@@ -1,0 +1,17 @@
+build/
+.vs/
+.vscode/
+*.user
+*.suo
+*.log
+*.tmp
+*.obj
+*.pdb
+*.ilk
+*.exe
+*.dll
+
+!resources/ranker_resources.rc
+!resources/original/
+!resources/original/*.bin
+!resources/main_menu_bink_fallback_565.bin

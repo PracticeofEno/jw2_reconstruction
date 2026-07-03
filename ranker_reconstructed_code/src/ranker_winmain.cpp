@@ -1,0 +1,21157 @@
+#include "ranker_winmain.h"
+#include "ranker_account_profile.h"
+#include "ranker_avatar_window.h"
+#include "ranker_change_password.h"
+#include "ranker_change_lobby.h"
+#include "ranker_connect_frontend.h"
+#include "ranker_crt_runtime.h"
+#include "ranker_create_game.h"
+#include "ranker_cursor.h"
+#include "ranker_directx.h"
+#include "ranker_directplay.h"
+#include "ranker_emoticon_popup.h"
+#include "ranker_free_server_lobby.h"
+#include "ranker_frontend_startup.h"
+#include "ranker_frontend_stage_flow.h"
+#include "ranker_frontend_routes.h"
+#include "ranker_figs_address_book.h"
+#include "ranker_game_session_tables.h"
+#include "ranker_game_loop.h"
+#include "ranker_gameplay_end_conditions.h"
+#include "ranker_gameplay_frame_render.h"
+#include "ranker_gameplay_input_actions.h"
+#include "ranker_gameplay_packets.h"
+#include "ranker_gameplay_production_actions.h"
+#include "ranker_gameplay_result_screen.h"
+#include "ranker_gameplay_script.h"
+#include "ranker_gameplay_session_runtime.h"
+#include "ranker_gameplay_session_flow.h"
+#include "ranker_gameplay_sound.h"
+#include "ranker_gameplay_tooltips.h"
+#include "ranker_gameplay_visibility.h"
+#include "ranker_input.h"
+#include "ranker_indexed_text_table.h"
+#include "ranker_ipx_frontend.h"
+#include "ranker_ipx_lobby.h"
+#include "ranker_legacy_environment.h"
+#include "ranker_link_lobby.h"
+#include "ranker_map_brush.h"
+#include "ranker_map_effects.h"
+#include "ranker_memo_window.h"
+#include "ranker_miles.h"
+#include "ranker_network.h"
+#include "ranker_online_dialogs.h"
+#include "ranker_online_lobby.h"
+#include "ranker_owner_ai.h"
+#include "ranker_p2p_lobby.h"
+#include "ranker_player_profile.h"
+#include "ranker_production_orders.h"
+#include "ranker_reliable_packets.h"
+#include "ranker_replay.h"
+#include "ranker_replay_dialogs.h"
+#include "ranker_resource_store.h"
+#include "ranker_runtime_resources.h"
+#include "ranker_search_lobby.h"
+#include "ranker_setup_data.h"
+#include "ranker_sprite_renderer.h"
+#include "ranker_system_ui.h"
+#include "ranker_text_renderer.h"
+#include "ranker_trc.h"
+#include "ranker_text_tables.h"
+#include "ranker_ui_overlay.h"
+#include "ranker_ui_screen.h"
+#include "ranker_unit_action.h"
+#include "ranker_unit_animation.h"
+#include "ranker_unit_commands.h"
+#include "ranker_unit_equipment.h"
+#include "ranker_unit_lifecycle.h"
+#include "ranker_unit_spatial_index.h"
+#include "ranker_unit_support_effects.h"
+#include "ranker_unit_target_helpers.h"
+#include "ranker_unit_targeting.h"
+#include "ranker_view_rank.h"
+#include "ranker_wizard_login.h"
+
+#include <algorithm>
+#include <array>
+#include <cstdarg>
+#include <cstdio>
+#include <cstdlib>
+#include <ctime>
+#include <cstring>
+#include <filesystem>
+#include <limits>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+#ifdef _WIN32
+#include <shellapi.h>
+#endif
+
+#if defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64))
+#include <intrin.h>
+#elif defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))
+#include <cpuid.h>
+#endif
+
+namespace ranker {
+namespace {
+
+void default_lobby_show_message(HWND owner, const char* text, COLORREF color);
+void default_forward_lobby_network_message(HWND parent, UINT message, WPARAM wparam,
+    LPARAM lparam);
+void configure_default_gameplay_render_unit_sprite_definitions();
+void sync_default_gameplay_tooltip_unit_definitions();
+void sync_default_gameplay_tooltip_production_action_definitions(
+    GameplayTooltipState& tooltip);
+void sync_default_gameplay_tooltip_platform_texts(GameplayTooltipState& tooltip);
+void sync_default_gameplay_tooltip_object_texts(GameplayTooltipState& tooltip);
+void set_default_primary_miles_music_policy_mode(u32 mode);
+void send_startup_fatal_and_close(const char* detail);
+
+void append_startup_log(const char* format, ...) {
+    if (format == nullptr) {
+        return;
+    }
+
+    FILE* file = nullptr;
+#if defined(_MSC_VER)
+    if (fopen_s(&file, "Jw2.log", "a") != 0) {
+        file = nullptr;
+    }
+#else
+    file = std::fopen("Jw2.log", "a");
+#endif
+    if (file == nullptr) {
+        return;
+    }
+
+    std::fputs("[rebuild] ", file);
+    va_list args;
+    va_start(args, format);
+    std::vfprintf(file, format, args);
+    va_end(args);
+    std::fputc('\n', file);
+    std::fclose(file);
+}
+
+bool has_ranker_data_directory(const std::filesystem::path& directory) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    return fs::is_regular_file(directory / "JW2_01.TRC", ec) &&
+        fs::is_regular_file(directory / "Jw2_08.trc", ec) &&
+        fs::is_regular_file(directory / "Jw2_17.trc", ec);
+}
+
+void add_data_directory_candidates(std::vector<std::filesystem::path>& candidates,
+    const std::filesystem::path& base) {
+    if (base.empty()) {
+        return;
+    }
+
+    candidates.push_back(base);
+    candidates.push_back(base / "RankerOCPV_Win");
+    candidates.push_back(base.parent_path() / "RankerOCPV_Win");
+    candidates.push_back(base.parent_path().parent_path() / "RankerOCPV_Win");
+}
+
+bool ensure_ranker_data_working_directory() {
+    namespace fs = std::filesystem;
+    std::vector<fs::path> candidates;
+
+    std::error_code ec;
+    const fs::path current = fs::current_path(ec);
+    add_data_directory_candidates(candidates, current);
+
+#ifdef _WIN32
+    char module_path_buffer[MAX_PATH]{};
+    if (GetModuleFileNameA(nullptr, module_path_buffer,
+            static_cast<DWORD>(sizeof(module_path_buffer))) != 0) {
+        const fs::path module_dir = fs::path(module_path_buffer).parent_path();
+        add_data_directory_candidates(candidates, module_dir);
+    }
+#endif
+
+    for (const fs::path& candidate : candidates) {
+        if (!has_ranker_data_directory(candidate)) {
+            continue;
+        }
+
+        std::error_code set_ec;
+        fs::current_path(candidate, set_ec);
+        if (!set_ec) {
+            append_startup_log("data cwd=%s", candidate.string().c_str());
+            return true;
+        }
+    }
+
+    append_startup_log("data cwd not found");
+    return false;
+}
+
+const char* startup_message_row(std::size_t index, const char* fallback) {
+    const auto& rows = startup_text_tables().message_rows.rows;
+    if (index < rows.size() && !rows[index].empty()) {
+        return rows[index].data();
+    }
+    return fallback;
+}
+
+const char* startup_platform_row(std::size_t index, const char* fallback) {
+    const auto& rows = startup_text_tables().platform_rows.rows;
+    if (index < rows.size() && !rows[index].empty()) {
+        return rows[index].data();
+    }
+    return fallback;
+}
+
+const char* startup_production_resource_failure_row(u32 code) {
+    constexpr std::size_t kResourceFailureRowBase = 94;
+    constexpr std::array<const char*, 3> kFallbacks{
+        "Not enough resources", "Not enough WATER", "Not enough STONE"};
+    const u32 clamped = std::min<u32>(code, static_cast<u32>(kFallbacks.size() - 1));
+    return startup_platform_row(kResourceFailureRowBase + clamped,
+        kFallbacks[clamped]);
+}
+
+std::string startup_platform_label_value(
+    std::size_t index, const char* fallback, u32 value) {
+    return std::string(startup_platform_row(index, fallback)) +
+        std::to_string(value);
+}
+
+std::string startup_platform_ratio_value(
+    std::size_t index, const char* fallback, u32 value, u32 total) {
+    return std::string(startup_platform_row(index, fallback)) +
+        std::to_string(value) + "/" + std::to_string(std::max<u32>(total, 1));
+}
+
+std::string startup_unit_name_or_fallback(u32 type_id) {
+    std::string_view name =
+        GetIndexedTextTableRow(StartupAuxiliaryIndexedTextTable(0), type_id);
+    if (!name.empty()) {
+        return std::string(name);
+    }
+    return "Unit " + std::to_string(type_id);
+}
+
+std::string startup_auxiliary_text_or_empty(u32 slot, u32 row) {
+    std::string_view text =
+        GetIndexedTextTableRow(StartupAuxiliaryIndexedTextTable(slot), row);
+    return std::string(text.begin(), text.end());
+}
+
+std::string startup_action_name_or_empty(u32 action_id) {
+    std::string name = startup_auxiliary_text_or_empty(2, action_id);
+    if (!name.empty()) {
+        return name;
+    }
+    return startup_auxiliary_text_or_empty(1, action_id);
+}
+
+u32 default_selected_unit_next_experience_threshold(
+    const ProductionOrderRuntimeState& production, const UnitMovementUnit& unit) {
+    u32 wrapped_threshold =
+        unit.definition.avatar_next_exp_base +
+        unit.status_timer * unit.definition.avatar_next_exp_per_level;
+    wrapped_threshold -= static_cast<u32>(
+        GetProductionOrderOrder2bBonusTotal(production, unit.owner_id));
+
+    i32 signed_threshold = 0;
+    std::memcpy(&signed_threshold, &wrapped_threshold, sizeof(signed_threshold));
+    if (signed_threshold < 1) {
+        return 1;
+    }
+    return static_cast<u32>(signed_threshold);
+}
+
+constexpr int kOriginalClientWidth = 800;
+constexpr int kOriginalClientHeight = 600;
+constexpr int kOriginalColorDepth = 16;
+constexpr std::array<i32, 8> kGameplayTerrainTileOffsets{
+    0x000, 0x0c8, 0x190, 0x258, 0x320, 0x3e8, 0x4b0, 0x960};
+constexpr std::array<u32, 6> kGameplayTerrainBlendCodeShifts{
+    0, 6, 0x0c, 3, 9, 0x0f};
+constexpr i32 kGameplayTerrainBlendMaskBaseOffset = 0x0bb8;
+constexpr std::array<i32, 132> kGameplayTerrainBlendMaskOffsets{
+    0x85, 0x14d, 0x15, 0xdd, 0x18, 0xe0, 0x1b, 0xe3, 0x1e, 0xe6, 0x21, 0xe9,
+    0x35, 0xfd, 0x49, 0x111, 0x5d, 0x125, 0x24, 0xec, 0x38, 0x100, 0x4c, 0x114,
+    0x3d, 0x105, 0x40, 0x108, 0x43, 0x10b, 0x46, 0x10e, 0x65, 0x12d, 0x79, 0x141,
+    0x68, 0x130, 0x7c, 0x144, 0x6b, 0x133, 0x7f, 0x147, 0x6e, 0x136, 0x82, 0x14a,
+    0xb5, 0x17d, 0xa4, 0x16c, 0xb8, 0x180, 0xa7, 0x16f, 0xaa, 0x172, 0xad, 0x175,
+    0xc1, 0x189, 0xc4, 0x18c, 0xbb, 0x183, 0xbe, 0x186, 0x74, 0x13c, 0x9c, 0x164,
+    0x9e, 0x166, 0x76, 0x13e, 0x4e, 0x116, 0x3a, 0x102, 0xc6, 0x18e, 0x26, 0xee,
+    0x0, 0xc8, 0x3, 0xcb, 0x6, 0xce, 0x9, 0xd1, 0xc, 0xd4, 0xf, 0xd7,
+    0x12, 0xda, 0x28, 0xf0, 0x2b, 0xf3, 0xa1, 0x169, 0x2e, 0xf6, 0x31, 0xf9,
+    0x50, 0x118, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0};
+constexpr i32 kGameplayOverlayPaletteBaseOffset = 0x0960;
+constexpr i32 kGameplayOverlayBlendMaskBaseOffset = 0x0d48;
+constexpr std::array<i32, 256> kGameplayOverlayVariantOffsets{
+    0, 0, 0, 0, 23, 33, 223, 233, 24, 34, 224, 234, 25, 35, 225, 235,
+    26, 36, 226, 236, 42, 52, 242, 252, 43, 53, 243, 253, 44, 54, 244, 254,
+    45, 55, 245, 255, 46, 56, 246, 256, 47, 57, 247, 257, 61, 71, 261, 271,
+    62, 72, 262, 272, 63, 73, 263, 273, 64, 74, 264, 274, 65, 75, 265, 275,
+    66, 76, 266, 276, 67, 77, 267, 277, 68, 78, 268, 278, 81, 91, 281, 291,
+    82, 92, 282, 292, 83, 93, 283, 293, 84, 94, 284, 294, 85, 95, 285, 295,
+    86, 96, 286, 296, 87, 97, 287, 297, 88, 98, 288, 298, 101, 111, 301, 311,
+    102, 112, 302, 312, 103, 113, 303, 313, 104, 114, 304, 314, 105, 115, 305, 315,
+    106, 116, 306, 316, 107, 117, 307, 317, 108, 118, 308, 318, 121, 131, 321, 331,
+    122, 132, 322, 332, 123, 133, 323, 333, 124, 134, 324, 334, 125, 135, 325, 335,
+    126, 136, 326, 336, 127, 137, 327, 337, 128, 138, 328, 338, 143, 153, 343, 353,
+    144, 154, 344, 354, 145, 155, 345, 355, 146, 156, 346, 356, 161, 171, 361, 371,
+    162, 172, 362, 372, 181, 191, 381, 391, 182, 192, 382, 392, 0, 16842752, 257, 16843008,
+    1, 0, 0, 0, 0, 0, 0, 16777216, 65793, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, 23, 24, -1, -1, -1, -1, 29, 30, 43, 44, 45, 46};
+constexpr std::array<i32, 64> kGameplayOverlayBlendMaskOffsets{
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 23, 24, -1, -1, -1,
+    -1, 29, 30, 43, 44, 45, 46, 47, 48, 49, 50, 65, 66, 67, 68, -1,
+    -1, -1, -1, 0, 10, 0, 0, 0, 0, 0, 5, 7, 0, 0, 0, 0};
+constexpr std::array<u8, 64> kGameplayOverlayMaskedKinds{
+    0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1,
+    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+    1, 1, 1, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255};
+constexpr std::array<i32, 82> kGameplaySpecialOverlayPaletteOffsets{
+    0, 21, 22, 41, 42, 43, 44, 61, 62, 63, 64, 65, 66, 81,
+    82, 83, 84, 85, 86, 101, 102, 103, 104, 105, 106, 121, 122, 123,
+    124, 125, 126, 141, 142, 143, 144, 145, 146, 163, 164, 165, 166, 0,
+    31, 32, 49, 50, 51, 52, 67, 68, 69, 70, 71, 72, 87, 88,
+    89, 90, 91, 92, 107, 108, 109, 110, 111, 112, 127, 128, 129, 130,
+    131, 132, 147, 148, 149, 150, 151, 152, 167, 168, 169, 170};
+constexpr std::array<i32, 82> kGameplaySpecialOverlayBlendMaskOffsets{
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 45,
+    46, -1, -1, -1, -1, 65, 21, -1, -1, -1, -1, 45, 46, -1,
+    -1, -1, -1, 65, 66, 45, 46, 47, 48, 65, 66, 67, 68, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, 47, 48, -1, -1, -1, -1, 22, 68, -1, -1, -1, -1,
+    47, 48, 45, 46, 47, 48, 67, 68, 65, 66, 67, 68};
+constexpr std::array<u8, 0x2a> kUiOverlayObjectIconMarkerCodes{
+    0x47, 0x00, 0x00, 0x00, 0x4d, 0x41, 0x00, 0x00,
+    0x00, 0x50, 0x4c, 0x00, 0x00, 0x5a, 0x00, 0x00,
+    0x00, 0x44, 0x52, 0x59, 0x54, 0x44, 0x00, 0x00,
+    0x42, 0x57, 0x54, 0x52, 0x00, 0x00, 0x00, 0x52,
+    0x50, 0x48, 0x00, 0x46, 0x55, 0x00, 0x4f, 0x4f,
+    0x4f, 0x4f};
+constexpr u64 kExpectedJw208Size = 0x0ddcc154ULL;
+constexpr u32 kSetupVersionXor = 0x11223344u;
+constexpr std::size_t kPatchProgramLaunchFailedTextRow = 13;
+constexpr const char* kPatchProgramLaunchFailedTextFallback =
+    "Unable to run patch program.";
+constexpr std::size_t kDuplicateInstanceTextRow = 14;
+constexpr const char* kDuplicateInstanceTextFallback =
+    "%s is already running.";
+constexpr std::size_t kMouseRequiredTextRow = 15;
+constexpr const char* kMouseRequiredTextFallback =
+    "A mouse is required to play the game.";
+constexpr std::size_t kMmxRequiredTextRow = 16;
+constexpr const char* kMmxRequiredTextFallback =
+    "A Pentium MMX compatible CPU is required.";
+constexpr std::size_t kTrcLoadErrorCaptionTextRow = 24;
+constexpr const char* kTrcLoadErrorCaptionFallback = "The Ranker load error.";
+constexpr std::size_t kBootstrapDrawEnvironmentErrorTextRow = 28;
+constexpr std::size_t kBootstrapUnitDefinitionErrorTextRow = 29;
+constexpr std::size_t kBootstrapAnimationCatalogErrorTextRow = 30;
+constexpr std::size_t kBootstrapRuntimeCatalogErrorTextRow = 31;
+constexpr std::size_t kBootstrapProductionCatalogErrorTextRow = 32;
+constexpr std::size_t kBootstrapUnitEquipmentErrorTextRow = 33;
+constexpr std::size_t kBootstrapMiscCatalogErrorTextRow = 34;
+constexpr std::size_t kGameplayHudChatPrefixTextRowBase = 38;
+constexpr std::size_t kInterfaceBaseSpriteLoadErrorTextRow = 65;
+constexpr const char* kInterfaceBaseSpriteLoadErrorFallback =
+    "Interface base sprite loading error.";
+constexpr std::size_t kMainWindowTitleTextRow = 223;
+constexpr const char* kMainWindowTitleFallback = "The Ranker";
+constexpr std::size_t kSetupRegistrySubkeyTextRow = 224;
+constexpr const char* kSetupRegistrySubkeyFallback =
+    "Software\\WIZARD SOFT\\The Ranker";
+constexpr std::size_t kSingleInstanceMutexTextRow = 225;
+constexpr const char* kSingleInstanceMutexFallback = "The Ranker is running.";
+constexpr u32 kGameplayMapSourceLayerRecordIndex = 10;
+constexpr u32 kGameplayScenarioMapLayerRecordIndex = 12;
+constexpr u32 kGameplayMapEffectLayerRecordIndex = 13;
+constexpr u32 kGameplayFogMap3LayerRecordIndex = 17;
+constexpr u32 kGameplayScenarioDefaultMapTiles = 0x100;
+constexpr u32 kGameplayScenarioMapLayerStrideTiles = 0x100;
+constexpr u32 kGameplaySessionRuntimeFixedRecordCount =
+    kPostInitUnitRequirementCount;
+constexpr u32 kGameplaySessionRuntimeProductionOrderRecordCount =
+    kProductionOrderCount;
+constexpr u32 kGameplaySessionRuntimeTail8RecordCount =
+    kJw212RuntimeCatalogCount;
+constexpr u32 kGameplaySessionRuntimeTail4RecordCount =
+    kJw211RuntimeCatalogCount;
+constexpr u32 kGameplaySessionMapRecordIndex = 1;
+constexpr std::size_t kGameplaySaveTitleBytes = 0x20;
+constexpr u32 kGameplaySessionScenarioRecordIndex = 2;
+constexpr u32 kGameplaySessionScenarioRecordBytes = 0x2898;
+constexpr u32 kGameplaySessionPlayerRecordIndex = 3;
+constexpr u32 kGameplaySessionPlayerRecordBytes = kGameplaySessionSnapshotBytes;
+constexpr u32 kGameplaySessionOwnerUnitAvailabilityRecordIndex = 4;
+constexpr u32 kGameplaySessionOwnerUnitAvailabilityRecordBytes =
+    kGameSessionOwnerCount * kGameSessionUnitTypeCount;
+constexpr u32 kGameplaySessionOwnerAiRecordIndex = 19;
+constexpr u32 kGameplayResultMetricRecordIndex = 0;
+constexpr u32 kGameplayResultMetricRecordBytes = 0x1c960;
+constexpr u32 kGameplayScenarioObjectRecordIndex = 7;
+constexpr u32 kGameplayScenarioObjectStride = 0x1d0;
+constexpr u32 kGameplayScenarioObjectMaxSlots = 0x800;
+constexpr u32 kGameplayMapEffectObjectRecordIndex = 8;
+constexpr u32 kGameplayMapEffectObjectStride = 0x3c;
+constexpr u32 kGameplayMapEffectObjectMaxSlots = 0x200;
+constexpr std::size_t kGameplayScenarioObjectTypeOffset = 0x00;
+constexpr std::size_t kGameplayScenarioObjectOwnerOffset = 0x04;
+constexpr std::size_t kGameplayScenarioObjectStringSlotOffset = 0x08;
+constexpr std::size_t kGameplayScenarioObjectAreaFlagsOffset = 0x0c;
+constexpr std::size_t kGameplayScenarioObjectMaxHealthOffset = 0x10;
+constexpr std::size_t kGameplayScenarioObjectMaxSecondaryOffset = 0x14;
+constexpr std::size_t kGameplayScenarioObjectHealthOffset = 0x18;
+constexpr std::size_t kGameplayScenarioObjectRuntimeStat1cOffset = 0x1c;
+constexpr std::size_t kGameplayScenarioObjectRuntimeStat20Offset = 0x20;
+constexpr std::size_t kGameplayScenarioObjectSecondaryCurrentOffset = 0x24;
+constexpr std::size_t kGameplayScenarioObjectRuntimeStat28Offset = 0x28;
+constexpr std::size_t kGameplayScenarioObjectStat2cOffset = 0x2c;
+constexpr std::size_t kGameplayScenarioObjectStat30Offset = 0x30;
+constexpr std::array<std::size_t, kGameplayScriptObjectEquipmentSlots>
+    kGameplayScenarioObjectEquipmentSlotOffsets{{
+        0x30, 0x34, 0x38, 0x3c, 0x40, 0x44}};
+constexpr std::size_t kGameplayScenarioObjectDynamicStringSlotOffset = 0x48;
+constexpr std::size_t kGameplayScenarioObjectEliteProgressOffset = 0x50;
+constexpr std::size_t kGameplayScenarioObjectStatusTimerOffset = 0x54;
+constexpr std::size_t kGameplayScenarioObjectMutableCommandValueOffset = 0x4c;
+constexpr std::size_t kGameplayScenarioObjectTypeFlagsOffset = 0x58;
+constexpr std::size_t kGameplayScenarioObjectCommandBitsOffset = 0x5c;
+constexpr std::size_t kGameplayScenarioObjectCommandStateOffset = 0x60;
+constexpr std::size_t kGameplayScenarioObjectAnimationFrameOffset = 0x64;
+constexpr std::size_t kGameplayScenarioObjectCommandValueOffset = 0x68;
+constexpr std::size_t kGameplayScenarioObjectPathTargetXOffset = 0x6c;
+constexpr std::size_t kGameplayScenarioObjectPathTargetYOffset = 0x70;
+constexpr std::size_t kGameplayScenarioObjectPreviousCommandStateOffset = 0x74;
+constexpr std::size_t kGameplayScenarioObjectDestinationXOffset = 0x78;
+constexpr std::size_t kGameplayScenarioObjectDestinationYOffset = 0x7c;
+constexpr std::size_t kGameplayScenarioObjectDestinationAuxStateOffset = 0x80;
+constexpr std::size_t kGameplayScenarioObjectPendingCommandStateOffset = 0x84;
+constexpr std::size_t kGameplayScenarioObjectPendingCommandValueOffset = 0x88;
+constexpr std::size_t kGameplayScenarioObjectPendingCommandXOffset = 0x8c;
+constexpr std::size_t kGameplayScenarioObjectPendingCommandYOffset = 0x90;
+constexpr std::size_t kGameplayScenarioObjectLinkedObjectOffset = 0x94;
+constexpr std::size_t kGameplayScenarioObjectCommandEntryLockoutTicksOffset = 0x98;
+constexpr std::size_t kGameplayScenarioObjectCommandFlagsOffset = 0x9c;
+constexpr std::size_t kGameplayScenarioObjectFlagsOffset = 0xa0;
+constexpr std::size_t kGameplayScenarioObjectDrawFlagsOffset = 0xa4;
+constexpr std::size_t kGameplayScenarioObjectDirectionOffset = 0xa8;
+constexpr std::size_t kGameplayScenarioObjectMovementFlagsOffset = 0xac;
+constexpr std::size_t kGameplayScenarioObjectMovementStateOffset = 0xb0;
+constexpr std::size_t kGameplayScenarioObjectWaitTicksOffset = 0xb4;
+constexpr std::size_t kGameplayScenarioObjectXOffset = 0xb8;
+constexpr std::size_t kGameplayScenarioObjectYOffset = 0xbc;
+constexpr std::size_t kGameplayScenarioObjectCurrentCellXOffset = 0xc0;
+constexpr std::size_t kGameplayScenarioObjectCurrentCellYOffset = 0xc4;
+constexpr std::size_t kGameplayScenarioObjectNextPathXOffset = 0xc8;
+constexpr std::size_t kGameplayScenarioObjectNextPathYOffset = 0xcc;
+constexpr std::size_t kGameplayScenarioObjectAnchorXOffset = 0xd0;
+constexpr std::size_t kGameplayScenarioObjectAnchorYOffset = 0xd4;
+constexpr std::size_t kGameplayScenarioObjectActiveCommandValueOffset = 0xd8;
+constexpr std::size_t kGameplayScenarioObjectActiveCommandXOffset = 0xdc;
+constexpr std::size_t kGameplayScenarioObjectActiveCommandYOffset = 0xe0;
+constexpr std::size_t kGameplayScenarioObjectActiveCommandStateOffset = 0xe4;
+constexpr std::size_t kGameplayScenarioObjectScriptBitFlagsOffset = 0xe8;
+constexpr std::size_t kGameplayScenarioObjectAnimationTimerOffset = 0xec;
+constexpr std::size_t kGameplayScenarioObjectLinkedEffectSlotOffset = 0xf0;
+constexpr std::size_t kGameplayScenarioObjectCommandLockoutTicksOffset = 0xf4;
+constexpr std::size_t kGameplayScenarioObjectSavedTypeFlagsOffset = 0xf8;
+constexpr std::size_t kGameplayScenarioObjectPlacementResetScratchOffset = 0xfc;
+constexpr std::size_t kGameplayScenarioObjectDistanceCheckModeOffset = 0x10c;
+constexpr std::size_t kGameplayScenarioObjectMovementTurnTicksOffset = 0x110;
+constexpr std::array<std::size_t, 4> kGameplayScenarioObjectEffectResetScratchOffsets{{
+    0x114, 0x118, 0x11c, 0x120}};
+constexpr std::size_t kGameplayScenarioObjectDeferredCommandCountOffset = 0x124;
+constexpr std::size_t kGameplayScenarioObjectDeferredCommandSlotsOffset = 0x128;
+constexpr std::size_t kGameplayScenarioObjectDeferredCommandStride = 0x10;
+constexpr u32 kGameplayScenarioObjectDeferredCommandCapacity = 10;
+constexpr std::size_t kGameplayScenarioObjectPreviousLinkOffset = 0x1c8;
+constexpr std::size_t kGameplayScenarioObjectNextLinkOffset = 0x1cc;
+constexpr std::size_t kGameplayMapEffectObjectTypeOffset = 0x00;
+constexpr std::size_t kGameplayMapEffectObjectFlagsOffset = 0x0c;
+constexpr std::size_t kGameplayMapEffectObjectLinkedUnitOffset = 0x10;
+constexpr std::size_t kGameplayMapEffectObjectXOffset = 0x24;
+constexpr std::size_t kGameplayMapEffectObjectYOffset = 0x28;
+constexpr std::size_t kGameplayMapEffectObjectFrameTimerOffset = 0x2c;
+constexpr std::size_t kGameplayMapEffectObjectRepeatCountOffset = 0x30;
+constexpr std::size_t kGameplayMapEffectObjectPreviousOffset = 0x34;
+constexpr std::size_t kGameplayMapEffectObjectNextOffset = 0x38;
+constexpr std::size_t kAuxiliaryEffectStartupTicksOffset = 0x220;
+constexpr std::size_t kAuxiliaryEffectActiveRenderTicksOffset = 0x224;
+constexpr std::size_t kAuxiliaryEffectFrameCountOffset = 0x228;
+constexpr std::size_t kAuxiliaryEffectImpactRadiusOffset = 0x234;
+constexpr std::size_t kAuxiliaryEffectStartupDrawModeOffset = 0x214;
+constexpr std::size_t kAuxiliaryEffectActiveDrawModeOffset = 0x218;
+constexpr std::size_t kAuxiliaryEffectImpactDrawModeOffset = 0x21c;
+constexpr std::size_t kAuxiliaryEffectBehaviorFlagsOffset = 0x190;
+constexpr std::size_t kAuxiliaryEffectActiveStepIterationsOffset = 0x194;
+constexpr std::size_t kAuxiliaryEffectImpactChildFlagOffset = 0x20c;
+constexpr std::size_t kAuxiliaryEffectImpactClassStrideFactorOffset = 0x210;
+constexpr std::size_t kAuxiliaryEffectImpactClassFrameCountOffset = 0x22c;
+constexpr std::size_t kJw212EffectRenderSortHandlerOffset = 0x244;
+constexpr std::size_t kJw211EffectRenderSortHandlerOffset = 0x378;
+constexpr std::size_t kJw211ProductionModeOffset = 0x150;
+constexpr std::size_t kJw211ProductionMovementClassMaskOffset = 0x154;
+constexpr std::size_t kJw211ProductionDefinitionIdOffset = 0x158;
+constexpr std::size_t kJw211ProductionOwnerRequirementOffset = 0x15c;
+constexpr std::size_t kJw211ProductionActiveLimitOffset = 0x160;
+constexpr std::size_t kJw211ProductionStatusRechargeAmountOffset = 0x16c;
+constexpr std::size_t kJw211ProductionResourceLimitOffset = 0x1e0;
+constexpr std::size_t kJw211ProductionQueuedLimitOffset = 0x1e4;
+constexpr std::size_t kJw211ActionDirectionModeOffset = 0x378;
+constexpr std::size_t kJw211ActionSourceHealthCostOffset = 0x1e0;
+constexpr std::size_t kJw211ActionSourceStat20DeltaOffset = 0x1f4;
+constexpr std::size_t kJw211ActionCreateUnitRefundSecondaryOffset = 0x1e4;
+constexpr std::size_t kJw211ActionCreateUnitSecondaryValueOffset = 0x1ec;
+constexpr std::size_t kJw211ActionCreateUnitTypeOffset = 0x1f0;
+constexpr std::size_t kJw211ActionSecondaryAreaDebitLimitOffset = 0x1ec;
+constexpr std::size_t kJw211ActionAuraFrameLimitOffset = 0x1ec;
+constexpr std::size_t kJw211ActionChannelLinkedDamagePeriodOffset = 0x1f0;
+constexpr std::size_t kJw211ActionAuraTickResetValueOffset = 0x1f0;
+constexpr std::size_t kJw211ActionAuraTickResetThresholdOffset = 0x1f4;
+constexpr std::size_t kJw211ActionAuraRadiusOffset = 0x1f8;
+constexpr std::size_t kJw211ActionAreaDamageRadiusOffset = 0x1f8;
+constexpr std::size_t kJw211ActionAreaTargetRenderClassMaskOffset = 0x154;
+constexpr std::size_t kJw211ActionIconMarkerOffset = 0x380;
+constexpr std::array<std::size_t, 3> kJw211ActionProjectileImpactPercentOffsets{{
+    0x3ac, 0x3b0, 0x3b4,
+}};
+constexpr std::size_t kJw211ActionSecondaryCostOffset = 0x40c;
+constexpr std::size_t kJw211ActionTargetHealthDeltaOffset = 0x410;
+constexpr std::size_t kJw211ActionPathControlOffset = 0x424;
+constexpr std::size_t kJw211ActionStartupTicksOffset = 0x448;
+constexpr std::size_t kJw211ActionProjectileLoopTicksOffset = 0x44c;
+constexpr std::size_t kJw211ActionSequenceImageIndexBaseOffset = 0x658;
+constexpr std::size_t kJw211ActionNearbyMarkerRadiusOffset = 0x81c;
+constexpr std::size_t kJw211AreaDamageOwnerRelationModeOffset = 0xac0;
+constexpr u32 kJw211RestoreLinkedHealthEffectId = 0x65;
+constexpr std::size_t kJw212EffectStartupSourceMuzzleFlagOffset = 0xabc;
+constexpr std::size_t kAuxiliaryEffectStartupImageIndexBaseOffset = 0x230;
+constexpr std::size_t kAuxiliaryEffectActiveImageIndexBaseOffset = 0x430;
+constexpr std::size_t kAuxiliaryEffectImpactImageIndexBaseOffset = 0x630;
+constexpr std::size_t kAuxiliaryEffectStartSoundOffset = 0x834;
+constexpr std::size_t kJw211EffectDamageAmountOffset = 0x1e8;
+constexpr std::size_t kJw211EffectPathKindOffset = 0x1fc;
+constexpr std::size_t kJw211EffectSoundFrameBaseOffset = 0x878;
+constexpr std::size_t kJw211EffectImpactFrameCountOffset = 0x8b8;
+constexpr std::size_t kJw211EffectImpactFrameBaseOffset = 0x8bc;
+constexpr std::size_t kJw211ActionTargetLockFrameOffset = 0x900;
+constexpr u32 kJw21xEffectMaxTimerValue = 0x1000;
+constexpr u32 kUnitEffectOriginalSlotStride = 0xa8;
+constexpr u32 kJw211EffectMaxFrameSoundEntries = 8;
+constexpr u32 kJw211EffectMaxImpactFrameEntries = 64;
+constexpr u32 kAuxiliaryEffectMaxImageIndexEntries = 128;
+constexpr std::size_t kJw212ActionClass2TerrainGateOffset = 0x14c;
+constexpr std::size_t kJw212ActionTargetRenderClassMaskOffset = 0x154;
+constexpr std::size_t kJw212ActionTargetDistanceGateOffset = 0x240;
+constexpr std::size_t kJw212AreaDamageOwnerRelationModeOffset = 0xac0;
+constexpr std::array<std::size_t, 5> kJw212ActionDamageRenderClassOffsets{{
+    0x170, 0x174, 0x178, 0x17c, 0x180,
+}};
+constexpr std::array<std::size_t, 3> kJw212ActionDamageProjectileImpactClassOffsets{{
+    0x184, 0x188, 0x18c,
+}};
+constexpr std::size_t kJw212ActionDirectionModeOffset = 0x378;
+constexpr std::size_t kJw212ActionSecondaryCostOffset = 0x40c;
+constexpr std::size_t kUnitDefinitionConstructionTimerOffset = 0x44;
+constexpr std::size_t kUnitDefinitionInitialMaxHealthOffset = 0x00;
+constexpr std::size_t kUnitDefinitionInitialMaxSecondaryOffset = 0x04;
+constexpr std::size_t kUnitDefinitionProfileOffenseOffset = 0x08;
+constexpr std::size_t kUnitDefinitionProfileDefenseOffset = 0x0c;
+constexpr std::size_t kUnitDefinitionRuntimeStat28Offset = 0x10;
+constexpr std::size_t kUnitDefinitionAvatarNextExpPerLevelOffset = 0x68;
+constexpr std::size_t kUnitDefinitionAvatarNextExpBaseOffset = 0x94;
+constexpr std::size_t kUnitDefinitionLifecycleClassOffset = 0x14c;
+constexpr std::size_t kUnitDefinitionPlacementClassOffset = 0x150;
+constexpr std::size_t kUnitDefinitionMovementClassOffset = 0x17c;
+constexpr std::size_t kUnitDefinitionOverlayClassOffset = 0x180;
+constexpr std::size_t kUnitDefinitionProductionPopulationCostOffset = 0x184;
+constexpr std::size_t kUnitDefinitionTransportValueOffset = 0x188;
+constexpr std::size_t kUnitDefinitionProductionResourceCostOffset = 0x190;
+constexpr std::size_t kUnitDefinitionProductionSecondaryCostOffset = 0x194;
+constexpr std::size_t kUnitDefinitionSupportRangeOffset = 0x19c;
+constexpr std::size_t kUnitDefinitionActionProfileOffset = 0x1a0;
+constexpr std::size_t kUnitDefinitionActionProfileVsClass3Offset = 0x1a4;
+constexpr std::size_t kUnitDefinitionActionRangeBaseOffset = 0x1b0;
+constexpr std::size_t kUnitDefinitionActionRangeVsClass3Offset = 0x1b4;
+constexpr std::size_t kUnitDefinitionPassiveRecoveryEnabledOffset = 0x1c8;
+constexpr std::size_t kUnitDefinitionPassiveRecoveryFlagsOffset = 0x1cc;
+constexpr std::size_t kUnitDefinitionTypeFlagsOffset = 0x1ec;
+constexpr std::size_t kUnitDefinitionSupportTargetFlagsOffset = 0x1f4;
+constexpr std::size_t kUnitDefinitionSupportSourceFlagsOffset = 0x1f8;
+constexpr std::size_t kUnitDefinitionPrerequisiteCountOffset = 0x1fc;
+constexpr std::size_t kUnitDefinitionPrerequisiteTypeBaseOffset = 0x200;
+constexpr std::size_t kUnitDefinitionPrimaryReferenceCountOffset = 0x240;
+constexpr std::size_t kUnitDefinitionPrimaryReferenceBaseOffset = 0x244;
+constexpr std::size_t kUnitDefinitionAlternateReferenceCountOffset = 0x284;
+constexpr std::size_t kUnitDefinitionAlternateReferenceBaseOffset = 0x288;
+constexpr std::size_t kUnitDefinitionCompletionReferenceCountOffset = 0x2c8;
+constexpr std::size_t kUnitDefinitionCompletionReferenceBaseOffset = 0x2cc;
+constexpr std::size_t kUnitDefinitionSmallReferenceCountOffset = 0x30f;
+constexpr std::size_t kUnitDefinitionSmallReferenceBaseOffset = 0x310;
+constexpr std::size_t kUnitDefinitionActionRecoveryScaleOffset = 0x320;
+constexpr std::size_t kUnitDefinitionActionRangeBonusPerCountOffset = 0x321;
+constexpr std::size_t kUnitDefinitionActionRangeBonusCapOffset = 0x326;
+constexpr std::size_t kUnitDefinitionFootprintWidthTilesOffset = 0x330;
+constexpr std::size_t kUnitDefinitionFootprintHeightTilesOffset = 0x334;
+constexpr std::size_t kUnitDefinitionBoundsLeftOffset = 0x360;
+constexpr std::size_t kUnitDefinitionBoundsTopOffset = 0x364;
+constexpr std::size_t kUnitDefinitionBoundsWidthOffset = 0x368;
+constexpr std::size_t kUnitDefinitionBoundsHeightOffset = 0x36c;
+constexpr std::size_t kUnitDefinitionSpatialQueryLeftOffset = 0x370;
+constexpr std::size_t kUnitDefinitionSpatialQueryTopOffset = 0x374;
+constexpr std::size_t kUnitDefinitionSpatialQueryRightOffset = 0x378;
+constexpr std::size_t kUnitDefinitionSpatialQueryBottomOffset = 0x37c;
+constexpr std::size_t kUnitDefinitionEffectCommandDistanceGateOffset = 0x440;
+constexpr std::size_t kUnitDefinitionTargetAcquisitionRangeOffset = 0x444;
+constexpr std::size_t kUnitDefinitionGroupedCommandCompletedTypeGateOffset = 0x4a4;
+constexpr std::size_t kUnitDefinitionGroupedCommandCompletedTypeIndexOffset = 0x4a8;
+constexpr std::size_t kUnitDefinitionPassiveMapEffectSeedOffset = 0x488;
+constexpr std::size_t kUnitDefinitionRenderClassOffset = 0x474;
+constexpr std::size_t kUnitDefinitionProjectileImpactClassOffset = 0x478;
+constexpr std::size_t kUnitDefinitionActionEffectFlagsOffset = 0x4ec;
+constexpr std::size_t kUnitDefinitionTargetSelectionPriorityOffset = 0x4b8;
+constexpr std::size_t kUnitDefinitionGroupedCommandOrderVariantGateOffset = 0x570;
+constexpr std::size_t kUnitDefinitionGroupedCommandOrderVariantIndexOffset = 0x574;
+constexpr std::size_t kUnitDefinitionUiIconMarkerOffset = 0x5b4;
+constexpr std::size_t kUnitDefinitionSpecialDrawFlagOffset = 0x638;
+constexpr std::size_t kUnitDefinitionCellRenderFlagsOffset = 0x63c;
+constexpr std::size_t kUnitDefinitionNameOffsetXOffset = 0x658;
+constexpr std::size_t kUnitDefinitionNameOffsetYOffset = 0x65c;
+constexpr std::size_t kUnitDefinitionNameWidthOffset = 0x660;
+constexpr std::size_t kUnitDefinitionNameHeightOffset = 0x664;
+constexpr std::size_t kUnitDefinitionInteractionBoundsLeftOffset = 0x668;
+constexpr std::size_t kUnitDefinitionInteractionBoundsTopOffset = 0x66c;
+constexpr std::size_t kUnitDefinitionInteractionBoundsWidthOffset = 0x670;
+constexpr std::size_t kUnitDefinitionInteractionBoundsHeightOffset = 0x674;
+constexpr std::size_t kUnitDefinitionLifecycleLockoutPeriodOffset = 0x6c8;
+constexpr std::size_t kUnitDefinitionAbilityTimerPeriodOffset = 0x6d4;
+constexpr std::size_t kUnitDefinitionLifecycleGrowthPeriodOffset = 0x6d8;
+constexpr std::size_t kUnitDefinitionTimedFlagPhaseBPeriodOffset = 0x6dc;
+constexpr std::size_t kUnitDefinitionTimedFlagPhaseAPeriodOffset = 0x6e0;
+constexpr std::size_t kUnitDefinitionLifecycleDecayModeOffset = 0x6e8;
+constexpr std::size_t kUnitDefinitionLifecycleDecayLockoutGateOffset = 0x6f4;
+constexpr std::size_t kUnitDefinitionRuntimeCyclePeriodOffset = 0x6f8;
+constexpr std::size_t kUnitDefinitionActionImpactFrameBaseOffset = 0x774;
+constexpr std::size_t kUnitDefinitionStartupSecondaryStepXOffset = 0x620;
+constexpr std::size_t kUnitDefinitionEffectSourceOffsetBase = 0x67c;
+constexpr std::size_t kUnitDefinitionMovementFrameDeltaBaseOffset = 0x6c4;
+constexpr std::size_t kUnitDefinitionMovementFrameDirectionStride = 0x200;
+constexpr std::size_t kUnitDefinitionMovementStepLimitOffset = 0xa74;
+constexpr std::size_t kUnitDefinitionMovementPeriodOffset = 0xa7c;
+constexpr std::size_t kUnitDefinitionActionRecoveryBaseOffset = 0x13cc;
+constexpr std::size_t kUnitDefinitionUse16DirectionLookupOffset = 0x24b4;
+constexpr std::size_t kUnitDefinitionOwnerStrategicTargetOffsetX = 0x2410;
+constexpr std::size_t kUnitDefinitionOwnerStrategicTargetOffsetY = 0x2414;
+constexpr std::size_t kUnitDefinitionOwnerTransportRouteMetricOffset = 0x2410;
+constexpr std::size_t kUnitDefinitionCompletionEffectOffsetXOffset = 0x2410;
+constexpr std::size_t kUnitDefinitionCompletionEffectOffsetYOffset = 0x2414;
+constexpr std::size_t kUnitDefinitionStartupFollowupOffsetXOffset = 0x26b8;
+constexpr std::size_t kUnitDefinitionStartupFollowupOffsetYOffset = 0x26bc;
+constexpr std::size_t kProductionOrderDurationBaseOffset = 0x214;
+constexpr std::size_t kProductionOrderDurationModeOffset = 0x218;
+constexpr std::size_t kSessionScenarioRecordModeOffset = 0x00;
+constexpr std::size_t kSessionScenarioRecordActiveSlotCountOffset = 0x04;
+constexpr std::size_t kSessionPlayerRecordLocalOwnerOffset = 0x00;
+constexpr std::size_t kSessionPlayerRecordNameBaseOffset = 0x04;
+constexpr std::size_t kSessionPlayerRecordNameStride = 0x14;
+constexpr std::size_t kSessionPlayerRecordFactionBaseOffset = 0xa4;
+constexpr std::size_t kSessionPlayerRecordSlotStateBaseOffset = 0xf4;
+constexpr std::size_t kSessionPlayerRecordOwnerResourcePrimaryBaseOffset = 0x144;
+constexpr std::size_t kSessionPlayerRecordOwnerResourceSecondaryBaseOffset = 0x194;
+constexpr std::size_t kSessionPlayerRecordOwnerResourceAuxBaseOffset = 0x1e4;
+constexpr std::size_t kSessionPlayerRecordResultGroupBaseOffset = 0x234;
+constexpr std::size_t kSessionPlayerRecordStartCoordinateBaseOffset = 0x2d4;
+constexpr std::size_t kSessionPlayerRecordStartCoordinateStride = 8;
+constexpr std::size_t kLinkLobbyStartupFogRevealDisabledOffset = 0x10;
+constexpr std::size_t kLinkLobbyStartupSessionSeedMaxPlayersOffset = 0xe2;
+constexpr std::size_t kLinkLobbyStartupPlayerNamePayloadOffset = 0x60;
+constexpr std::size_t kLinkLobbyStartupPlayerNamePayloadBytes = 0x20;
+constexpr std::array<u32, 4> kLinkLobbyStartResourcePrimaryValues{{
+    500, 400, 500, 1000,
+}};
+constexpr std::size_t kSessionMapRecordTerrainBankOffset = 0x160;
+constexpr std::size_t kSessionMapRecordWidthTilesOffset = 0x164;
+constexpr std::size_t kSessionMapRecordHeightTilesOffset = 0x168;
+constexpr std::size_t kSessionMapRecordAmbientEffectGateOffset = 0x16c;
+constexpr std::array<u32, 4> kDefaultFactionStartingUnitTypes{{
+    0x60, 0x70, 0x80, 0x90,
+}};
+constexpr std::array<u32, 4> kDefaultFactionSecondaryStartingUnitTypes{{
+    0x00, 0x10, 0x20, 0x30,
+}};
+constexpr std::array<std::size_t, kGameplayResultMetricCount - 1>
+    kGameplayResultDisplayMetricOffsets{{
+        0x1454, 0x14d4, 0x1494, 0x1474, 0x14b4, 0x14f4, 0x1514,
+    }};
+constexpr std::array<std::size_t, 5> kGameplayResultTotalMetricOffsets{{
+    0x15d4, 0x15f4, 0x1654, 0x1674, 0x1514,
+}};
+constexpr std::array<u32, 4> kDefaultOwnerAiPrimaryUnitTypes{{
+    0x00, 0x10, 0x20, 0x30,
+}};
+constexpr std::array<u32, 4> kDefaultOwnerAiRouteHelperUnitTypes{{
+    0x60, 0x70, 0x80, 0x90,
+}};
+constexpr u32 kDefaultOwnerAiTemporaryPathProbePlacementType = 0x07;
+constexpr u32 kDefaultOwnerAiTemporaryPathProbeMovementType = 0x00;
+constexpr std::array<u32, 4> kDefaultOwnerAiCarrierUnitTypes{{
+    0x05, 0x18, 0x29, 0x34,
+}};
+constexpr std::array<u32, 4> kDefaultOwnerAiOpeningOrderIds{{
+    0x08, 0xffffffffu, 0xffffffffu, 0xffffffffu,
+}};
+
+OriginalRoutineRef kWinMainRoutines[] = {
+    {"Ranker_WinMain", 0x00407250, "Game WinMain reached from MSVC CRT startup."},
+    {"RouteMainWindowFrontendNetworkMessage", 0x00406190,
+        "Routes WM_USER+0x65 frontend/network traffic from the main window."},
+    {"HandleRankerMainWindowMessage", 0x00406580,
+        "Main window message dispatcher installed by the WNDCLASS thunk."},
+    {"CpuSupportsMmx", 0x004f96e0, "CPUID feature bit 23 gate before game startup."},
+    {"BuildTrcRecord10Key", 0x00407de0, "Builds a 15-byte key from JW2_01.TRC record 10."},
+    {"ValidateTrcRecord10Key", 0x00407fb0, "Validates the TRC-derived key and returns AL as success."},
+    {"LoadStartupPlatformTextTables", 0x004394d0, "Loads JW2_17.TRC record 0 and auxiliary startup text records."},
+    {"LoadStartupMessageTextTable", 0x004967d0, "Loads JW2_17.TRC record 1 and builds the message pointer table."},
+    {"VerifySetupVersionData", 0x00415670, "Compares registry VersionData against Windows setuprk.dat."},
+    {"VerifySetupOrFindJw208Archive", 0x004157d0, "Falls back to locating jw2_08.trc by expected size."},
+    {"LoadTrcRecord9Value", 0x00407d60, "Loads a 32-bit value from JW2_01.TRC record 9."},
+    {"InitDirectXSubsystems", 0x00407c40, "Initializes DirectDraw, DirectSound, and an async COM subsystem."},
+    {"StartBackgroundWorkerThread", 0x00407bb0, "Creates the original worker thread at 0x00402202."},
+    {"RaiseMainThreadPriority", 0x00407b40, "Stores current thread handle and sets priority 2."},
+    {"ShutdownDirectXSubsystems", 0x00407cf0, "Releases COM, DirectSound, render, and DirectDraw resources."},
+    {"OpenMultiplayerFrontendForActiveMode", 0x00453f50,
+        "Opens the active multiplayer frontend after the main-window modal pause."},
+    {"EnterHostedOrJoinedP2PGameFlow", 0x0044eb50,
+        "Runs the hosted/joined P2P game flow from the action-2 modal route."},
+};
+
+#ifdef _WIN32
+struct GameplayDamageRecordLink {
+    UnitMovementUnit* unit = nullptr;
+    UnitRecord record;
+};
+
+struct RuntimeGlobals {
+    HINSTANCE instance = nullptr;
+    HWND main_window = nullptr;
+    HANDLE single_instance_mutex = nullptr;
+    HWND frontend_route_window = nullptr;
+    RECT window_rect{};
+    RECT client_rect{};
+    RECT client_screen_rect{};
+    RankerMainWindowCallbacks callbacks{};
+    std::string external_launch_target;
+    std::string last_external_launch_target;
+    std::string last_external_launch_parameters;
+    INT_PTR last_external_launch_result = 0;
+    u32 frontend_mode = 0;
+    bool windowed_mode = true;
+    bool app_active = false;
+    bool input_enabled = true;
+    bool last_external_launch_succeeded = false;
+    bool worker_paused = false;
+    bool message_wait_worker_suspend_enabled = false;
+    bool suppress_paint = false;
+    bool title_menu_active = false;
+    bool hide_cursor = true;
+    bool worker_thread_started = false;
+    bool worker_thread_running = false;
+    HANDLE worker_thread = nullptr;
+    DWORD worker_thread_id = 0;
+    HWND active_accelerator_window = nullptr;
+    HACCEL active_accelerators = nullptr;
+    std::vector<std::string> frontend_network_chat_messages;
+    std::time_t runtime_clock_snapshot = 0;
+    std::string trc_record_fatal_caption;
+    bool directx_initialized = false;
+    bool generic_ai_profile_mode = false;
+    bool network_ai_profile_override = false;
+    bool generic_ai_scenario_active = false;
+    AsyncComContext async_com;
+    GameplaySessionFlowState gameplay_session_flow;
+    u32 gameplay_transition_mode = 0;
+    HWND gameplay_transition_owner = nullptr;
+    bool gameplay_transition_pending = false;
+    bool gameplay_transition_active = false;
+    bool p2p_command_line_flow_pending = false;
+    bool gameplay_session_loop_reached = false;
+    u32 frontend_stage_session_mode = 0;
+    u32 frontend_stage_selected_faction = 0;
+    bool frontend_stage_transition_active = false;
+    bool gameplay_session_bundle_loaded = false;
+    bool gameplay_session_user_runtime_overrides_loaded = false;
+    bool gameplay_session_forces_record_loaded = false;
+    bool gameplay_session_runtime_definitions_staged = false;
+    bool p2p_session_start_prepared = false;
+    bool gameplay_startup_slots_started = false;
+    bool link_lobby_start_parameters_pending = false;
+    std::string gameplay_session_archive_path;
+    P2PGameSessionStartState p2p_session_start_state;
+    SessionRuntimeBufferPairs gameplay_session_runtime_buffers;
+    SessionRuntimeImportState session_runtime_import_state;
+    SessionRuntimeDefinitionTableSet active_session_definitions;
+    SessionRuntimeDefinitionTableSet staged_session_definitions;
+    std::vector<u8> gameplay_session_forces_fixed_records;
+    GameSessionAvatarRuntime gameplay_avatar_runtime;
+    bool gameplay_avatar_runtime_loaded = false;
+    GameSessionUnitReferenceTables unit_reference_tables;
+    std::array<UnitMovementDefinition, kUnitDefinitionResourceCount>
+        unit_definition_cache{};
+    std::array<bool, kUnitDefinitionResourceCount> unit_definition_cache_valid{};
+    OwnerSessionCounterTables gameplay_owner_counters;
+    PostInitTransitionSnapshot gameplay_post_init_snapshot;
+    GameplayDisplayState gameplay_display_state;
+    GameplayOnlineTransitionState gameplay_online_transition_state;
+    GameplaySessionStartupState gameplay_startup_state;
+    GameplayFrameRenderContext gameplay_frame_render_context;
+    GameplayFrameRandomState gameplay_frame_random_state;
+    GameplayRenderCommandQueue gameplay_render_command_queue;
+    GameplayHudTextState gameplay_hud_text;
+    GameplayPlayerResourceHudState gameplay_player_resource_hud;
+    GameplayHudAlertMarkerState gameplay_hud_alert_markers;
+    std::string gameplay_script_hud_text;
+    GameplayVisibilityGrid gameplay_visibility_grid;
+    GameplayVisibilityContext gameplay_visibility_context;
+    std::vector<GameplayVisibilityUnit> gameplay_visibility_units;
+    GameplayFogRenderContext gameplay_fog_context;
+    std::vector<u8> gameplay_fog_mask_table;
+    GameplaySoundState gameplay_sound;
+    MapBrushViewportState gameplay_map_brush_viewport;
+    UnitMovementContext gameplay_movement_context;
+    UnitLifecycleContext gameplay_lifecycle_context;
+    UnitSpatialIndexSet gameplay_unit_spatial_indexes;
+    UnitRenderQueueContext gameplay_unit_render_queue;
+    MapEffectContext map_effect_context;
+    PlayerSlotRuntimeState gameplay_player_slots;
+    OwnerAiRuntimeState gameplay_owner_ai_state;
+    ProductionOrderCatalog gameplay_production_catalog;
+    ProductionOrderRuntimeState gameplay_production_runtime;
+    std::array<OwnerTransportQueueState, kOwnerAiOwnerCount>
+        gameplay_owner_transport_queues{};
+    std::array<OwnerTransportRouteState, kOwnerAiOwnerCount>
+        gameplay_owner_transport_routes{};
+    std::array<OwnerStrategicTargetState, kOwnerAiOwnerCount>
+        gameplay_owner_strategic_targets{};
+    std::array<OwnerStrategicPointList, kOwnerAiOwnerCount>
+        gameplay_owner_threat_points{};
+    std::array<OwnerProductionPlacementAnchorSet, kOwnerAiOwnerCount>
+        gameplay_owner_production_placement_anchors{};
+    std::array<bool, kOwnerAiOwnerCount>
+        gameplay_owner_production_placement_anchor_valid{};
+    std::array<UnitMovementPoint, kOwnerAiOwnerCount>
+        gameplay_owner_production_placement_target_points{};
+    std::array<u32, kOwnerAiOwnerCount>
+        gameplay_owner_ai_reserved_primary_cost{};
+    UnitDamageContext gameplay_damage_context;
+    UnitActionDamageProfileTable gameplay_action_damage_profiles;
+    UnitTargetingContext gameplay_targeting_context;
+    UnitActionContext gameplay_unit_actions;
+    UnitEffectRuntimeState gameplay_unit_effect_runtime;
+    UnitCommandContext gameplay_unit_commands;
+    UnitSupportEffectContext gameplay_unit_support_effects;
+    UnitEquipmentPublishState gameplay_unit_equipment_publish_state;
+    MinimapTerrainLayer gameplay_terrain_layer;
+    MinimapTerrainRenderConfig gameplay_minimap_render_config;
+    TerrainTilePulseState gameplay_terrain_pulse_state;
+    TerrainTileSheetState gameplay_terrain_tile_sheet;
+    TerrainViewportRenderState gameplay_terrain_viewport_render_state;
+    TerrainDecorationRenderState gameplay_terrain_decoration_render_state;
+    bool gameplay_terrain_tile_sheet_loaded = false;
+    std::array<UnitMovementUnit*, kGameplayMapEffectObjectMaxSlots>
+        gameplay_map_effect_object_assigned_units{};
+    std::vector<GameplayDamageRecordLink> gameplay_damage_record_links;
+    std::vector<GameplayEndUnit> gameplay_end_condition_units;
+    std::vector<std::unique_ptr<UnitMovementUnit>> gameplay_script_spawned_units;
+    std::vector<GameplayScriptSpawnRequest> gameplay_script_unhandled_spawn_requests;
+    std::vector<GameplayScriptDefinitionPatchRequest>
+        gameplay_script_last_definition_patch_requests;
+    GameplayEndConditionState gameplay_end_condition_state;
+    bool gameplay_result_screen_rendered = false;
+    bool gameplay_leave_reset_processed = false;
+    bool gameplay_script_triggers_loaded = false;
+    bool gameplay_script_scenario_objects_loaded = false;
+    bool gameplay_unit_effect_definitions_initialized = false;
+    bool gameplay_action_damage_profiles_initialized = false;
+    u32 gameplay_script_trigger_record_index = 0xffffffffu;
+    u32 gameplay_script_next_unit_id = 0x80000000u;
+    u32 gameplay_session_start_tick_ms = 0;
+    std::array<u32, kGameplaySimulationPhaseCount> gameplay_simulation_phase_counts{};
+};
+
+RuntimeGlobals g_runtime;
+
+void sync_default_ui_overlay_runtime_from_gameplay_state();
+void apply_default_ui_overlay_runtime_mutations();
+void process_default_ui_overlay_command_actions();
+void configure_default_map_effect_context();
+void default_gameplay_frame_mirror_visible_map_effects(GameplayFrameRenderContext& context);
+void default_gameplay_frame_prepare_visible_runtime_resources(
+    GameplayFrameRenderContext& context);
+u32 default_gameplay_frame_random_limit(u32 limit);
+void configure_default_unit_action_context(UnitActionContext& action_context,
+    UnitCommandContext& command_context);
+UnitMovementUnit* default_unit_command_find_target(UnitCommandContext& context,
+    UnitMovementUnit& unit);
+bool default_unit_visibility_allows_target(const UnitMovementUnit& source,
+    const UnitMovementUnit& candidate);
+UnitMovementUnit* default_unit_command_find_nearby_follow_target(
+    UnitCommandContext& context, UnitMovementUnit& unit);
+void run_default_gameplay_script_phase(GameplayLoopState& state, u32 phase);
+void instantiate_default_gameplay_script_scenario_units(GameplayScriptTriggerState& script);
+bool default_gameplay_script_object_alive(
+    const GameplayScriptTriggerObjectState& object);
+UnitMovementUnit* find_default_movement_unit_by_id(u32 unit_id);
+bool resolve_default_unit_sound_profile(const UnitMovementUnit& unit,
+    GameplayUnitSoundDefinition& definition, GameplayUnitSoundBaseSlots& base_slots);
+bool default_mode1_packet_subtype05_transport_gate_blocks(
+    const UnitMovementUnit& unit, u32 category_flag, u32 internal_command,
+    u32 slot_id);
+UnitMovementContext* default_gameplay_movement_context();
+const ProductionOrderDefinition* default_production_order_definition(u32 order_id);
+u32 default_unit_command_bit_mask(const UnitMovementUnit& unit);
+void apply_default_unit_command_bit_mask(UnitMovementUnit& unit, u32 mask);
+void sync_default_gameplay_production_action_definitions(
+    GameplayProductionActionState& production);
+void sync_default_gameplay_production_action_units(
+    GameplayProductionActionState& production, const UiOverlayState& overlay);
+const GameplayProductionActionDefinition* default_jw211_production_action_definition(
+    u32 action_id);
+void sync_default_gameplay_end_condition_state();
+void reset_default_owner_ai_runtime();
+void refresh_default_owner_ai_target_profiles();
+void activate_default_player_slots_from_active_units();
+void purge_default_inactive_movement_units(UnitMovementContext& movement);
+void rebuild_default_unit_spatial_indexes();
+void rebuild_default_damage_record_links(UnitMovementContext* movement,
+    UnitMovementUnit* source, UnitMovementUnit* target);
+bool stage_default_session_runtime_override_definitions();
+void apply_default_session_fixed44_player_slot_masks();
+bool import_default_owner_ai_snapshot_from_session_records();
+bool export_default_owner_ai_snapshot_to_payload(std::vector<u8>& payload);
+SessionRuntimeExportState build_default_session_runtime_export_state();
+bool append_default_session_runtime_export_records(
+    std::vector<TrcWriteRecord>& records);
+bool load_default_gameplay_terrain_tile_sheet_bank();
+void run_default_owner_ai_maintenance(GameplayLoopState& state);
+void initialize_default_gameplay_terrain_layer_from_session_records();
+void write_default_session_buffer_u32(
+    std::vector<u8>& bytes, std::size_t offset, u32 value);
+void default_gameplay_frame_draw_terrain(
+    GameplayFrameRenderContext& context, i32 camera_x, i32 camera_y);
+void default_gameplay_frame_draw_terrain_decorations(
+    GameplayFrameRenderContext& context);
+void default_gameplay_frame_draw_map_brushes(GameplayFrameRenderContext& context);
+void default_gameplay_frame_draw_selection_overlay(
+    GameplayFrameRenderContext& context);
+void default_gameplay_frame_draw_hud_pulse(GameplayFrameRenderContext& context);
+void default_gameplay_frame_draw_world_ui_overlay(
+    GameplayFrameRenderContext& context);
+void default_gameplay_frame_noop(GameplayFrameRenderContext& context);
+void default_gameplay_frame_draw_player_resource_hud(
+    GameplayFrameRenderContext& context);
+void default_gameplay_frame_render_scheduled_tooltip(
+    GameplayFrameRenderContext& context);
+void default_gameplay_frame_draw_active_modal(
+    GameplayFrameRenderContext& context);
+void default_gameplay_frame_show_pause_overlay(
+    GameplayFrameRenderContext& context);
+void configure_default_gameplay_hud_text_callbacks(GameplayHudTextState& hud);
+void rebuild_default_unit_reference_tables_from_catalog();
+bool default_unit_effect_definition_exists(
+    const UnitEffectRuntimeState& state, u32 id);
+const UnitEffectDefinition* find_default_unit_effect_definition(
+    const UnitEffectRuntimeState& state, u32 id);
+void configure_default_unit_effect_runtime_state(UnitEffectRuntimeState& effects);
+void sync_default_unit_effect_runtime_units(UnitEffectRuntimeState& effects,
+    UnitLifecycleContext& lifecycle);
+void drain_default_unit_effect_impact_events(
+    const UnitEffectRuntimeState& effects, UnitLifecycleContext& lifecycle);
+void sync_default_unit_action_damage_profiles_from_runtime_catalog();
+u32 default_unit_action_direct_damage(const UnitMovementUnit& source,
+    const UnitMovementUnit& target);
+UnitMovementUnit* default_unit_command_create_unit(UnitCommandContext& context,
+    UnitMovementUnit& source, u32 type_id, i32 x, i32 y);
+UnitMovementUnit* default_unit_effect_create_unit(UnitEffectRuntimeState& effects,
+    UnitMovementUnit& source, u32 type_id, i32 x, i32 y);
+void configure_default_unit_command_context(UnitCommandContext& command_context,
+    UnitLifecycleContext& lifecycle, u32 frame_counter);
+void commit_default_unit_command_context(UnitLifecycleContext& lifecycle,
+    const UnitCommandContext& command_context);
+void sync_default_owner_command_runtime_slots(
+    const UnitCommandContext& context, u32 owner);
+UnitCommandContext& prepare_default_mode1_packet_command_context();
+void default_unit_command_oversized_transport_passenger(
+    const UnitCommandContext& context, const UnitMovementUnit& unit,
+    u32 owner_id, u32 group_id, u32 carrier_capacity);
+void run_default_periodic_unit_support_effects(UnitLifecycleContext& lifecycle);
+void run_default_active_unit_runtime_dispatch(UnitLifecycleContext& lifecycle,
+    UnitMovementUnit& unit);
+void sync_default_owner_threat_points_from_ai(u32 owner);
+void sync_default_owner_threat_points_to_ai(u32 owner);
+bool default_owners_are_related(u32 source_owner, u32 target_owner);
+const UnitMovementDefinition* default_owner_ai_definition_lookup(
+    u32 unit_type, void* user_data);
+struct DefaultOwnerRouteHelperPathProbeContext {
+    UnitLifecycleContext* lifecycle = nullptr;
+    UnitMovementContext* movement = nullptr;
+    UnitMovementDefinition helper_definition{};
+    u32 owner_id = 0;
+};
+bool default_owner_ai_route_helper_path_score(
+    UnitMovementPoint origin_world, UnitMovementPoint candidate_world,
+    u32& score, void* user_data);
+
+bool rect_has_extent(const RECT& rect) {
+    return rect.right > rect.left && rect.bottom > rect.top;
+}
+
+RECT frontend_client_screen_rect_or_default() {
+    if (rect_has_extent(g_runtime.client_screen_rect)) {
+        return g_runtime.client_screen_rect;
+    }
+    if (rect_has_extent(g_runtime.window_rect)) {
+        return g_runtime.window_rect;
+    }
+    return RECT{0, 0, kOriginalClientWidth, kOriginalClientHeight};
+}
+
+void refresh_window_rects(HWND window) {
+    if (window == nullptr) {
+        return;
+    }
+
+    GetWindowRect(window, &g_runtime.window_rect);
+    GetClientRect(window, &g_runtime.client_rect);
+    g_runtime.client_screen_rect = g_runtime.client_rect;
+    POINT top_left{g_runtime.client_screen_rect.left, g_runtime.client_screen_rect.top};
+    POINT bottom_right{g_runtime.client_screen_rect.right, g_runtime.client_screen_rect.bottom};
+    ClientToScreen(window, &top_left);
+    ClientToScreen(window, &bottom_right);
+    g_runtime.client_screen_rect.left = top_left.x;
+    g_runtime.client_screen_rect.top = top_left.y;
+    g_runtime.client_screen_rect.right = bottom_right.x;
+    g_runtime.client_screen_rect.bottom = bottom_right.y;
+}
+
+void pause_worker_for_modal_action() {
+    g_runtime.input_enabled = false;
+    g_runtime.worker_paused = true;
+    if (g_runtime.callbacks.suspend_worker_thread != nullptr) {
+        g_runtime.callbacks.suspend_worker_thread(g_runtime.callbacks.user_data);
+    }
+}
+
+void resume_worker_after_modal_action() {
+    g_runtime.worker_paused = false;
+    g_runtime.input_enabled = true;
+    if (g_runtime.callbacks.resume_worker_thread != nullptr) {
+        g_runtime.callbacks.resume_worker_thread(g_runtime.callbacks.user_data);
+    }
+}
+
+const char* lparam_string_or_default(LPARAM value, const char* fallback) {
+    return value != 0 ? reinterpret_cast<const char*>(value) : fallback;
+}
+
+const char* ranker_window_title() {
+    return startup_platform_row(kMainWindowTitleTextRow, kMainWindowTitleFallback);
+}
+
+const char* trc_load_error_caption() {
+    return startup_platform_row(kTrcLoadErrorCaptionTextRow,
+        kTrcLoadErrorCaptionFallback);
+}
+
+const char* interface_base_sprite_load_error_caption() {
+    return startup_platform_row(kInterfaceBaseSpriteLoadErrorTextRow,
+        kInterfaceBaseSpriteLoadErrorFallback);
+}
+
+const char* ranker_single_instance_mutex_name() {
+    return startup_platform_row(
+        kSingleInstanceMutexTextRow, kSingleInstanceMutexFallback);
+}
+
+bool has_runtime_resource_failure(const RuntimeResourceFailure& failure) {
+    return failure.stage != RuntimeResourceFailureStage::None &&
+        !failure.archive.empty();
+}
+
+void log_runtime_resource_failure(const char* context,
+    const RuntimeResourceFailure& failure) {
+    append_startup_log(
+        "%s runtime failure stage=%lu archive=%s record=%lu",
+        context != nullptr ? context : "unknown",
+        static_cast<unsigned long>(failure.stage),
+        failure.archive.c_str(),
+        static_cast<unsigned long>(failure.record_index));
+}
+
+void show_trc_record_fatal_error_box(
+    HWND owner, const char* archive, u32 record, const char* caption) {
+    char text[512]{};
+    std::snprintf(text, sizeof(text), "File = '%s'\nFile No = %lu\n\n%s",
+        archive != nullptr ? archive : "",
+        static_cast<unsigned long>(record), "FATAL ERROR - Reinstall the game.");
+    MessageBoxA(owner, text,
+        caption != nullptr && caption[0] != '\0' ? caption : ranker_window_title(),
+        MB_OK | MB_ICONWARNING);
+}
+
+void send_trc_record_fatal_error(
+    HWND window, const char* archive, u32 record, const char* caption) {
+    const char* resolved_caption =
+        caption != nullptr && caption[0] != '\0' ? caption : ranker_window_title();
+    if (window != nullptr && IsWindow(window)) {
+        g_runtime.trc_record_fatal_caption = resolved_caption;
+        SendTrcRecordFatalErrorMessage(window, archive, record);
+        return;
+    }
+
+    show_trc_record_fatal_error_box(nullptr, archive, record, resolved_caption);
+}
+
+bool send_runtime_resource_failure_trc_error(
+    const RuntimeResourceFailure& failure, const char* caption) {
+    if (!has_runtime_resource_failure(failure)) {
+        return false;
+    }
+
+    send_trc_record_fatal_error(g_runtime.main_window,
+        failure.archive.c_str(), failure.record_index, caption);
+    return true;
+}
+
+bool report_gameplay_session_import_resource_failure() {
+    switch (gameplay_session_load_state().last_stage) {
+    case GameplaySessionLoadStage::CommandTheme:
+        return send_runtime_resource_failure_trc_error(
+            command_theme_resource_state().last_failure, trc_load_error_caption());
+    case GameplaySessionLoadStage::Interface:
+        return send_runtime_resource_failure_trc_error(
+            interface_resource_state().last_failure,
+            interface_base_sprite_load_error_caption());
+    default:
+        return false;
+    }
+}
+
+void show_window_status_message(HWND window, const char* text, u32 color) {
+    if (g_runtime.callbacks.show_status_message != nullptr) {
+        g_runtime.callbacks.show_status_message(window, text, color,
+            g_runtime.callbacks.user_data);
+        return;
+    }
+
+    MessageBoxA(window, text, ranker_window_title(), MB_OK | MB_ICONINFORMATION);
+}
+
+bool launch_external_target(HWND window, const char* parameters) {
+    const char* target = g_runtime.external_launch_target.empty() ?
+        nullptr : g_runtime.external_launch_target.c_str();
+    g_runtime.last_external_launch_target = target != nullptr ? target : "";
+    g_runtime.last_external_launch_parameters =
+        parameters != nullptr ? parameters : "";
+    g_runtime.last_external_launch_result = 0;
+    g_runtime.last_external_launch_succeeded = false;
+    if (g_runtime.callbacks.launch_external != nullptr) {
+        const bool succeeded = g_runtime.callbacks.launch_external(window, target, parameters,
+            g_runtime.callbacks.user_data);
+        g_runtime.last_external_launch_result = succeeded ? 33 : 0;
+        g_runtime.last_external_launch_succeeded = succeeded;
+        return succeeded;
+    }
+    if (target == nullptr || *target == '\0') {
+        return false;
+    }
+
+    HINSTANCE result = ShellExecuteA(nullptr, nullptr, target, parameters, nullptr,
+        SW_SHOWNORMAL);
+    g_runtime.last_external_launch_result = reinterpret_cast<INT_PTR>(result);
+    g_runtime.last_external_launch_succeeded =
+        g_runtime.last_external_launch_result > 32;
+    return g_runtime.last_external_launch_succeeded;
+}
+
+void SendMainWindowCloseMessage() {
+    SendMessageA(g_runtime.main_window, WM_CLOSE, 0, 0);
+}
+
+void activate_frontend_window(HWND window, HACCEL accelerators) {
+    if (window == nullptr) {
+        g_runtime.frontend_route_window = g_runtime.main_window;
+        g_runtime.active_accelerator_window = nullptr;
+        g_runtime.active_accelerators = nullptr;
+        return;
+    }
+
+    g_runtime.frontend_route_window = window;
+    g_runtime.active_accelerator_window = window;
+    g_runtime.active_accelerators = accelerators;
+}
+
+template <typename T>
+void activate_frontend_state(const T& state) {
+    activate_frontend_window(state.window, state.active_accelerators);
+}
+
+void destroy_existing_window(HWND window) {
+    if (window != nullptr && IsWindow(window)) {
+        DestroyWindow(window);
+    }
+}
+
+void open_connect_frontend_window(HWND parent, HINSTANCE instance, LPARAM return_context);
+void open_wizard_login_window(HWND parent, HINSTANCE instance, LPARAM return_context,
+    const char* account = nullptr, const char* password = nullptr);
+void open_account_profile_window(HWND parent, HINSTANCE instance, LPARAM account,
+    LPARAM password);
+void open_change_password_window(HWND parent, HINSTANCE instance, LPARAM account,
+    LPARAM old_password);
+void open_online_lobby_window(HWND parent, HINSTANCE instance, LPARAM return_context);
+void open_online_lobby_reconnect_window(HWND parent, HINSTANCE instance,
+    LPARAM return_context);
+void open_change_lobby_window(HWND parent, HINSTANCE instance, LPARAM return_context);
+void open_search_lobby_window(HWND parent, HINSTANCE instance, LPARAM return_context);
+void open_emoticon_popup_window(HWND parent, HINSTANCE instance, POINT screen_point);
+void open_avatar_window(HWND parent, HINSTANCE instance);
+void open_memo_window(HWND parent, HINSTANCE instance);
+void open_view_rank_window(HWND parent, HINSTANCE instance, LPARAM return_context);
+void open_p2p_lobby_window(HWND parent, HINSTANCE instance, LPARAM return_context);
+void open_free_server_lobby_window(HWND parent, HINSTANCE instance, LPARAM return_context);
+void open_ipx_lobby_window(HWND parent, HINSTANCE instance, LPARAM return_context);
+void open_figs_window(HWND parent, HINSTANCE instance, LPARAM return_context);
+void open_create_game_window(HWND parent, HINSTANCE instance, LPARAM return_context,
+    int mode);
+void configure_link_lobby_callbacks(LinkLobbyState& state);
+void run_default_gameplay_session_transition(HWND owner, u32 mode);
+void queue_default_gameplay_session_transition(HWND owner, u32 mode);
+void install_default_gameplay_loop_callbacks(GameplayLoopState& state);
+void default_gameplay_loop_initialize_session_resources(GameplayLoopState& state);
+void configure_default_mode1_gameplay_runtime_callbacks();
+const char* default_online_local_player_name();
+
+void default_setup_data_write_failed(const char* path, void*) {
+    if (path != nullptr && g_runtime.main_window != nullptr &&
+        IsWindow(g_runtime.main_window)) {
+        PostMessageA(g_runtime.main_window, WM_USER + 2, 0,
+            reinterpret_cast<LPARAM>(path));
+    }
+}
+
+void default_connect_resume_worker(ConnectFrontendState&) {
+    resume_worker_after_modal_action();
+}
+
+void default_connect_open_wizard(ConnectFrontendState& state) {
+    HWND parent = state.main_window;
+    HINSTANCE instance = state.instance;
+    LPARAM context = state.return_context;
+    destroy_existing_window(state.window);
+    open_wizard_login_window(parent, instance, context);
+}
+
+void default_connect_open_p2p(ConnectFrontendState& state) {
+    HWND parent = state.main_window;
+    HINSTANCE instance = state.instance;
+    LPARAM context = state.return_context;
+    destroy_existing_window(state.window);
+    open_p2p_lobby_window(parent, instance, context);
+}
+
+void default_connect_open_free_server(ConnectFrontendState& state) {
+    HWND parent = state.main_window;
+    HINSTANCE instance = state.instance;
+    LPARAM context = state.return_context;
+    destroy_existing_window(state.window);
+    open_free_server_lobby_window(parent, instance, context);
+}
+
+void default_connect_open_ipx(ConnectFrontendState& state) {
+    HWND parent = state.main_window;
+    HINSTANCE instance = state.instance;
+    LPARAM context = state.return_context;
+    destroy_existing_window(state.window);
+    open_ipx_lobby_window(parent, instance, context);
+}
+
+void configure_connect_callbacks(ConnectFrontendState& state) {
+    state.async_context = &g_runtime.async_com;
+    state.async_tcp_socket = &FrontendAsyncTcpSocket0();
+    state.icon_collection = &GlobalBitmapIconResourceCollection();
+    state.callbacks.resume_worker_modal = default_connect_resume_worker;
+    state.callbacks.open_wizard_soft_net = default_connect_open_wizard;
+    state.callbacks.open_p2p_lobby = default_connect_open_p2p;
+    state.callbacks.open_free_server = default_connect_open_free_server;
+    state.callbacks.open_ipx_lobby = default_connect_open_ipx;
+}
+
+void default_wizard_open_connect(WizardLoginState& state) {
+    open_connect_frontend_window(state.main_window, state.instance, state.return_context);
+}
+
+void default_wizard_open_lobby(WizardLoginState& state) {
+    open_online_lobby_window(state.main_window, state.instance, state.return_context);
+}
+
+void default_wizard_open_figs(WizardLoginState& state) {
+    open_figs_window(state.main_window, state.instance, 2);
+}
+
+void default_wizard_route_game_start(WizardLoginState& state) {
+    g_runtime.link_lobby_start_parameters_pending = false;
+    PostMessageA(state.main_window, WM_USER + 8, 0, 2);
+}
+
+void default_wizard_cancel_game_start(WizardLoginState& state) {
+    if (state.window != nullptr) {
+        PostMessageA(state.window, kWizardLoginReturnMessage, 0, 0);
+    }
+}
+
+bool default_wizard_confirm_game_start(WizardLoginState& state) {
+    EndOnlineModalPrompt(online_modal_prompt_state(), 0);
+    const INT_PTR result = ShowOnlineModalPrompt3(online_modal_prompt_state(),
+        state.window,
+        startup_message_row(15, "Start the game patch now?"),
+        RGB(250, 250, 250));
+    return result != 2;
+}
+
+void default_wizard_open_change_password(WizardLoginState& state,
+    const char* account, const char* password) {
+    open_change_password_window(state.main_window, state.instance,
+        reinterpret_cast<LPARAM>(account), reinterpret_cast<LPARAM>(password));
+}
+
+void default_wizard_open_new_account(WizardLoginState& state,
+    const char* account, const char* password) {
+    open_account_profile_window(state.main_window, state.instance,
+        reinterpret_cast<LPARAM>(account), reinterpret_cast<LPARAM>(password));
+}
+
+void configure_wizard_callbacks(WizardLoginState& state) {
+    state.async_tcp_socket = &FrontendAsyncTcpSocket0();
+    state.icon_collection = &GlobalBitmapIconResourceCollection();
+    state.callbacks.open_connect_frontend = default_wizard_open_connect;
+    state.callbacks.open_lobby = default_wizard_open_lobby;
+    state.callbacks.open_figs_address_book = default_wizard_open_figs;
+    state.callbacks.route_game_start = default_wizard_route_game_start;
+    state.callbacks.cancel_game_start = default_wizard_cancel_game_start;
+    state.callbacks.confirm_game_start = default_wizard_confirm_game_start;
+    state.callbacks.open_change_password = default_wizard_open_change_password;
+    state.callbacks.open_new_account = default_wizard_open_new_account;
+    state.callbacks.show_message = default_lobby_show_message;
+    ConnectFrontendState& connect = connect_frontend_state();
+    LoadConnectFrontendConfiguration(connect);
+    std::snprintf(state.patch_download_final_path.data(),
+        state.patch_download_final_path.size(), "%s",
+        connect.configuration.patcher_executable_name.empty() ?
+            "TheRankerPatcher.exe" :
+            connect.configuration.patcher_executable_name.c_str());
+    std::snprintf(state.patch_download_temp_path.data(),
+        state.patch_download_temp_path.size(), "%s",
+        connect.configuration.patcher_data_name.empty() ?
+            "TheRankerPatcher.pat" :
+            connect.configuration.patcher_data_name.c_str());
+}
+
+void default_account_open_connect(AccountProfileState& state) {
+    open_connect_frontend_window(state.main_window, state.instance, state.return_context);
+}
+
+void default_account_open_lobby(AccountProfileState& state) {
+    open_online_lobby_window(state.main_window, state.instance, state.return_context);
+}
+
+void default_account_open_wizard(AccountProfileState& state) {
+    open_wizard_login_window(state.main_window, state.instance, state.return_context,
+        state.submitted_account.data(), state.submitted_password.data());
+}
+
+const UnitMovementDefinition* default_unit_lifecycle_find_definition(
+    UnitLifecycleContext& lifecycle, u32 unit_type);
+
+bool default_account_lookup_avatar_stats(AccountProfileState&, u32 avatar_record_id,
+    AccountProfileAvatarStats& stats) {
+    UnitLifecycleContext fallback_context{};
+    const UnitMovementDefinition* definition =
+        default_unit_lifecycle_find_definition(fallback_context, avatar_record_id);
+    if (definition == nullptr) {
+        return false;
+    }
+
+    stats.hp = static_cast<i32>(definition->initial_max_health);
+    stats.mp = static_cast<i32>(definition->initial_max_secondary_value);
+    stats.op = static_cast<i32>(definition->profile_offense_value);
+    stats.dp = static_cast<i32>(definition->profile_defense_value);
+    return true;
+}
+
+void configure_account_callbacks(AccountProfileState& state) {
+    state.async_tcp_socket = &FrontendAsyncTcpSocket0();
+    state.callbacks.open_connect_frontend = default_account_open_connect;
+    state.callbacks.open_online_lobby = default_account_open_lobby;
+    state.callbacks.open_wizard_login = default_account_open_wizard;
+    state.callbacks.show_message = default_lobby_show_message;
+    state.callbacks.lookup_avatar_stats = default_account_lookup_avatar_stats;
+}
+
+void default_change_open_connect(ChangePasswordState& state) {
+    open_connect_frontend_window(state.main_window, state.instance, state.return_context);
+}
+
+void default_change_open_wizard(ChangePasswordState& state) {
+    open_wizard_login_window(state.main_window, state.instance, state.return_context,
+        state.submitted_account.data(), nullptr);
+}
+
+void configure_change_password_callbacks(ChangePasswordState& state) {
+    state.async_tcp_socket = &FrontendAsyncTcpSocket0();
+    state.callbacks.open_connect_frontend = default_change_open_connect;
+    state.callbacks.open_wizard_soft_net = default_change_open_wizard;
+    state.callbacks.show_message = default_lobby_show_message;
+}
+
+template <std::size_t N>
+void write_packet_u32(std::array<u8, N>& packet, std::size_t offset, u32 value) {
+    if (offset + sizeof(value) <= packet.size()) {
+        std::memcpy(packet.data() + offset, &value, sizeof(value));
+    }
+}
+
+template <std::size_t N>
+void write_packet_text(std::array<u8, N>& packet, std::size_t offset,
+    std::size_t byte_count, const char* text) {
+    if (offset >= packet.size() || byte_count == 0) {
+        return;
+    }
+
+    const std::size_t available = std::min<std::size_t>(byte_count,
+        packet.size() - offset);
+    std::snprintf(reinterpret_cast<char*>(packet.data() + offset), available,
+        "%s", text != nullptr ? text : "");
+}
+
+template <std::size_t N>
+void initialize_legacy_tcp_packet(std::array<u8, N>& packet, u32 opcode) {
+    packet.fill(0);
+    write_packet_u32(packet, 0, 3);
+    write_packet_u32(packet, 4, opcode);
+    write_packet_u32(packet, 8, static_cast<u32>(packet.size()));
+}
+
+template <std::size_t N>
+void queue_legacy_tcp_packet(std::array<u8, N>& packet) {
+    PrepareAndQueueLegacyAsyncTcpSend(FrontendAsyncTcpSocket0(), packet.data(),
+        static_cast<i32>(packet.size()));
+}
+
+u32 read_packet_u32_raw(const u8* packet, std::size_t byte_count,
+    std::size_t offset) {
+    if (packet == nullptr || offset + sizeof(u32) > byte_count) {
+        return 0;
+    }
+    u32 value = 0;
+    std::memcpy(&value, packet + offset, sizeof(value));
+    return value;
+}
+
+std::string fixed_packet_string_raw(const u8* packet, std::size_t byte_count,
+    std::size_t offset, std::size_t max_count) {
+    if (packet == nullptr || offset >= byte_count || max_count == 0) {
+        return {};
+    }
+    const char* text = reinterpret_cast<const char*>(packet + offset);
+    const std::size_t available = std::min(max_count, byte_count - offset);
+    std::size_t length = 0;
+    while (length < available && text[length] != '\0') {
+        ++length;
+    }
+    return std::string(text, length);
+}
+
+void default_online_return_to_connect(HWND parent, HINSTANCE instance,
+    LPARAM return_context, void*) {
+    open_connect_frontend_window(parent, instance, return_context);
+}
+
+void default_online_send_async_packet(const void* packet, std::size_t byte_count,
+    void*) {
+    if (packet == nullptr || byte_count == 0 || byte_count > 0x7fffffffu) {
+        return;
+    }
+
+    const auto* bytes = static_cast<const u8*>(packet);
+    std::vector<u8> copy(bytes, bytes + byte_count);
+    PrepareAndQueueLegacyAsyncTcpSend(FrontendAsyncTcpSocket0(), copy.data(),
+        static_cast<i32>(copy.size()));
+}
+
+void default_online_show_message(HWND owner, const char* text, COLORREF color,
+    void*) {
+    show_window_status_message(owner, text, color);
+}
+
+void default_lobby_show_message(HWND owner, const char* text, COLORREF color) {
+    show_window_status_message(owner, text, color);
+}
+
+void default_avatar_show_message(HWND owner, const char* text, COLORREF color,
+    void*) {
+    CreateOnlineModelessPrompt(online_modeless_prompt_state(), owner,
+        g_runtime.instance, text != nullptr ? text : "", color, false, 0, 0);
+}
+
+void reopen_online_lobby_after_change(ChangeLobbyState& state) {
+    HWND old_parent = state.parent_window;
+    HINSTANCE instance = state.instance;
+    LPARAM context = state.return_context;
+    char lobby_name[0x80]{};
+    std::snprintf(lobby_name, sizeof(lobby_name), "%s",
+        state.pending_lobby_name.data());
+
+    if (state.window != nullptr && IsWindow(state.window)) {
+        DestroyWindow(state.window);
+    }
+    if (old_parent != nullptr && IsWindow(old_parent)) {
+        DestroyWindow(old_parent);
+    }
+    open_online_lobby_reconnect_window(g_runtime.main_window, instance, context);
+
+    OnlineLobbyState& online = online_lobby_state();
+    if (online.window != nullptr && lobby_name[0] != '\0') {
+        char text[160]{};
+        std::snprintf(text, sizeof(text),
+            startup_message_row(65, "%s lobby entered."), lobby_name);
+        PostOnlineLobbySingleColorText(online.window, text, 0xfa, 0xfa, 0);
+    }
+}
+
+void default_change_handle_network_message(ChangeLobbyState& state, WPARAM wparam,
+    LPARAM lparam) {
+    const WORD network_event = LOWORD(lparam);
+    if (network_event == FD_CLOSE) {
+        default_lobby_show_message(state.window,
+            startup_message_row(5, "Disconnected from the server."),
+            RGB(10, 10, 250));
+        if (state.callbacks.set_busy != nullptr) {
+            state.callbacks.set_busy(FALSE);
+        }
+        if (state.window != nullptr) {
+            DestroyWindow(state.window);
+        }
+        if (state.callbacks.return_to_parent != nullptr) {
+            state.callbacks.return_to_parent(state.parent_window, state.instance,
+                state.return_context);
+        }
+        return;
+    }
+    if (network_event != FD_READ) {
+        return;
+    }
+
+    ReceiveLegacyAsyncTcpQueue(FrontendAsyncTcpSocket0());
+    const u8* payload = GetLegacyAsyncTcpReceiveBuffer(FrontendAsyncTcpSocket0());
+    i32 byte_count = GetLegacyAsyncTcpReceiveLength(FrontendAsyncTcpSocket0());
+    while (payload != nullptr && byte_count >= 0x0d) {
+        const u32 packet_count = read_packet_u32_raw(payload,
+            static_cast<std::size_t>(byte_count), 8);
+        if (packet_count < 0x0d ||
+            packet_count > static_cast<u32>(byte_count)) {
+            break;
+        }
+        if (!DispatchChangeLobbyServerPacket(state, payload, packet_count)) {
+            if (state.callbacks.forward_network_message != nullptr) {
+                state.callbacks.forward_network_message(state.parent_window,
+                    kChangeLobbyNetworkMessage, wparam, lparam);
+            } else {
+                default_forward_lobby_network_message(state.parent_window,
+                    kChangeLobbyNetworkMessage, wparam, lparam);
+            }
+            break;
+        }
+        ConsumeLegacyAsyncTcpReceiveQueue(FrontendAsyncTcpSocket0(),
+            static_cast<i32>(packet_count));
+        payload = GetLegacyAsyncTcpReceiveBuffer(FrontendAsyncTcpSocket0());
+        byte_count = GetLegacyAsyncTcpReceiveLength(FrontendAsyncTcpSocket0());
+    }
+}
+
+void default_change_queue_packet(ChangeLobbyState&, const void* packet,
+    i32 byte_count) {
+    if (packet == nullptr || byte_count <= 0) {
+        return;
+    }
+    PrepareAndQueueLegacyAsyncTcpSend(FrontendAsyncTcpSocket0(),
+        const_cast<void*>(packet), byte_count);
+}
+
+void default_change_request_lobby_list(ChangeLobbyState& state, int start_index) {
+    const auto packet = BuildChangeLobbyListRequestPacket(start_index);
+    default_change_queue_packet(state, packet.data(),
+        static_cast<i32>(packet.size()));
+}
+
+void default_change_lobby(ChangeLobbyState& state, const char* name,
+    const char* password, bool existing_lobby, int lobby_id) {
+    if (existing_lobby) {
+        const auto packet = BuildChangeLobbyJoinPacket(password, lobby_id);
+        default_change_queue_packet(state, packet.data(),
+            static_cast<i32>(packet.size()));
+        return;
+    }
+
+    const auto packet = BuildChangeLobbyCreatePacket(name, password);
+    default_change_queue_packet(state, packet.data(),
+        static_cast<i32>(packet.size()));
+}
+
+void default_forward_lobby_network_message(HWND parent, UINT message, WPARAM wparam,
+    LPARAM lparam) {
+    if (parent != nullptr && IsWindow(parent)) {
+        PostMessageA(parent, message, wparam, lparam);
+    }
+}
+
+void default_lobby_busy_state(BOOL busy) {
+    if (busy != FALSE) {
+        pause_worker_for_modal_action();
+    } else {
+        resume_worker_after_modal_action();
+    }
+}
+
+void default_change_return_to_parent(HWND parent, HINSTANCE instance,
+    LPARAM return_context) {
+    if (parent != nullptr && IsWindow(parent)) {
+        activate_frontend_window(parent, g_runtime.active_accelerators);
+        SetFocus(parent);
+        return;
+    }
+    open_online_lobby_window(g_runtime.main_window, instance, return_context);
+}
+
+void default_change_focus_parent(ChangeLobbyState& state) {
+    if (state.parent_window != nullptr && IsWindow(state.parent_window)) {
+        SetFocus(state.parent_window);
+    }
+}
+
+void configure_change_lobby_callbacks(ChangeLobbyState& state) {
+    state.callbacks.request_lobby_list = default_change_request_lobby_list;
+    state.callbacks.change_lobby = default_change_lobby;
+    state.callbacks.queue_packet = default_change_queue_packet;
+    state.callbacks.change_succeeded = reopen_online_lobby_after_change;
+    state.callbacks.handle_network_message = default_change_handle_network_message;
+    state.callbacks.show_message = default_lobby_show_message;
+    state.callbacks.set_busy = default_lobby_busy_state;
+    state.callbacks.return_to_parent = default_change_return_to_parent;
+    state.callbacks.focus_parent_control = default_change_focus_parent;
+}
+
+void default_search_queue_packet(SearchLobbyState&, const void* packet,
+    i32 byte_count) {
+    if (packet == nullptr || byte_count <= 0) {
+        return;
+    }
+    PrepareAndQueueLegacyAsyncTcpSend(FrontendAsyncTcpSocket0(),
+        const_cast<void*>(packet), byte_count);
+}
+
+void default_search_send_query(SearchLobbyState& state,
+    const SearchLobbyQuery& query) {
+    const auto packet = BuildSearchLobbyQueryPacket(query);
+    default_search_queue_packet(state, packet.data(),
+        static_cast<i32>(packet.size()));
+}
+
+void default_search_send_selected_name(SearchLobbyState& state,
+    const char* name) {
+    const auto packet = BuildSearchLobbySelectedNamePacket(name);
+    default_search_queue_packet(state, packet.data(),
+        static_cast<i32>(packet.size()));
+}
+
+void default_search_handle_network_message(SearchLobbyState& state, WPARAM wparam,
+    LPARAM lparam) {
+    const WORD network_event = LOWORD(lparam);
+    if (network_event == FD_CLOSE) {
+        if (state.callbacks.show_message != nullptr) {
+            state.callbacks.show_message(state.window,
+                startup_message_row(5, "Disconnected from the server."),
+                RGB(10, 10, 250));
+        }
+        CloseLegacyAsyncTcpSocket(FrontendAsyncTcpSocket0());
+        HWND parent = state.parent_window;
+        HINSTANCE instance = state.instance;
+        LPARAM context = state.return_context;
+        if (state.window != nullptr) {
+            DestroyWindow(state.window);
+        }
+        if (parent != nullptr && IsWindow(parent)) {
+            DestroyWindow(parent);
+        }
+        open_connect_frontend_window(g_runtime.main_window, instance, context);
+        return;
+    }
+    if (network_event != FD_READ) {
+        return;
+    }
+
+    ReceiveLegacyAsyncTcpQueue(FrontendAsyncTcpSocket0());
+    const u8* payload = GetLegacyAsyncTcpReceiveBuffer(FrontendAsyncTcpSocket0());
+    i32 byte_count = GetLegacyAsyncTcpReceiveLength(FrontendAsyncTcpSocket0());
+    while (payload != nullptr && byte_count >= 0x0d) {
+        const u32 packet_count = read_packet_u32_raw(payload,
+            static_cast<std::size_t>(byte_count), 8);
+        if (packet_count < 0x0d ||
+            packet_count > static_cast<u32>(byte_count)) {
+            break;
+        }
+        if (!DispatchSearchLobbyServerPacket(state, payload, packet_count)) {
+            if (state.callbacks.forward_network_message != nullptr) {
+                state.callbacks.forward_network_message(state.parent_window,
+                    kSearchLobbyNetworkMessage, wparam, lparam);
+            } else {
+                default_forward_lobby_network_message(state.parent_window,
+                    kSearchLobbyNetworkMessage, wparam, lparam);
+            }
+            break;
+        }
+        ConsumeLegacyAsyncTcpReceiveQueue(FrontendAsyncTcpSocket0(),
+            static_cast<i32>(packet_count));
+        payload = GetLegacyAsyncTcpReceiveBuffer(FrontendAsyncTcpSocket0());
+        byte_count = GetLegacyAsyncTcpReceiveLength(FrontendAsyncTcpSocket0());
+    }
+}
+
+void default_search_return_to_parent(HWND parent, HINSTANCE instance,
+    LPARAM return_context) {
+    default_change_return_to_parent(parent, instance, return_context);
+}
+
+void default_search_focus_parent(SearchLobbyState& state) {
+    if (state.parent_window != nullptr && IsWindow(state.parent_window)) {
+        SetFocus(state.parent_window);
+    }
+}
+
+void configure_search_lobby_callbacks(SearchLobbyState& state) {
+    state.async_tcp_socket = &FrontendAsyncTcpSocket0();
+    std::snprintf(state.local_account_name.data(), state.local_account_name.size(),
+        "%s", default_online_local_player_name());
+    state.callbacks.send_query = default_search_send_query;
+    state.callbacks.send_selected_name = default_search_send_selected_name;
+    state.callbacks.queue_packet = default_search_queue_packet;
+    state.callbacks.handle_network_message = default_search_handle_network_message;
+    state.callbacks.show_message = default_lobby_show_message;
+    state.callbacks.set_busy = default_lobby_busy_state;
+    state.callbacks.return_to_parent = default_search_return_to_parent;
+    state.callbacks.focus_parent_control = default_search_focus_parent;
+}
+
+void default_online_open_change_lobby(HWND parent, HINSTANCE instance, void*) {
+    open_change_lobby_window(parent, instance, 0);
+}
+
+void default_online_open_search_lobby(HWND parent, HINSTANCE instance, void*) {
+    open_search_lobby_window(parent, instance, 0);
+}
+
+void default_online_open_create_game(HWND parent, HINSTANCE instance, void*) {
+    open_create_game_window(parent, instance, 0, 0);
+}
+
+void default_online_open_free_server_lobby(HWND parent, HINSTANCE instance, void*) {
+    open_free_server_lobby_window(parent, instance, 0);
+}
+
+void default_online_open_view_rank(HWND parent, HINSTANCE instance, void*) {
+    open_view_rank_window(parent, instance, 0);
+}
+
+void default_online_open_avatar(HWND parent, HINSTANCE instance, void*) {
+    open_avatar_window(parent, instance);
+}
+
+void default_online_open_memo(HWND parent, HINSTANCE instance, void*) {
+    open_memo_window(parent, instance);
+}
+
+void default_online_open_emoticon_popup(HWND parent, HINSTANCE instance,
+    POINT screen_point, void*) {
+    open_emoticon_popup_window(parent, instance, screen_point);
+}
+
+void configure_online_lobby_callbacks(OnlineLobbyState& state) {
+    state.async_tcp_socket = &FrontendAsyncTcpSocket0();
+    state.callbacks.return_to_connect_frontend = default_online_return_to_connect;
+    state.callbacks.open_change_lobby = default_online_open_change_lobby;
+    state.callbacks.open_search_lobby = default_online_open_search_lobby;
+    state.callbacks.open_create_game = default_online_open_create_game;
+    state.callbacks.open_free_server_lobby = default_online_open_free_server_lobby;
+    state.callbacks.open_view_rank = default_online_open_view_rank;
+    state.callbacks.open_avatar = default_online_open_avatar;
+    state.callbacks.open_memo = default_online_open_memo;
+    state.callbacks.open_emoticon_popup = default_online_open_emoticon_popup;
+    state.callbacks.send_async_packet = default_online_send_async_packet;
+    state.callbacks.show_message = default_online_show_message;
+    state.callbacks.user_data = nullptr;
+}
+
+const char* default_online_local_player_name() {
+    WizardLoginState& wizard = wizard_login_state();
+    if (wizard.account[0] != '\0') {
+        return wizard.account.data();
+    }
+    if (wizard.display_name[0] != '\0') {
+        return wizard.display_name.data();
+    }
+    if (p2p_network_launch_parameters().player_name[0] != '\0') {
+        return p2p_network_launch_parameters().player_name.data();
+    }
+    return "Player";
+}
+
+void load_default_p2p_ports(u16& tcp_port, u16& udp_port) {
+    ConnectFrontendState& connect = connect_frontend_state();
+    LoadConnectFrontendConfiguration(connect);
+    udp_port = static_cast<u16>(connect.configuration.p2p_udp_port);
+    if (connect.configuration.p2p_tcp_port != 0) {
+        tcp_port = static_cast<u16>(connect.configuration.p2p_tcp_port);
+        return;
+    }
+    tcp_port = udp_port;
+}
+
+u16 default_p2p_tcp_port() {
+    u16 tcp_port = 0;
+    u16 udp_port = 0;
+    load_default_p2p_ports(tcp_port, udp_port);
+    return tcp_port;
+}
+
+template <std::size_t N>
+void copy_p2p_lobby_text(std::array<char, N>& target, const char* source) {
+    target.fill('\0');
+    if (source != nullptr && N != 0) {
+        std::strncpy(target.data(), source, N - 1);
+    }
+}
+
+void default_p2p_handle_prompt_result(P2PLobbyState&, UINT);
+
+bool default_p2p_initialize_network(P2PLobbyState& state) {
+    P2PNetworkLaunchParameters& launch = p2p_network_launch_parameters();
+    if (launch.player_name[0] != '\0') {
+        copy_p2p_lobby_text(state.player_name, launch.player_name.data());
+    }
+    if (launch.remote_address[0] != '\0') {
+        copy_p2p_lobby_text(state.remote_address, launch.remote_address.data());
+    }
+
+    sockaddr_in local_address{};
+    if (ResolveLocalHostIpv4Address(local_address)) {
+        if (const char* text = inet_ntoa(local_address.sin_addr);
+            text != nullptr) {
+            copy_p2p_lobby_text(state.local_address, text);
+        }
+    }
+    return true;
+}
+
+bool default_p2p_start_join(P2PLobbyState& state, const char* remote_address,
+    DWORD app_context, HWND notify_window, UINT notify_message) {
+    const u16 port = static_cast<u16>(app_context);
+    if (remote_address == nullptr || remote_address[0] == '\0' || port == 0) {
+        return false;
+    }
+    if (state.join_socket != INVALID_SOCKET) {
+        CloseLegacySocketRecord(state.join_socket);
+        state.join_socket = INVALID_SOCKET;
+    }
+    return StartLegacySocketConnect(state.join_socket, remote_address, port,
+        notify_window, notify_message);
+}
+
+bool default_p2p_continue_join(P2PLobbyState& state) {
+    if (!state.join_pending) {
+        return true;
+    }
+    return default_p2p_start_join(state, state.remote_address.data(),
+        state.default_tcp_port, state.window, kP2PLobbySocketNotifyMessage);
+}
+
+bool default_p2p_start_host(P2PLobbyState& state) {
+    state.start_game_requested = true;
+    return true;
+}
+
+void default_p2p_cancel_connection(P2PLobbyState& state) {
+    state.join_pending = false;
+    state.join_socket = INVALID_SOCKET;
+    ShutdownLegacyUdpNetworking();
+}
+
+void default_p2p_shutdown_network(P2PLobbyState&) {
+    DeleteLinkLobbySocketCriticalSection(link_lobby_state());
+}
+
+void default_p2p_handle_socket_event(P2PLobbyState& state, WPARAM socket,
+    LPARAM event) {
+    ApplyP2PLobbySocketEvent(state, socket, event);
+}
+
+void default_p2p_return_or_host(HWND parent, HINSTANCE instance,
+    LPARAM return_context) {
+    if (p2p_lobby_state().start_game_requested) {
+        open_create_game_window(parent, instance, return_context, 1);
+        return;
+    }
+    open_connect_frontend_window(parent, instance, return_context);
+}
+
+void open_joined_link_lobby_from_staged_payloads(HWND parent, HINSTANCE instance,
+    LPARAM return_context, int mode, SOCKET pending_join_socket = INVALID_SOCKET) {
+    g_runtime.link_lobby_start_parameters_pending = false;
+    g_runtime.frontend_mode = static_cast<u32>(std::max(mode, 0));
+
+    LinkLobbyState& lobby = link_lobby_state();
+    const auto map_descriptor = lobby.map_descriptor;
+    const auto session_seed = lobby.session_seed_payload;
+    const int game_type = lobby.game_type;
+    const int screen_size = lobby.screen_size_index;
+    const LPARAM join_context =
+        reinterpret_cast<LPARAM>(session_seed.data() + 0x0c);
+
+    destroy_existing_window(lobby.window);
+    configure_link_lobby_callbacks(lobby);
+    lobby.pending_join_socket = pending_join_socket;
+    if (CreateLinkLobbyWindow(lobby, parent, instance, join_context,
+            reinterpret_cast<LPARAM>(map_descriptor.data()),
+            reinterpret_cast<LPARAM>(session_seed.data()), mode, return_context,
+            game_type, screen_size)) {
+        if (!PrepareLinkLobbyMapDownload(lobby)) {
+            ReturnFromLinkLobby(lobby);
+            return;
+        }
+        activate_frontend_state(lobby);
+    }
+}
+
+void default_p2p_start_game(HWND parent, HINSTANCE instance, LPARAM return_context) {
+    open_joined_link_lobby_from_staged_payloads(parent, instance, return_context, 1,
+        p2p_lobby_state().join_socket);
+}
+
+void configure_p2p_callbacks(P2PLobbyState& state) {
+    state.default_tcp_port = default_p2p_tcp_port();
+    state.callbacks.initialize_network = default_p2p_initialize_network;
+    state.callbacks.start_join = default_p2p_start_join;
+    state.callbacks.continue_join = default_p2p_continue_join;
+    state.callbacks.shutdown_network = default_p2p_shutdown_network;
+    state.callbacks.cancel_connection = default_p2p_cancel_connection;
+    state.callbacks.handle_socket_event = default_p2p_handle_socket_event;
+    state.callbacks.handle_prompt_result = default_p2p_handle_prompt_result;
+    state.callbacks.show_message = default_lobby_show_message;
+    state.callbacks.start_host = default_p2p_start_host;
+    state.callbacks.return_to_parent = default_p2p_return_or_host;
+    state.callbacks.start_game = default_p2p_start_game;
+}
+
+void default_free_open_connect(FreeServerLobbyState& state) {
+    open_connect_frontend_window(state.main_window, state.instance, state.return_context);
+}
+
+void default_free_start_game(FreeServerLobbyState& state) {
+    open_joined_link_lobby_from_staged_payloads(state.main_window, state.instance,
+        state.return_context, 2);
+}
+
+void configure_free_server_callbacks(FreeServerLobbyState& state) {
+    state.async_tcp_socket = &FrontendAsyncTcpSocket0();
+    state.callbacks.open_connect_frontend = default_free_open_connect;
+    state.callbacks.start_game = default_free_start_game;
+}
+
+void default_ipx_open_create_game(IpxLobbyState& state) {
+    open_create_game_window(state.main_window, state.instance, state.return_context, 3);
+}
+
+void default_ipx_open_connect(IpxLobbyState& state) {
+    open_connect_frontend_window(state.main_window, state.instance, state.return_context);
+}
+
+void default_ipx_start_game(IpxLobbyState& state) {
+    open_joined_link_lobby_from_staged_payloads(state.main_window, state.instance,
+        state.return_context, 3);
+}
+
+void configure_ipx_callbacks(IpxLobbyState& state) {
+    state.callbacks.open_create_game = default_ipx_open_create_game;
+    state.callbacks.open_connect_frontend = default_ipx_open_connect;
+    state.callbacks.start_game = default_ipx_start_game;
+}
+
+void default_link_open_connect(LinkLobbyState& state) {
+    open_connect_frontend_window(state.main_window, state.instance, state.return_context);
+}
+
+void default_link_open_online(LinkLobbyState& state) {
+    open_online_lobby_window(state.main_window, state.instance, state.return_context);
+}
+
+void default_link_open_p2p(LinkLobbyState& state) {
+    open_p2p_lobby_window(state.main_window, state.instance, state.return_context);
+}
+
+void default_link_open_ipx(LinkLobbyState& state) {
+    open_ipx_lobby_window(state.main_window, state.instance, state.return_context);
+}
+
+void default_link_start_game(LinkLobbyState& state) {
+    const u32 mode = state.mode >= 0 ?
+        static_cast<u32>(state.mode) : g_runtime.frontend_mode;
+    g_runtime.frontend_mode = mode;
+    g_runtime.link_lobby_start_parameters_pending =
+        !state.start_parameter_payload.empty();
+    SetActiveNetworkTransportMode(static_cast<i32>(mode));
+    if (state.main_window != nullptr && IsWindow(state.main_window)) {
+        PostMessageA(state.main_window, WM_USER + 8, 0, 2);
+        return;
+    }
+    queue_default_gameplay_session_transition(state.main_window, mode);
+}
+
+void default_link_queue_packet(LinkLobbyState&, const void* packet,
+    i32 byte_count) {
+    if (packet == nullptr || byte_count <= 0) {
+        return;
+    }
+    PrepareAndQueueLegacyAsyncTcpSend(FrontendAsyncTcpSocket0(),
+        const_cast<void*>(packet), byte_count);
+}
+
+bool default_link_finalize_start_sync(LinkLobbyState& state) {
+    return SendLinkLobbyStartParametersPacket(state);
+}
+
+void default_link_shutdown_network(LinkLobbyState& state) {
+    CloseAllLegacySocketRecords();
+    if (state.map_download_state == 2 && !state.prepared_map_path.empty()) {
+        DeleteFileA(state.prepared_map_path.c_str());
+        state.map_download_state = 0;
+    }
+}
+
+void configure_link_lobby_callbacks(LinkLobbyState& state) {
+    load_default_p2p_ports(state.default_tcp_port, state.default_udp_port);
+    ConnectFrontendState& connect = connect_frontend_state();
+    LoadConnectFrontendConfiguration(connect);
+    state.default_peer_probe_port =
+        static_cast<u16>(connect.configuration.server_port);
+    std::snprintf(state.default_peer_probe_host.data(),
+        state.default_peer_probe_host.size(), "%s",
+        connect.configuration.default_server_address.c_str());
+    state.async_tcp_socket = &FrontendAsyncTcpSocket0();
+    state.callbacks.open_connect_frontend = default_link_open_connect;
+    state.callbacks.open_online_lobby = default_link_open_online;
+    state.callbacks.open_p2p_lobby = default_link_open_p2p;
+    state.callbacks.open_ipx_lobby = default_link_open_ipx;
+    state.callbacks.start_game = default_link_start_game;
+    state.callbacks.shutdown_network = default_link_shutdown_network;
+    state.callbacks.show_message = nullptr;
+    state.callbacks.queue_packet = default_link_queue_packet;
+    state.callbacks.finalize_start_sync = default_link_finalize_start_sync;
+}
+
+void default_create_game_open_p2p(CreateGameState& state) {
+    open_p2p_lobby_window(state.main_window, state.instance, state.return_context);
+}
+
+void default_create_game_open_ipx(CreateGameState& state) {
+    open_ipx_lobby_window(state.main_window, state.instance, state.return_context);
+}
+
+void default_create_game_open_connect(CreateGameState& state) {
+    open_connect_frontend_window(state.main_window, state.instance, state.return_context);
+}
+
+void default_create_game_queue_packet(CreateGameState&, const void* packet,
+    i32 byte_count) {
+    if (packet == nullptr || byte_count <= 0) {
+        return;
+    }
+    const auto* bytes = static_cast<const u8*>(packet);
+    std::vector<u8> copy(bytes, bytes + byte_count);
+    PrepareAndQueueLegacyAsyncTcpSend(FrontendAsyncTcpSocket0(), copy.data(),
+        static_cast<i32>(copy.size()), nullptr);
+}
+
+constexpr std::size_t kCreateGameDirectPlayMapPlayerCountOffset = 0x168;
+
+bool default_create_game_prepare_ipx_host_session(CreateGameState& state) {
+    AsyncComContext& context = g_runtime.async_com;
+    const DirectPlayConnectionRecord* connection = context.selected_connection;
+    if (connection == nullptr ||
+        FAILED(InitializeDirectPlayConnection(*connection, &context))) {
+        return false;
+    }
+
+    const auto& ipx_frontend = ipx_frontend_state();
+    const char* player_name = ipx_frontend.player_name[0] != '\0' ?
+        ipx_frontend.player_name.data() : state.local_player_name.data();
+    const HRESULT result = HostDirectPlayJwarSessionRecord(state.game_name.data(),
+        state.password.data(),
+        state.map_descriptor_payload[kCreateGameDirectPlayMapPlayerCountOffset],
+        LoadTrcRecord9Value(), player_name, state.map_descriptor_payload.data(),
+        static_cast<DWORD>(state.map_descriptor_payload.size()), 0, &context);
+    return SUCCEEDED(result);
+}
+
+void default_create_game_open_link_lobby(CreateGameState& state) {
+    if (state.mode >= 0 && state.mode < 3 && !InitializeLegacyTcpNetworking()) {
+        ShowOnlineModalPrompt1(online_modal_prompt_state(), state.window,
+            startup_message_row(55, "Create game failed: TCP/IP error."),
+            RGB(250, 250, 250));
+        return;
+    }
+    if (state.mode == 3 && !default_create_game_prepare_ipx_host_session(state)) {
+        ShowOnlineModalPrompt1(online_modal_prompt_state(), state.window,
+            startup_message_row(56, "Create game failed: DirectX IPX error."),
+            RGB(250, 250, 250));
+        return;
+    }
+
+    HWND owner = state.main_window;
+    HINSTANCE instance = state.instance;
+    LPARAM return_context = state.return_context;
+    const int mode = state.mode;
+    const auto map_descriptor = state.map_descriptor_payload;
+    const auto session_seed = state.session_seed_payload;
+
+    LinkLobbyState& lobby = link_lobby_state();
+    destroy_existing_window(lobby.window);
+    configure_link_lobby_callbacks(lobby);
+    destroy_existing_window(state.window);
+    if (CreateLinkLobbyWindow(lobby, owner, instance, 0,
+            reinterpret_cast<LPARAM>(map_descriptor.data()),
+            reinterpret_cast<LPARAM>(session_seed.data()), mode, return_context,
+            state.game_type, state.screen_size)) {
+        activate_frontend_state(lobby);
+    }
+}
+
+void configure_create_game_callbacks(CreateGameState& state) {
+    state.async_tcp_socket = &FrontendAsyncTcpSocket0();
+    std::snprintf(state.local_player_name.data(), state.local_player_name.size(),
+        "%s", default_online_local_player_name());
+    state.callbacks.open_link_lobby = default_create_game_open_link_lobby;
+    state.callbacks.open_p2p_lobby = default_create_game_open_p2p;
+    state.callbacks.open_ipx_lobby = default_create_game_open_ipx;
+    state.callbacks.open_connect_frontend = default_create_game_open_connect;
+    state.callbacks.show_message = default_lobby_show_message;
+    state.callbacks.queue_packet = default_create_game_queue_packet;
+}
+
+void open_connect_frontend_window(HWND parent, HINSTANCE instance, LPARAM return_context) {
+    ConnectFrontendState& state = connect_frontend_state();
+    destroy_existing_window(state.window);
+    configure_connect_callbacks(state);
+    if (CreateConnectFrontendWindow(state, parent, instance, return_context)) {
+        activate_frontend_state(state);
+    }
+}
+
+const DirectPlayConnectionRecord* default_ipx_connection_record() {
+    const AsyncComRuntimeState& runtime = async_com_state();
+    const GUID null_guid{};
+    if (std::memcmp(&runtime.ipx_provider, &null_guid, sizeof(null_guid)) == 0) {
+        return nullptr;
+    }
+    for (const DirectPlayConnectionRecord& connection : runtime.connections) {
+        if (std::memcmp(&connection.service_provider, &runtime.ipx_provider,
+                sizeof(connection.service_provider)) == 0 &&
+            !connection.connection_data.empty()) {
+            return &connection;
+        }
+    }
+    return nullptr;
+}
+
+bool default_ipx_frontend_open_lobby(IpxFrontendState& state) {
+    IpxLobbyState& lobby = ipx_lobby_state();
+    destroy_existing_window(lobby.window);
+    configure_ipx_callbacks(lobby);
+    if (!CreateIpxLobbyWindow(lobby, state.main_window, state.instance,
+            state.return_context, state.async_context)) {
+        return false;
+    }
+    activate_frontend_state(lobby);
+    return true;
+}
+
+void default_ipx_frontend_open_connect(IpxFrontendState& state) {
+    open_connect_frontend_window(state.main_window, state.instance,
+        state.return_context);
+}
+
+void open_ipx_frontend_window(HWND parent, HINSTANCE instance, LPARAM return_context) {
+    IpxFrontendState& state = ipx_frontend_state();
+    destroy_existing_window(state.window);
+    state.callbacks = {};
+    state.callbacks.open_ipx_lobby = default_ipx_frontend_open_lobby;
+    state.callbacks.open_connect_frontend = default_ipx_frontend_open_connect;
+    state.callbacks.show_message = default_lobby_show_message;
+    state.main_window = parent;
+    state.parent_window = parent;
+    state.instance = instance;
+    state.return_context = return_context;
+    state.async_context = &g_runtime.async_com;
+    state.ipx_connection = default_ipx_connection_record();
+    state.ipx_mode_enabled = state.ipx_connection != nullptr;
+    if (CreateIpxFrontendWindow(state, parent, instance, return_context,
+            &g_runtime.async_com)) {
+        activate_frontend_state(state);
+    }
+}
+
+void open_wizard_login_window(HWND parent, HINSTANCE instance, LPARAM return_context,
+    const char* account, const char* password) {
+    WizardLoginState& state = wizard_login_state();
+    destroy_existing_window(state.window);
+    configure_wizard_callbacks(state);
+    if (account != nullptr) {
+        std::snprintf(state.account.data(), state.account.size(), "%s", account);
+    }
+    if (password != nullptr) {
+        std::snprintf(state.password.data(), state.password.size(), "%s", password);
+    }
+    if (CreateWizardLoginWindow(state, parent, instance, return_context)) {
+        activate_frontend_state(state);
+    }
+}
+
+void open_account_profile_window(HWND parent, HINSTANCE instance, LPARAM account,
+    LPARAM password) {
+    AccountProfileState& state = account_profile_state();
+    destroy_existing_window(state.window);
+    configure_account_callbacks(state);
+    if (CreateAccountProfileWindow(state, parent, instance, account, password)) {
+        activate_frontend_state(state);
+    }
+}
+
+void open_change_password_window(HWND parent, HINSTANCE instance, LPARAM account,
+    LPARAM old_password) {
+    ChangePasswordState& state = change_password_state();
+    destroy_existing_window(state.window);
+    configure_change_password_callbacks(state);
+    if (CreateChangePasswordWindow(state, parent, instance, account, old_password)) {
+        activate_frontend_state(state);
+    }
+}
+
+void open_online_lobby_window(HWND parent, HINSTANCE instance, LPARAM return_context) {
+    OnlineLobbyState& state = online_lobby_state();
+    destroy_existing_window(state.window);
+    configure_online_lobby_callbacks(state);
+    state.local_player_name = default_online_local_player_name();
+    if (CreateOnlineLobbyWindow(state, parent, instance, return_context, false)) {
+        activate_frontend_state(state);
+    }
+}
+
+void open_online_lobby_reconnect_window(HWND parent, HINSTANCE instance,
+    LPARAM return_context) {
+    OnlineLobbyState& state = online_lobby_state();
+    destroy_existing_window(state.window);
+    configure_online_lobby_callbacks(state);
+    state.local_player_name = default_online_local_player_name();
+    if (CreateOnlineLobbyWindow(state, parent, instance, return_context, true)) {
+        activate_frontend_state(state);
+    }
+}
+
+void open_change_lobby_window(HWND parent, HINSTANCE instance, LPARAM return_context) {
+    ChangeLobbyState& state = change_lobby_state();
+    destroy_existing_window(state.window);
+    configure_change_lobby_callbacks(state);
+    if (CreateChangeLobbyWindow(state, parent, instance, return_context)) {
+        activate_frontend_state(state);
+    }
+}
+
+void open_search_lobby_window(HWND parent, HINSTANCE instance, LPARAM return_context) {
+    SearchLobbyState& state = search_lobby_state();
+    destroy_existing_window(state.window);
+    configure_search_lobby_callbacks(state);
+    if (CreateSearchLobbyWindow(state, parent, instance, return_context)) {
+        activate_frontend_state(state);
+    }
+}
+
+void open_emoticon_popup_window(HWND parent, HINSTANCE instance, POINT screen_point) {
+    OnlineLobbyState& lobby = online_lobby_state();
+    EmoticonPopupState& state = emoticon_popup_state();
+    destroy_existing_window(state.popup_window);
+    InitializeEmoticonPopupSupport(state);
+    SetEmoticonPopupHostState(state, g_runtime.main_window, parent,
+        lobby.chat_edit != nullptr ? lobby.chat_edit : parent,
+        g_runtime.active_accelerators, g_runtime.active_accelerator_window);
+    if (CreateEmoticonPopupWindow(state, parent, instance, screen_point.x,
+            screen_point.y, "Emo", lobby.icon_sheet)) {
+        InstallEmoticonPopupAccelerators(state);
+        activate_frontend_window(state.popup_window, state.active_accelerators);
+    }
+}
+
+void default_avatar_return_to_online_lobby(AvatarWindowState& state) {
+    if (state.parent_window != nullptr && IsWindow(state.parent_window)) {
+        activate_frontend_window(state.parent_window, state.saved_accelerators);
+        SetFocus(state.parent_window);
+    }
+}
+
+bool default_avatar_lookup_definition(AvatarWindowState&, i32 avatar_id,
+    AvatarDefinitionStats& stats) {
+    if (avatar_id < 0) {
+        return false;
+    }
+
+    UnitLifecycleContext fallback_context{};
+    const UnitMovementDefinition* definition =
+        default_unit_lifecycle_find_definition(fallback_context,
+            static_cast<u32>(avatar_id));
+    if (definition == nullptr) {
+        return false;
+    }
+
+    const std::string display_name =
+        startup_unit_name_or_fallback(static_cast<u32>(avatar_id));
+    std::snprintf(stats.display_name.data(), stats.display_name.size(),
+        "%s", display_name.c_str());
+    stats.hp = static_cast<i32>(definition->initial_max_health);
+    stats.mp = static_cast<i32>(definition->initial_max_secondary_value);
+    stats.op = static_cast<i32>(definition->profile_offense_value);
+    stats.dp = static_cast<i32>(definition->profile_defense_value);
+    stats.next_exp_base = static_cast<i32>(std::max<u32>(
+        definition->avatar_next_exp_base, 1));
+    stats.next_exp_per_level = static_cast<i32>(
+        definition->avatar_next_exp_per_level);
+    return true;
+}
+
+bool default_avatar_item_compatible(AvatarWindowState& state, i32 avatar_slot,
+    i32 item_id) {
+    if (avatar_slot < 0 ||
+        avatar_slot >= static_cast<i32>(state.owned_avatars.size()) ||
+        item_id <= 0) {
+        return false;
+    }
+
+    UnitEquipmentCatalog& catalog = frontend_bootstrap_state().equipment_catalog;
+    if (catalog.effects.empty()) {
+        LoadUnitEquipmentCatalogFromJw210Trc(catalog);
+    }
+    const UnitEquipmentEffectDefinition* effect =
+        FindUnitEquipmentEffect(catalog, static_cast<u32>(item_id));
+    if (effect == nullptr) {
+        return true;
+    }
+
+    const AvatarOwnedSlot& avatar =
+        state.owned_avatars[static_cast<std::size_t>(avatar_slot)];
+    if (avatar.avatar_id < 0) {
+        return false;
+    }
+
+    UnitMovementUnit unit{};
+    unit.type_id = static_cast<u32>(avatar.avatar_id);
+    UnitLifecycleContext fallback_context{};
+    if (const UnitMovementDefinition* definition =
+            default_unit_lifecycle_find_definition(fallback_context, unit.type_id)) {
+        unit.definition = *definition;
+    }
+    return UnitEquipmentEffectAllowsUnitType(unit, *effect);
+}
+
+void open_avatar_window(HWND parent, HINSTANCE instance) {
+    AvatarWindowState& state = avatar_window_state();
+    destroy_existing_window(state.window);
+    state.callbacks = {};
+    state.callbacks.return_to_online_lobby = default_avatar_return_to_online_lobby;
+    state.callbacks.show_message = default_avatar_show_message;
+    state.callbacks.lookup_avatar_definition = default_avatar_lookup_definition;
+    state.callbacks.item_compatible_with_avatar = default_avatar_item_compatible;
+    if (CreateAvatarWindow(state, parent, instance, &FrontendAsyncTcpSocket0())) {
+        activate_frontend_state(state);
+    }
+}
+
+void default_memo_return_to_online_lobby(MemoWindowState& state) {
+    if (state.parent_window != nullptr && IsWindow(state.parent_window)) {
+        activate_frontend_window(state.parent_window, state.saved_accelerators);
+        SetFocus(state.parent_window);
+    }
+}
+
+void open_memo_window(HWND parent, HINSTANCE instance) {
+    MemoWindowState& state = memo_window_state();
+    destroy_existing_window(state.window);
+    state.callbacks = {};
+    state.callbacks.return_to_online_lobby = default_memo_return_to_online_lobby;
+    if (CreateMemoWindow(state, parent, instance, &FrontendAsyncTcpSocket0())) {
+        activate_frontend_state(state);
+    }
+}
+
+void default_figs_open_connect(FigsState& state) {
+    open_connect_frontend_window(state.main_window, state.instance, state.return_context);
+}
+
+void default_figs_connect_to_entry(FigsState& state, const FigsEntry& entry) {
+    WizardLoginState& wizard = wizard_login_state();
+    destroy_existing_window(wizard.window);
+    configure_wizard_callbacks(wizard);
+    std::snprintf(wizard.server_address.data(), wizard.server_address.size(), "%s",
+        entry.address.data());
+    if (CreateWizardLoginWindow(wizard, state.main_window, state.instance, 2)) {
+        activate_frontend_state(wizard);
+    }
+}
+
+void configure_figs_callbacks(FigsState& state) {
+    state.callbacks.open_connect_frontend = default_figs_open_connect;
+    state.callbacks.connect_to_entry = default_figs_connect_to_entry;
+}
+
+void open_figs_window(HWND parent, HINSTANCE instance, LPARAM return_context) {
+    FigsState& state = figs_state();
+    destroy_existing_window(state.window);
+    configure_figs_callbacks(state);
+    if (CreateFigsWindow(state, parent, instance, return_context)) {
+        activate_frontend_state(state);
+    }
+}
+
+void default_view_rank_open_connect(ViewRankState& state) {
+    HWND parent = g_runtime.main_window != nullptr ? g_runtime.main_window :
+        state.main_window;
+    open_connect_frontend_window(parent, state.instance, state.return_context);
+}
+
+void open_view_rank_window(HWND parent, HINSTANCE instance, LPARAM return_context) {
+    ViewRankState& state = view_rank_state();
+    destroy_existing_window(state.window);
+    state.callbacks = {};
+    state.callbacks.open_connect_frontend = default_view_rank_open_connect;
+    if (CreateViewRankWindow(state, parent, instance, return_context,
+            &FrontendAsyncTcpSocket0())) {
+        activate_frontend_state(state);
+    }
+}
+
+void open_p2p_lobby_window(HWND parent, HINSTANCE instance, LPARAM return_context) {
+    P2PLobbyState& state = p2p_lobby_state();
+    destroy_existing_window(state.window);
+    configure_p2p_callbacks(state);
+    if (CreateP2PLobbyWindow(state, parent, instance, return_context)) {
+        activate_frontend_state(state);
+    }
+}
+
+void open_free_server_lobby_window(HWND parent, HINSTANCE instance,
+    LPARAM return_context) {
+    FreeServerLobbyState& state = free_server_lobby_state();
+    destroy_existing_window(state.window);
+    configure_free_server_callbacks(state);
+    if (CreateFreeServerLobbyWindow(state, parent, instance, return_context)) {
+        activate_frontend_state(state);
+    }
+}
+
+void open_ipx_lobby_window(HWND parent, HINSTANCE instance, LPARAM return_context) {
+    IpxLobbyState& state = ipx_lobby_state();
+    destroy_existing_window(state.window);
+    configure_ipx_callbacks(state);
+    if (CreateIpxLobbyWindow(state, parent, instance, return_context,
+            &g_runtime.async_com)) {
+        activate_frontend_state(state);
+    }
+}
+
+void open_create_game_window(HWND parent, HINSTANCE instance, LPARAM return_context,
+    int mode) {
+    CreateGameState& state = create_game_state();
+    destroy_existing_window(state.window);
+    configure_create_game_callbacks(state);
+    if (CreateCreateGameWindow(state, parent, instance, return_context, mode)) {
+        activate_frontend_state(state);
+    }
+}
+
+const char* gameplay_transition_mode_label(u32 mode) {
+    switch (mode) {
+    case 1:
+        return "P2P";
+    case 2:
+        return "free-server";
+    case 3:
+        return "IPX";
+    default:
+        return "online";
+    }
+}
+
+template <std::size_t N>
+void copy_result_text(std::array<char, N>& dest, const char* text) {
+    std::snprintf(dest.data(), dest.size(), "%s", text != nullptr ? text : "");
+}
+
+P2PGameEndReason p2p_result_end_reason_from_modal_result(int result) {
+    if (result == 0) {
+        return P2PGameEndReason::NoError;
+    }
+    if (result >= 0 && result <= static_cast<int>(P2PGameEndReason::NetworkError)) {
+        return static_cast<P2PGameEndReason>(result);
+    }
+    return P2PGameEndReason::NoGameplayAbort;
+}
+
+std::string default_p2p_result_player_name(
+    u32 owner, const P2PGameSessionStartState& p2p) {
+    if (owner < g_runtime.gameplay_startup_state.owner_display_names.size() &&
+        !g_runtime.gameplay_startup_state.owner_display_names[owner].empty()) {
+        return g_runtime.gameplay_startup_state.owner_display_names[owner];
+    }
+    if (owner < p2p.network_index_by_owner.size()) {
+        const u32 network_index = p2p.network_index_by_owner[owner];
+        if (network_index < p2p.network_player_count &&
+            network_index < p2p.player_names.size() &&
+            p2p.player_names[network_index][0] != '\0') {
+            return p2p.player_names[network_index].data();
+        }
+    }
+
+    char fallback[32]{};
+    std::snprintf(fallback, sizeof(fallback), "Player %u", owner + 1);
+    return fallback;
+}
+
+bool default_p2p_result_slot_playing(const PlayerSlotRuntimeState& players, u32 owner) {
+    return owner < players.slot_states.size() &&
+        players.slot_states[owner] != static_cast<u8>(PlayerSlotState::disabled);
+}
+
+void default_gameplay_flow_write_p2p_result_file(
+    GameplaySessionFlowState& state, int result) {
+    P2PGameResultFileInput input{};
+    const PlayerSlotRuntimeState& players = g_runtime.gameplay_player_slots;
+    const GameplaySessionStartupState& startup = g_runtime.gameplay_startup_state;
+    const P2PGameSessionStartState& p2p = g_runtime.p2p_session_start_state;
+    const bool normal_end = result == 0;
+    const u32 network_player_count = std::min<u32>(
+        p2p.network_player_count, static_cast<u32>(input.players.size()));
+
+    input.version_packed = LoadTrcRecord9Value();
+    input.local_player_slot = std::min<u32>(
+        players.local_player_slot, static_cast<u32>(input.players.size() - 1));
+    input.active_player_count = std::min<u32>(
+        std::max<u32>(players.active_slot_count, 1),
+        static_cast<u32>(input.players.size()));
+    input.connected_player_count = network_player_count != 0 ?
+        network_player_count : input.active_player_count;
+
+    for (u32 owner = 0; owner < input.players.size(); ++owner) {
+        P2PGameResultPlayer& player = input.players[owner];
+        const std::string name = default_p2p_result_player_name(owner, p2p);
+        copy_result_text(player.result_name, name.c_str());
+        copy_result_text(player.network_name, name.c_str());
+        player.faction = owner < startup.owner_faction_ids.size() ?
+            startup.owner_faction_ids[owner] : 0;
+        player.selected_tribe = owner < startup.owner_tribe_ids.size() ?
+            startup.owner_tribe_ids[owner] : player.faction;
+        player.ally_mask = owner < players.owner_relation_masks.size() ?
+            players.owner_relation_masks[owner] : 0;
+        player.playing = default_p2p_result_slot_playing(players, owner);
+    }
+
+    if (!normal_end && network_player_count != 0) {
+        for (u32 index = 0; index < network_player_count; ++index) {
+            P2PGameResultPlayer& player = input.players[index];
+            copy_result_text(player.network_name, p2p.player_names[index].data());
+            if (player.result_name[0] == '\0') {
+                copy_result_text(player.result_name, p2p.player_names[index].data());
+            }
+            player.playing = p2p.player_names[index][0] != '\0';
+        }
+    }
+
+    input.client_player_name = input.players[input.local_player_slot].result_name.data();
+    const P2PGameWinResult win_result = normal_end ?
+        static_cast<P2PGameWinResult>(state.p2p_win_result) :
+        P2PGameWinResult::Draw;
+    WriteP2PGameResultFile(input, win_result,
+        p2p_result_end_reason_from_modal_result(result));
+}
+
+void default_gameplay_flow_set_cursor(GameplaySessionFlowState&) {
+    g_runtime.hide_cursor = false;
+    SetGameCursorIndex(gameplay_loop_state().current_cursor_index);
+    ShowGameCursor();
+}
+
+void default_gameplay_flow_hide_cursor(GameplaySessionFlowState&) {
+    g_runtime.hide_cursor = true;
+    HideGameCursor();
+}
+
+void default_gameplay_flow_show_cursor(GameplaySessionFlowState&) {
+    g_runtime.hide_cursor = false;
+    ShowGameCursor();
+}
+
+void default_gameplay_flow_frame_boundary(GameplaySessionFlowState&) {
+    YieldBackgroundWorkerThreadSlice();
+}
+
+void default_gameplay_flow_send_p2p_game_flow_modal(GameplaySessionFlowState& state) {
+    if (g_runtime.main_window != nullptr && IsWindow(g_runtime.main_window)) {
+        SendMessageA(g_runtime.main_window, WM_USER + 8, 0, 2);
+        return;
+    }
+
+    state.modal_result = GameplayModalResult::ContinueNetwork;
+    state.worker_modal_pending = 0;
+}
+
+void default_gameplay_flow_immediate_dialog_sound(GameplaySessionFlowState& state) {
+    HandleImmediateDialogGameplaySound(g_runtime.gameplay_sound,
+        state.immediate_dialog_sound_selector,
+        state.immediate_dialog_sound_world_delta);
+}
+
+void default_gameplay_flow_reset_input(GameplaySessionFlowState&) {
+    ResetInputState();
+}
+
+void default_gameplay_flow_cleanup_after_close(GameplaySessionFlowState&) {
+    ResetInputState();
+}
+
+void default_gameplay_flow_final_worker_cleanup(GameplaySessionFlowState&) {
+    if (g_runtime.worker_thread != nullptr &&
+        g_runtime.worker_thread_id == GetCurrentThreadId()) {
+        ExitBackgroundWorkerThread();
+        return;
+    }
+    ResetInputState();
+}
+
+void default_gameplay_flow_release_loaded_resources(GameplaySessionFlowState& state) {
+    if (state.loaded_resource_base_owned &&
+        state.loaded_resource_base != kInvalidResourceEntry) {
+        ReleaseResourceEntriesFrom(state.loaded_resource_base);
+    }
+    state.loaded_resource_base = kInvalidResourceEntry;
+    state.loaded_palette_slot = kInvalidResourceEntry;
+    state.loaded_resource_base_owned = false;
+}
+
+void default_gameplay_flow_shutdown_primary_music_policy(GameplaySessionFlowState&) {
+    ShutdownPrimaryMilesMusicPolicy();
+}
+
+void default_gameplay_flow_set_primary_music_policy_mode(
+    GameplaySessionFlowState&, u32 mode) {
+    set_default_primary_miles_music_policy_mode(mode);
+}
+
+void default_gameplay_display_reset_overlay() {
+    g_runtime.suppress_paint = false;
+}
+
+void default_gameplay_display_frame_boundary() {
+    YieldBackgroundWorkerThreadSlice();
+}
+
+void default_gameplay_display_configure_surfaces(u32 width, u32 height, u32 color_depth) {
+    char text[160]{};
+    std::snprintf(text, sizeof(text),
+        "Gameplay display configured through reconstructed state: %ux%ux%u.\n",
+        width, height, color_depth);
+    OutputDebugStringA(text);
+}
+
+bool gameplay_modal_ui_is_active(const GameplayModalUiState& state) {
+    return state.main_menu_active || state.scenario_message_active ||
+        state.exit_surrender_active || state.options_active ||
+        state.relation_mask_active || state.observer_mask_active ||
+        state.wait_dialog_active || state.replay_modal_pending;
+}
+
+bool default_gameplay_input_can_skip_input_drain(GameplayInputActionState& state) {
+    const bool modal_active = gameplay_modal_ui_is_active(gameplay_modal_ui_state());
+    state.modal_route_blocked = modal_active;
+    return modal_active;
+}
+
+void configure_default_gameplay_input_action_context(
+    GameplayInputActionState& state);
+void install_default_gameplay_session_flow_callbacks(GameplaySessionFlowState& state);
+
+GameplaySessionFlowState& prepare_default_modal_session_flow() {
+    GameplaySessionFlowState& flow = g_runtime.gameplay_session_flow;
+    install_default_gameplay_session_flow_callbacks(flow);
+    for (std::size_t index = 0; index < flow.save_slots.size(); ++index) {
+        if (!flow.save_slots[index].path.empty()) {
+            continue;
+        }
+        char path[MAX_PATH]{};
+        std::snprintf(path, sizeof(path), "Save\\Jw2_%02zu.sav", index + 1);
+        flow.save_slots[index].path = path;
+    }
+    return flow;
+}
+
+GameplayModalSaveSlotState modal_save_slot_state_from_flow(
+    GameplaySaveSlotStatus status) {
+    switch (status) {
+    case GameplaySaveSlotStatus::Valid:
+        return GameplayModalSaveSlotState::Occupied;
+    case GameplaySaveSlotStatus::Invalid:
+        return GameplayModalSaveSlotState::Invalid;
+    case GameplaySaveSlotStatus::Empty:
+    default:
+        return GameplayModalSaveSlotState::Empty;
+    }
+}
+
+void sync_default_modal_save_slots_from_session_flow(
+    GameplayModalUiState& modal, const GameplaySessionFlowState& flow) {
+    for (std::size_t index = 0;
+         index < modal.save_slots.size() && index < flow.save_slots.size(); ++index) {
+        modal.save_slots[index].state =
+            modal_save_slot_state_from_flow(flow.save_slots[index].status);
+        modal.save_slots[index].label = flow.save_slots[index].title;
+    }
+}
+
+std::string default_gameplay_modal_player_display_name(u32 owner) {
+    if (owner < g_runtime.gameplay_startup_state.owner_display_names.size() &&
+        !g_runtime.gameplay_startup_state.owner_display_names[owner].empty()) {
+        return g_runtime.gameplay_startup_state.owner_display_names[owner];
+    }
+    char name[32]{};
+    std::snprintf(name, sizeof(name), "Player %u", owner + 1);
+    return name;
+}
+
+void sync_default_gameplay_modal_players(GameplayModalUiState& modal) {
+    const PlayerSlotRuntimeState& players = g_runtime.gameplay_player_slots;
+    const Mode1ReliableRuntimeState& reliable = mode1_reliable_state();
+    if (reliable.initialized) {
+        modal.wait_required_packet_count = reliable.sync_threshold;
+    }
+    for (u32 owner = 0; owner < modal.players.size(); ++owner) {
+        GameplayModalPlayerSlot& row = modal.players[owner];
+        row.slot_state = owner < players.slot_states.size() ?
+            players.slot_states[owner] : static_cast<u8>(PlayerSlotState::disabled);
+        row.relation_mask = owner < players.owner_relation_masks.size() ?
+            players.owner_relation_masks[owner] : 0;
+        row.visibility_mask = owner < players.owner_visibility_masks.size() ?
+            players.owner_visibility_masks[owner] : 0;
+        row.display_name = default_gameplay_modal_player_display_name(owner);
+        if (reliable.initialized && owner < kMode1ReliableChannelCount) {
+            modal.wait_packet_counts[owner] = reliable.subtype10_counts[owner];
+            modal.wait_elapsed_ms[owner] = reliable.wait_budget[owner];
+            row.wait_ready = reliable.wait_budget[owner] == 0;
+        }
+    }
+    if (!modal.relation_mask_active && modal.local_player_index < 32) {
+        modal.relation_observer_flag =
+            ((players.global_active_slot_mask >> modal.local_player_index) & 1u) != 0;
+    }
+}
+
+void sync_default_gameplay_movement_layer_record(
+    u32 relative_record, u32 UnitMovementCell::* field) {
+    std::vector<u8>* record = MutableGameplaySessionLoadedRecord(relative_record);
+    const UnitMovementMap& map = g_runtime.gameplay_movement_context.map;
+    if (record == nullptr || record->size() < sizeof(u32) || map.cells.empty()) {
+        return;
+    }
+
+    const u32 record_cells = static_cast<u32>(
+        std::min<std::size_t>(record->size() / sizeof(u32),
+            std::numeric_limits<u32>::max()));
+    for (u32 y = 0; y < map.height; ++y) {
+        for (u32 x = 0; x < map.width; ++x) {
+            const u32 cell = UnitMovementMapTileIndex(map, x, y);
+            if (cell >= record_cells || cell >= map.cells.size()) {
+                continue;
+            }
+            write_default_session_buffer_u32(
+                *record, static_cast<std::size_t>(cell) * sizeof(u32),
+                map.cells[cell].*field);
+        }
+    }
+}
+
+void sync_default_gameplay_movement_map_session_records() {
+    sync_default_gameplay_movement_layer_record(
+        kGameplayScenarioMapLayerRecordIndex, &UnitMovementCell::flags);
+    sync_default_gameplay_movement_layer_record(
+        kGameplayMapSourceLayerRecordIndex, &UnitMovementCell::alternate_flags);
+    sync_default_gameplay_movement_layer_record(
+        kGameplayMapEffectLayerRecordIndex, &UnitMovementCell::visibility_flags);
+}
+
+void sync_default_map_effect_context_session_record() {
+    std::vector<u8>* record =
+        MutableGameplaySessionLoadedRecord(kGameplayMapEffectObjectRecordIndex);
+    if (record == nullptr ||
+        record->size() < kGameplayMapEffectObjectStride * 2) {
+        return;
+    }
+
+    const u32 object_count = std::min<u32>(
+        static_cast<u32>(record->size() / kGameplayMapEffectObjectStride),
+        kGameplayMapEffectObjectMaxSlots);
+    std::vector<bool> active(object_count, false);
+    std::vector<u32> active_indices;
+    active_indices.reserve(g_runtime.map_effect_context.active_effect_indices.size());
+    for (u32 index : g_runtime.map_effect_context.active_effect_indices) {
+        if (index == 0 || index >= object_count ||
+            index >= g_runtime.map_effect_context.effects.size() ||
+            active[index]) {
+            continue;
+        }
+        const MapEffectInstance& effect =
+            g_runtime.map_effect_context.effects[index];
+        if (!effect.active || effect.effect_id == 0) {
+            continue;
+        }
+        active[index] = true;
+        active_indices.push_back(index);
+    }
+
+    for (std::size_t position = 0; position < active_indices.size(); ++position) {
+        const u32 index = active_indices[position];
+        const MapEffectInstance& effect =
+            g_runtime.map_effect_context.effects[index];
+        const std::size_t object_base =
+            static_cast<std::size_t>(index) * kGameplayMapEffectObjectStride;
+        const u32 previous_offset = position == 0 ? 0 :
+            active_indices[position - 1] * kGameplayMapEffectObjectStride;
+        const u32 next_offset = position + 1 >= active_indices.size() ? 0 :
+            active_indices[position + 1] * kGameplayMapEffectObjectStride;
+        const bool linked_unit_valid = effect.linked_unit != nullptr;
+        const u32 stored_flags = linked_unit_valid ?
+            (effect.flags | kMapEffectLinkedFlag) :
+            (effect.flags & ~kMapEffectLinkedFlag);
+        const u32 linked_unit_offset = linked_unit_valid ?
+            effect.linked_unit->id : 0;
+
+        write_default_session_buffer_u32(
+            *record, object_base + kGameplayMapEffectObjectTypeOffset,
+            effect.effect_id);
+        write_default_session_buffer_u32(
+            *record, object_base + kGameplayMapEffectObjectFlagsOffset,
+            stored_flags);
+        write_default_session_buffer_u32(
+            *record, object_base + kGameplayMapEffectObjectLinkedUnitOffset,
+            linked_unit_offset);
+        write_default_session_buffer_u32(
+            *record, object_base + kGameplayMapEffectObjectXOffset,
+            static_cast<u32>(effect.x));
+        write_default_session_buffer_u32(
+            *record, object_base + kGameplayMapEffectObjectYOffset,
+            static_cast<u32>(effect.y));
+        write_default_session_buffer_u32(
+            *record, object_base + kGameplayMapEffectObjectFrameTimerOffset,
+            effect.frame_timer);
+        write_default_session_buffer_u32(
+            *record, object_base + kGameplayMapEffectObjectRepeatCountOffset,
+            effect.repeat_count);
+        write_default_session_buffer_u32(
+            *record, object_base + kGameplayMapEffectObjectPreviousOffset,
+            previous_offset);
+        write_default_session_buffer_u32(
+            *record, object_base + kGameplayMapEffectObjectNextOffset,
+            next_offset);
+    }
+
+    for (u32 index = 1; index < object_count; ++index) {
+        if (active[index]) {
+            continue;
+        }
+        const std::size_t object_base =
+            static_cast<std::size_t>(index) * kGameplayMapEffectObjectStride;
+        write_default_session_buffer_u32(
+            *record, object_base + kGameplayMapEffectObjectTypeOffset, 0);
+        write_default_session_buffer_u32(
+            *record, object_base + kGameplayMapEffectObjectFlagsOffset, 0);
+        write_default_session_buffer_u32(
+            *record, object_base + kGameplayMapEffectObjectLinkedUnitOffset, 0);
+        write_default_session_buffer_u32(
+            *record, object_base + kGameplayMapEffectObjectFrameTimerOffset, 0);
+        write_default_session_buffer_u32(
+            *record, object_base + kGameplayMapEffectObjectRepeatCountOffset, 0);
+        write_default_session_buffer_u32(
+            *record, object_base + kGameplayMapEffectObjectPreviousOffset, 0);
+        write_default_session_buffer_u32(
+            *record, object_base + kGameplayMapEffectObjectNextOffset, 0);
+    }
+}
+
+void stamp_default_gameplay_save_title(std::vector<u8>& record, const char* title) {
+    if (record.size() < kGameplaySaveTitleBytes) {
+        record.resize(kGameplaySaveTitleBytes, 0);
+    }
+    std::fill_n(record.data(), kGameplaySaveTitleBytes, u8{0});
+    if (title == nullptr) {
+        return;
+    }
+
+    std::size_t count = 0;
+    while (count + 1 < kGameplaySaveTitleBytes && title[count] != '\0') {
+        ++count;
+    }
+    std::memcpy(record.data(), title, count);
+}
+
+bool export_default_loaded_gameplay_session_bundle_to(
+    const char* archive_name, const char* save_title) {
+    const GameplaySessionLoadState& load = gameplay_session_load_state();
+    if (archive_name == nullptr || archive_name[0] == '\0' || !load.loaded) {
+        return false;
+    }
+
+    sync_default_gameplay_movement_map_session_records();
+    sync_default_map_effect_context_session_record();
+
+    std::vector<TrcWriteRecord> records;
+    const std::vector<GameplaySessionExportRecordSpec>& specs =
+        gameplay_session_export_specs();
+    records.reserve(specs.size() + kSessionRuntimeUserRecordCount + 2);
+    for (std::size_t i = 0; i < specs.size(); ++i) {
+        const GameplaySessionExportRecordSpec& spec = specs[i];
+        TrcWriteRecord record{};
+        record.name = spec.name;
+        record.method = spec.original_method;
+        if (i == kGameplaySessionOwnerAiRecordIndex) {
+            if (!export_default_owner_ai_snapshot_to_payload(record.payload)) {
+                return false;
+            }
+        } else if (i < load.records.size() && load.record_loaded[i]) {
+            record.payload = load.records[i];
+        } else if (spec.byte_count != 0) {
+            record.payload.assign(spec.byte_count, 0);
+        }
+        if (i == kGameplaySessionMapRecordIndex) {
+            stamp_default_gameplay_save_title(record.payload, save_title);
+        }
+        records.push_back(record);
+    }
+    if (!append_default_session_runtime_export_records(records)) {
+        return false;
+    }
+
+    return HandleGameplaySessionBundleExport(archive_name, records);
+}
+
+GameplayInputActionState& prepare_default_modal_publish_input() {
+    GameplayInputActionState& input = gameplay_input_action_state();
+    configure_default_gameplay_input_action_context(input);
+    input.local_player_index = mode1_reliable_state().local_player_index;
+    return input;
+}
+
+void default_gameplay_modal_clear_reliable_packet_rings(GameplayModalUiState&) {
+    ClearMode1ReliablePacketRings();
+}
+
+void default_gameplay_modal_scan_save_slot_headers(GameplayModalUiState& state) {
+    GameplaySessionFlowState& flow = prepare_default_modal_session_flow();
+    ScanGameplaySaveSlotHeaders(flow);
+    sync_default_modal_save_slots_from_session_flow(state, flow);
+}
+
+bool default_gameplay_modal_import_session_bundle(
+    GameplayModalUiState& state, u32 slot_index) {
+    GameplaySessionFlowState& flow = prepare_default_modal_session_flow();
+    if (slot_index >= flow.save_slots.size()) {
+        return false;
+    }
+
+    const std::string& path = flow.save_slots[slot_index].path;
+    if (path.empty()) {
+        return false;
+    }
+
+    g_runtime.gameplay_session_archive_path = path;
+    const bool bundle_imported = HandleGameplaySessionBundleImport(path.c_str(), 0);
+    if (!bundle_imported) {
+        report_gameplay_session_import_resource_failure();
+    }
+    g_runtime.gameplay_session_bundle_loaded = bundle_imported;
+    if (g_runtime.gameplay_session_bundle_loaded &&
+        !import_default_owner_ai_snapshot_from_session_records()) {
+        g_runtime.gameplay_session_bundle_loaded = false;
+    }
+    if (g_runtime.gameplay_session_bundle_loaded) {
+        g_runtime.gameplay_terrain_tile_sheet_loaded =
+            load_default_gameplay_terrain_tile_sheet_bank();
+        g_runtime.session_runtime_import_state = SessionRuntimeImportState{};
+        g_runtime.active_session_definitions = SessionRuntimeDefinitionTableSet{};
+        g_runtime.staged_session_definitions = SessionRuntimeDefinitionTableSet{};
+        g_runtime.gameplay_session_runtime_buffers = SessionRuntimeBufferPairs{};
+        stage_default_session_runtime_override_definitions();
+        state.non_empty_runtime_tables_available =
+            g_runtime.gameplay_session_runtime_definitions_staged;
+    } else {
+        ReleaseTerrainTileSheetBankResources(g_runtime.gameplay_terrain_tile_sheet);
+        g_runtime.gameplay_terrain_tile_sheet_loaded = false;
+        state.non_empty_runtime_tables_available = false;
+    }
+
+    return g_runtime.gameplay_session_bundle_loaded;
+}
+
+bool default_gameplay_modal_export_session_bundle(
+    GameplayModalUiState& state, u32 slot_index) {
+    GameplaySessionFlowState& flow = prepare_default_modal_session_flow();
+    if (slot_index >= flow.save_slots.size()) {
+        return false;
+    }
+
+    const std::string& path = flow.save_slots[slot_index].path;
+    if (!export_default_loaded_gameplay_session_bundle_to(
+            path.c_str(), state.save_slots[slot_index].label.c_str())) {
+        return false;
+    }
+
+    ScanGameplaySaveSlotHeaders(flow);
+    sync_default_modal_save_slots_from_session_flow(state, flow);
+    return true;
+}
+
+void default_gameplay_modal_import_runtime_tables(GameplayModalUiState&) {
+    ImportSessionRuntimeDefinitionTables(g_runtime.session_runtime_import_state,
+        g_runtime.active_session_definitions, g_runtime.staged_session_definitions);
+}
+
+void default_gameplay_modal_import_non_empty_runtime_tables(GameplayModalUiState&) {
+    ImportNonEmptySessionRuntimeDefinitionTables(g_runtime.session_runtime_import_state,
+        g_runtime.active_session_definitions, g_runtime.staged_session_definitions);
+}
+
+void default_gameplay_modal_rebuild_unit_type_references(GameplayModalUiState&) {
+    rebuild_default_unit_reference_tables_from_catalog();
+}
+
+void default_gameplay_modal_publish_corrective_checksum(GameplayModalUiState&) {
+    PublishMode1CorrectiveChecksum(prepare_default_modal_publish_input());
+}
+
+void default_gameplay_modal_publish_modal_pause(GameplayModalUiState&) {
+    GameplayInputActionState& input = prepare_default_modal_publish_input();
+    input.pending_action_arg0 =
+        gameplay_loop_state().modal_pause_suppressed ? 0u : 1u;
+    PublishMode1ModalPauseAction(input);
+}
+
+void default_gameplay_modal_reset_and_publish_inactive(GameplayModalUiState&) {
+    ResetAndPublishPlayerInactiveState(prepare_default_modal_publish_input());
+}
+
+void default_gameplay_modal_publish_relation_mask(
+    GameplayModalUiState&, u32 relation_mask, u32 visibility_mask,
+    bool observer_flag) {
+    GameplayInputActionState& input = prepare_default_modal_publish_input();
+    input.pending_action_arg0 = observer_flag ? 1u : 0u;
+    input.pending_action_arg1 = relation_mask;
+    input.pending_action_arg2 = visibility_mask;
+    input.pending_action_arg3 = 0;
+    PublishMode1RelationMaskAction(input);
+}
+
+void default_gameplay_modal_update_catchup_target(GameplayModalUiState&) {
+    UpdateGameplayCatchupTargetIfActive(gameplay_loop_state());
+}
+
+void default_gameplay_modal_toggle_catchup(GameplayModalUiState& state) {
+    GameplayLoopState& loop = gameplay_loop_state();
+    if (loop.catchup_enabled != state.catchup_enabled) {
+        ToggleGameplayCatchupMode(loop);
+    }
+}
+
+void default_gameplay_modal_pause_music(GameplayModalUiState&) {
+    PausePrimaryMusicFromPolicy();
+}
+
+void default_gameplay_modal_resume_music(GameplayModalUiState&) {
+    HandlePrimaryMusicPolicyResume();
+}
+
+void sync_default_gameplay_options_from_setup_once() {
+    static bool synced = false;
+    if (synced) {
+        return;
+    }
+    synced = true;
+
+    GameplayLoopState& loop = gameplay_loop_state();
+    loop.frame_interval_index = std::min<u32>(
+        ImportSetupU32(kSetupGameplaySpeedOffset, loop.frame_interval_index),
+        static_cast<u32>(kGameplayFrameIntervalsMs.size() - 1));
+    SetPrimaryMilesMusicPolicyRawVolume(std::min<u32>(
+        ImportSetupU32(kSetupPrimaryMusicRawVolumeOffset,
+            miles_music_state().primary_policy_raw_volume),
+        0xffffu));
+    g_runtime.gameplay_sound.listener_position_offset = std::clamp(
+        ImportSetupI32(kSetupGameplaySoundListenerOffset,
+            g_runtime.gameplay_sound.listener_position_offset),
+        -10000, 0);
+    HandlePrimaryMusicPolicyVolumeApply();
+}
+
+u32 default_gameplay_speed_index(u32 speed) {
+    return std::min<u32>(
+        speed, static_cast<u32>(kGameplayFrameIntervalsMs.size() - 1));
+}
+
+u32 default_camera_scroll_speed_index(u32 speed) {
+    return std::min<u32>(
+        speed, static_cast<u32>(kCameraScrollSpeedCount - 1));
+}
+
+void apply_default_gameplay_speed_index(u32 speed, bool export_setup) {
+    const u32 clamped_speed = default_gameplay_speed_index(speed);
+    gameplay_loop_state().frame_interval_index = clamped_speed;
+    if (export_setup) {
+        ExportSetupU32(kSetupGameplaySpeedOffset, clamped_speed);
+    }
+}
+
+void apply_default_camera_scroll_speed_index(u32 speed, bool export_setup) {
+    const u32 clamped_speed = default_camera_scroll_speed_index(speed);
+    ui_overlay_state().camera_scroll_speed_index = clamped_speed;
+    if (export_setup) {
+        ExportSetupU32(kSetupSecondaryTimingOffset, clamped_speed);
+    }
+}
+
+void default_gameplay_modal_apply_music_volume(GameplayModalUiState& state) {
+    const u32 gameplay_speed =
+        static_cast<u32>(std::clamp(state.music_volume_left, 0, 0x0f));
+    const u32 secondary_timing =
+        static_cast<u32>(std::clamp(state.music_volume_right, 0, 0x0f));
+    const u32 music_raw =
+        static_cast<u32>(std::clamp(state.music_volume_raw, 0, 0xffff));
+    const i32 sound_offset = std::clamp(state.sound_volume_raw, -10000, 0);
+    const u32 scroll_speed =
+        static_cast<u32>(std::max(state.scroll_speed, 0));
+
+    apply_default_gameplay_speed_index(gameplay_speed, true);
+    apply_default_camera_scroll_speed_index(secondary_timing, true);
+    SetPrimaryMilesMusicPolicyRawVolume(music_raw);
+    g_runtime.gameplay_sound.listener_position_offset = sound_offset;
+    ExportSetupU32(kSetupPrimaryMusicRawVolumeOffset, music_raw);
+    ExportSetupI32(kSetupGameplaySoundListenerOffset, sound_offset);
+    ExportSetupU32(kSetupScrollSpeedOffset, scroll_speed);
+    HandlePrimaryMusicPolicyVolumeApply();
+}
+
+void default_gameplay_modal_apply_setup_data(GameplayModalUiState&) {
+    WriteDefaultSetupDataBuffer();
+}
+
+void default_gameplay_modal_toggle_unit_resource_pack(GameplayModalUiState& state) {
+    bool setup_write_requested = false;
+    if (ToggleUnitResourcePackVariantAndReload(&setup_write_requested) &&
+        setup_write_requested) {
+        WriteDefaultSetupDataBuffer();
+    }
+    state.unit_resource_pack_variant =
+        unit_definition_resource_catalog_state().alternate_pack_active;
+}
+
+void default_gameplay_modal_exit_worker_thread(GameplayModalUiState& state) {
+    state.worker_exit_requested = true;
+    g_runtime.worker_thread_running = false;
+    gameplay_loop_state().process_shutdown_requested = true;
+    gameplay_loop_state().leave_requested = true;
+}
+
+void default_gameplay_modal_show_message(GameplayModalUiState&, const char* message) {
+    const char* text = message != nullptr ? message : "";
+#ifdef _WIN32
+    OutputDebugStringA(text);
+    OutputDebugStringA("\n");
+#endif
+    if (g_runtime.main_window != nullptr && IsWindow(g_runtime.main_window) &&
+        g_runtime.callbacks.show_status_message != nullptr) {
+        g_runtime.callbacks.show_status_message(g_runtime.main_window, text, 0x000a0afa,
+            g_runtime.callbacks.user_data);
+    }
+}
+
+void default_gameplay_modal_send_replay_modal_action(
+    GameplayModalUiState& state, u32 action) {
+    if (g_runtime.main_window == nullptr || !IsWindow(g_runtime.main_window)) {
+        state.replay_modal_pending = false;
+        return;
+    }
+    SendMessageA(g_runtime.main_window, WM_USER + 9, 0,
+        static_cast<LPARAM>(action));
+    state.replay_modal_pending = false;
+}
+
+void default_gameplay_modal_trc_fatal_error(GameplayModalUiState& state) {
+    DispatchActiveTrcRecordFatalErrorMirror(state);
+}
+
+void configure_default_gameplay_modal_ui_callbacks(GameplayModalUiState& state) {
+    constexpr std::size_t kStartupDefaultObjectiveTextRow = 182;
+    constexpr std::size_t kStartupPostResultTextRow = 204;
+    constexpr std::size_t kStartupEmptySaveSlotTextRow = 233;
+    constexpr std::size_t kStartupInvalidSaveSlotTextRow = 234;
+    constexpr std::size_t kStartupImportErrorTextRow = 235;
+    constexpr std::size_t kStartupNetworkAddressFormatRow = 236;
+    constexpr std::size_t kStartupCancelConfirmTextRow = 237;
+    constexpr std::size_t kStartupExportErrorTextRow = 238;
+    constexpr std::size_t kStartupDefaultMessageTextRow = 239;
+    constexpr std::size_t kStartupWaitRemainingFormatRow = 240;
+    sync_default_gameplay_options_from_setup_once();
+    if (const char* post_result_text =
+            startup_platform_row(kStartupPostResultTextRow, nullptr)) {
+        state.post_result_text = post_result_text;
+    }
+    state.empty_save_label =
+        startup_platform_row(kStartupEmptySaveSlotTextRow, "Empty");
+    state.invalid_save_label =
+        startup_platform_row(kStartupInvalidSaveSlotTextRow, "Invalid");
+    state.import_error_message =
+        startup_platform_row(kStartupImportErrorTextRow, "Game Loading error !");
+    state.network_address_format =
+        startup_platform_row(kStartupNetworkAddressFormatRow, "Ver %d-%d-%d");
+    state.cancel_confirm_message = startup_platform_row(
+        kStartupCancelConfirmTextRow, "Game data demaged, You must load a game.");
+    state.export_error_message =
+        startup_platform_row(kStartupExportErrorTextRow, "Game Saveing error !");
+    state.default_message_text =
+        startup_platform_row(kStartupDefaultMessageTextRow, "Unknown error !");
+    state.default_objective_text = startup_platform_row(
+        kStartupDefaultObjectiveTextRow, "Destroy all enemy buildings.");
+    state.wait_remaining_format = startup_platform_row(
+        kStartupWaitRemainingFormatRow, "%s - %d Sec remain.");
+    state.catchup_enabled = gameplay_loop_state().catchup_enabled;
+    state.local_player_index = mode1_reliable_state().local_player_index;
+    state.transport_mode = static_cast<u32>(
+        std::max<i32>(async_com_state().active_network_transport_mode, 0));
+    state.session_mode = g_runtime.gameplay_startup_state.session_mode;
+    state.network_ai_profile_override = g_runtime.network_ai_profile_override;
+    state.modal_pause_suppressed =
+        gameplay_loop_state().modal_pause_suppressed ||
+        gameplay_loop_state().replay_direct_music_paused;
+    sync_default_gameplay_modal_players(state);
+    state.sound_options_available = direct_sound_state().active;
+    state.unit_resource_pack_variant =
+        (ImportSetupU32(kSetupUiFlagsOffset,
+            unit_definition_resource_catalog_state().alternate_pack_active ? 0x20u : 0u) &
+            0x20u) != 0;
+    state.music_volume_left =
+        static_cast<int>(default_gameplay_speed_index(
+            gameplay_loop_state().frame_interval_index));
+    state.music_volume_raw =
+        static_cast<int>(std::min<u32>(
+            miles_music_state().primary_policy_raw_volume, 0xffffu));
+    state.sound_volume_raw =
+        std::clamp(g_runtime.gameplay_sound.listener_position_offset, -10000, 0);
+    state.music_volume_right = static_cast<int>(default_camera_scroll_speed_index(
+        ImportSetupU32(kSetupSecondaryTimingOffset,
+            static_cast<u32>(std::max(state.music_volume_right, 0)))));
+    state.scroll_speed = static_cast<int>(ImportSetupU32(
+        kSetupScrollSpeedOffset, static_cast<u32>(std::max(state.scroll_speed, 0))));
+    if (state.callbacks.scan_save_slot_headers == nullptr) {
+        state.callbacks.scan_save_slot_headers =
+            default_gameplay_modal_scan_save_slot_headers;
+    }
+    if (state.callbacks.import_session_bundle == nullptr) {
+        state.callbacks.import_session_bundle =
+            default_gameplay_modal_import_session_bundle;
+    }
+    if (state.callbacks.export_session_bundle == nullptr) {
+        state.callbacks.export_session_bundle =
+            default_gameplay_modal_export_session_bundle;
+    }
+    if (state.callbacks.clear_reliable_packet_rings == nullptr) {
+        state.callbacks.clear_reliable_packet_rings =
+            default_gameplay_modal_clear_reliable_packet_rings;
+    }
+    if (state.callbacks.import_runtime_tables == nullptr) {
+        state.callbacks.import_runtime_tables =
+            default_gameplay_modal_import_runtime_tables;
+    }
+    if (state.callbacks.import_non_empty_runtime_tables == nullptr) {
+        state.callbacks.import_non_empty_runtime_tables =
+            default_gameplay_modal_import_non_empty_runtime_tables;
+    }
+    if (state.callbacks.rebuild_unit_type_references == nullptr) {
+        state.callbacks.rebuild_unit_type_references =
+            default_gameplay_modal_rebuild_unit_type_references;
+    }
+    if (state.callbacks.publish_corrective_checksum == nullptr) {
+        state.callbacks.publish_corrective_checksum =
+            default_gameplay_modal_publish_corrective_checksum;
+    }
+    if (state.callbacks.publish_modal_pause == nullptr) {
+        state.callbacks.publish_modal_pause =
+            default_gameplay_modal_publish_modal_pause;
+    }
+    if (state.callbacks.reset_and_publish_inactive == nullptr) {
+        state.callbacks.reset_and_publish_inactive =
+            default_gameplay_modal_reset_and_publish_inactive;
+    }
+    if (state.callbacks.publish_relation_mask == nullptr) {
+        state.callbacks.publish_relation_mask =
+            default_gameplay_modal_publish_relation_mask;
+    }
+    if (state.callbacks.update_catchup_target == nullptr) {
+        state.callbacks.update_catchup_target =
+            default_gameplay_modal_update_catchup_target;
+    }
+    if (state.callbacks.toggle_catchup == nullptr) {
+        state.callbacks.toggle_catchup =
+            default_gameplay_modal_toggle_catchup;
+    }
+    if (state.callbacks.pause_music == nullptr) {
+        state.callbacks.pause_music = default_gameplay_modal_pause_music;
+    }
+    if (state.callbacks.resume_music == nullptr) {
+        state.callbacks.resume_music = default_gameplay_modal_resume_music;
+    }
+    if (state.callbacks.apply_music_volume == nullptr) {
+        state.callbacks.apply_music_volume =
+            default_gameplay_modal_apply_music_volume;
+    }
+    if (state.callbacks.apply_setup_data == nullptr) {
+        state.callbacks.apply_setup_data =
+            default_gameplay_modal_apply_setup_data;
+    }
+    if (state.callbacks.toggle_unit_resource_pack == nullptr) {
+        state.callbacks.toggle_unit_resource_pack =
+            default_gameplay_modal_toggle_unit_resource_pack;
+    }
+    if (state.callbacks.exit_worker_thread == nullptr) {
+        state.callbacks.exit_worker_thread =
+            default_gameplay_modal_exit_worker_thread;
+    }
+    if (state.callbacks.show_message == nullptr) {
+        state.callbacks.show_message = default_gameplay_modal_show_message;
+    }
+    if (state.callbacks.send_replay_modal_action == nullptr) {
+        state.callbacks.send_replay_modal_action =
+            default_gameplay_modal_send_replay_modal_action;
+    }
+    if (state.callbacks.trc_fatal_error == nullptr) {
+        state.callbacks.trc_fatal_error =
+            default_gameplay_modal_trc_fatal_error;
+    }
+}
+
+void publish_default_ui_overlay_camera(UiOverlayState& overlay) {
+    g_runtime.gameplay_frame_render_context.camera_x = overlay.camera_x;
+    g_runtime.gameplay_frame_render_context.camera_y = overlay.camera_y;
+}
+
+void run_default_ui_overlay_pointer_frame(u32 pointer_state) {
+    sync_default_ui_overlay_runtime_from_gameplay_state();
+    UiOverlayState& overlay = ui_overlay_state();
+    overlay.pointer_state = pointer_state |
+        (overlay.pointer_state & kUiOverlayPointerMinimapDrag);
+    HandleGameplayPointerActionFrame(overlay);
+    UpdateGameplayHoverContextAndTooltip(overlay);
+    publish_default_ui_overlay_camera(overlay);
+}
+
+void default_gameplay_input_handle_pointer_event(GameplayInputActionState& state,
+    const InputEvent& event) {
+    (void)state;
+    if (g_runtime.directx_initialized) {
+        SetGameCursorPointerPosition(event.x, event.y);
+    }
+
+    sync_default_ui_overlay_runtime_from_gameplay_state();
+    UiOverlayState& overlay = ui_overlay_state();
+    overlay.mouse_x = event.x;
+    overlay.mouse_y = event.y;
+
+    u32 pointer_state = 0;
+    bool resolve_selection = false;
+    switch (event.message) {
+    case 0x0201:
+    case 0x0203:
+        pointer_state = kUiOverlayPointerPress;
+        break;
+    case 0x0202:
+        pointer_state = kUiOverlayPointerRelease;
+        resolve_selection = overlay.selection_rectangle_active;
+        break;
+    case 0x0204:
+    case 0x0206:
+        pointer_state = kUiOverlayPointerHoldPress;
+        break;
+    case 0x0205:
+        pointer_state = kUiOverlayPointerHoldRelease;
+        break;
+    default:
+        pointer_state = event.button_mask != 0 ? kUiOverlayPointerDrag : 0;
+        break;
+    }
+
+    overlay.pointer_state = pointer_state |
+        (overlay.pointer_state & kUiOverlayPointerMinimapDrag);
+    if (resolve_selection) {
+        ResolveGameplayClickSelection(overlay);
+    }
+    HandleGameplayPointerActionFrame(overlay);
+    UpdateGameplayHoverContextAndTooltip(overlay);
+    publish_default_ui_overlay_camera(overlay);
+}
+
+void default_gameplay_input_handle_keyboard_event(GameplayInputActionState& state,
+    const InputEvent& event) {
+    (void)state;
+    sync_default_ui_overlay_runtime_from_gameplay_state();
+    UiOverlayState& overlay = ui_overlay_state();
+    const InputState& input = input_state();
+    overlay.shift_modifier_down = input.shift_down;
+    overlay.ctrl_modifier_down = input.ctrl_down;
+    overlay.alt_modifier_down = input.alt_down;
+    overlay.control_group_assign_mode = input.ctrl_down;
+    const u32 raw_code = event.code;
+    const u8 ascii = (raw_code & 0xff00u) != 0 ?
+        static_cast<u8>((raw_code >> 8) & 0xffu) : 0;
+    const u32 virtual_key = ascii != 0 ? 0 : raw_code;
+    DispatchGameplayUiKeyboardInput(overlay, virtual_key, ascii);
+    apply_default_ui_overlay_runtime_mutations();
+    publish_default_ui_overlay_camera(overlay);
+}
+
+void default_gameplay_input_pre_cursor_update(GameplayInputActionState&) {
+    const InputState& input = input_state();
+    sync_default_ui_overlay_runtime_from_gameplay_state();
+    UiOverlayState& overlay = ui_overlay_state();
+    overlay.mouse_x = static_cast<i32>(input.mouse_x);
+    overlay.mouse_y = static_cast<i32>(input.mouse_y);
+    if ((input.mouse_button_mask & 1u) != 0) {
+        overlay.pointer_state |= kUiOverlayPointerDrag;
+    } else {
+        overlay.pointer_state &= ~kUiOverlayPointerDrag;
+    }
+    if ((overlay.pointer_state & kUiOverlayPointerMinimapDrag) != 0) {
+        UpdateCameraFromMinimapDrag(overlay);
+    }
+    ScrollCameraFromEdgeOrKeys(overlay);
+    publish_default_ui_overlay_camera(overlay);
+
+    if (!g_runtime.directx_initialized) {
+        return;
+    }
+
+    SetGameCursorPointerPosition(static_cast<i32>(input.mouse_x),
+        static_cast<i32>(input.mouse_y));
+}
+
+void default_gameplay_input_post_cursor_update(GameplayInputActionState&) {
+    UiOverlayState& overlay = ui_overlay_state();
+    UpdateCameraScrollRamp(overlay);
+    publish_default_ui_overlay_camera(overlay);
+}
+
+void default_gameplay_input_set_cursor_index(GameplayInputActionState& state) {
+    if (!g_runtime.directx_initialized) {
+        return;
+    }
+
+    SetGameCursorIndex(state.cursor_index);
+    ShowGameCursor();
+}
+
+void default_gameplay_input_restore_cursor(GameplayInputActionState&) {
+    UiOverlayState& overlay = ui_overlay_state();
+    UpdateGameplayHoverContextAndTooltip(overlay);
+    publish_default_ui_overlay_camera(overlay);
+}
+
+void default_gameplay_input_finalize_cursor_frame(GameplayInputActionState&) {
+    UiOverlayState& overlay = ui_overlay_state();
+    BuildSelectedUnitCommandPanel(overlay);
+}
+
+bool default_gameplay_input_publish_action(GameplayInputActionState&,
+    const GameplayPublishedAction& action) {
+    return PublishLocalMode1GameplayPacket(action.packed_opcode, action.arg0,
+        action.unit_offset, action.arg1, action.arg2, action.arg3);
+}
+
+bool default_gameplay_input_publish_corrective_action(GameplayInputActionState&,
+    const GameplayPublishedAction& action) {
+    return BroadcastMode1GameplayPacket(action.packed_opcode, action.arg0,
+        action.unit_offset, action.arg1, action.arg2, action.arg3);
+}
+
+bool default_gameplay_production_publish_action(GameplayProductionActionState&,
+    const GameplayPublishedAction& action) {
+    return PublishLocalMode1GameplayPacket(action.packed_opcode, action.arg0,
+        action.unit_offset, action.arg1, action.arg2, action.arg3);
+}
+
+GameplayInputActionProductionAvailability
+default_gameplay_input_check_production_availability(
+    GameplayInputActionState& state, u32 production, u32 unit_offset) {
+    GameplayInputActionProductionAvailability result{};
+    result.code = production;
+
+    const ProductionOrderDefinition* definition =
+        default_production_order_definition(production);
+    if (definition == nullptr) {
+        result.available = false;
+        result.code = static_cast<u32>(ProductionOrderAvailabilityCode::locked);
+        return result;
+    }
+
+    u32 owner = state.local_player_index;
+    if (const UnitMovementUnit* unit = find_default_movement_unit_by_id(unit_offset)) {
+        owner = unit->owner_id;
+    }
+
+    const ProductionOrderCheckResult check =
+        CheckProductionOrderAvailabilityForUi(
+            g_runtime.gameplay_production_runtime, *definition, owner);
+    result.available = check.available;
+    result.code = check.code;
+    result.primary_cost = check.primary_cost;
+    result.secondary_cost = check.secondary_cost;
+    return result;
+}
+
+bool default_gameplay_input_indexed_payload_blocked(
+    GameplayInputActionState&, u32 unit_offset, u32, u32 index) {
+    UnitMovementUnit* unit = find_default_movement_unit_by_id(unit_offset);
+    if (unit == nullptr || index == 0) {
+        return false;
+    }
+    return default_mode1_packet_subtype05_transport_gate_blocks(
+        *unit, 0x05, 0x10, index);
+}
+
+void default_gameplay_input_rejected_action_feedback(GameplayInputActionState& state) {
+    QueueGameplayHudMessageAndSound(g_runtime.gameplay_hud_text,
+        g_runtime.gameplay_sound,
+        startup_production_resource_failure_row(state.last_production_availability_code),
+        kDefaultUiClickSoundSlot);
+}
+
+bool default_gameplay_production_rejected_action_feedback(GameplayProductionActionState&) {
+    HandleCurrentGameplaySoundQueued(g_runtime.gameplay_sound,
+        kDefaultUiClickSoundSlot, 0, 0);
+    QueueGameplayHudMessage(g_runtime.gameplay_hud_text,
+        startup_platform_row(104, "Cannot use action"));
+    return false;
+}
+
+void default_gameplay_production_accepted_action_feedback(
+    GameplayProductionActionState& state, u32 unit_offset) {
+    UnitMovementUnit* unit = find_default_movement_unit_by_id(unit_offset);
+    if (unit == nullptr || unit->owner_id != state.local_player_index) {
+        return;
+    }
+
+    GameplayUnitSoundDefinition definition;
+    GameplayUnitSoundBaseSlots base_slots;
+    if (!resolve_default_unit_sound_profile(*unit, definition, base_slots)) {
+        return;
+    }
+    HandleCommandAcknowledgementVoiceCue(g_runtime.gameplay_sound, *unit, definition,
+        base_slots);
+}
+
+void default_gameplay_input_start_hud_pulse(
+    GameplayInputActionState& state, i32 world_x, i32 world_y) {
+    UiOverlayState& overlay = ui_overlay_state();
+    StartGameplayHudPulse(overlay,
+        world_x - static_cast<i32>(state.map_origin_x),
+        world_y - static_cast<i32>(state.map_origin_y),
+        overlay.current_frame_counter);
+}
+
+void default_gameplay_input_stop_hud_pulse(GameplayInputActionState&) {
+    StopGameplayHudPulse(ui_overlay_state());
+}
+
+void default_gameplay_input_reset_snapshot_side_state(
+    GameplayInputActionState& state) {
+    ResetGameplayInputPointerState(state);
+}
+
+void default_gameplay_production_start_hud_pulse(
+    GameplayProductionActionState& state, i32 world_x, i32 world_y) {
+    UiOverlayState& overlay = ui_overlay_state();
+    StartGameplayHudPulse(overlay,
+        world_x - static_cast<i32>(state.map_origin_x),
+        world_y - static_cast<i32>(state.map_origin_y),
+        overlay.current_frame_counter);
+}
+
+void default_gameplay_production_stop_hud_pulse(GameplayProductionActionState&) {
+    StopGameplayHudPulse(ui_overlay_state());
+}
+
+bool default_ui_overlay_check_selected_production_action_gate(
+    UiOverlayState& overlay, u32 selector, u32& failure_code) {
+    GameplayProductionActionState& production = gameplay_production_action_state();
+    sync_default_gameplay_production_action_units(production, overlay);
+    const bool allowed =
+        CheckSelectedUnitProductionActionGate(production, selector);
+    failure_code = static_cast<u32>(production.last_gate_failure);
+    return allowed;
+}
+
+void configure_default_gameplay_input_action_context(
+    GameplayInputActionState& state) {
+    if (state.callbacks.can_skip_input_drain == nullptr) {
+        state.callbacks.can_skip_input_drain =
+            default_gameplay_input_can_skip_input_drain;
+    }
+    if (state.callbacks.has_pending_input_event == nullptr) {
+        state.callbacks.has_pending_input_event =
+            DefaultHasPendingGameplayInputEvent;
+    }
+    if (state.callbacks.pop_input_event == nullptr) {
+        state.callbacks.pop_input_event =
+            DefaultPopGameplayInputEvent;
+    }
+    if (state.callbacks.handle_pointer_event == nullptr) {
+        state.callbacks.handle_pointer_event =
+            default_gameplay_input_handle_pointer_event;
+    }
+    if (state.callbacks.handle_keyboard_event == nullptr) {
+        state.callbacks.handle_keyboard_event =
+            default_gameplay_input_handle_keyboard_event;
+    }
+    if (state.callbacks.pre_cursor_update == nullptr) {
+        state.callbacks.pre_cursor_update =
+            default_gameplay_input_pre_cursor_update;
+    }
+    if (state.callbacks.post_cursor_update == nullptr) {
+        state.callbacks.post_cursor_update =
+            default_gameplay_input_post_cursor_update;
+    }
+    if (state.callbacks.set_game_cursor_index == nullptr) {
+        state.callbacks.set_game_cursor_index =
+            default_gameplay_input_set_cursor_index;
+    }
+    if (state.callbacks.restore_game_cursor == nullptr) {
+        state.callbacks.restore_game_cursor =
+            default_gameplay_input_restore_cursor;
+    }
+    if (state.callbacks.finalize_cursor_frame == nullptr) {
+        state.callbacks.finalize_cursor_frame =
+            default_gameplay_input_finalize_cursor_frame;
+    }
+    if (state.callbacks.reset_snapshot_side_state == nullptr) {
+        state.callbacks.reset_snapshot_side_state =
+            default_gameplay_input_reset_snapshot_side_state;
+    }
+    if (state.callbacks.publish_action == nullptr) {
+        state.callbacks.publish_action =
+            default_gameplay_input_publish_action;
+    }
+    if (state.callbacks.publish_corrective_action == nullptr) {
+        state.callbacks.publish_corrective_action =
+            default_gameplay_input_publish_corrective_action;
+    }
+    if (state.callbacks.validate_low_action == nullptr) {
+        state.callbacks.validate_low_action =
+            DefaultValidateLowGameplayInputAction;
+    }
+    if (state.callbacks.validate_high_action == nullptr) {
+        state.callbacks.validate_high_action =
+            DefaultValidateHighGameplayInputAction;
+    }
+    if (state.callbacks.select_action_index == nullptr) {
+        state.callbacks.select_action_index =
+            DefaultSelectGameplayInputActionIndex;
+    }
+    if (state.callbacks.check_production_availability == nullptr) {
+        state.callbacks.check_production_availability =
+            default_gameplay_input_check_production_availability;
+    }
+    if (state.callbacks.indexed_payload_blocked == nullptr) {
+        state.callbacks.indexed_payload_blocked =
+            default_gameplay_input_indexed_payload_blocked;
+    }
+    if (state.callbacks.start_hud_pulse == nullptr) {
+        state.callbacks.start_hud_pulse =
+            default_gameplay_input_start_hud_pulse;
+    }
+    if (state.callbacks.stop_hud_pulse == nullptr) {
+        state.callbacks.stop_hud_pulse =
+            default_gameplay_input_stop_hud_pulse;
+    }
+    if (state.callbacks.rejected_action_feedback == nullptr) {
+        state.callbacks.rejected_action_feedback =
+            default_gameplay_input_rejected_action_feedback;
+    }
+}
+
+void configure_default_gameplay_production_action_context(
+    GameplayProductionActionState& state) {
+    if (state.callbacks.publish_action == nullptr) {
+        state.callbacks.publish_action =
+            default_gameplay_production_publish_action;
+    }
+    if (state.callbacks.rejected_action_feedback == nullptr) {
+        state.callbacks.rejected_action_feedback =
+            default_gameplay_production_rejected_action_feedback;
+    }
+    if (state.callbacks.accepted_action_feedback == nullptr) {
+        state.callbacks.accepted_action_feedback =
+            default_gameplay_production_accepted_action_feedback;
+    }
+    if (state.callbacks.validate_low_action == nullptr) {
+        state.callbacks.validate_low_action =
+            DefaultValidateLowGameplayProductionAction;
+    }
+    if (state.callbacks.validate_high_action == nullptr) {
+        state.callbacks.validate_high_action =
+            DefaultValidateHighGameplayProductionAction;
+    }
+    if (state.callbacks.select_action_index == nullptr) {
+        state.callbacks.select_action_index =
+            DefaultSelectGameplayProductionActionIndex;
+    }
+    if (state.callbacks.start_hud_pulse == nullptr) {
+        state.callbacks.start_hud_pulse =
+            default_gameplay_production_start_hud_pulse;
+    }
+    if (state.callbacks.stop_hud_pulse == nullptr) {
+        state.callbacks.stop_hud_pulse =
+            default_gameplay_production_stop_hud_pulse;
+    }
+    if (state.callbacks.dispatch_queued_command == nullptr) {
+        state.callbacks.dispatch_queued_command =
+            DefaultDispatchGameplayProductionQueuedCommand;
+    }
+    if (state.callbacks.broadcast_reliable_range == nullptr) {
+        state.callbacks.broadcast_reliable_range =
+            DefaultBroadcastGameplayProductionReliableRange;
+    }
+    if (state.callbacks.export_session_bundle == nullptr) {
+        state.callbacks.export_session_bundle =
+            DefaultExportGameplayProductionSessionBundle;
+    }
+}
+
+void reset_default_gameplay_input_action_state() {
+    GameplayInputActionState& input = gameplay_input_action_state();
+    input = GameplayInputActionState{};
+    input.cursor_mode = 1;
+    input.cursor_index = gameplay_loop_state().current_cursor_index;
+    InitializeOriginalGameplayInputActionTables(input);
+    configure_default_gameplay_input_action_context(input);
+    ResetGameplayInputSnapshotRing(input);
+}
+
+void reset_default_gameplay_production_action_state() {
+    GameplayProductionActionState& production = gameplay_production_action_state();
+    production = GameplayProductionActionState{};
+    configure_default_gameplay_production_action_context(production);
+}
+
+void default_gameplay_flow_configure_display(GameplaySessionFlowState&) {
+    g_runtime.gameplay_display_state = GameplayDisplayState{};
+    g_runtime.gameplay_display_state.callbacks.reset_runtime_overlay =
+        default_gameplay_display_reset_overlay;
+    g_runtime.gameplay_display_state.callbacks.frame_boundary =
+        default_gameplay_display_frame_boundary;
+    g_runtime.gameplay_display_state.callbacks.configure_surfaces =
+        default_gameplay_display_configure_surfaces;
+    ConfigureGameplayDisplay800x600(g_runtime.gameplay_display_state);
+    refresh_window_rects(g_runtime.main_window);
+}
+
+const char* resolve_gameplay_session_archive_path() {
+    P2PNetworkLaunchParameters& launch = p2p_network_launch_parameters();
+    if (launch.uses_map_file && launch.map_path[0] != '\0') {
+        return launch.map_path.data();
+    }
+
+    CreateGameState& create_game = create_game_state();
+    if (create_game.selected_session_valid &&
+        create_game.selected_session.archive_path[0] != '\0') {
+        return create_game.selected_session.archive_path.data();
+    }
+
+    WizardLoginState& wizard = wizard_login_state();
+    if (!wizard.selected_session.invalid &&
+        wizard.selected_session.archive_path[0] != '\0') {
+        return wizard.selected_session.archive_path.data();
+    }
+
+    return nullptr;
+}
+
+MinimapPixelFormat default_gameplay_minimap_pixel_format() {
+    const bool pixel_mode_555 = SurfacePixelMode555();
+
+    MinimapPixelFormat format{};
+    format.red_mask = pixel_mode_555 ? 0x7c00u : 0xf800u;
+    format.green_mask = pixel_mode_555 ? 0x03e0u : 0x07e0u;
+    format.blue_mask = 0x001fu;
+    format.red_shift = pixel_mode_555 ? 10u : 11u;
+    format.green_shift = 5u;
+    format.blue_shift = 0u;
+    format.pixel_mode_555 = pixel_mode_555;
+    return format;
+}
+
+u32 default_gameplay_terrain_component_limit(u32 mask, u32 shift) {
+    return mask == 0 ? 0 : mask >> (shift & 0x1f);
+}
+
+u32 default_gameplay_terrain_component(u16 pixel, u32 mask, u32 shift) {
+    return (static_cast<u32>(pixel) & mask) >> (shift & 0x1f);
+}
+
+u16 default_gameplay_pack_terrain_pixel(
+    const MinimapPixelFormat& format, u32 red, u32 green, u32 blue) {
+    red = std::min(red,
+        default_gameplay_terrain_component_limit(format.red_mask, format.red_shift));
+    green = std::min(green,
+        default_gameplay_terrain_component_limit(format.green_mask, format.green_shift));
+    blue = std::min(blue,
+        default_gameplay_terrain_component_limit(format.blue_mask, format.blue_shift));
+    return static_cast<u16>(
+        ((red & 0xffffu) << (format.red_shift & 0x1f)) |
+        ((green & 0xffffu) << (format.green_shift & 0x1f)) |
+        ((blue & 0xffffu) << (format.blue_shift & 0x1f)));
+}
+
+bool default_gameplay_terrain_tile_index_valid(
+    const TerrainTileSheetState& tile_sheet, i32 tile_index) {
+    if (tile_index < 0 ||
+        static_cast<u32>(tile_index) >= tile_sheet.tile_count) {
+        return false;
+    }
+    const std::size_t pixel_offset =
+        static_cast<std::size_t>(tile_index) * kTerrainTilePixelsPerTile;
+    return pixel_offset + kTerrainTilePixelsPerTile <=
+        tile_sheet.tile_pixels.size();
+}
+
+i32 default_gameplay_terrain_tile_index(
+    u32 terrain_code, i32 tile_x, i32 tile_y, u32 animation_slot) {
+    terrain_code &= 7u;
+    i32 offset = kGameplayTerrainTileOffsets[terrain_code];
+    if (terrain_code == 6) {
+        offset += static_cast<i32>(animation_slot * 0xc8u);
+    }
+    return offset + ResolveMinimapTilePatternIndex(tile_x, tile_y);
+}
+
+const u16* default_gameplay_terrain_tile_pixels(
+    const TerrainTileSheetState& tile_sheet, i32 tile_index) {
+    if (!default_gameplay_terrain_tile_index_valid(tile_sheet, tile_index)) {
+        return nullptr;
+    }
+    return tile_sheet.tile_pixels.data() +
+        static_cast<std::size_t>(tile_index) * kTerrainTilePixelsPerTile;
+}
+
+void default_gameplay_draw_uniform_terrain_tile(
+    const TerrainTileSheetState& tile_sheet, const TerrainTileDrawCommand& command,
+    SpriteRenderTarget& target, u32 animation_slot) {
+    const u32 terrain_code = command.terrain_flags & 7u;
+    const i32 tile_index = default_gameplay_terrain_tile_index(
+        terrain_code, command.tile_x, command.tile_y, animation_slot);
+    const u16* source = default_gameplay_terrain_tile_pixels(tile_sheet, tile_index);
+    if (source == nullptr) {
+        return;
+    }
+
+    const u32 target_pitch = target.stride_words != 0 ?
+        target.stride_words : target.width;
+    for (i32 row = 0; row < command.clip.height; ++row) {
+        const u16* source_row = source +
+            static_cast<std::size_t>(command.clip.src_y + row) * 0x20u +
+            static_cast<std::size_t>(command.clip.src_x);
+        u16* target_row = target.pixels +
+            static_cast<std::size_t>(command.clip.dst_y + row) * target_pitch +
+            static_cast<std::size_t>(command.clip.dst_x);
+        std::copy_n(source_row, static_cast<std::size_t>(command.clip.width),
+            target_row);
+    }
+}
+
+void default_gameplay_draw_average_blended_terrain_tile(
+    const TerrainTileSheetState& tile_sheet, const TerrainTileDrawCommand& command,
+    SpriteRenderTarget& target, u32 animation_slot) {
+    std::array<const u16*, kGameplayTerrainBlendCodeShifts.size()> sources{};
+    std::size_t source_count = 0;
+    for (u32 shift : kGameplayTerrainBlendCodeShifts) {
+        const u32 terrain_code = (command.terrain_flags >> shift) & 7u;
+        const i32 tile_index = default_gameplay_terrain_tile_index(
+            terrain_code, command.tile_x, command.tile_y, animation_slot);
+        const u16* source = default_gameplay_terrain_tile_pixels(tile_sheet, tile_index);
+        if (source != nullptr) {
+            sources[source_count++] = source;
+        }
+    }
+    if (source_count == 0) {
+        return;
+    }
+
+    const MinimapPixelFormat format = default_gameplay_minimap_pixel_format();
+    const u32 target_pitch = target.stride_words != 0 ?
+        target.stride_words : target.width;
+    for (i32 row = 0; row < command.clip.height; ++row) {
+        u16* target_row = target.pixels +
+            static_cast<std::size_t>(command.clip.dst_y + row) * target_pitch +
+            static_cast<std::size_t>(command.clip.dst_x);
+        const std::size_t source_row =
+            static_cast<std::size_t>(command.clip.src_y + row) * 0x20u;
+        for (i32 col = 0; col < command.clip.width; ++col) {
+            const std::size_t source_pixel = source_row +
+                static_cast<std::size_t>(command.clip.src_x + col);
+            u32 red = 0;
+            u32 green = 0;
+            u32 blue = 0;
+            for (std::size_t source_index = 0; source_index < source_count;
+                 ++source_index) {
+                const u16 pixel = sources[source_index][source_pixel];
+                red += default_gameplay_terrain_component(
+                    pixel, format.red_mask, format.red_shift);
+                green += default_gameplay_terrain_component(
+                    pixel, format.green_mask, format.green_shift);
+                blue += default_gameplay_terrain_component(
+                    pixel, format.blue_mask, format.blue_shift);
+            }
+            target_row[col] = default_gameplay_pack_terrain_pixel(format,
+                red / static_cast<u32>(source_count),
+                green / static_cast<u32>(source_count),
+                blue / static_cast<u32>(source_count));
+        }
+    }
+}
+
+i32 default_gameplay_terrain_blend_mask_tile_index(
+    const TerrainTileDrawCommand& command) {
+    const u32 mask_id = (command.terrain_flags >> 0x12) & 0x3fu;
+    const u32 variant = (command.terrain_flags >> 0x18) & 3u;
+    const std::size_t offset_index =
+        static_cast<std::size_t>(mask_id) * 2u + variant;
+    i32 base = kGameplayTerrainBlendMaskBaseOffset;
+    if ((command.tile_x & 1) == 0) {
+        ++base;
+    }
+    if (offset_index >= kGameplayTerrainBlendMaskOffsets.size()) {
+        return base;
+    }
+    return base + kGameplayTerrainBlendMaskOffsets[offset_index];
+}
+
+u16 default_gameplay_blend_terrain_pixels(const MinimapPixelFormat& format,
+    u16 primary, u16 secondary, u32 weight31) {
+    const u32 primary_weight = std::min<u32>(weight31 + 1u, 0x20u);
+    const u32 secondary_weight = 0x20u - primary_weight;
+    const u32 red =
+        (default_gameplay_terrain_component(primary, format.red_mask,
+             format.red_shift) *
+             primary_weight +
+            default_gameplay_terrain_component(secondary, format.red_mask,
+                format.red_shift) *
+                secondary_weight) >>
+        5;
+    const u32 green =
+        (default_gameplay_terrain_component(primary, format.green_mask,
+             format.green_shift) *
+             primary_weight +
+            default_gameplay_terrain_component(secondary, format.green_mask,
+                format.green_shift) *
+                secondary_weight) >>
+        5;
+    const u32 blue =
+        (default_gameplay_terrain_component(primary, format.blue_mask,
+             format.blue_shift) *
+             primary_weight +
+            default_gameplay_terrain_component(secondary, format.blue_mask,
+                format.blue_shift) *
+                secondary_weight) >>
+        5;
+    return default_gameplay_pack_terrain_pixel(format, red, green, blue);
+}
+
+void default_gameplay_draw_blended_terrain_tile(
+    const TerrainTileSheetState& tile_sheet, const TerrainTileDrawCommand& command,
+    SpriteRenderTarget& target, u32 animation_slot) {
+    std::array<const u16*, kGameplayTerrainBlendCodeShifts.size()> sources{};
+    for (std::size_t source_index = 0;
+         source_index < kGameplayTerrainBlendCodeShifts.size(); ++source_index) {
+        const u32 shift = kGameplayTerrainBlendCodeShifts[source_index];
+        const u32 terrain_code = (command.terrain_flags >> shift) & 7u;
+        const i32 tile_index = default_gameplay_terrain_tile_index(
+            terrain_code, command.tile_x, command.tile_y, animation_slot);
+        sources[source_index] =
+            default_gameplay_terrain_tile_pixels(tile_sheet, tile_index);
+    }
+
+    const i32 mask_tile_index =
+        default_gameplay_terrain_blend_mask_tile_index(command);
+    const u16* mask = default_gameplay_terrain_tile_pixels(
+        tile_sheet, mask_tile_index);
+    if (mask == nullptr) {
+        default_gameplay_draw_average_blended_terrain_tile(
+            tile_sheet, command, target, animation_slot);
+        return;
+    }
+
+    const MinimapPixelFormat format = default_gameplay_minimap_pixel_format();
+    const u32 target_pitch = target.stride_words != 0 ?
+        target.stride_words : target.width;
+    const u32 green_weight_shift =
+        format.green_shift + (format.pixel_mode_555 ? 0u : 1u);
+    for (i32 row = 0; row < command.clip.height; ++row) {
+        u16* target_row = target.pixels +
+            static_cast<std::size_t>(command.clip.dst_y + row) * target_pitch +
+            static_cast<std::size_t>(command.clip.dst_x);
+        const std::size_t source_row =
+            static_cast<std::size_t>(command.clip.src_y + row) * 0x20u;
+        for (i32 col = 0; col < command.clip.width; ++col) {
+            const std::size_t source_pixel = source_row +
+                static_cast<std::size_t>(command.clip.src_x + col);
+            const u16 mask_pixel = mask[source_pixel];
+            std::size_t primary_index = 5;
+            std::size_t secondary_index = 2;
+            u32 weight = mask_pixel & 0x1fu;
+            if ((mask_pixel & static_cast<u16>(format.green_mask)) != 0) {
+                primary_index = 4;
+                secondary_index = 1;
+                weight = (static_cast<u32>(mask_pixel) >>
+                             (green_weight_shift & 0x1f)) &
+                    0x1fu;
+            }
+            else if ((mask_pixel & static_cast<u16>(format.red_mask)) != 0) {
+                primary_index = 3;
+                secondary_index = 0;
+                weight = (static_cast<u32>(mask_pixel) >>
+                             (format.red_shift & 0x1f)) &
+                    0x1fu;
+            }
+
+            const u16* primary = sources[primary_index];
+            const u16* secondary = sources[secondary_index];
+            if (primary == nullptr || secondary == nullptr) {
+                continue;
+            }
+            target_row[col] = default_gameplay_blend_terrain_pixels(format,
+                primary[source_pixel], secondary[source_pixel], weight);
+        }
+    }
+}
+
+u32 default_gameplay_overlay_id(u32 overlay_flags, u32 slot) {
+    switch (slot) {
+    case 0:
+        return overlay_flags & 0x3fu;
+    case 1:
+        return (overlay_flags >> 8) & 0x3fu;
+    case 2:
+        return (overlay_flags >> 0x10) & 0x3fu;
+    case 3:
+        return (overlay_flags >> 0x18) & 0x3fu;
+    default:
+        return 0;
+    }
+}
+
+u32 default_gameplay_overlay_variant(u32 overlay_flags, u32 slot) {
+    switch (slot) {
+    case 0:
+        return (overlay_flags >> 6) & 3u;
+    case 1:
+        return (overlay_flags >> 0x0e) & 3u;
+    case 2:
+        return (overlay_flags >> 0x16) & 3u;
+    case 3:
+        return overlay_flags >> 0x1e;
+    default:
+        return 0;
+    }
+}
+
+i32 default_gameplay_overlay_palette_tile_index(u32 overlay_id, u32 variant) {
+    const std::size_t index =
+        static_cast<std::size_t>(overlay_id & 0x3fu) * 4u +
+        (variant & 3u);
+    if (index >= kGameplayOverlayVariantOffsets.size()) {
+        return kGameplayOverlayPaletteBaseOffset;
+    }
+    return kGameplayOverlayPaletteBaseOffset +
+        kGameplayOverlayVariantOffsets[index];
+}
+
+i32 default_gameplay_overlay_blend_mask_tile_index(u32 overlay_id) {
+    if (overlay_id >= kGameplayOverlayBlendMaskOffsets.size()) {
+        return -1;
+    }
+    const i32 offset = kGameplayOverlayBlendMaskOffsets[overlay_id];
+    if (offset < 0) {
+        return offset;
+    }
+    return kGameplayOverlayBlendMaskBaseOffset + offset;
+}
+
+void default_gameplay_draw_transparent_overlay_tile(
+    const TerrainTileSheetState& tile_sheet, const TerrainTileDrawCommand& command,
+    SpriteRenderTarget& target, u32 overlay_id, u32 variant) {
+    const i32 tile_index =
+        default_gameplay_overlay_palette_tile_index(overlay_id, variant);
+    const u16* source = default_gameplay_terrain_tile_pixels(tile_sheet, tile_index);
+    if (source == nullptr) {
+        return;
+    }
+
+    const MinimapPixelFormat format = default_gameplay_minimap_pixel_format();
+    const u16 transparent = static_cast<u16>(format.green_mask);
+    const u32 target_pitch = target.stride_words != 0 ?
+        target.stride_words : target.width;
+    for (i32 row = 0; row < command.clip.height; ++row) {
+        u16* target_row = target.pixels +
+            static_cast<std::size_t>(command.clip.dst_y + row) * target_pitch +
+            static_cast<std::size_t>(command.clip.dst_x);
+        const std::size_t source_row =
+            static_cast<std::size_t>(command.clip.src_y + row) * 0x20u;
+        for (i32 col = 0; col < command.clip.width; ++col) {
+            const u16 pixel = source[source_row +
+                static_cast<std::size_t>(command.clip.src_x + col)];
+            if (pixel != transparent) {
+                target_row[col] = pixel;
+            }
+        }
+    }
+}
+
+void default_gameplay_draw_masked_overlay_tile_index(
+    const TerrainTileSheetState& tile_sheet, const TerrainTileDrawCommand& command,
+    SpriteRenderTarget& target, i32 overlay_tile_index, u32 animation_slot) {
+    const i32 fill_tile_index = default_gameplay_terrain_tile_index(
+        5, command.tile_x, command.tile_y, animation_slot);
+    const u16* overlay =
+        default_gameplay_terrain_tile_pixels(tile_sheet, overlay_tile_index);
+    const u16* fill =
+        default_gameplay_terrain_tile_pixels(tile_sheet, fill_tile_index);
+    if (overlay == nullptr || fill == nullptr) {
+        return;
+    }
+
+    const MinimapPixelFormat format = default_gameplay_minimap_pixel_format();
+    const u16 transparent = static_cast<u16>(format.green_mask);
+    const u16 fill_token =
+        static_cast<u16>(format.red_mask | format.blue_mask);
+    const u32 target_pitch = target.stride_words != 0 ?
+        target.stride_words : target.width;
+    for (i32 row = 0; row < command.clip.height; ++row) {
+        u16* target_row = target.pixels +
+            static_cast<std::size_t>(command.clip.dst_y + row) * target_pitch +
+            static_cast<std::size_t>(command.clip.dst_x);
+        const std::size_t source_row =
+            static_cast<std::size_t>(command.clip.src_y + row) * 0x20u;
+        for (i32 col = 0; col < command.clip.width; ++col) {
+            const std::size_t source_pixel = source_row +
+                static_cast<std::size_t>(command.clip.src_x + col);
+            const u16 pixel = overlay[source_pixel];
+            if (pixel == transparent) {
+                continue;
+            }
+            target_row[col] = pixel == fill_token ? fill[source_pixel] : pixel;
+        }
+    }
+}
+
+void default_gameplay_draw_masked_overlay_tile(
+    const TerrainTileSheetState& tile_sheet, const TerrainTileDrawCommand& command,
+    SpriteRenderTarget& target, u32 overlay_id, u32 variant,
+    u32 animation_slot) {
+    default_gameplay_draw_masked_overlay_tile_index(tile_sheet, command, target,
+        default_gameplay_overlay_palette_tile_index(overlay_id, variant),
+        animation_slot);
+}
+
+void default_gameplay_draw_blended_overlay_tile_index(
+    const TerrainTileSheetState& tile_sheet, const TerrainTileDrawCommand& command,
+    SpriteRenderTarget& target, i32 overlay_tile_index, i32 blend_mask_tile_index) {
+    const u16* overlay =
+        default_gameplay_terrain_tile_pixels(tile_sheet, overlay_tile_index);
+    const u16* blend_mask =
+        default_gameplay_terrain_tile_pixels(tile_sheet, blend_mask_tile_index);
+    if (overlay == nullptr || blend_mask == nullptr) {
+        return;
+    }
+
+    const MinimapPixelFormat format = default_gameplay_minimap_pixel_format();
+    const u16 transparent = static_cast<u16>(format.green_mask);
+    const u32 target_pitch = target.stride_words != 0 ?
+        target.stride_words : target.width;
+    for (i32 row = 0; row < command.clip.height; ++row) {
+        u16* target_row = target.pixels +
+            static_cast<std::size_t>(command.clip.dst_y + row) * target_pitch +
+            static_cast<std::size_t>(command.clip.dst_x);
+        const std::size_t source_row =
+            static_cast<std::size_t>(command.clip.src_y + row) * 0x20u;
+        for (i32 col = 0; col < command.clip.width; ++col) {
+            const std::size_t source_pixel = source_row +
+                static_cast<std::size_t>(command.clip.src_x + col);
+            const u16 overlay_pixel = overlay[source_pixel];
+            if (overlay_pixel == transparent) {
+                continue;
+            }
+            const u32 weight = blend_mask[source_pixel] & 0x1fu;
+            if (weight == 0) {
+                continue;
+            }
+            target_row[col] = default_gameplay_blend_terrain_pixels(format,
+                overlay_pixel, target_row[col], weight);
+        }
+    }
+}
+
+void default_gameplay_draw_blended_overlay_tile(
+    const TerrainTileSheetState& tile_sheet, const TerrainTileDrawCommand& command,
+    SpriteRenderTarget& target, u32 overlay_id, u32 variant,
+    i32 blend_mask_tile_index) {
+    default_gameplay_draw_blended_overlay_tile_index(tile_sheet, command, target,
+        default_gameplay_overlay_palette_tile_index(overlay_id, variant),
+        blend_mask_tile_index);
+}
+
+bool default_gameplay_draw_special_overlay_terrain_tile(
+    const TerrainTileSheetState& tile_sheet, const TerrainTileDrawCommand& command,
+    SpriteRenderTarget& target, u32 animation_slot) {
+    const u32 row = default_gameplay_overlay_id(command.overlay_flags, 2);
+    const u32 column = default_gameplay_overlay_id(command.overlay_flags, 3);
+    const std::size_t index =
+        static_cast<std::size_t>(row) * 41u + column;
+    if (index >= kGameplaySpecialOverlayPaletteOffsets.size()) {
+        return false;
+    }
+
+    const i32 overlay_tile_index = 0x0af0 +
+        kGameplaySpecialOverlayPaletteOffsets[index];
+    const i32 mask_offset = kGameplaySpecialOverlayBlendMaskOffsets[index];
+    if (mask_offset < 0) {
+        default_gameplay_draw_masked_overlay_tile_index(
+            tile_sheet, command, target, overlay_tile_index, animation_slot);
+    }
+    else {
+        default_gameplay_draw_blended_overlay_tile_index(tile_sheet, command,
+            target, overlay_tile_index,
+            kGameplayOverlayBlendMaskBaseOffset + mask_offset);
+    }
+    return true;
+}
+
+void default_gameplay_draw_overlay_terrain_tile(
+    const TerrainTileSheetState& tile_sheet, const TerrainTileDrawCommand& command,
+    SpriteRenderTarget& target, u32 animation_slot) {
+    if (default_gameplay_overlay_id(command.overlay_flags, 0) == 0x3fu) {
+        (void)default_gameplay_draw_special_overlay_terrain_tile(
+            tile_sheet, command, target, animation_slot);
+        return;
+    }
+
+    for (i32 slot = 3; slot >= 0; --slot) {
+        const u32 overlay_id =
+            default_gameplay_overlay_id(command.overlay_flags, static_cast<u32>(slot));
+        if (overlay_id == 0) {
+            continue;
+        }
+        const u32 variant = default_gameplay_overlay_variant(
+            command.overlay_flags, static_cast<u32>(slot));
+        const i32 blend_mask_tile =
+            default_gameplay_overlay_blend_mask_tile_index(overlay_id);
+        if (blend_mask_tile >= 0) {
+            default_gameplay_draw_blended_overlay_tile(
+                tile_sheet, command, target, overlay_id, variant, blend_mask_tile);
+        }
+        else if (overlay_id < kGameplayOverlayMaskedKinds.size() &&
+                 kGameplayOverlayMaskedKinds[overlay_id] == 1) {
+            default_gameplay_draw_masked_overlay_tile(
+                tile_sheet, command, target, overlay_id, variant, animation_slot);
+        }
+        else {
+            default_gameplay_draw_transparent_overlay_tile(
+                tile_sheet, command, target, overlay_id, variant);
+        }
+    }
+}
+
+u32 default_gameplay_session_terrain_bank_index() {
+    const GameplaySessionLoadState& load = gameplay_session_load_state();
+    if (kGameplaySessionMapRecordIndex >= load.records.size() ||
+        !load.record_loaded[kGameplaySessionMapRecordIndex]) {
+        return 0;
+    }
+
+    const std::vector<u8>& record = load.records[kGameplaySessionMapRecordIndex];
+    if (kSessionMapRecordTerrainBankOffset + sizeof(u32) > record.size()) {
+        return 0;
+    }
+
+    return static_cast<u32>(record[kSessionMapRecordTerrainBankOffset]) |
+        (static_cast<u32>(record[kSessionMapRecordTerrainBankOffset + 1]) << 8) |
+        (static_cast<u32>(record[kSessionMapRecordTerrainBankOffset + 2]) << 16) |
+        (static_cast<u32>(record[kSessionMapRecordTerrainBankOffset + 3]) << 24);
+}
+
+bool load_default_gameplay_terrain_tile_sheet_bank() {
+    const u32 bank_index = default_gameplay_session_terrain_bank_index();
+    return LoadTerrainTileSheetBank(g_runtime.gameplay_terrain_tile_sheet,
+        "JW2_03.TRC", static_cast<i32>(bank_index),
+        default_gameplay_minimap_pixel_format(), kOriginalColorDepth);
+}
+
+void configure_default_gameplay_minimap_render_config(
+    MinimapTerrainRenderConfig& config) {
+    config.pixel_format = default_gameplay_minimap_pixel_format();
+    config.terrain_palette_offsets = kGameplayTerrainTileOffsets;
+    config.animated_terrain_bank =
+        g_runtime.gameplay_frame_render_context.animation_frame_slot;
+    config.overlay_palette_base_offset = kGameplayOverlayPaletteBaseOffset;
+    for (std::size_t overlay = 0; overlay < config.overlay_variant_offsets.size();
+         ++overlay) {
+        for (std::size_t variant = 0;
+             variant < config.overlay_variant_offsets[overlay].size(); ++variant) {
+            const std::size_t index = overlay * 4u + variant;
+            config.overlay_variant_offsets[overlay][variant] =
+                index < kGameplayOverlayVariantOffsets.size() ?
+                    kGameplayOverlayVariantOffsets[index] : 0;
+        }
+    }
+
+    config.terrain_blend_mask_base_offset =
+        kGameplayTerrainBlendMaskBaseOffset;
+    for (std::size_t mask = 0; mask < config.terrain_blend_mask_offsets.size();
+         ++mask) {
+        for (std::size_t variant = 0;
+             variant < config.terrain_blend_mask_offsets[mask].size(); ++variant) {
+            const std::size_t index = mask * 2u + variant;
+            config.terrain_blend_mask_offsets[mask][variant] =
+                index < kGameplayTerrainBlendMaskOffsets.size() ?
+                    kGameplayTerrainBlendMaskOffsets[index] : 0;
+        }
+    }
+
+    config.overlay_blend_mask_base_offset =
+        kGameplayOverlayBlendMaskBaseOffset;
+    for (std::size_t overlay = 0; overlay < config.overlay_blend_mask_offsets.size();
+         ++overlay) {
+        config.overlay_blend_mask_offsets[overlay] =
+            overlay < kGameplayOverlayBlendMaskOffsets.size() ?
+                kGameplayOverlayBlendMaskOffsets[overlay] : -1;
+    }
+    config.minimap_tile_palette =
+        g_runtime.gameplay_terrain_tile_sheet.average_pixels;
+}
+
+void ensure_default_ui_overlay_minimap_surface(UiOverlayState& overlay) {
+    ConfigureGameplayUiOverlayLayout(overlay);
+    if (overlay.minimap.map_width_tiles == 0) {
+        overlay.minimap.map_width_tiles = overlay.map_width_tiles;
+    }
+    if (overlay.minimap.map_height_tiles == 0) {
+        overlay.minimap.map_height_tiles = overlay.map_height_tiles;
+    }
+    if (overlay.minimap.viewport_width_pixels == 0) {
+        overlay.minimap.viewport_width_pixels = overlay.screen_width;
+    }
+    if (overlay.minimap.viewport_height_pixels == 0) {
+        overlay.minimap.viewport_height_pixels = overlay.screen_height;
+    }
+    if (overlay.minimap.output_pitch_pixels == 0) {
+        overlay.minimap.output_pitch_pixels = overlay.screen_width;
+    }
+    if (overlay.minimap.output_height_pixels == 0) {
+        overlay.minimap.output_height_pixels = overlay.screen_height;
+    }
+}
+
+void prepare_default_ui_overlay_minimap_base(UiOverlayState& overlay) {
+    if (!g_runtime.gameplay_terrain_tile_sheet_loaded ||
+        g_runtime.gameplay_terrain_tile_sheet.average_pixels.empty() ||
+        g_runtime.gameplay_terrain_layer.terrain_flags.empty()) {
+        return;
+    }
+
+    ensure_default_ui_overlay_minimap_surface(overlay);
+    configure_default_gameplay_minimap_render_config(
+        g_runtime.gameplay_minimap_render_config);
+    RenderMinimapTerrainBase(overlay.minimap,
+        g_runtime.gameplay_terrain_layer,
+        g_runtime.gameplay_minimap_render_config);
+}
+
+bool default_gameplay_flow_import_session_bundle(GameplaySessionFlowState& state) {
+    state.loaded_resource_base = 0xffffffffu;
+    state.loaded_palette_slot = 0xffffffffu;
+    state.loaded_resource_base_owned = false;
+    g_runtime.gameplay_session_bundle_loaded = false;
+    g_runtime.gameplay_terrain_tile_sheet_loaded = false;
+    g_runtime.gameplay_session_archive_path.clear();
+
+    const char* archive_path = resolve_gameplay_session_archive_path();
+    if (archive_path == nullptr || archive_path[0] == '\0') {
+        OutputDebugStringA(
+            "Gameplay session import callback reached without a selected session "
+            "archive.\n");
+        return false;
+    }
+
+    g_runtime.gameplay_session_archive_path = archive_path;
+    const bool bundle_imported = HandleGameplaySessionBundleImport(archive_path, 0);
+    if (!bundle_imported) {
+        report_gameplay_session_import_resource_failure();
+    }
+    g_runtime.gameplay_session_bundle_loaded = bundle_imported;
+    if (g_runtime.gameplay_session_bundle_loaded &&
+        !import_default_owner_ai_snapshot_from_session_records()) {
+        g_runtime.gameplay_session_bundle_loaded = false;
+    }
+    if (g_runtime.gameplay_session_bundle_loaded) {
+        g_runtime.gameplay_terrain_tile_sheet_loaded =
+            load_default_gameplay_terrain_tile_sheet_bank();
+    }
+    else {
+        ReleaseTerrainTileSheetBankResources(g_runtime.gameplay_terrain_tile_sheet);
+    }
+
+    char text[512]{};
+    std::snprintf(text, sizeof(text),
+        "Gameplay session bundle import %s for '%s' (terrain=%s).\n",
+        g_runtime.gameplay_session_bundle_loaded ? "succeeded" : "failed",
+        g_runtime.gameplay_session_archive_path.c_str(),
+        g_runtime.gameplay_terrain_tile_sheet_loaded ? "loaded" : "not loaded");
+    OutputDebugStringA(text);
+    return g_runtime.gameplay_session_bundle_loaded;
+}
+
+const UnitMovementDefinition* default_unit_lifecycle_find_definition(
+    UnitLifecycleContext& lifecycle, u32 unit_type);
+
+void default_gameplay_startup_unit_placed(UnitMovementUnit& unit) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    UnitMovementContext* movement =
+        lifecycle != nullptr ? lifecycle->movement : nullptr;
+    if (movement == nullptr) {
+        return;
+    }
+
+    auto remove_unit = [&unit](std::vector<UnitMovementUnit*>& units) {
+        units.erase(std::remove(units.begin(), units.end(), &unit), units.end());
+    };
+    remove_unit(movement->free_units);
+    remove_unit(movement->lifecycle_units);
+    remove_unit(movement->active_units);
+    unit.active = true;
+    unit.linked_unit = &unit;
+    movement->active_units.insert(movement->active_units.begin(), &unit);
+}
+
+void default_gameplay_startup_initialize_local_camera(i32 x, i32 y) {
+    sync_default_ui_overlay_runtime_from_gameplay_state();
+    UiOverlayState& overlay = ui_overlay_state();
+    ClampCameraToMinimapPoint(overlay, x, y);
+    publish_default_ui_overlay_camera(overlay);
+
+    GameplayHudAlertMarkerState& markers = g_runtime.gameplay_hud_alert_markers;
+    markers.last_alert_world_x = overlay.camera_x;
+    markers.last_alert_world_y = overlay.camera_y;
+    markers.last_alert_valid = true;
+    overlay.stored_minimap_world_x = overlay.camera_x;
+    overlay.stored_minimap_world_y = overlay.camera_y;
+    overlay.stored_minimap_point_valid = true;
+}
+
+void default_gameplay_startup_after_session_snapshot(
+    const std::vector<u8>& snapshot) {
+    std::vector<u8>* record =
+        MutableGameplaySessionLoadedRecord(kGameplaySessionPlayerRecordIndex);
+    if (record != nullptr) {
+        *record = snapshot;
+    }
+}
+
+void default_gameplay_session_update_owner_display_name(
+    GameplaySessionRuntimeResetState& state, u32 owner) {
+    if (owner >= state.owner_display_names.size() ||
+        owner >= g_runtime.gameplay_startup_state.owner_display_names.size()) {
+        return;
+    }
+    g_runtime.gameplay_startup_state.owner_display_names[owner] =
+        state.owner_display_names[owner];
+}
+
+void default_gameplay_session_unit_reset_or_removed(
+    GameplaySessionRuntimeResetState&, UnitMovementUnit& unit) {
+    if (unit.active) {
+        return;
+    }
+
+    unit.target = nullptr;
+    unit.linked_unit = nullptr;
+    unit.pending_command = UnitQueuedCommand{};
+    unit.active_command_payload = UnitQueuedCommand{};
+    unit.deferred_commands = {};
+    unit.deferred_command_count = 0;
+}
+
+void sync_default_gameplay_session_runtime_views_after_reset() {
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    if (movement == nullptr) {
+        g_runtime.gameplay_damage_record_links.clear();
+        g_runtime.gameplay_damage_context.active_units.clear();
+        g_runtime.gameplay_targeting_context = UnitTargetingContext{};
+        return;
+    }
+
+    purge_default_inactive_movement_units(*movement);
+    rebuild_default_unit_spatial_indexes();
+    rebuild_default_damage_record_links(movement, nullptr, nullptr);
+    g_runtime.gameplay_targeting_context = UnitTargetingContext{};
+    g_runtime.gameplay_targeting_context.active_units =
+        g_runtime.gameplay_damage_context.active_units;
+    sync_default_gameplay_end_condition_state();
+}
+
+void default_gameplay_startup_reset_runtime_objects() {
+    const u32 start_tick = RefreshLegacyTickTime();
+    g_runtime.gameplay_session_start_tick_ms = start_tick;
+    GameplayLoopState& loop = gameplay_loop_state();
+    loop.current_tick_ms = start_tick;
+    loop.frame_time_anchor = start_tick;
+    loop.simulation_frame_counter = 0;
+    loop.present_frame_counter = 0;
+
+    g_runtime.gameplay_end_condition_state = GameplayEndConditionState{};
+    g_runtime.gameplay_end_condition_units.clear();
+    g_runtime.gameplay_online_transition_state = GameplayOnlineTransitionState{};
+    g_runtime.gameplay_result_screen_rendered = false;
+    g_runtime.gameplay_leave_reset_processed = false;
+
+    GameplayModalUiState& modal = gameplay_modal_ui_state();
+    modal.committed_observer_mode = 3;
+    modal.pending_observer_mode = 3;
+    modal.committed_observer_mask = 0;
+    modal.pending_observer_mask = 0;
+
+    ResetCameraBookmarks(ui_overlay_state());
+    ExportSetupU32(kSetupVisibilityGateOffset,
+        g_runtime.gameplay_startup_state.fog_reveal_disabled ? 0u : 1u);
+}
+
+void reset_default_gameplay_startup_slots(GameplaySessionStartupState& startup) {
+    startup = GameplaySessionStartupState{};
+    g_runtime.gameplay_movement_context = UnitMovementContext{};
+    g_runtime.gameplay_lifecycle_context = UnitLifecycleContext{};
+    g_runtime.gameplay_lifecycle_context.movement =
+        &g_runtime.gameplay_movement_context;
+    g_runtime.gameplay_lifecycle_context.callbacks.find_definition =
+        default_unit_lifecycle_find_definition;
+    g_runtime.gameplay_unit_spatial_indexes = UnitSpatialIndexSet{};
+    InitializeUnitSpatialIndexSet(g_runtime.gameplay_unit_spatial_indexes);
+    g_runtime.gameplay_unit_effect_runtime = UnitEffectRuntimeState{};
+    g_runtime.gameplay_unit_effect_definitions_initialized = false;
+    g_runtime.gameplay_action_damage_profiles = UnitActionDamageProfileTable{};
+    g_runtime.gameplay_action_damage_profiles_initialized = false;
+    g_runtime.gameplay_frame_random_state = GameplayFrameRandomState{};
+    g_runtime.gameplay_terrain_layer = MinimapTerrainLayer{};
+    ResetTerrainTilePulseState(g_runtime.gameplay_terrain_pulse_state);
+    startup.players = &g_runtime.gameplay_player_slots;
+    startup.lifecycle = &g_runtime.gameplay_lifecycle_context;
+    startup.callbacks.reset_runtime_objects =
+        default_gameplay_startup_reset_runtime_objects;
+    startup.callbacks.reset_owner_ai = reset_default_owner_ai_runtime;
+    startup.callbacks.on_unit_placed = default_gameplay_startup_unit_placed;
+    startup.callbacks.initialize_local_camera =
+        default_gameplay_startup_initialize_local_camera;
+    startup.callbacks.after_session_snapshot =
+        default_gameplay_startup_after_session_snapshot;
+    startup.local_owner_id = 0;
+    startup.session_mode = 0;
+    startup.active_slot_count = kPlayerSlotCount;
+    startup.owner_slots[0].slot_state =
+        static_cast<u8>(PlayerSlotState::player_controlled);
+    startup.owner_slots[0].map_slot = 0;
+    startup.owner_slots[0].faction_id = 0;
+    startup.owner_slots[0].tribe_id = 0;
+    startup.owner_slots[0].start_x = 0x400;
+    startup.owner_slots[0].start_y = 0x400;
+    startup.owner_slots[0].starting_unit_type = kDefaultFactionStartingUnitTypes[0];
+    startup.owner_slots[0].secondary_starting_unit_type =
+        kDefaultFactionSecondaryStartingUnitTypes[0];
+    for (std::size_t slot = 1; slot < startup.owner_slots.size(); ++slot) {
+        startup.owner_slots[slot].slot_state = static_cast<u8>(PlayerSlotState::disabled);
+    }
+}
+
+void mirror_startup_slots_to_player_runtime(
+    const GameplaySessionStartupState& startup, PlayerSlotRuntimeState& players) {
+    players.active_slot_count = std::min<u32>(
+        std::max<u32>(startup.active_slot_count, 1), kPlayerSlotCount);
+    players.local_player_slot = std::min<u32>(startup.local_owner_id,
+        kPlayerSlotCount - 1);
+    for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+        const GameplayScenarioOwnerSlot& slot = startup.owner_slots[owner];
+        players.slot_states[owner] = slot.slot_state;
+        players.owner_start_x[owner] = slot.start_x;
+        players.owner_start_y[owner] = slot.start_y;
+    }
+}
+
+u32 default_primary_miles_music_policy_faction(
+    const GameplaySessionStartupState& startup) {
+    const u32 local_owner = std::min<u32>(startup.local_owner_id,
+        kPlayerSlotCount - 1);
+    return startup.owner_slots[local_owner].faction_id;
+}
+
+void sync_default_primary_miles_music_policy_faction() {
+    SetPrimaryMilesMusicPolicyFactionIndex(
+        default_primary_miles_music_policy_faction(
+            g_runtime.gameplay_startup_state));
+}
+
+void sync_startup_owner_factions_to_lifecycle(
+    const GameplaySessionStartupState& startup) {
+    SetPrimaryMilesMusicPolicyFactionIndex(
+        default_primary_miles_music_policy_faction(startup));
+
+    if (startup.lifecycle == nullptr) {
+        return;
+    }
+
+    for (u32 owner = 0; owner < kPlayerSlotCount &&
+         owner < startup.lifecycle->owner_faction_ids.size(); ++owner) {
+        startup.lifecycle->owner_faction_ids[owner] =
+            startup.owner_slots[owner].faction_id;
+    }
+}
+
+void set_default_primary_miles_music_policy_mode(u32 mode) {
+    sync_default_primary_miles_music_policy_faction();
+    SetPrimaryMilesMusicPolicyMode(mode);
+}
+
+void reset_default_mode1_packet_state_from_player_slots() {
+    ResetMode1GameplayPacketDispatch();
+
+    const PlayerSlotRuntimeState& players = g_runtime.gameplay_player_slots;
+    Mode1GameplayPacketDispatchState& packets = mode1_gameplay_packet_dispatch_state();
+    u32 active_count = 0;
+    const u32 active_limit = std::min<u32>(
+        std::max<u32>(players.active_slot_count, 1), kPlayerSlotCount);
+
+    for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+        Mode1GameplayPlayerPacketState& packet_player = packets.players[owner];
+        const bool disabled = owner >= active_limit ||
+            players.slot_states[owner] == static_cast<u8>(PlayerSlotState::disabled);
+        packet_player.status = disabled ? static_cast<u8>(PlayerSlotState::disabled) : 0;
+        packet_player.inactive = disabled;
+        packet_player.relation_mask = players.owner_relation_masks[owner];
+        packet_player.relation_block_mask = players.owner_visibility_masks[owner];
+        if (!disabled) {
+            ++active_count;
+        }
+    }
+
+    SetMode1GameplayActivePlayerCount(active_count);
+}
+
+std::size_t default_session_runtime_pair_byte_count(
+    const SessionRuntimeBufferPair& pair) {
+    return static_cast<std::size_t>(pair.count) * pair.record_size;
+}
+
+bool session_archive_record_has_original_size(
+    const char* archive_name, u32 record_index, std::size_t expected_size) {
+    if (archive_name == nullptr || archive_name[0] == '\0' ||
+        expected_size > 0xffffffffu) {
+        return false;
+    }
+
+    u32 original_size = 0;
+    return QueryTrcRecordSizes(
+               archive_name, record_index, nullptr, &original_size, nullptr) &&
+        original_size == static_cast<u32>(expected_size);
+}
+
+void write_default_session_buffer_u32(
+    std::vector<u8>& bytes, std::size_t offset, u32 value) {
+    if (offset > bytes.size() || bytes.size() - offset < sizeof(value)) {
+        return;
+    }
+    bytes[offset + 0] = static_cast<u8>(value & 0xffu);
+    bytes[offset + 1] = static_cast<u8>((value >> 8) & 0xffu);
+    bytes[offset + 2] = static_cast<u8>((value >> 16) & 0xffu);
+    bytes[offset + 3] = static_cast<u8>((value >> 24) & 0xffu);
+}
+
+void initialize_default_session_runtime_staging_buffers(
+    SessionRuntimeBufferPairs& buffers) {
+    InitializeSessionRuntimeBufferPairs(buffers);
+    for (SessionRuntimeBufferPair& pair : buffers.categories) {
+        pair.snapshot.assign(default_session_runtime_pair_byte_count(pair), 0);
+    }
+
+    SessionRuntimeBufferPair& fixed =
+        buffers.categories[kSessionRuntimeForcesRecordIndex];
+    if (fixed.count == 0 || fixed.record_size < 0x34) {
+        return;
+    }
+
+    write_default_session_buffer_u32(fixed.snapshot, 0x20, 0xff);
+    for (u32 index = 0; index < fixed.count; ++index) {
+        const std::size_t offset =
+            static_cast<std::size_t>(index) * fixed.record_size;
+        write_default_session_buffer_u32(fixed.snapshot, offset + 0x24, 1);
+        write_default_session_buffer_u32(fixed.snapshot, offset + 0x28, 1);
+        write_default_session_buffer_u32(fixed.snapshot, offset + 0x2c, 1);
+        write_default_session_buffer_u32(fixed.snapshot, offset + 0x30, 1);
+    }
+}
+
+bool unpack_default_session_runtime_records(
+    std::vector<RuntimeDefinitionRecord>& records,
+    const SessionRuntimeBufferPair& pair, const std::vector<u8>& bytes) {
+    const std::size_t expected_size = default_session_runtime_pair_byte_count(pair);
+    records.clear();
+    if (expected_size == 0) {
+        return true;
+    }
+    if (pair.record_size == 0 || bytes.size() < expected_size) {
+        return false;
+    }
+
+    records.resize(pair.count);
+    for (u32 index = 0; index < pair.count; ++index) {
+        const std::size_t offset =
+            static_cast<std::size_t>(index) * pair.record_size;
+        records[index].bytes.assign(bytes.begin() + offset,
+            bytes.begin() + offset + pair.record_size);
+    }
+    return true;
+}
+
+bool unpack_default_session_runtime_active_definitions(
+    const SessionRuntimeBufferPairs& buffers,
+    SessionRuntimeDefinitionTableSet& definitions) {
+    return
+        unpack_default_session_runtime_records(
+            definitions.fixed44_records, buffers.categories[0],
+            buffers.categories[0].active) &&
+        unpack_default_session_runtime_records(
+            definitions.unit_records, buffers.categories[1],
+            buffers.categories[1].active) &&
+        unpack_default_session_runtime_records(
+            definitions.production_order_records, buffers.categories[2],
+            buffers.categories[2].active) &&
+        unpack_default_session_runtime_records(
+            definitions.tail8_records, buffers.categories[3],
+            buffers.categories[3].active) &&
+        unpack_default_session_runtime_records(
+            definitions.tail4_records, buffers.categories[4],
+            buffers.categories[4].active);
+}
+
+bool unpack_default_session_runtime_fixed_records(
+    const SessionRuntimeBufferPairs& buffers, const std::vector<u8>& bytes,
+    std::vector<RuntimeDefinitionRecord>& fixed44_records) {
+    return unpack_default_session_runtime_records(
+        fixed44_records, buffers.categories[kSessionRuntimeForcesRecordIndex], bytes);
+}
+
+bool default_session_runtime_user_override_records_available(
+    const char* archive_name, const SessionRuntimeBufferPairs& buffers) {
+    for (u32 index = 0; index < kSessionRuntimeUserRecordCount; ++index) {
+        const SessionRuntimeBufferPair& pair = buffers.categories[index];
+        if (!session_archive_record_has_original_size(archive_name,
+                kSessionRuntimeUserRecordFirstIndex + index,
+                default_session_runtime_pair_byte_count(pair))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool stage_default_session_runtime_override_definitions() {
+    g_runtime.gameplay_session_user_runtime_overrides_loaded = false;
+    g_runtime.gameplay_session_forces_record_loaded = false;
+    g_runtime.gameplay_session_runtime_definitions_staged = false;
+    g_runtime.gameplay_session_forces_fixed_records.clear();
+
+    if (g_runtime.gameplay_session_archive_path.empty()) {
+        return false;
+    }
+
+    SessionRuntimeBufferPairs& buffers =
+        g_runtime.gameplay_session_runtime_buffers;
+    if (!ResizeSessionRuntimeBufferPairs(buffers,
+            kGameplaySessionRuntimeFixedRecordCount,
+            kGameSessionUnitTypeCount,
+            kGameplaySessionRuntimeProductionOrderRecordCount,
+            kGameplaySessionRuntimeTail8RecordCount,
+            kGameplaySessionRuntimeTail4RecordCount,
+            initialize_default_session_runtime_staging_buffers)) {
+        return false;
+    }
+
+    const char* archive_name = g_runtime.gameplay_session_archive_path.c_str();
+    const bool user_records_available =
+        default_session_runtime_user_override_records_available(
+            archive_name, buffers);
+    if (user_records_available &&
+        LoadUserSessionRuntimeOverrideRecords(archive_name, buffers)) {
+        SessionRuntimeDefinitionTableSet staged;
+        if (unpack_default_session_runtime_active_definitions(
+                buffers, staged)) {
+            g_runtime.staged_session_definitions = std::move(staged);
+            g_runtime.gameplay_session_user_runtime_overrides_loaded = true;
+        }
+    }
+
+    const bool forces_record_available = session_archive_record_has_original_size(
+        archive_name, kSessionRuntimeForcesArchiveRecordIndex,
+        kSessionRuntimeForcesFixedRecordBytes);
+    if (forces_record_available &&
+        LoadForcesSessionRuntimeRecord(
+            archive_name, buffers, g_runtime.gameplay_session_forces_fixed_records)) {
+        g_runtime.gameplay_session_forces_record_loaded =
+            unpack_default_session_runtime_fixed_records(
+                buffers, g_runtime.gameplay_session_forces_fixed_records,
+                g_runtime.active_session_definitions.fixed44_records);
+        if (!g_runtime.gameplay_session_user_runtime_overrides_loaded &&
+            g_runtime.gameplay_session_forces_record_loaded) {
+            g_runtime.staged_session_definitions.fixed44_records =
+                g_runtime.active_session_definitions.fixed44_records;
+        }
+    }
+
+    g_runtime.gameplay_session_runtime_definitions_staged =
+        g_runtime.gameplay_session_user_runtime_overrides_loaded ||
+        g_runtime.gameplay_session_forces_record_loaded;
+    return g_runtime.gameplay_session_runtime_definitions_staged;
+}
+
+u32 read_default_session_record_u32(
+    const std::vector<u8>& record, std::size_t offset, u32 fallback) {
+    if (offset > record.size() || record.size() - offset < sizeof(u32)) {
+        return fallback;
+    }
+    return static_cast<u32>(record[offset]) |
+        (static_cast<u32>(record[offset + 1]) << 8) |
+        (static_cast<u32>(record[offset + 2]) << 16) |
+        (static_cast<u32>(record[offset + 3]) << 24);
+}
+
+u32 default_gameplay_session_map_dimension_tiles(std::size_t offset) {
+    const GameplaySessionLoadState& load = gameplay_session_load_state();
+    if (kGameplaySessionMapRecordIndex >= load.records.size() ||
+        !load.record_loaded[kGameplaySessionMapRecordIndex]) {
+        return kGameplayScenarioDefaultMapTiles;
+    }
+
+    const u32 value = read_default_session_record_u32(
+        load.records[kGameplaySessionMapRecordIndex], offset, 0);
+    if (value == 0) {
+        return kGameplayScenarioDefaultMapTiles;
+    }
+    return std::min<u32>(value, kGameplayScenarioMapLayerStrideTiles);
+}
+
+u32 default_gameplay_session_map_width_tiles() {
+    return default_gameplay_session_map_dimension_tiles(
+        kSessionMapRecordWidthTilesOffset);
+}
+
+u32 default_gameplay_session_map_height_tiles() {
+    return default_gameplay_session_map_dimension_tiles(
+        kSessionMapRecordHeightTilesOffset);
+}
+
+std::string read_default_session_record_string(
+    const std::vector<u8>& record, std::size_t offset, std::size_t length) {
+    if (offset > record.size() || record.size() - offset < length) {
+        return {};
+    }
+
+    const auto begin = record.begin() + offset;
+    const auto end = begin + length;
+    const auto nul = std::find(begin, end, 0);
+    return std::string(
+        reinterpret_cast<const char*>(&*begin),
+        static_cast<std::size_t>(nul - begin));
+}
+
+const std::vector<u8>* default_session_scenario_record() {
+    const GameplaySessionLoadState& load = gameplay_session_load_state();
+    if (kGameplaySessionScenarioRecordIndex >= load.records.size() ||
+        !load.record_loaded[kGameplaySessionScenarioRecordIndex]) {
+        return nullptr;
+    }
+
+    const std::vector<u8>& record = load.records[kGameplaySessionScenarioRecordIndex];
+    if (record.size() < kGameplaySessionScenarioRecordBytes) {
+        return nullptr;
+    }
+    return &record;
+}
+
+const std::vector<u8>* default_session_map_record() {
+    const GameplaySessionLoadState& load = gameplay_session_load_state();
+    if (kGameplaySessionMapRecordIndex >= load.records.size() ||
+        !load.record_loaded[kGameplaySessionMapRecordIndex]) {
+        return nullptr;
+    }
+
+    const std::vector<u8>& record = load.records[kGameplaySessionMapRecordIndex];
+    if (record.size() < kSessionMapRecordAmbientEffectGateOffset + sizeof(u32)) {
+        return nullptr;
+    }
+    return &record;
+}
+
+const std::vector<u8>* default_session_player_record() {
+    const GameplaySessionLoadState& load = gameplay_session_load_state();
+    if (kGameplaySessionPlayerRecordIndex >= load.records.size() ||
+        !load.record_loaded[kGameplaySessionPlayerRecordIndex]) {
+        if (g_runtime.gameplay_startup_state.snapshot.size() >=
+            kGameplaySessionPlayerRecordBytes) {
+            return &g_runtime.gameplay_startup_state.snapshot;
+        }
+        return nullptr;
+    }
+
+    const std::vector<u8>& record = load.records[kGameplaySessionPlayerRecordIndex];
+    if (record.size() < kGameplaySessionPlayerRecordBytes) {
+        return nullptr;
+    }
+    return &record;
+}
+
+const std::vector<u8>* default_gameplay_result_metric_record() {
+    const GameplaySessionLoadState& load = gameplay_session_load_state();
+    if (kGameplayResultMetricRecordIndex >= load.records.size() ||
+        !load.record_loaded[kGameplayResultMetricRecordIndex]) {
+        return nullptr;
+    }
+
+    const std::vector<u8>& record = load.records[kGameplayResultMetricRecordIndex];
+    if (record.size() < kGameplayResultMetricRecordBytes) {
+        return nullptr;
+    }
+    return &record;
+}
+
+bool default_session_player_slot_state_valid(u32 state) {
+    return state == static_cast<u32>(PlayerSlotState::active) ||
+        state == static_cast<u32>(PlayerSlotState::player_controlled) ||
+        state == static_cast<u32>(PlayerSlotState::observer) ||
+        state == static_cast<u32>(PlayerSlotState::rotation_reserve) ||
+        state == static_cast<u32>(PlayerSlotState::disabled);
+}
+
+bool import_default_session_map_record_startup_state() {
+    const std::vector<u8>* record = default_session_map_record();
+    if (record == nullptr) {
+        return false;
+    }
+
+    GameplaySessionStartupState& startup = g_runtime.gameplay_startup_state;
+    startup.ambient_map_effect_spawn_gate = read_default_session_record_u32(
+        *record, kSessionMapRecordAmbientEffectGateOffset,
+        startup.ambient_map_effect_spawn_gate);
+    return true;
+}
+
+bool import_default_session_scenario_record_startup_state() {
+    const std::vector<u8>* record = default_session_scenario_record();
+    if (record == nullptr) {
+        return false;
+    }
+
+    GameplaySessionStartupState& startup = g_runtime.gameplay_startup_state;
+    startup.session_mode = read_default_session_record_u32(
+        *record, kSessionScenarioRecordModeOffset, startup.session_mode);
+
+    const u32 active_slot_count = read_default_session_record_u32(
+        *record, kSessionScenarioRecordActiveSlotCountOffset,
+        startup.active_slot_count);
+    if (active_slot_count != 0) {
+        startup.active_slot_count = std::min<u32>(
+            active_slot_count, kPlayerSlotCount);
+    }
+    return true;
+}
+
+bool import_default_session_player_record_startup_state() {
+    const std::vector<u8>* record = default_session_player_record();
+    if (record == nullptr) {
+        return false;
+    }
+
+    GameplaySessionStartupState& startup = g_runtime.gameplay_startup_state;
+    PlayerSlotRuntimeState& players = g_runtime.gameplay_player_slots;
+
+    const u32 local_owner = read_default_session_record_u32(
+        *record, kSessionPlayerRecordLocalOwnerOffset, startup.local_owner_id);
+    if (local_owner < kPlayerSlotCount) {
+        startup.local_owner_id = local_owner;
+        players.local_player_slot = local_owner;
+    }
+
+    const u32 active_slot_count = std::min<u32>(
+        std::max<u32>(startup.active_slot_count, 1), kPlayerSlotCount);
+    for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+        GameplayScenarioOwnerSlot& slot = startup.owner_slots[owner];
+        std::string display_name = read_default_session_record_string(
+            *record,
+            kSessionPlayerRecordNameBaseOffset +
+                static_cast<std::size_t>(owner) *
+                    kSessionPlayerRecordNameStride,
+            kSessionPlayerRecordNameStride);
+        if (!display_name.empty()) {
+            startup.owner_display_names[owner] = std::move(display_name);
+        }
+
+        if (owner >= active_slot_count) {
+            slot.slot_state = static_cast<u8>(PlayerSlotState::disabled);
+        }
+        else {
+            const u32 slot_state = read_default_session_record_u32(
+                *record,
+                kSessionPlayerRecordSlotStateBaseOffset + owner * sizeof(u32),
+                slot.slot_state);
+            if (default_session_player_slot_state_valid(slot_state)) {
+                slot.slot_state = static_cast<u8>(slot_state);
+            }
+        }
+
+        const u32 faction = read_default_session_record_u32(
+            *record, kSessionPlayerRecordFactionBaseOffset + owner * sizeof(u32),
+            slot.faction_id);
+        slot.faction_id = faction <= 3 ? faction : 0;
+        slot.tribe_id = slot.faction_id;
+        slot.map_slot = owner;
+        startup.owner_faction_ids[owner] = slot.faction_id;
+        startup.owner_tribe_ids[owner] = slot.tribe_id;
+
+        const std::size_t start_offset =
+            kSessionPlayerRecordStartCoordinateBaseOffset +
+            static_cast<std::size_t>(owner) *
+                kSessionPlayerRecordStartCoordinateStride;
+        const u32 start_x = read_default_session_record_u32(
+            *record, start_offset, 0xffffffffu);
+        const u32 start_y = read_default_session_record_u32(
+            *record, start_offset + sizeof(u32), 0xffffffffu);
+        if (start_x != 0xffffffffu && start_y != 0xffffffffu) {
+            slot.start_x = static_cast<i32>(start_x);
+            slot.start_y = static_cast<i32>(start_y);
+            players.owner_start_x[owner] = slot.start_x;
+            players.owner_start_y[owner] = slot.start_y;
+        }
+    }
+
+    for (u32 owner = 0; owner < kPlayerOwnerResourceSlots; ++owner) {
+        const std::size_t resource_offset = static_cast<std::size_t>(owner) *
+            sizeof(u32);
+        players.owner_primary_resources[owner] =
+            read_default_session_record_u32(
+                *record,
+                kSessionPlayerRecordOwnerResourcePrimaryBaseOffset +
+                    resource_offset,
+                players.owner_primary_resources[owner]);
+        players.owner_secondary_resources[owner] =
+            read_default_session_record_u32(
+                *record,
+                kSessionPlayerRecordOwnerResourceSecondaryBaseOffset +
+                    resource_offset,
+                players.owner_secondary_resources[owner]);
+        players.owner_aux_resources[owner] =
+            read_default_session_record_u32(
+                *record,
+                kSessionPlayerRecordOwnerResourceAuxBaseOffset + resource_offset,
+                players.owner_aux_resources[owner]);
+    }
+
+    return true;
+}
+
+bool import_default_session_starting_unit_types() {
+    const u32 active_slot_count = std::min<u32>(
+        std::max<u32>(g_runtime.gameplay_startup_state.active_slot_count, 1),
+        kPlayerSlotCount);
+    for (u32 owner = 0; owner < active_slot_count; ++owner) {
+        GameplayScenarioOwnerSlot& slot =
+            g_runtime.gameplay_startup_state.owner_slots[owner];
+        const u32 faction = std::min<u32>(slot.faction_id,
+            static_cast<u32>(kDefaultFactionStartingUnitTypes.size() - 1));
+        slot.starting_unit_type = kDefaultFactionStartingUnitTypes[faction];
+        slot.secondary_starting_unit_type =
+            kDefaultFactionSecondaryStartingUnitTypes[faction];
+    }
+    return true;
+}
+
+bool link_lobby_startup_session_seed_present(const LinkLobbyState& lobby) {
+    return std::any_of(lobby.session_seed_payload.begin(),
+        lobby.session_seed_payload.end(), [](u8 value) { return value != 0; });
+}
+
+u32 read_link_lobby_startup_seed_u32(
+    const LinkLobbyState& lobby, std::size_t offset) {
+    return read_packet_u32_raw(lobby.session_seed_payload.data(),
+        lobby.session_seed_payload.size(), offset);
+}
+
+u32 link_lobby_startup_active_slot_count(const LinkLobbyState& lobby) {
+    if (link_lobby_startup_session_seed_present(lobby)) {
+        const u32 max_players = read_link_lobby_startup_seed_u32(
+            lobby, kLinkLobbyStartupSessionSeedMaxPlayersOffset);
+        if (max_players != 0) {
+            return std::min<u32>(max_players, kPlayerSlotCount);
+        }
+    }
+
+    u32 active_count = 0;
+    for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+        const u32 state = lobby.start_states[owner];
+        if (default_session_player_slot_state_valid(state) &&
+            state != static_cast<u32>(PlayerSlotState::disabled)) {
+            active_count = owner + 1;
+        }
+    }
+    return std::max<u32>(active_count, 1);
+}
+
+std::string link_lobby_startup_player_name(
+    const LinkLobbyState& lobby, u32 owner) {
+    if (owner >= kPlayerSlotCount) {
+        return {};
+    }
+
+    std::string name = fixed_packet_string_raw(
+        reinterpret_cast<const u8*>(lobby.players[owner].name.data()),
+        lobby.players[owner].name.size(), 0, lobby.players[owner].name.size());
+    if (!name.empty()) {
+        return name;
+    }
+
+    return fixed_packet_string_raw(lobby.player_payloads[owner].data(),
+        lobby.player_payloads[owner].size(), kLinkLobbyStartupPlayerNamePayloadOffset,
+        kLinkLobbyStartupPlayerNamePayloadBytes);
+}
+
+u8 normalized_link_lobby_startup_slot_state(u8 value) {
+    return default_session_player_slot_state_valid(value) ? value :
+        static_cast<u8>(PlayerSlotState::disabled);
+}
+
+bool link_lobby_startup_parameters_available() {
+    return g_runtime.link_lobby_start_parameters_pending &&
+        !link_lobby_state().start_parameter_payload.empty();
+}
+
+void populate_p2p_session_start_input_from_link_lobby(
+    P2PGameSessionStartInput& input) {
+    if (!link_lobby_startup_parameters_available()) {
+        return;
+    }
+
+    const LinkLobbyState& lobby = link_lobby_state();
+    input.start_parameter_payload.fill(0);
+    const std::size_t start_parameter_bytes = std::min<std::size_t>(
+        input.start_parameter_payload.size(), lobby.start_parameter_payload.size());
+    std::memcpy(input.start_parameter_payload.data(),
+        lobby.start_parameter_payload.data(), start_parameter_bytes);
+    input.start_parameter_payload_present = start_parameter_bytes != 0;
+    input.copied_runtime_local_player = static_cast<u32>(
+        std::clamp(lobby.local_player_index, 0, static_cast<int>(kPlayerSlotCount - 1)));
+    input.network_player_count = 0;
+
+    for (u32 owner = 0; owner < kPlayerSlotCount &&
+         input.network_player_count < input.players.size(); ++owner) {
+        const u8 slot_state = normalized_link_lobby_startup_slot_state(
+            lobby.start_states[owner]);
+        if (slot_state == static_cast<u8>(PlayerSlotState::disabled)) {
+            continue;
+        }
+
+        P2PGameSessionPlayerSetup& player =
+            input.players[input.network_player_count++];
+        std::string name = link_lobby_startup_player_name(lobby, owner);
+        if (name.empty()) {
+            char fallback[32]{};
+            std::snprintf(fallback, sizeof(fallback), "Player %u", owner);
+            name = fallback;
+        }
+        copy_result_text(player.name, name.c_str());
+        player.owner_slot = static_cast<u8>(owner);
+    }
+
+    if (input.network_player_count == 0) {
+        input.network_player_count = 1;
+        input.players[0].owner_slot = static_cast<u8>(input.copied_runtime_local_player);
+    }
+}
+
+void sync_default_owner_resource_runtime_slots(
+    u32 owner, u32 primary, u32 secondary, UnitLifecycleContext* lifecycle) {
+    if (owner < g_runtime.gameplay_player_slots.owner_primary_resources.size() &&
+        owner < g_runtime.gameplay_player_slots.owner_secondary_resources.size()) {
+        g_runtime.gameplay_player_slots.owner_primary_resources[owner] = primary;
+        g_runtime.gameplay_player_slots.owner_secondary_resources[owner] = secondary;
+    }
+    if (owner < g_runtime.gameplay_production_runtime.owner_primary_resources.size() &&
+        owner <
+            g_runtime.gameplay_production_runtime.owner_secondary_resources.size()) {
+        g_runtime.gameplay_production_runtime.owner_primary_resources[owner] = primary;
+        g_runtime.gameplay_production_runtime.owner_secondary_resources[owner] =
+            secondary;
+    }
+    if (owner < g_runtime.gameplay_unit_commands.owner_resources.size() &&
+        owner < g_runtime.gameplay_unit_commands.owner_secondary_resources.size()) {
+        g_runtime.gameplay_unit_commands.owner_resources[owner] = primary;
+        g_runtime.gameplay_unit_commands.owner_secondary_resources[owner] = secondary;
+    }
+    if (lifecycle != nullptr &&
+        owner < lifecycle->owner_primary_resources.size() &&
+        owner < lifecycle->owner_secondary_resources.size()) {
+        lifecycle->owner_primary_resources[owner] = primary;
+        lifecycle->owner_secondary_resources[owner] = secondary;
+    }
+}
+
+void sync_default_owner_resource_runtime_slots(u32 owner, u32 primary, u32 secondary) {
+    sync_default_owner_resource_runtime_slots(owner, primary, secondary,
+        g_runtime.gameplay_startup_state.lifecycle);
+}
+
+void sync_link_lobby_startup_resources_to_lifecycle(
+    const PlayerSlotRuntimeState& players, UnitLifecycleContext* lifecycle) {
+    for (u32 owner = 0; owner < kPlayerOwnerResourceSlots &&
+         owner < players.owner_primary_resources.size() &&
+         owner < players.owner_secondary_resources.size(); ++owner) {
+        sync_default_owner_resource_runtime_slots(owner,
+            players.owner_primary_resources[owner],
+            players.owner_secondary_resources[owner], lifecycle);
+    }
+}
+
+bool apply_pending_link_lobby_start_parameters_to_gameplay_startup() {
+    if (!g_runtime.link_lobby_start_parameters_pending) {
+        return false;
+    }
+    g_runtime.link_lobby_start_parameters_pending = false;
+
+    LinkLobbyState& lobby = link_lobby_state();
+    if (lobby.start_parameter_payload.empty()) {
+        return false;
+    }
+
+    GameplaySessionStartupState& startup = g_runtime.gameplay_startup_state;
+    PlayerSlotRuntimeState& players = g_runtime.gameplay_player_slots;
+
+    std::array<i32, kPlayerSlotCount> imported_start_x{};
+    std::array<i32, kPlayerSlotCount> imported_start_y{};
+    for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+        imported_start_x[owner] = startup.owner_slots[owner].start_x;
+        imported_start_y[owner] = startup.owner_slots[owner].start_y;
+    }
+
+    startup.local_owner_id = static_cast<u32>(
+        std::clamp(lobby.local_player_index, 0, static_cast<int>(kPlayerSlotCount - 1)));
+    startup.session_mode = static_cast<u32>(std::max(0, lobby.game_type));
+    startup.active_slot_count = link_lobby_startup_active_slot_count(lobby);
+    startup.frame_interval_index = static_cast<u32>(
+        std::clamp(lobby.map_selection_index, 0,
+            static_cast<int>(kGameplayFrameIntervalsMs.size() - 1)));
+    startup.fog_reveal_disabled =
+        read_packet_u32_raw(lobby.start_parameter_payload.data(),
+            lobby.start_parameter_payload.size(),
+            kLinkLobbyStartupFogRevealDisabledOffset) != 0;
+    ExportSetupU32(kSetupVisibilityGateOffset,
+        startup.fog_reveal_disabled ? 0u : 1u);
+
+    for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+        GameplayScenarioOwnerSlot& slot = startup.owner_slots[owner];
+        u8 slot_state = normalized_link_lobby_startup_slot_state(
+            lobby.start_states[owner]);
+        if (owner >= startup.active_slot_count) {
+            slot_state = static_cast<u8>(PlayerSlotState::disabled);
+        }
+
+        const u32 map_slot = std::min<u32>(lobby.randomized_slots[owner],
+            kPlayerSlotCount - 1);
+        const u32 faction = lobby.tribe_choices[owner] <= 3 ?
+            lobby.tribe_choices[owner] : 0;
+        slot.slot_state = slot_state;
+        slot.map_slot = map_slot;
+        slot.faction_id = faction;
+        slot.tribe_id = faction;
+        slot.start_x = imported_start_x[map_slot];
+        slot.start_y = imported_start_y[map_slot];
+        slot.starting_unit_type = kDefaultFactionStartingUnitTypes[faction];
+        slot.secondary_starting_unit_type =
+            kDefaultFactionSecondaryStartingUnitTypes[faction];
+
+        startup.owner_faction_ids[owner] = faction;
+        startup.owner_tribe_ids[owner] = faction;
+        players.slot_states[owner] = slot.slot_state;
+        players.owner_start_x[owner] = slot.start_x;
+        players.owner_start_y[owner] = slot.start_y;
+
+        std::string display_name = link_lobby_startup_player_name(lobby, owner);
+        if (!display_name.empty()) {
+            startup.owner_display_names[owner] = std::move(display_name);
+        }
+    }
+
+    const int start_resource = lobby.start_resource_index;
+    if (start_resource > 0 &&
+        start_resource < static_cast<int>(kLinkLobbyStartResourcePrimaryValues.size())) {
+        const u32 value =
+            kLinkLobbyStartResourcePrimaryValues[static_cast<std::size_t>(start_resource)];
+        players.owner_primary_resources.fill(value);
+    }
+
+    mirror_startup_slots_to_player_runtime(startup, players);
+    sync_startup_owner_factions_to_lifecycle(startup);
+    sync_link_lobby_startup_resources_to_lifecycle(players, startup.lifecycle);
+    return true;
+}
+
+bool import_default_session_owner_unit_availability() {
+    const GameplaySessionLoadState& load = gameplay_session_load_state();
+    if (kGameplaySessionOwnerUnitAvailabilityRecordIndex >= load.records.size() ||
+        !load.record_loaded[kGameplaySessionOwnerUnitAvailabilityRecordIndex]) {
+        return false;
+    }
+
+    const std::vector<u8>& record =
+        load.records[kGameplaySessionOwnerUnitAvailabilityRecordIndex];
+    if (record.size() < kGameplaySessionOwnerUnitAvailabilityRecordBytes) {
+        return false;
+    }
+
+    for (u32 owner = 0; owner < kGameSessionOwnerCount; ++owner) {
+        const std::size_t offset =
+            static_cast<std::size_t>(owner) * kGameSessionUnitTypeCount;
+        std::copy(record.begin() + offset,
+            record.begin() + offset + kGameSessionUnitTypeCount,
+            g_runtime.session_runtime_import_state
+                .owner_unit_availability[owner].begin());
+    }
+    return true;
+}
+
+bool import_default_owner_ai_snapshot_from_session_records() {
+    const GameplaySessionLoadState& load = gameplay_session_load_state();
+    if (kGameplaySessionOwnerAiRecordIndex >= load.records.size() ||
+        !load.record_loaded[kGameplaySessionOwnerAiRecordIndex]) {
+        return false;
+    }
+
+    const std::vector<u8>& record = load.records[kGameplaySessionOwnerAiRecordIndex];
+    return ImportOwnerAiSnapshot(g_runtime.gameplay_owner_ai_state, record.data(),
+        static_cast<u32>(record.size()));
+}
+
+bool export_default_owner_ai_snapshot_to_payload(std::vector<u8>& payload) {
+    payload.assign(kOwnerAiSnapshotByteCount, 0);
+    if (!ExportOwnerAiSnapshot(g_runtime.gameplay_owner_ai_state, payload.data(),
+            static_cast<u32>(payload.size()))) {
+        payload.clear();
+        return false;
+    }
+    return true;
+}
+
+SessionRuntimeExportState build_default_session_runtime_export_state() {
+    SessionRuntimeExportState state{};
+    for (u32 owner = 0;
+         owner < state.owner_order_variants.size() &&
+         owner < g_runtime.gameplay_production_runtime.variant_counts.size();
+         ++owner) {
+        for (u32 order = 0;
+             order < g_runtime.gameplay_production_runtime.variant_counts[owner].size();
+             ++order) {
+            const std::size_t variant_offset =
+                static_cast<std::size_t>(order) * sizeof(u32);
+            if (variant_offset >= state.owner_order_variants[owner].size()) {
+                break;
+            }
+            state.owner_order_variants[owner][variant_offset] =
+                g_runtime.gameplay_production_runtime.variant_counts[owner][order];
+        }
+    }
+    return state;
+}
+
+bool append_default_session_runtime_export_records(
+    std::vector<TrcWriteRecord>& records) {
+    SessionRuntimeBufferPairs buffers;
+    if (!ResizeSessionRuntimeBufferPairs(buffers,
+            kGameplaySessionRuntimeFixedRecordCount,
+            kGameSessionUnitTypeCount,
+            kGameplaySessionRuntimeProductionOrderRecordCount,
+            kGameplaySessionRuntimeTail8RecordCount,
+            kGameplaySessionRuntimeTail4RecordCount,
+            initialize_default_session_runtime_staging_buffers)) {
+        return false;
+    }
+
+    const SessionRuntimeExportState export_state =
+        build_default_session_runtime_export_state();
+    if (!BuildDefaultSessionRuntimeStagingBuffers(buffers,
+            g_runtime.active_session_definitions, export_state)) {
+        return false;
+    }
+    SnapshotSessionRuntimeBufferPairs(buffers);
+
+    if (!AppendUserSessionRuntimeOverrideWriteRecords(records, buffers)) {
+        return false;
+    }
+
+    TrcWriteRecord res2{};
+    res2.name = "RES2";
+    res2.method = 0;
+    res2.payload.assign(4, 0);
+    records.push_back(res2);
+
+    return AppendForcesSessionRuntimeWriteRecord(records, buffers);
+}
+
+void apply_default_session_fixed44_player_slot_masks() {
+    if (!g_runtime.gameplay_session_runtime_definitions_staged ||
+        g_runtime.staged_session_definitions.fixed44_records.empty()) {
+        return;
+    }
+
+    RebuildSessionPlayerSlotMasksFromFixed44Records(
+        g_runtime.gameplay_player_slots,
+        g_runtime.staged_session_definitions.fixed44_records);
+    SelectNearestHostilePlayerSlots(g_runtime.gameplay_player_slots);
+}
+
+void default_gameplay_session_reset_effect_runtime(
+    GameplaySessionRuntimeResetState&) {
+    g_runtime.map_effect_context = MapEffectContext{};
+    g_runtime.gameplay_unit_effect_runtime = UnitEffectRuntimeState{};
+    g_runtime.gameplay_unit_effect_definitions_initialized = false;
+    g_runtime.gameplay_action_damage_profiles = UnitActionDamageProfileTable{};
+    g_runtime.gameplay_action_damage_profiles_initialized = false;
+}
+
+void default_gameplay_session_reset_ui_runtime_flags(
+    GameplaySessionRuntimeResetState&) {
+    gameplay_modal_ui_state().quit_to_frontend_requested = false;
+    gameplay_modal_ui_state().surrender_requested = false;
+    gameplay_modal_ui_state().worker_exit_requested = false;
+    gameplay_modal_ui_state().end_session_requested = false;
+
+    UiOverlayState& overlay = ui_overlay_state();
+    StopGameplayHudPulse(overlay);
+    ResetGameplaySelectionState(overlay);
+    ResetCameraBookmarks(overlay);
+    ResetGameplayHudAlertMarkers(g_runtime.gameplay_hud_alert_markers);
+}
+
+bool load_default_game_session_avatar_runtime() {
+    constexpr u32 kOriginalAvatarRecord = 9;
+    ResetGameSessionAvatarRuntime(g_runtime.gameplay_avatar_runtime);
+    g_runtime.gameplay_avatar_runtime_loaded = false;
+
+    if (g_runtime.gameplay_session_archive_path.empty()) {
+        return false;
+    }
+
+    const char* archive_name = g_runtime.gameplay_session_archive_path.c_str();
+    if (LoadGameSessionAvatarRuntimeRecord(
+            g_runtime.gameplay_avatar_runtime, archive_name, kOriginalAvatarRecord)) {
+        g_runtime.gameplay_avatar_runtime_loaded = true;
+        return true;
+    }
+
+    u32 record_count = 0;
+    if (!QueryTrcArchiveRecordCount(archive_name, &record_count)) {
+        return false;
+    }
+
+    for (u32 record = 0; record < record_count; ++record) {
+        TrcDirectoryEntry entry{};
+        if (!QueryTrcRecordSizes(archive_name, record, nullptr, nullptr, &entry) ||
+            entry.name != "AVATAR" ||
+            entry.original_size > kGameSessionAvatarRuntimeBytes) {
+            continue;
+        }
+        if (!LoadGameSessionAvatarRuntimeRecord(
+                g_runtime.gameplay_avatar_runtime, archive_name, record)) {
+            return false;
+        }
+        g_runtime.gameplay_avatar_runtime_loaded = true;
+        return true;
+    }
+
+    return false;
+}
+
+bool load_default_gameplay_script_triggers_from_session_archive(
+    GameplayScriptTriggerState& script) {
+    constexpr u32 kOriginalTriggerRecord = 5;
+    g_runtime.gameplay_script_triggers_loaded = false;
+    g_runtime.gameplay_script_trigger_record_index = 0xffffffffu;
+
+    if (g_runtime.gameplay_session_archive_path.empty()) {
+        return false;
+    }
+
+    TrcDirectoryEntry original_entry{};
+    if (QueryTrcRecordSizes(g_runtime.gameplay_session_archive_path.c_str(),
+            kOriginalTriggerRecord, nullptr, nullptr, &original_entry) &&
+        original_entry.original_size >= kGameplayScriptTriggerRuntimeOffset &&
+        LoadGameplayScriptTriggersRecord(script,
+            g_runtime.gameplay_session_archive_path.c_str(), kOriginalTriggerRecord)) {
+        g_runtime.gameplay_script_triggers_loaded = true;
+        g_runtime.gameplay_script_trigger_record_index = kOriginalTriggerRecord;
+        return true;
+    }
+
+    u32 record_count = 0;
+    if (!QueryTrcArchiveRecordCount(g_runtime.gameplay_session_archive_path.c_str(),
+            &record_count)) {
+        return false;
+    }
+
+    for (u32 record = 0; record < record_count; ++record) {
+        TrcDirectoryEntry entry{};
+        if (!QueryTrcRecordSizes(g_runtime.gameplay_session_archive_path.c_str(),
+                record, nullptr, nullptr, &entry)) {
+            continue;
+        }
+        if (entry.name != "TRIGGERS" ||
+            entry.original_size < kGameplayScriptTriggerRuntimeOffset) {
+            continue;
+        }
+
+        if (!LoadGameplayScriptTriggersRecord(script,
+                g_runtime.gameplay_session_archive_path.c_str(), record)) {
+            return false;
+        }
+        g_runtime.gameplay_script_triggers_loaded = true;
+        g_runtime.gameplay_script_trigger_record_index = record;
+        return true;
+    }
+
+    return false;
+}
+
+u32 read_default_scenario_object_u32(const std::vector<u8>& bytes,
+    std::size_t object_base, std::size_t field_offset) {
+    const std::size_t offset = object_base + field_offset;
+    if (offset > bytes.size() || bytes.size() - offset < sizeof(u32)) {
+        return 0;
+    }
+    return static_cast<u32>(bytes[offset]) |
+        (static_cast<u32>(bytes[offset + 1]) << 8) |
+        (static_cast<u32>(bytes[offset + 2]) << 16) |
+        (static_cast<u32>(bytes[offset + 3]) << 24);
+}
+
+i32 read_default_scenario_object_i32(const std::vector<u8>& bytes,
+    std::size_t object_base, std::size_t field_offset) {
+    return static_cast<i32>(
+        read_default_scenario_object_u32(bytes, object_base, field_offset));
+}
+
+void write_default_scenario_object_u32(std::vector<u8>& bytes,
+    std::size_t object_base, std::size_t field_offset, u32 value) {
+    const std::size_t offset = object_base + field_offset;
+    if (offset > bytes.size() || bytes.size() - offset < sizeof(u32)) {
+        return;
+    }
+    bytes[offset + 0] = static_cast<u8>(value & 0xffu);
+    bytes[offset + 1] = static_cast<u8>((value >> 8) & 0xffu);
+    bytes[offset + 2] = static_cast<u8>((value >> 16) & 0xffu);
+    bytes[offset + 3] = static_cast<u8>((value >> 24) & 0xffu);
+}
+
+void write_default_scenario_object_i32(std::vector<u8>& bytes,
+    std::size_t object_base, std::size_t field_offset, i32 value) {
+    write_default_scenario_object_u32(
+        bytes, object_base, field_offset, static_cast<u32>(value));
+}
+
+bool scenario_object_uses_equipment_slot_zero(u32 type_id) {
+    return type_id < 0x60;
+}
+
+u32 default_scenario_object_reference_to_unit_id(u32 value) {
+    if (value != 0 && value % kGameplayScenarioObjectStride == 0) {
+        const u32 object_index = value / kGameplayScenarioObjectStride;
+        if (object_index < kGameplayScenarioObjectMaxSlots) {
+            return object_index;
+        }
+    }
+    return value;
+}
+
+u32 default_scenario_object_id_to_reference(u32 value) {
+    if (value != 0 && value < kGameplayScenarioObjectMaxSlots) {
+        return value * kGameplayScenarioObjectStride;
+    }
+    return value;
+}
+
+u32 default_unit_id_to_scenario_object_reference(const UnitMovementUnit* unit,
+    u32 value) {
+    if (unit != nullptr && unit->target != nullptr && value == unit->target->id &&
+        unit->target->id < kGameplayScenarioObjectMaxSlots) {
+        return default_scenario_object_id_to_reference(unit->target->id);
+    }
+    return value;
+}
+
+bool default_command_payload_uses_unit_reference(u32 state, u32 command_value) {
+    if (command_value == 0 || (command_value & 0x80000000u) != 0) {
+        return false;
+    }
+    if ((state & 0x20000000u) != 0) {
+        return true;
+    }
+
+    switch (state & kUnitCommandStateMask) {
+    case 0x02:
+    case 0x03:
+    case 0x04:
+    case 0x05:
+    case 0x0a:
+    case 0x0b:
+    case 0x23:
+        return true;
+    default:
+        return false;
+    }
+}
+
+u32 default_command_payload_reference_to_unit_id(u32 state, u32 value) {
+    if (!default_command_payload_uses_unit_reference(state, value)) {
+        return value;
+    }
+    return default_scenario_object_reference_to_unit_id(value);
+}
+
+u32 default_unit_id_to_command_payload_reference(u32 state, u32 value) {
+    if (!default_command_payload_uses_unit_reference(state, value) ||
+        value >= kGameplayScenarioObjectMaxSlots) {
+        return value;
+    }
+    return default_scenario_object_id_to_reference(value);
+}
+
+u32 compose_default_scenario_object_command_state(
+    const GameplayScriptTriggerObjectState& object) {
+    return (object.command_state_raw & 0xff000000u) |
+        (object.script_state & 0x00ffffffu);
+}
+
+GameplayScriptCommandPayload read_default_scenario_object_command_payload(
+    const std::vector<u8>& bytes, std::size_t object_base,
+    std::size_t state_offset, std::size_t value_offset, std::size_t x_offset,
+    std::size_t y_offset) {
+    GameplayScriptCommandPayload payload{};
+    payload.state =
+        read_default_scenario_object_u32(bytes, object_base, state_offset);
+    payload.command_value = static_cast<i32>(
+        default_command_payload_reference_to_unit_id(payload.state,
+            read_default_scenario_object_u32(bytes, object_base, value_offset)));
+    payload.x_payload =
+        read_default_scenario_object_i32(bytes, object_base, x_offset);
+    payload.y_payload =
+        read_default_scenario_object_u32(bytes, object_base, y_offset);
+    return payload;
+}
+
+void write_default_scenario_object_command_payload(std::vector<u8>& bytes,
+    std::size_t object_base, std::size_t state_offset,
+    std::size_t value_offset, std::size_t x_offset, std::size_t y_offset,
+    const GameplayScriptCommandPayload& payload) {
+    write_default_scenario_object_u32(bytes, object_base, state_offset,
+        payload.state);
+    write_default_scenario_object_u32(bytes, object_base, value_offset,
+        default_unit_id_to_command_payload_reference(payload.state,
+            static_cast<u32>(payload.command_value)));
+    write_default_scenario_object_i32(bytes, object_base, x_offset,
+        payload.x_payload);
+    write_default_scenario_object_u32(bytes, object_base, y_offset,
+        payload.y_payload);
+}
+
+UnitQueuedCommand to_unit_queued_command(
+    const GameplayScriptCommandPayload& payload) {
+    return UnitQueuedCommand{
+        payload.state,
+        payload.command_value,
+        payload.x_payload,
+        payload.y_payload,
+    };
+}
+
+GameplayScriptCommandPayload from_unit_queued_command(
+    const UnitQueuedCommand& command) {
+    return GameplayScriptCommandPayload{
+        command.state,
+        command.x,
+        command.y,
+        command.value,
+    };
+}
+
+void load_default_gameplay_script_scenario_object(
+    GameplayScriptTriggerObjectState& object, const std::vector<u8>& bytes,
+    u32 object_index) {
+    const std::size_t object_base =
+        static_cast<std::size_t>(object_index) * kGameplayScenarioObjectStride;
+    object = GameplayScriptTriggerObjectState{};
+    object.scenario_object_index = object_index;
+    object.type_id = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectTypeOffset);
+    object.owner_id = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectOwnerOffset);
+    object.string_slot = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectStringSlotOffset);
+    object.area_marker_flags = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectAreaFlagsOffset);
+    object.stat_18 = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectMaxHealthOffset);
+    object.stat_secondary_max = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectMaxSecondaryOffset);
+    object.stat_20 = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectHealthOffset);
+    object.stat_1c = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectRuntimeStat1cOffset);
+    object.stat_24 = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectRuntimeStat20Offset);
+    object.stat_secondary_current = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectSecondaryCurrentOffset);
+    object.stat_28 = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectRuntimeStat28Offset);
+    object.stat_2c = read_default_scenario_object_i32(
+        bytes, object_base, kGameplayScenarioObjectStat2cOffset);
+    object.stat_30 = read_default_scenario_object_i32(
+        bytes, object_base, kGameplayScenarioObjectStat30Offset);
+    for (std::size_t slot = 0; slot < object.equipment_slots.size(); ++slot) {
+        object.equipment_slots[slot] = read_default_scenario_object_u32(
+            bytes, object_base, kGameplayScenarioObjectEquipmentSlotOffsets[slot]);
+    }
+    if (!scenario_object_uses_equipment_slot_zero(object.type_id)) {
+        object.equipment_slots[0] = 0;
+    }
+    object.dynamic_string_slot = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectDynamicStringSlotOffset);
+    object.stat_50 = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectEliteProgressOffset);
+    object.stat_54 = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectStatusTimerOffset);
+    object.type_flags = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectTypeFlagsOffset);
+    object.command_bit_mask = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectCommandBitsOffset);
+    object.command_state_raw = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectCommandStateOffset);
+    object.script_state = object.command_state_raw & 0x00ffffffu;
+    object.command_value = default_command_payload_reference_to_unit_id(
+        object.script_state,
+        read_default_scenario_object_u32(
+            bytes, object_base, kGameplayScenarioObjectMutableCommandValueOffset));
+    object.animation_frame = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectAnimationFrameOffset);
+    object.current_payload_value = default_command_payload_reference_to_unit_id(
+        object.script_state,
+        read_default_scenario_object_u32(
+            bytes, object_base, kGameplayScenarioObjectCommandValueOffset));
+    object.scripted_target_x = read_default_scenario_object_i32(
+        bytes, object_base, kGameplayScenarioObjectPathTargetXOffset);
+    object.scripted_target_y = read_default_scenario_object_i32(
+        bytes, object_base, kGameplayScenarioObjectPathTargetYOffset);
+    object.previous_command_state = read_default_scenario_object_u32(
+        bytes, object_base,
+        kGameplayScenarioObjectPreviousCommandStateOffset) & 0x00ffffffu;
+    object.pending_command = read_default_scenario_object_command_payload(bytes,
+        object_base, kGameplayScenarioObjectPendingCommandStateOffset,
+        kGameplayScenarioObjectPendingCommandValueOffset,
+        kGameplayScenarioObjectPendingCommandXOffset,
+        kGameplayScenarioObjectPendingCommandYOffset);
+    object.linked_object_id = default_scenario_object_reference_to_unit_id(
+        read_default_scenario_object_u32(
+            bytes, object_base, kGameplayScenarioObjectLinkedObjectOffset));
+    object.command_entry_lockout_ticks = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectCommandEntryLockoutTicksOffset);
+    object.command_flags = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectCommandFlagsOffset);
+    object.flags = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectFlagsOffset);
+    object.draw_flags = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectDrawFlagsOffset);
+    object.direction = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectDirectionOffset);
+    object.movement_flags = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectMovementFlagsOffset);
+    object.movement_state = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectMovementStateOffset);
+    object.wait_ticks = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectWaitTicksOffset);
+    object.x = read_default_scenario_object_i32(
+        bytes, object_base, kGameplayScenarioObjectXOffset);
+    object.y = read_default_scenario_object_i32(
+        bytes, object_base, kGameplayScenarioObjectYOffset);
+    object.destination_x = read_default_scenario_object_i32(
+        bytes, object_base, kGameplayScenarioObjectDestinationXOffset);
+    object.destination_y = read_default_scenario_object_i32(
+        bytes, object_base, kGameplayScenarioObjectDestinationYOffset);
+    object.destination_aux_state = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectDestinationAuxStateOffset);
+    object.current_cell_x = read_default_scenario_object_i32(
+        bytes, object_base, kGameplayScenarioObjectCurrentCellXOffset);
+    object.current_cell_y = read_default_scenario_object_i32(
+        bytes, object_base, kGameplayScenarioObjectCurrentCellYOffset);
+    object.next_path_x = read_default_scenario_object_i32(
+        bytes, object_base, kGameplayScenarioObjectNextPathXOffset);
+    object.next_path_y = read_default_scenario_object_i32(
+        bytes, object_base, kGameplayScenarioObjectNextPathYOffset);
+    object.saved_path_target_x = object.next_path_x;
+    object.saved_path_target_y = object.next_path_y;
+    object.anchor_x = read_default_scenario_object_i32(
+        bytes, object_base, kGameplayScenarioObjectAnchorXOffset);
+    object.anchor_y = read_default_scenario_object_i32(
+        bytes, object_base, kGameplayScenarioObjectAnchorYOffset);
+    object.active_command_payload = read_default_scenario_object_command_payload(
+        bytes, object_base, kGameplayScenarioObjectActiveCommandStateOffset,
+        kGameplayScenarioObjectActiveCommandValueOffset,
+        kGameplayScenarioObjectActiveCommandXOffset,
+        kGameplayScenarioObjectActiveCommandYOffset);
+    object.script_bit_flags = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectScriptBitFlagsOffset);
+    object.animation_timer = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectAnimationTimerOffset);
+    object.linked_effect_slot_offset = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectLinkedEffectSlotOffset);
+    object.command_lockout_ticks = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectCommandLockoutTicksOffset);
+    object.saved_type_flags = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectSavedTypeFlagsOffset);
+    object.placement_reset_scratch = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectPlacementResetScratchOffset);
+    object.distance_check_mode = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectDistanceCheckModeOffset);
+    object.movement_turn_ticks = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectMovementTurnTicksOffset);
+    for (std::size_t slot = 0;
+         slot < object.effect_reset_scratch.size() &&
+         slot < kGameplayScenarioObjectEffectResetScratchOffsets.size();
+         ++slot) {
+        object.effect_reset_scratch[slot] = read_default_scenario_object_u32(
+            bytes, object_base,
+            kGameplayScenarioObjectEffectResetScratchOffsets[slot]);
+    }
+    object.deferred_command_count = std::min<u32>(
+        read_default_scenario_object_u32(bytes, object_base,
+            kGameplayScenarioObjectDeferredCommandCountOffset),
+        kGameplayScenarioObjectDeferredCommandCapacity);
+    for (u32 slot = 0; slot < object.deferred_command_count; ++slot) {
+        const std::size_t slot_base =
+            kGameplayScenarioObjectDeferredCommandSlotsOffset +
+            static_cast<std::size_t>(slot) *
+                kGameplayScenarioObjectDeferredCommandStride;
+        object.deferred_commands[slot] =
+            read_default_scenario_object_command_payload(bytes, object_base,
+                slot_base + 0x00, slot_base + 0x04, slot_base + 0x08,
+                slot_base + 0x0c);
+    }
+    object.previous_object_index = default_scenario_object_reference_to_unit_id(
+        read_default_scenario_object_u32(
+            bytes, object_base, kGameplayScenarioObjectPreviousLinkOffset));
+    object.next_object_index = default_scenario_object_reference_to_unit_id(
+        read_default_scenario_object_u32(
+            bytes, object_base, kGameplayScenarioObjectNextLinkOffset));
+    object.remove_from_triggers = object.flags == 0 || (object.flags & 4u) != 0;
+}
+
+bool load_default_gameplay_script_scenario_objects(
+    GameplayScriptTriggerState& script) {
+    g_runtime.gameplay_script_scenario_objects_loaded = false;
+    const GameplaySessionLoadState& load = gameplay_session_load_state();
+    if (kGameplayScenarioObjectRecordIndex >= load.records.size() ||
+        !load.record_loaded[kGameplayScenarioObjectRecordIndex]) {
+        return false;
+    }
+
+    const std::vector<u8>& objects =
+        load.records[kGameplayScenarioObjectRecordIndex];
+    if (objects.size() < kGameplayScenarioObjectStride * 2) {
+        return false;
+    }
+
+    const u32 object_count = std::min<u32>(
+        static_cast<u32>(objects.size() / kGameplayScenarioObjectStride),
+        kGameplayScenarioObjectMaxSlots);
+    if (script.objects.size() < object_count) {
+        script.objects.resize(object_count);
+    }
+
+    for (u32 object_index = 1; object_index < object_count; ++object_index) {
+        load_default_gameplay_script_scenario_object(
+            script.objects[object_index], objects, object_index);
+    }
+
+    g_runtime.gameplay_script_scenario_objects_loaded = true;
+    return true;
+}
+
+u32 read_default_map_layer_u32(const std::vector<u8>& bytes, u32 cell_index) {
+    const std::size_t offset = static_cast<std::size_t>(cell_index) * sizeof(u32);
+    if (offset > bytes.size() || bytes.size() - offset < sizeof(u32)) {
+        return 0;
+    }
+    return static_cast<u32>(bytes[offset]) |
+        (static_cast<u32>(bytes[offset + 1]) << 8) |
+        (static_cast<u32>(bytes[offset + 2]) << 16) |
+        (static_cast<u32>(bytes[offset + 3]) << 24);
+}
+
+void initialize_default_gameplay_movement_map_from_session_records(
+    UnitMovementContext& movement) {
+    UnitMovementMap map{};
+    map.width = default_gameplay_session_map_width_tiles();
+    map.height = default_gameplay_session_map_height_tiles();
+    map.stride_tiles = kGameplayScenarioMapLayerStrideTiles;
+    const std::size_t cell_count =
+        static_cast<std::size_t>(UnitMovementMapStrideTiles(map)) * map.height;
+    map.cells.resize(cell_count);
+
+    const GameplaySessionLoadState& load = gameplay_session_load_state();
+    const std::vector<u8>* source_layer = nullptr;
+    if (kGameplayMapSourceLayerRecordIndex < load.records.size() &&
+        load.record_loaded[kGameplayMapSourceLayerRecordIndex]) {
+        source_layer = &load.records[kGameplayMapSourceLayerRecordIndex];
+    }
+    const std::vector<u8>* terrain_layer = nullptr;
+    if (kGameplayScenarioMapLayerRecordIndex < load.records.size() &&
+        load.record_loaded[kGameplayScenarioMapLayerRecordIndex]) {
+        terrain_layer = &load.records[kGameplayScenarioMapLayerRecordIndex];
+    }
+    const std::vector<u8>* brush_layer = nullptr;
+    if (kGameplayMapEffectLayerRecordIndex < load.records.size() &&
+        load.record_loaded[kGameplayMapEffectLayerRecordIndex]) {
+        brush_layer = &load.records[kGameplayMapEffectLayerRecordIndex];
+    }
+
+    for (u32 y = 0; y < map.height; ++y) {
+        for (u32 x = 0; x < map.width; ++x) {
+            const u32 cell = UnitMovementMapTileIndex(map, x, y);
+            u32 flags = terrain_layer != nullptr ?
+                read_default_map_layer_u32(*terrain_layer, cell) : 0;
+            if (terrain_layer == nullptr && (flags & kMapCellTerrainMask) == 0) {
+                flags |= kMapCellPassableTerrain;
+            }
+            map.cells[cell].flags = flags;
+            map.cells[cell].alternate_flags = source_layer != nullptr ?
+                read_default_map_layer_u32(*source_layer, cell) : 0;
+            map.cells[cell].visibility_flags = brush_layer != nullptr ?
+                read_default_map_layer_u32(*brush_layer, cell) : 0;
+        }
+    }
+
+    movement.map = std::move(map);
+}
+
+bool default_session_map_effect_offset_valid(u32 offset, u32 object_count) {
+    return offset != 0 &&
+        offset % kGameplayMapEffectObjectStride == 0 &&
+        offset / kGameplayMapEffectObjectStride < object_count;
+}
+
+bool default_session_map_effect_link_offset_valid(u32 offset, u32 object_count) {
+    return offset == 0 ||
+        default_session_map_effect_offset_valid(offset, object_count);
+}
+
+bool default_session_map_effect_slot_has_occupancy(
+    const std::vector<u8>& record, u32 index) {
+    const GameplaySessionLoadState& load = gameplay_session_load_state();
+    if (kGameplayMapEffectLayerRecordIndex >= load.records.size() ||
+        !load.record_loaded[kGameplayMapEffectLayerRecordIndex]) {
+        return true;
+    }
+
+    const std::size_t object_base =
+        static_cast<std::size_t>(index) * kGameplayMapEffectObjectStride;
+    const i32 x = read_default_scenario_object_i32(
+        record, object_base, kGameplayMapEffectObjectXOffset);
+    const i32 y = read_default_scenario_object_i32(
+        record, object_base, kGameplayMapEffectObjectYOffset);
+    if (x < 0 || y < 0) {
+        return false;
+    }
+
+    const UnitMovementCell* cell = GetMovementCell(
+        g_runtime.gameplay_movement_context.map,
+        static_cast<u32>(x) >> 5, static_cast<u32>(y) >> 5);
+    return cell != nullptr &&
+        (cell->visibility_flags & kMapEffectTileFlag) != 0;
+}
+
+std::vector<u32> recover_default_session_active_map_effect_indices(
+    const std::vector<u8>& record, u32 object_count) {
+    std::vector<u32> best_indices;
+
+    for (u32 head_index = 1; head_index < object_count; ++head_index) {
+        const std::size_t head_base =
+            static_cast<std::size_t>(head_index) * kGameplayMapEffectObjectStride;
+        if (read_default_scenario_object_u32(
+                record, head_base, kGameplayMapEffectObjectPreviousOffset) != 0) {
+            continue;
+        }
+
+        std::vector<u32> indices;
+        std::vector<bool> seen(object_count, false);
+        u32 previous_offset = 0;
+        u32 current_offset = head_index * kGameplayMapEffectObjectStride;
+        bool valid = true;
+
+        while (current_offset != 0) {
+            if (!default_session_map_effect_offset_valid(
+                    current_offset, object_count)) {
+                valid = false;
+                break;
+            }
+            const u32 index = current_offset / kGameplayMapEffectObjectStride;
+            if (seen[index]) {
+                valid = false;
+                break;
+            }
+            seen[index] = true;
+
+            const std::size_t object_base =
+                static_cast<std::size_t>(index) * kGameplayMapEffectObjectStride;
+            if (read_default_scenario_object_u32(
+                    record, object_base, kGameplayMapEffectObjectPreviousOffset) !=
+                    previous_offset ||
+                !default_session_map_effect_link_offset_valid(
+                    read_default_scenario_object_u32(
+                        record, object_base, kGameplayMapEffectObjectNextOffset),
+                    object_count)) {
+                valid = false;
+                break;
+            }
+
+            if (read_default_scenario_object_u32(
+                    record, object_base, kGameplayMapEffectObjectTypeOffset) != 0) {
+                indices.push_back(index);
+            }
+            previous_offset = current_offset;
+            current_offset = read_default_scenario_object_u32(
+                record, object_base, kGameplayMapEffectObjectNextOffset);
+        }
+
+        if (valid && indices.size() > best_indices.size()) {
+            best_indices = std::move(indices);
+        }
+    }
+
+    if (!best_indices.empty()) {
+        return best_indices;
+    }
+
+    for (u32 index = 1; index < object_count; ++index) {
+        const std::size_t object_base =
+            static_cast<std::size_t>(index) * kGameplayMapEffectObjectStride;
+        if (read_default_scenario_object_u32(
+                record, object_base, kGameplayMapEffectObjectTypeOffset) != 0 &&
+            default_session_map_effect_slot_has_occupancy(record, index)) {
+            best_indices.push_back(index);
+        }
+    }
+    return best_indices;
+}
+
+void initialize_default_map_effect_context_from_session_records() {
+    MapEffectContext& context = g_runtime.map_effect_context;
+    context = MapEffectContext{};
+    context.effects.resize(1);
+    context.effects[0].id = 0;
+
+    std::vector<u8>* record =
+        MutableGameplaySessionLoadedRecord(kGameplayMapEffectObjectRecordIndex);
+    if (record == nullptr ||
+        record->size() < kGameplayMapEffectObjectStride * 2) {
+        configure_default_map_effect_context();
+        return;
+    }
+
+    const u32 object_count = std::min<u32>(
+        static_cast<u32>(record->size() / kGameplayMapEffectObjectStride),
+        kGameplayMapEffectObjectMaxSlots);
+    context.effects.assign(object_count, MapEffectInstance{});
+    for (u32 index = 0; index < object_count; ++index) {
+        context.effects[index].id = index;
+    }
+
+    std::vector<bool> active(object_count, false);
+    const std::vector<u32> active_indices =
+        recover_default_session_active_map_effect_indices(*record, object_count);
+    for (u32 index : active_indices) {
+        if (index == 0 || index >= object_count || active[index]) {
+            continue;
+        }
+
+        const std::size_t object_base =
+            static_cast<std::size_t>(index) * kGameplayMapEffectObjectStride;
+        const u32 effect_id = read_default_scenario_object_u32(
+            *record, object_base, kGameplayMapEffectObjectTypeOffset);
+        if (effect_id == 0) {
+            continue;
+        }
+
+        MapEffectInstance& effect = context.effects[index];
+        effect.active = true;
+        effect.id = index;
+        effect.effect_id = effect_id;
+        effect.flags = read_default_scenario_object_u32(
+            *record, object_base, kGameplayMapEffectObjectFlagsOffset);
+        const u32 linked_unit_offset = read_default_scenario_object_u32(
+            *record, object_base, kGameplayMapEffectObjectLinkedUnitOffset);
+        if (linked_unit_offset != 0) {
+            effect.linked_unit = find_default_movement_unit_by_id(linked_unit_offset);
+            if (effect.linked_unit != nullptr) {
+                effect.flags |= kMapEffectLinkedFlag;
+            }
+        }
+        if (effect.linked_unit == nullptr) {
+            effect.flags &= ~kMapEffectLinkedFlag;
+        }
+        effect.frame_timer = read_default_scenario_object_u32(
+            *record, object_base, kGameplayMapEffectObjectFrameTimerOffset);
+        effect.repeat_count = read_default_scenario_object_u32(
+            *record, object_base, kGameplayMapEffectObjectRepeatCountOffset);
+        effect.x = read_default_scenario_object_i32(
+            *record, object_base, kGameplayMapEffectObjectXOffset);
+        effect.y = read_default_scenario_object_i32(
+            *record, object_base, kGameplayMapEffectObjectYOffset);
+        context.active_effect_indices.push_back(index);
+        active[index] = true;
+    }
+
+    for (u32 index = object_count; index > 1; --index) {
+        const u32 slot = index - 1;
+        if (!active[slot]) {
+            context.free_effect_indices.push_back(slot);
+        }
+    }
+    configure_default_map_effect_context();
+}
+
+void initialize_default_gameplay_terrain_layer_from_session_records() {
+    MinimapTerrainLayer layer{};
+    layer.width_tiles = default_gameplay_session_map_width_tiles();
+    layer.height_tiles = default_gameplay_session_map_height_tiles();
+    layer.stride_tiles = kGameplayScenarioMapLayerStrideTiles;
+    const std::size_t cell_count =
+        static_cast<std::size_t>(layer.stride_tiles) * layer.height_tiles;
+    layer.terrain_flags.resize(cell_count);
+    layer.overlay_flags.assign(cell_count, 0);
+
+    const GameplaySessionLoadState& load = gameplay_session_load_state();
+    const std::vector<u8>* source = nullptr;
+    if (kGameplayScenarioMapLayerRecordIndex < load.records.size() &&
+        load.record_loaded[kGameplayScenarioMapLayerRecordIndex]) {
+        source = &load.records[kGameplayScenarioMapLayerRecordIndex];
+    }
+
+    if (source != nullptr) {
+        for (u32 y = 0; y < layer.height_tiles; ++y) {
+            for (u32 x = 0; x < layer.width_tiles; ++x) {
+                const u32 cell = y * layer.stride_tiles + x;
+                layer.terrain_flags[cell] =
+                    read_default_map_layer_u32(*source, cell);
+            }
+        }
+    }
+
+    g_runtime.gameplay_terrain_layer = std::move(layer);
+    ResetTerrainTilePulseState(g_runtime.gameplay_terrain_pulse_state);
+}
+
+void default_gameplay_frame_draw_terrain(
+    GameplayFrameRenderContext& context, i32 camera_x, i32 camera_y) {
+    if (!g_runtime.gameplay_terrain_tile_sheet_loaded ||
+        g_runtime.gameplay_terrain_tile_sheet.tile_pixels.empty() ||
+        g_runtime.gameplay_terrain_layer.terrain_flags.empty()) {
+        return;
+    }
+
+    const SpriteRenderState& sprite_state = sprite_render_state();
+    if (!sprite_state.active || sprite_state.target.pixels == nullptr ||
+        sprite_state.target.width == 0 || sprite_state.target.height == 0) {
+        return;
+    }
+
+    TerrainViewportRenderState& state =
+        g_runtime.gameplay_terrain_viewport_render_state;
+    state.target_width_pixels = sprite_state.target.width;
+    state.target_height_pixels = sprite_state.target.height;
+    state.target_pitch_pixels = sprite_state.target.stride_words != 0 ?
+        sprite_state.target.stride_words : sprite_state.target.width;
+    BuildTerrainTileDrawCommands(
+        state, g_runtime.gameplay_terrain_layer, camera_x, camera_y);
+
+    SpriteRenderTarget target = sprite_state.target;
+    const u32 animation_slot = context.animation_frame_slot;
+    for (const TerrainTileDrawCommand& command : state.draw_commands) {
+        switch (command.kind) {
+        case TerrainTileDrawKind::uniform:
+            default_gameplay_draw_uniform_terrain_tile(
+                g_runtime.gameplay_terrain_tile_sheet, command, target,
+                animation_slot);
+            break;
+        case TerrainTileDrawKind::blended:
+            default_gameplay_draw_blended_terrain_tile(
+                g_runtime.gameplay_terrain_tile_sheet, command, target,
+                animation_slot);
+            break;
+        case TerrainTileDrawKind::overlay:
+            default_gameplay_draw_overlay_terrain_tile(
+                g_runtime.gameplay_terrain_tile_sheet, command, target,
+                animation_slot);
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+void default_gameplay_frame_draw_terrain_decorations(
+    GameplayFrameRenderContext& context) {
+    if (context.render_command_queue == nullptr ||
+        g_runtime.gameplay_terrain_layer.terrain_flags.empty()) {
+        return;
+    }
+
+    const Jw207ResourcePackState& jw207 = jw207_resource_pack_state();
+    const bool terrain_type1_loaded =
+        jw207.berry_start != kInvalidResourceEntry;
+    const bool terrain_type3_loaded =
+        g_runtime.gameplay_terrain_tile_sheet_loaded &&
+        g_runtime.gameplay_terrain_tile_sheet.resource_start !=
+            kInvalidTerrainTileResourceIndex;
+    if (!terrain_type1_loaded && !terrain_type3_loaded) {
+        return;
+    }
+
+    TerrainDecorationLayer terrain_layer{};
+    terrain_layer.width_tiles = g_runtime.gameplay_terrain_layer.width_tiles;
+    terrain_layer.height_tiles = g_runtime.gameplay_terrain_layer.height_tiles;
+    terrain_layer.stride_tiles = g_runtime.gameplay_terrain_layer.stride_tiles;
+    terrain_layer.tile_flags = g_runtime.gameplay_terrain_layer.terrain_flags;
+
+    const GameplayVisibilityGrid& visibility_grid =
+        g_runtime.gameplay_visibility_grid;
+    if (!visibility_grid.terrain_backup.empty() &&
+        visibility_grid.width == terrain_layer.width_tiles &&
+        visibility_grid.height == terrain_layer.height_tiles) {
+        terrain_layer.stride_tiles = visibility_grid.width;
+        terrain_layer.tile_flags = visibility_grid.terrain_backup;
+    }
+
+    TerrainDecorationLayer brush_layer{};
+    brush_layer.width_tiles = terrain_layer.width_tiles;
+    brush_layer.height_tiles = terrain_layer.height_tiles;
+    brush_layer.stride_tiles = terrain_layer.stride_tiles;
+    if (!visibility_grid.previous.empty() &&
+        visibility_grid.width == terrain_layer.width_tiles &&
+        visibility_grid.height == terrain_layer.height_tiles) {
+        brush_layer.stride_tiles = visibility_grid.width;
+        brush_layer.tile_flags = visibility_grid.previous;
+    }
+    TerrainDecorationResourceTable brush_resources{};
+
+    TerrainDecorationRenderState& state =
+        g_runtime.gameplay_terrain_decoration_render_state;
+    state.visible_left_world = context.expanded_left;
+    state.visible_top_world = context.expanded_top;
+    state.visible_right_world = context.expanded_right;
+    state.visible_bottom_world = context.expanded_bottom;
+    state.camera_x = context.camera_x;
+    state.camera_y = context.camera_y;
+    state.terrain_type1_resource_base =
+        terrain_type1_loaded ? static_cast<i32>(jw207.berry_start) : 0;
+    BuildVisibleTerrainDecorationRenderCommands(state, terrain_layer,
+        brush_layer, brush_resources, g_runtime.gameplay_terrain_tile_sheet);
+
+    for (const TerrainDecorationRenderCommand& decoration :
+         state.render_commands) {
+        if (decoration.resource_index < 0) {
+            continue;
+        }
+        if (decoration.kind == TerrainDecorationRenderKind::terrain_type1 &&
+            !terrain_type1_loaded) {
+            continue;
+        }
+        if (decoration.kind == TerrainDecorationRenderKind::terrain_type3 &&
+            !terrain_type3_loaded) {
+            continue;
+        }
+
+        GameplayRenderCommand command{};
+        command.class_id = decoration.render_layer;
+        command.payload = static_cast<u32>(decoration.kind);
+        command.sort_key = decoration.sort_key;
+        command.sprite_entry_index =
+            static_cast<u32>(decoration.resource_index);
+        command.screen_x = decoration.screen_x;
+        command.screen_y = decoration.screen_y;
+        command.packed_flags = decoration.flags;
+        QueueGameplayRenderCommand(*context.render_command_queue, command);
+    }
+}
+
+void run_default_gameplay_session_runtime_reset(
+    GameplaySessionStartupState& startup, const char* player_name) {
+    mirror_startup_slots_to_player_runtime(startup, g_runtime.gameplay_player_slots);
+    sync_startup_owner_factions_to_lifecycle(startup);
+    apply_default_gameplay_speed_index(startup.frame_interval_index, true);
+
+    GameplaySessionRuntimeResetState reset{};
+    reset.import_state = &g_runtime.session_runtime_import_state;
+    reset.active_definitions = &g_runtime.active_session_definitions;
+    reset.staged_definitions = &g_runtime.staged_session_definitions;
+    reset.players = &g_runtime.gameplay_player_slots;
+    reset.lifecycle = startup.lifecycle;
+    reset.owner_counters = &g_runtime.gameplay_owner_counters;
+    reset.script_dialog = &gameplay_script_dialog_state();
+    reset.script_triggers = &gameplay_script_trigger_state();
+    reset.unit_reference_tables = &g_runtime.unit_reference_tables;
+    reset.post_init_snapshot = &g_runtime.gameplay_post_init_snapshot;
+    reset.session_mode = startup.session_mode;
+    reset.rotation_reset_units = startup.rotation_reset_units;
+    reset.default_player_name = player_name != nullptr && player_name[0] != '\0' ?
+        player_name : "Player";
+    reset.owner_display_names = startup.owner_display_names;
+    reset.callbacks.reset_effect_runtime =
+        default_gameplay_session_reset_effect_runtime;
+    reset.callbacks.reset_ui_runtime_flags =
+        default_gameplay_session_reset_ui_runtime_flags;
+    reset.callbacks.on_unit_reset_or_removed =
+        default_gameplay_session_unit_reset_or_removed;
+    reset.callbacks.update_owner_display_name =
+        default_gameplay_session_update_owner_display_name;
+
+    InitializeGameplaySessionRuntimeState(reset);
+    sync_default_gameplay_session_runtime_views_after_reset();
+    rebuild_default_unit_reference_tables_from_catalog();
+    load_default_game_session_avatar_runtime();
+    load_default_gameplay_script_triggers_from_session_archive(
+        gameplay_script_trigger_state());
+    load_default_gameplay_script_scenario_objects(gameplay_script_trigger_state());
+}
+
+void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& state) {
+    g_runtime.p2p_session_start_state = P2PGameSessionStartState{};
+    g_runtime.session_runtime_import_state = SessionRuntimeImportState{};
+    g_runtime.active_session_definitions = SessionRuntimeDefinitionTableSet{};
+    g_runtime.staged_session_definitions = SessionRuntimeDefinitionTableSet{};
+    g_runtime.gameplay_session_runtime_buffers = SessionRuntimeBufferPairs{};
+    g_runtime.gameplay_session_forces_fixed_records.clear();
+    g_runtime.gameplay_session_user_runtime_overrides_loaded = false;
+    g_runtime.gameplay_session_forces_record_loaded = false;
+    g_runtime.gameplay_session_runtime_definitions_staged = false;
+    ResetGameSessionAvatarRuntime(g_runtime.gameplay_avatar_runtime);
+    g_runtime.gameplay_avatar_runtime_loaded = false;
+    g_runtime.unit_reference_tables = GameSessionUnitReferenceTables{};
+    g_runtime.unit_definition_cache = {};
+    g_runtime.unit_definition_cache_valid = {};
+    g_runtime.gameplay_owner_counters = OwnerSessionCounterTables{};
+    g_runtime.gameplay_post_init_snapshot = PostInitTransitionSnapshot{};
+    g_runtime.gameplay_damage_context = UnitDamageContext{};
+    g_runtime.gameplay_frame_random_state = GameplayFrameRandomState{};
+    g_runtime.gameplay_targeting_context = UnitTargetingContext{};
+    g_runtime.gameplay_unit_actions = UnitActionContext{};
+    g_runtime.gameplay_unit_commands = UnitCommandContext{};
+    g_runtime.gameplay_unit_support_effects = UnitSupportEffectContext{};
+    g_runtime.gameplay_visibility_grid = GameplayVisibilityGrid{};
+    g_runtime.gameplay_visibility_context = GameplayVisibilityContext{};
+    g_runtime.gameplay_visibility_units.clear();
+    g_runtime.gameplay_fog_context = GameplayFogRenderContext{};
+    g_runtime.gameplay_map_effect_object_assigned_units.fill(nullptr);
+    g_runtime.gameplay_damage_record_links.clear();
+    g_runtime.gameplay_script_hud_text.clear();
+    g_runtime.gameplay_script_spawned_units.clear();
+    g_runtime.gameplay_script_unhandled_spawn_requests.clear();
+    g_runtime.gameplay_script_last_definition_patch_requests.clear();
+    g_runtime.gameplay_end_condition_units.clear();
+    g_runtime.gameplay_script_triggers_loaded = false;
+    g_runtime.gameplay_script_scenario_objects_loaded = false;
+    g_runtime.gameplay_script_trigger_record_index = 0xffffffffu;
+    g_runtime.gameplay_script_next_unit_id = 0x80000000u;
+    g_runtime.gameplay_end_condition_state = GameplayEndConditionState{};
+    g_runtime.gameplay_online_transition_state = GameplayOnlineTransitionState{};
+    g_runtime.gameplay_result_screen_rendered = false;
+    g_runtime.gameplay_leave_reset_processed = false;
+    reset_default_gameplay_input_action_state();
+    reset_default_gameplay_production_action_state();
+    configure_default_mode1_gameplay_runtime_callbacks();
+    ResetPlayerSlotRuntime(g_runtime.gameplay_player_slots);
+    configure_default_mode1_gameplay_runtime_callbacks();
+    const bool link_lobby_start_parameters_available_for_start =
+        link_lobby_startup_parameters_available();
+
+    P2PGameSessionStartInput input{};
+    input.import_state = &g_runtime.session_runtime_import_state;
+    input.active_definitions = &g_runtime.active_session_definitions;
+    input.staged_definitions = &g_runtime.staged_session_definitions;
+    input.reference_tables = &g_runtime.unit_reference_tables;
+    input.map_path = g_runtime.gameplay_session_archive_path;
+    input.network_player_count = 1;
+    input.copied_runtime_local_player = 0;
+    input.ai_profile_mode = state.generic_ai_profile_mode != 0 ? 1 : 0;
+    input.scenario_ai_profile_override = g_runtime.generic_ai_scenario_active;
+    if (g_runtime.frontend_mode == 6 ||
+        async_com_state().active_network_transport_mode == 6) {
+        input.ai_profile_mode = 2;
+    }
+
+    const char* player_name = p2p_network_launch_parameters().player_name[0] != '\0' ?
+        p2p_network_launch_parameters().player_name.data() : "Player";
+    copy_result_text(input.players[0].name, player_name);
+    input.players[0].owner_slot = 0;
+    if (link_lobby_start_parameters_available_for_start) {
+        populate_p2p_session_start_input_from_link_lobby(input);
+    }
+
+    import_default_session_owner_unit_availability();
+    stage_default_session_runtime_override_definitions();
+
+    g_runtime.p2p_session_start_prepared =
+        PrepareP2PGameSessionStart(g_runtime.p2p_session_start_state, input);
+    gameplay_loop_state().fixed_step_mode = 4;
+    if (link_lobby_start_parameters_available_for_start) {
+        SetMode1ReliableLocalPlayerIndex(input.copied_runtime_local_player);
+    }
+    SetRankerMainWindowGenericAiProfileState(
+        g_runtime.p2p_session_start_state.generic_ai_profile_mode,
+        g_runtime.p2p_session_start_state.scenario_ai_profile_override);
+    SetRankerMainWindowNetworkAiProfileOverride(
+        g_runtime.p2p_session_start_state.network_ai_profile_override);
+
+    reset_default_gameplay_startup_slots(g_runtime.gameplay_startup_state);
+    import_default_session_map_record_startup_state();
+    import_default_session_scenario_record_startup_state();
+    import_default_session_player_record_startup_state();
+    import_default_session_starting_unit_types();
+    apply_pending_link_lobby_start_parameters_to_gameplay_startup();
+    run_default_gameplay_session_runtime_reset(
+        g_runtime.gameplay_startup_state, player_name);
+    initialize_default_gameplay_movement_map_from_session_records(
+        g_runtime.gameplay_movement_context);
+    initialize_default_gameplay_terrain_layer_from_session_records();
+    StartGameplaySessionFromScenarioSlots(g_runtime.gameplay_startup_state);
+    instantiate_default_gameplay_script_scenario_units(gameplay_script_trigger_state());
+    activate_default_player_slots_from_active_units();
+    initialize_default_map_effect_context_from_session_records();
+    apply_default_session_fixed44_player_slot_masks();
+    reset_default_mode1_packet_state_from_player_slots();
+    refresh_default_owner_ai_target_profiles();
+    sync_default_gameplay_end_condition_state();
+    g_runtime.gameplay_damage_context.local_player_owner_id =
+        g_runtime.gameplay_player_slots.local_player_slot;
+    g_runtime.gameplay_targeting_context.active_units =
+        g_runtime.gameplay_damage_context.active_units;
+    g_runtime.gameplay_startup_slots_started = true;
+}
+
+void default_frontend_stage_reset_runtime(FrontendStageFlowState& state) {
+    g_runtime.frontend_stage_transition_active = true;
+    g_runtime.gameplay_session_archive_path = state.active_stage_archive;
+    g_runtime.gameplay_session_bundle_loaded = state.stage_bundle_loaded;
+    gameplay_loop_state().simulation_frame_counter = 0;
+    gameplay_loop_state().present_frame_counter = 0;
+
+    g_runtime.session_runtime_import_state = SessionRuntimeImportState{};
+    g_runtime.active_session_definitions = SessionRuntimeDefinitionTableSet{};
+    g_runtime.staged_session_definitions = SessionRuntimeDefinitionTableSet{};
+    g_runtime.gameplay_session_runtime_buffers = SessionRuntimeBufferPairs{};
+    g_runtime.gameplay_session_forces_fixed_records.clear();
+    g_runtime.gameplay_session_user_runtime_overrides_loaded = false;
+    g_runtime.gameplay_session_forces_record_loaded = false;
+    g_runtime.gameplay_session_runtime_definitions_staged = false;
+    ResetGameSessionAvatarRuntime(g_runtime.gameplay_avatar_runtime);
+    g_runtime.gameplay_avatar_runtime_loaded = false;
+    g_runtime.unit_reference_tables = GameSessionUnitReferenceTables{};
+    g_runtime.gameplay_owner_counters = OwnerSessionCounterTables{};
+    g_runtime.gameplay_post_init_snapshot = PostInitTransitionSnapshot{};
+    g_runtime.gameplay_frame_random_state = GameplayFrameRandomState{};
+    ResetPlayerSlotRuntime(g_runtime.gameplay_player_slots);
+
+    reset_default_gameplay_startup_slots(g_runtime.gameplay_startup_state);
+    import_default_session_map_record_startup_state();
+    import_default_session_scenario_record_startup_state();
+    import_default_session_player_record_startup_state();
+    import_default_session_starting_unit_types();
+    import_default_session_owner_unit_availability();
+    stage_default_session_runtime_override_definitions();
+
+    const char* player_name = default_online_local_player_name();
+    run_default_gameplay_session_runtime_reset(
+        g_runtime.gameplay_startup_state, player_name);
+    apply_default_session_fixed44_player_slot_masks();
+
+    state.current_mode = g_runtime.gameplay_startup_state.session_mode;
+    state.selected_faction_id = g_runtime.gameplay_startup_state.owner_slots[0].faction_id;
+    state.active_player_slot_count = g_runtime.gameplay_player_slots.active_slot_count;
+    state.runtime_tables_imported =
+        !g_runtime.active_session_definitions.fixed44_records.empty() ||
+        !g_runtime.active_session_definitions.unit_records.empty() ||
+        !g_runtime.active_session_definitions.production_order_records.empty() ||
+        !g_runtime.active_session_definitions.tail8_records.empty() ||
+        !g_runtime.active_session_definitions.tail4_records.empty();
+    state.non_empty_runtime_tables_imported = state.current_mode == 5 &&
+        state.runtime_tables_imported;
+    state.player_slot_masks_rebuilt =
+        g_runtime.gameplay_session_runtime_definitions_staged;
+    state.nearest_hostile_slots_selected = true;
+
+    g_runtime.frontend_stage_session_mode = state.current_mode;
+    g_runtime.frontend_stage_selected_faction = state.selected_faction_id;
+}
+
+void default_frontend_stage_reset_render_state(FrontendStageFlowState& state) {
+    default_gameplay_loop_initialize_session_resources(gameplay_loop_state());
+    state.render_state_reset = true;
+}
+
+void default_frontend_stage_handle_result(FrontendStageFlowState&, u32 result) {
+    OpenGameplayIndexedSelectionDialog(result);
+}
+
+void default_frontend_stage_refresh_after_result(FrontendStageFlowState& state);
+
+FrontendStageFlowCallbacks default_frontend_stage_flow_callbacks() {
+    FrontendStageFlowCallbacks callbacks{};
+    callbacks.reset_runtime_before_stage = default_frontend_stage_reset_runtime;
+    callbacks.reset_render_state_before_stage = default_frontend_stage_reset_render_state;
+    callbacks.handle_stage_result = default_frontend_stage_handle_result;
+    callbacks.refresh_frontend_after_stage =
+        default_frontend_stage_refresh_after_result;
+    return callbacks;
+}
+
+u32 read_default_gameplay_result_metric(
+    const std::vector<u8>& record, std::size_t base_offset, u32 player) {
+    return read_default_session_record_u32(
+        record, base_offset + static_cast<std::size_t>(player) * sizeof(u32), 0);
+}
+
+u32 compute_default_gameplay_result_total_without_adjustment(
+    const std::vector<u8>& record, u32 player) {
+    u32 total = 0;
+    for (const std::size_t offset : kGameplayResultTotalMetricOffsets) {
+        total += read_default_gameplay_result_metric(record, offset, player);
+    }
+    return total;
+}
+
+void import_default_gameplay_result_metrics(
+    GameplayResultPlayer& row, const std::vector<u8>& record, u32 player) {
+    for (std::size_t metric = 0;
+         metric < kGameplayResultDisplayMetricOffsets.size(); ++metric) {
+        row.metrics[metric] = read_default_gameplay_result_metric(
+            record, kGameplayResultDisplayMetricOffsets[metric], player);
+    }
+
+    const u32 total_without_adjustment =
+        compute_default_gameplay_result_total_without_adjustment(record, player);
+    row.metrics[kGameplayResultMetricCount - 1] = total_without_adjustment;
+    row.total_score =
+        static_cast<i32>(total_without_adjustment) + row.adjustment_score;
+    row.total_score_valid = true;
+}
+
+i32 gameplay_result_adjustment_for_mode(u32 result_mode) {
+    switch (result_mode) {
+    case 0:
+        return 100000000;
+    case 1:
+        return -100000000;
+    case 3:
+        return -200000000;
+    default:
+        return 0;
+    }
+}
+
+u32 read_default_gameplay_result_local_owner(
+    const std::vector<u8>* player_record, u32 fallback) {
+    if (player_record == nullptr) {
+        return fallback < kPlayerSlotCount ? fallback : 0;
+    }
+
+    const u32 local_owner = read_default_session_record_u32(
+        *player_record, kSessionPlayerRecordLocalOwnerOffset, fallback);
+    return local_owner < kPlayerSlotCount ? local_owner : 0;
+}
+
+u32 read_default_gameplay_result_owner_faction(
+    const std::vector<u8>* player_record, u32 owner, u32 fallback) {
+    if (player_record == nullptr || owner >= kPlayerSlotCount) {
+        return fallback <= 3 ? fallback : 0;
+    }
+
+    const u32 faction = read_default_session_record_u32(
+        *player_record,
+        kSessionPlayerRecordFactionBaseOffset +
+            static_cast<std::size_t>(owner) * sizeof(u32),
+        fallback);
+    return faction <= 3 ? faction : 0;
+}
+
+bool default_gameplay_result_owner_matches_local_group(
+    const std::vector<u8>* player_record, u32 owner, u32 local_owner) {
+    if (player_record == nullptr || owner >= kPlayerSlotCount ||
+        local_owner >= kPlayerSlotCount) {
+        return owner == local_owner;
+    }
+
+    const u32 owner_group = read_default_session_record_u32(
+        *player_record,
+        kSessionPlayerRecordResultGroupBaseOffset +
+            static_cast<std::size_t>(owner) * sizeof(u32),
+        owner);
+    const u32 local_group = read_default_session_record_u32(
+        *player_record,
+        kSessionPlayerRecordResultGroupBaseOffset +
+            static_cast<std::size_t>(local_owner) * sizeof(u32),
+        local_owner);
+    return owner_group == local_group;
+}
+
+void default_gameplay_online_queue_request(GameplayOnlineRequest request) {
+    switch (request) {
+    case GameplayOnlineRequest::locale_flag0:
+        QueueAsyncTcpLocaleFlag0Request(FrontendAsyncTcpSocket0());
+        break;
+    case GameplayOnlineRequest::locale_flag1:
+        QueueAsyncTcpLocaleFlag1Request(FrontendAsyncTcpSocket0());
+        break;
+    case GameplayOnlineRequest::locale_flag2:
+    default:
+        QueueAsyncTcpLocaleFlag2Request(FrontendAsyncTcpSocket0());
+        break;
+    }
+}
+
+void default_gameplay_online_publish_state(u32 state) {
+    OpenGameplayIndexedSelectionDialog(state);
+}
+
+void default_gameplay_online_fade_to_black() {
+    HandleBackBufferFadeToBlack();
+}
+
+void default_gameplay_online_frame_boundary() {
+    (void)HandleDirectDrawFrameBoundary();
+}
+
+void default_gameplay_leave_reset_replay(const char* name) {
+    FinalizeReplayRecordingDisabled(replay_recording_state(), name);
+}
+
+void prepare_default_gameplay_result_leave_render() {
+    set_default_primary_miles_music_policy_mode(2);
+    SetDirectPlayMessageDispatchMode(0);
+}
+
+void default_gameplay_result_set_music_policy_mode(
+    GameplayResultScreenState&, u32 result_mode) {
+    set_default_primary_miles_music_policy_mode(result_mode == 0 ? 5u : 6u);
+}
+
+void run_default_gameplay_leave_reset_once() {
+    if (g_runtime.gameplay_leave_reset_processed) {
+        return;
+    }
+
+    GameplayLeaveState leave{};
+    leave.result_state = g_runtime.gameplay_end_condition_state.result_code;
+    leave.network_mode = static_cast<u32>(
+        std::max<i32>(async_com_state().active_network_transport_mode, 0));
+    leave.callbacks.close_directplay_player = DestroyGlobalDirectPlayPlayer;
+    leave.callbacks.shutdown_directplay_session = ShutdownGlobalDirectPlaySession;
+    leave.callbacks.reset_replay_state = default_gameplay_leave_reset_replay;
+    LeaveGameplaySessionAndResetReplay(leave);
+    g_runtime.gameplay_leave_reset_processed = true;
+}
+
+void sync_default_gameplay_ready_flags_from_packets() {
+    const Mode1GameplayPacketDispatchState& packets =
+        mode1_gameplay_packet_dispatch_state();
+    for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+        g_runtime.gameplay_startup_state.ready_flags[owner] =
+            packets.players[owner].ready_flag;
+    }
+}
+
+void handle_default_generic_ai_end_request() {
+    if (!g_runtime.generic_ai_profile_mode) {
+        return;
+    }
+
+    sync_default_gameplay_ready_flags_from_packets();
+    if (g_runtime.gameplay_startup_state.requested_state == 0 &&
+        g_runtime.gameplay_end_condition_state.result_code ==
+            kGameplayEndResultVictory) {
+        RequestGameplayStateWhenNoPlayersReady(g_runtime.gameplay_startup_state);
+    }
+    if (g_runtime.gameplay_startup_state.requested_state != 0) {
+        g_runtime.gameplay_end_condition_state.result_code =
+            g_runtime.gameplay_startup_state.requested_state;
+    }
+
+    GameplayInputActionState& input = gameplay_input_action_state();
+    configure_default_gameplay_input_action_context(input);
+    if (!input.player_reset_gate) {
+        ResetAndPublishPlayerInactiveState(input);
+    }
+}
+
+void run_default_gameplay_online_transition() {
+    GameplayOnlineTransitionState& state =
+        g_runtime.gameplay_online_transition_state;
+    state.current_state = g_runtime.gameplay_end_condition_state.result_code;
+    state.remote_player_count =
+        g_runtime.gameplay_player_slots.active_slot_count;
+    state.frame_counter = gameplay_loop_state().simulation_frame_counter;
+
+    const u32 local_slot = std::min<u32>(
+        g_runtime.gameplay_player_slots.local_player_slot,
+        kPlayerSlotCount - 1);
+    state.local_slot_state =
+        g_runtime.gameplay_player_slots.slot_states[local_slot];
+    state.callbacks.queue_request = default_gameplay_online_queue_request;
+    state.callbacks.publish_state = default_gameplay_online_publish_state;
+    state.callbacks.fade_to_black = default_gameplay_online_fade_to_black;
+    state.callbacks.frame_boundary = default_gameplay_online_frame_boundary;
+    UpdateGameplayOnlineTransitionState(state);
+}
+
+u32 seed_default_gameplay_result_screen(u32 result_mode) {
+    GameplayResultScreenState& result = gameplay_result_screen_state();
+    result.callbacks = {};
+    result.callbacks.set_music_policy_mode =
+        default_gameplay_result_set_music_policy_mode;
+    result.result_mode = result_mode;
+    result.rows.clear();
+    result.action_log.clear();
+
+    const std::vector<u8>* metric_record = default_gameplay_result_metric_record();
+    const std::vector<u8>* player_record = default_session_player_record();
+    const GameplaySessionLoadState& session_load = gameplay_session_load_state();
+    const ReplayRecordingState& replay_state = replay_recording_state();
+    result.generic_ai_profile_mode = g_runtime.generic_ai_profile_mode;
+    result.scenario_ai_profile_override =
+        g_runtime.generic_ai_scenario_active ||
+        gameplay_modal_ui_state().scenario_ai_profile_override;
+    result.replay_controls_available =
+        replay_state.packet_temp_open && replay_state.viewport_temp_open &&
+        replay_state.packet_count != 0;
+    result.replay_record_index_is_zero =
+        session_load.loaded && session_load.base_record_index == 0;
+    const u32 elapsed_ticks =
+        RefreshLegacyTickTime() - g_runtime.gameplay_session_start_tick_ms;
+    result.elapsed_seconds = (elapsed_ticks >> 10) % 60;
+    result.elapsed_minutes = ((elapsed_ticks >> 10) / 60) % 60;
+    result.elapsed_hours = elapsed_ticks / 0x384000u;
+    const u32 player_count = std::min<u32>(
+        std::max<u32>(g_runtime.gameplay_player_slots.active_slot_count, 1),
+        kPlayerSlotCount);
+    const u32 local_owner = read_default_gameplay_result_local_owner(
+        player_record, g_runtime.gameplay_player_slots.local_player_slot);
+    const u32 local_faction_fallback =
+        local_owner < g_runtime.gameplay_startup_state.owner_faction_ids.size() ?
+        g_runtime.gameplay_startup_state.owner_faction_ids[local_owner] : 0;
+    result.selected_tribe_index = read_default_gameplay_result_owner_faction(
+        player_record, local_owner, local_faction_fallback);
+    const i32 result_adjustment =
+        gameplay_result_adjustment_for_mode(result.result_mode);
+    for (u32 player = 0; player < result.players.size(); ++player) {
+        GameplayResultPlayer& row = result.players[player];
+        row = GameplayResultPlayer{};
+        row.owner_id = player;
+        row.slot_state = player < g_runtime.gameplay_player_slots.slot_states.size() ?
+            g_runtime.gameplay_player_slots.slot_states[player] :
+            static_cast<u8>(PlayerSlotState::disabled);
+        row.connected = row.slot_state != static_cast<u8>(PlayerSlotState::disabled);
+        const u32 faction_fallback =
+            player < g_runtime.gameplay_startup_state.owner_faction_ids.size() ?
+            g_runtime.gameplay_startup_state.owner_faction_ids[player] : 0;
+        row.faction_id = read_default_gameplay_result_owner_faction(
+            player_record, player, faction_fallback);
+        if (player < g_runtime.gameplay_startup_state.owner_display_names.size() &&
+            !g_runtime.gameplay_startup_state.owner_display_names[player].empty()) {
+            row.name = g_runtime.gameplay_startup_state.owner_display_names[player];
+        }
+        if (default_gameplay_result_owner_matches_local_group(
+                player_record, player, local_owner)) {
+            row.adjustment_score = result_adjustment;
+        }
+        if (metric_record != nullptr && player < player_count) {
+            import_default_gameplay_result_metrics(row, *metric_record, player);
+        }
+        if (row.name.empty()) {
+            char name[32]{};
+            std::snprintf(name, sizeof(name), "Player %u", player + 1);
+            row.name = name;
+        }
+    }
+
+    return player_count;
+}
+
+void render_default_gameplay_result_screen_once() {
+    if (g_runtime.gameplay_result_screen_rendered) {
+        return;
+    }
+
+    run_default_gameplay_online_transition();
+
+    const u32 player_count = seed_default_gameplay_result_screen(
+        g_runtime.gameplay_end_condition_state.result_code);
+    prepare_default_gameplay_result_leave_render();
+    RenderGameplayResultRankingScreen(gameplay_result_screen_state(),
+        g_runtime.gameplay_end_condition_state.result_code, player_count);
+    run_default_gameplay_leave_reset_once();
+    g_runtime.gameplay_result_screen_rendered = true;
+}
+
+void render_default_gameplay_result_and_leave_once() {
+    if (g_runtime.gameplay_result_screen_rendered) {
+        return;
+    }
+
+    const u32 player_count = seed_default_gameplay_result_screen(
+        g_runtime.gameplay_end_condition_state.result_code);
+    prepare_default_gameplay_result_leave_render();
+    RenderGameplayResultRankingScreen(gameplay_result_screen_state(),
+        g_runtime.gameplay_end_condition_state.result_code, player_count);
+    run_default_gameplay_leave_reset_once();
+    g_runtime.gameplay_result_screen_rendered = true;
+}
+
+void render_default_network_ai_override_result_once() {
+    if (g_runtime.gameplay_result_screen_rendered) {
+        return;
+    }
+
+    OpenGameplayIndexedSelectionDialog(
+        g_runtime.gameplay_end_condition_state.result_code);
+    render_default_gameplay_result_and_leave_once();
+}
+
+void complete_default_frontend_stage_result_once(u32 result) {
+    if (!g_runtime.frontend_stage_transition_active) {
+        render_default_gameplay_result_screen_once();
+        return;
+    }
+
+    FrontendStageFlowState& stage = frontend_stage_flow_state();
+    const u32 current_mode = stage.current_mode != 0 ?
+        stage.current_mode : g_runtime.gameplay_startup_state.session_mode;
+    CompleteRankerFrontendStage(result, current_mode + 1);
+}
+
+void default_frontend_stage_refresh_after_result(FrontendStageFlowState& state) {
+    if (state.selected_stage_result == 0) {
+        g_runtime.frontend_stage_session_mode = state.current_mode;
+    }
+
+    if (!g_runtime.gameplay_result_screen_rendered) {
+        const u32 player_count =
+            seed_default_gameplay_result_screen(state.selected_stage_result);
+        prepare_default_gameplay_result_leave_render();
+        RenderGameplayResultRankingScreen(gameplay_result_screen_state(),
+            state.selected_stage_result, player_count);
+        g_runtime.gameplay_result_screen_rendered = true;
+    }
+
+    state.frontend_refreshed_after_stage = true;
+    g_runtime.frontend_stage_transition_active = false;
+}
+
+bool default_frontend_stage_continues_after_result(u32 mode) {
+    return mode != 8 && mode != 0x0f;
+}
+
+void default_gameplay_loop_run_stage_exit_fade() {
+    HideGameCursor();
+    HandleBackBufferFadeToBlack();
+    (void)HandleDirectDrawFrameBoundary();
+    ShowGameCursor();
+}
+
+bool default_gameplay_loop_try_restart_session(GameplayLoopState& state) {
+    mode1_reliable_state().corrective_packet_pending = false;
+    SetGameCursorIndex(state.current_cursor_index);
+    state.session_active = false;
+    if (g_runtime.network_ai_profile_override) {
+        return false;
+    }
+
+    FrontendStageFlowState& stage = frontend_stage_flow_state();
+    if (!stage.stage_started) {
+        return false;
+    }
+
+    HandleBackBufferFadeToBlack();
+    (void)HandleDirectDrawFrameBoundary();
+    if (StartRankerFrontendStageFromMenu(stage.column, stage.row)) {
+        (void)HandleDirectDrawFrameBoundary();
+        state.reenter_session_requested = true;
+        return false;
+    }
+
+    stage.stage_started = false;
+    stage.frontend_refreshed_after_stage = false;
+    default_gameplay_loop_run_stage_exit_fade();
+    return false;
+}
+
+void default_gameplay_loop_handle_restart_request(GameplayLoopState& state) {
+    FrontendStageFlowState& stage = frontend_stage_flow_state();
+    if (!stage.stage_started || !stage.frontend_refreshed_after_stage ||
+        g_runtime.frontend_stage_transition_active ||
+        g_runtime.network_ai_profile_override) {
+        return;
+    }
+
+    if (!default_frontend_stage_continues_after_result(stage.current_mode)) {
+        state.session_active = false;
+        stage.stage_started = false;
+        stage.frontend_refreshed_after_stage = false;
+        if (g_runtime.generic_ai_scenario_active) {
+            OpenGameplayResultTextDialog();
+            CloseDirectMilesMusic();
+            render_default_gameplay_result_and_leave_once();
+            return;
+        }
+        default_gameplay_loop_run_stage_exit_fade();
+        return;
+    }
+
+    state.session_active = false;
+    if (StartRankerFrontendStageFromMenu(stage.column, stage.row)) {
+        (void)HandleDirectDrawFrameBoundary();
+        state.reenter_session_requested = true;
+        return;
+    }
+
+    stage.stage_started = false;
+    stage.frontend_refreshed_after_stage = false;
+    default_gameplay_loop_run_stage_exit_fade();
+}
+
+void default_gameplay_loop_handle_post_victory_loop(GameplayLoopState& state) {
+    mode1_reliable_state().corrective_packet_pending = false;
+    state.pause_loop_requested = false;
+    state.session_active = false;
+
+    if (g_runtime.generic_ai_scenario_active) {
+        OpenGameplayResultTextDialog();
+        CloseDirectMilesMusic();
+        render_default_gameplay_result_and_leave_once();
+        return;
+    }
+
+    if (g_runtime.generic_ai_profile_mode) {
+        render_default_gameplay_result_screen_once();
+        return;
+    }
+
+    if (g_runtime.network_ai_profile_override) {
+        g_runtime.gameplay_end_condition_state.result_code =
+            kGameplayEndResultDefeat;
+        render_default_gameplay_result_and_leave_once();
+    }
+}
+
+void default_gameplay_flow_pre_session_runtime(GameplaySessionFlowState& state) {
+    if (g_runtime.gameplay_transition_active) {
+        return;
+    }
+    SetRankerMainWindowGenericAiProfileState(state.generic_ai_profile_mode != 0, false);
+    SetRankerMainWindowNetworkAiProfileOverride(false);
+}
+
+void default_gameplay_flow_post_session_runtime(GameplaySessionFlowState&) {
+    if (g_runtime.main_window == nullptr || !IsWindow(g_runtime.main_window)) {
+        SetImeConversionOpenTarget(false);
+        return;
+    }
+
+    RefreshImeConversionOpenStatus(g_runtime.main_window);
+    SetImeConversionOpenTarget(false);
+    RestoreImeConversionOpenStatus(g_runtime.main_window);
+}
+
+void default_gameplay_flow_enter_session_ui(GameplaySessionFlowState&) {
+    if (g_runtime.main_window != nullptr && IsWindow(g_runtime.main_window)) {
+        SetFocus(g_runtime.main_window);
+    }
+}
+
+void default_gameplay_flow_process_session_loop(GameplaySessionFlowState& state) {
+    GameplayLoopState& loop_state = gameplay_loop_state();
+    install_default_gameplay_loop_callbacks(loop_state);
+    loop_state.process_shutdown_requested = state.process_shutdown_requested;
+    loop_state.leave_requested = false;
+    loop_state.restart_requested = false;
+    ProcessGameplaySessionLoop(loop_state, state.session_loop_iteration_budget);
+    state.process_shutdown_requested = loop_state.process_shutdown_requested;
+    state.close_requested = loop_state.process_shutdown_requested;
+    state.p2p_win_result = g_runtime.gameplay_end_condition_state.result_code;
+    g_runtime.gameplay_session_loop_reached = true;
+}
+
+void default_gameplay_flow_send_main_close(GameplaySessionFlowState& state) {
+    if ((state.close_requested || state.process_shutdown_requested) &&
+        g_runtime.main_window != nullptr && IsWindow(g_runtime.main_window)) {
+        SendMainWindowCloseMessage();
+    }
+}
+
+void default_gameplay_frame_present_cursor(GameplayFrameRenderContext&) {
+    if (g_runtime.directx_initialized) {
+        HandleGameCursorPresentation();
+    }
+}
+
+void default_select_gameplay_hud_font() {
+    SelectTextDrawFont(0);
+    SelectTextMetricFont(0);
+}
+
+GameplayTextExtent default_gameplay_hud_measure_text(
+    GameplayHudTextState&, const char* text) {
+    default_select_gameplay_hud_font();
+    if (text != nullptr && MeasureTextExtent(text)) {
+        const TextRendererState& renderer = text_renderer_state();
+        return {renderer.measured_width, renderer.measured_height};
+    }
+    const u32 width =
+        text != nullptr ? static_cast<u32>(std::strlen(text) * 8u) : 0;
+    return {width, 16};
+}
+
+void default_gameplay_hud_select_font(GameplayHudTextState&) {
+    default_select_gameplay_hud_font();
+}
+
+void default_gameplay_draw_text_at(
+    const char* text, i32 x, i32 y, u8 color, bool centered) {
+    if (text == nullptr || text[0] == '\0') {
+        return;
+    }
+    default_select_gameplay_hud_font();
+    SetTextCursor(x, y, color);
+    if (centered) {
+        DrawCenterAlignedText(text);
+    }
+    else {
+        DrawTextString(text);
+    }
+}
+
+void default_gameplay_hud_draw_text(
+    GameplayHudTextState&, const char* text, i32 x, i32 y, u8 color) {
+    default_gameplay_draw_text_at(text, x, y, color, false);
+}
+
+void default_gameplay_hud_draw_centered_text(
+    GameplayHudTextState&, const char* text, i32 x, i32 y, u8 color) {
+    default_gameplay_draw_text_at(text, x, y, color, true);
+}
+
+void default_gameplay_hud_draw_shadow_text(
+    GameplayHudTextState&, const char* text, i32 x, i32 y, u8 color) {
+    if (text == nullptr || text[0] == '\0') {
+        return;
+    }
+    default_select_gameplay_hud_font();
+    TextRendererState& renderer = text_renderer_state();
+    const TextRenderCursor saved = renderer.cursor;
+    SetTextCursor(x, y, color);
+    renderer.cursor.style_flags |= 1u;
+    renderer.cursor.shadow_foreground = 0xe9;
+    renderer.cursor.shadow_x = 1;
+    renderer.cursor.shadow_y = 1;
+#ifdef _WIN32
+    if ((renderer.draw_font.flags & 8u) != 0 ||
+        (renderer.metric_font.flags & 8u) != 0) {
+        RenderWin32FontTextShadowAndAdvance(text);
+    }
+    else
+#endif
+    {
+        DrawTextString(text);
+    }
+    renderer.cursor = saved;
+}
+
+void default_gameplay_hud_flush_status_tail(GameplayHudTextState&) {
+}
+
+void configure_default_gameplay_hud_text_callbacks(GameplayHudTextState& hud) {
+    static constexpr std::array<const char*, 5> kFallbackChatPrefixes{
+        "To player>", "To allies>", "To enemies>", "To all>", "Message>"};
+    static constexpr std::array<u8, 5> kChatPrefixColors{
+        0x11, 0x41, 0x09, 0x01, 0x01};
+
+    hud.callbacks.select_draw_font = default_gameplay_hud_select_font;
+    hud.callbacks.select_metric_font = default_gameplay_hud_select_font;
+    hud.callbacks.measure_text = default_gameplay_hud_measure_text;
+    hud.callbacks.draw_shadow_and_advance = default_gameplay_hud_draw_shadow_text;
+    hud.callbacks.draw_text = default_gameplay_hud_draw_text;
+    hud.callbacks.draw_centered_text = default_gameplay_hud_draw_centered_text;
+    hud.callbacks.flush_status_tail = default_gameplay_hud_flush_status_tail;
+    for (std::size_t index = 0; index < kFallbackChatPrefixes.size(); ++index) {
+        hud.selected_status.category_labels[index] = startup_platform_row(
+            kGameplayHudChatPrefixTextRowBase + index, kFallbackChatPrefixes[index]);
+        hud.selected_status.category_colors[index] = kChatPrefixColors[index];
+    }
+}
+
+void default_gameplay_resource_hud_select_font(
+    GameplayPlayerResourceHudState&, u32) {
+    default_select_gameplay_hud_font();
+}
+
+void default_gameplay_resource_hud_draw_sprite(
+    GameplayPlayerResourceHudState&, u32 sprite_entry, i32 x, i32 y, u32) {
+    if (sprite_entry != kInvalidResourceEntry) {
+        DrawResourceSpriteNormal(sprite_entry, x, y);
+    }
+}
+
+void default_gameplay_resource_hud_draw_text(
+    GameplayPlayerResourceHudState&, const char* text, i32 x, i32 y,
+    u8 color, bool centered) {
+    default_gameplay_draw_text_at(text, x, y, color, centered);
+}
+
+i32 default_i32_from_u32(u32 value) {
+    return value > 0x7fffffffu ? 0x7fffffff : static_cast<i32>(value);
+}
+
+void sync_default_gameplay_player_resource_hud(
+    GameplayPlayerResourceHudState& hud, const GameplayFrameRenderContext& context) {
+    hud.callbacks.select_font = default_gameplay_resource_hud_select_font;
+    hud.callbacks.draw_sprite = default_gameplay_resource_hud_draw_sprite;
+    hud.callbacks.draw_text = default_gameplay_resource_hud_draw_text;
+
+    const GameplayScriptOpcodeContext& opcode =
+        gameplay_script_trigger_state().opcode_context;
+    const PlayerSlotRuntimeState& players = g_runtime.gameplay_player_slots;
+    const UnitLifecycleContext* lifecycle =
+        g_runtime.gameplay_startup_state.lifecycle;
+    const GameplayUiResourceState& ui_resources = gameplay_ui_resource_state();
+    const Jw207ResourcePackState& jw207 = jw207_resource_pack_state();
+
+    hud.flags = (opcode.cinematic_flags & 0xffu) | players.rotation_control_value;
+    hud.start_x = static_cast<i32>(opcode.global_value_a);
+    hud.start_y = static_cast<i32>(opcode.global_value_b);
+    hud.primary_resource_icon =
+        ui_resources.misc_icons_start != kInvalidResourceEntry ?
+        ui_resources.misc_icons_start + 0x20u : kInvalidResourceEntry;
+    hud.population_icon =
+        ui_resources.misc_icons_start != kInvalidResourceEntry ?
+        ui_resources.misc_icons_start + 0x23u : kInvalidResourceEntry;
+    hud.player_icon_base = jw207.start_location_start;
+    hud.rotation_countdown_ticks = players.rotation_countdown_ticks;
+    hud.rotation_countdown_x =
+        static_cast<i32>(std::max<u32>(context.viewport_width, 1) >> 1);
+    hud.rotation_countdown_y = 0x0c;
+    hud.rotation_countdown_color = 1;
+    hud.normal_color = 1;
+    hud.warning_color = 9;
+    hud.capped_color = 0x11;
+
+    for (u32 owner = 0; owner < hud.players.size(); ++owner) {
+        GameplayPlayerResourceHudPlayer& row = hud.players[owner];
+        row = GameplayPlayerResourceHudPlayer{};
+        row.slot_state = owner < players.slot_states.size() ?
+            players.slot_states[owner] : static_cast<u8>(PlayerSlotState::disabled);
+        if (owner < g_runtime.gameplay_startup_state.owner_display_names.size() &&
+            !g_runtime.gameplay_startup_state.owner_display_names[owner].empty()) {
+            row.name = g_runtime.gameplay_startup_state.owner_display_names[owner];
+        }
+        else {
+            char name[32]{};
+            std::snprintf(name, sizeof(name), "Player %u", owner + 1);
+            row.name = name;
+        }
+
+        if (lifecycle != nullptr && owner < lifecycle->owner_primary_resources.size()) {
+            row.primary_resource =
+                default_i32_from_u32(lifecycle->owner_primary_resources[owner]);
+            row.population_current =
+                default_i32_from_u32(lifecycle->owner_population_used[owner]);
+            row.population_display =
+                default_i32_from_u32(lifecycle->owner_population_reserved[owner]);
+            row.population_cap =
+                default_i32_from_u32(lifecycle->owner_population_limit[owner]);
+            row.active_unit_count =
+                default_i32_from_u32(lifecycle->owner_unit_active_count[owner]);
+            row.queued_unit_count =
+                default_i32_from_u32(lifecycle->owner_building_active_count[owner]);
+        }
+        else if (owner < players.owner_primary_resources.size()) {
+            row.primary_resource =
+                default_i32_from_u32(players.owner_primary_resources[owner]);
+        }
+        row.score = static_cast<i32>(
+            GetOwnerSessionCounterTotal(g_runtime.gameplay_owner_counters, owner));
+    }
+}
+
+GameplayTooltipCostValues default_gameplay_tooltip_production_order_costs(
+    GameplayTooltipState&, u32 order_id, u32 variant) {
+    if (order_id >= 0xf4) {
+        order_id -= 0xf4;
+    }
+
+    GameplayTooltipCostValues costs{};
+    const ProductionOrderDefinition* definition =
+        default_production_order_definition(order_id);
+    if (definition == nullptr) {
+        costs.values[0] = order_id + 1;
+        costs.values[3] = variant;
+        return costs;
+    }
+
+    const u32 rule_variant = variant;
+
+    costs.values[0] =
+        CalculateProductionOrderCost(definition->primary_cost, rule_variant);
+    costs.values[1] =
+        CalculateProductionOrderCost(definition->secondary_cost, rule_variant);
+    return costs;
+}
+
+void sync_default_gameplay_tooltip_context(
+    GameplayTooltipState& tooltip, const GameplayFrameRenderContext& context) {
+    tooltip.current_tick_ms = context.current_tick_ms;
+    tooltip.screen_width = context.viewport_width;
+    tooltip.emit_backbuffer_draws = true;
+    tooltip.camera_x = context.camera_x;
+    tooltip.camera_y = context.camera_y;
+    tooltip.map_width_tiles = g_runtime.gameplay_terrain_layer.width_tiles;
+    tooltip.map_height_tiles = g_runtime.gameplay_terrain_layer.height_tiles;
+    tooltip.terrain_flags = g_runtime.gameplay_terrain_layer.terrain_flags;
+    tooltip.callbacks.production_order_costs =
+        default_gameplay_tooltip_production_order_costs;
+    tooltip.local_owner = std::min<u32>(
+        g_runtime.gameplay_player_slots.local_player_slot,
+        kGameplayTooltipOwnerCount - 1);
+
+    for (auto& owner_counts : tooltip.owner_unit_counts) {
+        owner_counts.fill(0);
+    }
+    for (auto& owner_variants : tooltip.production_order_variants) {
+        owner_variants.fill(0);
+    }
+
+    const UnitLifecycleContext* lifecycle =
+        g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle != nullptr) {
+        for (u32 owner = 0;
+             owner < kGameplayTooltipOwnerCount && owner < kUnitOwnerTypeCountOwners;
+             ++owner) {
+            for (u32 type = 0;
+                 type < kGameplayTooltipOwnerUnitTypeCount &&
+                 type < kUnitOwnerTypeCountTypes;
+                 ++type) {
+                tooltip.owner_unit_counts[owner][type] =
+                    lifecycle->owner_unit_type_counts[owner][type];
+            }
+        }
+    }
+    else {
+        const OwnerAiRuntimeState& owner_ai = g_runtime.gameplay_owner_ai_state;
+        for (u32 owner = 0;
+             owner < kGameplayTooltipOwnerCount && owner < kOwnerAiOwnerCount;
+             ++owner) {
+            for (u32 type = 0;
+                 type < kGameplayTooltipOwnerUnitTypeCount &&
+                 type < kOwnerAiUnitTypeCount;
+                 ++type) {
+                tooltip.owner_unit_counts[owner][type] =
+                    owner_ai.owner_unit_type_counts[owner][type];
+            }
+        }
+    }
+
+    const ProductionOrderRuntimeState& production =
+        g_runtime.gameplay_production_runtime;
+    for (u32 owner = 0;
+         owner < tooltip.production_order_variants.size() &&
+         owner < production.variant_counts.size(); ++owner) {
+        for (u32 order = 0;
+             order < tooltip.production_order_variants[owner].size() &&
+             order < production.variant_counts[owner].size(); ++order) {
+            tooltip.production_order_variants[owner][order] =
+                production.variant_counts[owner][order];
+        }
+    }
+    sync_default_gameplay_tooltip_platform_texts(tooltip);
+    sync_default_gameplay_tooltip_object_texts(tooltip);
+    sync_default_gameplay_tooltip_production_action_definitions(tooltip);
+
+    if (!tooltip.selected_unit_valid || tooltip.selected_unit.offset == 0) {
+        tooltip.selected_unit = GameplayTooltipSelectedUnitState{};
+        tooltip.selected_unit_valid = false;
+        return;
+    }
+
+    const UnitMovementUnit* unit =
+        find_default_movement_unit_by_id(tooltip.selected_unit.offset);
+    if (unit == nullptr || !unit->active) {
+        tooltip.selected_unit = GameplayTooltipSelectedUnitState{};
+        tooltip.selected_unit_valid = false;
+        return;
+    }
+
+    tooltip.selected_unit.offset = unit->id;
+    tooltip.selected_unit.type = unit->type_id;
+    tooltip.selected_unit.owner = unit->owner_id;
+    tooltip.selected_unit.area_marker_flags = unit->area_marker_flags;
+    tooltip.selected_unit.tier_value = unit->elite_progress_value;
+    tooltip.selected_unit.equipment_slots = unit->equipment_slots;
+}
+
+void default_gameplay_frame_draw_selection_overlay(GameplayFrameRenderContext&) {
+    sync_default_ui_overlay_runtime_from_gameplay_state();
+    UiOverlayState& overlay = ui_overlay_state();
+    DrawGameplaySelectionRectangleOverlay(overlay);
+}
+
+void default_gameplay_frame_draw_hud_pulse(GameplayFrameRenderContext& context) {
+    sync_default_ui_overlay_runtime_from_gameplay_state();
+    RenderGameplayHudPulse(ui_overlay_state(), context.frame_counter);
+}
+
+void default_gameplay_frame_draw_world_ui_overlay(GameplayFrameRenderContext&) {
+    sync_default_ui_overlay_runtime_from_gameplay_state();
+    UiOverlayState& overlay = ui_overlay_state();
+    prepare_default_ui_overlay_minimap_base(overlay);
+    RenderGameplayWorldAndUiOverlay(overlay);
+}
+
+void default_gameplay_frame_noop(GameplayFrameRenderContext&) {
+}
+
+void default_gameplay_frame_draw_player_resource_hud(
+    GameplayFrameRenderContext& context) {
+    sync_default_gameplay_player_resource_hud(
+        g_runtime.gameplay_player_resource_hud, context);
+    RenderGameplayPlayerResourceRows(g_runtime.gameplay_player_resource_hud);
+}
+
+void default_gameplay_frame_render_scheduled_tooltip(
+    GameplayFrameRenderContext& context) {
+    GameplayTooltipState& tooltip = gameplay_tooltip_state();
+    sync_default_gameplay_tooltip_context(tooltip, context);
+    ResetGameplayTooltipDrawCommands(tooltip);
+    RenderScheduledGameplayTooltip(tooltip);
+}
+
+void default_gameplay_frame_draw_active_modal(GameplayFrameRenderContext&) {
+    run_default_gameplay_script_phase(gameplay_loop_state(), 1);
+    DrawActiveGameplayModalUiScreen(gameplay_modal_ui_state());
+}
+
+const char* default_pause_overlay_line(
+    const GameplayFrameRenderContext& context, std::size_t index) {
+    static constexpr std::array<std::size_t, 3> kPlatformRows{44, 52, 53};
+    static constexpr std::array<const char*, 3> kFallbackLines{
+        "WIZARD SOFT (R) 2002 The Ranker",
+        "Click Resume Game to unpause.",
+        "Game paused."
+    };
+    if (index >= context.pause_overlay_lines.size()) {
+        return "";
+    }
+    const std::string& configured = context.pause_overlay_lines[index];
+    return configured.empty()
+        ? startup_platform_row(kPlatformRows[index], kFallbackLines[index])
+        : configured.c_str();
+}
+
+void default_gameplay_frame_show_pause_overlay(GameplayFrameRenderContext& context) {
+    SelectTextDrawFont(4);
+    SelectTextMetricFont(4);
+
+    i32 y = 5;
+    for (std::size_t index = 0; index < context.pause_overlay_lines.size(); ++index) {
+        if (index == 2 && context.pause_overlay_blinks_third_line &&
+            (RefreshLegacyTickTime() & 0x200u) != 0) {
+            continue;
+        }
+
+        const char* text = default_pause_overlay_line(context, index);
+        if (text == nullptr || text[0] == '\0') {
+            continue;
+        }
+
+        u32 width = 0;
+        u32 height = 16;
+        if (MeasureTextExtent(text)) {
+            const TextRendererState& renderer = text_renderer_state();
+            width = renderer.measured_width;
+            height = renderer.measured_height != 0 ? renderer.measured_height : height;
+        }
+
+        const i32 x = static_cast<i32>(context.viewport_width >> 1) -
+            static_cast<i32>(width >> 1);
+        RenderGameplayHudAsciiTextLine(text, x, y, 1);
+        y += static_cast<i32>(height);
+    }
+}
+
+void default_gameplay_frame_draw_map_brushes(GameplayFrameRenderContext& context) {
+    MapBrushViewportState& brush = g_runtime.gameplay_map_brush_viewport;
+    brush.camera_x = context.camera_x;
+    brush.camera_y = context.camera_y;
+    brush.viewport_width_pixels = context.viewport_width;
+    brush.viewport_height_pixels = context.viewport_height;
+    brush.map_width_tiles = g_runtime.gameplay_terrain_layer.width_tiles;
+    brush.map_height_tiles = g_runtime.gameplay_terrain_layer.height_tiles;
+    brush.tile_flags = g_runtime.gameplay_terrain_layer.terrain_flags;
+    if (brush.map_width_tiles == 0 || brush.map_height_tiles == 0 ||
+        brush.tile_flags.empty()) {
+        brush.draw_commands.clear();
+        brush.tile_classes.fill(0);
+        return;
+    }
+    BuildViewportBrushDrawCommands(brush);
+}
+
+void default_gameplay_unit_render_queued(UnitRenderQueueContext& context,
+    const UnitRenderItem& item) {
+    if (context.queued_entries.empty()) {
+        return;
+    }
+
+    QueueGameplayUnitRenderCommand(g_runtime.gameplay_render_command_queue,
+        context.queued_entries.back(), item,
+        g_runtime.gameplay_frame_render_context.camera_x,
+        g_runtime.gameplay_frame_render_context.camera_y, &context);
+}
+
+void default_gameplay_unit_render_fog_blocked(UnitRenderQueueContext&,
+    const UnitRenderItem&) {
+}
+
+const char* frontend_bootstrap_failure_detail(FrontendBootstrapFailureStage stage) {
+    switch (stage) {
+    case FrontendBootstrapFailureStage::DrawEnvironment:
+        return startup_platform_row(kBootstrapDrawEnvironmentErrorTextRow,
+            "The Ranker mouse initialization failed.");
+    case FrontendBootstrapFailureStage::UnitDefinitionCatalog:
+        return startup_platform_row(kBootstrapUnitDefinitionErrorTextRow,
+            "Character information load failed.");
+    case FrontendBootstrapFailureStage::AnimationCatalog:
+        return startup_platform_row(kBootstrapAnimationCatalogErrorTextRow,
+            "Weapon information load failed.");
+    case FrontendBootstrapFailureStage::RuntimeCatalog:
+        return startup_platform_row(kBootstrapRuntimeCatalogErrorTextRow,
+            "Magic information load failed.");
+    case FrontendBootstrapFailureStage::ProductionCatalog:
+        return startup_platform_row(kBootstrapProductionCatalogErrorTextRow,
+            "Upgrade information load failed.");
+    case FrontendBootstrapFailureStage::UnitEquipmentCatalog:
+        return startup_platform_row(kBootstrapUnitEquipmentErrorTextRow,
+            "Item information load failed.");
+    case FrontendBootstrapFailureStage::MiscStartupCatalog:
+        return startup_platform_row(kBootstrapMiscCatalogErrorTextRow,
+            "Fog resource load failed.");
+    case FrontendBootstrapFailureStage::Jw207ResourcePacks:
+        return trc_load_error_caption();
+    default:
+        return "Frontend startup resource load failed.";
+    }
+}
+
+bool default_defer_startup_unit_definition_catalog(FrontendBootstrapState& state) {
+    state.unit_definition_catalog_loaded = false;
+    append_startup_log("bootstrap unit catalog deferred");
+    return true;
+}
+
+void default_gameplay_loop_initialize_worker_runtime(GameplayLoopState&) {
+    FrontendBootstrapState& bootstrap = frontend_bootstrap_state();
+    FrontendBootstrapCallbacks callbacks{};
+    callbacks.load_unit_definition_catalog =
+        default_defer_startup_unit_definition_catalog;
+    append_startup_log("frontend bootstrap begin");
+    if (!RunFrontendStartupBootstrap(frontend_startup_state(), bootstrap, callbacks)) {
+        append_startup_log("frontend bootstrap failed stage=%lu",
+            static_cast<unsigned long>(bootstrap.failure_stage));
+        if (bootstrap.failure_stage == FrontendBootstrapFailureStage::Jw207ResourcePacks) {
+            log_runtime_resource_failure("jw207",
+                jw207_resource_pack_state().last_failure);
+            if (!send_runtime_resource_failure_trc_error(
+                    jw207_resource_pack_state().last_failure, trc_load_error_caption())) {
+                send_startup_fatal_and_close(
+                    frontend_bootstrap_failure_detail(bootstrap.failure_stage));
+            }
+        }
+        else if (bootstrap.failure_stage ==
+            FrontendBootstrapFailureStage::UnitDefinitionCatalog) {
+            log_runtime_resource_failure("unit-definition",
+                unit_definition_resource_catalog_state().last_failure);
+            if (!send_runtime_resource_failure_trc_error(
+                    unit_definition_resource_catalog_state().last_failure,
+                    frontend_bootstrap_failure_detail(bootstrap.failure_stage))) {
+                send_startup_fatal_and_close(
+                    frontend_bootstrap_failure_detail(bootstrap.failure_stage));
+            }
+        }
+        else {
+            send_startup_fatal_and_close(
+                frontend_bootstrap_failure_detail(bootstrap.failure_stage));
+        }
+        gameplay_loop_state().process_shutdown_requested = true;
+    } else {
+        append_startup_log("frontend bootstrap ok");
+    }
+}
+
+void default_gameplay_loop_shutdown_runtime_phase(GameplayLoopState&) {
+    ShutdownPrimaryMilesMusicPolicy();
+}
+
+void default_gameplay_loop_release_worker_runtime(GameplayLoopState&) {
+    if (g_runtime.main_window != nullptr && IsWindow(g_runtime.main_window)) {
+        SendMainWindowCloseMessage();
+    }
+}
+
+void default_gameplay_loop_finish_worker_exit(GameplayLoopState&) {
+    ExitBackgroundWorkerThread();
+}
+
+void default_gameplay_loop_enter_session_mode(GameplayLoopState& state) {
+    state.modal_subloop_active = false;
+    state.special_exit_mode = false;
+    set_default_primary_miles_music_policy_mode(3);
+    SetTextClipRect(0, 0, kOriginalClientWidth, kOriginalClientHeight);
+}
+
+void default_gameplay_loop_handle_replay_session_leave(GameplayLoopState&) {
+    CloseAllMilesEffectPlaylistStreams();
+    OpenGameplayResultTextDialog();
+    CloseDirectMilesMusic();
+    render_default_gameplay_result_and_leave_once();
+}
+
+void default_gameplay_loop_handle_session_abort(GameplayLoopState&) {
+    CloseAllMilesEffectPlaylistStreams();
+}
+
+void default_gameplay_loop_leave_session_cleanup(GameplayLoopState& state) {
+    mode1_reliable_state().corrective_packet_pending = false;
+    state.pause_loop_requested = false;
+    state.leave_requested = false;
+    state.restart_requested = false;
+    state.session_active = false;
+    ResetInputState();
+}
+
+void default_gameplay_loop_publish_catchup_mode(GameplayLoopState& state) {
+    const u32 local = mode1_reliable_state().local_player_index & 0xffu;
+    PublishLocalMode1GameplayPacket((0x0fu << 24) | local,
+        state.catchup_enabled ? 1u : 0u);
+}
+
+void default_gameplay_loop_reset_catchup_status_message(GameplayLoopState& state) {
+    state.catchup_status_counter0 = 0;
+    state.catchup_status_counter1 = 0;
+    state.catchup_status_mode = 4;
+
+    GameplayHudTextState& hud = g_runtime.gameplay_hud_text;
+    for (std::size_t i = 0; i + 1 < hud.timed_notifications.size(); ++i) {
+        hud.timed_notifications[i] = hud.timed_notifications[i + 1];
+    }
+    if (!hud.timed_notifications.empty()) {
+        GameplayTimedHudNotification& notification = hud.timed_notifications.back();
+        notification = GameplayTimedHudNotification{};
+        notification.active = true;
+        notification.expires_tick_ms = state.current_tick_ms + 8000;
+        notification.primary_color = 1;
+        notification.secondary_color = state.catchup_enabled ? 0x11 : 9;
+        notification.primary_text = "Catch-up ";
+        notification.secondary_text = state.catchup_enabled ? "enabled" : "disabled";
+    }
+}
+
+void clear_default_gameplay_sound_requests(GameplaySoundState& sound) {
+    for (GameplaySoundRequest& request : sound.requests) {
+        request = GameplaySoundRequest{};
+    }
+}
+
+void sync_default_gameplay_sound_spatial_view(GameplaySoundState& sound) {
+    const GameplayFrameRenderContext& frame =
+        g_runtime.gameplay_frame_render_context;
+    sound.camera_x = frame.camera_x;
+    sound.camera_y = frame.camera_y;
+    sound.viewport_center_x = static_cast<i32>(
+        (frame.viewport_width != 0 ? frame.viewport_width : kOriginalClientWidth) / 2);
+    sound.viewport_center_y = static_cast<i32>(
+        (frame.viewport_height != 0 ? frame.viewport_height : kOriginalClientHeight) / 2);
+}
+
+void configure_default_gameplay_sound_visibility(GameplaySoundState& sound) {
+    sync_default_gameplay_sound_spatial_view(sound);
+    if (sound.visibility_map.width != 0 && sound.visibility_map.height != 0 &&
+        !sound.visibility_map.flags.empty()) {
+        return;
+    }
+    sound.visibility_map.visible_flag = kGameplayVisibilityRevealed;
+    sound.visibility_map.width = 1;
+    sound.visibility_map.height = 1;
+    sound.visibility_map.flags.assign(1, sound.visibility_map.visible_flag);
+}
+
+bool resolve_default_unit_sound_profile(const UnitMovementUnit& unit,
+    GameplayUnitSoundDefinition& definition, GameplayUnitSoundBaseSlots& base_slots);
+void sync_default_gameplay_visibility_and_render_inputs(u32 frame_counter);
+void mirror_default_gameplay_visibility_to_consumers(GameplayVisibilityGrid& grid);
+void sync_default_gameplay_hud_alert_markers();
+
+UnitMovementUnit* find_default_movement_unit_by_id(u32 unit_id) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr || lifecycle->movement == nullptr) {
+        return nullptr;
+    }
+    for (UnitMovementUnit* unit : lifecycle->movement->active_units) {
+        if (unit != nullptr && unit->id == unit_id) {
+            return unit;
+        }
+    }
+    return nullptr;
+}
+
+void default_ui_overlay_unit_selected(UiOverlayState& state,
+    const UiOverlayMinimapUnit& selected_unit) {
+    if (selected_unit.owner_id != state.local_player_slot) {
+        return;
+    }
+
+    UnitMovementUnit* unit = find_default_movement_unit_by_id(selected_unit.unit_id);
+    if (unit == nullptr) {
+        return;
+    }
+
+    GameplayUnitSoundDefinition definition;
+    GameplayUnitSoundBaseSlots base_slots;
+    if (!resolve_default_unit_sound_profile(*unit, definition, base_slots)) {
+        return;
+    }
+    HandleSelectedUnitVoiceCue(g_runtime.gameplay_sound, *unit, definition, base_slots);
+}
+
+void default_ui_overlay_chat_input_begin(UiOverlayState&) {
+    SetImeConversionOpenTarget(system_ui_state().ime.saved_conversion_open);
+    if (g_runtime.main_window != nullptr && IsWindow(g_runtime.main_window)) {
+        RestoreImeConversionOpenStatus(g_runtime.main_window);
+    }
+}
+
+void default_ui_overlay_chat_input_end(UiOverlayState&) {
+    if (g_runtime.main_window != nullptr && IsWindow(g_runtime.main_window)) {
+        RefreshImeConversionOpenStatus(g_runtime.main_window);
+    }
+    SetImeConversionOpenTarget(false);
+    if (g_runtime.main_window != nullptr && IsWindow(g_runtime.main_window)) {
+        RestoreImeConversionOpenStatus(g_runtime.main_window);
+    }
+}
+
+void default_ui_overlay_frame_noop(UiOverlayState&) {}
+
+void default_ui_overlay_play_click_sound(UiOverlayState&) {
+    HandleDefaultFrontendUiClickSound();
+}
+
+void default_ui_overlay_open_save_session_dialog(UiOverlayState&) {
+    OpenGameplaySaveSessionDialog();
+}
+
+void default_ui_overlay_open_load_session_dialog(UiOverlayState&) {
+    OpenGameplayLoadSessionDialog();
+}
+
+void default_ui_overlay_open_options_menu(UiOverlayState&) {
+    OpenGameplayOptionsDialog();
+}
+
+void default_ui_overlay_update_catchup_target_if_active(UiOverlayState&) {
+    UpdateGameplayCatchupTargetIfActive(gameplay_loop_state());
+}
+
+void default_ui_overlay_draw_selection_rectangle(
+    UiOverlayState&, i32 left, i32 top, i32 right, i32 bottom) {
+    DrawBackBufferRectangleOutline16(left, top, right - left, bottom - top);
+}
+
+void configure_default_ui_overlay_callbacks() {
+    UiOverlayState& overlay = ui_overlay_state();
+    overlay.emit_sprite_draws = true;
+    if (overlay.callbacks.draw_placement_preview == nullptr) {
+        overlay.callbacks.draw_placement_preview = default_ui_overlay_frame_noop;
+    }
+    if (overlay.callbacks.draw_world_surface == nullptr) {
+        overlay.callbacks.draw_world_surface = default_ui_overlay_frame_noop;
+    }
+    if (overlay.callbacks.draw_after_queue == nullptr) {
+        overlay.callbacks.draw_after_queue = default_ui_overlay_frame_noop;
+    }
+    if (overlay.callbacks.draw_after_overlay == nullptr) {
+        overlay.callbacks.draw_after_overlay = default_ui_overlay_frame_noop;
+    }
+    if (overlay.callbacks.draw_selection_rectangle == nullptr) {
+        overlay.callbacks.draw_selection_rectangle =
+            default_ui_overlay_draw_selection_rectangle;
+    }
+    if (overlay.callbacks.on_unit_selected == nullptr) {
+        overlay.callbacks.on_unit_selected = default_ui_overlay_unit_selected;
+    }
+    if (overlay.callbacks.on_chat_input_begin == nullptr) {
+        overlay.callbacks.on_chat_input_begin = default_ui_overlay_chat_input_begin;
+    }
+    if (overlay.callbacks.on_chat_input_end == nullptr) {
+        overlay.callbacks.on_chat_input_end = default_ui_overlay_chat_input_end;
+    }
+    if (overlay.callbacks.play_click_sound == nullptr) {
+        overlay.callbacks.play_click_sound = default_ui_overlay_play_click_sound;
+    }
+    if (overlay.callbacks.open_save_session_dialog == nullptr) {
+        overlay.callbacks.open_save_session_dialog =
+            default_ui_overlay_open_save_session_dialog;
+    }
+    if (overlay.callbacks.open_load_session_dialog == nullptr) {
+        overlay.callbacks.open_load_session_dialog =
+            default_ui_overlay_open_load_session_dialog;
+    }
+    if (overlay.callbacks.open_options_menu == nullptr) {
+        overlay.callbacks.open_options_menu = default_ui_overlay_open_options_menu;
+    }
+    if (overlay.callbacks.update_catchup_target_if_active == nullptr) {
+        overlay.callbacks.update_catchup_target_if_active =
+            default_ui_overlay_update_catchup_target_if_active;
+    }
+}
+
+void initialize_default_gameplay_sound_state() {
+    SetDefaultFrontendGameplaySoundState(&g_runtime.gameplay_sound);
+    const GameplaySoundState& bootstrap_sound = frontend_bootstrap_state().gameplay_sound;
+    if (bootstrap_sound.bank_loaded) {
+        g_runtime.gameplay_sound = bootstrap_sound;
+    }
+    g_runtime.gameplay_sound.direct_sound_available =
+        g_runtime.directx_initialized && direct_sound_state().active;
+    if (g_runtime.gameplay_sound.attenuation_by_bucket.empty()) {
+        InitializeDefaultGameplaySoundAttenuation(g_runtime.gameplay_sound);
+    }
+    if (!g_runtime.gameplay_sound.bank_loaded &&
+        g_runtime.gameplay_sound.direct_sound_available &&
+        direct_sound_state().next_allocated_slot == 0) {
+        InitializeGameplaySoundEffectBank(g_runtime.gameplay_sound);
+    }
+    clear_default_gameplay_sound_requests(g_runtime.gameplay_sound);
+    configure_default_gameplay_sound_visibility(g_runtime.gameplay_sound);
+}
+
+void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
+    g_runtime.gameplay_frame_render_context = GameplayFrameRenderContext{};
+    g_runtime.gameplay_render_command_queue = GameplayRenderCommandQueue{};
+    g_runtime.gameplay_hud_text = GameplayHudTextState{};
+    g_runtime.gameplay_player_resource_hud = GameplayPlayerResourceHudState{};
+    g_runtime.gameplay_hud_alert_markers = GameplayHudAlertMarkerState{};
+    g_runtime.gameplay_script_hud_text.clear();
+    g_runtime.gameplay_unit_render_queue = UnitRenderQueueContext{};
+    g_runtime.gameplay_fog_context = GameplayFogRenderContext{};
+    g_runtime.map_effect_context = MapEffectContext{};
+    g_runtime.gameplay_unit_effect_runtime = UnitEffectRuntimeState{};
+    g_runtime.gameplay_map_brush_viewport = MapBrushViewportState{};
+    g_runtime.gameplay_minimap_render_config = MinimapTerrainRenderConfig{};
+    g_runtime.gameplay_terrain_viewport_render_state =
+        TerrainViewportRenderState{};
+    g_runtime.gameplay_terrain_decoration_render_state =
+        TerrainDecorationRenderState{};
+    g_runtime.gameplay_unit_effect_definitions_initialized = false;
+    g_runtime.gameplay_action_damage_profiles = UnitActionDamageProfileTable{};
+    g_runtime.gameplay_action_damage_profiles_initialized = false;
+    ResetUiOverlayState();
+    initialize_default_gameplay_sound_state();
+    g_runtime.gameplay_render_command_queue.callbacks.default_dispatch =
+        NoOpQueuedRenderCommand;
+    g_runtime.gameplay_render_command_queue.callbacks.dispatch_by_class[0] =
+        NoOpQueuedRenderCommand;
+    g_runtime.gameplay_render_command_queue.callbacks.dispatch_by_class[1] =
+        DispatchQueuedUnitEffectRenderCommand;
+    g_runtime.gameplay_render_command_queue.callbacks.dispatch_by_class[2] =
+        DrawQueuedTerrainTileRenderCommand;
+    g_runtime.gameplay_render_command_queue.callbacks.dispatch_by_class[3] =
+        DispatchQueuedUnitRenderByTypeCommand;
+    g_runtime.gameplay_render_command_queue.callbacks.dispatch_by_class[4] =
+        DrawQueuedTerrainDecorationRenderCommand;
+    g_runtime.gameplay_render_command_queue.callbacks.dispatch_by_class[5] =
+        DispatchQueuedUnitRenderByTypeCommand;
+    g_runtime.gameplay_render_command_queue.callbacks.dispatch_by_class[6] =
+        DispatchQueuedUnitRenderByTypeCommand;
+    g_runtime.gameplay_render_command_queue.callbacks.dispatch_by_class[7] =
+        DispatchQueuedUnitEffectRenderCommand;
+    g_runtime.gameplay_render_command_queue.callbacks.dispatch_by_class[8] =
+        DispatchQueuedUnitRenderByTypeCommand;
+    g_runtime.gameplay_render_command_queue.callbacks.dispatch_by_class[9] =
+        DispatchQueuedUnitEffectRenderCommand;
+    g_runtime.gameplay_render_command_queue.callbacks.dispatch_by_class[10] =
+        DrawQueuedUnitRenderCommand;
+    for (std::size_t class_id = 11;
+         class_id < g_runtime.gameplay_render_command_queue.callbacks.dispatch_by_class.size();
+         ++class_id) {
+        g_runtime.gameplay_render_command_queue.callbacks.dispatch_by_class[class_id] =
+            NoOpQueuedRenderCommand;
+    }
+    configure_default_gameplay_render_unit_sprite_definitions();
+    sync_default_gameplay_tooltip_unit_definitions();
+    g_runtime.gameplay_unit_render_queue.viewport.left = 0;
+    g_runtime.gameplay_unit_render_queue.viewport.top = 0;
+    g_runtime.gameplay_unit_render_queue.viewport.right = kOriginalClientWidth;
+    g_runtime.gameplay_unit_render_queue.viewport.bottom = kOriginalClientHeight;
+    g_runtime.gameplay_unit_render_queue.local_owner_id =
+        g_runtime.gameplay_player_slots.local_player_slot;
+    g_runtime.gameplay_unit_render_queue.owner_relation_masks =
+        g_runtime.gameplay_player_slots.owner_relation_masks;
+    g_runtime.gameplay_unit_render_queue.owner_visibility_masks =
+        g_runtime.gameplay_player_slots.owner_visibility_masks;
+    g_runtime.gameplay_unit_render_queue.visibility.width = 1;
+    g_runtime.gameplay_unit_render_queue.visibility.height = 1;
+    g_runtime.gameplay_unit_render_queue.visibility.cells.assign(
+        1, kMapTileVisible | kMapTileRevealed);
+    g_runtime.gameplay_unit_render_queue.unit_layer_by_class =
+        {5, 5, 5, 8, 5, 0, 0, 0};
+    g_runtime.gameplay_unit_render_queue.unit_sort_bias_by_class =
+        {0x50000000u, 0x50000000u, 0x50000000u, 0x80000000u,
+            0x50000000u, 0, 0, 0};
+    g_runtime.gameplay_unit_render_queue.effect_layer_by_class =
+        {3, 3, 3, 8, 3, 5, 0, 0};
+    g_runtime.gameplay_unit_render_queue.effect_sort_bias_by_class =
+        {0x30000000u, 0x30000000u, 0x30000000u, 0x80000000u,
+            0x30000000u, 0x50000000u, 0, 0};
+    configure_default_ui_overlay_callbacks();
+    g_runtime.gameplay_unit_render_queue.callbacks.on_queue_entry =
+        default_gameplay_unit_render_queued;
+    g_runtime.gameplay_unit_render_queue.callbacks.on_fog_blocked_unit =
+        default_gameplay_unit_render_fog_blocked;
+    for (std::size_t type = 0; type < 96 &&
+         type < g_runtime.gameplay_unit_render_queue.callbacks.dispatch_by_type.size();
+         ++type) {
+        g_runtime.gameplay_unit_render_queue.callbacks.dispatch_by_type[type] =
+            DispatchUnitAnimationRenderQueueItem;
+    }
+    for (std::size_t type = 96; type < 170 &&
+         type < g_runtime.gameplay_unit_render_queue.callbacks.dispatch_by_type.size();
+         ++type) {
+        g_runtime.gameplay_unit_render_queue.callbacks.dispatch_by_type[type] =
+            DispatchUnitCellRenderQueueItem;
+    }
+    g_runtime.gameplay_frame_render_context.render_command_queue =
+        &g_runtime.gameplay_render_command_queue;
+    g_runtime.gameplay_frame_render_context.unit_render_queue =
+        &g_runtime.gameplay_unit_render_queue;
+    g_runtime.gameplay_hud_text.screen_width = kOriginalClientWidth;
+    g_runtime.gameplay_hud_text.screen_height = kOriginalClientHeight;
+    configure_default_gameplay_hud_text_callbacks(g_runtime.gameplay_hud_text);
+    ResetGameplayHudTextLayout(g_runtime.gameplay_hud_text);
+    ResetGameplayHudAlertMarkers(g_runtime.gameplay_hud_alert_markers);
+    sync_default_gameplay_hud_alert_markers();
+    g_runtime.gameplay_hud_text.alert_markers =
+        &g_runtime.gameplay_hud_alert_markers;
+    g_runtime.gameplay_frame_render_context.hud = &g_runtime.gameplay_hud_text;
+    g_runtime.gameplay_frame_render_context.fog = &g_runtime.gameplay_fog_context;
+    g_runtime.gameplay_frame_render_context.viewport_width = kOriginalClientWidth;
+    g_runtime.gameplay_frame_render_context.viewport_height = kOriginalClientHeight;
+    g_runtime.gameplay_frame_render_context.callbacks.prepare_visible_runtime_resources =
+        default_gameplay_frame_prepare_visible_runtime_resources;
+    g_runtime.gameplay_frame_render_context.callbacks.draw_terrain =
+        default_gameplay_frame_draw_terrain;
+    g_runtime.gameplay_frame_render_context.callbacks.draw_terrain_decorations =
+        default_gameplay_frame_draw_terrain_decorations;
+    g_runtime.gameplay_frame_render_context.callbacks.draw_map_brushes =
+        default_gameplay_frame_draw_map_brushes;
+    g_runtime.gameplay_frame_render_context.callbacks.draw_first_overlay =
+        default_gameplay_frame_draw_selection_overlay;
+    g_runtime.gameplay_frame_render_context.callbacks.draw_second_overlay =
+        default_gameplay_frame_draw_hud_pulse;
+    g_runtime.gameplay_frame_render_context.callbacks.draw_third_overlay =
+        default_gameplay_frame_draw_world_ui_overlay;
+    g_runtime.gameplay_frame_render_context.callbacks.draw_system_hud =
+        default_gameplay_frame_noop;
+    g_runtime.gameplay_frame_render_context.callbacks.draw_resource_hud =
+        default_gameplay_frame_draw_player_resource_hud;
+    g_runtime.gameplay_frame_render_context.callbacks.publish_present_flag =
+        default_gameplay_frame_render_scheduled_tooltip;
+    g_runtime.gameplay_frame_render_context.callbacks.draw_ui_overlay =
+        default_gameplay_frame_draw_active_modal;
+    g_runtime.gameplay_frame_render_context.callbacks.show_pause_overlay =
+        default_gameplay_frame_show_pause_overlay;
+    g_runtime.gameplay_frame_render_context.callbacks.mirror_visible_map_effects =
+        default_gameplay_frame_mirror_visible_map_effects;
+    g_runtime.gameplay_frame_render_context.callbacks.present_cursor =
+        default_gameplay_frame_present_cursor;
+    sync_default_gameplay_visibility_and_render_inputs(0);
+}
+
+bool default_gameplay_loop_frame_gate(GameplayLoopState& state) {
+    SetMode1ReliableReplayFrameTick(state.simulation_frame_counter);
+    if (!g_runtime.worker_thread_running) {
+        state.process_shutdown_requested = true;
+        state.leave_requested = true;
+        return false;
+    }
+    Mode1ReliableRuntimeState& reliable = mode1_reliable_state();
+    if (!reliable.initialized) {
+        return true;
+    }
+
+    const bool scenario_ai_profile_override =
+        g_runtime.generic_ai_scenario_active ||
+        g_runtime.p2p_session_start_state.scenario_ai_profile_override;
+    const u32 consumed =
+        PumpMode1ReliablePackets(
+            g_runtime.generic_ai_profile_mode, scenario_ai_profile_override,
+            state.current_tick_ms);
+    if (g_runtime.generic_ai_profile_mode && !scenario_ai_profile_override) {
+        return consumed != 0;
+    }
+    return true;
+}
+
+u32 default_gameplay_loop_read_tick_ms(GameplayLoopState& state) {
+    state.external_single_step = gameplay_modal_ui_is_active(gameplay_modal_ui_state());
+    state.generic_ai_profile_mode = g_runtime.generic_ai_profile_mode;
+    const P2PGameSessionStartState& p2p = g_runtime.p2p_session_start_state;
+    state.replay_timing_enabled = p2p.replay_target_frame_count != 0;
+    state.replay_direct_music_started = p2p.direct_music_started;
+    state.replay_direct_music_paused = p2p.direct_music_paused;
+    state.replay_direct_music_status_active = false;
+    if (!state.replay_timing_enabled) {
+        state.replay_simulation_suppressed = state.modal_pause_suppressed;
+    }
+#ifdef _WIN32
+    return GetTickCount();
+#else
+    return state.current_tick_ms;
+#endif
+}
+
+bool default_gameplay_loop_sync_replay_direct_music(GameplayLoopState& state) {
+    P2PGameSessionStartState& p2p = g_runtime.p2p_session_start_state;
+    if (!state.replay_timing_enabled || !p2p.direct_music_started) {
+        return false;
+    }
+    return TickP2PDirectMusicSync(p2p, state.simulation_frame_counter,
+        p2p.replay_target_frame_count,
+        static_cast<u32>(std::max(0, GetDirectMilesMusicLengthMs())),
+        static_cast<u32>(GetDirectMilesMusicStatus()));
+}
+
+bool default_gameplay_loop_external_turn_wait(GameplayLoopState&) {
+    return false;
+}
+
+void default_gameplay_loop_pre_update_phase(GameplayLoopState& state) {
+    g_runtime.gameplay_sound.current_tick = state.current_tick_ms;
+    configure_default_map_effect_context();
+    configure_default_ui_overlay_callbacks();
+    configure_default_mode1_gameplay_runtime_callbacks();
+    configure_default_gameplay_modal_ui_callbacks(gameplay_modal_ui_state());
+    GameplayInputActionState& input = gameplay_input_action_state();
+    configure_default_gameplay_input_action_context(input);
+    input.cursor_index = gameplay_loop_state().current_cursor_index;
+    input.modal_route_blocked = gameplay_modal_ui_is_active(gameplay_modal_ui_state());
+    PumpGameplayInputAndCursorFrame(input);
+    apply_default_ui_overlay_runtime_mutations();
+    PumpActiveGameplayModalUiFlow(gameplay_modal_ui_state());
+    if (!gameplay_modal_ui_is_active(gameplay_modal_ui_state())) {
+        process_default_ui_overlay_command_actions();
+    }
+}
+
+void default_unit_command_reset_to_idle(UnitCommandContext& context,
+    UnitMovementUnit& unit) {
+    HandleUnitReturnToIdleState(context, unit);
+}
+
+bool default_unit_action_profile_allows_target_render_class(UnitActionContext& context,
+    const UnitMovementUnit& source, const UnitMovementUnit& target) {
+    sync_default_unit_action_damage_profiles_from_runtime_catalog();
+    const UnitActionDamageProfileTable& table =
+        g_runtime.gameplay_action_damage_profiles;
+    const u32 profile_index = source.definition.action_profile_index;
+    if (profile_index >= table.profiles.size()) {
+        return true;
+    }
+
+    const UnitActionDamageProfile& profile = table.profiles[profile_index];
+    const u32 target_render_class = target.definition.render_class;
+    if (target_render_class < 32 &&
+        (profile.allowed_target_render_class_mask &
+            (1u << target_render_class)) == 0) {
+        return false;
+    }
+    if (target_render_class == 2 && profile.render_class2_terrain_gate == 0 &&
+        context.movement_context != nullptr) {
+        const i32 target_cell_x = target.x & ~0x1f;
+        const i32 target_cell_y = target.y & ~0x1f;
+        if (!CheckUnitCanEnterTerrainCell(*context.movement_context, source,
+                target_cell_x, target_cell_y)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+const UnitActionDamageProfile* default_unit_action_damage_profile(u32 profile_index) {
+    sync_default_unit_action_damage_profiles_from_runtime_catalog();
+    const UnitActionDamageProfileTable& table =
+        g_runtime.gameplay_action_damage_profiles;
+    if (profile_index >= table.profiles.size()) {
+        return nullptr;
+    }
+    return &table.profiles[profile_index];
+}
+
+bool default_unit_action_can_target(UnitActionContext& context,
+    const UnitMovementUnit& source, const UnitMovementUnit& target) {
+    return target.active && source.owner_id != target.owner_id &&
+        !default_owners_are_related(source.owner_id, target.owner_id) &&
+        (target.command_state & kUnitCommandDead) == 0 &&
+        (target.runtime_flags &
+            (kUnitActionTargetInactive | kUnitActionTargetClassBlocked)) == 0 &&
+        default_unit_visibility_allows_target(source, target) &&
+        default_unit_action_profile_allows_target_render_class(
+            context, source, target);
+}
+
+u32 default_unit_action_effect_id(const UnitMovementUnit& source,
+    const UnitMovementUnit* target) {
+    return target != nullptr
+        ? ResolveUnitActionProfileIndexForTarget(source, target->definition.render_class)
+        : source.definition.action_profile_index;
+}
+
+bool default_unit_action_can_replace_transient_target(UnitActionContext&,
+    const UnitMovementUnit& source, const UnitMovementUnit& target) {
+    const UnitActionDamageProfile* profile =
+        default_unit_action_damage_profile(default_unit_action_effect_id(source, &target));
+    return profile != nullptr && profile->target_distance_gate != 0;
+}
+
+bool default_unit_action_effect_is_direct_damage_only(u32 effect_id) {
+    switch (effect_id) {
+    case 0x00:
+    case 0x01:
+    case 0x08:
+    case 0x0c:
+    case 0x0d:
+    case 0x11:
+    case 0x12:
+    case 0x13:
+    case 0x1a:
+    case 0x1b:
+    case 0x1d:
+    case 0x23:
+    case 0x24:
+        return true;
+    default:
+        return false;
+    }
+}
+
+i32 default_unit_action_center_x(const UnitMovementUnit& unit) {
+    return unit.x + unit.definition.center_bounds_left +
+        (unit.definition.center_bounds_width >> 1);
+}
+
+i32 default_unit_action_center_y(const UnitMovementUnit& unit) {
+    return unit.y + unit.definition.center_bounds_top +
+        (unit.definition.center_bounds_height >> 1);
+}
+
+u32 default_unit_action_distance(UnitActionContext&,
+    const UnitMovementUnit& source, const UnitMovementUnit& target) {
+    return CalculateApproxUnitDistance(default_unit_action_center_x(source),
+        default_unit_action_center_y(source), default_unit_action_center_x(target),
+        default_unit_action_center_y(target));
+}
+
+struct DefaultUnitActionFootprintReach {
+    bool in_range = false;
+    i32 command_x = 0;
+    i32 command_y = 0;
+};
+
+const ProductionOrderRuntimeState& default_unit_action_production_state_or_empty(
+    const UnitActionContext& context) {
+    static const ProductionOrderRuntimeState empty_state{};
+    return context.production_state != nullptr ? *context.production_state : empty_state;
+}
+
+DefaultUnitActionFootprintReach default_unit_action_footprint_reach(
+    const UnitMovementUnit& source, const UnitMovementUnit& target) {
+    DefaultUnitActionFootprintReach result;
+    if (source.type_id == 0x6a) {
+        const i32 left = source.x + source.definition.interaction_bounds_left;
+        const i32 top = source.y + source.definition.interaction_bounds_top;
+        const i32 right = left + source.definition.interaction_bounds_width;
+        const i32 bottom = top + source.definition.interaction_bounds_height;
+        result.command_x = target.x;
+        result.command_y = target.y;
+        result.in_range = static_cast<u32>(target.x) >= static_cast<u32>(left) &&
+            static_cast<u32>(target.x) <= static_cast<u32>(right) &&
+            static_cast<u32>(target.y) >= static_cast<u32>(top) &&
+            static_cast<u32>(target.y) <= static_cast<u32>(bottom);
+        return result;
+    }
+
+    const i32 source_left =
+        source.x + source.definition.interaction_bounds_left * 2;
+    const i32 source_top =
+        source.y + source.definition.interaction_bounds_top * 2;
+    const i32 source_right =
+        source_left + source.definition.interaction_bounds_width * 2;
+    const i32 source_bottom =
+        source_top + source.definition.interaction_bounds_height * 2;
+    const i32 target_left = target.x + target.definition.interaction_bounds_left;
+    const i32 target_top = target.y + target.definition.interaction_bounds_top;
+    const i32 target_right = target_left + target.definition.interaction_bounds_width;
+    const i32 target_bottom = target_top + target.definition.interaction_bounds_height;
+    result.command_x = target_right;
+    result.command_y = target_bottom;
+    result.in_range = source_right >= target_left && source_bottom >= target_top &&
+        target_right >= source_left && target_bottom >= source_top;
+    return result;
+}
+
+UnitActionTargetValidation default_unit_action_validate_target_reach(
+    UnitActionContext& context, const UnitMovementUnit& source,
+    const UnitMovementUnit& target) {
+    UnitActionTargetValidation result;
+    result.valid = true;
+    result.command_x = default_unit_action_center_x(target);
+    result.command_y = default_unit_action_center_y(target);
+
+    const UnitActionDamageProfile* profile =
+        default_unit_action_damage_profile(source.definition.action_profile_index);
+    if (profile != nullptr && profile->target_distance_gate == 0) {
+        const DefaultUnitActionFootprintReach reach =
+            default_unit_action_footprint_reach(source, target);
+        result.in_range = reach.in_range;
+        result.command_x = reach.command_x;
+        result.command_y = reach.command_y;
+        return result;
+    }
+
+    result.range = CalculateUnitActionRangeWithProductionAndEquipmentEffects(
+        default_unit_action_production_state_or_empty(context), source,
+        target.definition.render_class, context.equipment_catalog);
+    result.distance = default_unit_action_distance(context, source, target);
+    result.in_range = result.distance <= result.range;
+    return result;
+}
+
+UnitEffectRuntime* start_default_unit_action_effect(UnitMovementUnit& source,
+    UnitMovementUnit* target) {
+    UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
+    configure_default_unit_effect_runtime_state(effects);
+
+    const u32 effect_id = default_unit_action_effect_id(source, target);
+    if (!default_unit_effect_definition_exists(effects, effect_id)) {
+        return nullptr;
+    }
+
+    UnitEffectRuntime* effect = AllocateUnitEffectSlot(effects);
+    if (effect == nullptr) {
+        return nullptr;
+    }
+
+    DispatchUnitEffectStartByAction(effects, *effect, effect_id, source, target);
+    if (!effect->active || effect->effect_id != effect_id) {
+        ReleaseUnitEffectSlot(effects, *effect);
+        return nullptr;
+    }
+    if (target != nullptr &&
+        !default_unit_action_effect_is_direct_damage_only(effect_id)) {
+        effect->amount = default_unit_action_direct_damage(source, *target);
+    }
+    return effect;
+}
+
+UnitEffectRuntime* start_default_unit_action_startup_effect(UnitMovementUnit& source,
+    UnitMovementUnit* target) {
+    UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
+    configure_default_unit_effect_runtime_state(effects);
+
+    const u32 effect_id = default_unit_action_effect_id(source, target);
+    if (!default_unit_effect_definition_exists(effects, effect_id)) {
+        return nullptr;
+    }
+
+    UnitEffectRuntime* effect = AllocateUnitEffectSlot(effects);
+    if (effect == nullptr) {
+        return nullptr;
+    }
+
+    if (!BeginUnitEffectStartup(effects, *effect, effect_id, source, target)) {
+        ReleaseUnitEffectSlot(effects, *effect);
+        return nullptr;
+    }
+    return effect;
+}
+
+void default_unit_action_begin_animation(UnitActionContext&, UnitMovementUnit& source) {
+    source.animation_frame = 0;
+    source.effect_timer = 0;
+    start_default_unit_action_startup_effect(source, source.target);
+}
+
+void default_unit_action_cycle_complete(UnitActionContext&, UnitMovementUnit&) {}
+
+void default_unit_action_target_lost(UnitActionContext&, UnitMovementUnit&) {}
+
+UnitMovementUnit* default_unit_action_find_replacement_target(
+    UnitActionContext&, UnitMovementUnit& source) {
+    return default_unit_command_find_target(g_runtime.gameplay_unit_commands, source);
+}
+
+bool default_unit_effect_selected_production_gate(UnitEffectRuntimeState&,
+    UnitMovementUnit& source, u32 selector) {
+    if (source.id == 0 || selector >= kGameplayProductionSelectorCount) {
+        return false;
+    }
+
+    GameplayProductionActionState& production = gameplay_production_action_state();
+    const u32 saved_current = production.current_unit_offset;
+    production.current_unit_offset = source.id;
+    const bool allowed = CheckSelectedUnitProductionActionGate(production, selector);
+    production.current_unit_offset = saved_current;
+    return allowed;
+}
+
+UnitMovementUnit* default_unit_effect_create_unit(UnitEffectRuntimeState&,
+    UnitMovementUnit& source, u32 type_id, i32 x, i32 y) {
+    UnitCommandContext command_context;
+    return default_unit_command_create_unit(command_context, source, type_id, x, y);
+}
+
+bool default_unit_action_auto_effect_command(UnitActionContext&,
+    UnitMovementUnit& source, i32 target_x, i32 target_y) {
+    if (source.owner_id >= g_runtime.gameplay_player_slots.slot_states.size() ||
+        g_runtime.gameplay_player_slots.slot_states[source.owner_id] !=
+            static_cast<u8>(PlayerSlotState::player_controlled) ||
+        (source.area_marker_flags & 0x80000000u) != 0) {
+        return false;
+    }
+
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr) {
+        return false;
+    }
+
+    UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
+    configure_default_unit_effect_runtime_state(effects);
+    sync_default_gameplay_production_action_units(
+        gameplay_production_action_state(), ui_overlay_state());
+    sync_default_unit_effect_runtime_units(effects, *lifecycle);
+    return DispatchSelectedUnitAutoEffectCommand(effects, source, target_x, target_y);
+}
+
+i32 default_unit_damage_center_x(const UnitMovementUnit& unit) {
+    return unit.x + unit.definition.center_bounds_left +
+        (unit.definition.center_bounds_width >> 1);
+}
+
+i32 default_unit_damage_center_y(const UnitMovementUnit& unit) {
+    return unit.y + unit.definition.center_bounds_top +
+        (unit.definition.center_bounds_height >> 1);
+}
+
+UnitEffectRuntime* default_unit_effect_from_original_slot_offset(
+    UnitEffectRuntimeState& effects, u32 offset) {
+    if (offset == 0 || (offset % kUnitEffectOriginalSlotStride) != 0) {
+        return nullptr;
+    }
+
+    const u32 raw_index = (offset / kUnitEffectOriginalSlotStride) - 1u;
+    if (raw_index >= effects.effect_slots.size()) {
+        return nullptr;
+    }
+
+    UnitEffectRuntime& effect = effects.effect_slots[raw_index];
+    return effect.active ? &effect : nullptr;
+}
+
+u32 default_unit_damage_shield_points(const UnitMovementUnit& unit) {
+    if ((unit.runtime_flags & kUnitRuntimeShielded) == 0) {
+        return 0;
+    }
+    UnitEffectRuntime* shield_effect = default_unit_effect_from_original_slot_offset(
+        g_runtime.gameplay_unit_effect_runtime, unit.linked_effect_slot_offset);
+    return shield_effect != nullptr ? shield_effect->amount : 0;
+}
+
+void commit_default_unit_damage_shield_record(UnitMovementUnit& unit,
+    const UnitRecord& record) {
+    const bool was_shielded =
+        (unit.runtime_flags & kUnitRuntimeShielded) != 0;
+    const bool remains_shielded =
+        (record.runtime_flags & kUnitRuntimeShielded) != 0;
+    if (!was_shielded && !remains_shielded) {
+        return;
+    }
+
+    UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
+    UnitEffectRuntime* shield_effect = default_unit_effect_from_original_slot_offset(
+        effects, unit.linked_effect_slot_offset);
+
+    if (remains_shielded) {
+        if (shield_effect != nullptr) {
+            shield_effect->amount = record.shield_points;
+        }
+        return;
+    }
+
+    if (shield_effect != nullptr) {
+        ReleaseUnitEffectSlot(effects, *shield_effect);
+    }
+    unit.linked_effect_slot_offset = 0;
+}
+
+UnitRecord make_default_unit_damage_record(const UnitMovementUnit& unit) {
+    UnitRecord record{};
+    record.id = unit.id;
+    record.type_id = unit.type_id;
+    record.owner_id = unit.owner_id;
+    record.command_state = unit.command_state;
+    record.command_flags = unit.command_flags;
+    record.runtime_flags = unit.runtime_flags;
+    record.max_hit_points = unit.max_health != 0
+        ? unit.max_health
+        : std::max<u32>(unit.definition.initial_max_health, 1);
+    record.hit_points = std::min(unit.health, record.max_hit_points);
+    record.max_secondary_value = unit.max_secondary_value;
+    record.secondary_value = std::min(unit.secondary_value, record.max_secondary_value);
+    record.experience = unit.elite_progress_value;
+    record.kill_experience_value = unit.definition.target_progress_elite_value;
+    record.interaction_range = std::max<u32>(unit.definition.action_range_base,
+        unit.definition.range_threshold);
+    record.target_priority = unit.definition.target_selection_priority != 0xffffffffu
+        ? unit.definition.target_selection_priority
+        : unit.type_id;
+    record.target_tiebreaker = unit.id;
+    record.render_class = unit.definition.render_class;
+    record.x = unit.x;
+    record.y = unit.y;
+    record.bounds_left = unit.x + unit.definition.center_bounds_left;
+    record.bounds_top = unit.y + unit.definition.center_bounds_top;
+    record.bounds_right = record.bounds_left +
+        std::max<i32>(unit.definition.center_bounds_width, 1);
+    record.bounds_bottom = record.bounds_top +
+        std::max<i32>(unit.definition.center_bounds_height, 1);
+    record.interaction_bounds_left = unit.x + unit.definition.interaction_bounds_left;
+    record.interaction_bounds_top = unit.y + unit.definition.interaction_bounds_top;
+    record.interaction_bounds_right = record.interaction_bounds_left +
+        unit.definition.interaction_bounds_width;
+    record.interaction_bounds_bottom = record.interaction_bounds_top +
+        unit.definition.interaction_bounds_height;
+    record.variant = unit.production_variant;
+    record.shield_points = default_unit_damage_shield_points(unit);
+    record.point_target = unit.definition.render_class == 1;
+    return record;
+}
+
+void apply_default_unit_damage_record(UnitMovementUnit& unit,
+    const UnitRecord& record) {
+    commit_default_unit_damage_shield_record(unit, record);
+    unit.command_state = record.command_state;
+    unit.command_flags = record.command_flags;
+    unit.runtime_flags = record.runtime_flags;
+    unit.health = std::min(record.hit_points,
+        unit.max_health != 0 ? unit.max_health : record.max_hit_points);
+    unit.secondary_value = std::min(record.secondary_value, unit.max_secondary_value);
+    unit.elite_progress_value = record.experience;
+}
+
+void mirror_default_unit_damage_record_stats(UnitRecord& record,
+    const UnitMovementUnit& unit) {
+    record.max_hit_points = unit.max_health;
+    record.hit_points = unit.health;
+    record.max_secondary_value = unit.max_secondary_value;
+    record.secondary_value = unit.secondary_value;
+    record.experience = unit.elite_progress_value;
+    record.variant = unit.production_variant;
+    record.shield_points = default_unit_damage_shield_points(unit);
+}
+
+GameplayDamageRecordLink* find_default_damage_record_link(UnitMovementUnit* unit) {
+    const auto it = std::find_if(g_runtime.gameplay_damage_record_links.begin(),
+        g_runtime.gameplay_damage_record_links.end(),
+        [unit](const GameplayDamageRecordLink& link) {
+            return link.unit == unit;
+        });
+    return it == g_runtime.gameplay_damage_record_links.end() ? nullptr : &*it;
+}
+
+UnitMovementContext* default_gameplay_movement_context() {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    return lifecycle != nullptr ? lifecycle->movement : nullptr;
+}
+
+void default_mode1_packet_clear_unit_string(void*, u32 unit_offset,
+    u32 previous_slot) {
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    if (movement == nullptr) {
+        return;
+    }
+
+    UnitMovementUnit* unit = find_default_movement_unit_by_id(unit_offset);
+    u32 slot = previous_slot;
+    if (unit != nullptr && unit->string_slot != 0) {
+        slot = unit->string_slot;
+        unit->string_slot = 0;
+    }
+
+    if (slot != 0 && slot != kInvalidUnitStringSlot) {
+        ClearUnitStringSlotIfUnused(*movement, slot);
+    }
+}
+
+u32 default_mode1_packet_intern_unit_string(void*, u32 unit_offset,
+    const char* text) {
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    UnitMovementUnit* unit = find_default_movement_unit_by_id(unit_offset);
+    if (movement == nullptr || unit == nullptr || text == nullptr ||
+        text[0] == '\0') {
+        return kInvalidUnitStringSlot;
+    }
+
+    if (unit->string_slot != 0) {
+        const u32 previous_slot = unit->string_slot;
+        unit->string_slot = 0;
+        ClearUnitStringSlotIfUnused(*movement, previous_slot);
+    }
+
+    const u32 slot = InternUnitStringSlot(*movement, text);
+    if (slot != kInvalidUnitStringSlot) {
+        unit->string_slot = slot;
+    }
+    return slot;
+}
+
+void default_mode1_packet_mark_unit_death(void*, u32 unit_offset) {
+    UnitMovementUnit* unit = find_default_movement_unit_by_id(unit_offset);
+    if (unit == nullptr) {
+        return;
+    }
+
+    unit->command_state |= kUnitCommandDead;
+    unit->movement_state = 1;
+
+    GameplayUnitSoundDefinition definition;
+    GameplayUnitSoundBaseSlots base_slots;
+    if (resolve_default_unit_sound_profile(*unit, definition, base_slots)) {
+        HandleUnitDeathVoiceCue(g_runtime.gameplay_sound, *unit, definition,
+            base_slots);
+    }
+}
+
+void default_mode1_packet_set_unit_command_bit(void*, u32 unit_offset,
+    u32 bit, bool enabled) {
+    UnitMovementUnit* unit = find_default_movement_unit_by_id(unit_offset);
+    const u32 byte_index = bit >> 3;
+    if (unit == nullptr || byte_index >= unit->command_bits.size()) {
+        return;
+    }
+
+    const u8 mask = static_cast<u8>(1u << (bit & 7));
+    if (enabled) {
+        unit->command_bits[byte_index] |= mask;
+    } else {
+        unit->command_bits[byte_index] &= static_cast<u8>(~mask);
+    }
+}
+
+void default_mode1_packet_set_unit_command_payload(void*, u32 unit_offset,
+    u32 state, i32 command_value_or_target, i32 x_payload, u32 y_payload,
+    bool enqueue_deferred, bool clear_deferred) {
+    UnitMovementUnit* unit = find_default_movement_unit_by_id(unit_offset);
+    if (unit == nullptr) {
+        return;
+    }
+
+    if (!enqueue_deferred && clear_deferred) {
+        unit->deferred_commands = {};
+        unit->deferred_command_count = 0;
+    }
+
+    const UnitQueuedCommand command{
+        state,
+        command_value_or_target,
+        x_payload,
+        y_payload};
+    SetOrQueueUnitCommandPayload(unit, command, enqueue_deferred);
+    if (!enqueue_deferred) {
+        unit->command_flags &= ~0x20u;
+        unit->action_mode_gate = 0;
+    }
+}
+
+bool default_unit_resource_command_payload_matches(
+    const UnitQueuedCommand& command, u32 expected_payload) {
+    if (command.state == 0) {
+        return false;
+    }
+
+    return static_cast<u32>(command.x) == expected_payload;
+}
+
+bool remove_default_unit_deferred_resource_command(UnitMovementUnit& unit,
+    u32 logical_index, u32 expected_payload) {
+    if (logical_index == 0xffffffffu) {
+        logical_index = unit.deferred_command_count == 0
+            ? 0
+            : unit.deferred_command_count;
+        if (logical_index != 0) {
+            expected_payload =
+                static_cast<u32>(unit.deferred_commands[logical_index - 1].x);
+        }
+        else if (unit.active_command_payload.state != 0) {
+            expected_payload = static_cast<u32>(unit.active_command_payload.x);
+        }
+    }
+
+    if (logical_index == 0) {
+        if (default_unit_resource_command_payload_matches(
+                unit.active_command_payload, expected_payload)) {
+            unit.active_command_payload = {};
+            return true;
+        }
+        return false;
+    }
+
+    if (logical_index > unit.deferred_command_count) {
+        return false;
+    }
+
+    const u32 queue_index = logical_index - 1;
+    if (!default_unit_resource_command_payload_matches(
+            unit.deferred_commands[queue_index], expected_payload)) {
+        return false;
+    }
+
+    for (u32 index = queue_index + 1; index < unit.deferred_command_count;
+         ++index) {
+        unit.deferred_commands[index - 1] = unit.deferred_commands[index];
+    }
+    --unit.deferred_command_count;
+    if (unit.deferred_command_count < unit.deferred_commands.size()) {
+        unit.deferred_commands[unit.deferred_command_count] = {};
+    }
+    return true;
+}
+
+bool default_mode1_packet_production_cost_values(u32 action_id,
+    u32& primary_cost, u32& secondary_cost) {
+    const GameplayProductionActionDefinition* action =
+        default_jw211_production_action_definition(action_id);
+    if (action == nullptr || action->unit_type >= kUnitDefinitionResourceCount) {
+        return false;
+    }
+
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    UnitLifecycleContext& lookup_context =
+        lifecycle != nullptr ? *lifecycle : g_runtime.gameplay_lifecycle_context;
+    const UnitMovementDefinition* definition =
+        default_unit_lifecycle_find_definition(lookup_context, action->unit_type);
+    if (definition == nullptr) {
+        return false;
+    }
+
+    primary_cost = definition->production_resource_cost;
+    secondary_cost = definition->production_secondary_cost;
+    return true;
+}
+
+bool default_mode1_packet_unit_type_cost_values(u32 unit_type,
+    u32& primary_cost, u32& secondary_cost) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    UnitLifecycleContext& lookup_context =
+        lifecycle != nullptr ? *lifecycle : g_runtime.gameplay_lifecycle_context;
+    const UnitMovementDefinition* definition =
+        default_unit_lifecycle_find_definition(lookup_context, unit_type);
+    if (definition == nullptr) {
+        return false;
+    }
+
+    primary_cost = definition->production_resource_cost;
+    secondary_cost = definition->production_secondary_cost;
+    return true;
+}
+
+bool default_mode1_packet_deferred_resource_cost_values(u32 category_flag,
+    u32 internal_command, u32 payload, u32& primary_cost, u32& secondary_cost) {
+    if (category_flag == 0x17 && internal_command == 0x10) {
+        return default_mode1_packet_unit_type_cost_values(payload, primary_cost,
+            secondary_cost);
+    }
+    if (category_flag == 0x1a && internal_command == 0x22) {
+        return default_mode1_packet_production_cost_values(payload, primary_cost,
+            secondary_cost);
+    }
+    return false;
+}
+
+bool default_mode1_packet_deferred_resource_cost_model_applies(u32 category_flag,
+    u32 internal_command) {
+    return (category_flag == 0x17 && internal_command == 0x10) ||
+        (category_flag == 0x1a && internal_command == 0x22);
+}
+
+bool default_mode1_packet_is_production_order_resource_command(
+    u32 category_flag, u32 internal_command) {
+    return category_flag == 0x0c && internal_command == 0x17;
+}
+
+u32 default_mode1_packet_deferred_resource_queue_limit(u32 category_flag,
+    u32 internal_command) {
+    return default_mode1_packet_is_production_order_resource_command(
+        category_flag, internal_command) ? 10u : 4u;
+}
+
+bool default_mode1_packet_sync_production_resources_from_command_context(
+    const UnitCommandContext& command_context, u32 owner) {
+    if (owner >= command_context.owner_resources.size() ||
+        owner >= command_context.owner_secondary_resources.size() ||
+        owner >= g_runtime.gameplay_production_runtime.owner_primary_resources.size() ||
+        owner >=
+            g_runtime.gameplay_production_runtime.owner_secondary_resources.size()) {
+        return false;
+    }
+
+    g_runtime.gameplay_production_runtime.owner_primary_resources[owner] =
+        command_context.owner_resources[owner];
+    g_runtime.gameplay_production_runtime.owner_secondary_resources[owner] =
+        command_context.owner_secondary_resources[owner];
+    return true;
+}
+
+void default_mode1_packet_sync_owner_from_production_runtime(u32 owner) {
+    if (owner >= g_runtime.gameplay_production_runtime.owner_primary_resources.size() ||
+        owner >=
+            g_runtime.gameplay_production_runtime.owner_secondary_resources.size()) {
+        return;
+    }
+
+    UnitCommandContext& command_context =
+        prepare_default_mode1_packet_command_context();
+    if (owner >= command_context.owner_resources.size() ||
+        owner >= command_context.owner_secondary_resources.size()) {
+        return;
+    }
+
+    command_context.owner_resources[owner] =
+        g_runtime.gameplay_production_runtime.owner_primary_resources[owner];
+    command_context.owner_secondary_resources[owner] =
+        g_runtime.gameplay_production_runtime.owner_secondary_resources[owner];
+    sync_default_owner_command_runtime_slots(command_context, owner);
+}
+
+const ProductionOrderDefinition*
+default_mode1_packet_production_order_definition_for_payload(u32 payload) {
+    return default_production_order_definition(payload);
+}
+
+bool default_mode1_packet_production_order_available_for_enqueue(
+    const UnitMovementUnit& unit, u32 payload) {
+    const ProductionOrderDefinition* definition =
+        default_mode1_packet_production_order_definition_for_payload(payload);
+    if (definition == nullptr) {
+        return false;
+    }
+
+    UnitCommandContext& command_context =
+        prepare_default_mode1_packet_command_context();
+    if (!default_mode1_packet_sync_production_resources_from_command_context(
+            command_context, unit.owner_id)) {
+        return false;
+    }
+
+    const ProductionOrderCheckResult check =
+        CheckProductionOrderAvailability(g_runtime.gameplay_production_runtime,
+            *definition, unit.owner_id);
+    return check.available;
+}
+
+bool default_mode1_packet_commit_production_order_enqueue(
+    const UnitMovementUnit& unit, u32 payload) {
+    const ProductionOrderDefinition* definition =
+        default_mode1_packet_production_order_definition_for_payload(payload);
+    if (definition == nullptr ||
+        !DebitProductionOrderPrimaryCost(g_runtime.gameplay_production_runtime,
+            *definition, unit.owner_id)) {
+        return false;
+    }
+
+    if (unit.owner_id < g_runtime.gameplay_production_runtime.lock_flags.size() &&
+        definition->id < kProductionOrderCount) {
+        g_runtime.gameplay_production_runtime.lock_flags[unit.owner_id]
+            [definition->id] |= 2u;
+    }
+    default_mode1_packet_sync_owner_from_production_runtime(unit.owner_id);
+    return true;
+}
+
+void default_mode1_packet_refund_production_order(
+    const UnitMovementUnit& unit, u32 payload) {
+    const ProductionOrderDefinition* definition =
+        default_mode1_packet_production_order_definition_for_payload(payload);
+    if (definition == nullptr) {
+        return;
+    }
+
+    UnitCommandContext& command_context =
+        prepare_default_mode1_packet_command_context();
+    if (!default_mode1_packet_sync_production_resources_from_command_context(
+            command_context, unit.owner_id)) {
+        return;
+    }
+
+    ClearProductionOrderLockFlags(g_runtime.gameplay_production_runtime,
+        definition->id, unit.owner_id);
+    RefundProductionOrderCosts(g_runtime.gameplay_production_runtime,
+        *definition, unit.owner_id);
+    default_mode1_packet_sync_owner_from_production_runtime(unit.owner_id);
+}
+
+bool default_mode1_packet_is_avatar_resource_command(
+    u32 category_flag, u32 internal_command) {
+    return category_flag == 0x05 && internal_command == 0x10 &&
+        g_runtime.gameplay_avatar_runtime_loaded;
+}
+
+u32 default_mode1_packet_avatar_runtime_u32(std::size_t offset) {
+    const auto& bytes = g_runtime.gameplay_avatar_runtime.bytes;
+    if (offset > bytes.size() || bytes.size() - offset < sizeof(u32)) {
+        return 0;
+    }
+    return static_cast<u32>(bytes[offset]) |
+        (static_cast<u32>(bytes[offset + 1]) << 8) |
+        (static_cast<u32>(bytes[offset + 2]) << 16) |
+        (static_cast<u32>(bytes[offset + 3]) << 24);
+}
+
+bool default_mode1_packet_avatar_slot_costs(u32 owner, u32 slot_id,
+    u32& primary_cost, u32& support_cost) {
+    if (slot_id == 0 || owner >= kGameSessionAvatarPlayerCount) {
+        return false;
+    }
+
+    const u32 avatar_slot = slot_id - 1;
+    if (avatar_slot >= kGameSessionAvatarSlotCount) {
+        return false;
+    }
+
+    const std::size_t offset =
+        static_cast<std::size_t>(owner) * kGameSessionAvatarPlayerBytes +
+        static_cast<std::size_t>(avatar_slot) * kGameSessionAvatarRecordBytes;
+    const u32 avatar_id = default_mode1_packet_avatar_runtime_u32(
+        offset + kGameSessionAvatarInvalidMarkerOffset);
+    if (avatar_id == kInvalidGameSessionUnitType ||
+        avatar_id >= kUnitDefinitionResourceCount) {
+        return false;
+    }
+
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    UnitLifecycleContext& lookup_context =
+        lifecycle != nullptr ? *lifecycle : g_runtime.gameplay_lifecycle_context;
+    const UnitMovementDefinition* definition =
+        default_unit_lifecycle_find_definition(lookup_context, avatar_id);
+    if (definition == nullptr) {
+        return false;
+    }
+
+    const u32 level = default_mode1_packet_avatar_runtime_u32(
+        offset + kGameSessionAvatarLevelOffset);
+    primary_cost = definition->production_resource_cost + level * 10u;
+    support_cost = definition->production_population_cost;
+    return true;
+}
+
+bool default_mode1_packet_avatar_resources_available(
+    const UnitCommandContext& command_context, u32 owner, u32 primary_cost,
+    u32 support_cost) {
+    if (owner >= command_context.owner_resources.size() ||
+        owner >= command_context.owner_population_reserved.size() ||
+        owner >= command_context.owner_population_used.size() ||
+        owner >= command_context.owner_population_limit.size()) {
+        return false;
+    }
+
+    const u32 projected_support =
+        command_context.owner_population_reserved[owner] + support_cost;
+    return command_context.owner_resources[owner] >= primary_cost &&
+        projected_support <= command_context.owner_population_used[owner] &&
+        projected_support <= command_context.owner_population_limit[owner];
+}
+
+bool default_mode1_packet_avatar_costs_available_for_enqueue(
+    const UnitMovementUnit& unit, u32 slot_id, u32& primary_cost,
+    u32& support_cost) {
+    if (!default_mode1_packet_avatar_slot_costs(
+            unit.owner_id, slot_id, primary_cost, support_cost)) {
+        return false;
+    }
+
+    UnitCommandContext& command_context =
+        prepare_default_mode1_packet_command_context();
+    return default_mode1_packet_avatar_resources_available(command_context,
+        unit.owner_id, primary_cost, support_cost);
+}
+
+bool default_mode1_packet_debit_avatar_resource_cost(
+    const UnitMovementUnit& unit, u32 primary_cost) {
+    UnitCommandContext& command_context =
+        prepare_default_mode1_packet_command_context();
+    const u32 owner = unit.owner_id;
+    if (owner >= command_context.owner_resources.size() ||
+        command_context.owner_resources[owner] < primary_cost) {
+        return false;
+    }
+
+    command_context.owner_resources[owner] -= primary_cost;
+    sync_default_owner_command_runtime_slots(command_context, owner);
+    return true;
+}
+
+void default_mode1_packet_refund_avatar_resource_cost(
+    const UnitMovementUnit& unit, u32 slot_id) {
+    u32 primary_cost = 0;
+    u32 support_cost = 0;
+    if (!default_mode1_packet_avatar_slot_costs(
+            unit.owner_id, slot_id, primary_cost, support_cost)) {
+        return;
+    }
+
+    UnitCommandContext& command_context =
+        prepare_default_mode1_packet_command_context();
+    const u32 owner = unit.owner_id;
+    if (owner >= command_context.owner_resources.size()) {
+        return;
+    }
+
+    command_context.owner_resources[owner] += primary_cost;
+    sync_default_owner_command_runtime_slots(command_context, owner);
+}
+
+bool default_mode1_packet_peek_unit_deferred_resource_command(
+    const UnitMovementUnit& unit, u32 logical_index, u32 expected_payload,
+    UnitQueuedCommand& out_command) {
+    if (logical_index == 0xffffffffu) {
+        logical_index = unit.deferred_command_count == 0
+            ? 0
+            : unit.deferred_command_count;
+        if (logical_index != 0) {
+            expected_payload =
+                static_cast<u32>(unit.deferred_commands[logical_index - 1].x);
+        }
+        else if (unit.active_command_payload.state != 0) {
+            expected_payload = static_cast<u32>(unit.active_command_payload.x);
+        }
+    }
+
+    if (logical_index == 0) {
+        if (!default_unit_resource_command_payload_matches(
+                unit.active_command_payload, expected_payload)) {
+            return false;
+        }
+        out_command = unit.active_command_payload;
+        return true;
+    }
+
+    if (logical_index > unit.deferred_command_count) {
+        return false;
+    }
+
+    const UnitQueuedCommand& command =
+        unit.deferred_commands[logical_index - 1];
+    if (!default_unit_resource_command_payload_matches(command, expected_payload)) {
+        return false;
+    }
+    out_command = command;
+    return true;
+}
+
+bool default_mode1_packet_resolve_latest_subtype01_resource_command(
+    const UnitMovementUnit& unit, u32 logical_index, u32& category_flag,
+    u32& internal_command, u32& payload) {
+    if (category_flag != 0x17 || internal_command != 0x10 ||
+        logical_index != 0xffffffffu) {
+        return true;
+    }
+
+    UnitQueuedCommand command{};
+    if (!default_mode1_packet_peek_unit_deferred_resource_command(
+            unit, logical_index, payload, command)) {
+        return false;
+    }
+
+    const bool active_command = unit.deferred_command_count == 0;
+    const u32 state = active_command
+        ? (unit.command_state & kUnitCommandStateMask)
+        : (command.state & kUnitCommandStateMask);
+    if (active_command && (state == kUnitStateProductionSpawnStart ||
+            state == kUnitStateProductionSpawnCycle)) {
+        payload = static_cast<u32>(command.x);
+        return true;
+    }
+    if ((!active_command && state == 0x17) ||
+        (active_command && (state == kUnitStateCompletionAnnouncementStart ||
+            state == kUnitStateCompletionAnnouncementTimer))) {
+        category_flag = 0x0c;
+        internal_command = 0x17;
+        payload = static_cast<u32>(command.x);
+        return true;
+    }
+    if ((!active_command && state == 0x22) ||
+        (active_command && (state == kUnitStateCompletionEffectStart ||
+            state == kUnitStateCompletionEffectTimer))) {
+        category_flag = 0x1a;
+        internal_command = 0x22;
+        payload = static_cast<u32>(command.x);
+        return true;
+    }
+    return false;
+}
+
+bool default_mode1_packet_owner_transport_attachment_exists(u32 owner,
+    u32 slot_id) {
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    if (movement == nullptr) {
+        return false;
+    }
+
+    const u32 attachment_mask = (slot_id << 18) & 0x003c0000u;
+    for (const UnitMovementUnit* unit : movement->active_units) {
+        if (unit != nullptr && unit->active && unit->owner_id == owner &&
+            (unit->command_flags & 0x003c0000u) == attachment_mask) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool default_mode1_packet_unit_is_carrier_type(u32 type_id) {
+    return type_id == 0x6f || type_id == 0x7f ||
+        type_id == 0x8f || type_id == 0x9f;
+}
+
+bool default_mode1_packet_owner_carrier_linked_to_slot(u32 owner, u32 slot_id) {
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    if (movement == nullptr) {
+        return false;
+    }
+
+    for (const UnitMovementUnit* unit : movement->active_units) {
+        if (unit == nullptr || !unit->active || unit->owner_id != owner ||
+            !default_mode1_packet_unit_is_carrier_type(unit->type_id)) {
+            continue;
+        }
+
+        const u32 current_state = unit->command_state & kUnitCommandStateMask;
+        if ((current_state == kUnitStateProductionSpawnStart ||
+                current_state == kUnitStateProductionSpawnCycle) &&
+            unit->command_value == slot_id) {
+            return true;
+        }
+
+        const u32 queued_count = std::min<u32>(unit->deferred_command_count, 4);
+        for (u32 index = 0; index < queued_count; ++index) {
+            const UnitQueuedCommand& queued = unit->deferred_commands[index];
+            if ((queued.state & kUnitCommandStateMask) == kUnitStateCommand10 &&
+                queued.value == slot_id) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool default_mode1_packet_subtype05_transport_gate_blocks(
+    const UnitMovementUnit& unit, u32 category_flag, u32 internal_command,
+    u32 slot_id) {
+    if (category_flag != 0x05 || internal_command != 0x10) {
+        return false;
+    }
+    return default_mode1_packet_owner_transport_attachment_exists(
+        unit.owner_id, slot_id) ||
+        default_mode1_packet_owner_carrier_linked_to_slot(unit.owner_id, slot_id);
+}
+
+UnitCommandContext& prepare_default_mode1_packet_command_context() {
+    UnitCommandContext& command_context = g_runtime.gameplay_unit_commands;
+    if (UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle) {
+        configure_default_unit_command_context(command_context, *lifecycle,
+            gameplay_loop_state().simulation_frame_counter);
+    }
+    return command_context;
+}
+
+bool default_mode1_packet_set_unit_deferred_resource_command(void*,
+    u32 unit_offset, u32 category_flag, u32 internal_command, u32 payload,
+    i32 mode, u32 arg1, u32 arg2, bool enqueue, u32 logical_index) {
+    UnitMovementUnit* unit = find_default_movement_unit_by_id(unit_offset);
+    if (unit == nullptr) {
+        return false;
+    }
+    if (!enqueue) {
+        if (!default_mode1_packet_resolve_latest_subtype01_resource_command(
+                *unit, logical_index, category_flag, internal_command, payload)) {
+            return false;
+        }
+    }
+
+    const bool production_order_resource =
+        default_mode1_packet_is_production_order_resource_command(category_flag,
+            internal_command);
+    const bool avatar_resource =
+        default_mode1_packet_is_avatar_resource_command(category_flag,
+            internal_command);
+    if (!enqueue) {
+        UnitQueuedCommand removed_command{};
+        const bool captured_removed_command =
+            avatar_resource &&
+            default_mode1_packet_peek_unit_deferred_resource_command(
+                *unit, logical_index, payload, removed_command);
+        const bool removed = remove_default_unit_deferred_resource_command(
+            *unit, logical_index, payload);
+        if (removed) {
+            if (production_order_resource) {
+                default_mode1_packet_refund_production_order(*unit, payload);
+            }
+            else if (captured_removed_command) {
+                default_mode1_packet_refund_avatar_resource_cost(
+                    *unit, removed_command.value);
+            }
+            else {
+                u32 primary_cost = 0;
+                u32 secondary_cost = 0;
+                if (default_mode1_packet_deferred_resource_cost_values(category_flag,
+                        internal_command, payload, primary_cost, secondary_cost)) {
+                    UnitCommandContext& command_context =
+                        prepare_default_mode1_packet_command_context();
+                    const u32 owner = unit->owner_id;
+                    if (owner < command_context.owner_resources.size() &&
+                        owner < command_context.owner_secondary_resources.size()) {
+                        command_context.owner_resources[owner] += primary_cost;
+                        command_context.owner_secondary_resources[owner] +=
+                            secondary_cost;
+                        sync_default_owner_command_runtime_slots(command_context, owner);
+                    }
+                }
+            }
+        }
+        return removed;
+    }
+
+    if (production_order_resource) {
+        if (mode == 0 ||
+            !default_mode1_packet_production_order_available_for_enqueue(
+                *unit, payload)) {
+            return false;
+        }
+    }
+
+    u32 avatar_primary_cost = 0;
+    u32 avatar_support_cost = 0;
+    if (avatar_resource &&
+        !default_mode1_packet_avatar_costs_available_for_enqueue(
+            *unit, arg2, avatar_primary_cost, avatar_support_cost)) {
+        return false;
+    }
+
+    if (default_mode1_packet_subtype05_transport_gate_blocks(
+            *unit, category_flag, internal_command, arg2)) {
+        return false;
+    }
+
+    const UnitQueuedCommand command{
+        internal_command,
+        static_cast<i32>(payload),
+        static_cast<i32>(arg1),
+        arg2};
+    if (!SetOrQueueUnitCommandPayload(unit, command, true,
+            default_mode1_packet_deferred_resource_queue_limit(
+                category_flag, internal_command))) {
+        return false;
+    }
+
+    if (production_order_resource) {
+        if (!default_mode1_packet_commit_production_order_enqueue(*unit, payload)) {
+            remove_default_unit_deferred_resource_command(*unit, 0xffffffffu, payload);
+            return false;
+        }
+        return true;
+    }
+
+    if (avatar_resource) {
+        if (!default_mode1_packet_debit_avatar_resource_cost(
+                *unit, avatar_primary_cost)) {
+            remove_default_unit_deferred_resource_command(*unit, 0xffffffffu, payload);
+            return false;
+        }
+        return true;
+    }
+
+    u32 primary_cost = 0;
+    u32 secondary_cost = 0;
+    const bool cost_model_applies =
+        default_mode1_packet_deferred_resource_cost_model_applies(
+            category_flag, internal_command);
+    if (cost_model_applies &&
+        !default_mode1_packet_deferred_resource_cost_values(category_flag,
+            internal_command, payload, primary_cost, secondary_cost)) {
+        remove_default_unit_deferred_resource_command(*unit, 0xffffffffu, payload);
+        return false;
+    }
+    if (cost_model_applies) {
+        UnitCommandContext& command_context =
+            prepare_default_mode1_packet_command_context();
+        const u32 owner = unit->owner_id;
+        if (owner < command_context.owner_resources.size() &&
+            owner < command_context.owner_secondary_resources.size()) {
+            if (command_context.owner_resources[owner] < primary_cost ||
+                command_context.owner_secondary_resources[owner] < secondary_cost) {
+                remove_default_unit_deferred_resource_command(
+                    *unit, 0xffffffffu, payload);
+                return false;
+            }
+            command_context.owner_resources[owner] -= primary_cost;
+            command_context.owner_secondary_resources[owner] -= secondary_cost;
+            sync_default_owner_command_runtime_slots(command_context, owner);
+        }
+    }
+    return true;
+}
+
+const GameplayProductionActionDefinition* default_jw211_production_action_definition(
+    u32 action_id) {
+    GameplayProductionActionState& production = gameplay_production_action_state();
+    sync_default_gameplay_production_action_definitions(production);
+    if (action_id >= production.definitions.size()) {
+        return nullptr;
+    }
+    return &production.definitions[action_id];
+}
+
+bool default_production_owner_requirement_allows_unit(
+    const GameplayProductionActionDefinition& definition,
+    const UnitMovementUnit& unit) {
+    if (definition.owner_requirement == 0xffffffffu) {
+        return true;
+    }
+
+    const PlayerSlotRuntimeState& slots = player_slot_state();
+    if (unit.owner_id < slots.owner_relation_masks.size() &&
+        definition.owner_requirement < 32) {
+        const u32 relation_mask = slots.owner_relation_masks[unit.owner_id];
+        if (relation_mask != 0) {
+            return (relation_mask & (1u << definition.owner_requirement)) != 0;
+        }
+    }
+    return unit.owner_id == definition.owner_requirement;
+}
+
+bool default_mode1_packet_start_basic_special_attachment(UnitMovementUnit& unit,
+    u32 action_id) {
+    constexpr u32 kSelectedActionEffectBase = 0x3d;
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr || action_id >= 0x2e) {
+        return true;
+    }
+
+    UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
+    configure_default_unit_effect_runtime_state(effects);
+    sync_default_unit_effect_runtime_units(effects, *lifecycle);
+
+    UnitEffectRuntime* effect = AllocateUnitEffectSlot(effects);
+    if (effect == nullptr) {
+        return false;
+    }
+
+    if (!BeginSelectedUnitAttachmentEffect(effects, *effect,
+            kSelectedActionEffectBase + action_id, unit, &unit)) {
+        ReleaseUnitEffectSlot(effects, *effect);
+        return false;
+    }
+    return true;
+}
+
+bool apply_default_mode1_basic_special_command_flag(UnitMovementUnit& unit,
+    u32 command, u32 flag, i32 mode) {
+    if (mode == 1) {
+        unit.command_flags &= ~flag;
+        return true;
+    }
+    if (mode != 0 || command < 0x12 || command > 0x15) {
+        return false;
+    }
+    if ((default_unit_command_bit_mask(unit) & (1u << command)) == 0) {
+        return false;
+    }
+
+    const u32 action_id = command + 0x0e;
+    const GameplayProductionActionDefinition* definition =
+        default_jw211_production_action_definition(action_id);
+    if (!default_mode1_packet_start_basic_special_attachment(unit, action_id)) {
+        unit.command_flags &= ~flag;
+        return false;
+    }
+    if (definition == nullptr ||
+        definition->resource_limit == 0xffffffffu ||
+        unit.action_mode <= definition->resource_limit) {
+        return false;
+    }
+
+    unit.action_mode -= definition->resource_limit;
+    unit.command_flags |= flag;
+    return true;
+}
+
+bool apply_default_mode1_extended_special_command_flag(UnitMovementUnit& unit,
+    u32 command, i32 mode) {
+    if (mode == -1) {
+        unit.command_flags &= ~0x840u;
+        return true;
+    }
+    if (command != 0x13 || (unit.command_flags & 0x800u) != 0) {
+        return false;
+    }
+
+    const GameplayProductionActionDefinition* definition =
+        default_jw211_production_action_definition(command);
+    if (definition == nullptr ||
+        !default_production_owner_requirement_allows_unit(*definition, unit) ||
+        (default_unit_command_bit_mask(unit) & (1u << command)) == 0 ||
+        definition->active_limit >= unit.status_timer + 1 ||
+        definition->queued_limit >= unit.secondary_value + 1 ||
+        definition->resource_limit >= unit.health) {
+        return false;
+    }
+    if (!default_mode1_packet_start_basic_special_attachment(unit, command)) {
+        return false;
+    }
+
+    unit.secondary_value -= definition->queued_limit;
+    unit.health -= definition->resource_limit;
+    unit.command_flags |= 0x840u;
+    return true;
+}
+
+bool default_mode1_packet_set_unit_command_flag(void*, u32 unit_offset,
+    u32 flag, u32 command, i32 mode, bool enabled) {
+    constexpr u32 kSuppressedCommandRuntimeFlag = 4;
+    UnitMovementUnit* unit = find_default_movement_unit_by_id(unit_offset);
+    if (unit == nullptr ||
+        (unit->runtime_flags & kSuppressedCommandRuntimeFlag) != 0) {
+        return false;
+    }
+
+    if (!enabled) {
+        unit->command_flags &= ~flag;
+        return true;
+    }
+
+    if (flag == 0x840u) {
+        return apply_default_mode1_extended_special_command_flag(
+            *unit, command, mode);
+    }
+    return apply_default_mode1_basic_special_command_flag(
+        *unit, command, flag, mode);
+}
+
+void default_mode1_packet_apply_unit_equipment_effect(void*, u32 unit_offset,
+    u32 effect_id) {
+    UnitMovementUnit* unit = find_default_movement_unit_by_id(unit_offset);
+    if (unit == nullptr) {
+        return;
+    }
+
+    UnitEquipmentCatalog& catalog = frontend_bootstrap_state().equipment_catalog;
+    if (catalog.effects.empty()) {
+        LoadUnitEquipmentCatalogFromJw210Trc(catalog);
+    }
+
+    bool command_context_needs_commit = false;
+    UnitCommandContext& command_context = g_runtime.gameplay_unit_commands;
+    if (UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle) {
+        configure_default_unit_command_context(command_context, *lifecycle,
+            gameplay_loop_state().simulation_frame_counter);
+        command_context_needs_commit = true;
+    }
+
+    if (const UnitEquipmentEffectDefinition* effect =
+            FindUnitEquipmentEffect(catalog, effect_id)) {
+        ApplyUnitEquipmentEffect(command_context, *unit, *effect);
+        if (command_context_needs_commit) {
+            commit_default_unit_command_context(
+                *g_runtime.gameplay_startup_state.lifecycle, command_context);
+        }
+    }
+
+    PublishUnitEquipmentSlots(
+        g_runtime.gameplay_unit_equipment_publish_state, *unit, 0);
+}
+
+u32 default_mode1_packet_toggle_unit_equipment_slot(void*, u32 unit_offset,
+    u32 original_slot_code) {
+    UnitMovementUnit* unit = find_default_movement_unit_by_id(unit_offset);
+    if (unit == nullptr) {
+        return 0;
+    }
+
+    UnitEquipmentCatalog& catalog = frontend_bootstrap_state().equipment_catalog;
+    if (catalog.effects.empty()) {
+        LoadUnitEquipmentCatalogFromJw210Trc(catalog);
+    }
+
+    bool command_context_needs_commit = false;
+    UnitCommandContext& command_context = g_runtime.gameplay_unit_commands;
+    if (UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle) {
+        configure_default_unit_command_context(command_context, *lifecycle,
+            gameplay_loop_state().simulation_frame_counter);
+        command_context_needs_commit = true;
+    }
+
+    const u32 toggle_result = ToggleUnitEquipmentOriginalSlotEffect(
+        command_context, *unit, original_slot_code, catalog);
+    if (toggle_result != 0 &&
+        command_context_needs_commit) {
+        commit_default_unit_command_context(
+            *g_runtime.gameplay_startup_state.lifecycle, command_context);
+    }
+
+    PublishUnitEquipmentSlots(
+        g_runtime.gameplay_unit_equipment_publish_state, *unit, 0);
+    return toggle_result;
+}
+
+void default_mode1_packet_set_unit_status_mask(void*, u32 unit_offset,
+    u32 status_mask) {
+    UnitMovementUnit* unit = find_default_movement_unit_by_id(unit_offset);
+    if (unit == nullptr) {
+        return;
+    }
+
+    unit->area_marker_flags =
+        (unit->area_marker_flags & 0x7fffffffu) | status_mask;
+}
+
+void default_mode1_packet_set_unit_aux_vector(void*, u32 unit_offset,
+    u32 linked_unit_offset, i32 x, i32 y) {
+    UnitMovementUnit* unit = find_default_movement_unit_by_id(unit_offset);
+    if (unit == nullptr) {
+        return;
+    }
+
+    unit->linked_object_id = linked_unit_offset;
+    unit->linked_unit = linked_unit_offset == unit_offset
+        ? unit
+        : find_default_movement_unit_by_id(linked_unit_offset);
+    unit->next_path_x = x;
+    unit->next_path_y = y;
+    unit->saved_path_target_x = x;
+    unit->saved_path_target_y = y;
+}
+
+void default_mode1_packet_force_order21(void*, u32 unit_offset) {
+    UnitMovementUnit* unit = find_default_movement_unit_by_id(unit_offset);
+    if (unit == nullptr) {
+        return;
+    }
+    unit->runtime_flags |= 8;
+}
+
+void default_mode1_packet_apply_unit_bonus(void*, u32 unit_offset) {
+    UnitMovementUnit* unit = find_default_movement_unit_by_id(unit_offset);
+    if (unit == nullptr) {
+        return;
+    }
+
+    unit->status_timer = 9;
+    unit->production_variant = 9;
+    unit->max_health += 100;
+    unit->health += 100;
+    unit->runtime_stat_1c += 100;
+    unit->runtime_stat_20 += 100;
+    if (unit->max_secondary_value != 0) {
+        unit->max_secondary_value += 100;
+        unit->secondary_value += 100;
+    }
+}
+
+void write_default_runtime_definition_u32(RuntimeDefinitionRecord& record,
+    std::size_t offset, u32 value) {
+    if (offset > record.bytes.size() || record.bytes.size() - offset < sizeof(value)) {
+        return;
+    }
+    record.bytes[offset + 0] = static_cast<u8>(value & 0xffu);
+    record.bytes[offset + 1] = static_cast<u8>((value >> 8) & 0xffu);
+    record.bytes[offset + 2] = static_cast<u8>((value >> 16) & 0xffu);
+    record.bytes[offset + 3] = static_cast<u8>((value >> 24) & 0xffu);
+}
+
+void reset_default_runtime_definition_records(
+    std::vector<RuntimeDefinitionRecord>& records, std::size_t count,
+    std::size_t offset, u32 value) {
+    const std::size_t limit = std::min(count, records.size());
+    for (std::size_t index = 0; index < limit; ++index) {
+        write_default_runtime_definition_u32(records[index], offset, value);
+    }
+}
+
+void reset_default_runtime_production_order_durations(
+    std::vector<RuntimeDefinitionRecord>& records) {
+    const std::size_t limit =
+        std::min<std::size_t>(kProductionOrderCount, records.size());
+    for (std::size_t index = 0; index < limit; ++index) {
+        write_default_runtime_definition_u32(
+            records[index], kProductionOrderDurationBaseOffset, 10);
+        write_default_runtime_definition_u32(
+            records[index], kProductionOrderDurationModeOffset, 0);
+    }
+}
+
+void reset_default_live_production_order_durations() {
+    if (g_runtime.gameplay_production_catalog.definitions.empty()) {
+        LoadProductionOrderCatalogFromJw210Trc(g_runtime.gameplay_production_catalog);
+    }
+
+    const std::size_t limit = std::min<std::size_t>(
+        kProductionOrderCount, g_runtime.gameplay_production_catalog.definitions.size());
+    for (std::size_t index = 0; index < limit; ++index) {
+        ProductionOrderCostRule& duration =
+            g_runtime.gameplay_production_catalog.definitions[index].duration_ticks;
+        duration.base = 10;
+        duration.mode = 0;
+    }
+}
+
+void reset_default_live_unit_definition_timers() {
+    ResetLoadedUnitDefinitionConstructionTimers(10);
+    reset_default_runtime_definition_records(
+        g_runtime.active_session_definitions.unit_records,
+        kUnitDefinitionResourceCount, kUnitDefinitionConstructionTimerOffset, 10);
+
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    if (movement == nullptr) {
+        return;
+    }
+
+    for (UnitMovementUnit* unit : movement->active_units) {
+        if (unit == nullptr) {
+            continue;
+        }
+        unit->definition.production_spawn_time = 10;
+        if (unit->type_id >= 0x60 && unit->action_mode_gate == 1) {
+            unit->action_mode = 0;
+        }
+    }
+}
+
+void default_mode1_packet_apply_global_reset(void*) {
+    reset_default_live_unit_definition_timers();
+    reset_default_live_production_order_durations();
+    reset_default_runtime_production_order_durations(
+        g_runtime.active_session_definitions.production_order_records);
+}
+
+void default_mode1_packet_apply_catchup_target(void*, u32, bool enabled) {
+    GameplayLoopState& state = gameplay_loop_state();
+    if (enabled) {
+        EnableGameplayCatchupTargetState(state);
+    } else {
+        DisableGameplayCatchupTargetState(state);
+    }
+}
+
+void default_mode1_packet_set_modal_pause(void*, bool visible) {
+    g_runtime.gameplay_frame_render_context.pause_overlay_active = visible;
+    GameplayLoopState& loop = gameplay_loop_state();
+    loop.modal_pause_suppressed = visible;
+    loop.replay_simulation_suppressed =
+        visible || (loop.replay_timing_enabled && loop.replay_direct_music_paused);
+    if (visible) {
+        PausePrimaryMusicFromPolicy();
+    } else {
+        HandlePrimaryMusicPolicyResume();
+    }
+    ResetInputState();
+}
+
+void default_mode1_packet_set_player_cooldown(void*, u32 player, u32 ticks) {
+    if (player >= kPlayerSlotCount) {
+        return;
+    }
+    player_slot_state().owner_cooldown_timers[player] = ticks;
+    g_runtime.gameplay_player_slots.owner_cooldown_timers[player] = ticks;
+}
+
+void default_mode1_packet_apply_high_cluster_transition(void*,
+    i32 transition_index, bool write_transition_index,
+    bool local_scene_change) {
+    GameplaySessionStartupState& startup = g_runtime.gameplay_startup_state;
+    if (write_transition_index) {
+        const u32 raw_value = static_cast<u32>(transition_index);
+        startup.high_cluster_transition_value = raw_value;
+        startup.session_mode = raw_value;
+    }
+    startup.high_cluster_transition_requested = true;
+    startup.high_cluster_transition_timer = 0;
+    if (local_scene_change) {
+        startup.local_scene_change_requested = true;
+    }
+}
+
+void default_mode1_packet_promote_fog_visible_tiles(void*,
+    bool require_current_visible) {
+    g_runtime.gameplay_startup_state.fog_reveal_disabled =
+        !require_current_visible;
+    ExportSetupU32(kSetupVisibilityGateOffset, require_current_visible ? 1u : 0u);
+    GameplayVisibilityGrid& grid = g_runtime.gameplay_visibility_grid;
+    PromoteGameplayFogVisibleTiles(grid, require_current_visible);
+    mirror_default_gameplay_visibility_to_consumers(grid);
+}
+
+const char* inactive_player_notification_suffix_fallback(u32 code) {
+    switch (code) {
+    case 0:
+        return " left the game.";
+    case 1:
+        return " was defeated.";
+    case 2:
+        return " dropped from the game.";
+    case 3:
+        return " has won the game.";
+    default:
+        return " inactive.";
+    }
+}
+
+void default_mode1_packet_queue_player_inactive_notification(void*,
+    u32 target_slot, u32, u32 lobby_code) {
+    std::string name;
+    if (target_slot < g_runtime.gameplay_startup_state.owner_display_names.size()) {
+        name = g_runtime.gameplay_startup_state.owner_display_names[target_slot];
+    }
+    if (name.empty()) {
+        char fallback[32]{};
+        std::snprintf(fallback, sizeof(fallback), "Player %u", target_slot + 1);
+        name = fallback;
+    }
+
+    constexpr std::size_t kInactiveNotificationSuffixRowBase = 48;
+    const char* suffix = lobby_code <= 3 ?
+        startup_platform_row(kInactiveNotificationSuffixRowBase + lobby_code,
+            inactive_player_notification_suffix_fallback(lobby_code)) :
+        inactive_player_notification_suffix_fallback(lobby_code);
+    QueueGameplayChatMessageDisplay(ui_overlay_state(), name + suffix, 0, false);
+}
+
+void default_player_slot_broadcast_player_inactive(PlayerSlotRuntimeState& state,
+    u32 target_slot, u32 source_slot) {
+    BroadcastMode1GameplayPlayerInactive(state, target_slot, source_slot);
+}
+
+void sync_default_owner_type_counts_from_lifecycle(
+    const UnitLifecycleContext& lifecycle, u32 owner) {
+    if (owner >= lifecycle.owner_unit_type_counts.size() ||
+        owner >= g_runtime.gameplay_owner_ai_state.owner_unit_type_counts.size() ||
+        owner >= g_runtime.gameplay_production_runtime.completed_type_counts.size()) {
+        return;
+    }
+
+    for (u32 type = 0;
+         type < kOwnerAiUnitTypeCount &&
+         type < lifecycle.owner_unit_type_counts[owner].size() &&
+         type < g_runtime.gameplay_owner_ai_state.owner_unit_type_counts[owner].size() &&
+         type < g_runtime.gameplay_production_runtime.completed_type_counts[owner].size();
+         ++type) {
+        const u32 count = lifecycle.owner_unit_type_counts[owner][type];
+        g_runtime.gameplay_owner_ai_state.owner_unit_type_counts[owner][type] = count;
+        g_runtime.gameplay_production_runtime.completed_type_counts[owner][type] = count;
+    }
+}
+
+void default_player_slot_transfer_owner_state(PlayerSlotRuntimeState& state,
+    u32 from_slot, u32 to_slot) {
+    if (from_slot >= kPlayerSlotCount || to_slot >= kPlayerSlotCount ||
+        from_slot == to_slot) {
+        return;
+    }
+
+    std::swap(state.owner_primary_resources[from_slot],
+        state.owner_primary_resources[to_slot]);
+    std::swap(state.owner_secondary_resources[from_slot],
+        state.owner_secondary_resources[to_slot]);
+    std::swap(state.owner_aux_resources[from_slot],
+        state.owner_aux_resources[to_slot]);
+
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle != nullptr) {
+        std::swap(lifecycle->owner_primary_resources[from_slot],
+            lifecycle->owner_primary_resources[to_slot]);
+        std::swap(lifecycle->owner_secondary_resources[from_slot],
+            lifecycle->owner_secondary_resources[to_slot]);
+
+        UnitMovementContext* movement = lifecycle->movement;
+        if (movement != nullptr) {
+            for (UnitMovementUnit* unit : movement->active_units) {
+                if (unit == nullptr || unit->owner_id != from_slot) {
+                    continue;
+                }
+                unit->owner_id = to_slot;
+                SetUnitFootprintOccupancyBits(*lifecycle, *unit);
+            }
+        }
+        HandleOwnerUnitTypeCountRebuild(*lifecycle);
+        sync_default_owner_type_counts_from_lifecycle(*lifecycle, from_slot);
+        sync_default_owner_type_counts_from_lifecycle(*lifecycle, to_slot);
+    }
+
+    std::swap(g_runtime.gameplay_production_runtime.owner_primary_resources[from_slot],
+        g_runtime.gameplay_production_runtime.owner_primary_resources[to_slot]);
+    std::swap(g_runtime.gameplay_production_runtime.owner_secondary_resources[from_slot],
+        g_runtime.gameplay_production_runtime.owner_secondary_resources[to_slot]);
+    SwapProductionOrderOwnerState(g_runtime.gameplay_production_runtime,
+        from_slot, to_slot);
+}
+
+void default_player_slot_refresh_owner_target(PlayerSlotRuntimeState& state,
+    u32 owner) {
+    RefreshOwnerTargetDataForSlot(g_runtime.gameplay_owner_ai_state, state, owner);
+}
+
+void default_directplay_mode1_player_type0(AsyncComContext*, const void* message,
+    DWORD message_size, DPID, DPID, void*) {
+    QueueFrontendNetworkChatPacketDisplay(message, message_size);
+}
+
+u32 read_directplay_mode1_packet_u32(
+    const Mode1ReliablePacket& packet, u32 offset) {
+    if (offset > packet.bytes.size() || packet.bytes.size() - offset < sizeof(u32)) {
+        return 0;
+    }
+
+    u32 value = 0;
+    std::memcpy(&value, packet.bytes.data() + offset, sizeof(value));
+    return value;
+}
+
+void default_directplay_mode1_player_subtype15(AsyncComContext*,
+    const void* message, DWORD message_size, DPID, DPID, void*) {
+    if (message == nullptr) {
+        return;
+    }
+
+    Mode1ReliablePacket packet{};
+    const u32 copied =
+        std::min<u32>(static_cast<u32>(message_size), kMode1ReliablePacketBytes);
+    std::memcpy(packet.bytes.data(), message, copied);
+    packet.size = copied;
+    packet.sequence = read_directplay_mode1_packet_u32(packet, 8);
+    packet.channel = copied > 0x0c ? packet.bytes[0x0c] : 0;
+    packet.subtype = copied > 0x0f ? packet.bytes[0x0f] : 0;
+    DispatchMode1GameplayPacket(packet);
+}
+
+void install_default_directplay_message_callbacks() {
+    DirectPlayMessageDispatchCallbacks callbacks{};
+    callbacks.mode1_player_type0 = default_directplay_mode1_player_type0;
+    callbacks.mode1_player_subtype15 = default_directplay_mode1_player_subtype15;
+    SetDirectPlayMessageDispatchCallbacks(callbacks);
+}
+
+void default_mode1_reliable_snapshot_local_checksum(void*) {
+    SnapshotLocalGameplayChecksum(gameplay_input_action_state());
+}
+
+void default_mode1_reliable_sync_ready(void*) {
+    CloseGameplayWaitDialog(gameplay_modal_ui_state());
+}
+
+void default_mode1_reliable_sync_timeout(void*) {
+    sync_default_gameplay_modal_players(gameplay_modal_ui_state());
+    OpenGameplayWaitDialog(gameplay_modal_ui_state());
+}
+
+void configure_default_mode1_gameplay_runtime_callbacks() {
+    Mode1GameplayRuntimeCallbacks callbacks{};
+    callbacks.clear_unit_string = default_mode1_packet_clear_unit_string;
+    callbacks.intern_unit_string = default_mode1_packet_intern_unit_string;
+    callbacks.mark_unit_death = default_mode1_packet_mark_unit_death;
+    callbacks.set_unit_command_bit = default_mode1_packet_set_unit_command_bit;
+    callbacks.set_unit_command_payload =
+        default_mode1_packet_set_unit_command_payload;
+    callbacks.set_unit_deferred_resource_command =
+        default_mode1_packet_set_unit_deferred_resource_command;
+    callbacks.set_unit_command_flag = default_mode1_packet_set_unit_command_flag;
+    callbacks.apply_unit_equipment_effect =
+        default_mode1_packet_apply_unit_equipment_effect;
+    callbacks.toggle_unit_equipment_slot =
+        default_mode1_packet_toggle_unit_equipment_slot;
+    callbacks.set_unit_status_mask = default_mode1_packet_set_unit_status_mask;
+    callbacks.set_unit_aux_vector = default_mode1_packet_set_unit_aux_vector;
+    callbacks.force_order21 = default_mode1_packet_force_order21;
+    callbacks.apply_unit_bonus = default_mode1_packet_apply_unit_bonus;
+    callbacks.apply_global_reset = default_mode1_packet_apply_global_reset;
+    callbacks.apply_catchup_target =
+        default_mode1_packet_apply_catchup_target;
+    callbacks.set_modal_pause = default_mode1_packet_set_modal_pause;
+    callbacks.set_player_cooldown = default_mode1_packet_set_player_cooldown;
+    callbacks.apply_high_cluster_transition =
+        default_mode1_packet_apply_high_cluster_transition;
+    callbacks.queue_player_inactive_notification =
+        default_mode1_packet_queue_player_inactive_notification;
+    callbacks.promote_fog_visible_tiles =
+        default_mode1_packet_promote_fog_visible_tiles;
+    SetMode1GameplayRuntimeCallbacks(callbacks);
+    SetMode1GameplayGenericAiProfileMode(g_runtime.generic_ai_profile_mode);
+
+    Mode1ReliableRuntimeState& reliable = mode1_reliable_state();
+    Mode1ReliableCallbacks reliable_callbacks = reliable.callbacks;
+    reliable_callbacks.snapshot_local_checksum =
+        default_mode1_reliable_snapshot_local_checksum;
+    reliable_callbacks.sync_ready = default_mode1_reliable_sync_ready;
+    reliable_callbacks.sync_timeout = default_mode1_reliable_sync_timeout;
+    SetMode1ReliableCallbacks(reliable_callbacks, reliable.callback_user_data);
+
+    g_runtime.gameplay_player_slots.broadcast_player_inactive =
+        default_player_slot_broadcast_player_inactive;
+    g_runtime.gameplay_player_slots.transfer_owner_slot =
+        default_player_slot_transfer_owner_state;
+    g_runtime.gameplay_player_slots.refresh_owner_target =
+        default_player_slot_refresh_owner_target;
+    player_slot_state().broadcast_player_inactive =
+        default_player_slot_broadcast_player_inactive;
+    player_slot_state().transfer_owner_slot =
+        default_player_slot_transfer_owner_state;
+    player_slot_state().refresh_owner_target =
+        default_player_slot_refresh_owner_target;
+}
+
+u32 default_unit_command_metadata_flags_from_original_table(
+    const UnitMovementUnit& unit) {
+    static constexpr std::array<u32, 138> kOriginalMetadataFlags{{
+        0x00000000, 0x00000001, 0x00000002, 0x00000006,
+        0x00000004, 0x00000010, 0x00000012, 0x00000000,
+        0x00000010, 0x00000010, 0x00000012, 0x00000000,
+        0x00000000, 0x00000000, 0x00000002, 0x00000000,
+        0x00000000, 0x00000000, 0x00000002, 0x00000000,
+        0x00000002, 0x00000002, 0x00000002, 0x00000002,
+        0x00000000, 0x00000000, 0x00000000, 0x00000000,
+        0x00000004, 0x00000004, 0x00000006, 0x00000004,
+        0x00000004, 0x00000006, 0x00000006, 0x00000000,
+        0x00000000, 0x00000002, 0x00000000, 0x00000000,
+        0x00000020, 0x00000020, 0x00000022, 0x00000020,
+        0x00000022, 0x00000020, 0x00000000, 0x00000000,
+        0x00000000, 0x00000002, 0x00000002, 0x00000000,
+        0x00000000, 0x00000100, 0x00000100, 0x00000102,
+        0x00000102, 0x00000104, 0x00000104, 0x00000100,
+        0x00000008, 0x00000008, 0x0000000a, 0x00000008,
+        0x00000008, 0x00000008, 0x00000008, 0x0000000a,
+        0x00000008, 0x00000008, 0x00000000, 0x00000000,
+        0x00000002, 0x00000002, 0x00000000, 0x00000000,
+        0x00000000, 0x00000000, 0x00000040, 0x00000000,
+        0x00000000, 0x00000040, 0x00000000, 0x00000020,
+        0x00000020, 0x00000022, 0x00000020, 0x00000020,
+        0x00000020, 0x00000000, 0x00000000, 0x00000000,
+        0x00000002, 0x00000000, 0x00000000, 0x00000080,
+        0x00000080, 0x00000082, 0x00000000, 0x00000000,
+        0x00000004, 0x00000004, 0x00000006, 0x00000000,
+        0x00000000, 0x00000000, 0x00000006, 0x00000000,
+        0x00000000, 0x00000000, 0x00000000, 0x00000000,
+        0x00000000, 0x00000000, 0x00000000, 0x00000000,
+        0x00000000, 0x00000002, 0x00000000, 0x00000000,
+        0x00000000, 0x00000000, 0x00000000, 0x00000000,
+        0x00000000, 0x00000000, 0x00000000, 0x00000002,
+        0x00000000, 0x00000000, 0x00000000, 0x00000040,
+        0x00000000, 0x00000000, 0x00000000, 0x00000000,
+        0x00000000, 0x00000002,
+    }};
+
+    const u32 command_id = GetUnitCommandIdLow24(unit);
+    if (command_id >= kOriginalMetadataFlags.size()) {
+        return 0;
+    }
+    return kOriginalMetadataFlags[command_id];
+}
+
+const std::array<u32, kUnitCommandRuntimeStateTableCount>&
+original_unit_command_runtime_state_table() {
+    static constexpr std::array<u32, kUnitCommandRuntimeStateTableCount>
+        kOriginalRuntimeStates{{
+        0x00000000, 0x00000001, 0x00000001, 0x00000001,
+        0x00000001, 0x00000001, 0x00000001, 0x00000000,
+        0x00000002, 0x00000002, 0x00000002, 0x00000000,
+        0x00000003, 0x00000003, 0x00000003, 0x00000000,
+        0x00000004, 0x00000004, 0x00000004, 0x00000000,
+        0x00000005, 0x00000005, 0x00000005, 0x00000005,
+        0x00000000, 0x00000000, 0x00000000, 0x00000000,
+        0x00000006, 0x00000006, 0x00000006, 0x00000006,
+        0x00000006, 0x00000006, 0x00000006, 0x00000007,
+        0x00000007, 0x00000007, 0x00000000, 0x00000000,
+        0x00000008, 0x00000008, 0x00000008, 0x00000008,
+        0x00000008, 0x00000008, 0x00000000, 0x00000000,
+        0x00000009, 0x00000009, 0x00000009, 0x00000009,
+        0x00000000, 0x0000000a, 0x0000000a, 0x0000000a,
+        0x0000000a, 0x0000000a, 0x0000000a, 0x00000000,
+        0x0000000b, 0x0000000b, 0x0000000b, 0x0000000b,
+        0x00000000, 0x0000000c, 0x0000000c, 0x0000000c,
+        0x00000000, 0x0000000d, 0x00000000, 0x00000000,
+        0x0000000e, 0x0000000e, 0x00000000, 0x00000000,
+        0x00000000, 0x0000000f, 0x0000000f, 0x00000000,
+        0x00000010, 0x00000010, 0x00000000, 0x00000008,
+        0x00000008, 0x00000008, 0x00000008, 0x00000008,
+        0x00000008, 0x00000000, 0x00000007, 0x00000007,
+        0x00000007, 0x00000000, 0x00000000, 0x00000011,
+        0x00000011, 0x00000011, 0x00000000, 0x00000000,
+        0x00000012, 0x00000012, 0x00000012, 0x00000000,
+        0x00000000, 0x00001212, 0x00000000, 0x00000000,
+        0x00130000, 0x00140000, 0x00000000, 0x00000000,
+        0x00000000, 0x00150000, 0x00150000, 0x00150000,
+        0x00000000, 0x00000000, 0x00160000, 0x00170000,
+        0x00000000, 0x00000000, 0x00000000, 0x00040000,
+        0x00040000, 0x00040000, 0x00000000, 0x00000000,
+        0x00180000, 0x00180000, 0x00000000, 0x00000000,
+        0x00000000, 0x00190000, 0x00190000, 0x00190000,
+        0x00000000, 0x00000000,
+    }};
+    return kOriginalRuntimeStates;
+}
+
+u32 default_map_effect_sprite_entry(const MapEffectContext& context,
+    const MapEffectInstance& effect) {
+    const MapEffectDefinition* definition = nullptr;
+    if (context.callbacks.find_definition != nullptr) {
+        definition = context.callbacks.find_definition(context, effect.effect_id);
+    }
+
+    const u32 frame_index = definition != nullptr
+        ? definition->sprite_frame_index
+        : effect.effect_id;
+    const Jw207ResourcePackState& jw207 = jw207_resource_pack_state();
+    if (jw207.item_start == kInvalidResourceEntry) {
+        return frame_index;
+    }
+    return jw207.item_start + frame_index;
+}
+
+void default_map_effect_render(MapEffectContext& context,
+    const MapEffectInstance& effect) {
+    GameplayRenderCommand command{};
+    command.class_id = 4;
+    command.payload = effect.id;
+    command.sort_key =
+        static_cast<u32>((effect.y + 1) * (1 << kRenderSortRowShift) +
+            effect.x + 0x40000000u);
+    command.sprite_entry_index = default_map_effect_sprite_entry(context, effect);
+    command.screen_x = effect.x - g_runtime.gameplay_frame_render_context.camera_x;
+    command.screen_y = effect.y - g_runtime.gameplay_frame_render_context.camera_y;
+    QueueGameplayRenderCommand(g_runtime.gameplay_render_command_queue, command);
+}
+
+bool default_map_effect_linked_unit_keeps_effect(const MapEffectContext&,
+    const UnitMovementUnit& unit, const MapEffectInstance&) {
+    return (default_unit_command_metadata_flags_from_original_table(unit) & 0x10u) != 0;
+}
+
+bool default_map_effect_can_unit_interact(const MapEffectContext&,
+    const UnitMovementUnit& unit, const MapEffectInstance& effect) {
+    UnitEquipmentCatalog& catalog = frontend_bootstrap_state().equipment_catalog;
+    if (catalog.effects.empty()) {
+        LoadUnitEquipmentCatalogFromJw210Trc(catalog);
+    }
+    const UnitEquipmentEffectDefinition* definition =
+        FindUnitEquipmentEffect(catalog, effect.effect_id);
+    return definition != nullptr &&
+        UnitEquipmentEffectAllowsUnitType(unit, *definition);
+}
+
+const MapEffectDefinition* default_map_effect_find_definition(
+    const MapEffectContext&, u32 effect_id) {
+    UnitEquipmentCatalog& catalog = frontend_bootstrap_state().equipment_catalog;
+    if (catalog.effects.empty()) {
+        LoadUnitEquipmentCatalogFromJw210Trc(catalog);
+    }
+    static std::vector<MapEffectDefinition> definitions;
+
+    bool rebuild = definitions.size() != catalog.effects.size();
+    if (!rebuild) {
+        for (std::size_t index = 0; index < definitions.size(); ++index) {
+            if (definitions[index].id != catalog.effects[index].id ||
+                definitions[index].frame_period !=
+                    catalog.effects[index].map_effect_frame_period ||
+                definitions[index].sprite_frame_index !=
+                    catalog.effects[index].icon_frame_index) {
+                rebuild = true;
+                break;
+            }
+        }
+    }
+
+    if (rebuild) {
+        definitions.clear();
+        definitions.reserve(catalog.effects.size());
+        for (const UnitEquipmentEffectDefinition& effect : catalog.effects) {
+            MapEffectDefinition definition{};
+            definition.id = effect.id;
+            definition.frame_period = effect.map_effect_frame_period;
+            definition.default_repeat_count = 1;
+            definition.sprite_frame_index = effect.icon_frame_index;
+            definitions.push_back(definition);
+        }
+    }
+
+    for (const MapEffectDefinition& definition : definitions) {
+        if (definition.id == effect_id) {
+            return &definition;
+        }
+    }
+    return nullptr;
+}
+
+void default_map_effect_random_ambient_spawn_tick(
+    MapEffectContext& context, UnitMovementUnit& unit) {
+    if (!g_runtime.unit_reference_tables.post_init_transition_pending ||
+        g_runtime.gameplay_startup_state.session_mode == 5 ||
+        g_runtime.gameplay_startup_state.ambient_map_effect_spawn_gate == 0) {
+        return;
+    }
+    if (context.frame_counter >= 0x9ab1u) {
+        return;
+    }
+
+    UnitEquipmentCatalog& catalog = frontend_bootstrap_state().equipment_catalog;
+    if (catalog.effects.empty()) {
+        LoadUnitEquipmentCatalogFromJw210Trc(catalog);
+    }
+    u32 flagged_count = 0;
+    for (const UnitEquipmentEffectDefinition& effect : catalog.effects) {
+        if ((effect.ambient_flags & 4u) != 0) {
+            ++flagged_count;
+        }
+    }
+    if (flagged_count == 0) {
+        return;
+    }
+
+    const u32 selected_ordinal = default_gameplay_frame_random_limit(flagged_count);
+    const UnitEquipmentEffectDefinition* selected = nullptr;
+    u32 ordinal = 0;
+    for (const UnitEquipmentEffectDefinition& effect : catalog.effects) {
+        if ((effect.ambient_flags & 4u) == 0) {
+            continue;
+        }
+        if (ordinal == selected_ordinal) {
+            selected = &effect;
+            break;
+        }
+        ++ordinal;
+    }
+    if (selected == nullptr) {
+        return;
+    }
+
+    const u32 spawn_limit = selected->ambient_spawn_rate / 100u;
+    if (default_gameplay_frame_random_limit(spawn_limit) >= 3u) {
+        return;
+    }
+
+    HandleMapEffectNearestTileSpawn(context, selected->id, unit.x, unit.y);
+}
+
+u32 default_map_effect_random_limit(MapEffectContext&, u32 limit) {
+    return default_gameplay_frame_random_limit(limit);
+}
+
+void configure_default_map_effect_context() {
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    g_runtime.map_effect_context.map =
+        movement != nullptr ? &movement->map : nullptr;
+    g_runtime.map_effect_context.frame_counter =
+        gameplay_loop_state().simulation_frame_counter;
+    if (g_runtime.map_effect_context.callbacks.render_effect == nullptr) {
+        g_runtime.map_effect_context.callbacks.render_effect =
+            default_map_effect_render;
+    }
+    if (g_runtime.map_effect_context.callbacks.find_definition == nullptr) {
+        g_runtime.map_effect_context.callbacks.find_definition =
+            default_map_effect_find_definition;
+    }
+    if (g_runtime.map_effect_context.callbacks.linked_unit_keeps_effect == nullptr) {
+        g_runtime.map_effect_context.callbacks.linked_unit_keeps_effect =
+            default_map_effect_linked_unit_keeps_effect;
+    }
+    if (g_runtime.map_effect_context.callbacks.can_unit_interact == nullptr) {
+        g_runtime.map_effect_context.callbacks.can_unit_interact =
+            default_map_effect_can_unit_interact;
+    }
+    if (g_runtime.map_effect_context.callbacks.on_random_ambient_spawn_tick == nullptr) {
+        g_runtime.map_effect_context.callbacks.on_random_ambient_spawn_tick =
+            default_map_effect_random_ambient_spawn_tick;
+    }
+    if (g_runtime.map_effect_context.callbacks.random_limit == nullptr) {
+        g_runtime.map_effect_context.callbacks.random_limit =
+            default_map_effect_random_limit;
+    }
+}
+
+void default_gameplay_frame_mirror_visible_map_effects(
+    GameplayFrameRenderContext& context) {
+    configure_default_map_effect_context();
+    MapEffectContext& effects = g_runtime.map_effect_context;
+    effects.viewport.left = context.expanded_left;
+    effects.viewport.top = context.expanded_top;
+    effects.viewport.right = context.expanded_right;
+    effects.viewport.bottom = context.expanded_bottom;
+    effects.viewport.require_visible_tile =
+        !g_runtime.gameplay_startup_state.fog_reveal_disabled;
+    HandleVisibleMapEffectSpriteQueue(effects);
+}
+
+u32 read_runtime_catalog_u32(const std::vector<u8>& bytes, std::size_t offset,
+    u32 fallback = 0) {
+    if (offset + 4 > bytes.size()) {
+        return fallback;
+    }
+    return static_cast<u32>(bytes[offset]) |
+        (static_cast<u32>(bytes[offset + 1]) << 8) |
+        (static_cast<u32>(bytes[offset + 2]) << 16) |
+        (static_cast<u32>(bytes[offset + 3]) << 24);
+}
+
+u8 read_runtime_catalog_u8(const std::vector<u8>& bytes, std::size_t offset,
+    u8 fallback = 0) {
+    if (offset >= bytes.size()) {
+        return fallback;
+    }
+    return bytes[offset];
+}
+
+u16 read_runtime_catalog_u16(const std::vector<u8>& bytes, std::size_t offset,
+    u16 fallback = 0) {
+    if (offset + 2 > bytes.size()) {
+        return fallback;
+    }
+    return static_cast<u16>(bytes[offset]) |
+        static_cast<u16>(static_cast<u16>(bytes[offset + 1]) << 8);
+}
+
+i32 read_runtime_catalog_i32(const std::vector<u8>& bytes, std::size_t offset,
+    i32 fallback = 0) {
+    return static_cast<i32>(read_runtime_catalog_u32(
+        bytes, offset, static_cast<u32>(fallback)));
+}
+
+void configure_default_gameplay_render_unit_sprite_definitions() {
+    GameplayRenderCommandQueue& queue = g_runtime.gameplay_render_command_queue;
+    queue.definition_index_by_type.assign(kUnitDefinitionResourceCount, 0xffffffffu);
+    queue.unit_sprite_definitions.clear();
+
+    if (!unit_definition_resource_catalog_state().loaded) {
+        LoadUnitDefinitionResourceCatalog();
+    }
+    const UnitDefinitionResourceCatalogState& catalog =
+        unit_definition_resource_catalog_state();
+    queue.unit_sprite_definitions.reserve(catalog.records.size());
+    for (u32 unit_type = 0; unit_type < catalog.records.size(); ++unit_type) {
+        const UnitDefinitionResourceRecord& record = catalog.records[unit_type];
+        if (!record.loaded || record.definition_bytes.empty()) {
+            continue;
+        }
+
+        GameplayRenderUnitSpriteDefinition definition{};
+        definition.has_special_draw = read_runtime_catalog_u32(
+            record.definition_bytes, kUnitDefinitionSpecialDrawFlagOffset, 0) != 0;
+        definition.center_offset_x = read_runtime_catalog_i32(
+            record.definition_bytes, kUnitDefinitionNameOffsetXOffset, 0);
+        definition.center_offset_y = read_runtime_catalog_i32(
+            record.definition_bytes, kUnitDefinitionNameOffsetYOffset, 0);
+        definition.center_width = read_runtime_catalog_i32(
+            record.definition_bytes, kUnitDefinitionNameWidthOffset, 0);
+        definition.center_height = read_runtime_catalog_i32(
+            record.definition_bytes, kUnitDefinitionNameHeightOffset, 0);
+
+        queue.definition_index_by_type[unit_type] =
+            static_cast<u32>(queue.unit_sprite_definitions.size());
+        queue.unit_sprite_definitions.push_back(std::move(definition));
+    }
+}
+
+u32 bounded_runtime_catalog_u32(const std::vector<u8>& bytes, std::size_t offset,
+    u32 minimum, u32 maximum, u32 fallback) {
+    const u32 value = read_runtime_catalog_u32(bytes, offset, fallback);
+    if (value < minimum || value > maximum) {
+        return fallback;
+    }
+    return value;
+}
+
+void fill_default_unit_reverse_reference_table(
+    std::array<u32, kGameSessionUnitTypeCount>& reverse,
+    const std::vector<u8>& definition_bytes, std::size_t count_offset,
+    std::size_t list_offset, u32 owner_unit_type) {
+    const u32 count = std::min<u32>(
+        read_runtime_catalog_u32(definition_bytes, count_offset, 0),
+        kGameSessionUnitReferenceCapacity);
+    for (u32 index = 0; index < count; ++index) {
+        const u32 referenced_type = read_runtime_catalog_u32(
+            definition_bytes, list_offset + index * sizeof(u32),
+            kInvalidGameSessionUnitType);
+        if (referenced_type < reverse.size()) {
+            reverse[referenced_type] = owner_unit_type;
+        }
+    }
+}
+
+void fill_default_completion_reverse_reference_table(
+    std::array<u32, kGameSessionCompletionReverseCount>& reverse,
+    const std::vector<u8>& definition_bytes, std::size_t count_offset,
+    std::size_t list_offset, u32 owner_unit_type) {
+    const u32 count = std::min<u32>(
+        read_runtime_catalog_u32(definition_bytes, count_offset, 0),
+        kGameSessionUnitReferenceCapacity);
+    for (u32 index = 0; index < count; ++index) {
+        const u32 referenced_type = read_runtime_catalog_u32(
+            definition_bytes, list_offset + index * sizeof(u32),
+            kInvalidGameSessionUnitType);
+        if (referenced_type < reverse.size()) {
+            reverse[referenced_type] = owner_unit_type;
+        }
+    }
+}
+
+void fill_default_small_reverse_reference_table(std::array<u32, 0x100>& reverse,
+    const std::vector<u8>& definition_bytes, u32 owner_unit_type) {
+    const u32 count = std::min<u32>(
+        read_runtime_catalog_u8(definition_bytes,
+            kUnitDefinitionSmallReferenceCountOffset, 0),
+        kGameSessionSmallReferenceCapacity);
+    for (u32 index = 0; index < count; ++index) {
+        const u8 referenced_type = read_runtime_catalog_u8(
+            definition_bytes, kUnitDefinitionSmallReferenceBaseOffset + index, 0xff);
+        reverse[referenced_type] = owner_unit_type;
+    }
+}
+
+void rebuild_default_unit_reference_tables_from_catalog() {
+    if (!unit_definition_resource_catalog_state().loaded) {
+        LoadUnitDefinitionResourceCatalog();
+    }
+
+    const UnitDefinitionResourceCatalogState& catalog =
+        unit_definition_resource_catalog_state();
+    GameSessionUnitReferenceTables& tables = g_runtime.unit_reference_tables;
+    tables.primary_or_alternate_reverse.fill(kInvalidGameSessionUnitType);
+    tables.completion_reverse.fill(kInvalidGameSessionUnitType);
+    tables.small_reverse.fill(kInvalidGameSessionUnitType);
+
+    for (u32 unit_type = 0; unit_type < catalog.records.size(); ++unit_type) {
+        const UnitDefinitionResourceRecord& record = catalog.records[unit_type];
+        if (!record.loaded || record.definition_bytes.empty() ||
+            read_runtime_catalog_u32(record.definition_bytes, 0, 0) == 0) {
+            continue;
+        }
+
+        fill_default_unit_reverse_reference_table(
+            tables.primary_or_alternate_reverse, record.definition_bytes,
+            kUnitDefinitionPrimaryReferenceCountOffset,
+            kUnitDefinitionPrimaryReferenceBaseOffset, unit_type);
+        fill_default_unit_reverse_reference_table(
+            tables.primary_or_alternate_reverse, record.definition_bytes,
+            kUnitDefinitionAlternateReferenceCountOffset,
+            kUnitDefinitionAlternateReferenceBaseOffset, unit_type);
+        fill_default_completion_reverse_reference_table(tables.completion_reverse,
+            record.definition_bytes, kUnitDefinitionCompletionReferenceCountOffset,
+            kUnitDefinitionCompletionReferenceBaseOffset, unit_type);
+        fill_default_small_reverse_reference_table(tables.small_reverse,
+            record.definition_bytes, unit_type);
+    }
+}
+
+void refresh_default_unit_definition_runtime_fields(UnitMovementUnit& unit) {
+    if (unit.type_id >= kUnitDefinitionResourceCount) {
+        return;
+    }
+    if (!unit_definition_resource_catalog_state().loaded) {
+        LoadUnitDefinitionResourceCatalog();
+    }
+
+    const UnitDefinitionResourceCatalogState& catalog =
+        unit_definition_resource_catalog_state();
+    const UnitDefinitionResourceRecord& record = catalog.records[unit.type_id];
+    if (!record.loaded || record.definition_bytes.empty()) {
+        return;
+    }
+
+    UnitMovementDefinition& definition = unit.definition;
+    definition.initial_max_health = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionInitialMaxHealthOffset,
+        definition.initial_max_health);
+    definition.initial_max_secondary_value = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionInitialMaxSecondaryOffset,
+        definition.initial_max_secondary_value);
+    definition.profile_offense_value = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionProfileOffenseOffset,
+        definition.profile_offense_value);
+    definition.profile_defense_value = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionProfileDefenseOffset,
+        definition.profile_defense_value);
+    definition.initial_secondary_value = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionRuntimeStat28Offset,
+        definition.initial_secondary_value);
+    definition.avatar_next_exp_per_level = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionAvatarNextExpPerLevelOffset,
+        definition.avatar_next_exp_per_level);
+    definition.avatar_next_exp_base = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionAvatarNextExpBaseOffset,
+        definition.avatar_next_exp_base);
+    unit.type_flags = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionTypeFlagsOffset, unit.type_flags);
+    definition.type_flags = unit.type_flags;
+    definition.support_target_flags = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionSupportTargetFlagsOffset,
+        definition.support_target_flags);
+    definition.support_source_flags = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionSupportSourceFlagsOffset,
+        definition.support_source_flags);
+    definition.lifecycle_class = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionLifecycleClassOffset,
+        definition.lifecycle_class);
+    definition.placement_class = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionPlacementClassOffset,
+        definition.placement_class);
+    definition.movement_class = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionMovementClassOffset,
+        definition.movement_class);
+    definition.movement_step_limit = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionMovementStepLimitOffset,
+        definition.movement_step_limit);
+    const u32 movement_period = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionMovementPeriodOffset,
+        definition.movement_period);
+    definition.movement_period = movement_period != 0 ? movement_period : 1;
+    definition.use_16_direction_lookup = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionUse16DirectionLookupOffset,
+        definition.use_16_direction_lookup ? 1u : 0u) != 0;
+    definition.overlay_class = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionOverlayClassOffset,
+        definition.overlay_class);
+    definition.footprint_width_tiles = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionFootprintWidthTilesOffset,
+        definition.footprint_width_tiles);
+    definition.footprint_height_tiles = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionFootprintHeightTilesOffset,
+        definition.footprint_height_tiles);
+    definition.production_population_cost = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionProductionPopulationCostOffset,
+        definition.production_population_cost);
+    definition.production_resource_cost = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionProductionResourceCostOffset,
+        definition.production_resource_cost);
+    definition.production_secondary_cost = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionProductionSecondaryCostOffset,
+        definition.production_secondary_cost);
+    definition.production_spawn_time = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionConstructionTimerOffset,
+        definition.production_spawn_time);
+
+    const u32 transport_value = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionTransportValueOffset,
+        definition.transport_size);
+    definition.transport_size = transport_value;
+    if ((unit.type_flags & 0x400u) != 0 || definition.transport_capacity != 0) {
+        definition.transport_capacity = transport_value;
+    }
+    if ((definition.support_target_flags & 4u) != 0) {
+        definition.transport_flags |= 4u;
+    }
+
+    const u32 interaction_range = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionSupportRangeOffset,
+        definition.support_range);
+    definition.support_range = interaction_range;
+    const u32 raw_prerequisite_count = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionPrerequisiteCountOffset,
+        definition.prerequisite_count);
+    definition.prerequisite_count = std::min<u32>(raw_prerequisite_count,
+        static_cast<u32>(definition.prerequisite_type_ids.size()));
+    for (u32 index = 0; index < definition.prerequisite_count; ++index) {
+        definition.prerequisite_type_ids[index] = read_runtime_catalog_u32(
+            record.definition_bytes,
+            kUnitDefinitionPrerequisiteTypeBaseOffset + index * sizeof(u32),
+            definition.prerequisite_type_ids[index]);
+    }
+    definition.action_profile_index = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionActionProfileOffset,
+        definition.action_profile_index);
+    definition.action_profile_index_vs_class3 = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionActionProfileVsClass3Offset,
+        definition.action_profile_index_vs_class3);
+    definition.action_range_base = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionActionRangeBaseOffset,
+        definition.action_range_base);
+    definition.action_range_base_vs_class3 = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionActionRangeVsClass3Offset,
+        definition.action_range_base_vs_class3);
+    if (definition.action_range_base != 0) {
+        definition.range_threshold = definition.action_range_base;
+    }
+    else if (definition.range_threshold == 0) {
+        definition.range_threshold = interaction_range;
+    }
+    definition.passive_recovery_enabled = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionPassiveRecoveryEnabledOffset,
+        definition.passive_recovery_enabled);
+    definition.passive_recovery_flags = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionPassiveRecoveryFlagsOffset,
+        definition.passive_recovery_flags);
+
+    definition.action_recovery_scale_percent = read_runtime_catalog_u8(
+        record.definition_bytes, kUnitDefinitionActionRecoveryScaleOffset,
+        static_cast<u8>(definition.action_recovery_scale_percent));
+    definition.action_range_bonus_per_count = read_runtime_catalog_u8(
+        record.definition_bytes, kUnitDefinitionActionRangeBonusPerCountOffset,
+        static_cast<u8>(definition.action_range_bonus_per_count));
+    definition.action_range_bonus_cap = read_runtime_catalog_u16(
+        record.definition_bytes, kUnitDefinitionActionRangeBonusCapOffset,
+        static_cast<u16>(definition.action_range_bonus_cap));
+
+    definition.bounds_left = read_runtime_catalog_i32(
+        record.definition_bytes, kUnitDefinitionBoundsLeftOffset,
+        definition.bounds_left);
+    definition.bounds_top = read_runtime_catalog_i32(
+        record.definition_bytes, kUnitDefinitionBoundsTopOffset,
+        definition.bounds_top);
+    definition.bounds_width = read_runtime_catalog_i32(
+        record.definition_bytes, kUnitDefinitionBoundsWidthOffset,
+        definition.bounds_width);
+    definition.bounds_height = read_runtime_catalog_i32(
+        record.definition_bytes, kUnitDefinitionBoundsHeightOffset,
+        definition.bounds_height);
+    definition.center_bounds_left = read_runtime_catalog_i32(
+        record.definition_bytes, kUnitDefinitionNameOffsetXOffset,
+        definition.bounds_left);
+    definition.center_bounds_top = read_runtime_catalog_i32(
+        record.definition_bytes, kUnitDefinitionNameOffsetYOffset,
+        definition.bounds_top);
+    definition.center_bounds_width = read_runtime_catalog_i32(
+        record.definition_bytes, kUnitDefinitionNameWidthOffset,
+        definition.bounds_width);
+    definition.center_bounds_height = read_runtime_catalog_i32(
+        record.definition_bytes, kUnitDefinitionNameHeightOffset,
+        definition.bounds_height);
+    definition.interaction_bounds_left = read_runtime_catalog_i32(
+        record.definition_bytes, kUnitDefinitionInteractionBoundsLeftOffset,
+        definition.bounds_left);
+    definition.interaction_bounds_top = read_runtime_catalog_i32(
+        record.definition_bytes, kUnitDefinitionInteractionBoundsTopOffset,
+        definition.bounds_top);
+    definition.interaction_bounds_width = read_runtime_catalog_i32(
+        record.definition_bytes, kUnitDefinitionInteractionBoundsWidthOffset,
+        definition.bounds_width);
+    definition.interaction_bounds_height = read_runtime_catalog_i32(
+        record.definition_bytes, kUnitDefinitionInteractionBoundsHeightOffset,
+        definition.bounds_height);
+    definition.ability_timer_period = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionAbilityTimerPeriodOffset,
+        definition.ability_timer_period);
+    definition.action_cycle_ticks = definition.ability_timer_period;
+    definition.lifecycle_lockout_period = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionLifecycleLockoutPeriodOffset,
+        definition.lifecycle_lockout_period);
+    definition.lifecycle_growth_period = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionLifecycleGrowthPeriodOffset,
+        definition.lifecycle_growth_period);
+    definition.spawn_frame_count = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionActionImpactFrameBaseOffset,
+        definition.spawn_frame_count);
+    definition.action_impact_frame_count = 0;
+    for (u32 index = 0; index < definition.action_impact_frames.size(); ++index) {
+        const i32 frame = read_runtime_catalog_i32(record.definition_bytes,
+            kUnitDefinitionActionImpactFrameBaseOffset + index * sizeof(u32), -1);
+        if (frame < 0) {
+            break;
+        }
+        definition.action_impact_frames[index] = static_cast<u32>(frame);
+        ++definition.action_impact_frame_count;
+    }
+    definition.timed_flag_phase_b_period = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionTimedFlagPhaseBPeriodOffset,
+        definition.timed_flag_phase_b_period);
+    definition.timed_flag_phase_a_period = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionTimedFlagPhaseAPeriodOffset,
+        definition.timed_flag_phase_a_period);
+    definition.lifecycle_decay_mode = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionLifecycleDecayModeOffset,
+        definition.lifecycle_decay_mode);
+    definition.lifecycle_decay_lockout_gate = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionLifecycleDecayLockoutGateOffset,
+        definition.lifecycle_decay_lockout_gate);
+    const u32 runtime_cycle_period = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionRuntimeCyclePeriodOffset,
+        definition.completion_effect_period);
+    definition.completion_effect_period = runtime_cycle_period;
+    definition.completion_announcement_period = runtime_cycle_period;
+    definition.production_cycle_period = runtime_cycle_period;
+    definition.owner_strategic_target_offset_x = read_runtime_catalog_i32(
+        record.definition_bytes, kUnitDefinitionOwnerStrategicTargetOffsetX,
+        definition.owner_strategic_target_offset_x);
+    definition.owner_strategic_target_offset_y = read_runtime_catalog_i32(
+        record.definition_bytes, kUnitDefinitionOwnerStrategicTargetOffsetY,
+        definition.owner_strategic_target_offset_y);
+    definition.owner_transport_route_metric_offset = read_runtime_catalog_i32(
+        record.definition_bytes, kUnitDefinitionOwnerTransportRouteMetricOffset,
+        definition.owner_transport_route_metric_offset);
+    definition.completion_effect_offset_x = read_runtime_catalog_i32(
+        record.definition_bytes, kUnitDefinitionCompletionEffectOffsetXOffset,
+        definition.completion_effect_offset_x);
+    definition.completion_effect_offset_y = read_runtime_catalog_i32(
+        record.definition_bytes, kUnitDefinitionCompletionEffectOffsetYOffset,
+        definition.completion_effect_offset_y);
+    definition.spatial_query_left = read_runtime_catalog_i32(
+        record.definition_bytes, kUnitDefinitionSpatialQueryLeftOffset,
+        definition.spatial_query_left);
+    definition.spatial_query_top = read_runtime_catalog_i32(
+        record.definition_bytes, kUnitDefinitionSpatialQueryTopOffset,
+        definition.spatial_query_top);
+    definition.spatial_query_right = read_runtime_catalog_i32(
+        record.definition_bytes, kUnitDefinitionSpatialQueryRightOffset,
+        definition.spatial_query_right);
+    definition.spatial_query_bottom = read_runtime_catalog_i32(
+        record.definition_bytes, kUnitDefinitionSpatialQueryBottomOffset,
+        definition.spatial_query_bottom);
+    definition.passive_map_effect_seed = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionPassiveMapEffectSeedOffset,
+        definition.passive_map_effect_seed);
+    definition.effect_command_distance_gate = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionEffectCommandDistanceGateOffset,
+        definition.effect_command_distance_gate);
+    definition.target_acquisition_range = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionTargetAcquisitionRangeOffset,
+        definition.target_acquisition_range);
+    definition.cell_render_flags = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionCellRenderFlagsOffset,
+        definition.cell_render_flags);
+    definition.render_class = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionRenderClassOffset,
+        definition.render_class);
+    definition.projectile_impact_class = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionProjectileImpactClassOffset,
+        definition.projectile_impact_class);
+    definition.action_effect_flags = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionActionEffectFlagsOffset,
+        definition.action_effect_flags);
+    definition.target_selection_priority = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionTargetSelectionPriorityOffset,
+        definition.target_selection_priority);
+    definition.startup_secondary_step_x = read_runtime_catalog_i32(
+        record.definition_bytes, kUnitDefinitionStartupSecondaryStepXOffset,
+        definition.startup_secondary_step_x);
+    for (u32 direction = 0;
+         direction < definition.effect_source_offset_by_direction.size();
+         ++direction) {
+        const std::size_t offset =
+            kUnitDefinitionEffectSourceOffsetBase + direction * sizeof(u32) * 2;
+        definition.effect_source_offset_by_direction[direction].x =
+            read_runtime_catalog_i32(record.definition_bytes, offset,
+                definition.effect_source_offset_by_direction[direction].x);
+        definition.effect_source_offset_by_direction[direction].y =
+            read_runtime_catalog_i32(record.definition_bytes, offset + sizeof(u32),
+                definition.effect_source_offset_by_direction[direction].y);
+    }
+    for (u32 direction = 1; direction < definition.frame_delta_by_direction.size();
+         ++direction) {
+        for (u32 frame = 0;
+             frame < definition.frame_delta_by_direction[direction].size(); ++frame) {
+            const std::size_t offset = kUnitDefinitionMovementFrameDeltaBaseOffset +
+                (direction - 1) * kUnitDefinitionMovementFrameDirectionStride +
+                frame * sizeof(u32) * 2;
+            definition.frame_delta_by_direction[direction][frame].x =
+                read_runtime_catalog_i32(record.definition_bytes, offset,
+                    definition.frame_delta_by_direction[direction][frame].x);
+            definition.frame_delta_by_direction[direction][frame].y =
+                read_runtime_catalog_i32(record.definition_bytes,
+                    offset + sizeof(u32),
+                    definition.frame_delta_by_direction[direction][frame].y);
+        }
+    }
+    definition.action_recovery_base_ticks = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionActionRecoveryBaseOffset,
+        definition.action_recovery_base_ticks);
+    definition.startup_followup_offset.x = read_runtime_catalog_i32(
+        record.definition_bytes, kUnitDefinitionStartupFollowupOffsetXOffset,
+        definition.startup_followup_offset.x);
+    definition.startup_followup_offset.y = read_runtime_catalog_i32(
+        record.definition_bytes, kUnitDefinitionStartupFollowupOffsetYOffset,
+        definition.startup_followup_offset.y);
+}
+
+const UnitMovementDefinition* default_unit_lifecycle_find_definition(
+    UnitLifecycleContext&, u32 unit_type) {
+    if (unit_type >= kUnitDefinitionResourceCount) {
+        return nullptr;
+    }
+    if (!g_runtime.unit_definition_cache_valid[unit_type]) {
+        if (!unit_definition_resource_catalog_state().loaded) {
+            LoadUnitDefinitionResourceCatalog();
+        }
+        const UnitDefinitionResourceCatalogState& catalog =
+            unit_definition_resource_catalog_state();
+        const UnitDefinitionResourceRecord& record = catalog.records[unit_type];
+        if (!record.loaded || record.definition_bytes.empty()) {
+            return nullptr;
+        }
+        UnitMovementUnit unit{};
+        unit.type_id = unit_type;
+        refresh_default_unit_definition_runtime_fields(unit);
+        g_runtime.unit_definition_cache[unit_type] = unit.definition;
+        g_runtime.unit_definition_cache[unit_type].type_flags = unit.type_flags;
+        g_runtime.unit_definition_cache_valid[unit_type] = true;
+    }
+    return &g_runtime.unit_definition_cache[unit_type];
+}
+
+bool tooltip_unit_uses_any_prerequisite(u32 type_id) {
+    return type_id == 0x76 || type_id == 0x78 || type_id == 0x68 ||
+        type_id == 0x88 || type_id == 0x7b || type_id == 0x67;
+}
+
+void sync_default_gameplay_tooltip_unit_definitions() {
+    GameplayTooltipState& tooltip = gameplay_tooltip_state();
+    tooltip.unit_definitions.clear();
+    tooltip.unit_definitions.reserve(kUnitDefinitionResourceCount);
+
+    for (u32 unit_type = 0; unit_type < kUnitDefinitionResourceCount; ++unit_type) {
+        const UnitMovementDefinition* source =
+            default_unit_lifecycle_find_definition(
+                g_runtime.gameplay_lifecycle_context, unit_type);
+        if (source == nullptr) {
+            continue;
+        }
+
+        GameplayTooltipUnitDefinition definition{};
+        definition.type = unit_type;
+        definition.name = startup_unit_name_or_fallback(unit_type);
+        definition.costs.values[0] = source->production_resource_cost;
+        definition.costs.values[1] = source->production_secondary_cost;
+        definition.costs.values[2] = source->production_population_cost;
+        const u32 prerequisite_count = std::min<u32>(
+            source->prerequisite_count,
+            static_cast<u32>(source->prerequisite_type_ids.size()));
+        definition.prerequisites.reserve(prerequisite_count);
+        for (u32 index = 0; index < prerequisite_count; ++index) {
+            definition.prerequisites.push_back(source->prerequisite_type_ids[index]);
+        }
+        definition.special_dependency_scope =
+            tooltip_unit_uses_any_prerequisite(unit_type);
+        tooltip.unit_definitions.push_back(std::move(definition));
+    }
+}
+
+u32 tooltip_limit_or_zero(u32 value) {
+    return value == 0xffffffffu ? 0 : value;
+}
+
+void sync_default_gameplay_tooltip_production_action_definitions(
+    GameplayTooltipState& tooltip) {
+    GameplayProductionActionState& production = gameplay_production_action_state();
+    sync_default_gameplay_production_action_definitions(production);
+
+    tooltip.production_actions.clear();
+    tooltip.production_actions.reserve(production.definitions.size());
+    for (std::size_t index = 0; index < production.definitions.size(); ++index) {
+        const GameplayProductionActionDefinition& source =
+            production.definitions[index];
+        GameplayTooltipProductionActionDefinition definition{};
+        definition.id = static_cast<u32>(index);
+        definition.name = startup_action_name_or_empty(definition.id);
+        definition.owner_requirement = source.owner_requirement;
+        definition.requirement_order_id = source.owner_requirement;
+        definition.active_limit = source.active_limit;
+        definition.queued_limit = source.queued_limit;
+        definition.resource_primary = tooltip_limit_or_zero(source.resource_limit);
+        definition.resource_secondary = tooltip_limit_or_zero(source.queued_limit);
+        definition.costs.values[1] = definition.resource_primary;
+        definition.costs.values[2] = definition.resource_secondary;
+        tooltip.production_actions.push_back(std::move(definition));
+    }
+}
+
+void sync_default_gameplay_tooltip_platform_texts(GameplayTooltipState& tooltip) {
+    const auto& rows = startup_text_tables().platform_rows.rows;
+    tooltip.platform_text_rows.clear();
+    tooltip.platform_text_rows.reserve(rows.size());
+    for (std::string_view row : rows) {
+        tooltip.platform_text_rows.emplace_back(row);
+    }
+}
+
+void sync_default_gameplay_tooltip_object_texts(GameplayTooltipState& tooltip) {
+    constexpr u32 kObjectIdBase = 0xaa;
+    constexpr u32 kObjectIdLast = 0x133;
+    constexpr std::size_t kStartupObjectTextRowBase = 126;
+
+    if (tooltip.object_texts.size() <= kObjectIdLast) {
+        tooltip.object_texts.resize(kObjectIdLast + 1);
+    }
+    for (u32 object_id = kObjectIdBase; object_id <= kObjectIdLast; ++object_id) {
+        tooltip.object_texts[object_id] = startup_platform_row(
+            kStartupObjectTextRowBase + object_id - kObjectIdBase, "");
+    }
+}
+
+bool default_unit_effect_definition_exists(const UnitEffectRuntimeState& state, u32 id) {
+    return std::any_of(state.definitions.begin(), state.definitions.end(),
+        [id](const UnitEffectDefinition& definition) {
+            return definition.id == id;
+        });
+}
+
+const UnitEffectDefinition* find_default_unit_effect_definition(
+    const UnitEffectRuntimeState& state, u32 id) {
+    const auto it = std::find_if(state.definitions.begin(), state.definitions.end(),
+        [id](const UnitEffectDefinition& definition) {
+            return definition.id == id;
+        });
+    return it == state.definitions.end() ? nullptr : &*it;
+}
+
+u32 unsigned_magnitude(i32 value) {
+    const long long wide_value = value;
+    return wide_value < 0
+        ? static_cast<u32>(-wide_value)
+        : static_cast<u32>(wide_value);
+}
+
+u32 auxiliary_effect_sound_slot_for_raw_ref(
+    const AuxiliaryRuntimeCatalogRecord& record, i32 raw_ref) {
+    if (raw_ref < 0) {
+        return 0xffffffffu;
+    }
+    if (record.sound_slots.empty()) {
+        return static_cast<u32>(raw_ref);
+    }
+    const std::size_t index = static_cast<std::size_t>(raw_ref);
+    if (index < record.sound_slots.size()) {
+        return record.sound_slots[index];
+    }
+    return record.sound_slots.front();
+}
+
+void append_auxiliary_effect_sprite_entries(std::vector<u32>& out,
+    const AuxiliaryRuntimeCatalogRecord& record, std::size_t count_offset,
+    std::size_t table_offset, std::vector<u32>* raw_indices = nullptr) {
+    const u32 count = std::min<u32>(
+        read_runtime_catalog_u32(record.definition_bytes, count_offset, 0),
+        kAuxiliaryEffectMaxImageIndexEntries);
+    for (u32 index = 0; index < count; ++index) {
+        const u32 image_index = read_runtime_catalog_u32(
+            record.definition_bytes, table_offset + index * sizeof(u32),
+            0xffffffffu);
+        if (raw_indices != nullptr) {
+            raw_indices->push_back(image_index);
+        }
+        if (image_index < record.image_resource_entries.size()) {
+            out.push_back(record.image_resource_entries[image_index]);
+        }
+    }
+}
+
+void append_jw211_effect_frame_sound_slots(
+    UnitEffectDefinition& definition, const AuxiliaryRuntimeCatalogRecord& record) {
+    for (u32 index = 0; index < kJw211EffectMaxFrameSoundEntries; ++index) {
+        const std::size_t base =
+            kJw211EffectSoundFrameBaseOffset + index * sizeof(u32) * 2;
+        const i32 frame = read_runtime_catalog_i32(
+            record.definition_bytes, base, -1);
+        if (frame < 0) {
+            return;
+        }
+        const i32 sound_ref = read_runtime_catalog_i32(
+            record.definition_bytes, base + sizeof(u32), static_cast<i32>(index));
+        const u32 sound_slot = auxiliary_effect_sound_slot_for_raw_ref(
+            record, sound_ref);
+        if (sound_slot == 0xffffffffu) {
+            continue;
+        }
+        definition.sound_frames.push_back(static_cast<u32>(frame));
+        definition.frame_sound_slots.emplace_back(
+            static_cast<u32>(frame), sound_slot);
+    }
+}
+
+void append_jw211_effect_impact_frames(UnitEffectDefinition& definition,
+    const std::vector<u8>& bytes) {
+    const u32 count = std::min<u32>(
+        read_runtime_catalog_u32(bytes, kJw211EffectImpactFrameCountOffset, 0),
+        kJw211EffectMaxImpactFrameEntries);
+    for (u32 index = 0; index < count; ++index) {
+        definition.impact_frames.push_back(read_runtime_catalog_u32(
+            bytes, kJw211EffectImpactFrameBaseOffset + index * sizeof(u32), 0));
+    }
+}
+
+void append_default_unit_effect_definition_from_catalog_record(
+    UnitEffectRuntimeState& state, const AuxiliaryRuntimeCatalogRecord& record,
+    u32 effect_id, bool projectile) {
+    if (!record.loaded || record.definition_bytes.empty() ||
+        default_unit_effect_definition_exists(state, effect_id)) {
+        return;
+    }
+
+    UnitEffectDefinition definition;
+    definition.id = effect_id;
+    definition.startup_ticks = bounded_runtime_catalog_u32(
+        record.definition_bytes, kAuxiliaryEffectStartupTicksOffset, 0,
+        kJw21xEffectMaxTimerValue, 0);
+    const u32 active_render_ticks = bounded_runtime_catalog_u32(
+        record.definition_bytes, kAuxiliaryEffectActiveRenderTicksOffset, 0,
+        kJw21xEffectMaxTimerValue, 0);
+    const u32 frame_count = bounded_runtime_catalog_u32(
+        record.definition_bytes, kAuxiliaryEffectFrameCountOffset, 0,
+        kJw21xEffectMaxTimerValue, 0);
+    definition.active_frames = projectile ? frame_count : active_render_ticks;
+    definition.active_step_iterations = bounded_runtime_catalog_u32(
+        record.definition_bytes, kAuxiliaryEffectActiveStepIterationsOffset, 0,
+        kJw21xEffectMaxTimerValue, 0);
+    definition.render_ticks = active_render_ticks;
+    definition.impact_render_ticks = frame_count;
+    definition.impact_radius = read_runtime_catalog_u32(
+        record.definition_bytes, kAuxiliaryEffectImpactRadiusOffset, 0);
+    definition.sprite_entry = record.image_resource_entries.empty()
+        ? 0
+        : record.image_resource_entries.front();
+    definition.startup_draw_mode = read_runtime_catalog_u32(
+        record.definition_bytes, kAuxiliaryEffectStartupDrawModeOffset, 0);
+    definition.active_draw_mode = read_runtime_catalog_u32(
+        record.definition_bytes, kAuxiliaryEffectActiveDrawModeOffset, 0);
+    definition.impact_draw_mode = read_runtime_catalog_u32(
+        record.definition_bytes, kAuxiliaryEffectImpactDrawModeOffset, 0);
+    definition.behavior_flags = read_runtime_catalog_u32(
+        record.definition_bytes, kAuxiliaryEffectBehaviorFlagsOffset, 0);
+    definition.spawn_impact_child = read_runtime_catalog_u32(
+        record.definition_bytes, kAuxiliaryEffectImpactChildFlagOffset, 0) != 0;
+    definition.impact_class_stride_factor = read_runtime_catalog_u32(
+        record.definition_bytes, kAuxiliaryEffectImpactClassStrideFactorOffset, 0);
+    definition.impact_class_frame_count = read_runtime_catalog_u32(
+        record.definition_bytes, kAuxiliaryEffectImpactClassFrameCountOffset, 0);
+    definition.render_sort_handler = read_runtime_catalog_u32(record.definition_bytes,
+        projectile ? kJw211EffectRenderSortHandlerOffset
+                   : kJw212EffectRenderSortHandlerOffset,
+        0xffffffffu);
+    definition.action_direction_mode = projectile
+        ? read_runtime_catalog_u32(record.definition_bytes,
+              kJw211ActionDirectionModeOffset, 0)
+        : 0;
+    if (projectile) {
+        definition.action_source_health_cost = read_runtime_catalog_u32(
+            record.definition_bytes, kJw211ActionSourceHealthCostOffset, 0);
+        definition.action_source_stat20_delta = read_runtime_catalog_u32(
+            record.definition_bytes, kJw211ActionSourceStat20DeltaOffset, 0);
+        definition.action_secondary_cost = read_runtime_catalog_u32(
+            record.definition_bytes, kJw211ActionSecondaryCostOffset, 1);
+        definition.action_create_unit_refund_secondary = read_runtime_catalog_u32(
+            record.definition_bytes,
+            kJw211ActionCreateUnitRefundSecondaryOffset, 0);
+        definition.action_create_unit_secondary_value = read_runtime_catalog_u32(
+            record.definition_bytes,
+            kJw211ActionCreateUnitSecondaryValueOffset, 0);
+        definition.action_create_unit_type_id = read_runtime_catalog_u32(
+            record.definition_bytes, kJw211ActionCreateUnitTypeOffset, 0);
+        definition.action_secondary_area_debit_limit = read_runtime_catalog_u32(
+            record.definition_bytes,
+            kJw211ActionSecondaryAreaDebitLimitOffset, 0);
+        definition.action_area_target_render_class_mask = read_runtime_catalog_u32(
+            record.definition_bytes,
+            kJw211ActionAreaTargetRenderClassMaskOffset, 0xffffffffu);
+        definition.action_channel_linked_damage_period = read_runtime_catalog_u32(
+            record.definition_bytes,
+            kJw211ActionChannelLinkedDamagePeriodOffset, 0);
+        definition.action_aura_frame_limit = read_runtime_catalog_u32(
+            record.definition_bytes, kJw211ActionAuraFrameLimitOffset, 0);
+        definition.action_aura_tick_reset_value = read_runtime_catalog_u32(
+            record.definition_bytes, kJw211ActionAuraTickResetValueOffset, 0);
+        definition.action_aura_tick_reset_threshold = read_runtime_catalog_u32(
+            record.definition_bytes, kJw211ActionAuraTickResetThresholdOffset, 0);
+        definition.action_aura_radius = read_runtime_catalog_u32(
+            record.definition_bytes, kJw211ActionAuraRadiusOffset, 0);
+        definition.action_area_damage_radius = read_runtime_catalog_u32(
+            record.definition_bytes, kJw211ActionAreaDamageRadiusOffset, 0);
+        definition.action_target_lock_frame = read_runtime_catalog_u32(
+            record.definition_bytes, kJw211ActionTargetLockFrameOffset, 0);
+        definition.action_target_health_delta = -read_runtime_catalog_i32(
+            record.definition_bytes, kJw211ActionTargetHealthDeltaOffset, -1);
+        definition.action_startup_ticks = read_runtime_catalog_u32(
+            record.definition_bytes, kJw211ActionStartupTicksOffset, 0);
+        definition.action_path_control = read_runtime_catalog_u32(
+            record.definition_bytes, kJw211ActionPathControlOffset, 0);
+        definition.action_projectile_loop_ticks = read_runtime_catalog_u32(
+            record.definition_bytes, kJw211ActionProjectileLoopTicksOffset, 0);
+        definition.action_nearby_marker_radius = read_runtime_catalog_u32(
+            record.definition_bytes, kJw211ActionNearbyMarkerRadiusOffset, 0);
+        definition.area_damage_allows_related_targets = read_runtime_catalog_u32(
+            record.definition_bytes, kJw211AreaDamageOwnerRelationModeOffset, 0) == 1;
+        std::vector<u32> unused_sprite_entries;
+        append_auxiliary_effect_sprite_entries(unused_sprite_entries, record,
+            kAuxiliaryEffectActiveRenderTicksOffset,
+            kJw211ActionSequenceImageIndexBaseOffset,
+            &definition.action_sequence_image_indices);
+        for (std::size_t index = 0;
+             index < definition.action_projectile_impact_percent.size(); ++index) {
+            definition.action_projectile_impact_percent[index] =
+                read_runtime_catalog_u32(record.definition_bytes,
+                    kJw211ActionProjectileImpactPercentOffsets[index], 100);
+        }
+        if (effect_id == kJw211RestoreLinkedHealthEffectId) {
+            state.linked_health_restore_secondary_cost =
+                definition.action_secondary_cost;
+            state.linked_health_restore_amount =
+                definition.action_target_health_delta > 0
+                    ? static_cast<u32>(definition.action_target_health_delta)
+                    : 0;
+            state.linked_health_restore_globals_loaded = true;
+        }
+    }
+    if (!projectile) {
+        definition.allowed_target_render_class_mask = read_runtime_catalog_u32(
+            record.definition_bytes, kJw212ActionTargetRenderClassMaskOffset,
+            definition.allowed_target_render_class_mask);
+        definition.area_damage_allows_related_targets = read_runtime_catalog_u32(
+            record.definition_bytes, kJw212AreaDamageOwnerRelationModeOffset, 0) == 1;
+        definition.startup_uses_source_muzzle = read_runtime_catalog_u32(
+            record.definition_bytes, kJw212EffectStartupSourceMuzzleFlagOffset, 0) != 0;
+    }
+    definition.image_resource_entries = record.image_resource_entries;
+    append_auxiliary_effect_sprite_entries(definition.startup_sprite_entries,
+        record, kAuxiliaryEffectStartupTicksOffset,
+        kAuxiliaryEffectStartupImageIndexBaseOffset);
+    append_auxiliary_effect_sprite_entries(definition.active_sprite_entries,
+        record, kAuxiliaryEffectActiveRenderTicksOffset,
+        kAuxiliaryEffectActiveImageIndexBaseOffset);
+    append_auxiliary_effect_sprite_entries(definition.impact_sprite_entries,
+        record, kAuxiliaryEffectFrameCountOffset,
+        kAuxiliaryEffectImpactImageIndexBaseOffset,
+        &definition.impact_image_indices);
+    definition.start_sound_slot = auxiliary_effect_sound_slot_for_raw_ref(
+        record, read_runtime_catalog_i32(record.definition_bytes,
+            kAuxiliaryEffectStartSoundOffset, -1));
+    if (projectile) {
+        definition.directional_active_frames = read_runtime_catalog_u32(
+            record.definition_bytes, kJw211EffectPathKindOffset, 1) == 1;
+        definition.damage_amount = unsigned_magnitude(read_runtime_catalog_i32(
+            record.definition_bytes, kJw211EffectDamageAmountOffset, 0));
+        append_jw211_effect_frame_sound_slots(definition, record);
+        append_jw211_effect_impact_frames(definition, record.definition_bytes);
+    }
+    definition.projectile = projectile &&
+        read_runtime_catalog_u32(record.definition_bytes,
+            kJw211EffectPathKindOffset, 1) == 1;
+    state.definitions.push_back(std::move(definition));
+}
+
+UnitActionDamageProfile default_unit_action_damage_profile_from_catalog_record(
+    const AuxiliaryRuntimeCatalogRecord& record) {
+    UnitActionDamageProfile profile;
+    if (!record.loaded || record.definition_bytes.empty()) {
+        return profile;
+    }
+
+    profile.render_class2_terrain_gate = read_runtime_catalog_u32(
+        record.definition_bytes, kJw212ActionClass2TerrainGateOffset,
+        profile.render_class2_terrain_gate);
+    profile.allowed_target_render_class_mask = read_runtime_catalog_u32(
+        record.definition_bytes, kJw212ActionTargetRenderClassMaskOffset,
+        profile.allowed_target_render_class_mask);
+    profile.target_distance_gate = read_runtime_catalog_u32(
+        record.definition_bytes, kJw212ActionTargetDistanceGateOffset,
+        profile.target_distance_gate);
+    profile.area_damage_allows_related_targets = read_runtime_catalog_u32(
+        record.definition_bytes, kJw212AreaDamageOwnerRelationModeOffset, 0) == 1;
+    for (std::size_t index = 0;
+         index < kJw212ActionDamageRenderClassOffsets.size(); ++index) {
+        profile.render_class_percent[index] = read_runtime_catalog_i32(
+            record.definition_bytes, kJw212ActionDamageRenderClassOffsets[index], 100);
+    }
+    for (std::size_t index = 0;
+         index < kJw212ActionDamageProjectileImpactClassOffsets.size(); ++index) {
+        profile.projectile_impact_class_percent[index] = read_runtime_catalog_i32(
+            record.definition_bytes,
+            kJw212ActionDamageProjectileImpactClassOffsets[index], 100);
+    }
+    return profile;
+}
+
+void sync_default_unit_action_damage_profiles_from_runtime_catalog() {
+    if (g_runtime.gameplay_action_damage_profiles_initialized) {
+        return;
+    }
+    g_runtime.gameplay_action_damage_profiles_initialized = true;
+
+    UnitActionDamageProfileTable& table =
+        g_runtime.gameplay_action_damage_profiles;
+    table.profiles.clear();
+
+    if (jw212_runtime_catalog_state().records.empty()) {
+        LoadJw212RuntimeCatalog();
+    }
+    const AuxiliaryRuntimeCatalogState& jw212 = jw212_runtime_catalog_state();
+    table.profiles.reserve(jw212.records.size());
+    for (const AuxiliaryRuntimeCatalogRecord& record : jw212.records) {
+        table.profiles.push_back(
+            default_unit_action_damage_profile_from_catalog_record(record));
+    }
+}
+
+void sync_default_unit_effect_definitions_from_runtime_catalogs() {
+    if (g_runtime.gameplay_unit_effect_definitions_initialized) {
+        return;
+    }
+    g_runtime.gameplay_unit_effect_definitions_initialized = true;
+
+    UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
+    effects.definitions.clear();
+
+    if (jw212_runtime_catalog_state().records.empty()) {
+        LoadJw212RuntimeCatalog();
+    }
+    const AuxiliaryRuntimeCatalogState& jw212 = jw212_runtime_catalog_state();
+    for (std::size_t index = 0; index < jw212.records.size(); ++index) {
+        append_default_unit_effect_definition_from_catalog_record(effects,
+            jw212.records[index], static_cast<u32>(index), false);
+    }
+
+    if (jw211_runtime_catalog_state().records.empty()) {
+        LoadJw211RuntimeCatalog();
+    }
+    const AuxiliaryRuntimeCatalogState& jw211 = jw211_runtime_catalog_state();
+    for (std::size_t index = 0; index < jw211.records.size(); ++index) {
+        append_default_unit_effect_definition_from_catalog_record(effects,
+            jw211.records[index], 0x3d + static_cast<u32>(index), true);
+    }
+}
+
+u32 default_unit_effect_original_slot_offset(
+    const UnitEffectRuntimeState& effects, const UnitEffectRuntime* effect) {
+    if (effect == nullptr) {
+        return 0;
+    }
+
+    for (std::size_t index = 0; index < effects.effect_slots.size(); ++index) {
+        if (&effects.effect_slots[index] != effect) {
+            continue;
+        }
+
+        const u64 offset =
+            (static_cast<u64>(index) + 1u) * kUnitEffectOriginalSlotStride;
+        return offset <= std::numeric_limits<u32>::max()
+            ? static_cast<u32>(offset)
+            : 0;
+    }
+    return 0;
+}
+
+void sync_default_unit_effect_runtime_units(UnitEffectRuntimeState& effects,
+    UnitLifecycleContext& lifecycle) {
+    effects.units.clear();
+    effects.unit_refs.clear();
+    if (lifecycle.movement != nullptr) {
+        effects.units.reserve(lifecycle.movement->active_units.size());
+        effects.unit_refs.reserve(lifecycle.movement->active_units.size());
+        for (UnitMovementUnit* unit : lifecycle.movement->active_units) {
+            if (unit != nullptr && unit->active) {
+                effects.units.push_back(*unit);
+                effects.unit_refs.push_back(unit);
+            }
+        }
+    }
+
+    for (std::size_t owner = 0; owner < effects.owner_primary_resources.size() &&
+         owner < lifecycle.owner_primary_resources.size(); ++owner) {
+        effects.owner_primary_resources[owner] =
+            lifecycle.owner_primary_resources[owner];
+    }
+}
+
+void commit_default_unit_effect_runtime_resources(
+    UnitEffectRuntimeState& effects, UnitLifecycleContext& lifecycle) {
+    for (std::size_t owner = 0; owner < effects.owner_primary_resources.size() &&
+         owner < lifecycle.owner_primary_resources.size(); ++owner) {
+        lifecycle.owner_primary_resources[owner] =
+            effects.owner_primary_resources[owner];
+    }
+}
+
+void drain_default_unit_effect_sound_events(const UnitEffectRuntimeState& effects) {
+    for (const UnitEffectEvent& event : effects.events) {
+        if (event.kind != UnitEffectEventKind::frame_sound) {
+            continue;
+        }
+        HandleVisibleWorldPointGameplaySoundQueued(g_runtime.gameplay_sound,
+            event.value, event.x, event.y, 0, 0);
+    }
+}
+
+void default_unit_effect_camera_shake(
+    UnitEffectRuntimeState& effects, const UnitEffectRuntime&) {
+    UiOverlayState& overlay = ui_overlay_state();
+    const i32 dx =
+        static_cast<i32>(default_gameplay_frame_random_limit(0x20)) - 0x10;
+    const i32 dy =
+        static_cast<i32>(default_gameplay_frame_random_limit(0x20)) - 0x10;
+    overlay.camera_x = std::clamp(overlay.camera_x + dx, 0, overlay.camera_max_x);
+    overlay.camera_y = std::clamp(overlay.camera_y + dy, 0, overlay.camera_max_y);
+    publish_default_ui_overlay_camera(overlay);
+
+    effects.viewport_left = overlay.camera_x;
+    effects.viewport_top = overlay.camera_y;
+    effects.viewport_right = overlay.camera_x + kOriginalClientWidth;
+    effects.viewport_bottom = overlay.camera_y + kOriginalClientHeight;
+}
+
+u32 default_unit_effect_impact_damage(UnitEffectRuntimeState&,
+    const UnitEffectRuntime& effect, UnitMovementUnit* source,
+    UnitMovementUnit& target) {
+    if (source == nullptr) {
+        return effect.amount;
+    }
+    return default_unit_action_direct_damage(*source, target);
+}
+
+void configure_default_unit_effect_runtime_state(UnitEffectRuntimeState& effects) {
+    sync_default_unit_effect_definitions_from_runtime_catalogs();
+    const UnitEquipmentCatalog& equipment_catalog =
+        frontend_bootstrap_state().equipment_catalog;
+    effects.production_state = &g_runtime.gameplay_production_runtime;
+    effects.equipment_catalog =
+        equipment_catalog.effects.empty() ? nullptr : &equipment_catalog;
+    effects.lifecycle_context = g_runtime.gameplay_startup_state.lifecycle;
+    const auto& command_runtime_states =
+        original_unit_command_runtime_state_table();
+    effects.command_state_table.assign(
+        command_runtime_states.begin(), command_runtime_states.end());
+    effects.render_queue = &g_runtime.gameplay_render_command_queue;
+    effects.visibility_grid = &g_runtime.gameplay_visibility_grid;
+    effects.players = &g_runtime.gameplay_player_slots;
+    effects.local_player_slot = g_runtime.gameplay_player_slots.local_player_slot;
+    effects.frame_counter = gameplay_loop_state().simulation_frame_counter;
+    effects.require_revealed_visibility =
+        !g_runtime.gameplay_startup_state.fog_reveal_disabled;
+    effects.callbacks.on_camera_shake = default_unit_effect_camera_shake;
+    effects.callbacks.selected_production_gate =
+        default_unit_effect_selected_production_gate;
+    effects.callbacks.create_unit = default_unit_effect_create_unit;
+    effects.callbacks.calculate_impact_damage = default_unit_effect_impact_damage;
+    ConfigureUnitEffectRenderPalette(effects, false);
+}
+
+void run_default_unit_effect_runtime_list_tick(GameplayLoopState&) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr) {
+        return;
+    }
+
+    UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
+    configure_default_unit_effect_runtime_state(effects);
+    drain_default_unit_effect_sound_events(effects);
+    drain_default_unit_effect_impact_events(effects, *lifecycle);
+    effects.events.clear();
+    effects.trail_segments.clear();
+    sync_default_unit_effect_runtime_units(effects, *lifecycle);
+    TickUnitEffectRuntimeList(effects);
+    drain_default_unit_effect_sound_events(effects);
+    drain_default_unit_effect_impact_events(effects, *lifecycle);
+    effects.events.clear();
+    commit_default_unit_effect_runtime_resources(effects, *lifecycle);
+}
+
+void default_gameplay_frame_prepare_visible_runtime_resources(
+    GameplayFrameRenderContext& context) {
+    UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
+    configure_default_unit_effect_runtime_state(effects);
+    effects.render_queue = context.render_command_queue != nullptr
+        ? context.render_command_queue
+        : &g_runtime.gameplay_render_command_queue;
+    effects.viewport_left = context.camera_x;
+    effects.viewport_top = context.camera_y;
+    effects.viewport_right =
+        context.camera_x + static_cast<i32>(context.viewport_width);
+    effects.viewport_bottom =
+        context.camera_y + static_cast<i32>(context.viewport_height);
+    effects.frame_counter = context.frame_counter;
+    QueueVisibleUnitEffectRenderCommands(effects);
+}
+
+bool default_movement_map_ready(const UnitMovementMap& map) {
+    if (map.width == 0 || map.height == 0) {
+        return false;
+    }
+    const std::size_t required =
+        static_cast<std::size_t>(UnitMovementMapTileIndex(
+            map, map.width - 1, map.height - 1)) + 1u;
+    return map.cells.size() >= required;
+}
+
+void configure_default_gameplay_visibility_fallback_consumers() {
+    UnitVisibilityGrid& render_visibility =
+        g_runtime.gameplay_unit_render_queue.visibility;
+    render_visibility.width = kGameplayVisibilityTileWidth;
+    render_visibility.height = kGameplayVisibilityTileWidth;
+    render_visibility.require_revealed = false;
+    render_visibility.cells.assign(kGameplayVisibilityTileCount,
+        kMapTileVisible | kMapTileRevealed);
+    render_visibility.fog_blocked_cells = nullptr;
+
+    GameplaySoundState& sound = g_runtime.gameplay_sound;
+    sync_default_gameplay_sound_spatial_view(sound);
+    GameplaySoundTileMap& sound_visibility = sound.visibility_map;
+    sound_visibility.visible_flag = kGameplayVisibilityRevealed;
+    sound_visibility.width = 1;
+    sound_visibility.height = 1;
+    sound_visibility.flags.assign(1, kGameplayVisibilityRevealed);
+}
+
+void ensure_default_gameplay_visibility_grid(const UnitMovementMap& map) {
+    GameplayVisibilityGrid& grid = g_runtime.gameplay_visibility_grid;
+    const u32 width = map.width != 0 ? map.width : kGameplayVisibilityTileWidth;
+    const u32 height = map.height != 0 ? map.height : kGameplayVisibilityTileWidth;
+    const std::size_t count =
+        static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+
+    const bool resized = grid.width != width || grid.height != height ||
+        grid.current.size() != count || grid.previous.size() != count ||
+        grid.owner.size() != count || grid.terrain.size() != count ||
+        grid.terrain_class_flags.size() != count ||
+        grid.terrain_backup.size() != count;
+    grid.width = width;
+    grid.height = height;
+    if (resized) {
+        grid.current.assign(count, 0);
+        grid.previous.assign(count, 0);
+        grid.owner.assign(count, 0);
+        grid.terrain.assign(count, 0);
+        grid.terrain_class_flags.assign(count, 0);
+        grid.terrain_backup.assign(count, 0);
+    }
+
+    const GameplaySessionLoadState& load = gameplay_session_load_state();
+    const std::vector<u8>* fog_terrain_layer = nullptr;
+    if (resized && kGameplayFogMap3LayerRecordIndex < load.records.size() &&
+        load.record_loaded[kGameplayFogMap3LayerRecordIndex]) {
+        fog_terrain_layer = &load.records[kGameplayFogMap3LayerRecordIndex];
+    }
+
+    for (u32 y = 0; y < height; ++y) {
+        for (u32 x = 0; x < width; ++x) {
+            const std::size_t source_index = UnitMovementMapTileIndex(map, x, y);
+            const std::size_t target_index =
+                static_cast<std::size_t>(y) * width + x;
+            if (source_index >= map.cells.size() || target_index >= grid.terrain.size()) {
+                continue;
+            }
+            const UnitMovementCell& cell = map.cells[source_index];
+            grid.terrain[target_index] = cell.flags;
+            grid.terrain_class_flags[target_index] = cell.alternate_flags;
+            if (fog_terrain_layer != nullptr) {
+                grid.terrain_backup[target_index] =
+                    read_default_map_layer_u32(*fog_terrain_layer,
+                        static_cast<u32>(source_index));
+            }
+        }
+    }
+}
+
+u32 default_owner_visibility_mask(u32 owner_id) {
+    if (owner_id >= kPlayerSlotCount) {
+        return 0;
+    }
+
+    u32 mask = g_runtime.gameplay_player_slots.owner_visibility_masks[owner_id];
+    const u32 local_slot = g_runtime.gameplay_player_slots.local_player_slot;
+    if (mask == 0 && owner_id == local_slot && local_slot < 32) {
+        mask = 1u << local_slot;
+    }
+    return mask;
+}
+
+GameplayVisibilityUnit make_default_gameplay_visibility_unit(
+    const UnitMovementUnit& unit) {
+    GameplayVisibilityUnit visibility{};
+    visibility.owner_id = unit.owner_id;
+    visibility.type_id = unit.type_id;
+    visibility.variant = unit.production_variant;
+    visibility.runtime_flags = unit.runtime_flags;
+    visibility.state_flags = unit.command_state | unit.command_flags;
+    visibility.command_bits = unit.command_bits;
+    visibility.owner_visibility_mask = default_owner_visibility_mask(unit.owner_id);
+    visibility.owner_explore_mask = visibility.owner_visibility_mask;
+    visibility.max_health = unit.max_health != 0 ?
+        unit.max_health : std::max<u32>(unit.definition.initial_max_health, 1);
+    visibility.health = std::min(unit.health, visibility.max_health);
+    visibility.animation_timer = unit.animation_timer;
+    visibility.x = unit.x;
+    visibility.y = unit.y;
+    visibility.center_x = unit.x + unit.definition.center_bounds_left +
+        (unit.definition.center_bounds_width >> 1);
+    visibility.center_y = unit.y + unit.definition.center_bounds_top +
+        (unit.definition.center_bounds_height >> 1);
+    visibility.visibility_probe_x = unit.x;
+    visibility.visibility_probe_y = unit.y;
+    visibility.owner_layer_probe_x = unit.x & ~0x1f;
+    visibility.owner_layer_probe_y = unit.y & ~0x1f;
+    visibility.fallback_range_tiles = 5;
+    visibility.terrain_class = 7;
+    visibility.movement_class = unit.definition.movement_class;
+    visibility.large_centered = unit.type_id > 0x5f;
+    visibility.is_structure = unit.definition.lifecycle_class == 2;
+    const UnitEquipmentCatalog& equipment_catalog =
+        frontend_bootstrap_state().equipment_catalog;
+    visibility.interaction_range_pixels =
+        CalculateUnitInteractionRangeWithProductionAndEquipmentEffects(
+            g_runtime.gameplay_production_runtime, unit,
+            unit.definition.effect_command_distance_gate,
+            equipment_catalog.effects.empty() ? nullptr : &equipment_catalog);
+    visibility.current_visibility_enabled = CheckUnitCommandGateWithProductionEffect12(
+        g_runtime.gameplay_production_runtime, unit, false, unit.type_flags, 0,
+        equipment_catalog.effects.empty() ? nullptr : &equipment_catalog);
+    return visibility;
+}
+
+void append_default_gameplay_visibility_unit(
+    const UnitMovementUnit* unit, bool lifecycle_unit) {
+    if (unit == nullptr || !unit->active) {
+        return;
+    }
+
+    g_runtime.gameplay_visibility_units.push_back(
+        make_default_gameplay_visibility_unit(*unit));
+    GameplayVisibilityUnit* visibility_unit =
+        &g_runtime.gameplay_visibility_units.back();
+    if (lifecycle_unit) {
+        g_runtime.gameplay_visibility_context.lifecycle_units.push_back(
+            visibility_unit);
+    } else {
+        g_runtime.gameplay_visibility_context.active_units.push_back(
+            visibility_unit);
+    }
+}
+
+std::string default_unit_display_name(const UnitMovementUnit& unit) {
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    if (movement != nullptr && unit.string_slot < movement->string_slots.size()) {
+        const auto& slot = movement->string_slots[unit.string_slot];
+        if (slot[0] != '\0') {
+            std::size_t length = 0;
+            while (length < slot.size() && slot[length] != '\0') {
+                ++length;
+            }
+            return std::string(slot.data(), length);
+        }
+    }
+    return startup_unit_name_or_fallback(unit.type_id);
+}
+
+UnitRenderItem make_default_unit_render_item(UnitMovementUnit& unit) {
+    UnitRenderItem item{};
+    GameplayDamageRecordLink* link = find_default_damage_record_link(&unit);
+    item.unit = link != nullptr ? &link->record : nullptr;
+    item.type_id = unit.type_id;
+    item.owner_id = unit.owner_id;
+    item.runtime_slot_index = unit.runtime_slot_index;
+    item.render_class = unit.definition.render_class;
+    item.definition_kind = unit.definition.lifecycle_class;
+    item.animation_flags = unit.area_marker_flags;
+    item.marker_flags = unit.area_marker_flags;
+    item.command_state = unit.command_state;
+    item.command_flags = unit.command_flags;
+    item.command_metadata_flags =
+        default_unit_command_metadata_flags_from_original_table(unit);
+    item.definition_cell_flags = unit.definition.cell_render_flags;
+    item.terrain_cell_flags = 0;
+    item.state_flags = unit.command_state;
+    item.runtime_flags = unit.runtime_flags;
+    item.draw_flags = unit.draw_flags;
+    item.animation_frame = unit.animation_frame;
+    item.animation_timer = unit.animation_timer;
+    item.command_lockout_ticks = unit.command_lockout_ticks;
+    item.global_frame_counter = g_runtime.gameplay_frame_render_context.frame_counter;
+    item.direction = static_cast<i32>(unit.direction);
+    item.cargo_amount = unit.cargo_amount;
+    item.max_hit_points = unit.max_health != 0
+        ? unit.max_health
+        : std::max<u32>(unit.definition.initial_max_health, 1);
+    item.hit_points = std::min(unit.health, item.max_hit_points);
+    item.max_secondary_value = unit.max_secondary_value;
+    item.secondary_value = std::min(unit.secondary_value, item.max_secondary_value);
+    item.cell_animation_frame = unit.animation_frame;
+    item.cell_flag40_animation_frame = unit.action_mode_gate;
+    item.cell_channel_additive_frame = unit.action_mode;
+    item.construction_stage_count = unit.definition.spawn_frame_count;
+    item.construction_progress = unit.work_timer;
+    item.construction_progress_limit = unit.definition.production_spawn_time;
+    item.low_health_overlay_frame = unit.animation_frame;
+    item.ability_id = unit.ability_id;
+    item.x = unit.x;
+    item.y = unit.y;
+    item.center_offset_x = unit.definition.center_bounds_left;
+    item.center_offset_y = unit.definition.center_bounds_top;
+    item.center_width = std::max<i32>(unit.definition.center_bounds_width,
+        static_cast<i32>(std::max<u32>(unit.definition.footprint_width_tiles, 1) << 5));
+    item.center_height = std::max<i32>(unit.definition.center_bounds_height,
+        static_cast<i32>(std::max<u32>(unit.definition.footprint_height_tiles, 1) << 5));
+    item.cell_construction_progress_active = unit.item_slots[0] == 1;
+    item.cell_channel_additive_active = unit.ability_id == 1;
+    item.display_name = default_unit_display_name(unit);
+    return item;
+}
+
+void mirror_default_gameplay_visibility_to_consumers(
+    GameplayVisibilityGrid& grid) {
+    UnitVisibilityGrid& render_visibility =
+        g_runtime.gameplay_unit_render_queue.visibility;
+    render_visibility.width = grid.width;
+    render_visibility.height = grid.height;
+    render_visibility.require_revealed =
+        !g_runtime.gameplay_startup_state.fog_reveal_disabled;
+    render_visibility.cells = grid.current;
+    render_visibility.fog_blocked_cells = &grid.previous;
+
+    GameplaySoundState& sound = g_runtime.gameplay_sound;
+    sync_default_gameplay_sound_spatial_view(sound);
+    GameplaySoundTileMap& sound_visibility = sound.visibility_map;
+    sound_visibility.visible_flag = kGameplayVisibilityRevealed;
+    sound_visibility.width = grid.width;
+    sound_visibility.height = grid.height;
+    sound_visibility.flags = grid.current;
+}
+
+void configure_default_gameplay_fog_context() {
+    GameplayVisibilityGrid& grid = g_runtime.gameplay_visibility_grid;
+    GameplayFogRenderContext& fog = g_runtime.gameplay_fog_context;
+    if (grid.current.empty()) {
+        fog.grid = nullptr;
+        return;
+    }
+
+    if (g_runtime.gameplay_fog_mask_table.empty()) {
+        LoadGameplayFogMaskTable(g_runtime.gameplay_fog_mask_table);
+    }
+    fog.grid = &grid;
+    fog.fog_mask_table = g_runtime.gameplay_fog_mask_table.empty() ?
+        nullptr : g_runtime.gameplay_fog_mask_table.data();
+    fog.fog_mask_table_bytes = g_runtime.gameplay_fog_mask_table.size();
+    fog.camera_x = g_runtime.gameplay_frame_render_context.camera_x;
+    fog.camera_y = g_runtime.gameplay_frame_render_context.camera_y;
+}
+
+void sync_default_gameplay_visibility_and_render_inputs(u32 frame_counter) {
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    g_runtime.gameplay_unit_render_queue.units.clear();
+    g_runtime.gameplay_unit_render_queue.effects.clear();
+    g_runtime.gameplay_unit_render_queue.queued_entries.clear();
+
+    if (movement == nullptr || !default_movement_map_ready(movement->map)) {
+        configure_default_gameplay_visibility_fallback_consumers();
+        return;
+    }
+
+    ensure_default_gameplay_visibility_grid(movement->map);
+    movement->visibility_layers.previous_flags =
+        &g_runtime.gameplay_visibility_grid.previous;
+    movement->visibility_layers.terrain_backup_flags =
+        &g_runtime.gameplay_visibility_grid.terrain_backup;
+    movement->visibility_layers.width = g_runtime.gameplay_visibility_grid.width;
+    movement->visibility_layers.height = g_runtime.gameplay_visibility_grid.height;
+    movement->visibility_layers.stride_tiles = g_runtime.gameplay_visibility_grid.width;
+    GameplayVisibilityContext& context = g_runtime.gameplay_visibility_context;
+    context.grid = &g_runtime.gameplay_visibility_grid;
+    context.players = &g_runtime.gameplay_player_slots;
+    context.active_units.clear();
+    context.lifecycle_units.clear();
+    context.frame_counter = frame_counter;
+    context.local_player_slot = g_runtime.gameplay_player_slots.local_player_slot;
+    u32 current_clear_bits = 0x07fc0000u;
+    u32 owner_clear_bits = 0;
+    if (!g_runtime.gameplay_startup_state.fog_reveal_disabled) {
+        current_clear_bits |= kGameplayVisibilityRevealed;
+        owner_clear_bits |= kGameplayVisibilityOwnerLowMask;
+    }
+    context.current_mask_clear = ~current_clear_bits;
+    context.owner_mask_clear = ~owner_clear_bits;
+    context.fog_disabled = false;
+
+    const std::size_t active_count = movement->active_units.size();
+    const std::size_t lifecycle_count = movement->lifecycle_units.size();
+    g_runtime.gameplay_visibility_units.clear();
+    g_runtime.gameplay_visibility_units.reserve(active_count + lifecycle_count);
+    context.active_units.reserve(active_count);
+    context.lifecycle_units.reserve(lifecycle_count);
+    for (UnitMovementUnit* unit : movement->active_units) {
+        append_default_gameplay_visibility_unit(unit, false);
+    }
+    for (UnitMovementUnit* unit : movement->lifecycle_units) {
+        append_default_gameplay_visibility_unit(unit, true);
+    }
+
+    UpdateGameplayVisibilityMap(context);
+    mirror_default_gameplay_visibility_to_consumers(*context.grid);
+    configure_default_gameplay_fog_context();
+    g_runtime.gameplay_unit_render_queue.local_owner_id =
+        g_runtime.gameplay_player_slots.local_player_slot;
+    g_runtime.gameplay_unit_render_queue.owner_relation_masks =
+        g_runtime.gameplay_player_slots.owner_relation_masks;
+    g_runtime.gameplay_unit_render_queue.owner_visibility_masks =
+        g_runtime.gameplay_player_slots.owner_visibility_masks;
+
+    g_runtime.gameplay_unit_render_queue.units.reserve(active_count);
+    for (UnitMovementUnit* unit : movement->active_units) {
+        if (unit == nullptr || !unit->active) {
+            continue;
+        }
+        g_runtime.gameplay_unit_render_queue.units.push_back(
+            make_default_unit_render_item(*unit));
+    }
+}
+
+bool default_world_tile_currently_visible(i32 world_x, i32 world_y) {
+    if (g_runtime.gameplay_startup_state.fog_reveal_disabled) {
+        return true;
+    }
+
+    const GameplayVisibilityGrid& grid = g_runtime.gameplay_visibility_grid;
+    if (grid.width == 0 || grid.height == 0 || grid.current.empty()) {
+        return true;
+    }
+    if (world_x < 0 || world_y < 0) {
+        return false;
+    }
+
+    const u32 tile_x = static_cast<u32>(world_x) >> 5;
+    const u32 tile_y = static_cast<u32>(world_y) >> 5;
+    if (tile_x >= grid.width || tile_y >= grid.height) {
+        return false;
+    }
+    const std::size_t index =
+        static_cast<std::size_t>(tile_y) * grid.width + tile_x;
+    return index < grid.current.size() &&
+        (grid.current[index] & kGameplayVisibilityVisible) != 0;
+}
+
+u32 default_owner_ai_route_object_visibility_mask(i32 world_x, i32 world_y) {
+    if (g_runtime.gameplay_startup_state.fog_reveal_disabled) {
+        return kGameplayVisibilityOwnerLowMask;
+    }
+
+    const GameplayVisibilityGrid& grid = g_runtime.gameplay_visibility_grid;
+    if (grid.width == 0 || grid.height == 0 || grid.current.empty()) {
+        return 0xffffffffu;
+    }
+    if (world_x < 0 || world_y < 0) {
+        return 0;
+    }
+
+    const u32 tile_x = static_cast<u32>(world_x) >> 5;
+    const u32 tile_y = static_cast<u32>(world_y) >> 5;
+    if (tile_x >= grid.width || tile_y >= grid.height) {
+        return 0;
+    }
+
+    const std::size_t index =
+        static_cast<std::size_t>(tile_y) * grid.width + tile_x;
+    if (index >= grid.current.size()) {
+        return 0;
+    }
+
+    const u32 flags = grid.current[index];
+    u32 mask =
+        (flags & kGameplayVisibilityCurrentOwnerMask) >>
+        kGameplayVisibilityCurrentOwnerShift;
+    if (mask == 0) {
+        mask = flags & kGameplayVisibilityOwnerLowMask;
+    }
+    if (mask == 0) {
+        mask = (flags & kGameplayVisibilityOwnerLayerHighMask) >>
+            kGameplayVisibilityOwnerLayerShift;
+    }
+    return mask;
+}
+
+UiOverlayMinimapUnit make_default_ui_overlay_minimap_unit(
+    const UnitMovementUnit& unit) {
+    UiOverlayMinimapUnit overlay_unit{};
+    overlay_unit.unit_id = unit.id;
+    overlay_unit.type_id = unit.type_id;
+    overlay_unit.owner_id = unit.owner_id;
+    overlay_unit.runtime_flags = unit.runtime_flags;
+    overlay_unit.selection_score = unit.max_health + unit.health +
+        unit.runtime_stat_1c + unit.runtime_stat_20 +
+        unit.max_secondary_value + unit.runtime_stat_28;
+    overlay_unit.world_x = unit.x;
+    overlay_unit.world_y = unit.y;
+    if (unit.type_id < 0x60) {
+        overlay_unit.world_x = unit.x + unit.definition.center_bounds_left +
+            (unit.definition.center_bounds_width >> 1);
+        overlay_unit.world_y = unit.y + unit.definition.center_bounds_top +
+            (unit.definition.center_bounds_height >> 1);
+    }
+    overlay_unit.footprint_width_tiles =
+        std::max<u32>(unit.definition.footprint_width_tiles, 1);
+    overlay_unit.footprint_height_tiles =
+        std::max<u32>(unit.definition.footprint_height_tiles, 1);
+    overlay_unit.visible_to_local_player =
+        unit.owner_id == g_runtime.gameplay_player_slots.local_player_slot ||
+        default_world_tile_currently_visible(
+            overlay_unit.world_x, overlay_unit.world_y);
+    overlay_unit.hidden_from_minimap =
+        (unit.runtime_flags & kUnitRenderHiddenFlag) != 0;
+    return overlay_unit;
+}
+
+void clear_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
+    overlay.selected_unit_name_text.clear();
+    overlay.selected_unit_owner_text.clear();
+    overlay.selected_unit_experience_text.clear();
+    overlay.selected_unit_order_text.clear();
+    overlay.selected_unit_capability_lines.clear();
+    overlay.selected_unit_health = 0;
+    overlay.selected_unit_health_ratio_max = 0;
+    overlay.selected_unit_max_health = 0;
+    overlay.selected_unit_base_max_health = 0;
+    overlay.selected_unit_secondary = 0;
+    overlay.selected_unit_secondary_ratio_max = 0;
+    overlay.selected_unit_max_secondary = 0;
+    overlay.selected_unit_base_max_secondary = 0;
+    overlay.selected_unit_slot_value = 0;
+    overlay.selected_unit_command_state = 0;
+    overlay.selected_unit_command_flags = 0;
+    overlay.selected_unit_runtime_flags = 0;
+    overlay.selected_unit_action_mode_gate = 0;
+    overlay.selected_unit_command_bit_mask = 0;
+    overlay.selected_unit_details_visible = false;
+    overlay.current_detail_item_id = 0;
+    overlay.detail_progress = 0;
+    overlay.detail_progress_total = 0;
+}
+
+u32 default_unit_command_bit_mask(const UnitMovementUnit& unit) {
+    u32 mask = 0;
+    for (u32 bit = 0; bit < 32; ++bit) {
+        const u32 byte_index = bit >> 3;
+        const u32 bit_mask = 1u << (bit & 7u);
+        if (byte_index < unit.command_bits.size() &&
+            (unit.command_bits[byte_index] & bit_mask) != 0) {
+            mask |= 1u << bit;
+        }
+    }
+    return mask;
+}
+
+void apply_default_unit_command_bit_mask(UnitMovementUnit& unit, u32 mask) {
+    const u32 byte_count = std::min<u32>(4,
+        static_cast<u32>(unit.command_bits.size()));
+    for (u32 byte = 0; byte < byte_count; ++byte) {
+        unit.command_bits[byte] =
+            static_cast<u8>((mask >> (byte * 8u)) & 0xffu);
+    }
+}
+
+u32 default_selected_unit_progress_total(const UnitMovementUnit& unit) {
+    const u32 command = unit.command_state & 0xffu;
+    if (command == 0x4e || command == 0x4d) {
+        const u32 order_id = unit.command_value != 0
+            ? unit.command_value
+            : unit.queued_production_type_id;
+        if (const ProductionOrderDefinition* definition =
+                default_production_order_definition(order_id)) {
+            const u32 variant =
+                unit.owner_id < g_runtime.gameplay_production_runtime.variant_counts.size() &&
+                    definition->id < kProductionOrderCount
+                ? g_runtime.gameplay_production_runtime
+                    .variant_counts[unit.owner_id][definition->id]
+                : 0;
+            return CalculateProductionOrderDuration(*definition, variant);
+        }
+    }
+    if (command == 0x51 || command == 0x50) {
+        const u32 type_id = ResolveQueuedOwnerProductionUnitType(unit);
+        if (const UnitMovementDefinition* definition =
+                default_unit_lifecycle_find_definition(
+                    g_runtime.gameplay_lifecycle_context, type_id)) {
+            return definition->production_spawn_time;
+        }
+        return 0;
+    }
+    if (command == 0x83 || command == 0x82) {
+        UnitEquipmentCatalog& catalog = frontend_bootstrap_state().equipment_catalog;
+        if (catalog.effects.empty()) {
+            LoadUnitEquipmentCatalogFromJw210Trc(catalog);
+        }
+        const UnitEquipmentEffectDefinition* definition =
+            FindUnitEquipmentEffect(catalog, unit.command_value);
+        return definition != nullptr ?
+            definition->completion_terrain_effect_period : 0;
+    }
+    if (unit.action_mode_gate == 1) {
+        return std::max<u32>(unit.definition.action_cycle_ticks, 1);
+    }
+    return 0;
+}
+
+u32 default_selected_unit_progress_value(const UnitMovementUnit& unit) {
+    const u32 command = unit.command_state & 0xffu;
+    if (command == 0x83 || command == 0x82 || unit.action_mode_gate == 1) {
+        return unit.action_mode;
+    }
+    if ((command == 0x4e || command == 0x4d) && unit.work_timer == 0) {
+        return unit.action_mode;
+    }
+    return unit.work_timer;
+}
+
+void sync_default_ui_overlay_grouped_command_gates(UiOverlayState& overlay) {
+    overlay.grouped_command_gate_definitions = {};
+    overlay.grouped_command_order_variant_counts = {};
+    overlay.grouped_command_completed_type_counts = {};
+
+    if (!unit_definition_resource_catalog_state().loaded) {
+        LoadUnitDefinitionResourceCatalog();
+    }
+    const UnitDefinitionResourceCatalogState& catalog =
+        unit_definition_resource_catalog_state();
+    for (std::size_t type = 0;
+         type < overlay.grouped_command_gate_definitions.size() &&
+         type < catalog.records.size(); ++type) {
+        const UnitDefinitionResourceRecord& record = catalog.records[type];
+        if (!record.loaded || record.definition_bytes.empty()) {
+            continue;
+        }
+
+        UiOverlayGroupedCommandGateDefinition& gate =
+            overlay.grouped_command_gate_definitions[type];
+        gate.order_variant_gate = read_runtime_catalog_u32(
+            record.definition_bytes,
+            kUnitDefinitionGroupedCommandOrderVariantGateOffset, 0);
+        gate.order_variant_index = read_runtime_catalog_u32(
+            record.definition_bytes,
+            kUnitDefinitionGroupedCommandOrderVariantIndexOffset, 0);
+        gate.completed_type_gate = read_runtime_catalog_u32(
+            record.definition_bytes,
+            kUnitDefinitionGroupedCommandCompletedTypeGateOffset, 0);
+        gate.completed_type_index = read_runtime_catalog_u32(
+            record.definition_bytes,
+            kUnitDefinitionGroupedCommandCompletedTypeIndexOffset, 0);
+    }
+
+    const ProductionOrderRuntimeState& production =
+        g_runtime.gameplay_production_runtime;
+    for (std::size_t owner = 0;
+         owner < overlay.grouped_command_order_variant_counts.size() &&
+         owner < production.variant_counts.size(); ++owner) {
+        for (std::size_t order = 0;
+             order < overlay.grouped_command_order_variant_counts[owner].size() &&
+             order < production.variant_counts[owner].size(); ++order) {
+            overlay.grouped_command_order_variant_counts[owner][order] =
+                production.variant_counts[owner][order];
+        }
+    }
+    for (std::size_t owner = 0;
+         owner < overlay.grouped_command_completed_type_counts.size() &&
+         owner < production.completed_type_counts.size(); ++owner) {
+        for (std::size_t type = 0;
+             type < overlay.grouped_command_completed_type_counts[owner].size() &&
+             type < production.completed_type_counts[owner].size(); ++type) {
+            overlay.grouped_command_completed_type_counts[owner][type] =
+                production.completed_type_counts[owner][type];
+        }
+    }
+}
+
+void sync_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
+    if (overlay.selected_unit_count == 0 || overlay.selected_unit_id == 0) {
+        clear_default_ui_overlay_selected_unit_details(overlay);
+        return;
+    }
+
+    UnitMovementUnit* unit = find_default_movement_unit_by_id(
+        overlay.selected_unit_id);
+    if (unit == nullptr) {
+        clear_default_ui_overlay_selected_unit_details(overlay);
+        return;
+    }
+
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    const ProductionOrderRuntimeState& production =
+        g_runtime.gameplay_production_runtime;
+    overlay.current_detail_item_id = unit->type_id;
+    overlay.selected_unit_health = unit->health;
+    overlay.selected_unit_health_ratio_max =
+        CalculateUnitRuntimeMaxHealthWithProductionEffect00(production, *unit);
+    overlay.selected_unit_max_health =
+        CalculateUnitMaxHealthWithProductionEffects(production, *unit);
+    overlay.selected_unit_base_max_health =
+        unit->definition.initial_max_health;
+    overlay.selected_unit_secondary = unit->secondary_value;
+    overlay.selected_unit_secondary_ratio_max =
+        CalculateUnitRuntimeMaxSecondaryValueWithProductionEffect01(
+            production, *unit);
+    overlay.selected_unit_max_secondary =
+        CalculateUnitMaxSecondaryValueWithProductionEffects(production, *unit);
+    overlay.selected_unit_base_max_secondary =
+        unit->definition.initial_max_secondary_value;
+    overlay.selected_unit_slot_value = unit->action_mode;
+    overlay.selected_unit_command_state = unit->command_state;
+    overlay.selected_unit_command_flags = unit->command_flags;
+    overlay.selected_unit_runtime_flags = unit->runtime_flags;
+    overlay.selected_unit_action_mode_gate = unit->action_mode_gate;
+    overlay.selected_unit_command_bit_mask = default_unit_command_bit_mask(*unit);
+    overlay.selected_unit_details_visible =
+        overlay.scenario_ai_profile_override ||
+        overlay.local_player_type == 2 ||
+        unit->owner_id == overlay.local_player_slot;
+    overlay.detail_progress = default_selected_unit_progress_value(*unit);
+    overlay.detail_progress_total = default_selected_unit_progress_total(*unit);
+    overlay.selected_unit_capability_lines.clear();
+    if ((unit->definition.action_effect_flags & 2u) != 0) {
+        overlay.selected_unit_owner_text =
+            startup_platform_label_value(178, "Level ", unit->status_timer + 1);
+        overlay.selected_unit_experience_text =
+            startup_platform_ratio_value(179, "Exp. ",
+                unit->elite_progress_value,
+                default_selected_unit_next_experience_threshold(
+                    production, *unit));
+        overlay.selected_unit_order_text = overlay.selected_unit_owner_text;
+    }
+    else {
+        overlay.selected_unit_owner_text.clear();
+        overlay.selected_unit_experience_text.clear();
+        overlay.selected_unit_order_text.clear();
+    }
+
+    overlay.selected_unit_name_text.clear();
+    if (movement != nullptr && unit->string_slot < movement->string_slots.size()) {
+        const auto& slot = movement->string_slots[unit->string_slot];
+        if (slot[0] != '\0') {
+            std::size_t length = 0;
+            while (length < slot.size() && slot[length] != '\0') {
+                ++length;
+            }
+            overlay.selected_unit_name_text.assign(slot.data(), length);
+        }
+    }
+    if (overlay.selected_unit_name_text.empty()) {
+        overlay.selected_unit_name_text =
+            startup_unit_name_or_fallback(unit->type_id);
+    }
+}
+
+void sync_default_ui_overlay_runtime_from_gameplay_state() {
+    UiOverlayState& overlay = ui_overlay_state();
+    if (overlay.callbacks.check_selected_production_action_gate == nullptr) {
+        overlay.callbacks.check_selected_production_action_gate =
+            default_ui_overlay_check_selected_production_action_gate;
+    }
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    const GameplayVisibilityGrid& grid = g_runtime.gameplay_visibility_grid;
+
+    overlay.screen_width = kOriginalClientWidth;
+    overlay.screen_height = kOriginalClientHeight;
+    overlay.reveal_minimap_fog =
+        g_runtime.gameplay_startup_state.fog_reveal_disabled;
+    overlay.replay_timing_enabled = gameplay_loop_state().replay_timing_enabled;
+    overlay.scripted_input_restricted =
+        gameplay_script_trigger_state().opcode_context.global_flag_22358;
+    const GameplayUiResourceState& ui_resources = gameplay_ui_resource_state();
+    const InterfaceResourceState& interface_resources = interface_resource_state();
+    overlay.small_icon_resource_base =
+        interface_resources.resource_rewind_entry != kInvalidResourceEntry ?
+            interface_resources.resource_rewind_entry : kInvalidResourceEntry;
+    overlay.marker_resource_base =
+        interface_resources.resource_rewind_entry != kInvalidResourceEntry ?
+            interface_resources.resource_rewind_entry + 6u : kInvalidResourceEntry;
+    overlay.large_icon_resource_base =
+        interface_resources.replay_control_resource_start != kInvalidResourceEntry ?
+            interface_resources.replay_control_resource_start : kInvalidResourceEntry;
+    overlay.glyph_resource_base =
+        ui_resources.misc_icons_start != kInvalidResourceEntry ?
+            ui_resources.misc_icons_start : kInvalidResourceEntry;
+    overlay.digit_resource_base =
+        ui_resources.green_numbers_start != kInvalidResourceEntry ?
+            ui_resources.green_numbers_start : kInvalidResourceEntry;
+    if (!unit_definition_resource_catalog_state().loaded) {
+        LoadUnitDefinitionResourceCatalog();
+    }
+    const UnitDefinitionResourceCatalogState& unit_catalog =
+        unit_definition_resource_catalog_state();
+    overlay.unit_definition_icon_markers.clear();
+    overlay.unit_definition_icon_markers.reserve(kUnitDefinitionResourceCount);
+    for (u32 unit_type = 0; unit_type < kUnitDefinitionResourceCount; ++unit_type) {
+        const UnitDefinitionResourceRecord& record = unit_catalog.records[unit_type];
+        overlay.unit_definition_icon_markers.push_back(
+            record.loaded ?
+            read_runtime_catalog_u8(
+                record.definition_bytes, kUnitDefinitionUiIconMarkerOffset, 0) :
+            0);
+    }
+    overlay.object_icon_markers.assign(
+        kUiOverlayObjectIconMarkerCodes.begin(),
+        kUiOverlayObjectIconMarkerCodes.end());
+    const P2PGameSessionStartState& p2p = g_runtime.p2p_session_start_state;
+    overlay.direct_music_available = p2p.direct_music_started;
+    overlay.direct_music_paused = p2p.direct_music_paused;
+    overlay.alternate_slot_a = p2p.direct_music_volume_enabled ? 1u : 0u;
+    overlay.replay_vpos_available = p2p.replay_vpos_loaded;
+    overlay.alternate_slot_b = p2p.apply_replay_vpos_camera ? 1u : 0u;
+    overlay.replay_speed_index = std::min<u32>(gameplay_loop_state().fixed_step_mode, 6);
+    overlay.game_speed = std::min<u32>(
+        gameplay_loop_state().frame_interval_index, overlay.max_game_speed);
+    overlay.camera_scroll_speed_index = default_camera_scroll_speed_index(
+        ImportSetupU32(kSetupSecondaryTimingOffset,
+            overlay.camera_scroll_speed_index));
+    overlay.minimap_mode =
+        (ImportSetupU32(kSetupUiFlagsOffset, overlay.minimap_mode ? 1u : 0u) & 1u) != 0;
+    const UnitEquipmentCatalog& equipment_catalog =
+        frontend_bootstrap_state().equipment_catalog;
+    overlay.equipment_icon_frame_indices.clear();
+    overlay.equipment_icon_frame_indices.reserve(equipment_catalog.effects.size());
+    overlay.equipment_icon_markers.clear();
+    overlay.equipment_icon_markers.reserve(equipment_catalog.effects.size());
+    for (const UnitEquipmentEffectDefinition& effect : equipment_catalog.effects) {
+        overlay.equipment_icon_frame_indices.push_back(effect.icon_frame_index);
+        overlay.equipment_icon_markers.push_back(effect.icon_marker_code);
+    }
+    if (g_runtime.gameplay_production_catalog.definitions.empty()) {
+        LoadProductionOrderCatalogFromJw210Trc(g_runtime.gameplay_production_catalog);
+    }
+    overlay.production_order_icon_markers.clear();
+    overlay.production_order_icon_markers.reserve(
+        g_runtime.gameplay_production_catalog.definitions.size());
+    for (const ProductionOrderDefinition& definition :
+         g_runtime.gameplay_production_catalog.definitions) {
+        overlay.production_order_icon_markers.push_back(definition.icon_marker_code);
+    }
+    GameplayProductionActionState& production_actions =
+        gameplay_production_action_state();
+    sync_default_gameplay_production_action_definitions(production_actions);
+    overlay.production_action_icon_markers.clear();
+    overlay.production_action_icon_markers.reserve(
+        production_actions.definitions.size());
+    for (const GameplayProductionActionDefinition& definition :
+         production_actions.definitions) {
+        overlay.production_action_icon_markers.push_back(definition.icon_marker_code);
+    }
+    overlay.resource_icon_entry =
+        ui_resources.misc_icons_start != kInvalidResourceEntry ?
+            ui_resources.misc_icons_start + 0x20u : 0;
+    overlay.population_icon_entry =
+        ui_resources.misc_icons_start != kInvalidResourceEntry ?
+            ui_resources.misc_icons_start + 0x23u : 0;
+    overlay.current_frame_counter =
+        g_runtime.gameplay_frame_render_context.frame_counter;
+    overlay.current_tick_ms = gameplay_loop_state().current_tick_ms;
+    overlay.local_player_slot = g_runtime.gameplay_player_slots.local_player_slot;
+    overlay.selected_production_category =
+        gameplay_input_action_state().pointer_aux_state;
+    if (overlay.local_player_slot < g_runtime.gameplay_player_slots.slot_states.size()) {
+        overlay.local_player_type =
+            g_runtime.gameplay_player_slots.slot_states[overlay.local_player_slot];
+    }
+    sync_default_ui_overlay_grouped_command_gates(overlay);
+
+    const InputState& input = input_state();
+    overlay.mouse_x = static_cast<i32>(input.mouse_x);
+    overlay.mouse_y = static_cast<i32>(input.mouse_y);
+
+    if (movement != nullptr && movement->map.width != 0 && movement->map.height != 0) {
+        overlay.map_width_tiles = movement->map.width;
+        overlay.map_height_tiles = movement->map.height;
+    } else if (grid.width != 0 && grid.height != 0) {
+        overlay.map_width_tiles = grid.width;
+        overlay.map_height_tiles = grid.height;
+    } else {
+        overlay.map_width_tiles = kGameplayVisibilityTileWidth;
+        overlay.map_height_tiles = kGameplayVisibilityTileWidth;
+    }
+
+    overlay.camera_max_x = std::max<i32>(0,
+        static_cast<i32>(overlay.map_width_tiles << 5) - kOriginalClientWidth);
+    overlay.camera_max_y = std::max<i32>(0,
+        static_cast<i32>(overlay.map_height_tiles << 5) - kOriginalClientHeight);
+    overlay.camera_x = std::clamp(overlay.camera_x, 0, overlay.camera_max_x);
+    overlay.camera_y = std::clamp(overlay.camera_y, 0, overlay.camera_max_y);
+    g_runtime.gameplay_frame_render_context.camera_x = overlay.camera_x;
+    g_runtime.gameplay_frame_render_context.camera_y = overlay.camera_y;
+
+    const std::size_t tile_count =
+        static_cast<std::size_t>(overlay.map_width_tiles) *
+        static_cast<std::size_t>(overlay.map_height_tiles);
+    if (!grid.current.empty() && grid.width == overlay.map_width_tiles &&
+        grid.height == overlay.map_height_tiles) {
+        overlay.minimap_visibility_flags = grid.current;
+        overlay.minimap_object_flags = grid.previous;
+        overlay.minimap_overlay_flags = grid.terrain_backup;
+    } else {
+        overlay.minimap_visibility_flags.assign(tile_count,
+            kGameplayVisibilityVisible | kGameplayVisibilityRevealed);
+        overlay.minimap_object_flags.assign(tile_count, 0);
+        overlay.minimap_overlay_flags.assign(tile_count, 0);
+    }
+
+    configure_default_map_effect_context();
+    overlay.map_effects.clear();
+    overlay.map_effects.reserve(g_runtime.map_effect_context.effects.size());
+    for (const MapEffectInstance& effect : g_runtime.map_effect_context.effects) {
+        if (!effect.active) {
+            continue;
+        }
+        overlay.map_effects.push_back(UiOverlayMapEffect{
+            effect.id,
+            effect.effect_id,
+            effect.repeat_count,
+            effect.x,
+            effect.y,
+        });
+    }
+
+    overlay.minimap_units.clear();
+    if (movement != nullptr) {
+        overlay.minimap_units.reserve(movement->active_units.size());
+        for (UnitMovementUnit* unit : movement->active_units) {
+            if (unit == nullptr || !unit->active) {
+                continue;
+            }
+            overlay.minimap_units.push_back(
+                make_default_ui_overlay_minimap_unit(*unit));
+        }
+    }
+    RecountGameplaySelectedUnits(overlay);
+    sync_default_ui_overlay_selected_unit_details(overlay);
+}
+
+void apply_default_ui_overlay_runtime_mutations() {
+    UiOverlayState& overlay = ui_overlay_state();
+    const u32 speed = default_gameplay_speed_index(overlay.game_speed);
+    if (gameplay_loop_state().frame_interval_index != speed) {
+        apply_default_gameplay_speed_index(speed, true);
+    }
+
+    if (!overlay.setup_write_requested) {
+        return;
+    }
+
+    u32 ui_flags = ImportSetupU32(kSetupUiFlagsOffset, overlay.minimap_mode ? 1u : 0u);
+    if (overlay.minimap_mode) {
+        ui_flags |= 1u;
+    }
+    else {
+        ui_flags &= ~1u;
+    }
+    ExportSetupU32(kSetupUiFlagsOffset, ui_flags);
+    WriteDefaultSetupDataBuffer();
+    overlay.setup_write_requested = false;
+}
+
+void sync_default_gameplay_hud_alert_markers() {
+    GameplayHudAlertMarkerState& markers = g_runtime.gameplay_hud_alert_markers;
+    UiOverlayState& overlay = ui_overlay_state();
+
+    markers.minimap_x = overlay.minimap.output_x;
+    markers.minimap_y = overlay.minimap.output_y;
+    markers.minimap_width = overlay.minimap.minimap_width_pixels != 0 ?
+        overlay.minimap.minimap_width_pixels :
+        std::min<u32>(0x74, std::max<u32>(1, overlay.map_width_tiles));
+    markers.minimap_height = overlay.minimap.minimap_height_pixels != 0 ?
+        overlay.minimap.minimap_height_pixels :
+        std::min<u32>(0x74, std::max<u32>(1, overlay.map_height_tiles));
+    markers.map_width_tiles = overlay.map_width_tiles != 0 ?
+        overlay.map_width_tiles :
+        std::max<u32>(1, overlay.minimap.map_width_tiles);
+    markers.map_height_tiles = overlay.map_height_tiles != 0 ?
+        overlay.map_height_tiles :
+        std::max<u32>(1, overlay.minimap.map_height_tiles);
+    overlay.stored_minimap_world_x = markers.last_alert_world_x;
+    overlay.stored_minimap_world_y = markers.last_alert_world_y;
+    overlay.stored_minimap_point_valid = markers.last_alert_valid;
+}
+
+void sync_default_gameplay_input_action_units(
+    GameplayInputActionState& input, const UiOverlayState& overlay) {
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    input.local_player_index = overlay.local_player_slot;
+    input.map_origin_x = static_cast<u32>(std::max<i32>(overlay.camera_x, 0));
+    input.map_origin_y = static_cast<u32>(std::max<i32>(overlay.camera_y, 0));
+    input.map_width_tiles = overlay.map_width_tiles;
+    input.map_height_tiles = overlay.map_height_tiles;
+    input.selected_unit_offset = overlay.selected_unit_id;
+    input.current_unit_offset = overlay.selected_unit_id;
+    input.multi_select_count = overlay.selected_unit_count;
+    input.units.clear();
+    if (movement == nullptr) {
+        return;
+    }
+
+    input.units.reserve(movement->active_units.size());
+    for (UnitMovementUnit* unit : movement->active_units) {
+        if (unit == nullptr || !unit->active) {
+            continue;
+        }
+
+        GameplayActionUnitState action_unit{};
+        action_unit.offset = unit->id;
+        action_unit.type = unit->type_id;
+        action_unit.owner = unit->owner_id;
+        action_unit.runtime_state =
+            (unit->command_state & kUnitCommandDead) != 0 ? 4 : 0;
+        action_unit.command_state = unit->command_state;
+        action_unit.runtime_flags = unit->runtime_flags;
+        action_unit.action_mode_gate = unit->action_mode_gate;
+        action_unit.x = unit->x;
+        action_unit.y = unit->y;
+        action_unit.bounds_left = unit->definition.bounds_left;
+        action_unit.bounds_top = unit->definition.bounds_top;
+        action_unit.bounds_width = unit->definition.bounds_width;
+        action_unit.bounds_height = unit->definition.bounds_height;
+        action_unit.selected = std::find(overlay.selected_unit_ids.begin(),
+            overlay.selected_unit_ids.end(), unit->id) !=
+            overlay.selected_unit_ids.end();
+        action_unit.flags = action_unit.selected ? 0x80u : 0u;
+        const u32 command_bit_mask = default_unit_command_bit_mask(*unit);
+        for (u32 bit = 0; bit < 32; ++bit) {
+            if ((command_bit_mask & (1u << bit)) != 0) {
+                action_unit.production_capabilities.push_back(bit);
+            }
+        }
+        if (action_unit.selected) {
+            for (const UiOverlayCommandOption& option : overlay.command_options) {
+                if (option.enabled && option.item_id < 0x60u) {
+                    action_unit.command_capabilities.push_back(option.item_id);
+                }
+                if (option.enabled && option.item_id >= 0xf4u &&
+                    option.item_id < 0x134u) {
+                    action_unit.production_capabilities.push_back(
+                        option.item_id - 0xf4u);
+                }
+            }
+        }
+        action_unit.active = unit->active;
+        action_unit.visible = true;
+        input.units.push_back(action_unit);
+    }
+}
+
+void ensure_default_selected_input_command_capability(
+    GameplayInputActionState& input, u32 capability) {
+    for (GameplayActionUnitState& unit : input.units) {
+        if (unit.offset != input.selected_unit_offset) {
+            continue;
+        }
+        if (std::find(unit.command_capabilities.begin(),
+                unit.command_capabilities.end(), capability) ==
+            unit.command_capabilities.end()) {
+            unit.command_capabilities.push_back(capability);
+        }
+        return;
+    }
+}
+
+void ensure_default_indexed_input_payload(
+    GameplayInputActionState& input, u32 index, u32 fallback_payload) {
+    if (index == 0) {
+        return;
+    }
+    if (input.indexed_payloads.size() < index) {
+        input.indexed_payloads.resize(index, 0);
+    }
+    u32& payload = input.indexed_payloads[index - 1];
+    if (payload == 0) {
+        payload = fallback_payload;
+    }
+}
+
+bool publish_default_ui_overlay_input_command(
+    GameplayInputActionState& input, UiOverlayState& overlay,
+    const UiOverlayCommandAction& action) {
+    static constexpr std::array<u8, 0x2a> kOriginalObjectActionModes = {
+        1, 2, 2, 2, 2, 2, 0, 1, 1, 2, 2, 1, 2, 1,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 5, 6, 0,
+        1, 1, 1, 2, 1, 1, 0, 0, 2, 1, 0, 0, 0, 0,
+    };
+
+    const bool click = action.action == kUiOverlayCommandActionClick;
+    if (action.item_id < 0x60u) {
+        if (click) {
+            if (action.aux == 0) {
+                ensure_default_selected_input_command_capability(input, action.item_id);
+                PublishSelectedUnitCapabilityAction(input, action.item_id);
+            }
+            else {
+                const u32 index = action.aux & 0xffffu;
+                ensure_default_indexed_input_payload(input, index, action.item_id);
+                PublishSelectedUnitIndexedPayloadAction(input, index);
+            }
+        }
+        return true;
+    }
+    if (action.item_id >= 0xaau && action.item_id < 0xd4u) {
+        if (click) {
+            const u32 action_id = action.item_id - 0xaau;
+            const u32 mode = kOriginalObjectActionModes[action_id];
+            if (mode <= 1) {
+                DispatchSelectedUnitActionCommand(input, action_id,
+                    overlay.mouse_x, overlay.mouse_y, overlay.selected_unit_id);
+                ResetGameplayInputPointerState(input);
+                overlay.selected_production_category = 0;
+            }
+            else if (mode == 2) {
+                overlay.placement_mode = action_id;
+                overlay.placement_definition_id = 0;
+                overlay.selected_production_category = 0;
+                overlay.pending_local_command = true;
+            }
+            else {
+                input.pointer_aux_state = mode - 3;
+                overlay.selected_production_category = input.pointer_aux_state;
+                overlay.pending_local_command = true;
+            }
+        }
+        return true;
+    }
+    if (action.item_id >= 0xf4u && action.item_id < 0x134u) {
+        if (click) {
+            PublishSelectedUnitProductionAction(input, action.item_id - 0xf4u);
+        }
+        return true;
+    }
+    if (action.item_id == 0x1aau) {
+        if (click) {
+            PublishSelectedUnitPrimaryAction(input, action.aux, action.flags);
+        }
+        return true;
+    }
+    if (action.item_id == 0x1abu) {
+        if (click) {
+            PublishSelectedUnitPlacementAction(input, action.aux, action.flags);
+        }
+        return true;
+    }
+    if (action.item_id == 0x194u) {
+        if (click) {
+            OpenGameplayPauseMenu();
+        }
+        return true;
+    }
+    if (action.item_id == 0x195u) {
+        if (click) {
+            OpenGameplayRelationMaskDialog();
+        }
+        return true;
+    }
+    if (action.item_id == 0x196u) {
+        if (click) {
+            OpenGameplayObserverMaskDialog();
+        }
+        return true;
+    }
+    return false;
+}
+
+void set_default_ui_overlay_replay_speed(UiOverlayState& overlay, u32 speed_index) {
+    speed_index = std::min<u32>(speed_index, 6);
+    overlay.replay_speed_index = speed_index;
+    overlay.game_speed = speed_index;
+    gameplay_loop_state().fixed_step_mode = speed_index;
+}
+
+void select_default_ui_overlay_unit_only(UiOverlayState& overlay,
+    const UnitMovementUnit& unit) {
+    overlay.selected_unit_ids.assign(1, unit.id);
+    overlay.selected_unit_id = unit.id;
+    overlay.selected_unit_type = unit.type_id;
+    overlay.selected_unit_owner = unit.owner_id;
+    overlay.selected_unit_count = 1;
+    RecountGameplaySelectedUnits(overlay);
+    BuildSelectedUnitCommandPanel(overlay);
+    overlay.pending_local_command = true;
+}
+
+void select_default_ui_overlay_same_type_units(UiOverlayState& overlay,
+    const UnitMovementUnit& target) {
+    overlay.selected_unit_ids.clear();
+    for (const UiOverlayMinimapUnit& unit : overlay.minimap_units) {
+        if (unit.type_id != target.type_id ||
+            (unit.owner_id != overlay.local_player_slot &&
+                !CheckScenarioSelectionOverride(overlay))) {
+            continue;
+        }
+        overlay.selected_unit_ids.push_back(unit.unit_id);
+        if (overlay.selected_unit_ids.size() >= overlay.max_selected_unit_count) {
+            break;
+        }
+    }
+    if (overlay.selected_unit_ids.empty()) {
+        overlay.selected_unit_ids.push_back(target.id);
+    }
+    overlay.selected_unit_id = target.id;
+    overlay.selected_unit_type = target.type_id;
+    overlay.selected_unit_owner = target.owner_id;
+    overlay.selected_unit_count = static_cast<u32>(overlay.selected_unit_ids.size());
+    RecountGameplaySelectedUnits(overlay);
+    BuildSelectedUnitCommandPanel(overlay);
+    overlay.pending_local_command = true;
+}
+
+void clear_default_ui_overlay_unit_selection_if_selected(UiOverlayState& overlay,
+    const UnitMovementUnit& unit) {
+    const auto selected = std::find(overlay.selected_unit_ids.begin(),
+        overlay.selected_unit_ids.end(), unit.id);
+    if (selected != overlay.selected_unit_ids.end()) {
+        ClearSelectedUnitMembershipFlagAndRefreshSelection(overlay, unit.id);
+    }
+}
+
+void select_default_ui_overlay_side_slot_same_type_units(
+    UiOverlayState& overlay, const UnitMovementUnit& target) {
+    overlay.selected_unit_ids.clear();
+    const auto select_matching_record = [&](const UiOverlayDrawRecord& record) {
+        if (record.item_id != 0x1a8u) {
+            return;
+        }
+        UnitMovementUnit* unit = find_default_movement_unit_by_id(record.aux);
+        if (unit == nullptr || unit->type_id != target.type_id) {
+            return;
+        }
+        if (std::find(overlay.selected_unit_ids.begin(),
+                overlay.selected_unit_ids.end(), unit->id) ==
+            overlay.selected_unit_ids.end()) {
+            overlay.selected_unit_ids.push_back(unit->id);
+        }
+    };
+    for (const UiOverlayDrawRecord& record : overlay.dispatched_records) {
+        select_matching_record(record);
+    }
+    for (const UiOverlayDrawRecord& record : overlay.queued_records) {
+        select_matching_record(record);
+    }
+    if (overlay.selected_unit_ids.empty()) {
+        overlay.selected_unit_ids.push_back(target.id);
+    }
+    overlay.selected_unit_id = target.id;
+    overlay.selected_unit_type = target.type_id;
+    overlay.selected_unit_owner = target.owner_id;
+    overlay.selected_unit_count = static_cast<u32>(overlay.selected_unit_ids.size());
+    RecountGameplaySelectedUnits(overlay);
+    BuildSelectedUnitCommandPanel(overlay);
+    overlay.pending_local_command = true;
+}
+
+void select_default_ui_overlay_side_slot_unit(UiOverlayState& overlay, u32 unit_id) {
+    if (unit_id == 0) {
+        unit_id = overlay.selected_unit_id;
+    }
+    UnitMovementUnit* unit = find_default_movement_unit_by_id(unit_id);
+    if (unit == nullptr) {
+        return;
+    }
+    if (overlay.shift_modifier_down) {
+        clear_default_ui_overlay_unit_selection_if_selected(overlay, *unit);
+        return;
+    }
+    if (overlay.ctrl_modifier_down || overlay.control_group_assign_mode) {
+        select_default_ui_overlay_side_slot_same_type_units(overlay, *unit);
+        return;
+    }
+    select_default_ui_overlay_unit_only(overlay, *unit);
+}
+
+void focus_default_ui_overlay_selected_unit(UiOverlayState& overlay, u32 unit_id = 0) {
+    if (unit_id == 0) {
+        unit_id = overlay.selected_unit_id;
+    }
+    UnitMovementUnit* unit = find_default_movement_unit_by_id(unit_id);
+    if (unit == nullptr) {
+        FocusCameraOnSelectedUnitsBounds(overlay);
+        return;
+    }
+    ClampCameraToMinimapPoint(overlay, unit->x, unit->y);
+    g_runtime.gameplay_frame_render_context.camera_x = overlay.camera_x;
+    g_runtime.gameplay_frame_render_context.camera_y = overlay.camera_y;
+    overlay.pending_local_command = true;
+}
+
+bool apply_default_ui_overlay_local_command(
+    UiOverlayState& overlay, const UiOverlayCommandAction& action) {
+    const bool click = action.action == kUiOverlayCommandActionClick;
+    if (action.item_id >= 0x60u && action.item_id < 0xaau) {
+        if (click) {
+            overlay.placement_mode = 6;
+            overlay.placement_definition_id = action.item_id - 0x60u;
+            overlay.pending_local_command = true;
+        }
+        return true;
+    }
+    if (action.item_id == 0x197u) {
+        if (click) {
+            g_runtime.p2p_session_start_state.direct_music_paused = false;
+            overlay.direct_music_paused = false;
+            ResumeDirectMilesMusic();
+        }
+        return true;
+    }
+    if (action.item_id == 0x198u) {
+        if (click) {
+            g_runtime.p2p_session_start_state.direct_music_paused = true;
+            overlay.direct_music_paused = true;
+            StopDirectMilesMusic();
+        }
+        return true;
+    }
+    if (action.item_id == 0x199u) {
+        if (click && overlay.replay_speed_index != 0) {
+            set_default_ui_overlay_replay_speed(overlay, overlay.replay_speed_index - 1);
+        }
+        return true;
+    }
+    if (action.item_id == 0x19au) {
+        if (click && overlay.replay_speed_index < 6) {
+            set_default_ui_overlay_replay_speed(overlay, overlay.replay_speed_index + 1);
+        }
+        return true;
+    }
+    if (action.item_id == 0x19bu) {
+        if (click && overlay.direct_music_available) {
+            P2PGameSessionStartState& p2p = g_runtime.p2p_session_start_state;
+            p2p.direct_music_volume_enabled = !p2p.direct_music_volume_enabled;
+            overlay.alternate_slot_a = p2p.direct_music_volume_enabled ? 1u : 0u;
+            SetDirectMilesMusicVolume(static_cast<int>(overlay.alternate_slot_a * 100u));
+        }
+        return true;
+    }
+    if (action.item_id == 0x19cu) {
+        if (click && overlay.replay_vpos_available) {
+            overlay.alternate_slot_b ^= 1u;
+            g_runtime.p2p_session_start_state.apply_replay_vpos_camera =
+                overlay.alternate_slot_b != 0;
+        }
+        return true;
+    }
+    if (action.item_id == 0x1a6u) {
+        if (click) {
+            focus_default_ui_overlay_selected_unit(overlay, action.aux);
+        }
+        return true;
+    }
+    if (action.item_id == 0x1a8u) {
+        if (click) {
+            select_default_ui_overlay_side_slot_unit(overlay, action.aux);
+        }
+        return true;
+    }
+    switch (action.item_id) {
+    case 0x19d:
+    case 0x19e:
+    case 0x1a0:
+    case 0x1a1:
+    case 0x1a2:
+    case 0x1a3:
+    case 0x1a4:
+    case 0x1a5:
+    case 0x1a7:
+    case 0x1a9:
+    case 0x1ad:
+        return true;
+    default:
+        break;
+    }
+    return false;
+}
+
+void sync_default_gameplay_production_unit_footprints(
+    GameplayProductionActionState& production) {
+    if (!production.unit_footprints.empty()) {
+        return;
+    }
+    if (!unit_definition_resource_catalog_state().loaded) {
+        LoadUnitDefinitionResourceCatalog();
+    }
+
+    const UnitDefinitionResourceCatalogState& catalog =
+        unit_definition_resource_catalog_state();
+    const std::size_t count = std::min<std::size_t>(
+        catalog.records.size(), kUnitDefinitionResourceCount);
+    production.unit_footprints.reserve(count);
+    for (std::size_t unit_type = 0; unit_type < count; ++unit_type) {
+        const UnitDefinitionResourceRecord& record = catalog.records[unit_type];
+        GameplayProductionUnitFootprintDefinition footprint{};
+        footprint.unit_type = static_cast<u32>(unit_type);
+        if (record.loaded && !record.definition_bytes.empty()) {
+            footprint.width = std::max<u32>(1, read_runtime_catalog_u32(
+                record.definition_bytes, kUnitDefinitionFootprintWidthTilesOffset, 1));
+            footprint.height = std::max<u32>(1, read_runtime_catalog_u32(
+                record.definition_bytes, kUnitDefinitionFootprintHeightTilesOffset, 1));
+            footprint.layout_offset_x = read_runtime_catalog_i32(
+                record.definition_bytes, kUnitDefinitionSpatialQueryLeftOffset, 0);
+            footprint.layout_offset_y = read_runtime_catalog_i32(
+                record.definition_bytes, kUnitDefinitionSpatialQueryTopOffset, 0);
+            footprint.layout_width = std::max<i32>(0, read_runtime_catalog_i32(
+                record.definition_bytes, kUnitDefinitionSpatialQueryRightOffset,
+                static_cast<i32>(footprint.width)));
+            footprint.layout_height = std::max<i32>(0, read_runtime_catalog_i32(
+                record.definition_bytes, kUnitDefinitionSpatialQueryBottomOffset,
+                static_cast<i32>(footprint.height)));
+        }
+        production.unit_footprints.push_back(footprint);
+    }
+}
+
+void sync_default_gameplay_production_action_definitions(
+    GameplayProductionActionState& production) {
+    static constexpr std::array<u8, kGameplayProductionSelectorCount>
+        kOriginalRedirectFlags = {
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1,
+            1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
+            0, 8, 8, 8, 8, 136, 0, 0, 8, 0, 8, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        };
+    static constexpr std::array<u8, kGameplayProductionSelectorCount>
+        kOriginalResultStates = {
+            0x88, 0x88, 0x08, 0x88, 0x08, 0x88, 0x08, 0x08,
+            0x88, 0x88, 0x08, 0x88, 0x88, 0x88, 0x88, 0x88,
+            0x88, 0x08, 0x88, 0x08, 0x08, 0x88, 0x88, 0x08,
+            0x88, 0x08, 0x08, 0x08, 0x08, 0x88, 0x00, 0x00,
+            0x00, 0x01, 0x02, 0x03, 0x02, 0x02, 0x00, 0x01,
+            0x03, 0x01, 0x03, 0x00, 0x02, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+        };
+
+    production.selector_redirect_flags = kOriginalRedirectFlags;
+    production.selector_result_states = kOriginalResultStates;
+    for (u32 selector = 0; selector < kGameplayProductionSelectorCount; ++selector) {
+        production.selector_definition_indices[selector] = selector;
+    }
+    sync_default_gameplay_production_unit_footprints(production);
+
+    if (!production.definitions.empty()) {
+        return;
+    }
+    if (!jw211_runtime_catalog_state().loaded) {
+        LoadJw211RuntimeCatalog();
+    }
+
+    const AuxiliaryRuntimeCatalogState& catalog = jw211_runtime_catalog_state();
+    const std::size_t count = std::min<std::size_t>(
+        catalog.records.size(), kGameplayProductionSelectorCount);
+    production.definitions.resize(count);
+    for (std::size_t index = 0; index < count; ++index) {
+        const AuxiliaryRuntimeCatalogRecord& record = catalog.records[index];
+        GameplayProductionActionDefinition definition{};
+        if (record.loaded && !record.definition_bytes.empty()) {
+            definition.mode =
+                read_runtime_catalog_u32(
+                    record.definition_bytes, kJw211ProductionModeOffset, 0);
+            definition.allowed_movement_class_mask =
+                read_runtime_catalog_u32(record.definition_bytes,
+                    kJw211ProductionMovementClassMaskOffset, 0xffffffffu);
+            definition.unit_type =
+                read_runtime_catalog_u32(record.definition_bytes,
+                    kJw211ProductionDefinitionIdOffset, 0);
+            definition.owner_requirement =
+                read_runtime_catalog_u32(record.definition_bytes,
+                    kJw211ProductionOwnerRequirementOffset, 0xffffffffu);
+            definition.active_limit =
+                read_runtime_catalog_u32(record.definition_bytes,
+                    kJw211ProductionActiveLimitOffset, 0xffffffffu);
+            definition.status_recharge_amount =
+                read_runtime_catalog_u32(record.definition_bytes,
+                    kJw211ProductionStatusRechargeAmountOffset, 1);
+            definition.resource_limit =
+                read_runtime_catalog_u32(record.definition_bytes,
+                    kJw211ProductionResourceLimitOffset, 0xffffffffu);
+            definition.queued_limit =
+                read_runtime_catalog_u32(record.definition_bytes,
+                    kJw211ProductionQueuedLimitOffset, 0xffffffffu);
+            definition.icon_marker_code =
+                read_runtime_catalog_u8(record.definition_bytes,
+                    kJw211ActionIconMarkerOffset, 0);
+        }
+        definition.result_state = production.selector_result_states[index];
+        production.definitions[index] = definition;
+    }
+}
+
+void sync_default_gameplay_production_action_units(
+    GameplayProductionActionState& production, const UiOverlayState& overlay) {
+    configure_default_gameplay_production_action_context(production);
+    sync_default_gameplay_production_action_definitions(production);
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    production.local_player_index = overlay.local_player_slot;
+    production.map_origin_x = static_cast<u32>(std::max<i32>(overlay.camera_x, 0));
+    production.map_origin_y = static_cast<u32>(std::max<i32>(overlay.camera_y, 0));
+    production.map_width_tiles = overlay.map_width_tiles;
+    production.map_height_tiles = overlay.map_height_tiles;
+    if (movement != nullptr && default_movement_map_ready(movement->map)) {
+        MirrorGameplayProductionPlacementMapFromMovementMap(production,
+            *movement);
+    }
+    else if (!g_runtime.gameplay_terrain_layer.terrain_flags.empty()) {
+        MirrorGameplayProductionPlacementMapFromTerrainFlags(production,
+            g_runtime.gameplay_terrain_layer.width_tiles,
+            g_runtime.gameplay_terrain_layer.height_tiles,
+            g_runtime.gameplay_terrain_layer.terrain_flags,
+            g_runtime.gameplay_terrain_layer.stride_tiles);
+    }
+    production.selected_unit_offset = overlay.selected_unit_id;
+    production.current_unit_offset = overlay.selected_unit_id;
+    production.selected_count = overlay.selected_unit_count;
+    production.shift_modifier_down = overlay.shift_modifier_down;
+    production.owner_relation_masks = player_slot_state().owner_relation_masks;
+    production.units.clear();
+    if (movement == nullptr) {
+        return;
+    }
+
+    UnitEquipmentCatalog& equipment_catalog =
+        frontend_bootstrap_state().equipment_catalog;
+    if (equipment_catalog.effects.empty()) {
+        LoadUnitEquipmentCatalogFromJw210Trc(equipment_catalog);
+    }
+
+    production.units.reserve(movement->active_units.size());
+    for (UnitMovementUnit* unit : movement->active_units) {
+        if (unit == nullptr || !unit->active) {
+            continue;
+        }
+
+        GameplayProductionUnitState production_unit{};
+        production_unit.offset = unit->id;
+        production_unit.type = unit->type_id;
+        production_unit.owner = unit->owner_id;
+        production_unit.runtime_state =
+            (unit->command_state & kUnitCommandDead) != 0 ? 4 : 0;
+        production_unit.command_state = unit->command_state;
+        production_unit.command_flags = unit->command_flags;
+        production_unit.runtime_flags = unit->runtime_flags;
+        production_unit.definition_action_flags = unit->definition.action_effect_flags;
+        production_unit.movement_class = unit->definition.movement_class;
+        production_unit.x = unit->x;
+        production_unit.y = unit->y;
+        production_unit.bounds_left = unit->definition.bounds_left;
+        production_unit.bounds_top = unit->definition.bounds_top;
+        production_unit.bounds_width = unit->definition.bounds_width;
+        production_unit.bounds_height = unit->definition.bounds_height;
+        production_unit.command_bits = default_unit_command_bit_mask(*unit);
+        production_unit.production_bits = unit->definition.support_source_flags;
+        production_unit.active_count_metric = unit->status_timer;
+        production_unit.queued_count_metric = unit->secondary_value;
+        production_unit.resource_metric = unit->health;
+        production_unit.linked_object_id = unit->linked_object_id;
+        production_unit.saved_path_target_x = unit->saved_path_target_x;
+        production_unit.saved_path_target_y = unit->saved_path_target_y;
+        production_unit.action_mode_gate = unit->action_mode_gate;
+        production_unit.equipment_slots = unit->equipment_slots;
+        for (u32 slot = 0; slot < kGameplayProductionAttachmentSlots; ++slot) {
+            const u32 equipment_id = production_unit.equipment_slots[slot];
+            if (const UnitEquipmentEffectDefinition* effect =
+                    FindUnitEquipmentEffect(equipment_catalog, equipment_id)) {
+                production_unit.attachment_definition_ids[slot] =
+                    effect->attachment_definition_id;
+            }
+        }
+        if (unit->linked_unit != nullptr) {
+            production_unit.linked_unit_offset = unit->linked_unit->id;
+            production_unit.linked_unit_runtime_state =
+                unit->linked_unit->command_lockout_ticks;
+        }
+        production_unit.selected = std::find(overlay.selected_unit_ids.begin(),
+            overlay.selected_unit_ids.end(), unit->id) !=
+            overlay.selected_unit_ids.end();
+        if (production_unit.selected) {
+            production_unit.status_flags |= 0x80u;
+            for (const UiOverlayCommandOption& option : overlay.command_options) {
+                if (option.enabled && option.item_id >= 0x24au) {
+                    production_unit.production_cost_actions.push_back(
+                        option.item_id - 0x24au);
+                }
+            }
+        }
+        for (const UnitEquipmentEffectDefinition& effect :
+            equipment_catalog.effects) {
+            if (effect.id != kInvalidUnitEquipmentId &&
+                UnitEquipmentEffectAllowsUnitType(*unit, effect)) {
+                production_unit.equipment_type_filter.push_back(effect.id);
+            }
+        }
+        production_unit.active = unit->active;
+        production.units.push_back(std::move(production_unit));
+    }
+}
+
+u32 default_equipment_storage_index_from_original_slot_code(u32 slot_code) {
+    if (slot_code == kUnitEquipmentOriginalPrimarySlotCode) {
+        return kUnitEquipmentPrimarySlot;
+    }
+    if (slot_code == kUnitEquipmentOriginalSecondarySlotCode) {
+        return kUnitEquipmentSecondarySlot;
+    }
+    if (slot_code >= kUnitEquipmentOriginalGenericSlotBaseCode &&
+        slot_code < kUnitEquipmentOriginalGenericSlotBaseCode + 4u) {
+        return slot_code - kUnitEquipmentOriginalGenericSlotBaseCode;
+    }
+    return kUnitEquipmentSlotCount;
+}
+
+const GameplayProductionUnitState* default_selected_production_unit(
+    const GameplayProductionActionState& production) {
+    const u32 unit_offset = production.current_unit_offset != 0
+        ? production.current_unit_offset
+        : production.selected_unit_offset;
+    for (const GameplayProductionUnitState& unit : production.units) {
+        if (unit.offset == unit_offset) {
+            return &unit;
+        }
+    }
+    return nullptr;
+}
+
+bool selected_equipment_slot_mode(
+    const GameplayProductionActionState& production, u32 slot_code,
+    u32& equipment_id, u32& mode) {
+    const GameplayProductionUnitState* unit =
+        default_selected_production_unit(production);
+    const u32 storage_index =
+        default_equipment_storage_index_from_original_slot_code(slot_code);
+    if (unit == nullptr || storage_index >= unit->equipment_slots.size()) {
+        return false;
+    }
+    equipment_id = unit->equipment_slots[storage_index];
+    if (equipment_id == kInvalidUnitEquipmentId ||
+        std::find(unit->equipment_type_filter.begin(),
+            unit->equipment_type_filter.end(), equipment_id) ==
+            unit->equipment_type_filter.end()) {
+        return false;
+    }
+
+    UnitEquipmentCatalog& equipment_catalog =
+        frontend_bootstrap_state().equipment_catalog;
+    if (equipment_catalog.effects.empty()) {
+        LoadUnitEquipmentCatalogFromJw210Trc(equipment_catalog);
+    }
+    const UnitEquipmentEffectDefinition* effect =
+        FindUnitEquipmentEffect(equipment_catalog, equipment_id);
+    if (effect == nullptr) {
+        return false;
+    }
+    mode = effect->mode;
+    return true;
+}
+
+bool publish_or_stage_selected_equipment_slot_command(
+    GameplayProductionActionState& production, UiOverlayState& overlay,
+    u32 slot_code) {
+    u32 equipment_id = 0;
+    u32 mode = 0;
+    if (!selected_equipment_slot_mode(production, slot_code, equipment_id, mode)) {
+        return true;
+    }
+    if (mode <= 3) {
+        PublishSelectedUnitEquipmentSlotToggle(production, slot_code);
+        return true;
+    }
+    if (mode == 6) {
+        overlay.placement_mode = 0xe;
+        overlay.placement_definition_id = equipment_id;
+        overlay.placement_equipment_slot_code = slot_code;
+        overlay.pending_local_command = true;
+    }
+    return true;
+}
+
+u32 ui_overlay_command_record_unit_offset(
+    const GameplayProductionActionState& production,
+    const UiOverlayCommandAction& action) {
+    return action.aux != 0 ? action.aux : production.selected_unit_offset;
+}
+
+bool ui_overlay_action_uses_original_common_gate(u32 item_id) {
+    return item_id < 0x194u ||
+        (item_id >= 0x1aau && item_id <= 0x1acu) ||
+        item_id >= 0x1adu;
+}
+
+bool default_ui_overlay_common_action_gate_blocked(
+    const UiOverlayState& overlay, u32 item_id) {
+    if (!ui_overlay_action_uses_original_common_gate(item_id)) {
+        return false;
+    }
+    return overlay.replay_timing_enabled ||
+        overlay.local_player_type == static_cast<u32>(PlayerSlotState::observer);
+}
+
+bool apply_default_ui_overlay_held_command(UiOverlayState& overlay,
+    const UiOverlayCommandAction& action) {
+    if (action.action != kUiOverlayCommandActionHold) {
+        return false;
+    }
+    if (action.item_id == 0x1a6u || action.item_id == 0x1a8u) {
+        focus_default_ui_overlay_selected_unit(overlay, action.aux);
+        return true;
+    }
+    if (action.item_id >= 0x1adu && action.item_id <= 0x1b3u) {
+        overlay.placement_mode = 2;
+        overlay.placement_definition_id = action.item_id - 0x1adu;
+        overlay.placement_equipment_slot_code = 0;
+        overlay.selected_production_category = 0;
+        overlay.pending_local_command = true;
+        return true;
+    }
+    if (action.item_id >= 0x1b4u && action.item_id < 0x24au) {
+        overlay.placement_mode = 2;
+        overlay.placement_definition_id = action.item_id - 0x1b4u;
+        overlay.placement_equipment_slot_code = 0;
+        overlay.selected_production_category = 0;
+        overlay.pending_local_command = true;
+        return true;
+    }
+    return false;
+}
+
+bool publish_default_ui_overlay_production_command(
+    GameplayProductionActionState& production, GameplayInputActionState& input,
+    UiOverlayState& overlay, const UiOverlayCommandAction& action) {
+    const bool click = action.action == kUiOverlayCommandActionClick;
+    if (action.item_id >= 0xd4u && action.item_id < 0xf4u) {
+        if ((action.flags & 0x36u) != 0) {
+            return true;
+        }
+        if (click) {
+            DispatchOwnerProductionActionCommand(production, action.item_id - 0xd4u,
+                overlay.mouse_x, overlay.mouse_y, overlay.selected_unit_id);
+        }
+        return true;
+    }
+    if (action.item_id >= 0x134u && action.item_id < 0x194u) {
+        if (click) {
+            const u32 saved_current = production.current_unit_offset;
+            production.current_unit_offset =
+                ui_overlay_command_record_unit_offset(production, action);
+            PublishLinkedUnitCommand24IfIdle(production);
+            production.current_unit_offset = saved_current;
+        }
+        return true;
+    }
+    if (action.item_id == 0x19fu) {
+        if (click) {
+            PublishSelectedUnitsStatusMaskToggle(production, 0);
+        }
+        return true;
+    }
+    if (action.item_id >= 0x1aeu && action.item_id <= 0x1afu) {
+        if (click) {
+            const u32 saved_current = production.current_unit_offset;
+            production.current_unit_offset =
+                ui_overlay_command_record_unit_offset(production, action);
+            PublishSelectedUnitEquipmentSlotToggle(production, action.item_id - 0x1adu);
+            production.current_unit_offset = saved_current;
+        }
+        return true;
+    }
+    if (action.item_id >= 0x1b0u && action.item_id <= 0x1b3u) {
+        if (click) {
+            const u32 saved_current = production.current_unit_offset;
+            production.current_unit_offset =
+                ui_overlay_command_record_unit_offset(production, action);
+            publish_or_stage_selected_equipment_slot_command(
+                production, overlay, action.item_id - 0x1adu);
+            production.current_unit_offset = saved_current;
+        }
+        return true;
+    }
+    if (action.item_id == 0x1acu) {
+        if (click) {
+            PublishSelectedUnitProductionCostCancel(production, action.aux,
+                action.flags);
+        }
+        return true;
+    }
+    if (action.item_id >= 0x1b4u && action.item_id < 0x24au) {
+        if (click) {
+            PublishSelectedUnitEquipmentCommand(production, action.item_id - 0x1b4u);
+            ResetGameplayInputPointerState(input);
+        }
+        return true;
+    }
+    if (action.item_id >= 0x24au) {
+        if (click) {
+            const u32 production_id = action.item_id - 0x24au;
+            PublishSelectedUnitProductionCostAction(production, production_id);
+        }
+        return true;
+    }
+    return false;
+}
+
+void process_default_ui_overlay_command_actions() {
+    UiOverlayState& overlay = ui_overlay_state();
+    if (overlay.command_actions.empty()) {
+        return;
+    }
+
+    GameplayInputActionState& input = gameplay_input_action_state();
+    GameplayProductionActionState& production = gameplay_production_action_state();
+    sync_default_gameplay_input_action_units(input, overlay);
+    sync_default_gameplay_production_action_units(production, overlay);
+    for (const UiOverlayCommandAction& action : overlay.command_actions) {
+        if (action.action == kUiOverlayCommandActionSelection) {
+            continue;
+        }
+        if (default_ui_overlay_common_action_gate_blocked(
+                overlay, action.item_id)) {
+            continue;
+        }
+        if (apply_default_ui_overlay_held_command(overlay, action)) {
+            continue;
+        }
+        if (apply_default_ui_overlay_local_command(overlay, action)) {
+            continue;
+        }
+        if (publish_default_ui_overlay_input_command(input, overlay, action)) {
+            continue;
+        }
+        if (publish_default_ui_overlay_production_command(
+                production, input, overlay, action)) {
+            continue;
+        }
+
+        input.pending_action_arg0 = action.item_id;
+        input.pending_action_arg1 = action.aux;
+        input.pending_action_arg2 = action.action;
+        input.pending_action_arg3 =
+            ((static_cast<u32>(std::max<i32>(overlay.mouse_y, 0)) & 0xffffu) << 16) |
+            (static_cast<u32>(std::max<i32>(overlay.mouse_x, 0)) & 0xffffu);
+        PublishSelectedUnitsPendingAction(input, 0);
+    }
+
+    overlay.command_actions.clear();
+    overlay.pending_local_command = false;
+}
+
+UnitMovementUnit* find_default_damage_record_unit(const UnitRecord& record) {
+    const auto it = std::find_if(g_runtime.gameplay_damage_record_links.begin(),
+        g_runtime.gameplay_damage_record_links.end(),
+        [&record](const GameplayDamageRecordLink& link) {
+            return &link.record == &record;
+        });
+    return it == g_runtime.gameplay_damage_record_links.end() ? nullptr : it->unit;
+}
+
+void default_unit_damage_shield_broken(UnitDamageContext&, UnitRecord& target) {
+    UnitMovementUnit* unit = find_default_damage_record_unit(target);
+    if (unit == nullptr) {
+        return;
+    }
+
+    UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
+    if (UnitEffectRuntime* shield_effect =
+            default_unit_effect_from_original_slot_offset(
+                effects, unit->linked_effect_slot_offset)) {
+        ReleaseUnitEffectSlot(effects, *shield_effect);
+    }
+    unit->linked_effect_slot_offset = 0;
+}
+
+bool resolve_default_unit_sound_profile(const UnitMovementUnit& unit,
+    GameplayUnitSoundDefinition& definition, GameplayUnitSoundBaseSlots& base_slots) {
+    return GetUnitDefinitionGameplaySoundProfile(unit.type_id, definition, base_slots);
+}
+
+u32 default_owner_slot_bit(u32 owner) {
+    return owner < 32 ? (1u << owner) : 0;
+}
+
+bool default_owners_are_related(u32 source_owner, u32 target_owner) {
+    if (source_owner >= kPlayerSlotCount || target_owner >= kPlayerSlotCount) {
+        return false;
+    }
+    return (g_runtime.gameplay_player_slots.owner_relation_masks[source_owner] &
+        default_owner_slot_bit(target_owner)) != 0;
+}
+
+bool default_unit_damage_can_damage(UnitDamageContext& context, const UnitRecord& source,
+    const UnitRecord& target) {
+    if (context.splash_radius != 0 && context.area_damage_allows_related_targets) {
+        return true;
+    }
+    if (source.owner_id == target.owner_id) {
+        return false;
+    }
+    return !default_owners_are_related(source.owner_id, target.owner_id);
+}
+
+u32 default_unit_damage_calculate_damage(UnitDamageContext& context,
+    UnitRecord& source, UnitRecord& target, u32 radius, u32 distance) {
+    u32 damage = context.direct_damage;
+    UnitMovementUnit* source_unit = find_default_damage_record_unit(source);
+    UnitMovementUnit* target_unit = find_default_damage_record_unit(target);
+    if (source_unit != nullptr && target_unit != nullptr) {
+        damage = default_unit_action_direct_damage(*source_unit, *target_unit);
+    }
+
+    if (radius == 0 || target.point_target) {
+        return damage;
+    }
+    if (distance >= radius) {
+        return 0;
+    }
+    return damage - static_cast<u32>(
+        (static_cast<u64>(distance) * damage) / radius);
+}
+
+bool default_unit_damage_can_award_experience(UnitDamageContext&,
+    const UnitRecord& source, const UnitRecord& target) {
+    if (source.owner_id == target.owner_id ||
+        default_owners_are_related(target.owner_id, source.owner_id)) {
+        return false;
+    }
+    if ((target.runtime_flags & 0x10u) != 0) {
+        return false;
+    }
+    return !target.point_target;
+}
+
+void default_unit_damage_hit_sound(UnitDamageContext&, UnitRecord&,
+    UnitRecord& target) {
+    UnitMovementUnit* unit = find_default_damage_record_unit(target);
+    if (unit == nullptr) {
+        return;
+    }
+
+    GameplayUnitSoundDefinition definition;
+    GameplayUnitSoundBaseSlots base_slots;
+    if (!resolve_default_unit_sound_profile(*unit, definition, base_slots)) {
+        return;
+    }
+    HandleUnitHitReactionVoiceCue(g_runtime.gameplay_sound, *unit, definition, base_slots);
+}
+
+void default_unit_damage_attacker_experience_changed(UnitDamageContext&,
+    UnitRecord& attacker) {
+    UnitMovementUnit* unit = find_default_damage_record_unit(attacker);
+    if (unit == nullptr ||
+        (unit->definition.support_target_flags & 0x2u) == 0) {
+        return;
+    }
+
+    unit->elite_progress_value = attacker.experience;
+    UnitRuntimeStatBlock stats{};
+    stats.max_health = unit->max_health;
+    stats.max_secondary_value = unit->max_secondary_value;
+    stats.health = unit->health;
+    stats.stat_1c = unit->runtime_stat_1c;
+    stats.stat_20 = unit->runtime_stat_20;
+    stats.secondary_value = unit->secondary_value;
+    stats.stat_28 = unit->runtime_stat_28;
+
+    bool attachment_effect_started = false;
+    ApplyUnitVariantProgressFromStoredValue(g_runtime.gameplay_production_runtime,
+        *unit, stats, &attachment_effect_started, default_gameplay_frame_random_limit);
+    mirror_default_unit_damage_record_stats(attacker, *unit);
+}
+
+void default_unit_damage_defeated_accounting(UnitDamageContext&, UnitRecord& target) {
+    UnitMovementUnit* target_unit = find_default_damage_record_unit(target);
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (target_unit == nullptr || lifecycle == nullptr) {
+        return;
+    }
+    HandleUnitCompletionOwnerCounters(*lifecycle, *target_unit);
+}
+
+void default_unit_damage_kill_effects(UnitDamageContext&, UnitRecord& source,
+    UnitRecord& target) {
+    UnitMovementUnit* target_unit = find_default_damage_record_unit(target);
+    if (target_unit != nullptr) {
+        GameplayUnitSoundDefinition definition;
+        GameplayUnitSoundBaseSlots base_slots;
+        if (resolve_default_unit_sound_profile(*target_unit, definition, base_slots)) {
+            HandleUnitDeathVoiceCue(g_runtime.gameplay_sound, *target_unit,
+                definition, base_slots);
+        }
+    }
+
+    UnitMovementUnit* source_unit = find_default_damage_record_unit(source);
+    if (source_unit == nullptr || target_unit == nullptr ||
+        source_unit == target_unit) {
+        return;
+    }
+
+    UnitSupportEffectContext support_context{};
+    support_context.production_state = &g_runtime.gameplay_production_runtime;
+    support_context.movement_context = default_gameplay_movement_context();
+    ApplyUnitKillHealthRestoreSupport(support_context, *source_unit, *target_unit);
+    mirror_default_unit_damage_record_stats(source, *source_unit);
+}
+
+void default_unit_damage_linked_visibility(UnitDamageContext&, UnitRecord& source,
+    UnitRecord& target) {
+    UnitMovementUnit* source_unit = find_default_damage_record_unit(source);
+    UnitMovementUnit* target_unit = find_default_damage_record_unit(target);
+    GameplayVisibilityContext& visibility_context =
+        g_runtime.gameplay_visibility_context;
+    if (source_unit == nullptr || target_unit == nullptr ||
+        visibility_context.grid == nullptr) {
+        return;
+    }
+
+    GameplayVisibilityUnit source_visibility =
+        make_default_gameplay_visibility_unit(*source_unit);
+    GameplayVisibilityUnit target_visibility =
+        make_default_gameplay_visibility_unit(*target_unit);
+    ApplyLinkedUnitVisibilityFromSource(
+        visibility_context, source_visibility, target_visibility);
+    mirror_default_gameplay_visibility_to_consumers(*visibility_context.grid);
+}
+
+u32 default_damage_reaction_map_tiles(u32 value) {
+    return value != 0 ? value : kGameplayScenarioDefaultMapTiles;
+}
+
+i32 default_damage_reaction_random_axis(i32 origin, u32 map_tiles) {
+    const i32 offset =
+        static_cast<i32>(default_gameplay_frame_random_limit(0x80)) - 0x40;
+    i32 value = (origin + offset) & ~0x1f;
+    const i32 max_value =
+        static_cast<i32>(default_damage_reaction_map_tiles(map_tiles) * 0x20u) -
+        0x20;
+    value = std::min(value, std::max(max_value, 0));
+    return std::max(value, 0);
+}
+
+bool default_unit_damage_reaction_random_move(UnitMovementUnit& target) {
+    if ((target.type_flags & 0x10u) == 0 ||
+        (target.runtime_flags & 0x8u) != 0 ||
+        target.command_state != kUnitStateRuntimeIdleAcquire) {
+        return false;
+    }
+
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    if (movement == nullptr) {
+        return false;
+    }
+
+    const i32 path_target_y = default_damage_reaction_random_axis(
+        target.y, movement->map.height);
+    const i32 path_target_x = default_damage_reaction_random_axis(
+        target.x, movement->map.width);
+
+    target.target = nullptr;
+    target.path_target_x = path_target_x;
+    target.path_target_y = path_target_y;
+    target.command_state = kUnitStateTravel;
+    ProcessUnitPathToDestination(*movement, target);
+    return true;
+}
+
+enum class DefaultDamageReactionCombatGate {
+    dispatch_combat,
+    random_move_fallback,
+    stop,
+};
+
+bool default_unit_damage_reaction_command_allows_dispatch(
+    const UnitMovementUnit& unit) {
+    return (unit.command_flags & 0x10u) == 0 ||
+        (unit.command_flags & 0x400u) != 0;
+}
+
+DefaultDamageReactionCombatGate default_unit_damage_reaction_combat_gate(
+    UnitMovementUnit& damaged, UnitMovementUnit& threat) {
+    if ((damaged.runtime_flags & 0x40000u) != 0) {
+        return DefaultDamageReactionCombatGate::random_move_fallback;
+    }
+    if (damaged.type_id > kUnitEliteVariantThreshold &&
+        damaged.production_variant == 1) {
+        return DefaultDamageReactionCombatGate::stop;
+    }
+    if ((damaged.type_flags & 0x20u) == 0) {
+        return DefaultDamageReactionCombatGate::stop;
+    }
+
+    UnitActionContext& action_context = g_runtime.gameplay_unit_actions;
+    configure_default_unit_action_context(action_context,
+        g_runtime.gameplay_unit_commands);
+    if (!default_unit_action_can_target(action_context, damaged, threat)) {
+        return DefaultDamageReactionCombatGate::random_move_fallback;
+    }
+    const UnitActionTargetValidation validation =
+        ValidateUnitActionTarget(action_context, damaged, threat);
+    if (!validation.valid) {
+        return DefaultDamageReactionCombatGate::random_move_fallback;
+    }
+    return DefaultDamageReactionCombatGate::dispatch_combat;
+}
+
+bool default_unit_command_find_relocation_point(UnitCommandContext&,
+    UnitMovementUnit& unit, UnitMovementPoint& point) {
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    if (movement == nullptr) {
+        return false;
+    }
+
+    point.x = default_damage_reaction_random_axis(unit.x, movement->map.width);
+    point.y = default_damage_reaction_random_axis(unit.y, movement->map.height);
+    return true;
+}
+
+bool default_unit_command_find_strict_placement_point(UnitCommandContext&,
+    UnitMovementUnit& unit, UnitMovementPoint& point) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr) {
+        return false;
+    }
+
+    return FindStrictUnitPlacementPoint(*lifecycle, unit, point.x, point.y);
+}
+
+bool default_unit_damage_reaction_state_can_acquire_attacker(
+    const UnitMovementUnit& target) {
+    switch (target.command_state & 0x00ffffffu) {
+    case kUnitStateRuntimeIdleAcquire:
+    case kUnitStateTravel:
+    case kUnitStateAssistTarget:
+    case kUnitStateEquipmentPointTravel:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool default_unit_damage_reaction_acquire_attacker(UnitMovementUnit& target,
+    UnitMovementUnit& threat) {
+    if (!default_unit_damage_reaction_state_can_acquire_attacker(target) ||
+        (target.type_flags & 0x20u) == 0) {
+        return false;
+    }
+
+    UnitActionContext& action_context = g_runtime.gameplay_unit_actions;
+    configure_default_unit_action_context(action_context,
+        g_runtime.gameplay_unit_commands);
+    if (!default_unit_action_can_target(action_context, target, threat)) {
+        return false;
+    }
+
+    const UnitActionTargetValidation validation =
+        ValidateUnitActionTarget(action_context, target, threat);
+    if (!validation.valid) {
+        return false;
+    }
+
+    if (validation.in_range) {
+        SetUnitCommandTarget(target, &threat);
+        target.command_flags &= ~0x8u;
+        if ((target.command_state & kUnitCommandStateMask) !=
+            kUnitStateAttackTarget) {
+            target.action_mode = 0;
+        }
+        target.command_state = kUnitStateAttackTarget;
+        return true;
+    }
+
+    if ((target.runtime_flags & 0x8u) != 0 ||
+        (target.type_flags & 0x10u) == 0) {
+        return false;
+    }
+
+    SetUnitCommandTarget(target, &threat);
+    target.command_flags &= ~0x8u;
+    target.command_state = kUnitStateAttackTravel;
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    if (movement != nullptr) {
+        ProcessUnitPathToDestination(*movement, target);
+    }
+    return true;
+}
+
+u32 default_unit_damage_reaction_target_priority(const UnitMovementUnit& unit) {
+    return unit.definition.target_selection_priority != 0xffffffffu
+        ? unit.definition.target_selection_priority
+        : unit.type_id;
+}
+
+UnitActionTargetValidation default_unit_damage_reaction_validate_target(
+    UnitMovementUnit& source, UnitMovementUnit& target) {
+    UnitActionContext& action_context = g_runtime.gameplay_unit_actions;
+    configure_default_unit_action_context(action_context,
+        g_runtime.gameplay_unit_commands);
+    if (!default_unit_action_can_target(action_context, source, target)) {
+        return UnitActionTargetValidation{};
+    }
+    return ValidateUnitActionTarget(action_context, source, target);
+}
+
+bool default_unit_damage_reaction_replace_target_by_priority(
+    UnitMovementUnit& source, UnitMovementUnit& threat,
+    bool use_distance_tiebreak, bool replace_equal_when_current_not_ready,
+    bool clear_path_flag) {
+    UnitMovementUnit* current = source.target;
+    if (current == &threat) {
+        return false;
+    }
+
+    const UnitActionTargetValidation threat_validation =
+        default_unit_damage_reaction_validate_target(source, threat);
+    if (!threat_validation.valid) {
+        return false;
+    }
+
+    bool replace = current == nullptr;
+    if (!replace && current != nullptr) {
+        const u32 threat_priority =
+            default_unit_damage_reaction_target_priority(threat);
+        const u32 current_priority =
+            default_unit_damage_reaction_target_priority(*current);
+        if (threat_priority < current_priority) {
+            replace = true;
+        }
+        else if (threat_priority == current_priority) {
+            if (use_distance_tiebreak) {
+                const u32 threat_distance = CalculateApproxUnitDistance(
+                    source.x, source.y, threat.x, threat.y);
+                const u32 current_distance = CalculateApproxUnitDistance(
+                    source.x, source.y, current->x, current->y);
+                replace = threat_distance < current_distance;
+            }
+            else if (replace_equal_when_current_not_ready) {
+                const UnitActionTargetValidation current_validation =
+                    default_unit_damage_reaction_validate_target(source, *current);
+                replace = !current_validation.valid || !current_validation.in_range;
+            }
+        }
+    }
+    if (!replace) {
+        return false;
+    }
+
+    SetUnitCommandTarget(source, &threat);
+    if (clear_path_flag) {
+        source.command_flags &= ~0x8u;
+    }
+    return true;
+}
+
+bool default_unit_damage_reaction_guard_return_acquire_attacker(
+    UnitMovementUnit& target, UnitMovementUnit& threat) {
+    if ((target.type_flags & 0x20u) == 0) {
+        return false;
+    }
+
+    const UnitActionTargetValidation validation =
+        default_unit_damage_reaction_validate_target(target, threat);
+    if (!validation.valid) {
+        return false;
+    }
+
+    SetUnitCommandTarget(target, &threat);
+    if (validation.in_range) {
+        target.command_state = kUnitStateGuardCombatCycle;
+        return true;
+    }
+
+    target.command_state = kUnitStateGuardPursueTarget;
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    if (movement != nullptr) {
+        ProcessUnitPathToDestination(*movement, target);
+    }
+    return true;
+}
+
+bool default_unit_damage_reaction_patrol_leg_acquire_attacker(
+    UnitMovementUnit& target, UnitMovementUnit& threat, u32 combat_state) {
+    const UnitActionTargetValidation validation =
+        default_unit_damage_reaction_validate_target(target, threat);
+    if (!validation.valid) {
+        return false;
+    }
+
+    SetUnitCommandTarget(target, &threat);
+    target.command_state = combat_state;
+    target.command_flags &= ~0x8u;
+    return true;
+}
+
+bool default_unit_damage_reaction_dispatch_attacker(UnitMovementUnit& target,
+    UnitMovementUnit& threat) {
+    switch (target.command_state & 0x00ffffffu) {
+    case kUnitStateRuntimeIdleAcquire:
+    case kUnitStateTravel:
+    case kUnitStateAssistTarget:
+    case kUnitStateEquipmentPointTravel:
+        return default_unit_damage_reaction_acquire_attacker(target, threat);
+    case kUnitStateAttackTravel:
+    case kUnitStateAttackTarget:
+        return default_unit_damage_reaction_replace_target_by_priority(
+            target, threat, true, false, false);
+    case 0x1f:
+    case kUnitStateGuardReturnTravel:
+        return default_unit_damage_reaction_guard_return_acquire_attacker(
+            target, threat);
+    case kUnitStateGuardCombatCycle:
+    case kUnitStateGuardPursueTarget:
+        return default_unit_damage_reaction_replace_target_by_priority(
+            target, threat, true, false, false);
+    case kUnitStatePatrolReturnLeg:
+        return default_unit_damage_reaction_patrol_leg_acquire_attacker(
+            target, threat, kUnitStatePatrolReturnCombat);
+    case kUnitStatePatrolOutboundLeg:
+        return default_unit_damage_reaction_patrol_leg_acquire_attacker(
+            target, threat, kUnitStatePatrolOutboundCombat);
+    case kUnitStatePatrolReturnCombat:
+    case kUnitStatePatrolOutboundCombat:
+        return default_unit_damage_reaction_replace_target_by_priority(
+            target, threat, false, true, true);
+    default:
+        return false;
+    }
+}
+
+void mirror_default_damage_reaction_unit_state(UnitRecord& record,
+    const UnitMovementUnit& unit) {
+    record.command_state = unit.command_state;
+    record.command_flags = unit.command_flags;
+    record.runtime_flags = unit.runtime_flags;
+}
+
+u32 default_unit_damage_reaction_ally_range(const UnitMovementUnit& target) {
+    const UnitEquipmentCatalog& equipment_catalog =
+        frontend_bootstrap_state().equipment_catalog;
+    return CalculateUnitInteractionRangeWithProductionAndEquipmentEffects(
+        g_runtime.gameplay_production_runtime, target,
+        std::max<u32>(target.definition.support_range,
+            target.definition.range_threshold),
+        equipment_catalog.effects.empty() ? nullptr : &equipment_catalog) >> 1;
+}
+
+void default_unit_damage_reaction_scan_allies(UnitMovementUnit& damaged,
+    UnitMovementUnit& threat) {
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    if (movement == nullptr) {
+        return;
+    }
+
+    const u32 range = default_unit_damage_reaction_ally_range(damaged);
+    for (UnitMovementUnit* ally : movement->active_units) {
+        if (ally == nullptr || ally == &damaged || ally == &threat) {
+            continue;
+        }
+        if (!default_owners_are_related(damaged.owner_id, ally->owner_id) ||
+            default_owners_are_related(threat.owner_id, ally->owner_id)) {
+            continue;
+        }
+        if (CalculateApproxUnitDistance(damaged.x, damaged.y, ally->x, ally->y) >
+            range) {
+            continue;
+        }
+        if ((ally->type_id > kUnitEliteVariantThreshold &&
+                ally->production_variant == 1) ||
+            (ally->type_flags & 0x20u) == 0 ||
+            (ally->runtime_flags & kUnitDamageReactionSkipMask) != 0) {
+            continue;
+        }
+        if (!default_unit_damage_reaction_command_allows_dispatch(*ally)) {
+            continue;
+        }
+        if (!default_unit_damage_reaction_dispatch_attacker(*ally, threat)) {
+            continue;
+        }
+        if (GameplayDamageRecordLink* link = find_default_damage_record_link(ally)) {
+            mirror_default_damage_reaction_unit_state(link->record, *ally);
+        }
+    }
+}
+
+void default_unit_damage_reaction(UnitDamageContext&, UnitRecord& source,
+    UnitRecord& target) {
+    UnitMovementUnit* threat_unit = find_default_damage_record_unit(source);
+    UnitMovementUnit* strategic_target_unit = find_default_damage_record_unit(target);
+    if (threat_unit == nullptr || strategic_target_unit == nullptr) {
+        return;
+    }
+
+    const u32 target_owner = target.owner_id;
+    if (default_owners_are_related(source.owner_id, target_owner)) {
+        return;
+    }
+
+    if (target_owner < kOwnerAiOwnerCount && target_owner < kPlayerSlotCount &&
+        source.owner_id < kPlayerSlotCount &&
+        g_runtime.gameplay_player_slots.slot_states[target_owner] ==
+            static_cast<u8>(PlayerSlotState::player_controlled)) {
+        sync_default_owner_threat_points_from_ai(target_owner);
+        RecordOwnerThreatPointIfStrategicTarget(
+            g_runtime.gameplay_owner_threat_points[target_owner],
+            *strategic_target_unit, *threat_unit);
+        sync_default_owner_threat_points_to_ai(target_owner);
+    }
+
+    switch (default_unit_damage_reaction_combat_gate(
+        *strategic_target_unit, *threat_unit)) {
+    case DefaultDamageReactionCombatGate::stop:
+        return;
+    case DefaultDamageReactionCombatGate::dispatch_combat: {
+        if (default_unit_damage_reaction_command_allows_dispatch(
+                *strategic_target_unit)) {
+            const bool self_reacted = default_unit_damage_reaction_dispatch_attacker(
+                *strategic_target_unit, *threat_unit);
+            if (self_reacted) {
+                mirror_default_damage_reaction_unit_state(
+                    target, *strategic_target_unit);
+            }
+        }
+        default_unit_damage_reaction_scan_allies(
+            *strategic_target_unit, *threat_unit);
+        return;
+    }
+    case DefaultDamageReactionCombatGate::random_move_fallback:
+        break;
+    }
+
+    if (default_unit_damage_reaction_random_move(*strategic_target_unit)) {
+        mirror_default_damage_reaction_unit_state(target, *strategic_target_unit);
+    }
+}
+
+void configure_default_unit_damage_context(UnitDamageContext& damage_context) {
+    if (damage_context.callbacks.on_unit_damaged == nullptr) {
+        damage_context.callbacks.on_unit_damaged = default_unit_damage_hit_sound;
+    }
+    if (damage_context.callbacks.on_unit_defeated_accounting == nullptr) {
+        damage_context.callbacks.on_unit_defeated_accounting =
+            default_unit_damage_defeated_accounting;
+    }
+    if (damage_context.callbacks.on_unit_killed == nullptr) {
+        damage_context.callbacks.on_unit_killed = default_unit_damage_kill_effects;
+    }
+    if (damage_context.callbacks.on_linked_visibility_from_source == nullptr) {
+        damage_context.callbacks.on_linked_visibility_from_source =
+            default_unit_damage_linked_visibility;
+    }
+    if (damage_context.callbacks.on_damage_reaction == nullptr) {
+        damage_context.callbacks.on_damage_reaction = default_unit_damage_reaction;
+    }
+    if (damage_context.callbacks.on_shield_broken == nullptr) {
+        damage_context.callbacks.on_shield_broken = default_unit_damage_shield_broken;
+    }
+    if (damage_context.callbacks.calculate_damage == nullptr) {
+        damage_context.callbacks.calculate_damage = default_unit_damage_calculate_damage;
+    }
+    if (damage_context.callbacks.can_damage == nullptr) {
+        damage_context.callbacks.can_damage = default_unit_damage_can_damage;
+    }
+    if (damage_context.callbacks.can_award_experience == nullptr) {
+        damage_context.callbacks.can_award_experience =
+            default_unit_damage_can_award_experience;
+    }
+    if (damage_context.callbacks.on_attacker_experience_changed == nullptr) {
+        damage_context.callbacks.on_attacker_experience_changed =
+            default_unit_damage_attacker_experience_changed;
+    }
+    damage_context.allowed_area_target_render_class_mask = 0xffffffffu;
+    damage_context.area_damage_allows_related_targets = false;
+}
+
+void append_default_damage_record(UnitMovementUnit* unit) {
+    if (unit == nullptr || find_default_damage_record_link(unit) != nullptr) {
+        return;
+    }
+
+    GameplayDamageRecordLink link;
+    link.unit = unit;
+    link.record = make_default_unit_damage_record(*unit);
+    g_runtime.gameplay_damage_record_links.push_back(link);
+}
+
+void rebuild_default_damage_record_links(UnitMovementContext* movement,
+    UnitMovementUnit* source = nullptr, UnitMovementUnit* target = nullptr) {
+    std::size_t reserve_count = 2;
+    if (movement != nullptr) {
+        reserve_count += movement->active_units.size();
+    }
+
+    g_runtime.gameplay_damage_record_links.clear();
+    g_runtime.gameplay_damage_record_links.reserve(reserve_count);
+    if (movement != nullptr) {
+        for (UnitMovementUnit* unit : movement->active_units) {
+            append_default_damage_record(unit);
+        }
+    }
+    append_default_damage_record(source);
+    append_default_damage_record(target);
+
+    UnitDamageContext& damage_context = g_runtime.gameplay_damage_context;
+    configure_default_unit_damage_context(damage_context);
+    damage_context.active_units.clear();
+    damage_context.active_units.reserve(g_runtime.gameplay_damage_record_links.size());
+    for (GameplayDamageRecordLink& link : g_runtime.gameplay_damage_record_links) {
+        damage_context.active_units.push_back(&link.record);
+    }
+}
+
+void commit_default_damage_record_links() {
+    for (const GameplayDamageRecordLink& link : g_runtime.gameplay_damage_record_links) {
+        if (link.unit != nullptr) {
+            apply_default_unit_damage_record(*link.unit, link.record);
+        }
+    }
+}
+
+u32 default_gameplay_frame_random_limit(u32 limit) {
+    if (limit == 0) {
+        return 0;
+    }
+
+    GameplayFrameRandomState& random_state = g_runtime.gameplay_frame_random_state;
+    random_state.limit = limit;
+    return SelectGameplayFrameRandomLimit(random_state, 0,
+        gameplay_loop_state().simulation_frame_counter).selected_value;
+}
+
+u32 default_unit_action_direct_damage(const UnitMovementUnit& source,
+    const UnitMovementUnit& target) {
+    sync_default_unit_action_damage_profiles_from_runtime_catalog();
+    return CalculateUnitActionDamageWithDefinitionModifiers(
+        g_runtime.gameplay_production_runtime, source, target,
+        &g_runtime.gameplay_action_damage_profiles,
+        default_gameplay_frame_random_limit);
+}
+
+void apply_default_unit_action_damage(UnitCommandContext& command_context,
+    UnitMovementUnit& source, UnitMovementUnit& target) {
+    rebuild_default_damage_record_links(command_context.movement, &source, &target);
+    GameplayDamageRecordLink* source_link = find_default_damage_record_link(&source);
+    GameplayDamageRecordLink* target_link = find_default_damage_record_link(&target);
+    if (source_link == nullptr || target_link == nullptr) {
+        return;
+    }
+
+    UnitDamageContext& damage_context = g_runtime.gameplay_damage_context;
+    damage_context.attacker = &source_link->record;
+    damage_context.direct_target = &target_link->record;
+    damage_context.center_x = default_unit_damage_center_x(target);
+    damage_context.center_y = default_unit_damage_center_y(target);
+    damage_context.direct_damage = default_unit_action_direct_damage(source, target);
+    damage_context.splash_radius = 0;
+    damage_context.allowed_area_target_render_class_mask = 0xffffffffu;
+    damage_context.area_damage_allows_related_targets = false;
+    ApplyUnitDamageOrAreaDamage(damage_context);
+    commit_default_damage_record_links();
+
+    damage_context.attacker = nullptr;
+    damage_context.direct_target = nullptr;
+    damage_context.direct_damage = 0;
+    damage_context.splash_radius = 0;
+    damage_context.allowed_area_target_render_class_mask = 0xffffffffu;
+    damage_context.area_damage_allows_related_targets = false;
+}
+
+void drain_default_unit_effect_impact_events(
+    const UnitEffectRuntimeState& effects, UnitLifecycleContext& lifecycle) {
+    if (lifecycle.movement == nullptr) {
+        return;
+    }
+
+    for (const UnitEffectEvent& event : effects.events) {
+        if (event.kind != UnitEffectEventKind::impact || event.target_id == 0) {
+            continue;
+        }
+
+        UnitMovementUnit* source = find_default_movement_unit_by_id(event.unit_id);
+        UnitMovementUnit* target = find_default_movement_unit_by_id(event.target_id);
+        if (target == nullptr) {
+            continue;
+        }
+
+        rebuild_default_damage_record_links(lifecycle.movement, source, target);
+        GameplayDamageRecordLink* source_link =
+            source != nullptr ? find_default_damage_record_link(source) : nullptr;
+        GameplayDamageRecordLink* target_link = find_default_damage_record_link(target);
+        if (target_link == nullptr) {
+            continue;
+        }
+
+        const UnitEffectDefinition* definition =
+            find_default_unit_effect_definition(effects, event.effect_id);
+        UnitDamageContext& damage_context = g_runtime.gameplay_damage_context;
+        damage_context.attacker =
+            source_link != nullptr ? &source_link->record : nullptr;
+        damage_context.direct_target = &target_link->record;
+        damage_context.center_x = event.x;
+        damage_context.center_y = event.y;
+        damage_context.direct_damage = event.value;
+        damage_context.splash_radius = 0;
+        damage_context.allowed_area_target_render_class_mask =
+            definition != nullptr ? definition->allowed_target_render_class_mask
+                                  : 0xffffffffu;
+        damage_context.area_damage_allows_related_targets =
+            definition != nullptr && definition->area_damage_allows_related_targets;
+        ApplyUnitDamageOrAreaDamage(damage_context);
+        commit_default_damage_record_links();
+
+        damage_context.attacker = nullptr;
+        damage_context.direct_target = nullptr;
+        damage_context.direct_damage = 0;
+        damage_context.splash_radius = 0;
+        damage_context.allowed_area_target_render_class_mask = 0xffffffffu;
+        damage_context.area_damage_allows_related_targets = false;
+    }
+}
+
+void default_unit_action_impact(UnitActionContext&,
+    UnitMovementUnit& source, UnitMovementUnit& target) {
+    const u32 effect_id = default_unit_action_effect_id(source, &target);
+    UnitEffectRuntime* effect = start_default_unit_action_effect(source, &target);
+    if (effect == nullptr ||
+        default_unit_action_effect_is_direct_damage_only(effect_id)) {
+        apply_default_unit_action_damage(g_runtime.gameplay_unit_commands,
+            source, target);
+    }
+}
+
+void default_unit_action_sound(UnitActionContext&, UnitMovementUnit& source) {
+    GameplayUnitSoundDefinition definition;
+    GameplayUnitSoundBaseSlots base_slots;
+    if (!resolve_default_unit_sound_profile(source, definition, base_slots)) {
+        return;
+    }
+    HandleUnitAttackFrameVoiceCue(g_runtime.gameplay_sound, source, definition, base_slots);
+}
+
+void default_unit_lifecycle_became_active(UnitLifecycleContext&, UnitMovementUnit& unit) {
+    GameplayUnitSoundDefinition definition;
+    GameplayUnitSoundBaseSlots base_slots;
+    if (!resolve_default_unit_sound_profile(unit, definition, base_slots)) {
+        return;
+    }
+    HandleUnitSpawnCompleteVoiceCue(g_runtime.gameplay_sound, unit, definition, base_slots);
+}
+
+void queue_default_unit_death_voice(UnitMovementUnit& unit) {
+    GameplayUnitSoundDefinition definition;
+    GameplayUnitSoundBaseSlots base_slots;
+    if (!resolve_default_unit_sound_profile(unit, definition, base_slots)) {
+        return;
+    }
+    HandleUnitDeathVoiceCue(g_runtime.gameplay_sound, unit, definition, base_slots);
+}
+
+void queue_default_runtime_death_sound(UnitMovementUnit& unit,
+    bool allow_silent_death_state) {
+    if (allow_silent_death_state && (unit.runtime_flags & 0x10u) != 0) {
+        HandleSilentDeathStateSoundCue(g_runtime.gameplay_sound, unit);
+        return;
+    }
+    queue_default_unit_death_voice(unit);
+}
+
+u32 default_unit_lifecycle_random_limit(UnitLifecycleContext&, u32 limit) {
+    return default_gameplay_frame_random_limit(limit);
+}
+
+void default_unit_command_harvest_sound(UnitCommandContext&, UnitMovementUnit& unit) {
+    GameplayUnitSoundDefinition definition;
+    GameplayUnitSoundBaseSlots base_slots;
+    if (!resolve_default_unit_sound_profile(unit, definition, base_slots)) {
+        return;
+    }
+    HandleWorkerHarvestFrameVoiceCue(g_runtime.gameplay_sound, unit, definition, base_slots);
+}
+
+void sync_default_owner_command_runtime_slots(const UnitCommandContext& context,
+    u32 owner) {
+    if (owner >= context.owner_resources.size() ||
+        owner >= context.owner_secondary_resources.size()) {
+        return;
+    }
+
+    const u32 primary = context.owner_resources[owner];
+    const u32 secondary = context.owner_secondary_resources[owner];
+    sync_default_owner_resource_runtime_slots(owner, primary, secondary);
+    if (owner < context.owner_resource_score.size() &&
+        owner < g_runtime.gameplay_owner_counters.tables[6].size()) {
+        g_runtime.gameplay_owner_counters.tables[6][owner] =
+            context.owner_resource_score[owner];
+    }
+
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle != nullptr &&
+        owner < context.owner_population_used.size() &&
+        owner < context.owner_population_limit.size() &&
+        owner < context.owner_population_reserved.size() &&
+        owner < lifecycle->owner_population_used.size() &&
+        owner < lifecycle->owner_population_limit.size() &&
+        owner < lifecycle->owner_population_reserved.size()) {
+        lifecycle->owner_population_used[owner] =
+            context.owner_population_used[owner];
+        lifecycle->owner_population_limit[owner] =
+            context.owner_population_limit[owner];
+        lifecycle->owner_population_reserved[owner] =
+            context.owner_population_reserved[owner];
+    }
+}
+
+void sync_default_owner_target_progress_runtime_slots(
+    const UnitTargetHelperContext& context, u32 owner) {
+    if (owner >= context.owner_primary_progress.size() ||
+        owner >= context.owner_secondary_progress.size()) {
+        return;
+    }
+
+    const u32 primary = context.owner_primary_progress[owner];
+    const u32 secondary = context.owner_secondary_progress[owner];
+    sync_default_owner_resource_runtime_slots(owner, primary, secondary);
+}
+
+void default_unit_command_target_progress_blocked(UnitTargetHelperContext&,
+    UnitMovementUnit&) {
+    QueueGameplayHudMessage(g_runtime.gameplay_hud_text,
+        startup_production_resource_failure_row(0));
+}
+
+void default_unit_command_target_progress(UnitTargetHelperContext& context,
+    UnitMovementUnit& source, UnitMovementUnit&) {
+    sync_default_owner_target_progress_runtime_slots(context, source.owner_id);
+}
+
+void default_unit_command_target_progress_complete(UnitTargetHelperContext& context,
+    UnitMovementUnit& source, UnitMovementUnit& target) {
+    sync_default_owner_target_progress_runtime_slots(context, source.owner_id);
+    append_default_damage_record(&target);
+}
+
+void default_unit_command_cargo_deposited(UnitCommandContext& context,
+    UnitMovementUnit& unit) {
+    if (unit.owner_id < context.owner_resource_score.size()) {
+        context.owner_resource_score[unit.owner_id] += unit.cargo_amount;
+    }
+    sync_default_owner_command_runtime_slots(context, unit.owner_id);
+}
+
+void default_unit_command_acknowledged_sound(UnitCommandContext& context,
+    UnitMovementUnit& unit) {
+    if (unit.owner_id != context.local_owner_id) {
+        return;
+    }
+
+    GameplayUnitSoundDefinition definition;
+    GameplayUnitSoundBaseSlots base_slots;
+    if (!resolve_default_unit_sound_profile(unit, definition, base_slots)) {
+        return;
+    }
+    HandleCommandAcknowledgementVoiceCue(g_runtime.gameplay_sound, unit, definition,
+        base_slots);
+}
+
+void default_unit_command_runtime_death_marked(UnitCommandContext&,
+    UnitMovementUnit& unit) {
+    ClearSelectedUnitMembershipFlagAndRefreshSelection(ui_overlay_state(), unit.id);
+}
+
+void default_unit_command_runtime_death_sound(UnitCommandContext&,
+    UnitMovementUnit& unit) {
+    queue_default_runtime_death_sound(unit, false);
+}
+
+void default_unit_command_clear_footprint(UnitCommandContext&,
+    UnitMovementUnit& unit) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr) {
+        return;
+    }
+    ClearUnitFootprintOccupancyBits(*lifecycle, unit);
+}
+
+void default_unit_command_set_footprint(UnitCommandContext&,
+    UnitMovementUnit& unit) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr) {
+        return;
+    }
+    SetUnitFootprintOccupancyBits(*lifecycle, unit);
+}
+
+void default_unit_command_unit_boarded(UnitCommandContext&,
+    UnitMovementUnit&, UnitMovementUnit& passenger) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr) {
+        return;
+    }
+    ClearUnitFootprintOccupancyBits(*lifecycle, passenger);
+}
+
+void default_unit_command_unit_unloaded(UnitCommandContext&,
+    UnitMovementUnit&, UnitMovementUnit& passenger) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr) {
+        return;
+    }
+    SetUnitFootprintOccupancyBits(*lifecycle, passenger);
+}
+
+void sync_default_owner_type_count(u32 owner, u32 type) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr ||
+        owner >= lifecycle->owner_unit_type_counts.size() ||
+        type >= lifecycle->owner_unit_type_counts[owner].size()) {
+        return;
+    }
+
+    const u32 count = lifecycle->owner_unit_type_counts[owner][type];
+    if (owner < g_runtime.gameplay_owner_ai_state.owner_unit_type_counts.size() &&
+        type < g_runtime.gameplay_owner_ai_state.owner_unit_type_counts[owner].size()) {
+        g_runtime.gameplay_owner_ai_state.owner_unit_type_counts[owner][type] =
+            count;
+    }
+    if (owner < g_runtime.gameplay_production_runtime.completed_type_counts.size() &&
+        type < g_runtime.gameplay_production_runtime.completed_type_counts[owner].size()) {
+        g_runtime.gameplay_production_runtime.completed_type_counts[owner][type] =
+            count;
+    }
+}
+
+void sync_default_owner_type_count_for_unit(const UnitMovementUnit& unit) {
+    sync_default_owner_type_count(unit.owner_id, unit.type_id);
+}
+
+void default_unit_command_unit_spawned(UnitCommandContext&,
+    UnitMovementUnit&, UnitMovementUnit& spawned) {
+    append_default_damage_record(&spawned);
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr) {
+        return;
+    }
+    HandleOwnerUnitTypeCountRebuild(*lifecycle);
+    sync_default_owner_type_count_for_unit(spawned);
+}
+
+void default_unit_command_linked_unit_released(UnitCommandContext&,
+    UnitMovementUnit& parent, UnitMovementUnit& child) {
+    append_default_damage_record(&child);
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr) {
+        return;
+    }
+
+    SetUnitFootprintOccupancyBits(*lifecycle, child);
+    HandleOwnerUnitTypeCountRebuild(*lifecycle);
+    sync_default_owner_type_count_for_unit(parent);
+    sync_default_owner_type_count_for_unit(child);
+}
+
+void default_unit_command_unit_type_replaced(UnitCommandContext&,
+    UnitMovementUnit& unit, u32 old_type, u32 new_type) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    const u32 owner = unit.owner_id;
+    if (lifecycle == nullptr ||
+        owner >= lifecycle->owner_unit_type_counts.size()) {
+        return;
+    }
+
+    auto& counts = lifecycle->owner_unit_type_counts[owner];
+    if (old_type < counts.size() && counts[old_type] != 0) {
+        --counts[old_type];
+    }
+    if (new_type < counts.size()) {
+        ++counts[new_type];
+    }
+    sync_default_owner_type_count(owner, old_type);
+    sync_default_owner_type_count(owner, new_type);
+}
+
+void default_unit_movement_marked_dead(UnitMovementContext&,
+    UnitMovementUnit& unit) {
+    ClearSelectedUnitMembershipFlagAndRefreshSelection(ui_overlay_state(), unit.id);
+}
+
+u32 default_unit_movement_command_metadata_flags(UnitMovementContext&,
+    const UnitMovementUnit& unit) {
+    return default_unit_command_metadata_flags_from_original_table(unit);
+}
+
+u32 default_unit_movement_random_limit(UnitMovementContext&, u32 limit) {
+    return default_gameplay_frame_random_limit(limit);
+}
+
+void spawn_default_runtime_death_passive_effects(UnitMovementUnit& unit) {
+    if (unit.type_id >= 0x60 || (unit.command_flags & 0x003c0000u) != 0) {
+        return;
+    }
+    configure_default_map_effect_context();
+    SpawnUnitPassiveMapEffects(g_runtime.map_effect_context, unit);
+}
+
+bool default_unit_movement_attached_child_parent_death(UnitMovementContext& movement,
+    UnitMovementUnit& parent, UnitMovementUnit& child) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr || lifecycle->movement != &movement) {
+        return false;
+    }
+
+    i32 x = parent.x;
+    i32 y = parent.y;
+    if (!FindStrictUnitPlacementPoint(*lifecycle, child, x, y)) {
+        x = parent.x;
+        y = parent.y;
+    }
+    child.x = x;
+    child.y = y;
+    child.destination_x = x;
+    child.destination_y = y;
+    child.current_cell_x = x & ~0x1f;
+    child.current_cell_y = y & ~0x1f;
+    SetUnitFootprintOccupancyBits(*lifecycle, child);
+    return true;
+}
+
+void configure_default_unit_movement_callbacks(UnitMovementContext& movement) {
+    FrontendBootstrapState& bootstrap = frontend_bootstrap_state();
+    movement.production_state = &g_runtime.gameplay_production_runtime;
+    movement.equipment_catalog = &bootstrap.equipment_catalog;
+    movement.direction_lookup_8 = &bootstrap.direction_lookup_8;
+    movement.direction_lookup_16 = &bootstrap.direction_lookup_16;
+
+    if (movement.callbacks.on_unit_marked_dead == nullptr) {
+        movement.callbacks.on_unit_marked_dead = default_unit_movement_marked_dead;
+    }
+    if (movement.callbacks.random_limit == nullptr) {
+        movement.callbacks.random_limit = default_unit_movement_random_limit;
+    }
+    if (movement.callbacks.command_metadata_flags == nullptr) {
+        movement.callbacks.command_metadata_flags =
+            default_unit_movement_command_metadata_flags;
+    }
+    if (movement.callbacks.on_attached_child_parent_death == nullptr) {
+        movement.callbacks.on_attached_child_parent_death =
+            default_unit_movement_attached_child_parent_death;
+    }
+}
+
+void default_unit_command_completion_effect(UnitCommandContext& context,
+    UnitMovementUnit& unit) {
+    if (unit.owner_id != context.local_owner_id) {
+        return;
+    }
+    QueueGameplayHudAlertMarker(g_runtime.gameplay_hud_alert_markers, 1,
+        unit.x, unit.y);
+    UnitEquipmentCatalog& catalog = frontend_bootstrap_state().equipment_catalog;
+    if (catalog.effects.empty()) {
+        LoadUnitEquipmentCatalogFromJw210Trc(catalog);
+    }
+    const UnitEquipmentEffectDefinition* effect =
+        FindUnitEquipmentEffect(catalog, unit.command_value);
+    if (effect != nullptr && !effect->display_name.empty()) {
+        static std::string completion_effect_message;
+        completion_effect_message =
+            effect->display_name + startup_platform_row(123, "Supply  ");
+        QueueGameplayHudMessage(g_runtime.gameplay_hud_text,
+            completion_effect_message.c_str());
+    }
+}
+
+bool default_unit_command_advance_completion_effect(UnitCommandContext&,
+    UnitMovementUnit& unit) {
+    configure_default_map_effect_context();
+    UnitEquipmentCatalog& catalog = frontend_bootstrap_state().equipment_catalog;
+    if (catalog.effects.empty()) {
+        LoadUnitEquipmentCatalogFromJw210Trc(catalog);
+    }
+    const UnitEquipmentEffectDefinition* definition =
+        FindUnitEquipmentEffect(catalog, unit.command_value);
+    const u32 period = definition != nullptr ?
+        definition->completion_terrain_effect_period : 0;
+    return HandleCompletionTerrainEffectSpawnTick(g_runtime.map_effect_context, unit,
+        unit.command_value, period);
+}
+
+const ProductionOrderDefinition* default_production_order_definition(u32 order_id) {
+    if (g_runtime.gameplay_production_catalog.definitions.empty()) {
+        LoadProductionOrderCatalogFromJw210Trc(g_runtime.gameplay_production_catalog);
+    }
+    for (const ProductionOrderDefinition& definition :
+         g_runtime.gameplay_production_catalog.definitions) {
+        if (definition.id == order_id) {
+            return &definition;
+        }
+    }
+    return nullptr;
+}
+
+u32 default_unit_completion_order_id(const UnitMovementUnit& unit) {
+    if ((unit.active_command_payload.state & kUnitCommandStateMask) == 0x17) {
+        return static_cast<u32>(unit.active_command_payload.x);
+    }
+    return unit.command_value;
+}
+
+bool default_unit_command_start_completion_announcement(UnitCommandContext&,
+    UnitMovementUnit& unit) {
+    const ProductionOrderDefinition* definition =
+        default_production_order_definition(default_unit_completion_order_id(unit));
+    if (definition == nullptr) {
+        return false;
+    }
+
+    ProductionOrderUnitRuntime runtime{};
+    runtime.owner = unit.owner_id;
+    if (!StartSelectedUnitProductionOrder(g_runtime.gameplay_production_runtime,
+            *definition, runtime)) {
+        return false;
+    }
+
+    unit.command_value = runtime.current_order_id;
+    unit.work_timer = runtime.progress_ticks;
+    return true;
+}
+
+bool default_unit_command_advance_completion_announcement(UnitCommandContext&,
+    UnitMovementUnit& unit) {
+    const ProductionOrderDefinition* definition =
+        default_production_order_definition(default_unit_completion_order_id(unit));
+    if (definition == nullptr) {
+        return true;
+    }
+
+    const ProductionOrderCompletionResult result =
+        AdvanceProductionOrderProgress(g_runtime.gameplay_production_runtime,
+            *definition, unit.owner_id, unit.work_timer);
+    return result.completed;
+}
+
+void default_unit_command_completion_announcement(UnitCommandContext& context,
+    UnitMovementUnit& unit) {
+    if (unit.owner_id != context.local_owner_id) {
+        return;
+    }
+
+    QueueGameplayHudAlertMarker(g_runtime.gameplay_hud_alert_markers, 1,
+        unit.x, unit.y);
+    const ProductionOrderDefinition* definition =
+        default_production_order_definition(default_unit_completion_order_id(unit));
+    if (definition != nullptr && !definition->display_name.empty()) {
+        QueueGameplayHudMessage(g_runtime.gameplay_hud_text,
+            definition->display_name.c_str());
+    }
+}
+
+void default_unit_command_regen_error(UnitCommandContext&, UnitMovementUnit&) {
+    OutputDebugStringA("regen_error");
+}
+
+void default_unit_command_target_validation_failed(UnitCommandContext& context,
+    UnitMovementUnit& unit) {
+    if (unit.owner_id != context.local_owner_id) {
+        return;
+    }
+
+    QueueGameplayHudMessageAndSound(g_runtime.gameplay_hud_text,
+        g_runtime.gameplay_sound,
+        startup_platform_row(104, "Cannot use action"),
+        kDefaultUiClickSoundSlot);
+}
+
+void default_unit_command_production_start_failed(UnitCommandContext& context,
+    UnitMovementUnit& unit) {
+    if (unit.owner_id != context.local_owner_id) {
+        return;
+    }
+
+    QueueGameplayHudMessageAndSound(g_runtime.gameplay_hud_text,
+        g_runtime.gameplay_sound,
+        startup_production_resource_failure_row(0),
+        kDefaultUiClickSoundSlot);
+}
+
+u32 default_owner_faction_for_message(u32 owner) {
+    if (owner < g_runtime.gameplay_startup_state.owner_faction_ids.size()) {
+        return std::min<u32>(
+            g_runtime.gameplay_startup_state.owner_faction_ids[owner], 3);
+    }
+    return 0;
+}
+
+u32 default_unit_production_resource_failure_code(
+    UnitProductionStartFailure failure) {
+    switch (failure) {
+    case UnitProductionStartFailure::secondary_resources:
+        return static_cast<u32>(
+            ProductionOrderAvailabilityCode::missing_secondary_resource);
+    case UnitProductionStartFailure::resources:
+    case UnitProductionStartFailure::primary_resources:
+    default:
+        return static_cast<u32>(
+            ProductionOrderAvailabilityCode::missing_primary_resource);
+    }
+}
+
+void default_unit_command_production_start_failed_reason(
+    UnitCommandContext& context, UnitMovementUnit& unit,
+    UnitProductionStartFailure failure) {
+    if (unit.owner_id != context.local_owner_id) {
+        return;
+    }
+
+    if (failure == UnitProductionStartFailure::population_limit) {
+        QueueGameplayHudMessage(g_runtime.gameplay_hud_text,
+            startup_platform_row(97, "Population limit reached"));
+        return;
+    }
+    if (failure == UnitProductionStartFailure::placement_failed) {
+        QueueGameplayHudMessage(g_runtime.gameplay_hud_text,
+            startup_platform_row(98, "Cannot build here"));
+        return;
+    }
+
+    const char* message = nullptr;
+    if (failure == UnitProductionStartFailure::population_capacity) {
+        const u32 faction = default_owner_faction_for_message(unit.owner_id);
+        message = startup_platform_row(105 + faction,
+            "Not enough population capacity");
+    }
+    else {
+        message = startup_production_resource_failure_row(
+            default_unit_production_resource_failure_code(failure));
+    }
+    QueueGameplayHudMessageAndSound(g_runtime.gameplay_hud_text,
+        g_runtime.gameplay_sound, message, kDefaultUiClickSoundSlot);
+}
+
+void default_unit_command_linked_release_population_blocked(
+    UnitCommandContext& context, UnitMovementUnit& unit,
+    UnitProductionStartFailure failure) {
+    default_unit_command_production_start_failed_reason(context, unit, failure);
+}
+
+void default_unit_command_production_started(UnitCommandContext& context,
+    UnitMovementUnit& unit) {
+    sync_default_owner_command_runtime_slots(context, unit.owner_id);
+}
+
+void default_unit_command_production_completed(UnitCommandContext& context,
+    UnitMovementUnit& producer, UnitMovementUnit& produced) {
+    if (producer.owner_id != context.local_owner_id) {
+        return;
+    }
+
+    QueueGameplayHudAlertMarker(g_runtime.gameplay_hud_alert_markers, 1,
+        produced.x, produced.y);
+    GameplayUnitSoundDefinition definition;
+    GameplayUnitSoundBaseSlots base_slots;
+    if (resolve_default_unit_sound_profile(produced, definition, base_slots)) {
+        HandleUnitProductionCompleteVoiceCue(g_runtime.gameplay_sound, produced,
+            definition, base_slots);
+    }
+    static std::string production_complete_message;
+    production_complete_message =
+        default_unit_display_name(produced) + startup_platform_row(101, " ready");
+    QueueGameplayHudMessage(g_runtime.gameplay_hud_text,
+        production_complete_message.c_str());
+}
+
+void default_unit_command_refund_completion_announcement(UnitCommandContext& context,
+    UnitMovementUnit& unit) {
+    const ProductionOrderDefinition* definition =
+        default_production_order_definition(default_unit_completion_order_id(unit));
+    if (definition == nullptr) {
+        return;
+    }
+    const u32 owner = unit.owner_id;
+    if (owner < context.owner_resources.size() &&
+        owner < g_runtime.gameplay_production_runtime.variant_counts.size() &&
+        definition->id < kProductionOrderCount) {
+        const u32 variant =
+            g_runtime.gameplay_production_runtime.variant_counts[owner][definition->id];
+        const u32 primary =
+            CalculateProductionOrderCost(definition->primary_cost, variant);
+        context.owner_resources[owner] += primary;
+        context.owner_secondary_resources[owner] += primary;
+    }
+    ClearProductionOrderLockFlags(g_runtime.gameplay_production_runtime,
+        definition->id, unit.owner_id);
+    RefundProductionOrderCosts(g_runtime.gameplay_production_runtime,
+        *definition, unit.owner_id);
+}
+
+void default_unit_command_deferred_death_refund(UnitCommandContext& context,
+    UnitMovementUnit& unit, const UnitQueuedCommand& command) {
+    const u32 owner = unit.owner_id;
+    if (owner >= context.owner_resources.size()) {
+        return;
+    }
+
+    const u32 state = command.state & kUnitCommandStateMask;
+    if (state == kUnitStateProductionSpawnStart ||
+        state == kUnitStateProductionSpawnCycle || state == 0x10) {
+        const u32 type_id = static_cast<u32>(command.x);
+        const UnitMovementDefinition* definition =
+            default_unit_lifecycle_find_definition(
+                g_runtime.gameplay_lifecycle_context, type_id);
+        if (definition != nullptr) {
+            context.owner_resources[owner] += definition->production_resource_cost;
+        }
+        return;
+    }
+
+    if (state == kUnitStateCompletionEffectStart ||
+        state == kUnitStateCompletionEffectTimer || state == 0x22) {
+        const u32 dependency_slot = static_cast<u32>(command.x);
+        if (dependency_slot >= g_runtime.unit_reference_tables.small_reverse.size()) {
+            return;
+        }
+        const u32 type_id =
+            g_runtime.unit_reference_tables.small_reverse[dependency_slot];
+        const UnitMovementDefinition* definition =
+            default_unit_lifecycle_find_definition(
+                g_runtime.gameplay_lifecycle_context, type_id);
+        if (definition != nullptr) {
+            context.owner_resources[owner] += definition->production_resource_cost;
+            context.owner_secondary_resources[owner] +=
+                definition->production_secondary_cost;
+        }
+        return;
+    }
+
+    if (state == kUnitStateCompletionAnnouncementStart ||
+        state == kUnitStateCompletionAnnouncementTimer || state == 0x17) {
+        const u32 order_id = static_cast<u32>(command.x);
+        const ProductionOrderDefinition* definition =
+            default_production_order_definition(order_id);
+        if (definition == nullptr) {
+            return;
+        }
+        if (owner < g_runtime.gameplay_production_runtime.variant_counts.size() &&
+            definition->id < kProductionOrderCount) {
+            const u32 variant =
+                g_runtime.gameplay_production_runtime.variant_counts[owner]
+                    [definition->id];
+            const u32 primary =
+                CalculateProductionOrderCost(definition->primary_cost, variant);
+            context.owner_resources[owner] += primary;
+            context.owner_secondary_resources[owner] += primary;
+        }
+        ClearProductionOrderLockFlags(g_runtime.gameplay_production_runtime,
+            definition->id, unit.owner_id);
+        RefundProductionOrderCosts(g_runtime.gameplay_production_runtime,
+            *definition, unit.owner_id);
+    }
+}
+
+void configure_default_unit_lifecycle_callbacks(UnitLifecycleContext& lifecycle) {
+    if (lifecycle.callbacks.on_unit_became_active == nullptr) {
+        lifecycle.callbacks.on_unit_became_active = default_unit_lifecycle_became_active;
+    }
+    if (lifecycle.callbacks.on_before_active_simulation == nullptr) {
+        lifecycle.callbacks.on_before_active_simulation =
+            run_default_periodic_unit_support_effects;
+    }
+    if (lifecycle.callbacks.on_active_unit_runtime_dispatch == nullptr) {
+        lifecycle.callbacks.on_active_unit_runtime_dispatch =
+            run_default_active_unit_runtime_dispatch;
+    }
+    if (lifecycle.callbacks.find_definition == nullptr) {
+        lifecycle.callbacks.find_definition = default_unit_lifecycle_find_definition;
+    }
+    if (lifecycle.callbacks.random_limit == nullptr) {
+        lifecycle.callbacks.random_limit = default_unit_lifecycle_random_limit;
+    }
+}
+
+void configure_default_unit_action_context(UnitActionContext& action_context,
+    UnitCommandContext& command_context) {
+    action_context.movement_context = command_context.movement;
+    action_context.production_state = command_context.production_state;
+    const UnitEquipmentCatalog& equipment_catalog =
+        frontend_bootstrap_state().equipment_catalog;
+    action_context.equipment_catalog =
+        equipment_catalog.effects.empty() ? nullptr : &equipment_catalog;
+    if (action_context.callbacks.can_target == nullptr) {
+        action_context.callbacks.can_target = default_unit_action_can_target;
+    }
+    if (action_context.callbacks.distance_to_target == nullptr) {
+        action_context.callbacks.distance_to_target = default_unit_action_distance;
+    }
+    if (action_context.callbacks.validate_target_reach == nullptr) {
+        action_context.callbacks.validate_target_reach =
+            default_unit_action_validate_target_reach;
+    }
+    if (action_context.callbacks.find_replacement_target == nullptr) {
+        action_context.callbacks.find_replacement_target =
+            default_unit_action_find_replacement_target;
+    }
+    if (action_context.callbacks.can_replace_transient_target == nullptr) {
+        action_context.callbacks.can_replace_transient_target =
+            default_unit_action_can_replace_transient_target;
+    }
+    if (action_context.callbacks.try_auto_effect_command == nullptr) {
+        action_context.callbacks.try_auto_effect_command =
+            default_unit_action_auto_effect_command;
+    }
+    if (action_context.callbacks.on_begin_action_animation == nullptr) {
+        action_context.callbacks.on_begin_action_animation =
+            default_unit_action_begin_animation;
+    }
+    if (action_context.callbacks.on_action_impact == nullptr) {
+        action_context.callbacks.on_action_impact = default_unit_action_impact;
+    }
+    if (action_context.callbacks.on_action_sound == nullptr) {
+        action_context.callbacks.on_action_sound = default_unit_action_sound;
+    }
+    if (action_context.callbacks.on_action_cycle_complete == nullptr) {
+        action_context.callbacks.on_action_cycle_complete =
+            default_unit_action_cycle_complete;
+    }
+    if (action_context.callbacks.on_target_lost == nullptr) {
+        action_context.callbacks.on_target_lost = default_unit_action_target_lost;
+    }
+}
+
+bool default_unit_command_can_attack(UnitCommandContext& context,
+    UnitMovementUnit& unit, UnitMovementUnit& target) {
+    UnitActionContext& action_context = g_runtime.gameplay_unit_actions;
+    configure_default_unit_action_context(action_context, context);
+    return ValidateUnitActionTarget(action_context, unit, target).valid;
+}
+
+bool default_unit_command_target_in_action_range(UnitCommandContext& context,
+    UnitMovementUnit& unit, UnitMovementUnit& target) {
+    UnitActionContext& action_context = g_runtime.gameplay_unit_actions;
+    configure_default_unit_action_context(action_context, context);
+    const UnitActionTargetValidation validation =
+        ValidateUnitActionTarget(action_context, unit, target);
+    return validation.valid && validation.in_range;
+}
+
+bool default_unit_command_validate_action_target(UnitCommandContext& context,
+    UnitMovementUnit& unit, UnitMovementUnit& target) {
+    UnitActionContext& action_context = g_runtime.gameplay_unit_actions;
+    configure_default_unit_action_context(action_context, context);
+    return ValidateUnitActionTarget(action_context, unit, target).valid;
+}
+
+bool default_unit_command_can_follow(UnitCommandContext&,
+    UnitMovementUnit&, UnitMovementUnit& target) {
+    return target.active && (target.command_state & kUnitCommandDead) == 0 &&
+        (target.runtime_flags & 0x84u) == 0;
+}
+
+bool default_unit_command_can_board_transport(UnitCommandContext&,
+    UnitMovementUnit&, UnitMovementUnit&) {
+    return true;
+}
+
+bool default_visibility_grid_ready_for_targeting() {
+    const GameplayVisibilityGrid& grid = g_runtime.gameplay_visibility_grid;
+    if (grid.width == 0 || grid.height == 0) {
+        return false;
+    }
+    const std::size_t count = static_cast<std::size_t>(grid.width) * grid.height;
+    return grid.current.size() >= count && grid.owner.size() >= count;
+}
+
+bool default_unit_visibility_allows_target(const UnitMovementUnit& source,
+    const UnitMovementUnit& candidate) {
+    if (!default_visibility_grid_ready_for_targeting()) {
+        return true;
+    }
+    if (source.owner_id >= 32) {
+        return false;
+    }
+
+    const GameplayVisibilityGrid& grid = g_runtime.gameplay_visibility_grid;
+    const GameplayVisibilityUnit visibility =
+        make_default_gameplay_visibility_unit(candidate);
+    if (CheckUnitVisibilityGateFlags(visibility) &&
+        !CheckUnitOwnerMaskOrCurrentVisibilityBit(g_runtime.gameplay_player_slots,
+            grid, visibility, source.owner_id)) {
+        return false;
+    }
+    return CheckUnitOwnerLayerBitAtTarget(grid, visibility, source.owner_id);
+}
+
+bool default_unit_targeting_can_target(UnitTargetingContext&,
+    const UnitRecord& source, const UnitRecord& candidate) {
+    UnitMovementUnit* source_unit = find_default_damage_record_unit(source);
+    UnitMovementUnit* candidate_unit = find_default_damage_record_unit(candidate);
+    if (source_unit == nullptr || candidate_unit == nullptr) {
+        return default_unit_damage_can_damage(g_runtime.gameplay_damage_context,
+            source, candidate);
+    }
+    if (!default_unit_visibility_allows_target(*source_unit, *candidate_unit)) {
+        return false;
+    }
+    return default_unit_action_can_target(g_runtime.gameplay_unit_actions,
+        *source_unit, *candidate_unit);
+}
+
+bool populate_default_spatial_target_candidates(UnitCommandContext& context,
+    UnitMovementUnit& unit, UnitTargetingContext& targeting) {
+    if (context.movement == nullptr) {
+        return false;
+    }
+
+    RebuildUnitSpatialIndexSet(g_runtime.gameplay_unit_spatial_indexes,
+        *context.movement);
+    UnitMovementUnit* candidate = QueryAllUnitsSpatialIndexAroundUnit(
+        g_runtime.gameplay_unit_spatial_indexes, unit, targeting.interaction_range);
+    bool queried = candidate != nullptr;
+    while (candidate != nullptr) {
+        GameplayDamageRecordLink* link = find_default_damage_record_link(candidate);
+        if (link != nullptr) {
+            targeting.spatial_candidates.push_back(&link->record);
+        }
+        candidate = NextAllUnitsSpatialIndexResult(
+            g_runtime.gameplay_unit_spatial_indexes);
+    }
+    return queried;
+}
+
+UnitMovementUnit* default_unit_command_find_source_bounds_target(
+    UnitCommandContext& context, UnitMovementUnit& unit) {
+    if (context.movement == nullptr) {
+        return nullptr;
+    }
+
+    const i32 left = unit.x + unit.definition.interaction_bounds_left;
+    const i32 top = unit.y + unit.definition.interaction_bounds_top;
+    const i32 right = left + unit.definition.interaction_bounds_width;
+    const i32 bottom = top + unit.definition.interaction_bounds_height;
+    for (UnitMovementUnit* candidate : context.movement->active_units) {
+        if (candidate == nullptr || candidate == &unit || !candidate->active ||
+            (candidate->command_state & kUnitCommandDead) != 0 ||
+            (candidate->runtime_flags & 0x20000084u) != 0) {
+            continue;
+        }
+        if (candidate->x < left || candidate->x > right ||
+            candidate->y < top || candidate->y > bottom) {
+            continue;
+        }
+        if (!default_unit_visibility_allows_target(unit, *candidate) ||
+            !default_unit_command_can_attack(context, unit, *candidate)) {
+            continue;
+        }
+        return candidate;
+    }
+    return nullptr;
+}
+
+UnitMovementUnit* default_unit_command_find_nearby_follow_target(
+    UnitCommandContext& context, UnitMovementUnit& unit) {
+    if (context.movement == nullptr) {
+        return nullptr;
+    }
+    RebuildUnitSpatialIndexSet(g_runtime.gameplay_unit_spatial_indexes,
+        *context.movement);
+    return QueryNonTerminalUnitSpatialBox(g_runtime.gameplay_unit_spatial_indexes,
+        unit);
+}
+
+UnitMovementUnit* default_unit_command_find_dropoff(UnitCommandContext& context,
+    UnitMovementUnit& unit) {
+    return context.movement != nullptr ?
+        FindNearestOwnedDropoffBuilding(*context.movement, unit).unit : nullptr;
+}
+
+UnitMovementUnit* default_unit_command_find_target(UnitCommandContext& context,
+    UnitMovementUnit& unit) {
+    if (context.movement == nullptr) {
+        return nullptr;
+    }
+
+    UnitActionContext& action_context = g_runtime.gameplay_unit_actions;
+    configure_default_unit_action_context(action_context, context);
+    rebuild_default_damage_record_links(context.movement, &unit);
+    GameplayDamageRecordLink* source_link = find_default_damage_record_link(&unit);
+    if (source_link == nullptr) {
+        return nullptr;
+    }
+
+    UnitTargetingContext& targeting = g_runtime.gameplay_targeting_context;
+    targeting = UnitTargetingContext{};
+    targeting.callbacks.can_target = default_unit_targeting_can_target;
+    targeting.source = &source_link->record;
+    targeting.owner_relation_mask =
+        unit.owner_id < g_runtime.gameplay_player_slots.owner_relation_masks.size()
+            ? g_runtime.gameplay_player_slots.owner_relation_masks[unit.owner_id]
+            : 0;
+    targeting.active_units.reserve(g_runtime.gameplay_damage_record_links.size());
+    for (GameplayDamageRecordLink& link : g_runtime.gameplay_damage_record_links) {
+        targeting.active_units.push_back(&link.record);
+    }
+    targeting.interaction_range =
+        CalculateUnitInteractionRangeWithProductionAndEquipmentEffects(
+            g_runtime.gameplay_production_runtime, unit,
+            std::max<u32>(unit.definition.support_range, unit.definition.range_threshold),
+            action_context.equipment_catalog);
+
+    targeting.spatial_candidates.reserve(targeting.active_units.size());
+    const bool use_active_list_targeting = unit.type_id == 0x73;
+    const bool used_spatial_query = !use_active_list_targeting &&
+        populate_default_spatial_target_candidates(context, unit, targeting);
+    const UnitTargetingResult result = used_spatial_query
+        ? FindBestUnitTargetUsingSpatialIndex(targeting)
+        : FindBestUnitTargetByActiveList(targeting);
+    return result.target != nullptr ? find_default_damage_record_unit(*result.target) :
+        nullptr;
+}
+
+void default_unit_command_dispatch_attack(UnitCommandContext& context,
+    UnitMovementUnit& unit) {
+    UnitActionContext& action_context = g_runtime.gameplay_unit_actions;
+    configure_default_unit_action_context(action_context, context);
+    const bool extended_runtime_table_unit = unit.type_id >= 0x60;
+    const u32 command_state = unit.command_state & kUnitCommandStateMask;
+    const auto pop_extended_runtime_action = [&]() {
+        if (command_state == kUnitStateRuntimeAttackTarget) {
+            unit.command_flags &= ~0x10u;
+        }
+        PopDeferredUnitCommandOrReturnIdle(context, unit);
+    };
+    const auto can_attack_replacement = [&](UnitMovementUnit& target) {
+        return context.callbacks.can_attack_target != nullptr
+            ? context.callbacks.can_attack_target(context, unit, target)
+            : default_unit_command_can_attack(context, unit, target);
+    };
+    const auto target_in_command_action_range = [&](UnitMovementUnit& target) {
+        return context.callbacks.target_in_action_range != nullptr
+            ? context.callbacks.target_in_action_range(context, unit, target)
+            : default_unit_command_target_in_action_range(context, unit, target);
+    };
+    const auto command_target_priority = [](const UnitMovementUnit& target) {
+        return target.definition.target_selection_priority != 0xffffffffu
+            ? target.definition.target_selection_priority
+            : target.type_id;
+    };
+    const auto copy_attack_path_target = [&](UnitMovementUnit& target) {
+        unit.path_target_x = target.x;
+        unit.path_target_y = target.y;
+    };
+    const auto path_current_target_to_state =
+        [&](UnitMovementUnit& target, u32 state, bool set_path_flag) {
+            SetUnitCommandTarget(unit, &target);
+            copy_attack_path_target(target);
+            unit.command_state = state;
+            if (set_path_flag) {
+                unit.command_flags |= 8u;
+            }
+            if (context.movement != nullptr) {
+                ProcessUnitPathToDestination(*context.movement, unit);
+            }
+        };
+    const auto path_point_to_state = [&](i32 x, i32 y, u32 state, bool set_path_flag) {
+        unit.target = nullptr;
+        unit.path_target_x = x;
+        unit.path_target_y = y;
+        unit.command_state = state;
+        if (set_path_flag) {
+            unit.command_flags |= 8u;
+        }
+        if (context.movement != nullptr) {
+            ProcessUnitPathToDestination(*context.movement, unit);
+        }
+    };
+    const auto handle_lost_action_target = [&](UnitMovementUnit& target) {
+        switch (command_state) {
+        case kUnitStateGuardAnchorAction:
+            path_current_target_to_state(target, kUnitStateGuardAnchorApproach, false);
+            return true;
+        case kUnitStateGuardCombatCycle:
+            path_current_target_to_state(target, kUnitStateGuardPursueTarget, true);
+            return true;
+        case kUnitStatePatrolReturnCombat:
+            path_current_target_to_state(target, kUnitStatePatrolReturnLeg, false);
+            return true;
+        case kUnitStatePatrolOutboundCombat:
+            path_current_target_to_state(target, kUnitStatePatrolOutboundLeg, false);
+            return true;
+        default:
+            return false;
+        }
+    };
+    const auto handle_invalid_action_target = [&]() {
+        switch (command_state) {
+        case kUnitStateGuardAnchorAction:
+            unit.anchor_x = unit.x;
+            unit.anchor_y = unit.y;
+            PopDeferredUnitCommandOrReturnIdle(context, unit);
+            return true;
+        case kUnitStateGuardCombatCycle:
+            path_point_to_state(unit.saved_path_target_x, unit.saved_path_target_y,
+                kUnitStateGuardReturnTravel, true);
+            return true;
+        case kUnitStatePatrolReturnCombat:
+            path_point_to_state(unit.anchor_x, unit.anchor_y,
+                kUnitStatePatrolReturnLeg, true);
+            return true;
+        case kUnitStatePatrolOutboundCombat:
+            path_point_to_state(unit.destination_x, unit.destination_y,
+                kUnitStatePatrolOutboundLeg, true);
+            return true;
+        default:
+            return false;
+        }
+    };
+
+    const UnitActionTickResult result =
+        ProcessUnitActionCycle(action_context, unit);
+    if (result.code != UnitActionTickCode::lost_target) {
+        if (extended_runtime_table_unit && unit.type_id == 0x73 &&
+            result.target != nullptr &&
+            (result.code != UnitActionTickCode::cycle_started &&
+                result.code != UnitActionTickCode::cycle_in_progress) &&
+            (result.target->runtime_flags & 0x20000u) != 0) {
+            pop_extended_runtime_action();
+        }
+        if (command_state == kUnitStateAttackTarget &&
+            result.code == UnitActionTickCode::cycle_complete &&
+            context.callbacks.find_target != nullptr) {
+            UnitMovementUnit* replacement =
+                context.callbacks.find_target(context, unit);
+            if (replacement != nullptr && can_attack_replacement(*replacement)) {
+                SetUnitCommandTarget(unit, replacement);
+                copy_attack_path_target(*replacement);
+            }
+        }
+        if (command_state == kUnitStateGuardCombatCycle &&
+            result.code == UnitActionTickCode::cycle_complete) {
+            UnitMovementUnit* current = unit.target;
+            UnitMovementUnit* replacement = context.callbacks.find_target != nullptr
+                ? context.callbacks.find_target(context, unit)
+                : nullptr;
+            if (replacement != nullptr && can_attack_replacement(*replacement) &&
+                (current == nullptr ||
+                    command_target_priority(*replacement) <
+                        command_target_priority(*current))) {
+                SetUnitCommandTarget(unit, replacement);
+                copy_attack_path_target(*replacement);
+                current = replacement;
+            }
+            if (current != nullptr && !target_in_command_action_range(*current)) {
+                path_current_target_to_state(
+                    *current, kUnitStateGuardPursueTarget, true);
+            }
+        }
+        return;
+    }
+
+    if (result.valid_target && result.target != nullptr) {
+        if (handle_lost_action_target(*result.target)) {
+            return;
+        }
+        if (extended_runtime_table_unit || (unit.runtime_flags & 0x8u) != 0) {
+            pop_extended_runtime_action();
+            return;
+        }
+        SetUnitCommandTarget(unit, result.target);
+        copy_attack_path_target(*result.target);
+        unit.command_state = kUnitStateAttackTravel;
+        unit.command_flags |= 8;
+        if (context.movement != nullptr) {
+            ProcessUnitPathToDestination(*context.movement, unit);
+        }
+        return;
+    }
+
+    if (handle_invalid_action_target()) {
+        return;
+    }
+    PopDeferredUnitCommandOrReturnIdle(context, unit);
+}
+
+UnitMovementUnit* take_default_free_unit_head(UnitMovementContext& movement) {
+    if (movement.free_units.empty()) {
+        return nullptr;
+    }
+    UnitMovementUnit* unit = movement.free_units.front();
+    movement.free_units.erase(movement.free_units.begin());
+    return unit;
+}
+
+void return_default_free_unit_head(UnitMovementContext& movement,
+    UnitMovementUnit* unit) {
+    if (unit == nullptr) {
+        return;
+    }
+    auto remove_unit = [unit](std::vector<UnitMovementUnit*>& units) {
+        units.erase(std::remove(units.begin(), units.end(), unit), units.end());
+    };
+    remove_unit(movement.active_units);
+    remove_unit(movement.lifecycle_units);
+    remove_unit(movement.free_units);
+    unit->active = false;
+    movement.free_units.insert(movement.free_units.begin(), unit);
+}
+
+UnitMovementUnit* default_unit_command_create_unit(UnitCommandContext&,
+    UnitMovementUnit& source, u32 type_id, i32 x, i32 y) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr || lifecycle->movement == nullptr) {
+        return nullptr;
+    }
+
+    UnitMovementContext& movement = *lifecycle->movement;
+    UnitMovementUnit* unit = nullptr;
+    std::unique_ptr<UnitMovementUnit> owned_unit;
+    if (!movement.free_units.empty()) {
+        unit = take_default_free_unit_head(movement);
+    }
+    else {
+        owned_unit = std::make_unique<UnitMovementUnit>();
+        unit = owned_unit.get();
+    }
+    if (unit == nullptr) {
+        return nullptr;
+    }
+
+    const u32 unit_id = unit->id != 0 ? unit->id :
+        g_runtime.gameplay_script_next_unit_id++;
+    const u32 runtime_slot_index =
+        unit->runtime_slot_index != kInvalidUnitRuntimeSlotIndex ?
+            unit->runtime_slot_index : unit_id;
+
+    UnitMovementUnit initialized{};
+    if (!InitializePlacedUnitFromMapSlot(*lifecycle, initialized, type_id,
+            source.owner_id, x, y)) {
+        if (owned_unit == nullptr) {
+            return_default_free_unit_head(movement, unit);
+        }
+        return nullptr;
+    }
+
+    initialized.id = unit_id;
+    initialized.runtime_slot_index = runtime_slot_index;
+    *unit = initialized;
+    unit->id = unit_id;
+    unit->runtime_slot_index = runtime_slot_index;
+    unit->active = true;
+    unit->linked_unit = unit;
+    refresh_default_unit_definition_runtime_fields(*unit);
+    if (owned_unit != nullptr) {
+        g_runtime.gameplay_script_spawned_units.push_back(std::move(owned_unit));
+    }
+    default_gameplay_startup_unit_placed(*unit);
+    HandleOwnerUnitTypeCountRebuild(*lifecycle);
+    return unit;
+}
+
+bool dispatch_default_unit_command_action_effect(UnitMovementUnit& source,
+    UnitMovementUnit* target, u32 action_id, i32 world_x, i32 world_y) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr || action_id >= 0x2e) {
+        return false;
+    }
+
+    UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
+    configure_default_unit_effect_runtime_state(effects);
+    sync_default_unit_effect_runtime_units(effects, *lifecycle);
+
+    UnitEffectRuntime* effect = AllocateUnitEffectSlot(effects);
+    if (effect == nullptr) {
+        return false;
+    }
+
+    if (!DispatchSelectedUnitActionEffect(effects, *effect, action_id, source,
+            target, world_x, world_y)) {
+        ReleaseUnitEffectSlot(effects, *effect);
+        return false;
+    }
+    return true;
+}
+
+void default_unit_command_execute_ability(UnitCommandContext&,
+    UnitMovementUnit& source, UnitMovementUnit* target, u32 ability_id) {
+    dispatch_default_unit_command_action_effect(source, target, ability_id,
+        source.path_target_x, source.path_target_y);
+}
+
+void default_unit_command_start_ability_attachment(UnitCommandContext&,
+    UnitMovementUnit& source, UnitMovementUnit*, u32 ability_id) {
+    constexpr u32 kSelectedActionEffectBase = 0x3d;
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr || ability_id >= 0x2e) {
+        return;
+    }
+
+    UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
+    configure_default_unit_effect_runtime_state(effects);
+    sync_default_unit_effect_runtime_units(effects, *lifecycle);
+
+    UnitEffectRuntime* effect = AllocateUnitEffectSlot(effects);
+    if (effect == nullptr) {
+        return;
+    }
+
+    if (!BeginSelectedUnitAttachmentEffect(effects, *effect,
+            kSelectedActionEffectBase + ability_id, source, &source)) {
+        ReleaseUnitEffectSlot(effects, *effect);
+    }
+}
+
+bool default_unit_command_can_use_ability(UnitCommandContext&,
+    UnitMovementUnit& source, UnitMovementUnit* target, u32 ability_id) {
+    if (ability_id >= 0x2e) {
+        return false;
+    }
+    if (target != nullptr && !target->active) {
+        return false;
+    }
+
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr) {
+        return target == nullptr || (target->command_state & kUnitCommandDead) == 0;
+    }
+
+    UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
+    configure_default_unit_effect_runtime_state(effects);
+    sync_default_unit_effect_runtime_units(effects, *lifecycle);
+
+    const UnitEffectActionTargetGateResult gate =
+        EvaluateUnitEffectActionTargetGate(effects, source, ability_id);
+    return !gate.carry || gate.value == 0;
+}
+
+UnitCommandAbilityGateResult default_unit_command_ability_gate(UnitCommandContext&,
+    UnitMovementUnit& source, UnitMovementUnit* target, u32 ability_id) {
+    if (ability_id >= 0x2e) {
+        return UnitCommandAbilityGateResult::fail;
+    }
+    if (target != nullptr && !target->active) {
+        return UnitCommandAbilityGateResult::fail;
+    }
+
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr) {
+        if (target != nullptr && (target->command_state & kUnitCommandDead) != 0) {
+            return UnitCommandAbilityGateResult::fail;
+        }
+        const u32 distance = target != nullptr ?
+            CalculateApproxUnitDistance(source.x, source.y, target->x, target->y) :
+            CalculateApproxUnitDistance(source.x, source.y,
+                source.path_target_x, source.path_target_y);
+        return distance <= source.definition.effect_command_distance_gate ?
+            UnitCommandAbilityGateResult::ready :
+            UnitCommandAbilityGateResult::approach;
+    }
+
+    UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
+    configure_default_unit_effect_runtime_state(effects);
+    sync_default_unit_effect_runtime_units(effects, *lifecycle);
+
+    const UnitEffectActionTargetGateResult gate =
+        EvaluateUnitEffectActionTargetGate(effects, source, ability_id);
+    if (!gate.carry) {
+        return UnitCommandAbilityGateResult::ready;
+    }
+    return gate.value == 0 ? UnitCommandAbilityGateResult::approach :
+        UnitCommandAbilityGateResult::fail;
+}
+
+const UnitMovementDefinition* default_unit_command_find_definition(
+    UnitCommandContext&, u32 unit_type) {
+    return default_unit_lifecycle_find_definition(
+        g_runtime.gameplay_lifecycle_context, unit_type);
+}
+
+const UnitMovementDefinition* default_unit_command_production_definition(
+    const UnitMovementUnit& unit) {
+    const u32 type_id = ResolveQueuedOwnerProductionUnitType(unit);
+    return default_unit_lifecycle_find_definition(
+        g_runtime.gameplay_lifecycle_context, type_id);
+}
+
+u32 default_unit_command_production_type_id(UnitCommandContext&,
+    UnitMovementUnit& unit) {
+    return ResolveQueuedOwnerProductionUnitType(unit);
+}
+
+u32 default_unit_command_production_resource_cost(UnitCommandContext&,
+    UnitMovementUnit& unit) {
+    const UnitMovementDefinition* definition =
+        default_unit_command_production_definition(unit);
+    return definition != nullptr ? definition->production_resource_cost :
+        unit.definition.production_resource_cost;
+}
+
+u32 default_unit_command_production_secondary_cost(UnitCommandContext&,
+    UnitMovementUnit& unit) {
+    const UnitMovementDefinition* definition =
+        default_unit_command_production_definition(unit);
+    return definition != nullptr ? definition->production_secondary_cost :
+        unit.definition.production_secondary_cost;
+}
+
+u32 default_unit_command_production_population_cost(UnitCommandContext&,
+    UnitMovementUnit& unit) {
+    const UnitMovementDefinition* definition =
+        default_unit_command_production_definition(unit);
+    return definition != nullptr ? definition->production_population_cost :
+        unit.definition.production_population_cost;
+}
+
+u32 default_unit_command_harvest_amount(UnitCommandContext& context,
+    UnitMovementUnit& unit) {
+    const ProductionOrderRuntimeState& production =
+        context.production_state != nullptr ? *context.production_state :
+        g_runtime.gameplay_production_runtime;
+    return CalculateWorkerHarvestAmountWithProductionEffect10(
+        production, unit.owner_id, unit.type_id);
+}
+
+u32 default_unit_command_status_secondary_recharge_amount(UnitCommandContext&,
+    UnitMovementUnit&) {
+    constexpr u32 kStatusRechargeActionId = 0x21;
+    const GameplayProductionActionDefinition* definition =
+        default_jw211_production_action_definition(kStatusRechargeActionId);
+    return definition != nullptr ? definition->status_recharge_amount : 1;
+}
+
+u32 default_unit_command_random_limit(UnitCommandContext&, u32 limit) {
+    return default_gameplay_frame_random_limit(limit);
+}
+
+void default_unit_command_reserved_tile_work_complete(UnitCommandContext&,
+    UnitMovementUnit& unit) {
+    constexpr u32 kReservedTileCompletionActionId = 0x26;
+
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    UnitMovementUnit* target = unit.target;
+    if (lifecycle == nullptr || target == nullptr) {
+        unit.reserved_tile_effect = nullptr;
+        unit.linked_effect_slot_offset = 0;
+        return;
+    }
+
+    UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
+    configure_default_unit_effect_runtime_state(effects);
+    sync_default_unit_effect_runtime_units(effects, *lifecycle);
+
+    UnitEffectRuntime* effect = AllocateUnitEffectSlot(effects);
+    if (effect == nullptr) {
+        unit.reserved_tile_effect = nullptr;
+        unit.linked_effect_slot_offset = 0;
+        return;
+    }
+
+    if (!DispatchSelectedUnitActionEffect(effects, *effect,
+            kReservedTileCompletionActionId, unit, target,
+            unit.path_target_x, unit.path_target_y)) {
+        ReleaseUnitEffectSlot(effects, *effect);
+        unit.reserved_tile_effect = nullptr;
+        unit.linked_effect_slot_offset = 0;
+        return;
+    }
+
+    effect->amount = unit.work_timer;
+    unit.reserved_tile_effect = effect;
+    unit.linked_effect_slot_offset =
+        default_unit_effect_original_slot_offset(effects, effect);
+}
+
+u32 default_unit_command_ability_secondary_cost(UnitCommandContext&,
+    UnitMovementUnit&, UnitMovementUnit*, u32 ability_id) {
+    if (jw211_runtime_catalog_state().records.empty()) {
+        LoadJw211RuntimeCatalog();
+    }
+    const AuxiliaryRuntimeCatalogState& catalog = jw211_runtime_catalog_state();
+    if (ability_id >= catalog.records.size()) {
+        return 1;
+    }
+
+    const AuxiliaryRuntimeCatalogRecord& record = catalog.records[ability_id];
+    return read_runtime_catalog_u32(record.definition_bytes,
+        kJw211ActionSecondaryCostOffset, 1);
+}
+
+i32 default_unit_command_ability_target_health_delta(UnitCommandContext&,
+    UnitMovementUnit&, UnitMovementUnit*, u32 ability_id) {
+    if (jw211_runtime_catalog_state().records.empty()) {
+        LoadJw211RuntimeCatalog();
+    }
+    const AuxiliaryRuntimeCatalogState& catalog = jw211_runtime_catalog_state();
+    if (ability_id >= catalog.records.size()) {
+        return 1;
+    }
+
+    const AuxiliaryRuntimeCatalogRecord& record = catalog.records[ability_id];
+    return -read_runtime_catalog_i32(record.definition_bytes,
+        kJw211ActionTargetHealthDeltaOffset, -1);
+}
+
+bool default_unit_command_ability_updates_direction(UnitCommandContext&,
+    UnitMovementUnit&, UnitMovementUnit*, u32 ability_id) {
+    if (jw211_runtime_catalog_state().records.empty()) {
+        LoadJw211RuntimeCatalog();
+    }
+    const AuxiliaryRuntimeCatalogState& catalog = jw211_runtime_catalog_state();
+    if (ability_id >= catalog.records.size()) {
+        return true;
+    }
+
+    const AuxiliaryRuntimeCatalogRecord& record = catalog.records[ability_id];
+    return read_runtime_catalog_u32(record.definition_bytes,
+        kJw211ActionDirectionModeOffset, 1) != 0;
+}
+
+u32 default_unit_command_metadata_flags(UnitCommandContext&,
+    const UnitMovementUnit& unit) {
+    return default_unit_command_metadata_flags_from_original_table(unit);
+}
+
+bool default_unit_command_use_item_slot(UnitCommandContext&,
+    UnitMovementUnit& source, u32 item_id, i32 x, i32 y) {
+    return dispatch_default_unit_command_action_effect(source, nullptr, item_id, x, y);
+}
+
+bool default_unit_command_start_equipment_progress_effect(UnitCommandContext&,
+    UnitMovementUnit& unit, u32 effect_id) {
+    if (effect_id == 0) {
+        return true;
+    }
+    if (effect_id < 5 && unit.action_mode == 0) {
+        return true;
+    }
+    configure_default_map_effect_context();
+    return StartUnitProgressMapEffect(g_runtime.map_effect_context, unit, effect_id);
+}
+
+void configure_default_unit_command_context(UnitCommandContext& command_context,
+    UnitLifecycleContext& lifecycle, u32 frame_counter) {
+    UnitEquipmentCatalog& equipment_catalog =
+        frontend_bootstrap_state().equipment_catalog;
+    if (equipment_catalog.effects.empty()) {
+        LoadUnitEquipmentCatalogFromJw210Trc(equipment_catalog);
+    }
+    command_context.movement = lifecycle.movement;
+    configure_default_map_effect_context();
+    command_context.map_effects = &g_runtime.map_effect_context;
+    command_context.production_state = &g_runtime.gameplay_production_runtime;
+    command_context.equipment_catalog =
+        equipment_catalog.effects.empty() ? nullptr : &equipment_catalog;
+    command_context.command_runtime_state_table =
+        &original_unit_command_runtime_state_table();
+    command_context.owner_resources = lifecycle.owner_primary_resources;
+    command_context.owner_secondary_resources = lifecycle.owner_secondary_resources;
+    command_context.owner_resource_score.fill(0);
+    for (std::size_t owner = 0;
+         owner < command_context.owner_resource_score.size() &&
+         owner < g_runtime.gameplay_owner_counters.tables[6].size(); ++owner) {
+        command_context.owner_resource_score[owner] =
+            g_runtime.gameplay_owner_counters.tables[6][owner];
+    }
+    command_context.owner_population_used = lifecycle.owner_population_used;
+    command_context.owner_population_limit = lifecycle.owner_population_limit;
+    command_context.owner_population_reserved = lifecycle.owner_population_reserved;
+    command_context.owner_relation_masks.fill(0);
+    for (u32 owner = 0; owner < kPlayerSlotCount &&
+         owner < command_context.owner_relation_masks.size(); ++owner) {
+        command_context.owner_relation_masks[owner] =
+            g_runtime.gameplay_player_slots.owner_relation_masks[owner];
+    }
+    command_context.local_owner_id = g_runtime.gameplay_player_slots.local_player_slot;
+    command_context.frame_counter = frame_counter;
+    if (command_context.callbacks.reset_to_idle == nullptr) {
+        command_context.callbacks.reset_to_idle = default_unit_command_reset_to_idle;
+    }
+    if (command_context.callbacks.dispatch_attack == nullptr) {
+        command_context.callbacks.dispatch_attack = default_unit_command_dispatch_attack;
+    }
+    if (command_context.callbacks.find_target == nullptr) {
+        command_context.callbacks.find_target = default_unit_command_find_target;
+    }
+    if (command_context.callbacks.find_source_bounds_target == nullptr) {
+        command_context.callbacks.find_source_bounds_target =
+            default_unit_command_find_source_bounds_target;
+    }
+    if (command_context.callbacks.find_nearby_follow_target == nullptr) {
+        command_context.callbacks.find_nearby_follow_target =
+            default_unit_command_find_nearby_follow_target;
+    }
+    if (command_context.callbacks.find_dropoff == nullptr) {
+        command_context.callbacks.find_dropoff = default_unit_command_find_dropoff;
+    }
+    if (command_context.callbacks.harvest_amount == nullptr) {
+        command_context.callbacks.harvest_amount = default_unit_command_harvest_amount;
+    }
+    if (command_context.callbacks.status_secondary_recharge_amount == nullptr) {
+        command_context.callbacks.status_secondary_recharge_amount =
+            default_unit_command_status_secondary_recharge_amount;
+    }
+    if (command_context.callbacks.random_limit == nullptr) {
+        command_context.callbacks.random_limit = default_unit_command_random_limit;
+    }
+    if (command_context.callbacks.on_reserved_tile_work_complete == nullptr) {
+        command_context.callbacks.on_reserved_tile_work_complete =
+            default_unit_command_reserved_tile_work_complete;
+    }
+    if (command_context.callbacks.can_attack_target == nullptr) {
+        command_context.callbacks.can_attack_target = default_unit_command_can_attack;
+    }
+    if (command_context.callbacks.target_in_action_range == nullptr) {
+        command_context.callbacks.target_in_action_range =
+            default_unit_command_target_in_action_range;
+    }
+    if (command_context.callbacks.validate_action_target == nullptr) {
+        command_context.callbacks.validate_action_target =
+            default_unit_command_validate_action_target;
+    }
+    if (command_context.callbacks.can_follow_target == nullptr) {
+        command_context.callbacks.can_follow_target = default_unit_command_can_follow;
+    }
+    if (command_context.callbacks.can_board_transport == nullptr) {
+        command_context.callbacks.can_board_transport =
+            default_unit_command_can_board_transport;
+    }
+    if (command_context.callbacks.on_command_acknowledged == nullptr) {
+        command_context.callbacks.on_command_acknowledged =
+            default_unit_command_acknowledged_sound;
+    }
+    if (command_context.callbacks.on_harvest_frame == nullptr) {
+        command_context.callbacks.on_harvest_frame = default_unit_command_harvest_sound;
+    }
+    if (command_context.callbacks.on_cargo_deposited == nullptr) {
+        command_context.callbacks.on_cargo_deposited =
+            default_unit_command_cargo_deposited;
+    }
+    if (command_context.callbacks.on_target_progress == nullptr) {
+        command_context.callbacks.on_target_progress =
+            default_unit_command_target_progress;
+    }
+    if (command_context.callbacks.on_target_progress_complete == nullptr) {
+        command_context.callbacks.on_target_progress_complete =
+            default_unit_command_target_progress_complete;
+    }
+    if (command_context.callbacks.on_local_target_progress_blocked == nullptr) {
+        command_context.callbacks.on_local_target_progress_blocked =
+            default_unit_command_target_progress_blocked;
+    }
+    if (command_context.callbacks.on_runtime_death_marked == nullptr) {
+        command_context.callbacks.on_runtime_death_marked =
+            default_unit_command_runtime_death_marked;
+    }
+    if (command_context.callbacks.on_runtime_death_sound == nullptr) {
+        command_context.callbacks.on_runtime_death_sound =
+            default_unit_command_runtime_death_sound;
+    }
+    if (command_context.callbacks.on_target_validation_failed == nullptr) {
+        command_context.callbacks.on_target_validation_failed =
+            default_unit_command_target_validation_failed;
+    }
+    if (command_context.callbacks.on_unit_boarded == nullptr) {
+        command_context.callbacks.on_unit_boarded =
+            default_unit_command_unit_boarded;
+    }
+    if (command_context.callbacks.on_unit_unloaded == nullptr) {
+        command_context.callbacks.on_unit_unloaded =
+            default_unit_command_unit_unloaded;
+    }
+    if (command_context.callbacks.on_unit_spawned == nullptr) {
+        command_context.callbacks.on_unit_spawned =
+            default_unit_command_unit_spawned;
+    }
+    if (command_context.callbacks.on_linked_unit_released == nullptr) {
+        command_context.callbacks.on_linked_unit_released =
+            default_unit_command_linked_unit_released;
+    }
+    if (command_context.callbacks.on_unit_type_replaced == nullptr) {
+        command_context.callbacks.on_unit_type_replaced =
+            default_unit_command_unit_type_replaced;
+    }
+    if (command_context.callbacks.on_linked_release_population_blocked == nullptr) {
+        command_context.callbacks.on_linked_release_population_blocked =
+            default_unit_command_linked_release_population_blocked;
+    }
+    if (command_context.callbacks.find_relocation_point == nullptr) {
+        command_context.callbacks.find_relocation_point =
+            default_unit_command_find_relocation_point;
+    }
+    if (command_context.callbacks.find_strict_placement_point == nullptr) {
+        command_context.callbacks.find_strict_placement_point =
+            default_unit_command_find_strict_placement_point;
+    }
+    if (command_context.callbacks.clear_footprint == nullptr) {
+        command_context.callbacks.clear_footprint =
+            default_unit_command_clear_footprint;
+    }
+    if (command_context.callbacks.set_footprint == nullptr) {
+        command_context.callbacks.set_footprint =
+            default_unit_command_set_footprint;
+    }
+    if (command_context.callbacks.create_unit == nullptr) {
+        command_context.callbacks.create_unit = default_unit_command_create_unit;
+    }
+    if (command_context.callbacks.find_definition == nullptr) {
+        command_context.callbacks.find_definition =
+            default_unit_command_find_definition;
+    }
+    if (command_context.callbacks.production_type_id == nullptr) {
+        command_context.callbacks.production_type_id =
+            default_unit_command_production_type_id;
+    }
+    if (command_context.callbacks.production_resource_cost == nullptr) {
+        command_context.callbacks.production_resource_cost =
+            default_unit_command_production_resource_cost;
+    }
+    if (command_context.callbacks.production_secondary_cost == nullptr) {
+        command_context.callbacks.production_secondary_cost =
+            default_unit_command_production_secondary_cost;
+    }
+    if (command_context.callbacks.production_population_cost == nullptr) {
+        command_context.callbacks.production_population_cost =
+            default_unit_command_production_population_cost;
+    }
+    if (command_context.callbacks.command_metadata_flags == nullptr) {
+        command_context.callbacks.command_metadata_flags =
+            default_unit_command_metadata_flags;
+    }
+    if (command_context.callbacks.execute_ability == nullptr) {
+        command_context.callbacks.execute_ability = default_unit_command_execute_ability;
+    }
+    if (command_context.callbacks.start_ability_attachment == nullptr) {
+        command_context.callbacks.start_ability_attachment =
+            default_unit_command_start_ability_attachment;
+    }
+    if (command_context.callbacks.ability_gate == nullptr) {
+        command_context.callbacks.ability_gate = default_unit_command_ability_gate;
+    }
+    if (command_context.callbacks.can_use_ability == nullptr) {
+        command_context.callbacks.can_use_ability = default_unit_command_can_use_ability;
+    }
+    if (command_context.callbacks.ability_secondary_cost == nullptr) {
+        command_context.callbacks.ability_secondary_cost =
+            default_unit_command_ability_secondary_cost;
+    }
+    if (command_context.callbacks.ability_target_health_delta == nullptr) {
+        command_context.callbacks.ability_target_health_delta =
+            default_unit_command_ability_target_health_delta;
+    }
+    if (command_context.callbacks.ability_updates_direction == nullptr) {
+        command_context.callbacks.ability_updates_direction =
+            default_unit_command_ability_updates_direction;
+    }
+    if (command_context.callbacks.use_item_slot == nullptr) {
+        command_context.callbacks.use_item_slot = default_unit_command_use_item_slot;
+    }
+    if (command_context.callbacks.start_equipment_progress_effect == nullptr) {
+        command_context.callbacks.start_equipment_progress_effect =
+            default_unit_command_start_equipment_progress_effect;
+    }
+    if (command_context.callbacks.on_completion_effect == nullptr) {
+        command_context.callbacks.on_completion_effect =
+            default_unit_command_completion_effect;
+    }
+    if (command_context.callbacks.advance_completion_effect == nullptr) {
+        command_context.callbacks.advance_completion_effect =
+            default_unit_command_advance_completion_effect;
+    }
+    if (command_context.callbacks.can_start_completion_announcement == nullptr) {
+        command_context.callbacks.can_start_completion_announcement =
+            default_unit_command_start_completion_announcement;
+    }
+    if (command_context.callbacks.advance_completion_announcement == nullptr) {
+        command_context.callbacks.advance_completion_announcement =
+            default_unit_command_advance_completion_announcement;
+    }
+    if (command_context.callbacks.on_completion_announcement == nullptr) {
+        command_context.callbacks.on_completion_announcement =
+            default_unit_command_completion_announcement;
+    }
+    if (command_context.callbacks.on_regen_error == nullptr) {
+        command_context.callbacks.on_regen_error =
+            default_unit_command_regen_error;
+    }
+    if (command_context.callbacks.on_production_started == nullptr) {
+        command_context.callbacks.on_production_started =
+            default_unit_command_production_started;
+    }
+    if (command_context.callbacks.on_production_start_failed_reason == nullptr) {
+        command_context.callbacks.on_production_start_failed_reason =
+            default_unit_command_production_start_failed_reason;
+    }
+    if (command_context.callbacks.on_production_start_failed == nullptr) {
+        command_context.callbacks.on_production_start_failed =
+            default_unit_command_production_start_failed;
+    }
+    if (command_context.callbacks.on_production_completed == nullptr) {
+        command_context.callbacks.on_production_completed =
+            default_unit_command_production_completed;
+    }
+    if (command_context.callbacks.on_production_refunded == nullptr) {
+        command_context.callbacks.on_production_refunded =
+            default_unit_command_refund_completion_announcement;
+    }
+    if (command_context.callbacks.on_deferred_death_command_refund == nullptr) {
+        command_context.callbacks.on_deferred_death_command_refund =
+            default_unit_command_deferred_death_refund;
+    }
+    if (command_context.callbacks.on_oversized_transport_passenger == nullptr) {
+        command_context.callbacks.on_oversized_transport_passenger =
+            default_unit_command_oversized_transport_passenger;
+    }
+}
+
+UnitEffectRuntime* start_default_support_action_effect(UnitMovementUnit& source,
+    UnitMovementUnit* target, u32 action_id) {
+    if (action_id >= 0x2e) {
+        return nullptr;
+    }
+
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr) {
+        return nullptr;
+    }
+
+    UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
+    configure_default_unit_effect_runtime_state(effects);
+    sync_default_unit_effect_runtime_units(effects, *lifecycle);
+
+    UnitEffectRuntime* effect = AllocateUnitEffectSlot(effects);
+    if (effect == nullptr) {
+        return nullptr;
+    }
+
+    const i32 world_x = target != nullptr ? target->x : source.x;
+    const i32 world_y = target != nullptr ? target->y : source.y;
+    if (!DispatchSelectedUnitActionEffect(effects, *effect, action_id, source,
+            target, world_x, world_y)) {
+        ReleaseUnitEffectSlot(effects, *effect);
+        return nullptr;
+    }
+    return effect;
+}
+
+void default_unit_support_secondary_transfer(UnitSupportEffectContext& context,
+    UnitMovementUnit& source, UnitMovementUnit& target) {
+    const ProductionOrderRuntimeState* production = context.production_state;
+    if (production == nullptr) {
+        production = &g_runtime.gameplay_production_runtime;
+    }
+    AddUnitSecondaryValueClampedToProductionEffect01(*production, target, 1);
+    start_default_support_action_effect(source, &target, 0x2a);
+}
+
+void default_unit_support_secondary_transfer_complete(
+    UnitSupportEffectContext&, UnitMovementUnit& source) {
+    start_default_support_action_effect(source, &source, 0x2a);
+}
+
+void default_unit_support_health_restore_target_selected(
+    UnitSupportEffectContext&, UnitMovementUnit& source, UnitMovementUnit& target) {
+    start_default_support_action_effect(source, &target, 0x28);
+}
+
+void default_unit_support_health_restore_effect(UnitSupportEffectContext&,
+    UnitMovementUnit& source, UnitMovementUnit&) {
+    constexpr u32 kHealthRestoreAttachmentActionId = 0x28;
+    constexpr u32 kSelectedActionEffectBase = 0x3d;
+
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr) {
+        return;
+    }
+
+    UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
+    configure_default_unit_effect_runtime_state(effects);
+    sync_default_unit_effect_runtime_units(effects, *lifecycle);
+
+    UnitEffectRuntime* effect = AllocateUnitEffectSlot(effects);
+    if (effect == nullptr) {
+        return;
+    }
+
+    if (!BeginSelectedUnitAttachmentEffect(effects, *effect,
+            kSelectedActionEffectBase + kHealthRestoreAttachmentActionId,
+            source, &source)) {
+        ReleaseUnitEffectSlot(effects, *effect);
+    }
+}
+
+UnitMovementUnit* default_unit_support_marker_aura_sound_unit(
+    const UnitSupportEffectContext& context) {
+    if (context.movement_context == nullptr) {
+        return nullptr;
+    }
+    for (UnitMovementUnit* unit : context.movement_context->active_units) {
+        if (unit != nullptr && unit->runtime_slot_index == 0) {
+            return unit;
+        }
+    }
+    return nullptr;
+}
+
+void default_unit_support_marker_aura_sound(UnitSupportEffectContext& context) {
+    if (context.marker_aura_sound_offset == 0xffffffffu) {
+        return;
+    }
+
+    const u32 slot = context.marker_aura_sound_base_slot +
+        context.marker_aura_sound_offset;
+    UnitMovementUnit* sound_unit =
+        default_unit_support_marker_aura_sound_unit(context);
+    if (sound_unit != nullptr) {
+        HandleVisibleCurrentTileGameplaySoundQueued(g_runtime.gameplay_sound, slot,
+            sound_unit->x, sound_unit->y, 0, 0);
+        return;
+    }
+    HandleCurrentGameplaySoundQueued(g_runtime.gameplay_sound, slot, 0, 0);
+}
+
+void commit_default_unit_command_context(UnitLifecycleContext& lifecycle,
+    const UnitCommandContext& command_context) {
+    lifecycle.owner_primary_resources = command_context.owner_resources;
+    lifecycle.owner_secondary_resources = command_context.owner_secondary_resources;
+    for (std::size_t owner = 0;
+         owner < command_context.owner_resource_score.size() &&
+         owner < g_runtime.gameplay_owner_counters.tables[6].size(); ++owner) {
+        g_runtime.gameplay_owner_counters.tables[6][owner] =
+            command_context.owner_resource_score[owner];
+    }
+    lifecycle.owner_population_used = command_context.owner_population_used;
+    lifecycle.owner_population_limit = command_context.owner_population_limit;
+    lifecycle.owner_population_reserved = command_context.owner_population_reserved;
+}
+
+void configure_default_unit_support_context(UnitSupportEffectContext& support_context,
+    UnitLifecycleContext& lifecycle, u32 frame_counter) {
+    support_context = UnitSupportEffectContext{};
+    support_context.production_state = &g_runtime.gameplay_production_runtime;
+    support_context.movement_context = lifecycle.movement;
+    support_context.frame_counter = frame_counter;
+    support_context.callbacks.on_secondary_transfer =
+        default_unit_support_secondary_transfer;
+    support_context.callbacks.on_secondary_transfer_batch_complete =
+        default_unit_support_secondary_transfer_complete;
+    support_context.callbacks.on_health_restore_target_selected =
+        default_unit_support_health_restore_target_selected;
+    support_context.callbacks.on_health_restore_effect =
+        default_unit_support_health_restore_effect;
+    support_context.callbacks.on_marker_aura_sound =
+        default_unit_support_marker_aura_sound;
+
+    const PlayerSlotRuntimeState& players = g_runtime.gameplay_player_slots;
+    for (u32 owner = 0; owner < kPlayerSlotCount &&
+         owner < support_context.source_owner_masks.size(); ++owner) {
+        support_context.source_owner_masks[owner] = players.owner_relation_masks[owner];
+        support_context.target_owner_masks[owner] = default_owner_slot_bit(owner);
+    }
+}
+
+void run_default_periodic_unit_support_effects(UnitLifecycleContext& lifecycle) {
+    if (lifecycle.movement == nullptr) {
+        return;
+    }
+
+    UnitSupportEffectContext support_context;
+    configure_default_unit_support_context(support_context, lifecycle,
+        gameplay_loop_state().simulation_frame_counter);
+    ProcessPeriodicUnitSupportMarkerAura(support_context);
+}
+
+bool run_default_unit_runtime_pre_terrain_tick(UnitMovementContext&,
+    UnitMovementUnit& unit, void*) {
+    UnitCommandContext& command_context = g_runtime.gameplay_unit_commands;
+    if ((command_context.frame_counter & 7u) != 0) {
+        return true;
+    }
+    if ((unit.command_flags & 0x3c000u) != 0) {
+        HandleUnitStatusEffectTimer(command_context, unit);
+    }
+    HandleUnitPassiveRecoveryAndTimedRemoval(command_context, unit);
+    return (unit.command_state & kUnitCommandDead) == 0;
+}
+
+void run_default_active_unit_runtime_dispatch(UnitLifecycleContext& lifecycle,
+    UnitMovementUnit& unit) {
+    if (lifecycle.movement == nullptr) {
+        return;
+    }
+
+    UnitCommandContext& command_context = g_runtime.gameplay_unit_commands;
+    if (unit.type_id < 0x60) {
+        HandlePendingUnitCommandDispatch(command_context, unit);
+        if (!ProcessUnitRuntimeStateTick(*lifecycle.movement, unit,
+                run_default_unit_runtime_pre_terrain_tick, nullptr)) {
+            return;
+        }
+        ProcessUnitSupportEffectsByDefinition(
+            g_runtime.gameplay_unit_support_effects, unit);
+        DispatchUnitRuntimeCommandState(command_context, unit);
+        return;
+    }
+
+    HandleUnitRuntimeDispatchTick(command_context, unit);
+}
+
+bool default_owner_ai_profile_text_loader(const char* archive_name,
+    u32 record_index, u32, std::string& profile_text, void*) {
+    std::vector<u8> payload;
+    if (!LoadTrcRecordAlloc(archive_name, record_index, payload, 1)) {
+        return false;
+    }
+
+    if (!payload.empty() && payload.back() == 0) {
+        payload.pop_back();
+    }
+    if (payload.empty()) {
+        profile_text.clear();
+        return true;
+    }
+    profile_text.assign(reinterpret_cast<const char*>(payload.data()), payload.size());
+    return true;
+}
+
+bool default_owner_ai_producer_ready_for_planning(
+    const UnitMovementUnit& unit, u32, void*) {
+    return default_unit_command_metadata_flags_from_original_table(unit) == 1;
+}
+
+void default_owner_ai_issue_production_order(
+    OwnerAiRuntimeState&, UnitMovementUnit& producer, u32 order_id, void*) {
+    SetOrQueueUnitCommand17(&producer, order_id, false);
+}
+
+u32 default_owner_ai_queued_extended_production_count(
+    const OwnerAiRuntimeState&, u32 owner, u32 unit_type, void*) {
+    return CountOwnerQueuedExtendedProductionUnits(
+        g_runtime.gameplay_unit_commands, owner, unit_type,
+        g_runtime.unit_reference_tables.primary_or_alternate_reverse);
+}
+
+bool default_owner_ai_eligible_unit_summary(const OwnerAiRuntimeState& owner_ai,
+    u32 owner, OwnerAiEligibleUnitSummary& summary, void*) {
+    summary = OwnerAiEligibleUnitSummary{};
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (owner >= kOwnerAiOwnerCount || lifecycle == nullptr ||
+        lifecycle->movement == nullptr) {
+        return false;
+    }
+
+    for (UnitMovementUnit* unit : lifecycle->movement->active_units) {
+        if (unit == nullptr || unit->owner_id != owner) {
+            continue;
+        }
+        refresh_default_unit_definition_runtime_fields(*unit);
+        const bool owner_script_gate_open =
+            owner_ai.owners[owner].profile_gate_flag != 0;
+        const bool unit_in_active_script_trigger_group =
+            owner_script_gate_open &&
+            FindGameplayScriptTriggerGroupForObject(
+                gameplay_script_trigger_state(), unit) != -1;
+        if (!CheckOwnerEligibleRetargetUnitWithScriptGate(*unit,
+                owner_script_gate_open, unit_in_active_script_trigger_group)) {
+            continue;
+        }
+        ++summary.count;
+        const i32 weight = static_cast<i32>(std::min<u32>(
+            CalculateOwnerTransportUnitWeight(*unit),
+            static_cast<u32>(std::numeric_limits<i32>::max())));
+        if (summary.weight > std::numeric_limits<i32>::max() - weight) {
+            summary.weight = std::numeric_limits<i32>::max();
+        }
+        else {
+            summary.weight += weight;
+        }
+    }
+    return true;
+}
+
+void configure_default_owner_ai_runtime(OwnerAiRuntimeState& owner_ai) {
+    owner_ai.load_profile_text = default_owner_ai_profile_text_loader;
+    owner_ai.load_profile_text_user_data = nullptr;
+    owner_ai.command_player_slots = &g_runtime.gameplay_player_slots;
+    owner_ai.eligible_unit_summary = default_owner_ai_eligible_unit_summary;
+    owner_ai.eligible_unit_summary_user_data = nullptr;
+}
+
+void sync_default_owner_ai_runtime_metadata(GameplayLoopState* loop_state) {
+    OwnerAiRuntimeState& owner_ai = g_runtime.gameplay_owner_ai_state;
+    configure_default_owner_ai_runtime(owner_ai);
+    owner_ai.frame_counter =
+        loop_state != nullptr ? loop_state->simulation_frame_counter : 0;
+    owner_ai.skirmish_profile_mode = g_runtime.generic_ai_profile_mode;
+    owner_ai.network_profile_override = g_runtime.network_ai_profile_override;
+    owner_ai.scenario_profile_override = g_runtime.generic_ai_scenario_active;
+    owner_ai.session_mode = g_runtime.gameplay_startup_state.session_mode;
+    owner_ai.selected_faction = g_runtime.gameplay_startup_state.owner_slots[0].faction_id;
+    owner_ai.owner_population_used.fill(0);
+    owner_ai.owner_population_reserved.fill(0);
+
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    for (u32 owner = 0; owner < kOwnerAiOwnerCount; ++owner) {
+        owner_ai.owner_faction_ids[owner] =
+            g_runtime.gameplay_startup_state.owner_slots[owner].faction_id;
+        if (lifecycle == nullptr) {
+            owner_ai.owner_unit_type_counts[owner].fill(0);
+            continue;
+        }
+
+        owner_ai.owner_population_used[owner] =
+            owner < lifecycle->owner_population_used.size() ?
+            lifecycle->owner_population_used[owner] : 0;
+        owner_ai.owner_population_reserved[owner] =
+            owner < lifecycle->owner_population_reserved.size() ?
+            lifecycle->owner_population_reserved[owner] : 0;
+        for (u32 type = 0; type < kOwnerAiUnitTypeCount; ++type) {
+            owner_ai.owner_unit_type_counts[owner][type] =
+                lifecycle->owner_unit_type_counts[owner][type];
+            g_runtime.gameplay_production_runtime.completed_type_counts[owner][type] =
+                lifecycle->owner_unit_type_counts[owner][type];
+        }
+        g_runtime.gameplay_production_runtime.owner_primary_resources[owner] =
+            lifecycle->owner_primary_resources[owner];
+        g_runtime.gameplay_production_runtime.owner_secondary_resources[owner] =
+            lifecycle->owner_secondary_resources[owner];
+    }
+}
+
+void reset_default_owner_ai_runtime() {
+    ResetOwnerAiRuntime(g_runtime.gameplay_owner_ai_state);
+    configure_default_owner_ai_runtime(g_runtime.gameplay_owner_ai_state);
+    ResetProductionOrderRuntimeState(g_runtime.gameplay_production_runtime);
+    g_runtime.gameplay_owner_transport_queues = {};
+    g_runtime.gameplay_owner_transport_routes = {};
+    g_runtime.gameplay_owner_strategic_targets = {};
+    g_runtime.gameplay_owner_threat_points = {};
+    g_runtime.gameplay_owner_production_placement_anchors = {};
+    g_runtime.gameplay_owner_production_placement_anchor_valid.fill(false);
+    g_runtime.gameplay_owner_production_placement_target_points.fill({-1, -1});
+    g_runtime.gameplay_owner_ai_reserved_primary_cost.fill(0);
+
+    if (g_runtime.gameplay_production_catalog.definitions.empty()) {
+        LoadProductionOrderCatalogFromJw210Trc(g_runtime.gameplay_production_catalog);
+    }
+}
+
+bool default_player_slot_has_active_unit(u32 owner, i32& first_x, i32& first_y) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    UnitMovementContext* movement =
+        lifecycle != nullptr ? lifecycle->movement : nullptr;
+    if (movement == nullptr) {
+        return false;
+    }
+
+    for (const UnitMovementUnit* unit : movement->active_units) {
+        if (unit == nullptr || !unit->active || unit->owner_id != owner) {
+            continue;
+        }
+
+        first_x = unit->x;
+        first_y = unit->y;
+        return true;
+    }
+    return false;
+}
+
+void activate_default_player_slots_from_active_units() {
+    bool changed = false;
+    for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+        i32 first_x = 0;
+        i32 first_y = 0;
+        if (!default_player_slot_has_active_unit(owner, first_x, first_y)) {
+            continue;
+        }
+
+        PlayerSlotRuntimeState& players = g_runtime.gameplay_player_slots;
+        GameplayScenarioOwnerSlot& slot =
+            g_runtime.gameplay_startup_state.owner_slots[owner];
+        if (players.slot_states[owner] == static_cast<u8>(PlayerSlotState::disabled)) {
+            players.slot_states[owner] =
+                static_cast<u8>(PlayerSlotState::player_controlled);
+            slot.slot_state = static_cast<u8>(PlayerSlotState::player_controlled);
+            changed = true;
+        }
+        if (players.owner_start_x[owner] == 0 && players.owner_start_y[owner] == 0) {
+            players.owner_start_x[owner] = first_x;
+            players.owner_start_y[owner] = first_y;
+            slot.start_x = first_x;
+            slot.start_y = first_y;
+            changed = true;
+        }
+    }
+
+    if (changed) {
+        BuildGameplaySessionPlayerRelationMasks(g_runtime.gameplay_player_slots,
+            g_runtime.gameplay_startup_state.session_mode);
+    }
+}
+
+u32 default_gameplay_end_condition_mask_for_session_mode(u32 session_mode) {
+    switch (session_mode) {
+    case 0:
+    case 1:
+    case 2:
+    case 3:
+    case 4:
+    case 6:
+    case 7:
+    case 8:
+        return kGameplayEndConditionEliteUnit;
+    default:
+        return 0;
+    }
+}
+
+void sync_default_gameplay_end_condition_state() {
+    GameplayEndConditionState& end_state = g_runtime.gameplay_end_condition_state;
+    end_state.players = &g_runtime.gameplay_player_slots;
+    end_state.local_player_slot = std::min<u32>(
+        g_runtime.gameplay_player_slots.local_player_slot, kPlayerSlotCount - 1);
+    end_state.team_slot_rotation_enabled =
+        g_runtime.gameplay_player_slots.rotation_enabled;
+    end_state.team_slot_rotation_anchor_slot = std::min<u32>(
+        g_runtime.gameplay_player_slots.rotation_anchor_slot, kPlayerSlotCount - 1);
+    end_state.session_mode = g_runtime.gameplay_startup_state.session_mode;
+    end_state.generic_ai_profile_mode = g_runtime.generic_ai_profile_mode ? 1u : 0u;
+    end_state.scenario_ai_profile_override = g_runtime.generic_ai_scenario_active;
+    const u32 default_mask = default_gameplay_end_condition_mask_for_session_mode(
+        end_state.session_mode);
+    if (default_mask != 0 && end_state.scenario_defeat_condition_mask == 0 &&
+        end_state.scenario_victory_condition_mask == 0) {
+        end_state.scenario_defeat_condition_mask = default_mask;
+        end_state.scenario_victory_condition_mask = default_mask;
+    }
+
+    g_runtime.gameplay_end_condition_units.clear();
+    end_state.active_units.clear();
+
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    if (movement == nullptr) {
+        return;
+    }
+
+    g_runtime.gameplay_end_condition_units.reserve(movement->active_units.size());
+    for (const UnitMovementUnit* unit : movement->active_units) {
+        if (unit == nullptr) {
+            continue;
+        }
+
+        GameplayEndUnit snapshot{};
+        snapshot.owner_id = unit->owner_id;
+        snapshot.type_id = unit->type_id;
+        snapshot.state_flags = unit->command_state | unit->command_flags;
+        if (!unit->active || (unit->runtime_flags & 4u) != 0) {
+            snapshot.state_flags |= kGameplayEndDeadUnitFlag;
+        }
+        g_runtime.gameplay_end_condition_units.push_back(snapshot);
+    }
+
+    end_state.active_units.reserve(g_runtime.gameplay_end_condition_units.size());
+    for (const GameplayEndUnit& unit : g_runtime.gameplay_end_condition_units) {
+        end_state.active_units.push_back(&unit);
+    }
+}
+
+void refresh_default_owner_ai_target_profiles() {
+    sync_default_owner_ai_runtime_metadata(nullptr);
+    SelectNearestHostilePlayerSlots(g_runtime.gameplay_player_slots);
+    if (g_runtime.gameplay_player_slots.refresh_owner_target != nullptr) {
+        return;
+    }
+
+    OwnerAiRuntimeState& owner_ai = g_runtime.gameplay_owner_ai_state;
+    for (u32 owner = 0; owner < kOwnerAiOwnerCount; ++owner) {
+        if (g_runtime.gameplay_player_slots.slot_states[owner] !=
+            static_cast<u8>(PlayerSlotState::player_controlled)) {
+            continue;
+        }
+        RefreshOwnerTargetDataForSlot(owner_ai, g_runtime.gameplay_player_slots, owner);
+    }
+}
+
+void sync_default_owner_strategic_target_from_ai(u32 owner) {
+    if (owner >= kOwnerAiOwnerCount) {
+        return;
+    }
+
+    const OwnerAiSlotRuntime& ai_owner =
+        g_runtime.gameplay_owner_ai_state.owners[owner];
+    OwnerStrategicTargetState& target =
+        g_runtime.gameplay_owner_strategic_targets[owner];
+    target.target_owner_id = ai_owner.primary_target_owner >= 0 ?
+        static_cast<u32>(ai_owner.primary_target_owner) :
+        kInvalidOwnerTransportQueueSlot;
+    target.strategic_point = {
+        ai_owner.primary_target_point.x, ai_owner.primary_target_point.y};
+    target.preferred_target_point = target.strategic_point;
+    target.has_strategic_point =
+        target.strategic_point.x != -1 && target.strategic_point.y != -1;
+    target.has_preferred_target = target.has_strategic_point;
+}
+
+constexpr i32 default_owner_ai_shr_world_to_tile(i32 world_coord) {
+    return static_cast<i32>(static_cast<u32>(world_coord) >> 5);
+}
+
+UnitMovementPoint default_owner_ai_world_to_tile(UnitMovementPoint point) {
+    return {
+        default_owner_ai_shr_world_to_tile(point.x),
+        default_owner_ai_shr_world_to_tile(point.y),
+    };
+}
+
+UnitMovementPoint default_owner_ai_tile_to_world(UnitMovementPoint tile) {
+    return {tile.x * 32, tile.y * 32};
+}
+
+bool default_owner_ai_point_valid(UnitMovementPoint point) {
+    return point.x >= 0 && point.y >= 0;
+}
+
+UnitMovementPoint default_owner_ai_unit_center_tile(const UnitMovementUnit& unit) {
+    return {
+        default_owner_ai_shr_world_to_tile(unit.x) +
+            static_cast<i32>(unit.definition.footprint_width_tiles >> 1),
+        default_owner_ai_shr_world_to_tile(unit.y) +
+            static_cast<i32>(unit.definition.footprint_height_tiles >> 1),
+    };
+}
+
+bool default_owner_ai_preferred_route_target(const UnitMovementUnit& unit) {
+    return CheckOwnerTransportRouteTargetUnitType(unit.type_id);
+}
+
+bool default_owner_ai_preferred_building_target(const UnitMovementUnit& unit) {
+    return unit.definition.lifecycle_class == 1;
+}
+
+bool default_owner_ai_fallback_strategic_target(const UnitMovementUnit& unit) {
+    return unit.definition.lifecycle_class != 1 &&
+        (unit.runtime_flags & 0x80u) == 0;
+}
+
+UnitMovementPoint default_owner_ai_preferred_target_world_point(
+    const UnitMovementUnit& unit) {
+    return {
+        unit.x + unit.definition.owner_strategic_target_offset_x,
+        unit.y + unit.definition.owner_strategic_target_offset_y,
+    };
+}
+
+void set_default_owner_ai_preferred_strategic_target(
+    OwnerStrategicTargetState& target, UnitMovementUnit& unit) {
+    target.preferred_target = &unit;
+    target.preferred_target_point =
+        default_owner_ai_preferred_target_world_point(unit);
+    target.strategic_point = target.preferred_target_point;
+    target.has_preferred_target = true;
+    target.has_strategic_point = true;
+}
+
+void clear_default_owner_ai_strategic_target(
+    OwnerStrategicTargetState& target) {
+    target.preferred_target = nullptr;
+    target.preferred_target_point = {-1, -1};
+    target.strategic_point = {-1, -1};
+    target.has_preferred_target = false;
+    target.has_strategic_point = false;
+}
+
+UnitMovementUnit* default_owner_ai_last_route_target_unit(
+    const OwnerTransportRouteState& route_state) {
+    const u32 route_count = std::min<u32>(route_state.route_count,
+        static_cast<u32>(route_state.targets.size()));
+    if (route_count == 0) {
+        return nullptr;
+    }
+    return route_state.targets[route_count - 1].unit;
+}
+
+UnitMovementUnit* default_owner_ai_primary_route_target_unit(
+    const OwnerTransportRouteState& route_state) {
+    if (route_state.route_count == 0 || route_state.targets.empty()) {
+        return nullptr;
+    }
+    return route_state.targets[0].unit;
+}
+
+UnitMovementUnit* default_owner_ai_strategic_path_probe_unit(
+    UnitMovementContext& movement) {
+    auto find_by_movement_class = [&movement](u32 first_class,
+        u32 second_class = 0xffffffffu) -> UnitMovementUnit* {
+        for (UnitMovementUnit* unit : movement.active_units) {
+            if (unit == nullptr) {
+                continue;
+            }
+            const u32 movement_class = unit->definition.movement_class;
+            if (movement_class == first_class ||
+                movement_class == second_class) {
+                return unit;
+            }
+        }
+        return nullptr;
+    };
+
+    if (UnitMovementUnit* unit = find_by_movement_class(0)) {
+        return unit;
+    }
+    return find_by_movement_class(2, 3);
+}
+
+void sync_default_owner_strategic_target_to_ai(
+    u32 owner, const OwnerStrategicTargetState& target) {
+    if (owner >= kOwnerAiOwnerCount) {
+        return;
+    }
+
+    OwnerAiSlotRuntime& ai_owner =
+        g_runtime.gameplay_owner_ai_state.owners[owner];
+    ai_owner.primary_target_owner =
+        target.target_owner_id < kOwnerAiOwnerCount ?
+        static_cast<i32>(target.target_owner_id) : -1;
+    ai_owner.primary_target_point.x = target.strategic_point.x;
+    ai_owner.primary_target_point.y = target.strategic_point.y;
+}
+
+void refine_default_owner_strategic_target_path_window(
+    u32 owner, OwnerStrategicTargetState& target) {
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    if (movement == nullptr || !default_movement_map_ready(movement->map) ||
+        !target.has_preferred_target || owner >= kOwnerAiOwnerCount) {
+        return;
+    }
+
+    OwnerTransportRouteState& route_state =
+        g_runtime.gameplay_owner_transport_routes[owner];
+    UnitMovementUnit* route_unit =
+        default_owner_ai_primary_route_target_unit(route_state);
+    if (route_unit == nullptr) {
+        return;
+    }
+
+    const UnitMovementPoint start_tile =
+        default_owner_ai_unit_center_tile(*route_unit);
+    const UnitMovementPoint start_world{start_tile.x * 32, start_tile.y * 32};
+    UnitMovementUnit* probe_unit =
+        default_owner_ai_strategic_path_probe_unit(*movement);
+    if (probe_unit == nullptr) {
+        probe_unit = route_unit;
+    }
+    const OwnerAiRoutePathProbeResult path_probe =
+        ProbeOwnerAiRoutePath(*movement, probe_unit, start_world,
+            target.preferred_target_point);
+    if (!path_probe.reachable || path_probe.path_tiles.empty()) {
+        return;
+    }
+
+    const u32 progress_percent =
+        g_runtime.gameplay_owner_ai_state.owners[owner].route_radius;
+    const OwnerPathWindowSelection selection =
+        SelectOwnerBestOpenPathWindowPoint(movement->map, path_probe.path_tiles,
+            progress_percent, 10, 0x50);
+    if (selection.has_point) {
+        target.strategic_point = selection.world_point;
+        target.has_strategic_point = true;
+    }
+}
+
+u32 default_owner_ai_direction8_between_tiles(UnitMovementPoint source,
+    UnitMovementPoint target) {
+    const i32 dx = target.x > source.x ? 1 : (target.x < source.x ? -1 : 0);
+    const i32 dy = target.y > source.y ? 1 : (target.y < source.y ? -1 : 0);
+    if (dx == 0 && dy < 0) {
+        return 1;
+    }
+    if (dx > 0 && dy < 0) {
+        return 2;
+    }
+    if (dx > 0 && dy == 0) {
+        return 3;
+    }
+    if (dx > 0 && dy > 0) {
+        return 4;
+    }
+    if (dx == 0 && dy > 0) {
+        return 5;
+    }
+    if (dx < 0 && dy > 0) {
+        return 6;
+    }
+    if (dx < 0 && dy == 0) {
+        return 7;
+    }
+    if (dx < 0 && dy < 0) {
+        return 8;
+    }
+    return 1;
+}
+
+UnitMovementPoint default_owner_ai_direction8_tile_delta(u32 direction) {
+    switch (direction) {
+    case 1:
+        return {0, -1};
+    case 2:
+        return {1, -1};
+    case 3:
+        return {1, 0};
+    case 4:
+        return {1, 1};
+    case 5:
+        return {0, 1};
+    case 6:
+        return {-1, 1};
+    case 7:
+        return {-1, 0};
+    case 8:
+        return {-1, -1};
+    default:
+        return {0, 0};
+    }
+}
+
+UnitMovementPoint default_owner_ai_directional_anchor_tile(
+    UnitMovementPoint source_tile, UnitMovementPoint target_tile,
+    u32 forward_steps) {
+    if (source_tile.x == target_tile.x && source_tile.y == target_tile.y) {
+        return source_tile;
+    }
+
+    const UnitMovementPoint delta = default_owner_ai_direction8_tile_delta(
+        default_owner_ai_direction8_between_tiles(source_tile, target_tile));
+    const i32 steps = static_cast<i32>(forward_steps);
+    return {
+        source_tile.x + delta.x * steps,
+        source_tile.y + delta.y * steps,
+    };
+}
+
+UnitMovementPoint default_owner_ai_select_production_placement_target_point(
+    const OwnerAiRoutePathProbeResult& path_probe,
+    UnitMovementPoint fallback_target_tile) {
+    constexpr u32 kOriginalLongPathThreshold = 0x23;
+    const bool direct_path =
+        path_probe.reachable && !path_probe.path_target_adjusted &&
+        path_probe.next_path_point.x == path_probe.start.x &&
+        path_probe.next_path_point.y == path_probe.start.y;
+    if (!direct_path && !path_probe.path_tiles.empty() &&
+        path_probe.path_cost > kOriginalLongPathThreshold) {
+        return path_probe.path_tiles.back();
+    }
+    if (default_owner_ai_point_valid(path_probe.final_path_target_tile)) {
+        return path_probe.final_path_target_tile;
+    }
+    return fallback_target_tile;
+}
+
+struct DefaultOwnerPlacementAnchorClearanceContext {
+    const UnitMovementUnit* source = nullptr;
+    const UnitMovementDefinition* definition = nullptr;
+    u32 unit_type = 0x60;
+};
+
+struct DefaultOwnerAiPathProbeContext {
+    UnitLifecycleContext* lifecycle = nullptr;
+    u32 owner_id = 0;
+};
+
+const UnitMovementDefinition* find_default_owner_ai_lifecycle_definition(
+    UnitLifecycleContext& lifecycle, u32 unit_type) {
+    return lifecycle.callbacks.find_definition != nullptr
+        ? lifecycle.callbacks.find_definition(lifecycle, unit_type)
+        : nullptr;
+}
+
+OwnerAiRoutePathProbeResult default_owner_ai_path_probe_fallback(
+    UnitMovementContext* movement, const UnitMovementUnit* fallback_unit,
+    UnitMovementPoint start, UnitMovementPoint destination) {
+    if (movement == nullptr) {
+        OwnerAiRoutePathProbeResult result;
+        result.attempted = true;
+        result.start = start;
+        result.destination = destination;
+        result.start_tile = {start.x / 32, start.y / 32};
+        result.destination_tile = {destination.x / 32, destination.y / 32};
+        result.path_cost = 0xffffffffu;
+        return result;
+    }
+    return ProbeOwnerAiRoutePath(*movement, fallback_unit, start, destination);
+}
+
+OwnerAiRoutePathProbeResult default_owner_ai_temporary_unit_path_probe(
+    UnitLifecycleContext* lifecycle, u32 owner_id,
+    const UnitMovementUnit* fallback_unit, UnitMovementPoint start,
+    UnitMovementPoint destination) {
+    UnitMovementContext* movement =
+        lifecycle != nullptr ? lifecycle->movement : nullptr;
+    if (lifecycle == nullptr || movement == nullptr ||
+        owner_id >= lifecycle->owner_unit_score.size()) {
+        return default_owner_ai_path_probe_fallback(movement, fallback_unit,
+            start, destination);
+    }
+
+    const UnitMovementDefinition* cleanup_definition =
+        find_default_owner_ai_lifecycle_definition(*lifecycle,
+            kDefaultOwnerAiTemporaryPathProbePlacementType);
+    const UnitMovementDefinition* movement_definition =
+        find_default_owner_ai_lifecycle_definition(*lifecycle,
+            kDefaultOwnerAiTemporaryPathProbeMovementType);
+    if (cleanup_definition == nullptr || movement_definition == nullptr ||
+        movement->free_units.empty()) {
+        return default_owner_ai_path_probe_fallback(movement, fallback_unit,
+            start, destination);
+    }
+
+    UnitMovementUnit* unit = take_default_free_unit_head(*movement);
+    if (unit == nullptr) {
+        return default_owner_ai_path_probe_fallback(movement, fallback_unit,
+            start, destination);
+    }
+
+    const u32 unit_id = unit->id != 0 ? unit->id :
+        g_runtime.gameplay_script_next_unit_id++;
+    const u32 runtime_slot_index =
+        unit->runtime_slot_index != kInvalidUnitRuntimeSlotIndex ?
+            unit->runtime_slot_index : unit_id;
+    UnitMovementUnit initialized{};
+    if (!InitializePlacedUnitFromMapSlot(*lifecycle, initialized,
+            kDefaultOwnerAiTemporaryPathProbePlacementType, owner_id,
+            start.x, start.y)) {
+        return_default_free_unit_head(*movement, unit);
+        return default_owner_ai_path_probe_fallback(movement, fallback_unit,
+            start, destination);
+    }
+
+    *unit = initialized;
+    unit->id = unit_id;
+    unit->runtime_slot_index = runtime_slot_index;
+    unit->linked_unit = unit;
+    default_gameplay_startup_unit_placed(*unit);
+
+    unit->type_id = kDefaultOwnerAiTemporaryPathProbeMovementType;
+    unit->definition = *movement_definition;
+    unit->type_flags = movement_definition->type_flags;
+    refresh_default_unit_definition_runtime_fields(*unit);
+    OwnerAiRoutePathProbeResult result =
+        ProbeOwnerAiRoutePath(*movement, *unit, start, destination);
+
+    unit->type_id = kDefaultOwnerAiTemporaryPathProbePlacementType;
+    unit->definition = *cleanup_definition;
+    unit->type_flags = cleanup_definition->type_flags;
+    refresh_default_unit_definition_runtime_fields(*unit);
+    lifecycle->owner_unit_score[owner_id] -=
+        cleanup_definition->production_resource_cost;
+    HandleUnitRemovalAccounting(*lifecycle, *unit);
+    return result;
+}
+
+bool default_owner_ai_anchor_clearance_blocked(
+    UnitMovementPoint world_point, void* user_data) {
+    auto* context =
+        static_cast<DefaultOwnerPlacementAnchorClearanceContext*>(user_data);
+    if (context == nullptr || context->definition == nullptr) {
+        return true;
+    }
+
+    const OwnerProductionPlacementGateResult gate =
+        CheckOwnerProductionPlacementCandidateGate(
+            g_runtime.gameplay_unit_commands, context->source,
+            *context->definition, context->unit_type, world_point);
+    return gate.blocked;
+}
+
+UnitMovementUnit* default_owner_ai_find_anchor_source_unit(u32 owner,
+    u32 unit_type, UnitMovementPoint target_point) {
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    if (movement == nullptr) {
+        return nullptr;
+    }
+
+    UnitMovementUnit* best = nullptr;
+    u32 best_distance = 0xffffffff;
+    for (UnitMovementUnit* unit : movement->active_units) {
+        if (unit == nullptr || !unit->active || unit->owner_id != owner ||
+            unit->type_id != unit_type ||
+            (unit->command_state & kUnitCommandDead) != 0) {
+            continue;
+        }
+
+        const u32 distance = CalculateApproxUnitDistance(unit->x, unit->y,
+            target_point.x, target_point.y);
+        if (distance < best_distance) {
+            best_distance = distance;
+            best = unit;
+        }
+    }
+    return best;
+}
+
+const std::array<OwnerProductionRouteObjectRequirement,
+    kOwnerUnitTypeCountSlots>& default_owner_ai_route_object_requirements() {
+    static const auto requirements = [] {
+        std::array<OwnerProductionRouteObjectRequirement,
+            kOwnerUnitTypeCountSlots> table{};
+        for (OwnerProductionRouteObjectRequirement& requirement : table) {
+            requirement.required_unit_type = kInvalidOwnerTransportQueueSlot;
+            requirement.object_type = 0;
+        }
+        table[0x0a] = {0x01, 0x09};
+        table[0x0b] = {0x03, 0x05};
+        table[0x0c] = {0x03, 0x06};
+        table[0x0d] = {0x04, 0x07};
+        table[0x5b] = {0x0f, 0x17};
+        table[0x5d] = {0x5c, 0x18};
+        table[0x5e] = {0x02, 0x19};
+        table[0x5f] = {0x06, 0x1a};
+        return table;
+    }();
+    return requirements;
+}
+
+bool default_owner_ai_route_object_type_required(u32 object_type) {
+    if (object_type == 0) {
+        return false;
+    }
+    const auto& requirements = default_owner_ai_route_object_requirements();
+    return std::any_of(requirements.begin(), requirements.end(),
+        [object_type](const OwnerProductionRouteObjectRequirement& requirement) {
+            return requirement.object_type == object_type;
+        });
+}
+
+bool default_map_effect_object_offset_valid(u32 offset, u32 object_count) {
+    return offset != 0 &&
+        offset % kGameplayMapEffectObjectStride == 0 &&
+        offset / kGameplayMapEffectObjectStride < object_count;
+}
+
+bool default_map_effect_object_link_offset_valid(u32 offset, u32 object_count) {
+    return offset == 0 ||
+        default_map_effect_object_offset_valid(offset, object_count);
+}
+
+std::vector<u32> recover_default_owner_ai_active_map_effect_indices(
+    const std::vector<u8>& record, u32 object_count) {
+    std::vector<u32> best_indices;
+    u32 best_route_candidate_count = 0;
+
+    for (u32 head_index = 1; head_index < object_count; ++head_index) {
+        const std::size_t head_base =
+            static_cast<std::size_t>(head_index) *
+            kGameplayMapEffectObjectStride;
+        const u32 head_previous = read_default_scenario_object_u32(
+            record, head_base, kGameplayMapEffectObjectPreviousOffset);
+        if (head_previous != 0) {
+            continue;
+        }
+
+        std::vector<u32> indices;
+        std::vector<bool> seen(object_count, false);
+        u32 route_candidate_count = 0;
+        u32 previous_offset = 0;
+        u32 current_offset = head_index * kGameplayMapEffectObjectStride;
+        bool valid = true;
+
+        while (current_offset != 0) {
+            if (!default_map_effect_object_offset_valid(
+                    current_offset, object_count)) {
+                valid = false;
+                break;
+            }
+            const u32 index = current_offset / kGameplayMapEffectObjectStride;
+            if (seen[index]) {
+                valid = false;
+                break;
+            }
+            seen[index] = true;
+
+            const std::size_t object_base =
+                static_cast<std::size_t>(index) *
+                kGameplayMapEffectObjectStride;
+            const u32 object_previous = read_default_scenario_object_u32(
+                record, object_base, kGameplayMapEffectObjectPreviousOffset);
+            const u32 object_next = read_default_scenario_object_u32(
+                record, object_base, kGameplayMapEffectObjectNextOffset);
+            if (object_previous != previous_offset ||
+                !default_map_effect_object_link_offset_valid(
+                    object_next, object_count)) {
+                valid = false;
+                break;
+            }
+
+            const u32 object_type = read_default_scenario_object_u32(
+                record, object_base, kGameplayMapEffectObjectTypeOffset);
+            if (default_owner_ai_route_object_type_required(object_type)) {
+                ++route_candidate_count;
+            }
+            indices.push_back(index);
+            previous_offset = current_offset;
+            current_offset = object_next;
+        }
+
+        if (valid && route_candidate_count > best_route_candidate_count) {
+            best_route_candidate_count = route_candidate_count;
+            best_indices = std::move(indices);
+        }
+    }
+
+    return best_indices;
+}
+
+std::vector<OwnerProductionRouteObjectCandidate>
+build_default_owner_ai_map_effect_route_object_candidates() {
+    std::vector<OwnerProductionRouteObjectCandidate> candidates;
+    std::vector<u8>* record =
+        MutableGameplaySessionLoadedRecord(kGameplayMapEffectObjectRecordIndex);
+    if (record == nullptr ||
+        record->size() < kGameplayMapEffectObjectStride * 2) {
+        return candidates;
+    }
+
+    const u32 object_count = std::min<u32>(
+        static_cast<u32>(record->size() / kGameplayMapEffectObjectStride),
+        kGameplayMapEffectObjectMaxSlots);
+    std::vector<u32> recovered_indices =
+        recover_default_owner_ai_active_map_effect_indices(
+            *record, object_count);
+    if (recovered_indices.empty()) {
+        recovered_indices.reserve(object_count);
+        for (u32 index = 1; index < object_count; ++index) {
+            recovered_indices.push_back(index);
+        }
+    }
+    candidates.reserve(recovered_indices.size());
+    for (u32 index : recovered_indices) {
+        const std::size_t object_base =
+            static_cast<std::size_t>(index) * kGameplayMapEffectObjectStride;
+        const u32 object_type = read_default_scenario_object_u32(
+            *record, object_base, kGameplayMapEffectObjectTypeOffset);
+        if (object_type == 0) {
+            continue;
+        }
+
+        const u32 previous_offset = read_default_scenario_object_u32(
+            *record, object_base, kGameplayMapEffectObjectPreviousOffset);
+        const u32 next_offset = read_default_scenario_object_u32(
+            *record, object_base, kGameplayMapEffectObjectNextOffset);
+        const bool previous_valid =
+            previous_offset == 0 ||
+            (previous_offset % kGameplayMapEffectObjectStride == 0 &&
+                previous_offset / kGameplayMapEffectObjectStride < object_count);
+        const bool next_valid =
+            next_offset == 0 ||
+            (next_offset % kGameplayMapEffectObjectStride == 0 &&
+                next_offset / kGameplayMapEffectObjectStride < object_count);
+        if (!previous_valid || !next_valid) {
+            continue;
+        }
+
+        OwnerProductionRouteObjectCandidate candidate;
+        candidate.object_type = object_type;
+        candidate.flags = read_default_scenario_object_u32(
+            *record, object_base, kGameplayMapEffectObjectFlagsOffset);
+        candidate.point = {
+            read_default_scenario_object_i32(
+                *record, object_base, kGameplayMapEffectObjectXOffset),
+            read_default_scenario_object_i32(
+                *record, object_base, kGameplayMapEffectObjectYOffset)};
+        const GameplaySessionLoadState& load = gameplay_session_load_state();
+        if (kGameplayMapEffectLayerRecordIndex < load.records.size() &&
+            load.record_loaded[kGameplayMapEffectLayerRecordIndex]) {
+            const i32 tile_x = ConvertOwnerProductionWorldToTile(candidate.point.x);
+            const i32 tile_y = ConvertOwnerProductionWorldToTile(candidate.point.y);
+            const u32 map_width = default_gameplay_session_map_width_tiles();
+            const u32 map_height = default_gameplay_session_map_height_tiles();
+            if (tile_x < 0 || tile_y < 0 ||
+                tile_x >= static_cast<i32>(map_width) ||
+                tile_y >= static_cast<i32>(map_height)) {
+                continue;
+            }
+            const u32 cell_index =
+                static_cast<u32>(tile_y) * kGameplayScenarioMapLayerStrideTiles +
+                static_cast<u32>(tile_x);
+            const u32 map_effect_flags = read_default_map_layer_u32(
+                load.records[kGameplayMapEffectLayerRecordIndex], cell_index);
+            if ((map_effect_flags & kMapEffectTileFlag) == 0) {
+                continue;
+            }
+        }
+
+        candidate.owner_visibility_mask =
+            default_owner_ai_route_object_visibility_mask(
+                candidate.point.x, candidate.point.y);
+        candidate.source_object_index = index;
+        candidate.source_is_map_effect_object = true;
+        candidate.assigned_unit =
+            g_runtime.gameplay_map_effect_object_assigned_units[index];
+        if (candidate.assigned_unit == nullptr) {
+            const u32 linked_unit_offset = read_default_scenario_object_u32(
+                *record, object_base, kGameplayMapEffectObjectLinkedUnitOffset);
+            if (linked_unit_offset != 0) {
+                candidate.assigned_unit =
+                    find_default_movement_unit_by_id(linked_unit_offset);
+                g_runtime.gameplay_map_effect_object_assigned_units[index] =
+                    candidate.assigned_unit;
+            }
+        }
+        candidates.push_back(candidate);
+    }
+    return candidates;
+}
+
+std::vector<OwnerProductionRouteObjectCandidate>
+build_default_owner_ai_route_object_candidates() {
+    std::vector<OwnerProductionRouteObjectCandidate> candidates =
+        build_default_owner_ai_map_effect_route_object_candidates();
+    if (!candidates.empty()) {
+        return candidates;
+    }
+
+    GameplayScriptTriggerState& script = gameplay_script_trigger_state();
+    candidates.reserve(script.objects.size());
+    for (u32 index = 1; index < script.objects.size(); ++index) {
+        const GameplayScriptTriggerObjectState& object = script.objects[index];
+        if (object.flags == 0 || !default_gameplay_script_object_alive(object)) {
+            continue;
+        }
+
+        OwnerProductionRouteObjectCandidate candidate;
+        candidate.object_type = object.type_id;
+        candidate.flags = object.flags;
+        candidate.point = {object.x, object.y};
+        candidate.owner_visibility_mask =
+            default_owner_ai_route_object_visibility_mask(object.x, object.y);
+        candidate.source_object_index = index;
+        candidate.source_is_map_effect_object = false;
+        candidate.assigned_unit = object.route_assigned_unit;
+        candidates.push_back(candidate);
+    }
+    return candidates;
+}
+
+void sync_default_owner_ai_route_object_candidates(
+    const std::vector<OwnerProductionRouteObjectCandidate>& candidates) {
+    GameplayScriptTriggerState& script = gameplay_script_trigger_state();
+    std::vector<u8>* map_effect_record =
+        MutableGameplaySessionLoadedRecord(kGameplayMapEffectObjectRecordIndex);
+    for (const OwnerProductionRouteObjectCandidate& candidate : candidates) {
+        if ((candidate.flags & 1u) == 0) {
+            continue;
+        }
+        if (candidate.source_is_map_effect_object) {
+            if (candidate.source_object_index >=
+                    kGameplayMapEffectObjectMaxSlots) {
+                continue;
+            }
+            g_runtime.gameplay_map_effect_object_assigned_units
+                [candidate.source_object_index] = candidate.assigned_unit;
+            const bool assigned_unit_valid = candidate.assigned_unit != nullptr;
+            const u32 stored_flags = assigned_unit_valid ?
+                (candidate.flags | kMapEffectLinkedFlag) :
+                (candidate.flags & ~kMapEffectLinkedFlag);
+            if (candidate.source_object_index <
+                g_runtime.map_effect_context.effects.size()) {
+                MapEffectInstance& effect =
+                    g_runtime.map_effect_context.effects
+                        [candidate.source_object_index];
+                if (effect.active) {
+                    effect.flags = stored_flags;
+                    effect.linked_unit = assigned_unit_valid ?
+                        candidate.assigned_unit : nullptr;
+                }
+            }
+            if (map_effect_record != nullptr) {
+                const std::size_t object_base =
+                    static_cast<std::size_t>(candidate.source_object_index) *
+                    kGameplayMapEffectObjectStride;
+                if (object_base <= map_effect_record->size() &&
+                    map_effect_record->size() - object_base >=
+                        kGameplayMapEffectObjectStride) {
+                    write_default_scenario_object_u32(*map_effect_record,
+                        object_base, kGameplayMapEffectObjectFlagsOffset,
+                        stored_flags);
+                    write_default_scenario_object_u32(*map_effect_record,
+                        object_base, kGameplayMapEffectObjectLinkedUnitOffset,
+                        assigned_unit_valid ? candidate.assigned_unit->id : 0);
+                }
+            }
+            continue;
+        }
+        if (candidate.source_object_index >= script.objects.size()) {
+            continue;
+        }
+        GameplayScriptTriggerObjectState& object =
+            script.objects[candidate.source_object_index];
+        object.flags |= 1u;
+        object.route_assigned_unit = candidate.assigned_unit;
+    }
+}
+
+void default_owner_ai_refresh_placement_anchors(
+    OwnerAiRuntimeState& owner_ai, u32 owner, void*) {
+    if (owner >= kOwnerAiOwnerCount) {
+        return;
+    }
+
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    g_runtime.gameplay_owner_production_placement_anchor_valid[owner] = false;
+    g_runtime.gameplay_owner_production_placement_target_points[owner] = {-1, -1};
+    sync_default_owner_strategic_target_from_ai(owner);
+    const OwnerStrategicTargetState& target =
+        g_runtime.gameplay_owner_strategic_targets[owner];
+    if (!target.has_strategic_point) {
+        return;
+    }
+
+    UnitMovementUnit* source = nullptr;
+    OwnerTransportRouteState& route_state =
+        g_runtime.gameplay_owner_transport_routes[owner];
+    source = default_owner_ai_last_route_target_unit(route_state);
+    if (source == nullptr) {
+        const u32 faction = owner_ai.owner_faction_ids[owner];
+        if (faction >= kDefaultOwnerAiPrimaryUnitTypes.size()) {
+            return;
+        }
+        source = default_owner_ai_find_anchor_source_unit(owner,
+            kDefaultOwnerAiPrimaryUnitTypes[faction], target.strategic_point);
+    }
+    if (source == nullptr) {
+        return;
+    }
+
+    const UnitMovementPoint source_tile =
+        default_owner_ai_unit_center_tile(*source);
+    const UnitMovementPoint target_tile =
+        default_owner_ai_world_to_tile(target.strategic_point);
+    const u32 anchor_distance =
+        g_runtime.gameplay_owner_ai_state.owners[owner].route_radius + 5;
+    UnitMovementPoint base_tile = default_owner_ai_directional_anchor_tile(
+        source_tile, target_tile, anchor_distance);
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    if (movement != nullptr && default_movement_map_ready(movement->map)) {
+        const UnitMovementPoint start_world{source_tile.x * 32, source_tile.y * 32};
+        const OwnerAiRoutePathProbeResult path_probe =
+            default_owner_ai_temporary_unit_path_probe(lifecycle, owner,
+                source, start_world,
+                target.strategic_point);
+        if (path_probe.reachable && !path_probe.path_tiles.empty()) {
+            base_tile = path_probe.path_tiles.back();
+            for (const UnitMovementPoint& tile : path_probe.path_tiles) {
+                if (CalculateApproxUnitDistance(source_tile.x, source_tile.y,
+                        tile.x, tile.y) >= anchor_distance) {
+                    base_tile = tile;
+                    break;
+                }
+            }
+        }
+    }
+    const u32 direction =
+        default_owner_ai_direction8_between_tiles(source_tile, base_tile);
+    DefaultOwnerPlacementAnchorClearanceContext clearance_context;
+    clearance_context.source = source;
+    clearance_context.unit_type = kDefaultOwnerAiRouteHelperUnitTypes[0];
+    clearance_context.definition = default_owner_ai_definition_lookup(
+        clearance_context.unit_type, lifecycle);
+    OwnerProductionPlacementCandidatePredicate clearance_predicate =
+        clearance_context.definition != nullptr ?
+        default_owner_ai_anchor_clearance_blocked : nullptr;
+    g_runtime.gameplay_owner_production_placement_anchors[owner] =
+        BuildOwnerProductionPlacementAnchorSet(base_tile, source_tile,
+            direction, clearance_predicate, &clearance_context);
+    g_runtime.gameplay_owner_production_placement_target_points[owner] =
+        default_owner_ai_world_to_tile(target.strategic_point);
+    if (movement != nullptr && default_movement_map_ready(movement->map) &&
+        target.preferred_target != nullptr) {
+        const UnitMovementPoint source_raw_tile{
+            default_owner_ai_shr_world_to_tile(source->x),
+            default_owner_ai_shr_world_to_tile(source->y),
+        };
+        const UnitMovementPoint source_raw_world =
+            default_owner_ai_tile_to_world(source_raw_tile);
+        const UnitMovementPoint target_world{
+            target.preferred_target->x,
+            target.preferred_target->y,
+        };
+        const UnitMovementPoint target_tile =
+            default_owner_ai_world_to_tile(target_world);
+        const OwnerAiRoutePathProbeResult placement_probe =
+            default_owner_ai_temporary_unit_path_probe(lifecycle, owner,
+                source, source_raw_world,
+                target_world);
+        g_runtime.gameplay_owner_production_placement_target_points[owner] =
+            default_owner_ai_select_production_placement_target_point(
+                placement_probe, target_tile);
+    }
+    g_runtime.gameplay_owner_production_placement_anchor_valid[owner] = true;
+}
+
+void sync_default_owner_threat_points_from_ai(u32 owner) {
+    if (owner >= kOwnerAiOwnerCount) {
+        return;
+    }
+
+    OwnerStrategicPointList& points =
+        g_runtime.gameplay_owner_threat_points[owner];
+    const OwnerAiSlotRuntime& ai_owner =
+        g_runtime.gameplay_owner_ai_state.owners[owner];
+    for (u32 index = 0; index < kOwnerAiThreatPointCount; ++index) {
+        points.points[index] = {
+            ai_owner.threat_points[index].x, ai_owner.threat_points[index].y};
+    }
+}
+
+void sync_default_owner_threat_points_to_ai(u32 owner) {
+    if (owner >= kOwnerAiOwnerCount) {
+        return;
+    }
+
+    const OwnerStrategicPointList& points =
+        g_runtime.gameplay_owner_threat_points[owner];
+    OwnerAiSlotRuntime& ai_owner =
+        g_runtime.gameplay_owner_ai_state.owners[owner];
+    for (u32 index = 0; index < kOwnerAiThreatPointCount; ++index) {
+        ai_owner.threat_points[index].x = points.points[index].x;
+        ai_owner.threat_points[index].y = points.points[index].y;
+    }
+}
+
+void default_owner_ai_rebuild_route_targets(
+    OwnerAiRuntimeState&, u32 owner, void*) {
+    if (owner >= kOwnerAiOwnerCount) {
+        return;
+    }
+    RebuildOwnerTransportRouteTargetsForOwnedUnits(
+        g_runtime.gameplay_unit_commands,
+        g_runtime.gameplay_owner_transport_routes[owner], owner);
+}
+
+void default_owner_ai_maintain_transport_route_targets(
+    OwnerAiRuntimeState& owner_ai, u32 owner, void*) {
+    if (owner >= kOwnerAiOwnerCount) {
+        return;
+    }
+    g_runtime.gameplay_owner_ai_reserved_primary_cost[owner] = 0;
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    const u32 faction =
+        g_runtime.gameplay_owner_ai_state.owner_faction_ids[owner];
+    u32 helper_unit_type = kInvalidOwnerTransportQueueSlot;
+    u32 helper_producer_unit_type = kInvalidOwnerTransportQueueSlot;
+    bool helper_dispatch_prerequisites_met = false;
+    const UnitMovementDefinition* helper_definition = nullptr;
+    const UnitMovementDefinition* helper_producer_definition = nullptr;
+    DefaultOwnerRouteHelperPathProbeContext path_probe_context;
+    if (lifecycle != nullptr && faction < kDefaultOwnerAiRouteHelperUnitTypes.size()) {
+        helper_unit_type = kDefaultOwnerAiRouteHelperUnitTypes[faction];
+        helper_producer_unit_type = kDefaultOwnerAiPrimaryUnitTypes[faction];
+        helper_definition =
+            default_owner_ai_definition_lookup(helper_unit_type, lifecycle);
+        helper_producer_definition =
+            default_owner_ai_definition_lookup(helper_producer_unit_type, lifecycle);
+        path_probe_context.movement = lifecycle->movement;
+        path_probe_context.lifecycle = lifecycle;
+        path_probe_context.owner_id = owner;
+        if (helper_definition != nullptr) {
+            path_probe_context.helper_definition = *helper_definition;
+        }
+    }
+    if (owner < owner_ai.owner_unit_type_counts.size()) {
+        for (u32 primary_type : kDefaultOwnerAiPrimaryUnitTypes) {
+            if (primary_type < owner_ai.owner_unit_type_counts[owner].size() &&
+                owner_ai.owner_unit_type_counts[owner][primary_type] != 0) {
+                helper_dispatch_prerequisites_met = true;
+                break;
+            }
+        }
+    }
+    const u32 helper_resource_cost =
+        helper_definition != nullptr ? helper_definition->production_resource_cost : 0;
+    const u32 helper_producer_resource_cost =
+        helper_producer_definition != nullptr ?
+        helper_producer_definition->production_resource_cost : 0;
+    const u32 route_load_percent = owner_ai.owners[owner].route_load_percent;
+    const OwnerTransportRouteTargetMaintenanceResult result =
+        HandleOwnerTransportRouteTargetMaintenance(
+        g_runtime.gameplay_unit_commands,
+        g_runtime.gameplay_owner_transport_queues[owner],
+        g_runtime.gameplay_owner_transport_routes[owner], owner,
+        route_load_percent, owner_ai.owners[owner].primary_budget,
+        route_load_percent, helper_unit_type, helper_definition, helper_resource_cost,
+        &kDefaultOwnerAiRouteHelperUnitTypes,
+        path_probe_context.movement != nullptr ?
+            default_owner_ai_route_helper_path_score : nullptr,
+        nullptr, &path_probe_context, owner_ai.owners[owner].profile_age,
+        helper_producer_unit_type, helper_dispatch_prerequisites_met,
+        helper_producer_resource_cost);
+    g_runtime.gameplay_owner_ai_reserved_primary_cost[owner] +=
+        result.helper_queue_summary.reserved_resource_cost;
+    if (result.helper_dispatch.assigned) {
+        g_runtime.gameplay_owner_ai_reserved_primary_cost[owner] +=
+            helper_resource_cost;
+    }
+    sync_default_owner_command_runtime_slots(g_runtime.gameplay_unit_commands, owner);
+}
+
+void default_owner_ai_process_production_orders(
+    OwnerAiRuntimeState& owner_ai, u32 owner, void*) {
+    if (owner >= kOwnerAiOwnerCount) {
+        return;
+    }
+    owner_ai.owners[owner].production_pause_flag = 0;
+    if (g_runtime.gameplay_production_catalog.definitions.empty()) {
+        return;
+    }
+
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    OwnerAiProductionOrderPlanningInput input{};
+    input.movement = lifecycle != nullptr ? lifecycle->movement : nullptr;
+    input.catalog = &g_runtime.gameplay_production_catalog;
+    input.production_state = &g_runtime.gameplay_production_runtime;
+    input.faction_primary_unit_types = kDefaultOwnerAiPrimaryUnitTypes;
+    input.faction_opening_order_ids = kDefaultOwnerAiOpeningOrderIds;
+    input.producer_ready = default_owner_ai_producer_ready_for_planning;
+    input.queued_extended_count = default_owner_ai_queued_extended_production_count;
+    input.issue_order = default_owner_ai_issue_production_order;
+    input.initial_reserved_primary_cost =
+        g_runtime.gameplay_owner_ai_reserved_primary_cost[owner];
+    const OwnerAiProductionOrderPlanResult result =
+        ProcessOwnerAiProductionOrderRequests(owner_ai, owner, input);
+    g_runtime.gameplay_owner_ai_reserved_primary_cost[owner] +=
+        result.reserved_primary_cost;
+
+    if (lifecycle != nullptr && owner < lifecycle->owner_primary_resources.size()) {
+        lifecycle->owner_primary_resources[owner] =
+            g_runtime.gameplay_production_runtime.owner_primary_resources[owner];
+        lifecycle->owner_secondary_resources[owner] =
+            g_runtime.gameplay_production_runtime.owner_secondary_resources[owner];
+    }
+    if (owner < g_runtime.gameplay_unit_commands.owner_resources.size()) {
+        g_runtime.gameplay_unit_commands.owner_resources[owner] =
+            g_runtime.gameplay_production_runtime.owner_primary_resources[owner];
+        g_runtime.gameplay_unit_commands.owner_secondary_resources[owner] =
+            g_runtime.gameplay_production_runtime.owner_secondary_resources[owner];
+    }
+}
+
+OwnerUnitTypeCounts default_owner_counts_from_ai(
+    const OwnerAiRuntimeState& owner_ai, u32 owner) {
+    OwnerUnitTypeCounts counts;
+    if (owner >= kOwnerAiOwnerCount) {
+        return counts;
+    }
+    for (u32 type = 0; type < counts.counts.size() &&
+         type < owner_ai.owner_unit_type_counts[owner].size(); ++type) {
+        counts.counts[type] = owner_ai.owner_unit_type_counts[owner][type];
+    }
+    return counts;
+}
+
+const UnitMovementDefinition* default_owner_ai_definition_lookup(
+    u32 unit_type, void* user_data) {
+    UnitLifecycleContext* lifecycle =
+        static_cast<UnitLifecycleContext*>(user_data);
+    if (lifecycle == nullptr ||
+        lifecycle->callbacks.find_definition == nullptr) {
+        return nullptr;
+    }
+    return lifecycle->callbacks.find_definition(*lifecycle, unit_type);
+}
+
+bool default_owner_ai_placement_path_probe(
+    const UnitCommandContext& context, const UnitMovementUnit& producer,
+    const OwnerProductionPlacementPathProbeRequest& request, void* user_data) {
+    if (context.movement == nullptr) {
+        return true;
+    }
+    if (request.target_point.x < 0 || request.target_point.y < 0) {
+        return true;
+    }
+    if (request.start_tile.x < 0 || request.start_tile.y < 0) {
+        return false;
+    }
+
+    const UnitMovementPoint start{
+        request.start_tile.x * 32, request.start_tile.y * 32};
+    const UnitMovementPoint target =
+        default_owner_ai_tile_to_world(request.target_point);
+    auto* probe_context =
+        static_cast<DefaultOwnerAiPathProbeContext*>(user_data);
+    const OwnerAiRoutePathProbeResult result =
+        default_owner_ai_temporary_unit_path_probe(
+            probe_context != nullptr ? probe_context->lifecycle : nullptr,
+            probe_context != nullptr ? probe_context->owner_id : producer.owner_id,
+            &producer, start, target);
+    return result.reachable;
+}
+
+bool default_owner_ai_placement_target_refresh(
+    const UnitCommandContext& context, const UnitMovementUnit& producer,
+    const OwnerProductionPlacementTargetRefreshRequest& request,
+    UnitMovementPoint& refreshed_target_point, void* user_data) {
+    if (context.movement == nullptr || request.route_state == nullptr ||
+        request.owner_id >= kOwnerAiOwnerCount) {
+        return false;
+    }
+
+    const u32 route_count = std::min<u32>(request.route_state->route_count,
+        static_cast<u32>(request.route_state->targets.size()));
+    if (route_count == 0) {
+        return false;
+    }
+
+    const UnitMovementUnit* source =
+        request.route_state->targets[route_count - 1].unit;
+    if (source == nullptr) {
+        return false;
+    }
+
+    auto* probe_context =
+        static_cast<DefaultOwnerAiPathProbeContext*>(user_data);
+    const OwnerAiRoutePathProbeResult result =
+        default_owner_ai_temporary_unit_path_probe(
+            probe_context != nullptr ? probe_context->lifecycle :
+                g_runtime.gameplay_startup_state.lifecycle,
+            request.owner_id, &producer,
+            {source->x, source->y},
+            default_owner_ai_tile_to_world(request.current_target_point));
+    refreshed_target_point =
+        default_owner_ai_point_valid(result.final_path_target_tile)
+        ? result.final_path_target_tile
+        : request.current_target_point;
+    g_runtime.gameplay_owner_production_placement_target_points
+        [request.owner_id] = refreshed_target_point;
+    return true;
+}
+
+bool default_owner_ai_placement_producer_path_probe(
+    const UnitMovementUnit& producer, UnitMovementPoint placement_point,
+    void* user_data) {
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    if (movement == nullptr) {
+        return true;
+    }
+
+    auto* probe_context =
+        static_cast<DefaultOwnerAiPathProbeContext*>(user_data);
+    const OwnerAiRoutePathProbeResult result =
+        default_owner_ai_temporary_unit_path_probe(
+            probe_context != nullptr ? probe_context->lifecycle :
+                g_runtime.gameplay_startup_state.lifecycle,
+            producer.owner_id, &producer,
+            {producer.x, producer.y}, placement_point);
+    return result.reachable && !result.path_target_adjusted;
+}
+
+bool default_owner_ai_route_helper_path_score(
+    UnitMovementPoint origin_world, UnitMovementPoint candidate_world,
+    u32& score, void* user_data) {
+    auto* context =
+        static_cast<DefaultOwnerRouteHelperPathProbeContext*>(user_data);
+    if (context == nullptr || context->movement == nullptr) {
+        return false;
+    }
+
+    UnitMovementUnit probe;
+    probe.definition = context->helper_definition;
+    const OwnerAiRoutePathProbeResult result =
+        default_owner_ai_temporary_unit_path_probe(context->lifecycle,
+            context->owner_id, &probe, origin_world,
+            candidate_world);
+    if (!result.reachable) {
+        return false;
+    }
+
+    score = (CalculateApproxUnitDistance(origin_world.x, origin_world.y,
+        candidate_world.x, candidate_world.y) >> 5) + result.path_cost;
+    return true;
+}
+
+u32 default_owner_ai_target_owner(const OwnerAiRuntimeState& owner_ai,
+    u32 owner) {
+    if (owner >= kOwnerAiOwnerCount) {
+        return kInvalidOwnerTransportQueueSlot;
+    }
+    const i32 current_target = owner_ai.owners[owner].primary_target_owner;
+    if (current_target >= 0 &&
+        static_cast<u32>(current_target) < kOwnerAiOwnerCount) {
+        return static_cast<u32>(current_target);
+    }
+    const u32 nearest =
+        g_runtime.gameplay_player_slots.nearest_hostile_slots[owner];
+    return nearest < kOwnerAiOwnerCount ? nearest : kInvalidOwnerTransportQueueSlot;
+}
+
+UnitMovementPoint default_owner_ai_reselection_reference_point(
+    const UnitCommandContext& context, u32 owner) {
+    if (owner < kOwnerAiOwnerCount) {
+        const OwnerTransportRouteState& route_state =
+            g_runtime.gameplay_owner_transport_routes[owner];
+        if (route_state.route_count != 0 && route_state.targets[0].unit != nullptr) {
+            const UnitMovementUnit& route_unit = *route_state.targets[0].unit;
+            return {route_unit.x, route_unit.y};
+        }
+    }
+
+    const u32 map_width = context.movement != nullptr &&
+        context.movement->map.width != 0 ?
+        context.movement->map.width : default_gameplay_session_map_width_tiles();
+    const u32 map_height = context.movement != nullptr &&
+        context.movement->map.height != 0 ?
+        context.movement->map.height : default_gameplay_session_map_height_tiles();
+    return {
+        static_cast<i32>((map_width & 0x07ffffffu) << 4),
+        static_cast<i32>((map_height & 0x07ffffffu) << 4),
+    };
+}
+
+bool UpdateOwnerStrategicTargetPoint(UnitCommandContext& context,
+    u32 owner, OwnerStrategicTargetState& target) {
+    if (owner >= kOwnerAiOwnerCount) {
+        return false;
+    }
+
+    OwnerAiRuntimeState& owner_ai = g_runtime.gameplay_owner_ai_state;
+    target.blocked_owner_mask = owner < context.owner_relation_masks.size()
+        ? context.owner_relation_masks[owner]
+        : 0;
+
+    const UnitMovementPoint reference =
+        default_owner_ai_reselection_reference_point(context, owner);
+
+    u32 target_owner = default_owner_ai_target_owner(owner_ai, owner);
+    for (u32 attempt = 0; attempt <= kOwnerAiOwnerCount; ++attempt) {
+        if (target_owner >= kOwnerAiOwnerCount) {
+            u32 selected_owner = kInvalidOwnerTransportQueueSlot;
+            if (!SelectNearestAttackableOwnerForStrategicTarget(
+                    context, target, reference, selected_owner)) {
+                break;
+            }
+            target_owner = selected_owner;
+        }
+
+        target.target_owner_id = target_owner;
+        UnitMovementUnit* preferred =
+            FindOwnerRouteOrBuildingTargetForCurrentTargetOwner(
+                context, target, default_owner_ai_preferred_route_target,
+                default_owner_ai_preferred_building_target);
+        if (preferred != nullptr) {
+            set_default_owner_ai_preferred_strategic_target(target, *preferred);
+            refine_default_owner_strategic_target_path_window(owner, target);
+            sync_default_owner_strategic_target_to_ai(owner, target);
+            return true;
+        }
+
+        UnitMovementUnit* fallback =
+            FindOwnerFallbackTargetForCurrentTargetOwner(
+                context, target, default_owner_ai_fallback_strategic_target);
+        if (fallback != nullptr) {
+            SetOwnerStrategicPointFromUnit(target, *fallback);
+            sync_default_owner_strategic_target_to_ai(owner, target);
+            return true;
+        }
+
+        u32 reselected_owner = kInvalidOwnerTransportQueueSlot;
+        if (!SelectNearestAttackableOwnerForStrategicTarget(context, target,
+                reference, reselected_owner) ||
+                reselected_owner == target_owner) {
+            break;
+        }
+        target_owner = reselected_owner;
+    }
+
+    target.target_owner_id = target_owner;
+    clear_default_owner_ai_strategic_target(target);
+    sync_default_owner_strategic_target_to_ai(owner, target);
+    return false;
+}
+
+u32 default_owner_ai_carrier_capacity(u32 owner, u32 carrier_type,
+    UnitLifecycleContext& lifecycle) {
+    if (lifecycle.movement != nullptr) {
+        for (const UnitMovementUnit* unit : lifecycle.movement->active_units) {
+            if (unit != nullptr && unit->owner_id == owner &&
+                unit->type_id == carrier_type && unit->active &&
+                (unit->command_state & kUnitCommandDead) == 0) {
+                return CalculateUnitTransportCapacity(
+                    *unit, &g_runtime.gameplay_production_runtime);
+            }
+        }
+    }
+
+    const UnitMovementDefinition* definition =
+        default_owner_ai_definition_lookup(carrier_type, &lifecycle);
+    if (definition == nullptr) {
+        return 0;
+    }
+    UnitMovementUnit carrier;
+    carrier.owner_id = owner;
+    carrier.type_id = carrier_type;
+    carrier.definition = *definition;
+    return CalculateUnitTransportCapacity(carrier,
+        &g_runtime.gameplay_production_runtime);
+}
+
+u32 default_owner_ai_transport_queue_carrier_capacity(
+    const UnitCommandContext& context, const OwnerTransportQueueState&, u32 owner,
+    u32, u32, void*) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (owner >= kOwnerAiOwnerCount || lifecycle == nullptr) {
+        return 0;
+    }
+    const u32 faction =
+        g_runtime.gameplay_owner_ai_state.owner_faction_ids[owner];
+    if (faction >= kDefaultOwnerAiCarrierUnitTypes.size()) {
+        return 0;
+    }
+    const u32 carrier_type = kDefaultOwnerAiCarrierUnitTypes[faction];
+    const UnitMovementDefinition* definition =
+        default_owner_ai_definition_lookup(carrier_type, lifecycle);
+    if (definition == nullptr) {
+        return 0;
+    }
+
+    UnitMovementUnit carrier;
+    carrier.owner_id = owner;
+    carrier.type_id = carrier_type;
+    carrier.definition = *definition;
+    return CalculateUnitTransportCapacity(carrier, context.production_state);
+}
+
+void default_unit_command_oversized_transport_passenger(const UnitCommandContext&,
+    const UnitMovementUnit&, u32 owner, u32, u32) {
+    if (owner >= kOwnerAiOwnerCount) {
+        return;
+    }
+    const u32 faction =
+        g_runtime.gameplay_owner_ai_state.owner_faction_ids[owner];
+    if (faction >= kDefaultOwnerAiOpeningOrderIds.size()) {
+        return;
+    }
+
+    const u32 order_id = kDefaultOwnerAiOpeningOrderIds[faction];
+    if (order_id >= kProductionOrderCount) {
+        return;
+    }
+
+    g_runtime.gameplay_owner_ai_state.shared_grid_table[
+        owner * kProductionOrderCount + order_id] = 1;
+}
+
+u32 default_owner_ai_carrier_deficit(u32 owner,
+    UnitLifecycleContext& lifecycle) {
+    const u32 faction =
+        g_runtime.gameplay_owner_ai_state.owner_faction_ids[owner];
+    if (faction >= kDefaultOwnerAiCarrierUnitTypes.size()) {
+        return 0;
+    }
+
+    const u32 capacity = default_owner_ai_carrier_capacity(owner,
+        kDefaultOwnerAiCarrierUnitTypes[faction], lifecycle);
+    if (capacity == 0) {
+        return 0;
+    }
+
+    const OwnerTransportQueueState& queue =
+        g_runtime.gameplay_owner_transport_queues[owner];
+    return CalculateOwnerTransportCarrierDeficitTotal(
+        g_runtime.gameplay_unit_commands, queue, owner, capacity);
+}
+
+void default_owner_ai_assign_transport_queue_slot(UnitCommandContext& context,
+    OwnerTransportQueueState& queue, u32 owner, UnitMovementUnit& unit, void*) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (owner >= kOwnerAiOwnerCount || lifecycle == nullptr) {
+        return;
+    }
+    refresh_default_unit_definition_runtime_fields(unit);
+
+    OwnerAiRuntimeState& owner_ai = g_runtime.gameplay_owner_ai_state;
+    const OwnerUnitTypeCounts owner_counts =
+        default_owner_counts_from_ai(owner_ai, owner);
+    const u32 target_owner = default_owner_ai_target_owner(owner_ai, owner);
+    const OwnerUnitTypeCounts target_counts =
+        target_owner < kOwnerAiOwnerCount ?
+        default_owner_counts_from_ai(owner_ai, target_owner) :
+        OwnerUnitTypeCounts{};
+
+    const u32 faction = owner_ai.owner_faction_ids[owner];
+
+    OwnerTransportQueueAssignmentInput input;
+    input.owner_unit_counts = &owner_counts;
+    input.target_owner_counts =
+        target_owner < kOwnerAiOwnerCount ? &target_counts : nullptr;
+    input.route_state = &g_runtime.gameplay_owner_transport_routes[owner];
+    input.strategic_target = &g_runtime.gameplay_owner_strategic_targets[owner];
+    input.script_trigger_gate_open =
+        owner_ai.owners[owner].profile_gate_flag == 1;
+    input.unit_in_active_script_trigger_group =
+        input.script_trigger_gate_open &&
+        FindGameplayScriptTriggerGroupForObject(
+            gameplay_script_trigger_state(), &unit) != -1;
+    input.strategic_queue_target_enabled =
+        input.strategic_target != nullptr &&
+        input.strategic_target->has_strategic_point;
+    if (input.strategic_queue_target_enabled) {
+        input.strategic_queue_target_point =
+            input.strategic_target->strategic_point;
+    }
+    input.strategic_queue_load_percent =
+        owner_ai.owners[owner].route_target_score;
+    input.owner_faction = faction;
+    if (faction < kDefaultOwnerAiCarrierUnitTypes.size()) {
+        input.carrier_capacity = default_owner_ai_carrier_capacity(owner,
+            kDefaultOwnerAiCarrierUnitTypes[faction], *lifecycle);
+    }
+
+    AssignOwnerTransportQueueSlotForUnit(context, queue, owner, unit, input);
+}
+
+void default_owner_ai_process_production_demand(
+    OwnerAiRuntimeState& owner_ai, u32 owner, void*) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (owner >= kOwnerAiOwnerCount || lifecycle == nullptr ||
+        owner_ai.owners[owner].profile_state_flag != 0 ||
+        owner_ai.owners[owner].production_pause_flag != 0) {
+        return;
+    }
+
+    OwnerProductionDemandState demand_state;
+    for (u32 type = 0; type < demand_state.base_demand.counts.size() &&
+         type < owner_ai.owners[owner].unit_demand.size(); ++type) {
+        demand_state.base_demand.counts[type] =
+            owner_ai.owners[owner].unit_demand[type];
+    }
+
+    const OwnerUnitTypeCounts owner_counts =
+        default_owner_counts_from_ai(owner_ai, owner);
+    const u32 target_owner = default_owner_ai_target_owner(owner_ai, owner);
+    const OwnerUnitTypeCounts target_counts =
+        target_owner < kOwnerAiOwnerCount ?
+        default_owner_counts_from_ai(owner_ai, target_owner) :
+        OwnerUnitTypeCounts{};
+    std::array<u32, kOwnerProductionAuxDependencySlotCount>
+        aux_dependency_producer_types{};
+    aux_dependency_producer_types.fill(kInvalidOwnerTransportQueueSlot);
+    for (u32 slot = 0; slot < aux_dependency_producer_types.size() &&
+         slot < g_runtime.unit_reference_tables.completion_reverse.size(); ++slot) {
+        aux_dependency_producer_types[slot] =
+            g_runtime.unit_reference_tables.completion_reverse[slot];
+    }
+    std::vector<OwnerProductionRouteObjectCandidate> route_object_candidates =
+        build_default_owner_ai_route_object_candidates();
+    DefaultOwnerAiPathProbeContext placement_probe_context;
+    placement_probe_context.lifecycle = lifecycle;
+    placement_probe_context.owner_id = owner;
+
+    OwnerProductionDemandBuildPlanInput input;
+    input.owner_unit_counts = &owner_counts;
+    input.target_owner_counts =
+        target_owner < kOwnerAiOwnerCount ? &target_counts : nullptr;
+    input.producer_unit_types =
+        &g_runtime.unit_reference_tables.primary_or_alternate_reverse;
+    input.route_object_requirements =
+        &default_owner_ai_route_object_requirements();
+    input.route_state = &g_runtime.gameplay_owner_transport_routes[owner];
+    input.transport_queue = &g_runtime.gameplay_owner_transport_queues[owner];
+    input.route_objects = &route_object_candidates;
+    input.aux_dependency_producer_unit_types =
+        &aux_dependency_producer_types;
+    input.definition_lookup = default_owner_ai_definition_lookup;
+    input.definition_lookup_user_data = lifecycle;
+    input.owner_shared_dependency_flags =
+        &owner_ai.shared_grid_table[owner * kProductionOrderCount];
+    input.owner_shared_dependency_flag_count = kProductionOrderCount;
+    if (g_runtime.gameplay_owner_production_placement_anchor_valid[owner]) {
+        input.placement_anchors =
+            &g_runtime.gameplay_owner_production_placement_anchors[owner];
+        input.owner_target_point =
+            default_owner_ai_point_valid(
+                g_runtime.gameplay_owner_production_placement_target_points[owner])
+            ? g_runtime.gameplay_owner_production_placement_target_points[owner]
+            : default_owner_ai_world_to_tile(
+                g_runtime.gameplay_owner_strategic_targets[owner].strategic_point);
+        input.placement_path_probe = default_owner_ai_placement_path_probe;
+        input.placement_path_probe_user_data = &placement_probe_context;
+        input.placement_target_refresh =
+            default_owner_ai_placement_target_refresh;
+        input.placement_target_refresh_user_data = &placement_probe_context;
+        input.placement_producer_predicate =
+            default_owner_ai_placement_producer_path_probe;
+        input.placement_producer_user_data = &placement_probe_context;
+    }
+    input.owner_faction = owner_ai.owner_faction_ids[owner];
+    input.resource_budget_base = owner < owner_ai.owner_population_reserved.size() ?
+        owner_ai.owner_population_reserved[owner] : 0;
+    input.resource_budget_percent = owner_ai.owners[owner].resource_budget_percent;
+    input.resource_budget_cap_base =
+        owner < lifecycle->owner_population_used.size() ?
+        lifecycle->owner_population_used[owner] + 10 : 10;
+    input.target_composition_percent_bonus =
+        owner_ai.owners[owner].profile_counter;
+    input.carrier_deficit =
+        default_owner_ai_carrier_deficit(owner, *lifecycle);
+    input.reserved_resource_cost =
+        g_runtime.gameplay_owner_ai_reserved_primary_cost[owner];
+
+    OwnerProductionDemandBuildPlanResult result =
+        ProcessOwnerProductionDemandAndBuildPlan(
+            g_runtime.gameplay_unit_commands, owner, demand_state, input);
+    g_runtime.gameplay_owner_ai_reserved_primary_cost[owner] =
+        result.reserved_resource_cost;
+    sync_default_owner_ai_route_object_candidates(route_object_candidates);
+
+    for (u32 type = 0; type < owner_ai.owners[owner].unit_demand.size() &&
+         type < result.demand_state.base_demand.counts.size(); ++type) {
+        owner_ai.owners[owner].unit_demand[type] =
+            result.demand_state.base_demand.counts[type];
+        owner_ai.owners[owner].unit_demand_shadow[type] =
+            result.demand_state.bonus_demand.counts[type];
+    }
+
+    commit_default_unit_command_context(*lifecycle,
+        g_runtime.gameplay_unit_commands);
+    g_runtime.gameplay_production_runtime.owner_primary_resources[owner] =
+        lifecycle->owner_primary_resources[owner];
+    g_runtime.gameplay_production_runtime.owner_secondary_resources[owner] =
+        lifecycle->owner_secondary_resources[owner];
+}
+
+void default_owner_ai_reassign_strategic_transport_queue(
+    OwnerAiRuntimeState& owner_ai, u32 owner, void*) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (owner >= kOwnerAiOwnerCount || lifecycle == nullptr ||
+        lifecycle->movement == nullptr) {
+        return;
+    }
+
+    OwnerStrategicTargetState& strategic_target =
+        g_runtime.gameplay_owner_strategic_targets[owner];
+    if (!UpdateOwnerStrategicTargetPoint(
+            g_runtime.gameplay_unit_commands, owner, strategic_target) ||
+        !strategic_target.has_strategic_point) {
+        return;
+    }
+
+    OwnerAiEligibleUnitSummary eligible;
+    if (!default_owner_ai_eligible_unit_summary(owner_ai, owner, eligible,
+            nullptr)) {
+        eligible = OwnerAiEligibleUnitSummary{};
+    }
+
+    const OwnerAiSlotRuntime& ai_owner = owner_ai.owners[owner];
+    u32 quota = 0;
+    if (ai_owner.route_target_score != 0) {
+        quota = static_cast<u32>(
+            (static_cast<u64>(eligible.count) * ai_owner.route_target_score) /
+            100u);
+    }
+    quota = std::max(quota, ai_owner.strategic_retarget_quota_floor);
+    if (quota == 0) {
+        return;
+    }
+
+    OwnerTransportQueueTargetSnapshot target;
+    target.target_x = strategic_target.strategic_point.x;
+    target.target_y = strategic_target.strategic_point.y;
+
+    const u32 destination_state =
+        ai_owner.profile_state_flag == 1
+            ? kOwnerTransportQueueStateStrategicTargetAlt
+            : kOwnerTransportQueueStateStrategicTarget;
+    const OwnerTransportQueueRetargetResult result =
+        ReassignOwnerTransportUnitsInTransitRangeToTarget(
+            g_runtime.gameplay_unit_commands,
+            g_runtime.gameplay_owner_transport_queues[owner], owner, quota,
+            destination_state, target);
+    if (result.destination_slot != kInvalidOwnerTransportQueueSlot) {
+        ++owner_ai.owners[owner].script_cycle_counter;
+    }
+}
+
+void default_owner_ai_retarget_strategic_queue(
+    OwnerAiRuntimeState& owner_ai, u32 owner, void*) {
+    if (owner >= kOwnerAiOwnerCount) {
+        return;
+    }
+
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    OwnerAiStrategicRetargetGateInput input{};
+    input.movement = lifecycle != nullptr ? lifecycle->movement : nullptr;
+    input.counter_rules = &DefaultOwnerAiCounterRuleTable();
+    input.owner_phase_state = 1;
+    input.retarget_queue = default_owner_ai_reassign_strategic_transport_queue;
+    if (lifecycle != nullptr) {
+        for (u32 slot = 0; slot < kOwnerAiOwnerCount; ++slot) {
+            input.owner_population_used[slot] =
+                lifecycle->owner_population_used[slot];
+            input.owner_population_limit[slot] =
+                lifecycle->owner_population_limit[slot];
+            const OwnerTransportRouteState& route_state =
+                g_runtime.gameplay_owner_transport_routes[slot];
+            if (route_state.route_count != 0 &&
+                route_state.targets[0].unit != nullptr) {
+                input.strategic_route_targets[slot] =
+                    route_state.targets[0].unit;
+            }
+        }
+    }
+    TickOwnerAiStrategicQueueRetargetGate(owner_ai, owner, input);
+}
+
+void default_owner_ai_threat_point_handler(
+    u32 owner, UnitMovementPoint& point, void*) {
+    if (owner >= kOwnerAiOwnerCount) {
+        return;
+    }
+    OwnerThreatPointCrossOwnerResponseQueues cross_owner_response;
+    for (u32 slot = 0; slot < kOwnerAiOwnerCount &&
+         slot < cross_owner_response.queues.size(); ++slot) {
+        cross_owner_response.queues[slot] =
+            &g_runtime.gameplay_owner_transport_queues[slot];
+        cross_owner_response.active_owner_slots[slot] =
+            slot < g_runtime.gameplay_player_slots.slot_states.size() &&
+            g_runtime.gameplay_player_slots.slot_states[slot] ==
+                static_cast<u8>(PlayerSlotState::player_controlled);
+    }
+    HandleOwnerThreatPointResponseQueue(g_runtime.gameplay_unit_commands,
+        g_runtime.gameplay_owner_transport_queues[owner], owner, point,
+        nullptr, nullptr, CalculateOwnerTransportUnitWeight,
+        kOwnerStrategicPointMergeDistance, 2, &cross_owner_response);
+}
+
+void default_owner_ai_dispatch_threat_points(
+    OwnerAiRuntimeState&, u32 owner, void*) {
+    if (owner >= kOwnerAiOwnerCount) {
+        return;
+    }
+    sync_default_owner_threat_points_from_ai(owner);
+    ProcessOwnerThreatPointList(g_runtime.gameplay_owner_threat_points[owner],
+        owner, default_owner_ai_threat_point_handler);
+    sync_default_owner_threat_points_to_ai(owner);
+}
+
+void default_owner_ai_tick_transport_queue_unit(UnitCommandContext& context,
+    OwnerTransportQueueState& queue, u32 owner, UnitMovementUnit& unit, void*) {
+    const u32 slot_index = unit.command_value & 0xffu;
+    if (slot_index >= queue.slots.size()) {
+        return;
+    }
+
+    OwnerTransportQueueSlot& slot = queue.slots[slot_index];
+    const u32 command_id = GetUnitCommandIdLow24(unit);
+    const auto tile_to_world = [](i32 tile) {
+        return tile < 0 ? tile : tile * 32;
+    };
+    const auto primary_dropoff_target = [&]() {
+        OwnerTransportQueueTargetSnapshot target;
+        target.match_value = 0;
+        target.target_x = unit.anchor_x;
+        target.target_y = unit.anchor_y;
+        if (owner < kOwnerAiOwnerCount) {
+            const OwnerTransportRouteState& route_state =
+                g_runtime.gameplay_owner_transport_routes[owner];
+            if (route_state.route_count != 0 &&
+                route_state.targets[0].unit != nullptr) {
+                target.target_x = route_state.targets[0].unit->x;
+                target.target_y = route_state.targets[0].unit->y;
+            }
+        }
+        return target;
+    };
+    const auto advance_or_move = [&](u32 base_tiles, bool target_point_command) {
+        if (command_id != 1) {
+            return;
+        }
+        if (AdvanceOwnerTransportQueueProgressNearTarget(
+                unit, slot, base_tiles)) {
+            return;
+        }
+        if (target_point_command) {
+            SetOrQueueUnitTargetPointCommand04(&unit, nullptr,
+                slot.target_x, slot.target_y, false);
+        }
+        else {
+            SetOrQueueUnitConditionalTargetPointCommand05(&unit, nullptr,
+                slot.target_x, slot.target_y, false);
+        }
+    };
+    const auto redistribute_work_target_overflow = [&]() {
+        OwnerTransportRouteState& route_state =
+            g_runtime.gameplay_owner_transport_routes[owner];
+        const OwnerAiSlotRuntime& ai_owner =
+            g_runtime.gameplay_owner_ai_state.owners[owner];
+        OwnerTransportRouteState limit_route_state = route_state;
+        limit_route_state.load_percent = ai_owner.primary_budget;
+        const OwnerTransportQueueLimitPlan limit_plan =
+            BuildOwnerTransportWorkTargetLimitPlan(queue, limit_route_state);
+        for (u32 action_index = 0; action_index < limit_plan.action_count;
+             ++action_index) {
+            const OwnerTransportQueueLimitAction& action =
+                limit_plan.actions[action_index];
+            RedistributeOwnerTransportWorkTargetOverflow(context, queue,
+                route_state, owner, action.slot_index, action.desired_count,
+                ai_owner.route_load_percent);
+        }
+    };
+
+    switch (slot.state) {
+    case kOwnerTransportQueueStateWorkTarget: {
+        if (command_id == 1 && slot.match_value != 0) {
+            SetOrQueueUnitPointCommand07(&unit,
+                tile_to_world(slot.target_x), tile_to_world(slot.target_y),
+                false);
+        }
+        ++slot.completed_count;
+        break;
+    }
+    case kOwnerTransportQueueStateRouteHelperPending: {
+        OwnerTransportRouteState& route_state =
+            g_runtime.gameplay_owner_transport_routes[owner];
+        const OwnerUnitTypeCounts owner_counts =
+            default_owner_counts_from_ai(g_runtime.gameplay_owner_ai_state,
+                owner);
+        const u32 next_route_index = std::min<u32>(route_state.route_count,
+            static_cast<u32>(route_state.targets.size()));
+        const bool route_append_gate_open =
+            slot.aux_value < owner_counts.counts.size() &&
+            next_route_index < owner_counts.counts[slot.aux_value];
+        const u32 appended_route_index = route_append_gate_open ?
+            FindAndAppendOwnerTransportRouteTargetUnit(context, route_state, owner) :
+            kInvalidOwnerTransportQueueSlot;
+        if (appended_route_index != kInvalidOwnerTransportQueueSlot) {
+            slot.route_index = appended_route_index;
+        }
+        if (appended_route_index != kInvalidOwnerTransportQueueSlot &&
+            PromoteOwnerTransportQueueSlotToRouteWorkTarget(queue, slot_index,
+                slot.route_index, route_state, owner_counts, slot.aux_value, true)) {
+            redistribute_work_target_overflow();
+            break;
+        }
+        const auto& runtime_states = original_unit_command_runtime_state_table();
+        const u32 unit_runtime_state = command_id < runtime_states.size()
+            ? runtime_states[command_id]
+            : ResolveUnitRuntimeStateFromCommandTable(unit);
+        if (slot.aux_value >= kOwnerExtendedProductionUnitTypeBase &&
+            unit_runtime_state != 7) {
+            SetOrQueueUnitAlignedPointCommand06(&unit,
+                slot.aux_value - kOwnerExtendedProductionUnitTypeBase,
+                slot.target_x, slot.target_y, false);
+        }
+        break;
+    }
+    case 6:
+        unit.command_value &= 0x7fffffffu;
+        ++slot.completed_count;
+        break;
+    case 7:
+        advance_or_move(3, false);
+        break;
+    case 8:
+        if (command_id == 1) {
+            advance_or_move(8, false);
+            if (CheckOwnerTransportQueueUnitWithinTargetThreshold(unit, slot,
+                    8)) {
+                unit.command_value |= 0x80000000u;
+            }
+        }
+        break;
+    case kOwnerTransportQueueStateRelay0aPending:
+    case kOwnerTransportQueueStateRelay0ePending:
+        if (slot.target_x != -1) {
+            advance_or_move(6, true);
+        }
+        break;
+    case kOwnerTransportQueueStateLinkedGroup0a:
+    case kOwnerTransportQueueStateLinkedGroup: {
+        if (command_id == 0x16 || command_id == 0x17 ||
+            slot.match_value == 0) {
+            break;
+        }
+        UnitMovementUnit* target =
+            find_default_movement_unit_by_id(slot.match_value);
+        if (target != nullptr && (target->runtime_flags & 4u) == 0) {
+            SetOrQueueUnitTargetPointCommand04(&unit, target,
+                target->x, target->y, false);
+        }
+        break;
+    }
+    case kOwnerTransportQueueStatePendingB:
+        BoardOwnerTransportPassengersFromLinkedGroup(context, queue, unit,
+            slot_index);
+        break;
+    case kOwnerTransportQueueStatePendingC: {
+        if (command_id != 1) {
+            break;
+        }
+        const OwnerTransportQueueTargetSnapshot target =
+            primary_dropoff_target();
+        if (unit.cargo_amount == 0) {
+            AssignEmptyCarrierToOwnerDropoffQueueSlot(queue, unit, target);
+            break;
+        }
+        SetOrQueueUnitPointCommand24(&unit, slot.target_x, slot.target_y,
+            false);
+        SetOrQueueUnitTargetPointCommand04(&unit, nullptr,
+            target.target_x, target.target_y, true);
+        break;
+    }
+    case kOwnerTransportQueueStateStrategicTarget:
+    case 0x17:
+    case kOwnerTransportQueueStateStrategicTargetHold:
+    case 0x1c:
+        advance_or_move(8, false);
+        break;
+    case kOwnerTransportQueueStateThreatResponse:
+        if (CalculateApproxUnitDistance(unit.x, unit.y,
+                slot.target_x, slot.target_y) < 0x81) {
+            ++slot.completed_count;
+        }
+        else {
+            SetOrQueueUnitConditionalTargetPointCommand05(&unit, nullptr,
+                slot.target_x, slot.target_y, false);
+        }
+        slot.aux_value += CalculateOwnerTransportUnitWeight(unit);
+        break;
+    default:
+        break;
+    }
+}
+
+void default_owner_ai_maintain_transport_queue(
+    OwnerAiRuntimeState&, u32 owner, void*) {
+    if (owner >= kOwnerAiOwnerCount) {
+        return;
+    }
+
+    sync_default_owner_strategic_target_from_ai(owner);
+    OwnerTransportQueueMaintenanceInput input{};
+    input.route_state = &g_runtime.gameplay_owner_transport_routes[owner];
+    input.strategic_target = &g_runtime.gameplay_owner_strategic_targets[owner];
+    input.callbacks.assign_queue_slot =
+        default_owner_ai_assign_transport_queue_slot;
+    input.callbacks.tick_unit = default_owner_ai_tick_transport_queue_unit;
+    input.callbacks.carrier_capacity =
+        default_owner_ai_transport_queue_carrier_capacity;
+    input.callbacks.refresh_strategic_point =
+        [](UnitCommandContext& refresh_context, u32 refresh_owner,
+            OwnerStrategicTargetState& target, void*) {
+            return UpdateOwnerStrategicTargetPoint(
+                refresh_context, refresh_owner, target);
+        };
+    const UnitCommandContext& command_context = g_runtime.gameplay_unit_commands;
+    const u32 population_reserved =
+        owner < command_context.owner_population_reserved.size() ?
+        command_context.owner_population_reserved[owner] : 0;
+    const u32 population_limit =
+        owner < command_context.owner_population_limit.size() ?
+        command_context.owner_population_limit[owner] : 0;
+    input.carrier_population_gate_open =
+        population_limit <= 5 || population_reserved >= population_limit - 5;
+    TickOwnerTransportQueueMaintenance(g_runtime.gameplay_unit_commands,
+        g_runtime.gameplay_owner_transport_queues[owner], owner, input);
+}
+
+void run_default_owner_ai_maintenance(GameplayLoopState& state) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr) {
+        return;
+    }
+
+    HandleOwnerUnitTypeCountRebuild(*lifecycle);
+    configure_default_unit_command_context(g_runtime.gameplay_unit_commands,
+        *lifecycle, state.simulation_frame_counter);
+    g_runtime.gameplay_unit_commands.production_state =
+        &g_runtime.gameplay_production_runtime;
+    sync_default_owner_ai_runtime_metadata(&state);
+
+    OwnerAiMaintenanceCallbacks callbacks{};
+    callbacks.rebuild_route_targets = default_owner_ai_rebuild_route_targets;
+    callbacks.refresh_placement_anchors =
+        default_owner_ai_refresh_placement_anchors;
+    callbacks.maintain_transport_route_targets =
+        default_owner_ai_maintain_transport_route_targets;
+    callbacks.process_production_orders =
+        default_owner_ai_process_production_orders;
+    callbacks.process_production_demand =
+        default_owner_ai_process_production_demand;
+    callbacks.retarget_strategic_queue =
+        default_owner_ai_retarget_strategic_queue;
+    callbacks.dispatch_threat_points = default_owner_ai_dispatch_threat_points;
+    callbacks.maintain_transport_queue =
+        default_owner_ai_maintain_transport_queue;
+    TickOwnerAiMaintenance(g_runtime.gameplay_owner_ai_state,
+        g_runtime.gameplay_player_slots, callbacks);
+}
+
+bool default_gameplay_script_object_alive(
+    const GameplayScriptTriggerObjectState& object) {
+    return !object.remove_from_triggers && (object.flags & 4u) == 0;
+}
+
+void remove_default_unit_pointer(
+    std::vector<UnitMovementUnit*>& units, UnitMovementUnit* unit) {
+    units.erase(std::remove(units.begin(), units.end(), unit), units.end());
+}
+
+void activate_default_gameplay_script_unit(
+    UnitMovementContext& movement, UnitMovementUnit& unit) {
+    remove_default_unit_pointer(movement.free_units, &unit);
+    remove_default_unit_pointer(movement.lifecycle_units, &unit);
+    remove_default_unit_pointer(movement.active_units, &unit);
+    movement.active_units.insert(movement.active_units.begin(), &unit);
+    unit.active = true;
+}
+
+void initialize_default_unit_from_scenario_object(
+    UnitLifecycleContext& lifecycle, UnitMovementUnit& unit,
+    const GameplayScriptTriggerObjectState& object, u32 object_index) {
+    unit = UnitMovementUnit{};
+    unit.id = object.scenario_object_index != 0 ?
+        object.scenario_object_index : object_index;
+    unit.runtime_slot_index = object_index;
+    unit.type_id = object.type_id;
+    unit.owner_id = object.owner_id;
+    unit.scenario_string_slot = object.string_slot;
+    unit.string_slot = object.dynamic_string_slot;
+    unit.area_marker_flags = object.area_marker_flags;
+    unit.command_state = compose_default_scenario_object_command_state(object);
+    unit.command_flags = object.command_flags;
+    apply_default_unit_command_bit_mask(unit, object.command_bit_mask);
+    unit.runtime_flags = object.flags;
+    unit.type_flags = object.type_flags;
+    unit.draw_flags = object.draw_flags;
+    unit.direction = object.direction;
+    unit.movement_flags = object.movement_flags;
+    unit.movement_state = object.movement_state;
+    unit.wait_ticks = object.wait_ticks;
+    unit.animation_frame = object.animation_frame;
+    unit.previous_command_state = object.previous_command_state;
+    unit.animation_timer = object.animation_timer;
+    unit.command_lockout_ticks = object.command_lockout_ticks;
+    unit.distance_check_mode = object.distance_check_mode;
+    unit.movement_turn_ticks = object.movement_turn_ticks;
+    unit.placement_reset_scratch = object.placement_reset_scratch;
+    unit.effect_reset_scratch = object.effect_reset_scratch;
+    unit.x = object.x;
+    unit.y = object.y;
+    unit.command_value = object.command_value;
+    unit.path_target_x = object.scripted_target_x;
+    unit.path_target_y = object.scripted_target_y;
+    const bool has_destination =
+        object.destination_x != 0 || object.destination_y != 0;
+    unit.destination_x = has_destination ? object.destination_x : object.x;
+    unit.destination_y = has_destination ? object.destination_y : object.y;
+    unit.destination_aux_state = object.destination_aux_state;
+    const bool has_current_cell =
+        object.current_cell_x != 0 || object.current_cell_y != 0;
+    unit.current_cell_x =
+        has_current_cell ? object.current_cell_x : (object.x & ~0x1f);
+    unit.current_cell_y =
+        has_current_cell ? object.current_cell_y : (object.y & ~0x1f);
+    const bool has_next_path =
+        object.next_path_x != 0 || object.next_path_y != 0;
+    unit.next_path_x = has_next_path ? object.next_path_x : unit.current_cell_x;
+    unit.next_path_y = has_next_path ? object.next_path_y : unit.current_cell_y;
+    unit.saved_path_target_x = object.saved_path_target_x;
+    unit.saved_path_target_y = object.saved_path_target_y;
+    unit.anchor_x = object.anchor_x;
+    unit.anchor_y = object.anchor_y;
+    unit.pending_command = to_unit_queued_command(object.pending_command);
+    unit.active_command_payload =
+        to_unit_queued_command(object.active_command_payload);
+    if (object.current_payload_value != 0) {
+        unit.active_command_payload.x =
+            static_cast<i32>(object.current_payload_value);
+    }
+    unit.deferred_command_count = std::min<u32>(
+        object.deferred_command_count,
+        static_cast<u32>(unit.deferred_commands.size()));
+    for (u32 slot = 0; slot < unit.deferred_command_count; ++slot) {
+        unit.deferred_commands[slot] =
+            to_unit_queued_command(object.deferred_commands[slot]);
+    }
+    unit.linked_object_id =
+        object.linked_object_id != 0 ? object.linked_object_id : unit.id;
+
+    unit.max_health = object.stat_18;
+    unit.health = object.stat_20;
+    unit.runtime_stat_1c = object.stat_1c;
+    unit.runtime_stat_20 = object.stat_24;
+    unit.runtime_stat_28 = object.stat_28;
+    unit.max_secondary_value = object.stat_secondary_max;
+    unit.secondary_value = object.stat_secondary_current;
+    unit.elite_progress_value = object.stat_50;
+    unit.status_timer = object.stat_54;
+    unit.production_variant = object.stat_54;
+    unit.action_mode = static_cast<u32>(object.stat_2c);
+    unit.action_mode_gate = scenario_object_uses_equipment_slot_zero(object.type_id)
+        ? 0
+        : static_cast<u32>(object.stat_30);
+    unit.under_construction =
+        !scenario_object_uses_equipment_slot_zero(object.type_id) &&
+        unit.action_mode_gate == 1;
+    if (unit.under_construction && unit.anchor_x == 0 && unit.anchor_y == 0) {
+        unit.anchor_x = unit.x;
+        unit.anchor_y = unit.y;
+    }
+    unit.equipment_slots = object.equipment_slots;
+    for (std::size_t slot = 0;
+         slot < unit.item_slots.size() && slot < unit.equipment_slots.size();
+         ++slot) {
+        unit.item_slots[slot] = unit.equipment_slots[slot];
+    }
+    unit.active = true;
+    unit.linked_unit = &unit;
+
+    if (lifecycle.callbacks.find_definition != nullptr) {
+        if (const UnitMovementDefinition* definition =
+                lifecycle.callbacks.find_definition(lifecycle, unit.type_id)) {
+            unit.definition = *definition;
+        }
+    }
+    refresh_default_unit_definition_runtime_fields(unit);
+    if (object.type_flags != 0) {
+        unit.type_flags = object.type_flags;
+    }
+    unit.saved_type_flags = object.saved_type_flags;
+    unit.definition.support_source_flags = object.script_bit_flags;
+    unit.linked_effect_slot_offset = object.linked_effect_slot_offset;
+    unit.command_entry_lockout_ticks = object.command_entry_lockout_ticks;
+}
+
+void instantiate_default_gameplay_script_scenario_units(
+    GameplayScriptTriggerState& script) {
+    if (!g_runtime.gameplay_script_scenario_objects_loaded) {
+        return;
+    }
+
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr || lifecycle->movement == nullptr) {
+        return;
+    }
+
+    UnitMovementContext& movement = *lifecycle->movement;
+    const u32 object_count = std::min<u32>(
+        static_cast<u32>(script.objects.size()), kGameplayScenarioObjectMaxSlots);
+    for (u32 index = 1; index < object_count; ++index) {
+        GameplayScriptTriggerObjectState& object = script.objects[index];
+        if (!default_gameplay_script_object_alive(object)) {
+            continue;
+        }
+
+        UnitMovementUnit* unit = object.unit;
+        if (unit == nullptr && object.scenario_object_index != 0) {
+            unit = find_default_movement_unit_by_id(object.scenario_object_index);
+        }
+        std::unique_ptr<UnitMovementUnit> owned_unit;
+        if (unit == nullptr) {
+            owned_unit = std::make_unique<UnitMovementUnit>();
+            unit = owned_unit.get();
+        }
+        if (unit == nullptr) {
+            continue;
+        }
+
+        initialize_default_unit_from_scenario_object(*lifecycle, *unit, object, index);
+        object.unit = unit;
+        object.object_pointer = unit;
+        object.scenario_object_index = unit->id;
+        if (owned_unit != nullptr) {
+            g_runtime.gameplay_script_spawned_units.push_back(std::move(owned_unit));
+        }
+        activate_default_gameplay_script_unit(movement, *unit);
+    }
+
+    HandleOwnerUnitTypeCountRebuild(*lifecycle);
+}
+
+void purge_default_inactive_movement_units(UnitMovementContext& movement) {
+    movement.active_units.erase(
+        std::remove_if(movement.active_units.begin(), movement.active_units.end(),
+            [](const UnitMovementUnit* unit) {
+                return unit == nullptr || !unit->active;
+            }),
+        movement.active_units.end());
+}
+
+u32 find_default_gameplay_script_object_index_for_unit(
+    GameplayScriptTriggerState& script, UnitMovementUnit& unit) {
+    for (u32 index = 1; index < script.objects.size(); ++index) {
+        GameplayScriptTriggerObjectState& object = script.objects[index];
+        if (object.unit == &unit || object.object_pointer == &unit) {
+            return index;
+        }
+    }
+    return 0;
+}
+
+u32 ensure_default_gameplay_script_object_index_for_unit(
+    GameplayScriptTriggerState& script, UnitMovementUnit& unit) {
+    if (script.objects.empty()) {
+        script.objects.push_back(GameplayScriptTriggerObjectState{});
+    }
+
+    if (g_runtime.gameplay_script_scenario_objects_loaded &&
+        unit.id != 0 && unit.id < script.objects.size()) {
+        GameplayScriptTriggerObjectState& object = script.objects[unit.id];
+        object.unit = &unit;
+        object.object_pointer = &unit;
+        object.scenario_object_index = unit.id;
+        return unit.id;
+    }
+
+    const u32 existing = find_default_gameplay_script_object_index_for_unit(script, unit);
+    if (existing != 0) {
+        return existing;
+    }
+
+    GameplayScriptTriggerObjectState object{};
+    object.unit = &unit;
+    object.object_pointer = &unit;
+    script.objects.push_back(std::move(object));
+    return static_cast<u32>(script.objects.size() - 1);
+}
+
+void sync_default_gameplay_script_command_payloads_from_unit(
+    GameplayScriptTriggerObjectState& object, const UnitMovementUnit& unit) {
+    object.pending_command = from_unit_queued_command(unit.pending_command);
+    object.active_command_payload =
+        from_unit_queued_command(unit.active_command_payload);
+    object.deferred_command_count = std::min<u32>(
+        unit.deferred_command_count,
+        static_cast<u32>(object.deferred_commands.size()));
+    object.deferred_commands = {};
+    for (u32 slot = 0; slot < object.deferred_command_count; ++slot) {
+        object.deferred_commands[slot] =
+            from_unit_queued_command(unit.deferred_commands[slot]);
+    }
+}
+
+void sync_default_gameplay_script_object_from_unit(
+    GameplayScriptTriggerObjectState& object, UnitMovementUnit& unit) {
+    object.unit = &unit;
+    object.object_pointer = &unit;
+    object.type_id = unit.type_id;
+    object.owner_id = unit.owner_id;
+    object.area_marker_flags = unit.area_marker_flags;
+    object.command_flags = unit.command_flags;
+    object.command_bit_mask = default_unit_command_bit_mask(unit);
+    object.script_bit_flags = unit.definition.support_source_flags;
+    object.linked_effect_slot_offset = unit.linked_effect_slot_offset;
+    object.linked_object_id = unit.linked_object_id;
+    if (unit.reserved_tile_effect != nullptr) {
+        const u32 effect_offset = default_unit_effect_original_slot_offset(
+            g_runtime.gameplay_unit_effect_runtime, unit.reserved_tile_effect);
+        if (effect_offset != 0) {
+            object.linked_effect_slot_offset = effect_offset;
+        }
+    }
+    object.command_state_raw = unit.command_state;
+    object.script_state = unit.command_state & 0x00ffffffu;
+    object.definition_class = unit.definition.lifecycle_class;
+    object.string_slot = unit.scenario_string_slot;
+    object.dynamic_string_slot = unit.string_slot;
+    object.type_flags = unit.type_flags;
+    object.saved_type_flags = unit.saved_type_flags;
+    object.draw_flags = unit.draw_flags;
+    object.direction = unit.direction;
+    object.movement_flags = unit.movement_flags;
+    object.movement_state = unit.movement_state;
+    object.wait_ticks = unit.wait_ticks;
+    object.animation_frame = unit.animation_frame;
+    object.previous_command_state = unit.previous_command_state & 0x00ffffffu;
+    object.animation_timer = unit.animation_timer;
+    object.command_entry_lockout_ticks = unit.command_entry_lockout_ticks;
+    object.command_lockout_ticks = unit.command_lockout_ticks;
+    object.distance_check_mode = unit.distance_check_mode;
+    object.movement_turn_ticks = unit.movement_turn_ticks;
+    object.placement_reset_scratch = unit.placement_reset_scratch;
+    object.effect_reset_scratch = unit.effect_reset_scratch;
+    object.x = unit.x;
+    object.y = unit.y;
+    object.command_value = unit.command_value;
+    object.current_payload_value =
+        static_cast<u32>(unit.active_command_payload.x);
+    object.scripted_target_x = unit.path_target_x;
+    object.scripted_target_y = unit.path_target_y;
+    object.scripted_movement_mode = 0;
+    object.scripted_target_updated = false;
+    object.destination_x = unit.destination_x;
+    object.destination_y = unit.destination_y;
+    object.destination_aux_state = unit.destination_aux_state;
+    object.current_cell_x = unit.current_cell_x;
+    object.current_cell_y = unit.current_cell_y;
+    object.next_path_x = unit.next_path_x;
+    object.next_path_y = unit.next_path_y;
+    object.saved_path_target_x = unit.saved_path_target_x;
+    object.saved_path_target_y = unit.saved_path_target_y;
+    object.anchor_x = unit.anchor_x;
+    object.anchor_y = unit.anchor_y;
+    sync_default_gameplay_script_command_payloads_from_unit(object, unit);
+    object.stat_2c = static_cast<i32>(unit.action_mode);
+    object.stat_30 = scenario_object_uses_equipment_slot_zero(unit.type_id)
+        ? static_cast<i32>(unit.equipment_slots[0])
+        : static_cast<i32>(unit.action_mode_gate);
+    object.stat_18 = unit.max_health;
+    object.stat_1c = unit.runtime_stat_1c;
+    object.stat_20 = unit.health;
+    object.stat_24 = unit.runtime_stat_20;
+    object.stat_28 = unit.runtime_stat_28;
+    object.stat_50 = unit.elite_progress_value;
+    object.stat_54 = unit.status_timer;
+    object.stat_secondary_max = unit.max_secondary_value;
+    object.stat_secondary_current = unit.secondary_value;
+    object.bounds.left = unit.definition.bounds_left;
+    object.bounds.top = unit.definition.bounds_top;
+    object.bounds.right =
+        unit.definition.bounds_left + unit.definition.bounds_width;
+    object.bounds.bottom =
+        unit.definition.bounds_top + unit.definition.bounds_height;
+    object.equipment_slots = unit.equipment_slots;
+    for (std::size_t slot = 0;
+         slot < unit.item_slots.size() && slot < object.equipment_slots.size();
+         ++slot) {
+        object.equipment_slots[slot] = unit.item_slots[slot];
+    }
+
+    if ((unit.command_state & kUnitCommandDead) != 0 || !unit.active) {
+        object.flags |= 4u;
+        object.remove_from_triggers = true;
+    } else if (!object.remove_from_triggers) {
+        object.flags &= ~4u;
+    }
+}
+
+void append_default_gameplay_script_scenario_active_objects(
+    GameplayScriptTriggerState& script) {
+    if (!g_runtime.gameplay_script_scenario_objects_loaded) {
+        return;
+    }
+
+    const u32 object_count = std::min<u32>(
+        static_cast<u32>(script.objects.size()), kGameplayScenarioObjectMaxSlots);
+    for (u32 index = 1; index < object_count; ++index) {
+        const GameplayScriptTriggerObjectState& object = script.objects[index];
+        if (!default_gameplay_script_object_alive(object)) {
+            continue;
+        }
+        if (std::find(script.condition_context.active_object_order.begin(),
+                script.condition_context.active_object_order.end(), index) ==
+            script.condition_context.active_object_order.end()) {
+            script.condition_context.active_object_order.push_back(index);
+        }
+    }
+}
+
+void recount_default_gameplay_script_owner_unit_counts(
+    GameplayScriptTriggerState& script) {
+    for (GameplayScriptOwnerConditionState& owner :
+         script.condition_context.owners) {
+        owner.unit_type_counts.fill(0);
+    }
+
+    for (u32 index : script.condition_context.active_object_order) {
+        if (index >= script.objects.size()) {
+            continue;
+        }
+        const GameplayScriptTriggerObjectState& object = script.objects[index];
+        if (!default_gameplay_script_object_alive(object) ||
+            object.owner_id >= script.condition_context.owners.size() ||
+            object.type_id >= kGameplayScriptOwnerUnitTypeCount) {
+            continue;
+        }
+        u8& count =
+            script.condition_context.owners[object.owner_id].unit_type_counts[object.type_id];
+        if (count != 0xff) {
+            ++count;
+        }
+    }
+}
+
+void sync_default_gameplay_script_runtime_context(
+    GameplayLoopState& state, GameplayScriptTriggerState& script) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    UnitMovementContext* movement =
+        lifecycle != nullptr ? lifecycle->movement : default_gameplay_movement_context();
+    script.current_tick = state.simulation_frame_counter;
+    script.condition_context.enabled = true;
+    script.opcode_context.enabled = true;
+    script.opcode_context.local_owner_id =
+        std::min<u32>(g_runtime.gameplay_player_slots.local_player_slot,
+            kGameplayScriptOwnerCount - 1);
+    script.condition_context.active_object_order.clear();
+
+    for (u32 owner = 0; owner < kGameplayScriptOwnerCount; ++owner) {
+        GameplayScriptOwnerConditionState& condition_owner =
+            script.condition_context.owners[owner];
+        condition_owner.status = owner < g_runtime.gameplay_player_slots.slot_states.size() ?
+            g_runtime.gameplay_player_slots.slot_states[owner] :
+            kGameplayScriptOwnerInactiveStatus;
+        condition_owner.resource_a =
+            lifecycle != nullptr && owner < lifecycle->owner_primary_resources.size() ?
+            static_cast<i32>(lifecycle->owner_primary_resources[owner]) :
+            static_cast<i32>(g_runtime.gameplay_player_slots.owner_primary_resources[owner]);
+        condition_owner.resource_b =
+            lifecycle != nullptr && owner < lifecycle->owner_secondary_resources.size() ?
+            static_cast<i32>(lifecycle->owner_secondary_resources[owner]) :
+            static_cast<i32>(g_runtime.gameplay_player_slots.owner_secondary_resources[owner]);
+        condition_owner.blocked_relation_mask =
+            g_runtime.gameplay_player_slots.owner_relation_masks[owner];
+
+        i32 related = 0;
+        i32 hostile = 0;
+        for (u32 slot = 0; slot < kGameplayScriptOwnerCount; ++slot) {
+            if (slot == owner ||
+                g_runtime.gameplay_player_slots.slot_states[slot] ==
+                    static_cast<u8>(PlayerSlotState::disabled)) {
+                continue;
+            }
+            const u32 bit = 1u << slot;
+            if ((g_runtime.gameplay_player_slots.owner_relation_masks[owner] & bit) != 0) {
+                ++related;
+            } else {
+                ++hostile;
+            }
+        }
+        script.condition_context.relation_a_counts[owner] = related;
+        script.condition_context.relation_b_counts[owner] = hostile;
+    }
+
+    if (movement != nullptr) {
+        for (UnitMovementUnit* unit : movement->active_units) {
+            if (unit == nullptr) {
+                continue;
+            }
+            const u32 object_index =
+                ensure_default_gameplay_script_object_index_for_unit(script, *unit);
+            sync_default_gameplay_script_object_from_unit(
+                script.objects[object_index], *unit);
+            if (unit->active) {
+                script.condition_context.active_object_order.push_back(object_index);
+            }
+        }
+    }
+
+    append_default_gameplay_script_scenario_active_objects(script);
+    recount_default_gameplay_script_owner_unit_counts(script);
+}
+
+void apply_default_gameplay_script_object_to_unit(
+    GameplayScriptTriggerObjectState& object) {
+    UnitMovementUnit* unit = object.unit;
+    if (unit == nullptr) {
+        return;
+    }
+
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (!default_gameplay_script_object_alive(object)) {
+        unit->command_state |= kUnitCommandDead;
+        if (unit->active) {
+            if (lifecycle != nullptr) {
+                HandleUnitRemovalAccounting(*lifecycle, *unit);
+            } else {
+                unit->active = false;
+            }
+        }
+        return;
+    }
+
+    unit->type_id = object.type_id;
+    unit->owner_id = object.owner_id;
+    unit->scenario_string_slot = object.string_slot;
+    unit->string_slot = object.dynamic_string_slot;
+    if (object.type_flags != 0) {
+        unit->type_flags = object.type_flags;
+    }
+    unit->saved_type_flags = object.saved_type_flags;
+    unit->draw_flags = object.draw_flags;
+    unit->direction = object.direction;
+    unit->movement_flags = object.movement_flags;
+    unit->movement_state = object.movement_state;
+    unit->wait_ticks = object.wait_ticks;
+    unit->animation_frame = object.animation_frame;
+    unit->previous_command_state = object.previous_command_state;
+    unit->animation_timer = object.animation_timer;
+    unit->command_lockout_ticks = object.command_lockout_ticks;
+    unit->command_entry_lockout_ticks = object.command_entry_lockout_ticks;
+    unit->distance_check_mode = object.distance_check_mode;
+    unit->movement_turn_ticks = object.movement_turn_ticks;
+    unit->placement_reset_scratch = object.placement_reset_scratch;
+    unit->effect_reset_scratch = object.effect_reset_scratch;
+    unit->x = object.x;
+    unit->y = object.y;
+    unit->command_value = object.command_value;
+    if (object.current_payload_value != 0) {
+        unit->active_command_payload.x =
+            static_cast<i32>(object.current_payload_value);
+    }
+    if (object.scripted_target_updated || object.scripted_movement_mode != 0) {
+        unit->destination_x = object.scripted_target_x;
+        unit->destination_y = object.scripted_target_y;
+        unit->path_target_x = object.scripted_target_x;
+        unit->path_target_y = object.scripted_target_y;
+        unit->next_path_x = object.scripted_target_x;
+        unit->next_path_y = object.scripted_target_y;
+        unit->current_cell_x = object.scripted_target_x & ~0x1f;
+        unit->current_cell_y = object.scripted_target_y & ~0x1f;
+        object.destination_x = unit->destination_x;
+        object.destination_y = unit->destination_y;
+        object.current_cell_x = unit->current_cell_x;
+        object.current_cell_y = unit->current_cell_y;
+        object.next_path_x = unit->next_path_x;
+        object.next_path_y = unit->next_path_y;
+        object.scripted_target_updated = false;
+        object.scripted_movement_mode = 0;
+    }
+    unit->command_flags = object.command_flags;
+    apply_default_unit_command_bit_mask(*unit, object.command_bit_mask);
+    unit->definition.support_source_flags = object.script_bit_flags;
+    unit->linked_effect_slot_offset = object.linked_effect_slot_offset;
+    unit->linked_object_id = object.linked_object_id;
+    unit->area_marker_flags = object.area_marker_flags;
+    unit->max_health = object.stat_18;
+    unit->health = object.stat_20;
+    unit->runtime_stat_1c = object.stat_1c;
+    unit->runtime_stat_20 = object.stat_24;
+    unit->runtime_stat_28 = object.stat_28;
+    unit->elite_progress_value = object.stat_50;
+    unit->status_timer = object.stat_54;
+    unit->production_variant = object.stat_54;
+    unit->action_mode = static_cast<u32>(object.stat_2c);
+    unit->action_mode_gate = scenario_object_uses_equipment_slot_zero(object.type_id)
+        ? 0
+        : static_cast<u32>(object.stat_30);
+    unit->under_construction =
+        !scenario_object_uses_equipment_slot_zero(object.type_id) &&
+        unit->action_mode_gate == 1;
+    unit->max_secondary_value = object.stat_secondary_max;
+    unit->secondary_value = object.stat_secondary_current;
+    unit->equipment_slots = object.equipment_slots;
+    for (std::size_t slot = 0;
+         slot < unit->item_slots.size() && slot < unit->equipment_slots.size();
+         ++slot) {
+        unit->item_slots[slot] = unit->equipment_slots[slot];
+    }
+    object.destination_x = unit->destination_x;
+    object.destination_y = unit->destination_y;
+    object.destination_aux_state = unit->destination_aux_state;
+    object.current_cell_x = unit->current_cell_x;
+    object.current_cell_y = unit->current_cell_y;
+    object.next_path_x = unit->next_path_x;
+    object.next_path_y = unit->next_path_y;
+    object.movement_flags = unit->movement_flags;
+    object.movement_state = unit->movement_state;
+    object.wait_ticks = unit->wait_ticks;
+    object.movement_turn_ticks = unit->movement_turn_ticks;
+    object.placement_reset_scratch = unit->placement_reset_scratch;
+    object.effect_reset_scratch = unit->effect_reset_scratch;
+    object.command_entry_lockout_ticks = unit->command_entry_lockout_ticks;
+    object.command_bit_mask = default_unit_command_bit_mask(*unit);
+    object.script_bit_flags = unit->definition.support_source_flags;
+    object.linked_effect_slot_offset = unit->linked_effect_slot_offset;
+    object.linked_object_id = unit->linked_object_id;
+    object.string_slot = unit->scenario_string_slot;
+    object.dynamic_string_slot = unit->string_slot;
+    object.saved_type_flags = unit->saved_type_flags;
+    object.saved_path_target_x = unit->saved_path_target_x;
+    object.saved_path_target_y = unit->saved_path_target_y;
+    object.anchor_x = unit->anchor_x;
+    object.anchor_y = unit->anchor_y;
+    sync_default_gameplay_script_command_payloads_from_unit(object, *unit);
+
+    if (object.stat_recompute_required) {
+        UnitRuntimeStatBlock stats{};
+        stats.max_health = unit->max_health;
+        stats.max_secondary_value = unit->max_secondary_value;
+        stats.health = unit->health;
+        stats.stat_1c = unit->runtime_stat_1c;
+        stats.stat_20 = unit->runtime_stat_20;
+        stats.secondary_value = unit->secondary_value;
+        stats.stat_28 = unit->runtime_stat_28;
+
+        ApplyUnitVariantProgressFromStoredValue(g_runtime.gameplay_production_runtime,
+            *unit, stats, nullptr, default_gameplay_frame_random_limit);
+        object.stat_18 = unit->max_health;
+        object.stat_20 = unit->health;
+        object.stat_1c = unit->runtime_stat_1c;
+        object.stat_24 = unit->runtime_stat_20;
+        object.stat_28 = unit->runtime_stat_28;
+        object.stat_secondary_max = unit->max_secondary_value;
+        object.stat_secondary_current = unit->secondary_value;
+        object.stat_50 = unit->elite_progress_value;
+        object.stat_recompute_required = false;
+    }
+}
+
+void apply_default_gameplay_script_object_mutations(
+    GameplayScriptTriggerState& script) {
+    for (GameplayScriptTriggerObjectState& object : script.objects) {
+        apply_default_gameplay_script_object_to_unit(object);
+    }
+
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle != nullptr) {
+        HandleOwnerUnitTypeCountRebuild(*lifecycle);
+        if (lifecycle->movement != nullptr) {
+            purge_default_inactive_movement_units(*lifecycle->movement);
+        }
+    }
+}
+
+void sync_default_gameplay_script_scenario_record(
+    const GameplayScriptTriggerState& script) {
+    if (!g_runtime.gameplay_script_scenario_objects_loaded) {
+        return;
+    }
+
+    std::vector<u8>* record =
+        MutableGameplaySessionLoadedRecord(kGameplayScenarioObjectRecordIndex);
+    if (record == nullptr) {
+        return;
+    }
+
+    std::array<u32, kGameplayScenarioObjectMaxSlots> previous_links{};
+    std::array<u32, kGameplayScenarioObjectMaxSlots> next_links{};
+    std::array<bool, kGameplayScenarioObjectMaxSlots> linked_objects{};
+    bool rebuilt_links = false;
+    u32 previous_link = 0;
+    for (u32 active_index : script.condition_context.active_object_order) {
+        if (active_index >= script.objects.size()) {
+            continue;
+        }
+        const GameplayScriptTriggerObjectState& object =
+            script.objects[active_index];
+        if (!default_gameplay_script_object_alive(object)) {
+            continue;
+        }
+        const u32 object_index = object.scenario_object_index != 0 ?
+            object.scenario_object_index : active_index;
+        if (object_index == 0 || object_index >= kGameplayScenarioObjectMaxSlots ||
+            linked_objects[object_index]) {
+            continue;
+        }
+        linked_objects[object_index] = true;
+        previous_links[object_index] = previous_link;
+        if (previous_link != 0) {
+            next_links[previous_link] = object_index;
+        }
+        previous_link = object_index;
+        rebuilt_links = true;
+    }
+
+    const u32 object_count = std::min<u32>(
+        static_cast<u32>(script.objects.size()), kGameplayScenarioObjectMaxSlots);
+    for (u32 index = 1; index < object_count; ++index) {
+        const GameplayScriptTriggerObjectState& object = script.objects[index];
+        const u32 object_index = object.scenario_object_index != 0 ?
+            object.scenario_object_index : index;
+        if (object_index >= kGameplayScenarioObjectMaxSlots) {
+            continue;
+        }
+
+        const std::size_t object_base =
+            static_cast<std::size_t>(object_index) * kGameplayScenarioObjectStride;
+        if (object_base > record->size() ||
+            record->size() - object_base < kGameplayScenarioObjectStride) {
+            continue;
+        }
+
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectTypeOffset, object.type_id);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectOwnerOffset, object.owner_id);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectStringSlotOffset,
+            object.string_slot);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectAreaFlagsOffset,
+            object.area_marker_flags);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectMaxHealthOffset,
+            object.stat_18);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectMaxSecondaryOffset,
+            object.stat_secondary_max);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectHealthOffset, object.stat_20);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectRuntimeStat1cOffset,
+            object.stat_1c);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectRuntimeStat20Offset,
+            object.stat_24);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectSecondaryCurrentOffset,
+            object.stat_secondary_current);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectRuntimeStat28Offset,
+            object.stat_28);
+        write_default_scenario_object_i32(
+            *record, object_base, kGameplayScenarioObjectStat2cOffset, object.stat_2c);
+        const u32 raw_stat30_or_equipment =
+            scenario_object_uses_equipment_slot_zero(object.type_id)
+            ? object.equipment_slots[0]
+            : static_cast<u32>(object.stat_30);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectStat30Offset,
+            raw_stat30_or_equipment);
+        for (std::size_t slot = 1; slot < object.equipment_slots.size(); ++slot) {
+            write_default_scenario_object_u32(*record, object_base,
+                kGameplayScenarioObjectEquipmentSlotOffsets[slot],
+                object.equipment_slots[slot]);
+        }
+        write_default_scenario_object_u32(*record, object_base,
+            kGameplayScenarioObjectDynamicStringSlotOffset,
+            object.dynamic_string_slot);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectEliteProgressOffset,
+            object.stat_50);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectStatusTimerOffset,
+            object.stat_54);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectMutableCommandValueOffset,
+            default_unit_id_to_command_payload_reference(
+                object.script_state, object.command_value));
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectTypeFlagsOffset,
+            object.type_flags);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectCommandBitsOffset,
+            object.command_bit_mask);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectCommandStateOffset,
+            compose_default_scenario_object_command_state(object));
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectAnimationFrameOffset,
+            object.animation_frame);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectCommandValueOffset,
+            default_unit_id_to_command_payload_reference(
+                object.script_state, object.current_payload_value));
+        write_default_scenario_object_i32(
+            *record, object_base, kGameplayScenarioObjectPathTargetXOffset,
+            object.scripted_target_x);
+        write_default_scenario_object_i32(
+            *record, object_base, kGameplayScenarioObjectPathTargetYOffset,
+            object.scripted_target_y);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectPreviousCommandStateOffset,
+            object.previous_command_state & 0x00ffffffu);
+        write_default_scenario_object_command_payload(*record, object_base,
+            kGameplayScenarioObjectPendingCommandStateOffset,
+            kGameplayScenarioObjectPendingCommandValueOffset,
+            kGameplayScenarioObjectPendingCommandXOffset,
+            kGameplayScenarioObjectPendingCommandYOffset,
+            object.pending_command);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectLinkedObjectOffset,
+            default_scenario_object_id_to_reference(object.linked_object_id));
+        write_default_scenario_object_u32(*record, object_base,
+            kGameplayScenarioObjectCommandEntryLockoutTicksOffset,
+            object.command_entry_lockout_ticks);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectCommandFlagsOffset,
+            object.command_flags);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectFlagsOffset, object.flags);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectDrawFlagsOffset,
+            object.draw_flags);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectDirectionOffset,
+            object.direction);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectMovementFlagsOffset,
+            object.movement_flags);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectMovementStateOffset,
+            object.movement_state);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectWaitTicksOffset,
+            object.wait_ticks);
+        write_default_scenario_object_i32(
+            *record, object_base, kGameplayScenarioObjectXOffset, object.x);
+        write_default_scenario_object_i32(
+            *record, object_base, kGameplayScenarioObjectYOffset, object.y);
+        write_default_scenario_object_i32(
+            *record, object_base, kGameplayScenarioObjectDestinationXOffset,
+            object.destination_x);
+        write_default_scenario_object_i32(
+            *record, object_base, kGameplayScenarioObjectDestinationYOffset,
+            object.destination_y);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectDestinationAuxStateOffset,
+            object.destination_aux_state);
+        write_default_scenario_object_i32(
+            *record, object_base, kGameplayScenarioObjectCurrentCellXOffset,
+            object.current_cell_x);
+        write_default_scenario_object_i32(
+            *record, object_base, kGameplayScenarioObjectCurrentCellYOffset,
+            object.current_cell_y);
+        write_default_scenario_object_i32(
+            *record, object_base, kGameplayScenarioObjectNextPathXOffset,
+            object.next_path_x);
+        write_default_scenario_object_i32(
+            *record, object_base, kGameplayScenarioObjectNextPathYOffset,
+            object.next_path_y);
+        write_default_scenario_object_i32(
+            *record, object_base, kGameplayScenarioObjectAnchorXOffset,
+            object.anchor_x);
+        write_default_scenario_object_i32(
+            *record, object_base, kGameplayScenarioObjectAnchorYOffset,
+            object.anchor_y);
+        write_default_scenario_object_command_payload(*record, object_base,
+            kGameplayScenarioObjectActiveCommandStateOffset,
+            kGameplayScenarioObjectActiveCommandValueOffset,
+            kGameplayScenarioObjectActiveCommandXOffset,
+            kGameplayScenarioObjectActiveCommandYOffset,
+            object.active_command_payload);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectScriptBitFlagsOffset,
+            object.script_bit_flags);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectAnimationTimerOffset,
+            object.animation_timer);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectLinkedEffectSlotOffset,
+            object.linked_effect_slot_offset);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectCommandLockoutTicksOffset,
+            object.command_lockout_ticks);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectSavedTypeFlagsOffset,
+            object.saved_type_flags);
+        write_default_scenario_object_u32(*record, object_base,
+            kGameplayScenarioObjectPlacementResetScratchOffset,
+            object.placement_reset_scratch);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectDistanceCheckModeOffset,
+            object.distance_check_mode);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectMovementTurnTicksOffset,
+            object.movement_turn_ticks);
+        for (std::size_t slot = 0;
+             slot < object.effect_reset_scratch.size() &&
+             slot < kGameplayScenarioObjectEffectResetScratchOffsets.size();
+             ++slot) {
+            write_default_scenario_object_u32(*record, object_base,
+                kGameplayScenarioObjectEffectResetScratchOffsets[slot],
+                object.effect_reset_scratch[slot]);
+        }
+        const u32 deferred_count = std::min<u32>(object.deferred_command_count,
+            kGameplayScenarioObjectDeferredCommandCapacity);
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectDeferredCommandCountOffset,
+            deferred_count);
+        for (u32 slot = 0; slot < deferred_count; ++slot) {
+            const std::size_t slot_base =
+                kGameplayScenarioObjectDeferredCommandSlotsOffset +
+                static_cast<std::size_t>(slot) *
+                    kGameplayScenarioObjectDeferredCommandStride;
+            write_default_scenario_object_command_payload(*record, object_base,
+                slot_base + 0x00, slot_base + 0x04, slot_base + 0x08,
+                slot_base + 0x0c, object.deferred_commands[slot]);
+        }
+        const u32 previous_object_index = rebuilt_links ?
+            previous_links[object_index] : object.previous_object_index;
+        const u32 next_object_index = rebuilt_links ?
+            next_links[object_index] : object.next_object_index;
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectPreviousLinkOffset,
+            default_scenario_object_id_to_reference(previous_object_index));
+        write_default_scenario_object_u32(
+            *record, object_base, kGameplayScenarioObjectNextLinkOffset,
+            default_scenario_object_id_to_reference(next_object_index));
+    }
+}
+
+void consume_default_gameplay_script_camera_request(
+    GameplayScriptOpcodeContext& opcode) {
+    if (!opcode.camera_request_active) {
+        return;
+    }
+
+    sync_default_ui_overlay_runtime_from_gameplay_state();
+    UiOverlayState& overlay = ui_overlay_state();
+    ClampCameraToMinimapPoint(overlay, opcode.camera_x, opcode.camera_y);
+    publish_default_ui_overlay_camera(overlay);
+    opcode.camera_request_active = false;
+}
+
+void consume_default_gameplay_script_selection_request(
+    GameplayScriptTriggerState& script) {
+    GameplayScriptOpcodeContext& opcode = script.opcode_context;
+    if (!opcode.selection_request_active) {
+        return;
+    }
+
+    GameplayScriptTriggerObjectState* selected = nullptr;
+    if (opcode.selected_object_index < script.objects.size()) {
+        selected = &script.objects[opcode.selected_object_index];
+    }
+    if (selected == nullptr || selected->unit == nullptr) {
+        for (GameplayScriptTriggerObjectState& object : script.objects) {
+            if ((object.flags & 0x80u) != 0 && object.unit != nullptr) {
+                selected = &object;
+                break;
+            }
+        }
+    }
+
+    if (selected != nullptr && selected->unit != nullptr &&
+        selected->unit->active && selected->unit->id != 0) {
+        sync_default_ui_overlay_runtime_from_gameplay_state();
+        UiOverlayState& overlay = ui_overlay_state();
+        overlay.selected_unit_ids.assign(1, selected->unit->id);
+        overlay.selected_unit_id = selected->unit->id;
+        RecountGameplaySelectedUnits(overlay);
+        sync_default_ui_overlay_selected_unit_details(overlay);
+        BuildSelectedUnitCommandPanel(overlay);
+        for (const UiOverlayMinimapUnit& unit : overlay.minimap_units) {
+            if (unit.unit_id == selected->unit->id) {
+                default_ui_overlay_unit_selected(overlay, unit);
+                break;
+            }
+        }
+    }
+
+    opcode.selection_request_active = false;
+    opcode.selected_object_index = 0;
+}
+
+void consume_default_gameplay_script_stage_result(
+    GameplayScriptOpcodeContext& opcode) {
+    if (!opcode.stage_result_pending) {
+        return;
+    }
+
+    g_runtime.gameplay_end_condition_state.result_code = opcode.stage_result;
+    g_runtime.gameplay_end_condition_state.end_requested = true;
+    const FrontendStageFlowState& stage = frontend_stage_flow_state();
+    const u32 current_mode = stage.current_mode != 0 ?
+        stage.current_mode : g_runtime.gameplay_startup_state.session_mode;
+    CompleteRankerFrontendStage(opcode.stage_result, current_mode + 1);
+    g_runtime.gameplay_result_screen_rendered = true;
+    opcode.stage_result_pending = false;
+}
+
+void publish_default_gameplay_script_hud_text(
+    GameplayScriptOpcodeContext& opcode, GameplayLoopState& state) {
+    if (!opcode.text_overlay_active) {
+        return;
+    }
+
+    g_runtime.gameplay_script_hud_text = opcode.text_overlay;
+    if (!g_runtime.gameplay_script_hud_text.empty()) {
+        GameplayHudTextState& hud = g_runtime.gameplay_hud_text;
+        hud.current_tick_ms = state.current_tick_ms;
+        if (opcode.text_x == 0 && opcode.text_y == 0) {
+            QueueGameplayHudMessage(hud, g_runtime.gameplay_script_hud_text.c_str());
+        } else {
+            hud.current_message.text = g_runtime.gameplay_script_hud_text.c_str();
+            hud.current_message.x = opcode.text_x;
+            hud.current_message.y = opcode.text_y;
+            hud.current_message.tick_ms = state.current_tick_ms;
+            hud.queued_message = GameplayHudMessage{};
+        }
+    }
+
+    opcode.text_overlay_active = false;
+}
+
+void publish_default_gameplay_script_dialog_text(GameplayLoopState& state) {
+    GameplayScriptDialogState& dialog = gameplay_script_dialog_state();
+    if (dialog.advance_flags[1] == 0 || dialog.visible_text.empty()) {
+        return;
+    }
+
+    GameplayHudTextState& hud = g_runtime.gameplay_hud_text;
+    hud.current_tick_ms = state.current_tick_ms;
+    hud.current_message.text = dialog.visible_text.c_str();
+    hud.current_message.x = dialog.text_x;
+    hud.current_message.y = dialog.text_y;
+    hud.current_message.tick_ms = state.current_tick_ms;
+    hud.queued_message = GameplayHudMessage{};
+}
+
+void release_default_map_effects_near_request(
+    const GameplayScriptSpawnRequest& request) {
+    if (request.has_area_bounds) {
+        for (MapEffectInstance& effect : g_runtime.map_effect_context.effects) {
+            if (!effect.active) {
+                continue;
+            }
+            if (request.area_left <= effect.x && effect.x < request.area_right &&
+                request.area_top <= effect.y && effect.y < request.area_bottom) {
+                ReleaseMapEffect(g_runtime.map_effect_context, effect);
+            }
+        }
+        return;
+    }
+
+    constexpr i32 kReleaseRadius = 0x1e0;
+    for (MapEffectInstance& effect : g_runtime.map_effect_context.effects) {
+        if (!effect.active) {
+            continue;
+        }
+        if (std::abs(effect.x - request.x) <= kReleaseRadius &&
+            std::abs(effect.y - request.y) <= kReleaseRadius) {
+            ReleaseMapEffect(g_runtime.map_effect_context, effect);
+        }
+    }
+}
+
+bool spawn_default_gameplay_script_unit(
+    const GameplayScriptSpawnRequest& request) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr || lifecycle->movement == nullptr) {
+        return false;
+    }
+
+    UnitMovementContext& movement = *lifecycle->movement;
+    UnitMovementUnit* unit = nullptr;
+    std::unique_ptr<UnitMovementUnit> owned_unit;
+    if (!movement.free_units.empty()) {
+        unit = take_default_free_unit_head(movement);
+    } else {
+        owned_unit = std::make_unique<UnitMovementUnit>();
+        unit = owned_unit.get();
+    }
+    if (unit == nullptr) {
+        return false;
+    }
+
+    const u32 unit_id = unit->id != 0 ? unit->id :
+        g_runtime.gameplay_script_next_unit_id++;
+    const u32 runtime_slot_index =
+        unit->runtime_slot_index != kInvalidUnitRuntimeSlotIndex ?
+            unit->runtime_slot_index : unit_id;
+    UnitMovementUnit initialized{};
+    if (!InitializePlacedUnitFromMapSlot(*lifecycle, initialized,
+            request.type_or_effect_id, request.owner_id, request.x, request.y)) {
+        if (owned_unit == nullptr) {
+            return_default_free_unit_head(movement, unit);
+        }
+        return false;
+    }
+
+    initialized.id = unit_id;
+    initialized.runtime_slot_index = runtime_slot_index;
+    *unit = initialized;
+    unit->id = unit_id;
+    unit->runtime_slot_index = runtime_slot_index;
+    unit->active = true;
+    unit->linked_unit = unit;
+    refresh_default_unit_definition_runtime_fields(*unit);
+    if (owned_unit != nullptr) {
+        g_runtime.gameplay_script_spawned_units.push_back(std::move(owned_unit));
+    }
+    activate_default_gameplay_script_unit(movement, *unit);
+    HandleOwnerUnitTypeCountRebuild(*lifecycle);
+    return true;
+}
+
+void consume_default_gameplay_script_spawn_requests(
+    GameplayScriptOpcodeContext& opcode) {
+    g_runtime.gameplay_script_unhandled_spawn_requests.clear();
+    const bool has_map_effect_request = std::any_of(opcode.spawn_requests.begin(),
+        opcode.spawn_requests.end(),
+        [](const GameplayScriptSpawnRequest& request) {
+            return request.map_effect;
+        });
+    if (has_map_effect_request) {
+        configure_default_map_effect_context();
+    }
+    for (const GameplayScriptSpawnRequest& request : opcode.spawn_requests) {
+        if (request.map_effect) {
+            if (request.remove_from_area) {
+                release_default_map_effects_near_request(request);
+            } else {
+                HandleMapEffectNearestTileSpawn(g_runtime.map_effect_context,
+                    request.type_or_effect_id, request.x, request.y);
+            }
+            continue;
+        }
+
+        if (!spawn_default_gameplay_script_unit(request)) {
+            g_runtime.gameplay_script_unhandled_spawn_requests.push_back(request);
+        }
+    }
+    opcode.spawn_requests.clear();
+}
+
+void apply_default_gameplay_script_definition_patch(
+    const GameplayScriptDefinitionPatchRequest& request) {
+    if (request.type_id >= kGameSessionUnitTypeCount) {
+        return;
+    }
+    if (g_runtime.active_session_definitions.unit_records.size() <= request.type_id) {
+        g_runtime.active_session_definitions.unit_records.resize(request.type_id + 1);
+    }
+
+    RuntimeDefinitionRecord& record =
+        g_runtime.active_session_definitions.unit_records[request.type_id];
+    record.bytes.assign(request.words.size() * sizeof(u32), 0);
+    for (std::size_t index = 0; index < request.words.size(); ++index) {
+        const u32 word = request.words[index];
+        const std::size_t offset = index * sizeof(u32);
+        record.bytes[offset + 0] = static_cast<u8>(word & 0xffu);
+        record.bytes[offset + 1] = static_cast<u8>((word >> 8) & 0xffu);
+        record.bytes[offset + 2] = static_cast<u8>((word >> 16) & 0xffu);
+        record.bytes[offset + 3] = static_cast<u8>((word >> 24) & 0xffu);
+    }
+
+    PatchLoadedUnitDefinitionResourceRecord(
+        request.type_id, record.bytes.data(), record.bytes.size());
+    if (request.type_id < g_runtime.unit_definition_cache_valid.size()) {
+        g_runtime.unit_definition_cache_valid[request.type_id] = false;
+    }
+    if (UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+        lifecycle != nullptr && lifecycle->movement != nullptr) {
+        for (UnitMovementUnit* unit : lifecycle->movement->active_units) {
+            if (unit != nullptr && unit->active && unit->type_id == request.type_id) {
+                refresh_default_unit_definition_runtime_fields(*unit);
+            }
+        }
+    }
+    rebuild_default_unit_reference_tables_from_catalog();
+    configure_default_gameplay_render_unit_sprite_definitions();
+    sync_default_gameplay_tooltip_unit_definitions();
+}
+
+void consume_default_gameplay_script_definition_patch_requests(
+    GameplayScriptOpcodeContext& opcode) {
+    g_runtime.gameplay_script_last_definition_patch_requests =
+        opcode.definition_patch_requests;
+    for (const GameplayScriptDefinitionPatchRequest& request :
+         g_runtime.gameplay_script_last_definition_patch_requests) {
+        apply_default_gameplay_script_definition_patch(request);
+    }
+    opcode.definition_patch_requests.clear();
+}
+
+void consume_default_gameplay_script_opcode_context(
+    GameplayScriptTriggerState& script, GameplayLoopState& state) {
+    GameplayScriptOpcodeContext& opcode = script.opcode_context;
+    consume_default_gameplay_script_camera_request(opcode);
+    consume_default_gameplay_script_selection_request(script);
+    consume_default_gameplay_script_stage_result(opcode);
+    publish_default_gameplay_script_hud_text(opcode, state);
+    consume_default_gameplay_script_spawn_requests(opcode);
+    consume_default_gameplay_script_definition_patch_requests(opcode);
+}
+
+void run_default_gameplay_script_phase(GameplayLoopState& state, u32 phase) {
+    GameplayScriptTriggerState& script = gameplay_script_trigger_state();
+    sync_default_gameplay_script_runtime_context(state, script);
+    ProcessGameplayScriptTriggers(script, phase);
+    apply_default_gameplay_script_object_mutations(script);
+    sync_default_gameplay_script_scenario_record(script);
+    consume_default_gameplay_script_opcode_context(script, state);
+    publish_default_gameplay_script_dialog_text(state);
+}
+
+void RebuildUnitSpatialIndexes() {
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    if (movement == nullptr) {
+        return;
+    }
+    RebuildUnitSpatialIndexSet(g_runtime.gameplay_unit_spatial_indexes, *movement);
+}
+
+void rebuild_default_unit_spatial_indexes() {
+    RebuildUnitSpatialIndexes();
+}
+
+void prepare_default_unit_runtime_command_dispatch(GameplayLoopState& state,
+    UnitLifecycleContext& lifecycle) {
+    UnitMovementContext* movement = lifecycle.movement;
+    if (movement == nullptr) {
+        return;
+    }
+
+    UnitCommandContext& command_context = g_runtime.gameplay_unit_commands;
+    configure_default_unit_command_context(command_context, lifecycle,
+        state.simulation_frame_counter);
+    configure_default_unit_movement_callbacks(*movement);
+    g_runtime.gameplay_damage_context.current_tick_ms = state.current_tick_ms;
+    rebuild_default_damage_record_links(movement);
+
+    configure_default_unit_support_context(
+        g_runtime.gameplay_unit_support_effects, lifecycle,
+        state.simulation_frame_counter);
+}
+
+void commit_default_unit_runtime_command_dispatch(UnitLifecycleContext& lifecycle) {
+    commit_default_unit_command_context(lifecycle, g_runtime.gameplay_unit_commands);
+}
+
+void run_default_unit_post_runtime_list_moves(UnitLifecycleContext& lifecycle) {
+    UnitMovementContext* movement = lifecycle.movement;
+    if (movement == nullptr) {
+        return;
+    }
+
+    const std::vector<UnitMovementUnit*> active_units = movement->active_units;
+    for (UnitMovementUnit* unit : active_units) {
+        if (unit == nullptr) {
+            continue;
+        }
+        if ((unit->runtime_flags & 4u) != 0) {
+            HandleUnitDeathLifecycleTransition(lifecycle, *unit);
+            spawn_default_runtime_death_passive_effects(*unit);
+            if (unit->type_id < 0x60) {
+                HandleAttachedUnitParentDeath(*movement, *unit);
+                queue_default_runtime_death_sound(*unit, true);
+            }
+            HandleActiveUnitLifecycleListMove(*movement, *unit);
+        }
+        else if ((unit->command_flags & 0x100u) != 0) {
+            HandleActiveUnitFreeListMove(*movement, *unit);
+        }
+    }
+}
+
+void run_default_gameplay_end_condition_monitor(GameplayLoopState& state) {
+    g_runtime.gameplay_end_condition_state.frame_counter =
+        state.simulation_frame_counter;
+    sync_default_gameplay_end_condition_state();
+    TickGameplayEndConditionMonitor(g_runtime.gameplay_end_condition_state);
+    Mode1GameplayPacketDispatchState& packets = mode1_gameplay_packet_dispatch_state();
+    if (packets.session_complete_requested) {
+        CloseAllMilesEffectPlaylistStreams();
+        packets.session_complete_requested = false;
+        g_runtime.gameplay_end_condition_state.end_requested = true;
+    }
+    if (g_runtime.gameplay_end_condition_state.end_requested) {
+        if (g_runtime.generic_ai_profile_mode) {
+            handle_default_generic_ai_end_request();
+            g_runtime.gameplay_end_condition_state.end_requested = false;
+        }
+        else if (g_runtime.network_ai_profile_override) {
+            render_default_network_ai_override_result_once();
+            state.leave_requested = true;
+        }
+        else {
+            complete_default_frontend_stage_result_once(
+                g_runtime.gameplay_end_condition_state.result_code);
+            state.leave_requested = true;
+        }
+    }
+}
+
+void default_p2p_delayed_gameplay_packet_dispatch(
+    P2PDelayedGameplayPacket& delayed, void*) {
+    write_packet_u32(delayed.bytes, 0x04, delayed.due_frame);
+    write_packet_u32(delayed.bytes, 0x08, delayed.serial);
+    write_packet_u32(delayed.bytes, 0x1c, delayed.flags1);
+    write_packet_u32(delayed.bytes, 0x20, delayed.flags2);
+
+    Mode1ReliablePacket packet{};
+    packet.bytes = delayed.bytes;
+    packet.size = kMode1ReliablePacketBytes;
+    packet.sequence = delayed.serial;
+    packet.channel = delayed.owner_slot;
+    packet.subtype = delayed.subtype;
+    DispatchMode1GameplayPacket(packet);
+}
+
+void apply_default_p2p_replay_vpos_camera(P2PGameSessionStartState& p2p) {
+    if (!p2p.replay_vpos_camera_dirty) {
+        return;
+    }
+
+    UiOverlayState& overlay = ui_overlay_state();
+    overlay.camera_x = static_cast<i32>(p2p.camera_x);
+    overlay.camera_y = static_cast<i32>(p2p.camera_y);
+    publish_default_ui_overlay_camera(overlay);
+    p2p.replay_vpos_camera_dirty = false;
+}
+
+void run_default_p2p_replay_session_frame(GameplayLoopState& state) {
+    P2PGameSessionStartState& p2p = g_runtime.p2p_session_start_state;
+    if (!p2p.delayed_packets.empty()) {
+        PumpP2PDelayedGameplayPackets(p2p, state.simulation_frame_counter,
+            default_p2p_delayed_gameplay_packet_dispatch);
+    }
+    else if (p2p.replay_vpos_loaded) {
+        TickP2PReplayVposCamera(p2p, state.simulation_frame_counter);
+    }
+    apply_default_p2p_replay_vpos_camera(p2p);
+    if (p2p.game_end_requested) {
+        g_runtime.gameplay_end_condition_state.end_requested = true;
+    }
+}
+
+template <std::size_t Index>
+void default_gameplay_loop_simulation_phase(GameplayLoopState& state) {
+    static_assert(Index < kGameplaySimulationPhaseCount, "simulation phase index");
+    ++g_runtime.gameplay_simulation_phase_counts[Index];
+    if constexpr (Index == 0) {
+        if (g_runtime.gameplay_player_slots.rotation_enabled) {
+            TickTeamReserveRotationCountdown(g_runtime.gameplay_player_slots,
+                state.simulation_frame_counter);
+        }
+        g_runtime.gameplay_hud_text.current_tick_ms = state.current_tick_ms;
+        TickGameplayDebugFrameCounter(g_runtime.gameplay_hud_text);
+        rebuild_default_unit_spatial_indexes();
+        run_default_gameplay_script_phase(state, 0);
+        run_default_p2p_replay_session_frame(state);
+        run_default_gameplay_end_condition_monitor(state);
+    }
+    if constexpr (Index == 1) {
+        run_default_owner_ai_maintenance(state);
+        if (g_runtime.gameplay_startup_state.lifecycle != nullptr) {
+            UnitLifecycleContext& lifecycle =
+                *g_runtime.gameplay_startup_state.lifecycle;
+            configure_default_unit_lifecycle_callbacks(lifecycle);
+            prepare_default_unit_runtime_command_dispatch(state, lifecycle);
+            HandleUnitSimulationListTick(lifecycle);
+            commit_default_unit_runtime_command_dispatch(lifecycle);
+            run_default_unit_post_runtime_list_moves(lifecycle);
+            HandleUnitLifecycleDispatchListTick(lifecycle);
+        }
+        configure_default_map_effect_context();
+        HandleMapEffectTimerTick(g_runtime.map_effect_context);
+        run_default_unit_effect_runtime_list_tick(state);
+        sync_default_gameplay_visibility_and_render_inputs(
+            state.simulation_frame_counter);
+    }
+    if constexpr (Index == 2) {
+        g_runtime.gameplay_damage_context.current_tick_ms = state.current_tick_ms;
+        configure_default_unit_damage_context(g_runtime.gameplay_damage_context);
+        ApplyUnitDamageOrAreaDamage(g_runtime.gameplay_damage_context);
+    }
+    if constexpr (Index == 3) {
+        g_runtime.gameplay_targeting_context.active_units =
+            g_runtime.gameplay_damage_context.active_units;
+        if (g_runtime.gameplay_targeting_context.source != nullptr) {
+            FindBestUnitTargetByActiveList(g_runtime.gameplay_targeting_context);
+        }
+    }
+    if constexpr (Index == 12) {
+        if (!g_runtime.gameplay_terrain_layer.terrain_flags.empty()) {
+            UpdateTerrainTilePulseState(g_runtime.gameplay_terrain_pulse_state,
+                g_runtime.gameplay_terrain_layer);
+        }
+        g_runtime.gameplay_sound.current_tick = state.current_tick_ms;
+        HandleQueuedGameplaySoundPlayback(g_runtime.gameplay_sound);
+    }
+    if constexpr (Index == 13) {
+        sync_default_primary_miles_music_policy_faction();
+        UpdatePrimaryMilesMusicPolicy();
+    }
+    if constexpr (Index == 14) {
+        if (g_runtime.gameplay_player_slots.rotation_enabled) {
+            MirrorTeamRotationResourcesForLocalPlayer(g_runtime.gameplay_player_slots);
+            for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+                sync_default_owner_resource_runtime_slots(owner,
+                    g_runtime.gameplay_player_slots.owner_primary_resources[owner],
+                    g_runtime.gameplay_player_slots.owner_secondary_resources[owner]);
+            }
+        }
+        AppendReplayViewportRecord(replay_recording_state(),
+            state.simulation_frame_counter,
+            g_runtime.gameplay_frame_render_context.camera_x,
+            g_runtime.gameplay_frame_render_context.camera_y);
+    }
+}
+
+void default_gameplay_loop_present_phase(GameplayLoopState& state) {
+    GameplayFrameRenderContext& context = g_runtime.gameplay_frame_render_context;
+    context.current_tick_ms = state.current_tick_ms;
+    context.frame_counter = state.present_frame_counter;
+    context.viewport_width = kOriginalClientWidth;
+    context.viewport_height = kOriginalClientHeight;
+    context.render_command_queue = &g_runtime.gameplay_render_command_queue;
+    context.unit_render_queue = &g_runtime.gameplay_unit_render_queue;
+    g_runtime.gameplay_hud_text.screen_width = kOriginalClientWidth;
+    g_runtime.gameplay_hud_text.screen_height = kOriginalClientHeight;
+    configure_default_gameplay_hud_text_callbacks(g_runtime.gameplay_hud_text);
+    sync_default_gameplay_hud_alert_markers();
+    g_runtime.gameplay_hud_text.alert_markers =
+        &g_runtime.gameplay_hud_alert_markers;
+    context.hud = &g_runtime.gameplay_hud_text;
+    context.fog = &g_runtime.gameplay_fog_context;
+    context.render_command_queue->callbacks.default_dispatch =
+        NoOpQueuedRenderCommand;
+    context.render_command_queue->callbacks.dispatch_by_class[0] =
+        NoOpQueuedRenderCommand;
+    context.render_command_queue->callbacks.dispatch_by_class[1] =
+        DispatchQueuedUnitEffectRenderCommand;
+    context.render_command_queue->callbacks.dispatch_by_class[2] =
+        DrawQueuedTerrainTileRenderCommand;
+    context.render_command_queue->callbacks.dispatch_by_class[3] =
+        DispatchQueuedUnitRenderByTypeCommand;
+    context.render_command_queue->callbacks.dispatch_by_class[4] =
+        DrawQueuedTerrainDecorationRenderCommand;
+    context.render_command_queue->callbacks.dispatch_by_class[5] =
+        DispatchQueuedUnitRenderByTypeCommand;
+    context.render_command_queue->callbacks.dispatch_by_class[6] =
+        DispatchQueuedUnitRenderByTypeCommand;
+    context.render_command_queue->callbacks.dispatch_by_class[7] =
+        DispatchQueuedUnitEffectRenderCommand;
+    context.render_command_queue->callbacks.dispatch_by_class[8] =
+        DispatchQueuedUnitRenderByTypeCommand;
+    context.render_command_queue->callbacks.dispatch_by_class[9] =
+        DispatchQueuedUnitEffectRenderCommand;
+    context.render_command_queue->callbacks.dispatch_by_class[10] =
+        DrawQueuedUnitRenderCommand;
+    for (std::size_t class_id = 11;
+         class_id < context.render_command_queue->callbacks.dispatch_by_class.size();
+         ++class_id) {
+        context.render_command_queue->callbacks.dispatch_by_class[class_id] =
+            NoOpQueuedRenderCommand;
+    }
+    context.callbacks.prepare_visible_runtime_resources =
+        default_gameplay_frame_prepare_visible_runtime_resources;
+    context.callbacks.draw_terrain =
+        default_gameplay_frame_draw_terrain;
+    context.callbacks.mirror_visible_map_effects =
+        default_gameplay_frame_mirror_visible_map_effects;
+    context.callbacks.draw_terrain_decorations =
+        default_gameplay_frame_draw_terrain_decorations;
+    context.callbacks.draw_map_brushes =
+        default_gameplay_frame_draw_map_brushes;
+    context.callbacks.draw_first_overlay =
+        default_gameplay_frame_draw_selection_overlay;
+    context.callbacks.draw_second_overlay = default_gameplay_frame_draw_hud_pulse;
+    context.callbacks.draw_third_overlay =
+        default_gameplay_frame_draw_world_ui_overlay;
+    context.callbacks.draw_system_hud = default_gameplay_frame_noop;
+    context.callbacks.draw_resource_hud =
+        default_gameplay_frame_draw_player_resource_hud;
+    context.callbacks.publish_present_flag =
+        default_gameplay_frame_render_scheduled_tooltip;
+    context.callbacks.draw_ui_overlay = default_gameplay_frame_draw_active_modal;
+    context.callbacks.show_pause_overlay = default_gameplay_frame_show_pause_overlay;
+    context.callbacks.present_cursor = default_gameplay_frame_present_cursor;
+
+#ifdef _WIN32
+    if (g_runtime.directx_initialized) {
+        SpriteRenderTarget target{};
+        const HRESULT lock_result = LockBackBufferSpriteRenderTarget(target);
+        if (SUCCEEDED(lock_result)) {
+            const SpriteRenderTarget previous_sprite_target =
+                sprite_render_state().target;
+            const bool previous_sprite_active = sprite_render_state().active;
+            GameplayFogRenderTarget previous_fog_target{};
+            GameplayFogRenderMetrics previous_fog_metrics{};
+            if (context.fog != nullptr) {
+                previous_fog_target = context.fog->target;
+                previous_fog_metrics = context.fog->metrics;
+            }
+            BindGameplayRenderTarget(context, target);
+            g_runtime.gameplay_hud_text.screen_width = target.width;
+            g_runtime.gameplay_hud_text.screen_height = target.height;
+
+            context.callbacks.present_cursor = nullptr;
+            RenderGameplayFrameComposite(context);
+            if (previous_sprite_active) {
+                SetSpriteRenderTarget(previous_sprite_target.pixels,
+                    previous_sprite_target.width, previous_sprite_target.height,
+                    previous_sprite_target.stride_words);
+            }
+            else {
+                ClearSpriteRenderTarget();
+            }
+            if (context.fog != nullptr) {
+                context.fog->target = previous_fog_target;
+                context.fog->metrics = previous_fog_metrics;
+            }
+            UnlockBackBufferSpriteRenderTarget();
+            default_gameplay_frame_present_cursor(context);
+            return;
+        }
+    }
+#endif
+
+    RenderGameplayFrameComposite(context);
+}
+
+void default_gameplay_loop_end_frame_phase(GameplayLoopState&) {
+    YieldBackgroundWorkerThreadSlice();
+}
+
+void default_gameplay_loop_restore_render_surfaces(GameplayLoopState&) {
+    if (g_runtime.directx_initialized) {
+        PresentBackBufferToPrimary();
+    }
+}
+
+void install_default_gameplay_loop_callbacks(GameplayLoopState& state) {
+    if (state.callbacks.initialize_worker_runtime == nullptr) {
+        state.callbacks.initialize_worker_runtime =
+            default_gameplay_loop_initialize_worker_runtime;
+    }
+    if (state.callbacks.shutdown_runtime_phase == nullptr) {
+        state.callbacks.shutdown_runtime_phase =
+            default_gameplay_loop_shutdown_runtime_phase;
+    }
+    if (state.callbacks.release_worker_runtime == nullptr) {
+        state.callbacks.release_worker_runtime =
+            default_gameplay_loop_release_worker_runtime;
+    }
+    if (state.callbacks.finish_worker_exit == nullptr) {
+        state.callbacks.finish_worker_exit =
+            default_gameplay_loop_finish_worker_exit;
+    }
+    if (state.callbacks.initialize_session_resources == nullptr) {
+        state.callbacks.initialize_session_resources =
+            default_gameplay_loop_initialize_session_resources;
+    }
+    if (state.callbacks.enter_session_mode == nullptr) {
+        state.callbacks.enter_session_mode =
+            default_gameplay_loop_enter_session_mode;
+    }
+    if (state.callbacks.read_tick_ms == nullptr) {
+        state.callbacks.read_tick_ms = default_gameplay_loop_read_tick_ms;
+    }
+    if (state.callbacks.sync_replay_direct_music == nullptr) {
+        state.callbacks.sync_replay_direct_music =
+            default_gameplay_loop_sync_replay_direct_music;
+    }
+    if (state.callbacks.external_turn_wait == nullptr) {
+        state.callbacks.external_turn_wait =
+            default_gameplay_loop_external_turn_wait;
+    }
+    if (state.callbacks.frame_gate == nullptr) {
+        state.callbacks.frame_gate = default_gameplay_loop_frame_gate;
+    }
+    if (state.callbacks.try_restart_session == nullptr) {
+        state.callbacks.try_restart_session =
+            default_gameplay_loop_try_restart_session;
+    }
+    if (state.callbacks.catchup_mode_changed == nullptr) {
+        state.callbacks.catchup_mode_changed =
+            default_gameplay_loop_publish_catchup_mode;
+    }
+    if (state.callbacks.reset_catchup_status_message == nullptr) {
+        state.callbacks.reset_catchup_status_message =
+            default_gameplay_loop_reset_catchup_status_message;
+    }
+    if (state.callbacks.handle_replay_session_leave == nullptr) {
+        state.callbacks.handle_replay_session_leave =
+            default_gameplay_loop_handle_replay_session_leave;
+    }
+    if (state.callbacks.handle_session_abort == nullptr) {
+        state.callbacks.handle_session_abort =
+            default_gameplay_loop_handle_session_abort;
+    }
+    if (state.callbacks.handle_post_victory_loop == nullptr) {
+        state.callbacks.handle_post_victory_loop =
+            default_gameplay_loop_handle_post_victory_loop;
+    }
+    if (state.callbacks.leave_session_cleanup == nullptr) {
+        state.callbacks.leave_session_cleanup =
+            default_gameplay_loop_leave_session_cleanup;
+    }
+    if (state.callbacks.handle_restart_request == nullptr) {
+        state.callbacks.handle_restart_request =
+            default_gameplay_loop_handle_restart_request;
+    }
+    if (state.callbacks.pre_update_phase == nullptr) {
+        state.callbacks.pre_update_phase = default_gameplay_loop_pre_update_phase;
+    }
+    if (state.callbacks.present_phase == nullptr) {
+        state.callbacks.present_phase = default_gameplay_loop_present_phase;
+    }
+    if (state.callbacks.end_frame_phase == nullptr) {
+        state.callbacks.end_frame_phase = default_gameplay_loop_end_frame_phase;
+    }
+    if (state.callbacks.restore_render_surfaces == nullptr) {
+        state.callbacks.restore_render_surfaces =
+            default_gameplay_loop_restore_render_surfaces;
+    }
+
+    if (state.callbacks.simulation_phases[0] == nullptr) {
+        state.callbacks.simulation_phases[0] = default_gameplay_loop_simulation_phase<0>;
+    }
+    if (state.callbacks.simulation_phases[1] == nullptr) {
+        state.callbacks.simulation_phases[1] = default_gameplay_loop_simulation_phase<1>;
+    }
+    if (state.callbacks.simulation_phases[2] == nullptr) {
+        state.callbacks.simulation_phases[2] = default_gameplay_loop_simulation_phase<2>;
+    }
+    if (state.callbacks.simulation_phases[3] == nullptr) {
+        state.callbacks.simulation_phases[3] = default_gameplay_loop_simulation_phase<3>;
+    }
+    if (state.callbacks.simulation_phases[4] == nullptr) {
+        state.callbacks.simulation_phases[4] = default_gameplay_loop_simulation_phase<4>;
+    }
+    if (state.callbacks.simulation_phases[5] == nullptr) {
+        state.callbacks.simulation_phases[5] = default_gameplay_loop_simulation_phase<5>;
+    }
+    if (state.callbacks.simulation_phases[6] == nullptr) {
+        state.callbacks.simulation_phases[6] = default_gameplay_loop_simulation_phase<6>;
+    }
+    if (state.callbacks.simulation_phases[7] == nullptr) {
+        state.callbacks.simulation_phases[7] = default_gameplay_loop_simulation_phase<7>;
+    }
+    if (state.callbacks.simulation_phases[8] == nullptr) {
+        state.callbacks.simulation_phases[8] = default_gameplay_loop_simulation_phase<8>;
+    }
+    if (state.callbacks.simulation_phases[9] == nullptr) {
+        state.callbacks.simulation_phases[9] = default_gameplay_loop_simulation_phase<9>;
+    }
+    if (state.callbacks.simulation_phases[10] == nullptr) {
+        state.callbacks.simulation_phases[10] = default_gameplay_loop_simulation_phase<10>;
+    }
+    if (state.callbacks.simulation_phases[11] == nullptr) {
+        state.callbacks.simulation_phases[11] = default_gameplay_loop_simulation_phase<11>;
+    }
+    if (state.callbacks.simulation_phases[12] == nullptr) {
+        state.callbacks.simulation_phases[12] = default_gameplay_loop_simulation_phase<12>;
+    }
+    if (state.callbacks.simulation_phases[13] == nullptr) {
+        state.callbacks.simulation_phases[13] = default_gameplay_loop_simulation_phase<13>;
+    }
+    if (state.callbacks.simulation_phases[14] == nullptr) {
+        state.callbacks.simulation_phases[14] = default_gameplay_loop_simulation_phase<14>;
+    }
+    if (state.callbacks.simulation_phases[15] == nullptr) {
+        state.callbacks.simulation_phases[15] = default_gameplay_loop_simulation_phase<15>;
+    }
+    if (state.callbacks.simulation_phases[16] == nullptr) {
+        state.callbacks.simulation_phases[16] = default_gameplay_loop_simulation_phase<16>;
+    }
+}
+
+void install_default_gameplay_session_flow_callbacks(GameplaySessionFlowState& state) {
+    state.callbacks.reset_input = default_gameplay_flow_reset_input;
+    state.callbacks.set_cursor = default_gameplay_flow_set_cursor;
+    state.callbacks.hide_cursor = default_gameplay_flow_hide_cursor;
+    state.callbacks.show_cursor = default_gameplay_flow_show_cursor;
+    state.callbacks.frame_boundary = default_gameplay_flow_frame_boundary;
+    state.callbacks.send_p2p_game_flow_modal =
+        default_gameplay_flow_send_p2p_game_flow_modal;
+    state.callbacks.write_p2p_result_file =
+        default_gameplay_flow_write_p2p_result_file;
+    state.callbacks.configure_display = default_gameplay_flow_configure_display;
+    state.callbacks.import_session_bundle = default_gameplay_flow_import_session_bundle;
+    state.callbacks.start_session_from_slots =
+        default_gameplay_flow_start_session_from_slots;
+    state.callbacks.pre_session_runtime = default_gameplay_flow_pre_session_runtime;
+    state.callbacks.post_session_runtime =
+        default_gameplay_flow_post_session_runtime;
+    state.callbacks.enter_session_ui = default_gameplay_flow_enter_session_ui;
+    state.callbacks.process_session_loop = default_gameplay_flow_process_session_loop;
+    state.callbacks.cleanup_after_close = default_gameplay_flow_cleanup_after_close;
+    state.callbacks.send_main_close = default_gameplay_flow_send_main_close;
+    state.callbacks.final_worker_cleanup = default_gameplay_flow_final_worker_cleanup;
+    state.callbacks.release_loaded_resources =
+        default_gameplay_flow_release_loaded_resources;
+    state.callbacks.immediate_dialog_sound =
+        default_gameplay_flow_immediate_dialog_sound;
+    state.callbacks.shutdown_primary_music_policy =
+        default_gameplay_flow_shutdown_primary_music_policy;
+    state.callbacks.set_primary_music_policy_mode =
+        default_gameplay_flow_set_primary_music_policy_mode;
+}
+
+void prepare_default_gameplay_session_state(GameplaySessionFlowState& state) {
+    state = GameplaySessionFlowState{};
+    install_default_gameplay_session_flow_callbacks(state);
+    state.modal_result = GameplayModalResult::ContinueNetwork;
+    state.p2p_ready = 1;
+    state.generic_ai_profile_mode = 1;
+    state.setup_mode_flag = 1;
+    state.screen_width = kOriginalClientWidth;
+    state.screen_height = kOriginalClientHeight;
+
+    for (std::size_t index = 0; index < state.save_slots.size(); ++index) {
+        char path[MAX_PATH]{};
+        std::snprintf(path, sizeof(path), "Save\\Jw2_%02zu.sav", index + 1);
+        state.save_slots[index].path = path;
+    }
+}
+
+void run_default_gameplay_session_transition(HWND owner, u32 mode) {
+    g_runtime.gameplay_transition_mode = mode;
+    g_runtime.gameplay_transition_active = true;
+    g_runtime.gameplay_session_loop_reached = false;
+
+    GameplaySessionFlowState& state = g_runtime.gameplay_session_flow;
+    prepare_default_gameplay_session_state(state);
+
+    if (!g_runtime.directx_initialized) {
+        if (owner != nullptr && IsWindow(owner)) {
+            PostMessageA(owner, WM_USER + 3, 0,
+                reinterpret_cast<LPARAM>(
+                    "Gameplay session flow reached, but DirectX is not initialized."));
+        }
+        g_runtime.gameplay_transition_active = false;
+        resume_worker_after_modal_action();
+        return;
+    }
+
+    char debug_text[256]{};
+    std::snprintf(debug_text, sizeof(debug_text),
+        "Entering reconstructed GameplaySessionFlow for %s transition.\n",
+        gameplay_transition_mode_label(mode));
+    OutputDebugStringA(debug_text);
+
+    SetActiveNetworkTransportMode(static_cast<i32>(mode));
+    ConfigureDirectPlayMode6WindowDispatch(nullptr, false);
+    SetDirectPlayMode7DispatchEnabled(false);
+    ConfigureDirectPlayMode7WindowDispatch(nullptr);
+    SetDirectPlayMessageDispatchMode(1);
+
+    RunP2PGameplaySessionAfterModal(state);
+    SetDirectPlayMessageDispatchMode(0);
+
+    char status_text[384]{};
+    std::snprintf(status_text, sizeof(status_text),
+        "%s gameplay transition returned from the reconstructed session flow.\n",
+        gameplay_transition_mode_label(mode));
+    OutputDebugStringA(status_text);
+    g_runtime.gameplay_transition_active = false;
+    resume_worker_after_modal_action();
+}
+
+void queue_default_gameplay_session_transition(HWND owner, u32 mode) {
+    g_runtime.gameplay_transition_owner = owner;
+    g_runtime.gameplay_transition_mode = mode;
+    g_runtime.gameplay_transition_pending = true;
+    g_runtime.gameplay_session_flow.modal_result =
+        GameplayModalResult::ContinueNetwork;
+    g_runtime.gameplay_session_flow.worker_modal_pending = 0;
+    resume_worker_after_modal_action();
+}
+
+void write_default_p2p_command_line_result(P2PGameEndReason end_reason) {
+    P2PGameResultFileInput input{};
+    P2PNetworkLaunchParameters& parameters = p2p_network_launch_parameters();
+    const char* player_name = parameters.player_name[0] != '\0' ?
+        parameters.player_name.data() : "Player";
+
+    input.client_player_name = player_name;
+    input.version_packed = LoadTrcRecord9Value();
+    input.local_player_slot = 0;
+    input.active_player_count = 1;
+    input.connected_player_count = 1;
+    copy_result_text(input.players[0].result_name, player_name);
+    copy_result_text(input.players[0].network_name, player_name);
+    input.players[0].selected_tribe = 0;
+    input.players[0].faction = 0;
+    input.players[0].ally_mask = 1;
+    input.players[0].playing = false;
+
+    WriteP2PGameResultFile(input, P2PGameWinResult::Draw, end_reason);
+}
+
+void resume_default_p2p_command_line_modal(GameplayModalResult result) {
+    g_runtime.gameplay_session_flow.modal_result = result;
+    g_runtime.gameplay_session_flow.worker_modal_pending = 0;
+    resume_worker_after_modal_action();
+}
+
+void default_p2p_handle_prompt_result(P2PLobbyState&, UINT) {
+    if (!p2p_network_launch_parameters().valid) {
+        return;
+    }
+
+    resume_default_p2p_command_line_modal(GameplayModalResult::Cancel);
+    write_default_p2p_command_line_result(P2PGameEndReason::ConnectCancelFailClient);
+}
+
+void prepare_default_p2p_command_line_connect_state() {
+    ConnectFrontendState& connect = connect_frontend_state();
+    connect.async_context = &g_runtime.async_com;
+    connect.async_tcp_socket = &FrontendAsyncTcpSocket0();
+    LoadConnectFrontendConfiguration(connect);
+    ResetConnectFrontendPlayerSlots(connect);
+    InitializeConnectFrontendHandshakeHeader(
+        connect, connect.configuration.session_version);
+}
+
+void open_default_p2p_command_line_join(HWND window, HINSTANCE instance,
+    const P2PNetworkLaunchParameters& launch) {
+    P2PLobbyState& lobby = p2p_lobby_state();
+    destroy_existing_window(lobby.window);
+    configure_p2p_callbacks(lobby);
+    if (!CreateP2PLobbyWindow(lobby, window, instance, 0)) {
+        resume_default_p2p_command_line_modal(GameplayModalResult::Cancel);
+        return;
+    }
+    activate_frontend_state(lobby);
+
+    const HRESULT result = StartP2PLobbyJoinAttempt(lobby,
+        startup_message_row(97, "Game"), launch.remote_address.data(),
+        lobby.default_tcp_port);
+    if (result < 0) {
+        ShowOnlineModalPrompt1(online_modal_prompt_state(), lobby.window,
+            startup_message_row(34, "A TCP/IP initialization error occurred."),
+            RGB(250, 250, 250));
+    }
+}
+
+void open_default_p2p_command_line_host(HWND window, HINSTANCE instance,
+    const P2PNetworkLaunchParameters& launch) {
+    CreateGameState& create = create_game_state();
+    destroy_existing_window(create.window);
+    configure_create_game_callbacks(create);
+    create.main_window = window;
+    create.parent_window = window;
+    create.instance = instance;
+    create.return_context = 0;
+    create.mode = 1;
+    create.game_type = 0;
+    create.screen_size = 0;
+    if (!LoadWizardSessionArchiveDescriptor(create.selected_session,
+            launch.map_path.data())) {
+        write_default_p2p_command_line_result(P2PGameEndReason::MapFileError);
+        char text[512]{};
+        std::snprintf(text, sizeof(text), "Map file '%s' is Error !",
+            launch.map_path.data());
+        ShowOnlineModalPrompt1(online_modal_prompt_state(), window, text,
+            RGB(250, 250, 250));
+        resume_default_p2p_command_line_modal(GameplayModalResult::Cancel);
+        return;
+    }
+
+    char game_name[kCreateGameNameBytes]{};
+    std::snprintf(game_name, sizeof(game_name), "%s's Game",
+        launch.player_name[0] != '\0' ? launch.player_name.data() : "Player");
+    BuildCreateGameSessionSeedFromFields(create, game_name, launch.password.data());
+
+    char host_name[0x100]{};
+    char address[0x100]{};
+    if (!ResolveLocalHostDisplayAddress(host_name, sizeof(host_name),
+            address, sizeof(address))) {
+        write_default_p2p_command_line_result(P2PGameEndReason::NetworkError);
+        char text[256]{};
+        std::snprintf(text, sizeof(text),
+            startup_message_row(90,
+                "Unable to initialize P2P host address (%d)."), 0);
+        ShowOnlineModalPrompt1(online_modal_prompt_state(), window, text,
+            RGB(250, 250, 250));
+        resume_default_p2p_command_line_modal(GameplayModalResult::Cancel);
+        return;
+    }
+
+    LaunchCreateGameLinkLobby(create);
+}
+
+void open_default_p2p_command_line_game_flow(HWND window, HINSTANCE instance) {
+    P2PNetworkLaunchParameters& launch = p2p_network_launch_parameters();
+    prepare_default_p2p_command_line_connect_state();
+    SetRankerMainWindowFrontendMode(1);
+    SetActiveNetworkTransportMode(1);
+    g_runtime.link_lobby_start_parameters_pending = false;
+
+    if (launch.uses_map_file) {
+        open_default_p2p_command_line_host(window, instance, launch);
+        return;
+    }
+    open_default_p2p_command_line_join(window, instance, launch);
+}
+
+void default_open_multiplayer_frontend(HWND window, HINSTANCE instance, u32 mode,
+    void*) {
+    switch (mode) {
+    case 1:
+        open_p2p_lobby_window(window, instance, 0);
+        break;
+    case 2:
+        open_free_server_lobby_window(window, instance, 0);
+        break;
+    case 3:
+        open_ipx_frontend_window(window, instance, 0);
+        break;
+    case 0:
+    default:
+        open_connect_frontend_window(window, instance, 0);
+        break;
+    }
+}
+
+void default_open_game_frontend_modal(HWND window, HINSTANCE instance, u32 action,
+    void*) {
+    if (action == 0) {
+        FrontendCreateGameRouteState& route = frontend_create_game_route_state();
+        OpenCreateGameWindowRoute(route);
+        int mode = static_cast<int>(g_runtime.frontend_mode);
+        if (route.network_ai_profile_override) {
+            mode = route.route_mode != 0 ? static_cast<int>(route.route_mode) : 6;
+            SetRankerMainWindowNetworkAiProfileOverride(true);
+            SetRankerMainWindowFrontendMode(static_cast<u32>(mode));
+        }
+        open_create_game_window(window, instance, 0, mode);
+        return;
+    }
+
+    if (action == 2) {
+        EnterHostedOrJoinedP2PGameFlow(window, instance);
+    }
+}
+
+void default_open_replay_save(HWND window, HINSTANCE instance, void*) {
+    ReplayDialogState& state = replay_save_dialog_state();
+    if (OpenReplaySaveDialog(state, window, instance)) {
+        activate_frontend_state(state);
+    }
+}
+
+void default_open_replay_load(HWND window, HINSTANCE instance, void*) {
+    ReplayDialogState& state = replay_load_dialog_state();
+    if (OpenReplayLoadDialog(state, window, instance)) {
+        activate_frontend_state(state);
+    }
+}
+
+void default_suspend_worker_thread(void*) {
+    if (g_runtime.worker_thread == nullptr ||
+        g_runtime.worker_thread_id == GetCurrentThreadId()) {
+        return;
+    }
+    SuspendThread(g_runtime.worker_thread);
+}
+
+void default_resume_worker_thread(void*) {
+    if (g_runtime.worker_thread == nullptr ||
+        g_runtime.worker_thread_id == GetCurrentThreadId()) {
+        return;
+    }
+    ResumeThread(g_runtime.worker_thread);
+}
+
+void install_default_main_window_callbacks() {
+    SetDefaultSetupDataWriteFailureCallback(default_setup_data_write_failed, nullptr);
+
+    if (g_runtime.callbacks.suspend_worker_thread == nullptr) {
+        g_runtime.callbacks.suspend_worker_thread = default_suspend_worker_thread;
+    }
+    if (g_runtime.callbacks.resume_worker_thread == nullptr) {
+        g_runtime.callbacks.resume_worker_thread = default_resume_worker_thread;
+    }
+    if (g_runtime.callbacks.open_multiplayer_frontend == nullptr) {
+        g_runtime.callbacks.open_multiplayer_frontend = default_open_multiplayer_frontend;
+    }
+    if (g_runtime.callbacks.open_game_frontend_modal == nullptr) {
+        g_runtime.callbacks.open_game_frontend_modal = default_open_game_frontend_modal;
+    }
+    if (g_runtime.callbacks.open_replay_save_dialog == nullptr) {
+        g_runtime.callbacks.open_replay_save_dialog = default_open_replay_save;
+    }
+    if (g_runtime.callbacks.open_replay_load_dialog == nullptr) {
+        g_runtime.callbacks.open_replay_load_dialog = default_open_replay_load;
+    }
+}
+
+void open_multiplayer_frontend(HWND window) {
+    if (g_runtime.callbacks.open_multiplayer_frontend != nullptr) {
+        g_runtime.callbacks.open_multiplayer_frontend(window, g_runtime.instance,
+            g_runtime.frontend_mode, g_runtime.callbacks.user_data);
+    }
+}
+
+void open_game_frontend_modal(HWND window, u32 action);
+void open_replay_load_dialog(HWND window);
+bool background_test_mode_enabled();
+
+constexpr std::size_t kTitleMenuScreenSlot = 14;
+constexpr u32 kTitleMenuRecord = 94;
+constexpr u32 kTitleMenuSingleEntry = 1;
+constexpr u32 kTitleMenuMultiEntry = 2;
+constexpr u32 kTitleMenuReplayEntry = 3;
+constexpr u32 kTitleMenuCreditEntry = 4;
+constexpr u32 kTitleMenuQuitEntry = 5;
+constexpr u32 kTitleMenuFirstButtonEntry = kTitleMenuSingleEntry;
+constexpr u32 kTitleMenuLastButtonEntry = kTitleMenuQuitEntry;
+constexpr u32 kInvalidTitleMenuEntry = 0xffffffffu;
+
+UiScreenDefinition& title_main_menu_screen() {
+    return GlobalUiScreenSlot(kTitleMenuScreenSlot);
+}
+
+void close_title_main_menu_frontend() {
+    g_runtime.title_menu_active = false;
+    UiScreenDefinition& screen = title_main_menu_screen();
+    HandleUiScreenDefinitionResourceRelease(screen);
+}
+
+bool draw_title_main_menu_to_backbuffer(UiScreenDefinition& screen, bool* draw_result) {
+    SpriteRenderTarget target{};
+    const HRESULT lock_result = LockBackBufferSpriteRenderTarget(target);
+    if (FAILED(lock_result)) {
+        if (draw_result != nullptr) {
+            *draw_result = false;
+        }
+        return false;
+    }
+
+    const SpriteRenderTarget previous_sprite_target = sprite_render_state().target;
+    const bool previous_sprite_active = sprite_render_state().active;
+    SetSpriteRenderTarget(target.pixels, target.width, target.height, target.stride_words);
+    const bool draw_ok = HandleUiScreenDefinitionDraw(screen);
+    if (previous_sprite_active) {
+        SetSpriteRenderTarget(previous_sprite_target.pixels,
+            previous_sprite_target.width, previous_sprite_target.height,
+            previous_sprite_target.stride_words);
+    }
+    else {
+        ClearSpriteRenderTarget();
+    }
+
+    const HRESULT unlock_result = UnlockBackBufferSpriteRenderTarget();
+    if (draw_result != nullptr) {
+        *draw_result = draw_ok;
+    }
+    if (FAILED(unlock_result)) {
+        return false;
+    }
+    if (!draw_ok && screen.skipped_bink_entries == 0) {
+        return false;
+    }
+    return SUCCEEDED(PresentBackBufferToPrimary());
+}
+
+bool redraw_active_title_main_menu() {
+    if (!g_runtime.title_menu_active) {
+        return false;
+    }
+
+    bool draw_ok = false;
+    UiScreenDefinition& screen = title_main_menu_screen();
+    const bool presented = draw_title_main_menu_to_backbuffer(screen, &draw_ok);
+    if (!presented) {
+        append_startup_log("title redraw failed draw_ok=%s skipped_bink=%lu",
+            draw_ok ? "yes" : "no",
+            static_cast<unsigned long>(screen.skipped_bink_entries));
+    }
+    return presented;
+}
+
+bool open_title_main_menu_frontend(HWND window) {
+    g_runtime.title_menu_active = false;
+    UiScreenDefinition& screen = title_main_menu_screen();
+    HandleUiScreenDefinitionReleaseWrapper(screen);
+    InitializeUiScreenDefinition(screen);
+    if (!HandleUiScreenDefinitionTrcImport(screen, "JW2_02.TRC", kTitleMenuRecord)) {
+        append_startup_log("title menu import failed");
+        return false;
+    }
+
+    g_runtime.frontend_route_window = window;
+    g_runtime.suppress_paint = false;
+
+    bool draw_ok = false;
+    const bool presented = draw_title_main_menu_to_backbuffer(screen, &draw_ok);
+    append_startup_log("title menu open draw_ok=%s skipped_bink=%lu presented=%s resource_mark=%lu",
+        draw_ok ? "yes" : "no",
+        static_cast<unsigned long>(screen.skipped_bink_entries),
+        presented ? "yes" : "no",
+        static_cast<unsigned long>(screen.resource_mark));
+    g_runtime.title_menu_active = presented;
+    return presented;
+}
+
+i32 signed_lparam_coord(LPARAM value, u32 shift) {
+    return static_cast<i16>((static_cast<u32>(value) >> shift) & 0xffffu);
+}
+
+bool title_menu_entry_contains_point(const UiScreenEntry& entry, i32 x, i32 y) {
+    return UiScreenEntryI32(entry, 0x20) <= x && x <= UiScreenEntryI32(entry, 0x28) &&
+        UiScreenEntryI32(entry, 0x24) <= y && y <= UiScreenEntryI32(entry, 0x2c);
+}
+
+bool title_menu_button_entry_valid(const UiScreenDefinition& screen, u32 entry_index) {
+    if (entry_index < kTitleMenuFirstButtonEntry ||
+        entry_index > kTitleMenuLastButtonEntry ||
+        entry_index >= screen.entries.size()) {
+        return false;
+    }
+    return UiScreenEntryI32(screen.entries[entry_index], 0) != -1;
+}
+
+u32 title_menu_entry_at_point(const UiScreenDefinition& screen, i32 x, i32 y) {
+    for (u32 entry_index = kTitleMenuFirstButtonEntry;
+         entry_index <= kTitleMenuLastButtonEntry;
+         ++entry_index) {
+        if (title_menu_button_entry_valid(screen, entry_index) &&
+            title_menu_entry_contains_point(screen.entries[entry_index], x, y)) {
+            return entry_index;
+        }
+    }
+    return kInvalidTitleMenuEntry;
+}
+
+const char* title_menu_entry_name(u32 entry_index) {
+    switch (entry_index) {
+    case kTitleMenuSingleEntry:
+        return "single";
+    case kTitleMenuMultiEntry:
+        return "multi";
+    case kTitleMenuReplayEntry:
+        return "replay";
+    case kTitleMenuCreditEntry:
+        return "credit";
+    case kTitleMenuQuitEntry:
+        return "quit";
+    default:
+        return "unknown";
+    }
+}
+
+bool read_bink_dll_machine_type(u16& machine) {
+    FILE* file = nullptr;
+#if defined(_MSC_VER)
+    if (fopen_s(&file, "binkw32.dll", "rb") != 0) {
+        file = nullptr;
+    }
+#else
+    file = std::fopen("binkw32.dll", "rb");
+#endif
+    if (file == nullptr) {
+        return false;
+    }
+
+    u8 dos_header[0x40]{};
+    const bool dos_ok = std::fread(dos_header, 1, sizeof(dos_header), file) ==
+        sizeof(dos_header);
+    if (!dos_ok || dos_header[0] != 'M' || dos_header[1] != 'Z') {
+        std::fclose(file);
+        return false;
+    }
+
+    const u32 pe_offset =
+        static_cast<u32>(dos_header[0x3c]) |
+        (static_cast<u32>(dos_header[0x3d]) << 8) |
+        (static_cast<u32>(dos_header[0x3e]) << 16) |
+        (static_cast<u32>(dos_header[0x3f]) << 24);
+    if (std::fseek(file, static_cast<long>(pe_offset), SEEK_SET) != 0) {
+        std::fclose(file);
+        return false;
+    }
+
+    u8 pe_header[6]{};
+    const bool pe_ok = std::fread(pe_header, 1, sizeof(pe_header), file) ==
+        sizeof(pe_header);
+    std::fclose(file);
+    if (!pe_ok || pe_header[0] != 'P' || pe_header[1] != 'E' ||
+        pe_header[2] != 0 || pe_header[3] != 0) {
+        return false;
+    }
+
+    machine = static_cast<u16>(pe_header[4] | (static_cast<u16>(pe_header[5]) << 8));
+    return true;
+}
+
+bool title_credit_bink_runtime_compatible() {
+    u16 machine = 0;
+    if (!read_bink_dll_machine_type(machine)) {
+        append_startup_log("title credit bink skipped missing-or-invalid-dll");
+        return false;
+    }
+
+#if defined(_WIN64)
+    const bool compatible = machine == IMAGE_FILE_MACHINE_AMD64;
+#else
+    const bool compatible = machine == IMAGE_FILE_MACHINE_I386;
+#endif
+    if (!compatible) {
+        append_startup_log("title credit bink skipped incompatible-dll machine=0x%04x",
+            static_cast<unsigned>(machine));
+    }
+    return compatible;
+}
+
+i32 title_menu_button_state_for_pointer(const UiScreenDefinition& screen, u32 entry_index,
+    u32 hover_entry, i32 x, i32 y) {
+    if (!title_menu_button_entry_valid(screen, entry_index)) {
+        return -1;
+    }
+    if (screen.selected_index == static_cast<i32>(entry_index)) {
+        return title_menu_entry_contains_point(screen.entries[entry_index], x, y) ? 1 : 0;
+    }
+    return hover_entry == entry_index ? 2 : 0;
+}
+
+bool set_title_menu_button_state(UiScreenDefinition& screen, u32 entry_index, i32 state) {
+    if (!title_menu_button_entry_valid(screen, entry_index)) {
+        return false;
+    }
+    UiScreenEntry& entry = screen.entries[entry_index];
+    if (UiScreenEntryI32(entry, 0) == state) {
+        return false;
+    }
+    SetUiScreenEntryI32(entry, 0, state);
+    return true;
+}
+
+bool update_title_menu_pointer_states(UiScreenDefinition& screen, i32 x, i32 y) {
+    const u32 hover_entry = title_menu_entry_at_point(screen, x, y);
+    bool changed = false;
+    for (u32 entry_index = kTitleMenuFirstButtonEntry;
+         entry_index <= kTitleMenuLastButtonEntry;
+         ++entry_index) {
+        const i32 state = title_menu_button_state_for_pointer(
+            screen, entry_index, hover_entry, x, y);
+        if (state >= 0) {
+            changed = set_title_menu_button_state(screen, entry_index, state) || changed;
+        }
+    }
+    return changed;
+}
+
+bool route_title_main_menu_entry(HWND window, u32 entry_index) {
+    append_startup_log("title activate %s entry=%lu",
+        title_menu_entry_name(entry_index), static_cast<unsigned long>(entry_index));
+
+    switch (entry_index) {
+    case kTitleMenuSingleEntry:
+        close_title_main_menu_frontend();
+        pause_worker_for_modal_action();
+        open_game_frontend_modal(window, 0);
+        return true;
+    case kTitleMenuMultiEntry:
+        close_title_main_menu_frontend();
+        SetRankerMainWindowFrontendMode(0);
+        pause_worker_for_modal_action();
+        OpenMultiplayerFrontendForActiveMode(window);
+        return true;
+    case kTitleMenuReplayEntry:
+        close_title_main_menu_frontend();
+        pause_worker_for_modal_action();
+        open_replay_load_dialog(window);
+        return true;
+    case kTitleMenuCreditEntry:
+        close_title_main_menu_frontend();
+        pause_worker_for_modal_action();
+        {
+            const bool bink_compatible = title_credit_bink_runtime_compatible();
+            if (bink_compatible) {
+                SetPrimaryMilesMusicPolicyMode(1);
+            }
+            const bool played_credit = bink_compatible &&
+                PlayBinkTrcRecord("JW2_08.TRC", 3, -1, -1);
+            if (played_credit) {
+                HandleBackBufferFadeToBlack();
+                HandleDirectDrawFrameBoundary();
+            }
+            else if (bink_video_state().payload_bytes != 0) {
+                const BinkVideoRuntimeState& bink = bink_video_state();
+                append_startup_log(
+                    "title credit bink skipped api=%s failed=%s payload=%lu frames=%lu",
+                    bink.bink_api_ready ? "yes" : "no",
+                    bink.failed ? "yes" : "no",
+                    static_cast<unsigned long>(bink.payload_bytes),
+                    static_cast<unsigned long>(bink.frame_count));
+            }
+        }
+        resume_worker_after_modal_action();
+        open_title_main_menu_frontend(window);
+        return true;
+    case kTitleMenuQuitEntry:
+        close_title_main_menu_frontend();
+        PostMessageA(window, WM_CLOSE, 0, 0);
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool handle_title_main_menu_mouse_move(HWND, LPARAM lparam) {
+    UiScreenDefinition& screen = title_main_menu_screen();
+    const i32 x = signed_lparam_coord(lparam, 0);
+    const i32 y = signed_lparam_coord(lparam, 16);
+    if (update_title_menu_pointer_states(screen, x, y)) {
+        redraw_active_title_main_menu();
+    }
+    return true;
+}
+
+bool handle_title_main_menu_mouse_down(HWND window, LPARAM lparam) {
+    UiScreenDefinition& screen = title_main_menu_screen();
+    const i32 x = signed_lparam_coord(lparam, 0);
+    const i32 y = signed_lparam_coord(lparam, 16);
+    const u32 entry_index = title_menu_entry_at_point(screen, x, y);
+    screen.selected_index = entry_index != kInvalidTitleMenuEntry ?
+        static_cast<i32>(entry_index) : -1;
+
+    bool changed = update_title_menu_pointer_states(screen, x, y);
+    if (entry_index != kInvalidTitleMenuEntry) {
+        changed = set_title_menu_button_state(screen, entry_index, 1) || changed;
+        SetCapture(window);
+        HandleUiScreenStateSound(screen, entry_index);
+        append_startup_log("title press %s entry=%lu x=%ld y=%ld",
+            title_menu_entry_name(entry_index),
+            static_cast<unsigned long>(entry_index),
+            static_cast<long>(x),
+            static_cast<long>(y));
+    }
+    if (changed) {
+        redraw_active_title_main_menu();
+    }
+    return true;
+}
+
+bool handle_title_main_menu_mouse_up(HWND window, LPARAM lparam) {
+    UiScreenDefinition& screen = title_main_menu_screen();
+    const i32 x = signed_lparam_coord(lparam, 0);
+    const i32 y = signed_lparam_coord(lparam, 16);
+    const i32 selected_index = screen.selected_index;
+    const u32 release_entry = title_menu_entry_at_point(screen, x, y);
+
+    if (GetCapture() == window) {
+        ReleaseCapture();
+    }
+
+    bool activate = false;
+    u32 activated_entry = kInvalidTitleMenuEntry;
+    if (selected_index >= 0 &&
+        title_menu_button_entry_valid(screen, static_cast<u32>(selected_index))) {
+        UiScreenEntry& selected = screen.entries[static_cast<u32>(selected_index)];
+        SetUiScreenEntryI32(selected, 0x58, 0);
+        HandleUiScreenStateSound(screen, static_cast<u32>(selected_index));
+        activate = release_entry == static_cast<u32>(selected_index) &&
+            UiScreenEntryI32(selected, 0) == 1;
+        activated_entry = static_cast<u32>(selected_index);
+    }
+
+    screen.selected_index = -1;
+    update_title_menu_pointer_states(screen, x, y);
+    redraw_active_title_main_menu();
+
+    append_startup_log("title release selected=%ld release=%lu activate=%s x=%ld y=%ld",
+        static_cast<long>(selected_index),
+        static_cast<unsigned long>(release_entry),
+        activate ? "yes" : "no",
+        static_cast<long>(x),
+        static_cast<long>(y));
+
+    if (activate) {
+        return route_title_main_menu_entry(window, activated_entry);
+    }
+    return true;
+}
+
+u8 title_menu_uppercase_ascii(u32 value) {
+    value &= 0xffu;
+    if ('a' <= value && value <= 'z') {
+        value -= 0x20u;
+    }
+    return static_cast<u8>(value);
+}
+
+u32 title_menu_entry_for_keyboard(const UiScreenDefinition& screen, UINT message,
+    WPARAM wparam, LPARAM lparam) {
+    if (message == WM_KEYDOWN && (static_cast<u32>(lparam) & 0x40000000u) != 0) {
+        return kInvalidTitleMenuEntry;
+    }
+    if (message == WM_KEYDOWN && wparam == VK_ESCAPE) {
+        return kTitleMenuQuitEntry;
+    }
+
+    const u8 accelerator = message == WM_CHAR ?
+        title_menu_uppercase_ascii(static_cast<u32>(wparam)) : 0;
+    const u32 key_code = message == WM_KEYDOWN ? static_cast<u32>(wparam) : 0;
+    for (u32 entry_index = kTitleMenuFirstButtonEntry;
+         entry_index <= kTitleMenuLastButtonEntry;
+         ++entry_index) {
+        if (!title_menu_button_entry_valid(screen, entry_index)) {
+            continue;
+        }
+        const UiScreenEntry& entry = screen.entries[entry_index];
+        const bool accelerator_match =
+            accelerator != 0 &&
+            static_cast<u8>(UiScreenEntryI32(entry, 0x10)) == accelerator;
+        const bool key_match =
+            key_code != 0 &&
+            static_cast<u32>(UiScreenEntryI32(entry, 0x14)) == key_code;
+        if (accelerator_match || key_match) {
+            return entry_index;
+        }
+    }
+    return kInvalidTitleMenuEntry;
+}
+
+bool handle_title_main_menu_keyboard(HWND window, UINT message, WPARAM wparam,
+    LPARAM lparam) {
+    UiScreenDefinition& screen = title_main_menu_screen();
+    const u32 entry_index = title_menu_entry_for_keyboard(screen, message, wparam, lparam);
+    if (entry_index == kInvalidTitleMenuEntry) {
+        return false;
+    }
+
+    for (u32 button = kTitleMenuFirstButtonEntry;
+         button <= kTitleMenuLastButtonEntry;
+         ++button) {
+        set_title_menu_button_state(screen, button, button == entry_index ? 1 : 0);
+    }
+    HandleUiScreenStateSound(screen, entry_index);
+    redraw_active_title_main_menu();
+    return route_title_main_menu_entry(window, entry_index);
+}
+
+bool handle_title_main_menu_input(HWND window, UINT message, WPARAM wparam,
+    LPARAM lparam) {
+    if (!g_runtime.title_menu_active) {
+        return false;
+    }
+
+    switch (message) {
+    case WM_MOUSEMOVE:
+        return handle_title_main_menu_mouse_move(window, lparam);
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONDBLCLK:
+        return handle_title_main_menu_mouse_down(window, lparam);
+    case WM_LBUTTONUP:
+        return handle_title_main_menu_mouse_up(window, lparam);
+    case WM_KEYDOWN:
+    case WM_CHAR:
+        return handle_title_main_menu_keyboard(window, message, wparam, lparam);
+    default:
+        return false;
+    }
+}
+
+void open_game_frontend_modal(HWND window, u32 action) {
+    if (g_runtime.callbacks.open_game_frontend_modal != nullptr) {
+        g_runtime.callbacks.open_game_frontend_modal(window, g_runtime.instance, action,
+            g_runtime.callbacks.user_data);
+    }
+}
+
+void open_replay_save_dialog(HWND window) {
+    if (g_runtime.callbacks.open_replay_save_dialog != nullptr) {
+        g_runtime.callbacks.open_replay_save_dialog(window, g_runtime.instance,
+            g_runtime.callbacks.user_data);
+        return;
+    }
+    OpenReplaySaveDialog(window, g_runtime.instance, g_runtime.callbacks.user_data);
+}
+
+void open_replay_load_dialog(HWND window) {
+    if (g_runtime.callbacks.open_replay_load_dialog != nullptr) {
+        g_runtime.callbacks.open_replay_load_dialog(window, g_runtime.instance,
+            g_runtime.callbacks.user_data);
+        return;
+    }
+    OpenReplayLoadDialog(window, g_runtime.instance, g_runtime.callbacks.user_data);
+}
+
+void start_legacy_udp_mode1_receive_thread() {
+    if (g_runtime.callbacks.start_legacy_udp_mode1_receive_thread != nullptr) {
+        g_runtime.callbacks.start_legacy_udp_mode1_receive_thread(
+            g_runtime.callbacks.user_data);
+    }
+}
+
+bool should_suspend_worker_during_message_wait() {
+    if (background_test_mode_enabled()) {
+        return false;
+    }
+    return !g_runtime.app_active &&
+        g_runtime.message_wait_worker_suspend_enabled &&
+        (!g_runtime.generic_ai_scenario_active ||
+            !g_runtime.generic_ai_profile_mode);
+}
+
+void suspend_worker_for_message_wait() {
+    if (g_runtime.callbacks.suspend_worker_thread != nullptr) {
+        g_runtime.callbacks.suspend_worker_thread(g_runtime.callbacks.user_data);
+    }
+}
+
+void resume_worker_after_message_wait() {
+    if (g_runtime.callbacks.resume_worker_thread != nullptr) {
+        g_runtime.callbacks.resume_worker_thread(g_runtime.callbacks.user_data);
+    }
+}
+
+void winmain_worker_enter_frontend_flow(GameplayLoopState&) {
+    if (g_runtime.main_window != nullptr) {
+        if (g_runtime.p2p_command_line_flow_pending) {
+            PostMessageA(g_runtime.main_window, WM_USER + 8, 0, 2);
+        } else {
+            PostMessageA(g_runtime.main_window, WM_USER + 4, 0, 0);
+        }
+    }
+    while (g_runtime.worker_thread_running) {
+        if (g_runtime.gameplay_transition_pending) {
+            const HWND owner = g_runtime.gameplay_transition_owner;
+            const u32 mode = g_runtime.gameplay_transition_mode;
+            g_runtime.gameplay_transition_pending = false;
+            run_default_gameplay_session_transition(owner, mode);
+        }
+        YieldBackgroundWorkerThreadSlice();
+    }
+}
+
+bool should_emit_generic_ai_profile_message() {
+    return g_runtime.generic_ai_profile_mode &&
+        g_runtime.generic_ai_scenario_active &&
+        (g_runtime.frontend_mode == 0 || g_runtime.frontend_mode == 2);
+}
+
+void route_frontend_network_message(HWND window, WPARAM wparam, LPARAM lparam) {
+    const u32 command = static_cast<u32>(lparam) & 0xffffu;
+    HWND route_window = g_runtime.frontend_route_window;
+    if (route_window == nullptr) {
+        return;
+    }
+
+    if (route_window == g_runtime.main_window) {
+        if (command == 0x20 && should_emit_generic_ai_profile_message() &&
+            g_runtime.callbacks.emit_generic_ai_profile_message != nullptr) {
+            g_runtime.callbacks.emit_generic_ai_profile_message(window, wparam, lparam,
+                g_runtime.callbacks.user_data);
+        }
+        return;
+    }
+
+    if (g_runtime.callbacks.route_frontend_message != nullptr) {
+        g_runtime.callbacks.route_frontend_message(route_window, wparam, lparam,
+            g_runtime.callbacks.user_data);
+        return;
+    }
+
+    PostMessageA(route_window, WM_USER + 0x65, wparam, lparam);
+}
+
+void paint_main_window_black(HWND window) {
+    PAINTSTRUCT paint{};
+    HDC dc = BeginPaint(window, &paint);
+    if (dc != nullptr) {
+        PatBlt(dc, 0, 0, 0x1000, 0x1000, BLACKNESS);
+        EndPaint(window, &paint);
+    }
+}
+
+LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+    if (HandleWindowInputMessage(message, static_cast<u32>(wparam),
+            static_cast<u32>(lparam))) {
+        if (g_runtime.suppress_paint && bink_video_state().active) {
+            CancelBinkVideoPlayback();
+        }
+        if (handle_title_main_menu_input(window, message, wparam, lparam)) {
+            return 0;
+        }
+        return 0;
+    }
+
+    switch (message) {
+    case WM_MOVE:
+    case WM_SIZE:
+        if (g_runtime.app_active && g_runtime.directx_initialized &&
+            g_runtime.windowed_mode) {
+            refresh_window_rects(window);
+        }
+        break;
+    case WM_ACTIVATEAPP:
+        g_runtime.app_active = wparam != 0;
+        if (g_runtime.app_active && g_runtime.directx_initialized &&
+            g_runtime.input_enabled) {
+            SetFocus(window);
+            HandlePrimarySurfaceLostRefresh();
+        }
+        break;
+    case WM_SETCURSOR:
+        SetCursor(nullptr);
+        return TRUE;
+    case WM_GETMINMAXINFO:
+        if (lparam != 0) {
+            auto* minmax = reinterpret_cast<MINMAXINFO*>(lparam);
+            const DirectDrawRuntimeState& draw = direct_draw_state();
+            const int client_width = draw.width != 0 ?
+                static_cast<int>(draw.width) : kOriginalClientWidth;
+            const int client_height = draw.height != 0 ?
+                static_cast<int>(draw.height) : kOriginalClientHeight;
+            const int frame_x = GetSystemMetrics(SM_CXSIZEFRAME);
+            const int frame_y = GetSystemMetrics(SM_CYSIZEFRAME);
+            const int caption_y = GetSystemMetrics(SM_CYCAPTION);
+            minmax->ptMinTrackSize.x = client_width + frame_x * 2;
+            minmax->ptMinTrackSize.y = client_height + frame_y * 2 + caption_y;
+            minmax->ptMaxTrackSize = minmax->ptMinTrackSize;
+            return 0;
+        }
+        break;
+    case WM_IME_COMPOSITION:
+        RecordImeCompositionKeyStatus(wparam, lparam);
+        break;
+    case WM_IME_SETCONTEXT:
+        return 0;
+    case WM_PAINT:
+        if (g_runtime.title_menu_active && g_runtime.directx_initialized) {
+            PAINTSTRUCT paint{};
+            BeginPaint(window, &paint);
+            EndPaint(window, &paint);
+            PresentBackBufferToPrimary();
+            return 0;
+        }
+        if (g_runtime.suppress_paint) {
+            paint_main_window_black(window);
+            return 0;
+        }
+        break;
+    case WM_CLOSE:
+        if (g_runtime.generic_ai_scenario_active &&
+            g_runtime.generic_ai_profile_mode && !g_runtime.app_active) {
+            ShowWindow(window, SW_SHOWNORMAL);
+            UpdateWindow(window);
+            SetFocus(window);
+            return 0;
+        }
+        g_runtime.worker_thread_running = false;
+        gameplay_loop_state().process_shutdown_requested = true;
+        gameplay_loop_state().leave_requested = true;
+        DestroyWindow(window);
+        return 0;
+    case WM_DESTROY:
+        if (window == g_runtime.main_window) {
+            PostQuitMessage(0);
+        }
+        break;
+    case WM_USER + 1:
+    {
+        const char* path = lparam_string_or_default(lparam, "");
+        const char* caption = g_runtime.trc_record_fatal_caption.empty() ?
+            ranker_window_title() : g_runtime.trc_record_fatal_caption.c_str();
+        CloseWindow(window);
+        show_trc_record_fatal_error_box(
+            window, path, static_cast<u32>(wparam), caption);
+        g_runtime.trc_record_fatal_caption.clear();
+        PostMessageA(window, WM_CLOSE, 0, 0);
+        return 0;
+    }
+    case WM_USER + 2:
+    {
+        const char* path = lparam_string_or_default(lparam, "");
+        char text[512]{};
+        std::snprintf(text, sizeof(text), "File = '%s'\n\n%s", path,
+            "Setup data write error. - Check your hard disk space.");
+        CloseWindow(window);
+        MessageBoxA(window, text, ranker_window_title(), MB_OK | MB_ICONWARNING);
+        PostMessageA(window, WM_CLOSE, 0, 0);
+        return 0;
+    }
+    case WM_USER + 3:
+    {
+        const char* detail = lparam_string_or_default(lparam,
+            "FATAL ERROR - Reinstall the game.");
+        CloseWindow(window);
+        MessageBoxA(window, detail, ranker_window_title(), MB_OK | MB_ICONWARNING);
+        PostMessageA(window, WM_CLOSE, 0, 0);
+        return 0;
+    }
+    case WM_USER + 4:
+        if (!open_title_main_menu_frontend(window)) {
+            pause_worker_for_modal_action();
+            OpenMultiplayerFrontendForActiveMode(window);
+        }
+        return 0;
+    case WM_USER + 5:
+        resume_worker_after_modal_action();
+        return 0;
+    case WM_USER + 6:
+    {
+        const char* parameters = lparam_string_or_default(lparam, nullptr);
+        if (launch_external_target(window, parameters)) {
+            SendMainWindowCloseMessage();
+            return 0;
+        }
+
+        show_window_status_message(window,
+            startup_platform_row(kPatchProgramLaunchFailedTextRow,
+                kPatchProgramLaunchFailedTextFallback),
+            0x000a0afa);
+        char text[512]{};
+        const char* target = g_runtime.external_launch_target.empty() ?
+            "external target" : g_runtime.external_launch_target.c_str();
+        std::snprintf(text, sizeof(text), "Check %s", target);
+        show_window_status_message(window, text, 0x000a0afa);
+        return 0;
+    }
+    case WM_USER + 7:
+        if (async_com_state().active_network_transport_mode >= 0 &&
+            async_com_state().active_network_transport_mode < 3) {
+            start_legacy_udp_mode1_receive_thread();
+        }
+        return 0;
+    case WM_USER + 8:
+        if (lparam == 0) {
+            pause_worker_for_modal_action();
+            open_game_frontend_modal(window, 0);
+        }
+        else if (lparam == 1) {
+            resume_worker_after_modal_action();
+        }
+        else if (lparam == 2) {
+            pause_worker_for_modal_action();
+            open_game_frontend_modal(window, 2);
+        }
+        return 0;
+    case WM_USER + 9:
+        if (lparam == 0) {
+            pause_worker_for_modal_action();
+            open_replay_save_dialog(window);
+        }
+        else if (lparam == 1 || lparam == 3) {
+            resume_worker_after_modal_action();
+        }
+        else if (lparam == 2) {
+            pause_worker_for_modal_action();
+            open_replay_load_dialog(window);
+        }
+        return 0;
+    case WM_USER + 0x65:
+        RouteMainWindowFrontendNetworkMessage(window, wparam, lparam);
+        return 0;
+    default:
+        break;
+    }
+
+    return DefWindowProcA(window, message, wparam, lparam);
+}
+
+void show_startup_blocker(const char* detail) {
+    MessageBoxA(g_runtime.main_window, detail, ranker_window_title(),
+        MB_OK | MB_ICONINFORMATION);
+}
+
+void send_startup_fatal_and_close(const char* detail) {
+    if (g_runtime.main_window != nullptr && IsWindow(g_runtime.main_window)) {
+        SendMessageA(g_runtime.main_window, WM_USER + 3, 0,
+            reinterpret_cast<LPARAM>(detail));
+        if (IsWindow(g_runtime.main_window)) {
+            DestroyWindow(g_runtime.main_window);
+        }
+        g_runtime.main_window = nullptr;
+        g_runtime.frontend_route_window = nullptr;
+        return;
+    }
+
+    MessageBoxA(nullptr, detail, ranker_window_title(), MB_OK | MB_ICONWARNING);
+}
+
+bool find_expected_jw208_archive(const char* path) {
+    WIN32_FILE_ATTRIBUTE_DATA data{};
+    if (!GetFileAttributesExA(path, GetFileExInfoStandard, &data)) {
+        return false;
+    }
+
+    ULARGE_INTEGER size{};
+    size.HighPart = data.nFileSizeHigh;
+    size.LowPart = data.nFileSizeLow;
+    return size.QuadPart == kExpectedJw208Size;
+}
+
+bool background_test_mode_enabled() {
+    const char* value = std::getenv("RANKER_REBUILD_BACKGROUND_TEST");
+    return value != nullptr && value[0] != '\0' && value[0] != '0';
+}
+
+bool read_setup_version_file_value(u32& value) {
+    char windows_directory[MAX_PATH]{};
+    if (GetWindowsDirectoryA(windows_directory, static_cast<UINT>(sizeof(windows_directory))) == 0) {
+        return false;
+    }
+
+    std::string path = windows_directory;
+    path += "\\setuprk.dat";
+
+    FILE* file = nullptr;
+#if defined(_MSC_VER)
+    if (fopen_s(&file, path.c_str(), "r+b") != 0) {
+        file = nullptr;
+    }
+#else
+    file = std::fopen(path.c_str(), "r+b");
+#endif
+    if (file == nullptr) {
+        return false;
+    }
+
+    u32 stored_value = 0;
+    const bool ok = std::fread(&stored_value, sizeof(stored_value), 1, file) == 1;
+    std::fclose(file);
+    if (!ok) {
+        return false;
+    }
+
+    value = stored_value ^ kSetupVersionXor;
+    return true;
+}
+
+bool query_setup_registry_version_value(u32& value) {
+    DWORD type = REG_DWORD;
+    DWORD byte_count = sizeof(value);
+    const char* subkey = startup_platform_row(
+        kSetupRegistrySubkeyTextRow, kSetupRegistrySubkeyFallback);
+    return QueryRegistryValueBytes(HKEY_LOCAL_MACHINE, subkey, "VersionData",
+               &type, reinterpret_cast<LPBYTE>(&value), &byte_count) &&
+        byte_count == sizeof(value);
+}
+
+bool find_expected_jw208_archive_on_cdrom() {
+    if (!InitializeCdRomDriveScan()) {
+        return false;
+    }
+
+    while (!legacy_environment_state().selected_cdrom_root.empty()) {
+        std::string path = legacy_environment_state().selected_cdrom_root;
+        path += "jw2_08.trc";
+
+        CrtFindDataA find_data{};
+        const HANDLE find = CrtFindFirstFile(path.c_str(), find_data);
+        if (find != INVALID_HANDLE_VALUE) {
+            HANDLE file = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (file != INVALID_HANDLE_VALUE) {
+                const DWORD size = GetFileSize(file, nullptr);
+                CloseHandle(file);
+                if (size == kExpectedJw208Size) {
+                    CrtFindClose(find);
+                    return true;
+                }
+            }
+        }
+        SelectNextCdRomDrive();
+    }
+
+    return false;
+}
+#endif
+
+} // namespace
+
+const OriginalRoutineRef* winmain_routine_map(std::size_t& count) {
+    count = sizeof(kWinMainRoutines) / sizeof(kWinMainRoutines[0]);
+    return kWinMainRoutines;
+}
+
+#ifdef _WIN32
+LRESULT CALLBACK HandleRankerMainWindowMessage(
+    HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+    return RankerRebuildWndProc(window, message, wparam, lparam);
+}
+
+void RouteMainWindowFrontendNetworkMessage(HWND window, WPARAM wparam, LPARAM lparam) {
+    route_frontend_network_message(window, wparam, lparam);
+}
+
+void OpenMultiplayerFrontendForActiveMode(HWND window) {
+    open_multiplayer_frontend(window);
+}
+
+void EnterHostedOrJoinedP2PGameFlow(HWND window, HINSTANCE instance) {
+    if (g_runtime.p2p_command_line_flow_pending &&
+        p2p_network_launch_parameters().valid) {
+        g_runtime.p2p_command_line_flow_pending = false;
+        open_default_p2p_command_line_game_flow(window, instance);
+        return;
+    }
+    if (g_runtime.gameplay_transition_active &&
+        g_runtime.gameplay_session_flow.worker_modal_pending != 0) {
+        g_runtime.gameplay_session_flow.modal_result =
+            GameplayModalResult::ContinueNetwork;
+        g_runtime.gameplay_session_flow.worker_modal_pending = 0;
+        resume_worker_after_modal_action();
+        return;
+    }
+    queue_default_gameplay_session_transition(window, g_runtime.frontend_mode);
+}
+
+void DispatchActiveTrcRecordFatalErrorMirror(GameplayModalUiState& state) {
+    const char* archive = state.fatal_archive_name.empty() ?
+        "JW2_02.TRC" : state.fatal_archive_name.c_str();
+    const u32 record = state.fatal_record_index != 0 ?
+        state.fatal_record_index : state.last_loaded_record;
+    if (g_runtime.main_window != nullptr && IsWindow(g_runtime.main_window)) {
+        send_trc_record_fatal_error(
+            g_runtime.main_window, archive, record, trc_load_error_caption());
+        return;
+    }
+
+    show_trc_record_fatal_error_box(nullptr, archive, record, trc_load_error_caption());
+}
+
+void SetRankerMainWindowCallbacks(const RankerMainWindowCallbacks& callbacks) {
+    g_runtime.callbacks = callbacks;
+}
+
+void SetRankerMainWindowExternalLaunchTarget(const char* target) {
+    g_runtime.external_launch_target = target != nullptr ? target : "";
+}
+
+void SetRankerMainWindowFrontendMode(u32 mode) {
+    g_runtime.frontend_mode = mode;
+    SetActiveNetworkTransportMode(static_cast<i32>(mode));
+}
+
+void SetRankerMainWindowFrontendRouteWindow(HWND window) {
+    g_runtime.frontend_route_window = window;
+}
+
+void SetRankerMainWindowGenericAiProfileState(bool enabled, bool scenario_active) {
+    g_runtime.generic_ai_profile_mode = enabled;
+    g_runtime.generic_ai_scenario_active = scenario_active;
+}
+
+void SetRankerMainWindowScenarioAiProfileOverride(bool enabled) {
+    g_runtime.generic_ai_scenario_active = enabled;
+}
+
+void SetRankerMainWindowNetworkAiProfileOverride(bool enabled) {
+    g_runtime.network_ai_profile_override = enabled;
+}
+
+std::array<std::string, kRankerReplayPlayerNameCount> RankerMainWindowReplayPlayerNames() {
+    std::array<std::string, kRankerReplayPlayerNameCount> names{};
+    const GameplaySessionStartupState& startup = g_runtime.gameplay_startup_state;
+    const P2PGameSessionStartState& p2p = g_runtime.p2p_session_start_state;
+
+    for (u32 owner = 0; owner < names.size(); ++owner) {
+        if (owner < startup.owner_display_names.size() &&
+            !startup.owner_display_names[owner].empty()) {
+            names[owner] = startup.owner_display_names[owner];
+        }
+        if (!names[owner].empty() || owner >= p2p.network_index_by_owner.size()) {
+            continue;
+        }
+
+        const u32 network_index = p2p.network_index_by_owner[owner];
+        if (network_index < p2p.network_player_count &&
+            network_index < p2p.player_names.size() &&
+            p2p.player_names[network_index][0] != '\0') {
+            names[owner] = p2p.player_names[network_index].data();
+        }
+    }
+    return names;
+}
+
+bool StartRankerFrontendStageFromMenu(i32 column, i32 row) {
+    FrontendStageFlowState& state = frontend_stage_flow_state();
+    state.current_mode = g_runtime.frontend_stage_session_mode;
+    state.selected_faction_id = g_runtime.frontend_stage_selected_faction;
+    return StartFrontendStageFromMenu(
+        state, column, row, default_frontend_stage_flow_callbacks());
+}
+
+void CompleteRankerFrontendStage(u32 result, u32 next_mode) {
+    FrontendStageFlowState& state = frontend_stage_flow_state();
+    HandleFrontendStageCompletion(
+        state, result, next_mode, default_frontend_stage_flow_callbacks());
+}
+
+RankerMainWindowStateSnapshot RankerMainWindowState() {
+    RankerMainWindowStateSnapshot snapshot{};
+    snapshot.main_window = g_runtime.main_window;
+    snapshot.frontend_route_window = g_runtime.frontend_route_window;
+    snapshot.instance = g_runtime.instance;
+    snapshot.external_launch_target = g_runtime.external_launch_target.empty() ?
+        nullptr : g_runtime.external_launch_target.c_str();
+    snapshot.last_external_launch_target =
+        g_runtime.last_external_launch_target.empty() ?
+            nullptr : g_runtime.last_external_launch_target.c_str();
+    snapshot.last_external_launch_parameters =
+        g_runtime.last_external_launch_parameters.empty() ?
+            nullptr : g_runtime.last_external_launch_parameters.c_str();
+    snapshot.last_external_launch_result = g_runtime.last_external_launch_result;
+    snapshot.frontend_mode = g_runtime.frontend_mode;
+    snapshot.windowed_mode = g_runtime.windowed_mode;
+    snapshot.app_active = g_runtime.app_active;
+    snapshot.input_enabled = g_runtime.input_enabled;
+    snapshot.last_external_launch_succeeded =
+        g_runtime.last_external_launch_succeeded;
+    snapshot.worker_paused = g_runtime.worker_paused;
+    snapshot.message_wait_worker_suspend_enabled =
+        g_runtime.message_wait_worker_suspend_enabled;
+    snapshot.worker_thread_started = g_runtime.worker_thread_started;
+    snapshot.worker_thread_running = g_runtime.worker_thread_running;
+    snapshot.suppress_paint = g_runtime.suppress_paint;
+    snapshot.active_accelerator_window = g_runtime.active_accelerator_window;
+    snapshot.active_accelerators = g_runtime.active_accelerators;
+    snapshot.frontend_network_chat_message_count =
+        g_runtime.frontend_network_chat_messages.size();
+    return snapshot;
+}
+
+POINT RankerFrontendWindowOrigin() {
+    const RECT rect = frontend_client_screen_rect_or_default();
+    return POINT{rect.left, rect.top};
+}
+
+POINT RankerCenteredFrontendWindowOrigin(int width, int height) {
+    const RECT rect = frontend_client_screen_rect_or_default();
+    const int rect_width = rect.right - rect.left;
+    const int rect_height = rect.bottom - rect.top;
+    return POINT{
+        rect.left + (rect_width - width) / 2,
+        rect.top + (rect_height - height) / 2};
+}
+
+const std::vector<std::string>& FrontendNetworkChatMessages() {
+    return g_runtime.frontend_network_chat_messages;
+}
+#endif
+
+bool CpuSupportsMmx() {
+#if defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64))
+    int registers[4]{};
+    __cpuid(registers, 1);
+    return (registers[3] & (1 << 23)) != 0;
+#elif defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))
+    unsigned int eax = 0;
+    unsigned int ebx = 0;
+    unsigned int ecx = 0;
+    unsigned int edx = 0;
+    if (__get_cpuid(1, &eax, &ebx, &ecx, &edx) == 0) {
+        return false;
+    }
+    return (edx & (1u << 23)) != 0;
+#else
+    return false;
+#endif
+}
+
+void WriteStartupTimestampLog(const char* path) {
+    if (path == nullptr || *path == '\0') {
+        return;
+    }
+
+    std::time_t now = std::time(nullptr);
+    std::tm* local = std::localtime(&now);
+    FILE* file = nullptr;
+#if defined(_MSC_VER)
+    if (fopen_s(&file, path, "a") != 0) {
+        file = nullptr;
+    }
+#else
+    file = std::fopen(path, "a");
+#endif
+    if (file == nullptr) {
+        return;
+    }
+
+    if (local != nullptr) {
+        std::fputs(std::asctime(local), file);
+    }
+    std::fclose(file);
+}
+
+bool VerifySetupVersionData() {
+#ifdef _WIN32
+    u32 registry_value = 0;
+    u32 file_value = 0;
+    return query_setup_registry_version_value(registry_value) &&
+        read_setup_version_file_value(file_value) &&
+        registry_value == file_value;
+#else
+    return false;
+#endif
+}
+
+bool VerifySetupOrFindJw208Archive() {
+    if (VerifySetupVersionData()) {
+        return true;
+    }
+
+#ifdef _WIN32
+    return find_expected_jw208_archive_on_cdrom();
+#else
+    return false;
+#endif
+}
+
+#ifdef _WIN32
+bool register_frontend_window_class(HINSTANCE instance, const char* class_name) {
+    if (class_name == nullptr || class_name[0] == '\0') {
+        return false;
+    }
+
+    WNDCLASSA existing{};
+    if (GetClassInfoA(instance, class_name, &existing) != 0) {
+        return true;
+    }
+
+    WNDCLASSA window_class{};
+    window_class.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
+    window_class.lpfnWndProc = DefWindowProcA;
+    window_class.hInstance = instance;
+    window_class.hIcon = LoadIconA(instance, MAKEINTRESOURCEA(0x65));
+    window_class.hCursor = LoadCursorA(nullptr, IDC_ARROW);
+    window_class.hbrBackground = reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+    window_class.lpszClassName = class_name;
+
+    return RegisterClassA(&window_class) != 0 ||
+        GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+}
+
+bool register_reconstructed_frontend_classes(HINSTANCE instance) {
+    const char* class_names[] = {
+        "Account",
+        "Avatar",
+        "Barter",
+        "Change Lobby",
+        "ChangePassword",
+        "Connect",
+        "Create Game",
+        "Emo",
+        "FIGS",
+        "IPX",
+        "IPX Game",
+        "Join Game",
+        "Light",
+        "Link",
+        "Lobby",
+        "Memo",
+        "P2P",
+        "Player Profile",
+        "Replay",
+        "ReplaySave",
+        "Search",
+        "ViewRank",
+    };
+
+    for (const char* class_name : class_names) {
+        if (!register_frontend_window_class(instance, class_name)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool QueryRegistryValueBytes(HKEY root, const char* subkey, const char* value_name,
+    DWORD* type, BYTE* data, DWORD* byte_count) {
+    HKEY key = nullptr;
+    const LSTATUS open_result = RegOpenKeyExA(root, subkey, 0, KEY_QUERY_VALUE, &key);
+    if (open_result != ERROR_SUCCESS) {
+        return false;
+    }
+
+    const LSTATUS query_result = RegQueryValueExA(key, value_name, nullptr, type, data,
+        byte_count);
+    RegCloseKey(key);
+    return query_result == ERROR_SUCCESS;
+}
+
+void InitializeRuntimeClockSnapshot() {
+    g_runtime.runtime_clock_snapshot = std::time(nullptr);
+}
+
+void NoOpStartupRuntimeHook() {
+}
+
+bool InitDirectXSubsystems() {
+    const HRESULT draw_result = InitDirectDrawSubsystem(g_runtime.main_window,
+        kOriginalClientWidth, kOriginalClientHeight, kOriginalColorDepth,
+        g_runtime.windowed_mode);
+    if (FAILED(draw_result)) {
+        const DirectDrawRuntimeState& draw = direct_draw_state();
+        append_startup_log("directdraw init failed hr=0x%08lx name=%s windowed=%s",
+            static_cast<unsigned long>(draw_result),
+            draw.last_error_name.empty() ? "unknown" : draw.last_error_name.c_str(),
+            g_runtime.windowed_mode ? "yes" : "no");
+        ShutdownDirectDrawSubsystem(g_runtime.main_window);
+        g_runtime.directx_initialized = false;
+        return false;
+    }
+    append_startup_log("directdraw init ok windowed=%s",
+        g_runtime.windowed_mode ? "yes" : "no");
+
+    InitDirectSoundSubsystem(g_runtime.main_window);
+
+    const HRESULT async_result =
+        InitAsyncComSubsystem(g_runtime.instance, &g_runtime.async_com);
+    if (FAILED(async_result)) {
+        append_startup_log("async com init failed hr=0x%08lx; continuing",
+            static_cast<unsigned long>(async_result));
+    }
+    else {
+        const HRESULT callback_result =
+            RegisterAsyncComWindowCallback(g_runtime.main_window);
+        if (FAILED(callback_result)) {
+            append_startup_log(
+                "async com window callback failed hr=0x%08lx; continuing",
+                static_cast<unsigned long>(callback_result));
+        }
+    }
+
+    g_runtime.directx_initialized = true;
+    append_startup_log("directx init ok");
+    return true;
+}
+
+void ShutdownDirectXSubsystems() {
+    ShutdownPrimaryMilesMusicPolicy();
+    ShutdownAsyncComSubsystem(&g_runtime.async_com);
+    ShutdownDirectSoundSubsystem();
+    ShutdownDirectDrawSubsystem(g_runtime.main_window);
+    g_runtime.directx_initialized = false;
+}
+
+bool StartBackgroundWorkerThread() {
+    if (g_runtime.worker_thread != nullptr) {
+        return true;
+    }
+
+    GameplayLoopState& loop_state = gameplay_loop_state();
+    loop_state.current_cursor_index = 0;
+    loop_state.callbacks.enter_frontend_flow = winmain_worker_enter_frontend_flow;
+    install_default_gameplay_loop_callbacks(loop_state);
+
+    g_runtime.worker_thread_running = true;
+    g_runtime.worker_thread = CreateThread(nullptr, 0, BackgroundWorkerThreadProc,
+        &loop_state, 0, &g_runtime.worker_thread_id);
+    if (g_runtime.worker_thread == nullptr) {
+        g_runtime.worker_thread_id = 0;
+        g_runtime.worker_thread_running = false;
+        g_runtime.worker_thread_started = false;
+        g_runtime.message_wait_worker_suspend_enabled = false;
+        return false;
+    }
+
+    g_runtime.worker_thread_started = true;
+    g_runtime.message_wait_worker_suspend_enabled = true;
+    return true;
+}
+
+bool RaiseMainThreadPriority() {
+    HANDLE current_thread = GetCurrentThread();
+    return SetThreadPriority(current_thread, THREAD_PRIORITY_HIGHEST) != FALSE;
+}
+
+void YieldBackgroundWorkerThreadSlice() {
+    Sleep(1);
+}
+
+void TerminateBackgroundWorkerThread() {
+    if (g_runtime.worker_thread != nullptr) {
+        g_runtime.worker_thread_running = false;
+        if (WaitForSingleObject(g_runtime.worker_thread, 2000) == WAIT_TIMEOUT) {
+            TerminateThread(g_runtime.worker_thread, 0);
+        }
+        CloseHandle(g_runtime.worker_thread);
+    }
+    g_runtime.worker_thread = nullptr;
+    g_runtime.worker_thread_id = 0;
+    g_runtime.worker_thread_started = false;
+    g_runtime.worker_thread_running = false;
+    g_runtime.message_wait_worker_suspend_enabled = false;
+}
+
+void ExitBackgroundWorkerThread() {
+    if (g_runtime.worker_thread != nullptr) {
+        g_runtime.worker_thread = nullptr;
+        g_runtime.worker_thread_id = 0;
+        g_runtime.worker_thread_started = false;
+        g_runtime.worker_thread_running = false;
+        g_runtime.message_wait_worker_suspend_enabled = false;
+        ExitThread(0);
+    }
+}
+
+void ClearActiveAcceleratorState() {
+    g_runtime.active_accelerator_window = nullptr;
+    g_runtime.active_accelerators = nullptr;
+}
+
+void SetActiveAcceleratorState(HWND window, HACCEL accelerators) {
+    g_runtime.active_accelerator_window = window;
+    g_runtime.active_accelerators = accelerators;
+}
+
+void NoOpFrontendNetworkPayloadHandler(const void* packet, u32 byte_count) {
+    (void)packet;
+    (void)byte_count;
+}
+
+void QueueFrontendNetworkChatPacketDisplay(const void* packet, u32 byte_count) {
+    if (packet == nullptr || byte_count <= 4) {
+        return;
+    }
+
+    const auto* bytes = static_cast<const u8*>(packet) + 4;
+    byte_count -= 4;
+    if (byte_count <= 8) {
+        return;
+    }
+
+    const u32 text_length = bytes[7];
+    if (text_length == 0 || 8u + text_length > byte_count) {
+        return;
+    }
+
+    g_runtime.frontend_network_chat_messages.emplace_back(
+        reinterpret_cast<const char*>(bytes + 8), text_length);
+}
+
+int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_command) {
+    g_runtime.instance = instance;
+    char current_directory[MAX_PATH]{};
+    GetCurrentDirectoryA(static_cast<DWORD>(sizeof(current_directory)), current_directory);
+    append_startup_log("winmain begin initial_cwd=%s command_line=%s",
+        current_directory[0] != '\0' ? current_directory : "(unknown)",
+        command_line != nullptr ? command_line : "");
+    const bool data_directory_ready = ensure_ranker_data_working_directory();
+    GetCurrentDirectoryA(static_cast<DWORD>(sizeof(current_directory)), current_directory);
+    append_startup_log("winmain active_cwd=%s data_ready=%s",
+        current_directory[0] != '\0' ? current_directory : "(unknown)",
+        data_directory_ready ? "yes" : "no");
+    SetDefaultFrontendGameplaySoundState(&g_runtime.gameplay_sound);
+    install_default_main_window_callbacks();
+    InitializeFrontendAsyncTcpSocket0Static();
+    InstallDefaultMode1ReliableTransportCallbacks();
+    install_default_directplay_message_callbacks();
+    if (ParseP2PNetworkCommandLine(command_line != nullptr ? command_line : "")) {
+        g_runtime.frontend_mode = 1;
+        g_runtime.p2p_command_line_flow_pending = true;
+        SetActiveNetworkTransportMode(1);
+    }
+
+    const bool startup_text_loaded = LoadStartupJw217TextTables();
+    append_startup_log("startup text loaded=%s platform_rows=%zu message_rows=%zu",
+        startup_text_loaded ? "yes" : "no",
+        startup_platform_text_count(), startup_message_text_count());
+    g_runtime.single_instance_mutex =
+        CreateMutexA(nullptr, FALSE, ranker_single_instance_mutex_name());
+    if (g_runtime.single_instance_mutex != nullptr && GetLastError() == ERROR_ALREADY_EXISTS) {
+        char message[256]{};
+        std::snprintf(message, sizeof(message),
+            startup_platform_row(kDuplicateInstanceTextRow,
+                kDuplicateInstanceTextFallback),
+            ranker_window_title());
+        MessageBoxA(nullptr, message, ranker_window_title(),
+            MB_OK | MB_ICONINFORMATION);
+        CloseHandle(g_runtime.single_instance_mutex);
+        g_runtime.single_instance_mutex = nullptr;
+        return 0;
+    }
+
+    LoadLibraryA("RichEd32.Dll");
+
+    WNDCLASSA window_class{};
+    window_class.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
+    window_class.lpfnWndProc = HandleRankerMainWindowMessage;
+    window_class.hInstance = instance;
+    window_class.hIcon = LoadIconA(instance, MAKEINTRESOURCEA(0x65));
+    window_class.hCursor = LoadCursorA(nullptr, IDC_ARROW);
+    window_class.lpszClassName = ranker_window_title();
+
+    if (RegisterClassA(&window_class) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+        show_startup_blocker("RegisterClassA failed in the reconstructed WinMain shell.");
+        return 0;
+    }
+    if (!register_reconstructed_frontend_classes(instance)) {
+        show_startup_blocker(
+            "RegisterClassA failed while registering reconstructed frontend windows.");
+        return 0;
+    }
+
+    DWORD window_ex_style = 0;
+    DWORD window_style = WS_OVERLAPPEDWINDOW;
+    int window_width = kOriginalClientWidth;
+    int window_height = kOriginalClientHeight;
+    if (g_runtime.windowed_mode) {
+        RECT client_rect{0, 0, kOriginalClientWidth, kOriginalClientHeight};
+        AdjustWindowRectEx(&client_rect, window_style, FALSE, window_ex_style);
+        window_width = client_rect.right - client_rect.left;
+        window_height = client_rect.bottom - client_rect.top;
+    }
+    else {
+        window_ex_style = WS_EX_TOPMOST;
+        window_style = WS_POPUP | WS_VISIBLE | WS_SYSMENU;
+        window_width = GetSystemMetrics(SM_CXSCREEN);
+        window_height = GetSystemMetrics(SM_CYSCREEN);
+    }
+
+    g_runtime.main_window = CreateWindowExA(window_ex_style, window_class.lpszClassName,
+        ranker_window_title(), window_style, 0, 0, window_width, window_height,
+        nullptr, nullptr, instance, nullptr);
+    if (g_runtime.main_window == nullptr) {
+        show_startup_blocker("CreateWindowExA failed in the reconstructed WinMain shell.");
+        return 0;
+    }
+    g_runtime.frontend_route_window = g_runtime.main_window;
+
+    const bool background_test = background_test_mode_enabled();
+    ShowWindow(g_runtime.main_window, background_test ? SW_SHOWNOACTIVATE : show_command);
+    UpdateWindow(g_runtime.main_window);
+    if (!background_test) {
+        SetFocus(g_runtime.main_window);
+    }
+    refresh_window_rects(g_runtime.main_window);
+
+    const bool mouse_present = GetSystemMetrics(SM_MOUSEPRESENT) != 0;
+    if (!mouse_present) {
+        send_startup_fatal_and_close(startup_platform_row(
+            kMouseRequiredTextRow, kMouseRequiredTextFallback));
+        return 0;
+    }
+
+    const bool mmx_supported = CpuSupportsMmx();
+    if (!mmx_supported) {
+        send_startup_fatal_and_close(startup_platform_row(
+            kMmxRequiredTextRow, kMmxRequiredTextFallback));
+        return 0;
+    }
+
+    const bool trc_key_valid = ValidateTrcRecord10Key();
+    append_startup_log("trc key valid=%s", trc_key_valid ? "yes" : "no");
+
+    InitializeRuntimeClockSnapshot();
+    WriteStartupTimestampLog();
+    const bool setup_ready = VerifySetupOrFindJw208Archive();
+    const u32 record9_value = LoadTrcRecord9Value();
+    append_startup_log("setup ready=%s record9=0x%08lx",
+        setup_ready ? "yes" : "no",
+        static_cast<unsigned long>(record9_value));
+    const bool directx_ready = InitDirectXSubsystems();
+    if (!directx_ready) {
+        ShutdownDirectXSubsystems();
+        return 0;
+    }
+
+    const bool worker_started = StartBackgroundWorkerThread();
+    append_startup_log("worker started=%s", worker_started ? "yes" : "no");
+    if (!worker_started) {
+        ShutdownDirectXSubsystems();
+        return 0;
+    }
+
+    const bool priority_raised = RaiseMainThreadPriority();
+    append_startup_log("priority raised=%s", priority_raised ? "yes" : "no");
+    if (!priority_raised) {
+        ShutdownDirectXSubsystems();
+        return 0;
+    }
+
+    char startup_text[768]{};
+    std::snprintf(startup_text, sizeof(startup_text),
+        "WinMain stage reconstructed from 0x%08x. Original defaults: %dx%dx%d. "
+        "mouse=%s, MMX=%s, key=%s, jw2_08.trc=%s, record9=0x%08x, "
+        "JW2_17 text=%s (%zu/%zu rows), DirectX=%s, worker=%s, priority=%s.",
+        kRankerWinMainAddress, kOriginalClientWidth, kOriginalClientHeight, kOriginalColorDepth,
+        mouse_present ? "yes" : "no",
+        mmx_supported ? "yes" : "no",
+        trc_key_valid ? "valid" : "invalid",
+        setup_ready ? "found" : "not found",
+        record9_value,
+        startup_text_loaded ? "loaded" : "not loaded",
+        startup_platform_text_count(), startup_message_text_count(),
+        directx_ready ? "ready" : "failed",
+        worker_started ? "started" : "not started",
+        priority_raised ? "raised" : "unchanged");
+    OutputDebugStringA(startup_text);
+    OutputDebugStringA("\n");
+
+    MSG message{};
+    for (;;) {
+        if (PeekMessageA(&message, nullptr, 0, 0, PM_REMOVE) == 0) {
+            const bool suspend_worker = should_suspend_worker_during_message_wait();
+            if (suspend_worker) {
+                suspend_worker_for_message_wait();
+            }
+            WaitMessage();
+            if (suspend_worker) {
+                resume_worker_after_message_wait();
+            }
+            continue;
+        }
+
+        if (g_runtime.active_accelerator_window != nullptr &&
+            !IsWindow(g_runtime.active_accelerator_window)) {
+            ClearActiveAcceleratorState();
+        }
+        if (g_runtime.active_accelerator_window != nullptr &&
+            g_runtime.active_accelerators != nullptr &&
+            TranslateAcceleratorA(g_runtime.active_accelerator_window,
+                g_runtime.active_accelerators, &message) != 0) {
+            continue;
+        }
+        TranslateMessage(&message);
+        DispatchMessageA(&message);
+        if (message.message == WM_QUIT) {
+            break;
+        }
+    }
+
+    TerminateBackgroundWorkerThread();
+    ShutdownLegacyWinSock();
+    ShutdownDirectXSubsystems();
+    if (g_runtime.single_instance_mutex != nullptr) {
+        CloseHandle(g_runtime.single_instance_mutex);
+        g_runtime.single_instance_mutex = nullptr;
+    }
+
+    return static_cast<int>(message.wParam);
+}
+#else
+int run_reconstructed_winmain() {
+    return CpuSupportsMmx() ? 0 : 1;
+}
+#endif
+
+}
