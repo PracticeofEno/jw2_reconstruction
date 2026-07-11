@@ -521,7 +521,10 @@ void InstallDefaultGameplayTooltipHandlers(GameplayTooltipState& state) {
     state.handlers[0x02] = BuildUnitOrProductionCostTooltip;
     state.handlers[0x03] = BuildSimpleTooltipFromCurrentText;
     state.handlers[0x04] = BuildSimpleTooltipVariant0;
-    state.handlers[0x05] = BuildSimpleTooltipVariant2;
+    // Original dispatch entry 5 jumps through 00401f19 to the no-op RET at
+    // 004df3b2.  Keeping this slot empty also prevents interface-mask hover
+    // from drawing the selected unit definition name over the world/HUD.
+    state.handlers[0x05] = nullptr;
     state.handlers[0x09] = BuildIndexedValueTooltip;
     state.handlers[0x0b] = BuildSimpleEquipmentTooltip;
     state.handlers[0x0c] = BuildNumberedSimpleTooltip;

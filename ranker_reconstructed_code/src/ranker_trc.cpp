@@ -994,13 +994,17 @@ u32 LoadTrcRecord9Value() {
     std::size_t bytes_read = 0;
     if (!read_trc_record_bytes("JW2_01.TRC", 9, record.data(), record.size(),
             &bytes_read) ||
-        bytes_read < sizeof(u32)) {
+        bytes_read <= 0x20) {
         return 0;
     }
 
-    u32 value = 0;
-    std::memcpy(&value, record.data(), sizeof(value));
-    return value;
+    // The original 0x00407d60 does not return the first dword of version.dat.
+    // It gathers the year from bytes 0x0e..0x0f and the month/day from bytes
+    // 0x1f..0x20 into the packed little-endian value YYYY-MM-DD.
+    return static_cast<u32>(record[0x0e]) |
+        (static_cast<u32>(record[0x0f]) << 8) |
+        (static_cast<u32>(record[0x1f]) << 16) |
+        (static_cast<u32>(record[0x20]) << 24);
 }
 
 bool BuildTrcRecord10Key(char (&out_key)[16]) {

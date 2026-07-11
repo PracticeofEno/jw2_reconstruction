@@ -286,6 +286,7 @@ struct UnitCommandCallbacks {
     UnitCommandAbilitySignedAmountCallback ability_target_health_delta = nullptr;
     UnitCommandAbilityPredicate ability_updates_direction = nullptr;
     UnitCommandPointCallback find_relocation_point = nullptr;
+    UnitCommandPointCallback find_matching_terrain_placement_point = nullptr;
     UnitCommandPointCallback find_strict_placement_point = nullptr;
     UnitCommandCallback clear_footprint = nullptr;
     UnitCommandCallback set_footprint = nullptr;
@@ -293,6 +294,7 @@ struct UnitCommandCallbacks {
     UnitCommandEquipmentProgressEffectCallback start_equipment_progress_effect =
         nullptr;
     UnitCommandPairCallback on_unit_spawned = nullptr;
+    UnitCommandCallback on_construction_completed = nullptr;
     UnitCommandPairCallback on_linked_unit_released = nullptr;
     UnitCommandTypeReplacementCallback on_unit_type_replaced = nullptr;
     UnitCommandProductionStartFailedCallback on_linked_release_population_blocked =

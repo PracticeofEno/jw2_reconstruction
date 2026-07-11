@@ -61,6 +61,8 @@ struct GameplayVisibilityUnit {
     i32 visibility_probe_y = 0;
     i32 owner_layer_probe_x = 0;
     i32 owner_layer_probe_y = 0;
+    i32 terrain_probe_x = 0;
+    i32 terrain_probe_y = 0;
     u32 interaction_range_pixels = 0;
     u32 fallback_range_tiles = 5;
     u32 terrain_class = 7;
@@ -68,6 +70,7 @@ struct GameplayVisibilityUnit {
     bool large_centered = false;
     bool is_structure = false;
     bool current_visibility_enabled = true;
+    bool terrain_probe_valid = false;
 };
 
 struct GameplayVisibilityContext {

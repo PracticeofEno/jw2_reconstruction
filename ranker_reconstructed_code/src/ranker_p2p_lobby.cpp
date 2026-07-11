@@ -191,6 +191,32 @@ void copy_token_value_until_space(char* target, std::size_t target_size,
         static_cast<std::size_t>(end - uppercase_value));
 }
 
+void copy_command_line_value(char* target, std::size_t target_size,
+    const char* original_command_line, const char* uppercase_base,
+    const char* uppercase_value) {
+    const std::size_t offset = static_cast<std::size_t>(uppercase_value - uppercase_base);
+    const char* source = original_command_line + offset;
+    if (*source == '"' || *source == '\'') {
+        const char quote = *source++;
+        const char* end = std::strchr(source, quote);
+        if (end == nullptr) {
+            copy_limited(target, target_size, source);
+            return;
+        }
+        copy_limited_segment(target, target_size, source,
+            static_cast<std::size_t>(end - source));
+        return;
+    }
+
+    const char* end = source;
+    while (*end != '\0' && *end != ' ' && *end != '\t' &&
+           *end != '\r' && *end != '\n') {
+        ++end;
+    }
+    copy_limited_segment(target, target_size, source,
+        static_cast<std::size_t>(end - source));
+}
+
 const char* bounded_table_name(const char* const* names, std::size_t count,
     u32 index) {
     return index < count ? names[index] : "";
@@ -274,6 +300,10 @@ void free_posted_p2p_payload(LPARAM payload) {
 
 void end_active_p2p_modal_prompt() {
     EndOnlineModalPrompt(online_modal_prompt_state(), 0);
+    OnlineModelessPromptState& modeless = online_modeless_prompt_state();
+    if (modeless.window != nullptr && IsWindow(modeless.window)) {
+        DestroyWindow(modeless.window);
+    }
 }
 
 bool active_transport_uses_legacy_tcp() {
@@ -619,20 +649,20 @@ bool ParseP2PNetworkCommandLine(P2PNetworkLaunchParameters& parameters,
     if (id == nullptr) {
         return false;
     }
-    copy_token_value_until_space(parameters.player_name.data(),
+    copy_command_line_value(parameters.player_name.data(),
         parameters.player_name.size(), command_line, upper, id + 4);
 
     const char* password = std::strstr(upper, "-PASS:");
     if (password != nullptr) {
-        copy_token_value_until_space(parameters.password.data(),
+        copy_command_line_value(parameters.password.data(),
             parameters.password.size(), command_line, upper, password + 6);
     }
 
     const char* map = std::strstr(upper, "-MAP:");
     if (map != nullptr) {
         parameters.uses_map_file = true;
-        copy_limited(parameters.map_path.data(), parameters.map_path.size(),
-            command_line + static_cast<std::size_t>((map + 5) - upper));
+        copy_command_line_value(parameters.map_path.data(), parameters.map_path.size(),
+            command_line, upper, map + 5);
         parameters.valid = true;
         return true;
     }
@@ -642,8 +672,8 @@ bool ParseP2PNetworkCommandLine(P2PNetworkLaunchParameters& parameters,
     if (remote_address == nullptr) {
         return false;
     }
-    copy_limited(parameters.remote_address.data(), parameters.remote_address.size(),
-        command_line + static_cast<std::size_t>((remote_address + 4) - upper));
+    copy_command_line_value(parameters.remote_address.data(),
+        parameters.remote_address.size(), command_line, upper, remote_address + 4);
     parameters.valid = true;
     return true;
 }
@@ -1314,7 +1344,8 @@ bool CreateP2PLobbyWindow(P2PLobbyState& state, HWND parent, HINSTANCE instance,
     ShowWindow(state.name_edit, SW_SHOW);
     ShowWindow(state.local_address_edit, SW_SHOW);
     ShowWindow(state.remote_address_edit, SW_SHOW);
-    RedrawWindow(state.window, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+    RedrawWindow(state.window, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE |
+        RDW_UPDATENOW | RDW_ALLCHILDREN);
     SetFocus(state.name_edit);
     state.visible = true;
     return true;
@@ -1347,6 +1378,13 @@ LRESULT HandleP2PLobbyWindowMessage(P2PLobbyState& state, HWND hwnd, UINT messag
             return 0;
         }
         break;
+    case WM_ERASEBKGND:
+        if (hwnd == state.window) {
+            StretchBitmapMemoryResourceToDc(state.background,
+                reinterpret_cast<HDC>(wparam), 0, 0);
+            return 1;
+        }
+        break;
     case WM_CTLCOLORBTN:
         return reinterpret_cast<LRESULT>(GetStockObject(NULL_BRUSH));
     case WM_CTLCOLOREDIT:
@@ -1358,6 +1396,8 @@ LRESULT HandleP2PLobbyWindowMessage(P2PLobbyState& state, HWND hwnd, UINT messag
     case WM_DRAWITEM: {
         auto* draw = reinterpret_cast<DRAWITEMSTRUCT*>(lparam);
         if (draw != nullptr && draw->CtlID == kP2PLobbyInfoControlId) {
+            FillRect(draw->hDC, &draw->rcItem,
+                reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
             RECT text_rect{2, 12, 0x18c, 0x87};
             SetTextColor(draw->hDC, kP2PWhite);
             SetBkColor(draw->hDC, kP2PBlack);

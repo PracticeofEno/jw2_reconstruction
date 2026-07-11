@@ -22,6 +22,7 @@ struct TextFontDefinition {
     u32 max_width = 0;
     u32 height = 0;
     const u8* glyph_data = nullptr;
+    std::size_t glyph_data_size = 0;
     u32 glyph_span = 0;
     u32 row_stride = 0;
     u32 bitmap_offset = 0;
@@ -76,9 +77,11 @@ TextRendererState& text_renderer_state();
 LegacyTickTimerState& legacy_tick_timer_state();
 void ResetTextRendererState();
 TextFontDefinition BuildTextFontDefinition(
-    u8 flags, u32 max_width, u32 height, const u8* glyph_data);
+    u8 flags, u32 max_width, u32 height, const u8* glyph_data,
+    std::size_t glyph_data_size = 0);
 void RegisterTextFontDefinition(
-    u32 index, u8 flags, u32 max_width, u32 height, const u8* glyph_data);
+    u32 index, u8 flags, u32 max_width, u32 height, const u8* glyph_data,
+    std::size_t glyph_data_size = 0);
 void SetTextFontDefinition(u32 index, const TextFontDefinition& font);
 void SetTextColorPixel(u32 index, u16 pixel);
 void SetTextClipRect(i32 left, i32 top, i32 right, i32 bottom);

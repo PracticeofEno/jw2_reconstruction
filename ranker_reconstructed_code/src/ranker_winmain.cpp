@@ -138,6 +138,58 @@ void append_startup_log(const char* format, ...) {
     std::fclose(file);
 }
 
+#ifdef _WIN32
+LONG CALLBACK log_startup_vectored_exception(EXCEPTION_POINTERS* pointers) {
+    if (pointers == nullptr || pointers->ExceptionRecord == nullptr) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    const EXCEPTION_RECORD& record = *pointers->ExceptionRecord;
+    if (record.ExceptionCode == DBG_PRINTEXCEPTION_C ||
+        record.ExceptionCode == 0x4001000aUL ||
+        record.ExceptionCode == 0x406d1388UL) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    void* ip = nullptr;
+    if (pointers->ContextRecord != nullptr) {
+#if defined(_M_IX86)
+        ip = reinterpret_cast<void*>(pointers->ContextRecord->Eip);
+#elif defined(_M_X64)
+        ip = reinterpret_cast<void*>(pointers->ContextRecord->Rip);
+#elif defined(__i386__)
+        ip = reinterpret_cast<void*>(pointers->ContextRecord->Eip);
+#elif defined(__x86_64__)
+        ip = reinterpret_cast<void*>(pointers->ContextRecord->Rip);
+#endif
+    }
+
+    const ULONG_PTR info0 =
+        record.NumberParameters > 0 ? record.ExceptionInformation[0] : 0;
+    const ULONG_PTR info1 =
+        record.NumberParameters > 1 ? record.ExceptionInformation[1] : 0;
+    const void* image_base = GetModuleHandleA(nullptr);
+    append_startup_log(
+        "SEH code=0x%08lx flags=0x%08lx addr=%p ip=%p image_base=%p params=%lu info0=%p info1=%p",
+        static_cast<unsigned long>(record.ExceptionCode),
+        static_cast<unsigned long>(record.ExceptionFlags),
+        record.ExceptionAddress, ip, image_base,
+        static_cast<unsigned long>(record.NumberParameters),
+        reinterpret_cast<void*>(info0), reinterpret_cast<void*>(info1));
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+void install_startup_exception_logger_once() {
+    static void* handler = nullptr;
+    if (handler != nullptr) {
+        return;
+    }
+
+    handler = AddVectoredExceptionHandler(1, log_startup_vectored_exception);
+    append_startup_log("SEH logger install %s", handler != nullptr ? "ok" : "failed");
+}
+#endif
+
 bool has_ranker_data_directory(const std::filesystem::path& directory) {
     namespace fs = std::filesystem;
     std::error_code ec;
@@ -373,9 +425,12 @@ constexpr const char* kSetupRegistrySubkeyFallback =
 constexpr std::size_t kSingleInstanceMutexTextRow = 225;
 constexpr const char* kSingleInstanceMutexFallback = "The Ranker is running.";
 constexpr u32 kGameplayMapSourceLayerRecordIndex = 10;
+constexpr u32 kGameplayMapOverlayLayerRecordIndex = 11;
 constexpr u32 kGameplayScenarioMapLayerRecordIndex = 12;
 constexpr u32 kGameplayMapEffectLayerRecordIndex = 13;
+constexpr u32 kGameplayVisibilityPreviousLayerRecordIndex = 14;
 constexpr u32 kGameplayFogMap3LayerRecordIndex = 17;
+constexpr u32 kGameplayVisibilityOwnerLayerRecordIndex = 18;
 constexpr u32 kGameplayScenarioDefaultMapTiles = 0x100;
 constexpr u32 kGameplayScenarioMapLayerStrideTiles = 0x100;
 constexpr u32 kGameplaySessionRuntimeFixedRecordCount =
@@ -401,6 +456,11 @@ constexpr u32 kGameplayResultMetricRecordBytes = 0x1c960;
 constexpr u32 kGameplayScenarioObjectRecordIndex = 7;
 constexpr u32 kGameplayScenarioObjectStride = 0x1d0;
 constexpr u32 kGameplayScenarioObjectMaxSlots = 0x800;
+constexpr std::size_t kGameplayHeaderUnitActiveListHeadOffset = 0x143c;
+constexpr std::size_t kGameplayHeaderUnitFreeListHeadOffset = 0x1440;
+constexpr std::size_t kGameplayHeaderRandomLimitOffset = 0x1420;
+constexpr std::size_t kGameplayHeaderRandomSeedOffset = 0x1424;
+constexpr std::size_t kGameplayHeaderRandomCallCountOffset = 0x1428;
 constexpr u32 kGameplayMapEffectObjectRecordIndex = 8;
 constexpr u32 kGameplayMapEffectObjectStride = 0x3c;
 constexpr u32 kGameplayMapEffectObjectMaxSlots = 0x200;
@@ -562,14 +622,15 @@ constexpr std::array<std::size_t, 3> kJw212ActionDamageProjectileImpactClassOffs
 }};
 constexpr std::size_t kJw212ActionDirectionModeOffset = 0x378;
 constexpr std::size_t kJw212ActionSecondaryCostOffset = 0x40c;
-constexpr std::size_t kUnitDefinitionConstructionTimerOffset = 0x44;
-constexpr std::size_t kUnitDefinitionInitialMaxHealthOffset = 0x00;
-constexpr std::size_t kUnitDefinitionInitialMaxSecondaryOffset = 0x04;
-constexpr std::size_t kUnitDefinitionProfileOffenseOffset = 0x08;
-constexpr std::size_t kUnitDefinitionProfileDefenseOffset = 0x0c;
-constexpr std::size_t kUnitDefinitionRuntimeStat28Offset = 0x10;
-constexpr std::size_t kUnitDefinitionAvatarNextExpPerLevelOffset = 0x68;
-constexpr std::size_t kUnitDefinitionAvatarNextExpBaseOffset = 0x94;
+constexpr std::size_t kUnitDefinitionConstructionTimerOffset = 0x18c;
+constexpr std::size_t kUnitDefinitionInitialMaxHealthOffset = 0x154;
+constexpr std::size_t kUnitDefinitionInitialMaxSecondaryOffset = 0x160;
+constexpr std::size_t kUnitDefinitionProfileOffenseOffset = 0x158;
+constexpr std::size_t kUnitDefinitionProfileDefenseOffset = 0x15c;
+constexpr std::size_t kUnitDefinitionRuntimeStat28Offset = 0x164;
+constexpr std::size_t kUnitDefinitionAvatarNextExpPerLevelOffset = 0x1bc;
+constexpr std::size_t kUnitDefinitionAvatarNextExpBaseOffset = 0x1e8;
+constexpr std::size_t kUnitDefinitionInitialCommandBitsOffset = 0x1ec;
 constexpr std::size_t kUnitDefinitionLifecycleClassOffset = 0x14c;
 constexpr std::size_t kUnitDefinitionPlacementClassOffset = 0x150;
 constexpr std::size_t kUnitDefinitionMovementClassOffset = 0x17c;
@@ -611,52 +672,55 @@ constexpr std::size_t kUnitDefinitionSpatialQueryLeftOffset = 0x370;
 constexpr std::size_t kUnitDefinitionSpatialQueryTopOffset = 0x374;
 constexpr std::size_t kUnitDefinitionSpatialQueryRightOffset = 0x378;
 constexpr std::size_t kUnitDefinitionSpatialQueryBottomOffset = 0x37c;
-constexpr std::size_t kUnitDefinitionEffectCommandDistanceGateOffset = 0x440;
-constexpr std::size_t kUnitDefinitionTargetAcquisitionRangeOffset = 0x444;
-constexpr std::size_t kUnitDefinitionGroupedCommandCompletedTypeGateOffset = 0x4a4;
-constexpr std::size_t kUnitDefinitionGroupedCommandCompletedTypeIndexOffset = 0x4a8;
-constexpr std::size_t kUnitDefinitionPassiveMapEffectSeedOffset = 0x488;
-constexpr std::size_t kUnitDefinitionRenderClassOffset = 0x474;
-constexpr std::size_t kUnitDefinitionProjectileImpactClassOffset = 0x478;
-constexpr std::size_t kUnitDefinitionActionEffectFlagsOffset = 0x4ec;
-constexpr std::size_t kUnitDefinitionTargetSelectionPriorityOffset = 0x4b8;
-constexpr std::size_t kUnitDefinitionGroupedCommandOrderVariantGateOffset = 0x570;
-constexpr std::size_t kUnitDefinitionGroupedCommandOrderVariantIndexOffset = 0x574;
-constexpr std::size_t kUnitDefinitionUiIconMarkerOffset = 0x5b4;
-constexpr std::size_t kUnitDefinitionSpecialDrawFlagOffset = 0x638;
-constexpr std::size_t kUnitDefinitionCellRenderFlagsOffset = 0x63c;
-constexpr std::size_t kUnitDefinitionNameOffsetXOffset = 0x658;
-constexpr std::size_t kUnitDefinitionNameOffsetYOffset = 0x65c;
-constexpr std::size_t kUnitDefinitionNameWidthOffset = 0x660;
-constexpr std::size_t kUnitDefinitionNameHeightOffset = 0x664;
-constexpr std::size_t kUnitDefinitionInteractionBoundsLeftOffset = 0x668;
-constexpr std::size_t kUnitDefinitionInteractionBoundsTopOffset = 0x66c;
-constexpr std::size_t kUnitDefinitionInteractionBoundsWidthOffset = 0x670;
-constexpr std::size_t kUnitDefinitionInteractionBoundsHeightOffset = 0x674;
-constexpr std::size_t kUnitDefinitionLifecycleLockoutPeriodOffset = 0x6c8;
-constexpr std::size_t kUnitDefinitionAbilityTimerPeriodOffset = 0x6d4;
-constexpr std::size_t kUnitDefinitionLifecycleGrowthPeriodOffset = 0x6d8;
-constexpr std::size_t kUnitDefinitionTimedFlagPhaseBPeriodOffset = 0x6dc;
-constexpr std::size_t kUnitDefinitionTimedFlagPhaseAPeriodOffset = 0x6e0;
-constexpr std::size_t kUnitDefinitionLifecycleDecayModeOffset = 0x6e8;
-constexpr std::size_t kUnitDefinitionLifecycleDecayLockoutGateOffset = 0x6f4;
-constexpr std::size_t kUnitDefinitionRuntimeCyclePeriodOffset = 0x6f8;
-constexpr std::size_t kUnitDefinitionActionImpactFrameBaseOffset = 0x774;
-constexpr std::size_t kUnitDefinitionStartupSecondaryStepXOffset = 0x620;
-constexpr std::size_t kUnitDefinitionEffectSourceOffsetBase = 0x67c;
-constexpr std::size_t kUnitDefinitionMovementFrameDeltaBaseOffset = 0x6c4;
+constexpr std::size_t kUnitDefinitionEffectCommandDistanceGateOffset = 0x19c;
+constexpr std::size_t kUnitDefinitionTargetAcquisitionRangeOffset = 0x19c;
+constexpr std::size_t kUnitDefinitionGroupedCommandCompletedTypeGateOffset = 0x1fc;
+constexpr std::size_t kUnitDefinitionGroupedCommandCompletedTypeIndexOffset = 0x200;
+constexpr std::size_t kUnitDefinitionPassiveMapEffectSeedOffset = 0x190;
+constexpr std::size_t kUnitDefinitionRenderClassOffset = 0x17c;
+constexpr std::size_t kUnitDefinitionProjectileImpactClassOffset = 0x180;
+constexpr std::size_t kUnitDefinitionActionEffectFlagsOffset = 0x1f4;
+constexpr std::size_t kUnitDefinitionTargetSelectionPriorityOffset = 0x1c0;
+constexpr std::size_t kUnitDefinitionGroupedCommandOrderVariantGateOffset = 0x2c8;
+constexpr std::size_t kUnitDefinitionGroupedCommandOrderVariantIndexOffset = 0x2cc;
+constexpr std::size_t kUnitDefinitionUiIconMarkerOffset = 0x30c;
+constexpr std::size_t kUnitDefinitionSpecialDrawFlagOffset = 0x340;
+constexpr std::size_t kUnitDefinitionCellRenderFlagsOffset = 0x344;
+constexpr std::size_t kUnitDefinitionNameOffsetXOffset = 0x360;
+constexpr std::size_t kUnitDefinitionNameOffsetYOffset = 0x364;
+constexpr std::size_t kUnitDefinitionNameWidthOffset = 0x368;
+constexpr std::size_t kUnitDefinitionNameHeightOffset = 0x36c;
+constexpr std::size_t kUnitDefinitionInteractionBoundsLeftOffset = 0x370;
+constexpr std::size_t kUnitDefinitionInteractionBoundsTopOffset = 0x374;
+constexpr std::size_t kUnitDefinitionInteractionBoundsWidthOffset = 0x378;
+constexpr std::size_t kUnitDefinitionInteractionBoundsHeightOffset = 0x37c;
+constexpr std::size_t kUnitDefinitionLifecycleLockoutPeriodOffset = 0x13d0;
+constexpr std::size_t kUnitDefinitionAnimationTimerPeriodOffset = 0x13d4;
+constexpr std::size_t kUnitDefinitionAbilityTimerPeriodOffset = 0x13dc;
+constexpr std::size_t kUnitDefinitionLifecycleGrowthPeriodOffset = 0x13e0;
+constexpr std::size_t kUnitDefinitionTimedFlagPhaseBPeriodOffset = 0x13e4;
+constexpr std::size_t kUnitDefinitionTimedFlagPhaseAPeriodOffset = 0x13e8;
+constexpr std::size_t kUnitDefinitionLifecycleDecayModeOffset = 0x13f0;
+constexpr std::size_t kUnitDefinitionLifecycleDecayLockoutGateOffset = 0x13fc;
+constexpr std::size_t kUnitDefinitionRuntimeCyclePeriodOffset = 0x1400;
+constexpr std::size_t kUnitDefinitionActionImpactFrameBaseOffset = 0x247c;
+constexpr std::size_t kUnitDefinitionStartupSecondaryStepXOffset = 0x378;
+constexpr std::size_t kUnitDefinitionEffectSourceOffsetBase = 0x384;
+constexpr std::size_t kUnitDefinitionMovementFrameDeltaBaseOffset = 0x3cc;
 constexpr std::size_t kUnitDefinitionMovementFrameDirectionStride = 0x200;
-constexpr std::size_t kUnitDefinitionMovementStepLimitOffset = 0xa74;
-constexpr std::size_t kUnitDefinitionMovementPeriodOffset = 0xa7c;
+constexpr std::size_t kUnitDefinitionMovementStepLimitOffset = 0x7cc;
+constexpr std::size_t kUnitDefinitionMovementPeriodOffset = 0x7d4;
+constexpr std::size_t kUnitDefinitionAnimationFrameCountOffset = 0x13d8;
+constexpr std::size_t kUnitDefinitionMovementAnimationFrameCountOffset = 0x2218;
 constexpr std::size_t kUnitDefinitionActionRecoveryBaseOffset = 0x13cc;
-constexpr std::size_t kUnitDefinitionUse16DirectionLookupOffset = 0x24b4;
+constexpr std::size_t kUnitDefinitionUse16DirectionLookupOffset = 0x220c;
 constexpr std::size_t kUnitDefinitionOwnerStrategicTargetOffsetX = 0x2410;
 constexpr std::size_t kUnitDefinitionOwnerStrategicTargetOffsetY = 0x2414;
 constexpr std::size_t kUnitDefinitionOwnerTransportRouteMetricOffset = 0x2410;
 constexpr std::size_t kUnitDefinitionCompletionEffectOffsetXOffset = 0x2410;
 constexpr std::size_t kUnitDefinitionCompletionEffectOffsetYOffset = 0x2414;
-constexpr std::size_t kUnitDefinitionStartupFollowupOffsetXOffset = 0x26b8;
-constexpr std::size_t kUnitDefinitionStartupFollowupOffsetYOffset = 0x26bc;
+constexpr std::size_t kUnitDefinitionStartupFollowupOffsetXOffset = 0x2410;
+constexpr std::size_t kUnitDefinitionStartupFollowupOffsetYOffset = 0x2414;
 constexpr std::size_t kProductionOrderDurationBaseOffset = 0x214;
 constexpr std::size_t kProductionOrderDurationModeOffset = 0x218;
 constexpr std::size_t kSessionScenarioRecordModeOffset = 0x00;
@@ -872,6 +936,13 @@ struct RuntimeGlobals {
     std::vector<GameplayDamageRecordLink> gameplay_damage_record_links;
     std::vector<GameplayEndUnit> gameplay_end_condition_units;
     std::vector<std::unique_ptr<UnitMovementUnit>> gameplay_script_spawned_units;
+    // Original gameplay packets address units by their byte offset in the
+    // 0x1d0-byte runtime pool.  Scenario import records which pool nodes were
+    // rejected so the subsequent player-start allocation can pop the same
+    // free-list slots as the original executable.
+    std::vector<u32> gameplay_rejected_scenario_unit_slots;
+    std::vector<u32> gameplay_serialized_free_unit_slots;
+    u32 gameplay_highest_scenario_unit_slot = 0;
     std::vector<GameplayScriptSpawnRequest> gameplay_script_unhandled_spawn_requests;
     std::vector<GameplayScriptDefinitionPatchRequest>
         gameplay_script_last_definition_patch_requests;
@@ -908,6 +979,7 @@ UnitMovementUnit* default_unit_command_find_nearby_follow_target(
     UnitCommandContext& context, UnitMovementUnit& unit);
 void run_default_gameplay_script_phase(GameplayLoopState& state, u32 phase);
 void instantiate_default_gameplay_script_scenario_units(GameplayScriptTriggerState& script);
+void initialize_default_gameplay_original_unit_pool_slots();
 bool default_gameplay_script_object_alive(
     const GameplayScriptTriggerObjectState& object);
 UnitMovementUnit* find_default_movement_unit_by_id(u32 unit_id);
@@ -919,6 +991,7 @@ bool default_mode1_packet_subtype05_transport_gate_blocks(
 UnitMovementContext* default_gameplay_movement_context();
 const ProductionOrderDefinition* default_production_order_definition(u32 order_id);
 u32 default_unit_command_bit_mask(const UnitMovementUnit& unit);
+u32 default_unit_action_capability_mask(const UnitMovementUnit& unit);
 void apply_default_unit_command_bit_mask(UnitMovementUnit& unit, u32 mask);
 void sync_default_gameplay_production_action_definitions(
     GameplayProductionActionState& production);
@@ -996,6 +1069,7 @@ void default_unit_command_oversized_transport_passenger(
 void run_default_periodic_unit_support_effects(UnitLifecycleContext& lifecycle);
 void run_default_active_unit_runtime_dispatch(UnitLifecycleContext& lifecycle,
     UnitMovementUnit& unit);
+void configure_default_unit_lifecycle_callbacks(UnitLifecycleContext& lifecycle);
 void sync_default_owner_threat_points_from_ai(u32 owner);
 void sync_default_owner_threat_points_to_ai(u32 owner);
 bool default_owners_are_related(u32 source_owner, u32 target_owner);
@@ -1078,8 +1152,13 @@ const char* interface_base_sprite_load_error_caption() {
 }
 
 const char* ranker_single_instance_mutex_name() {
-    return startup_platform_row(
+    // Keep the reconstructed executable independent from the original so both
+    // can run side-by-side during behavior verification.
+    static std::string mutex_name;
+    mutex_name = startup_platform_row(
         kSingleInstanceMutexTextRow, kSingleInstanceMutexFallback);
+    mutex_name += "_Reconstructed";
+    return mutex_name.c_str();
 }
 
 bool has_runtime_resource_failure(const RuntimeResourceFailure& failure) {
@@ -1207,7 +1286,13 @@ void activate_frontend_state(const T& state) {
 
 void destroy_existing_window(HWND window) {
     if (window != nullptr && IsWindow(window)) {
+        HWND parent = GetParent(window);
+        ShowWindow(window, SW_HIDE);
         DestroyWindow(window);
+        if (parent != nullptr && IsWindow(parent)) {
+            RedrawWindow(parent, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE |
+                RDW_UPDATENOW | RDW_ALLCHILDREN);
+        }
     }
 }
 
@@ -1504,7 +1589,12 @@ void default_online_show_message(HWND owner, const char* text, COLORREF color,
 }
 
 void default_lobby_show_message(HWND owner, const char* text, COLORREF color) {
-    show_window_status_message(owner, text, color);
+    OnlineModelessPromptState& prompt = online_modeless_prompt_state();
+    if (prompt.window != nullptr && IsWindow(prompt.window)) {
+        DestroyWindow(prompt.window);
+    }
+    CreateOnlineModelessPrompt(prompt, owner, g_runtime.instance,
+        text != nullptr ? text : "", color, false, 0, 0);
 }
 
 void default_avatar_show_message(HWND owner, const char* text, COLORREF color,
@@ -2026,11 +2116,10 @@ void default_link_start_game(LinkLobbyState& state) {
     g_runtime.frontend_mode = mode;
     g_runtime.link_lobby_start_parameters_pending =
         !state.start_parameter_payload.empty();
+    append_startup_log("link start_game mode=%lu start_payload=%zu map=%s",
+        static_cast<unsigned long>(mode), state.start_parameter_payload.size(),
+        state.map_file_name.c_str());
     SetActiveNetworkTransportMode(static_cast<i32>(mode));
-    if (state.main_window != nullptr && IsWindow(state.main_window)) {
-        PostMessageA(state.main_window, WM_USER + 8, 0, 2);
-        return;
-    }
     queue_default_gameplay_session_transition(state.main_window, mode);
 }
 
@@ -2145,6 +2234,10 @@ void default_create_game_open_link_lobby(CreateGameState& state) {
     destroy_existing_window(lobby.window);
     configure_link_lobby_callbacks(lobby);
     destroy_existing_window(state.window);
+    if (owner != nullptr && IsWindow(owner)) {
+        RedrawWindow(owner, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE |
+            RDW_UPDATENOW | RDW_ALLCHILDREN);
+    }
     if (CreateLinkLobbyWindow(lobby, owner, instance, 0,
             reinterpret_cast<LPARAM>(map_descriptor.data()),
             reinterpret_cast<LPARAM>(session_seed.data()), mode, return_context,
@@ -3468,7 +3561,14 @@ void default_gameplay_input_pre_cursor_update(GameplayInputActionState&) {
     if ((overlay.pointer_state & kUiOverlayPointerMinimapDrag) != 0) {
         UpdateCameraFromMinimapDrag(overlay);
     }
-    ScrollCameraFromEdgeOrKeys(overlay);
+    // The original edge-scroll routine consumes the last coordinates written by
+    // a real window pointer message.  A command-line P2P client can enter the
+    // session in the background before receiving one, leaving our zero-filled
+    // InputState to look like a pointer held at the upper-left corner.  Do not
+    // turn that missing sample into continuous camera input.
+    if (g_runtime.app_active && input.pointer_motion_seen) {
+        ScrollCameraFromEdgeOrKeys(overlay);
+    }
     publish_default_ui_overlay_camera(overlay);
 
     if (!g_runtime.directx_initialized) {
@@ -3596,14 +3696,350 @@ void default_gameplay_production_accepted_action_feedback(
 void default_gameplay_input_start_hud_pulse(
     GameplayInputActionState& state, i32 world_x, i32 world_y) {
     UiOverlayState& overlay = ui_overlay_state();
-    StartGameplayHudPulse(overlay,
-        world_x - static_cast<i32>(state.map_origin_x),
-        world_y - static_cast<i32>(state.map_origin_y),
-        overlay.current_frame_counter);
+    StartGameplayHudPulse(overlay, world_x, world_y, overlay.current_tick_ms);
 }
 
 void default_gameplay_input_stop_hud_pulse(GameplayInputActionState&) {
     StopGameplayHudPulse(ui_overlay_state());
+}
+
+struct DefaultGameplayPendingUnitAction {
+    GameplayActionUnitState* action_unit = nullptr;
+    UnitMovementUnit* movement_unit = nullptr;
+    u32 action_index = 0;
+    u32 target_unit_id = 0;
+    i32 world_x = 0;
+    i32 world_y = 0;
+};
+
+bool default_gameplay_unit_supports_action(
+    const UnitMovementUnit* unit, u32 action_index) {
+    return unit != nullptr && action_index < 32u &&
+        (default_unit_action_capability_mask(*unit) &
+            (1u << action_index)) != 0;
+}
+
+void apply_default_selected_unit_formation(
+    const GameplayInputActionState& state,
+    std::vector<DefaultGameplayPendingUnitAction>& actions) {
+    if (actions.size() <= 1) {
+        return;
+    }
+
+    i32 group_left = std::numeric_limits<i32>::max();
+    i32 group_top = std::numeric_limits<i32>::max();
+    i32 group_right = std::numeric_limits<i32>::min();
+    i32 group_bottom = std::numeric_limits<i32>::min();
+    long long occupied_area = 0;
+
+    const auto interaction_width = [](const UnitMovementUnit& unit) {
+        return std::max<i32>(unit.definition.interaction_bounds_width, 1) + 2;
+    };
+    const auto interaction_height = [](const UnitMovementUnit& unit) {
+        return std::max<i32>(unit.definition.interaction_bounds_height, 1) + 2;
+    };
+
+    for (const DefaultGameplayPendingUnitAction& action : actions) {
+        if (action.movement_unit == nullptr) {
+            return;
+        }
+        const UnitMovementUnit& unit = *action.movement_unit;
+        const i32 left = unit.x + unit.definition.interaction_bounds_left;
+        const i32 top = unit.y + unit.definition.interaction_bounds_top;
+        const i32 width = interaction_width(unit);
+        const i32 height = interaction_height(unit);
+        group_left = std::min(group_left, left);
+        group_top = std::min(group_top, top);
+        group_right = std::max(group_right, left + width);
+        group_bottom = std::max(group_bottom, top + height);
+        occupied_area += static_cast<long long>(width) * height;
+    }
+
+    const long long bounding_area =
+        static_cast<long long>(group_right - group_left) *
+        (group_bottom - group_top);
+    if (occupied_area >= bounding_area) {
+        return;
+    }
+
+    const i32 requested_x = actions.front().world_x;
+    const i32 requested_y = actions.front().world_y;
+    const bool requested_outside_group =
+        requested_x < group_left || requested_x > group_right ||
+        requested_y < group_top || requested_y > group_bottom;
+    if (requested_outside_group && bounding_area / 4 <= occupied_area) {
+        const i32 center_x = group_left + (group_right - group_left) / 2;
+        const i32 center_y = group_top + (group_bottom - group_top) / 2;
+        for (DefaultGameplayPendingUnitAction& action : actions) {
+            action.world_x += action.movement_unit->x - center_x;
+            action.world_y += action.movement_unit->y - center_y;
+        }
+    }
+    else {
+        long long side = 0;
+        while ((side + 1) * (side + 1) <= occupied_area) {
+            ++side;
+        }
+        const long long lower_error = occupied_area - side * side;
+        const long long upper_error =
+            (side + 1) * (side + 1) - occupied_area;
+        if (upper_error < lower_error) {
+            ++side;
+        }
+
+        const i32 span = static_cast<i32>((side / 2) * 2);
+        const i32 start_x = requested_x - static_cast<i32>(side / 2);
+        const i32 start_y = requested_y - static_cast<i32>(side / 2);
+        const i32 end_x = start_x + span;
+        i32 cursor_x = start_x;
+        i32 cursor_y = start_y;
+        i32 row_height = 0;
+        for (DefaultGameplayPendingUnitAction& action : actions) {
+            action.world_x = cursor_x;
+            action.world_y = cursor_y;
+            cursor_x += interaction_width(*action.movement_unit);
+            row_height = std::max(
+                row_height, interaction_height(*action.movement_unit));
+            if (cursor_x > end_x) {
+                cursor_x = start_x;
+                cursor_y += row_height;
+                row_height = 0;
+            }
+        }
+    }
+
+    const auto clamp_axis = [](i32 value, u32 tile_count) {
+        if (tile_count == 0) {
+            return value;
+        }
+        const long long limit =
+            static_cast<long long>(tile_count) * 0x20 - 1;
+        return static_cast<i32>(std::clamp<long long>(value, 0, limit));
+    };
+    for (DefaultGameplayPendingUnitAction& action : actions) {
+        action.world_x = clamp_axis(action.world_x, state.map_width_tiles);
+        action.world_y = clamp_axis(action.world_y, state.map_height_tiles);
+    }
+}
+
+bool default_gameplay_input_dispatch_action(
+    GameplayInputActionState& state, u32 action_index) {
+    std::vector<GameplayActionUnitState*> selected_units;
+    selected_units.reserve(state.multi_select_count != 0 ?
+        state.multi_select_count : 1u);
+    for (GameplayActionUnitState& unit : state.units) {
+        if (unit.selected && unit.active && unit.runtime_state < 4 &&
+            unit.owner == state.local_player_index) {
+            selected_units.push_back(&unit);
+        }
+    }
+    if (selected_units.empty()) {
+        const auto primary = std::find_if(state.units.begin(), state.units.end(),
+            [&state](const GameplayActionUnitState& unit) {
+                return unit.offset == state.current_unit_offset && unit.active &&
+                    unit.runtime_state < 4 &&
+                    unit.owner == state.local_player_index;
+            });
+        if (primary != state.units.end()) {
+            selected_units.push_back(&*primary);
+        }
+    }
+    if (selected_units.empty()) {
+        return false;
+    }
+
+    u32 target_unit_id = 0;
+    GameplayActionUnitState* target_action_unit = nullptr;
+    if (state.last_validation_unit_offset != 0) {
+        const auto target = std::find_if(state.units.begin(), state.units.end(),
+            [&state](const GameplayActionUnitState& unit) {
+                return unit.offset == state.last_validation_unit_offset &&
+                    unit.active && unit.runtime_state < 4 && unit.visible;
+            });
+        if (target != state.units.end()) {
+            target_unit_id = target->offset;
+            target_action_unit = &*target;
+        }
+    }
+
+    const auto publish_group_action = [&state, &selected_units](
+        u32 subtype, u32 packet_action, u32 target, bool check_capability) {
+        bool published = false;
+        bool publish_succeeded = true;
+        for (GameplayActionUnitState* selected : selected_units) {
+            UnitMovementUnit* movement =
+                find_default_movement_unit_by_id(selected->offset);
+            if (check_capability &&
+                !default_gameplay_unit_supports_action(
+                    movement, packet_action & 0x7fffffffu)) {
+                continue;
+            }
+            published = true;
+            publish_succeeded = PublishLocalMode1GameplayPacket(
+                (subtype << 24) | (selected->owner & 0xffu), packet_action,
+                selected->offset, target, 0, 0) && publish_succeeded;
+        }
+        return published && publish_succeeded;
+    };
+
+    switch (action_index) {
+    case 0x00u: { // guard / idle
+        const u32 queued = input_state().shift_down ? 0x80000000u : 0;
+        return publish_group_action(0x02u, queued, 0, true);
+    }
+    case 0x04u: { // contextual right-click: harvest / attack / move
+        const u32 queued = input_state().shift_down ? 0x80000000u : 0;
+        bool harvest_point = false;
+        if (UnitMovementContext* movement = default_gameplay_movement_context()) {
+            const u32 tile_x = state.last_action_world_x >> 5;
+            const u32 tile_y = state.last_action_world_y >> 5;
+            if (const UnitMovementCell* cell =
+                    GetMovementCell(movement->map, tile_x, tile_y)) {
+                harvest_point =
+                    (cell->flags & kMapCellHarvestAmountMask) != 0;
+            }
+        }
+        const bool harvest_object = target_action_unit != nullptr &&
+            target_action_unit->owner >= kPlayerSlotCount &&
+            target_action_unit->type >= 0x60u;
+        const bool hostile_unit = target_action_unit != nullptr &&
+            target_action_unit->owner < kPlayerSlotCount &&
+            target_action_unit->owner != state.local_player_index &&
+            target_action_unit->type < 0x60u;
+
+        std::vector<DefaultGameplayPendingUnitAction> actions;
+        actions.reserve(selected_units.size());
+        for (GameplayActionUnitState* selected : selected_units) {
+            UnitMovementUnit* movement =
+                find_default_movement_unit_by_id(selected->offset);
+            u32 selected_action = 0x04u;
+            if ((harvest_point || harvest_object) &&
+                default_gameplay_unit_supports_action(movement, 0x07u)) {
+                selected_action = 0x07u;
+            }
+            else if (hostile_unit &&
+                default_gameplay_unit_supports_action(movement, 0x05u)) {
+                selected_action = 0x05u;
+            }
+            else if (!default_gameplay_unit_supports_action(
+                         movement, selected_action)) {
+                continue;
+            }
+            actions.push_back(DefaultGameplayPendingUnitAction{
+                selected, movement, selected_action,
+                selected->offset == target_unit_id ? 0u : target_unit_id,
+                static_cast<i32>(state.last_action_world_x),
+                static_cast<i32>(state.last_action_world_y)});
+        }
+        if (!harvest_point && !harvest_object && !hostile_unit &&
+            target_unit_id == 0) {
+            apply_default_selected_unit_formation(state, actions);
+        }
+        bool publish_succeeded = true;
+        for (const DefaultGameplayPendingUnitAction& action : actions) {
+            publish_succeeded = PublishLocalMode1GameplayPacket(
+                (0x02u << 24) | (action.action_unit->owner & 0xffu),
+                action.action_index | queued, action.action_unit->offset,
+                action.target_unit_id, static_cast<u32>(action.world_x),
+                static_cast<u32>(action.world_y)) && publish_succeeded;
+        }
+        return !actions.empty() && publish_succeeded;
+    }
+    case 0x06u: { // worker building placement
+        const u32 queued = input_state().shift_down ? 0x80000000u : 0;
+        const u32 building_index = ui_overlay_state().placement_definition_id;
+        const u32 world_x = state.last_action_world_x & ~0x1fu;
+        const u32 world_y = state.last_action_world_y & ~0x1fu;
+        bool published = false;
+        bool publish_succeeded = true;
+        for (GameplayActionUnitState* selected : selected_units) {
+            UnitMovementUnit* movement =
+                find_default_movement_unit_by_id(selected->offset);
+            if (!default_gameplay_unit_supports_action(movement, 0x06u)) {
+                continue;
+            }
+            published = true;
+            publish_succeeded = PublishLocalMode1GameplayPacket(
+                (0x02u << 24) | (selected->owner & 0xffu),
+                0x06u | queued, selected->offset, building_index,
+                world_x, world_y) && publish_succeeded;
+        }
+        return published && publish_succeeded;
+    }
+    case 0x09u: { // patrol
+        const u32 queued = input_state().shift_down ? 0x80000000u : 0;
+        std::vector<DefaultGameplayPendingUnitAction> actions;
+        actions.reserve(selected_units.size());
+        for (GameplayActionUnitState* selected : selected_units) {
+            UnitMovementUnit* movement =
+                find_default_movement_unit_by_id(selected->offset);
+            if (!default_gameplay_unit_supports_action(movement, action_index)) {
+                continue;
+            }
+            actions.push_back(DefaultGameplayPendingUnitAction{
+                selected, movement, action_index,
+                selected->offset == target_unit_id ? 0u : target_unit_id,
+                static_cast<i32>(state.last_action_world_x),
+                static_cast<i32>(state.last_action_world_y)});
+        }
+        apply_default_selected_unit_formation(state, actions);
+        bool publish_succeeded = true;
+        for (const DefaultGameplayPendingUnitAction& action : actions) {
+            publish_succeeded = PublishLocalMode1GameplayPacket(
+                (0x02u << 24) | (action.action_unit->owner & 0xffu),
+                action.action_index | queued, action.action_unit->offset,
+                action.target_unit_id, static_cast<u32>(action.world_x),
+                static_cast<u32>(action.world_y)) && publish_succeeded;
+        }
+        return !actions.empty() && publish_succeeded;
+    }
+    case 0x05u: { // attack, falling back to move per selected unit
+        const u32 queued = input_state().shift_down ? 0x80000000u : 0;
+        std::vector<DefaultGameplayPendingUnitAction> actions;
+        actions.reserve(selected_units.size());
+        for (GameplayActionUnitState* selected : selected_units) {
+            if (selected->offset == target_unit_id) {
+                continue;
+            }
+            UnitMovementUnit* movement =
+                find_default_movement_unit_by_id(selected->offset);
+            u32 selected_action = 0x05u;
+            if (!default_gameplay_unit_supports_action(movement, selected_action)) {
+                selected_action = 0x04u;
+                if (!default_gameplay_unit_supports_action(
+                        movement, selected_action)) {
+                    continue;
+                }
+            }
+            actions.push_back(DefaultGameplayPendingUnitAction{
+                selected, movement, selected_action, target_unit_id,
+                static_cast<i32>(state.last_action_world_x),
+                static_cast<i32>(state.last_action_world_y)});
+        }
+        if (target_unit_id == 0) {
+            apply_default_selected_unit_formation(state, actions);
+        }
+        bool publish_succeeded = true;
+        for (const DefaultGameplayPendingUnitAction& action : actions) {
+            publish_succeeded = PublishLocalMode1GameplayPacket(
+                (0x02u << 24) | (action.action_unit->owner & 0xffu),
+                action.action_index | queued, action.action_unit->offset,
+                action.target_unit_id, static_cast<u32>(action.world_x),
+                static_cast<u32>(action.world_y)) &&
+                publish_succeeded;
+        }
+        return !actions.empty() && publish_succeeded;
+    }
+    case 0x0du:
+        // The original B7 object-action entry only resolves the selected
+        // owner's colour.  The similarly shaped status-mask publisher belongs
+        // to UI item 0x19f, not to this object-action slot.
+        return true;
+    case 0x21u: // hold position
+        return publish_group_action(0x0au, 0x21u, 0, false);
+    default:
+        return false;
+    }
 }
 
 void default_gameplay_input_reset_snapshot_side_state(
@@ -3614,10 +4050,7 @@ void default_gameplay_input_reset_snapshot_side_state(
 void default_gameplay_production_start_hud_pulse(
     GameplayProductionActionState& state, i32 world_x, i32 world_y) {
     UiOverlayState& overlay = ui_overlay_state();
-    StartGameplayHudPulse(overlay,
-        world_x - static_cast<i32>(state.map_origin_x),
-        world_y - static_cast<i32>(state.map_origin_y),
-        overlay.current_frame_counter);
+    StartGameplayHudPulse(overlay, world_x, world_y, overlay.current_tick_ms);
 }
 
 void default_gameplay_production_stop_hud_pulse(GameplayProductionActionState&) {
@@ -3699,6 +4132,10 @@ void configure_default_gameplay_input_action_context(
     if (state.callbacks.select_action_index == nullptr) {
         state.callbacks.select_action_index =
             DefaultSelectGameplayInputActionIndex;
+    }
+    if (state.callbacks.dispatch_action == nullptr) {
+        state.callbacks.dispatch_action =
+            default_gameplay_input_dispatch_action;
     }
     if (state.callbacks.check_production_availability == nullptr) {
         state.callbacks.check_production_availability =
@@ -3802,6 +4239,21 @@ const char* resolve_gameplay_session_archive_path() {
     P2PNetworkLaunchParameters& launch = p2p_network_launch_parameters();
     if (launch.uses_map_file && launch.map_path[0] != '\0') {
         return launch.map_path.data();
+    }
+
+    // The original Link lobby normalizes the descriptor's map name into its
+    // absolute DAT_01244a40 path (cwd + "\\Maps" + descriptor tail), then
+    // passes that path directly to the gameplay session importer.  The
+    // reconstructed download preparation already performs the same safe
+    // basename-based resolution; retain and consume that resolved path here.
+    LinkLobbyState& link_lobby = link_lobby_state();
+    if (!link_lobby.prepared_map_path.empty()) {
+        const DWORD attributes =
+            GetFileAttributesA(link_lobby.prepared_map_path.c_str());
+        if (attributes != INVALID_FILE_ATTRIBUTES &&
+            (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+            return link_lobby.prepared_map_path.c_str();
+        }
     }
 
     CreateGameState& create_game = create_game_state();
@@ -4428,6 +4880,7 @@ bool default_gameplay_flow_import_session_bundle(GameplaySessionFlowState& state
 
     const char* archive_path = resolve_gameplay_session_archive_path();
     if (archive_path == nullptr || archive_path[0] == '\0') {
+        append_startup_log("gameplay import missing selected session archive");
         OutputDebugStringA(
             "Gameplay session import callback reached without a selected session "
             "archive.\n");
@@ -4435,6 +4888,14 @@ bool default_gameplay_flow_import_session_bundle(GameplaySessionFlowState& state
     }
 
     g_runtime.gameplay_session_archive_path = archive_path;
+    {
+        const LinkLobbyState& lobby = link_lobby_state();
+        const int local_index = std::clamp(
+            lobby.local_player_index, 0, kLinkLobbyAvatarCount - 1);
+        const u32 theme = lobby.tribe_choices[local_index] <= 3 ?
+            lobby.tribe_choices[local_index] : 0u;
+        SetRuntimeResourceThemeIndex(theme);
+    }
     const bool bundle_imported = HandleGameplaySessionBundleImport(archive_path, 0);
     if (!bundle_imported) {
         report_gameplay_session_import_resource_failure();
@@ -4458,6 +4919,10 @@ bool default_gameplay_flow_import_session_bundle(GameplaySessionFlowState& state
         g_runtime.gameplay_session_bundle_loaded ? "succeeded" : "failed",
         g_runtime.gameplay_session_archive_path.c_str(),
         g_runtime.gameplay_terrain_tile_sheet_loaded ? "loaded" : "not loaded");
+    append_startup_log("gameplay import %s archive=%s terrain=%s",
+        g_runtime.gameplay_session_bundle_loaded ? "ok" : "failed",
+        g_runtime.gameplay_session_archive_path.c_str(),
+        g_runtime.gameplay_terrain_tile_sheet_loaded ? "ok" : "failed");
     OutputDebugStringA(text);
     return g_runtime.gameplay_session_bundle_loaded;
 }
@@ -4470,6 +4935,11 @@ void default_gameplay_startup_unit_placed(UnitMovementUnit& unit) {
     UnitMovementContext* movement =
         lifecycle != nullptr ? lifecycle->movement : nullptr;
     if (movement == nullptr) {
+        append_startup_log(
+            "start-slots: unit placed skipped missing movement id=%lu type=%lu owner=%lu",
+            static_cast<unsigned long>(unit.id),
+            static_cast<unsigned long>(unit.type_id),
+            static_cast<unsigned long>(unit.owner_id));
         return;
     }
 
@@ -4482,11 +4952,23 @@ void default_gameplay_startup_unit_placed(UnitMovementUnit& unit) {
     unit.active = true;
     unit.linked_unit = &unit;
     movement->active_units.insert(movement->active_units.begin(), &unit);
+    append_startup_log(
+        "start-slots: unit placed id=%lu type=%lu owner=%lu xy=%ld,%ld active_units=%zu placed=%zu",
+        static_cast<unsigned long>(unit.id),
+        static_cast<unsigned long>(unit.type_id),
+        static_cast<unsigned long>(unit.owner_id),
+        static_cast<long>(unit.x), static_cast<long>(unit.y),
+        movement->active_units.size(),
+        g_runtime.gameplay_startup_state.placed_units.size());
 }
 
 void default_gameplay_startup_initialize_local_camera(i32 x, i32 y) {
     sync_default_ui_overlay_runtime_from_gameplay_state();
     UiOverlayState& overlay = ui_overlay_state();
+    constexpr std::array<i32, 4> kHudY{{439, 436, 421, 452}};
+    const u32 theme = std::min<u32>(interface_resource_state().theme_index, 3);
+    overlay.minimap_camera_anchor_x = static_cast<i32>(kOriginalClientWidth / 2);
+    overlay.minimap_camera_anchor_y = kHudY[theme] / 2;
     ClampCameraToMinimapPoint(overlay, x, y);
     publish_default_ui_overlay_camera(overlay);
 
@@ -4580,10 +5062,18 @@ void reset_default_gameplay_startup_slots(GameplaySessionStartupState& startup) 
     startup = GameplaySessionStartupState{};
     g_runtime.gameplay_movement_context = UnitMovementContext{};
     g_runtime.gameplay_lifecycle_context = UnitLifecycleContext{};
+    g_runtime.gameplay_lifecycle_context.owner_population_limit.fill(0);
+    std::fill_n(g_runtime.gameplay_lifecycle_context.owner_population_limit.begin(),
+        kPlayerSlotCount, 0xb4u);
     g_runtime.gameplay_lifecycle_context.movement =
         &g_runtime.gameplay_movement_context;
-    g_runtime.gameplay_lifecycle_context.callbacks.find_definition =
-        default_unit_lifecycle_find_definition;
+    // The original installs the complete unit-runtime callback surface before
+    // it materializes scenario/player units.  In particular, the two RNG calls
+    // in InitializePlacedUnitFromMapSlot (0x004cf3e9/0x004cf431) must already
+    // be live here; deferring this until simulation phase 1 gives every startup
+    // unit the same direction/frame and leaves the gameplay RNG stream behind.
+    configure_default_unit_lifecycle_callbacks(
+        g_runtime.gameplay_lifecycle_context);
     g_runtime.gameplay_unit_spatial_indexes = UnitSpatialIndexSet{};
     InitializeUnitSpatialIndexSet(g_runtime.gameplay_unit_spatial_indexes);
     g_runtime.gameplay_unit_effect_runtime = UnitEffectRuntimeState{};
@@ -4671,6 +5161,7 @@ void set_default_primary_miles_music_policy_mode(u32 mode) {
 
 void reset_default_mode1_packet_state_from_player_slots() {
     ResetMode1GameplayPacketDispatch();
+    ResetMode1ReliablePacketState();
 
     const PlayerSlotRuntimeState& players = g_runtime.gameplay_player_slots;
     Mode1GameplayPacketDispatchState& packets = mode1_gameplay_packet_dispatch_state();
@@ -4682,11 +5173,15 @@ void reset_default_mode1_packet_state_from_player_slots() {
         Mode1GameplayPlayerPacketState& packet_player = packets.players[owner];
         const bool disabled = owner >= active_limit ||
             players.slot_states[owner] == static_cast<u8>(PlayerSlotState::disabled);
-        packet_player.status = disabled ? static_cast<u8>(PlayerSlotState::disabled) : 0;
+        packet_player.status = disabled ?
+            static_cast<u8>(PlayerSlotState::disabled) :
+            players.slot_states[owner];
         packet_player.inactive = disabled;
         packet_player.relation_mask = players.owner_relation_masks[owner];
         packet_player.relation_block_mask = players.owner_visibility_masks[owner];
-        if (!disabled) {
+        SetMode1ReliablePlayerStatus(owner, packet_player.status);
+        if (packet_player.status != static_cast<u8>(PlayerSlotState::player_controlled) &&
+            packet_player.status != static_cast<u8>(PlayerSlotState::disabled)) {
             ++active_count;
         }
     }
@@ -5467,6 +5962,16 @@ void apply_default_session_fixed44_player_slot_masks() {
     RebuildSessionPlayerSlotMasksFromFixed44Records(
         g_runtime.gameplay_player_slots,
         g_runtime.staged_session_definitions.fixed44_records);
+    // The synthesized default FORCES record uses a shared 0xff mask.  Direct
+    // link modes do not use that record as a team declaration: each active
+    // player is an opponent unless a dedicated team mode grouped the slots.
+    // Re-apply the session-mode relation builder so the fixed44 import cannot
+    // turn every P2P player and Computer slot into allies.
+    const u32 session_mode = g_runtime.gameplay_startup_state.session_mode;
+    if (session_mode == 1 || session_mode == 5 || session_mode == 6) {
+        BuildGameplaySessionPlayerRelationMasks(
+            g_runtime.gameplay_player_slots, session_mode);
+    }
     SelectNearestHostilePlayerSlots(g_runtime.gameplay_player_slots);
 }
 
@@ -5622,6 +6127,10 @@ bool scenario_object_uses_equipment_slot_zero(u32 type_id) {
     return type_id < 0x60;
 }
 
+bool scenario_object_uses_cell_render_scratch(u32 type_id) {
+    return !scenario_object_uses_equipment_slot_zero(type_id);
+}
+
 u32 default_scenario_object_reference_to_unit_id(u32 value) {
     if (value != 0 && value % kGameplayScenarioObjectStride == 0) {
         const u32 object_index = value / kGameplayScenarioObjectStride;
@@ -5641,9 +6150,12 @@ u32 default_scenario_object_id_to_reference(u32 value) {
 
 u32 default_unit_id_to_scenario_object_reference(const UnitMovementUnit* unit,
     u32 value) {
-    if (unit != nullptr && unit->target != nullptr && value == unit->target->id &&
-        unit->target->id < kGameplayScenarioObjectMaxSlots) {
-        return default_scenario_object_id_to_reference(unit->target->id);
+    if (unit != nullptr && unit->target != nullptr && value == unit->target->id) {
+        const u32 slot = unit->target->runtime_slot_index;
+        if (slot != 0 && slot != kInvalidUnitRuntimeSlotIndex &&
+            slot < kGameplayScenarioObjectMaxSlots) {
+            return slot * kGameplayScenarioObjectStride;
+        }
     }
     return value;
 }
@@ -5678,8 +6190,23 @@ u32 default_command_payload_reference_to_unit_id(u32 state, u32 value) {
 }
 
 u32 default_unit_id_to_command_payload_reference(u32 state, u32 value) {
-    if (!default_command_payload_uses_unit_reference(state, value) ||
-        value >= kGameplayScenarioObjectMaxSlots) {
+    if (!default_command_payload_uses_unit_reference(state, value)) {
+        return value;
+    }
+
+    // Small raw offsets are numerically indistinguishable from legacy object
+    // indices by range alone (slots 1..4 are 0x1d0..0x740).  Prefer the live
+    // unit's stable runtime slot before applying the legacy index conversion,
+    // otherwise those valid wire ids would be multiplied by 0x1d0 twice.
+    if (const UnitMovementUnit* target =
+            find_default_movement_unit_by_id(value)) {
+        const u32 slot = target->runtime_slot_index;
+        if (slot != 0 && slot != kInvalidUnitRuntimeSlotIndex &&
+            slot < kGameplayScenarioObjectMaxSlots) {
+            return slot * kGameplayScenarioObjectStride;
+        }
+    }
+    if (value >= kGameplayScenarioObjectMaxSlots) {
         return value;
     }
     return default_scenario_object_id_to_reference(value);
@@ -6195,21 +6722,30 @@ void initialize_default_gameplay_terrain_layer_from_session_records() {
     const std::size_t cell_count =
         static_cast<std::size_t>(layer.stride_tiles) * layer.height_tiles;
     layer.terrain_flags.resize(cell_count);
-    layer.overlay_flags.assign(cell_count, 0);
+    layer.overlay_flags.resize(cell_count);
 
     const GameplaySessionLoadState& load = gameplay_session_load_state();
-    const std::vector<u8>* source = nullptr;
-    if (kGameplayScenarioMapLayerRecordIndex < load.records.size() &&
-        load.record_loaded[kGameplayScenarioMapLayerRecordIndex]) {
-        source = &load.records[kGameplayScenarioMapLayerRecordIndex];
+    const std::vector<u8>* terrain_source = nullptr;
+    if (kGameplayMapSourceLayerRecordIndex < load.records.size() &&
+        load.record_loaded[kGameplayMapSourceLayerRecordIndex]) {
+        terrain_source = &load.records[kGameplayMapSourceLayerRecordIndex];
+    }
+    const std::vector<u8>* overlay_source = nullptr;
+    if (kGameplayMapOverlayLayerRecordIndex < load.records.size() &&
+        load.record_loaded[kGameplayMapOverlayLayerRecordIndex]) {
+        overlay_source = &load.records[kGameplayMapOverlayLayerRecordIndex];
     }
 
-    if (source != nullptr) {
-        for (u32 y = 0; y < layer.height_tiles; ++y) {
-            for (u32 x = 0; x < layer.width_tiles; ++x) {
-                const u32 cell = y * layer.stride_tiles + x;
+    for (u32 y = 0; y < layer.height_tiles; ++y) {
+        for (u32 x = 0; x < layer.width_tiles; ++x) {
+            const u32 cell = y * layer.stride_tiles + x;
+            if (terrain_source != nullptr) {
                 layer.terrain_flags[cell] =
-                    read_default_map_layer_u32(*source, cell);
+                    read_default_map_layer_u32(*terrain_source, cell);
+            }
+            if (overlay_source != nullptr) {
+                layer.overlay_flags[cell] =
+                    read_default_map_layer_u32(*overlay_source, cell);
             }
         }
     }
@@ -6310,6 +6846,21 @@ void default_gameplay_frame_draw_terrain_decorations(
         brush_layer.tile_flags = visibility_grid.previous;
     }
     TerrainDecorationResourceTable brush_resources{};
+    const UnitDefinitionResourceCatalogState& unit_resources =
+        unit_definition_resource_catalog_state();
+    if (unit_resources.loaded) {
+        brush_resources.resource_base_by_id.resize(unit_resources.records.size(), 0);
+        for (std::size_t id = 0; id < unit_resources.records.size(); ++id) {
+            const UnitDefinitionResourceRecord& record = unit_resources.records[id];
+            if (record.loaded &&
+                record.first_image_entries[0] != kInvalidResourceEntry) {
+                // FUN_00424ba0 indexes DAT_00aebfb8 with the brush id's
+                // 0x38-byte definition stride and uses its first image entry.
+                brush_resources.resource_base_by_id[id] =
+                    static_cast<i32>(record.first_image_entries[0]);
+            }
+        }
+    }
 
     TerrainDecorationRenderState& state =
         g_runtime.gameplay_terrain_decoration_render_state;
@@ -6351,6 +6902,31 @@ void default_gameplay_frame_draw_terrain_decorations(
     }
 }
 
+void restore_default_gameplay_random_state_from_session_header() {
+    const GameplaySessionLoadState& load = gameplay_session_load_state();
+    if (load.records.empty() || !load.record_loaded[0]) {
+        return;
+    }
+
+    const std::vector<u8>& header = load.records[0];
+    if (header.size() < kGameplayHeaderRandomCallCountOffset + sizeof(u32)) {
+        return;
+    }
+
+    // HandleGameplaySessionBundleImport (0x004d1ccc) copies record 0 to
+    // DAT_00705d98.  Consequently the original frame RNG globals at
+    // 0x007071b8/0x007071bc/0x007071c0 are archive-backed fields +0x1420,
+    // +0x1424 and +0x1428.  Starting from a zeroed reconstruction changes
+    // every placement facing and all later deterministic simulation rolls.
+    GameplayFrameRandomState& random = g_runtime.gameplay_frame_random_state;
+    random.limit = read_default_session_record_u32(
+        header, kGameplayHeaderRandomLimitOffset, random.limit);
+    random.seed = read_default_session_record_u32(
+        header, kGameplayHeaderRandomSeedOffset, random.seed);
+    random.call_count = read_default_session_record_u32(
+        header, kGameplayHeaderRandomCallCountOffset, random.call_count);
+}
+
 void run_default_gameplay_session_runtime_reset(
     GameplaySessionStartupState& startup, const char* player_name) {
     mirror_startup_slots_to_player_runtime(startup, g_runtime.gameplay_player_slots);
@@ -6383,6 +6959,7 @@ void run_default_gameplay_session_runtime_reset(
         default_gameplay_session_update_owner_display_name;
 
     InitializeGameplaySessionRuntimeState(reset);
+    restore_default_gameplay_random_state_from_session_header();
     sync_default_gameplay_session_runtime_views_after_reset();
     rebuild_default_unit_reference_tables_from_catalog();
     load_default_game_session_avatar_runtime();
@@ -6392,6 +6969,9 @@ void run_default_gameplay_session_runtime_reset(
 }
 
 void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& state) {
+    append_startup_log("start-slots: begin archive=%s frontend_mode=%lu",
+        g_runtime.gameplay_session_archive_path.c_str(),
+        static_cast<unsigned long>(g_runtime.frontend_mode));
     g_runtime.p2p_session_start_state = P2PGameSessionStartState{};
     g_runtime.session_runtime_import_state = SessionRuntimeImportState{};
     g_runtime.active_session_definitions = SessionRuntimeDefinitionTableSet{};
@@ -6438,8 +7018,12 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     configure_default_mode1_gameplay_runtime_callbacks();
     ResetPlayerSlotRuntime(g_runtime.gameplay_player_slots);
     configure_default_mode1_gameplay_runtime_callbacks();
+    append_startup_log("start-slots: runtime globals reset ok");
     const bool link_lobby_start_parameters_available_for_start =
         link_lobby_startup_parameters_available();
+    append_startup_log("start-slots: link params available=%s payload=%zu",
+        link_lobby_start_parameters_available_for_start ? "yes" : "no",
+        link_lobby_state().start_parameter_payload.size());
 
     P2PGameSessionStartInput input{};
     input.import_state = &g_runtime.session_runtime_import_state;
@@ -6461,17 +7045,42 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     copy_result_text(input.players[0].name, player_name);
     input.players[0].owner_slot = 0;
     if (link_lobby_start_parameters_available_for_start) {
+        append_startup_log("start-slots: populate link lobby input begin");
         populate_p2p_session_start_input_from_link_lobby(input);
+        append_startup_log(
+            "start-slots: populate link lobby input ok local=%lu network_players=%lu",
+            static_cast<unsigned long>(input.copied_runtime_local_player),
+            static_cast<unsigned long>(input.network_player_count));
     }
 
+    append_startup_log("start-slots: import owner availability begin");
     import_default_session_owner_unit_availability();
+    append_startup_log("start-slots: import owner availability ok");
+    append_startup_log("start-slots: stage runtime definitions begin");
     stage_default_session_runtime_override_definitions();
+    append_startup_log("start-slots: stage runtime definitions ok");
 
+    append_startup_log("start-slots: PrepareP2PGameSessionStart begin");
     g_runtime.p2p_session_start_prepared =
         PrepareP2PGameSessionStart(g_runtime.p2p_session_start_state, input);
+    append_startup_log(
+        "start-slots: PrepareP2PGameSessionStart ok prepared=%s network_players=%lu local=%lu",
+        g_runtime.p2p_session_start_prepared ? "yes" : "no",
+        static_cast<unsigned long>(
+            g_runtime.p2p_session_start_state.network_player_count),
+        static_cast<unsigned long>(
+            g_runtime.p2p_session_start_state.local_player_slot));
     gameplay_loop_state().fixed_step_mode = 4;
     if (link_lobby_start_parameters_available_for_start) {
-        SetMode1ReliableLocalPlayerIndex(input.copied_runtime_local_player);
+        const u32 local_player = input.copied_runtime_local_player;
+        SetMode1ReliableLocalPlayerIndex(local_player);
+        // The original uses the same DAT_00725100 local slot both for the
+        // reliable channel and for SnapshotLocalGameplayChecksum's packed
+        // opcode.  Keeping the input/production publishers at their reset
+        // default (slot 0) makes a joining slot-1 client inject its heartbeat
+        // packets into the host's channel and leaves its own channel empty.
+        gameplay_input_action_state().local_player_index = local_player;
+        gameplay_production_action_state().local_player_index = local_player;
     }
     SetRankerMainWindowGenericAiProfileState(
         g_runtime.p2p_session_start_state.generic_ai_profile_mode,
@@ -6479,30 +7088,106 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     SetRankerMainWindowNetworkAiProfileOverride(
         g_runtime.p2p_session_start_state.network_ai_profile_override);
 
+    append_startup_log("start-slots: reset startup slots begin");
     reset_default_gameplay_startup_slots(g_runtime.gameplay_startup_state);
+    append_startup_log("start-slots: reset startup slots ok lifecycle=%p movement=%p",
+        static_cast<void*>(g_runtime.gameplay_startup_state.lifecycle),
+        g_runtime.gameplay_startup_state.lifecycle != nullptr ?
+            static_cast<void*>(g_runtime.gameplay_startup_state.lifecycle->movement) :
+            nullptr);
+    append_startup_log("start-slots: import map startup begin");
     import_default_session_map_record_startup_state();
+    append_startup_log("start-slots: import map startup ok mode=%lu active_slots=%lu",
+        static_cast<unsigned long>(g_runtime.gameplay_startup_state.session_mode),
+        static_cast<unsigned long>(g_runtime.gameplay_startup_state.active_slot_count));
+    append_startup_log("start-slots: import scenario startup begin");
     import_default_session_scenario_record_startup_state();
+    append_startup_log("start-slots: import scenario startup ok");
+    append_startup_log("start-slots: import player startup begin");
     import_default_session_player_record_startup_state();
+    append_startup_log("start-slots: import player startup ok");
+    append_startup_log("start-slots: import starting unit types begin");
     import_default_session_starting_unit_types();
+    append_startup_log("start-slots: import starting unit types ok");
+    append_startup_log("start-slots: apply pending link params begin");
     apply_pending_link_lobby_start_parameters_to_gameplay_startup();
+    append_startup_log("start-slots: apply pending link params ok mode=%lu active_slots=%lu local=%lu",
+        static_cast<unsigned long>(g_runtime.gameplay_startup_state.session_mode),
+        static_cast<unsigned long>(g_runtime.gameplay_startup_state.active_slot_count),
+        static_cast<unsigned long>(g_runtime.gameplay_startup_state.local_owner_id));
+    for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+        const GameplayScenarioOwnerSlot& slot =
+            g_runtime.gameplay_startup_state.owner_slots[owner];
+        append_startup_log(
+            "start-slots: owner=%lu state=%lu map_slot=%lu faction=%lu tribe=%lu xy=%ld,%ld units=%lu/%lu",
+            static_cast<unsigned long>(owner),
+            static_cast<unsigned long>(slot.slot_state),
+            static_cast<unsigned long>(slot.map_slot),
+            static_cast<unsigned long>(slot.faction_id),
+            static_cast<unsigned long>(slot.tribe_id),
+            static_cast<long>(slot.start_x),
+            static_cast<long>(slot.start_y),
+            static_cast<unsigned long>(slot.starting_unit_type),
+            static_cast<unsigned long>(slot.secondary_starting_unit_type));
+    }
+    append_startup_log("start-slots: runtime reset begin");
     run_default_gameplay_session_runtime_reset(
         g_runtime.gameplay_startup_state, player_name);
+    append_startup_log(
+        "start-slots: runtime reset ok active_units=%zu lifecycle_units=%zu map=%lux%lu",
+        g_runtime.gameplay_movement_context.active_units.size(),
+        g_runtime.gameplay_movement_context.lifecycle_units.size(),
+        static_cast<unsigned long>(g_runtime.gameplay_movement_context.map.width),
+        static_cast<unsigned long>(g_runtime.gameplay_movement_context.map.height));
+    append_startup_log("start-slots: movement map init begin");
     initialize_default_gameplay_movement_map_from_session_records(
         g_runtime.gameplay_movement_context);
+    append_startup_log("start-slots: movement map init ok map=%lux%lu cells=%zu",
+        static_cast<unsigned long>(g_runtime.gameplay_movement_context.map.width),
+        static_cast<unsigned long>(g_runtime.gameplay_movement_context.map.height),
+        g_runtime.gameplay_movement_context.map.cells.size());
+    append_startup_log("start-slots: terrain layer init begin");
     initialize_default_gameplay_terrain_layer_from_session_records();
-    StartGameplaySessionFromScenarioSlots(g_runtime.gameplay_startup_state);
+    append_startup_log("start-slots: terrain layer init ok");
+    append_startup_log("start-slots: instantiate script scenario units begin");
     instantiate_default_gameplay_script_scenario_units(gameplay_script_trigger_state());
+    append_startup_log("start-slots: instantiate script scenario units ok active=%zu spawned=%zu",
+        g_runtime.gameplay_movement_context.active_units.size(),
+        g_runtime.gameplay_script_spawned_units.size());
+    append_startup_log("start-slots: StartGameplaySessionFromScenarioSlots begin");
+    StartGameplaySessionFromScenarioSlots(g_runtime.gameplay_startup_state);
+    append_startup_log("start-slots: StartGameplaySessionFromScenarioSlots ok placed=%zu active=%zu",
+        g_runtime.gameplay_startup_state.placed_units.size(),
+        g_runtime.gameplay_movement_context.active_units.size());
+    initialize_default_gameplay_original_unit_pool_slots();
+    append_startup_log("start-slots: activate player slots begin");
     activate_default_player_slots_from_active_units();
+    append_startup_log("start-slots: activate player slots ok active_count=%lu local=%lu",
+        static_cast<unsigned long>(g_runtime.gameplay_player_slots.active_slot_count),
+        static_cast<unsigned long>(g_runtime.gameplay_player_slots.local_player_slot));
+    append_startup_log("start-slots: map effect init begin");
     initialize_default_map_effect_context_from_session_records();
+    append_startup_log("start-slots: map effect init ok");
+    append_startup_log("start-slots: fixed slot masks begin");
     apply_default_session_fixed44_player_slot_masks();
+    append_startup_log("start-slots: fixed slot masks ok");
+    append_startup_log("start-slots: packet reset begin");
     reset_default_mode1_packet_state_from_player_slots();
+    append_startup_log("start-slots: packet reset ok");
+    append_startup_log("start-slots: owner AI refresh begin");
     refresh_default_owner_ai_target_profiles();
+    append_startup_log("start-slots: owner AI refresh ok");
+    append_startup_log("start-slots: end condition sync begin");
     sync_default_gameplay_end_condition_state();
+    append_startup_log("start-slots: end condition sync ok");
     g_runtime.gameplay_damage_context.local_player_owner_id =
         g_runtime.gameplay_player_slots.local_player_slot;
     g_runtime.gameplay_targeting_context.active_units =
         g_runtime.gameplay_damage_context.active_units;
     g_runtime.gameplay_startup_slots_started = true;
+    append_startup_log("start-slots: complete active_units=%zu damage_units=%zu",
+        g_runtime.gameplay_movement_context.active_units.size(),
+        g_runtime.gameplay_damage_context.active_units.size());
 }
 
 void default_frontend_stage_reset_runtime(FrontendStageFlowState& state) {
@@ -7019,41 +7704,57 @@ void default_gameplay_loop_handle_post_victory_loop(GameplayLoopState& state) {
 }
 
 void default_gameplay_flow_pre_session_runtime(GameplaySessionFlowState& state) {
+    append_startup_log("session-flow: pre runtime begin transition_active=%s",
+        g_runtime.gameplay_transition_active ? "yes" : "no");
     if (g_runtime.gameplay_transition_active) {
+        append_startup_log("session-flow: pre runtime skipped active transition");
         return;
     }
     SetRankerMainWindowGenericAiProfileState(state.generic_ai_profile_mode != 0, false);
     SetRankerMainWindowNetworkAiProfileOverride(false);
+    append_startup_log("session-flow: pre runtime ok");
 }
 
 void default_gameplay_flow_post_session_runtime(GameplaySessionFlowState&) {
+    append_startup_log("session-flow: post runtime begin");
     if (g_runtime.main_window == nullptr || !IsWindow(g_runtime.main_window)) {
         SetImeConversionOpenTarget(false);
+        append_startup_log("session-flow: post runtime no main window");
         return;
     }
 
     RefreshImeConversionOpenStatus(g_runtime.main_window);
     SetImeConversionOpenTarget(false);
     RestoreImeConversionOpenStatus(g_runtime.main_window);
+    append_startup_log("session-flow: post runtime ok");
 }
 
 void default_gameplay_flow_enter_session_ui(GameplaySessionFlowState&) {
+    append_startup_log("session-flow: enter ui begin");
     if (g_runtime.main_window != nullptr && IsWindow(g_runtime.main_window)) {
         SetFocus(g_runtime.main_window);
     }
+    append_startup_log("session-flow: enter ui ok");
 }
 
 void default_gameplay_flow_process_session_loop(GameplaySessionFlowState& state) {
+    append_startup_log("session-flow: process loop begin budget=%zu",
+        state.session_loop_iteration_budget);
     GameplayLoopState& loop_state = gameplay_loop_state();
     install_default_gameplay_loop_callbacks(loop_state);
+    InitializeMode1ReliableSyncRuntime(RefreshLegacyTickTime());
     loop_state.process_shutdown_requested = state.process_shutdown_requested;
     loop_state.leave_requested = false;
     loop_state.restart_requested = false;
+    g_runtime.gameplay_session_loop_reached = true;
+    append_startup_log("session-flow: process loop reached");
     ProcessGameplaySessionLoop(loop_state, state.session_loop_iteration_budget);
     state.process_shutdown_requested = loop_state.process_shutdown_requested;
     state.close_requested = loop_state.process_shutdown_requested;
     state.p2p_win_result = g_runtime.gameplay_end_condition_state.result_code;
-    g_runtime.gameplay_session_loop_reached = true;
+    append_startup_log("session-flow: process loop returned shutdown=%s result=%lu",
+        state.process_shutdown_requested ? "yes" : "no",
+        static_cast<unsigned long>(state.p2p_win_result));
 }
 
 void default_gameplay_flow_send_main_close(GameplaySessionFlowState& state) {
@@ -7380,7 +8081,9 @@ void default_gameplay_frame_draw_selection_overlay(GameplayFrameRenderContext&) 
 
 void default_gameplay_frame_draw_hud_pulse(GameplayFrameRenderContext& context) {
     sync_default_ui_overlay_runtime_from_gameplay_state();
-    RenderGameplayHudPulse(ui_overlay_state(), context.frame_counter);
+    // FUN_004e2b61 advances the pulse when DAT_0162ea48 (the current tick
+    // value) changes, not on every presentation pass.
+    RenderGameplayHudPulse(ui_overlay_state(), context.current_tick_ms);
 }
 
 void default_gameplay_frame_draw_world_ui_overlay(GameplayFrameRenderContext&) {
@@ -7675,11 +8378,39 @@ void sync_default_gameplay_hud_alert_markers();
 
 UnitMovementUnit* find_default_movement_unit_by_id(u32 unit_id) {
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
-    if (lifecycle == nullptr || lifecycle->movement == nullptr) {
+    if (lifecycle == nullptr || lifecycle->movement == nullptr || unit_id == 0) {
         return nullptr;
     }
+
+    // Mode-1 packets do not carry an abstract object id.  The original
+    // handlers add packet dword +0x14 directly to the unit-pool field bases
+    // (for example HandleSubtype02UnitOrderPacket at 0x004dd55f), so the wire
+    // reference is the pool byte offset: runtime slot * 0x1d0.  Keep an exact
+    // id lookup first for reconstruction-only objects, then accept both that
+    // original wire form and the legacy scenario slot-index form used while a
+    // loaded object record is being decoded.
     for (UnitMovementUnit* unit : lifecycle->movement->active_units) {
         if (unit != nullptr && unit->id == unit_id) {
+            return unit;
+        }
+    }
+
+    u32 runtime_slot_index = kInvalidUnitRuntimeSlotIndex;
+    if (unit_id % kGameplayScenarioObjectStride == 0) {
+        const u32 candidate = unit_id / kGameplayScenarioObjectStride;
+        if (candidate != 0 && candidate < kGameplayScenarioObjectMaxSlots) {
+            runtime_slot_index = candidate;
+        }
+    }
+    else if (unit_id < kGameplayScenarioObjectMaxSlots) {
+        runtime_slot_index = unit_id;
+    }
+    if (runtime_slot_index == kInvalidUnitRuntimeSlotIndex) {
+        return nullptr;
+    }
+
+    for (UnitMovementUnit* unit : lifecycle->movement->active_units) {
+        if (unit != nullptr && unit->runtime_slot_index == runtime_slot_index) {
             return unit;
         }
     }
@@ -7749,6 +8480,16 @@ void default_ui_overlay_draw_selection_rectangle(
     DrawBackBufferRectangleOutline16(left, top, right - left, bottom - top);
 }
 
+void default_ui_overlay_draw_world_surface(UiOverlayState&) {
+    const InterfaceResourceState& resources = interface_resource_state();
+    if (resources.loaded &&
+        resources.background_image_entry != kInvalidResourceEntry) {
+        constexpr std::array<i32, 4> kHudY{{439, 436, 421, 452}};
+        const u32 theme = std::min<u32>(resources.theme_index, 3);
+        BlitImageResourceNormal(resources.background_image_entry, 0, kHudY[theme]);
+    }
+}
+
 void configure_default_ui_overlay_callbacks() {
     UiOverlayState& overlay = ui_overlay_state();
     overlay.emit_sprite_draws = true;
@@ -7756,7 +8497,7 @@ void configure_default_ui_overlay_callbacks() {
         overlay.callbacks.draw_placement_preview = default_ui_overlay_frame_noop;
     }
     if (overlay.callbacks.draw_world_surface == nullptr) {
-        overlay.callbacks.draw_world_surface = default_ui_overlay_frame_noop;
+        overlay.callbacks.draw_world_surface = default_ui_overlay_draw_world_surface;
     }
     if (overlay.callbacks.draw_after_queue == nullptr) {
         overlay.callbacks.draw_after_queue = default_ui_overlay_frame_noop;
@@ -7896,6 +8637,60 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
         {0x30000000u, 0x30000000u, 0x30000000u, 0x80000000u,
             0x30000000u, 0x50000000u, 0, 0};
     configure_default_ui_overlay_callbacks();
+    {
+        UiOverlayState& overlay = ui_overlay_state();
+        constexpr std::array<i32, 4> kHudY{{439, 436, 421, 452}};
+        constexpr std::array<i32, 4> kCameraEffectiveHeight{{496, 487, 487, 480}};
+        constexpr std::array<i32, 4> kMinimapBaseY{{470, 474, 474, 474}};
+        const u32 theme = std::min<u32>(interface_resource_state().theme_index, 3);
+        overlay.interface_theme_index = theme;
+        const i32 gameplay_world_viewport_height = kHudY[theme];
+        const u32 minimap_width = std::min<u32>(
+            115, g_runtime.gameplay_movement_context.map.width);
+        const u32 minimap_height = std::min<u32>(
+            115, g_runtime.gameplay_movement_context.map.height);
+        overlay.minimap.output_x = 329 +
+            static_cast<i32>((116u - minimap_width) >> 1);
+        overlay.minimap.output_y = kMinimapBaseY[theme] +
+            static_cast<i32>((116u - minimap_height) >> 1);
+        overlay.minimap.minimap_width_pixels = minimap_width;
+        overlay.minimap.minimap_height_pixels = minimap_height;
+        overlay.minimap.output_pitch_pixels = kOriginalClientWidth;
+        overlay.minimap.output_height_pixels = kOriginalClientHeight;
+        const u32 local_owner = g_runtime.gameplay_player_slots.local_player_slot;
+        if (local_owner < g_runtime.gameplay_startup_state.owner_slots.size()) {
+            const GameplayScenarioOwnerSlot& local_slot =
+                g_runtime.gameplay_startup_state.owner_slots[local_owner];
+            i32 camera_anchor_x = local_slot.start_x;
+            i32 camera_anchor_y = local_slot.start_y;
+            for (const UnitMovementUnit& placed :
+                 g_runtime.gameplay_startup_state.placed_units) {
+                if (placed.owner_id == local_owner &&
+                    placed.type_id == local_slot.starting_unit_type) {
+                    camera_anchor_x = placed.x;
+                    camera_anchor_y = placed.y;
+                    break;
+                }
+            }
+            const i32 map_width_pixels = static_cast<i32>(
+                g_runtime.gameplay_movement_context.map.width << 5);
+            const i32 map_height_pixels = static_cast<i32>(
+                g_runtime.gameplay_movement_context.map.height << 5);
+            overlay.camera_max_x = std::max<i32>(
+                0, map_width_pixels - static_cast<i32>(kOriginalClientWidth));
+            overlay.camera_max_y = std::max<i32>(
+                0, map_height_pixels - kCameraEffectiveHeight[theme]);
+            overlay.camera_x = std::clamp(
+                camera_anchor_x - static_cast<i32>(kOriginalClientWidth / 2),
+                0, overlay.camera_max_x);
+            overlay.camera_y = std::clamp(
+                camera_anchor_y - (gameplay_world_viewport_height / 2),
+                0, overlay.camera_max_y);
+            publish_default_ui_overlay_camera(overlay);
+        }
+        ConfigureGameplayUiOverlayLayout(overlay);
+        BuildSelectedUnitCommandPanel(overlay);
+    }
     g_runtime.gameplay_unit_render_queue.callbacks.on_queue_entry =
         default_gameplay_unit_render_queued;
     g_runtime.gameplay_unit_render_queue.callbacks.on_fog_blocked_unit =
@@ -7956,18 +8751,30 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
         default_gameplay_frame_mirror_visible_map_effects;
     g_runtime.gameplay_frame_render_context.callbacks.present_cursor =
         default_gameplay_frame_present_cursor;
+    append_startup_log("session-loop: init resources visibility sync begin");
     sync_default_gameplay_visibility_and_render_inputs(0);
+    append_startup_log("session-loop: init resources ok active_units=%zu",
+        g_runtime.gameplay_movement_context.active_units.size());
 }
 
 bool default_gameplay_loop_frame_gate(GameplayLoopState& state) {
+    static unsigned long gate_log_budget = 40;
     SetMode1ReliableReplayFrameTick(state.simulation_frame_counter);
     if (!g_runtime.worker_thread_running) {
         state.process_shutdown_requested = true;
         state.leave_requested = true;
+        if (gate_log_budget != 0) {
+            --gate_log_budget;
+            append_startup_log("frame-gate: worker not running -> stop");
+        }
         return false;
     }
     Mode1ReliableRuntimeState& reliable = mode1_reliable_state();
     if (!reliable.initialized) {
+        if (gate_log_budget != 0) {
+            --gate_log_budget;
+            append_startup_log("frame-gate: reliable not initialized -> pass");
+        }
         return true;
     }
 
@@ -7978,10 +8785,21 @@ bool default_gameplay_loop_frame_gate(GameplayLoopState& state) {
         PumpMode1ReliablePackets(
             g_runtime.generic_ai_profile_mode, scenario_ai_profile_override,
             state.current_tick_ms);
-    if (g_runtime.generic_ai_profile_mode && !scenario_ai_profile_override) {
-        return consumed != 0;
+    const bool gate_pass =
+        (g_runtime.generic_ai_profile_mode && !scenario_ai_profile_override)
+            ? consumed != 0
+            : true;
+    if (gate_log_budget != 0) {
+        --gate_log_budget;
+        append_startup_log(
+            "frame-gate: sim_frame=%lu ai_mode=%lu scenario_override=%s consumed=%lu pass=%s",
+            static_cast<unsigned long>(state.simulation_frame_counter),
+            static_cast<unsigned long>(g_runtime.generic_ai_profile_mode),
+            scenario_ai_profile_override ? "yes" : "no",
+            static_cast<unsigned long>(consumed),
+            gate_pass ? "yes" : "no");
     }
-    return true;
+    return gate_pass;
 }
 
 u32 default_gameplay_loop_read_tick_ms(GameplayLoopState& state) {
@@ -8086,7 +8904,6 @@ bool default_unit_action_can_target(UnitActionContext& context,
         (target.command_state & kUnitCommandDead) == 0 &&
         (target.runtime_flags &
             (kUnitActionTargetInactive | kUnitActionTargetClassBlocked)) == 0 &&
-        default_unit_visibility_allows_target(source, target) &&
         default_unit_action_profile_allows_target_render_class(
             context, source, target);
 }
@@ -9263,7 +10080,7 @@ bool apply_default_mode1_basic_special_command_flag(UnitMovementUnit& unit,
     if (mode != 0 || command < 0x12 || command > 0x15) {
         return false;
     }
-    if ((default_unit_command_bit_mask(unit) & (1u << command)) == 0) {
+    if ((default_unit_action_capability_mask(unit) & (1u << command)) == 0) {
         return false;
     }
 
@@ -9299,7 +10116,7 @@ bool apply_default_mode1_extended_special_command_flag(UnitMovementUnit& unit,
         default_jw211_production_action_definition(command);
     if (definition == nullptr ||
         !default_production_owner_requirement_allows_unit(*definition, unit) ||
-        (default_unit_command_bit_mask(unit) & (1u << command)) == 0 ||
+        (default_unit_action_capability_mask(unit) & (1u << command)) == 0 ||
         definition->active_limit >= unit.status_timer + 1 ||
         definition->queued_limit >= unit.secondary_value + 1 ||
         definition->resource_limit >= unit.health) {
@@ -9739,8 +10556,65 @@ void install_default_directplay_message_callbacks() {
     SetDirectPlayMessageDispatchCallbacks(callbacks);
 }
 
+void sync_default_local_gameplay_checksum_objects(
+    GameplayInputActionState& input) {
+    input.checksum_units.clear();
+    input.checksum_effects.clear();
+
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    if (movement != nullptr) {
+        input.checksum_units.reserve(movement->active_units.size());
+        for (const UnitMovementUnit* unit : movement->active_units) {
+            if (unit == nullptr || unit->runtime_slot_index == 0 ||
+                unit->runtime_slot_index == kInvalidUnitRuntimeSlotIndex ||
+                unit->runtime_slot_index >= kGameplayScenarioObjectMaxSlots) {
+                continue;
+            }
+
+            GameplayChecksumObject checksum{};
+            checksum.offset =
+                unit->runtime_slot_index * kGameplayScenarioObjectStride;
+            // Original unit pool +0x60 is the current 1..8 facing direction.
+            checksum.identity = unit->direction;
+            checksum.x = unit->x;
+            checksum.y = unit->y;
+            checksum.active = true;
+            input.checksum_units.push_back(checksum);
+        }
+    }
+
+    const UnitEffectRuntimeState& effects =
+        g_runtime.gameplay_unit_effect_runtime;
+    input.checksum_effects.reserve(effects.active_effect_indices.size());
+    for (const std::size_t index : effects.active_effect_indices) {
+        if (index >= effects.effect_slots.size()) {
+            continue;
+        }
+
+        const u64 original_offset =
+            (static_cast<u64>(index) + 1u) * kUnitEffectOriginalSlotStride;
+        if (original_offset > std::numeric_limits<u32>::max()) {
+            continue;
+        }
+
+        const UnitEffectRuntime& effect = effects.effect_slots[index];
+        GameplayChecksumObject checksum{};
+        checksum.offset = static_cast<u32>(original_offset);
+        checksum.x = effect.x;
+        checksum.y = effect.y;
+        checksum.active = true;
+        input.checksum_effects.push_back(checksum);
+    }
+
+    // DAT_007071BC is the same seed mutated by the original frame RNG at
+    // 0x004D8370 and is the tail term of the subtype-0x10 combined checksum.
+    input.checksum_tail_value = g_runtime.gameplay_frame_random_state.seed;
+}
+
 void default_mode1_reliable_snapshot_local_checksum(void*) {
-    SnapshotLocalGameplayChecksum(gameplay_input_action_state());
+    GameplayInputActionState& input = gameplay_input_action_state();
+    sync_default_local_gameplay_checksum_objects(input);
+    SnapshotLocalGameplayChecksum(input);
 }
 
 void default_mode1_reliable_sync_ready(void*) {
@@ -9895,6 +10769,14 @@ original_unit_command_runtime_state_table() {
         0x00000000, 0x00000000,
     }};
     return kOriginalRuntimeStates;
+}
+
+const std::vector<u32>& original_unit_command_runtime_state_categories() {
+    static const std::vector<u32> categories = [] {
+        const auto& table = original_unit_command_runtime_state_table();
+        return std::vector<u32>(table.begin(), table.end());
+    }();
+    return categories;
 }
 
 u32 default_map_effect_sprite_entry(const MapEffectContext& context,
@@ -10284,6 +11166,13 @@ void refresh_default_unit_definition_runtime_fields(UnitMovementUnit& unit) {
     definition.avatar_next_exp_base = read_runtime_catalog_u32(
         record.definition_bytes, kUnitDefinitionAvatarNextExpBaseOffset,
         definition.avatar_next_exp_base);
+    definition.initial_command_bits.fill(0);
+    for (std::size_t index = 0; index < sizeof(u32); ++index) {
+        definition.initial_command_bits[index] = read_runtime_catalog_u8(
+            record.definition_bytes,
+            kUnitDefinitionInitialCommandBitsOffset + index,
+            definition.initial_command_bits[index]);
+    }
     unit.type_flags = read_runtime_catalog_u32(
         record.definition_bytes, kUnitDefinitionTypeFlagsOffset, unit.type_flags);
     definition.type_flags = unit.type_flags;
@@ -10309,6 +11198,21 @@ void refresh_default_unit_definition_runtime_fields(UnitMovementUnit& unit) {
         record.definition_bytes, kUnitDefinitionMovementPeriodOffset,
         definition.movement_period);
     definition.movement_period = movement_period != 0 ? movement_period : 1;
+    const u32 animation_frame_count = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionAnimationFrameCountOffset,
+        definition.animation_frame_count);
+    definition.animation_frame_count =
+        animation_frame_count != 0 ? animation_frame_count : 1;
+    definition.movement_animation_frame_count = read_runtime_catalog_u32(
+        record.definition_bytes,
+        kUnitDefinitionMovementAnimationFrameCountOffset,
+        definition.movement_animation_frame_count);
+    // DAT_0087d6cc is definition +0x13d4 in ProcessUnitIdleAcquireCommand
+    // (0x004c8fd9).  A zero fallback disables the original neutral idle
+    // cadence entirely, so preserve the archive value verbatim.
+    definition.animation_timer_period = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionAnimationTimerPeriodOffset,
+        definition.animation_timer_period);
     definition.use_16_direction_lookup = read_runtime_catalog_u32(
         record.definition_bytes, kUnitDefinitionUse16DirectionLookupOffset,
         definition.use_16_direction_lookup ? 1u : 0u) != 0;
@@ -10568,6 +11472,11 @@ void refresh_default_unit_definition_runtime_fields(UnitMovementUnit& unit) {
 const UnitMovementDefinition* default_unit_lifecycle_find_definition(
     UnitLifecycleContext&, u32 unit_type) {
     if (unit_type >= kUnitDefinitionResourceCount) {
+        if (g_runtime.gameplay_transition_active) {
+            append_startup_log("unit-def lookup rejected type=%lu count=%lu",
+                static_cast<unsigned long>(unit_type),
+                static_cast<unsigned long>(kUnitDefinitionResourceCount));
+        }
         return nullptr;
     }
     if (!g_runtime.unit_definition_cache_valid[unit_type]) {
@@ -10578,6 +11487,13 @@ const UnitMovementDefinition* default_unit_lifecycle_find_definition(
             unit_definition_resource_catalog_state();
         const UnitDefinitionResourceRecord& record = catalog.records[unit_type];
         if (!record.loaded || record.definition_bytes.empty()) {
+            if (g_runtime.gameplay_transition_active) {
+                append_startup_log(
+                    "unit-def lookup missing type=%lu loaded=%s bytes=%zu",
+                    static_cast<unsigned long>(unit_type),
+                    record.loaded ? "yes" : "no",
+                    record.definition_bytes.size());
+            }
             return nullptr;
         }
         UnitMovementUnit unit{};
@@ -11213,11 +12129,23 @@ void ensure_default_gameplay_visibility_grid(const UnitMovementMap& map) {
     }
 
     const GameplaySessionLoadState& load = gameplay_session_load_state();
-    const std::vector<u8>* fog_terrain_layer = nullptr;
-    if (resized && kGameplayFogMap3LayerRecordIndex < load.records.size() &&
-        load.record_loaded[kGameplayFogMap3LayerRecordIndex]) {
-        fog_terrain_layer = &load.records[kGameplayFogMap3LayerRecordIndex];
-    }
+    const auto loaded_layer = [&](u32 record_index) -> const std::vector<u8>* {
+        return resized && record_index < load.records.size() &&
+                load.record_loaded[record_index]
+            ? &load.records[record_index]
+            : nullptr;
+    };
+    // HandleSessionBundleImportMirror (0x004d1ccc) imports records 13, 14,
+    // and 18 directly into DAT_00758d40, DAT_00798d40, and DAT_007d8d40.
+    // Those are the three mutable visibility layers consumed by
+    // FUN_004d5bc0; starting all of them at zero loses the scenario's saved
+    // explored/owner state before the first 64-tick visibility refresh.
+    const std::vector<u8>* previous_visibility_layer =
+        loaded_layer(kGameplayVisibilityPreviousLayerRecordIndex);
+    const std::vector<u8>* owner_visibility_layer =
+        loaded_layer(kGameplayVisibilityOwnerLayerRecordIndex);
+    const std::vector<u8>* fog_terrain_layer =
+        loaded_layer(kGameplayFogMap3LayerRecordIndex);
 
     for (u32 y = 0; y < height; ++y) {
         for (u32 x = 0; x < width; ++x) {
@@ -11230,6 +12158,19 @@ void ensure_default_gameplay_visibility_grid(const UnitMovementMap& map) {
             const UnitMovementCell& cell = map.cells[source_index];
             grid.terrain[target_index] = cell.flags;
             grid.terrain_class_flags[target_index] = cell.alternate_flags;
+            // Record 13 is both DAT_00758d40 and the movement-map visibility /
+            // occupancy word array in the original.  Use the live cell value,
+            // not the pristine imported bytes, so footprint registrations that
+            // run after import are already visible to FUN_004d5bc0.
+            grid.current[target_index] = cell.visibility_flags;
+            if (previous_visibility_layer != nullptr) {
+                grid.previous[target_index] = read_default_map_layer_u32(
+                    *previous_visibility_layer, static_cast<u32>(source_index));
+            }
+            if (owner_visibility_layer != nullptr) {
+                grid.owner[target_index] = read_default_map_layer_u32(
+                    *owner_visibility_layer, static_cast<u32>(source_index));
+            }
             if (fog_terrain_layer != nullptr) {
                 grid.terrain_backup[target_index] =
                     read_default_map_layer_u32(*fog_terrain_layer,
@@ -11257,7 +12198,8 @@ GameplayVisibilityUnit make_default_gameplay_visibility_unit(
     GameplayVisibilityUnit visibility{};
     visibility.owner_id = unit.owner_id;
     visibility.type_id = unit.type_id;
-    visibility.variant = unit.production_variant;
+    // FUN_004d5ccd checks raw unit +0x30 for the structure radius override.
+    visibility.variant = unit.action_mode_gate;
     visibility.runtime_flags = unit.runtime_flags;
     visibility.state_flags = unit.command_state | unit.command_flags;
     visibility.command_bits = unit.command_bits;
@@ -11275,13 +12217,16 @@ GameplayVisibilityUnit make_default_gameplay_visibility_unit(
         (unit.definition.center_bounds_height >> 1);
     visibility.visibility_probe_x = unit.x;
     visibility.visibility_probe_y = unit.y;
-    visibility.owner_layer_probe_x = unit.x & ~0x1f;
-    visibility.owner_layer_probe_y = unit.y & ~0x1f;
-    visibility.fallback_range_tiles = 5;
+    visibility.owner_layer_probe_x = unit.current_cell_x;
+    visibility.owner_layer_probe_y = unit.current_cell_y;
+    visibility.terrain_probe_x = unit.current_cell_x;
+    visibility.terrain_probe_y = unit.current_cell_y;
+    visibility.terrain_probe_valid = true;
+    visibility.is_structure = unit.definition.lifecycle_class == 2;
+    visibility.fallback_range_tiles = visibility.is_structure ? 18u : 5u;
     visibility.terrain_class = 7;
     visibility.movement_class = unit.definition.movement_class;
     visibility.large_centered = unit.type_id > 0x5f;
-    visibility.is_structure = unit.definition.lifecycle_class == 2;
     const UnitEquipmentCatalog& equipment_catalog =
         frontend_bootstrap_state().equipment_catalog;
     visibility.interaction_range_pixels =
@@ -11289,9 +12234,12 @@ GameplayVisibilityUnit make_default_gameplay_visibility_unit(
             g_runtime.gameplay_production_runtime, unit,
             unit.definition.effect_command_distance_gate,
             equipment_catalog.effects.empty() ? nullptr : &equipment_catalog);
-    visibility.current_visibility_enabled = CheckUnitCommandGateWithProductionEffect12(
-        g_runtime.gameplay_production_runtime, unit, false, unit.type_flags, 0,
-        equipment_catalog.effects.empty() ? nullptr : &equipment_catalog);
+    visibility.current_visibility_enabled =
+        CheckUnitCommandGateWithProductionEffect12(
+            g_runtime.gameplay_production_runtime, unit, false,
+            unit.definition.type_flags,
+            default_unit_command_metadata_flags_from_original_table(unit),
+            equipment_catalog.effects.empty() ? nullptr : &equipment_catalog);
     return visibility;
 }
 
@@ -11316,7 +12264,12 @@ void append_default_gameplay_visibility_unit(
 
 std::string default_unit_display_name(const UnitMovementUnit& unit) {
     UnitMovementContext* movement = default_gameplay_movement_context();
-    if (movement != nullptr && unit.string_slot < movement->string_slots.size()) {
+    // FUN_004c523d only enters the in-world name draw path when raw unit
+    // +0x48 is non-zero.  Slot zero is the ordinary unnamed-unit sentinel;
+    // definition-name fallback belongs to the selected-unit HUD, not the
+    // sprite above the unit.
+    if (movement != nullptr && unit.string_slot != 0 &&
+        unit.string_slot < movement->string_slots.size()) {
         const auto& slot = movement->string_slots[unit.string_slot];
         if (slot[0] != '\0') {
             std::size_t length = 0;
@@ -11326,7 +12279,7 @@ std::string default_unit_display_name(const UnitMovementUnit& unit) {
             return std::string(slot.data(), length);
         }
     }
-    return startup_unit_name_or_fallback(unit.type_id);
+    return {};
 }
 
 UnitRenderItem make_default_unit_render_item(UnitMovementUnit& unit) {
@@ -11336,23 +12289,38 @@ UnitRenderItem make_default_unit_render_item(UnitMovementUnit& unit) {
     item.type_id = unit.type_id;
     item.owner_id = unit.owner_id;
     item.runtime_slot_index = unit.runtime_slot_index;
-    item.render_class = unit.definition.render_class;
+    item.render_class = unit.definition.movement_class;
     item.definition_kind = unit.definition.lifecycle_class;
-    item.animation_flags = unit.area_marker_flags;
+    // Raw unit +0x08 carries the selection/control flags consumed by the
+    // animation renderer (notably bit 0x80 for owner tint and bars).  +0x0c is
+    // the independent selection/target marker field.
+    item.animation_flags = unit.scenario_string_slot;
     item.marker_flags = unit.area_marker_flags;
     item.command_state = unit.command_state;
     item.command_flags = unit.command_flags;
+    item.command_bit_mask = default_unit_command_bit_mask(unit);
+    item.command_value = unit.command_value;
+    item.previous_command_state = unit.previous_command_state;
     item.command_metadata_flags =
         default_unit_command_metadata_flags_from_original_table(unit);
     item.definition_cell_flags = unit.definition.cell_render_flags;
     item.terrain_cell_flags = 0;
-    item.state_flags = unit.command_state;
+    // The original animation dispatcher reads its draw/state mode from the
+    // serialized unit +0xa0 field.  command_state lives at +0x60 and must only
+    // select the animation dispatch function; treating command ids as mode
+    // bits turns normal harvest/production frames into blend/direct sprites.
+    item.state_flags = unit.runtime_flags;
     item.runtime_flags = unit.runtime_flags;
     item.draw_flags = unit.draw_flags;
     item.animation_frame = unit.animation_frame;
     item.animation_timer = unit.animation_timer;
+    item.command_entry_lockout_ticks = unit.command_entry_lockout_ticks;
     item.command_lockout_ticks = unit.command_lockout_ticks;
-    item.global_frame_counter = g_runtime.gameplay_frame_render_context.frame_counter;
+    // Animated JW2_11 overlays use DAT_007071a4 directly.  Render items are
+    // snapshotted during the simulation phase, before present_phase copies
+    // that counter into the frame render context, so read the loop counter
+    // here instead of retaining the preceding frame.
+    item.global_frame_counter = gameplay_loop_state().simulation_frame_counter;
     item.direction = static_cast<i32>(unit.direction);
     item.cargo_amount = unit.cargo_amount;
     item.max_hit_points = unit.max_health != 0
@@ -11362,23 +12330,36 @@ UnitRenderItem make_default_unit_render_item(UnitMovementUnit& unit) {
     item.max_secondary_value = unit.max_secondary_value;
     item.secondary_value = std::min(unit.secondary_value, item.max_secondary_value);
     item.cell_animation_frame = unit.animation_frame;
-    item.cell_flag40_animation_frame = unit.action_mode_gate;
-    item.cell_channel_additive_frame = unit.action_mode;
+    item.cell_flag40_animation_frame = unit.cell_flag40_animation_frame;
+    item.cell_channel_additive_frame = unit.cell_channel_additive_frame;
     item.construction_stage_count = unit.definition.spawn_frame_count;
-    item.construction_progress = unit.work_timer;
+    const UnitDefinitionResourceCatalogState& catalog =
+        unit_definition_resource_catalog_state();
+    if (catalog.loaded && unit.type_id < catalog.records.size()) {
+        const UnitDefinitionResourceRecord& record = catalog.records[unit.type_id];
+        if (record.loaded) {
+            item.construction_stage_count = record.image_group_counts[0];
+        }
+    }
+    item.construction_progress = unit.action_mode;
     item.construction_progress_limit = unit.definition.production_spawn_time;
-    item.low_health_overlay_frame = unit.animation_frame;
+    // Damage-overlay selector is the original raw +0x3c slot.
+    item.low_health_overlay_frame = unit.equipment_slots[3];
     item.ability_id = unit.ability_id;
     item.x = unit.x;
     item.y = unit.y;
     item.center_offset_x = unit.definition.center_bounds_left;
     item.center_offset_y = unit.definition.center_bounds_top;
-    item.center_width = std::max<i32>(unit.definition.center_bounds_width,
-        static_cast<i32>(std::max<u32>(unit.definition.footprint_width_tiles, 1) << 5));
-    item.center_height = std::max<i32>(unit.definition.center_bounds_height,
-        static_cast<i32>(std::max<u32>(unit.definition.footprint_height_tiles, 1) << 5));
-    item.cell_construction_progress_active = unit.item_slots[0] == 1;
-    item.cell_channel_additive_active = unit.ability_id == 1;
+    // ProcessVisibleUnitRenderQueue (0x004c3de0) uses definition +0x360..
+    // +0x36c verbatim for lifecycle-class-2 center sorting.  Expanding these
+    // bounds to the tile footprint moves structures to a different sort key
+    // (and also widens their marker/health-bar bounds), changing overlap order
+    // relative to units and terrain decorations.
+    item.center_width = unit.definition.center_bounds_width;
+    item.center_height = unit.definition.center_bounds_height;
+    item.cell_construction_progress_active =
+        unit.under_construction || unit.action_mode_gate == 1;
+    item.cell_channel_additive_active = unit.previous_command_state == 1;
     item.display_name = default_unit_display_name(unit);
     return item;
 }
@@ -11471,7 +12452,44 @@ void sync_default_gameplay_visibility_and_render_inputs(u32 frame_counter) {
         append_default_gameplay_visibility_unit(unit, true);
     }
 
+    // DAT_00758d40 is shared by visibility, footprint, map-effect, and
+    // placement code.  The reconstruction keeps typed vectors for those
+    // systems, so merge non-visibility mutations into the grid immediately
+    // before the original visibility phase.  Preserve the transient/current
+    // vision bits in case a reliable-packet callback changed them this tick.
+    constexpr u32 kVisibilityOwnedCurrentBits =
+        kGameplayVisibilityCurrentOwnerMask | kGameplayVisibilityLocalMask;
+    for (u32 y = 0; y < context.grid->height; ++y) {
+        for (u32 x = 0; x < context.grid->width; ++x) {
+            const std::size_t source_index =
+                UnitMovementMapTileIndex(movement->map, x, y);
+            const std::size_t target_index =
+                static_cast<std::size_t>(y) * context.grid->width + x;
+            if (source_index >= movement->map.cells.size() ||
+                target_index >= context.grid->current.size()) {
+                continue;
+            }
+            context.grid->current[target_index] =
+                (context.grid->current[target_index] & kVisibilityOwnedCurrentBits) |
+                (movement->map.cells[source_index].visibility_flags &
+                    ~kVisibilityOwnedCurrentBits);
+        }
+    }
+
     UpdateGameplayVisibilityMap(context);
+    for (u32 y = 0; y < context.grid->height; ++y) {
+        for (u32 x = 0; x < context.grid->width; ++x) {
+            const std::size_t source_index =
+                UnitMovementMapTileIndex(movement->map, x, y);
+            const std::size_t target_index =
+                static_cast<std::size_t>(y) * context.grid->width + x;
+            if (source_index < movement->map.cells.size() &&
+                target_index < context.grid->current.size()) {
+                movement->map.cells[source_index].visibility_flags =
+                    context.grid->current[target_index];
+            }
+        }
+    }
     mirror_default_gameplay_visibility_to_consumers(*context.grid);
     configure_default_gameplay_fog_context();
     g_runtime.gameplay_unit_render_queue.local_owner_id =
@@ -11480,6 +12498,33 @@ void sync_default_gameplay_visibility_and_render_inputs(u32 frame_counter) {
         g_runtime.gameplay_player_slots.owner_relation_masks;
     g_runtime.gameplay_unit_render_queue.owner_visibility_masks =
         g_runtime.gameplay_player_slots.owner_visibility_masks;
+
+    // Raw unit +0x08 combines the selected bit (0x80) and the persistent
+    // control-group number (low nibble).  The reconstructed UI keeps those in
+    // vectors, so mirror them back immediately before producing render items.
+    const UiOverlayState& overlay = ui_overlay_state();
+    for (UnitMovementUnit* unit : movement->active_units) {
+        if (unit == nullptr || !unit->active) {
+            continue;
+        }
+
+        unit->scenario_string_slot &= ~0x8fu;
+        if (std::find(overlay.selected_unit_ids.begin(),
+                overlay.selected_unit_ids.end(), unit->id) !=
+            overlay.selected_unit_ids.end()) {
+            unit->scenario_string_slot |= 0x80u;
+        }
+        for (u32 group = 1;
+             group < overlay.control_groups.size() && group <= 0x0fu;
+             ++group) {
+            const auto& group_units = overlay.control_groups[group].unit_ids;
+            if (std::find(group_units.begin(), group_units.end(), unit->id) !=
+                group_units.end()) {
+                unit->scenario_string_slot |= group;
+                break;
+            }
+        }
+    }
 
     g_runtime.gameplay_unit_render_queue.units.reserve(active_count);
     for (UnitMovementUnit* unit : movement->active_units) {
@@ -11586,6 +12631,7 @@ UiOverlayMinimapUnit make_default_ui_overlay_minimap_unit(
 }
 
 void clear_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
+    overlay.command_options.clear();
     overlay.selected_unit_name_text.clear();
     overlay.selected_unit_owner_text.clear();
     overlay.selected_unit_experience_text.clear();
@@ -11611,6 +12657,134 @@ void clear_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
     overlay.detail_progress_total = 0;
 }
 
+void sync_default_ui_overlay_selected_unit_command_options(
+    UiOverlayState& overlay, const UnitMovementUnit& unit) {
+    overlay.command_options.clear();
+    const UnitDefinitionResourceCatalogState& catalog =
+        unit_definition_resource_catalog_state();
+    if (!catalog.loaded || unit.type_id >= catalog.records.size()) {
+        return;
+    }
+    const UnitDefinitionResourceRecord& source = catalog.records[unit.type_id];
+    if (!source.loaded || source.definition_bytes.empty()) {
+        return;
+    }
+
+    const bool structure = unit.type_id >= 0x60u;
+    const std::size_t reference_count_offset = structure ?
+        kUnitDefinitionAlternateReferenceCountOffset :
+        kUnitDefinitionPrimaryReferenceCountOffset;
+    const std::size_t reference_base_offset = structure ?
+        kUnitDefinitionAlternateReferenceBaseOffset :
+        kUnitDefinitionPrimaryReferenceBaseOffset;
+    const u32 raw_count = read_runtime_catalog_u32(
+        source.definition_bytes, reference_count_offset, 0);
+    const u32 count = std::min<u32>(raw_count, 16);
+    for (u32 index = 0; index < count; ++index) {
+        const u32 referenced_type = read_runtime_catalog_u32(
+            source.definition_bytes,
+            reference_base_offset + index * sizeof(u32),
+            kUnitDefinitionResourceCount);
+        if (referenced_type >= catalog.records.size()) {
+            continue;
+        }
+        if (unit.owner_id <
+                g_runtime.session_runtime_import_state.owner_unit_availability.size() &&
+            referenced_type < g_runtime.session_runtime_import_state
+                                  .owner_unit_availability[unit.owner_id].size() &&
+            g_runtime.session_runtime_import_state
+                    .owner_unit_availability[unit.owner_id][referenced_type] == 0) {
+            continue;
+        }
+
+        const UnitDefinitionResourceRecord& candidate =
+            catalog.records[referenced_type];
+        if (!candidate.loaded || candidate.definition_bytes.empty()) {
+            continue;
+        }
+        u32 category = 0;
+        if (!structure) {
+            category = read_runtime_catalog_u32(candidate.definition_bytes,
+                kUnitDefinitionPlacementClassOffset, 3);
+            if (category >= 3) {
+                continue;
+            }
+        }
+
+        UiOverlayCommandOption option{};
+        option.item_id = referenced_type;
+        option.aux = category;
+        option.icon_marker = read_runtime_catalog_u8(candidate.definition_bytes,
+            kUnitDefinitionUiIconMarkerOffset, 0);
+        option.enabled = true;
+        overlay.command_options.push_back(option);
+    }
+
+    if (!structure) {
+        return;
+    }
+
+    // The structure-panel tail in FUN_004e3f6e consumes two additional
+    // definition lists after the producible-unit references.  Dwords at
+    // +0x2c8 become production-order ids (+0xf4 at 0x004e506d), followed by
+    // byte equipment ids at +0x30f/+0x310 (+0x24a at 0x004e50cc).
+    const u32 raw_order_count = read_runtime_catalog_u32(
+        source.definition_bytes, kUnitDefinitionCompletionReferenceCountOffset, 0);
+    const u32 order_count = std::min<u32>(raw_order_count, 0x40u);
+    for (u32 index = 0; index < order_count; ++index) {
+        const u32 order_id = read_runtime_catalog_u32(source.definition_bytes,
+            kUnitDefinitionCompletionReferenceBaseOffset + index * sizeof(u32),
+            0x40u);
+        if (order_id >= 0x40u) {
+            continue;
+        }
+        const ProductionOrderDefinition* definition =
+            default_production_order_definition(order_id);
+        if (definition == nullptr) {
+            continue;
+        }
+
+        UiOverlayCommandOption option{};
+        option.item_id = 0xf4u + order_id;
+        option.icon_marker = definition->icon_marker_code;
+        const ProductionOrderCheckResult availability =
+            CheckProductionOrderAvailabilityForUi(
+                g_runtime.gameplay_production_runtime, *definition, unit.owner_id);
+        if (!availability.available) {
+            if (availability.code == static_cast<u32>(
+                    ProductionOrderAvailabilityCode::variant_limit_reached) ||
+                availability.code == static_cast<u32>(
+                    ProductionOrderAvailabilityCode::locked)) {
+                // Original preserves the grid position with invisible item c8.
+                option.item_id = 0xc8u;
+                option.flags = 1u;
+            }
+            else if (availability.code >= 3u) {
+                option.flags = 2u;
+            }
+        }
+        option.enabled = true;
+        overlay.command_options.push_back(option);
+    }
+
+    const u32 equipment_count = std::min<u32>(
+        read_runtime_catalog_u8(source.definition_bytes,
+            kUnitDefinitionSmallReferenceCountOffset, 0),
+        0x96u);
+    for (u32 index = 0; index < equipment_count; ++index) {
+        const u32 equipment_id = read_runtime_catalog_u8(
+            source.definition_bytes,
+            kUnitDefinitionSmallReferenceBaseOffset + index, 0xffu);
+        if (equipment_id >= 0x96u) {
+            continue;
+        }
+        UiOverlayCommandOption option{};
+        option.item_id = 0x24au + equipment_id;
+        option.enabled = true;
+        overlay.command_options.push_back(option);
+    }
+}
+
 u32 default_unit_command_bit_mask(const UnitMovementUnit& unit) {
     u32 mask = 0;
     for (u32 bit = 0; bit < 32; ++bit) {
@@ -11622,6 +12796,14 @@ u32 default_unit_command_bit_mask(const UnitMovementUnit& unit) {
         }
     }
     return mask;
+}
+
+u32 default_unit_action_capability_mask(const UnitMovementUnit& unit) {
+    // InitializePlacedUnitFromMapSlot 0x004cf43c copies definition +0x1ec
+    // into unit raw +0x58.  FUN_004e4150 reads that field at 0x004e42ca
+    // when it aggregates the selected units' available action buttons.  Raw
+    // +0x5c is a separate mutable runtime bitset and starts at zero.
+    return unit.type_flags;
 }
 
 void apply_default_unit_command_bit_mask(UnitMovementUnit& unit, u32 mask) {
@@ -11764,6 +12946,16 @@ void sync_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
     overlay.selected_unit_health = unit->health;
     overlay.selected_unit_health_ratio_max =
         CalculateUnitRuntimeMaxHealthWithProductionEffect00(production, *unit);
+    // FUN_004e1544 selects one of the 32 red-adjusted character palettes as
+    // 31 - (current_hp * 31 / max_hp).  This is especially visible on a
+    // selected structure while it is still being constructed.
+    overlay.current_palette_selector = 0;
+    if (overlay.selected_unit_health_ratio_max != 0) {
+        const u32 health_step = static_cast<u32>(
+            (static_cast<u64>(overlay.selected_unit_health) * 31u) /
+            overlay.selected_unit_health_ratio_max) & 0x1fu;
+        overlay.current_palette_selector = 31u - health_step;
+    }
     overlay.selected_unit_max_health =
         CalculateUnitMaxHealthWithProductionEffects(production, *unit);
     overlay.selected_unit_base_max_health =
@@ -11781,7 +12973,34 @@ void sync_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
     overlay.selected_unit_command_flags = unit->command_flags;
     overlay.selected_unit_runtime_flags = unit->runtime_flags;
     overlay.selected_unit_action_mode_gate = unit->action_mode_gate;
-    overlay.selected_unit_command_bit_mask = default_unit_command_bit_mask(*unit);
+    overlay.selected_unit_command_bit_mask =
+        default_unit_action_capability_mask(*unit);
+    if (unit->type_id < 0x60u) {
+        u32 aggregate_mask = 0;
+        bool any_selected_mobile = false;
+        bool all_selected_can_produce = true;
+        for (u32 selected_id : overlay.selected_unit_ids) {
+            const UnitMovementUnit* selected =
+                find_default_movement_unit_by_id(selected_id);
+            if (selected == nullptr || !selected->active ||
+                selected->type_id >= 0x60u ||
+                selected->owner_id != overlay.local_player_slot) {
+                continue;
+            }
+            const u32 selected_mask =
+                default_unit_action_capability_mask(*selected);
+            aggregate_mask |= selected_mask;
+            all_selected_can_produce =
+                all_selected_can_produce && (selected_mask & 0x40u) != 0;
+            any_selected_mobile = true;
+        }
+        if (any_selected_mobile) {
+            if (!all_selected_can_produce) {
+                aggregate_mask &= ~0x40u;
+            }
+            overlay.selected_unit_command_bit_mask = aggregate_mask;
+        }
+    }
     overlay.selected_unit_details_visible =
         overlay.scenario_ai_profile_override ||
         overlay.local_player_type == 2 ||
@@ -11820,6 +13039,7 @@ void sync_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
         overlay.selected_unit_name_text =
             startup_unit_name_or_fallback(unit->type_id);
     }
+    sync_default_ui_overlay_selected_unit_command_options(overlay, *unit);
 }
 
 void sync_default_ui_overlay_runtime_from_gameplay_state() {
@@ -11840,12 +13060,17 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
         gameplay_script_trigger_state().opcode_context.global_flag_22358;
     const GameplayUiResourceState& ui_resources = gameplay_ui_resource_state();
     const InterfaceResourceState& interface_resources = interface_resource_state();
+    overlay.interface_theme_index = std::min<u32>(interface_resources.theme_index, 3);
     overlay.small_icon_resource_base =
         interface_resources.resource_rewind_entry != kInvalidResourceEntry ?
             interface_resources.resource_rewind_entry : kInvalidResourceEntry;
+    // LoadGameplayUiResourcePacks (original write at 0x004e8714) stores
+    // DAT_008685f8 as the first JW2_02 small-character resource plus six.
+    // Command/unit marker codes are ASCII offsets from '0' into that sequence;
+    // the interface-theme message sprite at resource_rewind_entry + 6 is an
+    // unrelated asset.
     overlay.marker_resource_base =
-        interface_resources.resource_rewind_entry != kInvalidResourceEntry ?
-            interface_resources.resource_rewind_entry + 6u : kInvalidResourceEntry;
+        ui_resources.small_character_aliases[6];
     overlay.large_icon_resource_base =
         interface_resources.replay_control_resource_start != kInvalidResourceEntry ?
             interface_resources.replay_control_resource_start : kInvalidResourceEntry;
@@ -11855,6 +13080,9 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
     overlay.digit_resource_base =
         ui_resources.green_numbers_start != kInvalidResourceEntry ?
             ui_resources.green_numbers_start : kInvalidResourceEntry;
+    overlay.command_ack_resource_base =
+        ui_resources.command_ack_start != kInvalidResourceEntry ?
+            ui_resources.command_ack_start : kInvalidResourceEntry;
     if (!unit_definition_resource_catalog_state().loaded) {
         LoadUnitDefinitionResourceCatalog();
     }
@@ -11927,6 +13155,21 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
         g_runtime.gameplay_frame_render_context.frame_counter;
     overlay.current_tick_ms = gameplay_loop_state().current_tick_ms;
     overlay.local_player_slot = g_runtime.gameplay_player_slots.local_player_slot;
+    if (g_runtime.gameplay_startup_state.lifecycle != nullptr &&
+        overlay.local_player_slot < kPlayerSlotCount) {
+        const UnitLifecycleContext& lifecycle =
+            *g_runtime.gameplay_startup_state.lifecycle;
+        overlay.resource_amount =
+            lifecycle.owner_primary_resources[overlay.local_player_slot];
+        // The original names these arrays inversely: mobile-unit population is
+        // reserved, while structures provide the available population total.
+        overlay.population_used =
+            lifecycle.owner_population_reserved[overlay.local_player_slot];
+        overlay.population_available =
+            lifecycle.owner_population_used[overlay.local_player_slot];
+        overlay.population_limit =
+            lifecycle.owner_population_limit[overlay.local_player_slot];
+    }
     overlay.selected_production_category =
         gameplay_input_action_state().pointer_aux_state;
     if (overlay.local_player_slot < g_runtime.gameplay_player_slots.slot_states.size()) {
@@ -11952,8 +13195,10 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
 
     overlay.camera_max_x = std::max<i32>(0,
         static_cast<i32>(overlay.map_width_tiles << 5) - kOriginalClientWidth);
+    constexpr std::array<i32, 4> kCameraEffectiveHeight{{496, 487, 487, 480}};
     overlay.camera_max_y = std::max<i32>(0,
-        static_cast<i32>(overlay.map_height_tiles << 5) - kOriginalClientHeight);
+        static_cast<i32>(overlay.map_height_tiles << 5) -
+            kCameraEffectiveHeight[overlay.interface_theme_index]);
     overlay.camera_x = std::clamp(overlay.camera_x, 0, overlay.camera_max_x);
     overlay.camera_y = std::clamp(overlay.camera_y, 0, overlay.camera_max_y);
     g_runtime.gameplay_frame_render_context.camera_x = overlay.camera_x;
@@ -12092,7 +13337,8 @@ void sync_default_gameplay_input_action_units(
             overlay.selected_unit_ids.end(), unit->id) !=
             overlay.selected_unit_ids.end();
         action_unit.flags = action_unit.selected ? 0x80u : 0u;
-        const u32 command_bit_mask = default_unit_command_bit_mask(*unit);
+        const u32 command_bit_mask =
+            default_unit_action_capability_mask(*unit);
         for (u32 bit = 0; bit < 32; ++bit) {
             if ((command_bit_mask & (1u << bit)) != 0) {
                 action_unit.production_capabilities.push_back(bit);
@@ -12155,6 +13401,10 @@ bool publish_default_ui_overlay_input_command(
     };
 
     const bool click = action.action == kUiOverlayCommandActionClick;
+    const i32 command_screen_x = action.world_x -
+        static_cast<i32>(input.map_origin_x);
+    const i32 command_screen_y = action.world_y -
+        static_cast<i32>(input.map_origin_y);
     if (action.item_id < 0x60u) {
         if (click) {
             if (action.aux == 0) {
@@ -12170,18 +13420,35 @@ bool publish_default_ui_overlay_input_command(
         return true;
     }
     if (action.item_id >= 0xaau && action.item_id < 0xd4u) {
+        const u32 action_id = action.item_id - 0xaau;
+        if (action.action == kUiOverlayCommandActionPlacement) {
+            // Selector 6 has original mode 0, so the generic dispatcher does
+            // not pass through its coordinate-validation branch.  Preserve
+            // the explicit placement world point for the build packet.
+            input.last_action_world_x = static_cast<u32>(
+                std::max<i32>(action.world_x, 0));
+            input.last_action_world_y = static_cast<u32>(
+                std::max<i32>(action.world_y, 0));
+            DispatchSelectedUnitActionCommand(input, action_id,
+                command_screen_x, command_screen_y, overlay.selected_unit_id);
+            ResetGameplayInputPointerState(input);
+            overlay.staged_unit_action_id = 0xffffffffu;
+            overlay.placement_mode = 0;
+            overlay.selected_production_category = 0;
+            return true;
+        }
         if (click) {
-            const u32 action_id = action.item_id - 0xaau;
             const u32 mode = kOriginalObjectActionModes[action_id];
             if (mode <= 1) {
                 DispatchSelectedUnitActionCommand(input, action_id,
-                    overlay.mouse_x, overlay.mouse_y, overlay.selected_unit_id);
+                    command_screen_x, command_screen_y, overlay.selected_unit_id);
                 ResetGameplayInputPointerState(input);
                 overlay.selected_production_category = 0;
             }
             else if (mode == 2) {
                 overlay.placement_mode = action_id;
                 overlay.placement_definition_id = 0;
+                overlay.staged_unit_action_id = action_id;
                 overlay.selected_production_category = 0;
                 overlay.pending_local_command = true;
             }
@@ -12616,7 +13883,10 @@ void sync_default_gameplay_production_action_units(
         production_unit.bounds_top = unit->definition.bounds_top;
         production_unit.bounds_width = unit->definition.bounds_width;
         production_unit.bounds_height = unit->definition.bounds_height;
-        production_unit.command_bits = default_unit_command_bit_mask(*unit);
+        production_unit.command_bits =
+            default_unit_action_capability_mask(*unit);
+        production_unit.runtime_command_bits =
+            default_unit_command_bit_mask(*unit);
         production_unit.production_bits = unit->definition.support_source_flags;
         production_unit.active_count_metric = unit->status_timer;
         production_unit.queued_count_metric = unit->secondary_value;
@@ -12796,13 +14066,17 @@ bool publish_default_ui_overlay_production_command(
     GameplayProductionActionState& production, GameplayInputActionState& input,
     UiOverlayState& overlay, const UiOverlayCommandAction& action) {
     const bool click = action.action == kUiOverlayCommandActionClick;
+    const i32 command_screen_x = action.world_x -
+        static_cast<i32>(input.map_origin_x);
+    const i32 command_screen_y = action.world_y -
+        static_cast<i32>(input.map_origin_y);
     if (action.item_id >= 0xd4u && action.item_id < 0xf4u) {
         if ((action.flags & 0x36u) != 0) {
             return true;
         }
         if (click) {
             DispatchOwnerProductionActionCommand(production, action.item_id - 0xd4u,
-                overlay.mouse_x, overlay.mouse_y, overlay.selected_unit_id);
+                command_screen_x, command_screen_y, overlay.selected_unit_id);
         }
         return true;
     }
@@ -12995,19 +14269,13 @@ bool default_unit_damage_can_award_experience(UnitDamageContext&,
     return !target.point_target;
 }
 
-void default_unit_damage_hit_sound(UnitDamageContext&, UnitRecord&,
-    UnitRecord& target) {
-    UnitMovementUnit* unit = find_default_damage_record_unit(target);
-    if (unit == nullptr) {
-        return;
-    }
-
+void play_default_unit_hit_reaction_voice(UnitMovementUnit& unit) {
     GameplayUnitSoundDefinition definition;
     GameplayUnitSoundBaseSlots base_slots;
-    if (!resolve_default_unit_sound_profile(*unit, definition, base_slots)) {
+    if (!resolve_default_unit_sound_profile(unit, definition, base_slots)) {
         return;
     }
-    HandleUnitHitReactionVoiceCue(g_runtime.gameplay_sound, *unit, definition, base_slots);
+    HandleUnitHitReactionVoiceCue(g_runtime.gameplay_sound, unit, definition, base_slots);
 }
 
 void default_unit_damage_attacker_experience_changed(UnitDamageContext&,
@@ -13125,6 +14393,16 @@ bool default_unit_damage_reaction_random_move(UnitMovementUnit& target) {
     target.path_target_y = path_target_y;
     target.command_state = kUnitStateTravel;
     ProcessUnitPathToDestination(*movement, target);
+
+    // Original HandleUnitDamageReaction 0x004c2794..0x004c27b0 rolls the
+    // shared gameplay RNG with limit 4 after the fallback path starts, but
+    // only for lifecycle-class-1 units.  The hit reaction voice is emitted on
+    // result zero.  Playing it unconditionally from ApplyUnitDamage both lost
+    // this RNG call and produced a different audible reaction cadence.
+    if (target.definition.lifecycle_class == 1 &&
+        default_gameplay_frame_random_limit(4) == 0) {
+        play_default_unit_hit_reaction_voice(target);
+    }
     return true;
 }
 
@@ -13168,14 +14446,20 @@ DefaultDamageReactionCombatGate default_unit_damage_reaction_combat_gate(
 }
 
 bool default_unit_command_find_relocation_point(UnitCommandContext&,
-    UnitMovementUnit& unit, UnitMovementPoint& point) {
+    UnitMovementUnit&, UnitMovementPoint& point) {
     UnitMovementContext* movement = default_gameplay_movement_context();
-    if (movement == nullptr) {
+    if (movement == nullptr || movement->map.width == 0 ||
+        movement->map.height == 0) {
         return false;
     }
 
-    point.x = default_damage_reaction_random_axis(unit.x, movement->map.width);
-    point.y = default_damage_reaction_random_axis(unit.y, movement->map.height);
+    // HandleUnitRandomRelocation (original 0x004cc1fe..0x004cc221) selects a
+    // completely new map cell, rolling height first and width second.  This is
+    // distinct from the damage-reaction +/-0x40-pixel fallback used elsewhere.
+    point.y = static_cast<i32>(
+        default_gameplay_frame_random_limit(movement->map.height) << 5);
+    point.x = static_cast<i32>(
+        default_gameplay_frame_random_limit(movement->map.width) << 5);
     return true;
 }
 
@@ -13187,6 +14471,17 @@ bool default_unit_command_find_strict_placement_point(UnitCommandContext&,
     }
 
     return FindStrictUnitPlacementPoint(*lifecycle, unit, point.x, point.y);
+}
+
+bool default_unit_command_find_matching_terrain_placement_point(
+    UnitCommandContext&, UnitMovementUnit& unit, UnitMovementPoint& point) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr) {
+        return false;
+    }
+
+    return FindMatchingTerrainUnitPlacementPoint(
+        *lifecycle, unit, point.x, point.y);
 }
 
 bool default_unit_damage_reaction_state_can_acquire_attacker(
@@ -13497,9 +14792,6 @@ void default_unit_damage_reaction(UnitDamageContext&, UnitRecord& source,
 }
 
 void configure_default_unit_damage_context(UnitDamageContext& damage_context) {
-    if (damage_context.callbacks.on_unit_damaged == nullptr) {
-        damage_context.callbacks.on_unit_damaged = default_unit_damage_hit_sound;
-    }
     if (damage_context.callbacks.on_unit_defeated_accounting == nullptr) {
         damage_context.callbacks.on_unit_defeated_accounting =
             default_unit_damage_defeated_accounting;
@@ -13805,9 +15097,9 @@ void default_unit_command_target_progress_complete(UnitTargetHelperContext& cont
 
 void default_unit_command_cargo_deposited(UnitCommandContext& context,
     UnitMovementUnit& unit) {
-    if (unit.owner_id < context.owner_resource_score.size()) {
-        context.owner_resource_score[unit.owner_id] += unit.cargo_amount;
-    }
+    // ProcessWorkerDepositCargo already advances both the spendable balance
+    // and original DAT_007072ac score counter.  Adding cargo here a second time
+    // made score/script conditions diverge after every harvest trip.
     sync_default_owner_command_runtime_slots(context, unit.owner_id);
 }
 
@@ -13908,6 +15200,20 @@ void default_unit_command_unit_spawned(UnitCommandContext&,
     sync_default_owner_type_count_for_unit(spawned);
 }
 
+void default_unit_command_construction_completed(UnitCommandContext&,
+    UnitMovementUnit& completed) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr) {
+        return;
+    }
+
+    // Exact completion transition from HandleUnitCreationRegisterFootprint:
+    // clear the construction gate, restore the self/rally fields, increment
+    // the completed type count, apply footprint flags, and register occupancy.
+    HandleUnitCreationRegisterFootprint(*lifecycle, completed);
+    sync_default_owner_type_count_for_unit(completed);
+}
+
 void default_unit_command_linked_unit_released(UnitCommandContext&,
     UnitMovementUnit& parent, UnitMovementUnit& child) {
     append_default_damage_record(&child);
@@ -13954,6 +15260,18 @@ u32 default_unit_movement_command_metadata_flags(UnitMovementContext&,
 
 u32 default_unit_movement_random_limit(UnitMovementContext&, u32 limit) {
     return default_gameplay_frame_random_limit(limit);
+}
+
+UnitMovementUnit* default_unit_movement_ground_separation_target(
+    UnitMovementContext&, UnitMovementUnit& unit) {
+    return QueryActiveCommandUnitSpatialBox(
+        g_runtime.gameplay_unit_spatial_indexes, unit);
+}
+
+UnitMovementUnit* default_unit_movement_air_separation_target(
+    UnitMovementContext&, UnitMovementUnit& unit) {
+    return QueryLifecycleClass3UnitSpatialBox(
+        g_runtime.gameplay_unit_spatial_indexes, unit);
 }
 
 void spawn_default_runtime_death_passive_effects(UnitMovementUnit& unit) {
@@ -14003,6 +15321,14 @@ void configure_default_unit_movement_callbacks(UnitMovementContext& movement) {
     if (movement.callbacks.command_metadata_flags == nullptr) {
         movement.callbacks.command_metadata_flags =
             default_unit_movement_command_metadata_flags;
+    }
+    if (movement.callbacks.query_ground_separation_target == nullptr) {
+        movement.callbacks.query_ground_separation_target =
+            default_unit_movement_ground_separation_target;
+    }
+    if (movement.callbacks.query_air_separation_target == nullptr) {
+        movement.callbacks.query_air_separation_target =
+            default_unit_movement_air_separation_target;
     }
     if (movement.callbacks.on_attached_child_parent_death == nullptr) {
         movement.callbacks.on_attached_child_parent_death =
@@ -14225,34 +15551,51 @@ void default_unit_command_production_completed(UnitCommandContext& context,
             definition, base_slots);
     }
     static std::string production_complete_message;
+    std::string produced_name = default_unit_display_name(produced);
+    if (produced_name.empty()) {
+        produced_name = startup_unit_name_or_fallback(produced.type_id);
+    }
     production_complete_message =
-        default_unit_display_name(produced) + startup_platform_row(101, " ready");
+        std::move(produced_name) + startup_platform_row(101, " ready");
     QueueGameplayHudMessage(g_runtime.gameplay_hud_text,
         production_complete_message.c_str());
 }
 
-void default_unit_command_refund_completion_announcement(UnitCommandContext& context,
+void default_unit_command_production_refunded(UnitCommandContext& context,
     UnitMovementUnit& unit) {
-    const ProductionOrderDefinition* definition =
-        default_production_order_definition(default_unit_completion_order_id(unit));
-    if (definition == nullptr) {
+    // refund_production_resources has already restored the queued unit cost.
+    // This callback only mirrors that authoritative command-context balance;
+    // treating the produced type id as a production-order id refunded it twice.
+    sync_default_owner_command_runtime_slots(context, unit.owner_id);
+}
+
+void refund_default_production_order_once(UnitCommandContext& context, u32 owner,
+    const ProductionOrderDefinition& definition) {
+    if (owner >= context.owner_resources.size() ||
+        owner >= context.owner_secondary_resources.size() ||
+        owner >= g_runtime.gameplay_production_runtime.owner_primary_resources.size() ||
+        owner >=
+            g_runtime.gameplay_production_runtime.owner_secondary_resources.size()) {
         return;
     }
-    const u32 owner = unit.owner_id;
-    if (owner < context.owner_resources.size() &&
-        owner < g_runtime.gameplay_production_runtime.variant_counts.size() &&
-        definition->id < kProductionOrderCount) {
-        const u32 variant =
-            g_runtime.gameplay_production_runtime.variant_counts[owner][definition->id];
-        const u32 primary =
-            CalculateProductionOrderCost(definition->primary_cost, variant);
-        context.owner_resources[owner] += primary;
-        context.owner_secondary_resources[owner] += primary;
-    }
+
+    // The command context and production runtime are mirrors of the same owner
+    // balances.  Seed the production helper from the command context, refund
+    // once, then copy the result back instead of independently incrementing
+    // both mirrors.
+    g_runtime.gameplay_production_runtime.owner_primary_resources[owner] =
+        context.owner_resources[owner];
+    g_runtime.gameplay_production_runtime.owner_secondary_resources[owner] =
+        context.owner_secondary_resources[owner];
     ClearProductionOrderLockFlags(g_runtime.gameplay_production_runtime,
-        definition->id, unit.owner_id);
+        definition.id, owner);
     RefundProductionOrderCosts(g_runtime.gameplay_production_runtime,
-        *definition, unit.owner_id);
+        definition, owner);
+    context.owner_resources[owner] =
+        g_runtime.gameplay_production_runtime.owner_primary_resources[owner];
+    context.owner_secondary_resources[owner] =
+        g_runtime.gameplay_production_runtime.owner_secondary_resources[owner];
+    sync_default_owner_command_runtime_slots(context, owner);
 }
 
 void default_unit_command_deferred_death_refund(UnitCommandContext& context,
@@ -14270,7 +15613,11 @@ void default_unit_command_deferred_death_refund(UnitCommandContext& context,
             default_unit_lifecycle_find_definition(
                 g_runtime.gameplay_lifecycle_context, type_id);
         if (definition != nullptr) {
-            context.owner_resources[owner] += definition->production_resource_cost;
+            // Original queued-unit death refund (0x004cdc44 -> 0x004ce4bd)
+            // restores the primary cost only.
+            context.owner_resources[owner] +=
+                definition->production_resource_cost;
+            sync_default_owner_command_runtime_slots(context, owner);
         }
         return;
     }
@@ -14287,9 +15634,10 @@ void default_unit_command_deferred_death_refund(UnitCommandContext& context,
             default_unit_lifecycle_find_definition(
                 g_runtime.gameplay_lifecycle_context, type_id);
         if (definition != nullptr) {
-            context.owner_resources[owner] += definition->production_resource_cost;
-            context.owner_secondary_resources[owner] +=
-                definition->production_secondary_cost;
+            HandleOwnerUnitProductionCostRefund(context, owner,
+                definition->production_resource_cost,
+                definition->production_secondary_cost);
+            sync_default_owner_command_runtime_slots(context, owner);
         }
         return;
     }
@@ -14302,20 +15650,7 @@ void default_unit_command_deferred_death_refund(UnitCommandContext& context,
         if (definition == nullptr) {
             return;
         }
-        if (owner < g_runtime.gameplay_production_runtime.variant_counts.size() &&
-            definition->id < kProductionOrderCount) {
-            const u32 variant =
-                g_runtime.gameplay_production_runtime.variant_counts[owner]
-                    [definition->id];
-            const u32 primary =
-                CalculateProductionOrderCost(definition->primary_cost, variant);
-            context.owner_resources[owner] += primary;
-            context.owner_secondary_resources[owner] += primary;
-        }
-        ClearProductionOrderLockFlags(g_runtime.gameplay_production_runtime,
-            definition->id, unit.owner_id);
-        RefundProductionOrderCosts(g_runtime.gameplay_production_runtime,
-            *definition, unit.owner_id);
+        refund_default_production_order_once(context, owner, *definition);
     }
 }
 
@@ -14472,8 +15807,7 @@ bool populate_default_spatial_target_candidates(UnitCommandContext& context,
         return false;
     }
 
-    RebuildUnitSpatialIndexSet(g_runtime.gameplay_unit_spatial_indexes,
-        *context.movement);
+    rebuild_default_unit_spatial_indexes();
     UnitMovementUnit* candidate = QueryAllUnitsSpatialIndexAroundUnit(
         g_runtime.gameplay_unit_spatial_indexes, unit, targeting.interaction_range);
     bool queried = candidate != nullptr;
@@ -14522,8 +15856,7 @@ UnitMovementUnit* default_unit_command_find_nearby_follow_target(
     if (context.movement == nullptr) {
         return nullptr;
     }
-    RebuildUnitSpatialIndexSet(g_runtime.gameplay_unit_spatial_indexes,
-        *context.movement);
+    rebuild_default_unit_spatial_indexes();
     return QueryNonTerminalUnitSpatialBox(g_runtime.gameplay_unit_spatial_indexes,
         unit);
 }
@@ -14553,8 +15886,8 @@ UnitMovementUnit* default_unit_command_find_target(UnitCommandContext& context,
     targeting.callbacks.can_target = default_unit_targeting_can_target;
     targeting.source = &source_link->record;
     targeting.owner_relation_mask =
-        unit.owner_id < g_runtime.gameplay_player_slots.owner_relation_masks.size()
-            ? g_runtime.gameplay_player_slots.owner_relation_masks[unit.owner_id]
+        unit.owner_id < context.owner_relation_masks.size()
+            ? context.owner_relation_masks[unit.owner_id]
             : 0;
     targeting.active_units.reserve(g_runtime.gameplay_damage_record_links.size());
     for (GameplayDamageRecordLink& link : g_runtime.gameplay_damage_record_links) {
@@ -15123,7 +16456,16 @@ void configure_default_unit_command_context(UnitCommandContext& command_context,
     command_context.owner_population_used = lifecycle.owner_population_used;
     command_context.owner_population_limit = lifecycle.owner_population_limit;
     command_context.owner_population_reserved = lifecycle.owner_population_reserved;
-    command_context.owner_relation_masks.fill(0);
+    // The original relation tables cover non-player owners as well.  In a
+    // fresh game DAT_00725334 contains each owner's own bit (owner 8 is
+    // 0x100), so neutral scenario units do not acquire and kill one another.
+    // PlayerSlotRuntimeState only stores the eight lobby owners; seed the
+    // remaining command owners with their original self relation before
+    // applying the live lobby masks.
+    for (u32 owner = 0; owner < command_context.owner_relation_masks.size();
+         ++owner) {
+        command_context.owner_relation_masks[owner] = 1u << owner;
+    }
     for (u32 owner = 0; owner < kPlayerSlotCount &&
          owner < command_context.owner_relation_masks.size(); ++owner) {
         command_context.owner_relation_masks[owner] =
@@ -15230,6 +16572,10 @@ void configure_default_unit_command_context(UnitCommandContext& command_context,
         command_context.callbacks.on_unit_spawned =
             default_unit_command_unit_spawned;
     }
+    if (command_context.callbacks.on_construction_completed == nullptr) {
+        command_context.callbacks.on_construction_completed =
+            default_unit_command_construction_completed;
+    }
     if (command_context.callbacks.on_linked_unit_released == nullptr) {
         command_context.callbacks.on_linked_unit_released =
             default_unit_command_linked_unit_released;
@@ -15245,6 +16591,10 @@ void configure_default_unit_command_context(UnitCommandContext& command_context,
     if (command_context.callbacks.find_relocation_point == nullptr) {
         command_context.callbacks.find_relocation_point =
             default_unit_command_find_relocation_point;
+    }
+    if (command_context.callbacks.find_matching_terrain_placement_point == nullptr) {
+        command_context.callbacks.find_matching_terrain_placement_point =
+            default_unit_command_find_matching_terrain_placement_point;
     }
     if (command_context.callbacks.find_strict_placement_point == nullptr) {
         command_context.callbacks.find_strict_placement_point =
@@ -15359,7 +16709,7 @@ void configure_default_unit_command_context(UnitCommandContext& command_context,
     }
     if (command_context.callbacks.on_production_refunded == nullptr) {
         command_context.callbacks.on_production_refunded =
-            default_unit_command_refund_completion_announcement;
+            default_unit_command_production_refunded;
     }
     if (command_context.callbacks.on_deferred_death_command_refund == nullptr) {
         command_context.callbacks.on_deferred_death_command_refund =
@@ -15636,12 +16986,22 @@ bool default_owner_ai_eligible_unit_summary(const OwnerAiRuntimeState& owner_ai,
     return true;
 }
 
+u32 default_owner_ai_random_value(OwnerAiRuntimeState&, u32 limit, void*) {
+    // Owner AI opcode 75 / original FUN_0043d150 case 0x4a writes the limit to
+    // DAT_007071b8 and calls the shared gameplay RNG thunk at 0x00401d75.
+    // Keeping a private OwnerAiRuntimeState seed forks both the AI branch and
+    // every later deterministic gameplay roll in multiplayer.
+    return default_gameplay_frame_random_limit(limit);
+}
+
 void configure_default_owner_ai_runtime(OwnerAiRuntimeState& owner_ai) {
     owner_ai.load_profile_text = default_owner_ai_profile_text_loader;
     owner_ai.load_profile_text_user_data = nullptr;
     owner_ai.command_player_slots = &g_runtime.gameplay_player_slots;
     owner_ai.eligible_unit_summary = default_owner_ai_eligible_unit_summary;
     owner_ai.eligible_unit_summary_user_data = nullptr;
+    owner_ai.random_value = default_owner_ai_random_value;
+    owner_ai.random_value_user_data = nullptr;
 }
 
 void sync_default_owner_ai_runtime_metadata(GameplayLoopState* loop_state) {
@@ -15825,9 +17185,6 @@ void sync_default_gameplay_end_condition_state() {
 void refresh_default_owner_ai_target_profiles() {
     sync_default_owner_ai_runtime_metadata(nullptr);
     SelectNearestHostilePlayerSlots(g_runtime.gameplay_player_slots);
-    if (g_runtime.gameplay_player_slots.refresh_owner_target != nullptr) {
-        return;
-    }
 
     OwnerAiRuntimeState& owner_ai = g_runtime.gameplay_owner_ai_state;
     for (u32 owner = 0; owner < kOwnerAiOwnerCount; ++owner) {
@@ -17400,7 +18757,7 @@ void default_owner_ai_dispatch_threat_points(
 
 void default_owner_ai_tick_transport_queue_unit(UnitCommandContext& context,
     OwnerTransportQueueState& queue, u32 owner, UnitMovementUnit& unit, void*) {
-    const u32 slot_index = unit.command_value & 0xffu;
+    const u32 slot_index = unit.area_marker_flags & 0xffu;
     if (slot_index >= queue.slots.size()) {
         return;
     }
@@ -17426,9 +18783,102 @@ void default_owner_ai_tick_transport_queue_unit(UnitCommandContext& context,
         }
         return target;
     };
-    const auto advance_or_move = [&](u32 base_tiles, bool target_point_command) {
+    const auto find_strategic_attack_target = [&]() -> UnitMovementUnit* {
+        if (context.movement == nullptr || owner >= kOwnerAiOwnerCount ||
+            !CheckOwnerEligibleRetargetUnit(unit)) {
+            return nullptr;
+        }
+
+        const OwnerStrategicTargetState& strategic_target =
+            g_runtime.gameplay_owner_strategic_targets[owner];
+        if (strategic_target.target_owner_id == owner ||
+            !CheckOwnerCanTargetOwner(strategic_target,
+                strategic_target.target_owner_id)) {
+            return nullptr;
+        }
+
+        UnitMovementUnit* best_target = nullptr;
+        UnitMovementUnit* best_worker_fallback = nullptr;
+        u32 best_distance = std::numeric_limits<u32>::max();
+        u32 best_priority = std::numeric_limits<u32>::max();
+        u32 best_worker_distance = std::numeric_limits<u32>::max();
+        u32 best_worker_priority = std::numeric_limits<u32>::max();
+        const auto can_attack = [&](UnitMovementUnit& candidate) {
+            return context.callbacks.can_attack_target != nullptr
+                ? context.callbacks.can_attack_target(context, unit, candidate)
+                : default_unit_command_can_attack(context, unit, candidate);
+        };
+        const auto better_candidate = [](u32 distance, u32 priority,
+                                          const UnitMovementUnit& candidate,
+                                          u32 best_candidate_distance,
+                                          u32 best_candidate_priority,
+                                          const UnitMovementUnit* current) {
+            return current == nullptr || distance < best_candidate_distance ||
+                (distance == best_candidate_distance &&
+                    (priority < best_candidate_priority ||
+                        (priority == best_candidate_priority &&
+                            candidate.id < current->id)));
+        };
+
+        for (UnitMovementUnit* candidate : context.movement->active_units) {
+            if (candidate == nullptr || candidate == &unit ||
+                candidate->owner_id != strategic_target.target_owner_id ||
+                !candidate->active ||
+                (candidate->command_state & kUnitCommandDead) != 0 ||
+                (candidate->runtime_flags & 0x84u) != 0 ||
+                candidate->definition.lifecycle_class > 1 ||
+                !can_attack(*candidate)) {
+                continue;
+            }
+
+            const u32 distance = CalculateApproxUnitDistance(
+                unit.x, unit.y, candidate->x, candidate->y);
+            const u32 priority =
+                candidate->definition.target_selection_priority != 0xffffffffu
+                    ? candidate->definition.target_selection_priority
+                    : candidate->type_id;
+            const bool worker =
+                (candidate->definition.type_flags & 0x40u) != 0;
+            if (!worker && better_candidate(distance, priority, *candidate,
+                    best_distance, best_priority, best_target)) {
+                best_target = candidate;
+                best_distance = distance;
+                best_priority = priority;
+            }
+            else if (worker && better_candidate(distance, priority, *candidate,
+                         best_worker_distance, best_worker_priority,
+                         best_worker_fallback)) {
+                best_worker_fallback = candidate;
+                best_worker_distance = distance;
+                best_worker_priority = priority;
+            }
+        }
+        return best_target != nullptr ? best_target : best_worker_fallback;
+    };
+    const auto advance_or_move = [&](u32 base_tiles, bool target_point_command,
+                                     bool attack_strategic_target) {
         if (command_id != 1) {
             return;
+        }
+        if (attack_strategic_target) {
+            if (UnitMovementUnit* target = find_strategic_attack_target()) {
+                // Raw command 0x04 enters the follow state.  The public 0x05
+                // helper is conditional and deliberately degrades to a
+                // target-less 0x04 command when command flag 0x20 is absent,
+                // which is not guaranteed for AI combat units.  Queue the
+                // same target-bearing raw 0x05 payload used by a player attack
+                // action so it enters target validation and combat dispatch.
+                const UnitQueuedCommand attack_command{
+                    5,
+                    static_cast<i32>(target->id),
+                    target->x,
+                    static_cast<u32>(target->y),
+                };
+                if (SetOrQueueUnitCommandPayload(
+                        &unit, attack_command, false)) {
+                    return;
+                }
+            }
         }
         if (AdvanceOwnerTransportQueueProgressNearTarget(
                 unit, slot, base_tiles)) {
@@ -17508,25 +18958,25 @@ void default_owner_ai_tick_transport_queue_unit(UnitCommandContext& context,
         break;
     }
     case 6:
-        unit.command_value &= 0x7fffffffu;
+        unit.area_marker_flags &= 0x7fffffffu;
         ++slot.completed_count;
         break;
     case 7:
-        advance_or_move(3, false);
+        advance_or_move(3, false, false);
         break;
     case 8:
         if (command_id == 1) {
-            advance_or_move(8, false);
+            advance_or_move(8, false, false);
             if (CheckOwnerTransportQueueUnitWithinTargetThreshold(unit, slot,
                     8)) {
-                unit.command_value |= 0x80000000u;
+                unit.area_marker_flags |= 0x80000000u;
             }
         }
         break;
     case kOwnerTransportQueueStateRelay0aPending:
     case kOwnerTransportQueueStateRelay0ePending:
         if (slot.target_x != -1) {
-            advance_or_move(6, true);
+            advance_or_move(6, true, false);
         }
         break;
     case kOwnerTransportQueueStateLinkedGroup0a:
@@ -17567,7 +19017,7 @@ void default_owner_ai_tick_transport_queue_unit(UnitCommandContext& context,
     case 0x17:
     case kOwnerTransportQueueStateStrategicTargetHold:
     case 0x1c:
-        advance_or_move(8, false);
+        advance_or_move(8, false, true);
         break;
     case kOwnerTransportQueueStateThreatResponse:
         if (CalculateApproxUnitDistance(unit.x, unit.y,
@@ -17662,11 +19112,17 @@ void remove_default_unit_pointer(
 }
 
 void activate_default_gameplay_script_unit(
-    UnitMovementContext& movement, UnitMovementUnit& unit) {
+    UnitMovementContext& movement, UnitMovementUnit& unit,
+    bool insert_at_head = true) {
     remove_default_unit_pointer(movement.free_units, &unit);
     remove_default_unit_pointer(movement.lifecycle_units, &unit);
     remove_default_unit_pointer(movement.active_units, &unit);
-    movement.active_units.insert(movement.active_units.begin(), &unit);
+    if (insert_at_head) {
+        movement.active_units.insert(movement.active_units.begin(), &unit);
+    }
+    else {
+        movement.active_units.push_back(&unit);
+    }
     unit.active = true;
 }
 
@@ -17705,10 +19161,20 @@ void initialize_default_unit_from_scenario_object(
     unit.command_value = object.command_value;
     unit.path_target_x = object.scripted_target_x;
     unit.path_target_y = object.scripted_target_y;
-    const bool has_destination =
-        object.destination_x != 0 || object.destination_y != 0;
-    unit.destination_x = has_destination ? object.destination_x : object.x;
-    unit.destination_y = has_destination ? object.destination_y : object.y;
+    if (scenario_object_uses_cell_render_scratch(unit.type_id)) {
+        unit.cell_channel_additive_frame =
+            static_cast<u32>(std::max<i32>(object.destination_x, 0));
+        unit.cell_flag40_animation_frame =
+            static_cast<u32>(std::max<i32>(object.destination_y, 0));
+        unit.destination_x = object.x;
+        unit.destination_y = object.y;
+    }
+    else {
+        const bool has_destination =
+            object.destination_x != 0 || object.destination_y != 0;
+        unit.destination_x = has_destination ? object.destination_x : object.x;
+        unit.destination_y = has_destination ? object.destination_y : object.y;
+    }
     unit.destination_aux_state = object.destination_aux_state;
     const bool has_current_cell =
         object.current_cell_x != 0 || object.current_cell_y != 0;
@@ -17716,10 +19182,8 @@ void initialize_default_unit_from_scenario_object(
         has_current_cell ? object.current_cell_x : (object.x & ~0x1f);
     unit.current_cell_y =
         has_current_cell ? object.current_cell_y : (object.y & ~0x1f);
-    const bool has_next_path =
-        object.next_path_x != 0 || object.next_path_y != 0;
-    unit.next_path_x = has_next_path ? object.next_path_x : unit.current_cell_x;
-    unit.next_path_y = has_next_path ? object.next_path_y : unit.current_cell_y;
+    unit.next_path_x = object.next_path_x;
+    unit.next_path_y = object.next_path_y;
     unit.saved_path_target_x = object.saved_path_target_x;
     unit.saved_path_target_y = object.saved_path_target_y;
     unit.anchor_x = object.anchor_x;
@@ -17799,13 +19263,66 @@ void instantiate_default_gameplay_script_scenario_units(
     }
 
     UnitMovementContext& movement = *lifecycle->movement;
+    g_runtime.gameplay_rejected_scenario_unit_slots.clear();
+    g_runtime.gameplay_serialized_free_unit_slots.clear();
+    g_runtime.gameplay_highest_scenario_unit_slot = 0;
     const u32 object_count = std::min<u32>(
         static_cast<u32>(script.objects.size()), kGameplayScenarioObjectMaxSlots);
-    for (u32 index = 1; index < object_count; ++index) {
+
+    // Record 0 stores the heads of record 7's active/free intrusive lists as
+    // 0x1d0-byte pool offsets.  Following the active head is essential: the
+    // lowest root is not consistently the active list across map archives.
+    std::vector<u32> import_order;
+    import_order.reserve(object_count);
+    const auto append_serialized_chain = [&](u32 head, std::vector<u32>& order) {
+        std::vector<u8> visited(object_count, 0);
+        u32 cursor = head;
+        while (cursor != 0 && cursor < object_count && !visited[cursor]) {
+            visited[cursor] = 1;
+            order.push_back(cursor);
+            cursor = script.objects[cursor].next_object_index;
+        }
+    };
+
+    const GameplaySessionLoadState& load = gameplay_session_load_state();
+    if (!load.records.empty() && load.record_loaded[0]) {
+        const std::vector<u8>& header = load.records[0];
+        const u32 active_head = default_scenario_object_reference_to_unit_id(
+            read_default_session_record_u32(header,
+                kGameplayHeaderUnitActiveListHeadOffset, 0));
+        const u32 free_head = default_scenario_object_reference_to_unit_id(
+            read_default_session_record_u32(header,
+                kGameplayHeaderUnitFreeListHeadOffset, 0));
+        append_serialized_chain(active_head, import_order);
+        append_serialized_chain(
+            free_head, g_runtime.gameplay_serialized_free_unit_slots);
+    }
+
+    // Keep a deterministic recovery path for malformed/headerless archives.
+    if (import_order.empty()) {
+        std::vector<u8> visited(object_count, 0);
+        for (u32 index = 1; index < object_count; ++index) {
+            const GameplayScriptTriggerObjectState& object = script.objects[index];
+            if (!default_gameplay_script_object_alive(object) ||
+                object.previous_object_index != 0) {
+                continue;
+            }
+            u32 cursor = index;
+            while (cursor != 0 && cursor < object_count && !visited[cursor]) {
+                visited[cursor] = 1;
+                import_order.push_back(cursor);
+                cursor = script.objects[cursor].next_object_index;
+            }
+        }
+    }
+
+    for (u32 index : import_order) {
         GameplayScriptTriggerObjectState& object = script.objects[index];
         if (!default_gameplay_script_object_alive(object)) {
             continue;
         }
+        g_runtime.gameplay_highest_scenario_unit_slot = std::max(
+            g_runtime.gameplay_highest_scenario_unit_slot, index);
 
         UnitMovementUnit* unit = object.unit;
         if (unit == nullptr && object.scenario_object_index != 0) {
@@ -17821,16 +19338,147 @@ void instantiate_default_gameplay_script_scenario_units(
         }
 
         initialize_default_unit_from_scenario_object(*lifecycle, *unit, object, index);
+
+        // Type 0x44 records are scenario placement markers, not live units.
+        // The Chaos archive also contains two records for the same type-0x4d
+        // object in one map cell; the intrusive-list import keeps the first
+        // record encountered (slot 51) and returns the later duplicate (slot
+        // 11) to the runtime free list.  Terrain-footprint validation is not
+        // appropriate here: the original accepts several edge resources whose
+        // large definition footprint extends beyond the playable border.
+        const bool placement_marker = object.type_id == 0x44u;
+        const bool duplicate_map_object = std::any_of(
+            movement.active_units.begin(), movement.active_units.end(),
+            [&](const UnitMovementUnit* candidate) {
+                return candidate != nullptr && candidate->active &&
+                    candidate->type_id == unit->type_id &&
+                    std::abs(candidate->x - unit->x) <= 16 &&
+                    std::abs(candidate->y - unit->y) <= 16;
+            });
+        if (placement_marker || duplicate_map_object) {
+            object.unit = nullptr;
+            object.object_pointer = nullptr;
+            object.remove_from_triggers = true;
+            g_runtime.gameplay_rejected_scenario_unit_slots.push_back(index);
+            append_startup_log(
+                "scenario-units: rejected slot=%lu type=%lu owner=%lu xy=%ld,%ld",
+                static_cast<unsigned long>(index),
+                static_cast<unsigned long>(object.type_id),
+                static_cast<unsigned long>(object.owner_id),
+                static_cast<long>(object.x), static_cast<long>(object.y));
+            continue;
+        }
+        unit->runtime_slot_index = index;
+        unit->id = index * kGameplayScenarioObjectStride;
+        unit->linked_object_id = unit->id;
         object.unit = unit;
         object.object_pointer = unit;
-        object.scenario_object_index = unit->id;
+        object.scenario_object_index = index;
         if (owned_unit != nullptr) {
             g_runtime.gameplay_script_spawned_units.push_back(std::move(owned_unit));
         }
-        activate_default_gameplay_script_unit(movement, *unit);
+        SetUnitFootprintOccupancyBits(*lifecycle, *unit);
+        // Record 0 stores DAT_007071d4 as the head of record 7's serialized
+        // active list.  import_order already follows that head-to-tail chain;
+        // appending preserves the original simulation order.  Inserting every
+        // imported node at the head reverses all 51 Chaos scenario units.
+        activate_default_gameplay_script_unit(movement, *unit, false);
     }
 
     HandleOwnerUnitTypeCountRebuild(*lifecycle);
+}
+
+void initialize_default_gameplay_original_unit_pool_slots() {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr || lifecycle->movement == nullptr) {
+        return;
+    }
+
+    UnitMovementContext& movement = *lifecycle->movement;
+    std::array<u8, kGameplayScenarioObjectMaxSlots> used{};
+    for (UnitMovementUnit* unit : movement.active_units) {
+        if (unit != nullptr && unit->runtime_slot_index != 0 &&
+            unit->runtime_slot_index < used.size()) {
+            used[unit->runtime_slot_index] = 1;
+        }
+    }
+
+    std::vector<u32> allocation_order;
+    allocation_order.reserve(kGameplayScenarioObjectMaxSlots - 1);
+    const auto append_available = [&](u32 slot) {
+        if (slot != 0 && slot < used.size() && !used[slot] &&
+            std::find(allocation_order.begin(), allocation_order.end(), slot) ==
+                allocation_order.end()) {
+            allocation_order.push_back(slot);
+        }
+    };
+
+    // The serialized-list traversal yields rejected nodes in the same order
+    // that the original archive repair path exposes them on its free list.
+    // Chaos therefore yields 54 -> 11 -> 53 -> 55 ... without a map-specific
+    // slot table.
+    const std::vector<u32>& rejected =
+        g_runtime.gameplay_rejected_scenario_unit_slots;
+    for (u32 slot : rejected) {
+        append_available(slot);
+    }
+    for (u32 slot : g_runtime.gameplay_serialized_free_unit_slots) {
+        append_available(slot);
+    }
+    for (u32 slot = g_runtime.gameplay_highest_scenario_unit_slot + 1;
+         slot < kGameplayScenarioObjectMaxSlots; ++slot) {
+        append_available(slot);
+    }
+    for (u32 slot = 1;
+         slot <= g_runtime.gameplay_highest_scenario_unit_slot; ++slot) {
+        append_available(slot);
+    }
+
+    std::size_t allocation_index = 0;
+    for (UnitMovementUnit& unit : g_runtime.gameplay_startup_state.placed_units) {
+        while (allocation_index < allocation_order.size() &&
+            used[allocation_order[allocation_index]]) {
+            ++allocation_index;
+        }
+        if (allocation_index >= allocation_order.size()) {
+            break;
+        }
+        const u32 slot = allocation_order[allocation_index++];
+        used[slot] = 1;
+        unit.runtime_slot_index = slot;
+        unit.id = slot * kGameplayScenarioObjectStride;
+        unit.linked_object_id = unit.id;
+        unit.linked_unit = &unit;
+        append_startup_log(
+            "start-slots: original pool slot=%lu offset=%lu type=%lu owner=%lu",
+            static_cast<unsigned long>(slot),
+            static_cast<unsigned long>(unit.id),
+            static_cast<unsigned long>(unit.type_id),
+            static_cast<unsigned long>(unit.owner_id));
+    }
+
+    // Materialize the rest of the original fixed pool as inactive nodes.  All
+    // later deterministic production/spawn paths already pop movement.free_units,
+    // so newly created units retain protocol-compatible raw offsets too.
+    for (std::size_t index = allocation_index; index < allocation_order.size();
+         ++index) {
+        const u32 slot = allocation_order[index];
+        if (used[slot]) {
+            continue;
+        }
+        auto free_unit = std::make_unique<UnitMovementUnit>();
+        free_unit->runtime_slot_index = slot;
+        free_unit->id = slot * kGameplayScenarioObjectStride;
+        free_unit->active = false;
+        UnitMovementUnit* free_pointer = free_unit.get();
+        g_runtime.gameplay_script_spawned_units.push_back(std::move(free_unit));
+        movement.free_units.push_back(free_pointer);
+    }
+
+    append_startup_log(
+        "start-slots: original pool active=%zu free=%zu rejected=%zu serialized_free=%zu",
+        movement.active_units.size(), movement.free_units.size(), rejected.size(),
+        g_runtime.gameplay_serialized_free_unit_slots.size());
 }
 
 void purge_default_inactive_movement_units(UnitMovementContext& movement) {
@@ -17859,15 +19507,14 @@ u32 ensure_default_gameplay_script_object_index_for_unit(
         script.objects.push_back(GameplayScriptTriggerObjectState{});
     }
 
-    if (g_runtime.gameplay_script_scenario_objects_loaded &&
-        unit.id != 0 && unit.id < script.objects.size()) {
-        GameplayScriptTriggerObjectState& object = script.objects[unit.id];
-        object.unit = &unit;
-        object.object_pointer = &unit;
-        object.scenario_object_index = unit.id;
-        return unit.id;
-    }
-
+    // Once the original 0x1d0-byte pool offsets are assigned, unit.id is a
+    // wire reference rather than a scenario-object index.  The first four
+    // offsets (0x1d0..0x740) are still numerically below the 0x800-entry
+    // scenario vector, so indexing objects[unit.id] aliases unrelated empty
+    // records and their removal flag kills those otherwise valid units on the
+    // first script tick.  Scenario import already installs the stable unit
+    // pointer on its object; resolve that identity before creating a dynamic
+    // script object for a newly produced pool node.
     const u32 existing = find_default_gameplay_script_object_index_for_unit(script, unit);
     if (existing != 0) {
         return existing;
@@ -17944,8 +19591,14 @@ void sync_default_gameplay_script_object_from_unit(
     object.scripted_target_y = unit.path_target_y;
     object.scripted_movement_mode = 0;
     object.scripted_target_updated = false;
-    object.destination_x = unit.destination_x;
-    object.destination_y = unit.destination_y;
+    if (scenario_object_uses_cell_render_scratch(unit.type_id)) {
+        object.destination_x = static_cast<i32>(unit.cell_channel_additive_frame);
+        object.destination_y = static_cast<i32>(unit.cell_flag40_animation_frame);
+    }
+    else {
+        object.destination_x = unit.destination_x;
+        object.destination_y = unit.destination_y;
+    }
     object.destination_aux_state = unit.destination_aux_state;
     object.current_cell_x = unit.current_cell_x;
     object.current_cell_y = unit.current_cell_y;
@@ -17985,7 +19638,12 @@ void sync_default_gameplay_script_object_from_unit(
     if ((unit.command_state & kUnitCommandDead) != 0 || !unit.active) {
         object.flags |= 4u;
         object.remove_from_triggers = true;
-    } else if (!object.remove_from_triggers) {
+    } else {
+        // A fixed-pool node can be activated again after its previous unit was
+        // removed.  The script object follows that node pointer, so revive the
+        // object at the same time; otherwise the subsequent mutation pass
+        // immediately reapplies the stale death flag to the new unit.
+        object.remove_from_triggers = false;
         object.flags &= ~4u;
     }
 }
@@ -18139,6 +19797,12 @@ void apply_default_gameplay_script_object_to_unit(
     unit->wait_ticks = object.wait_ticks;
     unit->animation_frame = object.animation_frame;
     unit->previous_command_state = object.previous_command_state;
+    if (scenario_object_uses_cell_render_scratch(unit->type_id)) {
+        unit->cell_channel_additive_frame =
+            static_cast<u32>(std::max<i32>(object.destination_x, 0));
+        unit->cell_flag40_animation_frame =
+            static_cast<u32>(std::max<i32>(object.destination_y, 0));
+    }
     unit->animation_timer = object.animation_timer;
     unit->command_lockout_ticks = object.command_lockout_ticks;
     unit->command_entry_lockout_ticks = object.command_entry_lockout_ticks;
@@ -18200,8 +19864,14 @@ void apply_default_gameplay_script_object_to_unit(
          ++slot) {
         unit->item_slots[slot] = unit->equipment_slots[slot];
     }
-    object.destination_x = unit->destination_x;
-    object.destination_y = unit->destination_y;
+    if (scenario_object_uses_cell_render_scratch(unit->type_id)) {
+        object.destination_x = static_cast<i32>(unit->cell_channel_additive_frame);
+        object.destination_y = static_cast<i32>(unit->cell_flag40_animation_frame);
+    }
+    else {
+        object.destination_x = unit->destination_x;
+        object.destination_y = unit->destination_y;
+    }
     object.destination_aux_state = unit->destination_aux_state;
     object.current_cell_x = unit->current_cell_x;
     object.current_cell_y = unit->current_cell_y;
@@ -18825,7 +20495,10 @@ void RebuildUnitSpatialIndexes() {
     if (movement == nullptr) {
         return;
     }
-    RebuildUnitSpatialIndexSet(g_runtime.gameplay_unit_spatial_indexes, *movement);
+    const std::vector<u32>& categories =
+        original_unit_command_runtime_state_categories();
+    RebuildUnitSpatialIndexSet(g_runtime.gameplay_unit_spatial_indexes, *movement,
+        &categories);
 }
 
 void rebuild_default_unit_spatial_indexes() {
@@ -18839,6 +20512,11 @@ void prepare_default_unit_runtime_command_dispatch(GameplayLoopState& state,
         return;
     }
 
+    // The command context owns a copy of the population counters and commits
+    // it after the unit-runtime pass.  Rebuild the counters before taking that
+    // copy; otherwise the pass starts from the previous frame's zero values
+    // and its commit erases the totals calculated by the lifecycle tick.
+    HandleOwnerPopulationReservationTotals(lifecycle);
     UnitCommandContext& command_context = g_runtime.gameplay_unit_commands;
     configure_default_unit_command_context(command_context, lifecycle,
         state.simulation_frame_counter);
@@ -19029,7 +20707,11 @@ void default_gameplay_loop_simulation_phase(GameplayLoopState& state) {
 void default_gameplay_loop_present_phase(GameplayLoopState& state) {
     GameplayFrameRenderContext& context = g_runtime.gameplay_frame_render_context;
     context.current_tick_ms = state.current_tick_ms;
-    context.frame_counter = state.present_frame_counter;
+    // Every gameplay renderer reached from FUN_004d7790 observes
+    // DAT_007071a4, the lockstep simulation frame.  present_frame_counter can
+    // advance thousands of times while waiting for the next simulation tick,
+    // which made animated terrain and frame-driven overlays race or flicker.
+    context.frame_counter = state.simulation_frame_counter;
     context.viewport_width = kOriginalClientWidth;
     context.viewport_height = kOriginalClientHeight;
     context.render_command_queue = &g_runtime.gameplay_render_command_queue;
@@ -19129,7 +20811,7 @@ void default_gameplay_loop_present_phase(GameplayLoopState& state) {
                 context.fog->metrics = previous_fog_metrics;
             }
             UnlockBackBufferSpriteRenderTarget();
-            default_gameplay_frame_present_cursor(context);
+            HandleGameCursorPresentation();
             return;
         }
     }
@@ -19139,6 +20821,11 @@ void default_gameplay_loop_present_phase(GameplayLoopState& state) {
 }
 
 void default_gameplay_loop_end_frame_phase(GameplayLoopState&) {
+    // Original 0x004c11e1 -> 0x00405fa0 only yields with Sleep(1).
+    // The present phase already ends in HandleGameCursorPresentation(), which
+    // blits the completed back buffer.  Presenting again here copied a stale
+    // frame on every simulation-only catch-up tick and consumed most of the
+    // worker budget before the next composite could be produced.
     YieldBackgroundWorkerThreadSlice();
 }
 
@@ -19339,6 +21026,8 @@ void run_default_gameplay_session_transition(HWND owner, u32 mode) {
     g_runtime.gameplay_transition_mode = mode;
     g_runtime.gameplay_transition_active = true;
     g_runtime.gameplay_session_loop_reached = false;
+    append_startup_log("gameplay transition begin mode=%lu",
+        static_cast<unsigned long>(mode));
 
     GameplaySessionFlowState& state = g_runtime.gameplay_session_flow;
     prepare_default_gameplay_session_state(state);
@@ -19374,6 +21063,9 @@ void run_default_gameplay_session_transition(HWND owner, u32 mode) {
         "%s gameplay transition returned from the reconstructed session flow.\n",
         gameplay_transition_mode_label(mode));
     OutputDebugStringA(status_text);
+    append_startup_log("gameplay transition returned mode=%lu loop_reached=%s",
+        static_cast<unsigned long>(mode),
+        g_runtime.gameplay_session_loop_reached ? "yes" : "no");
     g_runtime.gameplay_transition_active = false;
     resume_worker_after_modal_action();
 }
@@ -19446,7 +21138,9 @@ void open_default_p2p_command_line_join(HWND window, HINSTANCE instance,
     activate_frontend_state(lobby);
 
     const HRESULT result = StartP2PLobbyJoinAttempt(lobby,
-        startup_message_row(97, "Game"), launch.remote_address.data(),
+        launch.player_name[0] != '\0' ? launch.player_name.data() :
+            startup_message_row(97, "Game"),
+        launch.remote_address.data(),
         lobby.default_tcp_port);
     if (result < 0) {
         ShowOnlineModalPrompt1(online_modal_prompt_state(), lobby.window,
@@ -19455,8 +21149,50 @@ void open_default_p2p_command_line_join(HWND window, HINSTANCE instance,
     }
 }
 
+void configure_default_p2p_command_line_ai_opponent(
+    LinkLobbyState& lobby, int player_count) {
+    if (player_count < 2 || kLinkLobbyAvatarCount < 2) {
+        return;
+    }
+    if (lobby.player_role_values[1] == 0 || lobby.player_role_values[1] == 3) {
+        return;
+    }
+
+    lobby.player_role_values[1] = 3;
+    if (lobby.game_type == 0 || lobby.game_type == 8) {
+        lobby.player_team_values[1] = 1;
+    } else {
+        lobby.player_team_values[1] = 0;
+    }
+    lobby.tribe_choices[1] = 1;
+
+    LinkLobbyPlayerSlot& computer = lobby.players[1];
+    computer.occupied = true;
+    computer.selected = true;
+    computer.ready = true;
+    computer.human = false;
+    computer.tribe = lobby.tribe_choices[1];
+    computer.team = static_cast<u8>(std::clamp(lobby.player_team_values[1], 0, 7));
+    copy_result_text(computer.name, "Computer");
+    std::memcpy(lobby.player_payloads[1].data(), computer.raw_payload.data(),
+        lobby.player_payloads[1].size());
+    const char* name = computer.name.data();
+    const std::size_t name_bytes = std::min<std::size_t>(
+        std::strlen(name), kLinkLobbyStartupPlayerNamePayloadBytes - 1);
+    std::memcpy(lobby.player_payloads[1].data() +
+            kLinkLobbyStartupPlayerNamePayloadOffset,
+        name, name_bytes);
+
+    append_startup_log(
+        "p2p command-line host added computer slot=1 team=%lu tribe=%lu",
+        static_cast<unsigned long>(computer.team),
+        static_cast<unsigned long>(computer.tribe));
+}
+
 void open_default_p2p_command_line_host(HWND window, HINSTANCE instance,
     const P2PNetworkLaunchParameters& launch) {
+    append_startup_log("p2p command-line host begin map=%s",
+        launch.map_path.data());
     CreateGameState& create = create_game_state();
     destroy_existing_window(create.window);
     configure_create_game_callbacks(create);
@@ -19469,6 +21205,8 @@ void open_default_p2p_command_line_host(HWND window, HINSTANCE instance,
     create.screen_size = 0;
     if (!LoadWizardSessionArchiveDescriptor(create.selected_session,
             launch.map_path.data())) {
+        append_startup_log("p2p command-line host map load failed map=%s",
+            launch.map_path.data());
         write_default_p2p_command_line_result(P2PGameEndReason::MapFileError);
         char text[512]{};
         std::snprintf(text, sizeof(text), "Map file '%s' is Error !",
@@ -19478,6 +21216,10 @@ void open_default_p2p_command_line_host(HWND window, HINSTANCE instance,
         resume_default_p2p_command_line_modal(GameplayModalResult::Cancel);
         return;
     }
+    append_startup_log("p2p command-line host map load ok players=%lu size=%lux%lu",
+        static_cast<unsigned long>(create.selected_session.player_count),
+        static_cast<unsigned long>(create.selected_session.map_width),
+        static_cast<unsigned long>(create.selected_session.map_height));
 
     char game_name[kCreateGameNameBytes]{};
     std::snprintf(game_name, sizeof(game_name), "%s's Game",
@@ -19500,6 +21242,9 @@ void open_default_p2p_command_line_host(HWND window, HINSTANCE instance,
     }
 
     LaunchCreateGameLinkLobby(create);
+    configure_default_p2p_command_line_ai_opponent(
+        link_lobby_state(), create.selected_session.player_count);
+    append_startup_log("p2p command-line host lobby launched");
 }
 
 void open_default_p2p_command_line_game_flow(HWND window, HINSTANCE instance) {
@@ -20112,6 +21857,11 @@ bool should_suspend_worker_during_message_wait() {
     if (background_test_mode_enabled()) {
         return false;
     }
+    if (g_runtime.p2p_command_line_flow_pending ||
+        g_runtime.gameplay_transition_pending ||
+        g_runtime.gameplay_transition_active) {
+        return false;
+    }
     return !g_runtime.app_active &&
         g_runtime.message_wait_worker_suspend_enabled &&
         (!g_runtime.generic_ai_scenario_active ||
@@ -20131,13 +21881,19 @@ void resume_worker_after_message_wait() {
 }
 
 void winmain_worker_enter_frontend_flow(GameplayLoopState&) {
+    append_startup_log("worker enter frontend flow main=%p p2p_pending=%s",
+        static_cast<void*>(g_runtime.main_window),
+        g_runtime.p2p_command_line_flow_pending ? "yes" : "no");
     if (g_runtime.main_window != nullptr) {
         if (g_runtime.p2p_command_line_flow_pending) {
             PostMessageA(g_runtime.main_window, WM_USER + 8, 0, 2);
+            append_startup_log("worker posted command-line game flow");
         } else {
             PostMessageA(g_runtime.main_window, WM_USER + 4, 0, 0);
+            append_startup_log("worker posted title frontend flow");
         }
     }
+    g_runtime.message_wait_worker_suspend_enabled = true;
     while (g_runtime.worker_thread_running) {
         if (g_runtime.gameplay_transition_pending) {
             const HWND owner = g_runtime.gameplay_transition_owner;
@@ -20218,7 +21974,7 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
         }
         break;
     case WM_SETCURSOR:
-        SetCursor(nullptr);
+        SetCursor(LoadCursorA(nullptr, IDC_ARROW));
         return TRUE;
     case WM_GETMINMAXINFO:
         if (lparam != 0) {
@@ -20340,6 +22096,10 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
         }
         return 0;
     case WM_USER + 8:
+        append_startup_log("main WM_USER+8 lparam=%ld p2p_pending=%s transition_active=%s",
+            static_cast<long>(lparam),
+            g_runtime.p2p_command_line_flow_pending ? "yes" : "no",
+            g_runtime.gameplay_transition_active ? "yes" : "no");
         if (lparam == 0) {
             pause_worker_for_modal_action();
             open_game_frontend_modal(window, 0);
@@ -20506,9 +22266,14 @@ void OpenMultiplayerFrontendForActiveMode(HWND window) {
 }
 
 void EnterHostedOrJoinedP2PGameFlow(HWND window, HINSTANCE instance) {
+    append_startup_log("enter p2p game flow pending=%s valid=%s mode=%lu",
+        g_runtime.p2p_command_line_flow_pending ? "yes" : "no",
+        p2p_network_launch_parameters().valid ? "yes" : "no",
+        static_cast<unsigned long>(g_runtime.frontend_mode));
     if (g_runtime.p2p_command_line_flow_pending &&
         p2p_network_launch_parameters().valid) {
         g_runtime.p2p_command_line_flow_pending = false;
+        append_startup_log("enter p2p command-line flow");
         open_default_p2p_command_line_game_flow(window, instance);
         return;
     }
@@ -20518,8 +22283,11 @@ void EnterHostedOrJoinedP2PGameFlow(HWND window, HINSTANCE instance) {
             GameplayModalResult::ContinueNetwork;
         g_runtime.gameplay_session_flow.worker_modal_pending = 0;
         resume_worker_after_modal_action();
+        append_startup_log("enter p2p resumed pending gameplay modal");
         return;
     }
+    append_startup_log("enter p2p queue gameplay transition mode=%lu",
+        static_cast<unsigned long>(g_runtime.frontend_mode));
     queue_default_gameplay_session_transition(window, g_runtime.frontend_mode);
 }
 
@@ -20874,7 +22642,7 @@ bool StartBackgroundWorkerThread() {
     }
 
     g_runtime.worker_thread_started = true;
-    g_runtime.message_wait_worker_suspend_enabled = true;
+    g_runtime.message_wait_worker_suspend_enabled = false;
     return true;
 }
 
@@ -20955,6 +22723,7 @@ int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_c
     append_startup_log("winmain begin initial_cwd=%s command_line=%s",
         current_directory[0] != '\0' ? current_directory : "(unknown)",
         command_line != nullptr ? command_line : "");
+    install_startup_exception_logger_once();
     const bool data_directory_ready = ensure_ranker_data_working_directory();
     GetCurrentDirectoryA(static_cast<DWORD>(sizeof(current_directory)), current_directory);
     append_startup_log("winmain active_cwd=%s data_ready=%s",
@@ -20969,6 +22738,12 @@ int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_c
         g_runtime.frontend_mode = 1;
         g_runtime.p2p_command_line_flow_pending = true;
         SetActiveNetworkTransportMode(1);
+        append_startup_log("p2p command line parsed player=%s map=%s",
+            p2p_network_launch_parameters().player_name.data(),
+            p2p_network_launch_parameters().map_path.data());
+    } else if (command_line != nullptr && command_line[0] != '\0') {
+        append_startup_log("p2p command line parse skipped command_line=%s",
+            command_line);
     }
 
     const bool startup_text_loaded = LoadStartupJw217TextTables();

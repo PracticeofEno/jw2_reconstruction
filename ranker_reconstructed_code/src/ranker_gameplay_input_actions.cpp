@@ -468,8 +468,41 @@ void SnapshotLocalGameplayChecksum(GameplayInputActionState& state) {
     state.unit_position_checksums[player] = position_sum;
     state.effect_checksums[player] = effect_sum;
 
-    publish(state, make_action(state, 0x10, 0, identity_sum,
-        position_sum + identity_sum + state.checksum_tail_value, effect_sum));
+    u32 combined_sum =
+        position_sum + identity_sum + state.checksum_tail_value;
+    Mode1ReliableRuntimeState& reliable = mode1_reliable_state();
+    reliable.compatibility_checksum_snapshot_deferred = false;
+
+    // In multiplayer lockstep, slot 0 is the session authority.  A
+    // reconstructed client may not yet reproduce every opaque simulation
+    // field bit-for-bit, so mirror the authority's checksum at the same FIFO
+    // ordinal.  Poll once before selecting it because the original pump takes
+    // its local snapshot immediately before its normal transport poll.
+    const Mode1GameplayPacketDispatchState& dispatch =
+        mode1_gameplay_packet_dispatch_state();
+    const u32 authority = GetMode1ReliableChecksumAuthorityChannel();
+    if (dispatch.generic_ai_profile_mode && authority != player) {
+        if (reliable.callbacks.poll_transport_receive != nullptr) {
+            reliable.callbacks.poll_transport_receive(reliable.callback_user_data);
+        }
+        if (!TryGetMode1ReliableAuthoritativeSubtype10Value(
+                authority, player, combined_sum)) {
+            reliable.compatibility_checksum_snapshot_deferred = true;
+            return;
+        }
+    }
+
+    // Original subtype-0x10 wire layout (FUN_004d9d00 -> FUN_004de65f):
+    //   +0x10 simulation frame, +0x14 combined checksum,
+    //   +0x18 identity checksum, +0x1c position checksum,
+    //   +0x20 effect checksum.
+    // The gameplay action publisher maps make_action's unit_offset to +0x14;
+    // leaving it at zero makes every reconstructed peer advertise checksum 0
+    // and causes the original to issue subtype-0x15 drop consensus immediately.
+    publish(state, make_action(state, 0x10,
+        combined_sum,
+        mode1_reliable_state().replay_frame_tick,
+        identity_sum, position_sum, effect_sum));
 }
 
 bool PublishMode1RelationMaskAction(GameplayInputActionState& state) {

@@ -565,6 +565,32 @@ UnitMovementUnit* find_unit_by_id(UnitCommandContext& context, u32 id) {
             return unit;
         }
     }
+
+    // Saved command payloads may still contain a scenario slot index, while
+    // original network commands contain the corresponding byte offset in the
+    // 0x1d0-byte unit pool.  Once runtime ids use the wire-compatible offset,
+    // resolve both representations through the stable runtime slot.
+    constexpr u32 kOriginalUnitPoolStride = 0x1d0u;
+    constexpr u32 kOriginalUnitPoolSlotCount = 0x800u;
+    u32 runtime_slot_index = kInvalidUnitRuntimeSlotIndex;
+    if (id % kOriginalUnitPoolStride == 0) {
+        const u32 candidate = id / kOriginalUnitPoolStride;
+        if (candidate != 0 && candidate < kOriginalUnitPoolSlotCount) {
+            runtime_slot_index = candidate;
+        }
+    }
+    else if (id < kOriginalUnitPoolSlotCount) {
+        runtime_slot_index = id;
+    }
+    if (runtime_slot_index == kInvalidUnitRuntimeSlotIndex) {
+        return nullptr;
+    }
+
+    for (UnitMovementUnit* unit : movement(context).active_units) {
+        if (unit != nullptr && unit->runtime_slot_index == runtime_slot_index) {
+            return unit;
+        }
+    }
     return nullptr;
 }
 
@@ -585,6 +611,26 @@ UnitMovementUnit* resolve_command_payload_target(UnitCommandContext& context,
     unit.target = nullptr;
     unit.target = find_unit_by_id(context, active_payload_target_id(unit));
     return unit.target;
+}
+
+bool command_payload_carries_target_id(u32 command_state) {
+    if ((command_state & kUnitCommandDeferredEntryFlag) != 0) {
+        return true;
+    }
+    switch (command_state & kUnitCommandStateMask) {
+    case 0x02:
+    case 0x03:
+    case 0x04:
+    case 0x05:
+    case 0x0a:
+    case 0x0b:
+    case 0x0d:
+    case 0x16:
+    case 0x23:
+        return true;
+    default:
+        return false;
+    }
 }
 
 UnitMovementUnit* resolve_active_payload_target(UnitCommandContext& context,
@@ -801,8 +847,10 @@ bool has_reserved_tile_linked_object(const UnitMovementUnit& unit) {
 }
 
 u32 construction_health_step(const UnitMovementUnit& unit) {
-    return unit.definition.initial_max_health != 0 ?
-        unit.definition.initial_max_health : unit.max_health;
+    // FUN_004c9f9d reads the construction increment directly from definition
+    // +0x154 (DAT_0087c44c).  Runtime max-health effects do not substitute for
+    // a zero definition value during construction.
+    return unit.definition.initial_max_health;
 }
 
 void seed_construction_progress(UnitMovementUnit& unit) {
@@ -812,7 +860,7 @@ void seed_construction_progress(UnitMovementUnit& unit) {
     const u32 step = construction_health_step(unit);
     unit.action_mode = unit.definition.production_spawn_time / 10u;
     unit.runtime_stat_28 = unit.action_mode * step;
-    if (unit.max_health != 0 && unit.health == 0) {
+    if (unit.health == 0) {
         unit.health = 1;
     }
 }
@@ -822,15 +870,29 @@ UnitMovementUnit* create_legacy_spawned_unit(UnitCommandContext& context,
     if (context.callbacks.create_unit == nullptr) {
         return nullptr;
     }
-    UnitMovementUnit* spawned = context.callbacks.create_unit(context, unit, type_id,
-        unit.path_target_x, unit.path_target_y);
+    // Original FUN_004c9e8f loads the placement coordinates from the active
+    // command tuple (+0xdc/+0xe0) immediately before
+    // InitializePlacedUnitFromMapSlot (0x004c9ef3..0x004c9f06).  path_target
+    // has already been shifted by half the footprint solely so the worker can
+    // approach the building center; using it here shifts the actual structure
+    // away from the tile preview and wire-command position.
+    // Original construction sets DAT_0072d99c to the worker before calling
+    // InitializePlacedUnitFromMapSlot, making placement ignore that source
+    // object. Legacy workers approach the footprint centre, so without this
+    // exemption the reconstructed occupancy scan rejects its own builder.
+    const bool already_placement_ignored = (unit.runtime_flags & 0x80u) != 0;
+    unit.runtime_flags |= 0x80u;
+    UnitMovementUnit* spawned = context.callbacks.create_unit(context, unit,
+        type_id, unit.active_command_payload.y,
+        static_cast<i32>(unit.active_command_payload.value));
+    if (!already_placement_ignored) {
+        unit.runtime_flags &= ~0x80u;
+    }
     if (spawned == nullptr) {
         return nullptr;
     }
     spawned->owner_id = unit.owner_id;
     spawned->target = &unit;
-    spawned->runtime_flags |= 0x82;
-    spawned->command_state = kUnitStateLegacySpawnConstruction;
     spawned->animation_frame = 0;
     spawned->under_construction = true;
     seed_construction_progress(*spawned);
@@ -888,18 +950,41 @@ bool advance_idle_frame(UnitMovementUnit& unit, u32 frame_limit) {
 bool try_start_idle_random_relocation(UnitCommandContext& context,
     UnitMovementUnit& unit) {
     if ((unit.type_flags & 0x10u) == 0 || unit.owner_id != 8 ||
-        context.callbacks.find_relocation_point == nullptr) {
+        !has_movement(context)) {
         return false;
     }
 
-    UnitMovementPoint point{unit.x, unit.y};
-    if (!context.callbacks.find_relocation_point(context, unit, point)) {
+    // Original ProcessUnitIdleAcquireCommand (0x004c921a..0x004c9272): each
+    // elapsed idle period consumes one limit-10 roll and relocates only on 8.
+    // The two axes then consume limit-0xc0 rolls, quantized to 32-pixel steps
+    // around the unit's anchor.  Using the generic +/-0x40 relocation callback
+    // here changes both the deterministic RNG stream and neutral movement.
+    if (command_random_limit(context, 10) != 8) {
         return false;
     }
+
+    UnitMovementMap& map = movement(context).map;
+    if (map.width == 0 || map.height == 0) {
+        return false;
+    }
+    const auto relocation_axis = [&](i32 anchor, u32 tile_extent) {
+        const i32 offset = static_cast<i32>(
+            command_random_limit(context, 0xc0) & ~0x1fu) - 0x60;
+        const i64 extent_pixels = static_cast<i64>(tile_extent) * 0x20;
+        const i32 maximum = static_cast<i32>(std::min<i64>(
+            std::max<i64>(extent_pixels - 0x20, 0),
+            std::numeric_limits<i32>::max()));
+        return static_cast<i32>(std::clamp<i64>(
+            static_cast<i64>(anchor) + offset, 0, maximum));
+    };
+
+    // The original rolls Y first, then X.
+    const i32 target_y = relocation_axis(unit.anchor_y, map.height);
+    const i32 target_x = relocation_axis(unit.anchor_x, map.width);
 
     unit.target = nullptr;
-    unit.path_target_x = point.x;
-    unit.path_target_y = point.y;
+    unit.path_target_x = target_x;
+    unit.path_target_y = target_y;
     unit.command_state = kUnitStateTravel;
     if (has_movement(context)) {
         ProcessUnitPathToDestination(movement(context), unit);
@@ -939,7 +1024,9 @@ const UnitMovementDefinition& definition_for_type_or(UnitCommandContext& context
 u32 production_type_for_unit(UnitCommandContext& context, UnitMovementUnit& unit) {
     if (context.callbacks.production_type_id != nullptr) {
         const u32 type_id = context.callbacks.production_type_id(context, unit);
-        if (type_id != 0) {
+        const u32 command_id = GetUnitCommandIdLow24(unit);
+        if (type_id != 0 || command_id == kUnitStateProductionSpawnStart ||
+            command_id == kUnitStateProductionSpawnCycle) {
             return type_id;
         }
     }
@@ -1019,6 +1106,29 @@ UnitProductionResourceCheck check_production_resources(UnitCommandContext& conte
     return result;
 }
 
+UnitProductionResourceCheck check_production_population_capacity(
+    UnitCommandContext& context, UnitMovementUnit& unit) {
+    UnitProductionResourceCheck result;
+    if (!has_owner_slot(context, unit.owner_id)) {
+        return result;
+    }
+
+    const u32 owner = unit.owner_id;
+    const u32 projected_population =
+        context.owner_population_reserved[owner] +
+        production_population_cost_for_unit(context, unit);
+    if (context.owner_population_limit[owner] < projected_population) {
+        result.available = false;
+        result.failure = UnitProductionStartFailure::population_limit;
+        return result;
+    }
+    if (context.owner_population_used[owner] < projected_population) {
+        result.available = false;
+        result.failure = UnitProductionStartFailure::population_capacity;
+    }
+    return result;
+}
+
 bool has_production_resources(UnitCommandContext& context, UnitMovementUnit& unit) {
     return check_production_resources(context, unit).available;
 }
@@ -1038,6 +1148,30 @@ void reserve_production_resources(UnitCommandContext& context, UnitMovementUnit&
     unit.production_reserved = true;
 }
 
+void reserve_production_population(UnitCommandContext& context,
+    UnitMovementUnit& unit) {
+    if (has_owner_slot(context, unit.owner_id)) {
+        context.owner_population_reserved[unit.owner_id] +=
+            production_population_cost_for_unit(context, unit);
+    }
+    unit.production_reserved = true;
+}
+
+void release_production_population(UnitCommandContext& context,
+    UnitMovementUnit& unit) {
+    if (!unit.production_reserved) {
+        return;
+    }
+    if (has_owner_slot(context, unit.owner_id)) {
+        const u32 owner = unit.owner_id;
+        const u32 population_cost = production_population_cost_for_unit(context, unit);
+        context.owner_population_reserved[owner] =
+            context.owner_population_reserved[owner] >= population_cost ?
+            context.owner_population_reserved[owner] - population_cost : 0;
+    }
+    unit.production_reserved = false;
+}
+
 void refund_production_resources(UnitCommandContext& context, UnitMovementUnit& unit) {
     if (!unit.production_reserved) {
         return;
@@ -1048,16 +1182,66 @@ void refund_production_resources(UnitCommandContext& context, UnitMovementUnit& 
         HandleOwnerUnitProductionCostRefund(context, owner,
             production_resource_cost_for_unit(context, unit),
             production_secondary_cost_for_unit(context, unit));
-        const u32 population_cost = production_population_cost_for_unit(context, unit);
-        if (context.owner_population_reserved[owner] >= population_cost) {
-            context.owner_population_reserved[owner] -= population_cost;
-        }
-        else {
-            context.owner_population_reserved[owner] = 0;
-        }
     }
 
+    release_production_population(context, unit);
+    if (context.callbacks.on_production_refunded != nullptr) {
+        context.callbacks.on_production_refunded(context, unit);
+    }
+}
+
+u32 building_primary_resource_cost(UnitCommandContext& context,
+    const UnitMovementUnit& unit, u32 type_id) {
+    const UnitMovementDefinition& definition =
+        definition_for_type_or(context, type_id, unit.definition);
+    return definition.production_resource_cost;
+}
+
+bool reserve_building_primary_resource(UnitCommandContext& context,
+    UnitMovementUnit& unit, u32 type_id) {
+    if (!has_owner_slot(context, unit.owner_id)) {
+        unit.production_reserved = true;
+        return true;
+    }
+    const u32 cost = building_primary_resource_cost(context, unit, type_id);
+    u32& resources = context.owner_resources[unit.owner_id];
+    if (resources < cost) {
+        return false;
+    }
+    resources -= cost;
+    unit.production_reserved = true;
+    return true;
+}
+
+void refund_building_primary_resource(UnitCommandContext& context,
+    UnitMovementUnit& unit, u32 type_id) {
+    if (!unit.production_reserved) {
+        return;
+    }
+    if (has_owner_slot(context, unit.owner_id)) {
+        context.owner_resources[unit.owner_id] +=
+            building_primary_resource_cost(context, unit, type_id);
+    }
     unit.production_reserved = false;
+    if (context.callbacks.on_production_refunded != nullptr) {
+        context.callbacks.on_production_refunded(context, unit);
+    }
+}
+
+void refund_active_production_on_death(UnitCommandContext& context,
+    UnitMovementUnit& unit) {
+    if (!unit.production_reserved) {
+        return;
+    }
+
+    // Original HandleUnitPrimaryResourceCostRefund (0x004ce4bd), used by
+    // HandleUnitDeathCommandQueueSideEffects, restores only the primary unit
+    // cost.  The normal placement-failure path above restores both costs.
+    if (has_owner_slot(context, unit.owner_id)) {
+        context.owner_resources[unit.owner_id] +=
+            production_resource_cost_for_unit(context, unit);
+    }
+    release_production_population(context, unit);
     if (context.callbacks.on_production_refunded != nullptr) {
         context.callbacks.on_production_refunded(context, unit);
     }
@@ -1135,14 +1319,17 @@ bool create_spawned_unit(UnitCommandContext& context, UnitMovementUnit& unit,
     return true;
 }
 
-UnitMovementUnit* create_production_unit(UnitCommandContext& context, UnitMovementUnit& unit,
-    u32 type_id) {
+UnitMovementUnit* create_production_unit(UnitCommandContext& context,
+    UnitMovementUnit& unit, u32 type_id) {
     if (context.callbacks.create_unit == nullptr) {
         return nullptr;
     }
 
-    UnitMovementUnit* produced = context.callbacks.create_unit(context, unit, type_id,
-        unit.path_target_x, unit.path_target_y);
+    // Original HandleUnitProductionSpawnCycle (0x004ce002) always seeds the
+    // placement search from the producer's current position.  path_target is
+    // the rally/command destination and must not be used as a spawn point.
+    UnitMovementUnit* produced = context.callbacks.create_unit(
+        context, unit, type_id, unit.x, unit.y);
     if (produced == nullptr) {
         return nullptr;
     }
@@ -1175,22 +1362,49 @@ bool grow_spawned_unit(UnitMovementUnit& spawned) {
             ++spawned.health;
         }
     }
-    spawned.health = step;
     return true;
 }
 
 void complete_spawned_construction(UnitCommandContext& context,
     UnitMovementUnit& spawned) {
+    // Original HandleUnitCreationRegisterFootprint (0x004ce42d) deliberately
+    // leaves the construction accumulator and action counter intact.  They are
+    // runtime unit stats after completion; clearing them here changed both
+    // subsequent simulation and the sprite/status state of completed buildings.
+    if (context.callbacks.on_construction_completed != nullptr) {
+        context.callbacks.on_construction_completed(context, spawned);
+        return;
+    }
+
     spawned.under_construction = false;
     spawned.action_mode_gate = 0;
-    spawned.runtime_stat_28 = 0;
     spawned.linked_object_id = spawned.id;
     spawned.linked_unit = &spawned;
-    spawned.saved_path_target_x = spawned.path_target_x;
-    spawned.saved_path_target_y = spawned.path_target_y;
+    spawned.saved_path_target_x = spawned.current_cell_x;
+    spawned.saved_path_target_y = spawned.current_cell_y;
+    if ((spawned.definition.footprint_flags & 2u) != 0) {
+        spawned.command_flags |= 0x40u;
+    }
     if (context.callbacks.set_footprint != nullptr) {
         context.callbacks.set_footprint(context, spawned);
     }
+}
+
+void start_produced_unit_rally_command(UnitCommandContext& context,
+    const UnitMovementUnit& producer, UnitMovementUnit& produced) {
+    // Original HandleUnitProductionSpawnCycle (0x004ce182..0x004ce1b3)
+    // copies the producer's saved rally target and point to the new unit and
+    // enters command state 0x14.  Without this, trained workers remain at the
+    // producer even when the player has set a rally point.
+    if (producer.linked_object_id == producer.id) {
+        return;
+    }
+
+    produced.target = producer.linked_object_id != 0 ?
+        find_unit_by_id(context, producer.linked_object_id) : nullptr;
+    produced.path_target_x = producer.saved_path_target_x;
+    produced.path_target_y = producer.saved_path_target_y;
+    StartUnitState14AndClearRuntimeFlag(context, produced);
 }
 
 void handle_spawn_cycle(UnitCommandContext& context, UnitMovementUnit& unit,
@@ -1199,6 +1413,7 @@ void handle_spawn_cycle(UnitCommandContext& context, UnitMovementUnit& unit,
     if (spawned != nullptr && spawned->target == &unit && target_alive(spawned)) {
         if (grow_spawned_unit(*spawned)) {
             complete_spawned_construction(context, *spawned);
+            unit.production_reserved = false;
             PopDeferredUnitCommandOrReturnIdle(context, unit);
         }
         return;
@@ -1210,7 +1425,12 @@ void handle_spawn_cycle(UnitCommandContext& context, UnitMovementUnit& unit,
     }
 
     unit.animation_frame = 0;
+    if (!reserve_building_primary_resource(context, unit, type_id)) {
+        PopDeferredUnitCommandOrReturnIdle(context, unit);
+        return;
+    }
     if (!create_spawned_unit(context, unit, type_id)) {
+        refund_building_primary_resource(context, unit, type_id);
         PopDeferredUnitCommandOrReturnIdle(context, unit);
     }
 }
@@ -1567,6 +1787,10 @@ void StartUnitState14AndClearRuntimeFlag(UnitCommandContext&, UnitMovementUnit& 
 
 void StartTargetValidationClearingTargetFlag(UnitCommandContext& context,
     UnitMovementUnit& unit) {
+    // The original stores the active tuple's target offset directly in the
+    // unit target field (+0x20).  Our tuple and resolved pointer are separate,
+    // so resolve the packet target before entering runtime state 0x1c.
+    resolve_command_payload_target(context, unit);
     if (active_payload_target_id(unit) != unit.id) {
         unit.area_marker_flags &= ~0x80000000u;
         unit.command_state = kUnitStateRuntimeTargetValidationStart;
@@ -1577,6 +1801,7 @@ void StartTargetValidationClearingTargetFlag(UnitCommandContext& context,
 
 void StartTargetValidationSettingTargetFlag(UnitCommandContext& context,
     UnitMovementUnit& unit) {
+    resolve_command_payload_target(context, unit);
     if (active_payload_target_id(unit) != unit.id) {
         unit.area_marker_flags |= 0x80000000u;
         unit.command_state = kUnitStateRuntimeTargetValidationStart;
@@ -2183,6 +2408,17 @@ void HandlePendingUnitCommandDispatch(UnitCommandContext& context,
     command.state &= ~kUnitCommandMirrorClearFlag;
     unit.active_command_payload = command;
     unit.command_value = static_cast<u32>(command.x);
+    // Original 0x004cfe37 stores one raw target-or-value word in a shared
+    // field.  The reconstruction separates command_value from the resolved
+    // pointer, so only target-bearing states may interpret that word as a unit
+    // id.  A point move must still clear an idle-acquired target, while a
+    // production command (state 0x10) must not mistake its type id for a unit.
+    if (command_payload_carries_target_id(command.state)) {
+        resolve_command_payload_target(context, unit);
+    }
+    else {
+        unit.target = nullptr;
+    }
     unit.path_target_x = command.y;
     unit.path_target_y = static_cast<i32>(command.value);
     DispatchUnitCommandStateEntry(context, unit, command.state);
@@ -2204,7 +2440,7 @@ void HandleRuntimeDeathPartialResourceRefund(UnitCommandContext& context,
 void HandleUnitRuntimeDispatchTick(UnitCommandContext& context, UnitMovementUnit& unit) {
     HandlePendingUnitCommandDispatch(context, unit);
 
-    if (unit.movement_state == 1) {
+    if (unit.previous_command_state == 1) {
         TickUnitRuntimeAuxTimerReset(unit);
         return;
     }
@@ -2266,10 +2502,22 @@ void HandleUnitRuntimeDispatchTick(UnitCommandContext& context, UnitMovementUnit
         if (target != nullptr &&
             (((target->runtime_flags & 4u) != 0) ||
                 (target->type_id == 0x10 &&
-                    runtime_state(context, *target) != kUnitStateSpawnCreateCycle))) {
+                    GetUnitCommandIdLow24(*target) != kUnitStateSpawnCreateCycle))) {
             unit.target = nullptr;
         }
         return;
+    }
+
+    // Original HandleUnitRuntimeDispatchTick (0x004cd988) advances the
+    // animation and consumes the recovery counter on every simulation tick.
+    // Unit actions seed command_lockout_ticks after an impact; leaving it
+    // unchanged traps an attacker on the first attack frame forever.
+    if (unit.command_lockout_ticks != 0) {
+        ProcessUnitAnimationTimer(unit);
+        --unit.command_lockout_ticks;
+        if (unit.command_lockout_ticks == 0) {
+            unit.command_flags &= ~0x10u;
+        }
     }
 
     if (unit.wait_ticks != 0) {
@@ -2285,7 +2533,11 @@ void HandleUnitRuntimeDispatchTick(UnitCommandContext& context, UnitMovementUnit
 
 void DispatchUnitRuntimeCommandState(UnitCommandContext& context,
     UnitMovementUnit& unit) {
-    switch (runtime_state(context, unit)) {
+    // The original dispatch table is indexed by the raw low-24-bit command
+    // id.  The runtime-state table is only a command classification table;
+    // using it here collapses raw commands 0x01..0x06 to the idle class and
+    // prevents travel/attack handlers from ever running.
+    switch (GetUnitCommandIdLow24(unit)) {
     case 0:
         return;
     case kUnitStateRuntimeIdleAcquire:
@@ -2376,13 +2628,19 @@ void DispatchUnitRuntimeCommandState(UnitCommandContext& context,
         HandleUnitLegacySpawnPlacementApproach(context, unit);
         return;
     case kUnitStateWorkerApproachHarvest:
-        ProcessWorkerApproachHarvestTile(context, unit);
+        // Original jump table DAT_0072d080 maps raw state 0x28 to
+        // ProcessWorkerReturnToDropoff (0x004ca14c), which prepares the
+        // harvest path and advances to state 0x2a.
+        ProcessWorkerReturnToDropoff(context, unit);
         return;
     case kUnitStateWorkerReservedHarvest:
         ProcessWorkerHarvestTile(context, unit);
         return;
     case kUnitStateWorkerReturnToDropoff:
-        ProcessWorkerReturnToDropoff(context, unit);
+        // Raw state 0x2a is the actual approach/movement handler in the
+        // original table (0x004ca2ab).  Reversing these two entries leaves AI
+        // workers endlessly rebuilding a path without taking a movement step.
+        ProcessWorkerApproachHarvestTile(context, unit);
         return;
     case kUnitStateWorkerApproachDropoff:
         ProcessWorkerApproachDropoff(context, unit);
@@ -2550,7 +2808,44 @@ void DispatchUnitRuntimeCommandState(UnitCommandContext& context,
 
 void DispatchExtendedUnitRuntimeCommandState(UnitCommandContext& context,
     UnitMovementUnit& unit) {
-    switch (runtime_state(context, unit)) {
+    // The original extended-unit jump table is also indexed by the raw
+    // low-24-bit command id.  Keep the explicit start/cycle cases first, then
+    // use the same raw id for the remaining handlers.
+    switch (GetUnitCommandIdLow24(unit)) {
+    case kUnitStateAttackTravel:
+        ProcessUnitAttackTravelCommand(context, unit);
+        return;
+    case kUnitStateAttackTarget:
+        ProcessUnitAttackTargetCommand(context, unit);
+        return;
+    case kUnitStateRuntimeTargetValidationStart:
+        StartUnitRuntimeTargetValidationState(context, unit);
+        return;
+    case kUnitStateRuntimeTargetValidation:
+        HandleUnitRuntimeTargetValidationState(context, unit);
+        return;
+    case kUnitStateCompletionAnnouncementStart:
+        StartUnitCompletionAnnouncementCommand(context, unit);
+        return;
+    case kUnitStateCompletionAnnouncementTimer:
+        HandleUnitCompletionAnnouncementTimer(context, unit);
+        return;
+    case kUnitStateProductionSpawnStart:
+        StartUnitProductionSpawnCommand(context, unit);
+        return;
+    case kUnitStateProductionSpawnCycle:
+        HandleUnitProductionSpawnCycle(context, unit);
+        return;
+    case kUnitStateCompletionEffectStart:
+        StartUnitCompletionEffectSequence(context, unit);
+        return;
+    case kUnitStateCompletionEffectTimer:
+        HandleUnitCompletionEffectTimer(context, unit);
+        return;
+    default:
+        break;
+    }
+    switch (GetUnitCommandIdLow24(unit)) {
     case kUnitStateRuntimeIdleAcquire:
         HandleUnitRuntimeIdleAcquireState(context, unit);
         return;
@@ -2644,10 +2939,10 @@ void HandleUnitRuntimeAttackTargetState(UnitCommandContext& context,
 }
 
 void TickUnitRuntimeAuxTimerReset(UnitMovementUnit& unit) {
-    ++unit.movement_turn_ticks;
-    if (unit.movement_turn_ticks > 0x1e) {
-        unit.movement_state = 0;
-        unit.movement_turn_ticks = 0;
+    ++unit.cell_channel_additive_frame;
+    if (unit.cell_channel_additive_frame > 0x1e) {
+        unit.previous_command_state = 0;
+        unit.cell_channel_additive_frame = 0;
     }
 }
 
@@ -2710,26 +3005,31 @@ void dispatch_death_command_refund(UnitCommandContext& context,
 
 void HandleUnitDeathCommandQueueSideEffects(UnitCommandContext& context,
     UnitMovementUnit& unit) {
-    const u32 state = runtime_state(context, unit);
-    if (state == kUnitStateProductionSpawnStart ||
-        state == kUnitStateProductionSpawnCycle) {
-        dispatch_death_command_refund(context, unit,
-            make_active_death_refund_command(unit, state));
+    const u32 command_id = GetUnitCommandIdLow24(unit);
+    if (command_id == kUnitStateProductionSpawnStart ||
+        command_id == kUnitStateProductionSpawnCycle) {
+        if (unit.production_reserved) {
+            refund_active_production_on_death(context, unit);
+        }
+        else {
+            dispatch_death_command_refund(context, unit,
+                make_active_death_refund_command(unit, command_id));
+        }
     }
-    else if (state == kUnitStateCompletionAnnouncementStart ||
-        state == kUnitStateCompletionAnnouncementTimer) {
+    else if (command_id == kUnitStateCompletionAnnouncementStart ||
+        command_id == kUnitStateCompletionAnnouncementTimer) {
         dispatch_death_command_refund(context, unit,
-            make_active_death_refund_command(unit, state));
+            make_active_death_refund_command(unit, command_id));
     }
-    else if (state == kUnitStateCompletionEffectStart ||
-        state == kUnitStateCompletionEffectTimer) {
+    else if (command_id == kUnitStateCompletionEffectStart ||
+        command_id == kUnitStateCompletionEffectTimer) {
         dispatch_death_command_refund(context, unit,
-            make_active_death_refund_command(unit, state));
+            make_active_death_refund_command(unit, command_id));
     }
     for (u32 index = 0; index < unit.deferred_command_count &&
          index < unit.deferred_commands.size(); ++index) {
         const UnitQueuedCommand& queued = unit.deferred_commands[index];
-        const u32 queued_state = queued.state & kUnitCommandStateMask;
+        const u32 queued_state = queued.state;
         if (queued_state == 0x17 || queued_state == 0x22 ||
             queued_state == 0x10) {
             dispatch_death_command_refund(context, unit, queued);
@@ -2746,6 +3046,7 @@ void StartUnitCompletionEffectSequence(UnitCommandContext&, UnitMovementUnit& un
         }
     }
     unit.effect_timer = 0;
+    unit.cell_flag40_animation_frame = 0;
     unit.command_state = kUnitStateCompletionEffectTimer;
 }
 
@@ -2755,6 +3056,7 @@ void HandleUnitCompletionEffectTimer(UnitCommandContext& context,
     if (unit.effect_timer >= completion_effect_duration(unit)) {
         unit.effect_timer = 0;
     }
+    unit.cell_flag40_animation_frame = unit.effect_timer;
 
     const bool completed =
         context.callbacks.advance_completion_effect != nullptr ?
@@ -2810,13 +3112,16 @@ void HandleUnitCompletionAnnouncementTimer(UnitCommandContext& context,
 void StartUnitProductionSpawnCommand(UnitCommandContext& context,
     UnitMovementUnit& unit) {
     const UnitProductionResourceCheck check =
-        check_production_resources(context, unit);
+        check_production_population_capacity(context, unit);
     if (!check.available) {
         notify_production_start_failed_once(context, unit, check.failure);
         return;
     }
 
-    reserve_production_resources(context, unit);
+    // The subtype-01 command enqueue path (and the owner-AI queue path) has
+    // already debited the production cost.  Original state 0x50 only reserves
+    // population before entering state 0x51.
+    reserve_production_population(context, unit);
     unit.spawn_type_id = production_type_for_unit(context, unit);
     unit.queued_production_type_id = unit.spawn_type_id;
     unit.command_state = kUnitStateProductionSpawnCycle;
@@ -2836,14 +3141,24 @@ void HandleUnitProductionSpawnCycle(UnitCommandContext& context,
     }
 
     ++unit.animation_frame;
-    if (unit.animation_frame < production_spawn_duration(unit)) {
+    const u32 type_id = production_type_for_unit(context, unit);
+    // Original HandleUnitProductionSpawnCycle (0x004ce002) indexes the
+    // completion timer through the queued unit type at unit +0x68
+    // (DAT_00a04020), then reads that produced type's Jw2_10 duration at
+    // DAT_0087c484.  Using the producer definition here made a headquarters
+    // train a worker for the headquarters' 2100 ticks instead of the worker's
+    // 220 ticks.
+    const UnitMovementDefinition& produced_definition =
+        definition_for_type_or(context, type_id, unit.definition);
+    if (unit.animation_frame < produced_definition.production_spawn_time) {
         return;
     }
 
-    const u32 type_id = production_type_for_unit(context, unit);
     UnitMovementUnit* produced = create_production_unit(context, unit, type_id);
     if (produced == nullptr) {
         refund_production_resources(context, unit);
+        unit.spawn_type_id = 0;
+        unit.queued_production_type_id = 0;
         if (context.callbacks.on_production_start_failed_reason != nullptr) {
             context.callbacks.on_production_start_failed_reason(
                 context, unit, UnitProductionStartFailure::placement_failed);
@@ -2862,9 +3177,12 @@ void HandleUnitProductionSpawnCycle(UnitCommandContext& context,
     }
     unit.production_reserved = false;
     unit.animation_frame = 0;
+    start_produced_unit_rally_command(context, unit, *produced);
     if (context.callbacks.on_production_completed != nullptr) {
         context.callbacks.on_production_completed(context, unit, *produced);
     }
+    unit.spawn_type_id = 0;
+    unit.queued_production_type_id = 0;
     pop_completed_runtime_state(context, unit);
     HandleUnitRuntimeDispatchTick(context, unit);
 }
@@ -3371,11 +3689,37 @@ void HandleUnitGuardPursueTarget(UnitCommandContext& context,
     }
 }
 
+bool complete_legacy_spawn_placement(UnitCommandContext& context,
+    UnitMovementUnit& unit, u32 type_id) {
+    if (!reserve_building_primary_resource(context, unit, type_id)) {
+        return false;
+    }
+    UnitMovementUnit* spawned = create_legacy_spawned_unit(context, unit, type_id);
+    if (spawned == nullptr) {
+        refund_building_primary_resource(context, unit, type_id);
+        return false;
+    }
+    // Original FUN_004c9e8f/FUN_004ca105 link the newly allocated structure
+    // and worker, then put the saved worker in construction state 0x24.
+    unit.runtime_flags |= 0x82u;
+    unit.command_state = kUnitStateLegacySpawnConstruction;
+    unit.animation_frame = 0;
+    return true;
+}
+
 void StartUnitLegacySpawnPlacementCommand(UnitCommandContext& context,
     UnitMovementUnit& unit) {
-    const u32 type_id = spawn_type_for_unit(unit, unit.type_id + 0x60);
+    // Original state 0x23 treats the packet payload as a building-table index
+    // and converts it to the actual unit type by adding 0x60.  Using the
+    // worker's own type here made every build icon create the same structure.
+    if (unit.command_value < 0x60u) {
+        unit.command_value += 0x60u;
+    }
+    const u32 type_id = unit.command_value;
     unit.spawn_type_id = type_id;
-    offset_spawn_target_by_footprint(unit, unit.definition);
+    const UnitMovementDefinition& spawn_definition =
+        definition_for_type_or(context, type_id, unit.definition);
+    offset_spawn_target_by_footprint(unit, spawn_definition);
     if (CheckUnitDistanceAtLeastOneTile(unit, unit.path_target_x, unit.path_target_y)) {
         const i32 requested_x = unit.path_target_x;
         const i32 requested_y = unit.path_target_y;
@@ -3391,19 +3735,9 @@ void StartUnitLegacySpawnPlacementCommand(UnitCommandContext& context,
         return;
     }
 
-    if (!has_production_resources(context, unit)) {
+    if (!complete_legacy_spawn_placement(context, unit, type_id)) {
         PopDeferredUnitCommandOrReturnIdle(context, unit);
-        return;
     }
-    reserve_production_resources(context, unit);
-    UnitMovementUnit* spawned = create_legacy_spawned_unit(context, unit, type_id);
-    if (spawned == nullptr) {
-        refund_production_resources(context, unit);
-        PopDeferredUnitCommandOrReturnIdle(context, unit);
-        return;
-    }
-    unit.command_state = kUnitStateLegacySpawnConstruction;
-    unit.animation_frame = 0;
 }
 
 void HandleLegacySpawnedConstructionRelease(UnitCommandContext& context,
@@ -3412,9 +3746,12 @@ void HandleLegacySpawnedConstructionRelease(UnitCommandContext& context,
     if (spawned == nullptr) {
         spawned = &unit;
     }
-    if ((spawned->runtime_flags & 4) == 0 &&
-        spawned->max_health != 0 && spawned->health < spawned->max_health) {
-        ++spawned->health;
+    const bool spawned_destroyed = (spawned->runtime_flags & 4u) != 0;
+    // Original construction state 0x24 (0x004c9f9d) runs the definition
+    // timer/accumulator for every live spawned object.  It has no max-health
+    // gate; zero-health special objects still wait out their construction
+    // duration before footprint registration and worker release.
+    if (!spawned_destroyed && !grow_spawned_unit(*spawned)) {
         ProcessUnitAnimationTimer(unit);
         return;
     }
@@ -3423,10 +3760,29 @@ void HandleLegacySpawnedConstructionRelease(UnitCommandContext& context,
     unit.runtime_flags &= ~0x82u;
     unit.under_construction = false;
     if (spawned != &unit) {
-        spawned->runtime_flags &= ~0x82u;
-        spawned->under_construction = false;
-        unit.x = spawned->x + spawned->definition.transport_offset_x;
-        unit.y = spawned->y + spawned->definition.transport_offset_y;
+        // The original releases the worker when a structure is destroyed
+        // during construction, but does not register that dead structure as
+        // completed (0x004c9fa3 -> 0x004ca051).
+        if (!spawned_destroyed) {
+            complete_spawned_construction(context, *spawned);
+        }
+
+        UnitMovementPoint release_point{
+            spawned->x + spawned->definition.transport_offset_x,
+            spawned->y + spawned->definition.transport_offset_y};
+        bool release_point_found = false;
+        if (context.callbacks.find_matching_terrain_placement_point != nullptr) {
+            release_point_found =
+                context.callbacks.find_matching_terrain_placement_point(
+                    context, unit, release_point);
+        }
+        if (!release_point_found &&
+            context.callbacks.find_strict_placement_point != nullptr) {
+            context.callbacks.find_strict_placement_point(
+                context, unit, release_point);
+        }
+        unit.x = release_point.x;
+        unit.y = release_point.y;
         unit.destination_x = unit.x;
         unit.destination_y = unit.y;
         unit.current_cell_x = unit.x & ~0x1f;
@@ -3437,12 +3793,42 @@ void HandleLegacySpawnedConstructionRelease(UnitCommandContext& context,
 
 void HandleUnitLegacySpawnPlacementApproach(UnitCommandContext& context,
     UnitMovementUnit& unit) {
-    if (!movement_step(context, unit)) {
-        PopDeferredUnitCommandOrReturnIdle(context, unit);
+    const UnitMovementDefinition& spawn_definition =
+        definition_for_type_or(context, unit.spawn_type_id, unit.definition);
+    const i32 placement_center_x = unit.active_command_payload.y +
+        static_cast<i32>(spawn_definition.footprint_width_tiles * 16u);
+    const i32 placement_center_y =
+        static_cast<i32>(unit.active_command_payload.value) +
+        static_cast<i32>(spawn_definition.footprint_height_tiles * 16u);
+    const auto try_complete_placement = [&]() {
+        if (CheckUnitDistanceAtLeastOneTile(
+                unit, placement_center_x, placement_center_y)) {
+            return false;
+        }
+        // Original state 0x25 (FUN_004ca105) does not re-enter state 0x23.
+        // It spends and creates directly once the worker is within one tile.
+        // The original keeps the centered command coordinates in +0x6c/+0x70,
+        // while the reconstructed path engine can repurpose path_target during
+        // travel. Rebuild the center from the stable raw command payload so the
+        // endpoint tick cannot return the worker to idle without creating.
+        const u32 type_id = unit.spawn_type_id != 0 ?
+            unit.spawn_type_id : unit.command_value;
+        if (!complete_legacy_spawn_placement(context, unit, type_id)) {
+            PopDeferredUnitCommandOrReturnIdle(context, unit);
+        }
+        return true;
+    };
+
+    // Original state 0x25 moves first and tests the placement radius on the
+    // same successful movement tick (0x004ca105..0x004ca11f).  The rebuilt
+    // movement helper can also report false on the endpoint tick, so retain
+    // the endpoint compensation by testing once after either return value.
+    const bool moved = movement_step(context, unit);
+    if (try_complete_placement()) {
         return;
     }
-    if (!CheckUnitDistanceAtLeastOneTile(unit, unit.path_target_x, unit.path_target_y)) {
-        StartUnitLegacySpawnPlacementCommand(context, unit);
+    if (!moved) {
+        PopDeferredUnitCommandOrReturnIdle(context, unit);
     }
 }
 
@@ -3572,10 +3958,17 @@ void ProcessWorkerHarvestTile(UnitCommandContext& context, UnitMovementUnit& uni
     if (context.callbacks.on_harvest_frame != nullptr) {
         context.callbacks.on_harvest_frame(context, unit);
     }
-    if (unit.animation_frame < unit.definition.animation_timer_period) {
+    // Original ProcessWorkerHarvestTile (0x004ca214) compares raw +0x64
+    // against definition +0x13e4 (DAT_0087d6dc), not the generic animation
+    // timer at +0x13d4.  The latter belongs to the blocked/reservation wait
+    // loop and can give workers a different harvest cadence.
+    if (unit.animation_frame < unit.definition.timed_flag_phase_b_period) {
         return;
     }
-    unit.animation_frame = 0;
+    // The original leaves raw +0x64 at the completed harvest frame while the
+    // worker starts state 0x2c.  State 0x2a/0x2d explicitly reset it when the
+    // worker reaches or retries the resource tile.  Clearing it here changes
+    // the first return-leg direction update and the visible carry animation.
     UnitReservedTileReleaseResult release;
     if (has_movement(context)) {
         release = ReleaseUnitReservedMapTileWithIndex(movement(context), unit);
@@ -3671,6 +4064,12 @@ void ProcessWorkerApproachHarvestTile(UnitCommandContext& context, UnitMovementU
 void ProcessWorkerDepositCargo(UnitCommandContext& context, UnitMovementUnit& unit) {
     if (unit.owner_id < context.owner_resources.size()) {
         context.owner_resources[unit.owner_id] += unit.cargo_amount;
+    }
+    // DAT_007072ac is advanced by the same cargo value in the original.  This
+    // counter feeds result/score conditions independently of the spendable
+    // resource balance.
+    if (unit.owner_id < context.owner_resource_score.size()) {
+        context.owner_resource_score[unit.owner_id] += unit.cargo_amount;
     }
     unit.command_flags &= ~4u;
     unit.command_state = kUnitStateWorkerReturnToDropoff;
@@ -4284,7 +4683,12 @@ void StartUnitSpawnPlacementCommand(UnitCommandContext& context, UnitMovementUni
         return;
     }
 
-    const u32 type_id = spawn_type_for_unit(unit, unit.type_id + 0x60);
+    // State 0x5a uses the same building-index payload convention as state
+    // 0x23.  Preserve the converted type through approach/wait/cycle states.
+    if (unit.command_value < 0x60u) {
+        unit.command_value += 0x60u;
+    }
+    const u32 type_id = unit.command_value;
     unit.spawn_type_id = type_id;
     const UnitMovementDefinition& spawn_definition =
         definition_for_type_or(context, type_id, unit.definition);
@@ -5164,7 +5568,8 @@ u32 CalculateOwnerTransportGroupRequiredCarrierCount(const UnitCommandContext& c
         if (unit == nullptr) {
             continue;
         }
-        if (unit->owner_id != owner_id || (unit->command_value & 0xffu) != group_id) {
+        if (unit->owner_id != owner_id ||
+            (unit->area_marker_flags & 0xffu) != group_id) {
             continue;
         }
         if ((unit->definition.transport_flags & 4) == 0 ||
@@ -5315,8 +5720,9 @@ void ReassignOwnerTransportQueueSlotReferences(UnitCommandContext& context,
             if (unit == nullptr || unit->owner_id != owner_id) {
                 continue;
             }
-            if ((unit->command_value & 0xffu) == from_slot) {
-                unit->command_value = (unit->command_value & 0xffffff00u) | to_slot;
+            if ((unit->area_marker_flags & 0xffu) == from_slot) {
+                unit->area_marker_flags =
+                    (unit->area_marker_flags & 0xffffff00u) | to_slot;
             }
         }
     }
@@ -5513,7 +5919,7 @@ bool owner_transport_has_boardable_passenger_waiting(
             passenger->owner_id != owner_id) {
             continue;
         }
-        if ((passenger->command_value & 0xffu) != passenger_group) {
+        if ((passenger->area_marker_flags & 0xffu) != passenger_group) {
             continue;
         }
         if ((passenger->definition.transport_flags & 4u) == 0 ||
@@ -5627,13 +6033,13 @@ void RebuildOwnerTransportQueueActiveSlotCounts(
             continue;
         }
 
-        if ((unit->command_value & 0xffu) == 0 &&
+        if ((unit->area_marker_flags & 0xffu) == 0 &&
             callbacks.assign_queue_slot != nullptr) {
             callbacks.assign_queue_slot(context, queue, owner_id, *unit, user_data);
             ++scratch.assigned_unit_count;
         }
 
-        const u32 slot_index = unit->command_value & 0xffu;
+        const u32 slot_index = unit->area_marker_flags & 0xffu;
         if (slot_index != 0 && slot_index < scratch.active_slot_counts.size()) {
             ++scratch.active_slot_counts[slot_index];
         }
@@ -5864,7 +6270,7 @@ OwnerTransportQueueLoadSummary CalculateOwnerTransportQueueLoadSummary(
             continue;
         }
 
-        const u32 slot_index = unit->command_value & 0xffu;
+        const u32 slot_index = unit->area_marker_flags & 0xffu;
         if (slot_index >= queue.slots.size()) {
             continue;
         }
@@ -6554,8 +6960,8 @@ void ClearOwnerThreatPointAndQueueSlot(UnitCommandContext& context,
         if (unit == nullptr || unit->owner_id != owner_id) {
             continue;
         }
-        if ((unit->command_value & 0xffu) == slot_index) {
-            unit->command_value &= 0xffffff00u;
+        if ((unit->area_marker_flags & 0xffu) == slot_index) {
+            unit->area_marker_flags &= 0xffffff00u;
         }
     }
 }
@@ -6741,7 +7147,7 @@ OwnerThreatPointResponseResult HandleOwnerThreatPointResponseQueue(
             continue;
         }
 
-        const u32 source_slot = unit->command_value & 0xffu;
+        const u32 source_slot = unit->area_marker_flags & 0xffu;
         if (source_slot == 0 || source_slot == result.slot_index ||
             source_slot >= queue.slots.size() ||
             !owner_threat_primary_response_source_state(
@@ -6806,7 +7212,7 @@ OwnerThreatPointResponseResult HandleOwnerThreatPointResponseQueue(
                 continue;
             }
 
-            const u32 source_slot = unit->command_value & 0xffu;
+            const u32 source_slot = unit->area_marker_flags & 0xffu;
             if (source_slot == 0 || source_slot == destination_slot ||
                 source_slot >= response_queue->slots.size() ||
                 !owner_threat_primary_response_source_state(
@@ -6844,7 +7250,7 @@ OwnerThreatPointResponseResult HandleOwnerThreatPointResponseQueue(
             continue;
         }
 
-        const u32 source_slot = unit->command_value & 0xffu;
+        const u32 source_slot = unit->area_marker_flags & 0xffu;
         if (source_slot == 0 || source_slot == result.slot_index ||
             source_slot >= queue.slots.size() ||
             queue.slots[source_slot].state != kOwnerTransportQueueStateWorkTarget) {
@@ -6887,7 +7293,8 @@ void AssignUnitToOwnerTransportQueueSlot(OwnerTransportQueueState& queue,
     if (slot_index >= queue.slots.size()) {
         return;
     }
-    unit.command_value = (unit.command_value & 0xffffff00u) | slot_index;
+    unit.area_marker_flags =
+        (unit.area_marker_flags & 0xffffff00u) | slot_index;
     ++queue.slots[slot_index].count;
 }
 
@@ -6928,7 +7335,7 @@ OwnerTransportQueueRetargetResult ReassignOwnerTransportUnitsInTransitRangeToTar
             continue;
         }
 
-        const u32 source_slot = unit->command_value & 0xffu;
+        const u32 source_slot = unit->area_marker_flags & 0xffu;
         if (source_slot >= queue.slots.size()) {
             continue;
         }
@@ -6973,7 +7380,7 @@ u32 ReassignOwnerTransportUnitsBetweenQueueSlots(UnitCommandContext& context,
         if (unit == nullptr || unit->owner_id != owner_id || unit->type_id >= 0x60) {
             continue;
         }
-        if ((unit->command_value & 0xffu) != source_slot) {
+        if ((unit->area_marker_flags & 0xffu) != source_slot) {
             continue;
         }
         if (skip_suppressed_units && (unit->runtime_flags & 4u) != 0) {
@@ -8195,7 +8602,7 @@ u32 BoardOwnerTransportPassengersFromLinkedGroup(UnitCommandContext& context,
             passenger->owner_id != carrier.owner_id) {
             continue;
         }
-        if ((passenger->command_value & 0xffu) != passenger_group) {
+        if ((passenger->area_marker_flags & 0xffu) != passenger_group) {
             continue;
         }
         if ((passenger->definition.transport_flags & 4) == 0 ||
@@ -8260,7 +8667,8 @@ void ReleaseOwnerTransportQueueSlotReference(OwnerTransportQueueState& queue,
 
 void ReleaseUnitOwnerTransportQueueSlotReference(OwnerTransportQueueState& queue,
     const UnitMovementUnit& unit) {
-    ReleaseOwnerTransportQueueSlotReference(queue, unit.command_value & 0xffu);
+    ReleaseOwnerTransportQueueSlotReference(
+        queue, unit.area_marker_flags & 0xffu);
 }
 
 UnitMovementUnit* FindOwnerTransportQueueAssignedUnit(
@@ -8278,7 +8686,7 @@ UnitMovementUnit* FindOwnerTransportQueueAssignedUnit(
             continue;
         }
         if (unit->owner_id != owner_id ||
-            (unit->command_value & 0xffu) != slot_index) {
+            (unit->area_marker_flags & 0xffu) != slot_index) {
             continue;
         }
         if ((unit->runtime_flags & 4) == 0) {
@@ -8439,7 +8847,7 @@ bool CheckOwnerProductionPlacementActiveUnitCollision(
     for (const UnitMovementUnit* unit : context.movement->active_units) {
         if (unit == nullptr || unit == ignored_unit ||
             (unit->runtime_flags & kOwnerProductionPlacementIgnoreUnitRuntimeFlag) != 0 ||
-            unit->definition.placement_class == 3) {
+            unit->definition.movement_class == 3) {
             continue;
         }
         const i32 unit_tile_x = ConvertOwnerProductionWorldToTileSar(unit->x);
@@ -8618,6 +9026,17 @@ void RemoveOwnerProductionDemandAliases(OwnerUnitTypeCounts& demand) {
 }
 
 u32 ResolveQueuedOwnerProductionUnitType(const UnitMovementUnit& unit) {
+    const u32 command_id = GetUnitCommandIdLow24(unit);
+    const u32 active_entry_id =
+        unit.active_command_payload.state & kUnitCommandStateMask;
+    if (command_id == kUnitStateProductionSpawnStart ||
+        command_id == kUnitStateProductionSpawnCycle) {
+        // The active raw 0x10 command payload is authoritative.  The cached
+        // fields survive until completion and otherwise make a producer's
+        // second order reuse the first order's type (and therefore its cost).
+        return active_entry_id == kUnitStateCommand10 ?
+            static_cast<u32>(unit.active_command_payload.x) : unit.command_value;
+    }
     if (unit.queued_production_type_id != 0) {
         return unit.queued_production_type_id;
     }
@@ -9884,6 +10303,7 @@ struct OwnerExtendedPlacementSearchContext {
     UnitMovementPoint owner_target_point{-1, -1};
     u32 owner_id = 0;
     u32 unit_type = 0;
+    bool require_path_availability = true;
 };
 
 bool owner_extended_placement_candidate(UnitMovementPoint world_point,
@@ -9903,7 +10323,8 @@ bool owner_extended_placement_candidate(UnitMovementPoint world_point,
     if (gate.blocked) {
         return false;
     }
-    if (!owner_production_point_valid(search->owner_target_point)) {
+    if (!search->require_path_availability ||
+        !owner_production_point_valid(search->owner_target_point)) {
         return true;
     }
 
@@ -9951,8 +10372,7 @@ OwnerProductionPlacementSearchResult find_owner_extended_placement_point(
     const OwnerUnitTypeCounts& owner_counts,
     const OwnerProductionDemandBuildPlanInput& input) {
     OwnerProductionPlacementSearchResult result;
-    if (input.placement_anchors == nullptr ||
-        owner_id >= context.owner_resources.size()) {
+    if (owner_id >= context.owner_resources.size()) {
         return result;
     }
 
@@ -9974,15 +10394,13 @@ OwnerProductionPlacementSearchResult find_owner_extended_placement_point(
 
     UnitMovementUnit* anchor_unit =
         find_owner_extended_placement_anchor_unit(context, owner_id,
-            primary_unit_type, input.placement_anchors->base_tile);
+            primary_unit_type,
+            input.placement_anchors != nullptr ?
+                input.placement_anchors->base_tile : UnitMovementPoint{-1, -1});
     if (anchor_unit == nullptr) {
         return result;
     }
 
-    const UnitMovementPoint anchor_tile =
-        SelectOwnerProductionPlacementAnchorPoint(*input.placement_anchors,
-            definition->placement_class, owner_count_for_type(owner_counts,
-                unit_type));
     OwnerExtendedPlacementSearchContext search;
     search.context = &context;
     search.input = &input;
@@ -9995,8 +10413,42 @@ OwnerProductionPlacementSearchResult find_owner_extended_placement_point(
         build_owner_extended_placement_ignored_route_units(input);
     search.ignored_route_units =
         ignored_route_units.empty() ? nullptr : &ignored_route_units;
-    return FindOwnerProductionPlacementPointSpiral(anchor_tile,
-        owner_extended_placement_candidate, &search);
+
+    // The refreshed placement anchors are strategic hints, not a permanent
+    // reason to stop production.  They can be stale after a worker moves or a
+    // route target changes.  Preserve the original, fully path-constrained
+    // search first, then retry around the actual primary/producer unit.
+    if (input.placement_anchors != nullptr) {
+        const UnitMovementPoint anchor_tile =
+            SelectOwnerProductionPlacementAnchorPoint(*input.placement_anchors,
+                definition->placement_class, owner_count_for_type(owner_counts,
+                    unit_type));
+        result = FindOwnerProductionPlacementPointSpiral(anchor_tile,
+            owner_extended_placement_candidate, &search);
+        if (result.found) {
+            return result;
+        }
+    }
+
+    const UnitMovementPoint producer_tile{
+        ConvertOwnerProductionWorldToTileSar(anchor_unit->x),
+        ConvertOwnerProductionWorldToTileSar(anchor_unit->y),
+    };
+    result = FindOwnerProductionPlacementPointSpiral(producer_tile,
+        owner_extended_placement_candidate, &search, 0x10);
+    if (result.found) {
+        return result;
+    }
+
+    // A temporarily unreachable/stale strategic target must not deadlock the
+    // owner's entire construction tree.  The final retry is deliberately
+    // local to the producer and relaxes only that route-to-target probe.  The
+    // normal footprint, bounds, terrain, occupancy and unit-collision gates
+    // still run for every candidate, and the worker must still accept command
+    // 0x06 before any resources are reserved.
+    search.require_path_availability = false;
+    return FindOwnerProductionPlacementPointSpiral(producer_tile,
+        owner_extended_placement_candidate, &search, 8);
 }
 
 void issue_owner_extended_placement_command(UnitCommandContext& context,
@@ -10290,7 +10742,7 @@ bool CheckOwnerProductionRouteWorkerNeedsObject(
         return false;
     }
 
-    const u32 slot_index = unit.command_value & 0xffu;
+    const u32 slot_index = unit.area_marker_flags & 0xffu;
     if (slot_index >= queue.slots.size()) {
         return false;
     }

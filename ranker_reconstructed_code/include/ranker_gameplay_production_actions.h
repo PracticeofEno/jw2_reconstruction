@@ -65,7 +65,11 @@ struct GameplayProductionUnitState {
     u32 command_flags = 0;
     u32 status_flags = 0;
     u32 runtime_flags = 0;
+    // Original unit raw +0x58: action capability mask copied from the unit
+    // definition at creation time.
     u32 command_bits = 0;
+    // Original unit raw +0x5c: mutable subtype-06 runtime command-bit mask.
+    u32 runtime_command_bits = 0;
     u32 definition_action_flags = 0;
     u32 movement_class = 0;
     u64 production_bits = 0;

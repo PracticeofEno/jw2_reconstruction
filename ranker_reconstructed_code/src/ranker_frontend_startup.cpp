@@ -96,7 +96,7 @@ void register_frontend_font_record(u32 index, const std::vector<u8>& record) {
     const StartupFontRegistration& registration = kStartupFontRegistrations[index];
     const u8* glyph_data = record.empty() ? nullptr : record.data();
     RegisterTextFontDefinition(index, registration.flags, registration.max_width,
-        registration.height, glyph_data);
+        registration.height, glyph_data, record.size());
 }
 
 bool call_gate(FrontendBootstrapCallback callback, FrontendBootstrapState& state) {

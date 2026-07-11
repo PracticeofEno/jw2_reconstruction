@@ -212,7 +212,8 @@ bool production_unit_blocks_action(const GameplayProductionUnitState& unit) {
 bool preview_collision_visibility_gate(const GameplayProductionUnitState& unit) {
     return ((unit.command_state | unit.command_flags) &
             kPreviewPlacementVisibilityStateFlag) != 0 ||
-        (unit.command_bits & (1u << kPreviewPlacementVisibilityCommandBit)) != 0;
+        (unit.runtime_command_bits &
+            (1u << kPreviewPlacementVisibilityCommandBit)) != 0;
 }
 
 void record_validation_hit(GameplayProductionActionState& state,

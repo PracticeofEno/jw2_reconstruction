@@ -33,6 +33,9 @@ struct UnitRenderItem {
     u32 marker_flags = 0;
     u32 command_state = 0;
     u32 command_flags = 0;
+    u32 command_bit_mask = 0;
+    u32 command_value = 0;
+    u32 previous_command_state = 0;
     u32 command_metadata_flags = 0;
     u32 definition_cell_flags = 0;
     u32 terrain_cell_flags = 0;
@@ -42,6 +45,7 @@ struct UnitRenderItem {
     u32 effect_state = 0;
     u32 animation_frame = 0;
     u32 animation_timer = 0;
+    u32 command_entry_lockout_ticks = 0;
     u32 command_lockout_ticks = 0;
     u32 global_frame_counter = 0;
     i32 direction = 0;

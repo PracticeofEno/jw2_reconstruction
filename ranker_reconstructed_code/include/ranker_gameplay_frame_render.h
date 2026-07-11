@@ -325,7 +325,11 @@ struct GameplayFrameRandomState {
 
 struct GameplayFrameRenderContext {
     GameplayFrameCallbacks callbacks;
-    std::array<u32, kGameplayFrameAnimationSlotCount> animation_frame_table{};
+    // Original DAT_0083f420 table consumed by FUN_004d7863.  It advances
+    // animated terrain through a six-frame ping-pong sequence from the
+    // simulation frame counter (DAT_007071a4).
+    std::array<u32, kGameplayFrameAnimationSlotCount> animation_frame_table{
+        0, 1, 2, 3, 4, 5, 4, 3, 2, 1};
     u32 animation_frame_slot = 0;
     u32 animation_cycle = 0;
     u32 frame_counter = 0;

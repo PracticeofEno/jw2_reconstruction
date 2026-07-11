@@ -641,12 +641,13 @@ bool mode1_udp_address_ready(const sockaddr_in& address) {
         address.sin_port != 0;
 }
 
-bool mode1_slot_active_for_udp_send(u32 slot, const PlayerSlotRuntimeState& slots) {
-    if (slot >= slots.slot_states.size()) {
+bool mode1_slot_active_for_udp_send(
+    u32 slot, const Mode1ReliableRuntimeState& reliable) {
+    if (slot >= reliable.player_status.size()) {
         return false;
     }
 
-    const u8 state = slots.slot_states[slot];
+    const u8 state = reliable.player_status[slot];
     return state != static_cast<u8>(PlayerSlotState::disabled) &&
         state != static_cast<u8>(PlayerSlotState::player_controlled);
 }
@@ -660,6 +661,28 @@ void set_directplay_last_result(HRESULT result) {
 void set_mode1_send_status(i32 status) {
     lock_async_state();
     g_async_com_state.mode1_last_send_status = status;
+    unlock_async_state();
+}
+
+void record_mode1_udp_send_result(bool succeeded) {
+    lock_async_state();
+    ++g_async_com_state.mode1_udp_send_attempt_count;
+    if (succeeded) {
+        ++g_async_com_state.mode1_udp_send_success_count;
+    }
+    else {
+        ++g_async_com_state.mode1_udp_send_failure_count;
+    }
+    unlock_async_state();
+}
+
+void record_mode1_udp_receive_packet(u32 byte_count) {
+    const sockaddr_in sender = legacy_network_state().udp_last_sender;
+    lock_async_state();
+    ++g_async_com_state.mode1_udp_receive_packet_count;
+    g_async_com_state.mode1_udp_receive_byte_count += byte_count;
+    g_async_com_state.mode1_udp_last_sender_address = sender.sin_addr.s_addr;
+    g_async_com_state.mode1_udp_last_sender_port = ntohs(sender.sin_port);
     unlock_async_state();
 }
 
@@ -1443,8 +1466,8 @@ i32 SendMode1ReliablePayloadToPlayerDefault(const void* payload, u32 byte_count,
     unlock_async_state();
 
     if (mode1_reliable_uses_legacy_udp_transport(transport_mode)) {
-        const PlayerSlotRuntimeState& slots = player_slot_state();
-        if (target_player == slots.local_player_slot) {
+        const Mode1ReliableRuntimeState& reliable = mode1_reliable_state();
+        if (target_player == reliable.local_player_index) {
             set_mode1_send_status(0);
             return 0;
         }
@@ -1457,6 +1480,7 @@ i32 SendMode1ReliablePayloadToPlayerDefault(const void* payload, u32 byte_count,
         unlock_async_state();
         const bool sent = address_valid &&
             SendLegacyUdpChunks(byte_count, payload, target_address);
+        record_mode1_udp_send_result(sent);
         const i32 status = sent ? 0 : -1;
         set_mode1_send_status(status);
         return status;
@@ -1505,11 +1529,11 @@ i32 BroadcastMode1ReliablePayloadDefault(const void* payload, u32 byte_count) {
     unlock_async_state();
 
     if (mode1_reliable_uses_legacy_udp_transport(transport_mode)) {
-        const PlayerSlotRuntimeState& slots = player_slot_state();
+        const Mode1ReliableRuntimeState& reliable = mode1_reliable_state();
         i32 status = 0;
         for (u32 slot = 0; slot < kPlayerSlotCount; ++slot) {
-            if (slot == slots.local_player_slot ||
-                !mode1_slot_active_for_udp_send(slot, slots)) {
+            if (slot == reliable.local_player_index ||
+                !mode1_slot_active_for_udp_send(slot, reliable)) {
                 continue;
             }
 
@@ -1519,8 +1543,10 @@ i32 BroadcastMode1ReliablePayloadDefault(const void* payload, u32 byte_count) {
             target_address = g_async_com_state.mode1_udp_peer_addresses[slot];
             address_valid = g_async_com_state.mode1_udp_peer_address_valid[slot];
             unlock_async_state();
-            if (!address_valid ||
-                !SendLegacyUdpChunks(byte_count, payload, target_address)) {
+            const bool sent = address_valid &&
+                SendLegacyUdpChunks(byte_count, payload, target_address);
+            record_mode1_udp_send_result(sent);
+            if (!sent) {
                 status = -1;
             }
         }
@@ -1602,6 +1628,7 @@ void PumpLegacyUdpMode1Messages(AsyncComContext* context) {
         }
 
         if (dispatch_message) {
+            record_mode1_udp_receive_packet(message_size);
             const DirectPlayDispatchSnapshot snapshot = snapshot_directplay_dispatch();
             AsyncComContext* target_context = context;
             if (target_context == nullptr) {

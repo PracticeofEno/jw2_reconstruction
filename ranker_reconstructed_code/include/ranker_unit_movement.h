@@ -91,6 +91,7 @@ struct UnitMovementDefinition {
     u32 profile_defense_value = 0;
     u32 avatar_next_exp_per_level = 0;
     u32 avatar_next_exp_base = 1;
+    std::array<u8, 32> initial_command_bits{};
     u32 passive_recovery_enabled = 0;
     u32 passive_recovery_flags = 0;
     u32 passive_map_effect_seed = 0;
@@ -153,7 +154,9 @@ struct UnitMovementDefinition {
     i32 spatial_query_top = 0;
     i32 spatial_query_right = 0;
     i32 spatial_query_bottom = 0;
-    u32 path_start_delay = 0;
+    // Original definition +0x2218: RNG limit used whenever a path replan
+    // starts a new movement animation (ProcessUnitPathToDestination 0x004c7483).
+    u32 movement_animation_frame_count = 0;
     u32 action_recovery_base_ticks = 0;
     u32 action_recovery_scale_percent = 0;
     u32 action_range_base = 0;
@@ -240,6 +243,12 @@ struct UnitMovementUnit {
     i32 y = 0;
     i32 destination_x = 0;
     i32 destination_y = 0;
+    // Raw +0x78/+0x7c are movement destinations for mobile units, but the
+    // cell renderer overloads them as an additive-ramp index and image frame.
+    // Keep the typed runtime values separate so placed structures do not feed
+    // their world destination coordinates into sprite-frame selection.
+    u32 cell_channel_additive_frame = 0;
+    u32 cell_flag40_animation_frame = 0;
     u32 destination_aux_state = 0;
     i32 current_cell_x = 0;
     i32 current_cell_y = 0;
@@ -435,6 +444,8 @@ using UnitMovementDistanceCallback = u32 (*)(UnitMovementContext& context,
     const UnitMovementUnit& source, const UnitMovementUnit& target);
 using UnitMovementCommandMetadataFlagsCallback = u32 (*)(UnitMovementContext& context,
     const UnitMovementUnit& unit);
+using UnitMovementSpatialTargetCallback = UnitMovementUnit* (*)(
+    UnitMovementContext& context, UnitMovementUnit& unit);
 using UnitMovementAttachmentReleaseCallback = bool (*)(UnitMovementContext& context,
     UnitMovementUnit& parent, UnitMovementUnit& child);
 using UnitMovementPixelPresentCallback = void (*)(UnitMovementContext& context,
@@ -449,6 +460,8 @@ struct UnitMovementCallbacks {
     UnitMovementRandomLimitCallback random_limit = nullptr;
     UnitMovementDistanceCallback distance_to_unit = nullptr;
     UnitMovementCommandMetadataFlagsCallback command_metadata_flags = nullptr;
+    UnitMovementSpatialTargetCallback query_ground_separation_target = nullptr;
+    UnitMovementSpatialTargetCallback query_air_separation_target = nullptr;
     UnitMovementAttachmentReleaseCallback on_attached_child_parent_death = nullptr;
     UnitMovementPixelPresentCallback on_debug_pixel_present = nullptr;
 };

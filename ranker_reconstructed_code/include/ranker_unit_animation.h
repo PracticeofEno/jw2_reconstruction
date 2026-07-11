@@ -99,6 +99,8 @@ struct UnitAnimationDefinition {
     i32 bars_width = 0;
     bool has_move_resource = false;
     bool has_move_resource_alt = false;
+    bool has_alternate_default_resource = false;
+    bool has_alternate_default_resource_alt = false;
     bool action_fallback_uses_extended_directions = false;
     bool has_queued_command_resource = false;
 };
@@ -108,7 +110,10 @@ struct UnitAnimationUnit {
     u32 owner_id = 0;
     u32 runtime_slot_index = 0;
     u32 command_flags = 0;
+    u32 command_bit_mask = 0;
+    u32 command_value = 0;
     u32 command_state = 0;
+    u32 previous_command_state = 0;
     u32 animation_flags = 0;
     u32 marker_flags = 0;
     u32 state_flags = 0;
@@ -116,6 +121,7 @@ struct UnitAnimationUnit {
     u32 runtime_flags = 0;
     u32 animation_frame = 0;
     u32 animation_timer = 0;
+    u32 command_entry_lockout_ticks = 0;
     u32 command_lockout_ticks = 0;
     i32 direction = 0;
     i32 screen_x = 0;

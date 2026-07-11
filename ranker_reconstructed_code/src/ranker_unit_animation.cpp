@@ -208,7 +208,7 @@ UnitAnimationDrawKind select_tail_draw_kind(UnitAnimationDrawContext& context,
     if ((unit.state_flags & kUnitAnimStateBlendMode40) != 0) {
         return UnitAnimationDrawKind::blend_40;
     }
-    if ((unit.command_flags & 0x40) != 0 || (unit.runtime_flags & 0x80) != 0) {
+    if ((unit.command_flags & 0x40) != 0 || (unit.command_bit_mask & 0x80) != 0) {
         return owner_related_to_local(context, unit)
             ? UnitAnimationDrawKind::blend_factor_0f
             : (flipped ? UnitAnimationDrawKind::flipped : UnitAnimationDrawKind::normal);
@@ -553,6 +553,19 @@ void DrawUnitAnimationFrameSharedTail(UnitAnimationDrawContext& context,
 
 void DrawUnitAlternateDefaultAnimationFrame(UnitAnimationDrawContext& context,
     const UnitAnimationUnit& unit) {
+    const UnitAnimationDefinition& definition = definition_or_fallback(context);
+    const bool alternate_resource_present =
+        (unit.command_flags & kUnitAnimCommandMoving) != 0
+            ? definition.has_alternate_default_resource_alt
+            : definition.has_alternate_default_resource;
+    if (!alternate_resource_present) {
+        // The original branches at 0x004c4697 fall back directly to the
+        // ordinary group-0/1 frame resolver when the group-8/13 frame count
+        // is zero.  Calling DrawUnitDefaultAnimationFrame here would inspect
+        // the alternate flag again and recurse.
+        draw_resolved_frame(context, unit, UnitAnimationSequence::default_idle);
+        return;
+    }
     draw_resolved_frame(context, unit, UnitAnimationSequence::alternate_default);
 }
 
@@ -628,7 +641,7 @@ void DrawUnitAlternateActionAnimationFrame(UnitAnimationDrawContext& context,
 void DrawUnitConditionalAlternateActionAnimationFrame(UnitAnimationDrawContext& context,
     const UnitAnimationUnit& unit) {
     if ((unit.command_flags & kUnitAnimCommandConditionalAlternateMask) == 0 &&
-        unit.ability_id != 0) {
+        unit.previous_command_state != 0) {
         return;
     }
     draw_resolved_frame(context, unit, UnitAnimationSequence::conditional_alternate_action);
@@ -652,10 +665,11 @@ void DrawUnitDirectSpriteAnimationFrame(UnitAnimationDrawContext& context,
     const u32 frame = ResolveUnitAnimationFrame(
         context, unit, UnitAnimationSequence::direct_sprite);
     if ((unit.command_state & kUnitAnimCommandStateMirror) != 0) {
-        const u32 elapsed = std::min(unit.animation_timer, unit.command_lockout_ticks);
-        context.highlight_level = unit.command_lockout_ticks != 0
-            ? ratio_31(unit.command_lockout_ticks - elapsed,
-                unit.command_lockout_ticks)
+        const u32 elapsed = std::min(
+            unit.animation_timer, unit.command_entry_lockout_ticks);
+        context.highlight_level = unit.command_entry_lockout_ticks != 0
+            ? ratio_31(unit.command_entry_lockout_ticks - elapsed,
+                unit.command_entry_lockout_ticks)
             : 0;
         u32 animation_frame = 0;
         u32 direction_row = 0;
@@ -682,7 +696,7 @@ void DrawUnitDirectSpriteAnimationFrame(UnitAnimationDrawContext& context,
 
 void DrawUnitPaletteRampHighlightFrame(UnitAnimationDrawContext& context,
     const UnitAnimationUnit& unit) {
-    if (unit.cargo_amount == 0) {
+    if (unit.command_value == 0) {
         return;
     }
     context.highlight_level = unit.animation_frame & 0x1fu;
@@ -837,8 +851,28 @@ void DrawUnitCellConstructionProgressFrame(UnitAnimationDrawContext& context,
     if (unit.construction_stage_count == 0) {
         return;
     }
-    draw_cell_frame(context, unit, UnitAnimationSequence::cell_progress,
-        construction_progress_frame(unit));
+
+    const u32 frame = construction_progress_frame(unit);
+    if ((unit.draw_flags & kUnitAnimDrawMode2) != 0) {
+        const UnitAnimationDrawKind kind = (unit.draw_flags & kUnitAnimDrawMode80) != 0
+            ? UnitAnimationDrawKind::mode_80
+            : UnitAnimationDrawKind::mode_2;
+        draw_cell_frame_with_kind(
+            context, unit, UnitAnimationSequence::cell_progress, frame, kind);
+        return;
+    }
+
+    if (unit.construction_stage_count == 1 && unit.construction_progress_limit != 0 &&
+        unit.max_hit_points != 0) {
+        context.highlight_level = ratio_31(unit.hit_points, unit.max_hit_points);
+        if (context.highlight_level != 0x1f) {
+            draw_cell_frame_with_kind(context, unit, UnitAnimationSequence::cell_progress, 0,
+                UnitAnimationDrawKind::blend_factor_ramp);
+            return;
+        }
+    }
+
+    draw_cell_frame(context, unit, UnitAnimationSequence::cell_progress, frame);
 }
 
 void DrawUnitCellPaletteRampFrame(UnitAnimationDrawContext& context,
@@ -934,16 +968,12 @@ void DispatchUnitAnimationDraw(UnitAnimationDrawContext& context,
         DrawUnitAlternateDefaultAnimationFrame(context, unit);
         return;
     }
-    if ((unit.state_flags & kUnitAnimStateDirectSpriteMode) != 0) {
-        DrawUnitMovingAnimationFrame(context, unit);
-        return;
-    }
-    if ((unit.command_flags & kUnitAnimCommandStatusOverlayMask) != 0) {
-        DrawUnitActionAnimationFrame(context, unit);
-        return;
-    }
-
-    if ((unit.command_flags & kUnitAnimCommandMoving) != 0) {
+    // DispatchUnitAnimationDraw (0x004c4364) checks the active command's
+    // metadata table (DAT_007300e0), bit 0x20, before selecting image groups
+    // 12/7.  The moving flag only chooses between those two groups; it is not
+    // itself the gate.  Using runtime/status bits here selected the idle or
+    // action image set for many high-bit command states.
+    if ((unit.command_metadata_flags & 0x20u) != 0) {
         DrawUnitMovingAnimationFrame(context, unit);
         return;
     }

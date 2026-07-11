@@ -80,23 +80,27 @@ u32 local_player_bit(const GameplayVisibilityContext& context) {
 }
 
 u32 unit_center_tile_x(const GameplayVisibilityUnit& unit) {
-    const i32 world_x = unit.large_centered ? unit.center_x : unit.x;
+    // FUN_004d5ccd starts mobile units at raw +0xc0 (the current-cell
+    // coordinate).  Only type >= 0x60 switches to FUN_004c36de's bounds-
+    // adjusted raw +0xb8 world position.
+    const i32 world_x = unit.large_centered ? unit.center_x :
+        (unit.terrain_probe_valid ? unit.terrain_probe_x : unit.x);
     return static_cast<u32>(world_x) >> 5;
 }
 
 u32 unit_center_tile_y(const GameplayVisibilityUnit& unit) {
-    const i32 world_y = unit.large_centered ? unit.center_y : unit.y;
+    const i32 world_y = unit.large_centered ? unit.center_y :
+        (unit.terrain_probe_valid ? unit.terrain_probe_y : unit.y);
     return static_cast<u32>(world_y) >> 5;
 }
 
-u32 unit_visibility_radius_tiles(const GameplayVisibilityUnit& unit) {
+i32 unit_visibility_radius_tiles(const GameplayVisibilityUnit& unit) {
     if (unit.type_id > 0x5f && unit.variant == 1) {
         return 5;
     }
-    if (unit.interaction_range_pixels != 0) {
-        return std::max<u32>(1, unit.interaction_range_pixels >> 5);
-    }
-    return std::max<u32>(1, unit.fallback_range_tiles);
+    // FUN_004d5ccd uses SAR ECX,5.  A negative stat is therefore a real
+    // non-expanding radius, not a request for the reconstructed fallback.
+    return static_cast<i32>(unit.interaction_range_pixels) >> 5;
 }
 
 u32 terrain_class_at(const GameplayVisibilityGrid& grid, i32 tile_x, i32 tile_y) {
@@ -114,8 +118,12 @@ u32 terrain_class_for_visibility_unit(const GameplayVisibilityGrid& grid,
     if (unit.movement_class == 3) {
         return 7;
     }
-    return terrain_class_at(grid, static_cast<i32>(unit_center_tile_x(unit)),
-        static_cast<i32>(unit_center_tile_y(unit)));
+    const i32 probe_x = unit.terrain_probe_valid ? unit.terrain_probe_x :
+        (unit.large_centered ? unit.center_x : unit.x);
+    const i32 probe_y = unit.terrain_probe_valid ? unit.terrain_probe_y :
+        (unit.large_centered ? unit.center_y : unit.y);
+    return terrain_class_at(grid, static_cast<i32>(static_cast<u32>(probe_x) >> 5),
+        static_cast<i32>(static_cast<u32>(probe_y) >> 5));
 }
 
 u32 octile_half_distance(i32 dx, i32 dy) {
@@ -175,15 +183,134 @@ u32 owner_layer_mask_for_unit(GameplayVisibilityContext& context,
     return (owner_bits << kGameplayVisibilityOwnerLayerShift) | owner_bits;
 }
 
-void apply_visibility_radii(GameplayVisibilityContext& context,
-    const GameplayVisibilityUnit& unit, u32 radius) {
+bool mark_visibility_tile_at_radius(GameplayVisibilityContext& context,
+    const GameplayVisibilityUnit& unit, i32 radius, i32 tile_x, i32 tile_y) {
+    if (context.grid == nullptr || !tile_in_bounds(*context.grid, tile_x, tile_y) ||
+        terrain_class_at(*context.grid, tile_x, tile_y) > unit.terrain_class) {
+        return false;
+    }
+
     const i32 center_x = static_cast<i32>(unit_center_tile_x(unit));
     const i32 center_y = static_cast<i32>(unit_center_tile_y(unit));
-    const i32 span = static_cast<i32>(radius);
-    for (i32 y = center_y - span; y <= center_y + span; ++y) {
-        for (i32 x = center_x - span; x <= center_x + span; ++x) {
-            MarkVisibilityTileAtRadius(context, unit, radius, x, y);
+    const u32 index = tile_index(*context.grid, tile_x, tile_y);
+    if (static_cast<i32>(octile_half_distance(
+            tile_x - center_x, tile_y - center_y)) >= radius) {
+        context.grid->current[index] |=
+            unit.owner_visibility_mask & kGameplayVisibilityVisible;
+        return false;
+    }
+
+    context.grid->owner[index] |= unit.owner_explore_mask;
+    context.grid->current[index] |= unit.owner_visibility_mask;
+    if ((unit.owner_visibility_mask & kGameplayVisibilityRevealed) != 0) {
+        context.grid->terrain_backup[index] = context.grid->terrain[index];
+        context.grid->previous[index] &= 0x07fc0000;
+        context.grid->previous[index] |=
+            context.grid->current[index] & 0xf803ffff;
+    }
+    return true;
+}
+
+void apply_visibility_direction(GameplayVisibilityContext& context,
+    const GameplayVisibilityUnit& unit, i32 radius, i32 tile_x, i32 tile_y,
+    u32 direction) {
+    if (!mark_visibility_tile_at_radius(
+            context, unit, radius, tile_x, tile_y)) {
+        return;
+    }
+
+    // FUN_004d5fc1's jump table expands one octant at a time.  Diagonal
+    // entries also launch the two bordering axial rays before continuing the
+    // diagonal.  A rejected terrain cell returns before this expansion, which
+    // is what makes hills/terrain classes occlude cells behind them.
+    switch (direction) {
+    case 1: // north
+        apply_visibility_direction(context, unit, radius,
+            tile_x, tile_y - 1, 1);
+        break;
+    case 2: { // north-east
+        const i32 next_x = tile_x + 1;
+        const i32 next_y = tile_y - 1;
+        if (!tile_in_bounds(*context.grid, next_x, next_y)) {
+            return;
         }
+        apply_visibility_direction(context, unit, radius,
+            next_x, next_y - 1, 1);
+        apply_visibility_direction(context, unit, radius,
+            next_x + 1, next_y, 3);
+        apply_visibility_direction(context, unit, radius,
+            next_x, next_y, 2);
+        break;
+    }
+    case 3: // east
+        apply_visibility_direction(context, unit, radius,
+            tile_x + 1, tile_y, 3);
+        break;
+    case 4: { // south-east
+        const i32 next_x = tile_x + 1;
+        const i32 next_y = tile_y + 1;
+        if (!tile_in_bounds(*context.grid, next_x, next_y)) {
+            return;
+        }
+        apply_visibility_direction(context, unit, radius,
+            next_x + 1, next_y, 3);
+        apply_visibility_direction(context, unit, radius,
+            next_x, next_y + 1, 5);
+        apply_visibility_direction(context, unit, radius,
+            next_x, next_y, 4);
+        break;
+    }
+    case 5: // south
+        apply_visibility_direction(context, unit, radius,
+            tile_x, tile_y + 1, 5);
+        break;
+    case 6: { // south-west
+        const i32 next_x = tile_x - 1;
+        const i32 next_y = tile_y + 1;
+        if (!tile_in_bounds(*context.grid, next_x, next_y)) {
+            return;
+        }
+        apply_visibility_direction(context, unit, radius,
+            next_x, next_y + 1, 5);
+        apply_visibility_direction(context, unit, radius,
+            next_x - 1, next_y, 7);
+        apply_visibility_direction(context, unit, radius,
+            next_x, next_y, 6);
+        break;
+    }
+    case 7: // west
+        apply_visibility_direction(context, unit, radius,
+            tile_x - 1, tile_y, 7);
+        break;
+    case 8: { // north-west
+        const i32 next_x = tile_x - 1;
+        const i32 next_y = tile_y - 1;
+        if (!tile_in_bounds(*context.grid, next_x, next_y)) {
+            return;
+        }
+        apply_visibility_direction(context, unit, radius,
+            next_x - 1, next_y, 7);
+        apply_visibility_direction(context, unit, radius,
+            next_x, next_y - 1, 1);
+        apply_visibility_direction(context, unit, radius,
+            next_x, next_y, 8);
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+void apply_visibility_radii(GameplayVisibilityContext& context,
+    const GameplayVisibilityUnit& unit, i32 radius) {
+    if (context.grid == nullptr || !ensure_grid(*context.grid)) {
+        return;
+    }
+    const i32 center_x = static_cast<i32>(unit_center_tile_x(unit));
+    const i32 center_y = static_cast<i32>(unit_center_tile_y(unit));
+    for (u32 direction = 1; direction < 9; ++direction) {
+        apply_visibility_direction(
+            context, unit, radius, center_x, center_y, direction);
     }
 }
 
@@ -244,12 +371,57 @@ u32 layer_bit_at(const GameplayVisibilityGrid& grid, const std::vector<u32>& lay
     return layer[tile_index(grid, tile_x, tile_y)] & (1u << bit_index);
 }
 
-u32 neighbor_mask_for_flag(const GameplayVisibilityGrid& grid, i32 tile_x, i32 tile_y,
-    u32 flag_mask) {
-    if (!grid_layer_ready(grid, grid.current)) {
-        return 0;
+enum class FogTileClass : u8 {
+    dark = 0,
+    visible = 1,
+    revealed = 2,
+};
+
+FogTileClass raw_fog_tile_class(
+    const GameplayVisibilityGrid& grid, i32 tile_x, i32 tile_y) {
+    if (!grid_layer_ready(grid, grid.current) ||
+        !tile_in_bounds(grid, tile_x, tile_y)) {
+        return FogTileClass::dark;
     }
 
+    const u32 flags = grid.current[tile_index(grid, tile_x, tile_y)];
+    if ((flags & kGameplayVisibilityRevealed) != 0) {
+        return FogTileClass::revealed;
+    }
+    if ((flags & kGameplayVisibilityVisible) != 0) {
+        return FogTileClass::visible;
+    }
+    return FogTileClass::dark;
+}
+
+FogTileClass smoothed_fog_tile_class(
+    const GameplayVisibilityGrid& grid, i32 tile_x, i32 tile_y) {
+    const FogTileClass tile_class =
+        raw_fog_tile_class(grid, tile_x, tile_y);
+    if (tile_class != FogTileClass::revealed) {
+        return tile_class;
+    }
+
+    // FUN_00420370 first converts DAT_00758d40 bit 27/28 into classes
+    // 2/1/0.  A class-2 tile touching any in-map class-0 neighbor is then
+    // demoted to class 1 before FUN_004206e0 builds the 8-neighbor mask.
+    // Omitting this pass left hard, square fully-lit edges in rebuilt fog.
+    constexpr std::array<i32, 8> kDx{0, 1, 1, 1, 0, -1, -1, -1};
+    constexpr std::array<i32, 8> kDy{-1, -1, 0, 1, 1, 1, 0, -1};
+    for (std::size_t i = 0; i < kDx.size(); ++i) {
+        const i32 neighbor_x = tile_x + kDx[i];
+        const i32 neighbor_y = tile_y + kDy[i];
+        if (tile_in_bounds(grid, neighbor_x, neighbor_y) &&
+            raw_fog_tile_class(grid, neighbor_x, neighbor_y) ==
+                FogTileClass::dark) {
+            return FogTileClass::visible;
+        }
+    }
+    return FogTileClass::revealed;
+}
+
+u32 neighbor_mask_for_fog_class(const GameplayVisibilityGrid& grid,
+    i32 tile_x, i32 tile_y, FogTileClass expected_class) {
     constexpr std::array<i32, 8> kDx{0, 1, 1, 1, 0, -1, -1, -1};
     constexpr std::array<i32, 8> kDy{-1, -1, 0, 1, 1, 1, 0, -1};
     u32 mask = 0;
@@ -257,11 +429,59 @@ u32 neighbor_mask_for_flag(const GameplayVisibilityGrid& grid, i32 tile_x, i32 t
         const i32 x = tile_x + kDx[i];
         const i32 y = tile_y + kDy[i];
         if (tile_in_bounds(grid, x, y) &&
-            (grid.current[tile_index(grid, x, y)] & flag_mask) != 0) {
-            mask |= (1u << i);
+            smoothed_fog_tile_class(grid, x, y) == expected_class) {
+            mask |= 1u << i;
         }
     }
     return mask;
+}
+
+u32 resolve_fog_mask_from_class_grid(const std::vector<u8>& classes,
+    u32 storage_width, u32 storage_height, u32 neighbor_width,
+    u32 neighbor_height, u32 x, u32 y) {
+    if (x >= storage_width || y >= storage_height || classes.size() <
+        static_cast<std::size_t>(storage_width) * storage_height) {
+        return 0x100;
+    }
+
+    const auto class_at = [&classes, storage_width](u32 column, u32 row) {
+        return static_cast<FogTileClass>(
+            classes[static_cast<std::size_t>(row) * storage_width + column]);
+    };
+    const FogTileClass current = class_at(x, y);
+    if (current == FogTileClass::revealed) {
+        return 0xff;
+    }
+
+    constexpr std::array<i32, 8> kDx{0, 1, 1, 1, 0, -1, -1, -1};
+    constexpr std::array<i32, 8> kDy{-1, -1, 0, 1, 1, 1, 0, -1};
+    const auto neighbor_mask = [&](FogTileClass expected_class) {
+        u32 mask = 0;
+        for (u32 i = 0; i < kDx.size(); ++i) {
+            const i32 neighbor_x = static_cast<i32>(x) + kDx[i];
+            const i32 neighbor_y = static_cast<i32>(y) + kDy[i];
+            if (neighbor_x >= 0 && neighbor_y >= 0 &&
+                static_cast<u32>(neighbor_x) < neighbor_width &&
+                static_cast<u32>(neighbor_y) < neighbor_height &&
+                static_cast<u32>(neighbor_x) < storage_width &&
+                static_cast<u32>(neighbor_y) < storage_height &&
+                class_at(static_cast<u32>(neighbor_x),
+                    static_cast<u32>(neighbor_y)) == expected_class) {
+                mask |= 1u << i;
+            }
+        }
+        return mask;
+    };
+
+    const u32 revealed_neighbors =
+        neighbor_mask(FogTileClass::revealed);
+    if (revealed_neighbors != 0) {
+        return revealed_neighbors;
+    }
+    if (current == FogTileClass::visible) {
+        return 0x1ff;
+    }
+    return 0x100 | neighbor_mask(FogTileClass::visible);
 }
 
 } // namespace
@@ -398,23 +618,26 @@ u32 ResolveGameplayFogBlockMask(const GameplayVisibilityGrid& grid,
         return 0x100;
     }
 
-    const u32 current = grid.current[tile_index(grid, tile_x, tile_y)];
-    if ((current & kGameplayVisibilityRevealed) != 0) {
+    const FogTileClass current =
+        smoothed_fog_tile_class(grid, tile_x, tile_y);
+    if (current == FogTileClass::revealed) {
         return 0xff;
     }
 
     const u32 revealed_neighbors =
-        neighbor_mask_for_flag(grid, tile_x, tile_y, kGameplayVisibilityRevealed);
+        neighbor_mask_for_fog_class(
+            grid, tile_x, tile_y, FogTileClass::revealed);
     if (revealed_neighbors != 0) {
         return revealed_neighbors;
     }
 
-    if ((current & kGameplayVisibilityVisible) != 0) {
+    if (current == FogTileClass::visible) {
         return 0x1ff;
     }
 
     return 0x100 |
-        neighbor_mask_for_flag(grid, tile_x, tile_y, kGameplayVisibilityLocalMask);
+        neighbor_mask_for_fog_class(
+            grid, tile_x, tile_y, FogTileClass::visible);
 }
 
 void PromoteGameplayFogVisibleTiles(
@@ -444,22 +667,46 @@ void RenderGameplayFogOverlay(GameplayFogRenderContext& context) {
             RecalculateGameplayFogViewportMetrics(context.target.width, context.target.height);
     }
 
-    i32 tile_y = context.camera_y >> 5;
+    const i32 start_tile_x = context.camera_x >= 0
+        ? context.camera_x >> 5
+        : (context.camera_x + 0x1f) >> 5;
+    const i32 start_tile_y = context.camera_y >= 0
+        ? context.camera_y >> 5
+        : (context.camera_y + 0x1f) >> 5;
+    const u32 class_columns = static_cast<u32>(
+        (static_cast<u32>(context.camera_x +
+            static_cast<i32>(context.target.width)) >> 5) -
+        start_tile_x + 1);
+    const u32 class_rows = static_cast<u32>(
+        (static_cast<u32>(context.camera_y +
+            static_cast<i32>(context.target.height)) >> 5) -
+        start_tile_y + 1);
+    std::vector<u8> fog_classes(
+        static_cast<std::size_t>(class_columns) * class_rows, 0);
+    for (u32 row = 0; row < class_rows; ++row) {
+        for (u32 column = 0; column < class_columns; ++column) {
+            fog_classes[static_cast<std::size_t>(row) * class_columns + column] =
+                static_cast<u8>(smoothed_fog_tile_class(*context.grid,
+                    start_tile_x + static_cast<i32>(column),
+                    start_tile_y + static_cast<i32>(row)));
+        }
+    }
+
     i32 screen_y = -(context.camera_y & 0x1f);
-    for (u32 row = 0; row < context.metrics.tile_rows; ++row) {
-        i32 tile_x = context.camera_x >> 5;
+    for (u32 row = 0; row < class_rows; ++row) {
         i32 screen_x = -(context.camera_x & 0x1f);
-        for (u32 col = 0; col < context.metrics.tile_columns; ++col) {
-            const u32 mask = ResolveGameplayFogBlockMask(*context.grid, tile_x, tile_y);
+        for (u32 col = 0; col < class_columns; ++col) {
+            const u32 mask = resolve_fog_mask_from_class_grid(
+                fog_classes, class_columns, class_rows,
+                context.metrics.tile_columns, context.metrics.tile_rows,
+                col, row);
             if (mask == 0x100) {
                 ClearGameplayFogBlock(context.target, screen_x, screen_y);
             } else if (mask != 0xff) {
                 DrawGameplayFogBlock(context, mask, screen_x, screen_y);
             }
-            ++tile_x;
             screen_x += static_cast<i32>(kGameplayFogBlockPixels);
         }
-        ++tile_y;
         screen_y += static_cast<i32>(kGameplayFogBlockPixels);
     }
 }
@@ -608,31 +855,9 @@ u32 BuildUnitOwnerVisibilityMaskPair(const PlayerSlotRuntimeState& players,
 
 void MarkVisibilityTileAtRadius(GameplayVisibilityContext& context,
     const GameplayVisibilityUnit& unit, u32 radius, i32 tile_x, i32 tile_y) {
-    if (context.grid == nullptr || !ensure_grid(*context.grid) ||
-        !tile_in_bounds(*context.grid, tile_x, tile_y)) {
-        return;
-    }
-
-    const u32 terrain_class = terrain_class_at(*context.grid, tile_x, tile_y);
-    if (terrain_class > unit.terrain_class) {
-        return;
-    }
-
-    const i32 center_x = static_cast<i32>(unit_center_tile_x(unit));
-    const i32 center_y = static_cast<i32>(unit_center_tile_y(unit));
-    if (octile_half_distance(tile_x - center_x, tile_y - center_y) >= radius) {
-        const u32 index = tile_index(*context.grid, tile_x, tile_y);
-        context.grid->current[index] |= unit.owner_visibility_mask & kGameplayVisibilityVisible;
-        return;
-    }
-
-    const u32 index = tile_index(*context.grid, tile_x, tile_y);
-    context.grid->owner[index] |= unit.owner_explore_mask;
-    context.grid->current[index] |= unit.owner_visibility_mask;
-    if ((unit.owner_visibility_mask & kGameplayVisibilityRevealed) != 0) {
-        context.grid->terrain_backup[index] = context.grid->terrain[index];
-        context.grid->previous[index] &= 0x07fc0000;
-        context.grid->previous[index] |= context.grid->current[index] & 0xf803ffff;
+    if (context.grid != nullptr && ensure_grid(*context.grid)) {
+        mark_visibility_tile_at_radius(context, unit,
+            static_cast<i32>(radius), tile_x, tile_y);
     }
 }
 

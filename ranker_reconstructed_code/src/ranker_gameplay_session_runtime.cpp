@@ -10,6 +10,8 @@
 namespace ranker {
 namespace {
 
+constexpr u32 kGameplayStartupPlacedUnitIdBase = 0x70000000u;
+
 bool slot_state_is_disabled(u8 state) {
     return state == static_cast<u8>(PlayerSlotState::disabled);
 }
@@ -38,6 +40,8 @@ void reset_non_owner_unit_runtime(UnitMovementUnit& unit) {
     unit.command_bits = {};
     unit.runtime_flags = 0;
     unit.previous_command_state = 0;
+    unit.cell_channel_additive_frame = 0;
+    unit.cell_flag40_animation_frame = 0;
     unit.deferred_command_state = 0;
     unit.command_entry_lockout_ticks = 0;
     unit.command_lockout_ticks = 0;
@@ -277,15 +281,17 @@ void place_starting_units(GameplaySessionStartupState& state,
             first_x, first_y)) {
         return;
     }
-    first_unit.id = static_cast<u32>(state.placed_units.size() + 1);
+    first_unit.id = kGameplayStartupPlacedUnitIdBase +
+        static_cast<u32>(state.placed_units.size() + 1);
     HandleUnitCreationRegisterFootprint(*state.lifecycle, first_unit);
+    first_unit.health = first_unit.max_health;
     state.placed_units.push_back(first_unit);
     if (state.callbacks.on_unit_placed != nullptr) {
         state.callbacks.on_unit_placed(state.placed_units.back());
     }
 
     if (owner == state.local_owner_id && state.callbacks.initialize_local_camera != nullptr) {
-        state.callbacks.initialize_local_camera(first_x, first_y);
+        state.callbacks.initialize_local_camera(first_unit.x, first_unit.y);
         state.local_camera_initialized = true;
     }
 
@@ -311,22 +317,25 @@ void place_starting_units(GameplaySessionStartupState& state,
         secondary_definition = &secondary_probe.definition;
     }
 
-    i32 x = slot.start_x + first_definition.startup_followup_offset.x;
+    i32 planned_x = slot.start_x + first_definition.startup_followup_offset.x;
     const i32 y = slot.start_y + first_definition.startup_followup_offset.y;
     i32 step_x = secondary_definition->startup_secondary_step_x + 2;
-    if (step_x == 2) {
-        step_x = 0x20;
-    }
 
     for (u32 index = 1; index < kGameplayStartupUnitsPerSlot; ++index) {
-        x += step_x;
+        // InitializePlacedUnitFromMapSlot may move its x/y reference to a
+        // nearby legal tile.  The original preserves the planned sequence
+        // coordinates across each call, so keep placement output separate.
+        planned_x += step_x;
+        i32 placed_x = planned_x;
+        i32 placed_y = y;
         UnitMovementUnit unit;
         if (!InitializePlacedUnitFromMapSlot(
                 *state.lifecycle, unit, slot.secondary_starting_unit_type,
-                owner, x, y)) {
+                owner, placed_x, placed_y)) {
             continue;
         }
-        unit.id = static_cast<u32>(state.placed_units.size() + 1);
+        unit.id = kGameplayStartupPlacedUnitIdBase +
+            static_cast<u32>(state.placed_units.size() + 1);
         state.placed_units.push_back(unit);
         if (state.callbacks.on_unit_placed != nullptr) {
             state.callbacks.on_unit_placed(state.placed_units.back());

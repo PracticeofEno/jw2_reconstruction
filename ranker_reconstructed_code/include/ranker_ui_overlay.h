@@ -228,6 +228,8 @@ struct UiOverlayCommandAction {
     u32 aux = 0;
     u32 flags = 0;
     u32 action = 0;
+    i32 world_x = 0;
+    i32 world_y = 0;
 };
 
 struct UiOverlayGroupedCommandGateDefinition {
@@ -290,6 +292,7 @@ struct UiOverlayState {
     u32 marker_resource_base = kInvalidResourceEntry;
     u32 glyph_resource_base = kInvalidResourceEntry;
     u32 digit_resource_base = kInvalidResourceEntry;
+    u32 command_ack_resource_base = kInvalidResourceEntry;
     u32 alternate_slot_a = 1;
     u32 alternate_slot_b = 1;
 
@@ -332,6 +335,7 @@ struct UiOverlayState {
 
     u32 screen_width = 800;
     u32 screen_height = 600;
+    u32 interface_theme_index = 0;
     u32 dynamic_icon_index = 0;
     u32 side_slot_index = 0;
     u32 current_icon_marker = 0;
@@ -434,6 +438,7 @@ struct UiOverlayState {
     u32 selected_unit_status_mask = 0;
     u32 selected_unit_command_bit_mask = 0;
     u32 selected_production_category = 0;
+    u32 staged_unit_action_id = 0xffffffffu;
     u32 replay_speed_index = 4;
     u32 last_hotkey_command = 0;
     u32 last_hotkey_aux = 0;
@@ -611,9 +616,9 @@ void DrawUiOverlayRectangleOutline(UiOverlayState& state, i32 left, i32 top,
     i32 width, i32 height, u16 color = 0xffff);
 void ClampCameraToMinimapPoint(UiOverlayState& state, i32 world_x, i32 world_y);
 void RenderGameplayResourceCounters(UiOverlayState& state);
-void StartGameplayHudPulse(UiOverlayState& state, i32 x, i32 y, u32 frame_counter);
+void StartGameplayHudPulse(UiOverlayState& state, i32 world_x, i32 world_y, u32 tick_ms);
 void StopGameplayHudPulse(UiOverlayState& state);
-void RenderGameplayHudPulse(UiOverlayState& state, u32 frame_counter);
+void RenderGameplayHudPulse(UiOverlayState& state, u32 tick_ms);
 void ConfigureGameplayUiOverlayLayout(UiOverlayState& state);
 void ResetUiOverlayCommandPanelState(UiOverlayState& state);
 bool HitTestUiOverlayHotRegion(UiOverlayState& state, i32 x, i32 y);

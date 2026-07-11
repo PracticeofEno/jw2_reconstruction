@@ -123,6 +123,9 @@ void build_player_controlled_relation_masks(PlayerSlotRuntimeState& state) {
         if (!slot_has_state(state, owner, PlayerSlotState::player_controlled)) {
             continue;
         }
+        // Original mode 1/5/6 behavior: the local active(0) slot keeps a zero
+        // relation mask while player-controlled(1) Computer slots share their
+        // bits with one another.  With one Computer this produces {0, 2}.
         for (u32 slot = 0; slot < kPlayerSlotCount; ++slot) {
             if (slot_has_state(state, slot, PlayerSlotState::player_controlled)) {
                 add_owner_slot_relation(state, owner, slot);
@@ -287,8 +290,14 @@ u32 TickTeamReserveRotationCountdown(PlayerSlotRuntimeState& state, u32 frame_co
 }
 
 void ResetPlayerSlotRelationMasks(PlayerSlotRuntimeState& state) {
-    state.owner_relation_masks.fill(0);
-    state.owner_visibility_masks.fill(0);
+    // Original startup clears each row and immediately BTS-sets that owner's
+    // own bit before applying team/Computer grouping rules (0x004d6fa0 and
+    // 0x004d6fb3).  Preserve those self bits across every mask rebuild.
+    for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+        const u32 bit = slot_bit(owner);
+        state.owner_relation_masks[owner] = bit;
+        state.owner_visibility_masks[owner] = bit;
+    }
     state.global_active_slot_mask = 0;
     state.local_observer_slot_mask = 0;
     state.local_observer_interaction_enabled = true;

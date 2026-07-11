@@ -107,6 +107,15 @@ bool bitmap_font_available(const TextFontDefinition& font) {
     return font.glyph_data != nullptr && font.height != 0 && font.row_stride != 0;
 }
 
+const u8* font_data_at(const TextFontDefinition& font, std::size_t offset,
+    std::size_t required_size) {
+    if (font.glyph_data == nullptr || offset > font.glyph_data_size ||
+        required_size > font.glyph_data_size - offset) {
+        return nullptr;
+    }
+    return font.glyph_data + offset;
+}
+
 u32 glyph_source_width(const TextFontDefinition& font, u8 ch) {
     if (font.flags == 2 || font.flags == 6) {
         return font.max_width;
@@ -333,22 +342,26 @@ const u8* packed_hangul_final_component(const TextFontDefinition& font, u8 final
 
 const u8* indexed_hangul_initial_component(const TextFontDefinition& font, u8 initial,
     u8 medial_variant) {
-    return font.glyph_data + static_cast<std::size_t>(medial_variant) * 0x1680u +
+    const std::size_t offset =
+        static_cast<std::size_t>(medial_variant) * 0x1680u +
         static_cast<std::size_t>(initial) * 0x120u;
+    return font_data_at(font, offset, 0x120u);
 }
 
 const u8* indexed_hangul_medial_component(const TextFontDefinition& font, u8 medial,
     u8 initial_variant) {
-    return font.glyph_data + 0xb400u +
+    const std::size_t offset = 0xb400u +
         static_cast<std::size_t>(initial_variant) * 0x18c0u +
         static_cast<std::size_t>(medial) * 0x120u;
+    return font_data_at(font, offset, 0x120u);
 }
 
 const u8* indexed_hangul_final_component(const TextFontDefinition& font, u8 final,
     u8 final_variant) {
-    return font.glyph_data + 0x11700u +
+    const std::size_t offset = 0x11700u +
         static_cast<std::size_t>(final_variant) * 0x1f80u +
         static_cast<std::size_t>(final) * 0x120u;
+    return font_data_at(font, offset, 0x120u);
 }
 
 bool draw_bitmap_glyph(u8 ch, u8 foreground, u8 background, i32 x, i32 y) {
@@ -595,12 +608,14 @@ void ResetTextRendererState() {
 }
 
 TextFontDefinition BuildTextFontDefinition(
-    u8 flags, u32 max_width, u32 height, const u8* glyph_data) {
+    u8 flags, u32 max_width, u32 height, const u8* glyph_data,
+    std::size_t glyph_data_size) {
     TextFontDefinition font{};
     font.flags = flags;
     font.max_width = max_width;
     font.height = height;
     font.glyph_data = glyph_data;
+    font.glyph_data_size = glyph_data_size;
 
     if ((flags & 8u) != 0) {
         return font;
@@ -630,8 +645,10 @@ TextFontDefinition BuildTextFontDefinition(
 }
 
 void RegisterTextFontDefinition(
-    u32 index, u8 flags, u32 max_width, u32 height, const u8* glyph_data) {
-    SetTextFontDefinition(index, BuildTextFontDefinition(flags, max_width, height, glyph_data));
+    u32 index, u8 flags, u32 max_width, u32 height, const u8* glyph_data,
+    std::size_t glyph_data_size) {
+    SetTextFontDefinition(index, BuildTextFontDefinition(
+        flags, max_width, height, glyph_data, glyph_data_size));
 }
 
 void SetTextFontDefinition(u32 index, const TextFontDefinition& font) {

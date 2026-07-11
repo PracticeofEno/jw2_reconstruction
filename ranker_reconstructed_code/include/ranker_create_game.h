@@ -154,7 +154,7 @@ struct CreateGameState {
     std::string last_message;
     int visible_rows = 12;
     int selected_entry_index = -1;
-    int game_type = 0;
+    int game_type = 1;
     int screen_size = 0;
     int avatar_level_start = 10;
     int avatar_level_end = 1;

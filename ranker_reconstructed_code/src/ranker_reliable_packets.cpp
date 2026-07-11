@@ -248,6 +248,44 @@ void CollectMode1Subtype10Value(const Mode1ReliablePacket& packet) {
     g_mode1_reliable_state.subtype10_counts[packet.channel] = count + 1;
 }
 
+u32 GetMode1ReliableChecksumAuthorityChannel() {
+    for (u32 channel = 0; channel < kMode1ReliableChannelCount; ++channel) {
+        if (is_active_player(channel)) {
+            return channel;
+        }
+    }
+    return g_mode1_reliable_state.local_player_index;
+}
+
+bool TryGetMode1ReliableAuthoritativeSubtype10Value(
+    u32 authority_channel, u32 local_channel, u32& out_value,
+    u32* out_fifo_index) {
+    if (authority_channel >= kMode1ReliableChannelCount ||
+        local_channel >= kMode1ReliableChannelCount ||
+        authority_channel == local_channel ||
+        !is_active_player(authority_channel)) {
+        return false;
+    }
+
+    // CollectMode1Subtype10Value and ShiftMode1Subtype10Values maintain one
+    // FIFO per player.  The original comparison at 0x004296F0 compares only
+    // FIFO[0], not the packet sequence or the frame field.  Before appending
+    // our next heartbeat, the current local count is therefore the exact
+    // ordinal at which the authority's corresponding value must be found.
+    const u32 fifo_index = g_mode1_reliable_state.subtype10_counts[local_channel];
+    if (fifo_index >= kMode1Subtype10ValueSlots ||
+        g_mode1_reliable_state.subtype10_counts[authority_channel] <= fifo_index) {
+        return false;
+    }
+
+    out_value =
+        g_mode1_reliable_state.subtype10_values[authority_channel][fifo_index];
+    if (out_fifo_index != nullptr) {
+        *out_fifo_index = fifo_index;
+    }
+    return true;
+}
+
 bool AcceptMode1OrderedPacket(const void* packet, u32 packet_size) {
     if (packet == nullptr || packet_size < 16) {
         return false;
@@ -426,6 +464,7 @@ u32 PumpMode1ReliablePackets(
     }
 
     if (g_mode1_reliable_state.local_broadcast_gate_open) {
+        g_mode1_reliable_state.compatibility_checksum_snapshot_deferred = false;
         invoke_simple_hook(g_mode1_reliable_state.callbacks.snapshot_local_checksum);
         if (g_mode1_reliable_state.local_broadcast_start <
             g_mode1_reliable_state.local_broadcast_end) {
@@ -434,7 +473,12 @@ u32 PumpMode1ReliablePackets(
             g_mode1_reliable_state.local_broadcast_start =
                 g_mode1_reliable_state.local_broadcast_end;
         }
-        g_mode1_reliable_state.local_broadcast_gate_open = false;
+        // A compatibility client can defer its heartbeat while the
+        // authoritative peer's matching FIFO value is still in flight.  It
+        // may still have published other packets above, so flush those, then
+        // leave this gate open to retry the checksum on the next pump.
+        g_mode1_reliable_state.local_broadcast_gate_open =
+            g_mode1_reliable_state.compatibility_checksum_snapshot_deferred;
     }
 
     if (!CheckMode1ReliableSync(now_ms)) {

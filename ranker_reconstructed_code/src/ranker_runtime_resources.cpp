@@ -21,7 +21,7 @@ constexpr u32 kInterfaceThemeRecordBase = 0x133;
 constexpr u32 kInterfaceThemeRecordStride = 8;
 constexpr u32 kUnitDefinitionImageCountOffset = 0x2214;
 constexpr u32 kUnitDefinitionSoundCountOffset = 0x2424;
-constexpr u32 kUnitDefinitionConstructionTimerOffset = 0x44;
+constexpr u32 kUnitDefinitionConstructionTimerOffset = 0x18c;
 constexpr u32 kSetupUnitResourcePackVariantBit = 0x20;
 constexpr std::size_t kUnitDefinitionAnimationFrameOffsetTableBase = 0x140c;
 constexpr std::size_t kUnitDefinitionAnimationFrameOffsetTableStride = 0x100;
@@ -1400,15 +1400,24 @@ bool LoadJw211RuntimeCatalog(const char* archive_name) {
     if (g_jw211_catalog.archive_name.empty()) {
         return false;
     }
+    append_runtime_resource_log("jw211 catalog begin count=%lu archive=%s",
+        static_cast<unsigned long>(kJw211RuntimeCatalogCount),
+        g_jw211_catalog.archive_name.c_str());
     for (u32 index = 0; index < kJw211RuntimeCatalogCount; ++index) {
         ServeMilesSound();
         if (!LoadJw211RuntimeCatalogRecord(g_jw211_catalog.archive_name.c_str(), index,
                 index)) {
+            append_runtime_resource_log(
+                "jw211 catalog record=%lu failed stage=%lu failure_record=%lu",
+                static_cast<unsigned long>(index),
+                static_cast<unsigned long>(g_jw211_catalog.last_failure.stage),
+                static_cast<unsigned long>(g_jw211_catalog.last_failure.record_index));
             g_jw211_catalog.loaded = false;
             return false;
         }
     }
     g_jw211_catalog.loaded = true;
+    append_runtime_resource_log("jw211 catalog ok");
     return true;
 }
 

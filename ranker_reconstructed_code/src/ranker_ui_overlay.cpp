@@ -394,6 +394,11 @@ bool draw_raw_command_icon_blit(
             const u32 source_x = source.half_sampled ? col * 2u : col;
             const u8 index =
                 frame[source_y * source.frame_width + source_x];
+            // Raw command-icon frames use palette index zero as the transparent
+            // token, just like the regular sprite and UI-screen blitters.
+            if (index == 0) {
+                continue;
+            }
             target.pixels[static_cast<std::size_t>(target_y) * target.stride_words +
                 static_cast<std::size_t>(target_x)] =
                 static_cast<u16>(source.palette[index] | mask);
@@ -964,8 +969,8 @@ bool can_capture_ui_command_button_press(
         (original_effective_hot_region_flags(region) & 0x36u) == 0;
 }
 
-void append_command_action(
-    UiOverlayState& state, u32 item_id, u32 aux, u32 action, u32 flags = 0) {
+void append_command_action_at_world(UiOverlayState& state, u32 item_id, u32 aux,
+    u32 action, u32 flags, i32 world_x, i32 world_y) {
     if (item_id == 0xffffffffu) {
         return;
     }
@@ -974,11 +979,19 @@ void append_command_action(
     command.aux = aux;
     command.flags = flags;
     command.action = action;
+    command.world_x = world_x;
+    command.world_y = world_y;
     state.command_actions.push_back(command);
     state.last_hotkey_command = item_id;
     state.last_hotkey_aux = aux;
     state.last_hotkey_flags = flags;
     state.pending_local_command = true;
+}
+
+void append_command_action(
+    UiOverlayState& state, u32 item_id, u32 aux, u32 action, u32 flags = 0) {
+    append_command_action_at_world(state, item_id, aux, action, flags,
+        state.camera_x + state.mouse_x, state.camera_y + state.mouse_y);
 }
 
 u32 hover_kind_for_command_item(u32 item_id) {
@@ -1344,7 +1357,74 @@ void InstallDefaultUiOverlayDispatchHandlers(UiOverlayState& state) {
     if (state.dispatch_handlers[0] != nullptr) {
         return;
     }
-    state.dispatch_handlers[0] = DrawUiOverlaySmallUnitIconRecord;
+    for (u32 id = 0; id < 0x60; ++id) {
+        state.dispatch_handlers[id] = DrawUiOverlaySmallUnitIconRecord;
+    }
+    for (u32 id = 0x60; id < 0xaa; ++id) {
+        state.dispatch_handlers[id] = DrawUiOverlayLargeUnitIconRecord;
+    }
+    for (u32 id = 0xaa; id < 0xd4; ++id) {
+        state.dispatch_handlers[id] = DrawUiOverlayUnitOrObjectIconRecord;
+    }
+    for (u32 id = 0xd4; id < 0xf4; ++id) {
+        state.dispatch_handlers[id] = DrawUiOverlayObjectIconRecord;
+    }
+    for (u32 id = 0xf4; id < 0x134; ++id) {
+        state.dispatch_handlers[id] = DrawUiOverlayProductionIconRecord;
+    }
+    for (u32 id = 0x134; id < 0x194; ++id) {
+        state.dispatch_handlers[id] = DrawUiOverlayEquipmentIconRecord;
+    }
+    for (u32 id = 0x24a; id <= 0x2df; ++id) {
+        state.dispatch_handlers[id] = DrawUiOverlayEquipmentIconRecord;
+    }
+    state.dispatch_handlers[0x194] =
+        [](UiOverlayState&, const UiOverlayDrawRecord& record) {
+            return DrawUiSmallSlot1(record.item_id);
+        };
+    state.dispatch_handlers[0x195] =
+        [](UiOverlayState&, const UiOverlayDrawRecord& record) {
+            return DrawUiSmallSlot2(record.item_id);
+        };
+    state.dispatch_handlers[0x196] =
+        [](UiOverlayState&, const UiOverlayDrawRecord& record) {
+            return DrawUiSmallSlot3(record.item_id);
+        };
+    state.dispatch_handlers[0x197] =
+        [](UiOverlayState&, const UiOverlayDrawRecord& record) {
+            return DrawUiLargeSlot0AndDetails(record.item_id);
+        };
+    state.dispatch_handlers[0x198] =
+        [](UiOverlayState&, const UiOverlayDrawRecord& record) {
+            return DrawUiLargeSlot3AndDetails(record.item_id);
+        };
+    state.dispatch_handlers[0x199] =
+        [](UiOverlayState&, const UiOverlayDrawRecord& record) {
+            return DrawUiLargeSlot6(record.item_id, record.flags);
+        };
+    state.dispatch_handlers[0x19a] =
+        [](UiOverlayState&, const UiOverlayDrawRecord& record) {
+            return DrawUiLargeSlot9(record.item_id, record.flags);
+        };
+    state.dispatch_handlers[0x19b] =
+        [](UiOverlayState&, const UiOverlayDrawRecord& record) {
+            return DrawUiLargeSlot12(record.flags);
+        };
+    state.dispatch_handlers[0x19c] =
+        [](UiOverlayState&, const UiOverlayDrawRecord& record) {
+            return DrawUiLargeSlot15(record.flags);
+        };
+    state.dispatch_handlers[0x1a6] =
+        [](UiOverlayState& overlay, const UiOverlayDrawRecord&) {
+            const i32 previous_x = overlay.large_slot_x;
+            const i32 previous_y = overlay.large_slot_y;
+            overlay.large_slot_x = overlay.wide_slot_bounds.x;
+            overlay.large_slot_y = overlay.wide_slot_bounds.y;
+            RenderSelectedUnitInfoPanel(overlay);
+            overlay.large_slot_x = previous_x;
+            overlay.large_slot_y = previous_y;
+            return true;
+        };
 }
 
 void RenderGameplayWorldAndUiOverlay(UiOverlayState& state) {
@@ -1424,9 +1504,18 @@ void QueueEquipmentDefinitionDynamicIconRecord(UiOverlayState& state, u32 object
     QueueUiOverlayDynamicIconRecord(state, object_id, aux, flags);
 }
 
+void append_fixed_interactive_record(
+    UiOverlayState& state, const UiOverlayDrawRecord& record) {
+    append_record(state, record);
+    const UiOverlayCommandOption* option = find_command_option(state, record.item_id);
+    append_hot_region(state, record, option != nullptr ? option->hotkey : 0,
+        option == nullptr || option->enabled);
+}
+
 void QueueUiOverlayManual26Record(UiOverlayState& state, u32 item_id, u32 aux,
     u32 flags, i32 x, i32 y) {
-    append_record(state, make_record(item_id, aux, flags, {x, y, 0x26, 0x26}, 0));
+    append_fixed_interactive_record(
+        state, make_record(item_id, aux, flags, {x, y, 0x26, 0x26}, 0));
 }
 
 void QueueUiOverlayManual26RecordAlternate(UiOverlayState& state, u32 item_id,
@@ -1436,7 +1525,8 @@ void QueueUiOverlayManual26RecordAlternate(UiOverlayState& state, u32 item_id,
 
 void QueueUiOverlayManual13Record(UiOverlayState& state, u32 item_id, u32 aux,
     u32 flags, i32 x, i32 y) {
-    append_record(state, make_record(item_id, aux, flags, {x, y, 0x13, 0x13}, 0));
+    append_fixed_interactive_record(
+        state, make_record(item_id, aux, flags, {x, y, 0x13, 0x13}, 0));
 }
 
 void QueueUiOverlayDynamicIconRecord(UiOverlayState& state, u32 item_id, u32 aux,
@@ -1456,56 +1546,56 @@ void QueueUiOverlayDynamicIconRecord(UiOverlayState& state, u32 item_id, u32 aux
 
 void QueueUiOverlaySmallSlot1Record(UiOverlayState& state, u32 item_id, u32 aux,
     u32 flags) {
-    append_record(state, make_record(item_id, aux, flags,
+    append_fixed_interactive_record(state, make_record(item_id, aux, flags,
         rect_or_default(state.small_slot1_bounds, 0x26, 0x26), 0));
 }
 
 void QueueUiOverlaySmallSlot2Record(UiOverlayState& state, u32 item_id, u32 aux,
     u32 flags) {
-    append_record(state, make_record(item_id, aux, flags,
+    append_fixed_interactive_record(state, make_record(item_id, aux, flags,
         rect_or_default(state.small_slot2_bounds, 0x26, 0x26), 0));
 }
 
 void QueueUiOverlaySmallSlot3Record(UiOverlayState& state, u32 item_id, u32 aux,
     u32 flags) {
-    append_record(state, make_record(item_id, aux, flags,
+    append_fixed_interactive_record(state, make_record(item_id, aux, flags,
         rect_or_default(state.small_slot3_bounds, 0x26, 0x26), 0));
 }
 
 void QueueUiOverlayLargeSlot0Record(UiOverlayState& state, u32 item_id, u32 aux,
     u32 flags) {
-    append_record(state, make_record(item_id, aux, flags,
+    append_fixed_interactive_record(state, make_record(item_id, aux, flags,
         rect_or_default(state.large_slot0_bounds, 0x32, 0x32), 0));
 }
 
 void QueueUiOverlayLargeSlot3Record(UiOverlayState& state, u32 item_id, u32 aux,
     u32 flags) {
-    append_record(state, make_record(item_id, aux, flags,
+    append_fixed_interactive_record(state, make_record(item_id, aux, flags,
         rect_or_default(state.large_slot3_bounds, 0x32, 0x32), 0));
 }
 
 void QueueUiOverlayLargeSlot6Record(UiOverlayState& state, u32 item_id, u32 aux,
     u32 flags) {
-    append_record(state, make_record(item_id, aux, flags,
+    append_fixed_interactive_record(state, make_record(item_id, aux, flags,
         rect_or_default(state.large_slot6_bounds, 0x32, 0x32), 0));
 }
 
 void QueueUiOverlayLargeSlot9Record(UiOverlayState& state, u32 item_id, u32 aux,
     u32 flags) {
-    append_record(state, make_record(item_id, aux, flags,
+    append_fixed_interactive_record(state, make_record(item_id, aux, flags,
         rect_or_default(state.large_slot9_bounds, 0x32, 0x32), 0));
 }
 
 void QueueUiOverlayLargeSlot12Record(UiOverlayState& state, u32 item_id, u32 aux,
     u32 flags) {
-    append_record(state, make_record(item_id, aux, flags,
+    append_fixed_interactive_record(state, make_record(item_id, aux, flags,
         rect_or_default(state.large_slot12_bounds, 0x32, 0x32), 0));
 }
 
 void QueueUiOverlayWideSlotRecord(UiOverlayState& state, u32 item_id, u32 aux,
     u32 flags) {
     state.current_record_size = 0x32;
-    append_record(state, make_record(item_id, aux, flags,
+    append_fixed_interactive_record(state, make_record(item_id, aux, flags,
         rect_or_default(state.wide_slot_bounds, 0x32, 0x32), 0));
     ++state.side_slot_index;
 }
@@ -1562,8 +1652,12 @@ bool DrawUiOverlayObjectIconRecord(UiOverlayState& state,
     adjusted.width = adjusted.height = 0x26;
     const bool disabled = (adjusted.flags & kUiOverlayFlagDisabled) != 0;
     const bool masked = !disabled && (adjusted.flags & 0x34u) != 0;
+    // FUN_004e102f normalizes the dispatch id before selecting magic.trt:
+    // ids 0xd4..0xf3 address frames 0..31, not frames 0xd4..0xf3.
+    const u32 magic_frame = adjusted.item_id >= 0xd4u ?
+        adjusted.item_id - 0xd4u : adjusted.item_id;
     return draw_record_command_icon_blit(state, adjusted,
-        UiOverlayIconBlitKind::object, adjusted.item_id, disabled, masked);
+        UiOverlayIconBlitKind::object, magic_frame, disabled, masked);
 }
 
 bool DrawUiOverlayUnitOrObjectIconRecord(UiOverlayState& state,
@@ -1575,17 +1669,19 @@ bool DrawUiOverlayUnitOrObjectIconRecord(UiOverlayState& state,
     if (adjusted.item_id == 0xc6 && adjusted.width != 0x26) {
         adjusted.width = adjusted.height = 0x32;
         return draw_record_command_icon_blit(state, adjusted,
-            UiOverlayIconBlitKind::base, adjusted.item_id);
+            UiOverlayIconBlitKind::base, 0xa9);
     }
     adjusted.width = adjusted.height = 0x26;
     const bool disabled = (adjusted.flags & kUiOverlayFlagDisabled) != 0;
     if (adjusted.item_id == 0xb5) {
         return draw_record_command_icon_blit(state, adjusted,
-            UiOverlayIconBlitKind::base, adjusted.item_id, disabled);
+            UiOverlayIconBlitKind::unit, adjusted.aux, disabled);
     }
     const bool masked = !disabled && (adjusted.flags & 0x34u) != 0;
+    const u32 action_frame = adjusted.item_id >= 0xaau ?
+        adjusted.item_id - 0xaau : adjusted.item_id;
     return draw_record_command_icon_blit(state, adjusted,
-        UiOverlayIconBlitKind::unit, adjusted.item_id, disabled, masked);
+        UiOverlayIconBlitKind::unit, action_frame, disabled, masked);
 }
 
 bool DrawUiOverlayEquipmentIconRecord(UiOverlayState& state,
@@ -1595,6 +1691,12 @@ bool DrawUiOverlayEquipmentIconRecord(UiOverlayState& state,
     }
     UiOverlayDrawRecord adjusted = record;
     adjusted.width = adjusted.height = 0x26;
+    if (adjusted.item_id >= 0x24au) {
+        // FUN_004e22d5 subtracts 0x24a and FUN_004e66c7 resolves the
+        // equipment definition's icon-frame field before indexing item.trt.
+        return draw_record_command_icon_blit(state, adjusted,
+            UiOverlayIconBlitKind::equipment, adjusted.item_id);
+    }
     const u32 entry_id = adjusted.item_id >= 0x134 ?
         adjusted.item_id - 0x134 : adjusted.item_id;
     if (!state.emit_sprite_draws) {
@@ -1618,8 +1720,11 @@ bool DrawUiOverlayProductionIconRecord(UiOverlayState& state,
     UiOverlayDrawRecord adjusted = selected_adjusted_record(state, record, false);
     adjusted.width = adjusted.height = 0x26;
     const bool disabled = (adjusted.flags & kUiOverlayFlagDisabled) != 0;
+    // FUN_004e1216 subtracts 0xf4 before indexing upgrade.trt.
+    const u32 production_frame = adjusted.item_id >= 0xf4u ?
+        adjusted.item_id - 0xf4u : adjusted.item_id;
     return draw_record_command_icon_blit(state, adjusted,
-        UiOverlayIconBlitKind::production, adjusted.item_id, disabled);
+        UiOverlayIconBlitKind::production, production_frame, disabled);
 }
 
 void BlitUiOverlayBaseIcon(UiOverlayState& state, u32 item_id, i32 x, i32 y) {
@@ -2116,46 +2221,58 @@ void RenderGameplayResourceCounters(UiOverlayState& state) {
         DrawResourceSpriteNormal(state.population_icon_entry,
             state.population_counter_x, state.population_counter_y);
     }
-    const u8 used_color = state.population_used < state.population_limit ? 9 : 1;
+    const u8 used_color =
+        (state.population_available < state.population_used ||
+            state.population_limit < state.population_used) ? 9 : 1;
     append_text(state, std::to_string(state.population_used),
         state.population_counter_x + 0x12, state.population_counter_y + 2,
         used_color);
     append_text(state, "/", state.population_counter_x + 0x31,
         state.population_counter_y + 2, 1);
-    const u8 available_color =
-        state.population_available < state.population_used ? 0x11 : 1;
-    append_text(state, std::to_string(state.population_available),
+    const bool available_capped =
+        state.population_limit < state.population_available;
+    const u8 available_color = available_capped ? 0x11 : 1;
+    const u32 displayed_available = available_capped ?
+        state.population_limit : state.population_available;
+    append_text(state, std::to_string(displayed_available),
         state.population_counter_x + 0x39, state.population_counter_y + 2,
         available_color);
 }
 
-void StartGameplayHudPulse(UiOverlayState& state, i32 x, i32 y, u32 frame_counter) {
+void StartGameplayHudPulse(UiOverlayState& state, i32 world_x, i32 world_y, u32 tick_ms) {
     state.hud_pulse_phase = 0;
-    state.hud_pulse_x = x;
-    state.hud_pulse_y = y;
-    state.hud_pulse_start_frame = frame_counter;
+    state.hud_pulse_x = world_x;
+    state.hud_pulse_y = world_y;
+    state.hud_pulse_start_frame = tick_ms;
 }
 
 void StopGameplayHudPulse(UiOverlayState& state) {
     state.hud_pulse_phase = 0x0f;
 }
 
-void RenderGameplayHudPulse(UiOverlayState& state, u32 frame_counter) {
+void RenderGameplayHudPulse(UiOverlayState& state, u32 tick_ms) {
     if (state.hud_pulse_phase >= 8) {
         return;
     }
+    const i32 screen_x = state.hud_pulse_x - state.camera_x;
+    const i32 screen_y = state.hud_pulse_y - state.camera_y;
     UiOverlayHudPulseCommand command{};
-    command.x = state.hud_pulse_x;
-    command.y = state.hud_pulse_y;
+    command.x = screen_x;
+    command.y = screen_y;
     command.phase = state.hud_pulse_phase;
-    command.frame_counter = frame_counter;
+    command.frame_counter = tick_ms;
     state.pulse_commands.push_back(command);
-    if (state.emit_sprite_draws && state.current_icon_marker != 0) {
-        DrawResourceSpriteNormal(state.current_icon_marker,
-            state.hud_pulse_x, state.hud_pulse_y);
+    if (state.emit_sprite_draws &&
+        state.command_ack_resource_base != kInvalidResourceEntry) {
+        // FUN_004e2b61 indexes DAT_0086351c[phase] (0..7) from the
+        // nine-image JW2_02 record-0x12a sequence.  Active phases are
+        // 0, 2, 4 and 6.
+        DrawResourceSpriteNormal(
+            state.command_ack_resource_base + state.hud_pulse_phase,
+            screen_x, screen_y);
     }
-    if (frame_counter != state.hud_pulse_start_frame) {
-        state.hud_pulse_start_frame = frame_counter;
+    if (tick_ms != state.hud_pulse_start_frame) {
+        state.hud_pulse_start_frame = tick_ms;
         state.hud_pulse_phase += 2;
     }
 }
@@ -2164,6 +2281,84 @@ void ConfigureGameplayUiOverlayLayout(UiOverlayState& state) {
     state.screen_layout_bucket = 0;
     if (state.screen_width != 0x280) {
         state.screen_layout_bucket = state.screen_width == 800 ? 1 : 2;
+    }
+
+    if (state.screen_layout_bucket == 1) {
+        // Original 800x600 layout table initialized by FUN_004e2bb7.
+        constexpr std::array<UiOverlayRect, 4> kSmallSlot1{{
+            {460, 464, 81, 31}, {460, 467, 84, 29},
+            {467, 467, 80, 27}, {457, 468, 86, 26},
+        }};
+        constexpr std::array<UiOverlayRect, 4> kSmallSlot2{{
+            {273, 464, 40, 31}, {273, 466, 41, 30},
+            {276, 467, 29, 27}, {269, 468, 39, 26},
+        }};
+        constexpr std::array<UiOverlayRect, 4> kSmallSlot3{{
+            {230, 464, 36, 31}, {229, 467, 39, 29},
+            {227, 467, 44, 27}, {227, 468, 38, 26},
+        }};
+        const u32 theme = std::min<u32>(state.interface_theme_index, 3);
+        state.small_slot1_bounds = kSmallSlot1[theme];
+        state.small_slot2_bounds = kSmallSlot2[theme];
+        state.small_slot3_bounds = kSmallSlot3[theme];
+        state.small_slot1_x = state.small_slot1_bounds.x;
+        state.small_slot1_y = state.small_slot1_bounds.y;
+        state.small_slot2_x = state.small_slot2_bounds.x;
+        state.small_slot2_y = state.small_slot2_bounds.y;
+        state.small_slot3_x = state.small_slot3_bounds.x;
+        state.small_slot3_y = state.small_slot3_bounds.y;
+        state.large_slot_x = 570;
+        state.large_slot_y = 450;
+        state.large_slot3_x = 616;
+        state.large_slot3_y = 450;
+        state.large_slot4_x = 662;
+        state.large_slot4_y = 450;
+        state.large_slot5_x = 708;
+        state.large_slot5_y = 450;
+        state.large_slot6_x = 754;
+        state.large_slot6_y = 450;
+        state.large_slot0_bounds = {570, 450, 38, 38};
+        state.large_slot3_bounds = {616, 450, 38, 38};
+        state.large_slot6_bounds = {662, 450, 38, 38};
+        state.large_slot9_bounds = {708, 450, 38, 38};
+        state.large_slot12_bounds = {754, 450, 38, 38};
+        constexpr std::array<UiOverlayRect, 16> kDynamicIconBounds{{
+            {464, 513, 38, 38}, {505, 513, 38, 38},
+            {546, 513, 38, 38}, {587, 513, 38, 38},
+            {628, 513, 38, 38}, {669, 513, 38, 38},
+            {710, 513, 38, 38}, {751, 513, 38, 38},
+            {464, 554, 38, 38}, {505, 554, 38, 38},
+            {546, 554, 38, 38}, {587, 554, 38, 38},
+            {628, 554, 38, 38}, {669, 554, 38, 38},
+            {710, 554, 38, 38}, {751, 554, 38, 38},
+        }};
+        state.dynamic_icon_bounds = kDynamicIconBounds;
+        constexpr std::array<UiOverlayRect, 6> kCommandSlotBounds{{
+            {468, 530, 50, 50}, {521, 530, 50, 50},
+            {574, 530, 50, 50}, {627, 530, 50, 50},
+            {680, 530, 50, 50}, {733, 530, 50, 50},
+        }};
+        for (std::size_t i = 0; i < kCommandSlotBounds.size(); ++i) {
+            state.command_slot_bounds[i] = kCommandSlotBounds[i];
+        }
+        constexpr std::array<UiOverlayRect, 14> kSideSlotBounds{{
+            {15, 513, 38, 38}, {15, 554, 38, 38},
+            {56, 513, 38, 38}, {56, 554, 38, 38},
+            {97, 513, 38, 38}, {97, 554, 38, 38},
+            {138, 513, 38, 38}, {138, 554, 38, 38},
+            {179, 513, 38, 38}, {179, 554, 38, 38},
+            {220, 513, 38, 38}, {220, 554, 38, 38},
+            {261, 513, 38, 38}, {261, 554, 38, 38},
+        }};
+        state.side_slot_bounds.fill({});
+        std::copy(kSideSlotBounds.begin(), kSideSlotBounds.end(),
+            state.side_slot_bounds.begin());
+        state.indexed_slot_bounds = {
+            {84, 537, 38, 38}, {132, 549, 38, 38},
+            {175, 549, 38, 38}, {218, 549, 38, 38},
+            {261, 549, 38, 38},
+        };
+        state.wide_slot_bounds = {19, 518, 50, 50};
     }
 
     state.minimap.map_width_tiles = minimap_width_tiles(state);
@@ -2220,9 +2415,6 @@ void ResetUiOverlayCommandPanelState(UiOverlayState& state) {
     state.command_icon_marker = 0;
     state.dynamic_icon_index = 0;
     state.side_slot_index = 0;
-    state.selected_unit_capability_mask = 0;
-    state.selected_unit_status_mask = 0;
-    state.selected_unit_command_bit_mask = 0;
     state.selected_production_gate_masks = {};
     state.selected_production_class_counts = {};
     state.last_hotkey_command = 0;
@@ -2307,13 +2499,17 @@ void BuildSelectedUnitCommandPanel(UiOverlayState& state) {
     QueueSelectedUnitCurrentOrderButtons(state);
     if (state.placement_mode != 0) {
         state.command_slot_size = 0x32;
-        AppendUiOverlayCommandSlot(state, state.placement_mode, 0, 0);
+        AppendUiOverlayCommandSlot(state, 0xc6u, 0, 0);
         return;
     }
     if (state.selected_unit_count == 0) {
         return;
     }
-    if (state.selected_unit_count > 1 || state.selected_unit_type < 0x60) {
+    if (state.selected_unit_count == 1) {
+        QueueUiOverlayWideSlotRecord(
+            state, 0x1a6, state.selected_unit_id, 0);
+    }
+    if (state.selected_unit_type < 0x60) {
         BuildMultiSelectedUnitCommandPanel(state);
         return;
     }
@@ -2410,51 +2606,79 @@ void QueueDefaultGameplayCommandSlots(UiOverlayState& state) {
     }
 }
 
+void QueueSelectedUnitCoreActionButtons(UiOverlayState& state) {
+    const u32 mask = state.selected_unit_command_bit_mask;
+    if (state.selected_unit_type >= 0x60u) {
+        if ((mask & 0x20u) != 0) {
+            QueueUiOverlayCommandRecordByItemId(state, 0xafu, 0, 0);
+        }
+        if ((mask & 0x01u) != 0) {
+            QueueUiOverlayCommandRecordByItemId(state, 0xaau, 0, 0);
+        }
+        return;
+    }
+
+    if ((mask & 0x20u) != 0) {
+        QueueUiOverlayCommandRecordByItemId(state, 0xafu, 0, 0);
+        QueueUiOverlayCommandRecordByItemId(state, 0xb7u, 0, 0);
+    }
+    if ((mask & 0x200u) != 0) {
+        QueueUiOverlayCommandRecordByItemId(state, 0xb3u, 0, 0);
+    }
+    if ((mask & 0x01u) != 0) {
+        QueueUiOverlayCommandRecordByItemId(state, 0xaau, 0, 0);
+    }
+    QueueUiOverlayCommandRecordByItemId(state, 0xcbu, 0, 0);
+    QueueUiOverlayCommandRecordByItemId(state,
+        (mask & 0x10u) != 0 ? 0xaeu : 0xc8u, 0, kUiOverlayFlagHidden);
+    if ((mask & 0x40000u) != 0) {
+        QueueUiOverlayCommandRecordByItemId(state, 0xbcu, 0, 0);
+        QueueUiOverlayCommandRecordByItemId(state, 0xd0u, 0, 0);
+    }
+    if ((mask & 0x80000u) != 0) {
+        QueueUiOverlayCommandRecordByItemId(state, 0xbdu, 0, 0);
+        QueueUiOverlayCommandRecordByItemId(state, 0xd1u, 0, 0);
+    }
+    if ((mask & 0x100000u) != 0) {
+        QueueUiOverlayCommandRecordByItemId(state, 0xbeu, 0, 0);
+        QueueUiOverlayCommandRecordByItemId(state, 0xd2u, 0, 0);
+    }
+    if ((mask & 0x200000u) != 0) {
+        QueueUiOverlayCommandRecordByItemId(state, 0xbfu, 0, 0);
+        QueueUiOverlayCommandRecordByItemId(state, 0xd3u, 0, 0);
+    }
+    if ((mask & 0x20000u) != 0) {
+        QueueUiOverlayCommandRecordByItemId(state, 0xbbu, 0, 0);
+    }
+    if ((mask & 0x08000000u) != 0) {
+        QueueUiOverlayCommandRecordByItemId(state, 0xc5u, 0, 0);
+    }
+    QueueGroupedSpecialUnitCommands(state);
+    if ((state.selected_unit_command_flags & 0x800u) != 0) {
+        QueueUiOverlayCommandRecordByItemId(state, 0xf3u, 0, 0);
+    }
+    if ((mask & 0x400u) != 0) {
+        QueueUiOverlayCommandRecordByItemId(state, 0xb4u, 0, 0);
+        QueueUiOverlayCommandRecordByItemId(state, 0xceu, 0, 0);
+    }
+}
+
 void BuildMultiSelectedUnitCommandPanel(UiOverlayState& state) {
     state.command_slot_size = 0x26;
     CollectSelectedUnitProductionActionMasks(state);
-    QueueGroupedSpecialUnitCommands(state);
     if (selected_production_category_active(state)) {
         QueueProductionClassButtonsForSelectedUnit(
             state, selected_production_category_index(state));
         return;
     }
-    if (state.command_options.empty()) {
-        for (u32 bit = 0; bit < 32; ++bit) {
-            u32 flags = 0;
-            if (production_action_gate_flags(state, bit, flags)) {
-                QueueUiOverlayCommandRecordByItemId(state, 0xd4 + bit, 0, flags);
-            }
-        }
-        PadUiOverlayLargeCommandSlots(state);
-        return;
-    }
-    for (const UiOverlayCommandOption& option : state.command_options) {
-        if (!option.enabled) {
-            continue;
-        }
-        const bool selected_action =
-            option.item_id < 0x60 || (option.item_id >= 0xd4 && option.item_id <= 0xf3);
-        const bool selected_equipment =
-            option.item_id >= 0x134 && option.item_id <= 0x193;
-        if (selected_action || selected_equipment) {
-            u32 flags = option.flags;
-            if (option.item_id >= 0xd4 && option.item_id <= 0xf3) {
-                u32 gate_flags = 0;
-                if (production_action_gate_flags(
-                        state, option.item_id - 0xd4, gate_flags)) {
-                    flags |= gate_flags;
-                }
-            }
-            QueueUiOverlayCommandRecordByItemId(state, option.item_id, option.aux,
-                flags);
-        }
-    }
+    QueueSelectedUnitCoreActionButtons(state);
     QueueAvailableProductionClassButtons(state);
-    PadUiOverlayLargeCommandSlots(state);
 }
 
 void QueueAvailableProductionClassButtons(UiOverlayState& state) {
+    if ((state.selected_unit_command_bit_mask & 0x40u) == 0) {
+        return;
+    }
     for (u32 category = 0; category < state.selected_production_class_counts.size();
          ++category) {
         if (state.selected_production_class_counts[category] != 0) {
@@ -2480,14 +2704,27 @@ void QueueProductionClassButtonsForSelectedUnit(UiOverlayState& state, u32 categ
 
 void BuildSingleSelectedUnitCommandPanel(UiOverlayState& state) {
     state.command_slot_size = 0x26;
+    CollectSelectedUnitProductionActionMasks(state);
+    QueueSelectedUnitCoreActionButtons(state);
+    bool queued_production_reference = false;
     for (const UiOverlayCommandOption& option : state.command_options) {
-        if (option.enabled) {
-            QueueUiOverlayCommandRecordByItemId(state, option.item_id,
-                option.aux, option.flags);
+        if (!option.enabled || option.item_id >= 0xaau) {
+            continue;
         }
+        QueueUiOverlayCommandRecordByItemId(
+            state, option.item_id, option.aux, option.flags);
+        queued_production_reference = true;
     }
-    QueueAvailableProductionClassButtons(state);
-    PadUiOverlayLargeCommandSlots(state);
+    if (queued_production_reference) {
+        QueueUiOverlayCommandRecordByItemId(state, 0xc9u, 0, 0);
+    }
+    for (const UiOverlayCommandOption& option : state.command_options) {
+        if (!option.enabled || option.item_id < 0xaau) {
+            continue;
+        }
+        QueueUiOverlayCommandRecordByItemId(
+            state, option.item_id, option.aux, option.flags);
+    }
 }
 
 bool FindOwnerTransportAttachmentUnit(const UiOverlayState& state, u32 owner_id,
@@ -2513,9 +2750,7 @@ bool FindOwnerCarrierLinkedToSlot(const UiOverlayState& state, u32 owner_id,
 }
 
 void PadUiOverlayLargeCommandSlots(UiOverlayState& state) {
-    while (state.command_slot_count < 8) {
-        AppendUiOverlayCommandSlot(state, 0, 0, kUiOverlayFlagHidden);
-    }
+    (void)state;
 }
 
 void QueueSelectedUnitCurrentOrderButtons(UiOverlayState& state) {
@@ -2835,6 +3070,7 @@ void ToggleMinimapModeAndPersistSetup(UiOverlayState& state) {
 void CancelCurrentUiModeOrActivateCommand(UiOverlayState& state, u32 command_id) {
     if (state.placement_mode != 0) {
         state.placement_mode = 0;
+        state.staged_unit_action_id = 0xffffffffu;
         state.selected_production_category = 0;
         state.command_slot_count = 0;
         if (state.callbacks.play_click_sound != nullptr) {
@@ -2941,6 +3177,24 @@ void AssignSelectedUnitsToControlGroup(UiOverlayState& state, u32 group) {
     if (state.selected_unit_id == 0 ||
         state.selected_unit_owner != state.local_player_slot) {
         return;
+    }
+
+    // The original stores one low-nibble control-group id on each unit.  A
+    // group assignment replaces the target group and moves the selected units
+    // out of every other group instead of allowing duplicate membership.
+    state.control_groups[group].unit_ids.clear();
+    for (u32 other_group = 1; other_group < state.control_groups.size();
+         ++other_group) {
+        if (other_group == group) {
+            continue;
+        }
+        auto& unit_ids = state.control_groups[other_group].unit_ids;
+        unit_ids.erase(std::remove_if(unit_ids.begin(), unit_ids.end(),
+            [&](u32 unit_id) {
+                return std::find(state.selected_unit_ids.begin(),
+                           state.selected_unit_ids.end(), unit_id) !=
+                    state.selected_unit_ids.end();
+            }), unit_ids.end());
     }
     state.control_groups[group].unit_ids = state.selected_unit_ids;
 }
@@ -3382,12 +3636,42 @@ void HandleGameplayPointerActionFrame(UiOverlayState& state) {
 
     if ((state.pointer_state & kPointerPress) != 0) {
         BeginUiCommandButtonPress(state);
-        if (state.pressed_command_id == 0xffffffffu &&
-            !CheckPointerInsideMinimapAndPlacementMode(state) &&
-            !CheckUiOverlayIconMaskPixel(state, state.mouse_x, state.mouse_y)) {
-            state.selection_rectangle_active = true;
-            state.selection_left = state.selection_right = state.mouse_x;
-            state.selection_top = state.selection_bottom = state.mouse_y;
+        if (state.pressed_command_id == 0xffffffffu) {
+            const bool over_hud =
+                CheckUiOverlayIconMaskPixel(state, state.mouse_x, state.mouse_y);
+            if (state.placement_mode == 6 &&
+                !CheckMouseInsideMinimap(state) && !over_hud) {
+                // A mobile unit's build icon stores (unit_type - 0x60) in the
+                // placement definition.  Route the map click through original
+                // object action 6 so the lockstep command contains the chosen
+                // building index and placement point.
+                append_command_action(state, 0xaau + 6u,
+                    state.placement_definition_id, kCommandActionPlacement);
+                StartGameplayHudPulse(state,
+                    state.camera_x + state.mouse_x,
+                    state.camera_y + state.mouse_y,
+                    state.current_tick_ms);
+                state.pending_local_command = true;
+            }
+            else if (state.staged_unit_action_id != 0xffffffffu &&
+                !CheckMouseInsideMinimap(state) && !over_hud) {
+                const u32 action_id = state.staged_unit_action_id;
+                append_command_action(state, 0xaau + action_id, 0,
+                    kCommandActionPlacement);
+                StartGameplayHudPulse(state,
+                    state.camera_x + state.mouse_x,
+                    state.camera_y + state.mouse_y,
+                    state.current_tick_ms);
+                state.staged_unit_action_id = 0xffffffffu;
+                state.placement_mode = 0;
+                state.pending_local_command = true;
+            }
+            else if (!CheckPointerInsideMinimapAndPlacementMode(state) &&
+                !over_hud) {
+                state.selection_rectangle_active = true;
+                state.selection_left = state.selection_right = state.mouse_x;
+                state.selection_top = state.selection_bottom = state.mouse_y;
+            }
         }
     }
 
@@ -3420,7 +3704,18 @@ void HandleGameplayPointerActionFrame(UiOverlayState& state) {
     if ((state.pointer_state & kPointerHoldPress) != 0) {
         BeginUiCommandButtonHold(state);
         if (state.held_command_id == 0xffffffffu) {
-            CheckPointerInsideMinimapForAction(state);
+            const bool minimap_action = CheckPointerInsideMinimapForAction(state);
+            if (!minimap_action &&
+                !CheckUiOverlayIconMaskPixel(state, state.mouse_x, state.mouse_y) &&
+                state.selected_unit_count != 0) {
+                append_command_action(state, 0xaeu, 0,
+                    kCommandActionPlacement);
+                StartGameplayHudPulse(state,
+                    state.camera_x + state.mouse_x,
+                    state.camera_y + state.mouse_y,
+                    state.current_tick_ms);
+                state.pending_local_command = true;
+            }
         }
     }
 
@@ -3447,8 +3742,8 @@ void DispatchGameplayPointerUnitCommand(UiOverlayState& state, u32 command_id) {
 
     append_command_action(state, command_id, state.hover_context.unit_id,
         kCommandActionClick);
-    StartGameplayHudPulse(state, state.hover_context.x - state.camera_x,
-        state.hover_context.y - state.camera_y, state.current_frame_counter);
+    StartGameplayHudPulse(state, state.hover_context.x,
+        state.hover_context.y, state.current_tick_ms);
 }
 
 void DispatchGameplayPointerTerrainCommand(UiOverlayState& state, u32 command_id) {
@@ -3469,8 +3764,8 @@ void DispatchGameplayPointerTerrainCommand(UiOverlayState& state, u32 command_id
         (static_cast<u32>(state.hover_context.x) & 0xffffu);
     append_command_action(state, command_id,
         packed_tile, kCommandActionClick);
-    StartGameplayHudPulse(state, state.mouse_x, state.mouse_y,
-        state.current_frame_counter);
+    StartGameplayHudPulse(state, world_x, world_y,
+        state.current_tick_ms);
 }
 
 void NoOpGameplayPointerCommandHandler(UiOverlayState&) {
@@ -3566,9 +3861,20 @@ bool CheckPointerInsideMinimapAndPlacementMode(UiOverlayState& state) {
     if (!CheckMouseInsideMinimap(state)) {
         return false;
     }
+    const i32 local_x = state.mouse_x - state.minimap.output_x;
+    const i32 local_y = state.mouse_y - state.minimap.output_y;
+    const i32 world_x = MinimapScreenToWorldX(state.minimap, local_x);
+    const i32 world_y = MinimapScreenToWorldY(state.minimap, local_y);
+    if (state.staged_unit_action_id != 0xffffffffu) {
+        append_command_action_at_world(state,
+            0xaau + state.staged_unit_action_id, 0,
+            kCommandActionPlacement, 0, world_x, world_y);
+        return true;
+    }
     if (state.placement_mode != 0 && state.placement_mode != 6) {
-        append_command_action(state, state.placement_mode,
-            state.placement_definition_id, kCommandActionPlacement);
+        append_command_action_at_world(state, state.placement_mode,
+            state.placement_definition_id, kCommandActionPlacement, 0,
+            world_x, world_y);
         return true;
     }
     state.pointer_state |= kPointerMinimapDrag;
@@ -3586,8 +3892,11 @@ bool CheckPointerInsideMinimapForAction(UiOverlayState& state) {
     state.hover_context.kind = 1;
     state.hover_context.x = MinimapScreenToWorldX(state.minimap, local_x);
     state.hover_context.y = MinimapScreenToWorldY(state.minimap, local_y);
-    append_command_action(state, state.selected_unit_id,
-        state.hover_context.item_id, kCommandActionMinimap);
+    if (state.selected_unit_count != 0) {
+        append_command_action_at_world(state, 0xaeu, 0,
+            kCommandActionPlacement, 0,
+            state.hover_context.x, state.hover_context.y);
+    }
     return true;
 }
 
@@ -3623,6 +3932,7 @@ void DispatchUiOverlayHeldCommandAction(UiOverlayState& state, u32 item_id) {
 
 void ResetGameplaySelectionState(UiOverlayState& state) {
     ResetUiOverlayCommandPanelState(state);
+    state.staged_unit_action_id = 0xffffffffu;
     state.selected_unit_ids.clear();
     state.selected_unit_id = 0;
     state.selected_unit_type = 0;

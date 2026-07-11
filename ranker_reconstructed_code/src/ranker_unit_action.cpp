@@ -587,7 +587,7 @@ GameplayVisibilityUnit visibility_unit_from_effect_unit(
     GameplayVisibilityUnit visibility{};
     visibility.owner_id = unit.owner_id;
     visibility.type_id = unit.type_id;
-    visibility.variant = unit.production_variant;
+    visibility.variant = unit.action_mode_gate;
     visibility.runtime_flags = unit.runtime_flags;
     visibility.state_flags = unit.command_state | unit.command_flags;
     visibility.owner_visibility_mask =
@@ -605,8 +605,11 @@ GameplayVisibilityUnit visibility_unit_from_effect_unit(
         (unit.definition.center_bounds_height >> 1);
     visibility.visibility_probe_x = unit.x;
     visibility.visibility_probe_y = unit.y;
-    visibility.owner_layer_probe_x = unit.x & ~0x1f;
-    visibility.owner_layer_probe_y = unit.y & ~0x1f;
+    visibility.owner_layer_probe_x = unit.current_cell_x;
+    visibility.owner_layer_probe_y = unit.current_cell_y;
+    visibility.terrain_probe_x = unit.current_cell_x;
+    visibility.terrain_probe_y = unit.current_cell_y;
+    visibility.terrain_probe_valid = true;
     return visibility;
 }
 
@@ -1065,7 +1068,7 @@ bool chain_candidate_visible_to_source_owner(const UnitEffectRuntimeState& state
         *state.visibility_grid, visibility, source.owner_id);
 }
 
-bool effect_uses_zero_reach_tick(u32 effect_id) {
+bool effect_uses_zero_reach_frame(u32 effect_id) {
     return effect_id == 0x14 || effect_id == 0x17 ||
         effect_id == 0x27 || effect_id == 0x28 || effect_id == 0x2c;
 }
@@ -1597,7 +1600,12 @@ void TickUnitEffectPathActive(UnitEffectRuntimeState& state, UnitEffectRuntime& 
     }
 
     const bool chain_path_active = effect.effect_id == 0x17;
-    if (effect.tick == 0 && !chain_path_active) {
+    // The original generic low-id effect path (0x004ec785) consumes the
+    // remaining path budget stored at effect + 0x10.  InitializeUnitEffectPathToTarget
+    // mirrors that field in `range`; `tick` mirrors a separate render timer and
+    // starts at zero.  Consuming `tick` here therefore discarded every ordinary
+    // projectile before its first movement step.
+    if (effect.range == 0 && !chain_path_active) {
         finish_effect(state, effect);
         return;
     }
@@ -1612,9 +1620,9 @@ void TickUnitEffectPathActive(UnitEffectRuntimeState& state, UnitEffectRuntime& 
     }
 
     for (u32 index = 0; index < definition->active_step_iterations; ++index) {
-        if (!chain_path_active && effect.tick != 0) {
-            --effect.tick;
-            if (effect.tick == 0) {
+        if (!chain_path_active && effect.range != 0) {
+            --effect.range;
+            if (effect.range == 0) {
                 finish_effect(state, effect);
                 return;
             }
@@ -1631,8 +1639,11 @@ void TickUnitEffectPathActive(UnitEffectRuntimeState& state, UnitEffectRuntime& 
         }
         AdvanceUnitEffectProjectileTowardTarget(state, effect);
         if ((effect.flags & kUnitEffectFlagImpact) != 0) {
-            effect.frame = 0;
-            effect.tick = effect_uses_zero_reach_tick(effect.effect_id) ? 0 : 1;
+            // Original 0x004ec813 seeds the generic impact animation at frame
+            // one; the handful of specialized path handlers seed frame zero.
+            // This is the +0x0c animation-frame field, not the path budget.
+            effect.frame = effect_uses_zero_reach_frame(effect.effect_id) ? 0 : 1;
+            effect.tick = 0;
             UnitMovementUnit* target = find_effect_unit(state, effect.target_unit_id);
             if (target == nullptr ||
                 (target->runtime_flags & kUnitActionTargetTransient) != 0) {

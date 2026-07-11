@@ -186,6 +186,7 @@ struct LinkLobbyState {
     std::array<u8, kLinkLobbyAvatarCount> tribe_choices{};
     std::array<SOCKET, kLinkLobbyAvatarCount> player_sockets{};
     std::array<sockaddr_in, kLinkLobbyAvatarCount> udp_peer_addresses{};
+    sockaddr_in local_udp_reflexive_address{};
     std::array<std::array<char, 0x10>, kLinkLobbyAvatarCount> primary_peer_hosts{};
     std::array<std::array<char, 0x10>, kLinkLobbyAvatarCount> secondary_peer_hosts{};
     std::array<u16, kLinkLobbyAvatarCount> primary_peer_ports{};
@@ -236,6 +237,8 @@ struct LinkLobbyState {
     bool start_sync_complete = false;
     bool secondary_start_sync_required = false;
     bool directplay_join_disabled = false;
+    bool udp_probe_route_toggle = false;
+    bool local_udp_reflexive_address_valid = false;
     int map_download_state = 0;
     int last_map_download_progress_value = -1;
     u32 map_download_received_bytes = 0;
@@ -413,6 +416,7 @@ void ApplyLinkLobbySessionSeedPacket(LinkLobbyState& state, const void* packet,
     std::size_t byte_count);
 void ApplyLinkLobbyPlayerPresencePacket(LinkLobbyState& state, const void* packet,
     std::size_t byte_count);
+void SetLinkLobbyLocalPlayerIdentity(LinkLobbyState& state, const char* player_name);
 void BeginLinkLobbyPeerRouteSync(LinkLobbyState& state, const void* packet,
     std::size_t byte_count);
 void ApplyLinkLobbyPeerRoutePacket(LinkLobbyState& state, const void* packet,

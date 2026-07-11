@@ -866,12 +866,15 @@ bool LoadWizardSessionArchiveDescriptor(WizardSessionArchiveDescriptor& descript
         std::memcpy(descriptor.description.data(),
             descriptor.raw_summary_record.data() + 0x20, description_bytes);
     }
-    descriptor.terrain_type = read_le32(descriptor.raw_summary_record, 0x160);
-    descriptor.map_width = read_le32(descriptor.raw_summary_record, 0x164);
-    descriptor.map_height = read_le32(descriptor.raw_summary_record, 0x168);
-    descriptor.session_game_type = read_le32(descriptor.raw_summary_record, 0x16c);
-    if (descriptor.raw_summary_record.size() > 0x174) {
-        descriptor.player_count = descriptor.raw_summary_record[0x174];
+    if (descriptor.raw_summary_record.size() >= 0x170) {
+        descriptor.terrain_type = read_le32(descriptor.raw_summary_record, 0x160);
+        descriptor.map_width = read_le32(descriptor.raw_summary_record, 0x164);
+        descriptor.map_height = read_le32(descriptor.raw_summary_record, 0x168);
+        descriptor.session_game_type = read_le32(descriptor.raw_summary_record, 0x16c);
+    }
+    if (descriptor.raw_mode_record.size() >= 8) {
+        descriptor.player_count = static_cast<u8>(
+            read_le32(descriptor.raw_mode_record, 4));
     }
     WIN32_FILE_ATTRIBUTE_DATA file_data{};
     if (GetFileAttributesExA(archive_name, GetFileExInfoStandard, &file_data)) {

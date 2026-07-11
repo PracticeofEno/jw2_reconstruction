@@ -7,11 +7,13 @@
 #include "ranker_gameplay_sound.h"
 #include "ranker_network.h"
 #include "ranker_online_dialogs.h"
+#include "ranker_p2p_lobby.h"
 #include "ranker_text_tables.h"
 #include "ranker_trc.h"
 #include "ranker_winmain.h"
 
 #include <algorithm>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -48,6 +50,8 @@ constexpr COLORREF kLinkHostCancelRed = RGB(250, 20, 20);
 constexpr COLORREF kLinkDisconnectYellow = RGB(250, 250, 0);
 constexpr COLORREF kLinkMapWaiterYellow = RGB(250, 250, 10);
 constexpr COLORREF kLinkBlack = RGB(0, 0, 0);
+constexpr UINT kLinkLobbyTabTextFlags =
+    DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS | DT_MODIFYSTRING;
 constexpr long kLinkLobbyJoinSocketEvents = FD_READ | FD_WRITE | FD_CLOSE;
 constexpr std::size_t kLinkLobbySessionSeedMapScrollOffset = 0x36;
 constexpr std::size_t kLinkLobbySessionSeedGroupCountOffset = 0x3a;
@@ -64,6 +68,32 @@ constexpr std::size_t kLinkLobbySessionSeedRoleMasksOffset = 0x106;
 constexpr std::size_t kLinkLobbySessionSeedTeamValuesOffset = 0x126;
 constexpr std::size_t kLinkLobbySessionSeedTribeValuesOffset = 0x146;
 constexpr std::size_t kLinkLobbySessionSeedTribeMasksOffset = 0x166;
+constexpr std::size_t kLinkLobbyMapDescriptorTitleOffset = 0x08;
+constexpr std::size_t kLinkLobbyMapDescriptorTitleBytes = 0x20;
+constexpr std::size_t kLinkLobbyMapDescriptorPlayerCountOffset = 0x168;
+constexpr std::size_t kLinkLobbyMapDescriptorMapWidthOffset = 0x174;
+constexpr std::size_t kLinkLobbyMapDescriptorMapHeightOffset = 0x178;
+constexpr std::size_t kLinkLobbyMapDescriptorTerrainNameOffset = 0x17c;
+constexpr std::size_t kLinkLobbyMapDescriptorTerrainNameBytes = 0x20;
+
+void append_link_lobby_log(const char* format, ...) {
+    if (format == nullptr) {
+        return;
+    }
+
+    FILE* file = std::fopen("Jw2.log", "a");
+    if (file == nullptr) {
+        return;
+    }
+
+    std::fputs("[rebuild] ", file);
+    va_list args;
+    va_start(args, format);
+    std::vfprintf(file, format, args);
+    va_end(args);
+    std::fputc('\n', file);
+    std::fclose(file);
+}
 constexpr std::size_t kLinkLobbyMapDescriptorFileNameOffset = 0x19c;
 constexpr std::size_t kLinkLobbyMapDescriptorFileNameBytes = 0x100;
 constexpr std::size_t kLinkLobbyMapDescriptorFileSizeOffset = 0x29c;
@@ -208,8 +238,8 @@ const char* kFallbackTabLabels[kLinkLobbyTabButtonCount] = {
 const char* kFallbackPlayerRoleLabels[] = {
     "Player",
     "Open",
-    "Computer",
     "Closed",
+    "Computer",
 };
 
 const char* kFallbackTribeLabels[] = {
@@ -521,13 +551,68 @@ u32 read_le32(const u8* buffer) {
         (static_cast<u32>(buffer[3]) << 24);
 }
 
+u32 link_lobby_map_descriptor_u32(const LinkLobbyState& state, std::size_t offset);
+bool link_lobby_session_seed_present(const LinkLobbyState& state);
+
 u32 link_lobby_seed_max_players(const LinkLobbyState& state) {
     const u32 value =
         read_le32(state.session_seed_payload.data() + kLinkLobbySessionSeedMaxPlayersOffset);
     if (value == 0 || value > kLinkLobbyAvatarCount) {
+        const u32 descriptor_players = link_lobby_map_descriptor_u32(
+            state, kLinkLobbyMapDescriptorPlayerCountOffset) & 0xff;
+        if (descriptor_players != 0 && descriptor_players <= kLinkLobbyAvatarCount) {
+            return descriptor_players;
+        }
         return kLinkLobbyAvatarCount;
     }
     return value;
+}
+
+bool link_lobby_uses_single_group_room_layout(const LinkLobbyState& state) {
+    return link_lobby_session_seed_present(state) && state.tab_button_count <= 1;
+}
+
+const char* link_lobby_game_type_name(int game_type) {
+    static constexpr const char* kFallbacks[] = {
+        "Top Vs Bottom",
+        "Melee",
+        "Rank",
+        "Avatar Melee",
+        "Avatar Rank",
+        "Use Map Setting",
+        "Melee Observer",
+        "Avatar Observer",
+        "Relay",
+    };
+    const int index = std::clamp(game_type, 0,
+        static_cast<int>(std::size(kFallbacks)) - 1);
+    return startup_message_row(109 + static_cast<std::size_t>(index),
+        kFallbacks[index]);
+}
+
+std::string link_lobby_map_info_text(const LinkLobbyState& state) {
+    const std::string title = bounded_c_string(
+        state.map_descriptor.data() + kLinkLobbyMapDescriptorTitleOffset,
+        kLinkLobbyMapDescriptorTitleBytes);
+    const std::string terrain = bounded_c_string(
+        state.map_descriptor.data() + kLinkLobbyMapDescriptorTerrainNameOffset,
+        kLinkLobbyMapDescriptorTerrainNameBytes);
+    const u32 width =
+        link_lobby_map_descriptor_u32(state, kLinkLobbyMapDescriptorMapWidthOffset);
+    const u32 height =
+        link_lobby_map_descriptor_u32(state, kLinkLobbyMapDescriptorMapHeightOffset);
+
+    if (title.empty() && terrain.empty() && width == 0 && height == 0) {
+        return "Game infos";
+    }
+
+    char text[0x180]{};
+    std::snprintf(text, sizeof(text),
+        "Title: %s\r\nGame type: %s\r\nMap: %ux%u %s",
+        title.empty() ? "" : title.c_str(),
+        link_lobby_game_type_name(state.game_type),
+        width, height, terrain.empty() ? "" : terrain.c_str());
+    return text;
 }
 
 int link_lobby_seed_map_scroll_value(const LinkLobbyState& state) {
@@ -562,7 +647,7 @@ int link_lobby_active_start_slot_count(const LinkLobbyState& state) {
     int count = 0;
     for (int slot = 0; slot < max_players; ++slot) {
         const int role = state.player_role_values[slot];
-        if (role == 0 || role == 2) {
+        if (role == 0 || role == 3) {
             ++count;
         }
     }
@@ -681,7 +766,7 @@ bool link_lobby_start_team_requirements_met(const LinkLobbyState& state) {
         const int team = std::clamp(state.player_team_values[slot], 0,
             kLinkLobbyAvatarCount - 1);
         const int role = state.player_role_values[slot];
-        if (role == 0 || role == 2) {
+        if (role == 0 || role == 3) {
             ++team_slots[team];
         }
         if (role == 0) {
@@ -731,6 +816,90 @@ bool player_index_valid(int player_index) {
     return player_index >= 0 && player_index < kLinkLobbyAvatarCount;
 }
 
+bool udp_endpoint_ready(const sockaddr_in& address) {
+    return address.sin_family == AF_INET && address.sin_addr.s_addr != 0 &&
+        address.sin_port != 0;
+}
+
+void copy_udp_endpoint_to_route(std::array<char, 0x10>& host, u16& port,
+    const sockaddr_in& address) {
+    host.fill(0);
+    port = 0;
+    if (!udp_endpoint_ready(address)) {
+        return;
+    }
+
+    const char* text = inet_ntoa(address.sin_addr);
+    if (text == nullptr || text[0] == '\0') {
+        return;
+    }
+    std::strncpy(host.data(), text, host.size() - 1);
+    port = ntohs(address.sin_port);
+}
+
+bool route_endpoint_ready(const std::array<char, 0x10>& host, u16 port) {
+    if (host[0] == '\0' || port == 0) {
+        return false;
+    }
+    const sockaddr_in address = BuildLegacyUdpSockaddr(host.data(), port);
+    return udp_endpoint_ready(address);
+}
+
+bool player_has_advertised_udp_route(const LinkLobbyState& state, int player_index) {
+    if (!player_index_valid(player_index)) {
+        return false;
+    }
+    return route_endpoint_ready(state.primary_peer_hosts[player_index],
+               state.primary_peer_ports[player_index]) ||
+        route_endpoint_ready(state.secondary_peer_hosts[player_index],
+            state.secondary_peer_ports[player_index]);
+}
+
+bool link_lobby_player_needs_start_sync(const LinkLobbyState& state,
+    int player_index);
+
+bool all_remote_human_routes_advertised(const LinkLobbyState& state) {
+    for (int slot = 0; slot < kLinkLobbyAvatarCount; ++slot) {
+        if (slot == state.local_player_index ||
+            !link_lobby_player_needs_start_sync(state, slot)) {
+            continue;
+        }
+        if (!player_has_advertised_udp_route(state, slot)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void register_local_udp_route(LinkLobbyState& state,
+    const sockaddr_in* secondary_address = nullptr) {
+    if (!player_index_valid(state.local_player_index)) {
+        return;
+    }
+
+    const int slot = state.local_player_index;
+    const sockaddr_in local_address = legacy_network_state().udp_bind_address;
+    copy_udp_endpoint_to_route(state.primary_peer_hosts[slot],
+        state.primary_peer_ports[slot], local_address);
+    if (secondary_address != nullptr && udp_endpoint_ready(*secondary_address)) {
+        state.local_udp_reflexive_address = *secondary_address;
+        state.local_udp_reflexive_address_valid = true;
+    }
+    if (state.local_udp_reflexive_address_valid) {
+        copy_udp_endpoint_to_route(state.secondary_peer_hosts[slot],
+            state.secondary_peer_ports[slot],
+            state.local_udp_reflexive_address);
+    }
+    state.udp_peer_addresses[slot] = local_address;
+    SetDirectPlayMode1UdpPeerAddress(slot, local_address);
+    append_link_lobby_log(
+        "link udp local route slot=%ld primary=%s:%u secondary=%s:%u",
+        static_cast<long>(slot), state.primary_peer_hosts[slot].data(),
+        static_cast<unsigned>(state.primary_peer_ports[slot]),
+        state.secondary_peer_hosts[slot].data(),
+        static_cast<unsigned>(state.secondary_peer_ports[slot]));
+}
+
 bool link_lobby_player_needs_start_sync(const LinkLobbyState& state,
     int player_index) {
     return player_index_valid(player_index) &&
@@ -761,11 +930,11 @@ std::vector<int> player_role_option_values(const LinkLobbyState& state,
     if ((mask & 2) != 0) {
         values.push_back(1);
     }
-    if ((mask & 4) != 0) {
-        values.push_back(2);
-    }
     if ((mask & 8) != 0) {
         values.push_back(3);
+    }
+    if ((mask & 4) != 0) {
+        values.push_back(2);
     }
     return values;
 }
@@ -1017,8 +1186,14 @@ void build_link_lobby_start_parameter_payload(LinkLobbyState& state) {
         static_cast<u32>(std::max(0, state.game_type)));
 
     for (int i = 0; i < kLinkLobbyAvatarCount; ++i) {
-        packet[kLinkLobbyStartParameterRandomSlotsOffset + i] =
-            state.randomized_slots[i];
+        // The original start packet stores the randomized map-slot permutation
+        // as eight DWORDs.  The following start-state and tribe tables are byte
+        // arrays, but this table spans 0x20 bytes (0x28..0x47).  Treating it as
+        // eight adjacent bytes makes an original-host packet such as
+        // {0, 1, 2, ...} appear as {0, 0, 0, 0, 1, ...} on the client, causing
+        // multiple owners to be placed at the same start point.
+        write_le32(packet, kLinkLobbyStartParameterRandomSlotsOffset + i * 4,
+            state.randomized_slots[i]);
         packet[kLinkLobbyStartParameterStartStatesOffset + i] =
             state.start_states[i];
         packet[kLinkLobbyStartParameterTribeChoicesOffset + i] =
@@ -1069,8 +1244,9 @@ void apply_link_lobby_start_parameter_payload_fields(LinkLobbyState& state,
     set_combo_selection(state.screen_size_combo, state.screen_size_index);
 
     for (int i = 0; i < kLinkLobbyAvatarCount; ++i) {
-        state.randomized_slots[i] =
-            bytes[kLinkLobbyStartParameterRandomSlotsOffset + i];
+        state.randomized_slots[i] = static_cast<u8>(std::min<u32>(
+            read_le32(bytes + kLinkLobbyStartParameterRandomSlotsOffset + i * 4),
+            kLinkLobbyAvatarCount - 1));
         state.start_states[i] =
             bytes[kLinkLobbyStartParameterStartStatesOffset + i];
         state.tribe_choices[i] =
@@ -1121,8 +1297,16 @@ void record_udp_start_ack(LinkLobbyState& state, const u8* packet,
         return;
     }
     state.udp_peer_addresses[player_index] = legacy_network_state().udp_last_sender;
+    copy_udp_endpoint_to_route(state.secondary_peer_hosts[player_index],
+        state.secondary_peer_ports[player_index],
+        state.udp_peer_addresses[player_index]);
     SetDirectPlayMode1UdpPeerAddress(player_index, state.udp_peer_addresses[player_index]);
     state.start_acknowledged[player_index] = 1;
+    append_link_lobby_log("link udp probe ack slot=%lu endpoint=%s:%u",
+        static_cast<unsigned long>(player_index),
+        inet_ntoa(state.udp_peer_addresses[player_index].sin_addr),
+        static_cast<unsigned>(ntohs(
+            state.udp_peer_addresses[player_index].sin_port)));
 }
 
 std::string colored_payload_text_segment(const char* text, std::size_t length) {
@@ -1379,9 +1563,9 @@ const char* link_lobby_role_label(int role_value) {
     case 1:
         return startup_message_row(179, kFallbackPlayerRoleLabels[1]);
     case 2:
-        return startup_message_row(181, kFallbackPlayerRoleLabels[2]);
+        return startup_message_row(180, kFallbackPlayerRoleLabels[2]);
     case 3:
-        return startup_message_row(180, kFallbackPlayerRoleLabels[3]);
+        return startup_message_row(181, kFallbackPlayerRoleLabels[3]);
     default:
         return kFallbackPlayerRoleLabels[0];
     }
@@ -1397,6 +1581,14 @@ std::string format_link_version_mismatch(u32 remote_version) {
         (local_version >> 24) & 0xffu, remote_version & 0xffffu,
         (remote_version >> 16) & 0xffu, (remote_version >> 24) & 0xffu);
     return buffer;
+}
+
+u32 active_link_lobby_connection_mode(const LinkLobbyState& state) {
+    // The original relay handshake reads the process-wide DAT_014b9e58.
+    // A joining client sends this packet before its Link window is created,
+    // so LinkLobbyState::mode can still contain its default/stale value here.
+    const i32 active_mode = async_com_state().active_network_transport_mode;
+    return static_cast<u32>(std::max(active_mode >= 0 ? active_mode : state.mode, 0));
 }
 
 std::string format_countdown_message(int countdown_value) {
@@ -1689,6 +1881,59 @@ void fill_combo(HWND combo, const char* const* values, std::size_t count,
     SendMessageA(combo, CB_SETCURSEL, selection, 0);
 }
 
+void add_child_rect_to_parent(HWND parent, HWND child, RECT& bounds, bool& has_bounds) {
+    if (parent == nullptr || child == nullptr) {
+        return;
+    }
+
+    RECT child_rect{};
+    if (!GetWindowRect(child, &child_rect)) {
+        return;
+    }
+    MapWindowPoints(HWND_DESKTOP, parent,
+        reinterpret_cast<POINT*>(&child_rect), 2);
+
+    if (!has_bounds) {
+        bounds = child_rect;
+        has_bounds = true;
+        return;
+    }
+    UnionRect(&bounds, &bounds, &child_rect);
+}
+
+void redraw_link_lobby_player_row(LinkLobbyState& state, int player_index) {
+    if (!player_index_valid(player_index) || state.window == nullptr) {
+        return;
+    }
+
+    RECT row_rect{};
+    bool has_bounds = false;
+    add_child_rect_to_parent(state.window,
+        state.player_role_combos[player_index].window, row_rect, has_bounds);
+    add_child_rect_to_parent(state.window,
+        state.tribe_combos[player_index].window, row_rect, has_bounds);
+    add_child_rect_to_parent(state.window,
+        state.latency_buttons[player_index].window, row_rect, has_bounds);
+    add_child_rect_to_parent(state.window,
+        state.map_download_buttons[player_index].window, row_rect, has_bounds);
+    if (!has_bounds) {
+        return;
+    }
+
+    InflateRect(&row_rect, 4, 4);
+    RedrawWindow(state.window, &row_rect, nullptr,
+        RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+    if (state.player_role_combos[player_index].window != nullptr) {
+        RedrawWindow(state.player_role_combos[player_index].window, nullptr, nullptr,
+            RDW_INVALIDATE | RDW_UPDATENOW);
+    }
+    if (state.tribe_combos[player_index].window != nullptr &&
+        IsWindowVisible(state.tribe_combos[player_index].window)) {
+        RedrawWindow(state.tribe_combos[player_index].window, nullptr, nullptr,
+            RDW_INVALIDATE | RDW_UPDATENOW);
+    }
+}
+
 void release_resources(LinkLobbyState& state) {
     DeleteLinkLobbySocketCriticalSection(state);
     ShutdownLinkLobbyBackgroundBitmap(state);
@@ -1788,12 +2033,32 @@ void draw_game_list_item(LinkLobbyState& state, const DRAWITEMSTRUCT& draw) {
     }
 }
 
+bool erase_game_list_background_if_current(LinkLobbyState& state, HWND hwnd, HDC dc) {
+    if (hwnd == nullptr || dc == nullptr || hwnd != state.game_list.window) {
+        return false;
+    }
+    RECT rect{};
+    GetClientRect(hwnd, &rect);
+    FillRect(dc, &rect, reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+    return true;
+}
+
 void draw_info_panel(LinkLobbyState& state, const DRAWITEMSTRUCT& draw) {
     RECT rect = draw.rcItem;
+    HBRUSH brush = CreateSolidBrush(kLinkBlack);
+    if (brush != nullptr) {
+        FillRect(draw.hDC, &rect, brush);
+        DeleteObject(brush);
+    }
+    rect.left += 6;
+    rect.top += 6;
+    rect.right -= 6;
+    rect.bottom -= 6;
     SetBkColor(draw.hDC, kLinkBlack);
     SetBkMode(draw.hDC, TRANSPARENT);
     SetTextColor(draw.hDC, kLinkSoftWhite);
-    std::string text = state.last_message.empty() ? "Game infos" : state.last_message;
+    std::string text = state.last_message.empty() ?
+        link_lobby_map_info_text(state) : state.last_message;
     DrawTextA(draw.hDC, text.c_str(), -1, &rect, DT_LEFT | DT_WORDBREAK);
 }
 
@@ -1807,6 +2072,28 @@ void destroy_window(LinkLobbyState& state) {
 
 LinkLobbyState& link_lobby_state() {
     return g_link_lobby_state;
+}
+
+void SetLinkLobbyLocalPlayerIdentity(LinkLobbyState& state,
+    const char* player_name) {
+    if (!player_index_valid(state.local_player_index)) {
+        return;
+    }
+
+    LinkLobbyPlayerSlot& player = state.players[state.local_player_index];
+    player.occupied = true;
+    player.selected = true;
+    player.ready = true;
+    player.human = true;
+    copy_c_string(player.name,
+        player_name != nullptr && player_name[0] != '\0' ? player_name : "Player");
+    std::memset(player.raw_payload.data() + kLinkLobbyPlayerRecordNameOffset, 0,
+        kLinkLobbyPlayerRecordNameBytes);
+    std::strncpy(reinterpret_cast<char*>(player.raw_payload.data() +
+            kLinkLobbyPlayerRecordNameOffset), player.name.data(),
+        kLinkLobbyPlayerRecordNameBytes - 1);
+    state.player_payloads[state.local_player_index] = player.raw_payload;
+    state.player_role_values[state.local_player_index] = 0;
 }
 
 void InitializeLinkLobbyHostResourceComboControl(LinkLobbyState& state) {
@@ -2101,7 +2388,7 @@ int CountLinkLobbySelectedAvatarSlots(const LinkLobbyState& state) {
         return count;
     }
     for (int i = 0; i < kLinkLobbyAvatarCount; ++i) {
-        if (state.player_role_values[i] == 0 || state.player_role_values[i] == 2) {
+        if (state.player_role_values[i] == 0 || state.player_role_values[i] == 3) {
             ++count;
         }
     }
@@ -2175,7 +2462,7 @@ void PrepareLinkLobbyStartParameters(LinkLobbyState& state) {
                 state.player_team_values[i] == 1) {
                 state.start_states[i] = 2;
             }
-        } else if (state.player_role_values[i] == 2) {
+        } else if (state.player_role_values[i] == 3) {
             state.start_states[i] = 1;
         } else {
             state.start_states[i] = 0x14;
@@ -2223,6 +2510,14 @@ void PrepareLinkLobbyStartParameters(LinkLobbyState& state) {
 }
 
 void BeginLinkLobbyStartCountdown(LinkLobbyState& state) {
+    append_link_lobby_log(
+        "link countdown begin selected=%lu active_humans=%lu host=%s mode=%ld game_type=%ld active_slots=%ld",
+        static_cast<unsigned long>(state.selected_avatar_count),
+        static_cast<unsigned long>(state.active_human_count),
+        state.host_mode ? "yes" : "no",
+        static_cast<long>(state.mode),
+        static_cast<long>(state.game_type),
+        static_cast<long>(link_lobby_active_start_slot_count(state)));
     state.selected_avatar_count = CountLinkLobbySelectedAvatarSlots(state);
     state.active_human_count = 0;
     for (u8 start_state : state.start_states) {
@@ -2231,12 +2526,16 @@ void BeginLinkLobbyStartCountdown(LinkLobbyState& state) {
         }
     }
     if (state.selected_avatar_count == 0) {
+        append_link_lobby_log("link countdown blocked no selected avatars");
         show_startup_message(state, 28, "Another player is required.",
             kLinkMapFailureRed);
         return;
     }
     if (!link_lobby_start_team_requirements_met(state) &&
         !(state.host_mode && link_lobby_active_start_slot_count(state) >= 2)) {
+        append_link_lobby_log(
+            "link countdown blocked team requirements active_slots=%ld",
+            static_cast<long>(link_lobby_active_start_slot_count(state)));
         show_startup_message(state, 28,
             "The selected game type requires more players.",
             kLinkMapFailureRed);
@@ -2245,6 +2544,7 @@ void BeginLinkLobbyStartCountdown(LinkLobbyState& state) {
     if (state.mode == 6) {
         state.start_locked = true;
         if (state.callbacks.start_game != nullptr) {
+            append_link_lobby_log("link countdown immediate start mode=6");
             state.callbacks.start_game(state);
         }
         destroy_window(state);
@@ -2255,6 +2555,9 @@ void BeginLinkLobbyStartCountdown(LinkLobbyState& state) {
     if (state.window != nullptr) {
         state.countdown_timer = SetTimer(state.window, 1, 1000, nullptr);
     }
+    append_link_lobby_log("link countdown timer set value=%ld timer=%lu",
+        static_cast<long>(state.countdown_value),
+        static_cast<unsigned long>(state.countdown_timer));
     const std::string message = format_countdown_message(state.countdown_value);
     show_message(state, message.c_str());
 }
@@ -2455,8 +2758,8 @@ void PopulateLinkLobbyPlayerRoleComboBox(LinkLobbyState& state, int player_index
         add_option(1, 0, link_lobby_player_name(state, player_index));
     }
     add_option(2, 1, link_lobby_role_label(1));
-    add_option(4, 2, link_lobby_role_label(2));
     add_option(8, 3, link_lobby_role_label(3));
+    add_option(4, 2, link_lobby_role_label(2));
     if (item_count == 0) {
         SendMessageA(combo, CB_ADDSTRING, 0,
             reinterpret_cast<LPARAM>(kFallbackPlayerRoleLabels[0]));
@@ -2469,6 +2772,7 @@ void PopulateLinkLobbyPlayerRoleComboBox(LinkLobbyState& state, int player_index
     } else {
         EnableLinkLobbyPlayerRoleComboBox(state, player_index);
     }
+    redraw_link_lobby_player_row(state, player_index);
 }
 
 void EnableLinkLobbyPlayerRoleComboBox(LinkLobbyState& state, int player_index) {
@@ -2496,11 +2800,10 @@ void DisableLinkLobbyPlayerRoleComboBox(LinkLobbyState& state, int player_index)
 }
 
 bool CreateLinkLobbyPlayerRoleControls(LinkLobbyState& state) {
-    if (!CreateLinkLobbyTabButtons(state)) {
-        return false;
-    }
-
     if (!link_lobby_session_seed_present(state)) {
+        if (!CreateLinkLobbyTabButtons(state)) {
+            return false;
+        }
         const int first_y = 0x64;
         const int step_y = 0x18;
         for (int i = 0; i < kLinkLobbyAvatarCount; ++i) {
@@ -2524,8 +2827,51 @@ bool CreateLinkLobbyPlayerRoleControls(LinkLobbyState& state) {
     const int player_count = std::clamp(
         static_cast<int>(link_lobby_seed_max_players(state)), 0,
         kLinkLobbyAvatarCount);
+    if (link_lobby_uses_single_group_room_layout(state)) {
+        state.tab_button_count = 1;
+        state.tab_button_positions[0] = tab_rect.y;
+        if (state.tab_button_labels[0][0] == '\0') {
+            copy_c_string(state.tab_button_labels[0], "Player's Game");
+        }
+        if (!CreateLinkLobbyTabButtons(state)) {
+            return false;
+        }
+        int y = role_rect.y;
+        for (int player = 0; player < player_count; ++player) {
+            state.player_team_values[player] = 0;
+            if (!CreateLinkLobbyPlayerRoleComboBox(state, player, y) ||
+                !CreateLinkLobbyTribeComboBox(state, player) ||
+                !CreateLinkLobbyMapDownloadButton(state, player) ||
+                !CreateLinkLobbyLatencyButton(state, player)) {
+                return false;
+            }
+            PopulateLinkLobbyPlayerRoleComboBox(state, player,
+                state.player_role_values[player]);
+            PopulateLinkLobbyTribeComboBox(state, player);
+            UpdateLinkLobbyTribeComboBoxState(state, player);
+            y += row_step;
+        }
+        return true;
+    }
+
+    int next_group_y = tab_rect.y;
     for (int group = 0; group < state.tab_button_count; ++group) {
-        int y = state.tab_button_positions[group] + 3 + tab_rect.height;
+        state.tab_button_positions[group] = next_group_y;
+        int group_players = 0;
+        for (int player = 0; player < player_count; ++player) {
+            if (state.player_team_values[player] == group) {
+                ++group_players;
+            }
+        }
+        next_group_y += tab_rect.height +
+            std::max(1, group_players) * row_step + 8;
+    }
+    if (!CreateLinkLobbyTabButtons(state)) {
+        return false;
+    }
+
+    for (int group = 0; group < state.tab_button_count; ++group) {
+        int y = state.tab_button_positions[group] + (role_rect.y - tab_rect.y);
         for (int player = 0; player < player_count; ++player) {
             if (state.player_team_values[player] != group) {
                 continue;
@@ -2777,6 +3123,7 @@ void UpdateLinkLobbyTribeComboBoxState(LinkLobbyState& state, int player_index) 
     } else {
         DisableLinkLobbyTribeComboBox(state, player_index);
     }
+    redraw_link_lobby_player_row(state, player_index);
 }
 
 void EnableLinkLobbyTribeComboBox(LinkLobbyState& state, int player_index) {
@@ -2899,6 +3246,14 @@ void HandleLinkLobbyStartResult(LinkLobbyState& state, u32 player_index,
     }
 
     const int previous_local_player = state.local_player_index;
+    SOCKET assigned_peer_socket = state.player_sockets[player_index];
+    if (assigned_peer_socket == INVALID_SOCKET) {
+        assigned_peer_socket = state.shared_peer_socket;
+    }
+    if (assigned_peer_socket == INVALID_SOCKET &&
+        player_index_valid(previous_local_player)) {
+        assigned_peer_socket = state.player_sockets[previous_local_player];
+    }
     state.local_player_index = static_cast<int>(player_index);
     state.join_accepted = true;
     state.start_locked = true;
@@ -2907,17 +3262,39 @@ void HandleLinkLobbyStartResult(LinkLobbyState& state, u32 player_index,
     if (previous_local_player != state.local_player_index &&
         player_index_valid(previous_local_player)) {
         DisableLinkLobbyPlayerRoleComboBox(state, previous_local_player);
+        state.primary_peer_hosts[previous_local_player] = {};
+        state.secondary_peer_hosts[previous_local_player] = {};
+        state.primary_peer_ports[previous_local_player] = 0;
+        state.secondary_peer_ports[previous_local_player] = 0;
+        state.udp_peer_addresses[previous_local_player] = {};
+        state.player_sockets[previous_local_player] = INVALID_SOCKET;
+        state.player_socket_connected[previous_local_player] = false;
+        SetDirectPlayMode1UdpPeerAddress(
+            static_cast<u32>(previous_local_player), sockaddr_in{});
     }
 
     if (state.mode >= 0 && state.mode < 3) {
-        sockaddr_in local_udp = legacy_network_state().udp_bind_address;
-        sockaddr_in peer_udp = state.udp_peer_addresses[state.local_player_index];
-        state.udp_peer_addresses[state.local_player_index] = peer_udp;
-        SetDirectPlayMode1UdpPeerAddress(state.local_player_index, peer_udp);
-        state.shared_peer_socket = state.player_sockets[state.local_player_index];
-        if (local_udp.sin_family == AF_INET && peer_udp.sin_family == AF_INET) {
+        state.player_sockets[state.local_player_index] = assigned_peer_socket;
+        state.shared_peer_socket = assigned_peer_socket;
+        register_local_udp_route(state);
+        if (state.mode == 1 && p2p_lobby_state().player_name[0] != '\0') {
+            SetLinkLobbyLocalPlayerIdentity(state,
+                p2p_lobby_state().player_name.data());
+        }
+        const u32 local = static_cast<u32>(state.local_player_index);
+        SendLinkLobbyPeerRoutePacket(state, local,
+            state.primary_peer_hosts[local].data(),
+            state.primary_peer_ports[local],
+            state.secondary_peer_hosts[local].data(),
+            state.secondary_peer_ports[local]);
+        if (state.shared_peer_socket != INVALID_SOCKET) {
             state.player_socket_connected[state.local_player_index] = true;
         }
+        append_link_lobby_log(
+            "link join accepted slot=%lu advertised=%s:%u",
+            static_cast<unsigned long>(local),
+            state.primary_peer_hosts[local].data(),
+            static_cast<unsigned>(state.primary_peer_ports[local]));
     } else if (state.mode == 3) {
         state.secondary_start_sync_required = true;
     }
@@ -3039,7 +3416,7 @@ void ApplyLinkLobbyPlayerRolePacket(LinkLobbyState& state, u32 player_index,
     state.player_role_values[index] = std::clamp(role_value, 0, 3);
     state.players[index].human = state.player_role_values[index] == 0;
     state.players[index].occupied =
-        state.player_role_values[index] == 0 || state.player_role_values[index] == 2;
+        state.player_role_values[index] == 0 || state.player_role_values[index] == 3;
     state.players[index].ready = state.players[index].occupied;
     PopulateLinkLobbyPlayerRoleComboBox(state, index, state.player_role_values[index]);
     UpdateLinkLobbyTribeComboBoxState(state, index);
@@ -3094,13 +3471,53 @@ void HandleLinkLobbyIncomingPlayerJoinRequest(LinkLobbyState& state, u32 sender,
     const auto* bytes = static_cast<const u8*>(packet);
     const int requested_slot = static_cast<int>(read_le32(bytes + 0x0c));
     const SOCKET sender_socket = static_cast<SOCKET>(sender);
+
+    // The host rebroadcasts an accepted player's opcode-0x0c record to every
+    // connected peer.  On an original client this is only a player-table
+    // update (FUN_00473100's non-host branch); it must not be treated as a new
+    // join request or answered with another result-10 packet.  Doing so makes
+    // the original host consume that reply as its own join result and changes
+    // its local player slot.
+    if (!state.host_mode) {
+        if (player_index_valid(requested_slot)) {
+            accept_link_lobby_join_request_slot(state, requested_slot,
+                sender_socket, bytes, byte_count);
+            append_link_lobby_log(
+                "link join record applied slot=%ld sender_socket=%llu",
+                static_cast<long>(requested_slot),
+                static_cast<unsigned long long>(sender_socket));
+        }
+        return;
+    }
+
     const AsyncComContext* context = async_com_state().active_context;
     const bool directplay_ready =
         context != nullptr && context->system_message_101_seen;
 
     if (!directplay_ready) {
-        accept_link_lobby_join_request_slot(state, requested_slot, sender_socket,
+        int assigned_slot = requested_slot;
+        if (!player_index_valid(assigned_slot) ||
+            state.player_role_values[assigned_slot] != 1) {
+            assigned_slot = FindOpenLinkLobbyPlayerRoleSlot(state);
+        }
+        if (!player_index_valid(assigned_slot)) {
+            SendLinkLobbyStartResultPacket(state, sender_socket, 0, 3);
+            return;
+        }
+        accept_link_lobby_join_request_slot(state, assigned_slot, sender_socket,
             bytes, byte_count);
+        SendLinkLobbyStartResultPacket(state, sender_socket,
+            static_cast<u32>(assigned_slot), 10);
+        if (player_has_advertised_udp_route(state,
+                state.local_player_index)) {
+            const u32 local = static_cast<u32>(state.local_player_index);
+            SendLinkLobbyPeerRoutePacket(state, local,
+                state.primary_peer_hosts[local].data(),
+                state.primary_peer_ports[local],
+                state.secondary_peer_hosts[local].data(),
+                state.secondary_peer_ports[local]);
+        }
+        SendLinkLobbyCurrentRoleStatePackets(state);
         return;
     }
 
@@ -3578,6 +3995,13 @@ void ApplyLinkLobbyPeerRoutePacket(LinkLobbyState& state, const void* packet,
     copy_fixed_string(state.secondary_peer_hosts[player_index], bytes + 0x24, 0x10);
     state.secondary_peer_ports[player_index] =
         static_cast<u16>(packet_u32(packet, byte_count, 0x34));
+    append_link_lobby_log(
+        "link udp route received slot=%ld primary=%s:%u secondary=%s:%u",
+        static_cast<long>(player_index),
+        state.primary_peer_hosts[player_index].data(),
+        static_cast<unsigned>(state.primary_peer_ports[player_index]),
+        state.secondary_peer_hosts[player_index].data(),
+        static_cast<unsigned>(state.secondary_peer_ports[player_index]));
 }
 
 void HandleLinkLobbyUdpPeerProbeRequest(LinkLobbyState& state, const void* packet,
@@ -3588,25 +4012,43 @@ void HandleLinkLobbyUdpPeerProbeRequest(LinkLobbyState& state, const void* packe
     }
     const int target_player = static_cast<int>(packet_u32(packet, byte_count, 0x10));
     if (target_player == state.local_player_index && player_index_valid(probe_player)) {
-        sockaddr_in address{};
+        const bool primary_ready = route_endpoint_ready(
+            state.primary_peer_hosts[probe_player],
+            state.primary_peer_ports[probe_player]);
+        const bool secondary_ready = route_endpoint_ready(
+            state.secondary_peer_hosts[probe_player],
+            state.secondary_peer_ports[probe_player]);
+        const bool routes_differ = primary_ready && secondary_ready &&
+            (state.primary_peer_ports[probe_player] !=
+                    state.secondary_peer_ports[probe_player] ||
+                std::strcmp(state.primary_peer_hosts[probe_player].data(),
+                    state.secondary_peer_hosts[probe_player].data()) != 0);
+        bool use_secondary = !primary_ready && secondary_ready;
+        if (routes_differ) {
+            state.udp_probe_route_toggle = !state.udp_probe_route_toggle;
+            use_secondary = !state.udp_probe_route_toggle;
+        }
+
         const char* host = state.primary_peer_hosts[probe_player].data();
         u16 port = state.primary_peer_ports[probe_player];
-        if (!ProbeLinkLobbyUdpPeerAddress(state, host, port, address) &&
-            state.secondary_peer_hosts[probe_player][0] != '\0') {
+        if (use_secondary) {
             host = state.secondary_peer_hosts[probe_player].data();
             port = state.secondary_peer_ports[probe_player];
-            ProbeLinkLobbyUdpPeerAddress(state, host, port, address);
         }
-        state.udp_peer_addresses[probe_player] = address;
-        SetDirectPlayMode1UdpPeerAddress(probe_player, address);
-        send_link_lobby_two_value_packet(state, kLinkLobbyUdpProbeReplyOpcode,
-            static_cast<u32>(probe_player), static_cast<u32>(state.local_player_index));
+        if (host[0] != '\0' && port != 0) {
+            SendLinkLobbyUdpProbeDatagram(state,
+                static_cast<u32>(state.local_player_index), host, port);
+            append_link_lobby_log(
+                "link udp probe sent from=%ld to=%ld endpoint=%s:%u",
+                static_cast<long>(state.local_player_index),
+                static_cast<long>(probe_player), host,
+                static_cast<unsigned>(port));
+        }
     } else if (player_index_valid(target_player)) {
-        const AsyncComContext* context = async_com_state().active_context;
-        if (context != nullptr && context->system_message_101_seen) {
+        if (state.host_mode || link_lobby_directplay_ready()) {
             send_link_lobby_two_value_packet(state, kLinkLobbyUdpProbeRequestOpcode,
                 static_cast<u32>(probe_player), static_cast<u32>(target_player),
-                link_lobby_player_record_socket(state, target_player));
+                start_sync_target_socket(state, target_player));
         }
     }
 }
@@ -3740,6 +4182,10 @@ void DispatchLinkLobbyTransportPacket(LinkLobbyState& state, u32 sender,
         break;
     case kLinkLobbyPeerRouteOpcode:
         ApplyLinkLobbyPeerRoutePacket(state, packet, effective_size);
+        if (state.host_mode) {
+            BroadcastLinkLobbyTransportPacketExcept(state, packet, effective_size,
+                static_cast<SOCKET>(sender));
+        }
         break;
     case kLinkLobbyUdpProbeRequestOpcode:
         HandleLinkLobbyUdpPeerProbeRequest(state, packet, effective_size);
@@ -3923,7 +4369,7 @@ void SendLinkLobbyRelayJoinPacket(LinkLobbyState& state, SOCKET target_socket,
     write_le32(packet, 0x0c, static_cast<u32>(state.local_player_index));
     write_le32(packet, 0x10, kLinkLobbyHandshakeMagic);
     write_le32(packet, 0x14, LoadTrcRecord9Value());
-    write_le32(packet, 0x18, static_cast<u32>(std::max(state.mode, 0)));
+    write_le32(packet, 0x18, active_link_lobby_connection_mode(state));
     if (player_name != nullptr) {
         std::strncpy(reinterpret_cast<char*>(packet.data() + 0x1c), player_name, 0x20);
     }
@@ -4179,7 +4625,7 @@ void DispatchLinkLobbyRelayPacket(LinkLobbyState& state, SOCKET sender_socket,
         return;
     }
     const u32 remote_mode = packet_u32(packet, byte_count, 0x18);
-    if (remote_mode != static_cast<u32>(std::max(state.mode, 0))) {
+    if (remote_mode != active_link_lobby_connection_mode(state)) {
         SendLinkLobbyStartResultPacket(state, sender_socket, 0, 8);
         return;
     }
@@ -4430,8 +4876,7 @@ void DrawLinkLobbyTabButton(LinkLobbyState& state, int tab_index,
     rect.right -= 0x0e;
     SetBkMode(draw.hDC, TRANSPARENT);
     SetTextColor(draw.hDC, state.tab_text_colors[tab_index]);
-    DrawTextA(draw.hDC, text.data(), -1, &rect,
-        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    DrawTextA(draw.hDC, text.data(), -1, &rect, kLinkLobbyTabTextFlags);
 }
 
 void NoOpLinkLobbyUnusedOwnerDrawControl(LinkLobbyState&, const DRAWITEMSTRUCT&) {
@@ -5038,20 +5483,38 @@ bool InitializeLinkLobbyNetworkRoute(LinkLobbyState& state) {
         char host_name[0x100]{};
         char local_address[0x100]{};
         if (!ResolveLocalHostDisplayAddress(host_name, sizeof(host_name),
-                local_address, sizeof(local_address)) ||
-            StartLegacyUdpSocket(local_address, state.default_udp_port) ==
-                INVALID_SOCKET) {
+                local_address, sizeof(local_address))) {
             show_startup_message(state, 25, " UDP initialization error.",
                 RGB(255, 10, 10));
             return false;
         }
 
+        SOCKET udp_socket = StartLegacyUdpSocket(local_address,
+            state.default_udp_port);
+        if (udp_socket == INVALID_SOCKET) {
+            const int requested_port_error = WSAGetLastError();
+            udp_socket = StartLegacyUdpSocket(local_address, 0);
+            append_link_lobby_log(
+                "link udp requested port unavailable requested=%u error=%ld fallback=%s",
+                static_cast<unsigned>(state.default_udp_port),
+                static_cast<long>(requested_port_error),
+                udp_socket != INVALID_SOCKET ? "ephemeral" : "failed");
+        }
+        if (udp_socket == INVALID_SOCKET) {
+            show_startup_message(state, 25, " UDP initialization error.",
+                RGB(255, 10, 10));
+            return false;
+        }
+
+        sockaddr_in probed_address{};
+        bool probed_address_valid = false;
+
         if (state.default_peer_probe_host[0] != '\0' &&
             state.default_peer_probe_port != 0) {
-            sockaddr_in probed_address{};
-            if (ProbeLinkLobbyUdpPeerAddress(state,
+            probed_address_valid = ProbeLinkLobbyUdpPeerAddress(state,
                     state.default_peer_probe_host.data(),
-                    state.default_peer_probe_port, probed_address) &&
+                    state.default_peer_probe_port, probed_address);
+            if (probed_address_valid &&
                 IsPrivateIpv4Address(probed_address.sin_addr)) {
                 show_startup_message(state, 98,
                     "Your UDP connection is using a private IP address that "
@@ -5060,6 +5523,8 @@ bool InitializeLinkLobbyNetworkRoute(LinkLobbyState& state) {
                 return false;
             }
         }
+        register_local_udp_route(state,
+            probed_address_valid ? &probed_address : nullptr);
     }
 
     if (state.host_mode) {
@@ -5498,24 +5963,44 @@ bool ClearLinkLobbyDirectPlayJoinDisabled(LinkLobbyState& state) {
 }
 
 bool SubmitLinkLobbyStartRequest(LinkLobbyState& state) {
+    append_link_lobby_log(
+        "link submit start begin host=%s mode=%ld game_type=%ld max_players=%lu local=%ld",
+        state.host_mode ? "yes" : "no",
+        static_cast<long>(state.mode),
+        static_cast<long>(state.game_type),
+        static_cast<unsigned long>(link_lobby_seed_max_players(state)),
+        static_cast<long>(state.local_player_index));
     PrepareLinkLobbyStartParameters(state);
+    append_link_lobby_log(
+        "link submit prepared selected=%ld active_slots=%ld humans=%lu start_resource=%ld screen=%ld",
+        static_cast<long>(CountLinkLobbySelectedAvatarSlots(state)),
+        static_cast<long>(link_lobby_active_start_slot_count(state)),
+        static_cast<unsigned long>(state.active_human_count),
+        static_cast<long>(state.start_resource_index),
+        static_cast<long>(state.screen_size_index));
     if (ReportLinkLobbyMapDownloadWaiters(state)) {
+        append_link_lobby_log("link submit blocked map download waiters");
         return false;
     }
     state.selected_avatar_count = CountLinkLobbySelectedAvatarSlots(state);
     if (state.selected_avatar_count == 0) {
+        append_link_lobby_log("link submit blocked no selected avatars");
         show_startup_message(state, 28, "Another player is required.",
             kLinkMapFailureRed);
         return false;
     }
     if (!link_lobby_start_team_requirements_met(state) &&
         !(state.host_mode && link_lobby_active_start_slot_count(state) >= 2)) {
+        append_link_lobby_log(
+            "link submit blocked team requirements active_slots=%ld",
+            static_cast<long>(link_lobby_active_start_slot_count(state)));
         show_startup_message(state, 28,
             "The selected game type requires more players.",
             kLinkMapFailureRed);
         return false;
     }
     if (!SetLinkLobbyDirectPlayJoinDisabled(state)) {
+        append_link_lobby_log("link submit blocked directplay join disable");
         show_startup_message(state, 28, "Another player is required.",
             kLinkMapFailureRed);
         return false;
@@ -5524,6 +6009,7 @@ bool SubmitLinkLobbyStartRequest(LinkLobbyState& state) {
     if (state.mode < 0 || state.mode > 2) {
         if (!SendLinkLobbyStartParametersPacket(state)) {
             ClearLinkLobbyDirectPlayJoinDisabled(state);
+            append_link_lobby_log("link submit blocked start parameters send");
             show_startup_message(state, 28, "Another player is required.",
                 kLinkMapFailureRed);
             return false;
@@ -5531,23 +6017,44 @@ bool SubmitLinkLobbyStartRequest(LinkLobbyState& state) {
         if (state.window != nullptr) {
             PostMessageA(state.window, kLinkLobbyStartDecisionMessage, 0, 0);
         }
+        append_link_lobby_log("link submit posted start decision non-mode1");
         return true;
+    }
+
+    const bool has_remote_start_players =
+        LinkLobbyHostHasRemoteStartSyncPlayers(state);
+    if (!player_has_advertised_udp_route(state, state.local_player_index) ||
+        (has_remote_start_players &&
+            !all_remote_human_routes_advertised(state))) {
+        ClearLinkLobbyDirectPlayJoinDisabled(state);
+        append_link_lobby_log(
+            "link submit blocked missing udp route local_ready=%s remote_ready=%s",
+            player_has_advertised_udp_route(state, state.local_player_index) ?
+                "yes" : "no",
+            all_remote_human_routes_advertised(state) ? "yes" : "no");
+        show_startup_message(state, 29,
+            "Unable to resolve the local player IP address.",
+            kLinkMapFailureRed);
+        return false;
     }
 
     if (!SendLinkLobbyPeerRouteTablePacket(state)) {
         ClearLinkLobbyDirectPlayJoinDisabled(state);
+        append_link_lobby_log("link submit blocked peer route send");
         show_startup_message(state, 28, "Another player is required.",
             kLinkMapFailureRed);
         return false;
     }
     state.secondary_start_sync_required = true;
-    if (state.host_mode && !LinkLobbyHostHasRemoteStartSyncPlayers(state)) {
+    if (state.host_mode && !has_remote_start_players) {
         if (state.window != nullptr) {
             PostMessageA(state.window, kLinkLobbyStartDecisionMessage, 0, 0);
         }
+        append_link_lobby_log("link submit posted start decision host local-only");
         return true;
     }
     BeginLinkLobbyPeerRouteSync(state, nullptr, 0);
+    append_link_lobby_log("link submit began peer route sync");
     return true;
 }
 
@@ -5584,10 +6091,22 @@ void PumpLinkLobbyUdpStartSync(LinkLobbyState& state) {
         }
         if (player_index_valid(state.local_player_index)) {
             state.secondary_start_acknowledged[state.local_player_index] = 1;
+            if (!state.host_mode) {
+                stop_start_sync_timer(state);
+                StopLinkLobbyPeerRouteTimer(state);
+                SendLinkLobbySecondaryStartAckPacket(state, 1);
+                append_link_lobby_log(
+                    "link udp primary sync complete client=%ld host ack sent",
+                    static_cast<long>(state.local_player_index));
+                return;
+            }
+            append_link_lobby_log(
+                "link udp primary sync complete host=%ld waiting client acks",
+                static_cast<long>(state.local_player_index));
         }
     }
 
-    if (state.secondary_start_sync_required) {
+    if (state.secondary_start_sync_required && state.host_mode) {
         bool secondary_complete = true;
         for (int i = 0; i < kLinkLobbyAvatarCount; ++i) {
             if (link_lobby_player_needs_start_sync(state, i) &&
@@ -5599,15 +6118,22 @@ void PumpLinkLobbyUdpStartSync(LinkLobbyState& state) {
         if (secondary_complete) {
             stop_start_sync_timer(state);
             StopLinkLobbyPeerRouteTimer(state);
-            const bool finalized = state.callbacks.finalize_start_sync == nullptr ||
-                state.callbacks.finalize_start_sync(state);
-            if (!finalized) {
-                show_startup_message(state, 29,
-                    "Unable to resolve the local player IP address.",
-                    kLinkMapFailureRed);
-            } else if (state.window != nullptr) {
-                PostMessageA(state.window, kLinkLobbyStartDecisionMessage, 0, 0);
+            if (state.host_mode) {
+                const bool finalized =
+                    state.callbacks.finalize_start_sync == nullptr ||
+                    state.callbacks.finalize_start_sync(state);
+                if (!finalized) {
+                    show_startup_message(state, 29,
+                        "Unable to resolve the local player IP address.",
+                        kLinkMapFailureRed);
+                } else if (state.window != nullptr) {
+                    PostMessageA(state.window, kLinkLobbyStartDecisionMessage, 0, 0);
+                }
             }
+            append_link_lobby_log(
+                "link udp secondary sync complete local=%ld host=%s",
+                static_cast<long>(state.local_player_index),
+                state.host_mode ? "yes" : "no");
             return;
         }
     }
@@ -5733,6 +6259,8 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
     state.secondary_start_acknowledged = {};
     state.player_sockets.fill(INVALID_SOCKET);
     state.udp_peer_addresses = {};
+    state.local_udp_reflexive_address = {};
+    state.local_udp_reflexive_address_valid = false;
     ClearDirectPlayMode1UdpPeerAddresses();
     state.primary_peer_hosts = {};
     state.secondary_peer_hosts = {};
@@ -5745,6 +6273,7 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
     state.start_sync_complete = false;
     state.secondary_start_sync_required = false;
     state.directplay_join_disabled = false;
+    state.udp_probe_route_toggle = false;
     state.store_avatar_publish_locally = state.host_mode;
     state.shared_peer_socket = INVALID_SOCKET;
     state.pending_join_socket = INVALID_SOCKET;
@@ -5776,6 +6305,10 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
         initialize_host_player_slots(state);
     }
     apply_link_lobby_session_seed_fields(state);
+    if (state.mode == 1 && p2p_lobby_state().player_name[0] != '\0') {
+        SetLinkLobbyLocalPlayerIdentity(state,
+            p2p_lobby_state().player_name.data());
+    }
     if (join_existing_lobby && pending_join_socket != INVALID_SOCKET) {
         state.shared_peer_socket = pending_join_socket;
         if (player_index_valid(state.local_player_index)) {
@@ -5916,6 +6449,12 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
             return false;
         }
     }
+    if (link_lobby_uses_single_group_room_layout(state)) {
+        ShowWindow(state.avatar_info_button.window, SW_HIDE);
+        for (LegacyImageButtonControl& button : state.avatar_buttons) {
+            ShowWindow(button.window, SW_HIDE);
+        }
+    }
 
     LoadBitmapMemoryResourceFromTrcRecord(state.background, "Jw2_19.trc",
         kLinkLobbyBackgroundBitmapRecord);
@@ -5951,6 +6490,8 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
         reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
     SendMessageA(state.game_list.window, WM_SETFONT,
         reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+    RedrawWindow(state.game_list.window, nullptr, nullptr,
+        RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
     SendMessageA(state.chat_edit.window, EM_LIMITTEXT, 200, 0);
     sync_game_list_scroll(state, false);
     InstallLinkLobbyAccelerators(state);
@@ -5974,6 +6515,8 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
     SetDirectPlayMessageDispatchMode(6);
     SetFocus(state.chat_edit.window);
     ShowWindow(state.window, SW_SHOW);
+    RedrawWindow(state.window, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE |
+        RDW_UPDATENOW | RDW_ALLCHILDREN);
     state.visible = true;
     return true;
 }
@@ -6005,6 +6548,16 @@ LRESULT HandleLinkLobbyWindowMessage(LinkLobbyState& state, HWND hwnd, UINT mess
             }
             EndPaint(hwnd, &paint);
             return 0;
+        }
+        break;
+    case WM_ERASEBKGND:
+        if (hwnd == state.window) {
+            HDC dc = reinterpret_cast<HDC>(wparam);
+            StretchBitmapMemoryResourceToDc(state.background, dc, 0, 0);
+            if (state.game_type == 8) {
+                StretchBitmapMemoryResourceToDc(state.download_background, dc, 600, 277);
+            }
+            return 1;
         }
         break;
     case WM_DRAWITEM: {
@@ -6067,8 +6620,12 @@ LRESULT HandleLinkLobbyWindowMessage(LinkLobbyState& state, HWND hwnd, UINT mess
         NoOpLinkLobbyUnusedOwnerDrawControl(state, draw);
         break;
     }
-    case WM_CTLCOLOREDIT:
     case WM_CTLCOLORLISTBOX:
+        SetTextColor(reinterpret_cast<HDC>(wparam), kLinkSoftWhite);
+        SetBkColor(reinterpret_cast<HDC>(wparam), kLinkBlack);
+        SetBkMode(reinterpret_cast<HDC>(wparam), TRANSPARENT);
+        return reinterpret_cast<LRESULT>(GetStockObject(BLACK_BRUSH));
+    case WM_CTLCOLOREDIT:
     case WM_CTLCOLORSTATIC:
         SetTextColor(reinterpret_cast<HDC>(wparam), kLinkSoftWhite);
         SetBkColor(reinterpret_cast<HDC>(wparam), kLinkBlack);
@@ -6105,6 +6662,7 @@ LRESULT HandleLinkLobbyWindowMessage(LinkLobbyState& state, HWND hwnd, UINT mess
                 }
                 queue_packet(state, packet.data(), static_cast<i32>(packet.size()));
                 if (state.callbacks.start_game != nullptr) {
+                    append_link_lobby_log("link countdown complete calling start_game");
                     state.callbacks.start_game(state);
                 }
                 destroy_window(state);
@@ -6282,6 +6840,11 @@ LRESULT HandleLinkLobbyControlMessage(LinkLobbyState& state, HWND hwnd, UINT mes
     WPARAM wparam, LPARAM lparam) {
     const int id = static_cast<int>(GetWindowLongPtrA(hwnd, GWLP_ID));
 
+    if (message == WM_ERASEBKGND &&
+        erase_game_list_background_if_current(
+            state, hwnd, reinterpret_cast<HDC>(wparam))) {
+        return 1;
+    }
     if (message == WM_PAINT && hwnd == state.game_list_scroll.window) {
         PAINTSTRUCT paint{};
         HDC dc = BeginPaint(hwnd, &paint);

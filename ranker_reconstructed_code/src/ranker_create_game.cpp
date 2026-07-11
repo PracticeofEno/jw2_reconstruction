@@ -949,7 +949,15 @@ bool launch_create_game_link_lobby(CreateGameState& state) {
     HINSTANCE instance = state.instance;
     LPARAM return_context = state.return_context;
     const int mode = state.mode;
-    DestroyWindow(state.window);
+    HWND old_window = state.window;
+    if (old_window != nullptr && IsWindow(old_window)) {
+        ShowWindow(old_window, SW_HIDE);
+        DestroyWindow(old_window);
+    }
+    if (owner != nullptr && IsWindow(owner)) {
+        RedrawWindow(owner, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE |
+            RDW_UPDATENOW | RDW_ALLCHILDREN);
+    }
     CreateLinkLobbyWindow(link_lobby_state(), owner, instance, 0,
         reinterpret_cast<LPARAM>(state.map_descriptor_payload.data()),
         reinterpret_cast<LPARAM>(state.session_seed_payload.data()), mode,
@@ -1222,6 +1230,17 @@ bool paint_background_if_current(CreateGameState& state, HWND hwnd) {
         StretchBitmapMemoryResourceToDc(state.avatar_level_panel, paint.hdc, 538, 202);
     }
     EndPaint(hwnd, &paint);
+    return true;
+}
+
+bool erase_background_if_current(CreateGameState& state, HWND hwnd, HDC dc) {
+    if (hwnd != state.window || dc == nullptr) {
+        return false;
+    }
+    StretchBitmapMemoryResourceToDc(state.background, dc, 0, 0);
+    if (state.avatar_level_controls_visible) {
+        StretchBitmapMemoryResourceToDc(state.avatar_level_panel, dc, 538, 202);
+    }
     return true;
 }
 
@@ -1651,6 +1670,8 @@ bool CreateCreateGameWindow(CreateGameState& state, HWND parent, HINSTANCE insta
         state.game_type >= 3 && state.game_type <= 4);
     InstallCreateGameAccelerators(state);
     ShowWindow(state.window, SW_SHOW);
+    RedrawWindow(state.window, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE |
+        RDW_UPDATENOW | RDW_ALLCHILDREN);
     SetFocus(state.name_edit.window);
     state.visible = true;
     return true;
@@ -2078,6 +2099,11 @@ LRESULT HandleCreateGameWindowMessage(CreateGameState& state, HWND hwnd,
     case WM_PAINT:
         if (paint_background_if_current(state, hwnd)) {
             return 0;
+        }
+        break;
+    case WM_ERASEBKGND:
+        if (erase_background_if_current(state, hwnd, reinterpret_cast<HDC>(wparam))) {
+            return 1;
         }
         break;
     case WM_CTLCOLOREDIT:

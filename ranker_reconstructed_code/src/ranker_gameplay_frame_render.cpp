@@ -31,6 +31,8 @@ constexpr std::size_t kUnitDefinitionLowHealthOverlayXOffsetTableBase = 0x180c;
 constexpr std::size_t kUnitDefinitionLowHealthOverlayYOffsetTableBase = 0x190c;
 constexpr std::size_t kUnitDefinitionShadowAttachmentCountOffset = 0x13f0;
 constexpr std::size_t kUnitDefinitionShadowDebrisSelectorOffset = 0x13fc;
+constexpr std::size_t kUnitDefinitionAlternateMovingFrameCountOffset = 0x13f4;
+constexpr std::size_t kUnitDefinitionAlternateIdleFrameCountOffset = 0x1408;
 constexpr std::size_t kUnitDefinitionShadowDrawModeOffset = 0x33c;
 constexpr std::size_t kUnitDefinitionShadowAttachmentFrameTableBase = 0x1b0c;
 constexpr std::size_t kUnitDefinitionShadowAttachmentXOffsetTableBase = 0x1c0c;
@@ -642,9 +644,9 @@ bool draw_unit_shadow_attachment_sprites(const UnitAnimationDrawCommand& command
     if ((command.unit->command_state & kUnitAnimCommandStateMirror) != 0) {
         if (debris_selector != 0 && debris_selector != 0xffffffffu &&
             jw207.debris_start != kInvalidResourceEntry) {
-            const u32 progress = command.unit->command_lockout_ticks != 0
+            const u32 progress = command.unit->command_entry_lockout_ticks != 0
                 ? std::min<u32>((3u * command.unit->animation_timer) /
-                    command.unit->command_lockout_ticks, 2)
+                    command.unit->command_entry_lockout_ticks, 2)
                 : 0;
             const u32 entry = jw207.debris_start + (debris_selector - 1) * 3 + progress;
             drew = DrawResourceSpriteToken1Shadow(
@@ -1120,7 +1122,10 @@ UnitAnimationUnit make_unit_animation_unit(const UnitRenderItem& item,
     unit.owner_id = item.owner_id;
     unit.runtime_slot_index = item.runtime_slot_index;
     unit.command_flags = item.command_flags;
+    unit.command_bit_mask = item.command_bit_mask;
+    unit.command_value = item.command_value;
     unit.command_state = item.command_state;
+    unit.previous_command_state = item.previous_command_state;
     unit.animation_flags = item.animation_flags;
     unit.marker_flags = item.marker_flags;
     unit.state_flags = item.state_flags;
@@ -1128,6 +1133,7 @@ UnitAnimationUnit make_unit_animation_unit(const UnitRenderItem& item,
     unit.runtime_flags = item.runtime_flags;
     unit.animation_frame = item.animation_frame;
     unit.animation_timer = item.animation_timer;
+    unit.command_entry_lockout_ticks = item.command_entry_lockout_ticks;
     unit.command_lockout_ticks = item.command_lockout_ticks;
     unit.direction = item.direction;
     unit.screen_x = screen_x;
@@ -1177,6 +1183,14 @@ UnitAnimationDefinition make_unit_animation_definition(const UnitRenderItem& ite
         read_unit_definition_i32(item.type_id,
             kUnitDefinitionMovingAltFrameCountOffset, 0) != 0 &&
         has_unit_animation_image_group(item.type_id, 7);
+    definition.has_alternate_default_resource =
+        read_unit_definition_i32(item.type_id,
+            kUnitDefinitionAlternateIdleFrameCountOffset, 0) != 0 &&
+        has_unit_animation_image_group(item.type_id, 13);
+    definition.has_alternate_default_resource_alt =
+        read_unit_definition_i32(item.type_id,
+            kUnitDefinitionAlternateMovingFrameCountOffset, 0) != 0 &&
+        has_unit_animation_image_group(item.type_id, 8);
     definition.has_queued_command_resource =
         read_unit_definition_i32(item.type_id,
             kUnitDefinitionQueuedCommandFrameCountOffset, 0) != 0 &&
@@ -1210,11 +1224,12 @@ UnitAnimationDrawContext make_unit_animation_context(
     context.special_overlay_resources_loaded = true;
     context.status_overlay_resources_loaded = true;
     context.use_555_color = SurfacePixelMode555();
-    const InterfaceResourceState& interface_resources = interface_resource_state();
-    if (interface_resources.resource_rewind_entry != kInvalidResourceEntry) {
-        context.selection_marker_base_entry =
-            interface_resources.resource_rewind_entry + 6;
-    }
+    // DrawUnitSelectionOrTargetMarker reads DAT_008685f8, initialized by
+    // LoadGameplayUiResourcePacks (0x004e8714) to the JW2_02 small-character
+    // resource sequence base + 6.  Interface-theme entry + 6 is msg_p.spz and
+    // causes unrelated HUD art to be used as world markers.
+    context.selection_marker_base_entry =
+        gameplay_ui_resource_state().small_character_aliases[6];
     InitializeOriginalUnitAnimationFrameTables(context.tables);
     InitializeUnitRenderColorRamps(context);
     return context;
@@ -1260,15 +1275,18 @@ void RenderGameplayFrameComposite(GameplayFrameRenderContext& context) {
     if (context.render_command_queue != nullptr) {
         ProcessGameplayRenderCommandQueue(*context.render_command_queue);
     }
-    frame_callback(context, context.callbacks.draw_map_brushes);
-    frame_callback(context, context.callbacks.draw_first_overlay);
-    frame_callback(context, context.callbacks.draw_second_overlay);
-    frame_callback(context, context.callbacks.draw_third_overlay);
+    // FUN_004d7790 proceeds directly from FUN_004d8050 (sorted render-queue
+    // dispatch) to FUN_00420580 (fog).  The standalone viewport-brush builder
+    // was reconstruction-only work performed after its output could be queued,
+    // and its commands were never consumed by this or the following frame.
     if (context.fog != nullptr) {
         context.fog->camera_x = context.camera_x;
         context.fog->camera_y = context.camera_y;
         RenderGameplayFogOverlay(*context.fog);
     }
+    frame_callback(context, context.callbacks.draw_first_overlay);
+    frame_callback(context, context.callbacks.draw_second_overlay);
+    frame_callback(context, context.callbacks.draw_third_overlay);
     if (context.hud != nullptr) {
         context.hud->frame_counter = context.frame_counter;
         context.hud->current_tick_ms = context.current_tick_ms;
@@ -1786,7 +1804,8 @@ GameplayRenderSpriteVariant ResolveGameplayRenderSpriteVariant(
     if ((state_flags & kUnitAnimStateBlendMode40) != 0) {
         return GameplayRenderSpriteVariant::high_green_mask;
     }
-    if ((item.command_flags & 0x40u) != 0 || (item.runtime_flags & 0x80u) != 0) {
+    if ((item.command_flags & 0x40u) != 0 ||
+        (item.command_bit_mask & 0x80u) != 0) {
         return GameplayRenderSpriteVariant::half_blend;
     }
     if ((state_flags & kUnitAnimStateDirectSpriteMode) != 0) {

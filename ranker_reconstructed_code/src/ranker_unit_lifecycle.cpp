@@ -212,9 +212,15 @@ bool advance_lifecycle_command_lockout(UnitMovementUnit& unit) {
 void reset_runtime_fields(UnitMovementUnit& unit) {
     unit.command_state = kUnitStateRuntimeIdleAcquire;
     unit.command_flags = 0;
-    unit.command_bits = {};
+    // InitializePlacedUnitFromMapSlot (0x004cf454) writes raw +0x5c to zero.
+    // The definition word at the similarly inferred catalog offset is a type
+    // flag field, not the unit's mutable subtype-06 command-bit state.
+    unit.command_bits.fill(0);
     unit.runtime_flags = 1;
     unit.draw_flags = 0;
+    unit.previous_command_state = 0;
+    unit.cell_channel_additive_frame = 0;
+    unit.cell_flag40_animation_frame = 0;
     unit.command_entry_lockout_ticks = 0;
     unit.action_mode = 0;
     unit.action_mode_gate = 0;
@@ -249,7 +255,7 @@ bool same_tile_as_active_unit(UnitLifecycleContext& context, UnitMovementUnit& u
             continue;
         }
         const UnitMovementDefinition& definition = definition_for(context, *candidate);
-        if (definition.placement_class == 3) {
+        if (definition.movement_class == 3) {
             continue;
         }
         if (collision_world_to_tile(candidate->x) == tile_x &&
@@ -314,8 +320,8 @@ bool find_unit_tile(UnitLifecycleContext& context, UnitMovementUnit& unit,
                 const i32 tile_x = scan_left + static_cast<i32>(column);
                 if (small_unit_placement_tile_fits(context, unit, tile_x, tile_y,
                         terrain_class, require_matching_terrain)) {
-                    x = tile_to_center(static_cast<u32>(tile_x));
-                    y = tile_to_center(static_cast<u32>(tile_y));
+                    x = tile_to_origin(static_cast<u32>(tile_x));
+                    y = tile_to_origin(static_cast<u32>(tile_y));
                     return true;
                 }
             }
@@ -341,8 +347,8 @@ bool find_large_footprint_tile(UnitLifecycleContext& context, UnitMovementUnit& 
     if (!footprint_fits_at(context, unit, tile_x, tile_y, true, terrain_class)) {
         return false;
     }
-    x = tile_to_center(tile_x);
-    y = tile_to_center(tile_y);
+    x = tile_to_origin(tile_x);
+    y = tile_to_origin(tile_y);
     return true;
 }
 
@@ -384,8 +390,10 @@ void HandleUnitCreationRegisterFootprint(UnitLifecycleContext& context,
     unit.action_mode_gate = 0;
     unit.linked_object_id = unit.id;
     unit.linked_unit = &unit;
-    unit.saved_path_target_x = unit.path_target_x;
-    unit.saved_path_target_y = unit.path_target_y;
+    // Original 0x004ce42d copies raw +0x78/+0x7c (the aligned current-cell
+    // coordinates) to the saved rally fields at +0xc8/+0xcc.
+    unit.saved_path_target_x = unit.current_cell_x;
+    unit.saved_path_target_y = unit.current_cell_y;
     increment_owner_type_count(context, unit.owner_id, unit.type_id);
 
     const UnitMovementDefinition& definition = definition_for(context, unit);
@@ -781,15 +789,15 @@ bool CheckPlacementFootprintCell(UnitLifecycleContext& context,
         ((cell->alternate_flags & 0x1c000000) >> 26) != terrain_class) {
         return false;
     }
-    u32 collision_tile_x = tile_x;
-    u32 collision_tile_y = tile_y;
-    if (uses_nearby_passable_placement_fallback(unit.type_id) &&
-        !find_nearby_passable_placement_tile(context, tile_x, tile_y,
-            collision_tile_x, collision_tile_y)) {
-        return false;
+    if (uses_nearby_passable_placement_fallback(unit.type_id)) {
+        u32 nearby_tile_x = tile_x;
+        u32 nearby_tile_y = tile_y;
+        if (find_nearby_passable_placement_tile(context, tile_x, tile_y,
+                nearby_tile_x, nearby_tile_y)) {
+            return false;
+        }
     }
-    return !same_tile_as_active_unit(context, unit, collision_tile_x,
-        collision_tile_y);
+    return !same_tile_as_active_unit(context, unit, tile_x, tile_y);
 }
 
 bool CheckUnitPlacementFootprintArea(UnitLifecycleContext& context,
@@ -902,10 +910,16 @@ bool InitializePlacedUnitFromMapSlot(UnitLifecycleContext& context,
     unit.destination_y = y;
     unit.current_cell_x = x & ~0x1f;
     unit.current_cell_y = y & ~0x1f;
-    unit.path_target_x = x;
-    unit.path_target_y = y;
-    unit.next_path_x = x;
-    unit.next_path_y = y;
+    // InitializePlacedUnitFromMapSlot (original 0x004cf229) keeps the
+    // command path fields clear for a freshly placed unit.  It copies the
+    // placement point to raw +0xb8/+0xbc, +0xc0/+0xc4 and +0xd0/+0xd4, but
+    // explicitly leaves the path target (+0x6c/+0x70) and next path
+    // (+0xc8/+0xcc) at zero.  Seeding these fields with x/y changes the first
+    // idle/docking transition and consumes an extra gameplay RNG call.
+    unit.path_target_x = 0;
+    unit.path_target_y = 0;
+    unit.next_path_x = 0;
+    unit.next_path_y = 0;
     unit.anchor_x = x;
     unit.anchor_y = y;
     reset_runtime_fields(unit);
@@ -916,6 +930,10 @@ bool InitializePlacedUnitFromMapSlot(UnitLifecycleContext& context,
     unit.max_secondary_value = definition->initial_max_secondary_value;
     unit.secondary_value = (unit.max_secondary_value >> 2) +
         (unit.max_secondary_value >> 3);
+    // Original 0x004cf300/0x004cf30c copy the definition's two runtime profile
+    // fields into raw +0x1c/+0x20 for every newly placed unit.
+    unit.runtime_stat_1c = definition->profile_offense_value;
+    unit.runtime_stat_20 = definition->profile_defense_value;
     unit.runtime_stat_28 = definition->initial_secondary_value;
 
     if ((definition->footprint_flags & 2) != 0 ||
@@ -932,7 +950,10 @@ bool InitializePlacedUnitFromMapSlot(UnitLifecycleContext& context,
         unit.work_timer = 0;
         unit.action_mode = definition->production_spawn_time / 10;
         unit.runtime_stat_28 = unit.action_mode * definition->initial_max_health;
-        unit.health = unit.max_health != 0 ? 1 : unit.health;
+        // InitializePlacedUnitFromMapSlot 0x004cf538 writes raw health +0x18
+        // to one unconditionally for construction-class placements, including
+        // definitions whose initial max health is zero.
+        unit.health = 1;
     }
 
     SetUnitFootprintOccupancyBits(context, unit);

@@ -87,6 +87,11 @@ struct Mode1ReliableRuntimeState {
     bool last_send_succeeded = true;
     Mode1ReliableCallbacks callbacks{};
     void* callback_user_data = nullptr;
+    // Compatibility heartbeats may have to wait until the authoritative
+    // peer's checksum with the same FIFO ordinal has arrived.  Keep the
+    // snapshot gate open in that case instead of publishing a speculative
+    // value that the original executable would treat as a desync.
+    bool compatibility_checksum_snapshot_deferred = false;
 };
 
 Mode1ReliableRuntimeState& mode1_reliable_state();
@@ -112,6 +117,10 @@ u32 GetMode1ReliableExpectedSequence(u32 channel);
 void ClearMode1ReliableMissingRangeRequest(u32 channel);
 void MarkMode1ReliableLocalBroadcastEnd(u32 end_sequence);
 void CollectMode1Subtype10Value(const Mode1ReliablePacket& packet);
+u32 GetMode1ReliableChecksumAuthorityChannel();
+bool TryGetMode1ReliableAuthoritativeSubtype10Value(
+    u32 authority_channel, u32 local_channel, u32& out_value,
+    u32* out_fifo_index = nullptr);
 
 bool AcceptMode1OrderedPacket(const void* packet, u32 packet_size);
 bool PopMode1OrderedPacket(u32 channel, Mode1ReliablePacket& out_packet);

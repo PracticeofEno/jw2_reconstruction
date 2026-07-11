@@ -286,8 +286,8 @@ void draw_mode_button(ConnectFrontendState& state, const DRAWITEMSTRUCT& draw) {
     }
 
     const bool selected = mode_for_button_id(draw.CtlID) == state.selected_mode;
-    StretchBitmapMemoryResourceToDc(selected ? button->pressed_bitmap :
-        button->normal_bitmap, draw.hDC, 0, 0);
+    StretchBitmapMemoryResourceToDc(selected ? button->normal_bitmap :
+        button->pressed_bitmap, draw.hDC, 0, 0);
 }
 
 void launch_selected_mode(ConnectFrontendState& state) {
@@ -707,8 +707,8 @@ bool CreateConnectFrontendWindow(ConnectFrontendState& state, HWND parent,
     }
 
     install_accelerators(state);
-    RedrawWindow(state.window, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW |
-        RDW_ALLCHILDREN);
+    RedrawWindow(state.window, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE |
+        RDW_UPDATENOW | RDW_ALLCHILDREN);
     state.visible = true;
     return true;
 }
@@ -766,6 +766,13 @@ LRESULT HandleConnectFrontendWindowMessage(ConnectFrontendState& state, HWND hwn
             StretchBitmapMemoryResourceToDc(state.background, dc, 0, 0);
             EndPaint(hwnd, &paint);
             return 0;
+        }
+        break;
+    case WM_ERASEBKGND:
+        if (hwnd == state.window) {
+            StretchBitmapMemoryResourceToDc(state.background,
+                reinterpret_cast<HDC>(wparam), 0, 0);
+            return 1;
         }
         break;
     case WM_GETMINMAXINFO: {
@@ -938,6 +945,19 @@ bool LoadConnectFrontendConfiguration(ConnectFrontendState& state) {
     state.configuration.free_server_port = state.configuration.p2p_tcp_port;
     state.configuration.p2p_udp_port = indexed_u32_or_zero(0x2e);
     state.configuration.max_players = indexed_u32_or_zero(0x30);
+    if (const char* offset_text = std::getenv("RANKER_RECONSTRUCTED_PORT_OFFSET")) {
+        const unsigned long offset = std::strtoul(offset_text, nullptr, 10);
+        if (offset <= 0xffffu) {
+            const auto shifted_port = [offset](u32 port) {
+                return port != 0 && port + offset <= 0xffffu
+                    ? static_cast<u32>(port + offset) : port;
+            };
+            state.configuration.p2p_tcp_port =
+                shifted_port(state.configuration.p2p_tcp_port);
+            state.configuration.p2p_udp_port =
+                shifted_port(state.configuration.p2p_udp_port);
+        }
+    }
     DestroyIndexedTextTableContext(indexed_table);
     state.configuration.loaded = true;
     return true;

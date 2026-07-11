@@ -104,6 +104,13 @@ struct AsyncComRuntimeState {
     bool mode6_system_ready_seen = false;
     HRESULT last_result = S_OK;
     i32 mode1_last_send_status = 0;
+    u32 mode1_udp_send_attempt_count = 0;
+    u32 mode1_udp_send_success_count = 0;
+    u32 mode1_udp_send_failure_count = 0;
+    u32 mode1_udp_receive_packet_count = 0;
+    u32 mode1_udp_receive_byte_count = 0;
+    u32 mode1_udp_last_sender_address = 0;
+    u16 mode1_udp_last_sender_port = 0;
     u32 received_message_count = 0;
     u32 receive_dispatch_mode = 0;
     i32 active_network_transport_mode = -1;

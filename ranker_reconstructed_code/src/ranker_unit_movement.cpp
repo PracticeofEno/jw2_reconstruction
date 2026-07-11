@@ -28,6 +28,12 @@ constexpr std::array<UnitMovementPoint, 9> kUnitMovementDirection8Deltas = {{
     {0, 0}, {0, -4}, {2, -2}, {4, 0}, {2, 2},
     {0, 4}, {-2, 2}, {-4, 0}, {-2, -2},
 }};
+// DAT_0072cee0 is a separate one-pixel separation-step table.  It must not be
+// conflated with the four-pixel animation movement deltas above.
+constexpr std::array<UnitMovementPoint, 9> kLegacySeparationDirectionDeltas = {{
+    {0, 0}, {0, -1}, {1, -1}, {1, 0}, {1, 1},
+    {0, 1}, {-1, 1}, {-1, 0}, {-1, -1},
+}};
 constexpr std::array<UnitMovementPoint, 9> kUnitMovementTileDirection8Deltas = {{
     {0, 0}, {0, -32}, {32, -32}, {32, 0}, {32, 32},
     {0, 32}, {-32, 32}, {-32, 0}, {-32, -32},
@@ -430,10 +436,10 @@ UnitMovementPoint legacy_fallback_direction_delta(u32 direction) {
         direction = 1;
     }
     const u32 remapped = kLegacyFallbackDirectionRemap[direction];
-    if (remapped >= kUnitMovementDirection8Deltas.size()) {
+    if (remapped >= kLegacySeparationDirectionDeltas.size()) {
         return {};
     }
-    return kUnitMovementDirection8Deltas[remapped];
+    return kLegacySeparationDirectionDeltas[remapped];
 }
 
 bool legacy_ground_fallback_cell_allows(const UnitMovementUnit& unit,
@@ -1798,7 +1804,7 @@ void ResetUnitMovementInterpolationState(UnitMovementUnit& unit,
         return;
     }
 
-    const u32 frame_count = unit.definition.animation_frame_count;
+    const u32 frame_count = unit.definition.movement_animation_frame_count;
     unit.animation_frame =
         frame_count == 0 ? 0 : random_animation_frame.value_or(0) % frame_count;
 }
@@ -2022,7 +2028,9 @@ bool CheckUnitCommandGateWithProductionEffect12(
     if ((unit.runtime_flags & 0x20) != 0) {
         return false;
     }
-    if (unit.type_id >= 0x60 && unit.movement_state == 1) {
+    // Original raw +0x30 is the construction/action gate field.  Movement
+    // state lives at raw +0xb0 and must not suppress this command gate.
+    if (unit.type_id >= 0x60 && unit.action_mode_gate == 1) {
         return false;
     }
     return true;
@@ -2225,6 +2233,23 @@ bool RunLegacyUnitPathfinder(UnitMovementContext& context, UnitMovementUnit& uni
 
     UnitMovementPoint resolved_goal = goal_tile;
     bool goal_adjusted = false;
+    auto first_motion_tile_can_enter =
+        [&](UnitMovementPoint candidate_tile) {
+            const UnitMovementPoint candidate_center =
+                tile_center_point(candidate_tile);
+            const u32 direction = CalculateUnitDirectionToPoint(
+                unit, candidate_center.x, candidate_center.y);
+            if (direction == 0 ||
+                direction >= kUnitMovementTileDirection8Deltas.size()) {
+                return true;
+            }
+            const UnitMovementPoint step =
+                kUnitMovementTileDirection8Deltas[direction];
+            const UnitMovementPoint first_tile{
+                start_tile.x + step.x / 32,
+                start_tile.y + step.y / 32};
+            return check_pathfinder_tile_can_enter(context, unit, first_tile);
+        };
     auto apply_legacy_pathfinder_outputs =
         [&](UnitMovementPoint path_target_tile, UnitMovementPoint next_path_tile,
             bool direct_path) {
@@ -2262,7 +2287,8 @@ bool RunLegacyUnitPathfinder(UnitMovementContext& context, UnitMovementUnit& uni
         return true;
     }
 
-    if (CheckStraightUnitPathTiles(context, unit, start_tile, resolved_goal)) {
+    if (CheckStraightUnitPathTiles(context, unit, start_tile, resolved_goal) &&
+        first_motion_tile_can_enter(resolved_goal)) {
         apply_legacy_pathfinder_outputs(resolved_goal, resolved_goal, true);
         if (out_path_tiles != nullptr) {
             *out_path_tiles = BuildStraightUnitPathTiles(start_tile, resolved_goal);
@@ -2358,16 +2384,23 @@ bool RunLegacyUnitPathfinder(UnitMovementContext& context, UnitMovementUnit& uni
 
     UnitMovementPoint waypoint = path.size() > 1 ? path[1] : path.front();
     for (std::size_t i = path.size(); i-- > 1;) {
-        if (CheckStraightUnitPathTiles(context, unit, start_tile, path[i])) {
+        // The Bresenham tile trace and the eight-direction pixel mover can
+        // choose different first cells for shallow slopes.  Do not smooth to
+        // a waypoint whose actual first motion step is blocked; retain path[1]
+        // so the unit follows the valid BFS edge out of the cell.
+        if (CheckStraightUnitPathTiles(context, unit, start_tile, path[i]) &&
+            first_motion_tile_can_enter(path[i])) {
             waypoint = path[i];
             break;
         }
     }
 
-    if (!reached_goal) {
-        goal_adjusted = true;
-    }
-    apply_legacy_pathfinder_outputs(path.back(), waypoint, false);
+    // A bounded search may only find a partial route during this pass.  Keep
+    // the requested (or nearest legal) final goal in path_target and expose
+    // only the partial route through next_path.  ProcessUnitMovementStep will
+    // re-run the pathfinder when that waypoint is reached.  Overwriting the
+    // final target with path.back() makes a long one-click move stop early.
+    apply_legacy_pathfinder_outputs(resolved_goal, waypoint, false);
     return reached_goal;
 }
 
@@ -2404,6 +2437,16 @@ u32 ProcessUnitPathToDestination(UnitMovementContext& context, UnitMovementUnit&
             unit.direction = direction;
             unit.wait_ticks = 4;
             unit.runtime_flags &= ~0x8u;
+            const u32 command_metadata_flags =
+                movement_command_metadata_flags(context, unit);
+            if ((command_metadata_flags &
+                    kUnitCommandMetadataPreserveAnimationFrame) == 0) {
+                // Original ProcessUnitPathToDestination 0x004c7465..0x004c748b
+                // consumes one gameplay RNG call with definition +0x2218 for
+                // every successful ground path replan.
+                unit.animation_frame = movement_random_limit(context,
+                    unit.definition.movement_animation_frame_count);
+            }
             unit.movement_state = 2;
             if (context.callbacks.on_path_replanned != nullptr) {
                 context.callbacks.on_path_replanned(context, unit);
@@ -2412,7 +2455,15 @@ u32 ProcessUnitPathToDestination(UnitMovementContext& context, UnitMovementUnit&
         return direction;
     }
 
-    ResetUnitMovementInterpolationState(unit);
+    const u32 command_metadata_flags =
+        movement_command_metadata_flags(context, unit);
+    std::optional<u32> random_animation_frame;
+    if ((command_metadata_flags & kUnitCommandMetadataPreserveAnimationFrame) == 0) {
+        random_animation_frame = movement_random_limit(context,
+            unit.definition.movement_animation_frame_count);
+    }
+    ResetUnitMovementInterpolationState(
+        unit, command_metadata_flags, random_animation_frame);
     return unit.type_id;
 }
 
@@ -2602,23 +2653,25 @@ UnitTerrainClassProbeResult DispatchTerrainClassEntryProbeDetailed(
 }
 
 void ProcessGroundUnitTerrainStep(UnitMovementContext& context, UnitMovementUnit& unit) {
-    const UnitMovementUnit* target =
-        unit.target != nullptr && (unit.target->runtime_flags & 4u) == 0
-            ? unit.target
+    // The original common terrain pass is a short-range unit-separation pass.
+    // It does not advance the command waypoint: it first queries the active-
+    // command spatial index and does nothing when that query has no hit.
+    UnitMovementUnit* target =
+        context.callbacks.query_ground_separation_target != nullptr
+            ? context.callbacks.query_ground_separation_target(context, unit)
             : nullptr;
-    if (target != nullptr && (movement_command_metadata_flags(context, unit) & 1u) != 0) {
+    if (target == nullptr || target == &unit ||
+        (target->runtime_flags & 4u) != 0) {
         return;
     }
-    u32 direction = target != nullptr
-        ? CalculateUnitDirectionToPoint(unit, target->x, target->y)
-        : CalculateUnitDirectionToPoint(unit, unit.next_path_x, unit.next_path_y);
-    if (direction == 0) {
-        direction = target != nullptr ? movement_random_limit(context, 8) + 1 :
-            (unit.direction != 0 ? unit.direction : 1);
+    if ((movement_command_metadata_flags(context, unit) & 1u) != 0) {
+        return;
     }
-    const UnitMovementPoint delta = target != nullptr
-        ? legacy_fallback_direction_delta(direction)
-        : unit.definition.frame_delta_by_direction[std::min<u32>(direction, 8)][0];
+    u32 direction = CalculateUnitDirectionToPoint(unit, target->x, target->y);
+    if (direction == 0) {
+        direction = movement_random_limit(context, 8) + 1;
+    }
+    const UnitMovementPoint delta = legacy_fallback_direction_delta(direction);
     const i32 next_x = unit.x + delta.x;
     const i32 next_y = unit.y + delta.y;
     if (!in_world_bounds(context.map, next_x, next_y)) {
@@ -2635,20 +2688,19 @@ void ProcessGroundUnitTerrainStep(UnitMovementContext& context, UnitMovementUnit
 }
 
 void ProcessAirUnitTerrainStep(UnitMovementContext& context, UnitMovementUnit& unit) {
-    const UnitMovementUnit* target =
-        unit.target != nullptr && (unit.target->runtime_flags & 4u) == 0
-            ? unit.target
+    UnitMovementUnit* target =
+        context.callbacks.query_air_separation_target != nullptr
+            ? context.callbacks.query_air_separation_target(context, unit)
             : nullptr;
-    u32 direction = target != nullptr
-        ? CalculateUnitDirectionToPoint(unit, target->x, target->y)
-        : CalculateUnitDirectionToPoint(unit, unit.next_path_x, unit.next_path_y);
-    if (direction == 0) {
-        direction = target != nullptr ? movement_random_limit(context, 8) + 1 :
-            (unit.direction != 0 ? unit.direction : 1);
+    if (target == nullptr || target == &unit ||
+        (target->runtime_flags & 4u) != 0) {
+        return;
     }
-    const UnitMovementPoint delta = target != nullptr
-        ? legacy_fallback_direction_delta(direction)
-        : unit.definition.frame_delta_by_direction[std::min<u32>(direction, 8)][0];
+    u32 direction = CalculateUnitDirectionToPoint(unit, target->x, target->y);
+    if (direction == 0) {
+        direction = movement_random_limit(context, 8) + 1;
+    }
+    const UnitMovementPoint delta = legacy_fallback_direction_delta(direction);
     const i32 next_x = unit.x + delta.x;
     const i32 next_y = unit.y + delta.y;
     if (in_world_bounds(context.map, next_x, next_y)) {
@@ -2696,8 +2748,14 @@ bool ProcessUnitMovementStep(UnitMovementContext& context, UnitMovementUnit& uni
         const UnitMovementCoreUpdateResult result =
             UpdateUnitMovementTowardPathTarget(
                 movement_production_state_or_empty(context), unit, config);
-        return result.turn.can_advance || result.advance.moved ||
-            result.accumulator_active;
+        // HandleUnitMovementTargetStepEntry (original 0x0040b450) returns the
+        // current direction only while the movement-step accumulator remains
+        // non-zero.  In particular, reaching the exact target drives the
+        // accumulator to zero, clears the movement progress fields, and
+        // returns zero so command state 2 can fall back to idle.  Treating
+        // can_advance as success keeps class-3 units in travel forever because
+        // the zero-direction interpolation branch itself is advanceable.
+        return result.accumulator_active;
     }
 
     const u32 before = CalculateApproxUnitDistance(unit.x, unit.y, unit.next_path_x,
@@ -3040,6 +3098,18 @@ bool ProcessUnitRuntimeStateTick(UnitMovementContext& context, UnitMovementUnit&
             }
         }
         return false;
+    }
+
+    // Original ProcessUnitRuntimeStateTick (0x004c8ddc) consumes the same
+    // post-impact recovery counter as the extended-unit dispatcher.  Without
+    // this block units handled by the base runtime list attack only once and
+    // remain locked on the target forever.
+    if (unit.command_lockout_ticks != 0) {
+        ProcessUnitAnimationTimer(unit);
+        --unit.command_lockout_ticks;
+        if (unit.command_lockout_ticks == 0) {
+            unit.command_flags &= ~0x10u;
+        }
     }
 
     if (unit.wait_ticks != 0) {
