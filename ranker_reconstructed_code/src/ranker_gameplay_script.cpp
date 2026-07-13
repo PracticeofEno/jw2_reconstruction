@@ -251,12 +251,14 @@ void mutate_gameplay_script_object_runtime_flags(
 
 void mutate_gameplay_script_object_script_bit_flags(
     GameplayScriptTriggerObjectState& object, u32 clear_mask, u32 set_mask) {
-    object.script_bit_flags =
-        (object.script_bit_flags & ~clear_mask) | set_mask;
     if (object.unit != nullptr) {
         object.unit->script_bit_flags =
             (object.unit->script_bit_flags & ~clear_mask) | set_mask;
+        object.script_bit_flags = object.unit->script_bit_flags;
+        return;
     }
+    object.script_bit_flags =
+        (object.script_bit_flags & ~clear_mask) | set_mask;
 }
 
 u32 gameplay_script_object_runtime_flags(
@@ -3019,6 +3021,13 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         if (owner != nullptr) {
             // Original DAT_0070728c/DAT_0070726c are the building/unit kill
             // buckets.  Both aliases clear the former and set the latter.
+            UnitLifecycleContext* lifecycle = state.opcode_context.lifecycle;
+            if (lifecycle != nullptr &&
+                command[1] < lifecycle->owner_building_kill_count.size() &&
+                command[1] < lifecycle->owner_unit_kill_count.size()) {
+                lifecycle->owner_building_kill_count[command[1]] = 0;
+                lifecycle->owner_unit_kill_count[command[1]] = command[2];
+            }
             owner->metric = static_cast<i32>(command[2]);
             state.opcode_context.owner_kill_counts_dirty[command[1]] = true;
         }
