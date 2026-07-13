@@ -69,10 +69,6 @@ bool owner_active(const GameplayScriptConditionContext& context, u32 owner_id) {
     return owner != nullptr && owner->status != kGameplayScriptOwnerInactiveStatus;
 }
 
-i32 owner_resource_total(const GameplayScriptOwnerConditionState& owner) {
-    return owner.resource_a + owner.resource_b;
-}
-
 bool owner_has_active_objects(
     const GameplayScriptConditionContext& context, u32 owner_id) {
     const GameplayScriptOwnerConditionState* owner = owner_state(context, owner_id);
@@ -1130,7 +1126,7 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
     case 0x0b: {
         const GameplayScriptOwnerConditionState* owner = owner_state(context, words[2]);
         return owner_active(context, words[2]) &&
-            owner_resource_total(*owner) >= static_cast<i32>(words[1]);
+            static_cast<u32>(owner->metric) >= words[1];
     }
     case 0x0c: {
         const GameplayScriptOwnerConditionState* owner = owner_state(context, words[1]);
