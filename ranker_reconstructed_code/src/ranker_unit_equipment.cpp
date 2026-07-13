@@ -516,8 +516,10 @@ PickupApplyResult apply_unit_equipment_effect_to_unit(UnitCommandContext& contex
         unit.action_mode += amount;
         return PickupApplyResult::consume_map_effect;
     }
-    unit.action_mode += amount;
-    return PickupApplyResult::consume_map_effect;
+    // FUN_00411350 compares the raw category with 3 and takes an unsigned JA
+    // directly to its zero result.  Unknown categories must leave both the
+    // unit reserve and the map effect untouched.
+    return PickupApplyResult::failed;
 }
 
 bool TryApplyUnitEquipmentEffectToUnit(UnitCommandContext& context,
