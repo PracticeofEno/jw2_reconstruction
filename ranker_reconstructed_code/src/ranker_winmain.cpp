@@ -23638,6 +23638,20 @@ void consume_default_gameplay_script_owner_resource_mutations(
         opcode.owner_score_component_dirty[owner] = false;
         opcode.owner_score_reset_dirty[owner] = false;
     }
+    for (u32 owner = 0; owner < opcode.owner_kill_counts_dirty.size(); ++owner) {
+        if (!opcode.owner_kill_counts_dirty[owner]) {
+            continue;
+        }
+        UnitLifecycleContext* lifecycle =
+            g_runtime.gameplay_startup_state.lifecycle;
+        if (lifecycle != nullptr && owner < lifecycle->owner_unit_kill_count.size() &&
+            owner < lifecycle->owner_building_kill_count.size()) {
+            lifecycle->owner_unit_kill_count[owner] = static_cast<u32>(
+                script.condition_context.owners[owner].metric);
+            lifecycle->owner_building_kill_count[owner] = 0;
+        }
+        opcode.owner_kill_counts_dirty[owner] = false;
+    }
 }
 
 void consume_default_gameplay_script_owner_mask_tables(

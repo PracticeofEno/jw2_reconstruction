@@ -2547,8 +2547,10 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptOwnerConditionState* owner =
             owner_state(state.condition_context, command[1]);
         if (owner != nullptr) {
-            owner->resource_a = 0;
-            owner->resource_b = static_cast<i32>(command[2]);
+            // Original DAT_0070728c/DAT_0070726c are the building/unit kill
+            // buckets.  Both aliases clear the former and set the latter.
+            owner->metric = static_cast<i32>(command[2]);
+            state.opcode_context.owner_kill_counts_dirty[command[1]] = true;
         }
         return true;
     }
