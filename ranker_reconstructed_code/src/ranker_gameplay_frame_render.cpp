@@ -944,12 +944,19 @@ void draw_unit_animation_sprite(UnitAnimationDrawContext& context,
         draw_jw211_direct_sprite_mode(command)) {
         return;
     }
-    if (command.sequence == UnitAnimationSequence::low_health_overlay &&
-        draw_unit_low_health_overlay_sprites(command)) {
+    if (command.sequence == UnitAnimationSequence::low_health_overlay) {
+        // FUN_004c58b1 returns directly when a definition has zero damage
+        // overlays.  That empty result is authoritative; falling through
+        // would incorrectly draw the definition's unrelated group-11 frame.
+        (void)draw_unit_low_health_overlay_sprites(command);
         return;
     }
-    if (command.sequence == UnitAnimationSequence::shadow_attachment &&
-        draw_unit_shadow_attachment_sprites(command)) {
+    if (command.sequence == UnitAnimationSequence::shadow_attachment) {
+        // FUN_004c523d commits to the structure debris/attachment branch as
+        // soon as raw state bit 4 selects it.  A definition with no debris or
+        // attachments is still a handled, intentionally empty frame and must
+        // not fall through to the generic group-11 sprite path.
+        (void)draw_unit_shadow_attachment_sprites(command);
         return;
     }
 
