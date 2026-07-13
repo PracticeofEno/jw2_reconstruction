@@ -189,6 +189,16 @@ void mutate_gameplay_script_object_runtime_flags(
     }
 }
 
+void mutate_gameplay_script_object_script_bit_flags(
+    GameplayScriptTriggerObjectState& object, u32 clear_mask, u32 set_mask) {
+    object.script_bit_flags =
+        (object.script_bit_flags & ~clear_mask) | set_mask;
+    if (object.unit != nullptr) {
+        object.unit->script_bit_flags =
+            (object.unit->script_bit_flags & ~clear_mask) | set_mask;
+    }
+}
+
 u32 gameplay_script_object_runtime_flags(
     const GameplayScriptTriggerObjectState& object) {
     return object.unit != nullptr ? object.unit->runtime_flags : object.flags;
@@ -2380,7 +2390,8 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
                 mutate_gameplay_script_object_runtime_flags(
                     object, 0, 0x20000000u);
             } else if (command[0] == 0x3b) {
-                object.script_bit_flags |= 1u << (command[2] & 0x1fu);
+                mutate_gameplay_script_object_script_bit_flags(
+                    object, 0, 1u << (command[2] & 0x1fu));
             } else if (command[0] == 0x3c) {
                 object.stat_2c += static_cast<i32>(command[2]);
             } else if (command[0] == 0x3e) {
@@ -2718,10 +2729,12 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         return true;
     case 0x78: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
-        if (group != nullptr && group->reference_count != 0) {
+        if (group != nullptr &&
+            signed_i32_from_wrapped_u32(group->reference_count) > 0) {
             for_each_group_slot_object(state, *group,
                 [&](GameplayScriptTriggerObjectState& object) {
-                object.script_bit_flags &= ~(1u << (command[2] & 0x1fu));
+                mutate_gameplay_script_object_script_bit_flags(
+                    object, 1u << (command[2] & 0x1fu), 0);
             });
         }
         return true;
