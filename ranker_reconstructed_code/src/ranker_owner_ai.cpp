@@ -986,15 +986,14 @@ bool owner_ai_population_gap_open(const OwnerAiStrategicRetargetGateInput& input
     if (!owner_slot_valid(owner_slot)) {
         return false;
     }
-    const u32 limit = input.owner_population_limit[owner_slot];
-    if (limit == 0) {
-        return true;
-    }
-    if (limit <= kOwnerAiPopulationRetargetReserve) {
-        return false;
-    }
-    return input.owner_population_used[owner_slot] <
-        limit - kOwnerAiPopulationRetargetReserve;
+    // 0x0044095f subtracts in a 32-bit register and follows CMP with signed
+    // JL.  Preserve both the wrap and the signed interpretation, including
+    // the hard-limit 0..5 and high-bit boundaries.
+    const u32 wrapped_threshold = input.owner_population_limit[owner_slot] -
+        kOwnerAiPopulationRetargetReserve;
+    return signed_i32_from_wrapped_u32(
+               input.owner_population_used[owner_slot]) <
+        signed_i32_from_wrapped_u32(wrapped_threshold);
 }
 
 bool owner_ai_default_pressure_unit_eligible(const UnitMovementUnit& unit) {

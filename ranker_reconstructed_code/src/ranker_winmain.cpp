@@ -21575,8 +21575,8 @@ void default_owner_ai_process_production_demand(
         owner_ai.owner_population_reserved[owner] : 0;
     input.resource_budget_percent = owner_ai.owners[owner].resource_budget_percent;
     input.resource_budget_cap_base =
-        owner < lifecycle->owner_population_used.size() ?
-        lifecycle->owner_population_used[owner] + 10 : 10;
+        owner < lifecycle->owner_population_limit.size() ?
+        lifecycle->owner_population_limit[owner] : 0;
     input.target_composition_percent_bonus =
         owner_ai.owners[owner].profile_counter;
     input.carrier_deficit =

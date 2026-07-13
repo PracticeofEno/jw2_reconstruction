@@ -8,6 +8,7 @@
 #include "ranker_unit_target_helpers.h"
 
 #include <algorithm>
+#include <cstring>
 #include <limits>
 
 namespace ranker {
@@ -18,6 +19,12 @@ constexpr u32 kReservedTileCompletionActionId = 0x26;
 constexpr u32 kSelectedUnitActionEffectBase = 0x3d;
 constexpr u32 kReservedTileCompletionEffectId =
     kSelectedUnitActionEffectBase + kReservedTileCompletionActionId;
+
+i32 signed_i32_from_wrapped_u32(u32 value) {
+    i32 signed_value = 0;
+    std::memcpy(&signed_value, &value, sizeof(signed_value));
+    return signed_value;
+}
 
 UnitMovementContext& movement(UnitCommandContext& context) {
     return *context.movement;
@@ -9183,9 +9190,14 @@ u32 CalculateOwnerResourceBudgetUnitDemand(u32 resource_budget,
         return 0;
     }
 
-    u32 budget = static_cast<u32>(
-        (static_cast<unsigned long long>(resource_budget) * build_percent) / 100);
-    budget = std::min(budget, cap_base + 10);
+    // 0x00443d6d uses the low DWORD of IMUL before unsigned DIV 100.  Its
+    // hard-limit clamp then wraps +10 in a DWORD and branches with signed JLE.
+    u32 budget = (resource_budget * build_percent) / 100u;
+    const u32 wrapped_cap = cap_base + 10u;
+    if (signed_i32_from_wrapped_u32(budget) >
+        signed_i32_from_wrapped_u32(wrapped_cap)) {
+        budget = wrapped_cap;
+    }
     u32 demand = budget / unit_cost;
     if ((budget % unit_cost) != 0) {
         ++demand;
