@@ -220,8 +220,7 @@ bool preview_collision_visibility_gate(
     // carrying raw +0x9c bit 0x40 or raw +0x5c bit 0x80 instead use
     // FUN_004d6cca's owner/current-visibility test.
     const bool requires_visibility_test =
-        ((unit.command_state | unit.command_flags) &
-            kPreviewPlacementVisibilityStateFlag) != 0 ||
+        (unit.command_flags & kPreviewPlacementVisibilityStateFlag) != 0 ||
         (unit.runtime_command_bits &
             (1u << kPreviewPlacementVisibilityCommandBit)) != 0;
     if (!requires_visibility_test) {
