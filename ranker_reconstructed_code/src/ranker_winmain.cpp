@@ -22714,6 +22714,7 @@ void sync_default_gameplay_script_runtime_context(
         lifecycle != nullptr ? lifecycle->movement : default_gameplay_movement_context();
     script.current_tick = state.simulation_frame_counter;
     script.condition_context.enabled = true;
+    script.condition_context.owner_active_counts_available = lifecycle != nullptr;
     // Mode 8 startup writes DAT_00722310 = 0x40 once.  Seed that original
     // global on the first script frame only; later opcode 0x30/0x6a clears
     // must not be undone by OR-ing the startup value on every render.
@@ -22774,6 +22775,13 @@ void sync_default_gameplay_script_runtime_context(
             g_runtime.gameplay_owner_counters.tables[2][owner]);
         condition_owner.blocked_relation_mask =
             g_runtime.gameplay_player_slots.owner_relation_masks[owner];
+
+        script.condition_context.owner_unit_active_count[owner] =
+            lifecycle != nullptr && owner < lifecycle->owner_unit_active_count.size() ?
+            lifecycle->owner_unit_active_count[owner] : 0;
+        script.condition_context.owner_building_active_count[owner] =
+            lifecycle != nullptr && owner < lifecycle->owner_building_active_count.size() ?
+            lifecycle->owner_building_active_count[owner] : 0;
 
         script.condition_context.owner_population_demand[owner] =
             lifecycle != nullptr &&

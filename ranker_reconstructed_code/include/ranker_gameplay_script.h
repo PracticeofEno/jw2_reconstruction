@@ -201,7 +201,13 @@ struct GameplayScriptOwnerConditionState {
 
 struct GameplayScriptConditionContext {
     bool enabled = false;
+    bool owner_active_counts_available = false;
     std::array<GameplayScriptOwnerConditionState, kGameplayScriptOwnerCount> owners{};
+    // Original DAT_007071ec / DAT_0070720c.  These lifecycle totals include
+    // constructing buildings that the owner/type-count table intentionally
+    // omits, so maximum/minimum player conditions need their own snapshot.
+    std::array<u32, kGameplayScriptOwnerCount> owner_unit_active_count{};
+    std::array<u32, kGameplayScriptOwnerCount> owner_building_active_count{};
     // Original DAT_00725a14 / DAT_007259c4: live population demand and
     // population capacity supplied by lifecycle-class-2 units.
     std::array<i32, kGameplayScriptOwnerCount> owner_population_demand{};

@@ -80,9 +80,17 @@ bool owner_active(const GameplayScriptConditionContext& context, u32 owner_id) {
 bool owner_has_active_objects(
     const GameplayScriptConditionContext& context, u32 owner_id) {
     const GameplayScriptOwnerConditionState* owner = owner_state(context, owner_id);
-    return owner != nullptr &&
-        std::any_of(owner->unit_type_counts.begin(), owner->unit_type_counts.end(),
-            [](u32 count) { return count != 0; });
+    if (owner == nullptr) {
+        return false;
+    }
+    if (context.owner_active_counts_available &&
+        owner_id < context.owner_unit_active_count.size() &&
+        owner_id < context.owner_building_active_count.size()) {
+        return context.owner_unit_active_count[owner_id] +
+            context.owner_building_active_count[owner_id] != 0;
+    }
+    return std::any_of(owner->unit_type_counts.begin(), owner->unit_type_counts.end(),
+        [](u32 count) { return count != 0; });
 }
 
 const GameplayScriptTriggerObjectState* object_state(
@@ -613,12 +621,18 @@ u32 count_group_objects_in_area(const GameplayScriptTriggerState& state,
 u32 count_raw_group_objects_in_area(const GameplayScriptTriggerState& state,
     const GameplayScriptTriggerGroup& group, const GameplayScriptArea& area) {
     u32 count = 0;
-    const u32 limit = std::min<u32>(
-        group.reference_count, kGameplayScriptTriggerReferencesPerGroup);
+    const i32 signed_reference_count =
+        signed_i32_from_wrapped_u32(group.reference_count);
+    if (signed_reference_count <= 0) {
+        return 0;
+    }
+    const u32 limit = std::min<u32>(static_cast<u32>(signed_reference_count),
+        kGameplayScriptTriggerReferencesPerGroup);
     for (u32 slot = 0; slot < limit; ++slot) {
         const GameplayScriptTriggerObjectState* object =
             object_state(state, group.object_indices[slot]);
-        if (object != nullptr && (object->flags & 4u) == 0 &&
+        if (object != nullptr &&
+            (gameplay_script_object_runtime_flags(*object) & 4u) == 0 &&
             area_contains_object(area, *object)) {
             ++count;
         }
@@ -1352,7 +1366,8 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
                 !owner_has_active_objects(context, other)) {
                 continue;
             }
-            if (owner->metric < other_owner->metric) {
+            if (static_cast<u32>(owner->metric) <
+                static_cast<u32>(other_owner->metric)) {
                 return false;
             }
         }
@@ -1370,7 +1385,8 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
                 !owner_has_active_objects(context, other)) {
                 continue;
             }
-            if (owner->metric >= other_owner->metric) {
+            if (static_cast<u32>(owner->metric) >=
+                static_cast<u32>(other_owner->metric)) {
                 return false;
             }
         }
@@ -1414,7 +1430,7 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
         const GameplayScriptTriggerGroup* group = group_state(state, words[1]);
         const GameplayScriptArea* area = area_state(state, words[2]);
         return group != nullptr && area != nullptr &&
-            count_group_objects_in_area(state, *group, *area) != 0;
+            count_raw_group_objects_in_area(state, *group, *area) != 0;
     }
     case 0x0f: {
         GameplayScriptTriggerGroup* group = group_state(state, words[1]);
