@@ -215,13 +215,6 @@ void set_script_object_type(GameplayScriptTriggerObjectState& object, u32 type_i
     sync_script_object_identity_to_unit(object);
 }
 
-u32 clamp_u32_add(u32 value, u32 delta, u32 maximum) {
-    if (value >= maximum || delta > maximum - value) {
-        return maximum;
-    }
-    return value + delta;
-}
-
 u32 default_gameplay_script_trigger_owner_phase(u32 lookup_index) {
     switch (lookup_index) {
     case 0x00:
@@ -2066,7 +2059,13 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
             } else if (command[0] == 0x49) {
                 object.stat_24 = command[2];
             } else if (command[0] == 0x4a) {
-                object.stat_54 = clamp_u32_add(object.stat_54, command[2], 999);
+                // Original 0x0041a2b5 performs the 32-bit ADD first and only
+                // then clamps values greater than 999.  Preserve wraparound
+                // for script deltas encoded as large unsigned values.
+                object.stat_54 += command[2];
+                if (object.stat_54 > 999) {
+                    object.stat_54 = 999;
+                }
             } else if (command[0] == 0x4b) {
                 object.stat_54 = std::min<u32>(command[2], 999);
             } else if (command[0] == 0x4c) {
