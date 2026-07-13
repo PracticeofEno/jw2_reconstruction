@@ -22583,10 +22583,13 @@ void sync_default_gameplay_script_object_from_unit(
     object.stat_secondary_current = unit.secondary_value;
     object.bounds.left = unit.definition.bounds_left;
     object.bounds.top = unit.definition.bounds_top;
-    object.bounds.right =
-        unit.definition.bounds_left + unit.definition.bounds_width;
-    object.bounds.bottom =
-        unit.definition.bounds_top + unit.definition.bounds_height;
+    // Gameplay-script condition 0x26 (FUN_0041dc60, 0x0041f4cf..
+    // 0x0041f541) adds raw definition +0x360/+0x364/+0x368/+0x36c
+    // independently to the unit position.  Despite their width/height use
+    // elsewhere, +0x368/+0x36c are the condition's right/bottom offsets; do
+    // not fold the negative left/top offsets into them here.
+    object.bounds.right = unit.definition.bounds_width;
+    object.bounds.bottom = unit.definition.bounds_height;
     object.equipment_slots = unit.equipment_slots;
     for (std::size_t slot = 0;
          slot < unit.item_slots.size() && slot < object.equipment_slots.size();
