@@ -820,10 +820,20 @@ try {
     }
     $consumeEvent = Wait-MeatTraceEvent $meatTracePath 'consume' `
         10 $collectorSlot
-    $consumePass =
-        [bool]$damageConsume.matched -and
-        [bool]$damageConsume.damage_observed -and
+    # The long-lived exact-frame trace starts before combat.  It can observe
+    # the damage/consume transition while the synchronous one-shot condition
+    # probe is still being launched after the UI attack attempts.  Treat that
+    # finalized parity event as authoritative instead of requiring the later
+    # probe to see the already-consumed edge a second time.
+    $consumeEventDamageObserved =
         $null -ne $consumeEvent -and
+        [int]$consumeEvent.original.health_before -lt
+            [int]$pickupState.pair.original.max_health -and
+        [int]$consumeEvent.rebuild.health_before -lt
+            [int]$pickupState.pair.rebuild.max_health
+    $consumeEventPass =
+        $null -ne $consumeEvent -and
+        $consumeEventDamageObserved -and
         [int]$consumeEvent.original.action_delta -lt 0 -and
         [int]$consumeEvent.original.health_delta -eq
             -[int]$consumeEvent.original.action_delta -and
@@ -831,7 +841,16 @@ try {
         [int]$consumeEvent.rebuild.action_delta -lt 0 -and
         [int]$consumeEvent.rebuild.health_delta -eq
             -[int]$consumeEvent.rebuild.action_delta -and
-        [int]$consumeEvent.rebuild.cargo_delta -eq 0
+        [int]$consumeEvent.rebuild.cargo_delta -eq 0 -and
+        [int]$consumeEvent.original.action_before -eq
+            [int]$consumeEvent.rebuild.action_before -and
+        [int]$consumeEvent.original.action_after -eq
+            [int]$consumeEvent.rebuild.action_after -and
+        [int]$consumeEvent.original.health_before -eq
+            [int]$consumeEvent.rebuild.health_before -and
+        [int]$consumeEvent.original.health_after -eq
+            [int]$consumeEvent.rebuild.health_after
+    $consumePass = $consumeEventPass
     $results.consume = [ordered]@{
         pass = $consumePass
         hostile = [ordered]@{
@@ -843,6 +862,8 @@ try {
         }
         explicit_attack = $damageAttack
         paired_damage_consume = $damageConsume
+        exact_event_damage_observed = $consumeEventDamageObserved
+        exact_event_pass = $consumeEventPass
         event = $consumeEvent
     }
     if (-not $consumePass) {

@@ -114,9 +114,11 @@ Assert-Contains $mainSource '[int]$pickupEvent.original.cargo_delta -eq 0' `
 Assert-Contains $mainSource '[int]$_.type -eq 32' `
     'hostile type-32 damage source'
 Assert-Contains $mainSource "`$collectorSlot 'damage-consume'" `
-    'real damage followed by consume probe'
-Assert-Contains $mainSource '[bool]$damageConsume.damage_observed' `
-    'damage is independently observed'
+    'diagnostic damage followed by consume probe'
+Assert-Contains $mainSource '$consumeEventDamageObserved' `
+    'exact trace proves real pre-consume damage'
+Assert-Contains $mainSource '$consumePass = $consumeEventPass' `
+    'long-lived finalized exact-frame event is authoritative'
 Assert-Contains $mainSource '[int]$consumeEvent.original.action_delta -lt 0' `
     'consume decrements action mode'
 Assert-Contains $mainSource `
