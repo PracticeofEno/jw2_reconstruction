@@ -8,6 +8,7 @@
 namespace ranker {
 
 struct UnitMovementUnit;
+struct UnitMovementMap;
 struct TerrainTileSheetState;
 
 constexpr u32 kMapBrushViewportGridWidth = 0x28;
@@ -356,6 +357,11 @@ void UpdateTerrainTilePulseState(
     TerrainTilePulseState& pulse_state, MinimapTerrainLayer& layer);
 void StartTerrainTilePulse(
     TerrainTilePulseState& pulse_state, const MinimapTerrainLayer& layer,
+    i32 tile_x, i32 tile_y);
+void UpdateTerrainTilePulseState(
+    TerrainTilePulseState& pulse_state, UnitMovementMap& map);
+void StartTerrainTilePulse(
+    TerrainTilePulseState& pulse_state, const UnitMovementMap& map,
     i32 tile_x, i32 tile_y);
 bool LoadTerrainTileSheetBank(TerrainTileSheetState& tile_sheet,
     const char* archive_name, i32 bank_index, const MinimapPixelFormat& pixel_format,

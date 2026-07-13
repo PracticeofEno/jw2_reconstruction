@@ -494,7 +494,7 @@ constexpr std::array<std::size_t, kGameplayScriptObjectEquipmentSlots>
 constexpr std::size_t kGameplayScenarioObjectDynamicStringSlotOffset = 0x48;
 constexpr std::size_t kGameplayScenarioObjectEliteProgressOffset = 0x50;
 constexpr std::size_t kGameplayScenarioObjectStatusTimerOffset = 0x54;
-constexpr std::size_t kGameplayScenarioObjectMutableCommandValueOffset = 0x4c;
+constexpr std::size_t kGameplayScenarioObjectCargoAmountOffset = 0x4c;
 constexpr std::size_t kGameplayScenarioObjectTypeFlagsOffset = 0x58;
 constexpr std::size_t kGameplayScenarioObjectCommandBitsOffset = 0x5c;
 constexpr std::size_t kGameplayScenarioObjectCommandStateOffset = 0x60;
@@ -1008,6 +1008,7 @@ RuntimeGlobals g_runtime;
 void sync_default_ui_overlay_runtime_from_gameplay_state();
 void apply_default_ui_overlay_runtime_mutations();
 void process_default_ui_overlay_command_actions();
+void default_gameplay_input_restore_cursor(GameplayInputActionState& input);
 void configure_default_map_effect_context();
 void default_gameplay_frame_mirror_visible_map_effects(GameplayFrameRenderContext& context);
 void default_gameplay_frame_prepare_visible_runtime_resources(
@@ -3603,7 +3604,18 @@ void run_default_ui_overlay_pointer_frame(u32 pointer_state) {
     UiOverlayState& overlay = ui_overlay_state();
     overlay.pointer_state = pointer_state |
         (overlay.pointer_state & kUiOverlayPointerMinimapDrag);
+    UpdateGameplayHoverContextAndTooltip(overlay);
+    if ((pointer_state & kUiOverlayPointerHoldPress) != 0 &&
+        overlay.placement_mode == 0) {
+        default_gameplay_input_restore_cursor(gameplay_input_action_state());
+    }
+    const bool cancel_mode =
+        (pointer_state & kUiOverlayPointerHoldPress) != 0 &&
+        overlay.placement_mode != 0;
     HandleGameplayPointerActionFrame(overlay);
+    if (cancel_mode) {
+        gameplay_input_action_state().pointer_aux_state = 0;
+    }
     UpdateGameplayHoverContextAndTooltip(overlay);
     publish_default_ui_overlay_camera(overlay);
 }
@@ -3654,7 +3666,20 @@ void default_gameplay_input_handle_pointer_event(GameplayInputActionState& state
     if (resolve_selection) {
         ResolveGameplayClickSelection(overlay);
     }
+    if ((pointer_state & kUiOverlayPointerHoldPress) != 0 &&
+        overlay.placement_mode == 0) {
+        // Original input snapshots DAT_00862410 after the contextual cursor
+        // table has resolved the current hover.  Resolve it now as well so a
+        // same-pump MOVE -> RBUTTONDOWN cannot dispatch the previous selector.
+        default_gameplay_input_restore_cursor(state);
+    }
+    const bool cancel_mode =
+        (pointer_state & kUiOverlayPointerHoldPress) != 0 &&
+        overlay.placement_mode != 0;
     HandleGameplayPointerActionFrame(overlay);
+    if (cancel_mode) {
+        state.pointer_aux_state = 0;
+    }
     UpdateGameplayHoverContextAndTooltip(overlay);
     publish_default_ui_overlay_camera(overlay);
 }
@@ -3673,7 +3698,11 @@ void default_gameplay_input_handle_keyboard_event(GameplayInputActionState& stat
     const u8 ascii = (raw_code & 0xff00u) != 0 ?
         static_cast<u8>((raw_code >> 8) & 0xffu) : 0;
     const u32 virtual_key = ascii != 0 ? 0 : raw_code;
+    const bool cancel_mode = virtual_key == 1u && overlay.placement_mode != 0;
     DispatchGameplayUiKeyboardInput(overlay, virtual_key, ascii);
+    if (cancel_mode) {
+        state.pointer_aux_state = 0;
+    }
     apply_default_ui_overlay_runtime_mutations();
     publish_default_ui_overlay_camera(overlay);
 }
@@ -4556,6 +4585,8 @@ bool default_gameplay_input_dispatch_action(
                 static_cast<u32>(harvest_tile.y)) && publish_succeeded;
         }
         if (published && publish_succeeded) {
+            StartTerrainTilePulse(g_runtime.gameplay_terrain_pulse_state,
+                movement->map, harvest_tile.x >> 5, harvest_tile.y >> 5);
             return true;
         }
         return reject_with_common_feedback();
@@ -7463,16 +7494,17 @@ void load_default_gameplay_script_scenario_object(
     object.command_state_raw = read_default_scenario_object_u32(
         bytes, object_base, kGameplayScenarioObjectCommandStateOffset);
     object.script_state = object.command_state_raw & 0x00ffffffu;
-    object.command_value = default_command_payload_reference_to_unit_id(
-        object.script_state,
-        read_default_scenario_object_u32(
-            bytes, object_base, kGameplayScenarioObjectMutableCommandValueOffset));
+    object.cargo_amount = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectCargoAmountOffset);
     object.animation_frame = read_default_scenario_object_u32(
         bytes, object_base, kGameplayScenarioObjectAnimationFrameOffset);
-    object.current_payload_value = default_command_payload_reference_to_unit_id(
-        object.script_state,
-        read_default_scenario_object_u32(
-            bytes, object_base, kGameplayScenarioObjectCommandValueOffset));
+    // Raw +0x68 is a runtime-state-dependent union.  It can be an object pool
+    // offset, a building-definition index, an order id, or a counter.  Runtime
+    // unit ids already use original pool offsets, so preserving this DWORD
+    // verbatim avoids interpreting the current-state and command namespaces as
+    // though they were the same enum.
+    object.command_value = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectCommandValueOffset);
     object.scripted_target_x = read_default_scenario_object_i32(
         bytes, object_base, kGameplayScenarioObjectPathTargetXOffset);
     object.scripted_target_y = read_default_scenario_object_i32(
@@ -15848,20 +15880,27 @@ bool publish_default_ui_overlay_input_command(
     }
     if (action.item_id >= 0xaau && action.item_id < 0xd4u) {
         const u32 action_id = action.item_id - 0xaau;
-        if (action.action == kUiOverlayCommandActionPlacement) {
-            if (action_id == 6u &&
+        if (action.action == kUiOverlayCommandActionPlacement ||
+            action.action == kUiOverlayCommandActionContextual) {
+            const bool placement_action =
+                action.action == kUiOverlayCommandActionPlacement;
+            if (placement_action && action_id == 6u &&
                 !default_worker_build_click_placement_allowed(
                     production, overlay, action)) {
                 reject_default_worker_build_click(input);
                 return true;
             }
-            if (action_id == 7u && action.aux != 0) {
-                // FUN_004da74c falls back to DAT_00862418 when EDI has no
-                // unit target.  The terrain cursor resolver stores class 0x0c
-                // there before dispatching a berry command.  Pointer event Y
-                // happens to share the reconstructed snapshot slot, so retain
-                // the contextual class carried by the queued UI action.
+            if (!placement_action) {
+                // FUN_004d9c00 snapshots resolved hover kind/aux at +0x08 and
+                // +0x0c.  The generic Win32 ring uses those typed fields for
+                // pointer x/y, so restore their original contextual meaning
+                // immediately around this deferred RBUTTON dispatch.
+                input.current_snapshot.field2 = action.flags;
                 input.current_snapshot.field3 = action.aux;
+                // Contextual target validation is rebuilt from this world
+                // point.  Clear any previous command's cached hit first;
+                // selector 7 mode-one deliberately falls back to field3.
+                input.last_validation_unit_offset = 0;
             }
             // Selector 6 has original mode 0, so the generic dispatcher does
             // not pass through its coordinate-validation branch.  Preserve
@@ -15872,10 +15911,12 @@ bool publish_default_ui_overlay_input_command(
                 std::max<i32>(action.world_y, 0));
             DispatchSelectedUnitActionCommand(input, action_id,
                 command_screen_x, command_screen_y, overlay.selected_unit_id);
-            ResetGameplayInputPointerState(input);
-            overlay.staged_unit_action_id = 0xffffffffu;
-            overlay.placement_mode = 0;
-            overlay.selected_production_category = 0;
+            if (placement_action) {
+                ResetGameplayInputPointerState(input);
+                overlay.staged_unit_action_id = 0xffffffffu;
+                overlay.placement_mode = 0;
+                overlay.selected_production_category = 0;
+            }
             return true;
         }
         if (click) {
@@ -22386,6 +22427,7 @@ void initialize_default_unit_from_scenario_object(
     unit.movement_interpolation_y = object.movement_interpolation_y;
     unit.x = object.x;
     unit.y = object.y;
+    unit.cargo_amount = object.cargo_amount;
     unit.command_value = object.command_value;
     unit.path_target_x = object.scripted_target_x;
     unit.path_target_y = object.scripted_target_y;
@@ -22426,10 +22468,6 @@ void initialize_default_unit_from_scenario_object(
     unit.pending_command = to_unit_queued_command(object.pending_command);
     unit.active_command_payload =
         to_unit_queued_command(object.active_command_payload);
-    if (object.current_payload_value != 0) {
-        unit.active_command_payload.x =
-            static_cast<i32>(object.current_payload_value);
-    }
     unit.deferred_command_count = std::min<u32>(
         object.deferred_command_count,
         static_cast<u32>(unit.deferred_commands.size()));
@@ -22862,9 +22900,8 @@ void sync_default_gameplay_script_object_from_unit(
     object.movement_interpolation_y = unit.movement_interpolation_y;
     object.x = unit.x;
     object.y = unit.y;
+    object.cargo_amount = unit.cargo_amount;
     object.command_value = unit.command_value;
-    object.current_payload_value =
-        static_cast<u32>(unit.active_command_payload.x);
     object.scripted_target_x = unit.path_target_x;
     object.scripted_target_y = unit.path_target_y;
     object.scripted_movement_mode = 0;
@@ -23336,11 +23373,8 @@ void apply_default_gameplay_script_object_to_unit(
     unit->movement_interpolation_y = object.movement_interpolation_y;
     unit->x = object.x;
     unit->y = object.y;
+    unit->cargo_amount = object.cargo_amount;
     unit->command_value = object.command_value;
-    if (object.current_payload_value != 0) {
-        unit->active_command_payload.x =
-            static_cast<i32>(object.current_payload_value);
-    }
     if (object.scripted_target_updated || object.scripted_movement_mode != 0) {
         unit->destination_x = object.scripted_target_x;
         unit->destination_y = object.scripted_target_y;
@@ -23575,9 +23609,8 @@ void sync_default_gameplay_script_scenario_record(
             *record, object_base, kGameplayScenarioObjectStatusTimerOffset,
             object.stat_54);
         write_default_scenario_object_u32(
-            *record, object_base, kGameplayScenarioObjectMutableCommandValueOffset,
-            default_unit_id_to_command_payload_reference(
-                object.script_state, object.command_value));
+            *record, object_base, kGameplayScenarioObjectCargoAmountOffset,
+            object.cargo_amount);
         write_default_scenario_object_u32(
             *record, object_base, kGameplayScenarioObjectTypeFlagsOffset,
             object.type_flags);
@@ -23592,8 +23625,7 @@ void sync_default_gameplay_script_scenario_record(
             object.animation_frame);
         write_default_scenario_object_u32(
             *record, object_base, kGameplayScenarioObjectCommandValueOffset,
-            default_unit_id_to_command_payload_reference(
-                object.script_state, object.current_payload_value));
+            object.command_value);
         write_default_scenario_object_i32(
             *record, object_base, kGameplayScenarioObjectPathTargetXOffset,
             object.scripted_target_x);
@@ -24406,9 +24438,58 @@ void default_gameplay_loop_simulation_phase(GameplayLoopState& state) {
         }
     }
     if constexpr (Index == 12) {
-        if (!g_runtime.gameplay_terrain_layer.terrain_flags.empty()) {
+        UnitMovementContext* movement = default_gameplay_movement_context();
+        if (movement != nullptr && !movement->map.cells.empty()) {
+            std::array<UnitMovementPoint, kTerrainTilePulseSlotCount>
+                active_pulse_tiles{};
+            std::array<bool, kTerrainTilePulseSlotCount> active_pulse_slots{};
+            for (std::size_t slot_index = 0;
+                    slot_index < g_runtime.gameplay_terrain_pulse_state.slots.size();
+                    ++slot_index) {
+                const TerrainTilePulseSlot& slot =
+                    g_runtime.gameplay_terrain_pulse_state.slots[slot_index];
+                if (slot.timer != 0) {
+                    active_pulse_slots[slot_index] = true;
+                    active_pulse_tiles[slot_index] = {slot.tile_x, slot.tile_y};
+                }
+            }
             UpdateTerrainTilePulseState(g_runtime.gameplay_terrain_pulse_state,
-                g_runtime.gameplay_terrain_layer);
+                movement->map);
+
+            // The reconstruction keeps original DAT_00f19e74 (record 12) and
+            // its revealed-terrain render snapshot in typed vectors.  Mirror
+            // the four changed live cells immediately so the alternate berry
+            // frame is visible during the same present pass.
+            GameplayVisibilityGrid& visibility =
+                g_runtime.gameplay_visibility_grid;
+            for (std::size_t slot_index = 0;
+                    slot_index < active_pulse_slots.size(); ++slot_index) {
+                if (!active_pulse_slots[slot_index]) {
+                    continue;
+                }
+                const UnitMovementPoint tile = active_pulse_tiles[slot_index];
+                if (tile.x < 0 || tile.y < 0) {
+                    continue;
+                }
+                const UnitMovementCell* cell = GetMovementCell(movement->map,
+                    static_cast<u32>(tile.x), static_cast<u32>(tile.y));
+                if (cell == nullptr || static_cast<u32>(tile.x) >= visibility.width ||
+                    static_cast<u32>(tile.y) >= visibility.height) {
+                    continue;
+                }
+                const std::size_t visibility_index =
+                    static_cast<std::size_t>(tile.y) * visibility.width +
+                    static_cast<std::size_t>(tile.x);
+                if (visibility_index < visibility.terrain.size()) {
+                    visibility.terrain[visibility_index] = cell->flags;
+                }
+                if (visibility_index < visibility.current.size() &&
+                    visibility_index < visibility.terrain_backup.size() &&
+                    (visibility.current[visibility_index] &
+                        kGameplayVisibilityRevealed) != 0) {
+                    visibility.terrain_backup[visibility_index] = cell->flags;
+                }
+            }
         }
         g_runtime.gameplay_sound.current_tick = state.current_tick_ms;
         HandleQueuedGameplaySoundPlayback(g_runtime.gameplay_sound);

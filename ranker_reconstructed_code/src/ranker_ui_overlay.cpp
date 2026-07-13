@@ -36,6 +36,7 @@ constexpr u32 kCommandActionHold = 2;
 constexpr u32 kCommandActionMinimap = 3;
 constexpr u32 kCommandActionPlacement = 4;
 constexpr u32 kCommandActionSelection = 5;
+constexpr u32 kCommandActionContextual = 6;
 constexpr u32 kProductionGateFailureOwnerRequirement = 1;
 constexpr u32 kProductionGateFailureActiveLimit = 3;
 constexpr u32 kProductionGateFailureResourceLimit = 4;
@@ -3782,6 +3783,7 @@ void CancelCurrentUiModeOrActivateCommand(UiOverlayState& state, u32 command_id)
         state.staged_unit_action_id = 0xffffffffu;
         state.selected_production_category = 0;
         state.command_slot_count = 0;
+        state.context_cursor.animation_mode = 0;
         if (state.callbacks.play_click_sound != nullptr) {
             state.callbacks.play_click_sound(state);
         }
@@ -4398,10 +4400,6 @@ void HandleGameplayPointerActionFrame(UiOverlayState& state) {
                 // building index and placement point.
                 append_command_action(state, 0xaau + 6u,
                     state.placement_definition_id, kCommandActionPlacement);
-                StartGameplayHudPulse(state,
-                    state.camera_x + state.mouse_x,
-                    state.camera_y + state.mouse_y,
-                    state.current_tick_ms);
                 state.pending_local_command = true;
             }
             else if (state.staged_unit_action_id != 0xffffffffu &&
@@ -4409,10 +4407,6 @@ void HandleGameplayPointerActionFrame(UiOverlayState& state) {
                 const u32 action_id = state.staged_unit_action_id;
                 append_command_action(state, 0xaau + action_id, 0,
                     kCommandActionPlacement);
-                StartGameplayHudPulse(state,
-                    state.camera_x + state.mouse_x,
-                    state.camera_y + state.mouse_y,
-                    state.current_tick_ms);
                 state.staged_unit_action_id = 0xffffffffu;
                 state.placement_mode = 0;
                 state.pending_local_command = true;
@@ -4453,33 +4447,39 @@ void HandleGameplayPointerActionFrame(UiOverlayState& state) {
     }
 
     if ((state.pointer_state & kPointerHoldPress) != 0) {
+        // RBUTTONDOWN snapshots raw placement mode before any HUD/minimap hit
+        // testing.  A nonzero mode cancels it and emits no world command.
+        if (state.placement_mode != 0) {
+            CancelCurrentUiModeOrActivateCommand(state);
+            return;
+        }
         BeginUiCommandButtonHold(state);
         if (state.held_command_id == 0xffffffffu) {
             const bool minimap_action = CheckPointerInsideMinimapForAction(state);
             if (!minimap_action &&
-                !CheckUiOverlayIconMaskPixel(state, state.mouse_x, state.mouse_y) &&
-                state.selected_unit_count != 0) {
-                // The original cursor resolver changes the secondary-click
-                // command from move (4) to harvest (7) while a terrain-class
-                // resource is under the pointer (0x004e914a/0x004e9169/
-                // 0x004e9189).  Keep the resolved terrain class in aux; the
-                // raw action-7 dispatcher consumes it as DAT_00862418 when no
-                // unit target was hit.
-                const bool harvest_point = state.hover_context.kind == 0x0cu &&
-                    (state.selected_unit_command_bit_mask & (1u << 7)) != 0;
-                const u32 action_id = harvest_point ? 0x07u : 0x04u;
-                // FUN_004e9458 stores both the terrain hover kind and its aux
-                // selector as raw 0x0c.  Action 7 publishes that selector at
-                // subtype-02 +0x18 without shifting it.
-                const u32 contextual_target = harvest_point
-                    ? state.hover_context.item_id : 0u;
+                !CheckUiOverlayIconMaskPixel(state, state.mouse_x, state.mouse_y)) {
+                // RBUTTONDOWN forwards the resolved contextual cursor mode
+                // verbatim: pickup 1, repair 3, move 4, attack 5, harvest 7,
+                // special 8, boarding 10, and the preserved/stale table cases.
+                const u32 action_id = state.context_cursor.animation_mode;
+                if (action_id == 0u) {
+                    return;
+                }
+                // Snapshot +0x08/+0x0c are hover kind and raw hover aux, not
+                // the Win32 event x/y stored in the generic input ring.  Keep
+                // both values with the deferred UI action until dispatch.
+                u32 contextual_target = 0;
+                if (state.hover_context.kind >= 6u &&
+                    state.hover_context.kind <= 9u) {
+                    contextual_target = state.hover_context.unit_id;
+                }
+                else if (state.hover_context.kind == 0x0bu ||
+                    state.hover_context.kind == 0x0cu) {
+                    contextual_target = state.hover_context.kind;
+                }
                 append_command_action(state, 0xaau + action_id,
                     contextual_target,
-                    kCommandActionPlacement);
-                StartGameplayHudPulse(state,
-                    state.camera_x + state.mouse_x,
-                    state.camera_y + state.mouse_y,
-                    state.current_tick_ms);
+                    kCommandActionContextual, state.hover_context.kind);
                 state.pending_local_command = true;
             }
         }
@@ -4671,20 +4671,20 @@ bool CheckPointerInsideMinimapAndPlacementMode(UiOverlayState& state) {
 }
 
 bool CheckPointerInsideMinimapForAction(UiOverlayState& state) {
-    if (!point_inside_minimap_rect(state, true) ||
-        state.scenario_ai_profile_override) {
+    if (!point_inside_minimap_rect(state, true)) {
         return false;
+    }
+    if (state.scenario_ai_profile_override) {
+        return true;
     }
     const i32 local_x = state.mouse_x - state.minimap.output_x;
     const i32 local_y = state.mouse_y - state.minimap.output_y;
     state.hover_context.kind = 1;
     state.hover_context.x = minimap_input_screen_to_world_x(state, local_x);
     state.hover_context.y = minimap_command_screen_to_world_y(state, local_y);
-    if (state.selected_unit_count != 0) {
-        append_command_action_at_world(state, 0xaeu, 0,
-            kCommandActionPlacement, 0,
-            state.hover_context.x, state.hover_context.y);
-    }
+    append_command_action_at_world(state, 0xaeu, 0,
+        kCommandActionContextual, 1,
+        state.hover_context.x, state.hover_context.y);
     return true;
 }
 

@@ -103,8 +103,10 @@ struct GameplayScriptTriggerObjectState {
     u32 dynamic_string_slot = 0;
     i32 x = 0;
     i32 y = 0;
+    // Original OBC raw +0x4c and +0x68 respectively.  These are independent:
+    // worker cargo must never alias the current command target/value word.
+    u32 cargo_amount = 0;
     u32 command_value = 0;
-    u32 current_payload_value = 0;
     i32 scripted_target_x = 0;
     i32 scripted_target_y = 0;
     u32 previous_command_state = 0;

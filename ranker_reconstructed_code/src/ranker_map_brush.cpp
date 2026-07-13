@@ -1309,6 +1309,52 @@ void StartTerrainTilePulse(TerrainTilePulseState& pulse_state,
     free_slot->tile_x = tile_x;
 }
 
+void UpdateTerrainTilePulseState(
+    TerrainTilePulseState& pulse_state, UnitMovementMap& map) {
+    for (TerrainTilePulseSlot& slot : pulse_state.slots) {
+        if (slot.timer == 0) {
+            continue;
+        }
+        --slot.timer;
+        if (slot.tile_x < 0 || slot.tile_y < 0) {
+            continue;
+        }
+        UnitMovementCell* cell = GetMovementCell(map,
+            static_cast<u32>(slot.tile_x), static_cast<u32>(slot.tile_y));
+        if (cell == nullptr) {
+            continue;
+        }
+        cell->flags = (cell->flags & ~0x20000000u) |
+            (static_cast<u32>((slot.timer & 4) != 0) << 29);
+    }
+}
+
+void StartTerrainTilePulse(TerrainTilePulseState& pulse_state,
+    const UnitMovementMap& map, i32 tile_x, i32 tile_y) {
+    TerrainTilePulseSlot* free_slot = nullptr;
+    for (TerrainTilePulseSlot& slot : pulse_state.slots) {
+        if (slot.timer == 0) {
+            free_slot = &slot;
+            break;
+        }
+    }
+    if (free_slot == nullptr || tile_x < 0 || tile_y < 0) {
+        return;
+    }
+
+    const UnitMovementCell* cell = GetMovementCell(map,
+        static_cast<u32>(tile_x), static_cast<u32>(tile_y));
+    if (cell == nullptr) {
+        return;
+    }
+    if ((cell->flags & kMapCellBlockedTerrain) != 0) {
+        --tile_x;
+    }
+    free_slot->timer = 0x0f;
+    free_slot->tile_y = tile_y;
+    free_slot->tile_x = tile_x;
+}
+
 void ConvertTerrainTileSheetPixelsForSurface(
     TerrainTileSheetState& tile_sheet, const MinimapPixelFormat& pixel_format) {
     if (!pixel_format.pixel_mode_555) {

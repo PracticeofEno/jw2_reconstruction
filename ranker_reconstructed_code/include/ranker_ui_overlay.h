@@ -34,6 +34,7 @@ constexpr u32 kUiOverlayCommandActionHold = 2;
 constexpr u32 kUiOverlayCommandActionMinimap = 3;
 constexpr u32 kUiOverlayCommandActionPlacement = 4;
 constexpr u32 kUiOverlayCommandActionSelection = 5;
+constexpr u32 kUiOverlayCommandActionContextual = 6;
 constexpr std::size_t kCameraScrollSpeedCount = 16;
 constexpr std::size_t kCameraScrollRampCount = 8;
 constexpr std::array<std::array<u32, kCameraScrollRampCount>,
