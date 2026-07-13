@@ -730,8 +730,9 @@ u32 count_raw_group_objects_in_area(const GameplayScriptTriggerState& state,
 template <typename Func>
 void for_each_group_object(GameplayScriptTriggerState& state,
     GameplayScriptTriggerGroup& group, Func func) {
-    const u32 limit = std::min<u32>(
-        group.reference_count, kGameplayScriptTriggerReferencesPerGroup);
+    // Prefix-loop opcodes compare the raw count as a signed int.  This is
+    // distinct from commands that gate once and then scan all 64 slots.
+    const u32 limit = signed_group_prefix_limit(group);
     for (u32 slot = 0; slot < limit; ++slot) {
         GameplayScriptTriggerObjectState* object =
             object_state(state, group.object_indices[slot]);
@@ -1999,7 +2000,8 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x10: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         const GameplayScriptArea* area = area_state(state, command[2]);
-        if (group == nullptr || area == nullptr || group->reference_count == 0) {
+        if (group == nullptr || area == nullptr ||
+            signed_i32_from_wrapped_u32(group->reference_count) <= 0) {
             return true;
         }
         const i32 target_x = area_translation_center_x(*area);
@@ -2054,8 +2056,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x14: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         if (group != nullptr) {
-            const u32 limit = std::min<u32>(
-                group->reference_count, kGameplayScriptTriggerReferencesPerGroup);
+            const u32 limit = signed_group_prefix_limit(*group);
             for (u32 slot = 0; slot < limit; ++slot) {
                 const u32 object_index = group->object_indices[slot];
                 if (object_index != 0) {
@@ -2101,7 +2102,8 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x18: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         const GameplayScriptArea* area = area_state(state, command[2]);
-        if (group == nullptr || area == nullptr || group->reference_count == 0) {
+        if (group == nullptr || area == nullptr ||
+            signed_i32_from_wrapped_u32(group->reference_count) <= 0) {
             return true;
         }
         u32 total_x = 0;
@@ -2136,23 +2138,24 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     }
     case 0x19: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
-        if (group == nullptr || group->reference_count == 0) {
+        if (group == nullptr ||
+            signed_i32_from_wrapped_u32(group->reference_count) <= 0) {
             return true;
         }
-        i32 total_x = 0;
-        i32 total_y = 0;
-        u32 count = 0;
+        u32 total_x = 0;
+        u32 total_y = 0;
         for_each_group_slot_object(state, *group,
             [&](GameplayScriptTriggerObjectState& object) {
-            total_x += object.x;
-            total_y += object.y;
-            ++count;
+            total_x += static_cast<u32>(object.x);
+            total_y += static_cast<u32>(object.y);
         });
-        if (count != 0) {
-            state.opcode_context.camera_request_active = true;
-            state.opcode_context.camera_x = total_x / static_cast<i32>(count);
-            state.opcode_context.camera_y = total_y / static_cast<i32>(count);
-        }
+        const i32 divisor =
+            signed_i32_from_wrapped_u32(group->reference_count);
+        state.opcode_context.camera_request_active = true;
+        state.opcode_context.camera_x =
+            signed_i32_from_wrapped_u32(total_x) / divisor;
+        state.opcode_context.camera_y =
+            signed_i32_from_wrapped_u32(total_y) / divisor;
         return true;
     }
     case 0x1a: {
@@ -2197,10 +2200,18 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         return true;
     case 0x1f: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
-        if (group != nullptr && group->reference_count != 0) {
+        if (group != nullptr &&
+            signed_i32_from_wrapped_u32(group->reference_count) > 0) {
             for_each_group_slot_object(state, *group,
                 [&](GameplayScriptTriggerObjectState& object) {
                 set_object_stat_by_mode(object, command[2], command[3]);
+                static constexpr std::array<u32, 5> kPublishOpcodes = {
+                    0x41, 0x45, 0x49, 0x47, 0x4b,
+                };
+                if (command[2] < kPublishOpcodes.size()) {
+                    publish_numeric_stat_to_attached_unit(
+                        object, kPublishOpcodes[command[2]]);
+                }
             });
         }
         return true;
@@ -2313,11 +2324,13 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptTriggerGroup* target_group = group_state(state, command[2]);
         GameplayScriptTriggerObjectState* source =
             source_group != nullptr ? first_group_slot_object(state, *source_group) : nullptr;
-        if (source != nullptr && target_group != nullptr &&
-            target_group->reference_count != 0) {
+        if (target_group != nullptr &&
+            signed_i32_from_wrapped_u32(target_group->reference_count) > 0) {
             for_each_group_slot_object(state, *target_group,
                 [&](GameplayScriptTriggerObjectState& object) {
-                    set_script_object_owner(object, source->owner_id);
+                    if (source != nullptr) {
+                        set_script_object_owner(object, source->owner_id);
+                    }
                 });
             rebuild_owner_unit_type_counts(state);
             trigger.blocked = 0;
