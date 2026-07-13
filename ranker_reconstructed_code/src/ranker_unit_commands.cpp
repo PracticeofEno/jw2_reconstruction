@@ -3141,6 +3141,16 @@ void StartUnitCompletionAnnouncementCommand(UnitCommandContext& context,
         return;
     }
 
+    // FUN_004ebed0 clears original raw unit +0x38 only after the production
+    // order start gate succeeds (0x004ebeed).  Raw +0x30..+0x3c are the four
+    // attachment slots, so this is item slot two rather than a construction
+    // or action-mode flag.  Keep the typed six-slot equipment mirror aligned.
+    if (unit.item_slots.size() > 2) {
+        unit.item_slots[2] = 0;
+        if (unit.equipment_slots.size() > 2) {
+            unit.equipment_slots[2] = 0;
+        }
+    }
     unit.effect_timer = 0;
     unit.command_state = kUnitStateCompletionAnnouncementTimer;
 }
