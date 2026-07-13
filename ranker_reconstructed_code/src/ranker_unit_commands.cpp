@@ -5405,18 +5405,16 @@ void HandleUnitSpecialAbilityApproach(UnitCommandContext& context, UnitMovementU
 
 void HandleUnitRestoreTargetCycle(UnitCommandContext& context, UnitMovementUnit& unit) {
     UnitMovementUnit* target = resolve_active_payload_target_or_clear(context, unit);
-    if (target == nullptr || !target_alive(target) ||
-        target->max_health == 0 || target->health >= target->max_health) {
+    if (target == nullptr || (target->runtime_flags & 4u) != 0 ||
+        target->health >= target->max_health) {
         PopDeferredUnitCommandOrReturnIdle(context, unit);
         return;
     }
     const UnitCommandAbilityGateResult gate =
         check_ability_gate(context, unit, target);
-    if (gate == UnitCommandAbilityGateResult::fail) {
-        PopDeferredUnitCommandOrReturnIdle(context, unit);
-        return;
-    }
-    if (gate == UnitCommandAbilityGateResult::approach) {
+    if (gate != UnitCommandAbilityGateResult::ready) {
+        // 0x004cc0dd sends both carry outcomes through state 0x6a first.  A
+        // hard gate failure is consumed by the approach handler next tick.
         unit.command_state = kUnitStateRestoreTargetApproach;
         path_to_target_without_command_flag(context, unit, *target);
         return;
@@ -5448,10 +5446,6 @@ void HandleUnitRestoreTargetCycle(UnitCommandContext& context, UnitMovementUnit&
 
 void HandleUnitRestoreTargetApproach(UnitCommandContext& context, UnitMovementUnit& unit) {
     UnitMovementUnit* target = resolve_active_payload_target_or_clear(context, unit);
-    if (target == nullptr || !target_alive(target)) {
-        PopDeferredUnitCommandOrReturnIdle(context, unit);
-        return;
-    }
     const UnitCommandAbilityGateResult gate =
         check_ability_gate(context, unit, target);
     if (gate == UnitCommandAbilityGateResult::fail) {
@@ -5464,15 +5458,18 @@ void HandleUnitRestoreTargetApproach(UnitCommandContext& context, UnitMovementUn
         return;
     }
     if (!movement_step(context, unit)) {
+        if (target == nullptr) {
+            PopDeferredUnitCommandOrReturnIdle(context, unit);
+            return;
+        }
         path_to_target_without_command_flag(context, unit, *target);
     }
 }
 
 void HandleUnitRandomRelocation(UnitCommandContext& context, UnitMovementUnit& unit) {
     unit.direction = legacy_random_relocation_direction(unit.direction);
-    const u32 relocation_ticks =
-        static_cast<u32>(unit.active_command_payload.x) + 1u;
-    unit.active_command_payload.x = static_cast<i32>(relocation_ticks);
+    const u32 relocation_ticks = unit.command_value + 1u;
+    unit.command_value = relocation_ticks;
     if (relocation_ticks <= 0x0e) {
         return;
     }
@@ -5491,13 +5488,11 @@ void HandleUnitRandomRelocation(UnitCommandContext& context, UnitMovementUnit& u
     if (placement_found) {
         unit.x = point.x;
         unit.y = point.y;
-        unit.destination_x = point.x;
-        unit.destination_y = point.y;
         unit.current_cell_x = point.x & ~0x1f;
         unit.current_cell_y = point.y & ~0x1f;
     }
 
-    unit.active_command_payload.x = 0;
+    unit.command_value = 0;
     unit.runtime_flags &= 0xf7ffffffu;
     unit.command_flags &= 0xffffefefu;
     HandleUnitReturnToIdleState(context, unit);
