@@ -229,6 +229,9 @@ struct GameplayScriptConditionContext {
 struct GameplayScriptOpcodeContext {
     bool enabled = false;
     u32 resource_hud_flags = 0;
+    // DAT_00725354 is toggled only by scenario opcodes 0x35/0x36.  It is
+    // independent from DAT_00722310, the resource/countdown HUD mask.
+    u32 scenario_toggle_flags = 0;
     i32 countdown_x = 400;
     i32 countdown_y = 12;
     u32 countdown_color = 1;

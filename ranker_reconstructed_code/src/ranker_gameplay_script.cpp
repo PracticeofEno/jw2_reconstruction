@@ -2357,7 +2357,8 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x2d: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         GameplayScriptTriggerObjectState* object =
-            group != nullptr && group->reference_count != 0 ?
+            group != nullptr &&
+                    signed_i32_from_wrapped_u32(group->reference_count) > 0 ?
                 first_group_slot_object(state, *group) : nullptr;
         if (object != nullptr && object->unit != nullptr) {
             SetOrQueueUnitCommand17(object->unit, command[2], true);
@@ -2369,16 +2370,18 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptTriggerGroup* target_group = group_state(state, command[2]);
         GameplayScriptTriggerObjectState* target =
             target_group != nullptr ? first_group_slot_object(state, *target_group) : nullptr;
-        if (source_group == nullptr || source_group->reference_count == 0 ||
-            target == nullptr) {
+        if (source_group == nullptr ||
+            signed_i32_from_wrapped_u32(source_group->reference_count) <= 0) {
             return true;
         }
         for (u32 slot = 0; slot < source_group->object_indices.size(); ++slot) {
             GameplayScriptTriggerObjectState* object =
                 object_state(state, source_group->object_indices[slot]);
-            if (object_alive(object) && object->unit != nullptr) {
-                DispatchGameplayScriptUnitCommand(command[3], object->unit, target->unit,
-                    target->x, target->y, true);
+            if (object != nullptr && object->unit != nullptr) {
+                DispatchGameplayScriptUnitCommand(command[3], object->unit,
+                    target != nullptr ? target->unit : nullptr,
+                    target != nullptr ? target->x : 0,
+                    target != nullptr ? target->y : 0, true);
             }
         }
         trigger.blocked = 0;
@@ -2396,7 +2399,8 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x31: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         GameplayScriptTriggerObjectState* object =
-            group != nullptr && group->reference_count != 0 ?
+            group != nullptr &&
+                    signed_i32_from_wrapped_u32(group->reference_count) > 0 ?
                 first_group_slot_object(state, *group) : nullptr;
         if (object != nullptr && object->unit != nullptr) {
             SetOrQueueUnitCommand22(object->unit, command[2], true);
@@ -2410,8 +2414,8 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptTriggerGroup* target_group = group_state(state, command[2]);
         GameplayScriptTriggerObjectState* source =
             source_group != nullptr ? first_group_slot_object(state, *source_group) : nullptr;
-        if (source == nullptr || source->unit == nullptr || target_group == nullptr ||
-            target_group->reference_count == 0) {
+        if (target_group == nullptr ||
+            signed_i32_from_wrapped_u32(target_group->reference_count) <= 0) {
             return true;
         }
         u32 issued = 0;
@@ -2419,8 +2423,9 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
              slot < target_group->object_indices.size() && issued < 8; ++slot) {
             GameplayScriptTriggerObjectState* target =
                 object_state(state, target_group->object_indices[slot]);
-            if (target != nullptr && target->unit != nullptr &&
-                object_visible_for_area_scan(*target)) {
+            if (source != nullptr && source->unit != nullptr &&
+                target != nullptr && target->unit != nullptr &&
+                (gameplay_script_object_runtime_flags(*target) & (4u | 0x80u)) == 0) {
                 SetOrQueueUnitTargetCommand0a(source->unit, target->unit, true);
                 ++issued;
             }
@@ -2433,24 +2438,29 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptTriggerObjectState* object =
             group != nullptr ? first_group_slot_object(state, *group) : nullptr;
         const GameplayScriptArea* area = area_state(state, command[2]);
+        if (group != nullptr && area != nullptr) {
+            trigger.blocked = 0;
+        }
         if (object != nullptr && object->unit != nullptr && area != nullptr) {
             const i32 x = area->left + (area->right - area->left) / 2;
             const i32 y = area->top + (area->bottom - area->top) / 2;
             SetOrQueueUnitPointCommand24(object->unit, x, y, true);
             SetOrQueueUnitCommand00(object->unit, true);
-            trigger.blocked = 0;
         }
         return true;
     }
     case 0x35:
-        state.opcode_context.resource_hud_flags |= 1u << (command[1] & 0x1fu);
+        state.opcode_context.scenario_toggle_flags |=
+            1u << (command[1] & 0x1fu);
         return true;
     case 0x36:
-        state.opcode_context.resource_hud_flags &= ~(1u << (command[1] & 0x1fu));
+        state.opcode_context.scenario_toggle_flags &=
+            ~(1u << (command[1] & 0x1fu));
         return true;
     case 0x37: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
-        if (group == nullptr || group->reference_count == 0) {
+        if (group == nullptr ||
+            signed_i32_from_wrapped_u32(group->reference_count) <= 0) {
             return true;
         }
         for (u32 slot = 0; slot < group->object_indices.size(); ++slot) {
@@ -2485,16 +2495,22 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptTriggerGroup* first_group = group_state(state, command[1]);
         GameplayScriptTriggerGroup* second_group = group_state(state, command[2]);
         GameplayScriptTriggerObjectState* first =
-            first_group != nullptr && first_group->reference_count != 0 ?
+            first_group != nullptr &&
+                    signed_i32_from_wrapped_u32(first_group->reference_count) > 0 ?
                 first_group_slot_object(state, *first_group) : nullptr;
         GameplayScriptTriggerObjectState* second =
-            second_group != nullptr && second_group->reference_count != 0 ?
+            second_group != nullptr &&
+                    signed_i32_from_wrapped_u32(second_group->reference_count) > 0 ?
                 first_group_slot_object(state, *second_group) : nullptr;
+        if (first_group != nullptr && second_group != nullptr &&
+            signed_i32_from_wrapped_u32(first_group->reference_count) > 0 &&
+            signed_i32_from_wrapped_u32(second_group->reference_count) > 0) {
+            trigger.blocked = 0;
+        }
         if (first != nullptr && first->unit != nullptr &&
             second != nullptr && second->unit != nullptr) {
             SetOrQueueUnitTargetCommand0b(first->unit, second->unit, true);
             SetOrQueueUnitTargetCommand0b(second->unit, first->unit, true);
-            trigger.blocked = 0;
         }
         return true;
     }
