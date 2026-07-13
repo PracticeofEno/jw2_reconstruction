@@ -150,7 +150,7 @@ bool spawn_unit_passive_counter_effect(MapEffectContext& context,
             repeat += context.callbacks.random_limit(context, limit);
         }
     }
-    effect->repeat_count = std::max<u32>(repeat, 1);
+    effect->repeat_count = repeat;
     unit.action_mode = 0;
     return true;
 }
