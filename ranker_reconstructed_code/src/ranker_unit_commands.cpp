@@ -4267,6 +4267,9 @@ bool TrySelectWorkerDropoffPath(UnitCommandContext& context, UnitMovementUnit& u
     }
 
     SetUnitCommandTarget(unit, dropoff);
+    // FindNearestOwnedDropoffBuilding returns the original unit-pool offset in
+    // EDI and each caller stores it to raw +0x68 before planning the path.
+    unit.command_value = dropoff->id;
     // The original uses two distinct target calculations here.  Initial
     // return setup (0x004ca1e3) calls FindNearestPointInTargetFootprint,
     // while both ProcessWorkerApproachDropoff recovery branches
@@ -4296,7 +4299,9 @@ void ProcessWorkerReturnToDropoff(UnitCommandContext& context, UnitMovementUnit&
         unit.destination_x = unit.path_target_x;
         unit.destination_y = unit.path_target_y;
     }
-    unit.destination_aux_state = 0;
+    // ProcessWorkerReturnToDropoff 0x004ca189 clears raw +0x74.  Raw +0x80
+    // is a distinct cached harvest target override and must survive here.
+    unit.previous_command_state = 0;
 
     if ((unit.command_value & 0x80000000u) == 0 && (unit.command_flags & 4u) == 0) {
         unit.command_flags &= ~7u;
@@ -4355,18 +4360,34 @@ void ProcessWorkerHarvestTile(UnitCommandContext& context, UnitMovementUnit& uni
     unit.cargo_amount = consumed;
     unit.command_flags |= 4;
 
-    // Original ProcessWorkerHarvestTile (0x004ca214) keeps raw target +0x80
-    // across harvest trips and searches for a dropoff only when it is null.
-    UnitMovementUnit* dropoff = unit.target;
-    if (dropoff == nullptr) {
+    // 0x004ca264 reads the cached override from raw +0x80, not the current
+    // raw +0x68 command target.  A normal worker has no override, so every
+    // completed harvest performs the original nearest-dropoff search again.
+    UnitMovementUnit* dropoff = unit.destination_aux_state != 0 ?
+        find_unit_by_id(context, unit.destination_aux_state) : nullptr;
+    if (unit.destination_aux_state == 0) {
         dropoff = find_dropoff(context, unit);
         if (dropoff == nullptr) {
             PopDeferredUnitCommandOrReturnIdle(context, unit);
             return;
         }
+        unit.command_value = dropoff->id;
         SetUnitCommandTarget(unit, dropoff);
-        unit.command_value = 0;
     }
+    else if (dropoff == nullptr) {
+        PopDeferredUnitCommandOrReturnIdle(context, unit);
+        return;
+    }
+    else {
+        // Saved scenario records keep raw +0x68 as an offset without a typed
+        // pointer.  Hydrate that persistent target for the following state,
+        // but retain its raw value instead of replacing it with the +0x80
+        // footprint-only override.
+        resolve_command_target(context, unit);
+    }
+    // A nonzero +0x80 override is local to this footprint calculation.  The
+    // original deliberately skips its +0x68 store, so do not merge it into
+    // the persistent command target when the two unit offsets differ.
     const UnitMovementPoint point = FindNearestPointInTargetFootprint(unit, *dropoff);
     unit.path_target_x = point.x;
     unit.path_target_y = point.y;
@@ -4501,6 +4522,9 @@ void ProcessWorkerApproachDropoff(UnitCommandContext& context, UnitMovementUnit&
 
     if (target_status.status == 0) {
         unit.target = nullptr;
+        // Original 0x004ca4ce invalidates raw +0x80 before selecting a new
+        // nearest owner dropoff and storing it in raw +0x68.
+        unit.destination_aux_state = 0;
         if (!TrySelectWorkerDropoffPath(context, unit,
                 WorkerDropoffPathAnchor::center_bounds)) {
             unit.movement_flags &= ~1u;
