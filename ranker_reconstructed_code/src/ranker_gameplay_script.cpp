@@ -19,6 +19,12 @@ GameplayScriptTriggerState g_trigger_state;
 
 void encode_trigger(GameplayScriptTriggerState& state, u32 trigger_index);
 
+i32 signed_i32_from_wrapped_u32(u32 value) {
+    i32 signed_value = 0;
+    std::memcpy(&signed_value, &value, sizeof(signed_value));
+    return signed_value;
+}
+
 u32 read_le_u32(const std::vector<u8>& bytes, std::size_t offset) {
     if (offset > bytes.size() || bytes.size() - offset < sizeof(u32)) {
         return 0;
@@ -171,6 +177,15 @@ void mark_gameplay_script_object_dead(GameplayScriptTriggerObjectState& object) 
     object.script_removal_requested = true;
     if (object.unit != nullptr) {
         object.unit->command_state |= kUnitCommandDead;
+    }
+}
+
+void mutate_gameplay_script_object_runtime_flags(
+    GameplayScriptTriggerObjectState& object, u32 clear_mask, u32 set_mask) {
+    object.flags = (object.flags & ~clear_mask) | set_mask;
+    if (object.unit != nullptr) {
+        object.unit->runtime_flags =
+            (object.unit->runtime_flags & ~clear_mask) | set_mask;
     }
 }
 
@@ -1787,8 +1802,8 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         if (group != nullptr) {
             for_each_group_slot_object(state, *group,
                 [](GameplayScriptTriggerObjectState& object) {
-                object.flags &= ~0x80u;
-                object.flags |= 1u;
+                mutate_gameplay_script_object_runtime_flags(
+                    object, 0x80u, 1u);
             });
         }
         return true;
@@ -1798,8 +1813,8 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         if (group != nullptr) {
             for_each_group_slot_object(state, *group,
                 [](GameplayScriptTriggerObjectState& object) {
-                object.flags |= 0x80u;
-                object.flags &= ~1u;
+                mutate_gameplay_script_object_runtime_flags(
+                    object, 1u, 0x80u);
             });
         }
         return true;
@@ -2224,13 +2239,15 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x4c:
     case 0x4d: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
-        if (group == nullptr || group->reference_count == 0) {
+        if (group == nullptr ||
+            signed_i32_from_wrapped_u32(group->reference_count) <= 0) {
             return true;
         }
         for_each_group_slot_object(state, *group,
             [&](GameplayScriptTriggerObjectState& object) {
             if (command[0] == 0x3a) {
-                object.flags |= 0x20000000u;
+                mutate_gameplay_script_object_runtime_flags(
+                    object, 0, 0x20000000u);
             } else if (command[0] == 0x3b) {
                 object.script_bit_flags |= 1u << (command[2] & 0x1fu);
             } else if (command[0] == 0x3c) {
@@ -2457,7 +2474,8 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
                 if (command[0] == 0x62 && object_alive(object)) {
                     object->area_marker_flags |= 0x10000000u;
                 } else if (command[0] == 0x63) {
-                    object->flags |= 0x20000000u;
+                    mutate_gameplay_script_object_runtime_flags(
+                        *object, 0, 0x20000000u);
                 }
             }
         }
