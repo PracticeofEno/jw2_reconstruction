@@ -4309,15 +4309,32 @@ bool default_gameplay_input_dispatch_action(
             selected_units.push_back(&*primary);
         }
     }
+
+    // Entry 0x23 walks the raw active intrusive list independently of the
+    // common action-unit filter.  In particular, a still-linked selected unit
+    // whose command-state high bit is set remains a balance donor/recipient;
+    // only the raw selection bit and local owner gate this candidate list.
+    std::vector<GameplayActionUnitState*> balance_units;
+    if (action_index == 0x23u) {
+        balance_units.reserve(state.multi_select_count != 0 ?
+            state.multi_select_count : 1u);
+        for (GameplayActionUnitState& unit : state.units) {
+            if (unit.active && (unit.flags & 0x80u) != 0 &&
+                unit.owner == state.local_player_index) {
+                balance_units.push_back(&unit);
+            }
+        }
+    }
     const bool primary_direct_entry =
         action_index == 0x01u || action_index == 0x02u ||
         action_index == 0x08u || action_index == 0x1cu;
-    if (selected_units.empty() && action_index == 0x23u) {
+    if (action_index == 0x23u && balance_units.empty()) {
         // The balance handler's no-packet tail reaches 0x004da100 with carry
         // clear.  In the real UI its aggregate-count gate prevents DIV 0.
         return true;
     }
-    if (selected_units.empty() && !primary_direct_entry) {
+    if (selected_units.empty() && action_index != 0x23u &&
+        !primary_direct_entry) {
         switch (action_index) {
         case 0x0bu:
         case 0x0du:
@@ -5012,7 +5029,7 @@ bool default_gameplay_input_dispatch_action(
         // Preserve the original 32-bit sum/division semantics.
         u32 aggregate_count = 0;
         u32 aggregate_sum = 0;
-        for (GameplayActionUnitState* selected : selected_units) {
+        for (GameplayActionUnitState* selected : balance_units) {
             UnitMovementUnit* movement =
                 find_default_movement_unit_by_id(selected->offset);
             if (movement == nullptr || movement->type_id >= 0x60u ||
@@ -5030,14 +5047,14 @@ bool default_gameplay_input_dispatch_action(
         const u32 threshold = aggregate_sum / aggregate_count;
         const u32 queued = input_state().shift_down ? 0x80000000u : 0;
         std::vector<u32> paired_recipients;
-        paired_recipients.reserve(selected_units.size());
+        paired_recipients.reserve(balance_units.size());
         const auto was_paired = [&paired_recipients](u32 unit_offset) {
             return std::find(paired_recipients.begin(),
                 paired_recipients.end(), unit_offset) !=
                 paired_recipients.end();
         };
 
-        for (GameplayActionUnitState* donor_state : selected_units) {
+        for (GameplayActionUnitState* donor_state : balance_units) {
             UnitMovementUnit* donor =
                 find_default_movement_unit_by_id(donor_state->offset);
             if (donor == nullptr || (donor_state->flags & 0x100u) != 0 ||
@@ -5048,7 +5065,7 @@ bool default_gameplay_input_dispatch_action(
             }
 
             u32 donor_remaining = donor->action_mode;
-            for (GameplayActionUnitState* recipient_state : selected_units) {
+            for (GameplayActionUnitState* recipient_state : balance_units) {
                 if (recipient_state == donor_state ||
                     (recipient_state->flags & 0x100u) != 0 ||
                     was_paired(recipient_state->offset)) {

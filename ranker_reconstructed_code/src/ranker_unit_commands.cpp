@@ -3567,7 +3567,10 @@ void HandleUnitTargetInteractionCycle(UnitCommandContext& context,
 void HandleUnitTargetInteractionApproach(UnitCommandContext& context,
     UnitMovementUnit& unit) {
     UnitMovementUnit* target = resolve_active_payload_target_or_clear(context, unit);
-    if (target == nullptr || !target_alive(target)) {
+    // State 0x0e follows the raw target pointer through command-dead, hidden
+    // and lifecycle transitions.  It changes to the transfer cycle only when
+    // the pointer is absent or the interaction footprints meet.
+    if (target == nullptr) {
         unit.command_state = kUnitStateTargetInteractionCycle;
         return;
     }
@@ -5542,7 +5545,9 @@ void HandleUnitMorphExitTimer(UnitCommandContext& context, UnitMovementUnit& uni
 
 void StartUnitValueTransferCommand(UnitCommandContext& context, UnitMovementUnit& unit) {
     UnitMovementUnit* target = resolve_active_payload_target_or_clear(context, unit);
-    if (target == nullptr || !target_alive(target)) {
+    // Original states 0x73 and 0x75 run only the target-footprint helper; they
+    // do not reject command-dead, hidden, inactive or runtime-death targets.
+    if (target == nullptr) {
         PopDeferredUnitCommandOrReturnIdle(context, unit);
         return;
     }
@@ -5560,7 +5565,9 @@ void StartUnitValueTransferCommand(UnitCommandContext& context, UnitMovementUnit
 
 void HandleUnitValueTransferCycle(UnitCommandContext& context, UnitMovementUnit& unit) {
     UnitMovementUnit* target = resolve_active_payload_target_or_clear(context, unit);
-    if (target == nullptr || !target_alive(target)) {
+    // 0x004cc3ef tests exactly raw runtime bit 4.  The command-dead high bit
+    // and raw 0x80 attachment/hidden bit remain transferable in this phase.
+    if (target == nullptr || (target->runtime_flags & 4u) != 0) {
         PopDeferredUnitCommandOrReturnIdle(context, unit);
         return;
     }
@@ -5583,7 +5590,7 @@ void HandleUnitValueTransferCycle(UnitCommandContext& context, UnitMovementUnit&
 
 void HandleUnitValueTransferApproach(UnitCommandContext& context, UnitMovementUnit& unit) {
     UnitMovementUnit* target = resolve_active_payload_target_or_clear(context, unit);
-    if (target == nullptr || !target_alive(target)) {
+    if (target == nullptr) {
         PopDeferredUnitCommandOrReturnIdle(context, unit);
         return;
     }
