@@ -106,7 +106,10 @@ ProductionOrderCostRule read_cost_rule(const u8* record, std::size_t offset) {
     rule.base = read_le_i32(record + offset);
     rule.mode = read_le_u32(record + offset + 4);
     rule.linear = read_le_i32(record + offset + 8);
-    rule.extra = read_le_i32(record + offset + 0x10);
+    // CalculateProductionOrderCostRule (0x0043b580) consumes the fifth
+    // argument loaded from rule +0x0c.  The two trailing DWORDs at +0x10 and
+    // +0x14 are passed by the wrappers but are not read by modes 0..4.
+    rule.extra = read_le_i32(record + offset + 0x0c);
     return rule;
 }
 
