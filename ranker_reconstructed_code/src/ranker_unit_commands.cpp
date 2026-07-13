@@ -3281,7 +3281,12 @@ void StartUnitCompletionAnnouncementCommand(UnitCommandContext& context,
     UnitMovementUnit& unit) {
     if (context.callbacks.can_start_completion_announcement != nullptr &&
         !context.callbacks.can_start_completion_announcement(context, unit)) {
-        PopDeferredUnitCommandOrReturnIdle(context, unit);
+        // FUN_004ebed0 returns with carry set and leaves state 0x4d intact
+        // when FUN_004ec121 rejects the start.  This is a retry gate: another
+        // order can still hold lock bit one, or a prerequisite can temporarily
+        // be absent after this queued order already paid its primary cost and
+        // set lock bit two.  Popping here lost the paid order and stranded its
+        // queued lock instead of retrying it on the following simulation tick.
         return;
     }
 
@@ -4037,19 +4042,16 @@ void HandleUnitGuardPursueTarget(UnitCommandContext& context,
 bool complete_legacy_spawn_placement(UnitCommandContext& context,
     UnitMovementUnit& unit, u32 type_id) {
     if (!reserve_building_primary_resource(context, unit, type_id)) {
-        if (context.callbacks.on_production_start_failed_reason != nullptr) {
-            context.callbacks.on_production_start_failed_reason(
-                context, unit, UnitProductionStartFailure::primary_resources);
-        }
+        // FUN_004c9e8f/0x004ca105 merge a late resource rejection and a
+        // placement-allocation rejection into the same DAT_011c3120
+        // construction-failure message plus queued sound slot two.
+        notify_spawn_failure(context, unit);
         return false;
     }
     UnitMovementUnit* spawned = create_legacy_spawned_unit(context, unit, type_id);
     if (spawned == nullptr) {
         refund_building_primary_resource(context, unit, type_id);
-        if (context.callbacks.on_production_start_failed_reason != nullptr) {
-            context.callbacks.on_production_start_failed_reason(
-                context, unit, UnitProductionStartFailure::placement_failed);
-        }
+        notify_spawn_failure(context, unit);
         return false;
     }
     // Original FUN_004c9e8f/FUN_004ca105 link the newly allocated structure

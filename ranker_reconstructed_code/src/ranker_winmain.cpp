@@ -15408,16 +15408,12 @@ void sync_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
     overlay.selected_unit_health_ratio_max = unit->max_health;
     // Original 0x004e1644 indexes the full DWORD table at 0x008640d8 with
     // HP * 4 / (max HP + effect 00).  Steps above four are observable while
-    // an effect-adjusted maximum changes underneath an existing current HP.
-    constexpr std::array<u32, 10> kSelectedHealthTextColors{{
-        0x09u, 0x09u, 0x99u, 0x11u, 0x11u,
-        0xa9u, 0xc1u, 0xc9u, 0xd1u, 0x71u,
-    }};
-    const u32 health_color_step = std::min<u32>(
-        CalculateUnitHitPointBarFillWithProductionEffect00(production, *unit),
-        static_cast<u32>(kSelectedHealthTextColors.size() - 1));
+    // an effect-adjusted maximum changes underneath an existing current HP;
+    // index ten and the following table tail resolve to color zero.
+    const u32 health_color_step =
+        CalculateUnitHitPointBarFillWithProductionEffect00(production, *unit);
     overlay.selected_unit_health_text_color =
-        kSelectedHealthTextColors[health_color_step];
+        ResolveSelectedUnitHealthTextColor(health_color_step);
     overlay.selected_unit_indestructible_text =
         startup_platform_row(251, "Indestructible");
     // FUN_004e1544 selects one of the 32 red-adjusted character palettes as
@@ -16110,6 +16106,27 @@ bool publish_default_ui_overlay_input_command(
         static_cast<i32>(input.map_origin_x);
     const i32 command_screen_y = action.world_y -
         static_cast<i32>(input.map_origin_y);
+    if (action.action == kUiOverlayCommandActionPlacement &&
+        action.item_id == 0x0eu) {
+        // FUN_004e9ed0 dispatches mode 0e through FUN_004db650 and clears the
+        // staged globals regardless of the slot command's carry result.  The
+        // UI record carries the original 1..6 slot code, while the production
+        // dispatcher supplies the clamped world point and subtype-04 tuple.
+        const u32 saved_attachment_slot = production.selected_attachment_slot;
+        const u32 slot_code = action.aux >= 1u && action.aux <= 6u ?
+            action.aux : overlay.placement_equipment_slot_code;
+        production.selected_attachment_slot = slot_code;
+        DispatchCurrentEquipmentSlotAtPoint(
+            production, command_screen_x, command_screen_y);
+        production.selected_attachment_slot = saved_attachment_slot;
+
+        ResetGameplayInputPointerState(input);
+        overlay.placement_mode = 0;
+        overlay.staged_unit_action_id = 0xffffffffu;
+        overlay.selected_production_category = 0;
+        overlay.context_cursor.animation_mode = 0;
+        return true;
+    }
     if (action.item_id < 0x60u) {
         if (click) {
             if (action.aux == 0) {
@@ -16155,13 +16172,28 @@ bool publish_default_ui_overlay_input_command(
                 std::max<i32>(action.world_x, 0));
             input.last_action_world_y = static_cast<u32>(
                 std::max<i32>(action.world_y, 0));
+            if (placement_action && action_id == 2u) {
+                // The reconstruction defers UI records until the command
+                // drain, unlike the original immediate caller.  Restore the
+                // slot captured at click time before entry two reads the
+                // DAT_00869e10 mirror, so a later UI mutation cannot replace
+                // raw +0x2c's logical slot zero (or slots one through six).
+                overlay.placement_definition_id = action.aux;
+            }
             DispatchSelectedUnitActionCommand(input, action_id,
                 command_screen_x, command_screen_y, overlay.selected_unit_id);
-            if (placement_action) {
+            // FUN_004e9ed0 keeps low mode two staged when FUN_004da02c
+            // returns carry, so a rejected food/equipment target can be
+            // retried.  Other reconstructed placement modes retain their
+            // established unconditional-clear behavior.
+            const bool keep_failed_mode_two = placement_action &&
+                action_id == 2u && input.last_dispatch_failed;
+            if (placement_action && !keep_failed_mode_two) {
                 ResetGameplayInputPointerState(input);
                 overlay.staged_unit_action_id = 0xffffffffu;
                 overlay.placement_mode = 0;
                 overlay.selected_production_category = 0;
+                overlay.context_cursor.animation_mode = 0;
             }
             return true;
         }
@@ -18577,8 +18609,10 @@ void default_unit_command_production_start_failed(UnitCommandContext& context,
 
 u32 default_owner_faction_for_message(u32 owner) {
     if (owner < g_runtime.gameplay_startup_state.owner_faction_ids.size()) {
-        return std::min<u32>(
-            g_runtime.gameplay_startup_state.owner_faction_ids[owner], 3);
+        // StartUnitProductionSpawnCommand 0x004cdf5f..0x004cdf69 adds the raw
+        // owner faction to 0x0b before indexing the platform-message pointer
+        // table.  It does not clamp synthetic/scripted faction values to three.
+        return g_runtime.gameplay_startup_state.owner_faction_ids[owner];
     }
     return 0;
 }

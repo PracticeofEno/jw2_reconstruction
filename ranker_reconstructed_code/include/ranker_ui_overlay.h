@@ -35,6 +35,19 @@ constexpr u32 kUiOverlayCommandActionMinimap = 3;
 constexpr u32 kUiOverlayCommandActionPlacement = 4;
 constexpr u32 kUiOverlayCommandActionSelection = 5;
 constexpr u32 kUiOverlayCommandActionContextual = 6;
+constexpr std::array<u32, 10> kOriginalSelectedHealthTextColors{{
+    0x09u, 0x09u, 0x99u, 0x11u, 0x11u,
+    0xa9u, 0xc1u, 0xc9u, 0xd1u, 0x71u,
+}};
+
+// FUN_004e1544 indexes the DWORD table at 0x008640d8 without clamping the
+// HP * 4 / (max HP + effect 00) result.  The original table tail following
+// its ten nonzero entries is zero, rather than a repeat of entry nine.
+constexpr u32 ResolveSelectedUnitHealthTextColor(u32 health_color_step) {
+    return health_color_step < kOriginalSelectedHealthTextColors.size()
+        ? kOriginalSelectedHealthTextColors[health_color_step]
+        : 0u;
+}
 constexpr std::size_t kCameraScrollSpeedCount = 16;
 constexpr std::size_t kCameraScrollRampCount = 8;
 constexpr std::array<std::array<u32, kCameraScrollRampCount>,

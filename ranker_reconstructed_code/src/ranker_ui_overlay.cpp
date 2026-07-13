@@ -2583,14 +2583,30 @@ void RenderProductionPlacementPreviewOverlay(UiOverlayState& state) {
         state.placement_definition_id = 0x1d;
     }
 
+    // FUN_004e2338 calls FUN_004e3f43 at 0x004e2364 and returns on carry at
+    // 0x004e2369.  A non-zero interface-background mask pixel therefore
+    // suppresses both the placement sprite and every green/red footprint cell;
+    // transparent holes in the interface remain valid preview space.
+    if (CheckUiOverlayIconMaskPixel(state, state.mouse_x, state.mouse_y)) {
+        return;
+    }
+
     frame_callback(state, state.callbacks.draw_placement_preview);
+
+    // The original draws the definition sprite first, then exits at
+    // 0x004e23f1/0x004e23fe when either raw footprint dimension is zero.
+    // Do not synthesize a one-cell invalid marker for those definitions.
+    if (state.placement_footprint_width_tiles == 0 ||
+        state.placement_footprint_height_tiles == 0) {
+        return;
+    }
 
     const i32 tile_x = (state.placement_pointer_x + state.camera_x) >> 5;
     const i32 tile_y = (state.placement_pointer_y + state.camera_y) >> 5;
     const i32 screen_x = (tile_x << 5) - state.camera_x;
     const i32 screen_y = (tile_y << 5) - state.camera_y;
-    const u32 width = std::max<u32>(1, state.placement_footprint_width_tiles);
-    const u32 height = std::max<u32>(1, state.placement_footprint_height_tiles);
+    const u32 width = state.placement_footprint_width_tiles;
+    const u32 height = state.placement_footprint_height_tiles;
 
     for (u32 y = 0; y < height; ++y) {
         for (u32 x = 0; x < width; ++x) {
@@ -3520,7 +3536,10 @@ void BuildSingleSelectedUnitCommandPanel(UiOverlayState& state) {
         QueueUiOverlayCommandRecordByItemId(
             state, option.item_id, option.aux, option.flags);
     }
-    const u32 command = state.selected_unit_command_state & 0xffu;
+    // 0x004e50e8..0x004e5122 compares the complete raw DWORD against each
+    // active production state.  High flag bits must not create a cancel slot
+    // merely because the low byte resembles one of those states.
+    const u32 command = state.selected_unit_command_state;
     if (command == 0x51u || command == 0x50u ||
         command == 0x83u || command == 0x82u ||
         command == 0x4eu || command == 0x4du) {
@@ -4512,6 +4531,25 @@ void HandleGameplayPointerActionFrame(UiOverlayState& state) {
                     state.placement_definition_id, kCommandActionPlacement);
                 state.pending_local_command = true;
             }
+            else if (state.placement_mode == 2 &&
+                !CheckMouseInsideMinimap(state) && !over_hud) {
+                // FUN_004e9ed0 sends every low placement mode through
+                // FUN_004da02c.  Mode two is the held food/equipment transfer
+                // command; retaining the logical slot in aux also snapshots
+                // raw +0x2c's slot-code zero for deferred UI processing.
+                append_command_action(state, 0xaau + 2u,
+                    state.placement_definition_id, kCommandActionPlacement);
+                state.pending_local_command = true;
+            }
+            else if (state.placement_mode == 0x0eu &&
+                !CheckMouseInsideMinimap(state) && !over_hud) {
+                // FUN_004e9ed0's dedicated mode-0e branch calls FUN_004db650,
+                // which publishes the staged equipment slot at this point.
+                append_command_action(state, 0x0eu,
+                    state.placement_equipment_slot_code,
+                    kCommandActionPlacement);
+                state.pending_local_command = true;
+            }
             else if (state.staged_unit_action_id != 0xffffffffu &&
                 !CheckMouseInsideMinimap(state) && !over_hud) {
                 const u32 action_id = state.staged_unit_action_id;
@@ -4788,6 +4826,18 @@ bool CheckPointerInsideMinimapAndPlacementMode(UiOverlayState& state) {
     const i32 local_y = state.mouse_y - state.minimap.output_y;
     const i32 world_x = minimap_input_screen_to_world_x(state, local_x);
     const i32 world_y = minimap_command_screen_to_world_y(state, local_y);
+    if (state.placement_mode == 2) {
+        append_command_action_at_world(state, 0xaau + 2u,
+            state.placement_definition_id, kCommandActionPlacement, 0,
+            world_x, world_y);
+        return true;
+    }
+    if (state.placement_mode == 0x0eu) {
+        append_command_action_at_world(state, 0x0eu,
+            state.placement_equipment_slot_code, kCommandActionPlacement, 0,
+            world_x, world_y);
+        return true;
+    }
     if (state.staged_unit_action_id != 0xffffffffu) {
         append_command_action_at_world(state,
             0xaau + state.staged_unit_action_id, 0,

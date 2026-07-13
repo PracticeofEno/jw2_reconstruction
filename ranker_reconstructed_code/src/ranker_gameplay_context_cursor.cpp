@@ -6,10 +6,11 @@ namespace {
 constexpr u32 kMobileUnitTypeLimit = 0x60u;
 constexpr u32 kBerryHoverKind = 0x0cu;
 constexpr u32 kHarvestCapability = 0x80u;
-constexpr u8 kHighModeAlternateCursor[24] = {
+constexpr u8 kHighModeAlternateCursor[32] = {
     1, 1, 0, 0, 0, 0, 1, 0,
     0, 1, 0, 1, 1, 1, 1, 1,
     1, 0, 0, 0, 0, 1, 1, 0,
+    1, 0, 0, 0, 0, 1, 0, 0,
 };
 
 GameplayContextCursorResolution preserve_cursor(
@@ -271,7 +272,7 @@ GameplayContextCursorResolution ResolveGameplayContextCursor(
     case 36u:
         return animate_cursor(state, input.current_tick_ms, 0x24u, 0x60u, 4u, 110u);
     default:
-        if (input.current_mode >= 42u && input.current_mode <= 65u) {
+        if (input.current_mode >= 42u && input.current_mode <= 73u) {
             const u32 table_index = input.current_mode - 42u;
             const u32 base_cursor = kHighModeAlternateCursor[table_index] != 0 ?
                 0x38u : 0x30u;
