@@ -1022,6 +1022,7 @@ bool default_unit_visibility_allows_target(const UnitMovementUnit& source,
 UnitMovementUnit* default_unit_command_find_nearby_follow_target(
     UnitCommandContext& context, UnitMovementUnit& unit);
 void run_default_gameplay_script_phase(GameplayLoopState& state, u32 phase);
+void default_gameplay_loop_present_phase(GameplayLoopState& state);
 bool dispatch_default_gameplay_script_immediate_spawn(
     const GameplayScriptSpawnRequest& request, void* user);
 void instantiate_default_gameplay_script_scenario_units(GameplayScriptTriggerState& script);
@@ -6069,10 +6070,7 @@ void default_gameplay_startup_unit_placed(UnitMovementUnit& unit) {
 void default_gameplay_startup_initialize_local_camera(i32 x, i32 y) {
     sync_default_ui_overlay_runtime_from_gameplay_state();
     UiOverlayState& overlay = ui_overlay_state();
-    constexpr std::array<i32, 4> kHudY{{439, 436, 421, 452}};
-    const u32 theme = std::min<u32>(interface_resource_state().theme_index, 3);
-    overlay.minimap_camera_anchor_x = static_cast<i32>(kOriginalClientWidth / 2);
-    overlay.minimap_camera_anchor_y = kHudY[theme] / 2;
+    ConfigureGameplayUiOverlayLayout(overlay);
     ClampCameraToMinimapPoint(overlay, x, y);
     publish_default_ui_overlay_camera(overlay);
 
@@ -10118,12 +10116,11 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
     configure_default_ui_overlay_callbacks();
     {
         UiOverlayState& overlay = ui_overlay_state();
-        constexpr std::array<i32, 4> kHudY{{439, 436, 421, 452}};
         constexpr std::array<i32, 4> kCameraEffectiveHeight{{496, 487, 487, 480}};
         constexpr std::array<i32, 4> kMinimapBaseY{{470, 474, 474, 474}};
         const u32 theme = std::min<u32>(interface_resource_state().theme_index, 3);
         overlay.interface_theme_index = theme;
-        const i32 gameplay_world_viewport_height = kHudY[theme];
+        ConfigureGameplayUiOverlayLayout(overlay);
         const u32 minimap_capacity =
             overlay.screen_width == 0x280 ? 0x5fu : 0x73u;
         const u32 minimap_width = std::min<u32>(
@@ -10162,14 +10159,13 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
             overlay.camera_max_y = std::max<i32>(
                 0, map_height_pixels - kCameraEffectiveHeight[theme]);
             overlay.camera_x = std::clamp(
-                camera_anchor_x - static_cast<i32>(kOriginalClientWidth / 2),
+                camera_anchor_x - overlay.minimap_camera_anchor_x,
                 0, overlay.camera_max_x);
             overlay.camera_y = std::clamp(
-                camera_anchor_y - (gameplay_world_viewport_height / 2),
+                camera_anchor_y - overlay.minimap_camera_anchor_y,
                 0, overlay.camera_max_y);
             publish_default_ui_overlay_camera(overlay);
         }
-        ConfigureGameplayUiOverlayLayout(overlay);
         BuildSelectedUnitCommandPanel(overlay);
     }
     g_runtime.gameplay_unit_render_queue.callbacks.on_queue_entry =
@@ -22755,6 +22751,76 @@ void recount_default_gameplay_script_owner_unit_counts(
     }
 }
 
+void publish_default_gameplay_script_population_limit_immediate(
+    u32 owner, u32 value, void*) {
+    UnitLifecycleContext* lifecycle =
+        g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle != nullptr && owner < lifecycle->owner_population_limit.size()) {
+        lifecycle->owner_population_limit[owner] = value;
+    }
+    if (owner < g_runtime.gameplay_unit_commands.owner_population_limit.size()) {
+        g_runtime.gameplay_unit_commands.owner_population_limit[owner] = value;
+    }
+}
+
+void publish_default_gameplay_script_ai_halt_immediate(
+    u32 owner, u32 value, void*) {
+    if (owner < g_runtime.gameplay_owner_ai_state.owners.size()) {
+        g_runtime.gameplay_owner_ai_state.owners[owner].script_halted = value;
+    }
+}
+
+void transition_default_gameplay_script_camera_immediate(
+    i32 target_x, i32 target_y, void*) {
+    sync_default_ui_overlay_runtime_from_gameplay_state();
+    UiOverlayState& overlay = ui_overlay_state();
+    const i32 anchor_x = overlay.minimap_camera_anchor_x != 0 ?
+        overlay.minimap_camera_anchor_x :
+        static_cast<i32>(overlay.screen_width / 2);
+    const i32 anchor_y = overlay.minimap_camera_anchor_y != 0 ?
+        overlay.minimap_camera_anchor_y :
+        static_cast<i32>(overlay.screen_height / 2);
+
+    const auto render_transition_frame = []() {
+        GameplayLoopState& loop = gameplay_loop_state();
+        if (sprite_render_state().active) {
+            GameplayFrameRenderContext& context =
+                g_runtime.gameplay_frame_render_context;
+            context.current_tick_ms = loop.current_tick_ms;
+            context.frame_counter = loop.simulation_frame_counter;
+            RenderGameplayFrameComposite(context);
+            return;
+        }
+        default_gameplay_loop_present_phase(loop);
+    };
+
+    for (u32 step = 0; step < 40; ++step) {
+        const i32 current_x = overlay.camera_x + anchor_x;
+        const i32 current_y = overlay.camera_y + anchor_y;
+        const i32 delta_x = default_i32_from_wrapped_u32(
+            static_cast<u32>(target_x) - static_cast<u32>(current_x)) / 2;
+        const i32 delta_y = default_i32_from_wrapped_u32(
+            static_cast<u32>(target_y) - static_cast<u32>(current_y)) / 2;
+        const i32 next_x = default_i32_from_wrapped_u32(
+            static_cast<u32>(current_x) + static_cast<u32>(delta_x));
+        const i32 next_y = default_i32_from_wrapped_u32(
+            static_cast<u32>(current_y) + static_cast<u32>(delta_y));
+        ClampCameraToMinimapPoint(overlay, next_x, next_y);
+        publish_default_ui_overlay_camera(overlay);
+        render_transition_frame();
+
+        // The original assembly compares the X delta twice.  Preserve that
+        // bug: a settled X ends the midpoint loop even while Y is farther out.
+        if (std::abs(delta_x) <= 2 || std::abs(delta_x) <= 2) {
+            break;
+        }
+    }
+
+    ClampCameraToMinimapPoint(overlay, target_x, target_y);
+    publish_default_ui_overlay_camera(overlay);
+    render_transition_frame();
+}
+
 void sync_default_gameplay_script_runtime_context(
     GameplayLoopState& state, GameplayScriptTriggerState& script) {
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
@@ -22789,6 +22855,15 @@ void sync_default_gameplay_script_runtime_context(
     script.opcode_context.apply_variant_progress_immediate =
         apply_default_gameplay_script_variant_progress_immediate;
     script.opcode_context.apply_variant_progress_immediate_user = nullptr;
+    script.opcode_context.publish_population_limit_immediate =
+        publish_default_gameplay_script_population_limit_immediate;
+    script.opcode_context.publish_population_limit_immediate_user = nullptr;
+    script.opcode_context.publish_ai_halt_immediate =
+        publish_default_gameplay_script_ai_halt_immediate;
+    script.opcode_context.publish_ai_halt_immediate_user = nullptr;
+    script.opcode_context.transition_camera_immediate =
+        transition_default_gameplay_script_camera_immediate;
+    script.opcode_context.transition_camera_immediate_user = nullptr;
     // DAT_00722320/DAT_0072231c are shared by the frame clock and script
     // opcodes 0x1e, 0x29 and 0x3d in the original.  Pull the live value after
     // the frame-clock tick so script arithmetic observes that same ordering.

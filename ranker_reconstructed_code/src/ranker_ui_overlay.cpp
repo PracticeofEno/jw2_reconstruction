@@ -2776,6 +2776,20 @@ void ConfigureGameplayUiOverlayLayout(UiOverlayState& state) {
         state.screen_layout_bucket = state.screen_width == 800 ? 1 : 2;
     }
 
+    // DAT_0083f3b8 / DAT_0086358c are the camera-center anchors consumed by
+    // FUN_004e29d1.  The vertical anchor is a separate layout-table field,
+    // not the top edge of the lower HUD artwork.
+    constexpr std::array<std::array<i32, 4>, 3> kCameraViewportHeight{{
+        {{356, 362, 356, 364}},
+        {{329, 329, 329, 329}},
+        {{329, 329, 329, 329}},
+    }};
+    const u32 camera_layout = std::min<u32>(state.screen_layout_bucket, 2);
+    const u32 camera_theme = std::min<u32>(state.interface_theme_index, 3);
+    state.minimap_camera_anchor_x = static_cast<i32>(state.screen_width / 2);
+    state.minimap_camera_anchor_y =
+        kCameraViewportHeight[camera_layout][camera_theme] / 2;
+
     // FUN_004e2bb7 selects these records by display-layout bucket first and
     // interface theme second.  Each source record contains an outer anchor,
     // an inner rectangle origin, and its exclusive end; bucket 2 proves the

@@ -185,6 +185,12 @@ using GameplayScriptImmediateSpawnCallback = bool (*)(
 using GameplayScriptImmediateVariantProgressCallback = void (*)(
     GameplayScriptTriggerObjectState& object, void* user);
 
+using GameplayScriptImmediateOwnerValueCallback = void (*)(
+    u32 owner, u32 value, void* user);
+
+using GameplayScriptImmediateCameraTransitionCallback = void (*)(
+    i32 target_x, i32 target_y, void* user);
+
 struct GameplayScriptUnitNameAppendRequest {
     u32 type_id = 0;
     std::string suffix;
@@ -246,6 +252,9 @@ struct GameplayScriptOpcodeContext {
     bool camera_request_active = false;
     i32 camera_x = 0;
     i32 camera_y = 0;
+    // DAT_00d5fe56 prevents the synchronous camera-transition renderer from
+    // recursively starting the same transition through phase-one scripts.
+    bool camera_transition_active = false;
     bool selection_request_active = false;
     u32 selected_object_index = 0;
     // Scenario opcodes 0x5d/0x60 replace the complete UI selection with the
@@ -295,6 +304,17 @@ struct GameplayScriptOpcodeContext {
     GameplayScriptImmediateVariantProgressCallback
         apply_variant_progress_immediate = nullptr;
     void* apply_variant_progress_immediate_user = nullptr;
+    // DAT_007226d8 and DAT_00721a00 are consumed directly by later commands
+    // in the same trigger pass.  Publish them at the opcode write site rather
+    // than waiting for the end-of-phase mirror flush.
+    GameplayScriptImmediateOwnerValueCallback
+        publish_population_limit_immediate = nullptr;
+    void* publish_population_limit_immediate_user = nullptr;
+    GameplayScriptImmediateOwnerValueCallback publish_ai_halt_immediate = nullptr;
+    void* publish_ai_halt_immediate_user = nullptr;
+    GameplayScriptImmediateCameraTransitionCallback
+        transition_camera_immediate = nullptr;
+    void* transition_camera_immediate_user = nullptr;
     std::vector<GameplayScriptSpawnRequest> spawn_requests;
     std::vector<GameplayScriptUnitNameAppendRequest> unit_name_append_requests;
 };

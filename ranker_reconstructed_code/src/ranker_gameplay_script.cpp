@@ -139,12 +139,30 @@ bool area_contains_object(const GameplayScriptArea& area,
     return area_contains_point(area, object.x, object.y);
 }
 
+bool area_contains_live_object(const GameplayScriptArea& area,
+    const GameplayScriptTriggerObjectState& object) {
+    return object.unit != nullptr ?
+        area_contains_point(area, object.unit->x, object.unit->y) :
+        area_contains_object(area, object);
+}
+
 bool object_bounds_inside_area(const GameplayScriptArea& area,
     const GameplayScriptTriggerObjectState& object) {
-    const i32 left = object.x + object.bounds.left;
-    const i32 top = object.y + object.bounds.top;
-    const i32 right = object.x + object.bounds.right;
-    const i32 bottom = object.y + object.bounds.bottom;
+    const UnitMovementUnit* unit = object.unit;
+    const i32 x = unit != nullptr ? unit->x : object.x;
+    const i32 y = unit != nullptr ? unit->y : object.y;
+    const i32 bounds_left = unit != nullptr ?
+        unit->definition.bounds_left : object.bounds.left;
+    const i32 bounds_top = unit != nullptr ?
+        unit->definition.bounds_top : object.bounds.top;
+    const i32 bounds_right = unit != nullptr ?
+        unit->definition.bounds_width : object.bounds.right;
+    const i32 bounds_bottom = unit != nullptr ?
+        unit->definition.bounds_height : object.bounds.bottom;
+    const i32 left = x + bounds_left;
+    const i32 top = y + bounds_top;
+    const i32 right = x + bounds_right;
+    const i32 bottom = y + bounds_bottom;
     return area.left < left && right < area.right &&
         area.top < top && bottom < area.bottom;
 }
@@ -1907,8 +1925,10 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         }
         for (u32 index : active_object_indices(state)) {
             GameplayScriptTriggerObjectState* object = object_state(state, index);
-            if (object_alive(object) && area_contains_object(*area, *object)) {
-                mark_gameplay_script_object_dead(*object);
+            if (object != nullptr &&
+                (gameplay_script_object_runtime_flags(*object) & 4u) == 0 &&
+                area_contains_live_object(*area, *object)) {
+                mark_gameplay_script_object_command_dead(*object);
             }
         }
         return true;
@@ -2263,8 +2283,10 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         }
         for (u32 index : active_object_indices(state)) {
             GameplayScriptTriggerObjectState* object = object_state(state, index);
-            if (object_alive(object) && area_contains_object(*area, *object)) {
-                mark_gameplay_script_object_dead(*object);
+            if (object != nullptr &&
+                (gameplay_script_object_runtime_flags(*object) & 4u) == 0 &&
+                area_contains_live_object(*area, *object)) {
+                mark_gameplay_script_object_command_dead(*object);
             }
         }
         return true;
@@ -2794,7 +2816,14 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
                     gameplay_script_object_lifecycle_class(*object) == 2) {
                     mark_gameplay_script_object_command_dead(*object);
                 }
-            } else if (object->owner_id == command[2] && object->type_id == command[3]) {
+            } else {
+                const u32 owner_id = object->unit != nullptr ?
+                    object->unit->owner_id : object->owner_id;
+                const u32 type_id = object->unit != nullptr ?
+                    object->unit->type_id : object->type_id;
+                if (owner_id != command[2] || type_id != command[3]) {
+                    continue;
+                }
                 if (command[0] == 0x62 &&
                     (gameplay_script_object_runtime_flags(*object) & 4u) == 0) {
                     mark_gameplay_script_object_command_dead(*object);
@@ -2810,6 +2839,11 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         if (command[1] < state.opcode_context.owner_external_values.size()) {
             state.opcode_context.owner_external_values[command[1]] = command[2];
             state.opcode_context.owner_population_limit_dirty[command[1]] = true;
+            if (state.opcode_context.publish_population_limit_immediate != nullptr) {
+                state.opcode_context.publish_population_limit_immediate(
+                    command[1], command[2],
+                    state.opcode_context.publish_population_limit_immediate_user);
+            }
         }
         return true;
     case 0x65: {
@@ -2833,6 +2867,10 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         if (command[1] < state.opcode_context.owner_ai_halt_values.size()) {
             state.opcode_context.owner_ai_halt_values[command[1]] = 0;
             state.opcode_context.owner_ai_halt_dirty[command[1]] = true;
+            if (state.opcode_context.publish_ai_halt_immediate != nullptr) {
+                state.opcode_context.publish_ai_halt_immediate(command[1], 0,
+                    state.opcode_context.publish_ai_halt_immediate_user);
+            }
         }
         return true;
     case 0x68:
@@ -2840,6 +2878,10 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         if (command[1] < state.opcode_context.owner_ai_halt_values.size()) {
             state.opcode_context.owner_ai_halt_values[command[1]] = 1;
             state.opcode_context.owner_ai_halt_dirty[command[1]] = true;
+            if (state.opcode_context.publish_ai_halt_immediate != nullptr) {
+                state.opcode_context.publish_ai_halt_immediate(command[1], 1,
+                    state.opcode_context.publish_ai_halt_immediate_user);
+            }
         }
         return true;
     case 0x69:
@@ -2876,9 +2918,23 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x6e: {
         const GameplayScriptArea* area = area_state(state, command[2]);
         if (state.opcode_context.local_owner_id == command[1] && area != nullptr) {
-            state.opcode_context.camera_request_active = true;
-            state.opcode_context.camera_x = area_center_x(*area);
-            state.opcode_context.camera_y = area_center_y(*area);
+            if (state.opcode_context.camera_transition_active) {
+                trigger.blocked = 0;
+                return true;
+            }
+            state.opcode_context.camera_transition_active = true;
+            const i32 target_x = area_translation_center_x(*area);
+            const i32 target_y = area_translation_center_y(*area);
+            if (state.opcode_context.transition_camera_immediate != nullptr) {
+                state.opcode_context.transition_camera_immediate(target_x, target_y,
+                    state.opcode_context.transition_camera_immediate_user);
+            }
+            else {
+                state.opcode_context.camera_request_active = true;
+                state.opcode_context.camera_x = target_x;
+                state.opcode_context.camera_y = target_y;
+            }
+            state.opcode_context.camera_transition_active = false;
         }
         return true;
     }
