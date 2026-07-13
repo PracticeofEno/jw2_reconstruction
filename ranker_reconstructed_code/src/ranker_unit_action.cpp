@@ -4265,7 +4265,6 @@ void ConfigureUnitEffectRenderPalette(UnitEffectRuntimeState& state, bool use_rg
 
 void TickUnitEffectRuntimeList(UnitEffectRuntimeState& state) {
     const std::vector<std::size_t> active_indices = state.active_effect_indices;
-    std::vector<std::size_t> finished_indices;
 
     for (std::size_t index : active_indices) {
         if (index >= state.effect_slots.size()) {
@@ -4273,7 +4272,7 @@ void TickUnitEffectRuntimeList(UnitEffectRuntimeState& state) {
         }
         UnitEffectRuntime& effect = state.effect_slots[index];
         if (!effect.active) {
-            finished_indices.push_back(index);
+            ReleaseUnitEffectSlot(state, effect);
             continue;
         }
 
@@ -4284,13 +4283,7 @@ void TickUnitEffectRuntimeList(UnitEffectRuntimeState& state) {
         }
 
         if (!effect.active) {
-            finished_indices.push_back(index);
-        }
-    }
-
-    for (std::size_t index : finished_indices) {
-        if (index < state.effect_slots.size()) {
-            ReleaseUnitEffectSlot(state, state.effect_slots[index]);
+            ReleaseUnitEffectSlot(state, effect);
         }
     }
 }
