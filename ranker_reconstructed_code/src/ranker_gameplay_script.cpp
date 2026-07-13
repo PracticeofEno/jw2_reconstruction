@@ -189,6 +189,22 @@ void mutate_gameplay_script_object_runtime_flags(
     }
 }
 
+u32 gameplay_script_object_runtime_flags(
+    const GameplayScriptTriggerObjectState& object) {
+    return object.unit != nullptr ? object.unit->runtime_flags : object.flags;
+}
+
+void mark_gameplay_script_object_command_dead(
+    GameplayScriptTriggerObjectState& object) {
+    // Opcodes 0x61/0x62 set only raw unit +0x60 bit 0x10000000.  Runtime
+    // flags, trigger membership, and lifecycle-list movement are handled by
+    // the subsequent ordinary unit-runtime phase.
+    object.command_state_raw |= kUnitCommandDead;
+    if (object.unit != nullptr) {
+        object.unit->command_state |= kUnitCommandDead;
+    }
+}
+
 void mutate_gameplay_script_object_selection_flag(
     GameplayScriptTriggerObjectState& object, bool selected) {
     if (selected) {
@@ -2582,12 +2598,14 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
                 continue;
             }
             if (command[0] == 0x61) {
-                if (object_alive(object) && object->definition_class == 2) {
-                    object->area_marker_flags |= 0x10000000u;
+                if ((gameplay_script_object_runtime_flags(*object) & 4u) == 0 &&
+                    gameplay_script_object_lifecycle_class(*object) == 2) {
+                    mark_gameplay_script_object_command_dead(*object);
                 }
             } else if (object->owner_id == command[2] && object->type_id == command[3]) {
-                if (command[0] == 0x62 && object_alive(object)) {
-                    object->area_marker_flags |= 0x10000000u;
+                if (command[0] == 0x62 &&
+                    (gameplay_script_object_runtime_flags(*object) & 4u) == 0) {
+                    mark_gameplay_script_object_command_dead(*object);
                 } else if (command[0] == 0x63) {
                     mutate_gameplay_script_object_runtime_flags(
                         *object, 0, 0x20000000u);
