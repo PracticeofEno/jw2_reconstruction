@@ -1665,8 +1665,8 @@ bool execute_item_slot_use(UnitCommandContext& context, UnitMovementUnit& unit,
         return false;
     }
     if (context.callbacks.use_item_slot != nullptr) {
-        return context.callbacks.use_item_slot(context, unit, kItemSlotUseActionEffectId,
-            unit.path_target_x, unit.path_target_y);
+        return context.callbacks.use_item_slot(context, unit, unit.target,
+            kItemSlotUseActionEffectId, unit.path_target_x, unit.path_target_y);
     }
     return true;
 }
@@ -1916,8 +1916,6 @@ void StartUnitItemSlotUseEntry(UnitCommandContext& context, UnitMovementUnit& un
         }
         unit.active_command_payload.y = unit.path_target_x;
         unit.active_command_payload.value = static_cast<u32>(unit.path_target_y);
-        unit.saved_path_target_x = unit.path_target_x;
-        unit.saved_path_target_y = unit.path_target_y;
     }
     else {
         unit.command_value = payload_target & 0x7fffffffu;

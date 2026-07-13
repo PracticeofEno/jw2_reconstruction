@@ -19675,8 +19675,8 @@ u32 default_unit_command_metadata_flags(UnitCommandContext&,
 }
 
 bool default_unit_command_use_item_slot(UnitCommandContext&,
-    UnitMovementUnit& source, u32 item_id, i32 x, i32 y) {
-    return dispatch_default_unit_command_action_effect(source, nullptr, item_id, x, y);
+    UnitMovementUnit& source, UnitMovementUnit* target, u32 item_id, i32 x, i32 y) {
+    return dispatch_default_unit_command_action_effect(source, target, item_id, x, y);
 }
 
 bool default_unit_command_start_equipment_progress_effect(UnitCommandContext&,

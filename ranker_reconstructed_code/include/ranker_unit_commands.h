@@ -200,7 +200,7 @@ using UnitCommandAbilitySignedAmountCallback = i32 (*)(UnitCommandContext& conte
 using UnitCommandPointCallback = bool (*)(UnitCommandContext& context,
     UnitMovementUnit& unit, UnitMovementPoint& point);
 using UnitCommandItemUseCallback = bool (*)(UnitCommandContext& context,
-    UnitMovementUnit& unit, u32 item_id, i32 x, i32 y);
+    UnitMovementUnit& unit, UnitMovementUnit* target, u32 item_id, i32 x, i32 y);
 using UnitCommandEquipmentProgressEffectCallback = bool (*)(
     UnitCommandContext& context, UnitMovementUnit& unit, u32 effect_id);
 using UnitCommandPredicate = bool (*)(UnitCommandContext& context,
