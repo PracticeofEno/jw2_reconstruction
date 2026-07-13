@@ -244,6 +244,7 @@ struct GameplayScriptOpcodeContext {
     std::array<bool, kGameplayScriptOwnerCount> owner_score_component_dirty{};
     std::array<bool, kGameplayScriptOwnerCount> owner_score_reset_dirty{};
     std::array<bool, kGameplayScriptOwnerCount> owner_kill_counts_dirty{};
+    std::array<bool, kGameplayScriptOwnerCount> owner_population_limit_dirty{};
     UnitMovementContext* movement = nullptr;
     UnitLifecycleContext* lifecycle = nullptr;
     GameplayScriptStrictPlacementCallback find_strict_placement = nullptr;

@@ -23598,7 +23598,7 @@ void consume_default_gameplay_script_definition_name_append_requests(
     }
 }
 
-void consume_default_gameplay_script_owner_resource_mutations(
+void consume_default_gameplay_script_owner_mutations(
     GameplayScriptTriggerState& script) {
     GameplayScriptOpcodeContext& opcode = script.opcode_context;
     for (u32 owner = 0; owner < opcode.owner_resource_dirty.size(); ++owner) {
@@ -23652,6 +23652,21 @@ void consume_default_gameplay_script_owner_resource_mutations(
         }
         opcode.owner_kill_counts_dirty[owner] = false;
     }
+    for (u32 owner = 0; owner < opcode.owner_population_limit_dirty.size(); ++owner) {
+        if (!opcode.owner_population_limit_dirty[owner]) {
+            continue;
+        }
+        const u32 limit = opcode.owner_external_values[owner];
+        UnitLifecycleContext* lifecycle =
+            g_runtime.gameplay_startup_state.lifecycle;
+        if (lifecycle != nullptr && owner < lifecycle->owner_population_limit.size()) {
+            lifecycle->owner_population_limit[owner] = limit;
+        }
+        if (owner < g_runtime.gameplay_unit_commands.owner_population_limit.size()) {
+            g_runtime.gameplay_unit_commands.owner_population_limit[owner] = limit;
+        }
+        opcode.owner_population_limit_dirty[owner] = false;
+    }
 }
 
 void consume_default_gameplay_script_owner_mask_tables(
@@ -23688,7 +23703,7 @@ void consume_default_gameplay_script_opcode_context(
         opcode.game_clock_decrements;
     gameplay_modal_ui_state().scenario_message_text = opcode.scenario_message_text;
     consume_default_gameplay_script_owner_mask_tables(script);
-    consume_default_gameplay_script_owner_resource_mutations(script);
+    consume_default_gameplay_script_owner_mutations(script);
     consume_default_gameplay_script_camera_request(opcode);
     consume_default_gameplay_script_selection_request(script);
     consume_default_gameplay_script_stage_result(opcode);

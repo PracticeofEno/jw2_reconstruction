@@ -2463,6 +2463,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x64:
         if (command[1] < state.opcode_context.owner_external_values.size()) {
             state.opcode_context.owner_external_values[command[1]] = command[2];
+            state.opcode_context.owner_population_limit_dirty[command[1]] = true;
         }
         return true;
     case 0x65: {
