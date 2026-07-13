@@ -950,7 +950,13 @@ bool draw_unit_low_health_overlay_sprites(const UnitAnimationDrawCommand& comman
 void draw_unit_animation_sprite(UnitAnimationDrawContext& context,
     const UnitAnimationDrawCommand& command) {
     if (command.sequence == UnitAnimationSequence::direct_sprite &&
-        draw_jw211_direct_sprite_mode(command)) {
+        command.unit != nullptr &&
+        (command.unit->state_flags & kUnitAnimStateDirectSpriteMode) != 0) {
+        // DispatchUnitAnimationDraw returns immediately from the raw state
+        // bit-0x10 branch after attempting the JW2_11 blit.  A missing frame
+        // in that dedicated resource is therefore an intentionally empty
+        // result, not permission to fall through to definition image group 3.
+        (void)draw_jw211_direct_sprite_mode(command);
         return;
     }
     if (command.sequence == UnitAnimationSequence::low_health_overlay) {
