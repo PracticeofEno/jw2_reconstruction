@@ -9167,6 +9167,12 @@ i32 default_i32_from_u32(u32 value) {
     return value > 0x7fffffffu ? 0x7fffffff : static_cast<i32>(value);
 }
 
+i32 default_i32_from_wrapped_u32(u32 value) {
+    i32 signed_value = 0;
+    std::memcpy(&signed_value, &value, sizeof(signed_value));
+    return signed_value;
+}
+
 void sync_default_owner_lifecycle_score_counter_tables(
     const UnitLifecycleContext& lifecycle, u32 owner) {
     if (owner >= lifecycle.owner_unit_score.size() ||
@@ -22750,13 +22756,14 @@ void sync_default_gameplay_script_runtime_context(
         script.condition_context.owner_population_demand[owner] =
             lifecycle != nullptr &&
                 owner < lifecycle->owner_population_reserved.size()
-            ? default_i32_from_u32(lifecycle->owner_population_reserved[owner])
-            : default_i32_from_u32(
+            ? default_i32_from_wrapped_u32(
+                lifecycle->owner_population_reserved[owner])
+            : default_i32_from_wrapped_u32(
                 g_runtime.gameplay_unit_commands.owner_population_reserved[owner]);
         script.condition_context.owner_population_capacity[owner] =
             lifecycle != nullptr && owner < lifecycle->owner_population_used.size()
-            ? default_i32_from_u32(lifecycle->owner_population_used[owner])
-            : default_i32_from_u32(
+            ? default_i32_from_wrapped_u32(lifecycle->owner_population_used[owner])
+            : default_i32_from_wrapped_u32(
                 g_runtime.gameplay_unit_commands.owner_population_used[owner]);
     }
 
