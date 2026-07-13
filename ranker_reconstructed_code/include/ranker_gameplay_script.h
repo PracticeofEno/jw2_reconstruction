@@ -238,7 +238,11 @@ struct GameplayScriptOpcodeContext {
     std::array<u32, kGameplayScriptCopiedOwnerTableWords> copied_owner_table_a{};
     std::array<u32, kGameplayScriptCopiedOwnerTableWords> copied_owner_table_b{};
     bool copied_owner_tables_dirty = false;
-    std::array<u8, kGameplayScriptOwnerCount> owner_script_flags{};
+    // Original DAT_00721a00: scenario opcodes 0x67/0x68 and 0x6f/0x70
+    // resume or halt the selected owner's AI scheduler.  Publish only dirty
+    // entries so an AI command-script halt is not overwritten every frame.
+    std::array<u32, kGameplayScriptOwnerCount> owner_ai_halt_values{};
+    std::array<bool, kGameplayScriptOwnerCount> owner_ai_halt_dirty{};
     std::array<u32, kGameplayScriptOwnerCount> owner_external_values{};
     std::array<bool, kGameplayScriptOwnerCount> owner_resource_dirty{};
     std::array<bool, kGameplayScriptOwnerCount> owner_score_component_dirty{};

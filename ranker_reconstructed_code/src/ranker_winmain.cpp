@@ -23603,6 +23603,16 @@ void consume_default_gameplay_script_definition_name_append_requests(
 void consume_default_gameplay_script_owner_mutations(
     GameplayScriptTriggerState& script) {
     GameplayScriptOpcodeContext& opcode = script.opcode_context;
+    for (u32 owner = 0; owner < opcode.owner_ai_halt_dirty.size(); ++owner) {
+        if (!opcode.owner_ai_halt_dirty[owner]) {
+            continue;
+        }
+        if (owner < g_runtime.gameplay_owner_ai_state.owners.size()) {
+            g_runtime.gameplay_owner_ai_state.owners[owner].script_halted =
+                opcode.owner_ai_halt_values[owner];
+        }
+        opcode.owner_ai_halt_dirty[owner] = false;
+    }
     for (u32 owner = 0; owner < opcode.owner_resource_dirty.size(); ++owner) {
         if (!opcode.owner_resource_dirty[owner]) {
             continue;

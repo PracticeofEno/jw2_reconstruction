@@ -2484,14 +2484,16 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     }
     case 0x67:
     case 0x6f:
-        if (command[1] < state.opcode_context.owner_script_flags.size()) {
-            state.opcode_context.owner_script_flags[command[1]] = 0;
+        if (command[1] < state.opcode_context.owner_ai_halt_values.size()) {
+            state.opcode_context.owner_ai_halt_values[command[1]] = 0;
+            state.opcode_context.owner_ai_halt_dirty[command[1]] = true;
         }
         return true;
     case 0x68:
     case 0x70:
-        if (command[1] < state.opcode_context.owner_script_flags.size()) {
-            state.opcode_context.owner_script_flags[command[1]] = 1;
+        if (command[1] < state.opcode_context.owner_ai_halt_values.size()) {
+            state.opcode_context.owner_ai_halt_values[command[1]] = 1;
+            state.opcode_context.owner_ai_halt_dirty[command[1]] = true;
         }
         return true;
     case 0x69:
