@@ -2618,7 +2618,9 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x4e: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         const GameplayScriptArea* area = area_state(state, command[2]);
-        if (group != nullptr && group->reference_count != 0 && area != nullptr) {
+        if (group != nullptr &&
+            signed_i32_from_wrapped_u32(group->reference_count) > 0 &&
+            area != nullptr) {
             for_each_group_slot_object(state, *group,
                 [&](GameplayScriptTriggerObjectState& object) {
                 if (object.unit != nullptr && (object_command_flags(object) & 2u) != 0) {
@@ -2631,7 +2633,9 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x4f: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         const GameplayScriptArea* area = area_state(state, command[3]);
-        if (group != nullptr && group->reference_count != 0 && area != nullptr) {
+        if (group != nullptr &&
+            signed_i32_from_wrapped_u32(group->reference_count) > 0 &&
+            area != nullptr) {
             for_each_group_slot_object(state, *group,
                 [&](GameplayScriptTriggerObjectState& object) {
                 if (object.unit != nullptr) {

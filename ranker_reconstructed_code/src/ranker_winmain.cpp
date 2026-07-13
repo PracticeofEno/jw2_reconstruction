@@ -25929,6 +25929,7 @@ void NoOpStartupRuntimeHook() {
 }
 
 bool InitDirectXSubsystems() {
+    gameplay_script_dialog_state().effect_playback_enabled = false;
     const HRESULT draw_result = InitDirectDrawSubsystem(g_runtime.main_window,
         kOriginalClientWidth, kOriginalClientHeight, kOriginalColorDepth,
         g_runtime.windowed_mode);
@@ -25946,6 +25947,8 @@ bool InitDirectXSubsystems() {
         g_runtime.windowed_mode ? "yes" : "no");
 
     InitDirectSoundSubsystem(g_runtime.main_window);
+    gameplay_script_dialog_state().effect_playback_enabled =
+        direct_sound_state().active;
 
     const HRESULT async_result =
         InitAsyncComSubsystem(g_runtime.instance, &g_runtime.async_com);
@@ -25969,6 +25972,7 @@ bool InitDirectXSubsystems() {
 }
 
 void ShutdownDirectXSubsystems() {
+    gameplay_script_dialog_state().effect_playback_enabled = false;
     ShutdownPrimaryMilesMusicPolicy();
     ShutdownAsyncComSubsystem(&g_runtime.async_com);
     ShutdownDirectSoundSubsystem();
