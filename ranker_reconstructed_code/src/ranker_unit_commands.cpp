@@ -1369,7 +1369,28 @@ bool targeted_spawn_target_outside(UnitCommandContext& context,
     return CheckCurrentTargetOutsideExpandedFootprint(unit);
 }
 
-void enter_spawn_cycle(UnitCommandContext&, UnitMovementUnit& unit,
+u32 spawn_direction_from_points(UnitCommandContext& context,
+    const UnitMovementUnit& unit, UnitMovementPoint source,
+    UnitMovementPoint target) {
+    if (has_movement(context) &&
+        movement(context).direction_lookup_8 != nullptr) {
+        return CalculatePointDirectionFromLookup(
+            source, target, *movement(context).direction_lookup_8);
+    }
+    UnitMovementUnit direction_source = unit;
+    direction_source.x = source.x;
+    direction_source.y = source.y;
+    return CalculateUnitDirectionToPoint(
+        direction_source, target.x, target.y);
+}
+
+void face_spawned_unit(UnitCommandContext& context, UnitMovementUnit& unit,
+    const UnitMovementUnit& spawned) {
+    unit.direction = spawn_direction_from_points(context, unit,
+        CalculateUnitCenterPoint(unit), CalculateUnitCenterPoint(spawned));
+}
+
+void enter_spawn_cycle(UnitCommandContext& context, UnitMovementUnit& unit,
     u32 state) {
     unit.command_state = state;
     unit.animation_frame = 0;
@@ -1377,31 +1398,43 @@ void enter_spawn_cycle(UnitCommandContext&, UnitMovementUnit& unit,
     // The direction is derived from the active command tuple, not the shifted
     // path destination used to approach the placement footprint.
     unit.cargo_amount = 0;
-    unit.direction = CalculateUnitDirectionToPoint(unit,
-        unit.active_command_payload.y,
-        static_cast<i32>(unit.active_command_payload.value));
+    unit.direction = spawn_direction_from_points(context, unit,
+        UnitMovementPoint{unit.x, unit.y},
+        UnitMovementPoint{unit.active_command_payload.y,
+            static_cast<i32>(unit.active_command_payload.value)});
+    if (state == kUnitStateSpawnCreateCycle &&
+        context.callbacks.on_spawn_cycle_started != nullptr) {
+        context.callbacks.on_spawn_cycle_started(context, unit);
+    }
 }
 
-bool create_spawned_unit(UnitCommandContext& context, UnitMovementUnit& unit,
+UnitMovementUnit* create_spawned_unit(UnitCommandContext& context,
+    UnitMovementUnit& unit,
     u32 type_id) {
     if (context.callbacks.create_unit == nullptr) {
-        return false;
+        return nullptr;
     }
 
+    const bool already_placement_ignored = (unit.runtime_flags & 0x80u) != 0;
+    unit.runtime_flags |= 0x80u;
     UnitMovementUnit* spawned = context.callbacks.create_unit(context, unit, type_id,
-        unit.path_target_x, unit.path_target_y);
+        unit.active_command_payload.y,
+        static_cast<i32>(unit.active_command_payload.value));
+    if (!already_placement_ignored) {
+        unit.runtime_flags &= ~0x80u;
+    }
     if (spawned == nullptr) {
-        return false;
+        return nullptr;
     }
 
+    unit.target = spawned;
     spawned->target = &unit;
     spawned->owner_id = unit.owner_id;
     seed_construction_progress(*spawned);
-    SetUnitCommandTarget(unit, spawned);
     if (context.callbacks.on_unit_spawned != nullptr) {
         context.callbacks.on_unit_spawned(context, unit, *spawned);
     }
-    return true;
+    return spawned;
 }
 
 UnitMovementUnit* create_production_unit(UnitCommandContext& context,
@@ -1482,6 +1515,44 @@ void complete_spawned_construction(UnitCommandContext& context,
     }
 }
 
+void notify_spawn_failure(UnitCommandContext& context, UnitMovementUnit& unit) {
+    if (unit.owner_id != context.local_owner_id) {
+        return;
+    }
+    if (context.callbacks.on_spawn_cycle_failed != nullptr) {
+        context.callbacks.on_spawn_cycle_failed(context, unit);
+    }
+    else if (context.callbacks.on_production_start_failed_reason != nullptr) {
+        context.callbacks.on_production_start_failed_reason(
+            context, unit, UnitProductionStartFailure::placement_failed);
+    }
+    else if (context.callbacks.on_production_start_failed != nullptr) {
+        context.callbacks.on_production_start_failed(context, unit);
+    }
+}
+
+bool start_spawn_action_2c(UnitCommandContext& context, UnitMovementUnit& source,
+    UnitMovementUnit& target, u32 mode) {
+    return context.callbacks.start_targeted_spawn_effect == nullptr ||
+        context.callbacks.start_targeted_spawn_effect(
+            context, source, target, mode);
+}
+
+void execute_spawn_action_27(UnitCommandContext& context,
+    UnitMovementUnit& source, UnitMovementUnit& target) {
+    if (context.callbacks.execute_ability != nullptr) {
+        context.callbacks.execute_ability(context, source, &target, 0x27);
+    }
+}
+
+void start_spawn_attachment_27(UnitCommandContext& context,
+    UnitMovementUnit& source, UnitMovementUnit& target) {
+    if (context.callbacks.start_ability_attachment != nullptr) {
+        (void)context.callbacks.start_ability_attachment(
+            context, source, &target, 0x27);
+    }
+}
+
 void start_produced_unit_rally_command(UnitCommandContext& context,
     const UnitMovementUnit& producer, UnitMovementUnit& produced) {
     // Original HandleUnitProductionSpawnCycle (0x004ce182..0x004ce1b3)
@@ -1501,30 +1572,58 @@ void start_produced_unit_rally_command(UnitCommandContext& context,
 
 void handle_spawn_cycle(UnitCommandContext& context, UnitMovementUnit& unit,
     u32 type_id) {
-    UnitMovementUnit* spawned = unit.target;
-    if (spawned != nullptr && spawned->target == &unit && target_alive(spawned)) {
-        if (grow_spawned_unit(*spawned)) {
-            complete_spawned_construction(context, *spawned);
-            unit.production_reserved = false;
-            PopDeferredUnitCommandOrReturnIdle(context, unit);
+    const u32 next_frame = unit.animation_frame + 1u;
+    const u32 duration = spawn_cycle_duration(unit);
+    if (next_frame <= duration) {
+        unit.animation_frame = next_frame;
+        if (next_frame < duration) {
+            return;
         }
-        return;
+
+        if (!reserve_building_primary_resource(context, unit, type_id)) {
+            notify_spawn_failure(context, unit);
+            PopDeferredUnitCommandOrReturnIdle(context, unit);
+            return;
+        }
+        UnitMovementUnit* spawned = create_spawned_unit(context, unit, type_id);
+        if (spawned == nullptr) {
+            refund_building_primary_resource(context, unit, type_id);
+            notify_spawn_failure(context, unit);
+            PopDeferredUnitCommandOrReturnIdle(context, unit);
+            return;
+        }
+
+        // Once placement succeeds the resource debit belongs to the spawned
+        // structure; later effect failure must not make builder death refund it.
+        unit.production_reserved = false;
+        face_spawned_unit(context, unit, *spawned);
+        spawned->previous_command_state = 0;
+        if (unit.cargo_amount == 0) {
+            if (!start_spawn_action_2c(context, unit, *spawned, 0)) {
+                PopDeferredUnitCommandOrReturnIdle(context, unit);
+                return;
+            }
+            execute_spawn_action_27(context, unit, *spawned);
+            start_spawn_attachment_27(context, unit, *spawned);
+            unit.cargo_amount = 1;
+            return;
+        }
     }
 
-    ++unit.animation_frame;
-    if (unit.animation_frame < spawn_cycle_duration(unit)) {
-        return;
-    }
-
-    unit.animation_frame = 0;
-    if (!reserve_building_primary_resource(context, unit, type_id)) {
+    UnitMovementUnit* spawned = unit.target;
+    if (spawned == nullptr || (spawned->runtime_flags & 4u) != 0) {
         PopDeferredUnitCommandOrReturnIdle(context, unit);
         return;
     }
-    if (!create_spawned_unit(context, unit, type_id)) {
-        refund_building_primary_resource(context, unit, type_id);
-        PopDeferredUnitCommandOrReturnIdle(context, unit);
+
+    face_spawned_unit(context, unit, *spawned);
+    if (!grow_spawned_unit(*spawned)) {
+        return;
     }
+    spawned->previous_command_state = 1;
+    spawned->cell_channel_additive_frame = 0;
+    complete_spawned_construction(context, *spawned);
+    PopDeferredUnitCommandOrReturnIdle(context, unit);
 }
 
 bool ability_target_in_range(UnitMovementUnit& unit, UnitMovementUnit* target) {
@@ -4997,11 +5096,8 @@ void StartUnitSpawnPlacementCommand(UnitCommandContext& context, UnitMovementUni
         return;
     }
 
-    // State 0x5a uses the same building-index payload convention as state
-    // 0x23.  Preserve the converted type through approach/wait/cycle states.
-    if (unit.command_value < 0x60u) {
-        unit.command_value += 0x60u;
-    }
+    // State 0x5a consumes the wire building index exactly once on entry.
+    unit.command_value += 0x60u;
     const u32 type_id = unit.command_value;
     unit.spawn_type_id = type_id;
     const UnitMovementDefinition& spawn_definition =
@@ -5022,6 +5118,7 @@ void StartUnitSpawnPlacementCommand(UnitCommandContext& context, UnitMovementUni
         unit.command_state = kUnitStateSpawnPlacementWait;
         return;
     }
+    notify_spawn_failure(context, unit);
     PopDeferredUnitCommandOrReturnIdle(context, unit);
 }
 
@@ -5031,6 +5128,7 @@ void HandleUnitSpawnCreateCycle(UnitCommandContext& context, UnitMovementUnit& u
 
 void HandleUnitSpawnPlacementWait(UnitCommandContext& context, UnitMovementUnit& unit) {
     if (!movement_step(context, unit)) {
+        notify_spawn_failure(context, unit);
         PopDeferredUnitCommandOrReturnIdle(context, unit);
         return;
     }
@@ -5107,9 +5205,7 @@ void HandleTargetedUnitSpawnCycle(UnitCommandContext& context, UnitMovementUnit&
     unit.direction = direction;
 
     const auto start_effect = [&](u32 effect_mode) {
-        return context.callbacks.start_targeted_spawn_effect == nullptr ||
-            context.callbacks.start_targeted_spawn_effect(
-                context, unit, *target, effect_mode);
+        return start_spawn_action_2c(context, unit, *target, effect_mode);
     };
 
     if (target->action_mode_gate == 1 && target->target == nullptr) {
@@ -5117,6 +5213,7 @@ void HandleTargetedUnitSpawnCycle(UnitCommandContext& context, UnitMovementUnit&
             PopDeferredUnitCommandOrReturnIdle(context, unit);
             return;
         }
+        start_spawn_attachment_27(context, unit, *target);
         // Raw +0x4c is a state-local one-shot latch here (the same storage is
         // worker cargo in harvest states).  The original does not reset the
         // completed animation frame when it changes to state 0x5b.
@@ -5134,6 +5231,7 @@ void HandleTargetedUnitSpawnCycle(UnitCommandContext& context, UnitMovementUnit&
             PopDeferredUnitCommandOrReturnIdle(context, unit);
             return;
         }
+        start_spawn_attachment_27(context, unit, *target);
         unit.cargo_amount = 1;
     }
 

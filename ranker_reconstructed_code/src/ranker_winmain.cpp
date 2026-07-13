@@ -17890,9 +17890,25 @@ void default_unit_command_construction_completed(UnitCommandContext& context,
     sync_default_owner_type_count_for_unit(completed);
 
     UnitMovementUnit* builder = completed.target;
-    if (completed.owner_id == context.local_owner_id && builder != nullptr &&
-        (builder->command_state & kUnitCommandStateMask) ==
-            kUnitStateLegacySpawnConstruction) {
+    if (completed.owner_id != context.local_owner_id || builder == nullptr) {
+        return;
+    }
+
+    const u32 builder_state = builder->command_state & kUnitCommandStateMask;
+    if (builder_state == kUnitStateSpawnCreateCycle) {
+        // HandleUnitSpawnCreateCycle (0x004cb8e4..0x004cb924) mirrors the
+        // builder's spawn-complete cue and places kind-2 HUD feedback at the
+        // builder, not at the completed structure.
+        GameplayUnitSoundDefinition definition;
+        GameplayUnitSoundBaseSlots base_slots;
+        if (resolve_default_unit_sound_profile(*builder, definition, base_slots)) {
+            HandleUnitSpawnCompleteVoiceCue(
+                g_runtime.gameplay_sound, *builder, definition, base_slots);
+        }
+        QueueGameplayHudAlertMarker(g_runtime.gameplay_hud_alert_markers, 2,
+            builder->x, builder->y);
+    }
+    else if (builder_state == kUnitStateLegacySpawnConstruction) {
         // Original state 0x24 completion (0x004ca00b..0x004ca050) plays the
         // completed structure's spawn cue, then places kind-2 HUD feedback at
         // the builder's pre-release position.
@@ -19351,27 +19367,43 @@ bool default_unit_command_start_ability_attachment(UnitCommandContext&,
         source, &source, ability_id);
 }
 
-bool default_unit_command_start_targeted_spawn_effect(UnitCommandContext& context,
+bool default_unit_command_start_targeted_spawn_effect(UnitCommandContext&,
     UnitMovementUnit& source, UnitMovementUnit& target, u32 effect_mode) {
-    // 0x004cba0f/0x004cba72 execute action 0x2c first.  Only allocation/action
-    // failure aborts the unit command; the following action-0x27 attachment is
-    // best-effort and the raw +0x4c latch is still committed when it cannot
-    // reserve its own effect node.
-    if (!dispatch_default_unit_command_action_effect(source, &target, 0x2c,
-            source.path_target_x, source.path_target_y, effect_mode)) {
-        return false;
+    // The state handlers own the following action/attachment-0x27 ordering;
+    // this callback represents only the mandatory action-0x2c allocation.
+    return dispatch_default_unit_command_action_effect(source, &target, 0x2c,
+        source.path_target_x, source.path_target_y, effect_mode);
+}
+
+void queue_default_spawn_cycle_sound(UnitMovementUnit& source) {
+    HandleVisibleCurrentTileGameplaySoundQueued(g_runtime.gameplay_sound,
+        0x15, source.x, source.y, 0, 0);
+}
+
+void default_unit_command_spawn_cycle_started(UnitCommandContext&,
+    UnitMovementUnit& source) {
+    queue_default_spawn_cycle_sound(source);
+}
+
+void default_unit_command_spawn_cycle_failed(UnitCommandContext& context,
+    UnitMovementUnit& source) {
+    if (source.owner_id != context.local_owner_id) {
+        return;
     }
-    (void)default_unit_command_start_ability_attachment(
-        context, source, &target, 0x27);
-    return true;
+    // Original 0x004cb653/0x004cb6fa/0x004cb884 queues fixed sound-bank slot
+    // two after centering the DAT_011c3120 construction-failure text.
+    constexpr u32 kSpawnCycleFailureSoundSlot = 2;
+    QueueGameplayHudMessageAndSound(g_runtime.gameplay_hud_text,
+        g_runtime.gameplay_sound,
+        startup_platform_row(98, "Cannot build here"),
+        kSpawnCycleFailureSoundSlot);
 }
 
 void default_unit_command_targeted_spawn_linked(UnitCommandContext&,
     UnitMovementUnit& source, UnitMovementUnit&) {
     // 0x004cba59 checks the source tile's current visibility and queues the
     // fixed positional completion slot 0x15.
-    HandleVisibleCurrentTileGameplaySoundQueued(g_runtime.gameplay_sound,
-        0x15, source.x, source.y, 0, 0);
+    queue_default_spawn_cycle_sound(source);
 }
 
 bool default_unit_command_can_use_ability(UnitCommandContext&,
@@ -19941,6 +19973,14 @@ void configure_default_unit_command_context(UnitCommandContext& command_context,
     if (command_context.callbacks.start_targeted_spawn_effect == nullptr) {
         command_context.callbacks.start_targeted_spawn_effect =
             default_unit_command_start_targeted_spawn_effect;
+    }
+    if (command_context.callbacks.on_spawn_cycle_started == nullptr) {
+        command_context.callbacks.on_spawn_cycle_started =
+            default_unit_command_spawn_cycle_started;
+    }
+    if (command_context.callbacks.on_spawn_cycle_failed == nullptr) {
+        command_context.callbacks.on_spawn_cycle_failed =
+            default_unit_command_spawn_cycle_failed;
     }
     if (command_context.callbacks.on_targeted_spawn_linked == nullptr) {
         command_context.callbacks.on_targeted_spawn_linked =

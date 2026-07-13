@@ -292,6 +292,8 @@ struct UnitCommandCallbacks {
     UnitCommandAbilityCallback execute_ability = nullptr;
     UnitCommandAbilityStartCallback start_ability_attachment = nullptr;
     UnitCommandTargetedSpawnEffectCallback start_targeted_spawn_effect = nullptr;
+    UnitCommandCallback on_spawn_cycle_started = nullptr;
+    UnitCommandCallback on_spawn_cycle_failed = nullptr;
     UnitCommandPairCallback on_targeted_spawn_linked = nullptr;
     UnitCommandAbilityAmountCallback ability_secondary_cost = nullptr;
     UnitCommandAbilitySignedAmountCallback ability_target_health_delta = nullptr;
