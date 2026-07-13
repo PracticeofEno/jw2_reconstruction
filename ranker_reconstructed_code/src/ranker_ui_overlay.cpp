@@ -1501,9 +1501,6 @@ const UiOverlayMinimapUnit* unit_at_screen_point(
         if (!UiOverlayUnitVisibleToLocalPlayer(unit)) {
             continue;
         }
-        if (!free_unit_only && (unit.runtime_flags & 4u) != 0) {
-            continue;
-        }
         if (free_unit_only &&
             (unit.type_id >= 0x60 || (unit.runtime_flags & 4u) == 0)) {
             continue;
