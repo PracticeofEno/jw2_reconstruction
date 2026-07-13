@@ -625,7 +625,9 @@ bool TransferUnitEquipmentSlot(UnitCommandContext& context, UnitMovementUnit& so
             return false;
         }
         u32 amount = source.action_mode;
-        if (amount > 0x32) {
+        // Original 0x00411bcc uses a signed JLE after CMP 0x32.  High-bit
+        // reserve values therefore transfer in full instead of leaving 50.
+        if (static_cast<i32>(amount) > 0x32) {
             amount -= 0x32;
         }
         if (TryApplyUnitEquipmentEffectToUnit(context, target, 1, amount, catalog)) {
