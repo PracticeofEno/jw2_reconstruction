@@ -998,7 +998,12 @@ bool InitializePlacedUnitFromMapSlot(UnitLifecycleContext& context,
         unit.animation_frame = 0;
         unit.work_timer = 0;
         unit.action_mode = definition->production_spawn_time / 10;
-        unit.runtime_stat_28 = unit.action_mode * definition->initial_max_health;
+        // Raw +0x34 is the construction accumulator for lifecycle-class-1
+        // structures.  It aliases generic equipment slot 1; raw +0x28 keeps
+        // the definition's ordinary runtime statistic throughout construction.
+        unit.equipment_slots[1] =
+            unit.action_mode * definition->initial_max_health;
+        unit.item_slots[1] = unit.equipment_slots[1];
         // InitializePlacedUnitFromMapSlot 0x004cf538 writes raw health +0x18
         // to one unconditionally for construction-class placements, including
         // definitions whose initial max health is zero.

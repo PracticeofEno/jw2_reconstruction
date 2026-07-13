@@ -182,6 +182,9 @@ using UnitCommandAbilityCallback = void (*)(UnitCommandContext& context,
     UnitMovementUnit& source, UnitMovementUnit* target, u32 ability_id);
 using UnitCommandAbilityStartCallback = bool (*)(UnitCommandContext& context,
     UnitMovementUnit& source, UnitMovementUnit* target, u32 ability_id);
+using UnitCommandTargetedSpawnEffectCallback = bool (*)(
+    UnitCommandContext& context, UnitMovementUnit& source,
+    UnitMovementUnit& target, u32 effect_mode);
 enum class UnitCommandAbilityGateResult : u32 {
     ready = 0,
     approach = 1,
@@ -287,6 +290,8 @@ struct UnitCommandCallbacks {
     UnitCommandAbilityPredicate can_use_ability = nullptr;
     UnitCommandAbilityCallback execute_ability = nullptr;
     UnitCommandAbilityStartCallback start_ability_attachment = nullptr;
+    UnitCommandTargetedSpawnEffectCallback start_targeted_spawn_effect = nullptr;
+    UnitCommandPairCallback on_targeted_spawn_linked = nullptr;
     UnitCommandAbilityAmountCallback ability_secondary_cost = nullptr;
     UnitCommandAbilitySignedAmountCallback ability_target_health_delta = nullptr;
     UnitCommandAbilityPredicate ability_updates_direction = nullptr;

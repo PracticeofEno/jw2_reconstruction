@@ -19112,7 +19112,8 @@ UnitMovementUnit* default_unit_command_create_unit(UnitCommandContext&,
 }
 
 bool dispatch_default_unit_command_action_effect(UnitMovementUnit& source,
-    UnitMovementUnit* target, u32 action_id, i32 world_x, i32 world_y) {
+    UnitMovementUnit* target, u32 action_id, i32 world_x, i32 world_y,
+    u32 effect_mode_override = std::numeric_limits<u32>::max()) {
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
     if (lifecycle == nullptr || action_id >= 0x2e) {
         return false;
@@ -19245,6 +19246,9 @@ bool dispatch_default_unit_command_action_effect(UnitMovementUnit& source,
         ReleaseUnitEffectSlot(effects, *effect);
         return false;
     }
+    if (effect_mode_override != std::numeric_limits<u32>::max()) {
+        effect->flags = effect_mode_override;
+    }
     return true;
 }
 
@@ -19298,6 +19302,29 @@ bool default_unit_command_start_ability_attachment(UnitCommandContext&,
 
     return StartSelectedUnitAttachmentEffect(effects,
         kSelectedActionEffectBase + ability_id, source, &source);
+}
+
+bool default_unit_command_start_targeted_spawn_effect(UnitCommandContext& context,
+    UnitMovementUnit& source, UnitMovementUnit& target, u32 effect_mode) {
+    // 0x004cba0f/0x004cba72 execute action 0x2c first.  Only allocation/action
+    // failure aborts the unit command; the following action-0x27 attachment is
+    // best-effort and the raw +0x4c latch is still committed when it cannot
+    // reserve its own effect node.
+    if (!dispatch_default_unit_command_action_effect(source, &target, 0x2c,
+            source.path_target_x, source.path_target_y, effect_mode)) {
+        return false;
+    }
+    (void)default_unit_command_start_ability_attachment(
+        context, source, &target, 0x27);
+    return true;
+}
+
+void default_unit_command_targeted_spawn_linked(UnitCommandContext&,
+    UnitMovementUnit& source, UnitMovementUnit&) {
+    // 0x004cba59 checks the source tile's current visibility and queues the
+    // fixed positional completion slot 0x15.
+    HandleVisibleCurrentTileGameplaySoundQueued(g_runtime.gameplay_sound,
+        0x15, source.x, source.y, 0, 0);
 }
 
 bool default_unit_command_can_use_ability(UnitCommandContext&,
@@ -19833,6 +19860,14 @@ void configure_default_unit_command_context(UnitCommandContext& command_context,
     if (command_context.callbacks.start_ability_attachment == nullptr) {
         command_context.callbacks.start_ability_attachment =
             default_unit_command_start_ability_attachment;
+    }
+    if (command_context.callbacks.start_targeted_spawn_effect == nullptr) {
+        command_context.callbacks.start_targeted_spawn_effect =
+            default_unit_command_start_targeted_spawn_effect;
+    }
+    if (command_context.callbacks.on_targeted_spawn_linked == nullptr) {
+        command_context.callbacks.on_targeted_spawn_linked =
+            default_unit_command_targeted_spawn_linked;
     }
     if (command_context.callbacks.ability_gate == nullptr) {
         command_context.callbacks.ability_gate = default_unit_command_ability_gate;

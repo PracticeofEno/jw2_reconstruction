@@ -878,7 +878,10 @@ void seed_construction_progress(UnitMovementUnit& unit) {
     }
     const u32 step = construction_health_step(unit);
     unit.action_mode = unit.definition.production_spawn_time / 10u;
-    unit.runtime_stat_28 = unit.action_mode * step;
+    // InitializePlacedUnitFromMapSlot stores the accumulator at raw +0x34,
+    // which is equipment/item slot 1 in the typed alias view.
+    unit.equipment_slots[1] = unit.action_mode * step;
+    unit.item_slots[1] = unit.equipment_slots[1];
     if (unit.health == 0) {
         unit.health = 1;
     }
@@ -1401,15 +1404,17 @@ bool grow_spawned_unit(UnitMovementUnit& spawned) {
     const u32 step = construction_health_step(spawned);
     if (spawned.action_mode < duration) {
         ++spawned.action_mode;
-        spawned.runtime_stat_28 += step;
+        spawned.equipment_slots[1] += step;
+        spawned.item_slots[1] = spawned.equipment_slots[1];
         while (true) {
-            if (spawned.runtime_stat_28 < duration) {
+            if (spawned.equipment_slots[1] < duration) {
                 return false;
             }
             if (step <= spawned.health) {
                 break;
             }
-            spawned.runtime_stat_28 -= duration;
+            spawned.equipment_slots[1] -= duration;
+            spawned.item_slots[1] = spawned.equipment_slots[1];
             ++spawned.health;
         }
     }
@@ -5005,7 +5010,9 @@ void StartTargetedUnitSpawnPlacement(UnitCommandContext& context, UnitMovementUn
     }
 
     unit.spawn_type_id = spawn_type_for_unit(unit, target->type_id);
-    offset_spawn_target_by_footprint(unit, target->definition);
+    // StartTargetedUnitSpawnPlacement (0x004cb903) approaches the target's
+    // interaction-bounds centre (+0x378/+0x37c), not its tile footprint.
+    offset_spawn_target_by_interaction_bounds(unit, target->definition);
     if (!CheckUnitSpawnDistanceThreshold(
             context, unit, unit.path_target_x, unit.path_target_y)) {
         enter_spawn_cycle(context, unit, kUnitStateTargetedSpawnCycle);
@@ -5038,11 +5045,54 @@ void HandleTargetedUnitSpawnCycle(UnitCommandContext& context, UnitMovementUnit&
         return;
     }
 
+    // HandleTargetedUnitSpawnCycle (0x004cb9f2) faces the target centre before
+    // creating Bline/action 0x2c and its action-0x27 attachment.
+    const UnitMovementPoint source_center = CalculateUnitCenterPoint(unit);
+    const UnitMovementPoint target_center = CalculateUnitCenterPoint(*target);
+    u32 direction = 0;
+    if (has_movement(context) &&
+        movement(context).direction_lookup_8 != nullptr) {
+        direction = CalculatePointDirectionFromLookup(source_center,
+            target_center, *movement(context).direction_lookup_8);
+    }
+    else {
+        UnitMovementUnit centered_source = unit;
+        centered_source.x = source_center.x;
+        centered_source.y = source_center.y;
+        direction = CalculateUnitDirectionToPoint(
+            centered_source, target_center.x, target_center.y);
+    }
+    unit.direction = direction;
+
+    const auto start_effect = [&](u32 effect_mode) {
+        return context.callbacks.start_targeted_spawn_effect == nullptr ||
+            context.callbacks.start_targeted_spawn_effect(
+                context, unit, *target, effect_mode);
+    };
+
     if (target->action_mode_gate == 1 && target->target == nullptr) {
+        if (!start_effect(0)) {
+            PopDeferredUnitCommandOrReturnIdle(context, unit);
+            return;
+        }
+        // Raw +0x4c is a state-local one-shot latch here (the same storage is
+        // worker cargo in harvest states).  The original does not reset the
+        // completed animation frame when it changes to state 0x5b.
+        unit.cargo_amount = 1;
         target->target = &unit;
         unit.command_state = kUnitStateSpawnCreateCycle;
-        unit.animation_frame = 0;
+        if (context.callbacks.on_targeted_spawn_linked != nullptr) {
+            context.callbacks.on_targeted_spawn_linked(context, unit, *target);
+        }
         return;
+    }
+
+    if (unit.cargo_amount == 0) {
+        if (!start_effect(2)) {
+            PopDeferredUnitCommandOrReturnIdle(context, unit);
+            return;
+        }
+        unit.cargo_amount = 1;
     }
 
     if ((context.frame_counter & 3u) == 0) {

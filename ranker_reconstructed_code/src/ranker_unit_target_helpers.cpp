@@ -210,9 +210,14 @@ UnitTargetProgressResult ApplyCurrentTargetBuildOrRepairProgress(
     }
 
     if (target->type_id >= kUnitTargetHelperEliteTypeBase &&
-        target->production_variant == 1) {
-        ++target->elite_progress_count;
-        target->elite_progress_value += target->definition.target_progress_elite_value;
+        target->action_mode_gate == 1) {
+        // FUN_004c3504 (0x004c3626..0x004c365c) advances a structure under
+        // construction through raw +0x2c and accumulates definition +0x154 in
+        // raw +0x34.  Those are action_mode and generic equipment/item slot 1,
+        // not the elite level/progress words at raw +0x54/+0x50.
+        ++target->action_mode;
+        target->equipment_slots[1] += target->definition.initial_max_health;
+        target->item_slots[1] = target->equipment_slots[1];
     }
     else {
         target->health = std::min(target->health + 2, target->max_health);
