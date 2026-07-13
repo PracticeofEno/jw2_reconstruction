@@ -4113,14 +4113,6 @@ void ProcessWorkerHarvestTile(UnitCommandContext& context, UnitMovementUnit& uni
         }
     }
 
-    // Original 0x004ca238 records period < frame before releasing the tile.
-    // Equality continues into harvesting; an overshot frame releases the
-    // reservation and then aborts through PopDeferredUnitCommandOrReturnIdle.
-    if (unit.animation_frame > harvest_period) {
-        PopDeferredUnitCommandOrReturnIdle(context, unit);
-        return;
-    }
-
     const u32 amount = context.callbacks.harvest_amount != nullptr ?
         context.callbacks.harvest_amount(context, unit) : kDefaultWorkerHarvestAmount;
     u32 consumed = amount;
