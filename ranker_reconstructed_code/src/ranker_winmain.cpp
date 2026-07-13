@@ -11341,34 +11341,63 @@ bool default_mode1_packet_avatar_slot_costs(u32 owner, u32 slot_id,
     return true;
 }
 
-bool default_mode1_packet_avatar_resources_available(
+struct DefaultMode1AvatarResourceCheck {
+    bool valid = false;
+    bool available = false;
+    u32 failure_message_code = 0xffffffffu;
+};
+
+DefaultMode1AvatarResourceCheck default_mode1_packet_avatar_resources_check(
     const UnitCommandContext& command_context, u32 owner, u32 primary_cost,
     u32 support_cost) {
+    DefaultMode1AvatarResourceCheck result{};
     if (owner >= command_context.owner_resources.size() ||
         owner >= command_context.owner_population_reserved.size() ||
         owner >= command_context.owner_population_used.size() ||
         owner >= command_context.owner_population_limit.size()) {
-        return false;
+        return result;
     }
 
+    result.valid = true;
     const u32 projected_support =
         command_context.owner_population_reserved[owner] + support_cost;
-    return command_context.owner_resources[owner] >= primary_cost &&
-        projected_support <= command_context.owner_population_used[owner] &&
-        projected_support <= command_context.owner_population_limit[owner];
+    // HandleSubtype05ResourceBuildPacket checks the absolute limit first
+    // (0x004dcd42), then supplied capacity (0x004dcd4b), then primary cost
+    // (0x004dcd64).  Preserve that ordering when several gates fail together.
+    if (projected_support > command_context.owner_population_limit[owner]) {
+        result.failure_message_code = static_cast<u32>(
+            UnitProductionRequirementCode::population_limit);
+        return result;
+    }
+    if (projected_support > command_context.owner_population_used[owner]) {
+        const u32 faction = owner <
+                g_runtime.gameplay_startup_state.owner_faction_ids.size() ?
+            g_runtime.gameplay_startup_state.owner_faction_ids[owner] : 0;
+        result.failure_message_code =
+            static_cast<u32>(UnitProductionRequirementCode::population_reserved_base) +
+            faction;
+        return result;
+    }
+    if (command_context.owner_resources[owner] < primary_cost) {
+        result.failure_message_code = static_cast<u32>(
+            UnitProductionRequirementCode::missing_primary_resource);
+        return result;
+    }
+    result.available = true;
+    return result;
 }
 
-bool default_mode1_packet_avatar_costs_available_for_enqueue(
+DefaultMode1AvatarResourceCheck default_mode1_packet_avatar_check_for_enqueue(
     const UnitMovementUnit& unit, u32 slot_id, u32& primary_cost,
     u32& support_cost) {
     if (!default_mode1_packet_avatar_slot_costs(
             unit.owner_id, slot_id, primary_cost, support_cost)) {
-        return false;
+        return {};
     }
 
     UnitCommandContext& command_context =
         prepare_default_mode1_packet_command_context();
-    return default_mode1_packet_avatar_resources_available(command_context,
+    return default_mode1_packet_avatar_resources_check(command_context,
         unit.owner_id, primary_cost, support_cost);
 }
 
@@ -11717,10 +11746,12 @@ bool default_mode1_packet_set_unit_deferred_resource_command(void*,
         return removed;
     }
 
-    // HandleSubtype01ProductionCommandPacket checks raw +0x124 before every
-    // requirement test.  A full queue is a silent rejection even when the
-    // same click would also fail a resource or population gate.
-    if (unit_production_resource && unit->deferred_command_count >= 4) {
+    // Subtypes 01, 05, and 1a all check raw +0x124 before resource and
+    // population gates.  A full queue is therefore silent even when the same
+    // click would also be unaffordable.
+    if ((unit_production_resource || avatar_resource ||
+            production_effect_resource) &&
+        unit->deferred_command_count >= 4) {
         return false;
     }
 
@@ -11745,15 +11776,22 @@ bool default_mode1_packet_set_unit_deferred_resource_command(void*,
 
     u32 avatar_primary_cost = 0;
     u32 avatar_support_cost = 0;
-    if (avatar_resource &&
-        !default_mode1_packet_avatar_costs_available_for_enqueue(
-            *unit, arg2, avatar_primary_cost, avatar_support_cost)) {
-        return false;
-    }
-
     if (default_mode1_packet_subtype05_transport_gate_blocks(
             *unit, category_flag, internal_command, arg2)) {
         return false;
+    }
+    if (avatar_resource) {
+        const DefaultMode1AvatarResourceCheck check =
+            default_mode1_packet_avatar_check_for_enqueue(
+                *unit, arg2, avatar_primary_cost, avatar_support_cost);
+        if (!check.valid || !check.available) {
+            if (check.valid &&
+                source_channel == mode1_reliable_state().local_player_index) {
+                queue_default_production_failure_feedback(
+                    check.failure_message_code);
+            }
+            return false;
+        }
     }
 
     if (unit_production_resource) {
@@ -11773,6 +11811,44 @@ bool default_mode1_packet_set_unit_deferred_resource_command(void*,
             if (source_channel == mode1_reliable_state().local_player_index) {
                 queue_default_production_failure_feedback(
                     default_unit_production_requirement_message_code(requirement));
+            }
+            return false;
+        }
+    }
+
+    u32 primary_cost = 0;
+    u32 secondary_cost = 0;
+    const bool cost_model_applies =
+        default_mode1_packet_deferred_resource_cost_model_applies(
+            category_flag, internal_command);
+    if (cost_model_applies &&
+        !default_mode1_packet_deferred_resource_cost_values(category_flag,
+            internal_command, payload, primary_cost, secondary_cost)) {
+        return false;
+    }
+    if (production_effect_resource) {
+        UnitCommandContext& command_context =
+            prepare_default_mode1_packet_command_context();
+        const u32 owner = unit->owner_id;
+        if (owner >= command_context.owner_resources.size() ||
+            owner >= command_context.owner_secondary_resources.size()) {
+            return false;
+        }
+        u32 failure_code = 0xffffffffu;
+        if (command_context.owner_resources[owner] < primary_cost) {
+            failure_code = static_cast<u32>(
+                ProductionOrderAvailabilityCode::missing_primary_resource);
+        }
+        else if (command_context.owner_secondary_resources[owner] <
+                 secondary_cost) {
+            failure_code = static_cast<u32>(
+                ProductionOrderAvailabilityCode::missing_secondary_resource);
+        }
+        if (failure_code != 0xffffffffu) {
+            // HandleSubtype1aProductionCostPacket reports only raw cost codes
+            // 0/1, and only to the originating local source channel.
+            if (source_channel == mode1_reliable_state().local_player_index) {
+                queue_default_production_failure_feedback(failure_code);
             }
             return false;
         }
@@ -11802,17 +11878,6 @@ bool default_mode1_packet_set_unit_deferred_resource_command(void*,
         return true;
     }
 
-    u32 primary_cost = 0;
-    u32 secondary_cost = 0;
-    const bool cost_model_applies =
-        default_mode1_packet_deferred_resource_cost_model_applies(
-            category_flag, internal_command);
-    if (cost_model_applies &&
-        !default_mode1_packet_deferred_resource_cost_values(category_flag,
-            internal_command, payload, primary_cost, secondary_cost)) {
-        remove_default_unit_deferred_resource_command(*unit, 0xffffffffu, payload);
-        return false;
-    }
     if (cost_model_applies) {
         UnitCommandContext& command_context =
             prepare_default_mode1_packet_command_context();
@@ -18377,8 +18442,7 @@ void default_unit_command_completion_announcement(UnitCommandContext& context,
         unit.x, unit.y);
     const u32 faction = unit.owner_id <
             g_runtime.gameplay_startup_state.owner_faction_ids.size() ?
-        std::min<u32>(
-            g_runtime.gameplay_startup_state.owner_faction_ids[unit.owner_id], 3) :
+        g_runtime.gameplay_startup_state.owner_faction_ids[unit.owner_id] :
         0;
     HandleCurrentGameplaySoundImmediate(g_runtime.gameplay_sound,
         0x1du + faction, 0, 0);
@@ -18480,7 +18544,30 @@ void default_unit_command_production_start_failed_reason(
 void default_unit_command_linked_release_population_blocked(
     UnitCommandContext& context, UnitMovementUnit& unit,
     UnitProductionStartFailure failure) {
-    default_unit_command_production_start_failed_reason(context, unit, failure);
+    if (unit.owner_id != context.local_owner_id) {
+        return;
+    }
+
+    u32 message_code = 0xffffffffu;
+    if (failure == UnitProductionStartFailure::population_limit) {
+        // CheckLinkedUnitReleaseReady (0x004cc8f0..0x004cc903) uses the
+        // common message+queued-slot-two path for the hard limit.  This is
+        // intentionally different from StartUnitProductionSpawnCommand,
+        // whose late hard-limit recheck publishes the message only.
+        message_code = static_cast<u32>(
+            UnitProductionRequirementCode::population_limit);
+    }
+    else if (failure == UnitProductionStartFailure::population_capacity) {
+        const u32 faction = unit.owner_id <
+                g_runtime.gameplay_startup_state.owner_faction_ids.size() ?
+            g_runtime.gameplay_startup_state.owner_faction_ids[unit.owner_id] : 0;
+        message_code =
+            static_cast<u32>(UnitProductionRequirementCode::population_reserved_base) +
+            faction;
+    }
+    if (message_code != 0xffffffffu) {
+        queue_default_production_failure_feedback(message_code);
+    }
 }
 
 void default_unit_command_production_started(UnitCommandContext& context,
@@ -18500,7 +18587,11 @@ void default_unit_command_production_completed(UnitCommandContext& context,
             static_cast<u32>(producer.path_target_y));
     }
 
-    if (producer.owner_id != context.local_owner_id) {
+    // The original completion callback gates marker/sound/message feedback on
+    // the newly produced unit's owner (0x004ce37a..0x004ce385), not the
+    // producer's owner.  They normally match, but ownership-transfer and
+    // scripted production paths can make them differ.
+    if (produced.owner_id != context.local_owner_id) {
         return;
     }
 
