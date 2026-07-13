@@ -586,7 +586,11 @@ bool ClearUnitEquipmentSlot(UnitCommandContext& context, UnitMovementUnit& unit,
 
     const u32 effect_id = unit.equipment_slots[slot_index];
     if (effect_id == kInvalidUnitEquipmentId) {
-        return false;
+        // FUN_00411890 treats every valid slot code as a successful clear.
+        // Effect id zero reaches StartUnitProgressMapEffect, whose zero-id
+        // return leaves carry clear, so the caller must not add its two-tick
+        // failure lockout for an already-empty slot.
+        return true;
     }
 
     if (!start_equipment_progress_effect_for_clear(context, unit, effect_id)) {
