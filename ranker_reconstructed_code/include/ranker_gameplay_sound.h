@@ -13,6 +13,9 @@ constexpr u32 kGameplaySoundRequestSlots = 0x32a;
 constexpr u32 kGameplaySoundBankRecordCount = 0x21;
 constexpr u32 kInvalidGameplaySoundSlot = 0xffffffffu;
 constexpr u32 kDefaultUiClickSoundSlot = 0;
+// Command validation failures use the original queued error cue, which is
+// distinct from the immediate slot-zero button click played before dispatch.
+constexpr u32 kGameplayCommandFailureSoundSlot = 2;
 constexpr i32 kDefaultUiClickWorldDelta = 0;
 constexpr i32 kGameplaySoundMinimumAudiblePosition = -10000;
 constexpr u32 kGameplaySoundResponseThrottleTicks = 1000;

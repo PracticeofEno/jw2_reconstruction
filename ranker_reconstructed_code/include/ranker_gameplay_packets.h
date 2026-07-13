@@ -29,7 +29,7 @@ using Mode1GameplayUnitCommandPayloadCallback = void (*)(void* user_data,
 using Mode1GameplayUnitDeferredResourceCommandCallback = bool (*)(
     void* user_data, u32 unit_offset, u32 category_flag, u32 internal_command,
     u32 payload, i32 mode, u32 arg1, u32 arg2, bool enqueue,
-    u32 logical_index);
+    u32 logical_index, u8 source_channel);
 using Mode1GameplayUnitCommandFlagCallback = bool (*)(void* user_data,
     u32 unit_offset, u32 flag, u32 command, i32 mode, bool enabled);
 using Mode1GameplayUnitEquipmentApplyCallback = void (*)(void* user_data,

@@ -264,11 +264,34 @@ const char* startup_platform_row(std::size_t index, const char* fallback) {
 
 const char* startup_production_resource_failure_row(u32 code) {
     constexpr std::size_t kResourceFailureRowBase = 94;
-    constexpr std::array<const char*, 3> kFallbacks{
-        "Not enough resources", "Not enough WATER", "Not enough STONE"};
-    const u32 clamped = std::min<u32>(code, static_cast<u32>(kFallbacks.size() - 1));
-    return startup_platform_row(kResourceFailureRowBase + clamped,
-        kFallbacks[clamped]);
+    const char* fallback = "Cannot produce unit";
+    switch (code) {
+    case 0:
+        fallback = "Not enough resources";
+        break;
+    case 1:
+        fallback = "Not enough WATER";
+        break;
+    case 2:
+        fallback = "Not enough STONE";
+        break;
+    case 3:
+        fallback = "Population limit reached";
+        break;
+    case 0x0b:
+    case 0x0c:
+    case 0x0d:
+    case 0x0e:
+        fallback = "Not enough population capacity";
+        break;
+    case 0x0f:
+        fallback = "Missing prerequisite";
+        break;
+    default:
+        code = 0x0f;
+        break;
+    }
+    return startup_platform_row(kResourceFailureRowBase + code, fallback);
 }
 
 std::string startup_platform_label_value(
@@ -3987,12 +4010,12 @@ void default_gameplay_input_rejected_action_feedback(GameplayInputActionState& s
     QueueGameplayHudMessageAndSound(g_runtime.gameplay_hud_text,
         g_runtime.gameplay_sound,
         startup_production_resource_failure_row(state.last_production_availability_code),
-        kDefaultUiClickSoundSlot);
+        kGameplayCommandFailureSoundSlot);
 }
 
 bool default_gameplay_production_rejected_action_feedback(GameplayProductionActionState&) {
     HandleCurrentGameplaySoundQueued(g_runtime.gameplay_sound,
-        kDefaultUiClickSoundSlot, 0, 0);
+        kGameplayCommandFailureSoundSlot, 0, 0);
     QueueGameplayHudMessage(g_runtime.gameplay_hud_text,
         startup_platform_row(104, "Cannot use action"));
     return false;
@@ -11177,25 +11200,45 @@ default_mode1_packet_production_order_definition_for_payload(u32 payload) {
     return default_production_order_definition(payload);
 }
 
-bool default_mode1_packet_production_order_available_for_enqueue(
+ProductionOrderCheckResult default_mode1_packet_production_order_check_for_enqueue(
     const UnitMovementUnit& unit, u32 payload) {
+    ProductionOrderCheckResult result{};
+    result.order_id = payload;
+    result.owner = unit.owner_id;
+    result.code = static_cast<u32>(ProductionOrderAvailabilityCode::locked);
     const ProductionOrderDefinition* definition =
         default_mode1_packet_production_order_definition_for_payload(payload);
     if (definition == nullptr) {
-        return false;
+        return result;
     }
 
     UnitCommandContext& command_context =
         prepare_default_mode1_packet_command_context();
     if (!default_mode1_packet_sync_production_resources_from_command_context(
             command_context, unit.owner_id)) {
-        return false;
+        return result;
     }
 
-    const ProductionOrderCheckResult check =
-        CheckProductionOrderAvailability(g_runtime.gameplay_production_runtime,
-            *definition, unit.owner_id);
-    return check.available;
+    return CheckProductionOrderAvailability(g_runtime.gameplay_production_runtime,
+        *definition, unit.owner_id);
+}
+
+u32 default_unit_production_requirement_message_code(
+    UnitProductionRequirementCode code) {
+    if (code == UnitProductionRequirementCode::missing_prerequisite) {
+        // The original checker returns EAX=0x0f with carry set.  The typed
+        // reconstruction keeps success and prerequisite failure distinct, so
+        // convert only at the platform-message boundary.
+        return 0x0f;
+    }
+    return static_cast<u32>(code);
+}
+
+void queue_default_production_failure_feedback(u32 message_code) {
+    QueueGameplayHudMessageAndSound(g_runtime.gameplay_hud_text,
+        g_runtime.gameplay_sound,
+        startup_production_resource_failure_row(message_code),
+        kGameplayCommandFailureSoundSlot);
 }
 
 bool default_mode1_packet_commit_production_order_enqueue(
@@ -11506,7 +11549,8 @@ UnitCommandContext& prepare_default_mode1_packet_command_context() {
 
 bool default_mode1_packet_set_unit_deferred_resource_command(void*,
     u32 unit_offset, u32 category_flag, u32 internal_command, u32 payload,
-    i32 mode, u32 arg1, u32 arg2, bool enqueue, u32 logical_index) {
+    i32 mode, u32 arg1, u32 arg2, bool enqueue, u32 logical_index,
+    u8 source_channel) {
     UnitMovementUnit* unit = find_default_movement_unit_by_id(unit_offset);
     if (unit == nullptr) {
         return false;
@@ -11673,12 +11717,28 @@ bool default_mode1_packet_set_unit_deferred_resource_command(void*,
         return removed;
     }
 
+    // HandleSubtype01ProductionCommandPacket checks raw +0x124 before every
+    // requirement test.  A full queue is a silent rejection even when the
+    // same click would also fail a resource or population gate.
+    if (unit_production_resource && unit->deferred_command_count >= 4) {
+        return false;
+    }
+
     if (production_order_resource) {
         // HandleSubtype0cPlacementResourcePacket treats only raw +0x18 == 1
         // as cancellation.  Enqueue mode is every other value, including
         // zero: many original upgrades have a zero secondary-resource cost.
-        if (!default_mode1_packet_production_order_available_for_enqueue(
-                *unit, payload)) {
+        const ProductionOrderCheckResult check =
+            default_mode1_packet_production_order_check_for_enqueue(
+                *unit, payload);
+        if (!check.available) {
+            // HandleSubtype0cPlacementResourcePacket rechecks after packet
+            // ordering.  A same-frame debit can make this fail even though
+            // the sender-side click gate passed; resource failures still use
+            // the common message and queued slot-two error cue.
+            if (check.code <= 1) {
+                queue_default_production_failure_feedback(check.code);
+            }
             return false;
         }
     }
@@ -11703,9 +11763,17 @@ bool default_mode1_packet_set_unit_deferred_resource_command(void*,
         // lifecycle requirement check before its queue/accounting helpers
         // (audited at 0x004cf145 and 0x004dcf81).  Avatar and production-order
         // commands have separate gates above.
-        if (lifecycle == nullptr ||
-            CheckUnitProductionRequirements(*lifecycle, unit->owner_id, payload) !=
-                UnitProductionRequirementCode::ok) {
+        const UnitProductionRequirementCode requirement = lifecycle != nullptr ?
+            CheckUnitProductionRequirements(*lifecycle, unit->owner_id, payload) :
+            UnitProductionRequirementCode::missing_prerequisite;
+        if (requirement != UnitProductionRequirementCode::ok) {
+            // The ordinary subtype-01 handler publishes first, then performs
+            // this authoritative check on every peer.  Only the originating
+            // local channel receives the failure message/cue.
+            if (source_channel == mode1_reliable_state().local_player_index) {
+                queue_default_production_failure_feedback(
+                    default_unit_production_requirement_message_code(requirement));
+            }
             return false;
         }
     }
@@ -15850,7 +15918,7 @@ void reject_default_worker_build_click(GameplayInputActionState& input) {
     QueueGameplayHudMessageAndSound(g_runtime.gameplay_hud_text,
         g_runtime.gameplay_sound,
         startup_platform_row(98, "Cannot build here"),
-        kDefaultUiClickSoundSlot);
+        kGameplayCommandFailureSoundSlot);
 }
 
 bool publish_default_ui_overlay_input_command(
@@ -18164,11 +18232,15 @@ void default_unit_command_completion_effect(UnitCommandContext& context,
     const UnitEquipmentEffectDefinition* effect =
         FindUnitEquipmentEffect(catalog, unit.command_value);
     if (effect != nullptr && !effect->display_name.empty()) {
-        static std::string completion_effect_message;
-        completion_effect_message =
-            effect->display_name + startup_platform_row(123, "Supply  ");
+        // Original global completion buffers are three distinct 0x40-byte
+        // regions.  Keeping this category on its own fixed buffer preserves
+        // the HUD queue's pointer-identity replacement behavior.
+        static std::array<char, 0x40> completion_effect_message{};
+        std::snprintf(completion_effect_message.data(),
+            completion_effect_message.size(), "%s%s", effect->display_name.c_str(),
+            startup_platform_row(123, "Supply  "));
         QueueGameplayHudMessage(g_runtime.gameplay_hud_text,
-            completion_effect_message.c_str());
+            completion_effect_message.data());
     }
 }
 
@@ -18303,11 +18375,23 @@ void default_unit_command_completion_announcement(UnitCommandContext& context,
 
     QueueGameplayHudAlertMarker(g_runtime.gameplay_hud_alert_markers, 1,
         unit.x, unit.y);
+    const u32 faction = unit.owner_id <
+            g_runtime.gameplay_startup_state.owner_faction_ids.size() ?
+        std::min<u32>(
+            g_runtime.gameplay_startup_state.owner_faction_ids[unit.owner_id], 3) :
+        0;
+    HandleCurrentGameplaySoundImmediate(g_runtime.gameplay_sound,
+        0x1du + faction, 0, 0);
     const ProductionOrderDefinition* definition =
         default_production_order_definition(default_unit_completion_order_id(unit));
     if (definition != nullptr && !definition->display_name.empty()) {
+        static std::array<char, 0x40> completion_announcement_message{};
+        std::snprintf(completion_announcement_message.data(),
+            completion_announcement_message.size(), "%s%s",
+            definition->display_name.c_str(),
+            startup_platform_row(111, " completed !"));
         QueueGameplayHudMessage(g_runtime.gameplay_hud_text,
-            definition->display_name.c_str());
+            completion_announcement_message.data());
     }
 }
 
@@ -18324,7 +18408,7 @@ void default_unit_command_target_validation_failed(UnitCommandContext& context,
     QueueGameplayHudMessageAndSound(g_runtime.gameplay_hud_text,
         g_runtime.gameplay_sound,
         startup_platform_row(104, "Cannot use action"),
-        kDefaultUiClickSoundSlot);
+        kGameplayCommandFailureSoundSlot);
 }
 
 void default_unit_command_production_start_failed(UnitCommandContext& context,
@@ -18336,7 +18420,7 @@ void default_unit_command_production_start_failed(UnitCommandContext& context,
     QueueGameplayHudMessageAndSound(g_runtime.gameplay_hud_text,
         g_runtime.gameplay_sound,
         startup_production_resource_failure_row(0),
-        kDefaultUiClickSoundSlot);
+        kGameplayCommandFailureSoundSlot);
 }
 
 u32 default_owner_faction_for_message(u32 owner) {
@@ -18390,7 +18474,7 @@ void default_unit_command_production_start_failed_reason(
             default_unit_production_resource_failure_code(failure));
     }
     QueueGameplayHudMessageAndSound(g_runtime.gameplay_hud_text,
-        g_runtime.gameplay_sound, message, kDefaultUiClickSoundSlot);
+        g_runtime.gameplay_sound, message, kGameplayCommandFailureSoundSlot);
 }
 
 void default_unit_command_linked_release_population_blocked(
@@ -18420,7 +18504,7 @@ void default_unit_command_production_completed(UnitCommandContext& context,
         return;
     }
 
-    QueueGameplayHudAlertMarker(g_runtime.gameplay_hud_alert_markers, 1,
+    QueueGameplayHudAlertMarker(g_runtime.gameplay_hud_alert_markers, 2,
         produced.x, produced.y);
     GameplayUnitSoundDefinition definition;
     GameplayUnitSoundBaseSlots base_slots;
@@ -18428,15 +18512,16 @@ void default_unit_command_production_completed(UnitCommandContext& context,
         HandleUnitProductionCompleteVoiceCue(g_runtime.gameplay_sound, produced,
             definition, base_slots);
     }
-    static std::string production_complete_message;
     std::string produced_name = default_unit_display_name(produced);
     if (produced_name.empty()) {
         produced_name = startup_unit_name_or_fallback(produced.type_id);
     }
-    production_complete_message =
-        std::move(produced_name) + startup_platform_row(101, " ready");
+    static std::array<char, 0x40> production_complete_message{};
+    std::snprintf(production_complete_message.data(),
+        production_complete_message.size(), "%s%s", produced_name.c_str(),
+        startup_platform_row(101, " ready"));
     QueueGameplayHudMessage(g_runtime.gameplay_hud_text,
-        production_complete_message.c_str());
+        production_complete_message.data());
 }
 
 void default_unit_command_production_refunded(UnitCommandContext& context,

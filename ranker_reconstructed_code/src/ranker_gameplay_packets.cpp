@@ -183,14 +183,15 @@ void mirror_runtime_command_payload(u32 unit_offset,
 
 bool mirror_runtime_deferred_resource_command(u32 unit_offset, u32 category_flag,
     u32 internal_command, u32 payload, i32 mode, u32 arg1, u32 arg2, bool enqueue,
-    u32 logical_index) {
+    u32 logical_index, u8 source_channel) {
     if (g_packet_dispatch_state.runtime_callbacks
             .set_unit_deferred_resource_command == nullptr) {
         return true;
     }
     return g_packet_dispatch_state.runtime_callbacks.set_unit_deferred_resource_command(
         g_packet_dispatch_state.runtime_user_data, unit_offset, category_flag,
-        internal_command, payload, mode, arg1, arg2, enqueue, logical_index);
+        internal_command, payload, mode, arg1, arg2, enqueue, logical_index,
+        source_channel);
 }
 
 bool has_runtime_deferred_resource_command_callback() {
@@ -671,7 +672,8 @@ void handle_resource_deferred_command(const Mode1ReliablePacket& packet,
         if (runtime_queue_is_authoritative &&
             !mirror_runtime_deferred_resource_command(fields.unit_offset,
                 category_flag, queued_internal_command, fields.command,
-                fields.mode, fields.arg1, fields.arg2, false, fields.arg1)) {
+                fields.mode, fields.arg1, fields.arg2, false, fields.arg1,
+                fields.channel)) {
             ++unit.command_reject_count;
             return;
         }
@@ -708,7 +710,7 @@ void handle_resource_deferred_command(const Mode1ReliablePacket& packet,
 
     if (!mirror_runtime_deferred_resource_command(fields.unit_offset,
             category_flag, queued_internal_command, fields.command, fields.mode,
-            queue_arg1, queue_arg2, true, 0)) {
+            queue_arg1, queue_arg2, true, 0, fields.channel)) {
         ++unit.command_reject_count;
         return;
     }
