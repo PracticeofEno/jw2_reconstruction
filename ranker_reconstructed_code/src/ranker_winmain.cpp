@@ -112,6 +112,7 @@ void sync_default_gameplay_tooltip_platform_texts(GameplayTooltipState& tooltip)
 void sync_default_gameplay_tooltip_object_texts(GameplayTooltipState& tooltip);
 void set_default_primary_miles_music_policy_mode(u32 mode);
 void send_startup_fatal_and_close(const char* detail);
+u32 pump_default_p2p_replay_frame_gate(GameplayLoopState& state);
 
 void append_startup_log(const char* format, ...) {
     if (format == nullptr) {
@@ -10218,6 +10219,16 @@ bool default_gameplay_loop_frame_gate(GameplayLoopState& state) {
         }
         return false;
     }
+
+    // PumpMode1ReliablePackets checks the replay-playback flag first in the
+    // original (0x004298a8) and runs the delayed packet/VPOS pump before
+    // ProcessGameplayFrameTick increments DAT_007071a4 (0x004c1173).  Replay
+    // setup deliberately leaves the live reliable runtime uninitialized, so
+    // this branch must precede that live-runtime shortcut.
+    if (replay_recording_state().playback_mode) {
+        return pump_default_p2p_replay_frame_gate(state) != 0;
+    }
+
     Mode1ReliableRuntimeState& reliable = mode1_reliable_state();
     if (!reliable.initialized) {
         if (gate_log_budget != 0) {
@@ -23634,19 +23645,16 @@ void apply_default_p2p_replay_vpos_camera(P2PGameSessionStartState& p2p) {
     p2p.replay_vpos_camera_dirty = false;
 }
 
-void run_default_p2p_replay_session_frame(GameplayLoopState& state) {
+u32 pump_default_p2p_replay_frame_gate(GameplayLoopState& state) {
     P2PGameSessionStartState& p2p = g_runtime.p2p_session_start_state;
-    if (!p2p.delayed_packets.empty()) {
-        PumpP2PDelayedGameplayPackets(p2p, state.simulation_frame_counter,
-            default_p2p_delayed_gameplay_packet_dispatch);
-    }
-    else if (p2p.replay_vpos_loaded) {
-        TickP2PReplayVposCamera(p2p, state.simulation_frame_counter);
-    }
+    const u32 gate_result = PumpP2PDelayedGameplayPackets(
+        p2p, state.simulation_frame_counter,
+        default_p2p_delayed_gameplay_packet_dispatch);
     apply_default_p2p_replay_vpos_camera(p2p);
     if (p2p.game_end_requested) {
         g_runtime.gameplay_end_condition_state.end_requested = true;
     }
+    return gate_result;
 }
 
 template <std::size_t Index>
@@ -23665,7 +23673,6 @@ void default_gameplay_loop_simulation_phase(GameplayLoopState& state) {
         TickGameplayDebugFrameCounter(g_runtime.gameplay_hud_text);
         rebuild_default_unit_spatial_indexes();
         run_default_gameplay_script_phase(state, 0);
-        run_default_p2p_replay_session_frame(state);
         run_default_gameplay_end_condition_monitor(state);
     }
     if constexpr (Index == 1) {
