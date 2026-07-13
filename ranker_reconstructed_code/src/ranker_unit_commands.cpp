@@ -2873,43 +2873,10 @@ void DispatchUnitRuntimeCommandState(UnitCommandContext& context,
 
 void DispatchExtendedUnitRuntimeCommandState(UnitCommandContext& context,
     UnitMovementUnit& unit) {
-    // The original extended-unit jump table is also indexed by the raw
-    // low-24-bit command id.  Keep the explicit start/cycle cases first, then
-    // use the same raw id for the remaining handlers.
-    switch (GetUnitCommandIdLow24(unit)) {
-    case kUnitStateAttackTravel:
-        ProcessUnitAttackTravelCommand(context, unit);
-        return;
-    case kUnitStateAttackTarget:
-        ProcessUnitAttackTargetCommand(context, unit);
-        return;
-    case kUnitStateRuntimeTargetValidationStart:
-        StartUnitRuntimeTargetValidationState(context, unit);
-        return;
-    case kUnitStateRuntimeTargetValidation:
-        HandleUnitRuntimeTargetValidationState(context, unit);
-        return;
-    case kUnitStateCompletionAnnouncementStart:
-        StartUnitCompletionAnnouncementCommand(context, unit);
-        return;
-    case kUnitStateCompletionAnnouncementTimer:
-        HandleUnitCompletionAnnouncementTimer(context, unit);
-        return;
-    case kUnitStateProductionSpawnStart:
-        StartUnitProductionSpawnCommand(context, unit);
-        return;
-    case kUnitStateProductionSpawnCycle:
-        HandleUnitProductionSpawnCycle(context, unit);
-        return;
-    case kUnitStateCompletionEffectStart:
-        StartUnitCompletionEffectSequence(context, unit);
-        return;
-    case kUnitStateCompletionEffectTimer:
-        HandleUnitCompletionEffectTimer(context, unit);
-        return;
-    default:
-        break;
-    }
+    // DAT_0072d350 is not the mobile-unit state table.  In particular, high
+    // state 0x03 is a RET entry and state 0x04 uses the runtime target-result
+    // handler; routing them through the mobile travel/attack pair changes
+    // structure and neutral combat state.
     switch (GetUnitCommandIdLow24(unit)) {
     case kUnitStateRuntimeIdleAcquire:
         HandleUnitRuntimeIdleAcquireState(context, unit);
