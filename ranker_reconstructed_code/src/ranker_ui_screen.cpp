@@ -1546,6 +1546,11 @@ u8 local_player_slot_state(const GameplayModalUiState& state) {
         state.players[state.local_player_index].slot_state : 0;
 }
 
+u8 local_player_modal_pause_uses_remaining(const GameplayModalUiState& state) {
+    return state.local_player_index < kGameplayModalPlayerSlots ?
+        state.players[state.local_player_index].modal_pause_uses_remaining : 0;
+}
+
 bool scenario_modal_uses_default_objective_text(const GameplayModalUiState& state) {
     return state.generic_ai_profile_mode ||
         (state.network_ai_profile_override && state.session_mode != 5);
@@ -1563,7 +1568,8 @@ bool pause_menu_modal_pause_available(const GameplayModalUiState& state) {
     if (state.scenario_ai_profile_override || !state.generic_ai_profile_mode) {
         return false;
     }
-    return state.modal_pause_suppressed || local_player_slot_state(state) != 0;
+    return state.modal_pause_suppressed ||
+        local_player_modal_pause_uses_remaining(state) != 0;
 }
 
 void configure_pause_menu_modal_pause_entry(
@@ -1573,9 +1579,10 @@ void configure_pause_menu_modal_pause_entry(
         return;
     }
 
-    const u8 local_state = local_player_slot_state(state);
+    const u8 local_pause_uses =
+        local_player_modal_pause_uses_remaining(state);
     if (state.scenario_ai_profile_override || !state.generic_ai_profile_mode ||
-        (!state.modal_pause_suppressed && local_state == 0)) {
+        (!state.modal_pause_suppressed && local_pause_uses == 0)) {
         set_entry_enabled(screen, kEntry, false);
         set_entry_button_triplet(screen, kEntry, 0x15, 0x15);
         return;
@@ -3563,11 +3570,24 @@ bool OrBackBufferMask32x32(i32 left, i32 top, u16 mask) {
 }
 
 bool OrBackBufferHighRedMask32x32(i32 left, i32 top) {
-    return OrBackBufferMask32x32(left, top, sprite_pixel_mask_constants().high_red);
+    // FUN_0050865c ORs the complete DDPIXELFORMAT red channel captured by
+    // ConfigureDirectDrawSurfaces at 0x004f4655.  The sprite renderer's
+    // `high_red` constant is a deliberately reduced tint mask (0xc000/0x6000)
+    // and is not the placement-cell mask used by the original.
+    const DirectDrawRuntimeState& draw = direct_draw_state();
+    const u16 mask = static_cast<u16>(draw.red_mask != 0
+        ? draw.red_mask
+        : (draw.pixel_mode_555 != 0 ? 0x7c00u : 0xf800u));
+    return OrBackBufferMask32x32(left, top, mask);
 }
 
 bool OrBackBufferLowBlueMask32x32(i32 left, i32 top) {
-    return OrBackBufferMask32x32(left, top, sprite_pixel_mask_constants().low_blue_a);
+    // FUN_005086d6 likewise uses the complete surface blue channel stored at
+    // 0x0144b82c (normally 0x001f), not the 0x0018 sprite-tint shortcut.
+    const DirectDrawRuntimeState& draw = direct_draw_state();
+    const u16 mask = static_cast<u16>(
+        draw.blue_mask != 0 ? draw.blue_mask : 0x001fu);
+    return OrBackBufferMask32x32(left, top, mask);
 }
 
 bool DrawUiScreenRectangleOutline(const UiScreenEntry& entry, u16 color) {

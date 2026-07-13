@@ -337,9 +337,15 @@ void TickUnitEffectAreaDamageFrames(UnitEffectRuntimeState& state, UnitEffectRun
 bool BeginSelectedUnitAttachmentEffect(UnitEffectRuntimeState& state,
     UnitEffectRuntime& effect, u32 effect_id, UnitMovementUnit& source,
     UnitMovementUnit* attachment);
+bool StartSelectedUnitAttachmentEffect(UnitEffectRuntimeState& state,
+    u32 effect_id, UnitMovementUnit& source, UnitMovementUnit* attachment);
 bool DispatchSelectedUnitActionEffect(UnitEffectRuntimeState& state,
     UnitEffectRuntime& effect, u32 action_id, UnitMovementUnit& source,
     UnitMovementUnit* target, i32 world_x, i32 world_y);
+using UnitEffectRandomLimitFunction = u32 (*)(u32 limit, void* user_data);
+bool DispatchSelectedUnitScatterActionEffect(UnitEffectRuntimeState& state,
+    u32 action_id, UnitMovementUnit& source, i32 world_x, i32 world_y,
+    UnitEffectRandomLimitFunction random_limit, void* random_user_data = nullptr);
 void InitializeUnitEffectProjectilePath(UnitEffectRuntimeState& state,
     UnitEffectRuntime& effect, UnitMovementUnit& source, UnitMovementUnit* target,
     i32 world_x, i32 world_y);
@@ -364,7 +370,10 @@ bool CheckUnitEffectAlreadyHitTarget(const UnitEffectRuntime& effect, u32 target
 UnitEffectRuntime* AllocateUnitEffectSlot(UnitEffectRuntimeState& state);
 void ReleaseUnitEffectSlot(UnitEffectRuntimeState& state, UnitEffectRuntime& effect);
 bool DispatchUnitEffectProjectileTrailRenderer(UnitEffectRuntimeState& state,
-    UnitEffectRuntime& effect, u32 effect_id);
+    UnitEffectRuntime& effect, u32 effect_id,
+    i32 captured_screen_x, i32 captured_screen_y);
+bool ResolveUnitEffectGenericSpriteRender(const UnitEffectRuntimeState& state,
+    const UnitEffectRuntime& effect, u32& sprite_entry, u32& draw_mode);
 void PrepareUnitEffectProjectileTrailRender(UnitEffectRuntimeState& state,
     UnitEffectRuntime& effect, i32 screen_x, i32 screen_y, u32 render_kind);
 void DrawUnitEffectWideProjectileTrail(UnitEffectRuntimeState& state,

@@ -1,6 +1,7 @@
 #include "ranker_unit_action.h"
 
 #include "ranker_gameplay_frame_render.h"
+#include "ranker_gameplay_sound.h"
 #include "ranker_gameplay_visibility.h"
 #include "ranker_player_slots.h"
 #include "ranker_runtime_resources.h"
@@ -11,6 +12,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <limits>
 
 namespace ranker {
 namespace {
@@ -55,14 +57,57 @@ constexpr u32 kUnitEffectBehaviorSkipImpactCheck = 0x04u;
 constexpr u32 kProjectileUnitImpactImageGroup = 3;
 constexpr u32 kProjectileUnitImpactRowIndex = 1;
 
+constexpr i32 action_center_coordinate(i32 origin, i32 bounds_start,
+    i32 bounds_extent) {
+    return origin + bounds_start + (bounds_extent >> 1);
+}
+
 i32 action_center_x(const UnitMovementUnit& unit) {
-    return unit.x + unit.definition.center_bounds_left +
-        (unit.definition.center_bounds_width >> 1);
+    return action_center_coordinate(unit.x, unit.definition.center_bounds_left,
+        unit.definition.center_bounds_width);
 }
 
 i32 action_center_y(const UnitMovementUnit& unit) {
-    return unit.y + unit.definition.center_bounds_top +
-        (unit.definition.center_bounds_height >> 1);
+    return action_center_coordinate(unit.y, unit.definition.center_bounds_top,
+        unit.definition.center_bounds_height);
+}
+
+constexpr u32 action_direction_or_previous(u32 previous_direction,
+    u32 calculated_direction) {
+    return calculated_direction != 0 ? calculated_direction : previous_direction;
+}
+
+static_assert(action_center_coordinate(100, -4, 32) == 112);
+static_assert(action_center_coordinate(200, 6, 18) == 215);
+static_assert(action_direction_or_previous(7, 0) == 7);
+static_assert(action_direction_or_previous(7, 3) == 3);
+
+void update_action_direction_to_target_center(UnitActionContext& context,
+    UnitMovementUnit& source, const UnitMovementUnit& target) {
+    const UnitMovementPoint source_center{
+        action_center_x(source), action_center_y(source)};
+    const UnitMovementPoint target_center{
+        action_center_x(target), action_center_y(target)};
+    // CalculateUnitCenterPathDistance (FUN_004c32fb) forwards these centers to
+    // PointDirectionLookupLowThunk.  In particular, the record-1 JW2_07.TRC
+    // table owns slope-boundary cases such as delta (10, 20); the generic
+    // movement heuristic returns a different direction at that boundary.
+    u32 direction = 0;
+    if (context.movement_context != nullptr &&
+        context.movement_context->direction_lookup_8 != nullptr) {
+        direction = CalculatePointDirectionFromLookup(source_center,
+            target_center, *context.movement_context->direction_lookup_8);
+    }
+    else {
+        UnitMovementUnit centered_source = source;
+        centered_source.x = source_center.x;
+        centered_source.y = source_center.y;
+        direction = CalculateUnitDirectionToPoint(centered_source,
+            target_center.x, target_center.y);
+    }
+    if (direction != 0) {
+        source.direction = action_direction_or_previous(source.direction, direction);
+    }
 }
 
 u32 default_action_distance(const UnitMovementUnit& source,
@@ -147,6 +192,93 @@ const UnitMovementUnit* find_effect_unit(
             return unit.id == unit_id;
         });
     return it == state.units.end() ? nullptr : &*it;
+}
+
+const UnitMovementDefinition* find_effect_unit_definition(
+    UnitEffectRuntimeState& state, u32 type_id,
+    const UnitMovementUnit* fallback = nullptr) {
+    if (state.lifecycle_context != nullptr &&
+        state.lifecycle_context->callbacks.find_definition != nullptr) {
+        if (const UnitMovementDefinition* definition =
+                state.lifecycle_context->callbacks.find_definition(
+                    *state.lifecycle_context, type_id)) {
+            return definition;
+        }
+    }
+    if (fallback != nullptr && fallback->type_id == type_id) {
+        return &fallback->definition;
+    }
+    for (const UnitMovementUnit* unit : state.unit_refs) {
+        if (unit != nullptr && unit->type_id == type_id) {
+            return &unit->definition;
+        }
+    }
+    const auto it = std::find_if(state.units.begin(), state.units.end(),
+        [type_id](const UnitMovementUnit& unit) {
+            return unit.type_id == type_id;
+        });
+    return it == state.units.end() ? nullptr : &it->definition;
+}
+
+void return_effect_target_to_idle(UnitMovementUnit& target) {
+    if (target.command_state == kUnitStateRuntimeIdleAcquire) {
+        return;
+    }
+    target.command_state = kUnitStateRuntimeIdleAcquire;
+    if (target.definition.animation_timer_period <= target.animation_frame) {
+        target.animation_frame = 0;
+    }
+}
+
+bool effect_target_is_revivable_corpse(const UnitMovementUnit* target) {
+    return target != nullptr && target->path_target_x != 1 &&
+        (target->runtime_flags & kUnitActionTargetTransient) != 0;
+}
+
+void register_effect_unit_ref(UnitEffectRuntimeState& state,
+    UnitMovementUnit& unit) {
+    if (std::find(state.unit_refs.begin(), state.unit_refs.end(), &unit) ==
+        state.unit_refs.end()) {
+        state.unit_refs.push_back(&unit);
+    }
+}
+
+void reactivate_effect_target(UnitEffectRuntimeState& state,
+    UnitMovementUnit& target) {
+    UnitLifecycleContext* lifecycle = state.lifecycle_context;
+    if (lifecycle != nullptr) {
+        SetUnitFootprintOccupancyBits(*lifecycle, target);
+        if (lifecycle->movement != nullptr) {
+            HandleLifecycleUnitActiveListMove(*lifecycle->movement, target);
+        }
+        else {
+            target.active = true;
+        }
+        if (target.owner_id < kUnitOwnerTypeCountOwners &&
+            target.type_id < kUnitOwnerTypeCountTypes) {
+            ++lifecycle->owner_unit_type_counts[target.owner_id][target.type_id];
+        }
+    }
+    else {
+        target.active = true;
+    }
+    register_effect_unit_ref(state, target);
+
+    bool footprint_command_flag =
+        (target.definition.footprint_flags & 2u) != 0;
+    if (!footprint_command_flag && state.equipment_catalog != nullptr) {
+        footprint_command_flag = CalculateUnitEquipmentCommandFlagModifier(
+            target, *state.equipment_catalog) != 0;
+    }
+    if (footprint_command_flag) {
+        target.command_flags |= 0x40u;
+    }
+}
+
+u32 effect_growth_countdown(const UnitMovementUnit& target) {
+    return target.definition.lifecycle_growth_period == 0
+        ? 0
+        : target.definition.lifecycle_growth_period - 1u;
 }
 
 void append_effect_event(UnitEffectRuntimeState& state, UnitEffectEventKind kind,
@@ -257,7 +389,6 @@ bool effect_frame_in_range(const UnitEffectRuntime& effect, std::size_t size,
 u32 effect_sprite_entry_for_frame(const UnitEffectRuntimeState& state,
     const UnitEffectDefinition& definition, const UnitEffectRuntime& effect) {
     if ((effect.flags & kUnitEffectFlagImpact) != 0 &&
-        effect.effect_id >= 0x3du &&
         !definition.impact_image_indices.empty() &&
         !definition.image_resource_entries.empty()) {
         std::size_t frame_index = 0;
@@ -484,8 +615,15 @@ bool effect_inside_viewport(const UnitEffectRuntimeState& state,
         state.viewport_bottom <= state.viewport_top) {
         return true;
     }
-    return effect.x >= state.viewport_left && effect.x < state.viewport_right &&
-        effect.y >= state.viewport_top && effect.y < state.viewport_bottom;
+    // FUN_004d7790 builds the effect cull rectangle 0x80 pixels beyond each
+    // camera edge.  Keep the live camera origin itself unchanged because the
+    // queued screen coordinates and trail endpoints still use that origin.
+    const i64 x = effect.x;
+    const i64 y = effect.y;
+    return x >= static_cast<i64>(state.viewport_left) - 0x80 &&
+        x < static_cast<i64>(state.viewport_right) + 0x80 &&
+        y >= static_cast<i64>(state.viewport_top) - 0x80 &&
+        y < static_cast<i64>(state.viewport_bottom) + 0x80;
 }
 
 bool effect_visible_on_current_grid(const UnitEffectRuntimeState& state,
@@ -540,19 +678,6 @@ bool queue_effect_render_command(UnitEffectRuntimeState& state,
         return false;
     }
 
-    const UnitEffectDefinition* definition =
-        find_effect_definition(state, effect.effect_id);
-    if (definition == nullptr || definition->sprite_entry == 0) {
-        return false;
-    }
-    if (!unit_effect_low_id_sprite_blit_allowed(*definition, effect)) {
-        return false;
-    }
-    const u32 sprite_entry = effect_sprite_entry_for_frame(state, *definition, effect);
-    if (sprite_entry == 0) {
-        return false;
-    }
-
     const u32 layer = effect_render_sort_layer(state, effect);
     const u32 packed_y = static_cast<u32>(effect.y + 1);
     const u32 packed_x = static_cast<u32>(effect.x);
@@ -561,10 +686,10 @@ bool queue_effect_render_command(UnitEffectRuntimeState& state,
     command.class_id = 9;
     command.payload = effect.effect_id;
     command.sort_key = layer + packed_y * 0x2000u + packed_x;
-    command.sprite_entry_index = sprite_entry;
-    command.sprite_draw_mode = effect_draw_mode_for_frame(*definition, effect);
-    command.sprite_draw_mode_valid = true;
-    command.screen_y = effect.y - state.viewport_top;
+    // Original FUN_004f28c0 queues every visible active effect before any
+    // definition/frame validation.  Special renderers (trail RNG, camera
+    // shake, etc.) therefore still run when the generic sprite is absent.
+    command.screen_y = effect.y + 1 - state.viewport_top;
     command.screen_x = effect.x - state.viewport_left;
     command.packed_flags = effect.flags;
     command.effect_runtime_context = &state;
@@ -589,7 +714,8 @@ GameplayVisibilityUnit visibility_unit_from_effect_unit(
     visibility.type_id = unit.type_id;
     visibility.variant = unit.action_mode_gate;
     visibility.runtime_flags = unit.runtime_flags;
-    visibility.state_flags = unit.command_state | unit.command_flags;
+    visibility.command_state = unit.command_state;
+    visibility.command_flags = unit.command_flags;
     visibility.owner_visibility_mask =
         state.players != nullptr &&
             unit.owner_id < state.players->owner_visibility_masks.size()
@@ -736,8 +862,11 @@ bool draw_projectile_direct_active_sprite(
         return true;
     }
     if ((effect.flags & kUnitEffectFlagRefundOnFinish) != 0) {
+        // Original 0x004f1ac8 -> 0x004d354a stores the caller's 32-bit
+        // blend factor verbatim; values above 0x1f deliberately wrap in the
+        // complementary-weight calculation instead of being clamped here.
         DrawResourceSpriteDirectBlendFactor(sprite_entry, screen_x, screen_y,
-            std::min<u32>(effect.amount, 0x1f));
+            effect.amount);
     } else {
         DrawResourceSpriteMode(sprite_entry, screen_x, screen_y,
             definition.active_draw_mode);
@@ -890,13 +1019,18 @@ void apply_unit_effect_area_stun_side_effect(UnitMovementUnit& unit) {
     unit.command_state = kUnitStateRandomRelocation;
     unit.command_value = 0;
     unit.distance_check_mode = 0;
-    unit.wait_ticks = 0;
     unit.work_timer = 0;
     unit.command_lockout_ticks = 0;
     unit.command_entry_lockout_ticks = 0;
     unit.animation_timer = 0;
-    unit.movement_turn_ticks = 0;
-    unit.effect_reset_scratch = {};
+    // Original FUN_004ef3cb clears raw unit +0x110 here.  That field is the
+    // movement step accumulator (also temporarily reused by obstacle probes),
+    // not the raw +0xb4 direction-turn timeout counter.
+    unit.movement_step_accumulator = 0;
+    unit.movement_residual_x = 0;
+    unit.movement_residual_y = 0;
+    unit.movement_interpolation_x = 0.0f;
+    unit.movement_interpolation_y = 0.0f;
     unit.runtime_flags |= 0x08000000u;
     unit.runtime_flags &= 0xfffdff9fu;
     unit.command_flags &= ~0x1000u;
@@ -995,11 +1129,44 @@ bool unit_effect_area_source_allows_scan(const UnitMovementUnit* source) {
     return source->command_state == 0x45 || (source->runtime_flags & 0x80u) == 0;
 }
 
-bool apply_unit_effect_raw_health_damage(UnitMovementUnit& target, u32 amount) {
+bool apply_unit_effect_raw_health_damage(UnitEffectRuntimeState& state,
+    UnitMovementUnit& target, u32 amount) {
     if (amount == 0 || !target.active ||
         (target.command_state & kUnitCommandDead) != 0 ||
         (target.runtime_flags & kUnitRuntimeHiddenOrInactive) != 0) {
         return false;
+    }
+
+    // FUN_004c212c routes this direct mutation through the target's shield
+    // record before touching HP.  This is intentionally not an impact event:
+    // action 0x18 calls the helper directly and the shared event drain would
+    // apply the same point of damage a second time.
+    if ((target.runtime_flags & 0x100u) != 0 &&
+        target.linked_effect_slot_offset >= 0xa8u &&
+        (target.linked_effect_slot_offset % 0xa8u) == 0) {
+        const std::size_t shield_index =
+            target.linked_effect_slot_offset / 0xa8u - 1u;
+        if (shield_index < state.effect_slots.size()) {
+            UnitEffectRuntime& shield = state.effect_slots[shield_index];
+            if (shield.active && shield.effect_id == 0x3fu &&
+                shield.linked_unit_id == target.id) {
+                if (shield.amount > amount) {
+                    shield.amount -= amount;
+                    return false;
+                }
+                amount -= shield.amount;
+                target.runtime_flags &= ~0x100u;
+                ReleaseUnitEffectSlot(state, shield);
+            }
+        }
+    }
+
+    // Raw +0x30 is overloaded: it is equipment slot zero for mobile types,
+    // but the construction/action-mode gate for class-0x60+ objects.  The
+    // original has already gated this branch on type >= 0x60, so marker one
+    // means an unfinished structure rather than an item or status timer.
+    if (target.type_id >= 0x60u && target.action_mode_gate == 1) {
+        amount += amount;
     }
     if (target.health <= amount) {
         target.health = 0;
@@ -1298,6 +1465,19 @@ UnitActionTickResult ProcessUnitActionCycle(UnitActionContext& context,
     }
 
     if ((source.command_flags & kUnitActionCommandStarted) == 0) {
+        // FUN_004c211c rejects the raw target bit-4 state before recovery,
+        // but the class/owner/range validation in FUN_004c1e85 happens only
+        // after the raw +0xf4 recovery branch.
+        if (CheckStoredActionTargetTransientFlag(source)) {
+            source.command_flags &= ~kUnitActionCommandStarted;
+            return result;
+        }
+        if (source.command_lockout_ticks != 0) {
+            result.valid_target = true;
+            update_action_direction_to_target_center(context, source, *target);
+            result.code = UnitActionTickCode::turning_to_target;
+            return result;
+        }
         const UnitActionTargetValidation validation =
             ValidateUnitActionTarget(context, source, *target);
         result.valid_target = validation.valid;
@@ -1309,11 +1489,6 @@ UnitActionTickResult ProcessUnitActionCycle(UnitActionContext& context,
         if (!validation.in_range) {
             source.path_target_x = target->x;
             source.path_target_y = target->y;
-            return result;
-        }
-        if (source.command_lockout_ticks != 0) {
-            source.direction = CalculateUnitDirectionToPoint(source, target->x, target->y);
-            result.code = UnitActionTickCode::turning_to_target;
             return result;
         }
 
@@ -1332,45 +1507,56 @@ UnitActionTickResult ProcessUnitActionCycle(UnitActionContext& context,
         return result;
     }
 
+    bool skip_active_frame_body = false;
     if ((source.command_flags & kUnitActionImpactApplied) == 0 &&
-        CheckStoredActionTargetTransientFlag(source) &&
-        can_replace_transient_target(context, source, *target)) {
-        UnitMovementUnit* replacement = context.callbacks.find_replacement_target != nullptr
-            ? context.callbacks.find_replacement_target(context, source)
-            : nullptr;
-        if (replacement == nullptr) {
-            source.command_flags &= ~kUnitActionCommandStarted;
-            if (context.callbacks.on_target_lost != nullptr) {
-                context.callbacks.on_target_lost(context, source);
+        CheckStoredActionTargetTransientFlag(source)) {
+        // At 0x004c1d22 the original skips straight to the frame advance when
+        // the target profile's +0x240 replacement gate is zero.  Facing,
+        // sound, and impact are intentionally omitted for that frame.
+        if (!can_replace_transient_target(context, source, *target)) {
+            skip_active_frame_body = true;
+        }
+        else {
+            UnitMovementUnit* replacement =
+                context.callbacks.find_replacement_target != nullptr
+                    ? context.callbacks.find_replacement_target(context, source)
+                    : nullptr;
+            if (replacement == nullptr) {
+                source.command_flags &= ~kUnitActionCommandStarted;
+                if (context.callbacks.on_target_lost != nullptr) {
+                    context.callbacks.on_target_lost(context, source);
+                }
+                return result;
             }
-            return result;
-        }
 
-        source.target = replacement;
-        source.path_target_x = replacement->x;
-        source.path_target_y = replacement->y;
-        target = replacement;
-        result.target = target;
+            source.target = replacement;
+            source.path_target_x = replacement->x;
+            source.path_target_y = replacement->y;
+            target = replacement;
+            result.target = target;
 
-        const UnitActionTargetValidation validation =
-            ValidateUnitActionTarget(context, source, *target);
-        result.valid_target = validation.valid;
-        result.distance = validation.distance;
-        if (!validation.valid) {
-            source.command_flags &= ~kUnitActionCommandStarted;
-            return result;
+            const UnitActionTargetValidation validation =
+                ValidateUnitActionTarget(context, source, *target);
+            result.valid_target = validation.valid;
+            result.distance = validation.distance;
+            if (!validation.valid || !validation.in_range) {
+                source.command_flags &= ~kUnitActionCommandStarted;
+                return result;
+            }
         }
     }
 
-    source.direction = CalculateUnitDirectionToPoint(source, target->x, target->y);
-    if (context.callbacks.on_action_sound != nullptr) {
-        context.callbacks.on_action_sound(context, source);
-    }
+    if (!skip_active_frame_body) {
+        update_action_direction_to_target_center(context, source, *target);
+        if (context.callbacks.on_action_sound != nullptr) {
+            context.callbacks.on_action_sound(context, source);
+        }
 
-    result.impact_frame = CheckUnitActionImpactFrame(source);
-    if (result.impact_frame) {
-        ApplyUnitActionImpact(context, source, *target);
-        source.command_flags |= kUnitActionImpactApplied;
+        result.impact_frame = CheckUnitActionImpactFrame(source);
+        if (result.impact_frame) {
+            ApplyUnitActionImpact(context, source, *target);
+            source.command_flags |= kUnitActionImpactApplied;
+        }
     }
 
     ++source.animation_frame;
@@ -1831,6 +2017,22 @@ void RenderUnitEffectRuntimeSprite(UnitEffectRuntimeState& state,
     queue_effect_render_command(state, effect);
 }
 
+bool ResolveUnitEffectGenericSpriteRender(const UnitEffectRuntimeState& state,
+    const UnitEffectRuntime& effect, u32& sprite_entry, u32& draw_mode) {
+    const UnitEffectDefinition* definition =
+        find_effect_definition(state, effect.effect_id);
+    if (definition == nullptr || definition->sprite_entry == 0 ||
+        !unit_effect_low_id_sprite_blit_allowed(*definition, effect)) {
+        return false;
+    }
+    sprite_entry = effect_sprite_entry_for_frame(state, *definition, effect);
+    if (sprite_entry == 0) {
+        return false;
+    }
+    draw_mode = effect_draw_mode_for_frame(*definition, effect);
+    return true;
+}
+
 u32 unit_effect_projectile_loop_period(const UnitEffectDefinition* definition) {
     u32 period = definition != nullptr
         ? definition->action_projectile_loop_ticks
@@ -2084,8 +2286,9 @@ void TickUnitEffectLinkedTargetSacrificeHeal(UnitEffectRuntimeState& state,
             AddUnitHealthClampedToProductionEffect00(
                 production_state_or_empty(state), *source, amount);
             linked->command_state |= kUnitCommandDead;
-            append_effect_event(state, UnitEffectEventKind::impact, effect,
-                linked->id, amount);
+            // Action 0x1b (0x004eedd0) heals the source and marks the linked
+            // unit dead, then goes straight to the frame/sound tail.  It does
+            // not enqueue a second damage-class impact for the dead target.
         }
     }
 
@@ -2581,7 +2784,10 @@ void TickUnitEffectTargetStatusMarkerWait(UnitEffectRuntimeState& state,
             ReleaseUnitEffectSlot(state, effect);
             return;
         }
-        if (linked->status_timer == 1) {
+        // FUN_004eddbb reads linked raw +0x30.  Action 0x27 tracks the
+        // structure construction gate stored there for type-0x60+ objects;
+        // raw +0x54 is the unrelated status/level timer.
+        if (linked->action_mode_gate == 1) {
             ++effect.tick;
             if (definition != nullptr &&
                 effect.tick >= active_frame_count(definition)) {
@@ -2796,7 +3002,7 @@ void TickUnitEffectChanneledLinkedHealthPulse(UnitEffectRuntimeState& state,
     ++effect.frame;
     if (effect.frame >= definition->damage_amount) {
         effect.frame = 0;
-        if (apply_unit_effect_raw_health_damage(*source, 1)) {
+        if (apply_unit_effect_raw_health_damage(state, *source, 1)) {
             ReleaseUnitEffectSlot(state, effect);
             return;
         }
@@ -2805,7 +3011,7 @@ void TickUnitEffectChanneledLinkedHealthPulse(UnitEffectRuntimeState& state,
     ++effect.amount;
     if (effect.amount >= definition->action_channel_linked_damage_period) {
         effect.amount = 0;
-        if (apply_unit_effect_raw_health_damage(*linked, 1)) {
+        if (apply_unit_effect_raw_health_damage(state, *linked, 1)) {
             release_and_clear_source_flag();
             return;
         }
@@ -2888,10 +3094,10 @@ void TickUnitEffectRestoreLinkedTargetHealth(UnitEffectRuntimeState& state,
             source->secondary_value -= secondary_cost;
             linked->health =
                 std::min<u32>(target_max, linked->health + restore_amount);
-            if (restore_amount != 0) {
-                append_effect_event(state, UnitEffectEventKind::impact, effect,
-                    linked->id, restore_amount);
-            }
+            // Original action-0x28 handler 0x004ee21c mutates HP directly and
+            // then jumps to the generic frame/sound tail.  It does not publish
+            // a damage-class impact; doing so makes the shared impact drain
+            // immediately damage the target for the amount just restored.
         }
     }
 
@@ -2935,16 +3141,17 @@ UnitMovementUnit* find_reserved_tile_completion_dropoff(UnitEffectRuntimeState& 
     UnitMovementUnit* best = nullptr;
     u32 best_distance = 0xffffffffu;
     for_each_effect_unit_in_active_order(state, [&](UnitMovementUnit& unit) {
+        // Lifecycle-less fallback mirrors FindNearestOwnedDropoffBuilding
+        // (0x004c6feb): raw +0x30 is the construction gate.
         if (&unit == &source || !unit.active || unit.owner_id != source.owner_id ||
-            unit.movement_state == 1) {
+            unit.action_mode_gate == 1) {
             return;
         }
         if (unit.type_id != 0x60 && unit.type_id != 0x70 &&
             unit.type_id != 0x80 && unit.type_id != 0x90) {
             return;
         }
-        const u32 distance = CalculateApproxUnitDistance(
-            source.x, source.y, unit.x, unit.y);
+        const u32 distance = default_action_distance(source, unit);
         if (distance <= best_distance) {
             best = &unit;
             best_distance = distance;
@@ -3431,13 +3638,206 @@ void TickUnitEffectAreaDamageFrames(UnitEffectRuntimeState& state, UnitEffectRun
 bool BeginSelectedUnitAttachmentEffect(UnitEffectRuntimeState& state,
     UnitEffectRuntime& effect, u32 effect_id, UnitMovementUnit& source,
     UnitMovementUnit* attachment) {
-    if (attachment == nullptr) {
+    static_cast<void>(attachment);
+    const UnitEffectDefinition* definition =
+        find_effect_definition(state, effect_id);
+    if (definition == nullptr || definition->startup_ticks == 0) {
         return false;
     }
-    if (!BeginUnitEffectStartup(state, effect, effect_id, source, attachment)) {
+
+    // FUN_004ef6cd's optional attachment record contains only the source
+    // pointer.  Raw +0x1c remains zero; treating the caster as a linked target
+    // makes several action ticks mutate the caster accidentally.
+    effect = {};
+    effect.active = true;
+    effect.effect_id = effect_id;
+    effect.flags = kUnitEffectFlagStartup;
+    effect.source_unit_id = source.id;
+    effect.x = source.x;
+    effect.y = source.y;
+    // FUN_004ef6cd reads raw JW2_11 +0xabc here.  +0x1fc is the unrelated
+    // action path-control field used by the later executing initializer.
+    if (definition->startup_uses_source_muzzle) {
+        const UnitMovementPoint delta = unit_effect_source_offset(source);
+        effect.x += delta.x;
+        effect.y += delta.y;
+    }
+    effect.target_x = effect.x;
+    effect.target_y = effect.y;
+    append_effect_event(state, UnitEffectEventKind::started, effect);
+    return true;
+}
+
+bool StartSelectedUnitAttachmentEffect(UnitEffectRuntimeState& state,
+    u32 effect_id, UnitMovementUnit& source, UnitMovementUnit* attachment) {
+    const UnitEffectDefinition* definition =
+        find_effect_definition(state, effect_id);
+    if (definition == nullptr) {
         return false;
     }
-    QueueUnitEffectStartSoundIfAny(state, effect);
+
+    // 0x004ef708..0x004ef72e queues +0x834 before checking raw +0x220
+    // and before FUN_004f3490 reserves a pool node.  Consequently a zero-tick
+    // attachment and a pool-full failure both still make the start sound.
+    UnitEffectRuntime sound_effect{};
+    sound_effect.effect_id = effect_id;
+    sound_effect.source_unit_id = source.id;
+    sound_effect.x = source.x;
+    sound_effect.y = source.y;
+    QueueUnitEffectStartSoundIfAny(state, sound_effect);
+    if (definition->startup_ticks == 0) {
+        return true;
+    }
+
+    UnitEffectRuntime* effect = AllocateUnitEffectSlot(state);
+    if (effect == nullptr) {
+        return false;
+    }
+    if (!BeginSelectedUnitAttachmentEffect(
+            state, *effect, effect_id, source, attachment)) {
+        ReleaseUnitEffectSlot(state, *effect);
+        return false;
+    }
+    return true;
+}
+
+bool DispatchSelectedUnitScatterActionEffect(UnitEffectRuntimeState& state,
+    u32 action_id, UnitMovementUnit& source, i32 world_x, i32 world_y,
+    UnitEffectRandomLimitFunction random_limit, void* random_user_data) {
+    if (action_id != 9 && action_id != 0x0f) {
+        return false;
+    }
+    const UnitEffectDefinition* definition =
+        find_effect_definition(state, action_id + 0x3du);
+    if (definition == nullptr) {
+        return false;
+    }
+
+    const auto cost_available = [&]() {
+        return source.secondary_value >= definition->action_secondary_cost &&
+            source.health > definition->action_source_health_cost;
+    };
+    const auto debit_cost = [&]() {
+        source.secondary_value -= definition->action_secondary_cost;
+        source.health -= definition->action_source_health_cost;
+    };
+    const auto roll = [&](u32 limit) {
+        if (limit == 0 || random_limit == nullptr) {
+            return 0u;
+        }
+        return random_limit(limit, random_user_data) % limit;
+    };
+
+    UnitMovementMap* map = state.lifecycle_context != nullptr &&
+            state.lifecycle_context->movement != nullptr
+        ? &state.lifecycle_context->movement->map
+        : nullptr;
+
+    if (action_id == 9) {
+        u32 remaining = definition->action_create_unit_secondary_value;
+        // Meteo count zero returns carry and never pays the action cost.
+        if (remaining == 0 || !cost_available()) {
+            return false;
+        }
+        debit_cost();
+
+        UnitEffectRuntime* reserved = nullptr;
+        while (remaining != 0) {
+            if (reserved == nullptr) {
+                reserved = AllocateUnitEffectSlot(state);
+                if (reserved == nullptr) {
+                    // 0x004ef8bd: the debit precedes the first and every later
+                    // allocation failure and is not rolled back.
+                    return false;
+                }
+            }
+
+            --remaining;
+            const u32 counter_limit = definition->action_create_unit_type_id;
+            const u32 spread = definition->action_source_stat20_delta;
+            const u32 counter = (counter_limit == 0 ? 0u : roll(counter_limit)) + 1u;
+            const i32 x = world_x + static_cast<i32>(roll(spread)) -
+                static_cast<i32>(spread >> 1);
+            const bool x_inside = x >= 0 && map != nullptr &&
+                static_cast<u32>(x >> 5) < map->width;
+            i32 y = world_y;
+            bool inside = false;
+            if (x_inside) {
+                // The original does not consume the Y RNG call when X is
+                // already outside the map.
+                y = world_y + static_cast<i32>(roll(spread)) -
+                    static_cast<i32>(spread >> 1);
+                inside = y >= 0 && static_cast<u32>(y >> 5) < map->height;
+            }
+            if (!inside) {
+                // Invalid candidates reuse this same reserved node.  Only the
+                // final exhausted attempt returns it to the pool.
+                if (remaining == 0) {
+                    ReleaseUnitEffectSlot(state, *reserved);
+                }
+                continue;
+            }
+
+            BeginUnitEffectImmediate(state, *reserved, 0x46u, source, nullptr);
+            reserved->amount = definition->damage_amount;
+            reserved->flags = kUnitEffectFlagImpact;
+            reserved->tick = 0;
+            reserved->frame = 0;
+            reserved->target_unit_id = 0;
+            reserved->linked_unit_id = 0;
+            reserved->x = x;
+            reserved->y = y;
+            reserved->target_x = x;
+            reserved->target_y = y;
+            reserved->previous_x = x;
+            reserved->previous_y = y;
+            reserved->abs_delta_x = counter;
+            reserved = nullptr;
+        }
+        return true;
+    }
+
+    const u32 count = definition->action_create_unit_secondary_value;
+    // Rise Death count zero is a successful no-op and bypasses its cost.
+    if (count == 0) {
+        return true;
+    }
+    if (!cost_available()) {
+        return false;
+    }
+    debit_cost();
+    for (u32 index = 0; index < count; ++index) {
+        if (state.callbacks.create_unit == nullptr) {
+            return true;
+        }
+        const u32 type_id = 0x3bu + roll(2);
+        UnitMovementUnit* created = state.callbacks.create_unit(
+            state, source, type_id, world_x, world_y);
+        // Placement failure terminates the entire creation loop but retains
+        // the already-paid cost and any earlier units/effects.
+        if (created == nullptr) {
+            return true;
+        }
+        register_effect_unit_ref(state, *created);
+
+        UnitEffectRuntime* spawned = AllocateUnitEffectSlot(state);
+        if (spawned == nullptr) {
+            // Unit creation comes first.  A full effect pool leaves this unit
+            // alive and still consumes all remaining RNG/create iterations.
+            continue;
+        }
+        BeginUnitEffectImmediate(state, *spawned, 0x4cu, source, created);
+        spawned->amount = 0;
+        spawned->flags = kUnitEffectFlagImpact;
+        spawned->tick = 0;
+        spawned->frame = 0;
+        spawned->x = created->x;
+        spawned->y = created->y;
+        spawned->target_x = created->x;
+        spawned->target_y = created->y;
+        spawned->previous_x = created->x;
+        spawned->previous_y = created->y;
+    }
     return true;
 }
 
@@ -3447,17 +3847,343 @@ bool DispatchSelectedUnitActionEffect(UnitEffectRuntimeState& state,
     if (action_id >= 0x2e) {
         return false;
     }
-    if (!BeginUnitEffectImmediate(state, effect, action_id + 0x3d, source, target)) {
+    // FUN_004ef7b8 dispatches through the 46-entry initializer table at
+    // 0x0086a4b8.  Entries 0x1e/0x1f point at the carry-return stub and never
+    // create a runtime effect (0x1f is started through its separate command-
+    // attachment path instead).
+    if (action_id == 0x1e || action_id == 0x1f) {
         return false;
     }
-    if (target != nullptr) {
-        effect.target_x = target->x;
-        effect.target_y = target->y;
-        InitializeUnitEffectProjectileOrMeleePath(state, effect, source, target);
-    } else {
+
+    const u32 effect_id = action_id + 0x3d;
+    const UnitEffectDefinition* definition =
+        find_effect_definition(state, effect_id);
+    if (definition == nullptr) {
+        return false;
+    }
+
+    const auto scaled_effect_amount = [&]() {
+        const u32 variant_bonus_percent =
+            CalculateUnitVariantScaledBonus61c(source);
+        return definition->damage_amount + static_cast<u32>(
+            (static_cast<u64>(definition->damage_amount) *
+                variant_bonus_percent) / 100u);
+    };
+
+    // Four initializer-table entries perform unit lifecycle mutations before
+    // the common effect initializer.  Keeping those mutations here is
+    // important: their tick handlers assume that the linked unit has already
+    // been created or moved back from the lifecycle list.
+    switch (action_id) {
+    case 8: {
+        // Fake (0x004efd35) creates a temporary clone of the selected target,
+        // but gives it the caster's owner and a deliberately reduced runtime
+        // stat block.  The effect follows the clone, not the original target.
+        if (target == nullptr || state.callbacks.create_unit == nullptr) {
+            return false;
+        }
+        UnitMovementUnit* clone = state.callbacks.create_unit(
+            state, source, target->type_id, target->x, target->y);
+        if (clone == nullptr) {
+            return false;
+        }
+        clone->runtime_flags |= 0x10u;
+        clone->command_flags &= ~0x40u;
+        clone->max_secondary_value =
+            definition->action_create_unit_secondary_value;
+        clone->secondary_value = definition->action_create_unit_secondary_value;
+        clone->runtime_stat_1c = 0;
+        clone->action_mode = 0;
+        clone->type_flags &= 0x231u;
+        clone->script_bit_flags = 0;
+        clone->command_bits.fill(0);
+        clone->max_health = source.health;
+        clone->health = source.health;
+        clone->runtime_stat_20 = source.runtime_stat_20;
+        register_effect_unit_ref(state, *clone);
+        target = clone;
+        break;
+    }
+    case 0x0a: {
+        // Resurrect accepts only a lifecycle corpse whose raw +0x6c marker is
+        // not one.  It restores percentages of the target's own maxima.
+        if (!effect_target_is_revivable_corpse(target)) {
+            return false;
+        }
+        return_effect_target_to_idle(*target);
+        target->runtime_flags &= ~kUnitActionTargetTransient;
+        target->command_flags &= ~0x10u;
+        target->runtime_flags |= 1u;
+        target->owner_id = source.owner_id;
+        // The loader exposes raw +0x1e8 twice: damage_amount is its unsigned
+        // magnitude, while action_target_health_delta is negated for the
+        // command-damage path.  Resurrection needs the unscaled magnitude.
+        const u32 health_percent = definition->damage_amount;
+        target->health = static_cast<u32>(
+            (static_cast<u64>(target->max_health) * health_percent) / 100u);
+        target->secondary_value = static_cast<u32>(
+            (static_cast<u64>(target->max_secondary_value) *
+                definition->action_create_unit_secondary_value) / 100u);
+        reactivate_effect_target(state, *target);
+        break;
+    }
+    case 0x19: {
+        // Rebirth revives the existing target with an absolute JW2_11 health
+        // value.  It deliberately preserves command flag 0x10 and secondary.
+        if (!effect_target_is_revivable_corpse(target)) {
+            return false;
+        }
+        return_effect_target_to_idle(*target);
+        target->runtime_flags &= ~kUnitActionTargetTransient;
+        target->runtime_flags |= 0x80u;
+        target->owner_id = source.owner_id;
+        target->health = definition->damage_amount;
+        target->pending_command = {};
+        target->deferred_command_count = 0;
+        reactivate_effect_target(state, *target);
+        break;
+    }
+    case 0x1c: {
+        // Bonefighter converts the corpse in-place to unit type 0x5a and
+        // rebuilds all mutable definition-derived fields before activation.
+        if (!effect_target_is_revivable_corpse(target)) {
+            return false;
+        }
+        const UnitMovementDefinition* bonefighter =
+            find_effect_unit_definition(state, 0x5au);
+        if (bonefighter == nullptr) {
+            return false;
+        }
+        return_effect_target_to_idle(*target);
+        target->runtime_flags &= ~kUnitActionTargetTransient;
+        target->command_flags &= ~0x10u;
+        target->runtime_flags |= 0x81u;
+        target->owner_id = source.owner_id;
+        target->type_id = 0x5a;
+        target->definition = *bonefighter;
+        target->max_health = bonefighter->initial_max_health;
+        target->health = bonefighter->initial_max_health;
+        target->max_secondary_value =
+            bonefighter->initial_max_secondary_value;
+        target->secondary_value = (target->max_secondary_value >> 2) +
+            (target->max_secondary_value >> 3);
+        target->runtime_stat_1c = bonefighter->profile_offense_value;
+        target->runtime_stat_20 = bonefighter->profile_defense_value;
+        target->runtime_stat_28 = bonefighter->initial_secondary_value;
+        target->type_flags = bonefighter->type_flags;
+        target->script_bit_flags = bonefighter->initial_script_bit_flags;
+        target->string_slot = 0;
+        target->cargo_amount = 0;
+        target->elite_progress_value = 0;
+        target->status_timer = 0;
+        target->command_bits.fill(0);
+        target->pending_command = {};
+        target->deferred_command_count = 0;
+        target->direction = 1;
+        reactivate_effect_target(state, *target);
+        break;
+    }
+    default:
+        break;
+    }
+
+    // Shield's initializer (0x004efd09) stores the effect pointer on the
+    // target.  Recasting an active shield refreshes that record instead of
+    // allocating a second effect (0x004ef7fa..0x004ef86d).
+    if (action_id == 2 && target != nullptr &&
+        (target->runtime_flags & 0x100u) != 0 &&
+        target->linked_effect_slot_offset >= 0xa8u &&
+        (target->linked_effect_slot_offset % 0xa8u) == 0) {
+        const std::size_t shield_index =
+            target->linked_effect_slot_offset / 0xa8u - 1u;
+        if (shield_index < state.effect_slots.size()) {
+            UnitEffectRuntime& shield = state.effect_slots[shield_index];
+            if (shield.active && shield.effect_id == effect_id &&
+                shield.linked_unit_id == target->id) {
+                shield.amount = scaled_effect_amount();
+                // The caller already reserved this pool slot.  Return it
+                // silently; the original refresh path never publishes a
+                // start/finish event for a second effect.
+                effect.active = false;
+                ReleaseUnitEffectSlot(state, effect);
+                return true;
+            }
+        }
+    }
+
+    if (!BeginUnitEffectImmediate(state, effect, effect_id, source, target)) {
+        return false;
+    }
+    // FUN_004ef7b8 scales the absolute JW2_11 +0x1e8 effect amount by the
+    // source unit's level bonus from JW2_09 +0x324/+0x32c.  Callers that use
+    // the allocated effect as a reservation token may still deliberately
+    // overwrite amount after this dispatch, matching the original flow.
+    effect.amount = scaled_effect_amount();
+
+    const auto initialize_immediate_at_point = [&](UnitMovementUnit* linked,
+                                                   i32 x, i32 y) {
+        effect.source_unit_id = source.id;
+        effect.target_unit_id = linked != nullptr ? linked->id : 0;
+        effect.linked_unit_id = effect.target_unit_id;
+        effect.x = x;
+        effect.y = y;
+        effect.target_x = x;
+        effect.target_y = y;
+        effect.previous_x = x;
+        effect.previous_y = y;
+        effect.flags = kUnitEffectFlagImpact;
+        effect.frame = 0;
+        effect.tick = 0;
+    };
+
+    bool initialized = false;
+    switch (action_id) {
+    case 8:
+        // Fake's common initializer receives the newly created clone.
+        initialize_immediate_at_point(target, target->x, target->y);
+        initialized = true;
+        break;
+    case 4:
+        // Teleport initializer 0x004efd1e links the effect back to the caster
+        // while retaining the commanded destination coordinates.
+        initialize_immediate_at_point(&source, world_x, world_y);
+        initialized = true;
+        break;
+    case 0x0a:
+        // Resurrect preserves the command's incoming world coordinates.
+        initialize_immediate_at_point(target, world_x, world_y);
+        initialized = true;
+        break;
+    case 0x0c:
+        // Suicide initializer 0x004efe30 uses the caster for both pointers and
+        // anchors the effect at the caster's current position.
+        initialize_immediate_at_point(&source, source.x, source.y);
+        initialized = true;
+        break;
+    case 0x10:
+    case 0x25:
+        // Sky Fallout (0x004f0118) and Blasting (0x004f028a) begin in the
+        // active state, not the generic impact state.  Their tick handlers
+        // consume frame/tick directly at the commanded point.
+        effect.source_unit_id = source.id;
+        effect.target_unit_id = target != nullptr ? target->id : 0;
+        effect.linked_unit_id = effect.target_unit_id;
+        effect.x = world_x;
+        effect.y = world_y;
         effect.target_x = world_x;
         effect.target_y = world_y;
-        InitializeUnitEffectProjectilePath(state, effect, source, target, world_x, world_y);
+        effect.previous_x = world_x;
+        effect.previous_y = world_y;
+        effect.flags = 0;
+        effect.frame = 0;
+        effect.tick = 0;
+        initialized = true;
+        break;
+    case 0x19:
+    case 0x1c:
+        // Rebirth and Bonefighter explicitly replace EDX/EBX with target x/y
+        // immediately before entering the common initializer.
+        initialize_immediate_at_point(target, target->x, target->y);
+        initialized = true;
+        break;
+    case 0x26:
+        // Berry-fly's dedicated initializer 0x004efb9d seeds the path-frame
+        // field to -1 before the first movement/render step.
+        if (target != nullptr) {
+            InitializeUnitEffectPathToTarget(state, effect, source, *target);
+            effect.frame = 0xffffffffu;
+            initialized = true;
+        }
+        break;
+    case 0x2c:
+        // Bline's initializer (0x004efc8a) stores source/target centers while
+        // leaving flags at mode zero; its tick handler interprets flags as
+        // command modes 0/1/2, not as generic impact/projectile flags.
+        CalculateUnitEffectSourceAndTargetCenters(
+            state, effect, source, target, world_x, world_y);
+        effect.linked_unit_id = target != nullptr ? target->id : 0;
+        effect.flags = 0;
+        effect.frame = 0;
+        effect.tick = 0;
+        initialized = true;
+        break;
+    default:
+        break;
+    }
+
+    if (!initialized) {
+        if (target != nullptr) {
+            effect.target_x = target->x;
+            effect.target_y = target->y;
+            InitializeUnitEffectProjectileOrMeleePath(
+                state, effect, source, target);
+        }
+        else if (selected_action_effect_uses_projectile_path(*definition)) {
+            effect.target_x = world_x;
+            effect.target_y = world_y;
+            InitializeUnitEffectProjectilePath(
+                state, effect, source, nullptr, world_x, world_y);
+        }
+        else {
+            // Generic initializer 0x004f02b2 places non-path point effects at
+            // EDX/EBX and enters impact immediately.  The previous code sent
+            // every null-target action down a projectile path from the caster.
+            initialize_immediate_at_point(nullptr, world_x, world_y);
+        }
+    }
+
+    switch (action_id) {
+    case 0:
+        if (target != nullptr) {
+            effect.x = target->x;
+            effect.y = target->y;
+        }
+        break;
+    case 2:
+        if (target != nullptr) {
+            target->runtime_flags |= 0x100u;
+            const std::size_t index = effect_slot_index(state, effect);
+            if (index != invalid_effect_slot_index()) {
+                const u64 original_offset =
+                    (static_cast<u64>(index) + 1u) * 0xa8u;
+                if (original_offset <= std::numeric_limits<u32>::max()) {
+                    target->linked_effect_slot_offset =
+                        static_cast<u32>(original_offset);
+                }
+            }
+        }
+        break;
+    case 3:
+        // Mass Temper initializer 0x004f0106 uses +0x30 as its remaining
+        // lifetime.  Leaving it zero makes the first decrement wrap forever.
+        effect.abs_delta_x = effect.amount;
+        break;
+    case 0x0d:
+        // Noxious Gas initializer 0x004efe43 seeds the same lifetime word from
+        // JW2_11 +0x1f4 rather than from the damage amount.
+        effect.abs_delta_x = definition->action_source_stat20_delta;
+        break;
+    case 0x18:
+        // Corrupt initializer 0x004f0141 owns command flag 0x2000 for the
+        // channel and uses amount as a zero-based linked-damage accumulator.
+        if ((source.command_flags & 0x2000u) != 0) {
+            ReleaseUnitEffectSlot(state, effect);
+            return false;
+        }
+        effect.amount = 0;
+        source.command_flags |= 0x2000u;
+        break;
+    case 0x1a:
+        // Recharge initializer 0x004f0172 explicitly clears +0x14 after the
+        // generic setup.  Rebirth (0x19) retains its scaled amount.
+        effect.amount = 0;
+        break;
+    case 0x19:
+    case 0x1c:
+        effect.tick = effect_growth_countdown(*target);
+        break;
+    default:
+        break;
     }
     return true;
 }
@@ -3505,7 +4231,9 @@ void RenderUnitEffectOrProjectileRuntime(UnitEffectRuntimeState& state,
         RenderUnitEffectRuntimeSprite(state, effect);
         return;
     }
-    if (DispatchUnitEffectProjectileTrailRenderer(state, effect, effect.effect_id)) {
+    if (DispatchUnitEffectProjectileTrailRenderer(state, effect, effect.effect_id,
+            effect.x - state.viewport_left,
+            effect.y + 1 - state.viewport_top)) {
         return;
     }
 
@@ -3797,7 +4525,8 @@ void ReleaseUnitEffectSlot(UnitEffectRuntimeState& state, UnitEffectRuntime& eff
 }
 
 bool DispatchUnitEffectProjectileTrailRenderer(UnitEffectRuntimeState& state,
-    UnitEffectRuntime& effect, u32 effect_id) {
+    UnitEffectRuntime& effect, u32 effect_id,
+    i32 captured_screen_x, i32 captured_screen_y) {
     const auto generic_impact_sprite_suppressed = [&]() {
         if ((effect.flags & kUnitEffectFlagImpact) == 0) {
             return false;
@@ -3834,8 +4563,7 @@ bool DispatchUnitEffectProjectileTrailRenderer(UnitEffectRuntimeState& state,
         if (const UnitEffectDefinition* definition =
                 find_effect_definition(state, effect.effect_id)) {
             return draw_projectile_parity_impact_sprite(
-                *definition, effect, effect.x - state.viewport_left,
-                effect.y - state.viewport_top);
+                *definition, effect, captured_screen_x, captured_screen_y);
         }
         return true;
     case 0x4b:
@@ -3848,13 +4576,13 @@ bool DispatchUnitEffectProjectileTrailRenderer(UnitEffectRuntimeState& state,
             return generic_tail_suppressed();
         }
         return draw_projectile_unit_group_impact_sprite(state, effect, 0x31,
-            effect.x - state.viewport_left, effect.y - state.viewport_top);
+            captured_screen_x, captured_screen_y);
     case 0x59:
         if ((effect.flags & kUnitEffectFlagImpact) == 0) {
             return generic_tail_suppressed();
         }
         return draw_projectile_unit_group_impact_sprite(state, effect, 0x5a,
-            effect.x - state.viewport_left, effect.y - state.viewport_top);
+            captured_screen_x, captured_screen_y);
     case 0x5b:
     case 0x5c:
         return true;
@@ -3884,7 +4612,7 @@ bool DispatchUnitEffectProjectileTrailRenderer(UnitEffectRuntimeState& state,
         if (const UnitEffectDefinition* definition =
                 find_effect_definition(state, effect.effect_id)) {
             return draw_projectile_direct_active_sprite(*definition, effect,
-                effect.x - state.viewport_left, effect.y - state.viewport_top);
+                captured_screen_x, captured_screen_y);
         }
         return true;
     case 0x67:
@@ -3892,8 +4620,7 @@ bool DispatchUnitEffectProjectileTrailRenderer(UnitEffectRuntimeState& state,
             generic_tail_suppressed();
     case 0x69:
         PrepareUnitEffectProjectileTrailRender(state, effect,
-            effect.x - state.viewport_left, effect.y - state.viewport_top,
-            effect.flags);
+            captured_screen_x, captured_screen_y, effect.flags);
         return true;
     case 0x6a: {
         const UnitMovementUnit* source =
@@ -3922,27 +4649,86 @@ void PrepareUnitEffectProjectileTrailRender(UnitEffectRuntimeState& state,
 void DrawUnitEffectWideTrailWithPalette(UnitEffectRuntimeState& state,
     UnitEffectRuntime& effect, i32 x0, i32 y0, i32 x1, i32 y1,
     const UnitEffectRenderPalette& palette) {
-    const bool x_major = std::abs(x1 - x0) >= std::abs(y1 - y0);
-    append_trail_segment(state, effect, x0, y0, x1, y1, 12, palette.highlight);
-    if (x_major) {
-        append_trail_segment(state, effect, x0, y0 + 1, x1, y1 + 1, 12,
-            palette.midtone);
-        append_trail_segment(state, effect, x0, y0 - 1, x1, y1 - 1, 12,
-            palette.midtone);
-        append_trail_segment(state, effect, x0, y0 + 2, x1, y1 + 2, 12,
-            palette.shadow);
-        append_trail_segment(state, effect, x0, y0 - 2, x1, y1 - 2, 12,
-            palette.shadow);
-        return;
+    // Original 0x004f1f52 starts at the current projectile position (x1/y1)
+    // and walks back toward its previous position (x0/y0) in eight-pixel
+    // Bresenham steps.  Each visible anchor is independently jittered.  The
+    // two random calls are also gameplay-significant because they advance the
+    // same global seed later used by sound/effect variants.
+    i32 base_x = x1;
+    i32 base_y = y1;
+    i32 anchor_x = base_x;
+    i32 anchor_y = base_y;
+
+    i32 step_x = -8;
+    i32 dx = base_x - x0;
+    if (dx < 0) {
+        dx = -dx;
+        step_x = 8;
     }
-    append_trail_segment(state, effect, x0 + 1, y0, x1 + 1, y1, 12,
-        palette.midtone);
-    append_trail_segment(state, effect, x0 - 1, y0, x1 - 1, y1, 12,
-        palette.midtone);
-    append_trail_segment(state, effect, x0 + 2, y0, x1 + 2, y1, 12,
-        palette.shadow);
-    append_trail_segment(state, effect, x0 - 2, y0, x1 - 2, y1, 12,
-        palette.shadow);
+    i32 step_y = -8;
+    i32 dy = base_y - y0;
+    if (dy < 0) {
+        dy = -dy;
+        step_y = 8;
+    }
+
+    const bool x_major = dx >= dy;
+    const u32 segment_count = static_cast<u32>(x_major ? dx : dy) >> 3;
+    i32 error_x = dx;
+    i32 error_y = dy;
+    GameplaySoundState* sound_state = DefaultFrontendGameplaySoundState();
+
+    for (u32 i = 0; i < segment_count; ++i) {
+        // The original consumes the Y roll before the X roll.
+        const i32 next_y = base_y +
+            (sound_state != nullptr
+                ? static_cast<i32>(SelectGameplaySoundVariant(*sound_state, 12))
+                : 0) - 6;
+        const i32 next_x = base_x +
+            (sound_state != nullptr
+                ? static_cast<i32>(SelectGameplaySoundVariant(*sound_state, 12))
+                : 0) - 6;
+
+        append_trail_segment(state, effect, anchor_x, anchor_y,
+            next_x, next_y, 12, palette.highlight);
+        if (x_major) {
+            append_trail_segment(state, effect, anchor_x, anchor_y + 1,
+                next_x, next_y + 1, 12, palette.midtone);
+            append_trail_segment(state, effect, anchor_x, anchor_y - 1,
+                next_x, next_y - 1, 12, palette.midtone);
+            append_trail_segment(state, effect, anchor_x, anchor_y + 2,
+                next_x, next_y + 2, 12, palette.shadow);
+            append_trail_segment(state, effect, anchor_x, anchor_y - 2,
+                next_x, next_y - 2, 12, palette.shadow);
+        } else {
+            append_trail_segment(state, effect, anchor_x + 1, anchor_y,
+                next_x + 1, next_y, 12, palette.midtone);
+            append_trail_segment(state, effect, anchor_x - 1, anchor_y,
+                next_x - 1, next_y, 12, palette.midtone);
+            append_trail_segment(state, effect, anchor_x + 2, anchor_y,
+                next_x + 2, next_y, 12, palette.shadow);
+            append_trail_segment(state, effect, anchor_x - 2, anchor_y,
+                next_x - 2, next_y, 12, palette.shadow);
+        }
+
+        anchor_x = next_x;
+        anchor_y = next_y;
+        if (x_major) {
+            base_x += step_x;
+            error_y += dy;
+            if (error_y >= error_x) {
+                error_y -= error_x;
+                base_y += step_y;
+            }
+        } else {
+            base_y += step_y;
+            error_x += dx;
+            if (error_x >= error_y) {
+                error_x -= error_y;
+                base_x += step_x;
+            }
+        }
+    }
 }
 
 void DrawUnitEffectWideProjectileTrail(UnitEffectRuntimeState& state,
@@ -3964,15 +4750,68 @@ void DrawUnitEffectWideImpactLineTrail(UnitEffectRuntimeState& state,
 
 void DrawUnitEffectNarrowProjectileTrail(UnitEffectRuntimeState& state,
     UnitEffectRuntime& effect, i32 x0, i32 y0, i32 x1, i32 y1) {
-    const bool x_major = std::abs(x1 - x0) >= std::abs(y1 - y0);
-    append_trail_segment(state, effect, x0, y0, x1, y1, 10,
-        state.render_palette.midtone);
-    if (x_major) {
-        append_trail_segment(state, effect, x0, y0 + 1, x1, y1 + 1, 10,
-            state.render_palette.shadow);
-    } else {
-        append_trail_segment(state, effect, x0 + 1, y0, x1 + 1, y1, 10,
-            state.render_palette.shadow);
+    // Original 0x004f2353 is the two-line counterpart of the wide trail.
+    i32 base_x = x1;
+    i32 base_y = y1;
+    i32 anchor_x = base_x;
+    i32 anchor_y = base_y;
+
+    i32 step_x = -8;
+    i32 dx = base_x - x0;
+    if (dx < 0) {
+        dx = -dx;
+        step_x = 8;
+    }
+    i32 step_y = -8;
+    i32 dy = base_y - y0;
+    if (dy < 0) {
+        dy = -dy;
+        step_y = 8;
+    }
+
+    const bool x_major = dx >= dy;
+    const u32 segment_count = static_cast<u32>(x_major ? dx : dy) >> 3;
+    i32 error_x = dx;
+    i32 error_y = dy;
+    GameplaySoundState* sound_state = DefaultFrontendGameplaySoundState();
+
+    for (u32 i = 0; i < segment_count; ++i) {
+        const i32 next_y = base_y +
+            (sound_state != nullptr
+                ? static_cast<i32>(SelectGameplaySoundVariant(*sound_state, 10))
+                : 0) - 5;
+        const i32 next_x = base_x +
+            (sound_state != nullptr
+                ? static_cast<i32>(SelectGameplaySoundVariant(*sound_state, 10))
+                : 0) - 5;
+
+        append_trail_segment(state, effect, anchor_x, anchor_y,
+            next_x, next_y, 10, state.render_palette.midtone);
+        if (x_major) {
+            append_trail_segment(state, effect, anchor_x, anchor_y + 1,
+                next_x, next_y + 1, 10, state.render_palette.shadow);
+        } else {
+            append_trail_segment(state, effect, anchor_x + 1, anchor_y,
+                next_x + 1, next_y, 10, state.render_palette.shadow);
+        }
+
+        anchor_x = next_x;
+        anchor_y = next_y;
+        if (x_major) {
+            base_x += step_x;
+            error_y += dy;
+            if (error_y >= error_x) {
+                error_y -= error_x;
+                base_y += step_y;
+            }
+        } else {
+            base_y += step_y;
+            error_x += dx;
+            if (error_x >= error_y) {
+                error_x -= error_y;
+                base_x += step_x;
+            }
+        }
     }
 }
 
@@ -4056,7 +4895,6 @@ UnitEffectActionTargetGateResult EvaluateUnitEffectActionTargetGate(
         result.carry = limit < distance;
         return result;
     };
-
     if (action_id == 4) {
         return UnitEffectActionTargetGateResult{4, false};
     }

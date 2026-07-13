@@ -64,6 +64,8 @@ enum class UnitAnimationDrawKind : u32 {
     mode_80,
     blend_factor_0f,
     blend_factor_ramp,
+    neighbor_copy,
+    resource_mode,
     ally_or_local,
     channel_additive_tint,
     palette_channel_additive_tint,
@@ -97,6 +99,13 @@ struct UnitAnimationDefinition {
     i32 bars_offset_x = 0;
     i32 bars_offset_y = 0;
     i32 bars_width = 0;
+    u32 owner_relation_overlay_entry_offset = 0;
+    i32 owner_relation_overlay_offset_x = 0;
+    i32 owner_relation_overlay_offset_y = 0;
+    u32 cell_base_blit_mode = 0;
+    u32 cell_flag4_blit_mode = 0;
+    u32 cell_flag40_blit_mode = 0;
+    bool cell_construction_special_draw = false;
     bool has_move_resource = false;
     bool has_move_resource_alt = false;
     bool has_alternate_default_resource = false;
@@ -131,6 +140,7 @@ struct UnitAnimationUnit {
     u32 hit_points = 0;
     u32 max_secondary_value = 0;
     u32 secondary_value = 0;
+    bool secondary_bar_enabled = true;
     u32 terrain_cell_flags = 0;
     u32 command_metadata_flags = 0;
     u32 definition_cell_flags = 0;
@@ -142,6 +152,7 @@ struct UnitAnimationUnit {
     u32 construction_progress_limit = 0;
     u32 low_health_overlay_frame = 0;
     u32 ability_id = 0;
+    bool visible_to_local_owner = false;
     bool cell_construction_progress_active = false;
     bool cell_channel_additive_active = false;
     std::string display_name;
@@ -173,6 +184,7 @@ struct UnitAnimationDrawCommand {
     i32 screen_x = 0;
     i32 screen_y = 0;
     bool flipped = false;
+    u32 resource_draw_mode = 0;
 };
 
 struct UnitAnimationDrawContext;
@@ -222,6 +234,7 @@ struct UnitAnimationDrawContext {
     const UnitAnimationDefinition* definition = nullptr;
     const UnitAnimationUnit* current_unit = nullptr;
     u32 local_owner_id = 0;
+    bool local_owner_is_observer = false;
     u32 global_frame_counter = 0;
     u32 highlight_level = 0;
     u32 selection_marker_base_entry = kUnitAnimationInvalidMarkerEntry;

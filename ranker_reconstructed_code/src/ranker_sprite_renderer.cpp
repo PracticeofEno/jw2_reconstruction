@@ -178,7 +178,12 @@ u16 blend_pixels_with_table(u16 dst, u16 src, u32 mode) {
 }
 
 u16 blend_pixels_by_factor(u16 dst, u16 src, u32 source_weight_31) {
-    const u32 src_weight = std::min(source_weight_31, 0x1fu);
+    // FUN_004d31d8 stores the caller's factor verbatim in DAT_007589e0 and
+    // computes 0x1f-factor with 32-bit wraparound.  Do not clamp here: raw HP
+    // ratios can temporarily exceed 31 when production effects raise current
+    // HP above the unmodified +0x10 maximum, and the original preserves that
+    // packed-arithmetic quirk.
+    const u32 src_weight = source_weight_31;
     const u32 dst_weight = 0x1fu - src_weight;
     const u16 red_blue_mask = surface_pixel_mode_555() ? 0x7c1fu : 0xf81fu;
     const u16 green_mask = surface_green_mask();

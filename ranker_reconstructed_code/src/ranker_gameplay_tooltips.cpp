@@ -1,5 +1,6 @@
 #include "ranker_gameplay_tooltips.h"
 
+#include "ranker_palette_cache.h"
 #include "ranker_production_orders.h"
 #include "ranker_sprite_renderer.h"
 #include "ranker_text_renderer.h"
@@ -80,7 +81,10 @@ void emit_fill(GameplayTooltipState& state, i32 left, i32 top, i32 right, i32 bo
         state.callbacks.fill_box(state, left, top, right, bottom);
     }
     else if (state.emit_backbuffer_draws) {
-        DrawBackBufferFilledRectangle16(left, top, right, bottom);
+        // FUN_004e2bb7 stores zero in the tooltip fill-color global for both
+        // 555 and 565 modes.  Using the rectangle helper's white default made
+        // every hover box look like a corrupted command icon.
+        DrawBackBufferFilledRectangle16(left, top, right, bottom, 0);
     }
 }
 
@@ -91,7 +95,11 @@ void emit_outline(GameplayTooltipState& state, i32 left, i32 top, i32 right, i32
         state.callbacks.outline_box(state, left, top, right, bottom);
     }
     else if (state.emit_backbuffer_draws) {
-        DrawBackBufferRectangleOutline16(left, top, right - left, bottom - top);
+        // Original DAT_00863218 is 0x316b for RGB555 and 0x62eb for RGB565.
+        // Its width/height arguments include both rectangle endpoints.
+        const u16 color = SurfacePixelMode555() ? 0x316bu : 0x62ebu;
+        DrawBackBufferRectangleOutline16(
+            left, top, right - left + 1, bottom - top + 1, color);
     }
 }
 
@@ -135,7 +143,9 @@ void emit_icon(GameplayTooltipState& state, u32 icon, i32 x, i32 y) {
 
 void emit_icon_value(
     GameplayTooltipState& state, u32 icon, u32 value, i32 icon_x, i32 y) {
-    emit_icon(state, icon, icon_x, y);
+    // Cost sprites in FUN_004deaee are anchored three pixels above the text
+    // baseline; only the numeric value remains at y.
+    emit_icon(state, icon, icon_x, y - 3);
     GameplayTooltipDrawCommand value_command{};
     value_command.kind = GameplayTooltipDrawCommandKind::icon_value;
     value_command.left = icon_x + static_cast<i32>(kCostIconTextOffset);
@@ -677,9 +687,10 @@ void DrawGameplayTooltipCostBox(GameplayTooltipState& state) {
         u32 row_width = row_extent.width;
         for (u32 cost : state.current_costs.values) {
             if (cost != 0) {
-                const std::string value_text = unsigned_text(cost);
-                row_width += kCostIconTextOffset +
-                    measure_text(state, value_text.c_str()).width + 4;
+                // The original box extent reserves a fixed 0x14 pixels for
+                // each nonzero cost token.  Numeric width only affects the
+                // subsequent draw cursor below, not the enclosing box width.
+                row_width += 0x14;
             }
         }
         width = std::max(width, row_width);

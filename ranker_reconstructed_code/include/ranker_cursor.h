@@ -38,10 +38,12 @@ struct SoftwareCursorState {
     bool pointer_motion_locked = false;
     bool presentation_locked = false;
     bool pointer_updates_suppressed = false;
+    bool resources_loaded = false;
 };
 
 SoftwareCursorState& software_cursor_state();
 bool InitializeSoftwareCursorSurfaces();
+bool LoadSoftwareCursorResourcesFromJw201Trc();
 void ShutdownSoftwareCursorSurfaces();
 void SetGameCursorHotspot(u32 cursor_index, i32 x, i32 y);
 void SetGameCursorPointerPosition(i32 x, i32 y);

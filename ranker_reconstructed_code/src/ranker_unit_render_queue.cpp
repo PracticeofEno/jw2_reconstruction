@@ -84,7 +84,7 @@ void push_entry(UnitRenderQueueContext& context, const UnitRenderItem& item,
     push_entry(context, item, item.render_class, layer, sort_key);
 }
 
-bool large_unit_local_visibility_gate(const UnitRenderQueueContext& context,
+bool unit_individual_visibility_gate(const UnitRenderQueueContext& context,
     const UnitRenderItem& item, u32 tile_x, u32 tile_y) {
     const u32 bit = context.local_owner_id;
     if (bit < 32 && item.owner_id < context.owner_visibility_masks.size() &&
@@ -131,6 +131,13 @@ bool IsMapTileVisible(const UnitVisibilityGrid& grid, u32 tile_x, u32 tile_y) {
     return (*cell & kMapTileVisible) != 0;
 }
 
+bool IsUnitRenderItemIndividuallyVisibleToLocal(
+    const UnitRenderQueueContext& context, const UnitRenderItem& item) {
+    const u32 tile_x = static_cast<u32>(item.x) >> 5;
+    const u32 tile_y = static_cast<u32>(item.y) >> 5;
+    return unit_individual_visibility_gate(context, item, tile_x, tile_y);
+}
+
 void ProcessVisibleUnitRenderQueue(UnitRenderQueueContext& context) {
     for (UnitRenderItem& item : context.units) {
         if ((item.runtime_flags & kUnitRenderHiddenFlag) != 0) {
@@ -156,7 +163,7 @@ void ProcessVisibleUnitRenderQueue(UnitRenderQueueContext& context) {
             continue;
         }
         if (item.definition_kind == 2 && (item.command_flags & 0x40) != 0 &&
-            !large_unit_local_visibility_gate(context, item, tile_x, tile_y)) {
+            !IsUnitRenderItemIndividuallyVisibleToLocal(context, item)) {
             mark_fog_blocked(context, item, tile_x, tile_y);
             continue;
         }

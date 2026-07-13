@@ -458,6 +458,8 @@ constexpr u32 kGameplayScenarioObjectStride = 0x1d0;
 constexpr u32 kGameplayScenarioObjectMaxSlots = 0x800;
 constexpr std::size_t kGameplayHeaderUnitActiveListHeadOffset = 0x143c;
 constexpr std::size_t kGameplayHeaderUnitFreeListHeadOffset = 0x1440;
+constexpr std::size_t kGameplayHeaderMapEffectActiveListHeadOffset = 0x1448;
+constexpr std::size_t kGameplayHeaderMapEffectFreeListHeadOffset = 0x144c;
 constexpr std::size_t kGameplayHeaderRandomLimitOffset = 0x1420;
 constexpr std::size_t kGameplayHeaderRandomSeedOffset = 0x1424;
 constexpr std::size_t kGameplayHeaderRandomCallCountOffset = 0x1428;
@@ -507,7 +509,9 @@ constexpr std::size_t kGameplayScenarioObjectDrawFlagsOffset = 0xa4;
 constexpr std::size_t kGameplayScenarioObjectDirectionOffset = 0xa8;
 constexpr std::size_t kGameplayScenarioObjectMovementFlagsOffset = 0xac;
 constexpr std::size_t kGameplayScenarioObjectMovementStateOffset = 0xb0;
-constexpr std::size_t kGameplayScenarioObjectWaitTicksOffset = 0xb4;
+// OBC unit raw +0xb4 is the direction-turn timeout counter.  It is not a
+// generic wait timer (UpdateUnitMovementTowardPathTarget, original 0x0040b450).
+constexpr std::size_t kGameplayScenarioObjectMovementTurnTicksOffset = 0xb4;
 constexpr std::size_t kGameplayScenarioObjectXOffset = 0xb8;
 constexpr std::size_t kGameplayScenarioObjectYOffset = 0xbc;
 constexpr std::size_t kGameplayScenarioObjectCurrentCellXOffset = 0xc0;
@@ -527,9 +531,13 @@ constexpr std::size_t kGameplayScenarioObjectCommandLockoutTicksOffset = 0xf4;
 constexpr std::size_t kGameplayScenarioObjectSavedTypeFlagsOffset = 0xf8;
 constexpr std::size_t kGameplayScenarioObjectPlacementResetScratchOffset = 0xfc;
 constexpr std::size_t kGameplayScenarioObjectDistanceCheckModeOffset = 0x10c;
-constexpr std::size_t kGameplayScenarioObjectMovementTurnTicksOffset = 0x110;
-constexpr std::array<std::size_t, 4> kGameplayScenarioObjectEffectResetScratchOffsets{{
-    0x114, 0x118, 0x11c, 0x120}};
+// OBC unit raw +0x110 is the movement step accumulator, also reused by the
+// rotating obstacle probes at original 0x004c7f99/0x004c8010.
+constexpr std::size_t kGameplayScenarioObjectMovementStepAccumulatorOffset = 0x110;
+constexpr std::size_t kGameplayScenarioObjectMovementResidualXOffset = 0x114;
+constexpr std::size_t kGameplayScenarioObjectMovementResidualYOffset = 0x118;
+constexpr std::size_t kGameplayScenarioObjectMovementInterpolationXOffset = 0x11c;
+constexpr std::size_t kGameplayScenarioObjectMovementInterpolationYOffset = 0x120;
 constexpr std::size_t kGameplayScenarioObjectDeferredCommandCountOffset = 0x124;
 constexpr std::size_t kGameplayScenarioObjectDeferredCommandSlotsOffset = 0x128;
 constexpr std::size_t kGameplayScenarioObjectDeferredCommandStride = 0x10;
@@ -557,8 +565,8 @@ constexpr std::size_t kAuxiliaryEffectActiveStepIterationsOffset = 0x194;
 constexpr std::size_t kAuxiliaryEffectImpactChildFlagOffset = 0x20c;
 constexpr std::size_t kAuxiliaryEffectImpactClassStrideFactorOffset = 0x210;
 constexpr std::size_t kAuxiliaryEffectImpactClassFrameCountOffset = 0x22c;
-constexpr std::size_t kJw212EffectRenderSortHandlerOffset = 0x244;
-constexpr std::size_t kJw211EffectRenderSortHandlerOffset = 0x378;
+constexpr std::size_t kJw212EffectRenderSortHandlerOffset = 0x150;
+constexpr std::size_t kJw211EffectRenderSortHandlerOffset = 0x150;
 constexpr std::size_t kJw211ProductionModeOffset = 0x150;
 constexpr std::size_t kJw211ProductionMovementClassMaskOffset = 0x154;
 constexpr std::size_t kJw211ProductionDefinitionIdOffset = 0x158;
@@ -567,7 +575,7 @@ constexpr std::size_t kJw211ProductionActiveLimitOffset = 0x160;
 constexpr std::size_t kJw211ProductionStatusRechargeAmountOffset = 0x16c;
 constexpr std::size_t kJw211ProductionResourceLimitOffset = 0x1e0;
 constexpr std::size_t kJw211ProductionQueuedLimitOffset = 0x1e4;
-constexpr std::size_t kJw211ActionDirectionModeOffset = 0x378;
+constexpr std::size_t kJw211ActionDirectionModeOffset = 0x150;
 constexpr std::size_t kJw211ActionSourceHealthCostOffset = 0x1e0;
 constexpr std::size_t kJw211ActionSourceStat20DeltaOffset = 0x1f4;
 constexpr std::size_t kJw211ActionCreateUnitRefundSecondaryOffset = 0x1e4;
@@ -581,20 +589,21 @@ constexpr std::size_t kJw211ActionAuraTickResetThresholdOffset = 0x1f4;
 constexpr std::size_t kJw211ActionAuraRadiusOffset = 0x1f8;
 constexpr std::size_t kJw211ActionAreaDamageRadiusOffset = 0x1f8;
 constexpr std::size_t kJw211ActionAreaTargetRenderClassMaskOffset = 0x154;
-constexpr std::size_t kJw211ActionIconMarkerOffset = 0x380;
+constexpr std::size_t kJw211ActionIconMarkerOffset = 0x158;
 constexpr std::array<std::size_t, 3> kJw211ActionProjectileImpactPercentOffsets{{
-    0x3ac, 0x3b0, 0x3b4,
+    0x184, 0x188, 0x18c,
 }};
-constexpr std::size_t kJw211ActionSecondaryCostOffset = 0x40c;
-constexpr std::size_t kJw211ActionTargetHealthDeltaOffset = 0x410;
-constexpr std::size_t kJw211ActionPathControlOffset = 0x424;
-constexpr std::size_t kJw211ActionStartupTicksOffset = 0x448;
-constexpr std::size_t kJw211ActionProjectileLoopTicksOffset = 0x44c;
-constexpr std::size_t kJw211ActionSequenceImageIndexBaseOffset = 0x658;
-constexpr std::size_t kJw211ActionNearbyMarkerRadiusOffset = 0x81c;
+constexpr std::size_t kJw211ActionSecondaryCostOffset = 0x1e4;
+constexpr std::size_t kJw211ActionTargetHealthDeltaOffset = 0x1e8;
+constexpr std::size_t kJw211ActionPathControlOffset = 0x1fc;
+constexpr std::size_t kJw211ActionStartupTicksOffset = 0x220;
+constexpr std::size_t kJw211ActionProjectileLoopTicksOffset = 0x224;
+constexpr std::size_t kJw211ActionSequenceImageIndexBaseOffset = 0x430;
+constexpr std::size_t kJw211ActionNearbyMarkerRadiusOffset = 0x1f8;
 constexpr std::size_t kJw211AreaDamageOwnerRelationModeOffset = 0xac0;
+constexpr u32 kJw211FirstRecordId = 0x3d;
 constexpr u32 kJw211RestoreLinkedHealthEffectId = 0x65;
-constexpr std::size_t kJw212EffectStartupSourceMuzzleFlagOffset = 0xabc;
+constexpr std::size_t kJw21xEffectStartupSourceMuzzleFlagOffset = 0xabc;
 constexpr std::size_t kAuxiliaryEffectStartupImageIndexBaseOffset = 0x230;
 constexpr std::size_t kAuxiliaryEffectActiveImageIndexBaseOffset = 0x430;
 constexpr std::size_t kAuxiliaryEffectImpactImageIndexBaseOffset = 0x630;
@@ -604,7 +613,6 @@ constexpr std::size_t kJw211EffectPathKindOffset = 0x1fc;
 constexpr std::size_t kJw211EffectSoundFrameBaseOffset = 0x878;
 constexpr std::size_t kJw211EffectImpactFrameCountOffset = 0x8b8;
 constexpr std::size_t kJw211EffectImpactFrameBaseOffset = 0x8bc;
-constexpr std::size_t kJw211ActionTargetLockFrameOffset = 0x900;
 constexpr u32 kJw21xEffectMaxTimerValue = 0x1000;
 constexpr u32 kUnitEffectOriginalSlotStride = 0xa8;
 constexpr u32 kJw211EffectMaxFrameSoundEntries = 8;
@@ -628,9 +636,27 @@ constexpr std::size_t kUnitDefinitionInitialMaxSecondaryOffset = 0x160;
 constexpr std::size_t kUnitDefinitionProfileOffenseOffset = 0x158;
 constexpr std::size_t kUnitDefinitionProfileDefenseOffset = 0x15c;
 constexpr std::size_t kUnitDefinitionRuntimeStat28Offset = 0x164;
+// FUN_00409ac0 / FUN_0040a690 / CalculateOrder2bAdjustedUnitValue read this
+// compact growth block directly from the per-type definition record.
+constexpr std::size_t kUnitDefinitionVariantGrowthHealthWeightOffset = 0x168;
+constexpr std::size_t kUnitDefinitionVariantGrowthSecondaryWeightOffset = 0x174;
+constexpr std::size_t kUnitDefinitionVariantGrowthStat1cWeightOffset = 0x16c;
+constexpr std::size_t kUnitDefinitionVariantGrowthStat20WeightOffset = 0x170;
+constexpr std::size_t kUnitDefinitionVariantGrowthStat28WeightOffset = 0x178;
+constexpr std::size_t kUnitDefinitionVariantHealthDeltaPercentOffset = 0x1a8;
+constexpr std::size_t kUnitDefinitionVariantSecondaryDeltaPercentOffset = 0x1ac;
+constexpr std::size_t kUnitDefinitionVariantStepModeOffset = 0x1b8;
+constexpr std::size_t kUnitDefinitionVariantStepBaseOffset = 0x1b9;
+constexpr std::size_t kUnitDefinitionVariantStepLinearOffset = 0x1ba;
+constexpr std::size_t kUnitDefinitionVariantStepExtraOffset = 0x1bb;
+constexpr std::size_t kUnitDefinitionVariantProgressCostPerLevelOffset = 0x1bc;
+constexpr std::size_t kUnitDefinitionLinkedReleaseTypeOffset = 0x1d4;
+constexpr std::size_t kUnitDefinitionAlternateMorphTypeOffset = 0x1e4;
+constexpr std::size_t kUnitDefinitionVariantProgressBaseCostOffset = 0x1e8;
 constexpr std::size_t kUnitDefinitionAvatarNextExpPerLevelOffset = 0x1bc;
 constexpr std::size_t kUnitDefinitionAvatarNextExpBaseOffset = 0x1e8;
 constexpr std::size_t kUnitDefinitionInitialCommandBitsOffset = 0x1ec;
+constexpr std::size_t kUnitDefinitionInitialScriptBitFlagsOffset = 0x1f0;
 constexpr std::size_t kUnitDefinitionLifecycleClassOffset = 0x14c;
 constexpr std::size_t kUnitDefinitionPlacementClassOffset = 0x150;
 constexpr std::size_t kUnitDefinitionMovementClassOffset = 0x17c;
@@ -661,7 +687,9 @@ constexpr std::size_t kUnitDefinitionSmallReferenceCountOffset = 0x30f;
 constexpr std::size_t kUnitDefinitionSmallReferenceBaseOffset = 0x310;
 constexpr std::size_t kUnitDefinitionActionRecoveryScaleOffset = 0x320;
 constexpr std::size_t kUnitDefinitionActionRangeBonusPerCountOffset = 0x321;
+constexpr std::size_t kUnitDefinitionVariantScaledBonus61cPerLevelOffset = 0x324;
 constexpr std::size_t kUnitDefinitionActionRangeBonusCapOffset = 0x326;
+constexpr std::size_t kUnitDefinitionVariantScaledBonus61cCapOffset = 0x32c;
 constexpr std::size_t kUnitDefinitionFootprintWidthTilesOffset = 0x330;
 constexpr std::size_t kUnitDefinitionFootprintHeightTilesOffset = 0x334;
 constexpr std::size_t kUnitDefinitionBoundsLeftOffset = 0x360;
@@ -672,6 +700,7 @@ constexpr std::size_t kUnitDefinitionSpatialQueryLeftOffset = 0x370;
 constexpr std::size_t kUnitDefinitionSpatialQueryTopOffset = 0x374;
 constexpr std::size_t kUnitDefinitionSpatialQueryRightOffset = 0x378;
 constexpr std::size_t kUnitDefinitionSpatialQueryBottomOffset = 0x37c;
+constexpr std::size_t kUnitDefinitionEffectAdjustedInteractionRangeBaseOffset = 0x198;
 constexpr std::size_t kUnitDefinitionEffectCommandDistanceGateOffset = 0x19c;
 constexpr std::size_t kUnitDefinitionTargetAcquisitionRangeOffset = 0x19c;
 constexpr std::size_t kUnitDefinitionGroupedCommandCompletedTypeGateOffset = 0x1fc;
@@ -684,6 +713,7 @@ constexpr std::size_t kUnitDefinitionTargetSelectionPriorityOffset = 0x1c0;
 constexpr std::size_t kUnitDefinitionGroupedCommandOrderVariantGateOffset = 0x2c8;
 constexpr std::size_t kUnitDefinitionGroupedCommandOrderVariantIndexOffset = 0x2cc;
 constexpr std::size_t kUnitDefinitionUiIconMarkerOffset = 0x30c;
+constexpr std::size_t kUnitDefinitionLowHealthOverlayDrawModeOffset = 0x338;
 constexpr std::size_t kUnitDefinitionSpecialDrawFlagOffset = 0x340;
 constexpr std::size_t kUnitDefinitionCellRenderFlagsOffset = 0x344;
 constexpr std::size_t kUnitDefinitionNameOffsetXOffset = 0x360;
@@ -696,8 +726,10 @@ constexpr std::size_t kUnitDefinitionInteractionBoundsWidthOffset = 0x378;
 constexpr std::size_t kUnitDefinitionInteractionBoundsHeightOffset = 0x37c;
 constexpr std::size_t kUnitDefinitionLifecycleLockoutPeriodOffset = 0x13d0;
 constexpr std::size_t kUnitDefinitionAnimationTimerPeriodOffset = 0x13d4;
+constexpr std::size_t kUnitDefinitionTargetProgressAnimationPeriodOffset = 0x13f8;
 constexpr std::size_t kUnitDefinitionAbilityTimerPeriodOffset = 0x13dc;
 constexpr std::size_t kUnitDefinitionLifecycleGrowthPeriodOffset = 0x13e0;
+constexpr std::size_t kUnitDefinitionLowHealthOverlayCountOffset = 0x13e0;
 constexpr std::size_t kUnitDefinitionTimedFlagPhaseBPeriodOffset = 0x13e4;
 constexpr std::size_t kUnitDefinitionTimedFlagPhaseAPeriodOffset = 0x13e8;
 constexpr std::size_t kUnitDefinitionLifecycleDecayModeOffset = 0x13f0;
@@ -712,6 +744,9 @@ constexpr std::size_t kUnitDefinitionMovementStepLimitOffset = 0x7cc;
 constexpr std::size_t kUnitDefinitionMovementPeriodOffset = 0x7d4;
 constexpr std::size_t kUnitDefinitionAnimationFrameCountOffset = 0x13d8;
 constexpr std::size_t kUnitDefinitionMovementAnimationFrameCountOffset = 0x2218;
+constexpr std::size_t kUnitDefinitionLowHealthOverlayFrameTableBase = 0x170c;
+constexpr std::size_t kUnitDefinitionLowHealthOverlayXOffsetTableBase = 0x180c;
+constexpr std::size_t kUnitDefinitionLowHealthOverlayYOffsetTableBase = 0x190c;
 constexpr std::size_t kUnitDefinitionActionRecoveryBaseOffset = 0x13cc;
 constexpr std::size_t kUnitDefinitionUse16DirectionLookupOffset = 0x220c;
 constexpr std::size_t kUnitDefinitionOwnerStrategicTargetOffsetX = 0x2410;
@@ -2862,6 +2897,12 @@ void sync_default_gameplay_modal_players(GameplayModalUiState& modal) {
         GameplayModalPlayerSlot& row = modal.players[owner];
         row.slot_state = owner < players.slot_states.size() ?
             players.slot_states[owner] : static_cast<u8>(PlayerSlotState::disabled);
+        row.modal_pause_uses_remaining =
+            owner < mode1_gameplay_packet_dispatch_state()
+                        .player_modal_pause_uses_remaining.size()
+            ? mode1_gameplay_packet_dispatch_state()
+                  .player_modal_pause_uses_remaining[owner]
+            : 0;
         row.relation_mask = owner < players.owner_relation_masks.size() ?
             players.owner_relation_masks[owner] : 0;
         row.visibility_mask = owner < players.owner_visibility_masks.size() ?
@@ -2924,6 +2965,7 @@ void sync_default_map_effect_context_session_record() {
         static_cast<u32>(record->size() / kGameplayMapEffectObjectStride),
         kGameplayMapEffectObjectMaxSlots);
     std::vector<bool> active(object_count, false);
+    std::vector<bool> free(object_count, false);
     std::vector<u32> active_indices;
     active_indices.reserve(g_runtime.map_effect_context.active_effect_indices.size());
     for (u32 index : g_runtime.map_effect_context.active_effect_indices) {
@@ -2939,6 +2981,30 @@ void sync_default_map_effect_context_session_record() {
         }
         active[index] = true;
         active_indices.push_back(index);
+    }
+
+    // The runtime vector keeps the intrusive free-list head at the back,
+    // because AllocateMapEffect pops from there.  Serialize it in the
+    // original head-to-tail order.
+    std::vector<u32> free_indices;
+    free_indices.reserve(object_count);
+    for (auto it = g_runtime.map_effect_context.free_effect_indices.rbegin();
+         it != g_runtime.map_effect_context.free_effect_indices.rend(); ++it) {
+        const u32 index = *it;
+        if (index == 0 || index >= object_count || active[index] || free[index]) {
+            continue;
+        }
+        free[index] = true;
+        free_indices.push_back(index);
+    }
+    // Keep the serialized pool complete even if a malformed runtime vector
+    // omitted an inactive slot.  Such recovered slots belong at the free-list
+    // tail and therefore do not change the next allocation.
+    for (u32 index = 1; index < object_count; ++index) {
+        if (!active[index] && !free[index]) {
+            free[index] = true;
+            free_indices.push_back(index);
+        }
     }
 
     for (std::size_t position = 0; position < active_indices.size(); ++position) {
@@ -2987,12 +3053,14 @@ void sync_default_map_effect_context_session_record() {
             next_offset);
     }
 
-    for (u32 index = 1; index < object_count; ++index) {
-        if (active[index]) {
-            continue;
-        }
+    for (std::size_t position = 0; position < free_indices.size(); ++position) {
+        const u32 index = free_indices[position];
         const std::size_t object_base =
             static_cast<std::size_t>(index) * kGameplayMapEffectObjectStride;
+        const u32 previous_offset = position == 0 ? 0 :
+            free_indices[position - 1] * kGameplayMapEffectObjectStride;
+        const u32 next_offset = position + 1 >= free_indices.size() ? 0 :
+            free_indices[position + 1] * kGameplayMapEffectObjectStride;
         write_default_session_buffer_u32(
             *record, object_base + kGameplayMapEffectObjectTypeOffset, 0);
         write_default_session_buffer_u32(
@@ -3004,9 +3072,25 @@ void sync_default_map_effect_context_session_record() {
         write_default_session_buffer_u32(
             *record, object_base + kGameplayMapEffectObjectRepeatCountOffset, 0);
         write_default_session_buffer_u32(
-            *record, object_base + kGameplayMapEffectObjectPreviousOffset, 0);
+            *record, object_base + kGameplayMapEffectObjectPreviousOffset,
+            previous_offset);
         write_default_session_buffer_u32(
-            *record, object_base + kGameplayMapEffectObjectNextOffset, 0);
+            *record, object_base + kGameplayMapEffectObjectNextOffset,
+            next_offset);
+    }
+
+    std::vector<u8>* header = MutableGameplaySessionLoadedRecord(0);
+    if (header != nullptr &&
+        header->size() >=
+            kGameplayHeaderMapEffectFreeListHeadOffset + sizeof(u32)) {
+        write_default_session_buffer_u32(
+            *header, kGameplayHeaderMapEffectActiveListHeadOffset,
+            active_indices.empty() ? 0 :
+                active_indices.front() * kGameplayMapEffectObjectStride);
+        write_default_session_buffer_u32(
+            *header, kGameplayHeaderMapEffectFreeListHeadOffset,
+            free_indices.empty() ? 0 :
+                free_indices.front() * kGameplayMapEffectObjectStride);
     }
 }
 
@@ -3168,7 +3252,18 @@ void default_gameplay_modal_publish_modal_pause(GameplayModalUiState&) {
 }
 
 void default_gameplay_modal_reset_and_publish_inactive(GameplayModalUiState&) {
-    ResetAndPublishPlayerInactiveState(prepare_default_modal_publish_input());
+    GameplayInputActionState& input = prepare_default_modal_publish_input();
+    input.pending_action_arg0 = 0;
+    input.pending_action_arg2 = 2;
+    const u32 local_slot = std::min<u32>(
+        g_runtime.gameplay_player_slots.local_player_slot,
+        kPlayerSlotCount - 1);
+    if (gameplay_loop_state().simulation_frame_counter >=
+            kGameplayOnlineAutoTransitionFrame &&
+        g_runtime.gameplay_startup_state.ready_flags[local_slot] != 2) {
+        input.pending_action_arg2 = 1;
+    }
+    ResetAndPublishPlayerInactiveState(input);
 }
 
 void default_gameplay_modal_publish_relation_mask(
@@ -3495,6 +3590,12 @@ void default_gameplay_input_handle_pointer_event(GameplayInputActionState& state
     overlay.mouse_x = event.x;
     overlay.mouse_y = event.y;
 
+    // WM_MOUSEMOVE updates InputState directly and is not queued for the
+    // gameplay-input drain.  Resolve the current event point before a button
+    // event consumes hover_context; resolving only after Handle made a
+    // same-pump MOVE -> RBUTTONDOWN use the previous tile's contextual action.
+    UpdateGameplayHoverContextAndTooltip(overlay);
+
     u32 pointer_state = 0;
     bool resolve_selection = false;
     switch (event.message) {
@@ -3579,10 +3680,14 @@ void default_gameplay_input_pre_cursor_update(GameplayInputActionState&) {
         static_cast<i32>(input.mouse_y));
 }
 
-void default_gameplay_input_post_cursor_update(GameplayInputActionState&) {
+void default_gameplay_input_post_cursor_update(GameplayInputActionState& state) {
     UiOverlayState& overlay = ui_overlay_state();
     UpdateCameraScrollRamp(overlay);
     publish_default_ui_overlay_camera(overlay);
+    // FUN_004e7e09 clears DAT_00868140 at the end of every input frame.
+    // Leaving the reconstructed cursor mode at its startup value of one made
+    // FUN_004d9b40 permanently skip the hover/tooltip branch.
+    state.cursor_mode = 0;
 }
 
 void default_gameplay_input_set_cursor_index(GameplayInputActionState& state) {
@@ -3719,6 +3824,37 @@ bool default_gameplay_unit_supports_action(
             (1u << action_index)) != 0;
 }
 
+constexpr u32 kNoDefaultGameplaySelectedAction = 0xffffffffu;
+
+constexpr u32 default_contextual_selected_action(bool harvest_point,
+    bool supports_harvest, bool supports_move) {
+    if (harvest_point) {
+        return supports_harvest ? 0x07u : kNoDefaultGameplaySelectedAction;
+    }
+    return supports_move ? 0x04u : kNoDefaultGameplaySelectedAction;
+}
+
+constexpr u32 default_explicit_attack_selected_action(bool supports_attack,
+    bool supports_move) {
+    if (supports_attack) {
+        return 0x05u;
+    }
+    return supports_move ? 0x04u : kNoDefaultGameplaySelectedAction;
+}
+
+static_assert(default_contextual_selected_action(false, false, true) == 0x04u,
+    "neutral low target must preserve contextual action 4");
+static_assert(default_contextual_selected_action(false, false, true) == 0x04u,
+    "enemy low target must preserve contextual action 4");
+static_assert(default_contextual_selected_action(false, false, true) == 0x04u,
+    "enemy building target must preserve contextual action 4");
+static_assert(default_contextual_selected_action(true, true, true) == 0x07u,
+    "harvest point must select action 7");
+static_assert(default_explicit_attack_selected_action(true, true) == 0x05u,
+    "explicit attack-capable unit must select action 5");
+static_assert(default_explicit_attack_selected_action(false, true) == 0x04u,
+    "explicit attack fallback must select action 4");
+
 void apply_default_selected_unit_formation(
     const GameplayInputActionState& state,
     std::vector<DefaultGameplayPendingUnitAction>& actions) {
@@ -3822,8 +3958,156 @@ void apply_default_selected_unit_formation(
     }
 }
 
+bool publish_default_nested_selected_action(GameplayInputActionState& state,
+    u32 nested_mode, u32 hit_target, u32 world_x, u32 world_y) {
+    const u32 primary_offset = state.current_unit_offset != 0
+        ? state.current_unit_offset
+        : state.selected_unit_offset;
+    const auto primary_it = std::find_if(state.units.begin(), state.units.end(),
+        [primary_offset](const GameplayActionUnitState& unit) {
+            return unit.offset == primary_offset;
+        });
+    if (primary_it == state.units.end() ||
+        primary_it->owner != state.local_player_index) {
+        return false;
+    }
+
+    GameplayActionUnitState& primary = *primary_it;
+    UnitMovementUnit* primary_movement =
+        find_default_movement_unit_by_id(primary.offset);
+    switch (nested_mode) {
+    case 0:
+    case 1:
+    case 2:
+        // 0x004dac88 clears the staged pointer/category globals and succeeds.
+        ResetGameplayInputPointerState(state);
+        return true;
+    case 3: {
+        // 0x004daca8 preserves EAX=0x1c and uses the shift-aware subtype-07
+        // publisher.  The otherwise-unused caller tuple is still wire state.
+        const u32 queued = input_state().shift_down ? 0x80000000u : 0;
+        PublishLocalMode1GameplayPacket(
+            (0x07u << 24) | (primary.owner & 0xffu), 0x1cu | queued,
+            primary.offset, hit_target, world_x, world_y);
+        return true;
+    }
+    case 4: {
+        // FUN_004d9f2e chooses subtype 05 only for these four producer types.
+        const bool special_type = primary.type == 0x6fu ||
+            primary.type == 0x7fu || primary.type == 0x8fu ||
+            primary.type == 0x9fu;
+        const u32 subtype = special_type ? 0x05u : 0x01u;
+        PublishLocalMode1GameplayPacket(
+            (subtype << 24) | (primary.owner & 0xffu), 0,
+            primary.offset, 1u, 0xffffffffu, 0);
+        return true;
+    }
+    case 5:
+        // No owner/capability test: walk raw selection bit 0x80 and raw
+        // command-state +0x60 equal to 0x60 (this is not the unit type).
+        for (GameplayActionUnitState& unit : state.units) {
+            if ((unit.flags & 0x80u) == 0 || unit.command_state != 0x60u) {
+                continue;
+            }
+            UnitMovementUnit* movement =
+                find_default_movement_unit_by_id(unit.offset);
+            if (movement == nullptr) {
+                continue;
+            }
+            PublishLocalMode1GameplayPacket(
+                (0x02u << 24) | (state.local_player_index & 0xffu), 0x0bu,
+                unit.offset, movement->command_value, world_x, 0xffffffffu);
+        }
+        return true;
+    case 6:
+        if (primary_movement == nullptr) {
+            return false;
+        }
+        PublishLocalMode1GameplayPacket(
+            (0x02u << 24) | (state.local_player_index & 0xffu), 0x06u,
+            primary.offset, primary_movement->command_value,
+            world_x, 0xffffffffu);
+        return true;
+    default:
+        return false;
+    }
+}
+
 bool default_gameplay_input_dispatch_action(
     GameplayInputActionState& state, u32 action_index) {
+    const auto reject_with_common_feedback = [&state]() {
+        ++state.validation_fail_count;
+        ++state.rejected_feedback_count;
+        state.last_dispatch_failed = true;
+        if (state.callbacks.rejected_action_feedback != nullptr) {
+            state.callbacks.rejected_action_feedback(state);
+        }
+        return false;
+    };
+
+    // These entries are literal jump-table tails and do not depend on the
+    // current selection.  Handle them before rebuilding the selected-local
+    // list so an empty selection cannot change their original carry result.
+    switch (action_index) {
+    case 0x1eu:
+    case 0x25u:
+        return true; // 0x004da1e7 / 0x004dae62: CLC; RET
+    case 0x0cu:
+    case 0x0eu:
+    case 0x0fu:
+    case 0x10u:
+    case 0x16u:
+    case 0x17u:
+    case 0x18u:
+    case 0x19u:
+    case 0x1au:
+    case 0x20u:
+    case 0x22u:
+        return false; // 0x004db0f5: STC; RET
+    default:
+        break;
+    }
+
+    if (action_index == 0x1fu) {
+        // Entry 0x1f reads the primary pointer directly; FUN_004db805 has no
+        // selected-list, owner or capability gate.  Its local +0x30/+0x60
+        // tests only suppress subtype 08, while the outer entry still CLCs.
+        const u32 primary_offset = state.current_unit_offset != 0
+            ? state.current_unit_offset
+            : state.selected_unit_offset;
+        const auto primary = std::find_if(state.units.begin(), state.units.end(),
+            [primary_offset](const GameplayActionUnitState& unit) {
+                return unit.offset == primary_offset;
+            });
+        if (primary == state.units.end()) {
+            return reject_with_common_feedback();
+        }
+        if (primary->action_mode_gate != 1 &&
+            (primary->command_state & kUnitCommandDead) == 0) {
+            PublishLocalMode1GameplayPacket(
+                (0x08u << 24) | (state.local_player_index & 0xffu), 0x1fu,
+                primary->offset, state.last_validation_unit_offset,
+                state.last_action_world_x, state.last_action_world_y);
+        }
+        return true;
+    }
+
+    if (action_index == 0x1cu) {
+        const u32 primary_offset = state.current_unit_offset != 0
+            ? state.current_unit_offset
+            : state.selected_unit_offset;
+        const auto primary = std::find_if(state.units.begin(), state.units.end(),
+            [primary_offset](const GameplayActionUnitState& unit) {
+                return unit.offset == primary_offset;
+            });
+        if (primary == state.units.end()) {
+            return reject_with_common_feedback();
+        }
+        if (primary->owner != state.local_player_index) {
+            return false; // 0x004dac5d -> silent 0x004db0f5
+        }
+    }
+
     std::vector<GameplayActionUnitState*> selected_units;
     selected_units.reserve(state.multi_select_count != 0 ?
         state.multi_select_count : 1u);
@@ -3844,21 +4128,50 @@ bool default_gameplay_input_dispatch_action(
             selected_units.push_back(&*primary);
         }
     }
-    if (selected_units.empty()) {
-        return false;
+    const bool primary_direct_entry =
+        action_index == 0x01u || action_index == 0x02u ||
+        action_index == 0x08u || action_index == 0x1cu;
+    if (selected_units.empty() && action_index == 0x23u) {
+        // The balance handler's no-packet tail reaches 0x004da100 with carry
+        // clear.  In the real UI its aggregate-count gate prevents DIV 0.
+        return true;
+    }
+    if (selected_units.empty() && !primary_direct_entry) {
+        switch (action_index) {
+        case 0x0bu:
+        case 0x0du:
+        case 0x11u:
+        case 0x1bu:
+            return false; // dedicated silent-STC tails
+        default:
+            return reject_with_common_feedback();
+        }
     }
 
     u32 target_unit_id = 0;
-    GameplayActionUnitState* target_action_unit = nullptr;
+    const bool lifecycle_target_action =
+        action_index < state.selector_modes.size() &&
+        state.selector_modes[action_index] >= 4;
     if (state.last_validation_unit_offset != 0) {
         const auto target = std::find_if(state.units.begin(), state.units.end(),
-            [&state](const GameplayActionUnitState& unit) {
-                return unit.offset == state.last_validation_unit_offset &&
-                    unit.active && unit.runtime_state < 4 && unit.visible;
+            [&state, action_index, lifecycle_target_action](
+                const GameplayActionUnitState& unit) {
+                if (unit.offset != state.last_validation_unit_offset ||
+                    !unit.visible || action_index >=
+                        state.selector_target_class_masks.size() ||
+                    unit.target_class >= 32 ||
+                    (state.selector_target_class_masks[action_index] &
+                        (1u << unit.target_class)) == 0) {
+                    return false;
+                }
+                if (lifecycle_target_action) {
+                    return !unit.active && unit.runtime_state == 4 &&
+                        (unit.runtime_flags & 4u) != 0;
+                }
+                return unit.active && unit.runtime_state < 4;
             });
         if (target != state.units.end()) {
             target_unit_id = target->offset;
-            target_action_unit = &*target;
         }
     }
 
@@ -3877,96 +4190,112 @@ bool default_gameplay_input_dispatch_action(
             published = true;
             publish_succeeded = PublishLocalMode1GameplayPacket(
                 (subtype << 24) | (selected->owner & 0xffu), packet_action,
-                selected->offset, target, 0, 0) && publish_succeeded;
+                selected->offset, target, state.last_action_world_x,
+                state.last_action_world_y) && publish_succeeded;
         }
         return published && publish_succeeded;
+    };
+
+    const auto primary_action_unit = [&state]() -> GameplayActionUnitState* {
+        const u32 primary_offset = state.current_unit_offset != 0
+            ? state.current_unit_offset
+            : state.selected_unit_offset;
+        const auto primary = std::find_if(state.units.begin(), state.units.end(),
+            [primary_offset](const GameplayActionUnitState& unit) {
+                return unit.offset == primary_offset;
+            });
+        return primary == state.units.end() ? nullptr : &*primary;
     };
 
     switch (action_index) {
     case 0x00u: { // guard / idle
         const u32 queued = input_state().shift_down ? 0x80000000u : 0;
-        return publish_group_action(0x02u, queued, 0, true);
-    }
-    case 0x04u: { // contextual right-click: harvest / attack / move
-        const u32 queued = input_state().shift_down ? 0x80000000u : 0;
-        bool harvest_point = false;
-        if (UnitMovementContext* movement = default_gameplay_movement_context()) {
-            const u32 tile_x = state.last_action_world_x >> 5;
-            const u32 tile_y = state.last_action_world_y >> 5;
-            if (const UnitMovementCell* cell =
-                    GetMovementCell(movement->map, tile_x, tile_y)) {
-                harvest_point =
-                    (cell->flags & kMapCellHarvestAmountMask) != 0;
-            }
+        if (publish_group_action(0x02u, queued, target_unit_id, true)) {
+            return true;
         }
-        const bool harvest_object = target_action_unit != nullptr &&
-            target_action_unit->owner >= kPlayerSlotCount &&
-            target_action_unit->type >= 0x60u;
-        const bool hostile_unit = target_action_unit != nullptr &&
-            target_action_unit->owner < kPlayerSlotCount &&
-            target_action_unit->owner != state.local_player_index &&
-            target_action_unit->type < 0x60u;
+        return reject_with_common_feedback();
+    }
+    case 0x01u:
+    case 0x08u: { // primary-only target orders
+        GameplayActionUnitState* primary = primary_action_unit();
+        if (primary == nullptr) {
+            return reject_with_common_feedback();
+        }
+        // 0x004da1ca is the owner-mismatch CLC tail: no packet, no failure.
+        if (primary->owner != state.local_player_index) {
+            return true;
+        }
+        UnitMovementUnit* movement =
+            find_default_movement_unit_by_id(primary->offset);
+        if (!default_gameplay_unit_supports_action(movement, action_index)) {
+            return reject_with_common_feedback();
+        }
+        const u32 queued = input_state().shift_down ? 0x80000000u : 0;
+        return PublishLocalMode1GameplayPacket(
+            (0x02u << 24) | (state.local_player_index & 0xffu),
+            action_index | queued, primary->offset, target_unit_id,
+            state.last_action_world_x, state.last_action_world_y);
+    }
+    case 0x02u: { // primary-only paired/equipment target order
+        GameplayActionUnitState* primary = primary_action_unit();
+        if (primary == nullptr) {
+            return reject_with_common_feedback();
+        }
+        if (primary->owner != state.local_player_index) {
+            return true;
+        }
+        UnitMovementUnit* primary_movement =
+            find_default_movement_unit_by_id(primary->offset);
+        if (!default_gameplay_unit_supports_action(primary_movement, 0x02u)) {
+            return reject_with_common_feedback();
+        }
 
-        std::vector<DefaultGameplayPendingUnitAction> actions;
-        actions.reserve(selected_units.size());
-        for (GameplayActionUnitState* selected : selected_units) {
-            UnitMovementUnit* movement =
-                find_default_movement_unit_by_id(selected->offset);
-            u32 selected_action = 0x04u;
-            if ((harvest_point || harvest_object) &&
-                default_gameplay_unit_supports_action(movement, 0x07u)) {
-                selected_action = 0x07u;
-            }
-            else if (hostile_unit &&
-                default_gameplay_unit_supports_action(movement, 0x05u)) {
-                selected_action = 0x05u;
-            }
-            else if (!default_gameplay_unit_supports_action(
-                         movement, selected_action)) {
-                continue;
-            }
-            actions.push_back(DefaultGameplayPendingUnitAction{
-                selected, movement, selected_action,
-                selected->offset == target_unit_id ? 0u : target_unit_id,
-                static_cast<i32>(state.last_action_world_x),
-                static_cast<i32>(state.last_action_world_y)});
+        const u32 logical_index = ui_overlay_state().placement_definition_id;
+        u32 packet_target = target_unit_id;
+        u32 packet_x = state.last_action_world_x;
+        if (packet_target == 0) {
+            // 0x004da21f uses DAT_00869e10 and tags the synthetic target.
+            packet_target = logical_index | 0x80000000u;
         }
-        if (!harvest_point && !harvest_object && !hostile_unit &&
-            target_unit_id == 0) {
-            apply_default_selected_unit_formation(state, actions);
+        else {
+            if (packet_target == primary->offset) {
+                return true; // 0x004da22f: silent CLC
+            }
+            UnitMovementUnit* target =
+                find_default_movement_unit_by_id(packet_target);
+            if (!default_gameplay_unit_supports_action(target, 0x02u)) {
+                return reject_with_common_feedback();
+            }
+            packet_x = logical_index;
         }
-        bool publish_succeeded = true;
-        for (const DefaultGameplayPendingUnitAction& action : actions) {
-            publish_succeeded = PublishLocalMode1GameplayPacket(
-                (0x02u << 24) | (action.action_unit->owner & 0xffu),
-                action.action_index | queued, action.action_unit->offset,
-                action.target_unit_id, static_cast<u32>(action.world_x),
-                static_cast<u32>(action.world_y)) && publish_succeeded;
-        }
-        return !actions.empty() && publish_succeeded;
-    }
-    case 0x06u: { // worker building placement
+
         const u32 queued = input_state().shift_down ? 0x80000000u : 0;
-        const u32 building_index = ui_overlay_state().placement_definition_id;
-        const u32 world_x = state.last_action_world_x & ~0x1fu;
-        const u32 world_y = state.last_action_world_y & ~0x1fu;
-        bool published = false;
-        bool publish_succeeded = true;
-        for (GameplayActionUnitState* selected : selected_units) {
-            UnitMovementUnit* movement =
-                find_default_movement_unit_by_id(selected->offset);
-            if (!default_gameplay_unit_supports_action(movement, 0x06u)) {
-                continue;
-            }
-            published = true;
-            publish_succeeded = PublishLocalMode1GameplayPacket(
-                (0x02u << 24) | (selected->owner & 0xffu),
-                0x06u | queued, selected->offset, building_index,
-                world_x, world_y) && publish_succeeded;
-        }
-        return published && publish_succeeded;
+        return PublishLocalMode1GameplayPacket(
+            (0x02u << 24) | (state.local_player_index & 0xffu),
+            0x02u | queued, primary->offset, packet_target, packet_x,
+            state.last_action_world_y);
     }
-    case 0x09u: { // patrol
+    case 0x03u: { // definition-gated selected group order
+        UnitMovementUnit* target =
+            find_default_movement_unit_by_id(target_unit_id);
+        if (target == nullptr ||
+            (target->definition.action_effect_flags & 1u) == 0) {
+            return false; // 0x004da7f6: direct STC without feedback
+        }
+        // Entry 3 jumps into the entry-0 group body without changing EAX;
+        // capability and wire command are both 3, not 0.
+        const u32 queued = input_state().shift_down ? 0x80000000u : 0;
+        if (publish_group_action(
+                0x02u, 0x03u | queued, target_unit_id, true)) {
+            return true;
+        }
+        return reject_with_common_feedback();
+    }
+    case 0x04u:
+    case 0x09u: { // shared formation-aware selected group orders
+        // Both entries point at 0x004da417 and preserve EAX.  Berry routing is
+        // exclusively entry 7 (0x004da74c); silently converting action 4 on a
+        // berry-looking tile changed the lockstep command stream.
         const u32 queued = input_state().shift_down ? 0x80000000u : 0;
         std::vector<DefaultGameplayPendingUnitAction> actions;
         actions.reserve(selected_units.size());
@@ -3991,7 +4320,66 @@ bool default_gameplay_input_dispatch_action(
                 action.target_unit_id, static_cast<u32>(action.world_x),
                 static_cast<u32>(action.world_y)) && publish_succeeded;
         }
-        return !actions.empty() && publish_succeeded;
+        if (!actions.empty() && publish_succeeded) {
+            return true;
+        }
+        return reject_with_common_feedback();
+    }
+    case 0x07u: { // point harvest
+        UnitMovementContext* movement = default_gameplay_movement_context();
+        if (movement == nullptr) {
+            return false;
+        }
+        const UnitTileSearchResult harvest_tile = FindPassableVerticalNudgeTile(
+            *movement, static_cast<i32>(state.last_action_world_x),
+            static_cast<i32>(state.last_action_world_y));
+        if (!harvest_tile.found) {
+            return false;
+        }
+
+        const u32 queued = input_state().shift_down ? 0x80000000u : 0;
+        const u32 harvest_target = target_unit_id != 0
+            ? target_unit_id
+            : state.current_snapshot.field3;
+        bool published = false;
+        bool publish_succeeded = true;
+        for (GameplayActionUnitState* selected : selected_units) {
+            UnitMovementUnit* selected_movement =
+                find_default_movement_unit_by_id(selected->offset);
+            if (!default_gameplay_unit_supports_action(
+                    selected_movement, 0x07u)) {
+                continue;
+            }
+            published = true;
+            publish_succeeded = PublishLocalMode1GameplayPacket(
+                (0x02u << 24) | (selected->owner & 0xffu),
+                0x07u | queued, selected->offset, harvest_target,
+                static_cast<u32>(harvest_tile.x),
+                static_cast<u32>(harvest_tile.y)) && publish_succeeded;
+        }
+        if (published && publish_succeeded) {
+            return true;
+        }
+        return reject_with_common_feedback();
+    }
+    case 0x06u: { // worker building placement
+        const u32 queued = input_state().shift_down ? 0x80000000u : 0;
+        const u32 building_index = ui_overlay_state().placement_definition_id;
+        const u32 world_x = state.last_action_world_x & ~0x1fu;
+        const u32 world_y = state.last_action_world_y & ~0x1fu;
+        GameplayActionUnitState* primary = primary_action_unit();
+        if (primary == nullptr || primary->owner != state.local_player_index) {
+            return reject_with_common_feedback();
+        }
+        // 0x004da6f4 validates the aligned footprint and then publishes only
+        // DAT_007071e8.  It never tests capability bit six and never walks the
+        // rest of the selected group.
+        if (PublishLocalMode1GameplayPacket(
+            (0x02u << 24) | (state.local_player_index & 0xffu),
+            0x06u | queued, primary->offset, building_index, world_x, world_y)) {
+            return true;
+        }
+        return reject_with_common_feedback();
     }
     case 0x05u: { // attack, falling back to move per selected unit
         const u32 queued = input_state().shift_down ? 0x80000000u : 0;
@@ -4003,13 +4391,11 @@ bool default_gameplay_input_dispatch_action(
             }
             UnitMovementUnit* movement =
                 find_default_movement_unit_by_id(selected->offset);
-            u32 selected_action = 0x05u;
-            if (!default_gameplay_unit_supports_action(movement, selected_action)) {
-                selected_action = 0x04u;
-                if (!default_gameplay_unit_supports_action(
-                        movement, selected_action)) {
-                    continue;
-                }
+            const u32 selected_action = default_explicit_attack_selected_action(
+                default_gameplay_unit_supports_action(movement, 0x05u),
+                default_gameplay_unit_supports_action(movement, 0x04u));
+            if (selected_action == kNoDefaultGameplaySelectedAction) {
+                continue;
             }
             actions.push_back(DefaultGameplayPendingUnitAction{
                 selected, movement, selected_action, target_unit_id,
@@ -4028,16 +4414,554 @@ bool default_gameplay_input_dispatch_action(
                 static_cast<u32>(action.world_y)) &&
                 publish_succeeded;
         }
-        return !actions.empty() && publish_succeeded;
+        if (!actions.empty() && publish_succeeded) {
+            return true;
+        }
+        return reject_with_common_feedback();
     }
-    case 0x0du:
-        // The original B7 object-action entry only resolves the selected
-        // owner's colour.  The similarly shaped status-mask publisher belongs
-        // to UI item 0x19f, not to this object-action slot.
+    case 0x0au: { // paired source/target definition command
+        GameplayActionUnitState* target_state = nullptr;
+        for (GameplayActionUnitState& unit : state.units) {
+            if (unit.offset == target_unit_id) {
+                target_state = &unit;
+                break;
+            }
+        }
+        UnitMovementUnit* target =
+            find_default_movement_unit_by_id(target_unit_id);
+        if (target_state == nullptr || target == nullptr ||
+            target_state->owner != state.local_player_index) {
+            return reject_with_common_feedback();
+        }
+
+        const bool target_capable =
+            default_gameplay_unit_supports_action(target, 0x0au);
+        const bool target_definition_pair =
+            (target->definition.action_effect_flags & 4u) != 0;
+        const u32 queued = input_state().shift_down ? 0x80000000u : 0;
+        bool published = false;
+        bool publish_succeeded = true;
+        for (GameplayActionUnitState* selected : selected_units) {
+            if (selected->offset == target_unit_id) {
+                continue;
+            }
+            UnitMovementUnit* source =
+                find_default_movement_unit_by_id(selected->offset);
+            if (source == nullptr) {
+                continue;
+            }
+            const bool source_capable =
+                default_gameplay_unit_supports_action(source, 0x0au);
+            const bool source_definition_pair =
+                (source->definition.action_effect_flags & 4u) != 0;
+            // 0x004da828..0x004da880 accepts either direction of the
+            // capability/definition-bit-4 pair; requiring the target bit for
+            // both directions drops valid reverse pairs.
+            if (!((source_capable && target_definition_pair) ||
+                    (source_definition_pair && target_capable))) {
+                continue;
+            }
+            published = true;
+            publish_succeeded = PublishLocalMode1GameplayPacket(
+                (0x02u << 24) | (state.local_player_index & 0xffu),
+                0x0au | queued, selected->offset, target_unit_id,
+                state.last_action_world_x, state.last_action_world_y) &&
+                publish_succeeded;
+        }
+        if (published && publish_succeeded) {
+            return true;
+        }
+        return reject_with_common_feedback();
+    }
+    case 0x0bu: { // linked-release pair/triad construction
+        const u32 requested_type = state.current_snapshot.field3;
+        const bool triad = requested_type == 0x2bu;
+
+        if (triad) {
+            UnitLifecycleContext& lifecycle =
+                g_runtime.gameplay_lifecycle_context;
+            const auto population_cost = [&lifecycle](u32 type_id) {
+                const UnitMovementDefinition* definition =
+                    default_unit_lifecycle_find_definition(lifecycle, type_id);
+                return definition != nullptr
+                    ? definition->production_population_cost
+                    : 0u;
+            };
+            const u32 composite_cost = population_cost(0x24u) +
+                population_cost(0x27u) + population_cost(0x28u);
+            const u32 release_cost = population_cost(0x2bu);
+            if (release_cost != composite_cost &&
+                state.local_player_index <
+                    lifecycle.owner_population_reserved.size()) {
+                // 0x004da913..0x004da944 projects the replacement demand and
+                // compares it against min(supplied capacity, hard limit).
+                const u32 owner = state.local_player_index;
+                const u32 projected = release_cost +
+                    lifecycle.owner_population_reserved[owner] -
+                    composite_cost;
+                const u32 capacity = std::min(
+                    lifecycle.owner_population_used[owner],
+                    lifecycle.owner_population_limit[owner]);
+                if (static_cast<i32>(projected) >
+                    static_cast<i32>(capacity)) {
+                    // The original queues its population-specific HUD row and
+                    // then reaches the silent STC table tail.  Reuse the raw
+                    // action feedback callback while keeping it distinct from
+                    // the common 0x004db0ba rejection path.
+                    ++state.rejected_feedback_count;
+                    if (state.callbacks.rejected_action_feedback != nullptr) {
+                        state.callbacks.rejected_action_feedback(state);
+                    }
+                    return false;
+                }
+            }
+        }
+
+        const u32 queued = input_state().shift_down ? 0x80000000u : 0;
+        std::vector<u32> temporarily_consumed;
+        temporarily_consumed.reserve(selected_units.size());
+        const auto is_consumed = [&temporarily_consumed](u32 unit_id) {
+            return std::find(temporarily_consumed.begin(),
+                temporarily_consumed.end(), unit_id) !=
+                temporarily_consumed.end();
+        };
+        const auto pair_distance = [](const UnitMovementUnit& lhs,
+                                      const UnitMovementUnit& rhs) {
+            const UnitMovementPoint lhs_center =
+                CalculateUnitMovementCenterPoint(lhs);
+            const UnitMovementPoint rhs_center =
+                CalculateUnitMovementCenterPoint(rhs);
+            return CalculateApproxUnitDistance(lhs_center.x, lhs_center.y,
+                rhs_center.x, rhs_center.y);
+        };
+
+        bool publish_succeeded = true;
+        u32 completed_groups = 0;
+        for (std::size_t outer_index = 0;
+             outer_index < selected_units.size(); ++outer_index) {
+            GameplayActionUnitState* outer_state = selected_units[outer_index];
+            if (is_consumed(outer_state->offset)) {
+                continue;
+            }
+            UnitMovementUnit* outer =
+                find_default_movement_unit_by_id(outer_state->offset);
+            if (outer == nullptr ||
+                !default_gameplay_unit_supports_action(outer, 0x0bu)) {
+                continue;
+            }
+
+            u32 primary_type = outer->type_id;
+            u32 secondary_type = 0xffffffffu;
+            if (triad) {
+                switch (outer->type_id) {
+                case 0x24u:
+                    primary_type = 0x27u;
+                    secondary_type = 0x28u;
+                    break;
+                case 0x27u:
+                    primary_type = 0x24u;
+                    secondary_type = 0x28u;
+                    break;
+                case 0x28u:
+                    primary_type = 0x24u;
+                    secondary_type = 0x27u;
+                    break;
+                default:
+                    continue;
+                }
+            }
+            else if (outer->definition.linked_release_type_id != requested_type) {
+                continue;
+            }
+
+            UnitMovementUnit* nearest_primary = nullptr;
+            UnitMovementUnit* nearest_secondary = nullptr;
+            u32 nearest_primary_distance = 0xffffffffu;
+            u32 nearest_secondary_distance = 0xffffffffu;
+            for (std::size_t candidate_index = outer_index + 1;
+                 candidate_index < selected_units.size(); ++candidate_index) {
+                GameplayActionUnitState* candidate_state =
+                    selected_units[candidate_index];
+                if (is_consumed(candidate_state->offset)) {
+                    continue;
+                }
+                UnitMovementUnit* candidate =
+                    find_default_movement_unit_by_id(candidate_state->offset);
+                if (candidate == nullptr ||
+                    !default_gameplay_unit_supports_action(candidate, 0x0bu)) {
+                    continue;
+                }
+                const u32 distance = pair_distance(*outer, *candidate);
+                if (candidate->type_id == primary_type &&
+                    distance <= nearest_primary_distance) {
+                    nearest_primary_distance = distance;
+                    nearest_primary = candidate;
+                }
+                else if (candidate->type_id == secondary_type &&
+                    distance <= nearest_secondary_distance) {
+                    nearest_secondary_distance = distance;
+                    nearest_secondary = candidate;
+                }
+            }
+
+            if (nearest_primary == nullptr ||
+                (triad && nearest_secondary == nullptr)) {
+                continue;
+            }
+
+            temporarily_consumed.push_back(nearest_primary->id);
+            if (triad) {
+                temporarily_consumed.push_back(nearest_secondary->id);
+                // 0x004dab2a..0x004dab5c constructs this exact ring.
+                publish_succeeded = PublishLocalMode1GameplayPacket(
+                    (0x02u << 24) | (state.local_player_index & 0xffu),
+                    0x0bu | queued, nearest_secondary->id, outer->id,
+                    state.last_action_world_x, 0) && publish_succeeded;
+                publish_succeeded = PublishLocalMode1GameplayPacket(
+                    (0x02u << 24) | (state.local_player_index & 0xffu),
+                    0x0bu | queued, nearest_primary->id,
+                    nearest_secondary->id, state.last_action_world_x, 0) &&
+                    publish_succeeded;
+                publish_succeeded = PublishLocalMode1GameplayPacket(
+                    (0x02u << 24) | (state.local_player_index & 0xffu),
+                    0x0bu | queued, outer->id, nearest_primary->id,
+                    state.last_action_world_x, 0) && publish_succeeded;
+            }
+            else {
+                // Normal linked releases form a bidirectional pair.
+                publish_succeeded = PublishLocalMode1GameplayPacket(
+                    (0x02u << 24) | (state.local_player_index & 0xffu),
+                    0x0bu | queued, nearest_primary->id, outer->id,
+                    state.last_action_world_x, 0) && publish_succeeded;
+                publish_succeeded = PublishLocalMode1GameplayPacket(
+                    (0x02u << 24) | (state.local_player_index & 0xffu),
+                    0x0bu | queued, outer->id, nearest_primary->id,
+                    state.last_action_world_x, 0) && publish_succeeded;
+            }
+            ++completed_groups;
+        }
+        // The original clears temporary bit 0x100 from every selected unit
+        // before returning; the reconstruction keeps that marker local.
+        return completed_groups != 0 && publish_succeeded;
+    }
+    case 0x0du: { // selected-unit area/status high-bit toggle
+        // Raw jump-table index 0x0d lands at thunk 0x0040332d ->
+        // FUN_004db799.  It publishes subtype 0x0b only for selected local
+        // units whose raw +0x0c high bit is still clear and which support
+        // capability five.  Raw +0x0c is area_marker_flags, not the unrelated
+        // raw +0x9c command_flags field.
+        constexpr u32 kTargetAreaMarker = 0x80000000u;
+        for (GameplayActionUnitState* selected : selected_units) {
+            UnitMovementUnit* movement =
+                find_default_movement_unit_by_id(selected->offset);
+            if ((selected->area_marker_flags & kTargetAreaMarker) != 0 ||
+                !default_gameplay_unit_supports_action(movement, 0x05u)) {
+                continue;
+            }
+            PublishLocalMode1GameplayPacket(
+                (0x0bu << 24) | (selected->owner & 0xffu), 0x0du,
+                selected->offset, kTargetAreaMarker,
+                state.last_action_world_x, state.last_action_world_y);
+        }
+        // FUN_004db799 ends in STC even after publishing one or more packets.
+        // This suppresses the ordinary action acknowledgement/state update.
+        return false;
+    }
+    case 0x11u: { // morph-enter group
+        constexpr u32 kMorphRuntimeActionFlag = 0x00040000u;
+        constexpr u32 kMorphVariantIndex = 0x2au;
+        const bool owner_variant_available =
+            state.local_player_index <
+                g_runtime.gameplay_production_runtime.variant_counts.size() &&
+            kMorphVariantIndex <
+                g_runtime.gameplay_production_runtime
+                    .variant_counts[state.local_player_index].size() &&
+            g_runtime.gameplay_production_runtime
+                    .variant_counts[state.local_player_index][kMorphVariantIndex] != 0;
+        if (!owner_variant_available) {
+            return false;
+        }
+
+        const u32 queued = input_state().shift_down ? 0x80000000u : 0;
+        bool published = false;
+        bool publish_succeeded = true;
+        for (GameplayActionUnitState* selected : selected_units) {
+            UnitMovementUnit* movement =
+                find_default_movement_unit_by_id(selected->offset);
+            if (movement == nullptr ||
+                (movement->runtime_flags &
+                    kMorphRuntimeActionFlag) != 0 ||
+                !default_gameplay_unit_supports_action(movement, 0x11u)) {
+                continue;
+            }
+            published = true;
+            publish_succeeded = PublishLocalMode1GameplayPacket(
+                (0x02u << 24) | (selected->owner & 0xffu),
+                0x11u | queued, selected->offset, target_unit_id,
+                state.last_action_world_x, state.last_action_world_y) &&
+                publish_succeeded;
+        }
+        return published && publish_succeeded;
+    }
+    case 0x12u:
+    case 0x13u:
+    case 0x14u:
+    case 0x15u: { // secondary-value commands with a forced null target
+        const u32 queued = input_state().shift_down ? 0x80000000u : 0;
+        bool published = false;
+        bool publish_succeeded = true;
+        for (GameplayActionUnitState* selected : selected_units) {
+            UnitMovementUnit* movement =
+                find_default_movement_unit_by_id(selected->offset);
+            if (movement == nullptr || movement->action_mode == 0 ||
+                !default_gameplay_unit_supports_action(movement, action_index)) {
+                continue;
+            }
+            published = true;
+            publish_succeeded = PublishLocalMode1GameplayPacket(
+                (0x02u << 24) | (selected->owner & 0xffu),
+                action_index | queued, selected->offset, 0,
+                state.last_action_world_x, state.last_action_world_y) &&
+                publish_succeeded;
+        }
+        if (published && publish_succeeded) {
+            return true;
+        }
+        return reject_with_common_feedback();
+    }
+    case 0x1bu: { // morph-exit group
+        constexpr u32 kMorphRuntimeActionFlag = 0x00040000u;
+        const u32 queued = input_state().shift_down ? 0x80000000u : 0;
+        bool published = false;
+        bool publish_succeeded = true;
+        for (GameplayActionUnitState* selected : selected_units) {
+            UnitMovementUnit* movement =
+                find_default_movement_unit_by_id(selected->offset);
+            if (movement == nullptr ||
+                (movement->runtime_flags &
+                    kMorphRuntimeActionFlag) == 0 ||
+                !default_gameplay_unit_supports_action(movement, 0x1bu)) {
+                continue;
+            }
+            published = true;
+            publish_succeeded = PublishLocalMode1GameplayPacket(
+                (0x02u << 24) | (selected->owner & 0xffu),
+                0x1bu | queued, selected->offset, target_unit_id,
+                state.last_action_world_x, state.last_action_world_y) &&
+                publish_succeeded;
+        }
+        return published && publish_succeeded;
+    }
+    case 0x1cu:
+        if (publish_default_nested_selected_action(state,
+                state.pointer_aux_state, target_unit_id,
+                state.last_action_world_x, state.last_action_world_y)) {
+            return true;
+        }
+        return reject_with_common_feedback();
+    case 0x1du: { // return carried resources / harvest point
+        const u32 queued = input_state().shift_down ? 0x80000000u : 0;
+        UnitMovementContext* movement_context =
+            default_gameplay_movement_context();
+        bool published = false;
+        bool publish_succeeded = true;
+        for (GameplayActionUnitState* selected : selected_units) {
+            UnitMovementUnit* movement =
+                find_default_movement_unit_by_id(selected->offset);
+            if (movement == nullptr) {
+                continue;
+            }
+
+            if (default_gameplay_unit_supports_action(movement, 0x07u) &&
+                (movement->command_flags & 4u) != 0) {
+                published = true;
+                publish_succeeded = PublishLocalMode1GameplayPacket(
+                    (0x02u << 24) | (selected->owner & 0xffu),
+                    0x07u | queued, selected->offset, 0x80000000u,
+                    state.last_action_world_x, state.last_action_world_y) &&
+                    publish_succeeded;
+                continue;
+            }
+
+            if (movement->action_mode == 0 || movement_context == nullptr) {
+                continue;
+            }
+            UnitMovementUnit* dropoff =
+                FindNearestOwnedDropoffBuilding(*movement_context, *movement).unit;
+            if (dropoff == nullptr) {
+                continue;
+            }
+            const UnitMovementPoint center =
+                CalculateUnitMovementCenterPoint(*dropoff);
+            const u32 encoded_center_x =
+                (static_cast<u32>(center.x) & 0xffffff00u) | 1u;
+            published = true;
+            publish_succeeded = PublishLocalMode1GameplayPacket(
+                (0x02u << 24) | (selected->owner & 0xffu),
+                0x02u | queued, selected->offset, dropoff->id,
+                encoded_center_x, static_cast<u32>(center.y)) &&
+                publish_succeeded;
+        }
+        if (published && publish_succeeded) {
+            return true;
+        }
+        return reject_with_common_feedback();
+    }
+    case 0x21u: { // hold position / forced order 0x21
+        // 0x004dae03 preserves the hit target and world point in EDI/EDX/EBX
+        // while publishing subtype 0x0a for every selected local unit.
+        bool published = false;
+        bool publish_succeeded = true;
+        for (GameplayActionUnitState* selected : selected_units) {
+            published = true;
+            publish_succeeded = PublishLocalMode1GameplayPacket(
+                (0x0au << 24) | (selected->owner & 0xffu), 0x21u,
+                selected->offset, target_unit_id,
+                state.last_action_world_x, state.last_action_world_y) &&
+                publish_succeeded;
+        }
+        if (published && publish_succeeded) {
+            return true;
+        }
+        return reject_with_common_feedback();
+    }
+    case 0x23u: { // balance selected units' secondary values
+        // DAT_00864b78/DAT_00864bd0 are rebuilt by the HUD aggregation pass
+        // from selected sub-0x60 units whose mutable unit raw +0xa0 has bit 0.
+        // Preserve the original 32-bit sum/division semantics.
+        u32 aggregate_count = 0;
+        u32 aggregate_sum = 0;
+        for (GameplayActionUnitState* selected : selected_units) {
+            UnitMovementUnit* movement =
+                find_default_movement_unit_by_id(selected->offset);
+            if (movement == nullptr || movement->type_id >= 0x60u ||
+                (movement->runtime_flags & 1u) == 0) {
+                continue;
+            }
+            ++aggregate_count;
+            aggregate_sum += movement->action_mode;
+        }
+        if (aggregate_count == 0) {
+            // The UI normally hides this route when the aggregate is empty;
+            // its jump-table no-packet tail is nevertheless CLC/success.
+            return true;
+        }
+        const u32 threshold = aggregate_sum / aggregate_count;
+        const u32 queued = input_state().shift_down ? 0x80000000u : 0;
+        std::vector<u32> paired_recipients;
+        paired_recipients.reserve(selected_units.size());
+        const auto was_paired = [&paired_recipients](u32 unit_offset) {
+            return std::find(paired_recipients.begin(),
+                paired_recipients.end(), unit_offset) !=
+                paired_recipients.end();
+        };
+
+        for (GameplayActionUnitState* donor_state : selected_units) {
+            UnitMovementUnit* donor =
+                find_default_movement_unit_by_id(donor_state->offset);
+            if (donor == nullptr || (donor_state->flags & 0x100u) != 0 ||
+                was_paired(donor_state->offset) ||
+                !default_gameplay_unit_supports_action(donor, 0x01u) ||
+                donor->action_mode < threshold) {
+                continue;
+            }
+
+            u32 donor_remaining = donor->action_mode;
+            for (GameplayActionUnitState* recipient_state : selected_units) {
+                if (recipient_state == donor_state ||
+                    (recipient_state->flags & 0x100u) != 0 ||
+                    was_paired(recipient_state->offset)) {
+                    continue;
+                }
+                UnitMovementUnit* recipient =
+                    find_default_movement_unit_by_id(recipient_state->offset);
+                if (recipient == nullptr ||
+                    !default_gameplay_unit_supports_action(recipient, 0x01u) ||
+                    recipient->action_mode >= threshold) {
+                    continue;
+                }
+
+                // Original temporarily marks raw selection bit 0x100 so one
+                // recipient cannot be paired twice, and publishes recipient
+                // at +0x14, donor at +0x18, threshold at +0x1c.
+                paired_recipients.push_back(recipient_state->offset);
+                PublishLocalMode1GameplayPacket(
+                    (0x02u << 24) |
+                        (state.local_player_index & 0xffu),
+                    0x23u | queued, recipient_state->offset,
+                    donor_state->offset, threshold,
+                    state.last_action_world_y);
+
+                donor_remaining -= threshold - recipient->action_mode;
+                if (donor_remaining <= threshold) {
+                    break;
+                }
+            }
+        }
+        // 0x004db0a0 reaches a shared CLC tail even when no pair was found.
         return true;
-    case 0x21u: // hold position
-        return publish_group_action(0x0au, 0x21u, 0, false);
+    }
+    case 0x24u: { // transport unload group (capability is action 0x0a)
+        const u32 queued = input_state().shift_down ? 0x80000000u : 0;
+        bool published = false;
+        bool publish_succeeded = true;
+        for (GameplayActionUnitState* selected : selected_units) {
+            UnitMovementUnit* movement =
+                find_default_movement_unit_by_id(selected->offset);
+            if (!default_gameplay_unit_supports_action(movement, 0x0au)) {
+                continue;
+            }
+            published = true;
+            publish_succeeded = PublishLocalMode1GameplayPacket(
+                (0x02u << 24) | (selected->owner & 0xffu),
+                0x24u | queued, selected->offset, target_unit_id,
+                state.last_action_world_x, state.last_action_world_y) &&
+                publish_succeeded;
+        }
+        if (published && publish_succeeded) {
+            return true;
+        }
+        return reject_with_common_feedback();
+    }
+    case 0x26u:
+    case 0x27u:
+    case 0x28u:
+    case 0x29u: {
+        // 0x004daed5..0x004daf74 map these UI actions to subtype-0x02
+        // cancellation commands 0x12..0x15.  The original leaves the tested
+        // command-flag mask in EDX (+0x1c) and the caller's world Y in EBX.
+        constexpr std::array<u32, 4> kCommands{
+            0x12u, 0x13u, 0x14u, 0x15u};
+        constexpr std::array<u32, 4> kCommandFlags{
+            0x00004000u, 0x00008000u, 0x00010000u, 0x00020000u};
+        const std::size_t special_index = action_index - 0x26u;
+        const u32 command = kCommands[special_index];
+        const u32 command_flag = kCommandFlags[special_index];
+        const u32 queued = input_state().shift_down ? 0x80000000u : 0;
+        bool published = false;
+        bool publish_succeeded = true;
+        for (GameplayActionUnitState* selected : selected_units) {
+            UnitMovementUnit* movement =
+                find_default_movement_unit_by_id(selected->offset);
+            if (movement == nullptr ||
+                (movement->command_flags & command_flag) == 0 ||
+                !default_gameplay_unit_supports_action(movement, command)) {
+                continue;
+            }
+            published = true;
+            publish_succeeded = PublishLocalMode1GameplayPacket(
+                (0x02u << 24) | (selected->owner & 0xffu), command | queued,
+                selected->offset, 1u, command_flag,
+                state.last_action_world_y) && publish_succeeded;
+        }
+        if (published && publish_succeeded) {
+            return true;
+        }
+        return reject_with_common_feedback();
+    }
     default:
+        // The original PTR_LAB_004da108 table has exactly 0x2a entries.
+        // Never invent a generic wire route for selectors outside 0..0x29.
         return false;
     }
 }
@@ -6105,6 +7029,17 @@ i32 read_default_scenario_object_i32(const std::vector<u8>& bytes,
         read_default_scenario_object_u32(bytes, object_base, field_offset));
 }
 
+float read_default_scenario_object_float(const std::vector<u8>& bytes,
+    std::size_t object_base, std::size_t field_offset) {
+    static_assert(sizeof(float) == sizeof(u32),
+        "scenario float fields must be 32-bit IEEE-754 values");
+    const u32 bits =
+        read_default_scenario_object_u32(bytes, object_base, field_offset);
+    float value = 0.0f;
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
 void write_default_scenario_object_u32(std::vector<u8>& bytes,
     std::size_t object_base, std::size_t field_offset, u32 value) {
     const std::size_t offset = object_base + field_offset;
@@ -6121,6 +7056,16 @@ void write_default_scenario_object_i32(std::vector<u8>& bytes,
     std::size_t object_base, std::size_t field_offset, i32 value) {
     write_default_scenario_object_u32(
         bytes, object_base, field_offset, static_cast<u32>(value));
+}
+
+void write_default_scenario_object_float(std::vector<u8>& bytes,
+    std::size_t object_base, std::size_t field_offset, float value) {
+    static_assert(sizeof(float) == sizeof(u32),
+        "scenario float fields must be 32-bit IEEE-754 values");
+    u32 bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    write_default_scenario_object_u32(
+        bytes, object_base, field_offset, bits);
 }
 
 bool scenario_object_uses_equipment_slot_zero(u32 type_id) {
@@ -6362,8 +7307,8 @@ void load_default_gameplay_script_scenario_object(
         bytes, object_base, kGameplayScenarioObjectMovementFlagsOffset);
     object.movement_state = read_default_scenario_object_u32(
         bytes, object_base, kGameplayScenarioObjectMovementStateOffset);
-    object.wait_ticks = read_default_scenario_object_u32(
-        bytes, object_base, kGameplayScenarioObjectWaitTicksOffset);
+    object.movement_turn_ticks = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectMovementTurnTicksOffset);
     object.x = read_default_scenario_object_i32(
         bytes, object_base, kGameplayScenarioObjectXOffset);
     object.y = read_default_scenario_object_i32(
@@ -6407,16 +7352,16 @@ void load_default_gameplay_script_scenario_object(
         bytes, object_base, kGameplayScenarioObjectPlacementResetScratchOffset);
     object.distance_check_mode = read_default_scenario_object_u32(
         bytes, object_base, kGameplayScenarioObjectDistanceCheckModeOffset);
-    object.movement_turn_ticks = read_default_scenario_object_u32(
-        bytes, object_base, kGameplayScenarioObjectMovementTurnTicksOffset);
-    for (std::size_t slot = 0;
-         slot < object.effect_reset_scratch.size() &&
-         slot < kGameplayScenarioObjectEffectResetScratchOffsets.size();
-         ++slot) {
-        object.effect_reset_scratch[slot] = read_default_scenario_object_u32(
-            bytes, object_base,
-            kGameplayScenarioObjectEffectResetScratchOffsets[slot]);
-    }
+    object.movement_step_accumulator = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectMovementStepAccumulatorOffset);
+    object.movement_residual_x = read_default_scenario_object_i32(
+        bytes, object_base, kGameplayScenarioObjectMovementResidualXOffset);
+    object.movement_residual_y = read_default_scenario_object_i32(
+        bytes, object_base, kGameplayScenarioObjectMovementResidualYOffset);
+    object.movement_interpolation_x = read_default_scenario_object_float(
+        bytes, object_base, kGameplayScenarioObjectMovementInterpolationXOffset);
+    object.movement_interpolation_y = read_default_scenario_object_float(
+        bytes, object_base, kGameplayScenarioObjectMovementInterpolationYOffset);
     object.deferred_command_count = std::min<u32>(
         read_default_scenario_object_u32(bytes, object_base,
             kGameplayScenarioObjectDeferredCommandCountOffset),
@@ -6509,6 +7454,15 @@ void initialize_default_gameplay_movement_map_from_session_records(
         brush_layer = &load.records[kGameplayMapEffectLayerRecordIndex];
     }
 
+    // HandleGameplaySessionBundleImport loads these three fixed legacy grids
+    // directly into DAT_00e99e74, DAT_00f19e74 and DAT_00758d40.  Their
+    // presence is a property of the map, not of the value stored by one tile:
+    // an all-zero source/brush tile must still take the original class-entry
+    // path and is impassable for movement class 0.
+    map.legacy_entry_layers_present =
+        source_layer != nullptr && terrain_layer != nullptr &&
+        brush_layer != nullptr;
+
     for (u32 y = 0; y < map.height; ++y) {
         for (u32 x = 0; x < map.width; ++x) {
             const u32 cell = UnitMovementMapTileIndex(map, x, y);
@@ -6562,6 +7516,53 @@ bool default_session_map_effect_slot_has_occupancy(
         static_cast<u32>(x) >> 5, static_cast<u32>(y) >> 5);
     return cell != nullptr &&
         (cell->visibility_flags & kMapEffectTileFlag) != 0;
+}
+
+bool recover_default_session_map_effect_chain_from_head(
+    const std::vector<u8>& record, u32 object_count, u32 head_offset,
+    std::vector<u32>& indices) {
+    indices.clear();
+    if (head_offset == 0) {
+        return true;
+    }
+    if (!default_session_map_effect_offset_valid(head_offset, object_count)) {
+        return false;
+    }
+
+    std::vector<bool> seen(object_count, false);
+    u32 previous_offset = 0;
+    u32 current_offset = head_offset;
+    while (current_offset != 0) {
+        if (!default_session_map_effect_offset_valid(
+                current_offset, object_count)) {
+            indices.clear();
+            return false;
+        }
+        const u32 index = current_offset / kGameplayMapEffectObjectStride;
+        if (seen[index]) {
+            indices.clear();
+            return false;
+        }
+        seen[index] = true;
+
+        const std::size_t object_base =
+            static_cast<std::size_t>(index) * kGameplayMapEffectObjectStride;
+        const u32 stored_previous = read_default_scenario_object_u32(
+            record, object_base, kGameplayMapEffectObjectPreviousOffset);
+        const u32 stored_next = read_default_scenario_object_u32(
+            record, object_base, kGameplayMapEffectObjectNextOffset);
+        if (stored_previous != previous_offset ||
+            !default_session_map_effect_link_offset_valid(
+                stored_next, object_count)) {
+            indices.clear();
+            return false;
+        }
+
+        indices.push_back(index);
+        previous_offset = current_offset;
+        current_offset = stored_next;
+    }
+    return true;
 }
 
 std::vector<u32> recover_default_session_active_map_effect_indices(
@@ -6660,9 +7661,66 @@ void initialize_default_map_effect_context_from_session_records() {
         context.effects[index].id = index;
     }
 
+    std::vector<u32> active_indices;
+    std::vector<u32> free_head_to_tail;
+    bool restored_header_lists = false;
+    const GameplaySessionLoadState& load = gameplay_session_load_state();
+    if (!load.records.empty() && load.record_loaded[0] &&
+        load.records[0].size() >=
+            kGameplayHeaderMapEffectFreeListHeadOffset + sizeof(u32)) {
+        const std::vector<u8>& header = load.records[0];
+        const u32 active_head = read_default_session_record_u32(
+            header, kGameplayHeaderMapEffectActiveListHeadOffset, 0);
+        const u32 free_head = read_default_session_record_u32(
+            header, kGameplayHeaderMapEffectFreeListHeadOffset, 0);
+        const bool active_chain_valid =
+            recover_default_session_map_effect_chain_from_head(
+                *record, object_count, active_head, active_indices);
+        const bool free_chain_valid =
+            recover_default_session_map_effect_chain_from_head(
+                *record, object_count, free_head, free_head_to_tail);
+
+        if (active_chain_valid && free_chain_valid) {
+            std::vector<bool> listed(object_count, false);
+            restored_header_lists = true;
+            for (u32 index : active_indices) {
+                const std::size_t object_base =
+                    static_cast<std::size_t>(index) *
+                    kGameplayMapEffectObjectStride;
+                if (listed[index] || read_default_scenario_object_u32(
+                        *record, object_base,
+                        kGameplayMapEffectObjectTypeOffset) == 0) {
+                    restored_header_lists = false;
+                    break;
+                }
+                listed[index] = true;
+            }
+            if (restored_header_lists) {
+                for (u32 index : free_head_to_tail) {
+                    if (listed[index]) {
+                        restored_header_lists = false;
+                        break;
+                    }
+                    listed[index] = true;
+                }
+            }
+            if (restored_header_lists) {
+                for (u32 index = 1; index < object_count; ++index) {
+                    if (!listed[index]) {
+                        restored_header_lists = false;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    if (!restored_header_lists) {
+        active_indices = recover_default_session_active_map_effect_indices(
+            *record, object_count);
+        free_head_to_tail.clear();
+    }
+
     std::vector<bool> active(object_count, false);
-    const std::vector<u32> active_indices =
-        recover_default_session_active_map_effect_indices(*record, object_count);
     for (u32 index : active_indices) {
         if (index == 0 || index >= object_count || active[index]) {
             continue;
@@ -6705,10 +7763,17 @@ void initialize_default_map_effect_context_from_session_records() {
         active[index] = true;
     }
 
-    for (u32 index = object_count; index > 1; --index) {
-        const u32 slot = index - 1;
-        if (!active[slot]) {
-            context.free_effect_indices.push_back(slot);
+    if (restored_header_lists) {
+        // AllocateMapEffect pops the vector back, so reverse the serialized
+        // free chain to keep its original head as the next allocation.
+        context.free_effect_indices.assign(
+            free_head_to_tail.rbegin(), free_head_to_tail.rend());
+    } else {
+        for (u32 index = object_count; index > 1; --index) {
+            const u32 slot = index - 1;
+            if (!active[slot]) {
+                context.free_effect_indices.push_back(slot);
+            }
         }
     }
     configure_default_map_effect_context();
@@ -7440,6 +8505,11 @@ void handle_default_generic_ai_end_request() {
     GameplayInputActionState& input = gameplay_input_action_state();
     configure_default_gameplay_input_action_context(input);
     if (!input.player_reset_gate) {
+        const u32 lobby_code =
+            g_runtime.gameplay_end_condition_state.result_code;
+        input.pending_action_arg0 =
+            lobby_code != 0 && lobby_code != 2 ? 1u : 0u;
+        input.pending_action_arg2 = lobby_code;
         ResetAndPublishPlayerInactiveState(input);
     }
 }
@@ -7731,6 +8801,16 @@ void default_gameplay_flow_post_session_runtime(GameplaySessionFlowState&) {
 
 void default_gameplay_flow_enter_session_ui(GameplaySessionFlowState&) {
     append_startup_log("session-flow: enter ui begin");
+    GameplayModalUiState& modal = gameplay_modal_ui_state();
+    ReleaseActiveGlobalUiScreenModalResources();
+    modal.main_menu_active = false;
+    modal.scenario_message_active = false;
+    modal.exit_surrender_active = false;
+    modal.options_active = false;
+    modal.relation_mask_active = false;
+    modal.observer_mask_active = false;
+    modal.wait_dialog_active = false;
+    modal.replay_modal_pending = false;
     if (g_runtime.main_window != nullptr && IsWindow(g_runtime.main_window)) {
         SetFocus(g_runtime.main_window);
     }
@@ -7867,7 +8947,27 @@ void configure_default_gameplay_hud_text_callbacks(GameplayHudTextState& hud) {
 
 void default_gameplay_resource_hud_select_font(
     GameplayPlayerResourceHudState&, u32) {
-    default_select_gameplay_hud_font();
+    // FUN_00429bf0 selects draw-font slot 1 at 0x00429c7b for each visible
+    // resource row.  The original leaves the metric-font lifecycle untouched.
+    SelectTextDrawFont(1);
+}
+
+void default_gameplay_resource_hud_select_name_font(
+    GameplayPlayerResourceHudState&, u32) {
+    // Player names switch to draw-font slot 4 at 0x00429ee0 only after all
+    // numeric fields for the row have been emitted.
+    SelectTextDrawFont(4);
+}
+
+GameplayTextExtent default_gameplay_resource_hud_measure_text(
+    GameplayPlayerResourceHudState&, const char* text) {
+    if (text != nullptr && MeasureTextExtent(text)) {
+        const TextRendererState& renderer = text_renderer_state();
+        return {renderer.measured_width, renderer.measured_height};
+    }
+    const u32 width =
+        text != nullptr ? static_cast<u32>(std::strlen(text) * 8u) : 0;
+    return {width, 16};
 }
 
 void default_gameplay_resource_hud_draw_sprite(
@@ -7880,16 +8980,47 @@ void default_gameplay_resource_hud_draw_sprite(
 void default_gameplay_resource_hud_draw_text(
     GameplayPlayerResourceHudState&, const char* text, i32 x, i32 y,
     u8 color, bool centered) {
-    default_gameplay_draw_text_at(text, x, y, color, centered);
+    if (text == nullptr || text[0] == '\0') {
+        return;
+    }
+    // The resource renderer advances from the font selected at row/name
+    // boundaries.  Re-selecting the general HUD font here changes both the
+    // glyph widths and the second population token's cursor position.
+    SetTextCursor(x, y, color);
+    if (centered) {
+        DrawCenterAlignedText(text);
+    }
+    else {
+        DrawTextString(text);
+    }
 }
 
 i32 default_i32_from_u32(u32 value) {
     return value > 0x7fffffffu ? 0x7fffffff : static_cast<i32>(value);
 }
 
+void sync_default_owner_lifecycle_score_counter_tables(
+    const UnitLifecycleContext& lifecycle, u32 owner) {
+    if (owner >= lifecycle.owner_unit_score.size() ||
+        owner >= lifecycle.owner_building_score.size() ||
+        owner >= g_runtime.gameplay_owner_counters.tables[0].size() ||
+        owner >= g_runtime.gameplay_owner_counters.tables[1].size()) {
+        return;
+    }
+
+    // FUN_00432af0 includes the original cumulative unit/building score
+    // arrays at 0x70736c and 0x70738c as counter tables zero and one.
+    g_runtime.gameplay_owner_counters.tables[0][owner] =
+        lifecycle.owner_unit_score[owner];
+    g_runtime.gameplay_owner_counters.tables[1][owner] =
+        lifecycle.owner_building_score[owner];
+}
+
 void sync_default_gameplay_player_resource_hud(
     GameplayPlayerResourceHudState& hud, const GameplayFrameRenderContext& context) {
     hud.callbacks.select_font = default_gameplay_resource_hud_select_font;
+    hud.callbacks.select_name_font = default_gameplay_resource_hud_select_name_font;
+    hud.callbacks.measure_text = default_gameplay_resource_hud_measure_text;
     hud.callbacks.draw_sprite = default_gameplay_resource_hud_draw_sprite;
     hud.callbacks.draw_text = default_gameplay_resource_hud_draw_text;
 
@@ -7936,6 +9067,7 @@ void sync_default_gameplay_player_resource_hud(
         }
 
         if (lifecycle != nullptr && owner < lifecycle->owner_primary_resources.size()) {
+            sync_default_owner_lifecycle_score_counter_tables(*lifecycle, owner);
             row.primary_resource =
                 default_i32_from_u32(lifecycle->owner_primary_resources[owner]);
             row.population_current =
@@ -7944,16 +9076,19 @@ void sync_default_gameplay_player_resource_hud(
                 default_i32_from_u32(lifecycle->owner_population_reserved[owner]);
             row.population_cap =
                 default_i32_from_u32(lifecycle->owner_population_limit[owner]);
+            // The original HUD path at 0x00429df7 displays 0x70726c plus
+            // 0x70728c here.  These renderer fields are transport slots for
+            // the separate unit/building kill buckets, not live populations.
             row.active_unit_count =
-                default_i32_from_u32(lifecycle->owner_unit_active_count[owner]);
+                default_i32_from_u32(lifecycle->owner_unit_kill_count[owner]);
             row.queued_unit_count =
-                default_i32_from_u32(lifecycle->owner_building_active_count[owner]);
+                default_i32_from_u32(lifecycle->owner_building_kill_count[owner]);
         }
         else if (owner < players.owner_primary_resources.size()) {
             row.primary_resource =
                 default_i32_from_u32(players.owner_primary_resources[owner]);
         }
-        row.score = static_cast<i32>(
+        row.score = default_i32_from_u32(
             GetOwnerSessionCounterTotal(g_runtime.gameplay_owner_counters, owner));
     }
 }
@@ -7989,9 +9124,44 @@ void sync_default_gameplay_tooltip_context(
     tooltip.emit_backbuffer_draws = true;
     tooltip.camera_x = context.camera_x;
     tooltip.camera_y = context.camera_y;
-    tooltip.map_width_tiles = g_runtime.gameplay_terrain_layer.width_tiles;
-    tooltip.map_height_tiles = g_runtime.gameplay_terrain_layer.height_tiles;
-    tooltip.terrain_flags = g_runtime.gameplay_terrain_layer.terrain_flags;
+    const GameplayVisibilityGrid& visibility =
+        g_runtime.gameplay_visibility_grid;
+    if (!visibility.terrain_backup.empty() &&
+        visibility.width != 0 && visibility.height != 0) {
+        // FUN_004d5fc1 copies the live terrain/resource word to DAT_00e59e74
+        // only while the tile is revealed. FUN_004dfb0d reads that last-visible
+        // snapshot for the Berry amount. The art tile layer is a different
+        // record whose high bits can be misread as values such as 21319.
+        tooltip.map_width_tiles = visibility.width;
+        tooltip.map_height_tiles = visibility.height;
+        tooltip.terrain_flags = visibility.terrain_backup;
+    }
+    else {
+        tooltip.map_width_tiles = g_runtime.gameplay_terrain_layer.width_tiles;
+        tooltip.map_height_tiles = g_runtime.gameplay_terrain_layer.height_tiles;
+        // The scenario terrain buffer keeps a fixed 0x100-cell row stride,
+        // while tooltip lookup is width-packed.
+        tooltip.terrain_flags.clear();
+        tooltip.terrain_flags.reserve(
+            static_cast<std::size_t>(tooltip.map_width_tiles) *
+            tooltip.map_height_tiles);
+        const MinimapTerrainLayer& terrain = g_runtime.gameplay_terrain_layer;
+        for (u32 y = 0; y < tooltip.map_height_tiles; ++y) {
+            const std::size_t source_row =
+                static_cast<std::size_t>(y) * terrain.stride_tiles;
+            for (u32 x = 0; x < tooltip.map_width_tiles; ++x) {
+                const std::size_t source_index = source_row + x;
+                tooltip.terrain_flags.push_back(
+                    source_index < terrain.terrain_flags.size() ?
+                        terrain.terrain_flags[source_index] : 0);
+            }
+        }
+    }
+    // LoadGameplayUiResourcePacks writes misc_icons_start+0x20..+0x23 to
+    // DAT_00868608..DAT_00868614.  Resource entries 0..3 are unrelated pack
+    // sprites and produced the large red/blue artifacts in cost tooltips.
+    const GameplayUiResourceState& ui_resources = gameplay_ui_resource_state();
+    tooltip.cost_icons = ui_resources.misc_icon_tail_aliases;
     tooltip.callbacks.production_order_costs =
         default_gameplay_tooltip_production_order_costs;
     tooltip.local_owner = std::min<u32>(
@@ -8089,6 +9259,11 @@ void default_gameplay_frame_draw_hud_pulse(GameplayFrameRenderContext& context) 
 void default_gameplay_frame_draw_world_ui_overlay(GameplayFrameRenderContext&) {
     sync_default_ui_overlay_runtime_from_gameplay_state();
     UiOverlayState& overlay = ui_overlay_state();
+    // The queue/order strip is derived from live command_state and deferred
+    // commands.  Rebuild it after the per-frame runtime mirror; previously the
+    // panel was rebuilt only by cursor input, so simulation-only production
+    // transitions left queued_records/hot_regions on the pre-command frame.
+    BuildSelectedUnitCommandPanel(overlay);
     prepare_default_ui_overlay_minimap_base(overlay);
     RenderGameplayWorldAndUiOverlay(overlay);
 }
@@ -8394,6 +9569,11 @@ UnitMovementUnit* find_default_movement_unit_by_id(u32 unit_id) {
             return unit;
         }
     }
+    for (UnitMovementUnit* unit : lifecycle->movement->lifecycle_units) {
+        if (unit != nullptr && unit->id == unit_id) {
+            return unit;
+        }
+    }
 
     u32 runtime_slot_index = kInvalidUnitRuntimeSlotIndex;
     if (unit_id % kGameplayScenarioObjectStride == 0) {
@@ -8410,6 +9590,11 @@ UnitMovementUnit* find_default_movement_unit_by_id(u32 unit_id) {
     }
 
     for (UnitMovementUnit* unit : lifecycle->movement->active_units) {
+        if (unit != nullptr && unit->runtime_slot_index == runtime_slot_index) {
+            return unit;
+        }
+    }
+    for (UnitMovementUnit* unit : lifecycle->movement->lifecycle_units) {
         if (unit != nullptr && unit->runtime_slot_index == runtime_slot_index) {
             return unit;
         }
@@ -8477,7 +9662,102 @@ void default_ui_overlay_update_catchup_target_if_active(UiOverlayState&) {
 
 void default_ui_overlay_draw_selection_rectangle(
     UiOverlayState&, i32 left, i32 top, i32 right, i32 bottom) {
-    DrawBackBufferRectangleOutline16(left, top, right - left, bottom - top);
+    const i32 normalized_left = std::min(left, right);
+    const i32 normalized_top = std::min(top, bottom);
+    const i32 normalized_right = std::max(left, right);
+    const i32 normalized_bottom = std::max(top, bottom);
+    DrawBackBufferRectangleOutline16(normalized_left, normalized_top,
+        normalized_right - normalized_left + 1,
+        normalized_bottom - normalized_top + 1,
+        SurfacePixelMode555() ? 0x7fffu : 0xffffu);
+}
+
+void default_ui_overlay_draw_placement_preview(UiOverlayState& state) {
+    state.placement_pointer_x = state.mouse_x;
+    state.placement_pointer_y = state.mouse_y;
+    state.placement_footprint_width_tiles = 1;
+    state.placement_footprint_height_tiles = 1;
+    state.placement_preview_valid = false;
+    state.placement_preview_cell_validity.assign(1, 0);
+
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr ||
+        state.placement_definition_id >= kUnitDefinitionResourceCount - 0x60u) {
+        return;
+    }
+    const u32 type_id = state.placement_definition_id + 0x60u;
+    const UnitMovementDefinition* definition =
+        default_unit_lifecycle_find_definition(*lifecycle, type_id);
+    if (definition == nullptr) {
+        return;
+    }
+
+    state.placement_footprint_width_tiles = definition->footprint_width_tiles;
+    state.placement_footprint_height_tiles = definition->footprint_height_tiles;
+    const u32 width = std::max<u32>(definition->footprint_width_tiles, 1);
+    const u32 height = std::max<u32>(definition->footprint_height_tiles, 1);
+    state.placement_preview_cell_validity.assign(
+        static_cast<std::size_t>(width) * height, 0);
+
+    const i32 signed_tile_x = (state.placement_pointer_x + state.camera_x) >> 5;
+    const i32 signed_tile_y = (state.placement_pointer_y + state.camera_y) >> 5;
+    if (signed_tile_x < 0 || signed_tile_y < 0) {
+        return;
+    }
+    const u32 tile_x = static_cast<u32>(signed_tile_x);
+    const u32 tile_y = static_cast<u32>(signed_tile_y);
+    const u32 terrain_class = GetPlacementTerrainClass(*lifecycle, tile_x, tile_y);
+    GameplayProductionActionState& preview_gate =
+        gameplay_production_action_state();
+    sync_default_gameplay_production_action_units(preview_gate, state);
+    preview_gate.preview_placement_terrain_class = terrain_class;
+
+    UnitMovementUnit preview{};
+    preview.id = state.selected_unit_id;
+    preview.type_id = type_id;
+    preview.owner_id = state.selected_unit_owner;
+    preview.x = signed_tile_x << 5;
+    preview.y = signed_tile_y << 5;
+    preview.definition = *definition;
+
+    // FUN_004e2338 calls FUN_004c5627 at 0x004e23d8 before testing the
+    // footprint dimensions or drawing the green/red cell masks.
+    if (state.emit_sprite_draws) {
+        UnitRenderItem preview_item{};
+        preview_item.type_id = type_id;
+        preview_item.owner_id = state.local_player_slot;
+        preview_item.global_frame_counter =
+            gameplay_loop_state().simulation_frame_counter;
+        DispatchPlacementPreviewDefinitionSprite(
+            g_runtime.gameplay_unit_render_queue, preview_item,
+            preview.x - state.camera_x, preview.y - state.camera_y);
+    }
+
+    if (definition->footprint_width_tiles == 0 ||
+        definition->footprint_height_tiles == 0) {
+        return;
+    }
+
+    // Original placement preview FUN_004e2338 calls FUN_004dbae2, not the
+    // authoritative placement predicate CheckPlacementFootprintCell
+    // (0x004cf755).  The preview predicate deliberately uses E59E74's
+    // last-visible terrain plus 798D40's remembered route/object bits, so fog,
+    // hidden units, and route reservations can color a cell differently from
+    // the later authoritative placement attempt.
+    state.placement_preview_valid = true;
+    const bool allow_nearby_probe = type_id == 0x60 || type_id == 0x70 ||
+        type_id == 0x80 || type_id == 0x90;
+    for (u32 y = 0; y < height; ++y) {
+        for (u32 x = 0; x < width; ++x) {
+            const bool valid = CheckPreviewProductionPlacementGateCell(
+                preview_gate, static_cast<i32>(tile_x + x),
+                static_cast<i32>(tile_y + y), state.selected_unit_id,
+                allow_nearby_probe);
+            state.placement_preview_cell_validity[
+                static_cast<std::size_t>(y) * width + x] = valid ? 1 : 0;
+            state.placement_preview_valid = state.placement_preview_valid && valid;
+        }
+    }
 }
 
 void default_ui_overlay_draw_world_surface(UiOverlayState&) {
@@ -8494,7 +9774,8 @@ void configure_default_ui_overlay_callbacks() {
     UiOverlayState& overlay = ui_overlay_state();
     overlay.emit_sprite_draws = true;
     if (overlay.callbacks.draw_placement_preview == nullptr) {
-        overlay.callbacks.draw_placement_preview = default_ui_overlay_frame_noop;
+        overlay.callbacks.draw_placement_preview =
+            default_ui_overlay_draw_placement_preview;
     }
     if (overlay.callbacks.draw_world_surface == nullptr) {
         overlay.callbacks.draw_world_surface = default_ui_overlay_draw_world_surface;
@@ -8567,7 +9848,10 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
     g_runtime.gameplay_script_hud_text.clear();
     g_runtime.gameplay_unit_render_queue = UnitRenderQueueContext{};
     g_runtime.gameplay_fog_context = GameplayFogRenderContext{};
-    g_runtime.map_effect_context = MapEffectContext{};
+    // The session-record stage has already materialized the fixed 512-node
+    // map-effect pool.  Clearing it here leaves every passive death effect
+    // without a free node, skips its RNG call, and keeps the unit's passive
+    // seed in action_mode (first observed at exact P2P frame 2217).
     g_runtime.gameplay_unit_effect_runtime = UnitEffectRuntimeState{};
     g_runtime.gameplay_map_brush_viewport = MapBrushViewportState{};
     g_runtime.gameplay_minimap_render_config = MinimapTerrainRenderConfig{};
@@ -8618,6 +9902,13 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
     g_runtime.gameplay_unit_render_queue.viewport.bottom = kOriginalClientHeight;
     g_runtime.gameplay_unit_render_queue.local_owner_id =
         g_runtime.gameplay_player_slots.local_player_slot;
+    {
+        const u32 local_owner = g_runtime.gameplay_player_slots.local_player_slot;
+        g_runtime.gameplay_unit_render_queue.local_owner_is_observer =
+            local_owner < g_runtime.gameplay_player_slots.slot_states.size() &&
+            g_runtime.gameplay_player_slots.slot_states[local_owner] ==
+                static_cast<u8>(PlayerSlotState::observer);
+    }
     g_runtime.gameplay_unit_render_queue.owner_relation_masks =
         g_runtime.gameplay_player_slots.owner_relation_masks;
     g_runtime.gameplay_unit_render_queue.owner_visibility_masks =
@@ -8645,10 +9936,12 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
         const u32 theme = std::min<u32>(interface_resource_state().theme_index, 3);
         overlay.interface_theme_index = theme;
         const i32 gameplay_world_viewport_height = kHudY[theme];
+        const u32 minimap_capacity =
+            overlay.screen_width == 0x280 ? 0x5fu : 0x73u;
         const u32 minimap_width = std::min<u32>(
-            115, g_runtime.gameplay_movement_context.map.width);
+            minimap_capacity, g_runtime.gameplay_movement_context.map.width);
         const u32 minimap_height = std::min<u32>(
-            115, g_runtime.gameplay_movement_context.map.height);
+            minimap_capacity, g_runtime.gameplay_movement_context.map.height);
         overlay.minimap.output_x = 329 +
             static_cast<i32>((116u - minimap_width) >> 1);
         overlay.minimap.output_y = kMinimapBaseY[theme] +
@@ -8781,22 +10074,19 @@ bool default_gameplay_loop_frame_gate(GameplayLoopState& state) {
     const bool scenario_ai_profile_override =
         g_runtime.generic_ai_scenario_active ||
         g_runtime.p2p_session_start_state.scenario_ai_profile_override;
-    const u32 consumed =
+    const u32 gate_result =
         PumpMode1ReliablePackets(
             g_runtime.generic_ai_profile_mode, scenario_ai_profile_override,
             state.current_tick_ms);
-    const bool gate_pass =
-        (g_runtime.generic_ai_profile_mode && !scenario_ai_profile_override)
-            ? consumed != 0
-            : true;
+    const bool gate_pass = gate_result != 0;
     if (gate_log_budget != 0) {
         --gate_log_budget;
         append_startup_log(
-            "frame-gate: sim_frame=%lu ai_mode=%lu scenario_override=%s consumed=%lu pass=%s",
+            "frame-gate: sim_frame=%lu ai_mode=%lu scenario_override=%s result=%lu pass=%s",
             static_cast<unsigned long>(state.simulation_frame_counter),
             static_cast<unsigned long>(g_runtime.generic_ai_profile_mode),
             scenario_ai_profile_override ? "yes" : "no",
-            static_cast<unsigned long>(consumed),
+            static_cast<unsigned long>(gate_result),
             gate_pass ? "yes" : "no");
     }
     return gate_pass;
@@ -8836,6 +10126,13 @@ bool default_gameplay_loop_external_turn_wait(GameplayLoopState&) {
 }
 
 void default_gameplay_loop_pre_update_phase(GameplayLoopState& state) {
+    // Original PumpMode1ReliablePackets stays inside 0x00429955..0x004299A9
+    // until every active channel reaches its subtype-10 boundary.  Our pump
+    // yields to the window loop on a temporarily empty ring, so do not drain
+    // or publish a second input batch into that still-open lockstep round.
+    if (IsMode1ReliableSyncRoundPending()) {
+        return;
+    }
     g_runtime.gameplay_sound.current_tick = state.current_tick_ms;
     configure_default_map_effect_context();
     configure_default_ui_overlay_callbacks();
@@ -8899,11 +10196,12 @@ const UnitActionDamageProfile* default_unit_action_damage_profile(u32 profile_in
 
 bool default_unit_action_can_target(UnitActionContext& context,
     const UnitMovementUnit& source, const UnitMovementUnit& target) {
-    return target.active && source.owner_id != target.owner_id &&
-        !default_owners_are_related(source.owner_id, target.owner_id) &&
-        (target.command_state & kUnitCommandDead) == 0 &&
-        (target.runtime_flags &
-            (kUnitActionTargetInactive | kUnitActionTargetClassBlocked)) == 0 &&
+    // FUN_004c209c is the common explicit-action class gate.  Owner relation
+    // filtering belongs to automatic spatial target selection, not here:
+    // explicit guard/follow commands are allowed to target a related unit.
+    return target.active &&
+        (target.runtime_flags & (kUnitActionTargetTransient |
+            kUnitActionTargetInactive | kUnitActionTargetClassBlocked)) == 0 &&
         default_unit_action_profile_allows_target_render_class(
             context, source, target);
 }
@@ -9047,6 +10345,22 @@ UnitEffectRuntime* start_default_unit_action_effect(UnitMovementUnit& source,
 
     UnitEffectRuntime* effect = AllocateUnitEffectSlot(effects);
     if (effect == nullptr) {
+        // The common/default action path and effect 0x17 queue their start
+        // sound before calling the slot allocator (0x004ed184/0x004ecfbc).
+        // The three specialized paths below allocate first and remain silent
+        // on exhaustion.
+        if (effect_id != 0x1eu && effect_id != 0x22u && effect_id != 0x26u) {
+            UnitEffectRuntime sound_effect{};
+            sound_effect.effect_id = effect_id;
+            sound_effect.source_unit_id = source.id;
+            sound_effect.target_unit_id = target != nullptr ? target->id : 0;
+            sound_effect.linked_unit_id = sound_effect.target_unit_id;
+            sound_effect.x = source.x;
+            sound_effect.y = source.y;
+            sound_effect.target_x = target != nullptr ? target->x : source.x;
+            sound_effect.target_y = target != nullptr ? target->y : source.y;
+            QueueUnitEffectStartSoundIfAny(effects, sound_effect);
+        }
         return nullptr;
     }
 
@@ -9117,6 +10431,10 @@ UnitMovementUnit* default_unit_effect_create_unit(UnitEffectRuntimeState&,
     UnitMovementUnit& source, u32 type_id, i32 x, i32 y) {
     UnitCommandContext command_context;
     return default_unit_command_create_unit(command_context, source, type_id, x, y);
+}
+
+u32 default_selected_action_random_limit(u32 limit, void*) {
+    return default_gameplay_frame_random_limit(limit);
 }
 
 bool default_unit_action_auto_effect_command(UnitActionContext&,
@@ -9217,7 +10535,12 @@ UnitRecord make_default_unit_damage_record(const UnitMovementUnit& unit) {
     record.max_secondary_value = unit.max_secondary_value;
     record.secondary_value = std::min(unit.secondary_value, record.max_secondary_value);
     record.experience = unit.elite_progress_value;
-    record.kill_experience_value = unit.definition.target_progress_elite_value;
+    // ProcessUnitKillExperienceAward (0x004c2da0) adds definition raw +0x184
+    // (DAT_0087c47c after the original +0x2a8 record prefix).  The runtime
+    // catalog already mirrors that exact field as production_population_cost;
+    // target_progress_elite_value is a separate reconstructed field that is
+    // never populated and therefore made every kill award zero experience.
+    record.kill_experience_value = unit.definition.production_population_cost;
     record.interaction_range = std::max<u32>(unit.definition.action_range_base,
         unit.definition.range_threshold);
     record.target_priority = unit.definition.target_selection_priority != 0xffffffffu
@@ -9251,8 +10574,16 @@ void apply_default_unit_damage_record(UnitMovementUnit& unit,
     unit.command_state = record.command_state;
     unit.command_flags = record.command_flags;
     unit.runtime_flags = record.runtime_flags;
-    unit.health = std::min(record.hit_points,
-        unit.max_health != 0 ? unit.max_health : record.max_hit_points);
+    // Original ApplyUnitDamageOrAreaDamage (0x004c212c) writes zero directly
+    // to the defeated unit's raw +0x18 hit-point field before publishing its
+    // dead command state.  Keep those two writes atomic at the reconstruction's
+    // UnitRecord -> UnitMovementUnit damage boundary as well.  A lethal record
+    // must not retain a pre-impact mirrored health value and later expose that
+    // value through the script object/free-list lifecycle.
+    unit.health = (record.command_state & kUnitStateDead) != 0
+        ? 0
+        : std::min(record.hit_points,
+              unit.max_health != 0 ? unit.max_health : record.max_hit_points);
     unit.secondary_value = std::min(record.secondary_value, unit.max_secondary_value);
     unit.elite_progress_value = record.experience;
 }
@@ -9330,7 +10661,10 @@ void default_mode1_packet_mark_unit_death(void*, u32 unit_offset) {
     }
 
     unit->command_state |= kUnitCommandDead;
-    unit->movement_state = 1;
+    // HandleSubtype07UnitDeathMarkPacket (0x004ddab6) writes one to raw
+    // unit +0x4c before the death tick.  Construction cancellation uses that
+    // marker to enable the original 75-percent primary-resource refund.
+    unit->cargo_amount = 1;
 
     GameplayUnitSoundDefinition definition;
     GameplayUnitSoundBaseSlots base_slots;
@@ -9374,10 +10708,15 @@ void default_mode1_packet_set_unit_command_payload(void*, u32 unit_offset,
         command_value_or_target,
         x_payload,
         y_payload};
-    SetOrQueueUnitCommandPayload(unit, command, enqueue_deferred);
-    if (!enqueue_deferred) {
+    if (enqueue_deferred) {
+        // Wire packet handlers use the original raw queue helper
+        // (0x004dd866): capacity is the only enqueue gate.  The local-command
+        // API's runtime-flag suppression must not partially reject a packet.
+        PushDeferredUnitCommand(*unit, command, 10);
+    }
+    else {
+        unit->pending_command = command;
         unit->command_flags &= ~0x20u;
-        unit->action_mode_gate = 0;
     }
 }
 
@@ -9437,23 +10776,22 @@ bool remove_default_unit_deferred_resource_command(UnitMovementUnit& unit,
 
 bool default_mode1_packet_production_cost_values(u32 action_id,
     u32& primary_cost, u32& secondary_cost) {
-    const GameplayProductionActionDefinition* action =
-        default_jw211_production_action_definition(action_id);
-    if (action == nullptr || action->unit_type >= kUnitDefinitionResourceCount) {
+    UnitEquipmentCatalog& catalog = frontend_bootstrap_state().equipment_catalog;
+    if (catalog.effects.empty()) {
+        LoadUnitEquipmentCatalogFromJw210Trc(catalog);
+    }
+    const UnitEquipmentEffectDefinition* effect =
+        FindUnitEquipmentEffect(catalog, action_id);
+    if (effect == nullptr) {
         return false;
     }
 
-    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
-    UnitLifecycleContext& lookup_context =
-        lifecycle != nullptr ? *lifecycle : g_runtime.gameplay_lifecycle_context;
-    const UnitMovementDefinition* definition =
-        default_unit_lifecycle_find_definition(lookup_context, action->unit_type);
-    if (definition == nullptr) {
-        return false;
-    }
-
-    primary_cost = definition->production_resource_cost;
-    secondary_cost = definition->production_secondary_cost;
+    // CheckOwnerProductionCostMirror/debit/refund (0x004d1916..0x004d196b)
+    // index the JW2_10 equipment/effect record by payload id and read raw
+    // +0xcc/+0xd4.  Following a JW2_11 action to a unit definition charges an
+    // unrelated unit-production price and breaks cancel/death refunds.
+    primary_cost = effect->tooltip_primary_cost;
+    secondary_cost = effect->tooltip_secondary_cost;
     return true;
 }
 
@@ -9584,6 +10922,11 @@ bool default_mode1_packet_commit_production_order_enqueue(
     }
     default_mode1_packet_sync_owner_from_production_runtime(unit.owner_id);
     return true;
+}
+
+bool default_mode1_packet_commit_production_order_before_push(
+    UnitMovementUnit& unit, u32 payload, void*) {
+    return default_mode1_packet_commit_production_order_enqueue(unit, payload);
 }
 
 void default_mode1_packet_refund_production_order(
@@ -9815,19 +11158,19 @@ bool default_mode1_packet_owner_transport_attachment_exists(u32 owner,
         return false;
     }
 
-    const u32 attachment_mask = (slot_id << 18) & 0x003c0000u;
-    for (const UnitMovementUnit* unit : movement->active_units) {
-        if (unit != nullptr && unit->active && unit->owner_id == owner &&
-            (unit->command_flags & 0x003c0000u) == attachment_mask) {
-            return true;
+    // FUN_004e5140 checks both the active and lifecycle lists.  A matching
+    // attachment continues to block the avatar slot until lifecycle removal.
+    const auto list_contains_attachment = [&](const auto& units) {
+        for (const UnitMovementUnit* unit : units) {
+            if (unit != nullptr &&
+                MatchesUiOverlayAvatarAttachmentSlot(*unit, owner, slot_id)) {
+                return true;
+            }
         }
-    }
-    return false;
-}
-
-bool default_mode1_packet_unit_is_carrier_type(u32 type_id) {
-    return type_id == 0x6f || type_id == 0x7f ||
-        type_id == 0x8f || type_id == 0x9f;
+        return false;
+    };
+    return list_contains_attachment(movement->active_units) ||
+        list_contains_attachment(movement->lifecycle_units);
 }
 
 bool default_mode1_packet_owner_carrier_linked_to_slot(u32 owner, u32 slot_id) {
@@ -9837,25 +11180,12 @@ bool default_mode1_packet_owner_carrier_linked_to_slot(u32 owner, u32 slot_id) {
     }
 
     for (const UnitMovementUnit* unit : movement->active_units) {
-        if (unit == nullptr || !unit->active || unit->owner_id != owner ||
-            !default_mode1_packet_unit_is_carrier_type(unit->type_id)) {
-            continue;
-        }
-
-        const u32 current_state = unit->command_state & kUnitCommandStateMask;
-        if ((current_state == kUnitStateProductionSpawnStart ||
-                current_state == kUnitStateProductionSpawnCycle) &&
-            unit->command_value == slot_id) {
+        // FUN_004e5198 uses the full command state, raw +0x70/path_target_y
+        // and exact queued 0x10/value tuples.  Share the HUD predicate so the
+        // visible gate and lockstep packet acceptance cannot disagree.
+        if (unit != nullptr &&
+            MatchesUiOverlayAvatarProducerQueueSlot(*unit, owner, slot_id)) {
             return true;
-        }
-
-        const u32 queued_count = std::min<u32>(unit->deferred_command_count, 4);
-        for (u32 index = 0; index < queued_count; ++index) {
-            const UnitQueuedCommand& queued = unit->deferred_commands[index];
-            if ((queued.state & kUnitCommandStateMask) == kUnitStateCommand10 &&
-                queued.value == slot_id) {
-                return true;
-            }
         }
     }
     return false;
@@ -9889,6 +11219,18 @@ bool default_mode1_packet_set_unit_deferred_resource_command(void*,
         return false;
     }
     if (!enqueue) {
+        if (category_flag == 0x0c && internal_command == 0x17 &&
+            !IsProductionOrderCancelLogicalIndexAllowed(logical_index)) {
+            return false;
+        }
+        // HandleSubtype1aProductionCostPacket (0x004dd404..0x004dd492)
+        // has five explicit cancellation branches (indices 0..4) and returns
+        // for every other value.  Unlike subtype 0x0c, it has no implicit
+        // 0xffffffff/latest form.
+        if (category_flag == 0x1a && internal_command == 0x22 &&
+            logical_index >= 5u) {
+            return false;
+        }
         if (!default_mode1_packet_resolve_latest_subtype01_resource_command(
                 *unit, logical_index, category_flag, internal_command, payload)) {
             return false;
@@ -9901,7 +11243,16 @@ bool default_mode1_packet_set_unit_deferred_resource_command(void*,
     const bool avatar_resource =
         default_mode1_packet_is_avatar_resource_command(category_flag,
             internal_command);
+    const bool unit_production_resource =
+        category_flag == 0x17 && internal_command == 0x10;
+    const bool production_effect_resource =
+        category_flag == 0x1a && internal_command == 0x22;
     if (!enqueue) {
+        const u32 cancel_logical_index = logical_index == 0xffffffffu
+            ? (unit->deferred_command_count == 0
+                    ? 0u
+                    : unit->deferred_command_count)
+            : logical_index;
         UnitQueuedCommand removed_command{};
         const bool captured_removed_command =
             avatar_resource &&
@@ -9910,12 +11261,95 @@ bool default_mode1_packet_set_unit_deferred_resource_command(void*,
         const bool removed = remove_default_unit_deferred_resource_command(
             *unit, logical_index, payload);
         if (removed) {
-            if (production_order_resource) {
+            if (unit_production_resource && cancel_logical_index == 0) {
+                UnitCommandContext& command_context =
+                    prepare_default_mode1_packet_command_context();
+                const u32 owner = unit->owner_id;
+                u32 primary_cost = 0;
+                u32 secondary_cost = 0;
+                if (default_mode1_packet_unit_type_cost_values(payload,
+                        primary_cost, secondary_cost) &&
+                    owner < command_context.owner_resources.size() &&
+                    owner < command_context.owner_secondary_resources.size()) {
+                    command_context.owner_resources[owner] += primary_cost;
+                    command_context.owner_secondary_resources[owner] +=
+                        secondary_cost;
+                }
+                if (unit->production_reserved &&
+                    owner < command_context.owner_population_reserved.size()) {
+                    UnitLifecycleContext* lifecycle =
+                        g_runtime.gameplay_startup_state.lifecycle;
+                    const UnitMovementDefinition* definition = lifecycle != nullptr
+                        ? default_unit_lifecycle_find_definition(*lifecycle, payload)
+                        : nullptr;
+                    if (definition != nullptr) {
+                        u32& reserved_population =
+                            command_context.owner_population_reserved[owner];
+                        reserved_population = reserved_population >=
+                                definition->production_population_cost
+                            ? reserved_population -
+                                definition->production_population_cost
+                            : 0;
+                    }
+                }
+
+                // HandleSubtype01ProductionCommandPacket (0x004dca58) sets
+                // unit +0x20 to -1 and pops only for active logical slot zero.
+                // The reconstruction also has explicit cached spawn and live
+                // population-reservation fields, so retire those together.
+                unit->command_value = 0xffffffffu;
+                unit->spawn_type_id = 0;
+                unit->queued_production_type_id = 0;
+                unit->production_reserved = false;
+                PopDeferredUnitCommandOrReturnIdle(command_context, *unit);
+                sync_default_owner_command_runtime_slots(command_context, owner);
+            }
+            else if (production_order_resource) {
                 default_mode1_packet_refund_production_order(*unit, payload);
+                if (cancel_logical_index == 0) {
+                    // HandleSubtype0cPlacementResourcePacket (0x004dcf81)
+                    // clears the order lock/refunds first, then marks the
+                    // active value invalid and pops.  Queued slots stop after
+                    // their erase/refund path and never advance the producer.
+                    UnitCommandContext& command_context =
+                        prepare_default_mode1_packet_command_context();
+                    unit->command_value = 0xffffffffu;
+                    PopDeferredUnitCommandOrReturnIdle(command_context, *unit);
+                }
             }
             else if (captured_removed_command) {
                 default_mode1_packet_refund_avatar_resource_cost(
                     *unit, removed_command.value);
+                if (cancel_logical_index == 0) {
+                    UnitCommandContext& command_context =
+                        prepare_default_mode1_packet_command_context();
+                    const u32 owner = unit->owner_id;
+                    u32 ignored_primary_cost = 0;
+                    u32 reserved_population_cost = 0;
+                    if (unit->production_reserved &&
+                        default_mode1_packet_avatar_slot_costs(owner,
+                            removed_command.value, ignored_primary_cost,
+                            reserved_population_cost) &&
+                        owner < command_context.owner_population_reserved.size()) {
+                        u32& reserved_population =
+                            command_context.owner_population_reserved[owner];
+                        reserved_population = reserved_population >=
+                                reserved_population_cost
+                            ? reserved_population - reserved_population_cost
+                            : 0;
+                    }
+
+                    // HandleSubtype05ResourceBuildPacket (0x004dccee) refunds
+                    // only the avatar's primary cost before setting unit +0x20
+                    // to -1 and popping.  The reconstructed 0x10 runtime shares
+                    // the spawn cache/reservation fields with normal training.
+                    unit->command_value = 0xffffffffu;
+                    unit->spawn_type_id = 0;
+                    unit->queued_production_type_id = 0;
+                    unit->production_reserved = false;
+                    PopDeferredUnitCommandOrReturnIdle(command_context, *unit);
+                    sync_default_owner_command_runtime_slots(command_context, owner);
+                }
             }
             else {
                 u32 primary_cost = 0;
@@ -9932,6 +11366,14 @@ bool default_mode1_packet_set_unit_deferred_resource_command(void*,
                             secondary_cost;
                         sync_default_owner_command_runtime_slots(command_context, owner);
                     }
+                }
+                if (production_effect_resource && cancel_logical_index == 0) {
+                    // HandleSubtype1aProductionCostPacket (0x004dd3b7) has the
+                    // same active-slot termination rule after its own refund.
+                    UnitCommandContext& command_context =
+                        prepare_default_mode1_packet_command_context();
+                    unit->command_value = 0xffffffffu;
+                    PopDeferredUnitCommandOrReturnIdle(command_context, *unit);
                 }
             }
         }
@@ -9959,23 +11401,33 @@ bool default_mode1_packet_set_unit_deferred_resource_command(void*,
         return false;
     }
 
+    if (unit_production_resource) {
+        UnitLifecycleContext* lifecycle =
+            g_runtime.gameplay_startup_state.lifecycle;
+        // The original ordinary 0x17/0x10 path at 0x004dca58 performs the full
+        // lifecycle requirement check before its queue/accounting helpers
+        // (audited at 0x004cf145 and 0x004dcf81).  Avatar and production-order
+        // commands have separate gates above.
+        if (lifecycle == nullptr ||
+            CheckUnitProductionRequirements(*lifecycle, unit->owner_id, payload) !=
+                UnitProductionRequirementCode::ok) {
+            return false;
+        }
+    }
+
     const UnitQueuedCommand command{
         internal_command,
         static_cast<i32>(payload),
         static_cast<i32>(arg1),
         arg2};
-    if (!SetOrQueueUnitCommandPayload(unit, command, true,
+    if (production_order_resource) {
+        return CommitThenPushDeferredUnitCommand(*unit, command, 10,
+            default_mode1_packet_commit_production_order_before_push);
+    }
+    if (!PushDeferredUnitCommand(*unit, command,
             default_mode1_packet_deferred_resource_queue_limit(
                 category_flag, internal_command))) {
         return false;
-    }
-
-    if (production_order_resource) {
-        if (!default_mode1_packet_commit_production_order_enqueue(*unit, payload)) {
-            remove_default_unit_deferred_resource_command(*unit, 0xffffffffu, payload);
-            return false;
-        }
-        return true;
     }
 
     if (avatar_resource) {
@@ -10034,16 +11486,12 @@ bool default_production_owner_requirement_allows_unit(
     if (definition.owner_requirement == 0xffffffffu) {
         return true;
     }
-
-    const PlayerSlotRuntimeState& slots = player_slot_state();
-    if (unit.owner_id < slots.owner_relation_masks.size() &&
-        definition.owner_requirement < 32) {
-        const u32 relation_mask = slots.owner_relation_masks[unit.owner_id];
-        if (relation_mask != 0) {
-            return (relation_mask & (1u << definition.owner_requirement)) != 0;
-        }
-    }
-    return unit.owner_id == definition.owner_requirement;
+    // FUN_004db92c/FUN_004db9de use DAT_00708970[owner][order] here.  The
+    // JW2_11 +0x15c value is a production-order id, not an owner/relation id.
+    const auto& variants = g_runtime.gameplay_production_runtime.variant_counts;
+    return unit.owner_id < variants.size() &&
+        definition.owner_requirement < variants[unit.owner_id].size() &&
+        variants[unit.owner_id][definition.owner_requirement] != 0;
 }
 
 bool default_mode1_packet_start_basic_special_attachment(UnitMovementUnit& unit,
@@ -10058,17 +11506,14 @@ bool default_mode1_packet_start_basic_special_attachment(UnitMovementUnit& unit,
     configure_default_unit_effect_runtime_state(effects);
     sync_default_unit_effect_runtime_units(effects, *lifecycle);
 
-    UnitEffectRuntime* effect = AllocateUnitEffectSlot(effects);
-    if (effect == nullptr) {
+    const UnitEffectDefinition* definition =
+        find_default_unit_effect_definition(
+            effects, kSelectedActionEffectBase + action_id);
+    if (definition == nullptr) {
         return false;
     }
-
-    if (!BeginSelectedUnitAttachmentEffect(effects, *effect,
-            kSelectedActionEffectBase + action_id, unit, &unit)) {
-        ReleaseUnitEffectSlot(effects, *effect);
-        return false;
-    }
-    return true;
+    return StartSelectedUnitAttachmentEffect(effects,
+        kSelectedActionEffectBase + action_id, unit, &unit);
 }
 
 bool apply_default_mode1_basic_special_command_flag(UnitMovementUnit& unit,
@@ -10806,7 +12251,8 @@ void default_map_effect_render(MapEffectContext& context,
             effect.x + 0x40000000u);
     command.sprite_entry_index = default_map_effect_sprite_entry(context, effect);
     command.screen_x = effect.x - g_runtime.gameplay_frame_render_context.camera_x;
-    command.screen_y = effect.y - g_runtime.gameplay_frame_render_context.camera_y;
+    command.screen_y = effect.y + 1 -
+        g_runtime.gameplay_frame_render_context.camera_y;
     QueueGameplayRenderCommand(g_runtime.gameplay_render_command_queue, command);
 }
 
@@ -11007,6 +12453,15 @@ void configure_default_gameplay_render_unit_sprite_definitions() {
     GameplayRenderCommandQueue& queue = g_runtime.gameplay_render_command_queue;
     queue.definition_index_by_type.assign(kUnitDefinitionResourceCount, 0xffffffffu);
     queue.unit_sprite_definitions.clear();
+    const Jw207ResourcePackState& jw207 = jw207_resource_pack_state();
+    queue.overlay_base_entry = jw207.loaded
+        ? jw207.unit_start
+        : kInvalidResourceEntry;
+    // FUN_004d80ae's bit-31 construction overlay is resolved directly from
+    // JW2_11 record 39 by draw_highbit_special_overlay.  Keep the legacy
+    // linear fallback disabled so entry zero can never draw an unrelated
+    // early resource under explored fog.
+    queue.highbit_overlay_base = kInvalidResourceEntry;
 
     if (!unit_definition_resource_catalog_state().loaded) {
         LoadUnitDefinitionResourceCatalog();
@@ -11023,6 +12478,9 @@ void configure_default_gameplay_render_unit_sprite_definitions() {
         GameplayRenderUnitSpriteDefinition definition{};
         definition.has_special_draw = read_runtime_catalog_u32(
             record.definition_bytes, kUnitDefinitionSpecialDrawFlagOffset, 0) != 0;
+        definition.blit_mode = read_runtime_catalog_u32(
+            record.definition_bytes,
+            kUnitDefinitionLowHealthOverlayDrawModeOffset, 0);
         definition.center_offset_x = read_runtime_catalog_i32(
             record.definition_bytes, kUnitDefinitionNameOffsetXOffset, 0);
         definition.center_offset_y = read_runtime_catalog_i32(
@@ -11031,6 +12489,32 @@ void configure_default_gameplay_render_unit_sprite_definitions() {
             record.definition_bytes, kUnitDefinitionNameWidthOffset, 0);
         definition.center_height = read_runtime_catalog_i32(
             record.definition_bytes, kUnitDefinitionNameHeightOffset, 0);
+
+        // FUN_004d80ae replays the packed low-health selector from
+        // DAT_00798d40 using definition +0x1688 and the three 64-entry
+        // frame/X/Y tables.  Without these records the remembered structure
+        // body rendered under explored fog, but all damage overlays vanished.
+        const u32 overlay_count = std::min<u32>(
+            read_runtime_catalog_u32(record.definition_bytes,
+                kUnitDefinitionLowHealthOverlayCountOffset, 0),
+            64u);
+        definition.overlays.reserve(overlay_count);
+        for (u32 overlay_index = 0; overlay_index < overlay_count;
+             ++overlay_index) {
+            const std::size_t table_offset =
+                static_cast<std::size_t>(overlay_index) * sizeof(u32);
+            definition.overlays.push_back(GameplayRenderOverlaySprite{
+                read_runtime_catalog_u32(record.definition_bytes,
+                    kUnitDefinitionLowHealthOverlayFrameTableBase +
+                        table_offset, 0),
+                read_runtime_catalog_i32(record.definition_bytes,
+                    kUnitDefinitionLowHealthOverlayXOffsetTableBase +
+                        table_offset, 0),
+                read_runtime_catalog_i32(record.definition_bytes,
+                    kUnitDefinitionLowHealthOverlayYOffsetTableBase +
+                        table_offset, 0),
+            });
+        }
 
         queue.definition_index_by_type[unit_type] =
             static_cast<u32>(queue.unit_sprite_definitions.size());
@@ -11148,6 +12632,10 @@ void refresh_default_unit_definition_runtime_fields(UnitMovementUnit& unit) {
     definition.initial_max_health = read_runtime_catalog_u32(
         record.definition_bytes, kUnitDefinitionInitialMaxHealthOffset,
         definition.initial_max_health);
+    // FUN_004c3504 consumes this same raw +0x154 value for the elite/variant
+    // contribution made by four-tick target-progress work.  The reconstructed
+    // definition exposes that use under a separate semantic name.
+    definition.target_progress_elite_value = definition.initial_max_health;
     definition.initial_max_secondary_value = read_runtime_catalog_u32(
         record.definition_bytes, kUnitDefinitionInitialMaxSecondaryOffset,
         definition.initial_max_secondary_value);
@@ -11160,6 +12648,56 @@ void refresh_default_unit_definition_runtime_fields(UnitMovementUnit& unit) {
     definition.initial_secondary_value = read_runtime_catalog_u32(
         record.definition_bytes, kUnitDefinitionRuntimeStat28Offset,
         definition.initial_secondary_value);
+    definition.variant_growth_health_weight = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionVariantGrowthHealthWeightOffset,
+        definition.variant_growth_health_weight);
+    definition.variant_growth_secondary_weight = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionVariantGrowthSecondaryWeightOffset,
+        definition.variant_growth_secondary_weight);
+    definition.variant_growth_stat1c_weight = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionVariantGrowthStat1cWeightOffset,
+        definition.variant_growth_stat1c_weight);
+    definition.variant_growth_stat20_weight = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionVariantGrowthStat20WeightOffset,
+        definition.variant_growth_stat20_weight);
+    definition.variant_growth_stat28_weight = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionVariantGrowthStat28WeightOffset,
+        definition.variant_growth_stat28_weight);
+    definition.variant_health_delta_percent = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionVariantHealthDeltaPercentOffset,
+        definition.variant_health_delta_percent);
+    definition.variant_secondary_delta_percent = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionVariantSecondaryDeltaPercentOffset,
+        definition.variant_secondary_delta_percent);
+    definition.variant_step_mode = read_runtime_catalog_u8(
+        record.definition_bytes, kUnitDefinitionVariantStepModeOffset,
+        static_cast<u8>(definition.variant_step_mode));
+    definition.variant_step_base = read_runtime_catalog_u8(
+        record.definition_bytes, kUnitDefinitionVariantStepBaseOffset,
+        static_cast<u8>(definition.variant_step_base));
+    definition.variant_step_linear = read_runtime_catalog_u8(
+        record.definition_bytes, kUnitDefinitionVariantStepLinearOffset,
+        static_cast<u8>(definition.variant_step_linear));
+    definition.variant_step_extra = read_runtime_catalog_u8(
+        record.definition_bytes, kUnitDefinitionVariantStepExtraOffset,
+        static_cast<u8>(definition.variant_step_extra));
+    definition.variant_progress_cost_per_level = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionVariantProgressCostPerLevelOffset,
+        definition.variant_progress_cost_per_level);
+    definition.linked_release_type_id = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionLinkedReleaseTypeOffset,
+        definition.linked_release_type_id);
+    // DAT_0087c4dc is the single original raw field used both by the timed
+    // morph state machine and by owner population/death accounting.  Keep the
+    // two typed semantic aliases synchronized with that one catalog value.
+    const u32 alternate_morph_type = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionAlternateMorphTypeOffset,
+        definition.morph_type_id);
+    definition.morph_type_id = alternate_morph_type;
+    definition.alternate_type_id = alternate_morph_type;
+    definition.variant_progress_base_cost = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionVariantProgressBaseCostOffset,
+        definition.variant_progress_base_cost);
     definition.avatar_next_exp_per_level = read_runtime_catalog_u32(
         record.definition_bytes, kUnitDefinitionAvatarNextExpPerLevelOffset,
         definition.avatar_next_exp_per_level);
@@ -11173,6 +12711,9 @@ void refresh_default_unit_definition_runtime_fields(UnitMovementUnit& unit) {
             kUnitDefinitionInitialCommandBitsOffset + index,
             definition.initial_command_bits[index]);
     }
+    definition.initial_script_bit_flags = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionInitialScriptBitFlagsOffset,
+        definition.initial_script_bit_flags);
     unit.type_flags = read_runtime_catalog_u32(
         record.definition_bytes, kUnitDefinitionTypeFlagsOffset, unit.type_flags);
     definition.type_flags = unit.type_flags;
@@ -11182,6 +12723,10 @@ void refresh_default_unit_definition_runtime_fields(UnitMovementUnit& unit) {
     definition.support_source_flags = read_runtime_catalog_u32(
         record.definition_bytes, kUnitDefinitionSupportSourceFlagsOffset,
         definition.support_source_flags);
+    // Creation, placement and path-probe code all read raw +0x1f8 in the
+    // original.  Keep the reconstructed footprint view aliased to it instead
+    // of leaving it at the zero default.
+    definition.footprint_flags = definition.support_source_flags;
     definition.lifecycle_class = read_runtime_catalog_u32(
         record.definition_bytes, kUnitDefinitionLifecycleClassOffset,
         definition.lifecycle_class);
@@ -11213,6 +12758,10 @@ void refresh_default_unit_definition_runtime_fields(UnitMovementUnit& unit) {
     definition.animation_timer_period = read_runtime_catalog_u32(
         record.definition_bytes, kUnitDefinitionAnimationTimerPeriodOffset,
         definition.animation_timer_period);
+    definition.target_progress_animation_period = read_runtime_catalog_u32(
+        record.definition_bytes,
+        kUnitDefinitionTargetProgressAnimationPeriodOffset,
+        definition.target_progress_animation_period);
     definition.use_16_direction_lookup = read_runtime_catalog_u32(
         record.definition_bytes, kUnitDefinitionUse16DirectionLookupOffset,
         definition.use_16_direction_lookup ? 1u : 0u) != 0;
@@ -11234,6 +12783,12 @@ void refresh_default_unit_definition_runtime_fields(UnitMovementUnit& unit) {
     definition.production_secondary_cost = read_runtime_catalog_u32(
         record.definition_bytes, kUnitDefinitionProductionSecondaryCostOffset,
         definition.production_secondary_cost);
+    // Target-progress work (repair/state 0x11 and targeted spawn) tests the
+    // same +0x190/+0x194 catalog costs used by production.
+    definition.target_progress_primary_cost =
+        definition.production_resource_cost;
+    definition.target_progress_secondary_cost =
+        definition.production_secondary_cost;
     definition.production_spawn_time = read_runtime_catalog_u32(
         record.definition_bytes, kUnitDefinitionConstructionTimerOffset,
         definition.production_spawn_time);
@@ -11264,6 +12819,21 @@ void refresh_default_unit_definition_runtime_fields(UnitMovementUnit& unit) {
             kUnitDefinitionPrerequisiteTypeBaseOffset + index * sizeof(u32),
             definition.prerequisite_type_ids[index]);
     }
+    const u32 raw_placement_path_reference_count = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionAlternateReferenceCountOffset,
+        definition.placement_path_reference_count);
+    definition.placement_path_reference_count = std::min<u32>(
+        raw_placement_path_reference_count,
+        static_cast<u32>(definition.placement_path_reference_type_ids.size()));
+    for (u32 index = 0; index < definition.placement_path_reference_count; ++index) {
+        definition.placement_path_reference_type_ids[index] =
+            read_runtime_catalog_u32(record.definition_bytes,
+                kUnitDefinitionAlternateReferenceBaseOffset + index * sizeof(u32),
+                definition.placement_path_reference_type_ids[index]);
+    }
+    definition.placement_small_reference_count = read_runtime_catalog_u8(
+        record.definition_bytes, kUnitDefinitionSmallReferenceCountOffset,
+        static_cast<u8>(definition.placement_small_reference_count));
     definition.action_profile_index = read_runtime_catalog_u32(
         record.definition_bytes, kUnitDefinitionActionProfileOffset,
         definition.action_profile_index);
@@ -11298,6 +12868,13 @@ void refresh_default_unit_definition_runtime_fields(UnitMovementUnit& unit) {
     definition.action_range_bonus_cap = read_runtime_catalog_u16(
         record.definition_bytes, kUnitDefinitionActionRangeBonusCapOffset,
         static_cast<u16>(definition.action_range_bonus_cap));
+    definition.variant_scaled_bonus61c_per_level = read_runtime_catalog_u8(
+        record.definition_bytes,
+        kUnitDefinitionVariantScaledBonus61cPerLevelOffset,
+        static_cast<u8>(definition.variant_scaled_bonus61c_per_level));
+    definition.variant_scaled_bonus61c_cap = read_runtime_catalog_u16(
+        record.definition_bytes, kUnitDefinitionVariantScaledBonus61cCapOffset,
+        static_cast<u16>(definition.variant_scaled_bonus61c_cap));
 
     definition.bounds_left = read_runtime_catalog_i32(
         record.definition_bytes, kUnitDefinitionBoundsLeftOffset,
@@ -11382,6 +12959,13 @@ void refresh_default_unit_definition_runtime_fields(UnitMovementUnit& unit) {
     definition.owner_strategic_target_offset_y = read_runtime_catalog_i32(
         record.definition_bytes, kUnitDefinitionOwnerStrategicTargetOffsetY,
         definition.owner_strategic_target_offset_y);
+    // Construction worker release at 0x004c9fdc..0x004ca02e (and the
+    // transport release helpers) read the same definition +0x2410/+0x2414
+    // pair.  Keep the typed release-offset view populated as well; otherwise
+    // a completed building always releases its worker from the building
+    // origin even when the original definition specifies an exit point.
+    definition.transport_offset_x = definition.owner_strategic_target_offset_x;
+    definition.transport_offset_y = definition.owner_strategic_target_offset_y;
     definition.owner_transport_route_metric_offset = read_runtime_catalog_i32(
         record.definition_bytes, kUnitDefinitionOwnerTransportRouteMetricOffset,
         definition.owner_transport_route_metric_offset);
@@ -11406,6 +12990,13 @@ void refresh_default_unit_definition_runtime_fields(UnitMovementUnit& unit) {
     definition.passive_map_effect_seed = read_runtime_catalog_u32(
         record.definition_bytes, kUnitDefinitionPassiveMapEffectSeedOffset,
         definition.passive_map_effect_seed);
+    // CalculateUnitInteractionRangeWithProductionAndEquipmentEffects reads
+    // raw definition +0x440 at 0x004c36b8.  Catalog records exclude the
+    // original 0x2a8-byte prefix, so the corresponding source offset is 0x198.
+    definition.effect_adjusted_interaction_range_base = read_runtime_catalog_u32(
+        record.definition_bytes,
+        kUnitDefinitionEffectAdjustedInteractionRangeBaseOffset,
+        definition.effect_adjusted_interaction_range_base);
     definition.effect_command_distance_gate = read_runtime_catalog_u32(
         record.definition_bytes, kUnitDefinitionEffectCommandDistanceGateOffset,
         definition.effect_command_distance_gate);
@@ -11427,6 +13018,10 @@ void refresh_default_unit_definition_runtime_fields(UnitMovementUnit& unit) {
     definition.target_selection_priority = read_runtime_catalog_u32(
         record.definition_bytes, kUnitDefinitionTargetSelectionPriorityOffset,
         definition.target_selection_priority);
+    // FUN_004c1650 uses the same raw +0x1c0 value when choosing the lowest
+    // priority health-restore target.  The general targeter and support
+    // helper expose separate typed names, but the archive has one field.
+    definition.support_priority = definition.target_selection_priority;
     definition.startup_secondary_step_x = read_runtime_catalog_i32(
         record.definition_bytes, kUnitDefinitionStartupSecondaryStepXOffset,
         definition.startup_secondary_step_x);
@@ -11772,8 +13367,6 @@ void append_default_unit_effect_definition_from_catalog_record(
             record.definition_bytes, kJw211ActionAuraRadiusOffset, 0);
         definition.action_area_damage_radius = read_runtime_catalog_u32(
             record.definition_bytes, kJw211ActionAreaDamageRadiusOffset, 0);
-        definition.action_target_lock_frame = read_runtime_catalog_u32(
-            record.definition_bytes, kJw211ActionTargetLockFrameOffset, 0);
         definition.action_target_health_delta = -read_runtime_catalog_i32(
             record.definition_bytes, kJw211ActionTargetHealthDeltaOffset, -1);
         definition.action_startup_ticks = read_runtime_catalog_u32(
@@ -11800,10 +13393,12 @@ void append_default_unit_effect_definition_from_catalog_record(
         if (effect_id == kJw211RestoreLinkedHealthEffectId) {
             state.linked_health_restore_secondary_cost =
                 definition.action_secondary_cost;
-            state.linked_health_restore_amount =
-                definition.action_target_health_delta > 0
-                    ? static_cast<u32>(definition.action_target_health_delta)
-                    : 0;
+            // Effect action 0x28 (0x004ee28f) adds Cure's raw +0x1e8 value
+            // directly (+5).  The unit-command path at 0x004cc115 negates the
+            // same raw field, so its signed action_target_health_delta cannot
+            // be reused for this effect-global amount.
+            state.linked_health_restore_amount = read_runtime_catalog_u32(
+                record.definition_bytes, kJw211EffectDamageAmountOffset, 0);
             state.linked_health_restore_globals_loaded = true;
         }
     }
@@ -11813,9 +13408,11 @@ void append_default_unit_effect_definition_from_catalog_record(
             definition.allowed_target_render_class_mask);
         definition.area_damage_allows_related_targets = read_runtime_catalog_u32(
             record.definition_bytes, kJw212AreaDamageOwnerRelationModeOffset, 0) == 1;
-        definition.startup_uses_source_muzzle = read_runtime_catalog_u32(
-            record.definition_bytes, kJw212EffectStartupSourceMuzzleFlagOffset, 0) != 0;
     }
+    // Both JW2_11 action/projectile records and JW2_12 auxiliary effects use
+    // raw +0xabc for the attachment-start source-muzzle flag.
+    definition.startup_uses_source_muzzle = read_runtime_catalog_u32(
+        record.definition_bytes, kJw21xEffectStartupSourceMuzzleFlagOffset, 0) != 0;
     definition.image_resource_entries = record.image_resource_entries;
     append_auxiliary_effect_sprite_entries(definition.startup_sprite_entries,
         record, kAuxiliaryEffectStartupTicksOffset,
@@ -11837,6 +13434,11 @@ void append_default_unit_effect_definition_from_catalog_record(
             record.definition_bytes, kJw211EffectDamageAmountOffset, 0));
         append_jw211_effect_frame_sound_slots(definition, record);
         append_jw211_effect_impact_frames(definition, record.definition_bytes);
+        // Action 0x0b compares against the first raw +0x8bc impact-frame
+        // entry (0x004ef5c0), not an unrelated scalar at raw +0x900.
+        definition.action_target_lock_frame = definition.impact_frames.empty()
+            ? 0u
+            : definition.impact_frames.front();
     }
     definition.projectile = projectile &&
         read_runtime_catalog_u32(record.definition_bytes,
@@ -12036,7 +13638,9 @@ void configure_default_unit_effect_runtime_state(UnitEffectRuntimeState& effects
         default_unit_effect_selected_production_gate;
     effects.callbacks.create_unit = default_unit_effect_create_unit;
     effects.callbacks.calculate_impact_damage = default_unit_effect_impact_damage;
-    ConfigureUnitEffectRenderPalette(effects, false);
+    // FUN_004f2aa4 selects its packed colors from DAT_01450834.  Despite the
+    // legacy parameter name, true selects the 555 constants in the typed API.
+    ConfigureUnitEffectRenderPalette(effects, SurfacePixelMode555());
 }
 
 void run_default_unit_effect_runtime_list_tick(GameplayLoopState&) {
@@ -12095,6 +13699,7 @@ void configure_default_gameplay_visibility_fallback_consumers() {
     render_visibility.cells.assign(kGameplayVisibilityTileCount,
         kMapTileVisible | kMapTileRevealed);
     render_visibility.fog_blocked_cells = nullptr;
+    render_visibility.authoritative_grid = nullptr;
 
     GameplaySoundState& sound = g_runtime.gameplay_sound;
     sync_default_gameplay_sound_spatial_view(sound);
@@ -12181,6 +13786,13 @@ void ensure_default_gameplay_visibility_grid(const UnitMovementMap& map) {
 }
 
 u32 default_owner_visibility_mask(u32 owner_id) {
+    // The original DAT_00725384 table has nine entries: player owners 0..7
+    // plus the neutral/world owner at index 8.  PlayerSlotRuntimeState only
+    // stores the eight network-player rows, so preserve the ninth self bit
+    // explicitly instead of dropping all neutral-unit exploration footprints.
+    if (owner_id == kPlayerSlotCount) {
+        return 1u << kPlayerSlotCount;
+    }
     if (owner_id >= kPlayerSlotCount) {
         return 0;
     }
@@ -12201,13 +13813,14 @@ GameplayVisibilityUnit make_default_gameplay_visibility_unit(
     // FUN_004d5ccd checks raw unit +0x30 for the structure radius override.
     visibility.variant = unit.action_mode_gate;
     visibility.runtime_flags = unit.runtime_flags;
-    visibility.state_flags = unit.command_state | unit.command_flags;
+    visibility.command_state = unit.command_state;
+    visibility.command_flags = unit.command_flags;
     visibility.command_bits = unit.command_bits;
     visibility.owner_visibility_mask = default_owner_visibility_mask(unit.owner_id);
     visibility.owner_explore_mask = visibility.owner_visibility_mask;
-    visibility.max_health = unit.max_health != 0 ?
-        unit.max_health : std::max<u32>(unit.definition.initial_max_health, 1);
-    visibility.health = std::min(unit.health, visibility.max_health);
+    // FUN_004d5ddc shrinks lifecycle-unit vision using raw +0x98 and +0xec.
+    // Raw HP (+0x10/+0x18) is unrelated to this death-phase radius timer.
+    visibility.command_entry_lockout_ticks = unit.command_entry_lockout_ticks;
     visibility.animation_timer = unit.animation_timer;
     visibility.x = unit.x;
     visibility.y = unit.y;
@@ -12232,12 +13845,16 @@ GameplayVisibilityUnit make_default_gameplay_visibility_unit(
     visibility.interaction_range_pixels =
         CalculateUnitInteractionRangeWithProductionAndEquipmentEffects(
             g_runtime.gameplay_production_runtime, unit,
-            unit.definition.effect_command_distance_gate,
+            unit.definition.effect_adjusted_interaction_range_base,
             equipment_catalog.effects.empty() ? nullptr : &equipment_catalog);
     visibility.current_visibility_enabled =
         CheckUnitCommandGateWithProductionEffect12(
             g_runtime.gameplay_production_runtime, unit, false,
-            unit.definition.type_flags,
+            // CheckUnitCommandGateWithProductionEffect12 reads definition
+            // +0x1f8 (0x0087c4f0 for record zero), not the unrelated raw
+            // +0x1ec type/initial-command word.  The typed support-source
+            // field is the existing exact view of that +0x1f8 word.
+            unit.definition.support_source_flags,
             default_unit_command_metadata_flags_from_original_table(unit),
             equipment_catalog.effects.empty() ? nullptr : &equipment_catalog);
     return visibility;
@@ -12245,7 +13862,7 @@ GameplayVisibilityUnit make_default_gameplay_visibility_unit(
 
 void append_default_gameplay_visibility_unit(
     const UnitMovementUnit* unit, bool lifecycle_unit) {
-    if (unit == nullptr || !unit->active) {
+    if (unit == nullptr || (!lifecycle_unit && !unit->active)) {
         return;
     }
 
@@ -12323,12 +13940,20 @@ UnitRenderItem make_default_unit_render_item(UnitMovementUnit& unit) {
     item.global_frame_counter = gameplay_loop_state().simulation_frame_counter;
     item.direction = static_cast<i32>(unit.direction);
     item.cargo_amount = unit.cargo_amount;
-    item.max_hit_points = unit.max_health != 0
-        ? unit.max_health
-        : std::max<u32>(unit.definition.initial_max_health, 1);
-    item.hit_points = std::min(unit.health, item.max_hit_points);
-    item.max_secondary_value = unit.max_secondary_value;
-    item.secondary_value = std::min(unit.secondary_value, item.max_secondary_value);
+    // World bars and damage overlays read raw +0x10 directly.  A zero value
+    // is the original indestructible/no-health-meter sentinel.
+    item.max_hit_points = unit.max_health;
+    item.hit_points = unit.health;
+    // DrawUnitHealthAndSecondaryBars divides raw +0x24 by raw +0x14 plus
+    // owner/type production-effect slot 1 (0x004c5da5..0x004c5dc8).
+    item.max_secondary_value =
+        CalculateUnitRuntimeMaxSecondaryValueWithProductionEffect01(
+            g_runtime.gameplay_production_runtime, unit);
+    item.secondary_value = unit.secondary_value;
+    // The outer gate at 0x004c5d34 tests raw +0x14 before using that
+    // effect-adjusted denominator.  An upgrade alone must not create a bar
+    // for a definition whose base secondary maximum is zero.
+    item.secondary_bar_enabled = unit.max_secondary_value != 0;
     item.cell_animation_frame = unit.animation_frame;
     item.cell_flag40_animation_frame = unit.cell_flag40_animation_frame;
     item.cell_channel_additive_frame = unit.cell_channel_additive_frame;
@@ -12348,6 +13973,8 @@ UnitRenderItem make_default_unit_render_item(UnitMovementUnit& unit) {
     item.ability_id = unit.ability_id;
     item.x = unit.x;
     item.y = unit.y;
+    item.visibility_cell_x = unit.current_cell_x;
+    item.visibility_cell_y = unit.current_cell_y;
     item.center_offset_x = unit.definition.center_bounds_left;
     item.center_offset_y = unit.definition.center_bounds_top;
     // ProcessVisibleUnitRenderQueue (0x004c3de0) uses definition +0x360..
@@ -12357,8 +13984,10 @@ UnitRenderItem make_default_unit_render_item(UnitMovementUnit& unit) {
     // relative to units and terrain decorations.
     item.center_width = unit.definition.center_bounds_width;
     item.center_height = unit.definition.center_bounds_height;
-    item.cell_construction_progress_active =
-        unit.under_construction || unit.action_mode_gate == 1;
+    // FUN_004c523d enters FUN_004c573c only when raw +0x30 is exactly one.
+    // `under_construction` remains simulation/UI state and is intentionally
+    // not a substitute for that renderer gate.
+    item.cell_construction_progress_active = unit.action_mode_gate == 1;
     item.cell_channel_additive_active = unit.previous_command_state == 1;
     item.display_name = default_unit_display_name(unit);
     return item;
@@ -12374,6 +14003,7 @@ void mirror_default_gameplay_visibility_to_consumers(
         !g_runtime.gameplay_startup_state.fog_reveal_disabled;
     render_visibility.cells = grid.current;
     render_visibility.fog_blocked_cells = &grid.previous;
+    render_visibility.authoritative_grid = &grid;
 
     GameplaySoundState& sound = g_runtime.gameplay_sound;
     sync_default_gameplay_sound_spatial_view(sound);
@@ -12456,9 +14086,11 @@ void sync_default_gameplay_visibility_and_render_inputs(u32 frame_counter) {
     // placement code.  The reconstruction keeps typed vectors for those
     // systems, so merge non-visibility mutations into the grid immediately
     // before the original visibility phase.  Preserve the transient/current
-    // vision bits in case a reliable-packet callback changed them this tick.
+    // vision bits and the render-owned low-health selector; the latter is
+    // copied into the explored-fog snapshot by the next visibility pass.
     constexpr u32 kVisibilityOwnedCurrentBits =
-        kGameplayVisibilityCurrentOwnerMask | kGameplayVisibilityLocalMask;
+        kGameplayVisibilityCurrentOwnerMask | kGameplayVisibilityLocalMask |
+        kGameplayRenderPackedOverlayMask;
     for (u32 y = 0; y < context.grid->height; ++y) {
         for (u32 x = 0; x < context.grid->width; ++x) {
             const std::size_t source_index =
@@ -12473,6 +14105,13 @@ void sync_default_gameplay_visibility_and_render_inputs(u32 frame_counter) {
                 (context.grid->current[target_index] & kVisibilityOwnedCurrentBits) |
                 (movement->map.cells[source_index].visibility_flags &
                     ~kVisibilityOwnedCurrentBits);
+            // DAT_00f19e74 is the live terrain/resource word array.  Keep the
+            // authoritative typed grid current before UpdateGameplayVisibilityMap
+            // snapshots revealed cells into terrain_backup (DAT_00e59e74).
+            if (target_index < context.grid->terrain.size()) {
+                context.grid->terrain[target_index] =
+                    movement->map.cells[source_index].flags;
+            }
         }
     }
 
@@ -12494,6 +14133,13 @@ void sync_default_gameplay_visibility_and_render_inputs(u32 frame_counter) {
     configure_default_gameplay_fog_context();
     g_runtime.gameplay_unit_render_queue.local_owner_id =
         g_runtime.gameplay_player_slots.local_player_slot;
+    {
+        const u32 local_owner = g_runtime.gameplay_player_slots.local_player_slot;
+        g_runtime.gameplay_unit_render_queue.local_owner_is_observer =
+            local_owner < g_runtime.gameplay_player_slots.slot_states.size() &&
+            g_runtime.gameplay_player_slots.slot_states[local_owner] ==
+                static_cast<u8>(PlayerSlotState::observer);
+    }
     g_runtime.gameplay_unit_render_queue.owner_relation_masks =
         g_runtime.gameplay_player_slots.owner_relation_masks;
     g_runtime.gameplay_unit_render_queue.owner_visibility_masks =
@@ -12534,6 +14180,29 @@ void sync_default_gameplay_visibility_and_render_inputs(u32 frame_counter) {
         g_runtime.gameplay_unit_render_queue.units.push_back(
             make_default_unit_render_item(*unit));
     }
+
+    // DAT_007071dc is rendered by ProcessVisibleEffectRenderQueue
+    // (0x004c3f8a) after the active list.  Lifecycle nodes are deliberately
+    // inactive, so only null pointers are rejected here.
+    g_runtime.gameplay_unit_render_queue.effects.reserve(lifecycle_count);
+    for (UnitMovementUnit* unit : movement->lifecycle_units) {
+        if (unit == nullptr) {
+            continue;
+        }
+        UnitRenderItem item = make_default_unit_render_item(*unit);
+        // Raw +0x6c is the first original lifecycle render filter.
+        item.effect_state = static_cast<u32>(unit->path_target_x);
+        // The original unit record reuses raw +0x64 after the node moves to
+        // DAT_007071dc: it is the lifecycle work timer and also the frame
+        // value consumed by DispatchUnitAnimationDraw.  The typed runtime
+        // separates work_timer from animation_frame, so project the reused
+        // original value into both render-frame consumers for corpse/effect
+        // items.  Otherwise the first death sprite is frame 0 here while the
+        // original has already advanced raw +0x64 to frame 1 in the same tick.
+        item.animation_frame = unit->work_timer;
+        item.cell_animation_frame = unit->work_timer;
+        g_runtime.gameplay_unit_render_queue.effects.push_back(std::move(item));
+    }
 }
 
 bool default_world_tile_currently_visible(i32 world_x, i32 world_y) {
@@ -12556,8 +14225,13 @@ bool default_world_tile_currently_visible(i32 world_x, i32 world_y) {
     }
     const std::size_t index =
         static_cast<std::size_t>(tile_y) * grid.width + tile_x;
+    // FUN_004e284a requires bit 28 (explored) and, while fog is active,
+    // bit 27 (current/full visibility) before drawing a mobile-unit marker.
+    // This helper feeds both minimap markers and the shared selection scan, so
+    // accepting bit 28 alone leaked/selectable enemy units through stale fog.
     return index < grid.current.size() &&
-        (grid.current[index] & kGameplayVisibilityVisible) != 0;
+        (grid.current[index] & kGameplayVisibilityLocalMask) ==
+            kGameplayVisibilityLocalMask;
 }
 
 u32 default_owner_ai_route_object_visibility_mask(i32 world_x, i32 world_y) {
@@ -12606,32 +14280,55 @@ UiOverlayMinimapUnit make_default_ui_overlay_minimap_unit(
     overlay_unit.type_id = unit.type_id;
     overlay_unit.owner_id = unit.owner_id;
     overlay_unit.runtime_flags = unit.runtime_flags;
+    overlay_unit.health = unit.health;
+    overlay_unit.max_health = unit.max_health;
+    overlay_unit.status_timer = unit.status_timer;
+    overlay_unit.action_effect_flags = unit.definition.action_effect_flags;
     overlay_unit.selection_score = unit.max_health + unit.health +
         unit.runtime_stat_1c + unit.runtime_stat_20 +
         unit.max_secondary_value + unit.runtime_stat_28;
     overlay_unit.world_x = unit.x;
     overlay_unit.world_y = unit.y;
-    if (unit.type_id < 0x60) {
-        overlay_unit.world_x = unit.x + unit.definition.center_bounds_left +
-            (unit.definition.center_bounds_width >> 1);
-        overlay_unit.world_y = unit.y + unit.definition.center_bounds_top +
-            (unit.definition.center_bounds_height >> 1);
-    }
+    overlay_unit.bounds_left = unit.definition.bounds_left;
+    overlay_unit.bounds_top = unit.definition.bounds_top;
+    overlay_unit.bounds_width = unit.definition.bounds_width;
+    overlay_unit.bounds_height = unit.definition.bounds_height;
     overlay_unit.footprint_width_tiles =
         std::max<u32>(unit.definition.footprint_width_tiles, 1);
     overlay_unit.footprint_height_tiles =
         std::max<u32>(unit.definition.footprint_height_tiles, 1);
-    overlay_unit.visible_to_local_player =
-        unit.owner_id == g_runtime.gameplay_player_slots.local_player_slot ||
-        default_world_tile_currently_visible(
-            overlay_unit.world_x, overlay_unit.world_y);
+    // FUN_004e284a uses raw +0xb8/+0xbc both for the visibility tile and for
+    // minimap placement.  It does not center mobile units in their sprite
+    // bounds or bypass the fog bits merely because the unit is locally owned.
+    overlay_unit.visible_to_local_player = default_world_tile_currently_visible(
+        overlay_unit.world_x, overlay_unit.world_y);
     overlay_unit.hidden_from_minimap =
         (unit.runtime_flags & kUnitRenderHiddenFlag) != 0;
+    // FUN_004e284a checks raw +0x9c bit 0x40 / raw +0x5c bit 0x80 before
+    // its ordinary hidden and fog-tile gates.  FUN_004d6cca then accepts the
+    // unit when its owner's relation row contains the local slot or when the
+    // unit's current cell carries the local slot's owner-visibility bit.
+    GameplayVisibilityUnit minimap_visibility{};
+    minimap_visibility.owner_id = unit.owner_id;
+    minimap_visibility.command_state = unit.command_state;
+    minimap_visibility.command_flags = unit.command_flags;
+    minimap_visibility.command_bits = unit.command_bits;
+    minimap_visibility.visibility_probe_x = unit.x;
+    minimap_visibility.visibility_probe_y = unit.y;
+    overlay_unit.special_visibility_gate_passed =
+        !CheckUnitVisibilityGateFlags(minimap_visibility) ||
+        CheckUnitOwnerMaskOrCurrentVisibilityBit(
+            g_runtime.gameplay_player_slots,
+            g_runtime.gameplay_visibility_grid, minimap_visibility,
+            g_runtime.gameplay_player_slots.local_player_slot);
     return overlay_unit;
 }
 
 void clear_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
     overlay.command_options.clear();
+    overlay.primary_production_options.clear();
+    overlay.selected_unit_raw_production_reference_count = 0;
+    overlay.selected_unit_uses_avatar_production_slots = false;
     overlay.selected_unit_name_text.clear();
     overlay.selected_unit_owner_text.clear();
     overlay.selected_unit_experience_text.clear();
@@ -12639,10 +14336,12 @@ void clear_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
     overlay.selected_unit_capability_lines.clear();
     overlay.selected_unit_health = 0;
     overlay.selected_unit_health_ratio_max = 0;
+    overlay.selected_unit_health_text_color = 0x11;
     overlay.selected_unit_max_health = 0;
     overlay.selected_unit_base_max_health = 0;
     overlay.selected_unit_secondary = 0;
     overlay.selected_unit_secondary_ratio_max = 0;
+    overlay.selected_unit_secondary_line_enabled = false;
     overlay.selected_unit_max_secondary = 0;
     overlay.selected_unit_base_max_secondary = 0;
     overlay.selected_unit_slot_value = 0;
@@ -12651,15 +14350,176 @@ void clear_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
     overlay.selected_unit_runtime_flags = 0;
     overlay.selected_unit_action_mode_gate = 0;
     overlay.selected_unit_command_bit_mask = 0;
+    overlay.selected_unit_special_action_states = {};
+    overlay.selected_unit_order_2a_available = false;
     overlay.selected_unit_details_visible = false;
     overlay.current_detail_item_id = 0;
     overlay.detail_progress = 0;
     overlay.detail_progress_total = 0;
+    overlay.selected_unit_indestructible_text.clear();
+}
+
+u32 default_ui_overlay_active_queue_item(u32 command_state) {
+    switch (command_state) {
+    case 0x50u:
+    case 0x51u:
+        return 0x1aau;
+    case 0x82u:
+    case 0x83u:
+        return 0x1acu;
+    case 0x4du:
+    case 0x4eu:
+        return 0x1abu;
+    default:
+        return 0;
+    }
+}
+
+u32 default_ui_overlay_deferred_queue_item(u32 command_state) {
+    switch (command_state) {
+    case 0x10u:
+        return 0x1aau;
+    case 0x22u:
+        return 0x1acu;
+    case 0x17u:
+        return 0x1abu;
+    default:
+        return 0;
+    }
+}
+
+void append_default_ui_overlay_selected_unit_queue_options(
+    UiOverlayState& overlay, const UnitMovementUnit& unit) {
+    if (unit.type_id < 0x60u) {
+        return;
+    }
+
+    const u32 active_item =
+        default_ui_overlay_active_queue_item(unit.command_state);
+    if (active_item == 0) {
+        // FUN_004e5292 reaches the deferred slots only through one of the six
+        // recognized active production states.
+        return;
+    }
+
+    UiOverlayCommandOption active{};
+    active.item_id = active_item;
+    active.aux = unit.command_value;
+    active.flags = 0; // logical index 0 is the active command
+    active.enabled = true;
+    overlay.command_options.push_back(active);
+
+    const u32 deferred_count = std::min<u32>(4u,
+        std::min<u32>(unit.deferred_command_count,
+            static_cast<u32>(unit.deferred_commands.size())));
+    for (u32 index = 0; index < deferred_count; ++index) {
+        const UnitQueuedCommand& queued = unit.deferred_commands[index];
+        const u32 item_id = default_ui_overlay_deferred_queue_item(queued.state);
+        if (item_id == 0) {
+            continue;
+        }
+        UiOverlayCommandOption option{};
+        option.item_id = item_id;
+        option.aux = static_cast<u32>(queued.x);
+        option.flags = index + 1u; // original logical queue index, not UI flags
+        option.enabled = true;
+        overlay.command_options.push_back(option);
+    }
+}
+
+bool default_ui_overlay_uses_avatar_production_slots(u32 type_id) {
+    return IsUiOverlayAvatarProductionStructureType(type_id);
+}
+
+u32 default_ui_overlay_avatar_slot_unit_type(u32 owner, u32 slot_index) {
+    if (!g_runtime.gameplay_avatar_runtime_loaded ||
+        owner >= kGameSessionAvatarPlayerCount ||
+        slot_index >= kGameSessionAvatarSlotCount) {
+        return kInvalidGameSessionUnitType;
+    }
+    const std::size_t offset =
+        static_cast<std::size_t>(owner) * kGameSessionAvatarPlayerBytes +
+        static_cast<std::size_t>(slot_index) * kGameSessionAvatarRecordBytes +
+        kGameSessionAvatarInvalidMarkerOffset;
+    return default_mode1_packet_avatar_runtime_u32(offset);
+}
+
+bool default_ui_overlay_avatar_attachment_gate_in_list(
+    const std::vector<UnitMovementUnit*>& units, u32 owner, u32 slot_id) {
+    for (const UnitMovementUnit* candidate : units) {
+        if (candidate != nullptr &&
+            MatchesUiOverlayAvatarAttachmentSlot(
+                *candidate, owner, slot_id)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool default_ui_overlay_avatar_attachment_gate(u32 owner, u32 slot_id) {
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    return movement != nullptr &&
+        (default_ui_overlay_avatar_attachment_gate_in_list(
+             movement->active_units, owner, slot_id) ||
+            default_ui_overlay_avatar_attachment_gate_in_list(
+                movement->lifecycle_units, owner, slot_id));
+}
+
+bool default_ui_overlay_avatar_queue_gate(u32 owner, u32 slot_id) {
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    if (movement == nullptr) {
+        return false;
+    }
+    for (const UnitMovementUnit* producer : movement->active_units) {
+        if (producer != nullptr && MatchesUiOverlayAvatarProducerQueueSlot(
+                *producer, owner, slot_id)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void append_default_ui_overlay_avatar_production_options(
+    UiOverlayState& overlay, const UnitMovementUnit& unit) {
+    overlay.selected_unit_uses_avatar_production_slots = true;
+    for (u32 slot_index = 0; slot_index < kGameSessionAvatarSlotCount;
+         ++slot_index) {
+        const u32 avatar_type = default_ui_overlay_avatar_slot_unit_type(
+            unit.owner_id, slot_index);
+        if (avatar_type == kInvalidGameSessionUnitType) {
+            continue;
+        }
+
+        const u32 slot_id = slot_index + 1u;
+        const bool blocked =
+            default_ui_overlay_avatar_attachment_gate(unit.owner_id, slot_id) ||
+            default_ui_overlay_avatar_queue_gate(unit.owner_id, slot_id);
+        UiOverlayCommandOption option{};
+        option.item_id = blocked ? 0xc8u : avatar_type;
+        option.aux = (unit.owner_id << 16) | slot_id;
+        option.flags = 0;
+        if (!blocked && avatar_type < overlay.unit_definition_icon_markers.size()) {
+            option.icon_marker = overlay.unit_definition_icon_markers[avatar_type];
+        }
+        // Original item 0xc8 consumes the slot but has no actionable command.
+        // Keep record flags at zero while disabling the reconstructed hot region.
+        option.enabled = !blocked;
+        overlay.primary_production_options.push_back(option);
+    }
 }
 
 void sync_default_ui_overlay_selected_unit_command_options(
     UiOverlayState& overlay, const UnitMovementUnit& unit) {
     overlay.command_options.clear();
+    overlay.primary_production_options.clear();
+    overlay.selected_unit_raw_production_reference_count = 0;
+    overlay.selected_unit_uses_avatar_production_slots = false;
+    append_default_ui_overlay_selected_unit_queue_options(overlay, unit);
+    const bool avatar_producer =
+        default_ui_overlay_uses_avatar_production_slots(unit.type_id);
+    if (avatar_producer) {
+        append_default_ui_overlay_avatar_production_options(overlay, unit);
+    }
     const UnitDefinitionResourceCatalogState& catalog =
         unit_definition_resource_catalog_state();
     if (!catalog.loaded || unit.type_id >= catalog.records.size()) {
@@ -12671,53 +14531,72 @@ void sync_default_ui_overlay_selected_unit_command_options(
     }
 
     const bool structure = unit.type_id >= 0x60u;
-    const std::size_t reference_count_offset = structure ?
-        kUnitDefinitionAlternateReferenceCountOffset :
-        kUnitDefinitionPrimaryReferenceCountOffset;
-    const std::size_t reference_base_offset = structure ?
-        kUnitDefinitionAlternateReferenceBaseOffset :
-        kUnitDefinitionPrimaryReferenceBaseOffset;
-    const u32 raw_count = read_runtime_catalog_u32(
-        source.definition_bytes, reference_count_offset, 0);
-    const u32 count = std::min<u32>(raw_count, 16);
-    for (u32 index = 0; index < count; ++index) {
-        const u32 referenced_type = read_runtime_catalog_u32(
-            source.definition_bytes,
-            reference_base_offset + index * sizeof(u32),
-            kUnitDefinitionResourceCount);
-        if (referenced_type >= catalog.records.size()) {
-            continue;
+    if (!avatar_producer) {
+        const std::size_t reference_count_offset = structure ?
+            kUnitDefinitionAlternateReferenceCountOffset :
+            kUnitDefinitionPrimaryReferenceCountOffset;
+        const std::size_t reference_base_offset = structure ?
+            kUnitDefinitionAlternateReferenceBaseOffset :
+            kUnitDefinitionPrimaryReferenceBaseOffset;
+        const u32 raw_count = read_runtime_catalog_u32(
+            source.definition_bytes, reference_count_offset, 0);
+        if (structure) {
+            overlay.selected_unit_raw_production_reference_count = raw_count;
         }
-        if (unit.owner_id <
-                g_runtime.session_runtime_import_state.owner_unit_availability.size() &&
-            referenced_type < g_runtime.session_runtime_import_state
-                                  .owner_unit_availability[unit.owner_id].size() &&
-            g_runtime.session_runtime_import_state
-                    .owner_unit_availability[unit.owner_id][referenced_type] == 0) {
-            continue;
-        }
-
-        const UnitDefinitionResourceRecord& candidate =
-            catalog.records[referenced_type];
-        if (!candidate.loaded || candidate.definition_bytes.empty()) {
-            continue;
-        }
-        u32 category = 0;
-        if (!structure) {
-            category = read_runtime_catalog_u32(candidate.definition_bytes,
-                kUnitDefinitionPlacementClassOffset, 3);
-            if (category >= 3) {
+        const u32 count = std::min<u32>(raw_count, 16);
+        for (u32 index = 0; index < count; ++index) {
+            const u32 referenced_type = read_runtime_catalog_u32(
+                source.definition_bytes,
+                reference_base_offset + index * sizeof(u32),
+                kUnitDefinitionResourceCount);
+            if (referenced_type >= catalog.records.size()) {
                 continue;
             }
-        }
+            if (unit.owner_id < g_runtime.session_runtime_import_state
+                                      .owner_unit_availability.size() &&
+                referenced_type < g_runtime.session_runtime_import_state
+                                      .owner_unit_availability[unit.owner_id].size() &&
+                g_runtime.session_runtime_import_state
+                        .owner_unit_availability[unit.owner_id][referenced_type] == 0) {
+                continue;
+            }
 
-        UiOverlayCommandOption option{};
-        option.item_id = referenced_type;
-        option.aux = category;
-        option.icon_marker = read_runtime_catalog_u8(candidate.definition_bytes,
-            kUnitDefinitionUiIconMarkerOffset, 0);
-        option.enabled = true;
-        overlay.command_options.push_back(option);
+            const UnitDefinitionResourceRecord& candidate =
+                catalog.records[referenced_type];
+            if (!candidate.loaded || candidate.definition_bytes.empty()) {
+                continue;
+            }
+            u32 category = 0;
+            if (!structure) {
+                category = read_runtime_catalog_u32(candidate.definition_bytes,
+                    kUnitDefinitionPlacementClassOffset, 3);
+                if (category >= 3) {
+                    continue;
+                }
+            }
+
+            UiOverlayCommandOption option{};
+            option.item_id = referenced_type;
+            option.aux = category;
+            option.icon_marker = read_runtime_catalog_u8(
+                candidate.definition_bytes, kUnitDefinitionUiIconMarkerOffset, 0);
+            UnitLifecycleContext* lifecycle =
+                g_runtime.gameplay_startup_state.lifecycle;
+            if (lifecycle != nullptr &&
+                !CheckUnitProductionPrerequisites(
+                    *lifecycle, unit.owner_id, referenced_type)) {
+                // Building records (0x60..0xa9) are gated in FUN_004e5731,
+                // while FUN_004e3f6e applies the same gate before
+                // structure-produced unit records. This combined path checks
+                // both kinds.
+                option.flags = 2u;
+            }
+            option.enabled = true;
+            overlay.command_options.push_back(option);
+            if (structure) {
+                overlay.primary_production_options.push_back(option);
+            }
+        }
     }
 
     if (!structure) {
@@ -12757,7 +14636,10 @@ void sync_default_ui_overlay_selected_unit_command_options(
                     ProductionOrderAvailabilityCode::locked)) {
                 // Original preserves the grid position with invisible item c8.
                 option.item_id = 0xc8u;
-                option.flags = 1u;
+                // 0x004e5081 calls FUN_004e5621 with EDI=0.  The c8 draw is
+                // empty, but FUN_004e5919 still consumes the dynamic slot so
+                // following structure orders retain their original positions.
+                option.flags = 0;
             }
             else if (availability.code >= 3u) {
                 option.flags = 2u;
@@ -12815,6 +14697,43 @@ void apply_default_unit_command_bit_mask(UnitMovementUnit& unit, u32 mask) {
     }
 }
 
+std::vector<GameSessionAvatarProductionDefinition>
+default_gameplay_avatar_production_definitions() {
+    std::vector<GameSessionAvatarProductionDefinition> definitions(
+        kUnitDefinitionResourceCount);
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    UnitLifecycleContext& lookup_context = lifecycle != nullptr
+        ? *lifecycle
+        : g_runtime.gameplay_lifecycle_context;
+    for (u32 type_id = 0; type_id < definitions.size(); ++type_id) {
+        const UnitMovementDefinition* definition =
+            default_unit_lifecycle_find_definition(lookup_context, type_id);
+        if (definition == nullptr) {
+            continue;
+        }
+        definitions[type_id].support_cost =
+            definition->production_population_cost;
+        definitions[type_id].build_ticks = definition->production_spawn_time;
+        definitions[type_id].resource_cost =
+            definition->production_resource_cost;
+    }
+    return definitions;
+}
+
+u32 default_selected_unit_avatar_progress_total(const UnitMovementUnit& unit) {
+    if (!g_runtime.gameplay_avatar_runtime_loaded ||
+        unit.owner_id >= kGameSessionAvatarPlayerCount ||
+        unit.path_target_y <= 0 ||
+        unit.path_target_y > static_cast<i32>(kGameSessionAvatarSlotCount)) {
+        return 0;
+    }
+    const std::vector<GameSessionAvatarProductionDefinition> definitions =
+        default_gameplay_avatar_production_definitions();
+    return CalculateGameSessionAvatarBuildTicks(
+        g_runtime.gameplay_avatar_runtime, unit.owner_id,
+        static_cast<u32>(unit.path_target_y - 1), definitions);
+}
+
 u32 default_selected_unit_progress_total(const UnitMovementUnit& unit) {
     const u32 command = unit.command_state & 0xffu;
     if (command == 0x4e || command == 0x4d) {
@@ -12833,6 +14752,10 @@ u32 default_selected_unit_progress_total(const UnitMovementUnit& unit) {
         }
     }
     if (command == 0x51 || command == 0x50) {
+        if (unit.path_target_y != 0 &&
+            g_runtime.gameplay_avatar_runtime_loaded) {
+            return default_selected_unit_avatar_progress_total(unit);
+        }
         const u32 type_id = ResolveQueuedOwnerProductionUnitType(unit);
         if (const UnitMovementDefinition* definition =
                 default_unit_lifecycle_find_definition(
@@ -12852,20 +14775,16 @@ u32 default_selected_unit_progress_total(const UnitMovementUnit& unit) {
             definition->completion_terrain_effect_period : 0;
     }
     if (unit.action_mode_gate == 1) {
-        return std::max<u32>(unit.definition.action_cycle_ticks, 1);
+        return ResolveUiOverlayConstructionProgressTotal(
+            unit.definition.production_spawn_time);
     }
     return 0;
 }
 
 u32 default_selected_unit_progress_value(const UnitMovementUnit& unit) {
-    const u32 command = unit.command_state & 0xffu;
-    if (command == 0x83 || command == 0x82 || unit.action_mode_gate == 1) {
-        return unit.action_mode;
-    }
-    if ((command == 0x4e || command == 0x4d) && unit.work_timer == 0) {
-        return unit.action_mode;
-    }
-    return unit.work_timer;
+    return ResolveUiOverlaySelectedUnitProgressValue(unit.command_state,
+        unit.action_mode_gate, unit.action_mode, unit.animation_frame,
+        unit.work_timer);
 }
 
 void sync_default_ui_overlay_grouped_command_gates(UiOverlayState& overlay) {
@@ -12944,8 +14863,23 @@ void sync_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
         g_runtime.gameplay_production_runtime;
     overlay.current_detail_item_id = unit->type_id;
     overlay.selected_unit_health = unit->health;
-    overlay.selected_unit_health_ratio_max =
-        CalculateUnitRuntimeMaxHealthWithProductionEffect00(production, *unit);
+    // FUN_004e1544 displays current/max and fades the selected icon using the
+    // raw runtime max-health field. Its text color alone uses max + effect 00.
+    overlay.selected_unit_health_ratio_max = unit->max_health;
+    // Original 0x004e1644 indexes the full DWORD table at 0x008640d8 with
+    // HP * 4 / (max HP + effect 00).  Steps above four are observable while
+    // an effect-adjusted maximum changes underneath an existing current HP.
+    constexpr std::array<u32, 10> kSelectedHealthTextColors{{
+        0x09u, 0x09u, 0x99u, 0x11u, 0x11u,
+        0xa9u, 0xc1u, 0xc9u, 0xd1u, 0x71u,
+    }};
+    const u32 health_color_step = std::min<u32>(
+        CalculateUnitHitPointBarFillWithProductionEffect00(production, *unit),
+        static_cast<u32>(kSelectedHealthTextColors.size() - 1));
+    overlay.selected_unit_health_text_color =
+        kSelectedHealthTextColors[health_color_step];
+    overlay.selected_unit_indestructible_text =
+        startup_platform_row(251, "Indestructible");
     // FUN_004e1544 selects one of the 32 red-adjusted character palettes as
     // 31 - (current_hp * 31 / max_hp).  This is especially visible on a
     // selected structure while it is still being constructed.
@@ -12959,15 +14893,20 @@ void sync_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
     overlay.selected_unit_max_health =
         CalculateUnitMaxHealthWithProductionEffects(production, *unit);
     overlay.selected_unit_base_max_health =
-        unit->definition.initial_max_health;
+        unit->definition.profile_offense_value;
     overlay.selected_unit_secondary = unit->secondary_value;
     overlay.selected_unit_secondary_ratio_max =
         CalculateUnitRuntimeMaxSecondaryValueWithProductionEffect01(
             production, *unit);
+    // Original FUN_004e1d8a gates this line solely on raw unit +0x14, the
+    // runtime base maximum.  Neither a nonzero current value nor an effect-01
+    // adjusted maximum can make a base-zero line appear.
+    overlay.selected_unit_secondary_line_enabled =
+        unit->max_secondary_value != 0;
     overlay.selected_unit_max_secondary =
         CalculateUnitMaxSecondaryValueWithProductionEffects(production, *unit);
     overlay.selected_unit_base_max_secondary =
-        unit->definition.initial_max_secondary_value;
+        unit->definition.profile_defense_value;
     overlay.selected_unit_slot_value = unit->action_mode;
     overlay.selected_unit_command_state = unit->command_state;
     overlay.selected_unit_command_flags = unit->command_flags;
@@ -12975,7 +14914,15 @@ void sync_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
     overlay.selected_unit_action_mode_gate = unit->action_mode_gate;
     overlay.selected_unit_command_bit_mask =
         default_unit_action_capability_mask(*unit);
+    overlay.selected_unit_special_action_states = {};
+    overlay.selected_unit_order_2a_available =
+        unit->owner_id < production.variant_counts.size() &&
+        0x2au < production.variant_counts[unit->owner_id].size() &&
+        production.variant_counts[unit->owner_id][0x2au] != 0;
     if (unit->type_id < 0x60u) {
+        GameplayProductionActionState& production_actions =
+            gameplay_production_action_state();
+        sync_default_gameplay_production_action_definitions(production_actions);
         u32 aggregate_mask = 0;
         bool any_selected_mobile = false;
         bool all_selected_can_produce = true;
@@ -12984,7 +14931,8 @@ void sync_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
                 find_default_movement_unit_by_id(selected_id);
             if (selected == nullptr || !selected->active ||
                 selected->type_id >= 0x60u ||
-                selected->owner_id != overlay.local_player_slot) {
+                selected->owner_id != overlay.local_player_slot ||
+                (selected->runtime_flags & 1u) == 0) {
                 continue;
             }
             const u32 selected_mask =
@@ -12993,6 +14941,48 @@ void sync_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
             all_selected_can_produce =
                 all_selected_can_produce && (selected_mask & 0x40u) != 0;
             any_selected_mobile = true;
+
+            // FUN_004e4414..0x004e48ad aggregates four special-action
+            // availability words independently of the ordinary capability
+            // mask.  Their bits select hidden, disabled, masked, and paired
+            // secondary command records in the panel builder.
+            for (u32 index = 0; index < 4; ++index) {
+                const u32 capability = 0x40000u << index;
+                if ((selected_mask & capability) == 0) {
+                    continue;
+                }
+                u32& action_state =
+                    overlay.selected_unit_special_action_states[index];
+                action_state |= 8u;
+                if ((selected->command_flags & (0x4000u << index)) != 0) {
+                    action_state |= 0x0eu;
+                    continue;
+                }
+                const u32 action_id = 0x20u + index;
+                if (action_id >= production_actions.definitions.size()) {
+                    continue;
+                }
+                const GameplayProductionActionDefinition& definition =
+                    production_actions.definitions[action_id];
+                if (definition.owner_requirement != 0xffffffffu &&
+                    (selected->owner_id >= production.variant_counts.size() ||
+                        definition.owner_requirement >=
+                            production.variant_counts[selected->owner_id].size() ||
+                        production.variant_counts[selected->owner_id]
+                            [definition.owner_requirement] == 0)) {
+                    continue;
+                }
+                if (definition.active_limit >= selected->status_timer + 1u) {
+                    continue;
+                }
+                action_state |= 4u;
+                if (definition.resource_limit < selected->action_mode) {
+                    action_state |= 1u;
+                }
+                else {
+                    action_state |= 0x10u;
+                }
+            }
         }
         if (any_selected_mobile) {
             if (!all_selected_can_produce) {
@@ -13008,6 +14998,38 @@ void sync_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
     overlay.detail_progress = default_selected_unit_progress_value(*unit);
     overlay.detail_progress_total = default_selected_unit_progress_total(*unit);
     overlay.selected_unit_capability_lines.clear();
+    if ((unit->runtime_flags & 0x10u) == 0) {
+        UnitEquipmentCatalog& equipment_catalog =
+            frontend_bootstrap_state().equipment_catalog;
+        const UnitEquipmentCatalog* equipment =
+            equipment_catalog.effects.empty() ? nullptr : &equipment_catalog;
+        if (CheckUnitCommandGateWithProductionEffect12(production, *unit,
+                false, unit->definition.support_source_flags,
+                default_unit_command_metadata_flags_from_original_table(*unit),
+                equipment)) {
+            overlay.selected_unit_capability_lines.emplace_back(
+                startup_platform_row(116, "Detector"));
+        }
+        const bool equipment_cloaking = equipment != nullptr &&
+            CalculateUnitEquipmentCommandFlagModifier(*unit, *equipment) != 0;
+        if ((unit->definition.support_source_flags & 2u) != 0 ||
+            (unit->command_flags & 0x40u) != 0 || equipment_cloaking) {
+            overlay.selected_unit_capability_lines.emplace_back(
+                startup_platform_row(117, "Cloaking"));
+        }
+        if ((unit->definition.support_source_flags & 4u) != 0) {
+            overlay.selected_unit_capability_lines.emplace_back(
+                startup_platform_row(118, "Mana support"));
+        }
+        if ((unit->definition.support_source_flags & 8u) != 0) {
+            overlay.selected_unit_capability_lines.emplace_back(
+                startup_platform_row(119, "Morale"));
+        }
+        if ((unit->definition.support_source_flags & 0x10u) != 0) {
+            overlay.selected_unit_capability_lines.emplace_back(
+                startup_platform_row(121, "Healing"));
+        }
+    }
     if ((unit->definition.action_effect_flags & 2u) != 0) {
         overlay.selected_unit_owner_text =
             startup_platform_label_value(178, "Level ", unit->status_timer + 1);
@@ -13022,6 +15044,16 @@ void sync_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
         overlay.selected_unit_owner_text.clear();
         overlay.selected_unit_experience_text.clear();
         overlay.selected_unit_order_text.clear();
+    }
+    // FUN_004e1f33 gives structures with definition +0x184 the platform-table
+    // `Supply  ` row (JW2_17.TRC record 0 row 120) instead of the mobile/elite
+    // Level/Exp pair. +0x184 is the existing production-population field
+    // (type 128 is the visible 9-supply case).
+    if (unit->type_id >= 0x60u &&
+        unit->definition.production_population_cost != 0) {
+        overlay.selected_unit_order_text = startup_platform_label_value(
+            120, "Supply  ", unit->definition.production_population_cost);
+        overlay.selected_unit_experience_text.clear();
     }
 
     overlay.selected_unit_name_text.clear();
@@ -13090,6 +15122,8 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
         unit_definition_resource_catalog_state();
     overlay.unit_definition_icon_markers.clear();
     overlay.unit_definition_icon_markers.reserve(kUnitDefinitionResourceCount);
+    overlay.minimap_definition_footprints.clear();
+    overlay.minimap_definition_footprints.reserve(kUnitDefinitionResourceCount);
     for (u32 unit_type = 0; unit_type < kUnitDefinitionResourceCount; ++unit_type) {
         const UnitDefinitionResourceRecord& record = unit_catalog.records[unit_type];
         overlay.unit_definition_icon_markers.push_back(
@@ -13097,6 +15131,15 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
             read_runtime_catalog_u8(
                 record.definition_bytes, kUnitDefinitionUiIconMarkerOffset, 0) :
             0);
+        const u32 footprint_width = record.loaded ?
+            read_runtime_catalog_u32(record.definition_bytes,
+                kUnitDefinitionFootprintWidthTilesOffset, 1) : 1;
+        const u32 footprint_height = record.loaded ?
+            read_runtime_catalog_u32(record.definition_bytes,
+                kUnitDefinitionFootprintHeightTilesOffset, 1) : 1;
+        overlay.minimap_definition_footprints.push_back(UiOverlayRect{
+            0, 0, std::max<u32>(footprint_width, 1),
+            std::max<u32>(footprint_height, 1)});
     }
     overlay.object_icon_markers.assign(
         kUiOverlayObjectIconMarkerCodes.begin(),
@@ -13236,6 +15279,7 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
     }
 
     overlay.minimap_units.clear();
+    overlay.lifecycle_units.clear();
     if (movement != nullptr) {
         overlay.minimap_units.reserve(movement->active_units.size());
         for (UnitMovementUnit* unit : movement->active_units) {
@@ -13243,6 +15287,14 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
                 continue;
             }
             overlay.minimap_units.push_back(
+                make_default_ui_overlay_minimap_unit(*unit));
+        }
+        overlay.lifecycle_units.reserve(movement->lifecycle_units.size());
+        for (UnitMovementUnit* unit : movement->lifecycle_units) {
+            if (unit == nullptr || (unit->runtime_flags & 4u) == 0) {
+                continue;
+            }
+            overlay.lifecycle_units.push_back(
                 make_default_ui_overlay_minimap_unit(*unit));
         }
     }
@@ -13276,6 +15328,10 @@ void apply_default_ui_overlay_runtime_mutations() {
 void sync_default_gameplay_hud_alert_markers() {
     GameplayHudAlertMarkerState& markers = g_runtime.gameplay_hud_alert_markers;
     UiOverlayState& overlay = ui_overlay_state();
+    // LoadJw207GameplayResourcePacks stores the first nine JW2_07 entries in
+    // DAT_00758a1c; FUN_0042a500 uses that base for all alert animation
+    // frames.  A zero/default base points at unrelated startup art.
+    markers.sprite_base_entry = jw207_resource_pack_state().under_attack_start;
 
     markers.minimap_x = overlay.minimap.output_x;
     markers.minimap_y = overlay.minimap.output_y;
@@ -13312,7 +15368,26 @@ void sync_default_gameplay_input_action_units(
         return;
     }
 
-    input.units.reserve(movement->active_units.size());
+    UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
+    configure_default_unit_effect_runtime_state(effects);
+    for (u32 action_id = 0;
+         action_id < 0x2eu && action_id < input.selector_modes.size();
+         ++action_id) {
+        const UnitEffectDefinition* definition =
+            find_default_unit_effect_definition(effects, 0x3du + action_id);
+        if (definition == nullptr) {
+            continue;
+        }
+        // FUN_004da02c's 64-byte selector-mode table is independent of the
+        // per-effect direction mode.  InitializeOriginalGameplayInputActionTables
+        // installed the original bytes; replacing them here made terrain-only
+        // action 7 take mode 3's target-hit return without ever dispatching.
+        input.selector_target_class_masks[action_id] =
+            definition->action_area_target_render_class_mask;
+    }
+
+    input.units.reserve(movement->active_units.size() +
+        movement->lifecycle_units.size());
     for (UnitMovementUnit* unit : movement->active_units) {
         if (unit == nullptr || !unit->active) {
             continue;
@@ -13325,8 +15400,12 @@ void sync_default_gameplay_input_action_units(
         action_unit.runtime_state =
             (unit->command_state & kUnitCommandDead) != 0 ? 4 : 0;
         action_unit.command_state = unit->command_state;
+        action_unit.area_marker_flags = unit->area_marker_flags;
         action_unit.runtime_flags = unit->runtime_flags;
         action_unit.action_mode_gate = unit->action_mode_gate;
+        action_unit.deferred_command_count = unit->deferred_command_count;
+        action_unit.target_class = unit->definition.render_class;
+        action_unit.path_target_x = unit->path_target_x;
         action_unit.x = unit->x;
         action_unit.y = unit->y;
         action_unit.bounds_left = unit->definition.bounds_left;
@@ -13360,6 +15439,41 @@ void sync_default_gameplay_input_action_units(
         action_unit.visible = true;
         input.units.push_back(action_unit);
     }
+
+    // Direction-mode-4 actions search the lifecycle/death list after the
+    // ordinary active hit-test.  These entries are target-only: they are
+    // never selected or included in normal command publication.
+    for (UnitMovementUnit* unit : movement->lifecycle_units) {
+        if (unit == nullptr || (unit->runtime_flags & 4u) == 0) {
+            continue;
+        }
+        GameplayActionUnitState action_unit{};
+        action_unit.offset = unit->id;
+        action_unit.type = unit->type_id;
+        action_unit.owner = unit->owner_id;
+        action_unit.runtime_state = 4;
+        action_unit.command_state = unit->command_state;
+        action_unit.area_marker_flags = unit->area_marker_flags;
+        action_unit.runtime_flags = unit->runtime_flags;
+        action_unit.action_mode_gate = unit->action_mode_gate;
+        action_unit.deferred_command_count = unit->deferred_command_count;
+        action_unit.target_class = unit->definition.render_class;
+        action_unit.path_target_x = unit->path_target_x;
+        action_unit.x = unit->x;
+        action_unit.y = unit->y;
+        action_unit.bounds_left = unit->definition.bounds_left;
+        action_unit.bounds_top = unit->definition.bounds_top;
+        action_unit.bounds_width = unit->definition.bounds_width;
+        action_unit.bounds_height = unit->definition.bounds_height;
+        action_unit.active = false;
+        const auto overlay_unit = std::find_if(overlay.lifecycle_units.begin(),
+            overlay.lifecycle_units.end(), [unit](const UiOverlayMinimapUnit& value) {
+                return value.unit_id == unit->id;
+            });
+        action_unit.visible = overlay_unit != overlay.lifecycle_units.end() &&
+            UiOverlayUnitVisibleToLocalPlayer(*overlay_unit);
+        input.units.push_back(action_unit);
+    }
 }
 
 void ensure_default_selected_input_command_capability(
@@ -13391,8 +15505,42 @@ void ensure_default_indexed_input_payload(
     }
 }
 
+bool default_worker_build_click_placement_allowed(
+    GameplayProductionActionState& production, const UiOverlayState& overlay,
+    const UiOverlayCommandAction& action) {
+    if (action.aux >= kUnitDefinitionResourceCount - 0x60u) {
+        return false;
+    }
+
+    UnitMovementUnit* builder = find_default_movement_unit_by_id(
+        overlay.selected_unit_id);
+    if (builder == nullptr || !builder->active ||
+        builder->owner_id != overlay.local_player_slot) {
+        return false;
+    }
+
+    // Original selector-6 click handler 0x004da6f4 calls FUN_004dba30 before
+    // publishing the command.  FUN_004dba30 iterates the same FUN_004dbae2
+    // cell predicate used by the placement preview, including its saved/live
+    // terrain, route, owner-visibility, collision and ignored-source rules.
+    return CheckPreviewProductionPlacementFootprintGateCells(production,
+        action.aux + 0x60u, action.world_x & ~0x1f,
+        action.world_y & ~0x1f, overlay.selected_unit_id);
+}
+
+void reject_default_worker_build_click(GameplayInputActionState& input) {
+    ++input.validation_fail_count;
+    ++input.rejected_feedback_count;
+    input.last_dispatch_failed = true;
+    QueueGameplayHudMessageAndSound(g_runtime.gameplay_hud_text,
+        g_runtime.gameplay_sound,
+        startup_platform_row(98, "Cannot build here"),
+        kDefaultUiClickSoundSlot);
+}
+
 bool publish_default_ui_overlay_input_command(
-    GameplayInputActionState& input, UiOverlayState& overlay,
+    GameplayProductionActionState& production, GameplayInputActionState& input,
+    UiOverlayState& overlay,
     const UiOverlayCommandAction& action) {
     static constexpr std::array<u8, 0x2a> kOriginalObjectActionModes = {
         1, 2, 2, 2, 2, 2, 0, 1, 1, 2, 2, 1, 2, 1,
@@ -13422,6 +15570,20 @@ bool publish_default_ui_overlay_input_command(
     if (action.item_id >= 0xaau && action.item_id < 0xd4u) {
         const u32 action_id = action.item_id - 0xaau;
         if (action.action == kUiOverlayCommandActionPlacement) {
+            if (action_id == 6u &&
+                !default_worker_build_click_placement_allowed(
+                    production, overlay, action)) {
+                reject_default_worker_build_click(input);
+                return true;
+            }
+            if (action_id == 7u && action.aux != 0) {
+                // FUN_004da74c falls back to DAT_00862418 when EDI has no
+                // unit target.  The terrain cursor resolver stores class 0x0c
+                // there before dispatching a berry command.  Pointer event Y
+                // happens to share the reconstructed snapshot slot, so retain
+                // the contextual class carried by the queued UI action.
+                input.current_snapshot.field3 = action.aux;
+            }
             // Selector 6 has original mode 0, so the generic dispatcher does
             // not pass through its coordinate-validation branch.  Preserve
             // the explicit placement world point for the build packet.
@@ -13625,6 +15787,84 @@ void focus_default_ui_overlay_selected_unit(UiOverlayState& overlay, u32 unit_id
 bool apply_default_ui_overlay_local_command(
     UiOverlayState& overlay, const UiOverlayCommandAction& action) {
     const bool click = action.action == kUiOverlayCommandActionClick;
+    if (action.item_id == 0xc6u) {
+        if (click) {
+            // The jump table at 0x004dac6c uses c6's aux field as a real mode,
+            // not decoration.  Aux 0..2 jump to 0x004dac88 (local placement /
+            // category clear), aux 3 to 0x004daca8 (subtype-07 construction
+            // cancel/death mark), and aux 4 to 0x004dacbb -> 0x004d9f2e
+            // (active production cancel, command 0 and logical index -1).
+            // Aux 5 and 6 are also live branches: they publish action 0x0b
+            // for every selected unit whose raw command state is 0x60 and
+            // action 0x06 for the primary unit respectively.  The old local shortcut dropped
+            // both branches and also zeroed action/target/world for aux 3.
+            // Route all seven entries through the reconstructed 0x1c handler
+            // so the exact register/wire tuple is retained:
+            //   aux3: 07, 1c|Q, primary, target, worldX, worldY
+            //   aux4: 01/05, 0, primary, 1, -1, 0
+            //   aux5: 02, 0b, selected type-60, command value, worldX, -1
+            //   aux6: 02, 06, primary, command value, worldX, -1.
+            GameplayInputActionState& input = gameplay_input_action_state();
+            input.current_unit_offset = overlay.selected_unit_id;
+            input.selected_unit_offset = overlay.selected_unit_id;
+            input.local_player_index = overlay.local_player_slot;
+            input.last_action_world_x = static_cast<u32>(
+                std::max<i32>(action.world_x, 0));
+            input.last_action_world_y = static_cast<u32>(
+                std::max<i32>(action.world_y, 0));
+            const auto reset_nested_pointer_state = [&]() {
+                ResetGameplayInputPointerState(input);
+                overlay.placement_mode = 0;
+                overlay.placement_definition_id = 0;
+                overlay.placement_equipment_slot_code = 0;
+                overlay.staged_unit_action_id = 0xffffffffu;
+                overlay.selected_production_category = 0;
+                overlay.command_slot_count = 0;
+            };
+
+            const auto primary = std::find_if(input.units.begin(),
+                input.units.end(), [&overlay](const GameplayActionUnitState& unit) {
+                    return unit.offset == overlay.selected_unit_id;
+                });
+            if (primary == input.units.end()) {
+                // 0x004dac49 -> 0x004db0ba: a null primary resets the staged
+                // pointer state, queues the common action-failure feedback,
+                // and returns carry.  Do not collapse this into the silent
+                // owner-mismatch branch at 0x004db0f5.
+                reset_nested_pointer_state();
+                ++input.validation_fail_count;
+                ++input.rejected_feedback_count;
+                input.last_dispatch_failed = true;
+                default_gameplay_production_rejected_action_feedback(
+                    gameplay_production_action_state());
+            }
+            else if (primary->owner != input.local_player_index) {
+                // 0x004dac56..0x004dac5d: owner mismatch is silent STC.
+                input.last_dispatch_failed = true;
+            }
+            else {
+                const bool succeeded = publish_default_nested_selected_action(
+                    input, action.aux, input.last_validation_unit_offset,
+                    input.last_action_world_x, input.last_action_world_y);
+                input.last_dispatch_failed = !succeeded;
+                if (!succeeded) {
+                    // A typed movement lookup failure is the reconstruction's
+                    // equivalent of losing the primary pointer before the
+                    // original jump-table body executes.
+                    reset_nested_pointer_state();
+                    ++input.validation_fail_count;
+                    ++input.rejected_feedback_count;
+                    default_gameplay_production_rejected_action_feedback(
+                        gameplay_production_action_state());
+                }
+                else if (action.aux <= 2u) {
+                    reset_nested_pointer_state();
+                }
+            }
+            overlay.pending_local_command = true;
+        }
+        return true;
+    }
     if (action.item_id >= 0x60u && action.item_id < 0xaau) {
         if (click) {
             overlay.placement_mode = 6;
@@ -13749,30 +15989,7 @@ void sync_default_gameplay_production_unit_footprints(
 
 void sync_default_gameplay_production_action_definitions(
     GameplayProductionActionState& production) {
-    static constexpr std::array<u8, kGameplayProductionSelectorCount>
-        kOriginalRedirectFlags = {
-            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1,
-            1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
-            0, 8, 8, 8, 8, 136, 0, 0, 8, 0, 8, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        };
-    static constexpr std::array<u8, kGameplayProductionSelectorCount>
-        kOriginalResultStates = {
-            0x88, 0x88, 0x08, 0x88, 0x08, 0x88, 0x08, 0x08,
-            0x88, 0x88, 0x08, 0x88, 0x88, 0x88, 0x88, 0x88,
-            0x88, 0x08, 0x88, 0x08, 0x08, 0x88, 0x88, 0x08,
-            0x88, 0x08, 0x08, 0x08, 0x08, 0x88, 0x00, 0x00,
-            0x00, 0x01, 0x02, 0x03, 0x02, 0x02, 0x00, 0x01,
-            0x03, 0x01, 0x03, 0x00, 0x02, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
-        };
-
-    production.selector_redirect_flags = kOriginalRedirectFlags;
-    production.selector_result_states = kOriginalResultStates;
-    for (u32 selector = 0; selector < kGameplayProductionSelectorCount; ++selector) {
-        production.selector_definition_indices[selector] = selector;
-    }
+    InitializeOriginalGameplayProductionSelectorTables(production);
     sync_default_gameplay_production_unit_footprints(production);
 
     if (!production.definitions.empty()) {
@@ -13783,8 +16000,10 @@ void sync_default_gameplay_production_action_definitions(
     }
 
     const AuxiliaryRuntimeCatalogState& catalog = jw211_runtime_catalog_state();
-    const std::size_t count = std::min<std::size_t>(
-        catalog.records.size(), kGameplayProductionSelectorCount);
+    // The UI table has 32 selectors, but JW2_11 still has 46 records.  Later
+    // simulation paths address records 0x21 and 0x26 directly, so keep the
+    // full catalog while limiting only the selector metadata arrays.
+    const std::size_t count = catalog.records.size();
     production.definitions.resize(count);
     for (std::size_t index = 0; index < count; ++index) {
         const AuxiliaryRuntimeCatalogRecord& record = catalog.records[index];
@@ -13818,7 +16037,9 @@ void sync_default_gameplay_production_action_definitions(
                 read_runtime_catalog_u8(record.definition_bytes,
                     kJw211ActionIconMarkerOffset, 0);
         }
-        definition.result_state = production.selector_result_states[index];
+        if (index < production.selector_result_states.size()) {
+            definition.result_state = production.selector_result_states[index];
+        }
         production.definitions[index] = definition;
     }
 }
@@ -13849,6 +16070,9 @@ void sync_default_gameplay_production_action_units(
     production.selected_count = overlay.selected_unit_count;
     production.shift_modifier_down = overlay.shift_modifier_down;
     production.owner_relation_masks = player_slot_state().owner_relation_masks;
+    production.owner_visibility_masks = player_slot_state().owner_visibility_masks;
+    production.owner_production_order_variant_counts =
+        g_runtime.gameplay_production_runtime.variant_counts;
     production.units.clear();
     if (movement == nullptr) {
         return;
@@ -13873,7 +16097,9 @@ void sync_default_gameplay_production_action_units(
         production_unit.runtime_state =
             (unit->command_state & kUnitCommandDead) != 0 ? 4 : 0;
         production_unit.command_state = unit->command_state;
+        production_unit.result_state = unit->previous_command_state;
         production_unit.command_flags = unit->command_flags;
+        production_unit.area_marker_flags = unit->area_marker_flags;
         production_unit.runtime_flags = unit->runtime_flags;
         production_unit.definition_action_flags = unit->definition.action_effect_flags;
         production_unit.movement_class = unit->definition.movement_class;
@@ -13887,7 +16113,9 @@ void sync_default_gameplay_production_action_units(
             default_unit_action_capability_mask(*unit);
         production_unit.runtime_command_bits =
             default_unit_command_bit_mask(*unit);
-        production_unit.production_bits = unit->definition.support_source_flags;
+        // FUN_004db92c tests mutable raw unit +0xe8.  The immutable catalog
+        // +0x1f8 support flags are a different field.
+        production_unit.production_bits = unit->script_bit_flags;
         production_unit.active_count_metric = unit->status_timer;
         production_unit.queued_count_metric = unit->secondary_value;
         production_unit.resource_metric = unit->health;
@@ -13895,9 +16123,11 @@ void sync_default_gameplay_production_action_units(
         production_unit.saved_path_target_x = unit->saved_path_target_x;
         production_unit.saved_path_target_y = unit->saved_path_target_y;
         production_unit.action_mode_gate = unit->action_mode_gate;
+        production_unit.deferred_command_count = unit->deferred_command_count;
         production_unit.equipment_slots = unit->equipment_slots;
+        production_unit.attachment_slots = unit->item_slots;
         for (u32 slot = 0; slot < kGameplayProductionAttachmentSlots; ++slot) {
-            const u32 equipment_id = production_unit.equipment_slots[slot];
+            const u32 equipment_id = production_unit.attachment_slots[slot];
             if (const UnitEquipmentEffectDefinition* effect =
                     FindUnitEquipmentEffect(equipment_catalog, equipment_id)) {
                 production_unit.attachment_definition_ids[slot] =
@@ -13929,7 +16159,42 @@ void sync_default_gameplay_production_action_units(
             }
         }
         production_unit.active = unit->active;
+        production_unit.visible = default_world_tile_currently_visible(
+            unit->x, unit->y);
         production.units.push_back(std::move(production_unit));
+    }
+
+    // FUN_004e98c5, used by JW2_11 modes 4+, scans the lifecycle list for a
+    // visible type<0x60 target carrying raw +0xa0 bit 4.  Keep those records
+    // in the production mirror as non-candidates so they can be targeted but
+    // can never publish as selected/local source units.
+    for (UnitMovementUnit* unit : movement->lifecycle_units) {
+        if (unit == nullptr) {
+            continue;
+        }
+        GameplayProductionUnitState target{};
+        target.offset = unit->id;
+        target.type = unit->type_id;
+        target.owner = unit->owner_id;
+        target.runtime_state = 4;
+        target.command_state = unit->command_state;
+        target.result_state = unit->previous_command_state;
+        target.command_flags = unit->command_flags;
+        target.area_marker_flags = unit->area_marker_flags;
+        target.runtime_flags = unit->runtime_flags;
+        target.definition_action_flags = unit->definition.action_effect_flags;
+        target.movement_class = unit->definition.movement_class;
+        target.production_bits = unit->script_bit_flags;
+        target.x = unit->x;
+        target.y = unit->y;
+        target.bounds_left = unit->definition.bounds_left;
+        target.bounds_top = unit->definition.bounds_top;
+        target.bounds_width = unit->definition.bounds_width;
+        target.bounds_height = unit->definition.bounds_height;
+        target.active = false;
+        target.visible = default_world_tile_currently_visible(
+            unit->x, unit->y);
+        production.units.push_back(std::move(target));
     }
 }
 
@@ -14062,6 +16327,19 @@ bool apply_default_ui_overlay_held_command(UiOverlayState& overlay,
     return false;
 }
 
+void mirror_default_gameplay_production_result_states(
+    const GameplayProductionActionState& production) {
+    // FUN_004db0f7 writes DAT_00862a14[selector] to raw target +0xa4 after
+    // the table handler returns CLC.  GameplayProductionActionState is a
+    // transient mirror, so carry that exact write back to the live unit.
+    for (const GameplayProductionUnitState& source : production.units) {
+        UnitMovementUnit* target = find_default_movement_unit_by_id(source.offset);
+        if (target != nullptr) {
+            target->previous_command_state = source.result_state;
+        }
+    }
+}
+
 bool publish_default_ui_overlay_production_command(
     GameplayProductionActionState& production, GameplayInputActionState& input,
     UiOverlayState& overlay, const UiOverlayCommandAction& action) {
@@ -14077,6 +16355,7 @@ bool publish_default_ui_overlay_production_command(
         if (click) {
             DispatchOwnerProductionActionCommand(production, action.item_id - 0xd4u,
                 command_screen_x, command_screen_y, overlay.selected_unit_id);
+            mirror_default_gameplay_production_result_states(production);
         }
         return true;
     }
@@ -14143,7 +16422,10 @@ bool publish_default_ui_overlay_production_command(
 
 void process_default_ui_overlay_command_actions() {
     UiOverlayState& overlay = ui_overlay_state();
-    if (overlay.command_actions.empty()) {
+    const bool has_pending_unit_action =
+        !overlay.pending_unit_action_text.empty() &&
+        overlay.pending_unit_action_text.front() == '!';
+    if (overlay.command_actions.empty() && !has_pending_unit_action) {
         return;
     }
 
@@ -14151,6 +16433,26 @@ void process_default_ui_overlay_command_actions() {
     GameplayProductionActionState& production = gameplay_production_action_state();
     sync_default_gameplay_input_action_units(input, overlay);
     sync_default_gameplay_production_action_units(production, overlay);
+
+    if (has_pending_unit_action) {
+        // FUN_004e7b48 -> FUN_004d9e0b is the original's sole subtype-0x19
+        // publisher.  It passes strlen(full_line), strips the leading '!',
+        // then loads the following 16 bytes as four little-endian dwords.
+        std::array<u8, 16> payload{};
+        const std::string_view text = overlay.pending_unit_action_text;
+        const std::string_view unit_text = text.substr(1);
+        const std::size_t copy_size = std::min(payload.size(), unit_text.size());
+        if (copy_size != 0) {
+            std::memcpy(payload.data(), unit_text.data(), copy_size);
+        }
+        std::memcpy(&input.pending_action_arg0, payload.data() + 0, 4);
+        std::memcpy(&input.pending_action_arg1, payload.data() + 4, 4);
+        std::memcpy(&input.pending_action_arg2, payload.data() + 8, 4);
+        std::memcpy(&input.pending_action_arg3, payload.data() + 12, 4);
+        PublishSelectedUnitsPendingAction(input, static_cast<u32>(text.size()));
+        overlay.pending_unit_action_text.clear();
+    }
+
     for (const UiOverlayCommandAction& action : overlay.command_actions) {
         if (action.action == kUiOverlayCommandActionSelection) {
             continue;
@@ -14165,21 +16467,17 @@ void process_default_ui_overlay_command_actions() {
         if (apply_default_ui_overlay_local_command(overlay, action)) {
             continue;
         }
-        if (publish_default_ui_overlay_input_command(input, overlay, action)) {
+        if (publish_default_ui_overlay_input_command(
+                production, input, overlay, action)) {
             continue;
         }
         if (publish_default_ui_overlay_production_command(
                 production, input, overlay, action)) {
             continue;
         }
-
-        input.pending_action_arg0 = action.item_id;
-        input.pending_action_arg1 = action.aux;
-        input.pending_action_arg2 = action.action;
-        input.pending_action_arg3 =
-            ((static_cast<u32>(std::max<i32>(overlay.mouse_y, 0)) & 0xffffu) << 16) |
-            (static_cast<u32>(std::max<i32>(overlay.mouse_x, 0)) & 0xffffu);
-        PublishSelectedUnitsPendingAction(input, 0);
+        // The original subtype-0x19 publisher has no generic UI-command
+        // caller.  Unknown overlay records are ignored instead of leaking
+        // item ids and pointer coordinates into live unit string state.
     }
 
     overlay.command_actions.clear();
@@ -14220,11 +16518,26 @@ u32 default_owner_slot_bit(u32 owner) {
 }
 
 bool default_owners_are_related(u32 source_owner, u32 target_owner) {
-    if (source_owner >= kPlayerSlotCount || target_owner >= kPlayerSlotCount) {
+    if (target_owner >= 32) {
         return false;
     }
-    return (g_runtime.gameplay_player_slots.owner_relation_masks[source_owner] &
-        default_owner_slot_bit(target_owner)) != 0;
+
+    u32 relation_mask = 0;
+    if (source_owner < kPlayerSlotCount) {
+        relation_mask =
+            g_runtime.gameplay_player_slots.owner_relation_masks[source_owner];
+    }
+    else if (source_owner <
+             g_runtime.gameplay_unit_commands.owner_relation_masks.size()) {
+        // DAT_00725334 is not limited to the eight lobby players.  Scenario
+        // owner 8, for example, carries relation mask 0x100 in the original.
+        // The command context mirrors that extended table; using only the
+        // lobby array here made neutral-owner damage reaction and ally response
+        // disagree with idle target acquisition.
+        relation_mask =
+            g_runtime.gameplay_unit_commands.owner_relation_masks[source_owner];
+    }
+    return (relation_mask & default_owner_slot_bit(target_owner)) != 0;
 }
 
 bool default_unit_damage_can_damage(UnitDamageContext& context, const UnitRecord& source,
@@ -14302,27 +16615,23 @@ void default_unit_damage_attacker_experience_changed(UnitDamageContext&,
     mirror_default_unit_damage_record_stats(attacker, *unit);
 }
 
-void default_unit_damage_defeated_accounting(UnitDamageContext&, UnitRecord& target) {
+void default_unit_damage_defeated_accounting(UnitDamageContext& context,
+    UnitRecord& target) {
+    UnitMovementUnit* attacker_unit = context.attacker != nullptr ?
+        find_default_damage_record_unit(*context.attacker) : nullptr;
     UnitMovementUnit* target_unit = find_default_damage_record_unit(target);
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
-    if (target_unit == nullptr || lifecycle == nullptr) {
+    if (attacker_unit == nullptr || target_unit == nullptr || lifecycle == nullptr) {
         return;
     }
-    HandleUnitCompletionOwnerCounters(*lifecycle, *target_unit);
+    HandleUnitKillOwnerCounters(*lifecycle, *attacker_unit, *target_unit);
+    sync_default_owner_lifecycle_score_counter_tables(
+        *lifecycle, attacker_unit->owner_id);
 }
 
 void default_unit_damage_kill_effects(UnitDamageContext&, UnitRecord& source,
     UnitRecord& target) {
     UnitMovementUnit* target_unit = find_default_damage_record_unit(target);
-    if (target_unit != nullptr) {
-        GameplayUnitSoundDefinition definition;
-        GameplayUnitSoundBaseSlots base_slots;
-        if (resolve_default_unit_sound_profile(*target_unit, definition, base_slots)) {
-            HandleUnitDeathVoiceCue(g_runtime.gameplay_sound, *target_unit,
-                definition, base_slots);
-        }
-    }
-
     UnitMovementUnit* source_unit = find_default_damage_record_unit(source);
     if (source_unit == nullptr || target_unit == nullptr ||
         source_unit == target_unit) {
@@ -14389,6 +16698,9 @@ bool default_unit_damage_reaction_random_move(UnitMovementUnit& target) {
         target.x, movement->map.width);
 
     target.target = nullptr;
+    // HandleUnitDamageReaction 0x004c2761 clears the shared raw +0x68
+    // target/value word before entering travel state 2.
+    target.command_value = 0;
     target.path_target_x = path_target_x;
     target.path_target_y = path_target_y;
     target.command_state = kUnitStateTravel;
@@ -14423,12 +16735,20 @@ DefaultDamageReactionCombatGate default_unit_damage_reaction_combat_gate(
     if ((damaged.runtime_flags & 0x40000u) != 0) {
         return DefaultDamageReactionCombatGate::random_move_fallback;
     }
+    // Original 0x004c2542..0x004c2552 rejects only an under-construction
+    // structure (raw +0x30), not a unit whose unrelated variant field is one.
     if (damaged.type_id > kUnitEliteVariantThreshold &&
-        damaged.production_variant == 1) {
+        damaged.action_mode_gate == 1) {
+        return DefaultDamageReactionCombatGate::stop;
+    }
+    // Raw +0x9c bit 0x20 is the outer reaction permission gate.  A unit that
+    // lacks it stops; a permitted but non-combat raw +0x58 unit falls through
+    // to the movable idle flee path at 0x004c26d1.
+    if ((damaged.command_flags & 0x20u) == 0) {
         return DefaultDamageReactionCombatGate::stop;
     }
     if ((damaged.type_flags & 0x20u) == 0) {
-        return DefaultDamageReactionCombatGate::stop;
+        return DefaultDamageReactionCombatGate::random_move_fallback;
     }
 
     UnitActionContext& action_context = g_runtime.gameplay_unit_actions;
@@ -14480,8 +16800,26 @@ bool default_unit_command_find_matching_terrain_placement_point(
         return false;
     }
 
-    return FindMatchingTerrainUnitPlacementPoint(
+    const u32 saved_terrain_class = lifecycle->placement_terrain_class_override;
+    const bool saved_override_enabled =
+        lifecycle->placement_terrain_class_override_enabled;
+    // Original construction release (0x004c9f9d..0x004ca061) samples the
+    // completed building's origin terrain, then searches from its release
+    // offset.  Sampling the offset itself can select the adjacent land class.
+    if ((unit.command_state & 0x00ffffffu) ==
+            kUnitStateLegacySpawnConstruction &&
+        unit.target != nullptr && unit.target->x >= 0 && unit.target->y >= 0) {
+        lifecycle->placement_terrain_class_override = GetPlacementTerrainClass(
+            *lifecycle, static_cast<u32>(unit.target->x) >> 5,
+            static_cast<u32>(unit.target->y) >> 5);
+        lifecycle->placement_terrain_class_override_enabled = true;
+    }
+
+    const bool found = FindMatchingTerrainUnitPlacementPoint(
         *lifecycle, unit, point.x, point.y);
+    lifecycle->placement_terrain_class_override = saved_terrain_class;
+    lifecycle->placement_terrain_class_override_enabled = saved_override_enabled;
+    return found;
 }
 
 bool default_unit_damage_reaction_state_can_acquire_attacker(
@@ -14714,8 +17052,10 @@ void default_unit_damage_reaction_scan_allies(UnitMovementUnit& damaged,
         if (ally == nullptr || ally == &damaged || ally == &threat) {
             continue;
         }
-        if (!default_owners_are_related(damaged.owner_id, ally->owner_id) ||
-            default_owners_are_related(threat.owner_id, ally->owner_id)) {
+        // Original 0x004c2603..0x004c2633 tests the candidate ally's directed
+        // relation mask against the damaged and threatening owners.
+        if (!default_owners_are_related(ally->owner_id, damaged.owner_id) ||
+            default_owners_are_related(ally->owner_id, threat.owner_id)) {
             continue;
         }
         if (CalculateApproxUnitDistance(damaged.x, damaged.y, ally->x, ally->y) >
@@ -14723,7 +17063,7 @@ void default_unit_damage_reaction_scan_allies(UnitMovementUnit& damaged,
             continue;
         }
         if ((ally->type_id > kUnitEliteVariantThreshold &&
-                ally->production_variant == 1) ||
+                ally->action_mode_gate == 1) ||
             (ally->type_flags & 0x20u) == 0 ||
             (ally->runtime_flags & kUnitDamageReactionSkipMask) != 0) {
             continue;
@@ -14749,7 +17089,9 @@ void default_unit_damage_reaction(UnitDamageContext&, UnitRecord& source,
     }
 
     const u32 target_owner = target.owner_id;
-    if (default_owners_are_related(source.owner_id, target_owner)) {
+    // Original 0x004c24e1..0x004c2502 asks whether the damaged owner's
+    // directed relation mask contains the attacker owner bit.
+    if (default_owners_are_related(target_owner, source.owner_id)) {
         return;
     }
 
@@ -14791,6 +17133,29 @@ void default_unit_damage_reaction(UnitDamageContext&, UnitRecord& source,
     }
 }
 
+void default_unit_damage_local_under_attack(
+    UnitDamageContext&, UnitRecord& target) {
+    // NotifyLocalPlayerUnitUnderAttack (0x004c2457) queues kind zero at the
+    // damaged local unit, and publishes its HUD text/sound only when the
+    // duplicate-radius/capacity gate accepted the marker.
+    if (!QueueGameplayHudAlertMarker(g_runtime.gameplay_hud_alert_markers, 0,
+            target.x, target.y)) {
+        return;
+    }
+
+    QueueGameplayHudMessage(g_runtime.gameplay_hud_text,
+        startup_platform_row(99, "---- Under attack ----"));
+
+    u32 faction = 0;
+    if (target.owner_id <
+        g_runtime.gameplay_startup_state.owner_faction_ids.size()) {
+        faction = std::min<u32>(
+            g_runtime.gameplay_startup_state.owner_faction_ids[target.owner_id], 3);
+    }
+    HandleIndexedTwoVariantGameplaySoundCue(
+        g_runtime.gameplay_sound, faction, 0);
+}
+
 void configure_default_unit_damage_context(UnitDamageContext& damage_context) {
     if (damage_context.callbacks.on_unit_defeated_accounting == nullptr) {
         damage_context.callbacks.on_unit_defeated_accounting =
@@ -14808,6 +17173,10 @@ void configure_default_unit_damage_context(UnitDamageContext& damage_context) {
     }
     if (damage_context.callbacks.on_shield_broken == nullptr) {
         damage_context.callbacks.on_shield_broken = default_unit_damage_shield_broken;
+    }
+    if (damage_context.callbacks.on_local_under_attack == nullptr) {
+        damage_context.callbacks.on_local_under_attack =
+            default_unit_damage_local_under_attack;
     }
     if (damage_context.callbacks.calculate_damage == nullptr) {
         damage_context.callbacks.calculate_damage = default_unit_damage_calculate_damage;
@@ -14976,12 +17345,24 @@ void drain_default_unit_effect_impact_events(
 void default_unit_action_impact(UnitActionContext&,
     UnitMovementUnit& source, UnitMovementUnit& target) {
     const u32 effect_id = default_unit_action_effect_id(source, &target);
-    UnitEffectRuntime* effect = start_default_unit_action_effect(source, &target);
-    if (effect == nullptr ||
-        default_unit_action_effect_is_direct_damage_only(effect_id)) {
+    if (default_unit_action_effect_is_direct_damage_only(effect_id)) {
+        // The direct jump-table cases at 0x004ecf65 do not reserve an effect
+        // slot.  They still enqueue the effect's start sound before applying
+        // damage, even when the runtime effect pool is exhausted.
+        UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
+        configure_default_unit_effect_runtime_state(effects);
+        UnitEffectRuntime direct_effect{};
+        DispatchUnitEffectStartByAction(effects, direct_effect, effect_id,
+            source, &target);
         apply_default_unit_action_damage(g_runtime.gameplay_unit_commands,
             source, target);
+        return;
     }
+
+    // Projectile/status cases require a live slot.  Original allocator carry
+    // returns without damage; it never degrades a failed effect into a direct
+    // hit.
+    (void)start_default_unit_action_effect(source, &target);
 }
 
 void default_unit_action_sound(UnitActionContext&, UnitMovementUnit& source) {
@@ -15128,6 +17509,14 @@ void default_unit_command_runtime_death_sound(UnitCommandContext&,
     queue_default_runtime_death_sound(unit, false);
 }
 
+void default_unit_command_runtime_death_accounting(UnitCommandContext&,
+    UnitMovementUnit& unit) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle != nullptr) {
+        HandleUnitDeathOwnerCounters(*lifecycle, unit);
+    }
+}
+
 void default_unit_command_clear_footprint(UnitCommandContext&,
     UnitMovementUnit& unit) {
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
@@ -15190,8 +17579,17 @@ void sync_default_owner_type_count_for_unit(const UnitMovementUnit& unit) {
 }
 
 void default_unit_command_unit_spawned(UnitCommandContext&,
-    UnitMovementUnit&, UnitMovementUnit& spawned) {
+    UnitMovementUnit& source, UnitMovementUnit& spawned) {
     append_default_damage_record(&spawned);
+    const u32 source_state = source.command_state & kUnitCommandStateMask;
+    if (source_state == kUnitStateLegacySpawnPlacementStart ||
+        source_state == kUnitStateLegacySpawnPlacementApproach) {
+        // Successful legacy construction calls FUN_004eb7d5 after linking the
+        // worker and building, removing the hidden builder from selection and
+        // rebuilding the primary command panel.
+        ClearSelectedUnitMembershipFlagAndRefreshSelection(
+            ui_overlay_state(), source.id);
+    }
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
     if (lifecycle == nullptr) {
         return;
@@ -15200,7 +17598,7 @@ void default_unit_command_unit_spawned(UnitCommandContext&,
     sync_default_owner_type_count_for_unit(spawned);
 }
 
-void default_unit_command_construction_completed(UnitCommandContext&,
+void default_unit_command_construction_completed(UnitCommandContext& context,
     UnitMovementUnit& completed) {
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
     if (lifecycle == nullptr) {
@@ -15212,18 +17610,85 @@ void default_unit_command_construction_completed(UnitCommandContext&,
     // the completed type count, apply footprint flags, and register occupancy.
     HandleUnitCreationRegisterFootprint(*lifecycle, completed);
     sync_default_owner_type_count_for_unit(completed);
+
+    UnitMovementUnit* builder = completed.target;
+    if (completed.owner_id == context.local_owner_id && builder != nullptr &&
+        (builder->command_state & kUnitCommandStateMask) ==
+            kUnitStateLegacySpawnConstruction) {
+        // Original state 0x24 completion (0x004ca00b..0x004ca050) plays the
+        // completed structure's spawn cue, then places kind-2 HUD feedback at
+        // the builder's pre-release position.
+        GameplayUnitSoundDefinition definition;
+        GameplayUnitSoundBaseSlots base_slots;
+        if (resolve_default_unit_sound_profile(completed, definition, base_slots)) {
+            HandleUnitSpawnCompleteVoiceCue(
+                g_runtime.gameplay_sound, completed, definition, base_slots);
+        }
+        QueueGameplayHudAlertMarker(g_runtime.gameplay_hud_alert_markers, 2,
+            builder->x, builder->y);
+    }
+}
+
+void default_unit_command_linked_unit_attached(UnitCommandContext&,
+    UnitMovementUnit&, UnitMovementUnit& child) {
+    ClearSelectedUnitMembershipFlagAndRefreshSelection(
+        ui_overlay_state(), child.id);
+}
+
+void default_unit_command_linked_unit_detached(UnitCommandContext&,
+    UnitMovementUnit& parent, UnitMovementUnit& child) {
+    if ((parent.scenario_string_slot & 0x80u) == 0) {
+        return;
+    }
+    UiOverlayState& overlay = ui_overlay_state();
+    constexpr std::size_t kOriginalSelectionLimit = 14;
+    const std::size_t limit = std::min<std::size_t>(
+        overlay.max_selected_unit_count, kOriginalSelectionLimit);
+    if (overlay.selected_unit_ids.size() >= limit ||
+        std::find(overlay.selected_unit_ids.begin(),
+            overlay.selected_unit_ids.end(), child.id) !=
+            overlay.selected_unit_ids.end()) {
+        return;
+    }
+
+    child.scenario_string_slot |= 0x80u;
+    overlay.selected_unit_ids.push_back(child.id);
+    if (overlay.selected_unit_id == 0) {
+        overlay.selected_unit_id = child.id;
+        overlay.selected_unit_type = child.type_id;
+        overlay.selected_unit_owner = child.owner_id;
+    }
+    overlay.selected_unit_count =
+        static_cast<u32>(overlay.selected_unit_ids.size());
+    BuildSelectedUnitCommandPanel(overlay);
 }
 
 void default_unit_command_linked_unit_released(UnitCommandContext&,
     UnitMovementUnit& parent, UnitMovementUnit& child) {
-    append_default_damage_record(&child);
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
     if (lifecycle == nullptr) {
         return;
     }
 
-    SetUnitFootprintOccupancyBits(*lifecycle, child);
-    HandleOwnerUnitTypeCountRebuild(*lifecycle);
+    // HandleLinkedUnitReleaseCycle has already cleared the footprint and marks
+    // the consumed child with command flag 0x100.  The post-runtime pass moves
+    // it to the free list; account for it now without rebuilding from an active
+    // list that still contains the pending-free node.
+    const u32 owner = child.owner_id;
+    if (owner < lifecycle->owner_unit_type_counts.size()) {
+        auto& counts = lifecycle->owner_unit_type_counts[owner];
+        if (child.type_id < counts.size() && counts[child.type_id] != 0) {
+            --counts[child.type_id];
+        }
+        if (child.type_id < 0x60) {
+            if (lifecycle->owner_unit_active_count[owner] != 0) {
+                --lifecycle->owner_unit_active_count[owner];
+            }
+        }
+        else if (lifecycle->owner_building_active_count[owner] != 0) {
+            --lifecycle->owner_building_active_count[owner];
+        }
+    }
     sync_default_owner_type_count_for_unit(parent);
     sync_default_owner_type_count_for_unit(child);
 }
@@ -15624,19 +18089,15 @@ void default_unit_command_deferred_death_refund(UnitCommandContext& context,
 
     if (state == kUnitStateCompletionEffectStart ||
         state == kUnitStateCompletionEffectTimer || state == 0x22) {
-        const u32 dependency_slot = static_cast<u32>(command.x);
-        if (dependency_slot >= g_runtime.unit_reference_tables.small_reverse.size()) {
-            return;
-        }
-        const u32 type_id =
-            g_runtime.unit_reference_tables.small_reverse[dependency_slot];
-        const UnitMovementDefinition* definition =
-            default_unit_lifecycle_find_definition(
-                g_runtime.gameplay_lifecycle_context, type_id);
-        if (definition != nullptr) {
-            HandleOwnerUnitProductionCostRefund(context, owner,
-                definition->production_resource_cost,
-                definition->production_secondary_cost);
+        u32 primary_cost = 0;
+        u32 secondary_cost = 0;
+        if (default_mode1_packet_production_cost_values(
+                static_cast<u32>(command.x), primary_cost, secondary_cost)) {
+            // HandleUnitDeathCommandQueueSideEffects (0x004cdc44) uses the
+            // same equipment-cost refund helper for active 0x82/0x83 and
+            // queued 0x22 tuples.
+            HandleOwnerUnitProductionCostRefund(
+                context, owner, primary_cost, secondary_cost);
             sync_default_owner_command_runtime_slots(context, owner);
         }
         return;
@@ -15786,6 +18247,48 @@ bool default_unit_visibility_allows_target(const UnitMovementUnit& source,
     return CheckUnitOwnerLayerBitAtTarget(grid, visibility, source.owner_id);
 }
 
+constexpr bool default_idle_target_lifecycle_class_allows(
+    bool source_targets_lifecycle_class1, bool candidate_is_lifecycle_class1,
+    bool candidate_special_visible) {
+    // FindBestUnitTargetUsingSpatialIndex 0x004c2eaf..0x004c2f0f uses raw
+    // source +0x0c bit 31 to select one side of lifecycle class 1.  A
+    // candidate carrying raw runtime flag 0x40000 first runs the current-cell
+    // visibility test at 0x004c2ec7/0x004c2ef5: visible candidates bypass the
+    // class test for a clear source marker and are rejected for a set marker.
+    if (candidate_special_visible) {
+        return !source_targets_lifecycle_class1;
+    }
+    return source_targets_lifecycle_class1 == candidate_is_lifecycle_class1;
+}
+
+static_assert(default_idle_target_lifecycle_class_allows(false, false, false));
+static_assert(!default_idle_target_lifecycle_class_allows(false, true, false));
+static_assert(!default_idle_target_lifecycle_class_allows(true, false, false));
+static_assert(default_idle_target_lifecycle_class_allows(true, true, false));
+static_assert(default_idle_target_lifecycle_class_allows(false, false, true));
+static_assert(default_idle_target_lifecycle_class_allows(false, true, true));
+static_assert(!default_idle_target_lifecycle_class_allows(true, false, true));
+static_assert(!default_idle_target_lifecycle_class_allows(true, true, true));
+
+bool default_idle_target_has_special_current_visibility(
+    const UnitMovementUnit& source, const UnitMovementUnit& candidate) {
+    constexpr u32 kSpecialCurrentVisibilityFlag = 0x00040000u;
+    if ((candidate.runtime_flags & kSpecialCurrentVisibilityFlag) == 0 ||
+        source.owner_id >= 32) {
+        return false;
+    }
+
+    // FUN_004d6cca (0x004d6cca) first tests the candidate owner's visibility
+    // mask for the source owner, then the current visibility layer at the
+    // candidate's world cell.  This is intentionally narrower than the full
+    // common visibility gate below, which also checks the owner layer.
+    const GameplayVisibilityUnit visibility =
+        make_default_gameplay_visibility_unit(candidate);
+    return CheckUnitOwnerMaskOrCurrentVisibilityBit(
+        g_runtime.gameplay_player_slots, g_runtime.gameplay_visibility_grid,
+        visibility, source.owner_id);
+}
+
 bool default_unit_targeting_can_target(UnitTargetingContext&,
     const UnitRecord& source, const UnitRecord& candidate) {
     UnitMovementUnit* source_unit = find_default_damage_record_unit(source);
@@ -15793,6 +18296,26 @@ bool default_unit_targeting_can_target(UnitTargetingContext&,
     if (source_unit == nullptr || candidate_unit == nullptr) {
         return default_unit_damage_can_damage(g_runtime.gameplay_damage_context,
             source, candidate);
+    }
+    // FindBestUnitTargetUsingSpatialIndex applies the owner relationship mask
+    // before the common class/profile gate.  Keep automatic acquisition
+    // hostile-only now that explicit action validation mirrors FUN_004c209c.
+    if (source_unit->owner_id == candidate_unit->owner_id ||
+        default_owners_are_related(source_unit->owner_id,
+            candidate_unit->owner_id)) {
+        return false;
+    }
+    const bool source_targets_lifecycle_class1 =
+        (source_unit->area_marker_flags & 0x80000000u) != 0;
+    const bool candidate_is_lifecycle_class1 =
+        candidate_unit->definition.lifecycle_class == 1;
+    const bool candidate_special_visible =
+        default_idle_target_has_special_current_visibility(
+            *source_unit, *candidate_unit);
+    if (!default_idle_target_lifecycle_class_allows(
+            source_targets_lifecycle_class1, candidate_is_lifecycle_class1,
+            candidate_special_visible)) {
+        return false;
     }
     if (!default_unit_visibility_allows_target(*source_unit, *candidate_unit)) {
         return false;
@@ -15807,7 +18330,10 @@ bool populate_default_spatial_target_candidates(UnitCommandContext& context,
         return false;
     }
 
-    rebuild_default_unit_spatial_indexes();
+    // ProcessGameplayFrameTick rebuilds all four indexes once at 0x004c1183,
+    // before scripts and HandleUnitSimulationListTick.  Original target
+    // queries consume that frame snapshot; rebuilding here would let units
+    // processed earlier in the active list change later units' candidates.
     UnitMovementUnit* candidate = QueryAllUnitsSpatialIndexAroundUnit(
         g_runtime.gameplay_unit_spatial_indexes, unit, targeting.interaction_range);
     bool queried = candidate != nullptr;
@@ -15834,8 +18360,9 @@ UnitMovementUnit* default_unit_command_find_source_bounds_target(
     const i32 bottom = top + unit.definition.interaction_bounds_height;
     for (UnitMovementUnit* candidate : context.movement->active_units) {
         if (candidate == nullptr || candidate == &unit || !candidate->active ||
-            (candidate->command_state & kUnitCommandDead) != 0 ||
-            (candidate->runtime_flags & 0x20000084u) != 0) {
+            (candidate->runtime_flags & 0x20000084u) != 0 ||
+            candidate->owner_id == unit.owner_id ||
+            default_owners_are_related(unit.owner_id, candidate->owner_id)) {
             continue;
         }
         if (candidate->x < left || candidate->x > right ||
@@ -15856,7 +18383,9 @@ UnitMovementUnit* default_unit_command_find_nearby_follow_target(
     if (context.movement == nullptr) {
         return nullptr;
     }
-    rebuild_default_unit_spatial_indexes();
+    // CheckNearbyFollowCommandTarget (0x004c84b7) queries the non-terminal
+    // index directly; it does not rebuild the index during active-list
+    // dispatch.  Keep the same frame-start snapshot used by the original.
     return QueryNonTerminalUnitSpatialBox(g_runtime.gameplay_unit_spatial_indexes,
         unit);
 }
@@ -15893,19 +18422,29 @@ UnitMovementUnit* default_unit_command_find_target(UnitCommandContext& context,
     for (GameplayDamageRecordLink& link : g_runtime.gameplay_damage_record_links) {
         targeting.active_units.push_back(&link.record);
     }
-    targeting.interaction_range =
-        CalculateUnitInteractionRangeWithProductionAndEquipmentEffects(
-            g_runtime.gameplay_production_runtime, unit,
-            std::max<u32>(unit.definition.support_range, unit.definition.range_threshold),
-            action_context.equipment_catalog);
+    // Original GetUnitInteractionRange (0x004c3686), consumed by
+    // FindBestUnitTargetUsingSpatialIndex (0x004c2e0f), reads the definition's
+    // raw archive +0x19c acquisition radius directly.  Action/support ranges
+    // and their production/equipment modifiers are separate gates and must not
+    // expand the candidate set before target priority is evaluated.
+    targeting.interaction_range = unit.definition.target_acquisition_range;
 
     targeting.spatial_candidates.reserve(targeting.active_units.size());
-    const bool use_active_list_targeting = unit.type_id == 0x73;
-    const bool used_spatial_query = !use_active_list_targeting &&
-        populate_default_spatial_target_candidates(context, unit, targeting);
-    const UnitTargetingResult result = used_spatial_query
-        ? FindBestUnitTargetUsingSpatialIndex(targeting)
-        : FindBestUnitTargetByActiveList(targeting);
+    UnitTargetingResult result{};
+    if (unit.type_id == 0x73) {
+        result = FindBestUnitTargetByActiveList(targeting);
+    }
+    else {
+        // FUN_004c2e61 returns no target when the frame-start spatial query
+        // has no head.  Only the original type-0x73 special case scans the
+        // active list; falling back for every other type observes units that
+        // were not present in the frame snapshot.
+        if (!populate_default_spatial_target_candidates(
+                context, unit, targeting)) {
+            return nullptr;
+        }
+        result = FindBestUnitTargetUsingSpatialIndex(targeting);
+    }
     return result.target != nullptr ? find_default_damage_record_unit(*result.target) :
         nullptr;
 }
@@ -15945,33 +18484,43 @@ void default_unit_command_dispatch_attack(UnitCommandContext& context,
         [&](UnitMovementUnit& target, u32 state, bool set_path_flag) {
             SetUnitCommandTarget(unit, &target);
             copy_attack_path_target(target);
+            if (context.movement != nullptr) {
+                ProcessUnitPathToDestination(*context.movement, unit);
+            }
             unit.command_state = state;
             if (set_path_flag) {
                 unit.command_flags |= 8u;
-            }
-            if (context.movement != nullptr) {
-                ProcessUnitPathToDestination(*context.movement, unit);
             }
         };
     const auto path_point_to_state = [&](i32 x, i32 y, u32 state, bool set_path_flag) {
         unit.target = nullptr;
         unit.path_target_x = x;
         unit.path_target_y = y;
+        if (context.movement != nullptr) {
+            ProcessUnitPathToDestination(*context.movement, unit);
+        }
         unit.command_state = state;
         if (set_path_flag) {
             unit.command_flags |= 8u;
-        }
-        if (context.movement != nullptr) {
-            ProcessUnitPathToDestination(*context.movement, unit);
         }
     };
     const auto handle_lost_action_target = [&](UnitMovementUnit& target) {
         switch (command_state) {
         case kUnitStateGuardAnchorAction:
-            path_current_target_to_state(target, kUnitStateGuardAnchorApproach, false);
+            // Original 0x004c9a66..0x004c9a89 replans while raw state is
+            // still 0x1d, then writes 0x1e.  State 0x1e has metadata bit 2;
+            // storing it before ProcessUnitPathToDestination suppresses the
+            // original rand(80) movement-animation initialization and shifts
+            // the shared gameplay RNG stream.
+            SetUnitCommandTarget(unit, &target);
+            copy_attack_path_target(target);
+            if (context.movement != nullptr) {
+                ProcessUnitPathToDestination(*context.movement, unit);
+            }
+            unit.command_state = kUnitStateGuardAnchorApproach;
             return true;
         case kUnitStateGuardCombatCycle:
-            path_current_target_to_state(target, kUnitStateGuardPursueTarget, true);
+            path_current_target_to_state(target, kUnitStateGuardPursueTarget, false);
             return true;
         case kUnitStatePatrolReturnCombat:
             path_current_target_to_state(target, kUnitStatePatrolReturnLeg, false);
@@ -16043,7 +18592,7 @@ void default_unit_command_dispatch_attack(UnitCommandContext& context,
             }
             if (current != nullptr && !target_in_command_action_range(*current)) {
                 path_current_target_to_state(
-                    *current, kUnitStateGuardPursueTarget, true);
+                    *current, kUnitStateGuardPursueTarget, false);
             }
         }
         return;
@@ -16125,8 +18674,25 @@ UnitMovementUnit* default_unit_command_create_unit(UnitCommandContext&,
             unit->runtime_slot_index : unit_id;
 
     UnitMovementUnit initialized{};
-    if (!InitializePlacedUnitFromMapSlot(*lifecycle, initialized, type_id,
-            source.owner_id, x, y)) {
+    const u32 saved_terrain_class = lifecycle->placement_terrain_class_override;
+    const bool saved_terrain_override =
+        lifecycle->placement_terrain_class_override_enabled;
+    // HandleUnitProductionSpawnCycle samples DAT_00e99e74 at the producer's
+    // origin (0x004ce092..0x004ce0b4), then searches from the definition
+    // +0x2410/+0x2414 exit point.  Sampling the exit point instead can switch
+    // placement class when a producer borders water or another terrain band.
+    if ((source.command_state & kUnitCommandStateMask) ==
+            kUnitStateProductionSpawnCycle && source.x >= 0 && source.y >= 0) {
+        lifecycle->placement_terrain_class_override = GetPlacementTerrainClass(
+            *lifecycle, static_cast<u32>(source.x) >> 5,
+            static_cast<u32>(source.y) >> 5);
+        lifecycle->placement_terrain_class_override_enabled = true;
+    }
+    const bool placed = InitializePlacedUnitFromMapSlot(*lifecycle, initialized,
+        type_id, source.owner_id, x, y);
+    lifecycle->placement_terrain_class_override = saved_terrain_class;
+    lifecycle->placement_terrain_class_override_enabled = saved_terrain_override;
+    if (!placed) {
         if (owned_unit == nullptr) {
             return_default_free_unit_head(movement, unit);
         }
@@ -16160,9 +18726,122 @@ bool dispatch_default_unit_command_action_effect(UnitMovementUnit& source,
     configure_default_unit_effect_runtime_state(effects);
     sync_default_unit_effect_runtime_units(effects, *lifecycle);
 
+    const UnitEffectDefinition* definition =
+        find_default_unit_effect_definition(effects, 0x3du + action_id);
+    if (definition == nullptr) {
+        return false;
+    }
+
+    // FUN_004ef7b8 rejects these two commands before pool allocation or
+    // resource debit.
+    if (action_id == 5 && target != nullptr &&
+        (target->runtime_flags & 0x84u) != 0) {
+        return false;
+    }
+    if (action_id == 0x17) {
+        world_x &= ~0x1f;
+        world_y &= ~0x1f;
+        constexpr u32 kHurdleUnitType = 0x7d;
+        const UnitMovementDefinition* hurdle_definition =
+            lifecycle->callbacks.find_definition != nullptr
+            ? lifecycle->callbacks.find_definition(*lifecycle, kHurdleUnitType)
+            : nullptr;
+        if (hurdle_definition == nullptr) {
+            return false;
+        }
+        UnitMovementUnit placement_probe{};
+        placement_probe.type_id = kHurdleUnitType;
+        placement_probe.owner_id = source.owner_id;
+        placement_probe.definition = *hurdle_definition;
+        placement_probe.x = world_x;
+        placement_probe.y = world_y;
+        if (!CheckUnitPlacementFootprintArea(*lifecycle, placement_probe,
+                world_x, world_y, true)) {
+            return false;
+        }
+    }
+
+    const auto ordinary_cost_available = [&]() {
+        return source.secondary_value >= definition->action_secondary_cost &&
+            source.health > definition->action_source_health_cost;
+    };
+    const auto debit_ordinary_cost = [&]() {
+        source.secondary_value -= definition->action_secondary_cost;
+        source.health -= definition->action_source_health_cost;
+    };
+    const auto scaled_effect_amount = [&]() {
+        const u32 bonus = CalculateUnitVariantScaledBonus61c(source);
+        return definition->damage_amount + static_cast<u32>(
+            (static_cast<u64>(definition->damage_amount) * bonus) / 100u);
+    };
+
+    // Shield refresh is a pre-allocation special case.  The original can
+    // refresh an existing shield even when the effect pool has no free node.
+    if (action_id == 2 && target != nullptr &&
+        (target->runtime_flags & 0x100u) != 0 &&
+        target->linked_effect_slot_offset >= 0xa8u &&
+        (target->linked_effect_slot_offset % 0xa8u) == 0) {
+        const std::size_t shield_index =
+            target->linked_effect_slot_offset / 0xa8u - 1u;
+        if (shield_index < effects.effect_slots.size()) {
+            UnitEffectRuntime& shield = effects.effect_slots[shield_index];
+            if (shield.active && shield.effect_id == 0x3fu &&
+                shield.linked_unit_id == target->id) {
+                if (!ordinary_cost_available()) {
+                    return false;
+                }
+                debit_ordinary_cost();
+                shield.amount = scaled_effect_amount();
+                return true;
+            }
+        }
+    }
+
+    // Meteo and Rise Death have allocation/RNG ordering that is observably
+    // different from the ordinary one-effect path.  Keep the production
+    // callback and the deterministic regression harness on the same helper.
+    if (action_id == 9 || action_id == 0x0f) {
+        return DispatchSelectedUnitScatterActionEffect(effects, action_id,
+            source, world_x, world_y, default_selected_action_random_limit);
+    }
+
+    // FUN_004ef7b8/0x004ef7c8 first looks for an equipped one-shot whose
+    // JW2_10 +0x260 attachment id equals this action.  Such an item replaces
+    // the ordinary JW2_11 +0x1e0/+0x1e4 health/secondary costs and is consumed
+    // before the initializer table runs.
+    i32 consumed_item_slot = -1;
+    if (effects.equipment_catalog != nullptr) {
+        for (std::size_t slot = 0; slot < source.item_slots.size(); ++slot) {
+            const u32 item_id = source.item_slots[slot];
+            if (item_id == 0) {
+                continue;
+            }
+            const UnitEquipmentEffectDefinition* item =
+                FindUnitEquipmentEffect(*effects.equipment_catalog, item_id);
+            if (item != nullptr && item->attachment_definition_id == action_id) {
+                consumed_item_slot = static_cast<i32>(slot);
+                break;
+            }
+        }
+    }
+    if (consumed_item_slot < 0 && !ordinary_cost_available()) {
+        return false;
+    }
+
     UnitEffectRuntime* effect = AllocateUnitEffectSlot(effects);
     if (effect == nullptr) {
         return false;
+    }
+
+    if (consumed_item_slot < 0) {
+        debit_ordinary_cost();
+    }
+    else {
+        const std::size_t slot = static_cast<std::size_t>(consumed_item_slot);
+        source.item_slots[slot] = 0;
+        if (slot < source.equipment_slots.size()) {
+            source.equipment_slots[slot] = 0;
+        }
     }
 
     if (!DispatchSelectedUnitActionEffect(effects, *effect, action_id, source,
@@ -16179,27 +18858,50 @@ void default_unit_command_execute_ability(UnitCommandContext&,
         source.path_target_x, source.path_target_y);
 }
 
-void default_unit_command_start_ability_attachment(UnitCommandContext&,
+bool default_unit_command_start_ability_attachment(UnitCommandContext&,
     UnitMovementUnit& source, UnitMovementUnit*, u32 ability_id) {
     constexpr u32 kSelectedActionEffectBase = 0x3d;
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
     if (lifecycle == nullptr || ability_id >= 0x2e) {
-        return;
+        return false;
     }
 
     UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
     configure_default_unit_effect_runtime_state(effects);
     sync_default_unit_effect_runtime_units(effects, *lifecycle);
 
-    UnitEffectRuntime* effect = AllocateUnitEffectSlot(effects);
-    if (effect == nullptr) {
-        return;
+    const UnitEffectDefinition* definition =
+        find_default_unit_effect_definition(
+            effects, kSelectedActionEffectBase + ability_id);
+    if (definition == nullptr) {
+        return false;
     }
 
-    if (!BeginSelectedUnitAttachmentEffect(effects, *effect,
-            kSelectedActionEffectBase + ability_id, source, &source)) {
-        ReleaseUnitEffectSlot(effects, *effect);
+    bool attached_item = false;
+    if (effects.equipment_catalog != nullptr) {
+        for (u32 item_id : source.item_slots) {
+            if (item_id == 0) {
+                continue;
+            }
+            const UnitEquipmentEffectDefinition* item =
+                FindUnitEquipmentEffect(*effects.equipment_catalog, item_id);
+            if (item != nullptr &&
+                item->attachment_definition_id == ability_id) {
+                attached_item = true;
+                break;
+            }
+        }
     }
+    // Availability helper 0x004ef6cd accepts equality for both resources;
+    // the strict health > cost check belongs to the later executing init.
+    if (!attached_item &&
+        (source.secondary_value < definition->action_secondary_cost ||
+            source.health < definition->action_source_health_cost)) {
+        return false;
+    }
+
+    return StartSelectedUnitAttachmentEffect(effects,
+        kSelectedActionEffectBase + ability_id, source, &source);
 }
 
 bool default_unit_command_can_use_ability(UnitCommandContext&,
@@ -16207,17 +18909,27 @@ bool default_unit_command_can_use_ability(UnitCommandContext&,
     if (ability_id >= 0x2e) {
         return false;
     }
-    if (target != nullptr && !target->active) {
+
+    UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
+    configure_default_unit_effect_runtime_state(effects);
+    const UnitEffectDefinition* definition =
+        find_default_unit_effect_definition(effects, 0x3du + ability_id);
+    const bool lifecycle_target =
+        definition != nullptr && definition->action_direction_mode >= 4;
+    if (target != nullptr && !target->active && !lifecycle_target) {
+        return false;
+    }
+    if (target != nullptr && lifecycle_target &&
+        ((target->runtime_flags & 4u) == 0 || target->path_target_x == 1)) {
         return false;
     }
 
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
     if (lifecycle == nullptr) {
-        return target == nullptr || (target->command_state & kUnitCommandDead) == 0;
+        return lifecycle_target || target == nullptr ||
+            (target->command_state & kUnitCommandDead) == 0;
     }
 
-    UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
-    configure_default_unit_effect_runtime_state(effects);
     sync_default_unit_effect_runtime_units(effects, *lifecycle);
 
     const UnitEffectActionTargetGateResult gate =
@@ -16230,13 +18942,24 @@ UnitCommandAbilityGateResult default_unit_command_ability_gate(UnitCommandContex
     if (ability_id >= 0x2e) {
         return UnitCommandAbilityGateResult::fail;
     }
-    if (target != nullptr && !target->active) {
+    UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
+    configure_default_unit_effect_runtime_state(effects);
+    const UnitEffectDefinition* definition =
+        find_default_unit_effect_definition(effects, 0x3du + ability_id);
+    const bool lifecycle_target =
+        definition != nullptr && definition->action_direction_mode >= 4;
+    if (target != nullptr && !target->active && !lifecycle_target) {
+        return UnitCommandAbilityGateResult::fail;
+    }
+    if (target != nullptr && lifecycle_target &&
+        ((target->runtime_flags & 4u) == 0 || target->path_target_x == 1)) {
         return UnitCommandAbilityGateResult::fail;
     }
 
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
     if (lifecycle == nullptr) {
-        if (target != nullptr && (target->command_state & kUnitCommandDead) != 0) {
+        if (!lifecycle_target && target != nullptr &&
+            (target->command_state & kUnitCommandDead) != 0) {
             return UnitCommandAbilityGateResult::fail;
         }
         const u32 distance = target != nullptr ?
@@ -16248,8 +18971,6 @@ UnitCommandAbilityGateResult default_unit_command_ability_gate(UnitCommandContex
             UnitCommandAbilityGateResult::approach;
     }
 
-    UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
-    configure_default_unit_effect_runtime_state(effects);
     sync_default_unit_effect_runtime_units(effects, *lifecycle);
 
     const UnitEffectActionTargetGateResult gate =
@@ -16429,6 +19150,12 @@ bool default_unit_command_start_equipment_progress_effect(UnitCommandContext&,
     return StartUnitProgressMapEffect(g_runtime.map_effect_context, unit, effect_id);
 }
 
+void default_unit_command_equipment_slots_changed(UnitCommandContext&,
+    UnitMovementUnit& unit) {
+    PublishUnitEquipmentSlots(
+        g_runtime.gameplay_unit_equipment_publish_state, unit, 0);
+}
+
 void configure_default_unit_command_context(UnitCommandContext& command_context,
     UnitLifecycleContext& lifecycle, u32 frame_counter) {
     UnitEquipmentCatalog& equipment_catalog =
@@ -16503,6 +19230,10 @@ void configure_default_unit_command_context(UnitCommandContext& command_context,
     if (command_context.callbacks.random_limit == nullptr) {
         command_context.callbacks.random_limit = default_unit_command_random_limit;
     }
+    if (command_context.callbacks.variant_random_limit == nullptr) {
+        command_context.callbacks.variant_random_limit =
+            default_gameplay_frame_random_limit;
+    }
     if (command_context.callbacks.on_reserved_tile_work_complete == nullptr) {
         command_context.callbacks.on_reserved_tile_work_complete =
             default_unit_command_reserved_tile_work_complete;
@@ -16532,6 +19263,10 @@ void configure_default_unit_command_context(UnitCommandContext& command_context,
     if (command_context.callbacks.on_harvest_frame == nullptr) {
         command_context.callbacks.on_harvest_frame = default_unit_command_harvest_sound;
     }
+    if (command_context.callbacks.on_equipment_slots_changed == nullptr) {
+        command_context.callbacks.on_equipment_slots_changed =
+            default_unit_command_equipment_slots_changed;
+    }
     if (command_context.callbacks.on_cargo_deposited == nullptr) {
         command_context.callbacks.on_cargo_deposited =
             default_unit_command_cargo_deposited;
@@ -16556,6 +19291,10 @@ void configure_default_unit_command_context(UnitCommandContext& command_context,
         command_context.callbacks.on_runtime_death_sound =
             default_unit_command_runtime_death_sound;
     }
+    if (command_context.callbacks.on_runtime_death_accounting == nullptr) {
+        command_context.callbacks.on_runtime_death_accounting =
+            default_unit_command_runtime_death_accounting;
+    }
     if (command_context.callbacks.on_target_validation_failed == nullptr) {
         command_context.callbacks.on_target_validation_failed =
             default_unit_command_target_validation_failed;
@@ -16579,6 +19318,14 @@ void configure_default_unit_command_context(UnitCommandContext& command_context,
     if (command_context.callbacks.on_linked_unit_released == nullptr) {
         command_context.callbacks.on_linked_unit_released =
             default_unit_command_linked_unit_released;
+    }
+    if (command_context.callbacks.on_linked_unit_attached == nullptr) {
+        command_context.callbacks.on_linked_unit_attached =
+            default_unit_command_linked_unit_attached;
+    }
+    if (command_context.callbacks.on_linked_unit_detached == nullptr) {
+        command_context.callbacks.on_linked_unit_detached =
+            default_unit_command_linked_unit_detached;
     }
     if (command_context.callbacks.on_unit_type_replaced == nullptr) {
         command_context.callbacks.on_unit_type_replaced =
@@ -16785,16 +19532,9 @@ void default_unit_support_health_restore_effect(UnitSupportEffectContext&,
     configure_default_unit_effect_runtime_state(effects);
     sync_default_unit_effect_runtime_units(effects, *lifecycle);
 
-    UnitEffectRuntime* effect = AllocateUnitEffectSlot(effects);
-    if (effect == nullptr) {
-        return;
-    }
-
-    if (!BeginSelectedUnitAttachmentEffect(effects, *effect,
-            kSelectedActionEffectBase + kHealthRestoreAttachmentActionId,
-            source, &source)) {
-        ReleaseUnitEffectSlot(effects, *effect);
-    }
+    StartSelectedUnitAttachmentEffect(effects,
+        kSelectedActionEffectBase + kHealthRestoreAttachmentActionId,
+        source, &source);
 }
 
 UnitMovementUnit* default_unit_support_marker_aura_sound_unit(
@@ -16859,6 +19599,25 @@ void configure_default_unit_support_context(UnitSupportEffectContext& support_co
     support_context.callbacks.on_marker_aura_sound =
         default_unit_support_marker_aura_sound;
 
+    if (jw211_runtime_catalog_state().records.empty()) {
+        LoadJw211RuntimeCatalog();
+    }
+    const AuxiliaryRuntimeCatalogState& action_catalog =
+        jw211_runtime_catalog_state();
+    const u32 restore_record_index =
+        kJw211RestoreLinkedHealthEffectId - kJw211FirstRecordId;
+    if (restore_record_index < action_catalog.records.size()) {
+        // FUN_004c1650 starts the periodic Cure scan only when source
+        // secondary is strictly greater than DAT_01225b84 (record 40 raw
+        // +0x1e4, value 2).  The support helper expresses that as a <=
+        // threshold rejection.
+        support_context.health_restore_secondary_threshold =
+            read_runtime_catalog_u32(
+                action_catalog.records[restore_record_index]
+                    .definition_bytes,
+                kJw211ActionSecondaryCostOffset, 0);
+    }
+
     const PlayerSlotRuntimeState& players = g_runtime.gameplay_player_slots;
     for (u32 owner = 0; owner < kPlayerSlotCount &&
          owner < support_context.source_owner_masks.size(); ++owner) {
@@ -16891,6 +19650,16 @@ bool run_default_unit_runtime_pre_terrain_tick(UnitMovementContext&,
     return (unit.command_state & kUnitCommandDead) == 0;
 }
 
+void run_default_unit_runtime_death_side_effects(
+    UnitLifecycleContext& lifecycle, UnitMovementUnit& unit) {
+    HandleUnitDeathLifecycleTransition(lifecycle, unit);
+    if (unit.type_id < 0x60 && lifecycle.movement != nullptr) {
+        spawn_default_runtime_death_passive_effects(unit);
+        HandleAttachedUnitParentDeath(*lifecycle.movement, unit);
+        queue_default_runtime_death_sound(unit, true);
+    }
+}
+
 void run_default_active_unit_runtime_dispatch(UnitLifecycleContext& lifecycle,
     UnitMovementUnit& unit) {
     if (lifecycle.movement == nullptr) {
@@ -16902,6 +19671,12 @@ void run_default_active_unit_runtime_dispatch(UnitLifecycleContext& lifecycle,
         HandlePendingUnitCommandDispatch(command_context, unit);
         if (!ProcessUnitRuntimeStateTick(*lifecycle.movement, unit,
                 run_default_unit_runtime_pre_terrain_tick, nullptr)) {
+            if ((unit.runtime_flags & 4u) != 0) {
+                // Original 0x004c8e36..0x004c8ecc performs footprint,
+                // accounting, passive-effect/RNG, attachment, and sound side
+                // effects immediately in this unit's active-list dispatch.
+                run_default_unit_runtime_death_side_effects(lifecycle, unit);
+            }
             return;
         }
         ProcessUnitSupportEffectsByDefinition(
@@ -16911,6 +19686,9 @@ void run_default_active_unit_runtime_dispatch(UnitLifecycleContext& lifecycle,
     }
 
     HandleUnitRuntimeDispatchTick(command_context, unit);
+    // High-type death cleanup, accounting, refunds, and sound all occur
+    // inside HandleUnitRuntimeDispatchTick in the original 0x004cdbbf path.
+    // The later lifecycle pass only moves the marked node between lists.
 }
 
 bool default_owner_ai_profile_text_loader(const char* archive_name,
@@ -17634,192 +20412,32 @@ const std::array<OwnerProductionRouteObjectRequirement,
     return requirements;
 }
 
-bool default_owner_ai_route_object_type_required(u32 object_type) {
-    if (object_type == 0) {
-        return false;
-    }
-    const auto& requirements = default_owner_ai_route_object_requirements();
-    return std::any_of(requirements.begin(), requirements.end(),
-        [object_type](const OwnerProductionRouteObjectRequirement& requirement) {
-            return requirement.object_type == object_type;
-        });
-}
-
-bool default_map_effect_object_offset_valid(u32 offset, u32 object_count) {
-    return offset != 0 &&
-        offset % kGameplayMapEffectObjectStride == 0 &&
-        offset / kGameplayMapEffectObjectStride < object_count;
-}
-
-bool default_map_effect_object_link_offset_valid(u32 offset, u32 object_count) {
-    return offset == 0 ||
-        default_map_effect_object_offset_valid(offset, object_count);
-}
-
-std::vector<u32> recover_default_owner_ai_active_map_effect_indices(
-    const std::vector<u8>& record, u32 object_count) {
-    std::vector<u32> best_indices;
-    u32 best_route_candidate_count = 0;
-
-    for (u32 head_index = 1; head_index < object_count; ++head_index) {
-        const std::size_t head_base =
-            static_cast<std::size_t>(head_index) *
-            kGameplayMapEffectObjectStride;
-        const u32 head_previous = read_default_scenario_object_u32(
-            record, head_base, kGameplayMapEffectObjectPreviousOffset);
-        if (head_previous != 0) {
-            continue;
-        }
-
-        std::vector<u32> indices;
-        std::vector<bool> seen(object_count, false);
-        u32 route_candidate_count = 0;
-        u32 previous_offset = 0;
-        u32 current_offset = head_index * kGameplayMapEffectObjectStride;
-        bool valid = true;
-
-        while (current_offset != 0) {
-            if (!default_map_effect_object_offset_valid(
-                    current_offset, object_count)) {
-                valid = false;
-                break;
-            }
-            const u32 index = current_offset / kGameplayMapEffectObjectStride;
-            if (seen[index]) {
-                valid = false;
-                break;
-            }
-            seen[index] = true;
-
-            const std::size_t object_base =
-                static_cast<std::size_t>(index) *
-                kGameplayMapEffectObjectStride;
-            const u32 object_previous = read_default_scenario_object_u32(
-                record, object_base, kGameplayMapEffectObjectPreviousOffset);
-            const u32 object_next = read_default_scenario_object_u32(
-                record, object_base, kGameplayMapEffectObjectNextOffset);
-            if (object_previous != previous_offset ||
-                !default_map_effect_object_link_offset_valid(
-                    object_next, object_count)) {
-                valid = false;
-                break;
-            }
-
-            const u32 object_type = read_default_scenario_object_u32(
-                record, object_base, kGameplayMapEffectObjectTypeOffset);
-            if (default_owner_ai_route_object_type_required(object_type)) {
-                ++route_candidate_count;
-            }
-            indices.push_back(index);
-            previous_offset = current_offset;
-            current_offset = object_next;
-        }
-
-        if (valid && route_candidate_count > best_route_candidate_count) {
-            best_route_candidate_count = route_candidate_count;
-            best_indices = std::move(indices);
-        }
-    }
-
-    return best_indices;
-}
-
 std::vector<OwnerProductionRouteObjectCandidate>
 build_default_owner_ai_map_effect_route_object_candidates() {
     std::vector<OwnerProductionRouteObjectCandidate> candidates;
-    std::vector<u8>* record =
-        MutableGameplaySessionLoadedRecord(kGameplayMapEffectObjectRecordIndex);
-    if (record == nullptr ||
-        record->size() < kGameplayMapEffectObjectStride * 2) {
-        return candidates;
-    }
-
-    const u32 object_count = std::min<u32>(
-        static_cast<u32>(record->size() / kGameplayMapEffectObjectStride),
-        kGameplayMapEffectObjectMaxSlots);
-    std::vector<u32> recovered_indices =
-        recover_default_owner_ai_active_map_effect_indices(
-            *record, object_count);
-    if (recovered_indices.empty()) {
-        recovered_indices.reserve(object_count);
-        for (u32 index = 1; index < object_count; ++index) {
-            recovered_indices.push_back(index);
-        }
-    }
-    candidates.reserve(recovered_indices.size());
-    for (u32 index : recovered_indices) {
-        const std::size_t object_base =
-            static_cast<std::size_t>(index) * kGameplayMapEffectObjectStride;
-        const u32 object_type = read_default_scenario_object_u32(
-            *record, object_base, kGameplayMapEffectObjectTypeOffset);
-        if (object_type == 0) {
+    MapEffectContext& map_effects = g_runtime.map_effect_context;
+    candidates.reserve(map_effects.active_effect_indices.size());
+    for (u32 index : map_effects.active_effect_indices) {
+        if (index == 0 || index >= map_effects.effects.size()) {
             continue;
         }
-
-        const u32 previous_offset = read_default_scenario_object_u32(
-            *record, object_base, kGameplayMapEffectObjectPreviousOffset);
-        const u32 next_offset = read_default_scenario_object_u32(
-            *record, object_base, kGameplayMapEffectObjectNextOffset);
-        const bool previous_valid =
-            previous_offset == 0 ||
-            (previous_offset % kGameplayMapEffectObjectStride == 0 &&
-                previous_offset / kGameplayMapEffectObjectStride < object_count);
-        const bool next_valid =
-            next_offset == 0 ||
-            (next_offset % kGameplayMapEffectObjectStride == 0 &&
-                next_offset / kGameplayMapEffectObjectStride < object_count);
-        if (!previous_valid || !next_valid) {
+        MapEffectInstance& effect = map_effects.effects[index];
+        if (!effect.active || effect.effect_id == 0) {
             continue;
         }
 
         OwnerProductionRouteObjectCandidate candidate;
-        candidate.object_type = object_type;
-        candidate.flags = read_default_scenario_object_u32(
-            *record, object_base, kGameplayMapEffectObjectFlagsOffset);
-        candidate.point = {
-            read_default_scenario_object_i32(
-                *record, object_base, kGameplayMapEffectObjectXOffset),
-            read_default_scenario_object_i32(
-                *record, object_base, kGameplayMapEffectObjectYOffset)};
-        const GameplaySessionLoadState& load = gameplay_session_load_state();
-        if (kGameplayMapEffectLayerRecordIndex < load.records.size() &&
-            load.record_loaded[kGameplayMapEffectLayerRecordIndex]) {
-            const i32 tile_x = ConvertOwnerProductionWorldToTile(candidate.point.x);
-            const i32 tile_y = ConvertOwnerProductionWorldToTile(candidate.point.y);
-            const u32 map_width = default_gameplay_session_map_width_tiles();
-            const u32 map_height = default_gameplay_session_map_height_tiles();
-            if (tile_x < 0 || tile_y < 0 ||
-                tile_x >= static_cast<i32>(map_width) ||
-                tile_y >= static_cast<i32>(map_height)) {
-                continue;
-            }
-            const u32 cell_index =
-                static_cast<u32>(tile_y) * kGameplayScenarioMapLayerStrideTiles +
-                static_cast<u32>(tile_x);
-            const u32 map_effect_flags = read_default_map_layer_u32(
-                load.records[kGameplayMapEffectLayerRecordIndex], cell_index);
-            if ((map_effect_flags & kMapEffectTileFlag) == 0) {
-                continue;
-            }
-        }
-
+        candidate.object_type = effect.effect_id;
+        candidate.flags = effect.flags;
+        candidate.point = {effect.x, effect.y};
         candidate.owner_visibility_mask =
             default_owner_ai_route_object_visibility_mask(
                 candidate.point.x, candidate.point.y);
         candidate.source_object_index = index;
         candidate.source_is_map_effect_object = true;
-        candidate.assigned_unit =
-            g_runtime.gameplay_map_effect_object_assigned_units[index];
-        if (candidate.assigned_unit == nullptr) {
-            const u32 linked_unit_offset = read_default_scenario_object_u32(
-                *record, object_base, kGameplayMapEffectObjectLinkedUnitOffset);
-            if (linked_unit_offset != 0) {
-                candidate.assigned_unit =
-                    find_default_movement_unit_by_id(linked_unit_offset);
-                g_runtime.gameplay_map_effect_object_assigned_units[index] =
-                    candidate.assigned_unit;
-            }
-        }
+        candidate.assigned_unit = effect.linked_unit;
+        g_runtime.gameplay_map_effect_object_assigned_units[index] =
+            candidate.assigned_unit;
         candidates.push_back(candidate);
     }
     return candidates;
@@ -19147,15 +21765,18 @@ void initialize_default_unit_from_scenario_object(
     unit.direction = object.direction;
     unit.movement_flags = object.movement_flags;
     unit.movement_state = object.movement_state;
-    unit.wait_ticks = object.wait_ticks;
+    unit.movement_turn_ticks = object.movement_turn_ticks;
     unit.animation_frame = object.animation_frame;
     unit.previous_command_state = object.previous_command_state;
     unit.animation_timer = object.animation_timer;
     unit.command_lockout_ticks = object.command_lockout_ticks;
     unit.distance_check_mode = object.distance_check_mode;
-    unit.movement_turn_ticks = object.movement_turn_ticks;
+    unit.movement_step_accumulator = object.movement_step_accumulator;
     unit.placement_reset_scratch = object.placement_reset_scratch;
-    unit.effect_reset_scratch = object.effect_reset_scratch;
+    unit.movement_residual_x = object.movement_residual_x;
+    unit.movement_residual_y = object.movement_residual_y;
+    unit.movement_interpolation_x = object.movement_interpolation_x;
+    unit.movement_interpolation_y = object.movement_interpolation_y;
     unit.x = object.x;
     unit.y = object.y;
     unit.command_value = object.command_value;
@@ -19166,14 +21787,21 @@ void initialize_default_unit_from_scenario_object(
             static_cast<u32>(std::max<i32>(object.destination_x, 0));
         unit.cell_flag40_animation_frame =
             static_cast<u32>(std::max<i32>(object.destination_y, 0));
-        unit.destination_x = object.x;
-        unit.destination_y = object.y;
+        // For type >= 0x60 the original raw +0x78/+0x7c words are the cell
+        // renderer's palette/frame scratch union, not movement destinations.
+        // Keep the typed movement-only view clear instead of manufacturing a
+        // second x/y value that does not exist in the original record.
+        unit.destination_x = 0;
+        unit.destination_y = 0;
     }
     else {
-        const bool has_destination =
-            object.destination_x != 0 || object.destination_y != 0;
-        unit.destination_x = has_destination ? object.destination_x : object.x;
-        unit.destination_y = has_destination ? object.destination_y : object.y;
+        // The scenario record stores original raw destination +0x78/+0x7c
+        // verbatim.  Zero is a meaningful idle value, not a missing-value
+        // marker: substituting world x/y caused the reconstructed worker to
+        // differ from the original for the five aligned frames preceding its
+        // first berry command.
+        unit.destination_x = object.destination_x;
+        unit.destination_y = object.destination_y;
     }
     unit.destination_aux_state = object.destination_aux_state;
     const bool has_current_cell =
@@ -19246,7 +21874,7 @@ void initialize_default_unit_from_scenario_object(
         unit.type_flags = object.type_flags;
     }
     unit.saved_type_flags = object.saved_type_flags;
-    unit.definition.support_source_flags = object.script_bit_flags;
+    unit.script_bit_flags = object.script_bit_flags;
     unit.linked_effect_slot_offset = object.linked_effect_slot_offset;
     unit.command_entry_lockout_ticks = object.command_entry_lockout_ticks;
 }
@@ -19551,7 +22179,7 @@ void sync_default_gameplay_script_object_from_unit(
     object.area_marker_flags = unit.area_marker_flags;
     object.command_flags = unit.command_flags;
     object.command_bit_mask = default_unit_command_bit_mask(unit);
-    object.script_bit_flags = unit.definition.support_source_flags;
+    object.script_bit_flags = unit.script_bit_flags;
     object.linked_effect_slot_offset = unit.linked_effect_slot_offset;
     object.linked_object_id = unit.linked_object_id;
     if (unit.reserved_tile_effect != nullptr) {
@@ -19572,16 +22200,19 @@ void sync_default_gameplay_script_object_from_unit(
     object.direction = unit.direction;
     object.movement_flags = unit.movement_flags;
     object.movement_state = unit.movement_state;
-    object.wait_ticks = unit.wait_ticks;
+    object.movement_turn_ticks = unit.movement_turn_ticks;
     object.animation_frame = unit.animation_frame;
     object.previous_command_state = unit.previous_command_state & 0x00ffffffu;
     object.animation_timer = unit.animation_timer;
     object.command_entry_lockout_ticks = unit.command_entry_lockout_ticks;
     object.command_lockout_ticks = unit.command_lockout_ticks;
     object.distance_check_mode = unit.distance_check_mode;
-    object.movement_turn_ticks = unit.movement_turn_ticks;
+    object.movement_step_accumulator = unit.movement_step_accumulator;
     object.placement_reset_scratch = unit.placement_reset_scratch;
-    object.effect_reset_scratch = unit.effect_reset_scratch;
+    object.movement_residual_x = unit.movement_residual_x;
+    object.movement_residual_y = unit.movement_residual_y;
+    object.movement_interpolation_x = unit.movement_interpolation_x;
+    object.movement_interpolation_y = unit.movement_interpolation_y;
     object.x = unit.x;
     object.y = unit.y;
     object.command_value = unit.command_value;
@@ -19638,12 +22269,14 @@ void sync_default_gameplay_script_object_from_unit(
     if ((unit.command_state & kUnitCommandDead) != 0 || !unit.active) {
         object.flags |= 4u;
         object.remove_from_triggers = true;
+        object.script_removal_requested = false;
     } else {
         // A fixed-pool node can be activated again after its previous unit was
         // removed.  The script object follows that node pointer, so revive the
         // object at the same time; otherwise the subsequent mutation pass
         // immediately reapplies the stale death flag to the new unit.
         object.remove_from_triggers = false;
+        object.script_removal_requested = false;
         object.flags &= ~4u;
     }
 }
@@ -19721,6 +22354,18 @@ void sync_default_gameplay_script_runtime_context(
             lifecycle != nullptr && owner < lifecycle->owner_secondary_resources.size() ?
             static_cast<i32>(lifecycle->owner_secondary_resources[owner]) :
             static_cast<i32>(g_runtime.gameplay_player_slots.owner_secondary_resources[owner]);
+        condition_owner.metric = 0;
+        if (lifecycle != nullptr && owner < lifecycle->owner_unit_kill_count.size() &&
+            owner < lifecycle->owner_building_kill_count.size()) {
+            sync_default_owner_lifecycle_score_counter_tables(*lifecycle, owner);
+            // FUN_0041dc60 consumes 0x70726c + 0x70728c for the kill-count
+            // conditions used by the original scenario victory logic.
+            condition_owner.metric = default_i32_from_u32(
+                lifecycle->owner_unit_kill_count[owner] +
+                lifecycle->owner_building_kill_count[owner]);
+        }
+        condition_owner.score = default_i32_from_u32(
+            GetOwnerSessionCounterTotal(g_runtime.gameplay_owner_counters, owner));
         condition_owner.blocked_relation_mask =
             g_runtime.gameplay_player_slots.owner_relation_masks[owner];
 
@@ -19756,6 +22401,20 @@ void sync_default_gameplay_script_runtime_context(
                 script.condition_context.active_object_order.push_back(object_index);
             }
         }
+
+        // Death/removal processing moves a unit out of active_units before the
+        // next script phase.  If its mirrored scenario object is not refreshed,
+        // that object remains alive with the health and command state from the
+        // frame before removal.  The mutation pass then writes those stale stats
+        // back and keeps counting the object in script conditions.  Walk only
+        // existing script objects so the unused fixed free pool remains cheap.
+        for (u32 index = 1; index < script.objects.size(); ++index) {
+            GameplayScriptTriggerObjectState& object = script.objects[index];
+            if (object.unit != nullptr && !object.unit->active) {
+                sync_default_gameplay_script_object_from_unit(
+                    object, *object.unit);
+            }
+        }
     }
 
     append_default_gameplay_script_scenario_active_objects(script);
@@ -19771,6 +22430,29 @@ void apply_default_gameplay_script_object_to_unit(
 
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
     if (!default_gameplay_script_object_alive(object)) {
+        // A lethal damage commit marks the live unit dead before its next
+        // runtime dispatch.  Original HandleUnitRuntimeDispatchTick
+        // (0x004cd988) observes that bit and the post-runtime list phase moves
+        // the unit to its death lifecycle.  Do not turn the mirrored script
+        // object's derived remove flag into an immediate active -> free move.
+        // Explicit scenario removal opcodes retain their one-phase provenance
+        // and still use HandleUnitRemovalAccounting below.
+        if (!object.script_removal_requested && unit->active &&
+            (unit->command_state & kUnitCommandDead) != 0) {
+            return;
+        }
+        // Original HandleUnitLifecycleGrowthOrDecay (0x004ce866) restores a
+        // lifecycle-class-1 object to state 1/full health, then sets raw
+        // command flag 0x200 while the node is still on the lifecycle list.
+        // HandleUnitLifecycleDispatchListTick moves it back to the active list
+        // on the following runtime phase.  The script mirror can still carry
+        // the object's preceding death flag during that one-phase hand-off;
+        // reapplying it here kills the restored node before active-list sync
+        // gets a chance to revive the mirror and incorrectly sends it free.
+        if (!object.script_removal_requested && !unit->active &&
+            (unit->command_flags & 0x200u) != 0) {
+            return;
+        }
         unit->command_state |= kUnitCommandDead;
         if (unit->active) {
             if (lifecycle != nullptr) {
@@ -19794,7 +22476,7 @@ void apply_default_gameplay_script_object_to_unit(
     unit->direction = object.direction;
     unit->movement_flags = object.movement_flags;
     unit->movement_state = object.movement_state;
-    unit->wait_ticks = object.wait_ticks;
+    unit->movement_turn_ticks = object.movement_turn_ticks;
     unit->animation_frame = object.animation_frame;
     unit->previous_command_state = object.previous_command_state;
     if (scenario_object_uses_cell_render_scratch(unit->type_id)) {
@@ -19807,9 +22489,12 @@ void apply_default_gameplay_script_object_to_unit(
     unit->command_lockout_ticks = object.command_lockout_ticks;
     unit->command_entry_lockout_ticks = object.command_entry_lockout_ticks;
     unit->distance_check_mode = object.distance_check_mode;
-    unit->movement_turn_ticks = object.movement_turn_ticks;
+    unit->movement_step_accumulator = object.movement_step_accumulator;
     unit->placement_reset_scratch = object.placement_reset_scratch;
-    unit->effect_reset_scratch = object.effect_reset_scratch;
+    unit->movement_residual_x = object.movement_residual_x;
+    unit->movement_residual_y = object.movement_residual_y;
+    unit->movement_interpolation_x = object.movement_interpolation_x;
+    unit->movement_interpolation_y = object.movement_interpolation_y;
     unit->x = object.x;
     unit->y = object.y;
     unit->command_value = object.command_value;
@@ -19837,7 +22522,7 @@ void apply_default_gameplay_script_object_to_unit(
     }
     unit->command_flags = object.command_flags;
     apply_default_unit_command_bit_mask(*unit, object.command_bit_mask);
-    unit->definition.support_source_flags = object.script_bit_flags;
+    unit->script_bit_flags = object.script_bit_flags;
     unit->linked_effect_slot_offset = object.linked_effect_slot_offset;
     unit->linked_object_id = object.linked_object_id;
     unit->area_marker_flags = object.area_marker_flags;
@@ -19879,13 +22564,16 @@ void apply_default_gameplay_script_object_to_unit(
     object.next_path_y = unit->next_path_y;
     object.movement_flags = unit->movement_flags;
     object.movement_state = unit->movement_state;
-    object.wait_ticks = unit->wait_ticks;
     object.movement_turn_ticks = unit->movement_turn_ticks;
+    object.movement_step_accumulator = unit->movement_step_accumulator;
     object.placement_reset_scratch = unit->placement_reset_scratch;
-    object.effect_reset_scratch = unit->effect_reset_scratch;
+    object.movement_residual_x = unit->movement_residual_x;
+    object.movement_residual_y = unit->movement_residual_y;
+    object.movement_interpolation_x = unit->movement_interpolation_x;
+    object.movement_interpolation_y = unit->movement_interpolation_y;
     object.command_entry_lockout_ticks = unit->command_entry_lockout_ticks;
     object.command_bit_mask = default_unit_command_bit_mask(*unit);
-    object.script_bit_flags = unit->definition.support_source_flags;
+    object.script_bit_flags = unit->script_bit_flags;
     object.linked_effect_slot_offset = unit->linked_effect_slot_offset;
     object.linked_object_id = unit->linked_object_id;
     object.string_slot = unit->scenario_string_slot;
@@ -20106,8 +22794,8 @@ void sync_default_gameplay_script_scenario_record(
             *record, object_base, kGameplayScenarioObjectMovementStateOffset,
             object.movement_state);
         write_default_scenario_object_u32(
-            *record, object_base, kGameplayScenarioObjectWaitTicksOffset,
-            object.wait_ticks);
+            *record, object_base, kGameplayScenarioObjectMovementTurnTicksOffset,
+            object.movement_turn_ticks);
         write_default_scenario_object_i32(
             *record, object_base, kGameplayScenarioObjectXOffset, object.x);
         write_default_scenario_object_i32(
@@ -20167,16 +22855,21 @@ void sync_default_gameplay_script_scenario_record(
             *record, object_base, kGameplayScenarioObjectDistanceCheckModeOffset,
             object.distance_check_mode);
         write_default_scenario_object_u32(
-            *record, object_base, kGameplayScenarioObjectMovementTurnTicksOffset,
-            object.movement_turn_ticks);
-        for (std::size_t slot = 0;
-             slot < object.effect_reset_scratch.size() &&
-             slot < kGameplayScenarioObjectEffectResetScratchOffsets.size();
-             ++slot) {
-            write_default_scenario_object_u32(*record, object_base,
-                kGameplayScenarioObjectEffectResetScratchOffsets[slot],
-                object.effect_reset_scratch[slot]);
-        }
+            *record, object_base,
+            kGameplayScenarioObjectMovementStepAccumulatorOffset,
+            object.movement_step_accumulator);
+        write_default_scenario_object_i32(
+            *record, object_base, kGameplayScenarioObjectMovementResidualXOffset,
+            object.movement_residual_x);
+        write_default_scenario_object_i32(
+            *record, object_base, kGameplayScenarioObjectMovementResidualYOffset,
+            object.movement_residual_y);
+        write_default_scenario_object_float(*record, object_base,
+            kGameplayScenarioObjectMovementInterpolationXOffset,
+            object.movement_interpolation_x);
+        write_default_scenario_object_float(*record, object_base,
+            kGameplayScenarioObjectMovementInterpolationYOffset,
+            object.movement_interpolation_y);
         const u32 deferred_count = std::min<u32>(object.deferred_command_count,
             kGameplayScenarioObjectDeferredCommandCapacity);
         write_default_scenario_object_u32(
@@ -20545,12 +23238,8 @@ void run_default_unit_post_runtime_list_moves(UnitLifecycleContext& lifecycle) {
             continue;
         }
         if ((unit->runtime_flags & 4u) != 0) {
-            HandleUnitDeathLifecycleTransition(lifecycle, *unit);
-            spawn_default_runtime_death_passive_effects(*unit);
-            if (unit->type_id < 0x60) {
-                HandleAttachedUnitParentDeath(*movement, *unit);
-                queue_default_runtime_death_sound(*unit, true);
-            }
+            // The original second pass at 0x004cebd1 only changes list
+            // membership; death side effects already ran during dispatch.
             HandleActiveUnitLifecycleListMove(*movement, *unit);
         }
         else if ((unit->command_flags & 0x100u) != 0) {

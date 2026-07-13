@@ -399,7 +399,9 @@ bool RunFrontendStartupBootstrap(FrontendStartupState& startup_state,
     RefreshPaletteTransparentMask();
     InitializeUiFontHandles();
 #ifdef _WIN32
-    InitializeSoftwareCursorSurfaces();
+    if (InitializeSoftwareCursorSurfaces()) {
+        LoadSoftwareCursorResourcesFromJw201Trc();
+    }
 #endif
 
     if (!bootstrap_state.draw_environment_ready ||
@@ -527,8 +529,13 @@ bool RunFrontendStartupBootstrap(FrontendStartupState& startup_state,
     advance_loading_progress(startup_state, bootstrap_state);
 
     append_frontend_bootstrap_log("bootstrap step direction begin");
-    if (!LoadJw207DirectionLookupRecords(bootstrap_state.direction_lookup_8,
-            bootstrap_state.direction_lookup_16)) {
+    // JW2_07.TRC record 0 is the 16-way table used by
+    // HandlePointDirection16LookupEntry, while record 1 is the 8-way table
+    // used by PointDirectionLookupLowThunk.  Keeping these in archive order
+    // here is important: swapping them changes neutral-unit turn direction
+    // before the shared gameplay RNG itself has diverged.
+    if (!LoadJw207DirectionLookupRecords(bootstrap_state.direction_lookup_16,
+            bootstrap_state.direction_lookup_8)) {
         return fail_bootstrap(bootstrap_state,
             FrontendBootstrapFailureStage::DirectionLookup);
     }

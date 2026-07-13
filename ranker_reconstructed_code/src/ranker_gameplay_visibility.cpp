@@ -589,11 +589,12 @@ void ApplyLifecycleUnitVisibility(GameplayVisibilityContext& context,
 
     GameplayVisibilityUnit adjusted = unit;
     u32 radius = 5;
-    if ((unit.state_flags & kGameplayVisibilityUnitDying) != 0) {
-        if ((unit.max_health >> 1) <= unit.animation_timer) {
+    if ((unit.command_state & kGameplayVisibilityUnitDying) != 0) {
+        if ((unit.command_entry_lockout_ticks >> 1) <= unit.animation_timer) {
             return;
         }
-        radius = (unit.animation_timer < (unit.max_health >> 2)) ? 5u : 2u;
+        radius = (unit.animation_timer <
+            (unit.command_entry_lockout_ticks >> 2)) ? 5u : 2u;
     }
     adjusted.owner_visibility_mask = current_visibility_mask_for_unit(context, unit, false);
     adjusted.owner_explore_mask = owner_layer_mask_for_unit(context, unit);
@@ -811,18 +812,35 @@ GameplayFogRenderMetrics RecalculateGameplayFogViewportMetrics(
 bool LoadGameplayFogMaskTable(std::vector<u8>& table,
     const char* archive_name, u32 record_index) {
     table.clear();
-    if (!LoadTrcRecordAlloc(archive_name, record_index, table)) {
+    // FUN_00420930 loads JW2_02.TRC records 0x153 and 0x154 into two
+    // contiguous 0x40000-byte buffers.  Masks 0x000..0x0ff live in the
+    // first record and masks 0x100..0x1ff (the explored/dark edge shapes)
+    // live in the second.  Loading only 0x153 and zero-extending the vector
+    // turns every dark-edge mask into a solid black 32x32 tile.
+    constexpr std::size_t kRecordBytes =
+        kGameplayFogMaskTableBytes / 2;
+    std::vector<u8> first_record;
+    std::vector<u8> second_record;
+    if (!LoadTrcRecordAlloc(
+            archive_name, record_index, first_record) ||
+        !LoadTrcRecordAlloc(
+            archive_name, record_index + 1, second_record) ||
+        first_record.size() < kRecordBytes ||
+        second_record.size() < kRecordBytes) {
         return false;
     }
-    if (table.size() < kGameplayFogMaskTableBytes) {
-        table.resize(kGameplayFogMaskTableBytes);
-    }
+
+    table.reserve(kGameplayFogMaskTableBytes);
+    table.insert(table.end(), first_record.begin(),
+        first_record.begin() + kRecordBytes);
+    table.insert(table.end(), second_record.begin(),
+        second_record.begin() + kRecordBytes);
     return true;
 }
 
 bool CheckUnitVisibilityGateFlags(const GameplayVisibilityUnit& unit) {
-    return (unit.state_flags & 0x40) != 0 ||
-        (unit.command_bits[0] & 0x80) != 0;
+    return HasUnitSpecialVisibilityGateBits(
+        unit.command_flags, unit.command_bits[0]);
 }
 
 bool CheckUnitOwnerMaskOrCurrentVisibilityBit(const PlayerSlotRuntimeState& players,

@@ -62,6 +62,8 @@ using GameplayPlayerResourceHudTextCallback = void (*)(
     u8 color, bool centered);
 using GameplayPlayerResourceHudSelectFontCallback = void (*)(
     GameplayPlayerResourceHudState& state, u32 player);
+using GameplayPlayerResourceHudMeasureTextCallback = GameplayTextExtent (*)(
+    GameplayPlayerResourceHudState& state, const char* text);
 
 struct GameplayHudCallbacks {
     GameplayHudSelectFontCallback select_draw_font = nullptr;
@@ -91,6 +93,8 @@ enum GameplayPlayerResourceHudFlags : u32 {
 
 struct GameplayPlayerResourceHudCallbacks {
     GameplayPlayerResourceHudSelectFontCallback select_font = nullptr;
+    GameplayPlayerResourceHudSelectFontCallback select_name_font = nullptr;
+    GameplayPlayerResourceHudMeasureTextCallback measure_text = nullptr;
     GameplayPlayerResourceHudSpriteCallback draw_sprite = nullptr;
     GameplayPlayerResourceHudTextCallback draw_text = nullptr;
 };
@@ -405,6 +409,8 @@ bool NoOpQueuedRenderCommand(
 void DispatchUnitAnimationRenderQueueItem(UnitRenderQueueContext& context,
     const UnitRenderItem& item, i32 screen_x, i32 screen_y);
 void DispatchUnitCellRenderQueueItem(UnitRenderQueueContext& context,
+    const UnitRenderItem& item, i32 screen_x, i32 screen_y);
+void DispatchPlacementPreviewDefinitionSprite(UnitRenderQueueContext& context,
     const UnitRenderItem& item, i32 screen_x, i32 screen_y);
 bool DispatchQueuedUnitRenderByTypeCommand(
     GameplayRenderCommandQueue& queue, const GameplayRenderCommand& command);

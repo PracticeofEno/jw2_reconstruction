@@ -73,10 +73,12 @@ i32 owner_resource_total(const GameplayScriptOwnerConditionState& owner) {
     return owner.resource_a + owner.resource_b;
 }
 
-bool owner_has_nonzero_resource(
+bool owner_has_active_objects(
     const GameplayScriptConditionContext& context, u32 owner_id) {
     const GameplayScriptOwnerConditionState* owner = owner_state(context, owner_id);
-    return owner != nullptr && owner_resource_total(*owner) != 0;
+    return owner != nullptr &&
+        std::any_of(owner->unit_type_counts.begin(), owner->unit_type_counts.end(),
+            [](u8 count) { return count != 0; });
 }
 
 const GameplayScriptTriggerObjectState* object_state(
@@ -168,6 +170,7 @@ u32 object_runtime_category(const GameplayScriptTriggerObjectState& object) {
 void mark_gameplay_script_object_dead(GameplayScriptTriggerObjectState& object) {
     object.flags |= 4u;
     object.remove_from_triggers = true;
+    object.script_removal_requested = true;
     if (object.unit != nullptr) {
         object.unit->command_state |= kUnitCommandDead;
     }
@@ -945,6 +948,8 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
     auto& words = trigger.condition_words;
     const GameplayScriptConditionContext& context = state.condition_context;
 
+    // Original FUN_0041dc60 consumes total score in cases 2/7/8, primary
+    // resources in cases 3/4/5, and 0x70726c + 0x70728c kills in cases 9/10.
     switch (words[0]) {
     case 0:
         return true;
@@ -953,12 +958,12 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
     case 2: {
         const GameplayScriptOwnerConditionState* owner = owner_state(context, words[1]);
         return owner_active(context, words[1]) &&
-            owner->metric >= static_cast<i32>(words[2]);
+            owner->score >= static_cast<i32>(words[2]);
     }
     case 3: {
         const GameplayScriptOwnerConditionState* owner = owner_state(context, words[1]);
         return owner_active(context, words[1]) &&
-            owner->score >= static_cast<i32>(words[2]);
+            owner->resource_a >= static_cast<i32>(words[2]);
     }
     case 4: {
         const GameplayScriptOwnerConditionState* owner = owner_state(context, words[1]);
@@ -969,10 +974,10 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
             const GameplayScriptOwnerConditionState* other_owner =
                 owner_state(context, other);
             if (!owner_active(context, other) ||
-                !owner_has_nonzero_resource(context, other)) {
+                !owner_has_active_objects(context, other)) {
                 continue;
             }
-            if (owner->score < other_owner->score) {
+            if (owner->resource_a < other_owner->resource_a) {
                 return false;
             }
         }
@@ -987,10 +992,10 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
             const GameplayScriptOwnerConditionState* other_owner =
                 owner_state(context, other);
             if (!owner_active(context, other) ||
-                !owner_has_nonzero_resource(context, other)) {
+                !owner_has_active_objects(context, other)) {
                 continue;
             }
-            if (owner->score >= other_owner->score) {
+            if (owner->resource_a >= other_owner->resource_a) {
                 return false;
             }
         }
@@ -1005,10 +1010,10 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
             const GameplayScriptOwnerConditionState* other_owner =
                 owner_state(context, other);
             if (!owner_active(context, other) ||
-                !owner_has_nonzero_resource(context, other)) {
+                !owner_has_active_objects(context, other)) {
                 continue;
             }
-            if (owner->metric < other_owner->metric) {
+            if (owner->score < other_owner->score) {
                 return false;
             }
         }
@@ -1023,10 +1028,10 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
             const GameplayScriptOwnerConditionState* other_owner =
                 owner_state(context, other);
             if (!owner_active(context, other) ||
-                !owner_has_nonzero_resource(context, other)) {
+                !owner_has_active_objects(context, other)) {
                 continue;
             }
-            if (owner->metric >= other_owner->metric) {
+            if (owner->score >= other_owner->score) {
                 return false;
             }
         }
@@ -1037,15 +1042,14 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
         if (!owner_active(context, words[1])) {
             return false;
         }
-        const i32 total = owner_resource_total(*owner);
         for (u32 other = 0; other < kGameplayScriptOwnerCount; ++other) {
             const GameplayScriptOwnerConditionState* other_owner =
                 owner_state(context, other);
             if (!owner_active(context, other) ||
-                !owner_has_nonzero_resource(context, other)) {
+                !owner_has_active_objects(context, other)) {
                 continue;
             }
-            if (total < owner_resource_total(*other_owner)) {
+            if (owner->metric < other_owner->metric) {
                 return false;
             }
         }
@@ -1056,15 +1060,14 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
         if (!owner_active(context, words[1])) {
             return false;
         }
-        const i32 total = owner_resource_total(*owner);
         for (u32 other = 0; other < kGameplayScriptOwnerCount; ++other) {
             const GameplayScriptOwnerConditionState* other_owner =
                 owner_state(context, other);
             if (!owner_active(context, other) ||
-                !owner_has_nonzero_resource(context, other)) {
+                !owner_has_active_objects(context, other)) {
                 continue;
             }
-            if (total >= owner_resource_total(*other_owner)) {
+            if (owner->metric >= other_owner->metric) {
                 return false;
             }
         }

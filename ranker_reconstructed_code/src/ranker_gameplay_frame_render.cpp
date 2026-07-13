@@ -16,7 +16,21 @@
 namespace ranker {
 namespace {
 
+u32 resolve_remembered_structure_overlay_frame_index(u32 frame_base,
+    u32 overlay_class, u32 class_stride_factor, u32 class_frame_count,
+    u32 packed_blend_factor_value) {
+    return frame_base + overlay_class * class_stride_factor * class_frame_count +
+        (packed_blend_factor_value & 7u);
+}
+
+
 constexpr std::size_t kUnitDefinitionAnimationDirectionOffset = 0x240c;
+constexpr std::size_t kUnitDefinitionOwnerRelationOverlayEntryOffset = 0x380;
+constexpr std::size_t kUnitDefinitionOwnerRelationOverlayXOffset = 0x384;
+constexpr std::size_t kUnitDefinitionOwnerRelationOverlayYOffset = 0x388;
+constexpr std::size_t kUnitDefinitionHealthBarXOffset = 0x350;
+constexpr std::size_t kUnitDefinitionHealthBarYOffset = 0x354;
+constexpr std::size_t kUnitDefinitionHealthBarWidthOffset = 0x358;
 constexpr std::size_t kUnitDefinitionAnimationFrameOffsetTableBase = 0x140c;
 constexpr std::size_t kUnitDefinitionAnimationFrameOffsetTableStride = 0x100;
 constexpr std::size_t kUnitDefinitionAnimationRowOffsetTableBase = 0x2248;
@@ -24,6 +38,10 @@ constexpr std::size_t kUnitDefinitionAnimationRowOffsetTableStride = 0x20;
 constexpr std::size_t kUnitDefinitionQueuedCommandFrameCountOffset = 0x13dc;
 constexpr std::size_t kUnitDefinitionMovingAltFrameCountOffset = 0x13f0;
 constexpr std::size_t kUnitDefinitionMovingFrameCountOffset = 0x1404;
+constexpr std::size_t kUnitDefinitionSpecialDrawFlagOffset = 0x340;
+constexpr std::size_t kUnitDefinitionCellBaseBlitModeOffset = 0x348;
+constexpr std::size_t kUnitDefinitionCellFlag4BlitModeOffset = 0x349;
+constexpr std::size_t kUnitDefinitionCellFlag40BlitModeOffset = 0x34a;
 constexpr std::size_t kUnitDefinitionLowHealthOverlayCountOffset = 0x13e0;
 constexpr std::size_t kUnitDefinitionLowHealthOverlayDrawModeOffset = 0x338;
 constexpr std::size_t kUnitDefinitionLowHealthOverlayFrameTableBase = 0x170c;
@@ -41,6 +59,7 @@ constexpr std::size_t kUnitDefinitionActionFallbackExtendedFlagOffset = 0x220c;
 constexpr std::size_t kUnitDefinitionActionFallbackExtendedRowStrideOffset = 0x2270;
 constexpr std::size_t kUnitDefinitionOverlayClassOffset = 0x180;
 constexpr u32 kJw211StatusOverlayRecord = 36;
+constexpr u32 kJw211RememberedStructureOverlayRecord = 39;
 constexpr u32 kJw211SpecialOverlayRecord = 43;
 constexpr u32 kJw211DirectSpriteRecord = 0;
 constexpr std::size_t kAuxOverlayClassStrideFactorOffset = 0x210;
@@ -119,7 +138,12 @@ std::string format_i32(i32 value) {
     return buffer;
 }
 
-i32 default_text_width(const std::string& text) {
+i32 resource_text_width(GameplayPlayerResourceHudState& state,
+    const std::string& text) {
+    if (state.callbacks.measure_text != nullptr) {
+        return static_cast<i32>(state.callbacks.measure_text(
+            state, text.c_str()).width);
+    }
     return static_cast<i32>(text.size() * 8);
 }
 
@@ -139,10 +163,11 @@ i32 emit_player_resource_text(GameplayPlayerResourceHudState& state, u32 player,
     }
     state.draw_requests.push_back(GameplayPlayerResourceHudDrawRequest{
         GameplayPlayerResourceHudDrawKind::text, player, 0, text, x, y, color, centered});
+    const i32 width = resource_text_width(state, text);
     if (state.callbacks.draw_text != nullptr) {
         state.callbacks.draw_text(state, text.c_str(), x, y, color, centered);
     }
-    return x + default_text_width(text);
+    return x + width;
 }
 
 std::string player_display_name(const GameplayPlayerResourceHudPlayer& player) {
@@ -292,6 +317,14 @@ i32 read_unit_definition_i32(u32 unit_type, std::size_t offset, i32 fallback) {
     return static_cast<i32>(value);
 }
 
+u32 read_unit_definition_u8(u32 unit_type, std::size_t offset, u32 fallback) {
+    const UnitDefinitionResourceRecord* record = loaded_unit_definition_record(unit_type);
+    if (record == nullptr || offset >= record->definition_bytes.size()) {
+        return fallback;
+    }
+    return record->definition_bytes[offset];
+}
+
 u32 read_unit_definition_u32(
     const UnitDefinitionResourceRecord& record, std::size_t offset, u32 fallback) {
     if (offset + sizeof(u32) > record.definition_bytes.size()) {
@@ -308,6 +341,139 @@ i32 read_unit_definition_record_i32(
     const UnitDefinitionResourceRecord& record, std::size_t offset, i32 fallback) {
     return static_cast<i32>(
         read_unit_definition_u32(record, offset, static_cast<u32>(fallback)));
+}
+
+u32 health_ratio_31(u32 value, u32 maximum) {
+    if (maximum == 0) {
+        return 0;
+    }
+    return static_cast<u32>((static_cast<u64>(value) * 0x1fu) / maximum);
+}
+
+u32 remembered_stage_blend_factor(u32 value, u32 maximum) {
+    // FUN_004c5546 indexes DAT_0072c4b0 after calculating HP * 31 / max HP.
+    // That 32-entry table clamps ratio + 6 to the inclusive range [10, 31].
+    return std::clamp<u32>(health_ratio_31(value, maximum) + 6u, 10u, 0x1fu);
+}
+
+bool unit_cell_draws_construction_stage(const UnitRenderItem& item) {
+    const bool flag4_path = (item.command_metadata_flags & 0x4u) != 0 ||
+        (item.command_metadata_flags == 0 && (item.terrain_cell_flags & 0x4u) != 0);
+    if (flag4_path) {
+        return (item.definition_cell_flags & 0x2u) != 0;
+    }
+
+    const bool flag40_path = (item.command_metadata_flags & 0x40u) != 0 ||
+        (item.command_metadata_flags == 0 && (item.terrain_cell_flags & 0x40u) != 0);
+    if (flag40_path) {
+        return (item.definition_cell_flags & 0x4u) != 0;
+    }
+    return (item.definition_cell_flags & 0x1u) != 0;
+}
+
+void update_explored_fog_structure_snapshot(
+    UnitRenderQueueContext& render_context, const UnitRenderItem& item) {
+    GameplayVisibilityGrid* grid = render_context.visibility.authoritative_grid;
+    if (grid == nullptr || grid->width == 0 || grid->height == 0) {
+        return;
+    }
+
+    // FUN_004c523d constructs DAT_0072c6c0 from raw unit +0xc0/+0xc4.
+    // Those current-cell coordinates are distinct from +0xb8/+0xbc, which
+    // ProcessVisibleUnitRenderQueue uses for its initial visibility gate.
+    const u32 tile_x = static_cast<u32>(item.visibility_cell_x) >> 5;
+    const u32 tile_y = static_cast<u32>(item.visibility_cell_y) >> 5;
+    if (tile_x >= grid->width || tile_y >= grid->height) {
+        return;
+    }
+    const std::size_t cell_index =
+        static_cast<std::size_t>(tile_y) * grid->width + tile_x;
+    if (cell_index >= grid->current.size() || cell_index >= grid->previous.size()) {
+        return;
+    }
+
+    if ((item.state_flags & kUnitAnimStateDirectSprite) != 0) {
+        return;
+    }
+
+    const UnitDefinitionResourceRecord* record =
+        loaded_unit_definition_record(item.type_id);
+    if (item.cell_construction_progress_active) {
+        if (item.construction_stage_count == 0) {
+            return;
+        }
+
+        u32 frame = item.construction_stage_count - 1u;
+        if (item.construction_progress_limit != 0) {
+            if (frame == 0) {
+                // FUN_004c573c's one-frame HP-fade path skips the snapshot
+                // entirely for draw mode 2/80.
+                if ((item.draw_flags & kUnitAnimDrawMode2) != 0) {
+                    return;
+                }
+                u32 packed = (grid->previous[cell_index] & 0xf8000fffu) |
+                    0x80000000u;
+                if (item.max_hit_points != 0) {
+                    packed |= health_ratio_31(
+                        item.hit_points, item.max_hit_points) << 22;
+                }
+                grid->previous[cell_index] = packed;
+                return;
+            }
+            frame = static_cast<u32>(
+                (static_cast<u64>(frame) * item.construction_progress) /
+                item.construction_progress_limit);
+        }
+        grid->previous[cell_index] =
+            (grid->previous[cell_index] & 0xf8000fffu) |
+            (frame << 18) | 0x80000000u;
+        return;
+    }
+
+    if (item.cell_channel_additive_active) {
+        return;
+    }
+
+    if (item.construction_stage_count != 0 &&
+        unit_cell_draws_construction_stage(item)) {
+        u32 packed = (grid->previous[cell_index] & 0x7803ffffu) |
+            ((item.construction_stage_count - 1u) << 18);
+        const u32 special_draw = record != nullptr
+            ? read_unit_definition_u32(
+                *record, kUnitDefinitionSpecialDrawFlagOffset, 0)
+            : 0;
+        if ((item.draw_flags & kUnitAnimDrawMode2) == 0 &&
+            (item.command_flags & 0x40u) == 0 && special_draw == 1 &&
+            item.max_hit_points != 0) {
+            packed |= remembered_stage_blend_factor(
+                item.hit_points, item.max_hit_points) << 22;
+        }
+        grid->previous[cell_index] = packed;
+    }
+
+    if (item.max_hit_points == 0 ||
+        item.hit_points >= item.max_hit_points - (item.max_hit_points >> 2)) {
+        return;
+    }
+    const u32 overlay_count = record != nullptr
+        ? read_unit_definition_u32(
+            *record, kUnitDefinitionLowHealthOverlayCountOffset, 0)
+        : 0;
+    if (overlay_count == 0) {
+        return;
+    }
+
+    u32 severity = 0;
+    const u32 quarter = item.max_hit_points >> 2;
+    if (item.hit_points < item.max_hit_points - quarter) {
+        severity = 0x15;
+        if (item.hit_points < item.max_hit_points - quarter - quarter) {
+            severity += 0x15;
+        }
+    }
+    grid->current[cell_index] =
+        (grid->current[cell_index] & 0xfffc0fffu) |
+        ((item.low_health_overlay_frame + severity + 1u) << 12);
 }
 
 u32 read_auxiliary_record_u32(
@@ -490,7 +656,8 @@ bool draw_extra_overlays(GameplayRenderCommandQueue& queue,
     const GameplayRenderCommand& command,
     const GameplayRenderUnitSpriteDefinition& definition) {
     const u32 selector = packed_overlay_selector(command);
-    if (selector == 0 || definition.overlays.empty()) {
+    if (selector == 0 || definition.overlays.empty() ||
+        queue.overlay_base_entry == kInvalidResourceEntry) {
         return true;
     }
 
@@ -512,14 +679,49 @@ bool draw_highbit_special_overlay(GameplayRenderCommandQueue& queue,
     if (queue.callbacks.highbit_special_overlay != nullptr) {
         return queue.callbacks.highbit_special_overlay(queue, command);
     }
+    if (!jw211_runtime_catalog_state().loaded && !LoadJw211RuntimeCatalog()) {
+        return false;
+    }
+    const AuxiliaryRuntimeCatalogState& catalog = jw211_runtime_catalog_state();
+    if (kJw211RememberedStructureOverlayRecord >= catalog.records.size()) {
+        return false;
+    }
+    const AuxiliaryRuntimeCatalogRecord& record =
+        catalog.records[kJw211RememberedStructureOverlayRecord];
+    if (!record.loaded || record.definition_bytes.empty()) {
+        return false;
+    }
 
+    // FUN_004d80ae (0x004d81ab..0x004d8248) uses JW2_11 record 39.  Its
+    // remembered construction/HP phase is the low three bits of the packed
+    // blend factor, not a present-time animation counter.
+    const u32 frame_base = read_auxiliary_record_u32(
+        record, kAuxOverlayFrameTableBase, 0xffffffffu);
+    if (frame_base == 0xffffffffu) {
+        return false;
+    }
+    const u32 overlay_class = static_cast<u32>(std::max<i32>(
+        read_unit_definition_i32(
+            packed_type_id(command), kUnitDefinitionOverlayClassOffset, 0),
+        0));
+    const u32 class_stride_factor = read_auxiliary_record_u32(
+        record, kAuxOverlayClassStrideFactorOffset, 0);
+    const u32 class_frame_count = read_auxiliary_record_u32(
+        record, kAuxOverlayClassFrameCountOffset, 0);
+    const u32 frame_index = resolve_remembered_structure_overlay_frame_index(
+        frame_base, overlay_class, class_stride_factor, class_frame_count,
+        packed_blend_factor(command));
+    const u32 entry_index = auxiliary_image_entry(record, frame_index);
+    if (entry_index == kInvalidResourceEntry) {
+        return false;
+    }
     const i32 x = command.screen_x + definition.center_offset_x +
         (definition.center_width >> 1);
     const i32 y = command.screen_y + definition.center_offset_y +
         (definition.center_height >> 1);
-    const u32 entry_index = queue.highbit_overlay_base +
-        packed_blend_factor(command) * queue.highbit_overlay_stride;
-    return DrawResourceSpriteMode(entry_index, x, y, queue.highbit_overlay_blit_mode);
+    const u32 draw_mode = read_auxiliary_record_u32(
+        record, kAuxOverlayDrawModeOffset, 0);
+    return DrawResourceSpriteMode(entry_index, x, y, draw_mode);
 }
 
 bool has_unit_animation_image_group(u32 type_id, u32 group) {
@@ -818,7 +1020,7 @@ void draw_unit_animation_sprite(UnitAnimationDrawContext& context,
         return;
     case UnitAnimationDrawKind::blend_factor_ramp:
     {
-        const u32 blend_factor = std::min<u32>(context.highlight_level, 0x1f);
+        const u32 blend_factor = context.highlight_level;
         if (flipped) {
             DrawResourceSpriteFlippedBlendFactor(
                 entry, command.screen_x, command.screen_y, blend_factor);
@@ -828,6 +1030,20 @@ void draw_unit_animation_sprite(UnitAnimationDrawContext& context,
             entry, command.screen_x, command.screen_y, blend_factor);
         return;
     }
+    case UnitAnimationDrawKind::neighbor_copy:
+        if (flipped) {
+            DrawResourceSpriteFlippedNeighborCopy(
+                entry, command.screen_x, command.screen_y);
+            return;
+        }
+        DrawResourceSpriteNeighborCopy(entry, command.screen_x, command.screen_y);
+        return;
+    case UnitAnimationDrawKind::resource_mode:
+        // Cell base/group-2/group-11 sprites are never direction-flipped in
+        // FUN_004c538a/FUN_004c5468/FUN_004c568e.
+        DrawResourceSpriteMode(
+            entry, command.screen_x, command.screen_y, command.resource_draw_mode);
+        return;
     case UnitAnimationDrawKind::ally_or_local:
         if (flipped) {
             DrawResourceSpriteFlippedUnitRampLowBlueMask(
@@ -1013,8 +1229,12 @@ u32 unit_bar_fill_width(i32 width, u32 value, u32 maximum) {
     if (maximum == 0 || width <= 3) {
         return 0;
     }
+    // DrawUnitHealthAndSecondaryBars multiplies the raw current value at
+    // 0x004c5cb1/0x004c5da5 and divides by its maximum without first
+    // clamping it.  Preserve that behavior for temporary over-max HP/cargo
+    // values instead of shortening their bar to the shell width.
     const u64 scaled = static_cast<u64>(static_cast<u32>(width - 3)) *
-        std::min(value, maximum);
+        value;
     return static_cast<u32>(scaled / maximum);
 }
 
@@ -1047,6 +1267,9 @@ void draw_unit_bar_shell(const UnitAnimationDrawContext& context,
 }
 
 void draw_unit_bar_value(i32 x, i32 y, u32 fill_width, u16 color) {
+    // DrawUnitHealthAndSecondaryBars increments the top row, then passes
+    // base-y + 3 as the inclusive bottom of both value rectangles
+    // (0x004c5cca..0x004c5d10 and 0x004c5ddd..0x004c5de6).
     DrawBackBufferStippledRectangle16(x + 1, y + 1,
         x + 1 + static_cast<i32>(fill_width), y + 3, color);
 }
@@ -1088,23 +1311,32 @@ void draw_unit_display_name(UnitAnimationDrawContext&,
     if (unit.display_name.empty()) {
         return;
     }
-    SelectTextDrawFont(0);
-    SelectTextMetricFont(0);
+    // Original unit-name tail selects font 4 for both drawing and metrics at
+    // 0x004c50fc/0x004c5103 before centering the dynamic name.
+    SelectTextDrawFont(4);
+    SelectTextMetricFont(4);
     SetTextCursor(center_x, baseline_y, 0xff);
     DrawCenterAlignedText(unit.display_name.c_str());
 }
 
 void apply_unit_owner_tint(UnitAnimationDrawContext& context,
-    const UnitAnimationUnit&, UnitOwnerRelationTint tint) {
-    if (context.last_command.unit == nullptr) {
+    const UnitAnimationUnit& unit, UnitOwnerRelationTint tint) {
+    if (context.definition == nullptr) {
         return;
     }
-    const u32 entry = resolve_unit_animation_sprite_entry(context.last_command);
-    if (entry == kInvalidResourceEntry) {
+    const u32 resource_base = gameplay_ui_resource_state().green_numbers_start;
+    if (resource_base == kInvalidResourceEntry) {
         return;
     }
-    DrawResourceSpritePaletteIndexOffset(entry, context.last_command.screen_x,
-        context.last_command.screen_y, static_cast<u8>(tint));
+    // ApplyUnitOwnerRelationTint (0x004c5b90) uses the unit-definition record
+    // fields at +0x380/+0x384/+0x388 to draw the dedicated relation marker.
+    // It does not redraw the unit's most recent body-sprite command.
+    const UnitAnimationDefinition& definition = *context.definition;
+    const u32 entry = resource_base + definition.owner_relation_overlay_entry_offset;
+    DrawResourceSpritePaletteIndexOffset(entry,
+        unit.screen_x + definition.owner_relation_overlay_offset_x,
+        unit.screen_y + definition.owner_relation_overlay_offset_y,
+        static_cast<u8>(tint));
 }
 
 bool unit_owner_allied(UnitAnimationDrawContext& context,
@@ -1143,6 +1375,7 @@ UnitAnimationUnit make_unit_animation_unit(const UnitRenderItem& item,
     unit.hit_points = item.hit_points;
     unit.max_secondary_value = item.max_secondary_value;
     unit.secondary_value = item.secondary_value;
+    unit.secondary_bar_enabled = item.secondary_bar_enabled;
     unit.terrain_cell_flags = item.terrain_cell_flags;
     unit.command_metadata_flags = item.command_metadata_flags;
     unit.definition_cell_flags = item.definition_cell_flags;
@@ -1172,9 +1405,32 @@ UnitAnimationDefinition make_unit_animation_definition(const UnitRenderItem& ite
     definition.marker_offset_y = item.center_offset_y;
     definition.marker_width = item.center_width;
     definition.marker_height = item.center_height;
-    definition.bars_offset_x = item.center_offset_x;
-    definition.bars_offset_y = item.center_offset_y + item.center_height;
-    definition.bars_width = item.center_width;
+    // DrawUnitHealthAndSecondaryBars reads the dedicated definition fields at
+    // +0x350/+0x354/+0x358.  These are independent of the +0x360..+0x36c
+    // name/selection bounds and differ for several mobile definitions.
+    definition.bars_offset_x = read_unit_definition_i32(
+        item.type_id, kUnitDefinitionHealthBarXOffset, item.center_offset_x);
+    definition.bars_offset_y = read_unit_definition_i32(
+        item.type_id, kUnitDefinitionHealthBarYOffset,
+        item.center_offset_y + item.center_height);
+    definition.bars_width = read_unit_definition_i32(
+        item.type_id, kUnitDefinitionHealthBarWidthOffset, item.center_width);
+    definition.owner_relation_overlay_entry_offset = static_cast<u32>(
+        read_unit_definition_i32(item.type_id,
+            kUnitDefinitionOwnerRelationOverlayEntryOffset, 0));
+    definition.owner_relation_overlay_offset_x = read_unit_definition_i32(
+        item.type_id, kUnitDefinitionOwnerRelationOverlayXOffset, 0);
+    definition.owner_relation_overlay_offset_y = read_unit_definition_i32(
+        item.type_id, kUnitDefinitionOwnerRelationOverlayYOffset, 0);
+    definition.cell_base_blit_mode = read_unit_definition_u8(
+        item.type_id, kUnitDefinitionCellBaseBlitModeOffset, 0);
+    definition.cell_flag4_blit_mode = read_unit_definition_u8(
+        item.type_id, kUnitDefinitionCellFlag4BlitModeOffset, 0);
+    definition.cell_flag40_blit_mode = read_unit_definition_u8(
+        item.type_id, kUnitDefinitionCellFlag40BlitModeOffset, 0);
+    definition.cell_construction_special_draw =
+        read_unit_definition_i32(
+            item.type_id, kUnitDefinitionSpecialDrawFlagOffset, 0) == 1;
     definition.has_move_resource =
         read_unit_definition_i32(item.type_id,
             kUnitDefinitionMovingFrameCountOffset, 0) != 0 &&
@@ -1203,11 +1459,13 @@ UnitAnimationDefinition make_unit_animation_definition(const UnitRenderItem& ite
 
 UnitAnimationDrawContext make_unit_animation_context(
     const UnitAnimationDefinition& definition, u32 global_frame_counter,
-    u32 local_owner_id, const std::array<u32, 8>& owner_relation_masks) {
+    u32 local_owner_id, bool local_owner_is_observer,
+    const std::array<u32, 8>& owner_relation_masks) {
     UnitAnimationDrawContext context{};
     context.definition = &definition;
     context.global_frame_counter = global_frame_counter;
     context.local_owner_id = local_owner_id;
+    context.local_owner_is_observer = local_owner_is_observer;
     context.owner_relation_masks = owner_relation_masks;
     context.callbacks.draw_sprite = draw_unit_animation_sprite;
     context.callbacks.draw_direct_sprite = draw_unit_animation_sprite;
@@ -1224,6 +1482,17 @@ UnitAnimationDrawContext make_unit_animation_context(
     context.special_overlay_resources_loaded = true;
     context.status_overlay_resources_loaded = true;
     context.use_555_color = SurfacePixelMode555();
+    // ConfigureDirectDrawSurfaces initializes these packed-channel steps at
+    // 0x004f468c/0x004f46a0/0x004f46b4 (565) and
+    // 0x004f4723/0x004f4737/0x004f474b (555).  The ramp builder at
+    // 0x004c5ef0 consumes them rather than deriving them itself.
+    context.ramp_x_step = context.use_555_color ? 0x400 : 0x800;
+    context.ramp_y_step = 0x20;
+    context.ramp_secondary_step = 1;
+    // 0x004c5139 subtracts half of the selected font-4 height from the
+    // definition's +0x364 name baseline.
+    context.text_half_height =
+        static_cast<i32>(text_renderer_state().fonts[4].height);
     // DrawUnitSelectionOrTargetMarker reads DAT_008685f8, initialized by
     // LoadGameplayUiResourcePacks (0x004e8714) to the JW2_02 small-character
     // resource sequence base + 6.  Interface-theme entry + 6 is msg_p.spz and
@@ -1470,7 +1739,7 @@ void RenderGameplayPlayerResourceRows(GameplayPlayerResourceHudState& state) {
                 current = row.population_cap;
                 current_color = state.capped_color;
             }
-            emit_player_resource_text(state, player, format_i32(current),
+            emit_player_resource_text(state, player, "/" + format_i32(current),
                 after_display, y + 2, current_color);
             x += 0x46;
         }
@@ -1494,6 +1763,9 @@ void RenderGameplayPlayerResourceRows(GameplayPlayerResourceHudState& state) {
         }
 
         if ((state.flags & kGameplayPlayerResourceHudName) != 0) {
+            if (state.callbacks.select_name_font != nullptr) {
+                state.callbacks.select_name_font(state, player);
+            }
             emit_player_resource_text(
                 state, player, player_display_name(row), x, y, state.normal_color);
         }
@@ -1630,12 +1902,22 @@ void TickAndRenderGameplayHudAlertMarkers(GameplayHudAlertMarkerState& state) {
                 marker.animation_frame = (marker.animation_frame + 1) & 7u;
             }
         }
-        state.draw_requests.push_back(GameplayHudAlertMarkerDraw{
+        const GameplayHudAlertMarkerDraw draw{
             state.sprite_base_entry + marker.animation_frame,
             marker.kind << 2,
             marker.screen_x,
             marker.screen_y,
-        });
+        };
+        state.draw_requests.push_back(draw);
+
+        // FUN_0042a500 does not merely publish a draw record: after advancing
+        // the 8-frame alert animation it immediately blits the JW2_07 sprite,
+        // adding kind * 4 to each non-transparent palette index.  Keeping the
+        // request is useful to callers/tests, but without this matching blit
+        // queued construction and under-attack markers never reached the
+        // gameplay back buffer.
+        DrawResourceSpritePaletteIndexOffset(draw.sprite_entry, draw.x, draw.y,
+            static_cast<u8>(draw.palette_selector));
     }
 }
 
@@ -1853,26 +2135,78 @@ bool QueueGameplayUnitRenderCommand(GameplayRenderCommandQueue& queue,
 
 void DispatchUnitAnimationRenderQueueItem(UnitRenderQueueContext& render_context,
     const UnitRenderItem& item, i32 screen_x, i32 screen_y) {
-    const UnitAnimationUnit unit =
-        make_unit_animation_unit(item, screen_x, screen_y);
+    // DispatchUnitRenderByType writes the raw unit owner to DAT_00758a4c at
+    // 0x004c408f before jumping to either the mobile or structure renderer.
+    // The typed render callback bypasses DrawQueuedUnitRenderCommand, so set
+    // the same per-unit palette ramp here instead of inheriting the preceding
+    // sprite's owner colour.
+    SetSpriteUnitPaletteRamp(static_cast<u8>(item.owner_id));
+    UnitAnimationUnit unit = make_unit_animation_unit(item, screen_x, screen_y);
+    unit.visible_to_local_owner =
+        IsUnitRenderItemIndividuallyVisibleToLocal(render_context, item);
     const UnitAnimationDefinition definition =
         make_unit_animation_definition(item);
     UnitAnimationDrawContext context = make_unit_animation_context(
         definition, item.global_frame_counter, render_context.local_owner_id,
+        render_context.local_owner_is_observer,
         render_context.owner_relation_masks);
     DispatchUnitAnimationDraw(context, unit);
 }
 
 void DispatchUnitCellRenderQueueItem(UnitRenderQueueContext& render_context,
     const UnitRenderItem& item, i32 screen_x, i32 screen_y) {
-    const UnitAnimationUnit unit =
-        make_unit_animation_unit(item, screen_x, screen_y);
+    // See DispatchUnitRenderByType (0x004c408f): structures use their raw
+    // owner palette ramp just like mobile units.
+    SetSpriteUnitPaletteRamp(static_cast<u8>(item.owner_id));
+    // The original cell renderers update the authoritative visibility grids
+    // while their sorted draw command executes (0x004c5546/573c/58b1).  This
+    // is what lets the map-brush pass reproduce the structure's last visible
+    // construction, HP-blend, and damage-overlay state under explored fog.
+    update_explored_fog_structure_snapshot(render_context, item);
+    UnitAnimationUnit unit = make_unit_animation_unit(item, screen_x, screen_y);
+    unit.visible_to_local_owner =
+        IsUnitRenderItemIndividuallyVisibleToLocal(render_context, item);
     const UnitAnimationDefinition definition =
         make_unit_animation_definition(item);
     UnitAnimationDrawContext context = make_unit_animation_context(
         definition, item.global_frame_counter, render_context.local_owner_id,
+        render_context.local_owner_is_observer,
         render_context.owner_relation_masks);
     DispatchUnitCellResourceDraw(context, unit);
+}
+
+void DispatchPlacementPreviewDefinitionSprite(
+    UnitRenderQueueContext& render_context, const UnitRenderItem& item,
+    i32 screen_x, i32 screen_y) {
+    const UnitDefinitionResourceRecord* record =
+        loaded_unit_definition_record(item.type_id);
+    if (record == nullptr ||
+        (record->image_group_counts[0] == 0 &&
+            record->image_group_counts[1] == 0)) {
+        return;
+    }
+
+    // FUN_004c5627 (called by FUN_004e2338) selects the local-player palette
+    // ramp before forwarding the definition preview to 0x004d2f5a.  That
+    // global ramp is intentionally left selected; the original does not save
+    // and restore its previous value around this draw.
+    SetSpriteUnitPaletteRamp(static_cast<u8>(render_context.local_owner_id));
+
+    u32 entry = kInvalidResourceEntry;
+    if (record->image_group_counts[0] != 0) {
+        // 0x004c563c..0x004c564b computes group-0 base + count - 1
+        // directly.  Do not route the preview through the ordinary animation
+        // frame tables or construction blend policies.
+        entry = GetUnitDefinitionImageFrameResourceEntry(
+            item.type_id, 0, record->image_group_counts[0] - 1u);
+    }
+    else {
+        // 0x004c5673..0x004c567c selects the first group-1 image directly.
+        entry = GetUnitDefinitionImageResourceEntry(item.type_id, 1);
+    }
+    if (entry != kInvalidResourceEntry) {
+        DrawResourceSpriteUnitRampToken1Shadow(entry, screen_x, screen_y);
+    }
 }
 
 bool DispatchQueuedUnitRenderByTypeCommand(
@@ -1959,7 +2293,7 @@ bool DispatchQueuedUnitEffectRenderCommand(
         effect->effect_id >= 0x3du) {
         const std::size_t first_trail_segment = state->trail_segments.size();
         if (DispatchUnitEffectProjectileTrailRenderer(*state, *effect,
-                effect->effect_id)) {
+                effect->effect_id, command.screen_x, command.screen_y)) {
             if (state->trail_segments.size() == first_trail_segment) {
                 return true;
             }
@@ -1971,6 +2305,30 @@ bool DispatchQueuedUnitEffectRenderCommand(
     }
 
     bool drew_sprite = false;
+    if (state != nullptr && effect != nullptr) {
+        u32 sprite_entry = 0;
+        u32 draw_mode = 0;
+        // The low-ID 0x1e renderer draws its impact trail before validating
+        // the impact frame, then anchors the valid sprite at the previous
+        // endpoint rather than the queued current point (0x004eda5c..4edb08).
+        if (!ResolveUnitEffectGenericSpriteRender(
+                *state, *effect, sprite_entry, draw_mode)) {
+            return drew_inline_trail;
+        }
+        i32 screen_x = command.screen_x;
+        i32 screen_y = command.screen_y;
+        if (effect->effect_id == 0x1e &&
+            (effect->flags & kUnitEffectFlagImpact) != 0) {
+            screen_x = effect->previous_x - state->viewport_left;
+            screen_y = effect->previous_y - state->viewport_top;
+        }
+        drew_sprite = DrawResourceSpriteMode(
+            sprite_entry, screen_x, screen_y, draw_mode);
+        return drew_inline_trail || drew_sprite;
+    }
+
+    // Classes 1 and 7 also use this dispatcher for lifecycle sprites without
+    // a UnitEffectRuntime pointer; retain their pre-existing fallback path.
     if (command.sprite_draw_mode_valid) {
         drew_sprite = DrawResourceSpriteMode(command.sprite_entry_index,
             command.screen_x, command.screen_y, command.sprite_draw_mode);

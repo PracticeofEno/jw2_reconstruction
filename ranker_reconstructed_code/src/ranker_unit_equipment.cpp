@@ -63,7 +63,8 @@ void apply_unit_experience_delta(UnitCommandContext& context,
     }
 
     UnitRuntimeStatBlock stats = runtime_stats_from_unit(unit);
-    ApplyUnitVariantProgressFromStoredValue(*context.production_state, unit, stats);
+    ApplyUnitVariantProgressFromStoredValue(*context.production_state, unit, stats,
+        nullptr, context.callbacks.variant_random_limit);
 }
 
 void remove_unit_experience_bonus(UnitCommandContext& context,
@@ -98,7 +99,8 @@ void remove_unit_experience_bonus(UnitCommandContext& context,
         ++unit.production_variant;
 
         UnitRuntimeStatBlock stats = runtime_stats_from_unit(unit);
-        if (!DecreaseUnitVariantStats(unit, stats)) {
+        if (!DecreaseUnitVariantStats(
+                unit, stats, context.callbacks.variant_random_limit)) {
             unit.elite_progress_value = 0;
             break;
         }
@@ -109,18 +111,25 @@ void remove_unit_experience_bonus(UnitCommandContext& context,
     }
 }
 
-void apply_unit_level_delta(UnitMovementUnit& unit, i32 delta) {
+void apply_unit_level_delta(UnitCommandContext& context, UnitMovementUnit& unit,
+    i32 delta) {
     if (delta == 0) {
         return;
     }
 
     UnitRuntimeStatBlock stats = runtime_stats_from_unit(unit);
     if (delta > 0) {
+        // ApplyUnitEquipmentEffect (0x00410300) deliberately runs every
+        // FUN_00409ac0 growth roll against the same raw +0x54 level, then adds
+        // the complete level delta once after the loop.  Advancing the level
+        // after each roll changes both the roll budget and the shared RNG
+        // sequence for multi-level equipment effects.
         for (i32 index = 0; index < delta; ++index) {
-            IncreaseUnitVariantStats(unit, stats);
-            ++unit.production_variant;
-            ++unit.status_timer;
+            IncreaseUnitVariantStats(
+                unit, stats, context.callbacks.variant_random_limit);
         }
+        unit.production_variant += static_cast<u32>(delta);
+        unit.status_timer += static_cast<u32>(delta);
         return;
     }
 
@@ -129,7 +138,8 @@ void apply_unit_level_delta(UnitMovementUnit& unit, i32 delta) {
             unit.status_timer = 0;
             break;
         }
-        if (!DecreaseUnitVariantStats(unit, stats)) {
+        if (!DecreaseUnitVariantStats(
+                unit, stats, context.callbacks.variant_random_limit)) {
             unit.status_timer = 0;
             break;
         }
@@ -373,7 +383,7 @@ bool UnitEquipmentEffectAllowsUnitType(const UnitMovementUnit& unit,
 
 bool CheckUnitEquipmentPickupEligible(const UnitMovementUnit& unit,
     const UnitEquipmentEffectDefinition& effect) {
-    if ((unit.equipment_flags & kUnitEquipmentPickupEnabledFlag) == 0) {
+    if ((unit.type_flags & kUnitEquipmentPickupEnabledFlag) == 0) {
         return false;
     }
 
@@ -500,10 +510,13 @@ PickupApplyResult apply_unit_equipment_effect_to_unit(UnitCommandContext& contex
         return PickupApplyResult::failed;
 
     case UnitEquipmentCategory::Amount:
-        unit.cargo_amount += amount;
+        // Original FUN_00411350 category 3 adds the map-effect repeat count
+        // to raw unit +0x2c.  That word is the passive food/recovery reserve
+        // (typed action_mode), while raw +0x4c/cargo_amount is worker cargo.
+        unit.action_mode += amount;
         return PickupApplyResult::consume_map_effect;
     }
-    unit.cargo_amount += amount;
+    unit.action_mode += amount;
     return PickupApplyResult::consume_map_effect;
 }
 
@@ -596,20 +609,23 @@ bool ClearUnitEquipmentSlot(UnitCommandContext& context, UnitMovementUnit& unit,
 bool TransferUnitEquipmentSlot(UnitCommandContext& context, UnitMovementUnit& source,
     UnitMovementUnit& target, u32 original_slot_code,
     const UnitEquipmentCatalog& catalog) {
-    if ((target.equipment_flags & kUnitEquipmentPickupEnabledFlag) == 0) {
+    if ((target.type_flags & kUnitEquipmentPickupEnabledFlag) == 0) {
         return false;
     }
 
     if (original_slot_code == 0) {
-        if (source.cargo_amount == 0) {
+        // Original FUN_00411b70 slot zero transfers the food reserve at raw
+        // +0x2c and deliberately leaves 50 behind when the source has more.
+        // It must not consume berry/resource cargo from raw +0x4c.
+        if (source.action_mode == 0) {
             return false;
         }
-        u32 amount = source.cargo_amount;
+        u32 amount = source.action_mode;
         if (amount > 0x32) {
             amount -= 0x32;
         }
         if (TryApplyUnitEquipmentEffectToUnit(context, target, 1, amount, catalog)) {
-            source.cargo_amount -= std::min(source.cargo_amount, amount);
+            source.action_mode -= std::min(source.action_mode, amount);
             return true;
         }
         return false;
@@ -767,7 +783,7 @@ bool ApplyUnitEquipmentEffect(UnitCommandContext& context, UnitMovementUnit& uni
         unit.command_flags |= 0x40;
     }
     apply_unit_experience_delta(context, unit, effect.experience_delta);
-    apply_unit_level_delta(unit, effect.level_delta);
+    apply_unit_level_delta(context, unit, effect.level_delta);
     unit.command_value = apply_signed_delta(unit.command_value, effect.command_value_delta);
 
     apply_owner_delta(context.owner_resources, unit.owner_id, effect.owner_resource_delta);
@@ -816,7 +832,7 @@ bool RemoveUnitEquipmentEffect(UnitCommandContext& context, UnitMovementUnit& un
         remove_unit_experience_bonus(context, unit,
             static_cast<u32>(effect.experience_delta));
     }
-    apply_unit_level_delta(unit, -effect.level_delta);
+    apply_unit_level_delta(context, unit, -effect.level_delta);
     unit.command_value = apply_signed_delta(unit.command_value, -effect.command_value_delta);
 
     apply_owner_delta(context.owner_resources, unit.owner_id, -effect.owner_resource_delta);

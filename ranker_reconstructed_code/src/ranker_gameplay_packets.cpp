@@ -154,6 +154,21 @@ bool push_deferred_command(Mode1GameplayUnitPacketState& unit,
     return true;
 }
 
+void retire_oldest_shadow_deferred_command(
+    Mode1GameplayUnitPacketState& unit) {
+    if (unit.queued_count == 0) {
+        return;
+    }
+
+    for (u32 index = 1; index < unit.queued_count; ++index) {
+        unit.queued_commands[index - 1] = unit.queued_commands[index];
+    }
+    --unit.queued_count;
+    if (unit.queued_count < unit.queued_commands.size()) {
+        unit.queued_commands[unit.queued_count] = Mode1GameplayCommandRecord{};
+    }
+}
+
 void mirror_runtime_command_payload(u32 unit_offset,
     const Mode1GameplayCommandRecord& record, bool enqueue_deferred,
     bool clear_deferred) {
@@ -627,45 +642,97 @@ void handle_high_cluster_packet(const Mode1ReliablePacket& packet, void*) {
 
 void handle_resource_deferred_command(const Mode1ReliablePacket& packet,
     u32 category_flag, u32 queued_internal_command, u32 max_queued_count = 4,
-    bool latest_cancel_allowed = false) {
+    bool latest_cancel_allowed = false,
+    bool synthesize_owner_queue_tail = false) {
     const PacketFields fields = packet_fields(packet);
     auto& unit = unit_state_for(fields.unit_offset, fields.channel);
 
     if (fields.mode == 1) {
-        if (fields.arg1 == 0xffffffffu && !latest_cancel_allowed) {
+        const bool original_five_slot_cancel_table =
+            (category_flag == 0x0000000cu &&
+                queued_internal_command == 0x17u) ||
+            (category_flag == 0x0000001au &&
+                queued_internal_command == 0x22u);
+        if ((fields.arg1 == 0xffffffffu && !latest_cancel_allowed) ||
+            (original_five_slot_cancel_table && fields.arg1 > 4u)) {
             ++unit.command_reject_count;
             return;
         }
-        const bool removed_local = remove_deferred_resource_command(unit,
-            fields.arg1, fields.command);
-        if (!removed_local && !has_runtime_deferred_resource_command_callback()) {
+        const bool runtime_queue_is_authoritative =
+            has_runtime_deferred_resource_command_callback();
+        // The original 0x01/0x05/0x0c/0x1a handlers validate the live tuple
+        // (queue index and payload) before shifting any queue entry or
+        // refunding its cost.  Mutating the packet-side shadow first meant a
+        // rejected runtime cancel still erased a reconstructed queue entry.
+        // Let the authoritative callback accept the cancel first; only then
+        // mirror the queue compaction locally.  With no runtime callback the
+        // shadow remains the authoritative fallback and is validated once.
+        if (runtime_queue_is_authoritative &&
+            !mirror_runtime_deferred_resource_command(fields.unit_offset,
+                category_flag, queued_internal_command, fields.command,
+                fields.mode, fields.arg1, fields.arg2, false, fields.arg1)) {
+            ++unit.command_reject_count;
             return;
         }
-        const bool removed_runtime = mirror_runtime_deferred_resource_command(
-            fields.unit_offset, category_flag, queued_internal_command,
-            fields.command, fields.mode, fields.arg1, fields.arg2, false,
-            fields.arg1);
-        if (removed_local && removed_runtime) {
-            refund_command_cost(unit);
+
+        const bool removed_local = remove_deferred_resource_command(unit,
+            fields.arg1, fields.command);
+        if (!removed_local) {
+            return;
         }
+        refund_command_cost(unit);
         return;
     }
 
-    if (unit.queued_count >= max_queued_count) {
+    const bool runtime_queue_is_authoritative =
+        has_runtime_deferred_resource_command_callback();
+    if (!runtime_queue_is_authoritative &&
+        unit.queued_count >= max_queued_count) {
         ++unit.command_reject_count;
         return;
     }
+
+    // HandleSubtype0cPlacementResourcePacket does not preserve the two zero
+    // scratch dwords normally published at +0x1c/+0x20.  After debiting the
+    // order cost, the original leaves EDX=source_channel*0x100 and
+    // EBX=source_channel, then FUN_004dd866 writes those registers as the
+    // queue tuple's final two fields (0x004dcf95..0x004dcfb2).  Other resource
+    // subtypes reload EDX/EBX from the wire immediately before queueing.
+    const u32 queue_arg1 = synthesize_owner_queue_tail
+        ? static_cast<u32>(fields.channel) * 0x100u
+        : fields.arg1;
+    const u32 queue_arg2 = synthesize_owner_queue_tail
+        ? static_cast<u32>(fields.channel)
+        : fields.arg2;
 
     if (!mirror_runtime_deferred_resource_command(fields.unit_offset,
             category_flag, queued_internal_command, fields.command, fields.mode,
-            fields.arg1, fields.arg2, true, 0)) {
+            queue_arg1, queue_arg2, true, 0)) {
         ++unit.command_reject_count;
         return;
     }
 
+    // HandleSubtype01ProductionCommandPacket checks the live unit queue count
+    // at raw unit +0x124 (0x004dca68). PopDeferredUnitCommandOrReturnIdle then
+    // decrements that same count when simulation consumes an entry
+    // (0x004cfe00). The packet-state queue below is only a reconstructed mirror;
+    // it receives packet enqueues but has no simulation-side pop notification.
+    // Treating that stale mirror as the capacity gate permanently rejected a
+    // producer after four lifetime commands even when its live queue was empty.
+    // A successful runtime callback proves that the live queue had room. Retire
+    // the oldest stale mirror entry only as needed to keep the diagnostic/cancel
+    // mirror bounded, while leaving the callback as the authoritative gate.
+    if (runtime_queue_is_authoritative) {
+        const u32 bounded_limit = std::min<u32>(max_queued_count,
+            static_cast<u32>(unit.queued_commands.size()));
+        while (bounded_limit != 0 && unit.queued_count >= bounded_limit) {
+            retire_oldest_shadow_deferred_command(unit);
+        }
+    }
+
     if (push_deferred_command(unit,
-            command_record(queued_internal_command, fields.command, fields.arg1,
-                fields.arg2),
+            command_record(queued_internal_command, fields.command, queue_arg1,
+                queue_arg2),
             max_queued_count)) {
         debit_command_cost(unit);
     }
@@ -674,6 +741,17 @@ void handle_resource_deferred_command(const Mode1ReliablePacket& packet,
 bool reroute_subtype01_latest_resource_cancel(const Mode1ReliablePacket& packet) {
     const PacketFields fields = packet_fields(packet);
     if (fields.mode != 1 || fields.arg1 != 0xffffffffu) {
+        return false;
+    }
+
+    // The packet-side queue is only a diagnostic mirror and is not notified
+    // when simulation consumes an entry.  With a live runtime callback,
+    // default_mode1_packet_set_unit_deferred_resource_command resolves -1
+    // against the authoritative UnitMovementUnit active/deferred tuples, just
+    // as HandleSubtype01ProductionCommandPacket (0x004dca58) does.  Rerouting
+    // from this stale shadow can otherwise send a normal production cancel to
+    // the previous upgrade/placement refund handler.
+    if (has_runtime_deferred_resource_command_callback()) {
         return false;
     }
 
@@ -912,7 +990,8 @@ void handle_unit_status_mask_packet(const Mode1ReliablePacket& packet, void*) {
 
 void handle_placement_resource_packet(const Mode1ReliablePacket& packet, void*) {
     ++g_packet_dispatch_state.resource_packets;
-    handle_resource_deferred_command(packet, 0x0000000c, 0x17, 10);
+    handle_resource_deferred_command(packet, 0x0000000c, 0x17, 10, false,
+        true);
 }
 
 void handle_nested_subtype13_packet(const Mode1ReliablePacket& packet, void*) {
@@ -971,7 +1050,17 @@ void handle_consumed_ack_packet(const Mode1ReliablePacket& packet, void*) {
     g_packet_dispatch_state.last_corrective_remote_value = remote_value;
     g_packet_dispatch_state.last_corrective_frame = reliable.replay_frame_tick;
 
-    BroadcastMode1GameplayPacket((0x15u << 24) | (local & 0xffu));
+    // HandleMode1ConsumedPacketAck (0x004297a3..0x004297b7) leaves the
+    // mismatching remote channel in EDX, the local checksum in ESI and the
+    // remote checksum in EDI before PublishMode1CorrectiveChecksum.  Its
+    // packet builder (0x004de71d) consequently writes those values to +0x1c,
+    // +0x14 and +0x18 respectively.  In particular, +0x1c is the target read
+    // by HandleSubtype15PlayerConsensusPacket.  Publishing a zero-filled
+    // corrective packet only happened to work when the mismatching peer was
+    // slot zero; a reconstructed slot-zero host would vote against itself
+    // instead of the remote peer.
+    BroadcastMode1GameplayPacket((0x15u << 24) | (local & 0xffu), 0,
+        local_value, remote_value, channel, 0);
     ++g_packet_dispatch_state.corrective_checksum_broadcasts;
 
     Mode1ReliablePacket corrective = BuildMode1GameplayPacket(
@@ -986,9 +1075,15 @@ void handle_consumed_ack_packet(const Mode1ReliablePacket& packet, void*) {
 }
 
 void handle_player_inactive_packet(const Mode1ReliablePacket& packet, void*) {
+    // DispatchMode1GameplayPacket enters the original subtype-13 handler with
+    // EAX still holding the subtype index (0x13).  FUN_004db82d publishes its
+    // pre-removal subtype-1d flush packet without changing EAX, so packet
+    // +0x10 is 0x13 -- not the departing source channel.  Using the channel
+    // could accidentally satisfy HandleSubtype1dVoteCompletionPacket on a
+    // same-numbered local slot and turn a flush marker into a completion vote.
     const PacketFields fields = packet_fields(packet);
     PublishVoteCompletionAndFlushReliableRange(gameplay_production_action_state(),
-        fields.channel);
+        0x13u);
 
     const u32 player = fields.channel;
     if (player >= g_packet_dispatch_state.players.size() ||
@@ -1015,7 +1110,11 @@ void handle_player_inactive_packet(const Mode1ReliablePacket& packet, void*) {
     state.relation_block_mask = 0;
     apply_inactive_player_slot_side_effects(player, state.lobby_code);
     if (fields.command != 3) {
-        record_player_inactive_notification(player, player, state.lobby_code);
+        // HandleSubtype13PlayerInactivePacket uses +0x1c only for the remote
+        // slot's lobby/ready code.  The notification suffix is selected by
+        // packet +0x10 (0=left, 1=defeated, 2=dropped); 3 suppresses it.
+        record_player_inactive_notification(player, player,
+            static_cast<u8>(fields.command));
     }
 
 #ifdef _WIN32
@@ -1080,6 +1179,17 @@ void handle_player_consensus_packet(const Mode1ReliablePacket& packet, void*) {
 
 void handle_modal_pause_packet(const Mode1ReliablePacket& packet, void*) {
     const bool visible = read_packet_u32(packet, 0x10) == 1;
+    const bool was_visible = g_packet_dispatch_state.modal_pause_visible;
+    const u8 channel = packet_channel(packet);
+    if (visible && !was_visible &&
+        g_packet_dispatch_state.generic_ai_profile_mode &&
+        channel < g_packet_dispatch_state.player_modal_pause_uses_remaining.size()) {
+        u8& remaining =
+            g_packet_dispatch_state.player_modal_pause_uses_remaining[channel];
+        if (remaining != 0) {
+            --remaining;
+        }
+    }
     g_packet_dispatch_state.modal_pause_visible = visible;
     if (g_packet_dispatch_state.runtime_callbacks.set_modal_pause != nullptr) {
         g_packet_dispatch_state.runtime_callbacks.set_modal_pause(
@@ -1125,10 +1235,15 @@ void clear_unit_pending_string_slot(u32 unit_offset,
     const u32 previous_slot = unit.pending_string_slot;
     if (previous_slot != 0) {
         ++g_packet_dispatch_state.string_slot_clear_packets;
-        if (g_packet_dispatch_state.runtime_callbacks.clear_unit_string != nullptr) {
-            g_packet_dispatch_state.runtime_callbacks.clear_unit_string(
-                g_packet_dispatch_state.runtime_user_data, unit_offset, previous_slot);
-        }
+    }
+    // The packet-side mirror can be empty after a load/reset while the live
+    // unit still owns a string slot.  Let the authoritative callback inspect
+    // the unit even when the shadow previous_slot is zero.  The default
+    // callback derives the real slot from unit_offset and treats zero as a
+    // harmless no-op when neither side owns one.
+    if (g_packet_dispatch_state.runtime_callbacks.clear_unit_string != nullptr) {
+        g_packet_dispatch_state.runtime_callbacks.clear_unit_string(
+            g_packet_dispatch_state.runtime_user_data, unit_offset, previous_slot);
     }
     unit.pending_string_slot = 0;
 }
@@ -1148,6 +1263,7 @@ Mode1GameplayPacketDispatchState make_initial_dispatch_state() {
     state.original_low_subtype_targets = kOriginalLowSubtypeTargets;
     state.original_nested_subtype13_targets = kOriginalSubtype13NestedTargets;
     state.active_player_count = kPlayerSlotCount;
+    state.player_modal_pause_uses_remaining.fill(4);
 
     state.handlers[0x00] = handle_no_op_packet;
     state.handlers[0x01] = handle_unit_production_packet;
@@ -1215,6 +1331,7 @@ void ResetMode1GameplayPacketDispatch() {
     g_packet_dispatch_state.generic_ai_profile_mode = generic_ai_profile_mode;
     g_packet_dispatch_state.active_player_count =
         active_player_count != 0 ? active_player_count : kPlayerSlotCount;
+    g_packet_dispatch_state.player_modal_pause_uses_remaining.fill(4);
     g_packet_dispatch_state.user_data = user_data;
     g_packet_dispatch_state.runtime_callbacks = runtime_callbacks;
     g_packet_dispatch_state.runtime_user_data = runtime_user_data;
@@ -1252,12 +1369,20 @@ void ResetMode1GameplayVoteCompletionGate() {
 
 void BroadcastMode1GameplayPlayerInactive(PlayerSlotRuntimeState& state,
     u32 target_slot, u32 source_slot) {
-    const bool accepted = apply_subtype15_inactive_marker(state, target_slot,
+    apply_subtype15_inactive_marker(state, target_slot,
         source_slot, mode1_reliable_state().replay_frame_tick);
-    if (accepted && source_slot == state.local_player_slot &&
+    // ApplySubtype15ConsensusDecision writes ready/inactive state 4 in its
+    // local-authority loop after MarkPlayerInactiveAndBroadcastSubtype15
+    // returns (0x004ddcf9).  That write is independent of whether the nested
+    // AcceptMode1OrderedPacket call accepted its synthesized subtype-15
+    // marker.  Keep both the packet mirror and the live player-slot state in
+    // that post-call state instead of leaving the latter at reason 1/2.
+    if (source_slot == state.local_player_slot &&
         target_slot != state.local_player_slot &&
-        target_slot < g_packet_dispatch_state.players.size()) {
+        target_slot < g_packet_dispatch_state.players.size() &&
+        g_packet_dispatch_state.players[target_slot].inactive) {
         g_packet_dispatch_state.players[target_slot].ready_flag = 4;
+        state.inactive_publish_states[target_slot] = 4;
     }
 }
 

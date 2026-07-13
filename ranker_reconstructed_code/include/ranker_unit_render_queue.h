@@ -8,6 +8,8 @@
 
 namespace ranker {
 
+struct GameplayVisibilityGrid;
+
 constexpr u32 kMapTileRevealed = 0x08000000;
 constexpr u32 kMapTileVisible = 0x10000000;
 constexpr u32 kMapTileFogMaskPreserve = 0x78000000;
@@ -54,6 +56,9 @@ struct UnitRenderItem {
     u32 hit_points = 0;
     u32 max_secondary_value = 0;
     u32 secondary_value = 0;
+    // Raw +0x14 controls whether the secondary bar exists; its denominator
+    // separately includes the owner/type production-effect slot.
+    bool secondary_bar_enabled = true;
     u32 cell_animation_frame = 0;
     u32 cell_flag40_animation_frame = 0;
     u32 cell_channel_additive_frame = 0;
@@ -64,6 +69,8 @@ struct UnitRenderItem {
     u32 ability_id = 0;
     i32 x = 0;
     i32 y = 0;
+    i32 visibility_cell_x = 0;
+    i32 visibility_cell_y = 0;
     i32 center_offset_x = 0;
     i32 center_offset_y = 0;
     i32 center_width = 0;
@@ -87,6 +94,7 @@ struct UnitVisibilityGrid {
     bool require_revealed = false;
     std::vector<u32> cells;
     std::vector<u32>* fog_blocked_cells = nullptr;
+    GameplayVisibilityGrid* authoritative_grid = nullptr;
 };
 
 struct UnitRenderQueueContext;
@@ -110,6 +118,7 @@ struct UnitRenderQueueContext {
     std::vector<UnitRenderItem> effects;
     std::vector<UnitRenderQueueEntry> queued_entries;
     u32 local_owner_id = 0;
+    bool local_owner_is_observer = false;
     std::array<u32, 8> owner_relation_masks{};
     std::array<u32, 8> owner_visibility_masks{};
     std::array<u32, 8> unit_layer_by_class{};
@@ -121,6 +130,8 @@ struct UnitRenderQueueContext {
 bool IsUnitRenderItemInViewport(const UnitRenderViewport& viewport,
     const UnitRenderItem& item);
 bool IsMapTileVisible(const UnitVisibilityGrid& grid, u32 tile_x, u32 tile_y);
+bool IsUnitRenderItemIndividuallyVisibleToLocal(
+    const UnitRenderQueueContext& context, const UnitRenderItem& item);
 void ProcessVisibleUnitRenderQueue(UnitRenderQueueContext& context);
 void ProcessVisibleEffectRenderQueue(UnitRenderQueueContext& context);
 void DispatchUnitRenderByType(UnitRenderQueueContext& context, const UnitRenderItem& item,

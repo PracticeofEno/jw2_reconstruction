@@ -129,6 +129,16 @@ bool unit_can_block_input_action(const GameplayActionUnitState& unit) {
         (unit.command_state & kUnitCommandDead) == 0;
 }
 
+bool unit_target_class_allowed(const GameplayInputActionState& state,
+    u32 selector, const GameplayActionUnitState& unit) {
+    if (selector >= state.selector_target_class_masks.size() ||
+        unit.target_class >= 32) {
+        return false;
+    }
+    return (state.selector_target_class_masks[selector] &
+        (1u << unit.target_class)) != 0;
+}
+
 void record_validation_hit(GameplayInputActionState& state,
     const GameplayActionUnitState& unit) {
     state.last_validation_unit_offset = unit.offset;
@@ -147,29 +157,73 @@ void record_validation_hit(GameplayInputActionState& state,
     }
 }
 
-bool default_validate_low_action(
-    GameplayInputActionState& state, i32 world_x, i32 world_y) {
+bool record_low_validation_hit(GameplayInputActionState& state,
+    const GameplayActionUnitState& unit) {
+    const bool local = unit.owner == state.local_player_index;
+    const bool normal_type = unit.type < 0x60;
+
+    // FUN_004e96ae returns immediately for the first local normal unit under
+    // the pointer.  The other three categories retain the last matching unit
+    // encountered in active-list order, then resolve in bit priority 2, 4, 8.
+    if (local && normal_type) {
+        state.last_validation_unit_offset = unit.offset;
+        return true;
+    }
+    if (normal_type) {
+        state.last_validation_flags |= 2u;
+        state.last_validation_enemy_unit_offset = unit.offset;
+    }
+    else if (local) {
+        state.last_validation_flags |= 4u;
+        state.last_validation_local_unit_offset = unit.offset;
+    }
+    else {
+        state.last_validation_flags |= 8u;
+        state.last_validation_special_unit_offset = unit.offset;
+    }
+    return false;
+}
+
+bool resolve_low_validation_hit(GameplayInputActionState& state) {
+    if ((state.last_validation_flags & 2u) != 0) {
+        state.last_validation_unit_offset =
+            state.last_validation_enemy_unit_offset;
+    }
+    else if ((state.last_validation_flags & 4u) != 0) {
+        state.last_validation_unit_offset =
+            state.last_validation_local_unit_offset;
+    }
+    else if ((state.last_validation_flags & 8u) != 0) {
+        state.last_validation_unit_offset =
+            state.last_validation_special_unit_offset;
+    }
+    return state.last_validation_unit_offset != 0;
+}
+
+bool default_validate_low_action(GameplayInputActionState& state,
+    u32 selector, i32 world_x, i32 world_y) {
     reset_validation_state(state);
     for (const GameplayActionUnitState& unit : state.units) {
         if (!unit_can_block_input_action(unit) ||
+            !unit_target_class_allowed(state, selector, unit) ||
             !point_in_unit_action_bounds(unit, world_x, world_y)) {
             continue;
         }
 
-        record_validation_hit(state, unit);
-        if (unit.owner == state.local_player_index && unit.type < 0x60) {
+        if (record_low_validation_hit(state, unit)) {
             return true;
         }
     }
-    return state.last_validation_flags != 0;
+    return resolve_low_validation_hit(state);
 }
 
-bool default_validate_high_action(
-    GameplayInputActionState& state, i32 world_x, i32 world_y) {
+bool default_validate_high_action(GameplayInputActionState& state,
+    u32 selector, i32 world_x, i32 world_y) {
     reset_validation_state(state);
     for (const GameplayActionUnitState& unit : state.units) {
-        if (!unit_can_block_input_action(unit) || unit.type >= 0x60 ||
-            (unit.runtime_flags & 4u) == 0 ||
+        if (unit.active || !unit.visible || unit.runtime_state != 4 ||
+            unit.type >= 0x60 || (unit.runtime_flags & 4u) == 0 ||
+            !unit_target_class_allowed(state, selector, unit) ||
             !point_in_unit_action_bounds(unit, world_x, world_y)) {
             continue;
         }
@@ -187,9 +241,9 @@ bool validate_action(GameplayInputActionState& state, u32 selector, i32 world_x,
     if (callback != nullptr) {
         return callback(state, selector, world_x, world_y);
     }
-    (void)selector;
-    return high_mode ? default_validate_high_action(state, world_x, world_y) :
-        default_validate_low_action(state, world_x, world_y);
+    return high_mode
+        ? default_validate_high_action(state, selector, world_x, world_y)
+        : default_validate_low_action(state, selector, world_x, world_y);
 }
 
 u32 select_action_index(GameplayInputActionState& state, u32 selector, i32 world_x,
@@ -300,14 +354,12 @@ bool DefaultPopGameplayInputEvent(
 
 bool DefaultValidateLowGameplayInputAction(
     GameplayInputActionState& state, u32 selector, i32 world_x, i32 world_y) {
-    (void)selector;
-    return default_validate_low_action(state, world_x, world_y);
+    return default_validate_low_action(state, selector, world_x, world_y);
 }
 
 bool DefaultValidateHighGameplayInputAction(
     GameplayInputActionState& state, u32 selector, i32 world_x, i32 world_y) {
-    (void)selector;
-    return default_validate_high_action(state, world_x, world_y);
+    return default_validate_high_action(state, selector, world_x, world_y);
 }
 
 u32 DefaultSelectGameplayInputActionIndex(
@@ -356,6 +408,7 @@ void InitializeOriginalGameplayInputActionTables(GameplayInputActionState& state
     state.selector_modes = kOriginalSelectorModes;
     state.selector_result_states = kOriginalResultStates;
     state.selector_enabled = kOriginalImmediateDispatchEnabled;
+    state.selector_target_class_masks.fill(0xffffffffu);
 }
 
 void PumpGameplayInputAndCursorFrame(GameplayInputActionState& state) {
@@ -506,9 +559,12 @@ void SnapshotLocalGameplayChecksum(GameplayInputActionState& state) {
 }
 
 bool PublishMode1RelationMaskAction(GameplayInputActionState& state) {
+    // FUN_0042f8c8/FUN_004d9d89 wire order is +10 observer, +18 zero,
+    // +1c relation mask, +20 visibility mask.  The public pending arguments
+    // retain their semantic order: arg0 observer, arg1 relation, arg2 visible.
     return publish(state, make_action(state, kSubtypeOpcode14, 0,
-        state.pending_action_arg0, state.pending_action_arg1,
-        state.pending_action_arg2, state.pending_action_arg3));
+        state.pending_action_arg0, 0,
+        state.pending_action_arg1, state.pending_action_arg2));
 }
 
 void PublishMode1CorrectiveChecksum(GameplayInputActionState& state) {
@@ -530,7 +586,10 @@ bool ResetAndPublishPlayerInactiveState(GameplayInputActionState& state) {
     state.player_reset_flags.fill(0);
     state.player_reset_gate = true;
     ResetMode1GameplayVoteCompletionGate();
-    return publish(state, make_action(state, kSubtypePlayerInactive));
+    // FUN_004d9dde preserves caller EAX at +0x10 and EDX at +0x1c.  +0x18
+    // remains zero; +0x20 is unused for subtype 0x13.
+    return publish(state, make_action(state, kSubtypePlayerInactive, 0,
+        state.pending_action_arg0, 0, state.pending_action_arg2, 0));
 }
 
 bool PublishSelectedUnitsPendingAction(GameplayInputActionState& state, u32 text_length) {
@@ -564,7 +623,7 @@ bool PublishMode1NoOp11Action(GameplayInputActionState& state) {
 bool PublishSelectedUnitCapabilityAction(GameplayInputActionState& state, u32 capability) {
     GameplayActionUnitState* unit = selected_unit(state);
     if (unit == nullptr || !unit_is_local_and_live(state, *unit) ||
-        unit->action_mode_gate >= 4 ||
+        unit->deferred_command_count >= 4 ||
         !contains_value(unit->command_capabilities, capability)) {
         return false;
     }
@@ -576,7 +635,7 @@ bool PublishSelectedUnitCapabilityAction(GameplayInputActionState& state, u32 ca
 bool PublishSelectedUnitIndexedPayloadAction(GameplayInputActionState& state, u32 index) {
     GameplayActionUnitState* unit = selected_unit(state);
     if (unit == nullptr || !unit_is_local_and_live(state, *unit) ||
-        unit->action_mode_gate >= 4 || index == 0 ||
+        unit->deferred_command_count >= 4 || index == 0 ||
         index > state.indexed_payloads.size()) {
         return false;
     }
@@ -586,8 +645,9 @@ bool PublishSelectedUnitIndexedPayloadAction(GameplayInputActionState& state, u3
         return false;
     }
 
-    publish_selected_unit_command(state, kSubtypeBuildResourceCommand,
-        unit->offset, payload, 0, index);
+    // FUN_004d9edd preserves EBX=index into packet +0x20; +0x1c is zero.
+    publish(state, make_action(state, kSubtypeBuildResourceCommand,
+        unit->offset, payload, 0, 0, index));
     return true;
 }
 
@@ -614,7 +674,7 @@ bool PublishSelectedUnitProductionAction(GameplayInputActionState& state, u32 pr
     GameplayActionUnitState* unit = selected_unit(state);
     state.last_production_availability_code = production;
     if (unit == nullptr || !unit_is_local_and_live(state, *unit) ||
-        unit->action_mode_gate >= 4 ||
+        unit->deferred_command_count >= 4 ||
         !contains_value(unit->production_capabilities, production)) {
         return false;
     }
@@ -630,8 +690,10 @@ bool PublishSelectedUnitProductionAction(GameplayInputActionState& state, u32 pr
         return false;
     }
 
-    publish_selected_unit_command(state, kSubtypePlacementCommand, unit->offset,
-        production, availability.secondary_cost);
+    // Normal subtype-0x0c publisher 0x004d9f89 keeps EBX=local owner through
+    // FUN_004de65f, placing it at packet +0x20.
+    publish(state, make_action(state, kSubtypePlacementCommand, unit->offset,
+        production, availability.secondary_cost, 0, state.local_player_index));
     return true;
 }
 
@@ -662,6 +724,15 @@ u32 DispatchSelectedUnitActionCommand(GameplayInputActionState& state, u32 selec
 
     i32 world_x = screen_x + static_cast<i32>(state.map_origin_x);
     i32 world_y = screen_y + static_cast<i32>(state.map_origin_y);
+
+    // FUN_004da02c receives EDX/EBX after the camera origin has already been
+    // added, even for selector-mode zero entries that jump straight into the
+    // raw action table.  Keep that caller tuple live before the mode branch;
+    // coordinate-validation modes overwrite it with their clamped values
+    // below.  Previously mode-zero actions (notably 0, 6, 0xb and 0x11..)
+    // reused coordinates from an unrelated older command.
+    state.last_action_world_x = static_cast<u32>(world_x);
+    state.last_action_world_y = static_cast<u32>(world_y);
 
     if (selector < state.selector_redirect_flags.size() &&
         state.selector_redirect_flags[selector] == 1) {

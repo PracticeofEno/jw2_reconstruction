@@ -12,7 +12,11 @@ namespace ranker {
 struct UnitMovementContext;
 struct UnitMovementMap;
 
-constexpr u32 kGameplayProductionSelectorCount = 0x40;
+// FUN_004db0f7 indexes the 32-entry handler table at 0x004db238.  These are
+// the command-panel items 0xd4..0xf3; they are not the 42-entry world-action
+// table used by FUN_004da02c and they are not the 64 production-order slots.
+constexpr u32 kGameplayProductionSelectorCount = 0x20;
+constexpr u32 kGameplayProductionOrderCount = 0x40;
 constexpr u32 kGameplayProductionAttachmentSlots = 4;
 constexpr u32 kGameplayProductionEquipmentSlots = 6;
 constexpr u32 kGameplayProductionQueuedRecordBytes = 0x24;
@@ -29,6 +33,8 @@ enum class GameplayProductionGateFailure : u32 {
 struct GameplayProductionActionDefinition {
     u32 mode = 0;
     u32 allowed_movement_class_mask = 0xffffffffu;
+    // JW2_11 +0x15c: required production-order id, or -1.  Despite the
+    // legacy field name this is not a player/relation owner id.
     u32 owner_requirement = 0xffffffffu;
     u32 active_limit = 0xffffffffu; // JW2_11 +0x160, status_timer + 1 gate.
     u32 queued_limit = 0xffffffffu; // JW2_11 +0x1e4, secondary_value + 1 gate.
@@ -62,7 +68,13 @@ struct GameplayProductionUnitState {
     u32 owner = 0;
     u32 runtime_state = 0;
     u32 command_state = 0;
+    // Original raw unit +0xa4.  A successful target-resolved production
+    // action writes DAT_00862a14[selector] here; raw +0x60/command_state is a
+    // different field and must not be overwritten by the UI dispatcher.
+    u32 result_state = 0;
     u32 command_flags = 0;
+    // Original unit raw +0x0c, used by the subtype-0x0b status-mask toggle.
+    u32 area_marker_flags = 0;
     u32 status_flags = 0;
     u32 runtime_flags = 0;
     // Original unit raw +0x58: action capability mask copied from the unit
@@ -83,6 +95,8 @@ struct GameplayProductionUnitState {
     // Original linked unit +0xa040ac action recovery/lockout tick gate.
     u32 linked_unit_runtime_state = 0;
     u32 action_mode_gate = 0;
+    // Original raw unit +0x124 deferred-command count.
+    u32 deferred_command_count = 0;
     i32 x = 0;
     i32 y = 0;
     i32 bounds_left = 0;
@@ -96,13 +110,19 @@ struct GameplayProductionUnitState {
     std::vector<u32> production_cost_actions;
     bool selected = false;
     bool active = true;
+    bool visible = true;
 };
 
 struct GameplayProductionPlacementCell {
+    // Original placement-preview layers used by FUN_004dbae2:
+    // E59E74 (last-visible terrain), F19E74 (authoritative terrain),
+    // E99E74 (terrain class), 798D40 (remembered route/object state), and
+    // 758D40 (current visibility/occupancy).
     u32 terrain_flags = 0;
     u32 live_terrain_flags = 0;
     u32 owner_flags = 0;
     u32 route_flags = 0;
+    u32 current_visibility_flags = 0;
 };
 
 struct GameplayProductionPlacementMap {
@@ -176,6 +196,9 @@ struct GameplayProductionActionState {
     std::array<u32, kGameplayProductionSelectorCount> selector_definition_indices{};
     std::array<u8, kGameplayProductionSelectorCount> selector_result_states{};
     std::array<u32, 8> owner_relation_masks{};
+    std::array<u32, 8> owner_visibility_masks{};
+    std::array<std::array<u8, kGameplayProductionOrderCount>, 8>
+        owner_production_order_variant_counts{};
     std::vector<GameplayProductionActionDefinition> definitions;
     std::vector<GameplayProductionUnitFootprintDefinition> unit_footprints;
     std::vector<GameplayProductionUnitState> units;
@@ -215,6 +238,8 @@ struct GameplayProductionActionState {
 };
 
 GameplayProductionActionState& gameplay_production_action_state();
+void InitializeOriginalGameplayProductionSelectorTables(
+    GameplayProductionActionState& state);
 
 bool DefaultValidateLowGameplayProductionAction(
     GameplayProductionActionState& state, u32 selector, i32 world_x, i32 world_y);

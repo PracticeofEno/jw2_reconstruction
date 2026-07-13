@@ -57,8 +57,8 @@ struct UnitLifecycleContext {
     std::array<u32, 16> owner_faction_ids{};
     std::array<u32, 16> owner_unit_active_count{};
     std::array<u32, 16> owner_building_active_count{};
-    std::array<u32, 16> owner_unit_completed_count{};
-    std::array<u32, 16> owner_building_completed_count{};
+    std::array<u32, 16> owner_unit_kill_count{};
+    std::array<u32, 16> owner_building_kill_count{};
     std::array<u32, 16> owner_unit_lost_count{};
     std::array<u32, 16> owner_building_lost_count{};
     std::array<u32, 16> owner_unit_score{};
@@ -112,8 +112,8 @@ bool CheckUnitPlacementFootprintArea(UnitLifecycleContext& context,
 bool FindNearbyPassablePlacementTile(UnitLifecycleContext& context, u32 tile_x,
     u32 tile_y, u32& out_tile_x, u32& out_tile_y);
 void HandleUnitRemovalAccounting(UnitLifecycleContext& context, UnitMovementUnit& unit);
-void HandleUnitCompletionOwnerCounters(UnitLifecycleContext& context,
-    UnitMovementUnit& unit);
+void HandleUnitKillOwnerCounters(UnitLifecycleContext& context,
+    UnitMovementUnit& attacker, UnitMovementUnit& defeated);
 void HandleUnitDeathOwnerCounters(UnitLifecycleContext& context,
     UnitMovementUnit& unit);
 void HandleOwnerUnitTypeCountRebuild(UnitLifecycleContext& context);

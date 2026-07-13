@@ -15,6 +15,453 @@ namespace {
 
 OwnerAiRuntimeState g_owner_ai_state;
 
+// Original ranker.exe keeps the saved "AI" record and the live owner-AI
+// runtime in the same 0x9d80-byte BSS span (DAT_0122ff28).  The original
+// layout is structure-of-arrays, so it cannot be memcpy'd into the buildable
+// C++ structure-of-structures representation.  Keep the raw image as the
+// backing store for fields which are not reconstructed yet and explicitly
+// mirror every evidenced typed field below.
+namespace owner_ai_snapshot_layout {
+
+constexpr u32 kOwnerDwordStride = sizeof(u32);
+constexpr u32 kOwnerPointStride = sizeof(u32) * 2;
+
+constexpr u32 kScriptHalted = 0x0000;
+constexpr u32 kPrimaryInterval = 0x0020;
+constexpr u32 kPrimaryRadius = 0x0040;
+constexpr u32 kPrimaryBudget = 0x0060;
+
+constexpr u32 kSharedCounterTable0 = 0x02e0;
+constexpr u32 kSharedCounterTable1 = 0x03a0;
+constexpr u32 kSharedCounterTable2 = 0x0460;
+
+constexpr u32 kRouteLoadPercent = 0x05e0;
+constexpr u32 kSupportInterval = 0x0600;
+constexpr u32 kSupportRadius = 0x0620;
+constexpr u32 kSupportTargetOwner = 0x0640;
+constexpr u32 kSupportMode = 0x0660;
+constexpr u32 kSupportBudget = 0x0680;
+constexpr u32 kSupportAnchorPoint = 0x06a0;
+constexpr u32 kSecondaryBudget = 0x06e0;
+constexpr u32 kResourceBudgetPercent = 0x0700;
+constexpr u32 kSecondaryMode = 0x0720;
+constexpr u32 kProfileCounter = 0x0a00;
+
+constexpr u32 kUnitDemand = 0x0b00;
+constexpr u32 kUnitDemandShadow = 0x2040;
+constexpr u32 kUnitDemandOwnerStride = kOwnerAiUnitTypeCount * sizeof(u32);
+
+// DAT_012334a8 is the nearest/current hostile selected by FUN_0043c5c0 and
+// consumed by the script's enemy predicates and strategic planners.
+constexpr u32 kPrimaryTargetOwner = 0x3580;
+constexpr u32 kScriptCycleCounter = 0x3600;
+constexpr u32 kPreviousScriptCycleCounter = 0x3620;
+constexpr u32 kScriptEnabled = 0x3640;
+constexpr u32 kLastTimingFrame = 0x3660;
+constexpr u32 kBuildBudget = 0x3680;
+constexpr u32 kProductionBudget = 0x36a0;
+constexpr u32 kRallyDelay = 0x36c0;
+constexpr u32 kReserveBudget = 0x36e0;
+constexpr u32 kReserveDelay = 0x3700;
+constexpr u32 kStrategicRetargetQuotaFloor = 0x3720;
+constexpr u32 kRouteTargetScore = 0x3740;
+constexpr u32 kProfileGateFlag = 0x3760;
+constexpr u32 kSharedPlannerTable = 0x37a0;
+
+constexpr u32 kRouteRadius = 0x8fa0;
+constexpr u32 kPrimaryTargetPoint = 0x8fc0;
+constexpr u32 kPrimaryTargetRadius = 0x9000;
+constexpr u32 kPrimaryTargetFlags = 0x9020;
+constexpr u32 kPlacementRadius = 0x9140;
+constexpr u32 kPlacementRecord = 0x9160;
+constexpr u32 kPlacementRecordOwnerStride = 0x30;
+constexpr u32 kThreatPoints = 0x92e0;
+constexpr u32 kThreatPointOwnerStride = 0x20;
+constexpr u32 kPlacementTargetRadius = 0x93e0;
+constexpr u32 kAttackInterval = 0x9400;
+constexpr u32 kAttackRadius = 0x9420;
+constexpr u32 kAttackTargetRadius = 0x9440;
+constexpr u32 kAttackTargetOwner = 0x9460;
+constexpr u32 kSupportTargetSlot = 0x9480;
+constexpr u32 kFallbackTargetSlot = 0x94a0;
+// FUN_0044e200 clears/accumulates reserved production cost here and
+// HandleOwnerProductionDemandAndBuildPlan gates on the same owner dword.
+constexpr u32 kProductionPauseFlag = 0x94c0;
+constexpr u32 kSharedGridTable = 0x94e0;
+constexpr u32 kProfileStateFlag = 0x9ce0;
+constexpr u32 kProfileAge = 0x9d00;
+constexpr u32 kProfileRecordIndices = 0x9d20;
+
+constexpr u32 owner_dword(u32 base, u32 owner) {
+    return base + owner * kOwnerDwordStride;
+}
+
+constexpr u32 owner_point(u32 base, u32 owner) {
+    return base + owner * kOwnerPointStride;
+}
+
+static_assert(kProfileRecordIndices +
+        kOwnerAiOwnerCount * sizeof(i32) <= kOwnerAiSnapshotByteCount,
+    "owner AI snapshot layout exceeds the original record");
+static_assert(kSharedPlannerTable +
+        kOwnerAiSharedPlannerDwordCount * sizeof(u32) == kRouteRadius,
+    "owner AI planner span must end at the original route-radius table");
+static_assert(kSharedGridTable +
+        kOwnerAiSharedGridDwordCount * sizeof(u32) == kProfileStateFlag,
+    "owner AI grid span must end at the original profile-state table");
+static_assert(kProductionPauseFlag +
+        kOwnerAiOwnerCount * sizeof(u32) == kSharedGridTable,
+    "owner AI production reservation table must precede the grid");
+
+} // namespace owner_ai_snapshot_layout
+
+u32 read_owner_ai_snapshot_u32(
+    const std::array<u8, kOwnerAiSnapshotByteCount>& bytes, u32 offset) {
+    u32 value = 0;
+    if (offset <= bytes.size() - sizeof(value)) {
+        std::memcpy(&value, bytes.data() + offset, sizeof(value));
+    }
+    return value;
+}
+
+i32 read_owner_ai_snapshot_i32(
+    const std::array<u8, kOwnerAiSnapshotByteCount>& bytes, u32 offset) {
+    i32 value = 0;
+    if (offset <= bytes.size() - sizeof(value)) {
+        std::memcpy(&value, bytes.data() + offset, sizeof(value));
+    }
+    return value;
+}
+
+void write_owner_ai_snapshot_u32(
+    std::array<u8, kOwnerAiSnapshotByteCount>& bytes, u32 offset, u32 value) {
+    if (offset <= bytes.size() - sizeof(value)) {
+        std::memcpy(bytes.data() + offset, &value, sizeof(value));
+    }
+}
+
+void write_owner_ai_snapshot_i32(
+    std::array<u8, kOwnerAiSnapshotByteCount>& bytes, u32 offset, i32 value) {
+    if (offset <= bytes.size() - sizeof(value)) {
+        std::memcpy(bytes.data() + offset, &value, sizeof(value));
+    }
+}
+
+void hydrate_owner_ai_runtime_from_snapshot(OwnerAiRuntimeState& state) {
+    using namespace owner_ai_snapshot_layout;
+
+    const auto& bytes = state.snapshot_bytes;
+    for (u32 owner_index = 0; owner_index < kOwnerAiOwnerCount; ++owner_index) {
+        OwnerAiSlotRuntime& owner = state.owners[owner_index];
+        owner.script_halted = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kScriptHalted, owner_index));
+        owner.primary_interval = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kPrimaryInterval, owner_index));
+        owner.primary_radius = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kPrimaryRadius, owner_index));
+        owner.primary_budget = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kPrimaryBudget, owner_index));
+        owner.primary_target_owner = read_owner_ai_snapshot_i32(
+            bytes, owner_dword(kPrimaryTargetOwner, owner_index));
+        owner.route_load_percent = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kRouteLoadPercent, owner_index));
+        owner.support_interval = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kSupportInterval, owner_index));
+        owner.support_radius = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kSupportRadius, owner_index));
+        owner.support_target_owner = read_owner_ai_snapshot_i32(
+            bytes, owner_dword(kSupportTargetOwner, owner_index));
+        owner.support_mode = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kSupportMode, owner_index));
+        owner.support_budget = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kSupportBudget, owner_index));
+        // The original value is the X half of an {x,y} point.  The current
+        // runtime exposes only the legacy scalar; preserve the Y half raw.
+        owner.support_anchor = read_owner_ai_snapshot_i32(
+            bytes, owner_point(kSupportAnchorPoint, owner_index));
+        owner.secondary_budget = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kSecondaryBudget, owner_index));
+        owner.resource_budget_percent = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kResourceBudgetPercent, owner_index));
+        owner.secondary_mode = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kSecondaryMode, owner_index));
+        owner.profile_counter = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kProfileCounter, owner_index));
+
+        const u32 demand_base =
+            kUnitDemand + owner_index * kUnitDemandOwnerStride;
+        const u32 shadow_base =
+            kUnitDemandShadow + owner_index * kUnitDemandOwnerStride;
+        for (u32 type = 0; type < kOwnerAiUnitTypeCount; ++type) {
+            owner.unit_demand[type] = read_owner_ai_snapshot_u32(
+                bytes, demand_base + type * sizeof(u32));
+            owner.unit_demand_shadow[type] = read_owner_ai_snapshot_u32(
+                bytes, shadow_base + type * sizeof(u32));
+        }
+
+        owner.script_cycle_counter = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kScriptCycleCounter, owner_index));
+        owner.previous_script_cycle_counter = read_owner_ai_snapshot_i32(
+            bytes, owner_dword(kPreviousScriptCycleCounter, owner_index));
+        owner.script_enabled = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kScriptEnabled, owner_index));
+        owner.last_timing_frame = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kLastTimingFrame, owner_index));
+        owner.build_budget = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kBuildBudget, owner_index));
+        owner.production_budget = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kProductionBudget, owner_index));
+        owner.rally_delay = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kRallyDelay, owner_index));
+        owner.reserve_budget = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kReserveBudget, owner_index));
+        owner.reserve_delay = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kReserveDelay, owner_index));
+        owner.strategic_retarget_quota_floor = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kStrategicRetargetQuotaFloor, owner_index));
+        owner.route_target_score = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kRouteTargetScore, owner_index));
+        owner.profile_gate_flag = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kProfileGateFlag, owner_index));
+        owner.production_pause_flag = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kProductionPauseFlag, owner_index));
+        owner.route_radius = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kRouteRadius, owner_index));
+        owner.primary_target_point.x = read_owner_ai_snapshot_i32(
+            bytes, owner_point(kPrimaryTargetPoint, owner_index));
+        owner.primary_target_point.y = read_owner_ai_snapshot_i32(
+            bytes, owner_point(kPrimaryTargetPoint, owner_index) + sizeof(i32));
+        owner.primary_target_radius = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kPrimaryTargetRadius, owner_index));
+        owner.primary_target_flags = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kPrimaryTargetFlags, owner_index));
+        owner.placement_radius = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kPlacementRadius, owner_index));
+
+        const u32 placement_base =
+            kPlacementRecord + owner_index * kPlacementRecordOwnerStride;
+        for (u32 index = 0; index < owner.placement_record.size(); ++index) {
+            owner.placement_record[index] = read_owner_ai_snapshot_i32(
+                bytes, placement_base + index * sizeof(i32));
+        }
+
+        const u32 threat_base =
+            kThreatPoints + owner_index * kThreatPointOwnerStride;
+        for (u32 index = 0; index < owner.threat_points.size(); ++index) {
+            owner.threat_points[index].x = read_owner_ai_snapshot_i32(
+                bytes, threat_base + index * kOwnerPointStride);
+            owner.threat_points[index].y = read_owner_ai_snapshot_i32(
+                bytes, threat_base + index * kOwnerPointStride + sizeof(i32));
+        }
+
+        owner.placement_target_radius = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kPlacementTargetRadius, owner_index));
+        owner.attack_interval = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kAttackInterval, owner_index));
+        owner.attack_radius = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kAttackRadius, owner_index));
+        owner.attack_target_radius = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kAttackTargetRadius, owner_index));
+        owner.attack_target_owner = read_owner_ai_snapshot_i32(
+            bytes, owner_dword(kAttackTargetOwner, owner_index));
+        owner.support_target_slot = read_owner_ai_snapshot_i32(
+            bytes, owner_dword(kSupportTargetSlot, owner_index));
+        owner.fallback_target_slot = read_owner_ai_snapshot_i32(
+            bytes, owner_dword(kFallbackTargetSlot, owner_index));
+        owner.profile_state_flag = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kProfileStateFlag, owner_index));
+        owner.profile_age = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kProfileAge, owner_index));
+        state.profile_record_indices[owner_index] = read_owner_ai_snapshot_i32(
+            bytes, owner_dword(kProfileRecordIndices, owner_index));
+    }
+
+    for (u32 index = 0; index < kOwnerAiSharedCounterDwordCount; ++index) {
+        const u32 byte_index = index * sizeof(u32);
+        state.shared_counter_table0[index] = read_owner_ai_snapshot_u32(
+            bytes, kSharedCounterTable0 + byte_index);
+        state.shared_counter_table1[index] = read_owner_ai_snapshot_u32(
+            bytes, kSharedCounterTable1 + byte_index);
+        state.shared_counter_table2[index] = read_owner_ai_snapshot_u32(
+            bytes, kSharedCounterTable2 + byte_index);
+    }
+    for (u32 index = 0; index < kOwnerAiSharedPlannerDwordCount; ++index) {
+        state.shared_planner_table[index] = read_owner_ai_snapshot_u32(
+            bytes, kSharedPlannerTable + index * sizeof(u32));
+    }
+    for (u32 index = 0; index < kOwnerAiSharedGridDwordCount; ++index) {
+        state.shared_grid_table[index] = read_owner_ai_snapshot_u32(
+            bytes, kSharedGridTable + index * sizeof(u32));
+    }
+}
+
+void overlay_owner_ai_runtime_on_snapshot(const OwnerAiRuntimeState& state,
+    std::array<u8, kOwnerAiSnapshotByteCount>& bytes) {
+    using namespace owner_ai_snapshot_layout;
+
+    for (u32 owner_index = 0; owner_index < kOwnerAiOwnerCount; ++owner_index) {
+        const OwnerAiSlotRuntime& owner = state.owners[owner_index];
+        write_owner_ai_snapshot_u32(
+            bytes, owner_dword(kScriptHalted, owner_index), owner.script_halted);
+        write_owner_ai_snapshot_u32(
+            bytes, owner_dword(kPrimaryInterval, owner_index), owner.primary_interval);
+        write_owner_ai_snapshot_u32(
+            bytes, owner_dword(kPrimaryRadius, owner_index), owner.primary_radius);
+        write_owner_ai_snapshot_u32(
+            bytes, owner_dword(kPrimaryBudget, owner_index), owner.primary_budget);
+        write_owner_ai_snapshot_i32(bytes,
+            owner_dword(kPrimaryTargetOwner, owner_index), owner.primary_target_owner);
+        write_owner_ai_snapshot_u32(bytes,
+            owner_dword(kRouteLoadPercent, owner_index), owner.route_load_percent);
+        write_owner_ai_snapshot_u32(bytes,
+            owner_dword(kSupportInterval, owner_index), owner.support_interval);
+        write_owner_ai_snapshot_u32(bytes,
+            owner_dword(kSupportRadius, owner_index), owner.support_radius);
+        write_owner_ai_snapshot_i32(bytes,
+            owner_dword(kSupportTargetOwner, owner_index), owner.support_target_owner);
+        write_owner_ai_snapshot_u32(
+            bytes, owner_dword(kSupportMode, owner_index), owner.support_mode);
+        write_owner_ai_snapshot_u32(
+            bytes, owner_dword(kSupportBudget, owner_index), owner.support_budget);
+        write_owner_ai_snapshot_i32(bytes,
+            owner_point(kSupportAnchorPoint, owner_index), owner.support_anchor);
+        write_owner_ai_snapshot_u32(bytes,
+            owner_dword(kSecondaryBudget, owner_index), owner.secondary_budget);
+        write_owner_ai_snapshot_u32(bytes,
+            owner_dword(kResourceBudgetPercent, owner_index),
+            owner.resource_budget_percent);
+        write_owner_ai_snapshot_u32(bytes,
+            owner_dword(kSecondaryMode, owner_index), owner.secondary_mode);
+        write_owner_ai_snapshot_u32(bytes,
+            owner_dword(kProfileCounter, owner_index), owner.profile_counter);
+
+        const u32 demand_base =
+            kUnitDemand + owner_index * kUnitDemandOwnerStride;
+        const u32 shadow_base =
+            kUnitDemandShadow + owner_index * kUnitDemandOwnerStride;
+        for (u32 type = 0; type < kOwnerAiUnitTypeCount; ++type) {
+            write_owner_ai_snapshot_u32(bytes,
+                demand_base + type * sizeof(u32), owner.unit_demand[type]);
+            write_owner_ai_snapshot_u32(bytes,
+                shadow_base + type * sizeof(u32), owner.unit_demand_shadow[type]);
+        }
+
+        write_owner_ai_snapshot_u32(bytes,
+            owner_dword(kScriptCycleCounter, owner_index),
+            owner.script_cycle_counter);
+        write_owner_ai_snapshot_i32(bytes,
+            owner_dword(kPreviousScriptCycleCounter, owner_index),
+            owner.previous_script_cycle_counter);
+        write_owner_ai_snapshot_u32(bytes,
+            owner_dword(kScriptEnabled, owner_index), owner.script_enabled);
+        write_owner_ai_snapshot_u32(bytes,
+            owner_dword(kLastTimingFrame, owner_index), owner.last_timing_frame);
+        write_owner_ai_snapshot_u32(
+            bytes, owner_dword(kBuildBudget, owner_index), owner.build_budget);
+        write_owner_ai_snapshot_u32(bytes,
+            owner_dword(kProductionBudget, owner_index), owner.production_budget);
+        write_owner_ai_snapshot_u32(
+            bytes, owner_dword(kRallyDelay, owner_index), owner.rally_delay);
+        write_owner_ai_snapshot_u32(
+            bytes, owner_dword(kReserveBudget, owner_index), owner.reserve_budget);
+        write_owner_ai_snapshot_u32(
+            bytes, owner_dword(kReserveDelay, owner_index), owner.reserve_delay);
+        write_owner_ai_snapshot_u32(bytes,
+            owner_dword(kStrategicRetargetQuotaFloor, owner_index),
+            owner.strategic_retarget_quota_floor);
+        write_owner_ai_snapshot_u32(bytes,
+            owner_dword(kRouteTargetScore, owner_index), owner.route_target_score);
+        write_owner_ai_snapshot_u32(bytes,
+            owner_dword(kProfileGateFlag, owner_index), owner.profile_gate_flag);
+        write_owner_ai_snapshot_u32(bytes,
+            owner_dword(kProductionPauseFlag, owner_index),
+            owner.production_pause_flag);
+        write_owner_ai_snapshot_u32(
+            bytes, owner_dword(kRouteRadius, owner_index), owner.route_radius);
+        write_owner_ai_snapshot_i32(bytes,
+            owner_point(kPrimaryTargetPoint, owner_index),
+            owner.primary_target_point.x);
+        write_owner_ai_snapshot_i32(bytes,
+            owner_point(kPrimaryTargetPoint, owner_index) + sizeof(i32),
+            owner.primary_target_point.y);
+        write_owner_ai_snapshot_u32(bytes,
+            owner_dword(kPrimaryTargetRadius, owner_index),
+            owner.primary_target_radius);
+        write_owner_ai_snapshot_u32(bytes,
+            owner_dword(kPrimaryTargetFlags, owner_index),
+            owner.primary_target_flags);
+        write_owner_ai_snapshot_u32(bytes,
+            owner_dword(kPlacementRadius, owner_index), owner.placement_radius);
+
+        const u32 placement_base =
+            kPlacementRecord + owner_index * kPlacementRecordOwnerStride;
+        for (u32 index = 0; index < owner.placement_record.size(); ++index) {
+            write_owner_ai_snapshot_i32(bytes,
+                placement_base + index * sizeof(i32),
+                owner.placement_record[index]);
+        }
+
+        const u32 threat_base =
+            kThreatPoints + owner_index * kThreatPointOwnerStride;
+        for (u32 index = 0; index < owner.threat_points.size(); ++index) {
+            write_owner_ai_snapshot_i32(bytes,
+                threat_base + index * kOwnerPointStride,
+                owner.threat_points[index].x);
+            write_owner_ai_snapshot_i32(bytes,
+                threat_base + index * kOwnerPointStride + sizeof(i32),
+                owner.threat_points[index].y);
+        }
+
+        write_owner_ai_snapshot_u32(bytes,
+            owner_dword(kPlacementTargetRadius, owner_index),
+            owner.placement_target_radius);
+        write_owner_ai_snapshot_u32(bytes,
+            owner_dword(kAttackInterval, owner_index), owner.attack_interval);
+        write_owner_ai_snapshot_u32(
+            bytes, owner_dword(kAttackRadius, owner_index), owner.attack_radius);
+        write_owner_ai_snapshot_u32(bytes,
+            owner_dword(kAttackTargetRadius, owner_index),
+            owner.attack_target_radius);
+        write_owner_ai_snapshot_i32(bytes,
+            owner_dword(kAttackTargetOwner, owner_index),
+            owner.attack_target_owner);
+        write_owner_ai_snapshot_i32(bytes,
+            owner_dword(kSupportTargetSlot, owner_index),
+            owner.support_target_slot);
+        write_owner_ai_snapshot_i32(bytes,
+            owner_dword(kFallbackTargetSlot, owner_index),
+            owner.fallback_target_slot);
+        write_owner_ai_snapshot_u32(bytes,
+            owner_dword(kProfileStateFlag, owner_index),
+            owner.profile_state_flag);
+        write_owner_ai_snapshot_u32(
+            bytes, owner_dword(kProfileAge, owner_index), owner.profile_age);
+        write_owner_ai_snapshot_i32(bytes,
+            owner_dword(kProfileRecordIndices, owner_index),
+            state.profile_record_indices[owner_index]);
+    }
+
+    for (u32 index = 0; index < kOwnerAiSharedCounterDwordCount; ++index) {
+        const u32 byte_index = index * sizeof(u32);
+        write_owner_ai_snapshot_u32(bytes,
+            kSharedCounterTable0 + byte_index, state.shared_counter_table0[index]);
+        write_owner_ai_snapshot_u32(bytes,
+            kSharedCounterTable1 + byte_index, state.shared_counter_table1[index]);
+        write_owner_ai_snapshot_u32(bytes,
+            kSharedCounterTable2 + byte_index, state.shared_counter_table2[index]);
+    }
+    for (u32 index = 0; index < kOwnerAiSharedPlannerDwordCount; ++index) {
+        write_owner_ai_snapshot_u32(bytes,
+            kSharedPlannerTable + index * sizeof(u32),
+            state.shared_planner_table[index]);
+    }
+    for (u32 index = 0; index < kOwnerAiSharedGridDwordCount; ++index) {
+        write_owner_ai_snapshot_u32(bytes,
+            kSharedGridTable + index * sizeof(u32),
+            state.shared_grid_table[index]);
+    }
+}
+
 struct OwnerAiCommandDefinition {
     const char* token;
     u32 argument_class;
@@ -2207,6 +2654,7 @@ bool ImportOwnerAiSnapshot(OwnerAiRuntimeState& state, const u8* bytes, u32 byte
 
     state.snapshot_bytes.fill(0);
     std::memcpy(state.snapshot_bytes.data(), bytes, byte_count);
+    hydrate_owner_ai_runtime_from_snapshot(state);
     return true;
 }
 
@@ -2215,7 +2663,9 @@ bool ExportOwnerAiSnapshot(const OwnerAiRuntimeState& state, u8* bytes, u32 byte
         return false;
     }
 
-    std::memcpy(bytes, state.snapshot_bytes.data(), kOwnerAiSnapshotByteCount);
+    std::array<u8, kOwnerAiSnapshotByteCount> snapshot = state.snapshot_bytes;
+    overlay_owner_ai_runtime_on_snapshot(state, snapshot);
+    std::memcpy(bytes, snapshot.data(), snapshot.size());
     return true;
 }
 

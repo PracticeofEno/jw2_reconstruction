@@ -70,6 +70,10 @@ struct Mode1ReliableRuntimeState {
     std::array<u8, kMode1ReliableChannelCount> player_status{};
     std::vector<u8> last_wrapped_command_packet;
     u32 sync_processed_mask = 0;
+    // Active participants are snapshotted when a synchronized pump round
+    // opens.  The mask can only shrink while that round is pending; a player
+    // that becomes active midway joins the following round instead.
+    u32 sync_round_required_mask = 0;
     u32 local_player_index = 0;
     u32 initial_sequence_count = 6;
     u32 local_broadcast_start = 6;
@@ -127,6 +131,7 @@ bool PopMode1OrderedPacket(u32 channel, Mode1ReliablePacket& out_packet);
 void ShiftMode1Subtype10Values();
 void ApplyMode1SyncTimeoutPenalty();
 bool CheckMode1ReliableSync(u32 now_ms);
+bool IsMode1ReliableSyncRoundPending();
 u32 PumpMode1ReliablePackets(
     bool generic_ai_profile_mode, bool scenario_ai_profile_override, u32 now_ms);
 void RequestMode1MissingRange(u32 channel, u32 start_sequence, u32 end_sequence);

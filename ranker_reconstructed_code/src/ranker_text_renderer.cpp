@@ -433,10 +433,13 @@ void ensure_win32_text_font(HDC dc) {
     if (fonts.handles[1] == nullptr) {
         InitializeUiFontHandles();
     }
-    const u32 height = g_text_renderer_state.draw_font.height != 0 ?
-        g_text_renderer_state.draw_font.height : 12;
-    SetWin32UiFontByHeight(height);
-    if (!fonts.metrics_initialized) {
+    // RenderWin32FontRunAndAdvance (0x005077f0) does not select an HFONT from
+    // the current text-definition height on each draw.  Its sole setup path,
+    // InitializeWin32UiFontMetrics (0x005071c0), selects height 12 once and
+    // leaves that handle active.  Treating slot 4's metadata height (16) as a
+    // per-run HFONT request made selected unit/building names visibly larger
+    // than the original.
+    if (!fonts.metrics_initialized || fonts.selected == nullptr) {
         InitializeWin32UiFontMetrics(dc);
     }
 }
@@ -728,7 +731,8 @@ bool MeasureTextExtent(const char* text) {
 
     g_text_renderer_state.measured_width = 0;
     g_text_renderer_state.measured_height = 0;
-    const auto& font = g_text_renderer_state.metric_font;
+    const auto& draw_font = g_text_renderer_state.draw_font;
+    const auto& metric_font = g_text_renderer_state.metric_font;
 
     const u8* p = reinterpret_cast<const u8*>(text);
     while (*p != 0) {
@@ -740,12 +744,15 @@ bool MeasureTextExtent(const char* text) {
                 break;
             }
             ++p;
-            width = font.max_width;
-            height = font.height;
+            width = metric_font.max_width;
+            height = metric_font.height;
         }
         else {
-            width = glyph_width(font, ch);
-            height = font.height;
+            // MeasureTextExtent (0x005021af) delegates ASCII glyphs to
+            // MeasureAsciiGlyphMetrics (0x0050222e), which reads the draw-font
+            // width table/height.  Only DBCS extents come from the metric font.
+            width = glyph_width(draw_font, ch);
+            height = draw_font.height;
         }
         g_text_renderer_state.measured_width += width;
         g_text_renderer_state.measured_height =
@@ -755,7 +762,8 @@ bool MeasureTextExtent(const char* text) {
 }
 
 bool MeasureAsciiGlyphMetrics(u8 ch) {
-    const auto& font = g_text_renderer_state.metric_font;
+    // Original 0x0050222e reads DAT_0086ad9c/ada0/ada4 (draw-font state).
+    const auto& font = g_text_renderer_state.draw_font;
     g_text_renderer_state.measured_width = glyph_width(font, ch);
     g_text_renderer_state.measured_height = font.height;
     return true;

@@ -820,24 +820,32 @@ i32 MinimapScreenToWorldX(const MinimapRenderState& state, i32 screen_x) {
     if (state.scale_percent == 0) {
         return 0;
     }
-    return ((screen_x - state.inset_x) * 0xc80) / static_cast<i32>(state.scale_percent);
+    return ((screen_x - state.inset_x) * 0xc80) /
+        static_cast<i32>(state.scale_percent);
 }
 
 i32 MinimapScreenToWorldY(const MinimapRenderState& state, i32 screen_y) {
     if (state.scale_percent == 0) {
         return 0;
     }
-    return ((screen_y - state.inset_y) * 0xc80) / static_cast<i32>(state.scale_percent);
+    return ((screen_y - state.inset_y) * 0xc80) /
+        static_cast<i32>(state.scale_percent);
 }
 
 i32 MinimapWorldToScreenX(const MinimapRenderState& state, i32 world_x) {
-    return (original_world_to_tile(world_x) * static_cast<i32>(state.scale_percent)) /
-        100 + state.inset_x;
+    if (state.map_width_tiles == 0) {
+        return state.inset_x;
+    }
+    return static_cast<i32>((static_cast<i64>(original_world_to_tile(world_x)) *
+        state.minimap_width_pixels) / state.map_width_tiles);
 }
 
 i32 MinimapWorldToScreenY(const MinimapRenderState& state, i32 world_y) {
-    return (original_world_to_tile(world_y) * static_cast<i32>(state.scale_percent)) /
-        100 + state.inset_y;
+    if (state.map_height_tiles == 0) {
+        return state.inset_y;
+    }
+    return static_cast<i32>((static_cast<i64>(original_world_to_tile(world_y)) *
+        state.minimap_height_pixels) / state.map_height_tiles);
 }
 
 i32 ResolveMinimapTilePatternIndex(i32 tile_x, i32 tile_y) {
@@ -1718,13 +1726,18 @@ void DrawMinimapViewportBorder(MinimapRenderState& state, i32 world_x, i32 world
     }
 
     const i32 left = state.output_x + MinimapWorldToScreenX(state, world_x);
-    const i32 top = state.output_y + MinimapWorldToScreenY(state, world_y);
+    // The original viewport box keeps a long-standing Y quirk at 0x004e29a0:
+    // camera Y is scaled by minimap width (not minimap height).
+    const i32 top = state.output_y +
+        (state.map_height_tiles == 0 ? 0 : static_cast<i32>(
+            (static_cast<i64>(original_world_to_tile(world_y)) *
+                state.minimap_width_pixels) / state.map_height_tiles));
     const u32 width = static_cast<u32>(
-        (static_cast<u64>((state.viewport_width_pixels + 0x1f) >> 5) *
+        (static_cast<u64>(state.viewport_width_pixels >> 5) *
             state.minimap_width_pixels) /
         state.map_width_tiles);
     const u32 height = static_cast<u32>(
-        (static_cast<u64>((state.viewport_height_pixels + 0x1f) >> 5) *
+        (static_cast<u64>(state.viewport_height_pixels >> 5) *
             state.minimap_height_pixels) /
         state.map_height_tiles);
     if (width == 0 || height == 0) {
@@ -1739,6 +1752,7 @@ void DrawMinimapViewportBorder(MinimapRenderState& state, i32 world_x, i32 world
         state.output_pixels.resize(required_output);
     }
 
+    const u16 border_color = SurfacePixelMode555() ? 0x7fffu : 0xffffu;
     auto set_pixel = [&](i32 x, i32 y) {
         if (x < 0 || y < 0 ||
             static_cast<u32>(x) >= state.output_pitch_pixels ||
@@ -1746,7 +1760,7 @@ void DrawMinimapViewportBorder(MinimapRenderState& state, i32 world_x, i32 world
             return;
         }
         state.output_pixels[static_cast<std::size_t>(y) * state.output_pitch_pixels +
-            static_cast<std::size_t>(x)] = 0xffff;
+            static_cast<std::size_t>(x)] = border_color;
     };
 
     for (u32 x = 0; x < width; ++x) {

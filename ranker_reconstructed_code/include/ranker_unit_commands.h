@@ -179,6 +179,8 @@ using UnitCommandAbilityPredicate = bool (*)(UnitCommandContext& context,
     UnitMovementUnit& source, UnitMovementUnit* target, u32 ability_id);
 using UnitCommandAbilityCallback = void (*)(UnitCommandContext& context,
     UnitMovementUnit& source, UnitMovementUnit* target, u32 ability_id);
+using UnitCommandAbilityStartCallback = bool (*)(UnitCommandContext& context,
+    UnitMovementUnit& source, UnitMovementUnit* target, u32 ability_id);
 enum class UnitCommandAbilityGateResult : u32 {
     ready = 0,
     approach = 1,
@@ -268,6 +270,7 @@ struct UnitCommandCallbacks {
     UnitCommandPairCallback on_unit_unloaded = nullptr;
     UnitCommandCallback on_command_acknowledged = nullptr;
     UnitCommandCallback on_harvest_frame = nullptr;
+    UnitCommandCallback on_equipment_slots_changed = nullptr;
     UnitCommandTargetProgressPairCallback on_target_progress = nullptr;
     UnitCommandTargetProgressPairCallback on_target_progress_complete = nullptr;
     UnitCommandTargetProgressCallback on_local_target_progress_blocked = nullptr;
@@ -275,13 +278,14 @@ struct UnitCommandCallbacks {
     UnitCommandAmountCallback harvest_amount = nullptr;
     UnitCommandAmountCallback status_secondary_recharge_amount = nullptr;
     UnitCommandRandomLimitCallback random_limit = nullptr;
+    UnitVariantRandomLimitCallback variant_random_limit = nullptr;
     UnitCommandSpawnCallback create_unit = nullptr;
     UnitCommandDefinitionLookupCallback find_definition = nullptr;
     UnitCommandMetadataFlagsCallback command_metadata_flags = nullptr;
     UnitCommandAbilityGateCallback ability_gate = nullptr;
     UnitCommandAbilityPredicate can_use_ability = nullptr;
     UnitCommandAbilityCallback execute_ability = nullptr;
-    UnitCommandAbilityCallback start_ability_attachment = nullptr;
+    UnitCommandAbilityStartCallback start_ability_attachment = nullptr;
     UnitCommandAbilityAmountCallback ability_secondary_cost = nullptr;
     UnitCommandAbilitySignedAmountCallback ability_target_health_delta = nullptr;
     UnitCommandAbilityPredicate ability_updates_direction = nullptr;
@@ -296,6 +300,8 @@ struct UnitCommandCallbacks {
     UnitCommandPairCallback on_unit_spawned = nullptr;
     UnitCommandCallback on_construction_completed = nullptr;
     UnitCommandPairCallback on_linked_unit_released = nullptr;
+    UnitCommandPairCallback on_linked_unit_attached = nullptr;
+    UnitCommandPairCallback on_linked_unit_detached = nullptr;
     UnitCommandTypeReplacementCallback on_unit_type_replaced = nullptr;
     UnitCommandProductionStartFailedCallback on_linked_release_population_blocked =
         nullptr;
@@ -317,6 +323,7 @@ struct UnitCommandCallbacks {
     UnitCommandCallback on_production_refunded = nullptr;
     UnitCommandCallback on_runtime_death_marked = nullptr;
     UnitCommandCallback on_runtime_death_sound = nullptr;
+    UnitCommandCallback on_runtime_death_accounting = nullptr;
     UnitCommandQueuedCallback on_deferred_death_command_refund = nullptr;
     UnitCommandOversizedTransportPassengerCallback
         on_oversized_transport_passenger = nullptr;
@@ -918,6 +925,12 @@ void HandleUnitDeathCommandQueueSideEffects(UnitCommandContext& context,
     UnitMovementUnit& unit);
 bool PushDeferredUnitCommand(UnitMovementUnit& unit,
     const UnitQueuedCommand& command, u32 max_deferred_count = 10);
+using UnitDeferredCommandCommitCallback = bool (*)(UnitMovementUnit& unit,
+    u32 payload, void* user_data);
+bool CommitThenPushDeferredUnitCommand(UnitMovementUnit& unit,
+    const UnitQueuedCommand& command, u32 max_deferred_count,
+    UnitDeferredCommandCommitCallback commit, void* user_data = nullptr);
+bool IsProductionOrderCancelLogicalIndexAllowed(u32 logical_index);
 bool SetOrQueueUnitCommandPayload(UnitMovementUnit* unit,
     const UnitQueuedCommand& command, bool enqueue_deferred,
     u32 max_deferred_count = 10);

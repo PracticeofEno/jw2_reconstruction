@@ -35,6 +35,7 @@ constexpr u32 kPreviewPlacementRouteBlockedFlag = 0x40000000;
 constexpr u32 kPreviewPlacementCollisionFlag = 0x08000000;
 constexpr u32 kPreviewPlacementVisibilityStateFlag = 0x40;
 constexpr u32 kPreviewPlacementVisibilityCommandBit = 7;
+constexpr u32 kPreviewPlacementCurrentOwnerShift = 0x12;
 constexpr u32 kSelectedUnitMarkerFlag = 0x80;
 constexpr u32 kIgnoredCommandHighBit = 0x80000000;
 constexpr u32 kStatusMaskCommand = 0x0d;
@@ -205,55 +206,128 @@ bool point_in_unit_bounds(
 }
 
 bool production_unit_blocks_action(const GameplayProductionUnitState& unit) {
-    return unit.active && unit.runtime_state < 4 &&
-        (unit.runtime_flags & 0x80u) == 0;
+    // FUN_004e96ae is already walking the active-unit list.  It only tests
+    // raw +0xa0 bit 0x80 here; the command/lifecycle state is not part of
+    // this target gate.
+    return unit.active && (unit.runtime_flags & 0x80u) == 0;
 }
 
-bool preview_collision_visibility_gate(const GameplayProductionUnitState& unit) {
-    return ((unit.command_state | unit.command_flags) &
+bool preview_collision_visibility_gate(
+    const GameplayProductionActionState& state,
+    const GameplayProductionPlacementCell& cell,
+    const GameplayProductionUnitState& unit, u32 source_owner) {
+    // FUN_004d6cb0 returns visible immediately for ordinary units.  Units
+    // carrying raw +0x9c bit 0x40 or raw +0x5c bit 0x80 instead use
+    // FUN_004d6cca's owner/current-visibility test.
+    const bool requires_visibility_test =
+        ((unit.command_state | unit.command_flags) &
             kPreviewPlacementVisibilityStateFlag) != 0 ||
         (unit.runtime_command_bits &
             (1u << kPreviewPlacementVisibilityCommandBit)) != 0;
+    if (!requires_visibility_test) {
+        return true;
+    }
+    if (source_owner >= 32) {
+        return false;
+    }
+    if (unit.owner < state.owner_visibility_masks.size() &&
+        (state.owner_visibility_masks[unit.owner] & (1u << source_owner)) != 0) {
+        return true;
+    }
+    const u32 current_bit = source_owner + kPreviewPlacementCurrentOwnerShift;
+    return current_bit < 32 &&
+        (cell.current_visibility_flags & (1u << current_bit)) != 0;
 }
 
-void record_validation_hit(GameplayProductionActionState& state,
-    const GameplayProductionUnitState& unit, u32 flag) {
-    state.last_validation_flags |= flag;
-    state.last_validation_unit_offset = unit.offset;
-    if (flag != 0) {
-        state.last_validation_blocking_unit_offset = unit.offset;
+bool production_action_target_visible(
+    const GameplayProductionActionState& state,
+    const GameplayProductionUnitState& unit) {
+    if (!unit.visible) {
+        return false;
     }
+    if (state.placement_map.width == 0 || state.placement_map.height == 0 ||
+        state.placement_map.cells.empty()) {
+        return true;
+    }
+    if (unit.x < 0 || unit.y < 0) {
+        return false;
+    }
+    const u32 tile_x = static_cast<u32>(unit.x) >> 5;
+    const u32 tile_y = static_cast<u32>(unit.y) >> 5;
+    if (tile_x >= state.placement_map.width ||
+        tile_y >= state.placement_map.height) {
+        return false;
+    }
+    const std::size_t index =
+        static_cast<std::size_t>(tile_y) * state.placement_map.width + tile_x;
+    return index < state.placement_map.cells.size() &&
+        preview_collision_visibility_gate(state,
+            state.placement_map.cells[index], unit, state.local_player_index);
 }
 
 bool default_validate_low_action(
     GameplayProductionActionState& state, i32 world_x, i32 world_y) {
     reset_validation_state(state);
+    const GameplayProductionUnitState* enemy_mobile = nullptr;
+    const GameplayProductionUnitState* local_structure = nullptr;
+    const GameplayProductionUnitState* enemy_structure = nullptr;
     for (const GameplayProductionUnitState& unit : state.units) {
         if (!production_unit_blocks_action(unit) ||
+            !production_action_target_visible(state, unit) ||
             !point_in_unit_bounds(unit, world_x, world_y)) {
             continue;
         }
 
-        record_validation_hit(
-            state, unit, unit.owner == state.local_player_index ? 1u : 2u);
-        if (unit.owner == state.local_player_index && unit.type < 0x60) {
-            return true;
+        if (unit.type < 0x60u) {
+            if (unit.owner == state.local_player_index) {
+                // FUN_004e96ae returns immediately for the first local mobile
+                // hit with DAT_008686c0 still zero; no lower-priority
+                // structure can replace it.
+                state.last_validation_unit_offset = unit.offset;
+                state.last_validation_blocking_unit_offset = unit.offset;
+                return true;
+            }
+            enemy_mobile = &unit;
+            state.last_validation_flags |= 2u;
+        }
+        else if (unit.owner == state.local_player_index) {
+            local_structure = &unit;
+            state.last_validation_flags |= 4u;
+        }
+        else {
+            enemy_structure = &unit;
+            state.last_validation_flags |= 8u;
         }
     }
-    return state.last_validation_flags != 0;
+
+    const GameplayProductionUnitState* selected = enemy_mobile != nullptr
+        ? enemy_mobile
+        : (local_structure != nullptr ? local_structure : enemy_structure);
+    if (selected != nullptr) {
+        state.last_validation_unit_offset = selected->offset;
+        state.last_validation_blocking_unit_offset = selected->offset;
+        return true;
+    }
+    return false;
 }
 
 bool default_validate_high_action(
     GameplayProductionActionState& state, i32 world_x, i32 world_y) {
     reset_validation_state(state);
     for (const GameplayProductionUnitState& unit : state.units) {
-        if (!production_unit_blocks_action(unit) || unit.type >= 0x60 ||
+        // FUN_004e98c5 scans DAT_007071dc (the lifecycle list), not the
+        // ordinary active list used by FUN_004e96ae.
+        if (unit.active ||
+            !production_action_target_visible(state, unit) ||
+            unit.type >= 0x60u ||
+            (unit.runtime_flags & 0x80u) != 0 ||
             (unit.runtime_flags & 4u) == 0 ||
             !point_in_unit_bounds(unit, world_x, world_y)) {
             continue;
         }
 
-        record_validation_hit(state, unit, 4u);
+        state.last_validation_unit_offset = unit.offset;
+        state.last_validation_blocking_unit_offset = unit.offset;
         return true;
     }
     return false;
@@ -294,13 +368,18 @@ void stop_hud_pulse(GameplayProductionActionState& state) {
     }
 }
 
-void reject_action(GameplayProductionActionState& state,
-    GameplayProductionGateFailure reason = GameplayProductionGateFailure::none) {
+void reject_action(GameplayProductionActionState& state) {
     state.last_dispatch_failed = true;
-    state.last_gate_failure = reason;
     if (state.callbacks.rejected_action_feedback != nullptr) {
         state.callbacks.rejected_action_feedback(state);
     }
+}
+
+void reject_action_silently(GameplayProductionActionState& state) {
+    // Production-table entry 0x1e targets 0x004db5df (STC; RET).  It does
+    // not execute the shared 0x004db5cd error-feedback tail.
+    state.last_dispatch_failed = true;
+    state.last_gate_failure = GameplayProductionGateFailure::none;
 }
 
 void acknowledge_action(GameplayProductionActionState& state, u32 unit_offset) {
@@ -326,11 +405,8 @@ bool production_gate_for_unit(GameplayProductionActionState& state,
 
 void apply_result_state_for_unit(GameplayProductionActionState& state,
     GameplayProductionUnitState& unit, u32 action_index) {
-    const bool skip_state_update =
-        action_index == 4 && state.selected_count <= 1 &&
-        unit.offset == state.selected_unit_offset;
-    if (!skip_state_update && action_index < state.selector_result_states.size()) {
-        unit.command_state = state.selector_result_states[action_index];
+    if (action_index < state.selector_result_states.size()) {
+        unit.result_state = state.selector_result_states[action_index];
     }
 }
 
@@ -348,7 +424,8 @@ GameplayProductionQueuedCommand make_extended_unit_order_queue_command(
     u32 command, u32 aux) {
     GameplayProductionQueuedCommand queued{};
     queued.player_opcode =
-        (kSubtypeExtendedUnitOrder << 24) | (state.local_player_index & 0xffu);
+        (kSubtypeExtendedUnitOrder << 24) |
+        (state.local_player_index & 0xffu);
     queued.selector = command;
     queued.unit_offset = unit.offset;
     queued.aux = aux;
@@ -367,7 +444,7 @@ GameplayProductionQueuedCommand make_extended_unit_order_queue_command(
     return queued;
 }
 
-u32 publish_selected_units_for_action(GameplayProductionActionState& state,
+u32 publish_all_selected_units_for_action(GameplayProductionActionState& state,
     u32 command, u32 aux, bool queue_commands) {
     u32 published = 0;
     for (GameplayProductionUnitState& unit : state.units) {
@@ -379,8 +456,10 @@ u32 publish_selected_units_for_action(GameplayProductionActionState& state,
             QueueProductionPlacementCommand(state,
                 make_extended_unit_order_queue_command(state, unit, command, aux));
         }
-        else if (!publish_extended_unit_order(state, unit, command, aux)) {
-            continue;
+        else {
+            // FUN_004de640 has no packet-rejection carry result.  Once the
+            // production gate passes, the table handler counts the command.
+            publish_extended_unit_order(state, unit, command, aux);
         }
         ++published;
     }
@@ -391,8 +470,8 @@ bool publish_first_matching_unit_for_action(GameplayProductionActionState& state
     u32 command, u32 aux) {
     if (GameplayProductionUnitState* unit = selected_unit(state)) {
         if (unit_is_local_active(state, *unit) &&
-            production_gate_for_unit(state, *unit, command) &&
-            publish_extended_unit_order(state, *unit, command, aux)) {
+            production_gate_for_unit(state, *unit, command)) {
+            publish_extended_unit_order(state, *unit, command, aux);
             acknowledge_action(state, unit->offset);
             return true;
         }
@@ -403,63 +482,11 @@ bool publish_first_matching_unit_for_action(GameplayProductionActionState& state
             !production_gate_for_unit(state, unit, command)) {
             continue;
         }
-        if (publish_extended_unit_order(state, unit, command, aux)) {
-            acknowledge_action(state, unit.offset);
-            return true;
-        }
+        publish_extended_unit_order(state, unit, command, aux);
+        acknowledge_action(state, unit.offset);
+        return true;
     }
     return false;
-}
-
-bool owner_relation_mask_allows_local_action(
-    const GameplayProductionActionState& state, const GameplayProductionUnitState& unit) {
-    if (unit.owner >= state.owner_relation_masks.size() ||
-        state.local_player_index >= 32) {
-        return true;
-    }
-    const u32 relation_mask = state.owner_relation_masks[unit.owner];
-    return relation_mask == 0 ||
-        (relation_mask & (1u << state.local_player_index)) != 0;
-}
-
-bool action_table_entry_precondition_allows(
-    const GameplayProductionActionState& state,
-    const GameplayProductionUnitState& unit, u32 action_index) {
-    switch (action_index) {
-    case 0:
-        return (unit.definition_action_flags & 0x10u) != 0;
-    case 8:
-        return (unit.definition_action_flags & 0x20u) != 0;
-    case 0x0a:
-    case 0x1c:
-        return (unit.command_flags & 0x003c0000u) == 0 &&
-            (unit.definition_action_flags & 0x40u) != 0;
-    case 0x18:
-        return (unit.runtime_flags & 0x20000000u) == 0;
-    case 0x19:
-        return (unit.command_flags & 0x003c0000u) == 0 && unit.type == 0x31;
-    case 0x1b:
-        return unit.type == 0x31 &&
-            owner_relation_mask_allows_local_action(state, unit);
-    default:
-        return true;
-    }
-}
-
-bool action_table_entry_uses_selected_group_publish(u32 action_index) {
-    switch (action_index) {
-    case 8:
-    case 9:
-    case 0x0c:
-    case 0x0d:
-    case 0x0f:
-    case 0x12:
-    case 0x13:
-    case 0x18:
-        return true;
-    default:
-        return false;
-    }
 }
 
 bool action_allows_unit_movement_class(
@@ -478,87 +505,165 @@ bool owner_requirement_allows_unit(const GameplayProductionActionState& state,
     if (definition.owner_requirement == 0xffffffffu) {
         return true;
     }
-    if (unit.owner < state.owner_relation_masks.size() &&
-        definition.owner_requirement < 32) {
-        const u32 relation_mask = state.owner_relation_masks[unit.owner];
-        if (relation_mask != 0) {
-            return (relation_mask & (1u << definition.owner_requirement)) != 0;
-        }
-    }
-    return unit.owner == definition.owner_requirement;
+    // FUN_004db92c/FUN_004db9de index DAT_00708970 by the source owner and
+    // JW2_11 +0x15c, then require a nonzero completed variant count.  The
+    // record field is a production-order dependency, not an owner relation.
+    return unit.owner < state.owner_production_order_variant_counts.size() &&
+        definition.owner_requirement <
+            state.owner_production_order_variant_counts[unit.owner].size() &&
+        state.owner_production_order_variant_counts
+            [unit.owner][definition.owner_requirement] != 0;
 }
 
 bool finish_dispatch_success(GameplayProductionActionState& state,
-    GameplayProductionUnitState* unit, u32 action_index, bool write_result_state) {
-    if (write_result_state && unit != nullptr) {
-        apply_result_state_for_unit(state, *unit, action_index);
+    GameplayProductionUnitState* target, u32 action_index,
+    bool write_result_state) {
+    if (write_result_state && target != nullptr) {
+        apply_result_state_for_unit(state, *target, action_index);
     }
     return true;
 }
 
+bool production_handler_uses_selected_group(u32 action_index) {
+    // Exact aliases in the 32-pointer table at 0x004db238:
+    // 0x004db31d is the all-selected publisher, while 0x004db47c is its
+    // queued/formation variant used only by selector 4.
+    switch (action_index) {
+    case 0x08:
+    case 0x09:
+    case 0x0c:
+    case 0x0d:
+    case 0x0f:
+    case 0x12:
+    case 0x13:
+    case 0x18:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool production_target_precondition_allows(
+    const GameplayProductionActionState& state, u32 action_index,
+    const GameplayProductionUnitState* target) {
+    switch (action_index) {
+    case 0x00:
+        return target != nullptr &&
+            (target->definition_action_flags & 0x10u) != 0;
+    case 0x08:
+        return target != nullptr &&
+            (target->definition_action_flags & 0x20u) != 0;
+    case 0x0a:
+    case 0x1c:
+        return target != nullptr &&
+            (target->command_flags & 0x003c0000u) == 0 &&
+            (target->definition_action_flags & 0x40u) != 0;
+    case 0x18:
+        return target != nullptr &&
+            (target->runtime_flags & 0x20000000u) == 0;
+    case 0x19:
+        return target != nullptr &&
+            (target->command_flags & 0x003c0000u) == 0 &&
+            target->type == 0x31u;
+    case 0x1b:
+        return target != nullptr && target->type == 0x31u &&
+            target->owner < state.owner_relation_masks.size() &&
+            state.local_player_index < 32u &&
+            (state.owner_relation_masks[target->owner] &
+                (1u << state.local_player_index)) != 0;
+    default:
+        return true;
+    }
+}
+
+u32 publish_selector_1f_units(GameplayProductionActionState& state) {
+    // 0x004db4ec hard-codes EAX=0x13 and EDI=-1; it deliberately bypasses
+    // FUN_004db92c and only requires selected/local plus raw +0x9c bit 0x800.
+    u32 published = 0;
+    for (GameplayProductionUnitState& unit : state.units) {
+        if (!unit_is_selected_local_action_candidate(state, unit) ||
+            (unit.command_flags & 0x800u) == 0) {
+            continue;
+        }
+        publish_extended_unit_order(state, unit, 0x13u, 0xffffffffu);
+        ++published;
+    }
+    return published;
+}
+
 bool dispatch_action_index(GameplayProductionActionState& state, u32 action_index,
-    u32 unit_offset, bool write_result_state = false) {
+    u32 target_offset, bool write_result_state = false) {
     state.last_action_index = action_index;
     state.last_dispatch_failed = false;
 
-    GameplayProductionUnitState* unit = find_unit(state, unit_offset);
-    if (unit != nullptr && !action_table_entry_precondition_allows(
-            state, *unit, action_index)) {
+    if (action_index >= kGameplayProductionSelectorCount) {
+        // The original UI can only index 0xd4..0xf3.  Keep malformed synthetic
+        // callers from reading beyond the 32-entry table, with the same
+        // carry-set/no-feedback behavior as the adjacent 0x1e stub.
+        reject_action_silently(state);
+        return false;
+    }
+
+    GameplayProductionUnitState* target =
+        write_result_state ? find_unit(state, target_offset) : nullptr;
+    const u32 packet_target = target != nullptr ? target->offset : 0u;
+    state.last_validation_unit_offset = packet_target;
+
+    if (action_index == 0x07u) {
+        // Table entry 7 -> 0x004db55d (CLC; RET).
+        return finish_dispatch_success(
+            state, target, action_index, write_result_state);
+    }
+    if (action_index == 0x1eu) {
+        // Table entry 0x1e -> 0x004db5df (STC; RET), not the shared feedback
+        // tail at 0x004db5cd.
+        reject_action_silently(state);
+        return false;
+    }
+    if (!production_target_precondition_allows(
+            state, action_index, target)) {
         reject_action(state);
         return false;
     }
 
-    switch (action_index) {
-    case 4:
+    if (action_index == 0x1fu) {
+        if (publish_selector_1f_units(state) == 0) {
+            reject_action(state);
+            return false;
+        }
+        acknowledge_action(state, state.selected_unit_offset);
+        return finish_dispatch_success(
+            state, target, action_index, write_result_state);
+    }
+
+    if (action_index == 0x04u) {
         ResetQueuedProductionPlacementCommands(state);
-        if (publish_selected_units_for_action(state, action_index,
-                state.last_validation_unit_offset, true) == 0) {
+        if (publish_all_selected_units_for_action(state, action_index,
+                packet_target, true) == 0) {
             reject_action(state);
             return false;
         }
         FlushQueuedProductionPlacementCommands(state);
         acknowledge_action(state, state.selected_unit_offset);
-        return finish_dispatch_success(state, unit, action_index, write_result_state);
-    case 7:
-        return finish_dispatch_success(state, unit, action_index, write_result_state);
-    case 0x1e:
-        reject_action(state);
-        return false;
-    case 0x1f:
-    {
-        u32 published = 0;
-        for (GameplayProductionUnitState& selected : state.units) {
-            if (!unit_is_selected_local_action_candidate(state, selected) ||
-                (selected.command_flags & 0x800u) == 0) {
-                continue;
-            }
-            if (publish_extended_unit_order(state, selected, 0x13, 0xffffffffu)) {
-                ++published;
-            }
-        }
-        if (published == 0) {
+        return finish_dispatch_success(
+            state, target, action_index, write_result_state);
+    }
+
+    if (production_handler_uses_selected_group(action_index)) {
+        if (publish_all_selected_units_for_action(state, action_index,
+                packet_target, false) == 0) {
             reject_action(state);
             return false;
         }
         acknowledge_action(state, state.selected_unit_offset);
-        return finish_dispatch_success(state, unit, action_index, write_result_state);
-    }
-    default:
-        break;
+        return finish_dispatch_success(
+            state, target, action_index, write_result_state);
     }
 
-    if (action_table_entry_uses_selected_group_publish(action_index)) {
-        if (publish_selected_units_for_action(state, action_index,
-                state.last_validation_unit_offset, false) != 0) {
-            acknowledge_action(state, state.selected_unit_offset);
-            return finish_dispatch_success(state, unit, action_index, write_result_state);
-        }
-    }
-    else {
-        if (publish_first_matching_unit_for_action(state, action_index,
-                state.last_validation_unit_offset)) {
-            return finish_dispatch_success(state, unit, action_index, write_result_state);
-        }
+    if (publish_first_matching_unit_for_action(
+            state, action_index, packet_target)) {
+        return finish_dispatch_success(
+            state, target, action_index, write_result_state);
     }
 
     reject_action(state);
@@ -654,6 +759,31 @@ GameplayProductionActionState& gameplay_production_action_state() {
     return g_gameplay_production_action_state;
 }
 
+void InitializeOriginalGameplayProductionSelectorTables(
+    GameplayProductionActionState& state) {
+    // DAT_008629be, immediately before the 32 production selectors.
+    static constexpr std::array<u8, kGameplayProductionSelectorCount>
+        kRedirectFlags = {
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1,
+            1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
+        };
+    // DAT_00862a14, written to target raw +0xa4 after a CLC return.
+    static constexpr std::array<u8, kGameplayProductionSelectorCount>
+        kResultStates = {
+            0x88, 0x88, 0x08, 0x88, 0x08, 0x88, 0x08, 0x08,
+            0x88, 0x88, 0x08, 0x88, 0x88, 0x88, 0x88, 0x88,
+            0x88, 0x08, 0x88, 0x08, 0x08, 0x88, 0x88, 0x08,
+            0x88, 0x08, 0x08, 0x08, 0x08, 0x88, 0x00, 0x00,
+        };
+
+    state.selector_redirect_flags = kRedirectFlags;
+    state.selector_result_states = kResultStates;
+    for (u32 selector = 0; selector < kGameplayProductionSelectorCount;
+         ++selector) {
+        state.selector_definition_indices[selector] = selector;
+    }
+}
+
 bool DefaultValidateLowGameplayProductionAction(
     GameplayProductionActionState& state, u32 selector, i32 world_x, i32 world_y) {
     (void)selector;
@@ -693,110 +823,109 @@ bool DefaultExportGameplayProductionSessionBundle(
     (void)mirror_archive_name;
     return export_loaded_gameplay_session_bundle(archive_name);
 }
-
 u32 DispatchOwnerProductionActionCommand(GameplayProductionActionState& state,
     u32 selector, i32 screen_x, i32 screen_y, u32 unit_offset) {
     state.selected_action_selector = selector;
     state.current_unit_offset = unit_offset;
+    state.last_dispatch_failed = false;
+    state.last_gate_failure = GameplayProductionGateFailure::none;
 
     i32 world_x = screen_x + static_cast<i32>(state.map_origin_x);
     i32 world_y = screen_y + static_cast<i32>(state.map_origin_y);
+    state.last_world_x = static_cast<u32>(world_x);
+    state.last_world_y = static_cast<u32>(world_y);
 
+    if (selector >= kGameplayProductionSelectorCount) {
+        reject_action_silently(state);
+        return selector;
+    }
+
+    // FUN_004db0f7 has one explicit pre-dispatch footprint check: selector
+    // 0x17 validates unit type 0x7d at an aligned world point.
     if (selector == kSpecialPreviewPlacementSelector &&
         !CheckPreviewProductionPlacementFootprintGateCells(state,
-            kSpecialPreviewPlacementUnitType, world_x & ~0x1f, world_y & ~0x1f,
-            state.selected_unit_offset)) {
+            kSpecialPreviewPlacementUnitType, world_x & ~0x1f,
+            world_y & ~0x1f, state.selected_unit_offset)) {
         reject_action(state);
         return selector;
     }
 
-    if (selector < state.selector_redirect_flags.size() &&
-        state.selector_redirect_flags[selector] == 1) {
+    // DAT_008629be is exactly 32 bytes.  A one starts the click marker before
+    // the JW2_11 mode is examined.
+    if (state.selector_redirect_flags[selector] == 1u) {
         start_hud_pulse(state, world_x, world_y);
     }
 
     const GameplayProductionActionDefinition* definition =
         definition_for_selector(state, selector);
-    if (definition == nullptr || definition->mode == 0) {
-        dispatch_action_index(state, selector, unit_offset);
+    if (definition == nullptr) {
+        reject_action_silently(state);
         return selector;
     }
 
-    world_x = static_cast<i32>(clamp_world_axis(world_x, state.map_width_tiles));
-    world_y = static_cast<i32>(clamp_world_axis(world_y, state.map_height_tiles));
+    if (definition->mode == 0u) {
+        dispatch_action_index(state, selector, 0, false);
+        return selector;
+    }
+
+    world_x = static_cast<i32>(
+        clamp_world_axis(world_x, state.map_width_tiles));
+    world_y = static_cast<i32>(
+        clamp_world_axis(world_y, state.map_height_tiles));
     state.last_world_x = static_cast<u32>(world_x);
     state.last_world_y = static_cast<u32>(world_y);
 
-    if (definition->mode == 1) {
-        dispatch_action_index(state, selector, unit_offset);
+    if (definition->mode == 1u) {
+        dispatch_action_index(state, selector, 0, false);
         return selector;
     }
 
-    if (state.current_snapshot_field2 != 1) {
-        const bool high_mode = definition->mode > 3;
-        const bool has_action_hit =
-            validate_action(state, selector, world_x, world_y, high_mode);
-
-        if (!has_action_hit) {
-            if (definition->mode < 3) {
-                dispatch_action_index(state, selector, unit_offset);
-                return selector;
-            }
-
-            if (high_mode) {
-                reject_action(state);
-                return selector;
-            }
-
-            stop_hud_pulse(state);
-            const u32 action_index =
-                select_action_index(state, selector, world_x, world_y);
-            reject_action(state);
-            return action_index;
+    if (state.current_snapshot_field2 == 1u) {
+        if (definition->mode <= 2u) {
+            dispatch_action_index(state, selector, 0, false);
         }
-    }
-    else {
-        if (definition->mode > 2) {
+        else {
             stop_hud_pulse(state);
-            const u32 action_index =
-                select_action_index(state, selector, world_x, world_y);
             reject_action(state);
-            return action_index;
         }
-
-        dispatch_action_index(state, selector, unit_offset);
         return selector;
     }
 
-    const u32 action_index = select_action_index(state, selector, world_x, world_y);
-    const GameplayProductionActionDefinition* action_definition =
-        definition_for_selector(state, action_index);
-    const GameplayProductionUnitState* action_unit =
+    const bool high_mode = definition->mode > 3u;
+    const bool has_action_hit =
+        validate_action(state, selector, world_x, world_y, high_mode);
+    if (!has_action_hit) {
+        if (definition->mode < 3u) {
+            dispatch_action_index(state, selector, 0, false);
+        }
+        else {
+            // Low-mode 3 explicitly stops the marker at 0x004db1bd; the
+            // high-mode validation failure jumps straight to the shared
+            // feedback tail.
+            if (!high_mode) {
+                stop_hud_pulse(state);
+            }
+            reject_action(state);
+        }
+        return selector;
+    }
+
+    GameplayProductionUnitState* target =
         find_unit(state, state.last_validation_unit_offset);
-    if (action_definition != nullptr && action_unit != nullptr &&
-        !action_allows_unit_movement_class(*action_definition, *action_unit)) {
-        if (definition->mode == 2) {
-            dispatch_action_index(state, selector, unit_offset);
-            return selector;
+    if (target == nullptr ||
+        !action_allows_unit_movement_class(*definition, *target)) {
+        if (definition->mode == 2u) {
+            dispatch_action_index(state, selector, 0, false);
         }
-        reject_action(state);
-        return action_index;
+        else {
+            reject_action(state);
+        }
+        return selector;
     }
 
     stop_hud_pulse(state);
-    if (CheckSelectedUnitProductionActionGate(state, action_index)) {
-        dispatch_action_index(
-            state, action_index, state.last_validation_unit_offset, true);
-        return action_index;
-    }
-
-    if (definition->mode == 2) {
-        dispatch_action_index(state, selector, unit_offset);
-        return selector;
-    }
-
-    reject_action(state, state.last_gate_failure);
-    return action_index;
+    dispatch_action_index(state, selector, target->offset, true);
+    return selector;
 }
 
 bool PublishLinkedUnitCommand24IfIdle(GameplayProductionActionState& state) {
@@ -874,6 +1003,7 @@ void MirrorGameplayProductionPlacementMapFromTerrainFlags(
             cell.live_terrain_flags = flags;
             cell.owner_flags = flags;
             cell.route_flags = flags;
+            cell.current_visibility_flags = flags;
         }
     }
 }
@@ -909,6 +1039,7 @@ void MirrorGameplayProductionPlacementMapFromMovementMap(
                 movement.visibility_layers,
                 movement.visibility_layers.previous_flags,
                 x, y, source.visibility_flags);
+            cell.current_visibility_flags = source.visibility_flags;
         }
     }
 }
@@ -940,7 +1071,7 @@ bool PublishSelectedUnitProductionCostAction(GameplayProductionActionState& stat
     u32 production) {
     GameplayProductionUnitState* unit = selected_unit(state);
     if (unit == nullptr || !unit_is_local_active(state, *unit) ||
-        unit->action_mode_gate >= 4) {
+        unit->deferred_command_count >= 4) {
         return false;
     }
 
@@ -976,19 +1107,20 @@ bool PublishSelectedUnitProductionCostCancel(GameplayProductionActionState& stat
 
 bool PublishSelectedUnitsStatusMaskToggle(GameplayProductionActionState& state,
     u32 required_high_flag) {
-    static_cast<void>(required_high_flag);
-    constexpr u32 target_high_flag = kIgnoredCommandHighBit;
+    const u32 target_high_flag = required_high_flag;
     bool published = false;
     state.selected_count = 0;
     for (const GameplayProductionUnitState& unit : state.units) {
         if ((unit.status_flags & kSelectedUnitMarkerFlag) == 0 ||
             unit.owner != state.local_player_index ||
-            (unit.command_flags & kIgnoredCommandHighBit) == target_high_flag) {
+            (unit.area_marker_flags & kIgnoredCommandHighBit) ==
+                target_high_flag) {
             continue;
         }
         if ((unit.command_bits & (1u << 5)) != 0) {
             publish(state, make_action(state, kSubtypeStatusMask, unit.offset,
-                kStatusMaskCommand, target_high_flag));
+                kStatusMaskCommand, target_high_flag,
+                state.last_world_x, state.last_world_y));
             ++state.selected_count;
             published = true;
         }
@@ -998,13 +1130,13 @@ bool PublishSelectedUnitsStatusMaskToggle(GameplayProductionActionState& state,
 
 bool PublishSelectedUnitAuxStateAction(GameplayProductionActionState& state) {
     GameplayProductionUnitState* unit = selected_unit(state);
-    if (unit == nullptr || unit->equipment_slots[0] == 1 ||
-        (unit->command_flags & 0x10000000u) != 0) {
+    if (unit == nullptr || unit->action_mode_gate == 1 ||
+        (unit->command_state & 0x10000000u) != 0) {
         return false;
     }
     return publish(state, make_action(state, kSubtypeAuxVector, unit->offset,
-        0, unit->linked_object_id, static_cast<u32>(unit->saved_path_target_x),
-        static_cast<u32>(unit->saved_path_target_y)));
+        0x1f, state.last_validation_unit_offset, state.last_world_x,
+        state.last_world_y));
 }
 
 void NoOpProductionActionHandler(GameplayProductionActionState&) {
@@ -1046,7 +1178,9 @@ bool FindSelectedUnitMatchingAttachmentSlot(GameplayProductionActionState& state
 
     for (u32 slot = 0; slot < kGameplayProductionAttachmentSlots; ++slot) {
         state.selected_attachment_slot = slot;
-        const bool attachment_present = unit->equipment_slots[slot] != 0;
+        // FUN_004db855 scans raw +0x30/+0x34/+0x38/+0x3c.  Those are the
+        // four item/attachment slots, not the six equipment command slots.
+        const bool attachment_present = unit->attachment_slots[slot] != 0;
         const u32 attachment_definition = unit->attachment_definition_ids[slot];
         if (attachment_present && attachment_definition != 0 &&
             attachment_definition == definition_id) {
@@ -1167,7 +1301,9 @@ bool CheckPreviewProductionPlacementGateCell(GameplayProductionActionState& stat
         placement_cell(state.placement_map, static_cast<u32>(tile_x),
             static_cast<u32>(tile_y));
     if (cell == nullptr ||
-        (cell->live_terrain_flags & kPreviewPlacementBlockedMask) != 0 ||
+        // FUN_004dbae2:004dbaff reads the last-visible E59E74 layer here;
+        // F19E74 is consulted separately below and by the nearby probe.
+        (cell->terrain_flags & kPreviewPlacementBlockedMask) != 0 ||
         (cell->owner_flags & kPreviewPlacementTerrainValidFlag) == 0 ||
         (cell->route_flags & kPreviewPlacementTemporaryBlock) != 0 ||
         (cell->route_flags & kPreviewPlacementRouteRequiredFlag) == 0) {
@@ -1177,8 +1313,18 @@ bool CheckPreviewProductionPlacementGateCell(GameplayProductionActionState& stat
     if (terrain_class(*cell) != state.preview_placement_terrain_class) {
         return false;
     }
-    if (allow_nearby_probe &&
-        (cell->terrain_flags & kPreviewPlacementRouteBlockedFlag) != 0) {
+    const GameplayProductionUnitState* source_unit =
+        find_unit(state, source_unit_offset);
+    const u32 source_owner = source_unit != nullptr ?
+        source_unit->owner : state.local_player_index;
+    const u32 source_current_bit =
+        source_owner + kPreviewPlacementCurrentOwnerShift;
+    const bool source_currently_sees_cell = source_current_bit < 32 &&
+        (cell->current_visibility_flags & (1u << source_current_bit)) != 0;
+    // FUN_004dbae2:004dbb53..004dbb74 only applies F19E74 bit 30 when
+    // the selected source owner's current-visibility bit is present.
+    if (source_currently_sees_cell &&
+        (cell->live_terrain_flags & kPreviewPlacementRouteBlockedFlag) != 0) {
         return false;
     }
     if (allow_nearby_probe &&
@@ -1186,8 +1332,6 @@ bool CheckPreviewProductionPlacementGateCell(GameplayProductionActionState& stat
         return false;
     }
 
-    const GameplayProductionUnitState* source_unit =
-        find_unit(state, source_unit_offset);
     const u32 ignored_source_offset =
         source_unit != nullptr && source_unit->type == 0x10 ?
         std::numeric_limits<u32>::max() : source_unit_offset;
@@ -1197,10 +1341,13 @@ bool CheckPreviewProductionPlacementGateCell(GameplayProductionActionState& stat
             continue;
         }
         if (world_to_tile(unit.x) == tile_x && world_to_tile(unit.y) == tile_y) {
-            if (!preview_collision_visibility_gate(unit)) {
+            if (!preview_collision_visibility_gate(
+                    state, *cell, unit, source_owner)) {
                 continue;
             }
-            return (cell->route_flags & kPreviewPlacementCollisionFlag) == 0;
+            if ((cell->route_flags & kPreviewPlacementCollisionFlag) != 0) {
+                return false;
+            }
         }
     }
     return true;

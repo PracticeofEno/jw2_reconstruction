@@ -152,6 +152,7 @@ struct GameplayModalSaveSlot {
 
 struct GameplayModalPlayerSlot {
     u8 slot_state = 0;
+    u8 modal_pause_uses_remaining = 4;
     std::string display_name;
     u32 relation_mask = 0;
     u32 visibility_mask = 0;

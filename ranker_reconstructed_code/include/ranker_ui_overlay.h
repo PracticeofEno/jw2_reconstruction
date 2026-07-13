@@ -11,6 +11,10 @@
 
 namespace ranker {
 
+constexpr u8 kUiOverlayPreserveMetricFont = 0xffu;
+
+struct UnitMovementUnit;
+
 constexpr std::size_t kUiOverlayDispatchHandlerCount = 0x400;
 constexpr std::size_t kUiOverlayDynamicIconRectCount = 0x10;
 constexpr std::size_t kUiOverlaySideSlotRectCount = 0x10;
@@ -111,6 +115,10 @@ struct UiOverlayTextCommand {
     i32 x = 0;
     i32 y = 0;
     u8 color = 1;
+    u8 draw_font = 0;
+    // 0xff mirrors original draw-only font selections that deliberately
+    // leave the current metric font untouched.
+    u8 metric_font = 0;
     bool centered = false;
     bool right_aligned = false;
     bool bottom_aligned = false;
@@ -151,14 +159,36 @@ struct UiOverlayMinimapUnit {
     u32 type_id = 0;
     u32 owner_id = 0;
     u32 runtime_flags = 0;
+    u32 health = 0;
+    u32 max_health = 0;
+    u32 status_timer = 0;
+    u32 action_effect_flags = 0;
     u32 selection_score = 0;
     i32 world_x = 0;
     i32 world_y = 0;
+    i32 bounds_left = 0;
+    i32 bounds_top = 0;
+    i32 bounds_width = 0;
+    i32 bounds_height = 0;
     u32 footprint_width_tiles = 1;
     u32 footprint_height_tiles = 1;
     bool visible_to_local_player = true;
     bool hidden_from_minimap = false;
+    // FUN_004d6cb0 applies FUN_004d6cca only to command-flag/bitmap-gated
+    // units.  Both FUN_004e284a's minimap marker pass and FUN_004e96ae's
+    // hit-selection pass consume that same gate before their fog-tile tests.
+    bool special_visibility_gate_passed = true;
 };
+
+constexpr bool UiOverlayUnitVisibleToLocalPlayer(
+    const UiOverlayMinimapUnit& unit) {
+    return !unit.hidden_from_minimap && unit.visible_to_local_player &&
+        unit.special_visibility_gate_passed;
+}
+
+constexpr bool ShouldRenderMinimapUnitMarker(const UiOverlayMinimapUnit& unit) {
+    return unit.type_id < 0x60 && UiOverlayUnitVisibleToLocalPlayer(unit);
+}
 
 struct UiOverlayMapEffect {
     u32 instance_id = 0;
@@ -281,6 +311,7 @@ struct UiOverlayState {
     std::vector<UiOverlayMinimapMarker> minimap_markers;
     std::vector<UiOverlayHudPulseCommand> pulse_commands;
     std::vector<UiOverlayCommandOption> command_options;
+    std::vector<UiOverlayCommandOption> primary_production_options;
     std::vector<UiOverlayHotRegion> hot_regions;
     std::vector<u32> selected_unit_ids;
     std::vector<UiOverlayChatMessage> chat_messages;
@@ -346,10 +377,12 @@ struct UiOverlayState {
     u32 detail_progress_total = 0;
     u32 selected_unit_health = 0;
     u32 selected_unit_health_ratio_max = 0;
+    u32 selected_unit_health_text_color = 0x11;
     u32 selected_unit_max_health = 0;
     u32 selected_unit_base_max_health = 0;
     u32 selected_unit_secondary = 0;
     u32 selected_unit_secondary_ratio_max = 0;
+    bool selected_unit_secondary_line_enabled = false;
     u32 selected_unit_max_secondary = 0;
     u32 selected_unit_base_max_secondary = 0;
     u32 selected_unit_slot_value = 0;
@@ -357,6 +390,8 @@ struct UiOverlayState {
     u32 selected_unit_command_flags = 0;
     u32 selected_unit_runtime_flags = 0;
     u32 selected_unit_action_mode_gate = 0;
+    u32 selected_unit_raw_production_reference_count = 0;
+    bool selected_unit_uses_avatar_production_slots = false;
     bool selected_unit_details_visible = false;
     u32 current_icon_number = 0;
     std::string detail_primary_text;
@@ -364,10 +399,16 @@ struct UiOverlayState {
     std::string detail_clock_text;
     std::string detail_route_text;
     std::string selected_unit_name_text;
+    std::string selected_unit_indestructible_text;
     std::string selected_unit_owner_text;
     std::string selected_unit_experience_text;
     std::string selected_unit_order_text;
     std::string chat_input_text;
+    // Original FUN_004e7b48 forwards a chat line beginning with '!' to the
+    // subtype-0x19 selected-unit publisher before the chat buffer is cleared.
+    // Keep the complete line (including '!') so a lone "!" still publishes an
+    // empty payload and clears the selected units' pending string slots.
+    std::string pending_unit_action_text;
     std::vector<std::string> selected_unit_capability_lines;
 
     MinimapRenderState minimap;
@@ -403,14 +444,21 @@ struct UiOverlayState {
     std::vector<u32> minimap_object_flags;
     std::vector<u32> minimap_overlay_flags;
     std::vector<UiOverlayMinimapUnit> minimap_units;
+    // Lifecycle/death-list units are kept out of ordinary selection and
+    // minimap rendering.  Direction-mode-4 abilities query this list through
+    // FindFreeUnitUnderStoredPointer to target a revivable corpse.
+    std::vector<UiOverlayMinimapUnit> lifecycle_units;
     std::vector<UiOverlayMapEffect> map_effects;
     std::vector<u16> minimap_owner_colors;
+    std::vector<u16> minimap_owner_footprint_colors;
     std::vector<UiOverlayRect> minimap_definition_footprints;
     u16 minimap_terrain_marker_color = 0x149f;
     u16 minimap_local_unit_color = 0x07c2;
+    u16 minimap_local_footprint_color = 0x05e2;
     u16 minimap_remote_unit_color = 0x05e2;
+    u16 minimap_remote_footprint_color = 0x05e2;
     u16 minimap_hidden_color = 0;
-    u16 minimap_dim_mask = 0x6000;
+    u16 minimap_dim_mask = 0xf7de;
     u32 minimap_background_entry = 0;
     u32 resource_icon_entry = 0;
     u32 population_icon_entry = 0;
@@ -437,6 +485,8 @@ struct UiOverlayState {
     u32 selected_unit_capability_mask = 0;
     u32 selected_unit_status_mask = 0;
     u32 selected_unit_command_bit_mask = 0;
+    std::array<u32, 4> selected_unit_special_action_states{};
+    bool selected_unit_order_2a_available = false;
     u32 selected_production_category = 0;
     u32 staged_unit_action_id = 0xffffffffu;
     u32 replay_speed_index = 4;
@@ -632,6 +682,14 @@ void BuildMultiSelectedUnitCommandPanel(UiOverlayState& state);
 void QueueAvailableProductionClassButtons(UiOverlayState& state);
 void QueueProductionClassButtonsForSelectedUnit(UiOverlayState& state, u32 category);
 void BuildSingleSelectedUnitCommandPanel(UiOverlayState& state);
+bool IsUiOverlayAvatarProductionStructureType(u32 type_id);
+bool MatchesUiOverlayAvatarAttachmentSlot(const UnitMovementUnit& unit,
+    u32 owner_id, u32 slot_id);
+bool MatchesUiOverlayAvatarProducerQueueSlot(const UnitMovementUnit& unit,
+    u32 owner_id, u32 slot_id);
+u32 ResolveUiOverlaySelectedUnitProgressValue(u32 command_state,
+    u32 action_mode_gate, u32 action_mode, u32 animation_frame, u32 work_timer);
+u32 ResolveUiOverlayConstructionProgressTotal(u32 production_spawn_time);
 bool FindOwnerTransportAttachmentUnit(const UiOverlayState& state, u32 owner_id,
     u32 attachment_mask);
 bool FindOwnerCarrierLinkedToSlot(const UiOverlayState& state, u32 owner_id,

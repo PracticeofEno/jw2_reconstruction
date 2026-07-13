@@ -6,6 +6,7 @@
 #include "ranker_sprite_renderer.h"
 #include "ranker_text_renderer.h"
 #include "ranker_ui_screen.h"
+#include "ranker_unit_movement.h"
 
 #include <algorithm>
 #include <utility>
@@ -139,8 +140,16 @@ u32 vector_value_or_zero(const std::vector<u32>& values, u32 index) {
     return index < values.size() ? values[index] : 0;
 }
 
+bool is_indexed_queue_command_item(u32 item_id) {
+    return item_id >= 0x1aau && item_id <= 0x1acu;
+}
+
 bool record_visible(const UiOverlayState& state, const UiOverlayDrawRecord& record) {
-    return (record.flags & kUiOverlayFlagHidden) == 0 &&
+    // FUN_004e5cca stores the production-queue logical index (0..4) in the
+    // record's third dword.  For 0x1aa..0x1ac that value is not the ordinary
+    // hidden/disabled flag word.
+    return (is_indexed_queue_command_item(record.item_id) ||
+               (record.flags & kUiOverlayFlagHidden) == 0) &&
         record.x < static_cast<i32>(state.screen_width) &&
         record.y < static_cast<i32>(state.screen_height);
 }
@@ -394,11 +403,9 @@ bool draw_raw_command_icon_blit(
             const u32 source_x = source.half_sampled ? col * 2u : col;
             const u8 index =
                 frame[source_y * source.frame_width + source_x];
-            // Raw command-icon frames use palette index zero as the transparent
-            // token, just like the regular sprite and UI-screen blitters.
-            if (index == 0) {
-                continue;
-            }
+            // The fixed 0x26 command-icon blitters write every palette entry,
+            // including index zero.  Masked variants also OR the red mask into
+            // that background entry; command icons are not sprite-transparent.
             target.pixels[static_cast<std::size_t>(target_y) * target.stride_words +
                 static_cast<std::size_t>(target_x)] =
                 static_cast<u16>(source.palette[index] | mask);
@@ -444,7 +451,12 @@ bool draw_record_command_icon_blit(UiOverlayState& state,
     request.masked_palette = masked;
 
     bool ok = draw_raw_command_icon_blit(state, request);
-    ok = draw_record_marker_overlay(state, record) && ok;
+    // Disabled object/production/base/unit paths tail-jump from their disabled
+    // blitter and skip the lower-right marker entirely.  Masked (red) icons
+    // are not that disabled branch and retain their marker.
+    if (!disabled) {
+        ok = draw_record_marker_overlay(state, record) && ok;
+    }
     return ok;
 }
 
@@ -500,7 +512,8 @@ void append_icon_blit(UiOverlayState& state, UiOverlayIconBlitKind kind,
 }
 
 void append_text(UiOverlayState& state, std::string text, i32 x, i32 y, u8 color,
-    bool centered = false, bool right_aligned = false, bool bottom_aligned = false) {
+    bool centered = false, bool right_aligned = false, bool bottom_aligned = false,
+    u8 draw_font = 0, u8 metric_font = 0) {
     if (text.empty()) {
         return;
     }
@@ -509,6 +522,8 @@ void append_text(UiOverlayState& state, std::string text, i32 x, i32 y, u8 color
     command.x = x;
     command.y = y;
     command.color = color;
+    command.draw_font = draw_font;
+    command.metric_font = metric_font;
     command.centered = centered;
     command.right_aligned = right_aligned;
     command.bottom_aligned = bottom_aligned;
@@ -540,11 +555,13 @@ void flush_ui_overlay_text_commands(UiOverlayState& state) {
         return;
     }
 
-    SelectTextDrawFont(0);
-    SelectTextMetricFont(0);
     for (const UiOverlayTextCommand& command : state.text_commands) {
         if (command.text.empty()) {
             continue;
+        }
+        SelectTextDrawFont(command.draw_font);
+        if (command.metric_font != kUiOverlayPreserveMetricFont) {
+            SelectTextMetricFont(command.metric_font);
         }
         i32 x = command.x;
         i32 y = command.y;
@@ -577,16 +594,19 @@ void flush_ui_overlay_progress_commands(UiOverlayState& state) {
             command.bottom < command.top) {
             continue;
         }
-        const i32 width = command.right - command.left + 1;
-        const u32 clamped =
-            std::min(command.numerator, command.denominator);
+        // FUN_004e1544 scales the endpoint span (right - left), then passes
+        // left + fill as an inclusive endpoint to FUN_005083fd.
+        const i32 width = command.right - command.left;
         const i32 filled_width = static_cast<i32>(
-            (static_cast<u64>(width) * clamped) / command.denominator);
+            (static_cast<u64>(width) * command.numerator) / command.denominator);
         if (filled_width <= 0) {
             continue;
         }
+        // FUN_004e2bb7 derives this from the green channel mask:
+        // ((mask >> 1) + (mask >> 2)) & mask.
+        const u16 color = SurfacePixelMode555() ? 0x02e0u : 0x05e0u;
         DrawBackBufferStippledRectangle16(command.left, command.top,
-            command.left + filled_width - 1, command.bottom);
+            command.left + filled_width, command.bottom, color);
     }
 }
 
@@ -633,7 +653,10 @@ void apply_minimap_marker_to_output(UiOverlayState& state,
         for (i32 x = clipped_left; x < clipped_right; ++x) {
             u16& pixel = minimap.output_pixels[row + static_cast<std::size_t>(x)];
             if (marker.kind == UiOverlayMinimapMarkerKind::fog_dimmed) {
-                pixel = static_cast<u16>(pixel | marker.color);
+                // FUN_004e26f3 halves an explored-but-not-current minimap
+                // pixel with (pixel & DAT_01440000) >> 1.  OR-ing a red mask
+                // brightened the stale area instead of dimming it.
+                pixel = static_cast<u16>((pixel & marker.color) >> 1);
             } else {
                 pixel = marker.color;
             }
@@ -744,21 +767,95 @@ u32 minimap_layer_value(
 }
 
 i32 minimap_screen_x_for_tile(const UiOverlayState& state, u32 tile_x) {
-    return state.minimap.output_x +
-        MinimapWorldToScreenX(state.minimap, static_cast<i32>(tile_x << 5));
+    const u32 map_width = minimap_width_tiles(state);
+    if (map_width == 0) {
+        return state.minimap.output_x;
+    }
+    // FUN_004e24e9 advances the map-cell accumulator before emitting the
+    // object/terrain pixel.  This is ceil((tile + 1) * mini / map) - 1,
+    // distinct from the mobile-unit floor(tile * mini / map) mapping.
+    return state.minimap.output_x + static_cast<i32>(
+        ((static_cast<u64>(tile_x + 1) * state.minimap.minimap_width_pixels) - 1) /
+        map_width);
 }
 
 i32 minimap_screen_y_for_tile(const UiOverlayState& state, u32 tile_y) {
-    return state.minimap.output_y +
-        MinimapWorldToScreenY(state.minimap, static_cast<i32>(tile_y << 5));
+    const u32 map_height = minimap_height_tiles(state);
+    if (map_height == 0) {
+        return state.minimap.output_y;
+    }
+    return state.minimap.output_y + static_cast<i32>(
+        ((static_cast<u64>(tile_y + 1) * state.minimap.minimap_height_pixels) - 1) /
+        map_height);
 }
 
-u16 minimap_owner_color(const UiOverlayState& state, u32 owner_id) {
-    if (owner_id < state.minimap_owner_colors.size()) {
-        return state.minimap_owner_colors[owner_id];
+i32 minimap_command_screen_to_world_y(
+    const UiOverlayState& state, i32 local_y) {
+    if (state.minimap.map_width_tiles == 0 ||
+        state.minimap.minimap_height_pixels == 0) {
+        return 0;
     }
-    return owner_id == state.local_player_slot ?
-        state.minimap_local_unit_color : state.minimap_remote_unit_color;
+    // The two minimap command publishers at 0x004ea62b/0x004ea815 retain the
+    // original rectangular-map quirk: Y is scaled by map width, unlike camera
+    // drag/hover which correctly use map height.
+    const i64 tile_y = (static_cast<i64>(local_y) *
+        state.minimap.map_width_tiles) /
+        state.minimap.minimap_height_pixels;
+    return static_cast<i32>(tile_y * 0x20);
+}
+
+i32 minimap_input_screen_to_world_x(
+    const UiOverlayState& state, i32 local_x) {
+    if (state.minimap.map_width_tiles == 0 ||
+        state.minimap.minimap_width_pixels == 0) {
+        return 0;
+    }
+    const i64 tile_x = (static_cast<i64>(local_x) *
+        state.minimap.map_width_tiles) /
+        state.minimap.minimap_width_pixels;
+    return static_cast<i32>(tile_x * 0x20);
+}
+
+i32 minimap_input_screen_to_world_y(
+    const UiOverlayState& state, i32 local_y) {
+    if (state.minimap.map_height_tiles == 0 ||
+        state.minimap.minimap_height_pixels == 0) {
+        return 0;
+    }
+    const i64 tile_y = (static_cast<i64>(local_y) *
+        state.minimap.map_height_tiles) /
+        state.minimap.minimap_height_pixels;
+    return static_cast<i32>(tile_y * 0x20);
+}
+
+u16 minimap_owner_color(
+    const UiOverlayState& state, u32 owner_id, bool footprint = false) {
+    if (owner_id == state.local_player_slot) {
+        return footprint ? state.minimap_local_footprint_color :
+            state.minimap_local_unit_color;
+    }
+
+    const std::vector<u16>& configured = footprint ?
+        state.minimap_owner_footprint_colors : state.minimap_owner_colors;
+    if (owner_id < configured.size() && configured[owner_id] != 0) {
+        return configured[owner_id];
+    }
+
+    // FUN_004e24e9/FUN_004e284a use remote owner ramp words 3/0 from
+    // DAT_0156e8d0 + owner * 0x20. Palette slot zero mirrors that table.
+    if (owner_id < 0x10u) {
+        const auto& palette = palette_cache_state().pixel_slots[0];
+        const std::size_t index =
+            static_cast<std::size_t>(owner_id) * 0x10u + (footprint ? 3u : 0u);
+        // FUN_004e25f4/FUN_004e28f8 use the owner-ramp word verbatim.  A
+        // zero entry is a valid (black/hidden) colour, not a signal to fall
+        // back to the generic remote green.
+        if (index < palette.size()) {
+            return palette[index];
+        }
+    }
+    return footprint ? state.minimap_remote_footprint_color :
+        state.minimap_remote_unit_color;
 }
 
 UiOverlayRect definition_footprint(const UiOverlayState& state, u32 definition_id) {
@@ -794,17 +891,13 @@ UiOverlayRect command_slot_rect(const UiOverlayState& state) {
             return rect;
         }
     }
-    if (state.command_slot_count < state.side_slot_bounds.size()) {
-        const UiOverlayRect& rect = state.side_slot_bounds[state.command_slot_count];
-        if (rect.width != 0 || rect.height != 0) {
-            return rect_or_default(rect, state.command_slot_size, state.command_slot_size);
-        }
-    }
-    const u32 column = state.command_slot_count % 8;
-    const u32 row = state.command_slot_count / 8;
-    return {static_cast<i32>(8 + column * (state.command_slot_size + 4)),
-        static_cast<i32>(state.screen_height - 0x38 - row * (state.command_slot_size + 4)),
-        state.command_slot_size, state.command_slot_size};
+    // FUN_004e5731/FUN_004e5762 use the six coordinates copied into
+    // DAT_008645cc/DAT_008645d0.  Once DAT_008663b4 reaches six they use the
+    // screen dimensions as the off-screen hotkey position; the side-selection
+    // table is driven by the separate DAT_008663bc counter.
+    return {static_cast<i32>(state.screen_width),
+        static_cast<i32>(state.screen_height), state.command_slot_size,
+        state.command_slot_size};
 }
 
 void append_hot_region(UiOverlayState& state, const UiOverlayDrawRecord& record,
@@ -818,6 +911,14 @@ void append_hot_region(UiOverlayState& state, const UiOverlayDrawRecord& record,
 
 const UiOverlayCommandOption* find_command_option(
     const UiOverlayState& state, u32 item_id) {
+    const auto primary = std::find_if(state.primary_production_options.begin(),
+        state.primary_production_options.end(),
+        [item_id](const UiOverlayCommandOption& option) {
+            return option.item_id == item_id;
+        });
+    if (primary != state.primary_production_options.end()) {
+        return &*primary;
+    }
     const auto it = std::find_if(state.command_options.begin(),
         state.command_options.end(), [item_id](const UiOverlayCommandOption& option) {
             return option.item_id == item_id;
@@ -846,7 +947,8 @@ u32 alternate_offset(const UiOverlayDrawRecord& record) {
 }
 
 bool record_contains_point(const UiOverlayDrawRecord& record, i32 x, i32 y) {
-    if ((record.flags & kUiOverlayFlagHidden) != 0 || record.width == 0 ||
+    if ((!is_indexed_queue_command_item(record.item_id) &&
+            (record.flags & kUiOverlayFlagHidden) != 0) || record.width == 0 ||
         record.height == 0) {
         return false;
     }
@@ -857,7 +959,8 @@ bool record_contains_point(const UiOverlayDrawRecord& record, i32 x, i32 y) {
 
 bool hot_region_contains_point_original(
     const UiOverlayDrawRecord& record, i32 x, i32 y) {
-    if ((record.flags & kUiOverlayFlagHidden) != 0 || record.width == 0 ||
+    if ((!is_indexed_queue_command_item(record.item_id) &&
+            (record.flags & kUiOverlayFlagHidden) != 0) || record.width == 0 ||
         record.height == 0) {
         return false;
     }
@@ -877,7 +980,35 @@ const UiOverlayHotRegion* hot_region_at(
 }
 
 bool is_script_always_capture_command_button(u32 item_id) {
-    return item_id >= 0x1aau && item_id <= 0x1acu;
+    return is_indexed_queue_command_item(item_id);
+}
+
+bool draw_indexed_queue_command_record(
+    UiOverlayState& state, const UiOverlayDrawRecord& record) {
+    if (!record_visible(state, record)) {
+        return false;
+    }
+
+    UiOverlayIconBlitKind kind = UiOverlayIconBlitKind::base;
+    if (record.item_id == 0x1abu) {
+        kind = UiOverlayIconBlitKind::production;
+    }
+    else if (record.item_id == 0x1acu) {
+        kind = UiOverlayIconBlitKind::equipment;
+    }
+
+    UiOverlayDrawRecord icon = record;
+    icon.width = icon.height = 0x26;
+    const bool drawn = draw_record_command_icon_blit(
+        state, icon, kind, record.aux);
+
+    // FUN_004e2042/FUN_004e208f/FUN_004e20dc draw '1' + logical index at
+    // (slot_x + 0x21, slot_y + 0x1e) after the queued command icon.  Those
+    // paths select draw font zero without changing the current metric font.
+    append_text(state, std::to_string(record.flags + 1u),
+        record.x + 0x21, record.y + 0x1e, 1,
+        false, false, false, 0, kUiOverlayPreserveMetricFont);
+    return drawn;
 }
 
 u32 selected_production_category_index(const UiOverlayState& state) {
@@ -1162,22 +1293,26 @@ const UiOverlayMinimapUnit* unit_at_screen_point(
     const UiOverlayMinimapUnit* enemy_unit = nullptr;
     const UiOverlayMinimapUnit* local_object = nullptr;
     const UiOverlayMinimapUnit* enemy_object = nullptr;
-    for (const UiOverlayMinimapUnit& unit : state.minimap_units) {
-        if (unit.hidden_from_minimap || !unit.visible_to_local_player) {
+    const std::vector<UiOverlayMinimapUnit>& candidates = free_unit_only
+        ? state.lifecycle_units
+        : state.minimap_units;
+    for (const UiOverlayMinimapUnit& unit : candidates) {
+        if (!UiOverlayUnitVisibleToLocalPlayer(unit)) {
+            continue;
+        }
+        if (!free_unit_only && (unit.runtime_flags & 4u) != 0) {
             continue;
         }
         if (free_unit_only &&
             (unit.type_id >= 0x60 || (unit.runtime_flags & 4u) == 0)) {
             continue;
         }
-        const u32 width_tiles = std::max<u32>(1, unit.footprint_width_tiles);
-        const u32 height_tiles = std::max<u32>(1, unit.footprint_height_tiles);
-        const i32 width = static_cast<i32>(width_tiles << 5);
-        const i32 height = static_cast<i32>(height_tiles << 5);
-        const i32 left = unit.type_id < 0x60 ? unit.world_x - (width / 2) : unit.world_x;
-        const i32 top = unit.type_id < 0x60 ? unit.world_y - (height / 2) : unit.world_y;
-        if (world_x < left || world_x >= left + width ||
-            world_y < top || world_y >= top + height) {
+        const i32 left = unit.world_x + unit.bounds_left;
+        const i32 top = unit.world_y + unit.bounds_top;
+        const i32 right = left + unit.bounds_width;
+        const i32 bottom = top + unit.bounds_height;
+        if (world_x < left || world_x > right ||
+            world_y < top || world_y > bottom) {
             continue;
         }
 
@@ -1223,14 +1358,16 @@ u32 minimap_screen_width(const UiOverlayState& state) {
     if (state.minimap.minimap_width_pixels != 0) {
         return state.minimap.minimap_width_pixels;
     }
-    return std::min<u32>(0x74, std::max<u32>(1, minimap_width_tiles(state)));
+    const u32 capacity = state.screen_layout_bucket == 0 ? 0x5fu : 0x73u;
+    return std::min<u32>(capacity, std::max<u32>(1, minimap_width_tiles(state)));
 }
 
 u32 minimap_screen_height(const UiOverlayState& state) {
     if (state.minimap.minimap_height_pixels != 0) {
         return state.minimap.minimap_height_pixels;
     }
-    return std::min<u32>(0x74, std::max<u32>(1, minimap_height_tiles(state)));
+    const u32 capacity = state.screen_layout_bucket == 0 ? 0x5fu : 0x73u;
+    return std::min<u32>(capacity, std::max<u32>(1, minimap_height_tiles(state)));
 }
 
 bool point_inside_minimap_rect(UiOverlayState& state, bool use_height_for_y) {
@@ -1286,7 +1423,7 @@ bool unit_already_selected(const UiOverlayState& state, u32 unit_id) {
 
 bool unit_selectable_for_local_player(
     const UiOverlayState& state, const UiOverlayMinimapUnit& unit) {
-    return !unit.hidden_from_minimap && unit.visible_to_local_player &&
+    return UiOverlayUnitVisibleToLocalPlayer(unit) &&
         unit.type_id < 0x60 &&
         (unit.owner_id == state.local_player_slot || CheckScenarioSelectionOverride(state));
 }
@@ -1332,6 +1469,56 @@ void deselect_unit(UiOverlayState& state, u32 unit_id) {
 }
 
 } // namespace
+
+bool IsUiOverlayAvatarProductionStructureType(u32 type_id) {
+    return type_id == 0x6fu || type_id == 0x7fu ||
+        type_id == 0x8fu || type_id == 0x9fu;
+}
+
+bool MatchesUiOverlayAvatarAttachmentSlot(const UnitMovementUnit& unit,
+    u32 owner_id, u32 slot_id) {
+    return unit.owner_id == owner_id &&
+        (unit.command_flags & 0x003c0000u) == (slot_id << 18);
+}
+
+bool MatchesUiOverlayAvatarProducerQueueSlot(const UnitMovementUnit& unit,
+    u32 owner_id, u32 slot_id) {
+    if (unit.owner_id != owner_id ||
+        !IsUiOverlayAvatarProductionStructureType(unit.type_id)) {
+        return false;
+    }
+    if ((unit.command_state == 0x50u || unit.command_state == 0x51u) &&
+        unit.path_target_y == static_cast<i32>(slot_id)) {
+        return true;
+    }
+    const u32 deferred_count = std::min<u32>(4u,
+        std::min<u32>(unit.deferred_command_count,
+            static_cast<u32>(unit.deferred_commands.size())));
+    for (u32 index = 0; index < deferred_count; ++index) {
+        const UnitQueuedCommand& queued = unit.deferred_commands[index];
+        if (queued.state == 0x10u && queued.value == slot_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+u32 ResolveUiOverlaySelectedUnitProgressValue(u32 command_state,
+    u32 action_mode_gate, u32 action_mode, u32 animation_frame, u32 work_timer) {
+    const u32 command = command_state & 0xffu;
+    if (command == 0x50u || command == 0x51u) {
+        return animation_frame;
+    }
+    if (command == 0x82u || command == 0x83u ||
+        action_mode_gate == 1u || command == 0x4du || command == 0x4eu) {
+        return action_mode;
+    }
+    return work_timer;
+}
+
+u32 ResolveUiOverlayConstructionProgressTotal(u32 production_spawn_time) {
+    return std::max<u32>(production_spawn_time, 1u);
+}
 
 UiOverlayState& ui_overlay_state() {
     return g_ui_overlay_state;
@@ -1425,6 +1612,43 @@ void InstallDefaultUiOverlayDispatchHandlers(UiOverlayState& state) {
             overlay.large_slot_y = previous_y;
             return true;
         };
+    state.dispatch_handlers[0x1a8] =
+        [](UiOverlayState& overlay, const UiOverlayDrawRecord& record) {
+            const UiOverlayMinimapUnit* unit =
+                find_unit_by_id(overlay, record.aux);
+            if (unit == nullptr) {
+                return false;
+            }
+
+            const u32 previous_record_size = overlay.current_record_size;
+            const u32 previous_palette = overlay.current_palette_selector;
+            overlay.current_record_size = 0x26;
+            if (unit->max_health == 0) {
+                overlay.current_palette_selector = previous_palette;
+                overlay.current_record_size = previous_record_size;
+                return false;
+            }
+            const u32 health_palette = 0x1fu - static_cast<u32>(
+                (static_cast<u64>(unit->health) * 0x1fu /
+                    unit->max_health) & 0x1fu);
+            BlitUiOverlayPaletteTableIcon(overlay, health_palette,
+                unit->type_id, record.x, record.y);
+
+            if ((unit->action_effect_flags & 2u) != 0 &&
+                overlay.emit_sprite_draws) {
+                const std::string level =
+                    std::to_string(unit->status_timer + 1u);
+                DrawUiGlyphRun(level.c_str(), level.size(),
+                    record.x + 0x1a, record.y + 0x16, 9,
+                    overlay.glyph_resource_base, '0');
+            }
+            overlay.current_palette_selector = previous_palette;
+            overlay.current_record_size = previous_record_size;
+            return true;
+        };
+    state.dispatch_handlers[0x1aa] = draw_indexed_queue_command_record;
+    state.dispatch_handlers[0x1ab] = draw_indexed_queue_command_record;
+    state.dispatch_handlers[0x1ac] = draw_indexed_queue_command_record;
 }
 
 void RenderGameplayWorldAndUiOverlay(UiOverlayState& state) {
@@ -1444,14 +1668,18 @@ void DrawGameplaySelectionRectangleOverlay(UiOverlayState& state) {
     if (!state.selection_rectangle_active) {
         return;
     }
+    // FUN_004e02b5 normalizes each drag axis before drawing, so dragging
+    // toward the upper-left has the same inclusive outline as lower-right.
+    const i32 left = std::min(state.selection_left, state.selection_right);
+    const i32 top = std::min(state.selection_top, state.selection_bottom);
+    const i32 right = std::max(state.selection_left, state.selection_right);
+    const i32 bottom = std::max(state.selection_top, state.selection_bottom);
     if (state.callbacks.draw_selection_rectangle != nullptr) {
-        state.callbacks.draw_selection_rectangle(state, state.selection_left,
-            state.selection_top, state.selection_right, state.selection_bottom);
+        state.callbacks.draw_selection_rectangle(state, left, top, right, bottom);
         return;
     }
-    DrawBackBufferRectangleOutline16(state.selection_left, state.selection_top,
-        state.selection_right - state.selection_left,
-        state.selection_bottom - state.selection_top);
+    DrawBackBufferRectangleOutline16(left, top, right - left + 1,
+        bottom - top + 1, SurfacePixelMode555() ? 0x7fffu : 0xffffu);
 }
 
 void FlushUiOverlayDrawQueue(UiOverlayState& state) {
@@ -1510,6 +1738,18 @@ void append_fixed_interactive_record(
     const UiOverlayCommandOption* option = find_command_option(state, record.item_id);
     append_hot_region(state, record, option != nullptr ? option->hotkey : 0,
         option == nullptr || option->enabled);
+}
+
+void append_offscreen_hotkey_record(
+    UiOverlayState& state, u32 item_id, u32 aux, u32 flags) {
+    // FUN_004e5621/FUN_004e56a2 store flag-1 commands at the screen
+    // dimensions without advancing DAT_008663b4. They remain available to
+    // the hotkey scan but do not occupy (or overlap) a dynamic icon slot.
+    const UiOverlayRect rect{static_cast<i32>(state.screen_width),
+        static_cast<i32>(state.screen_height), state.current_record_size,
+        state.current_record_size};
+    append_fixed_interactive_record(
+        state, make_record(item_id, aux, flags, rect, 0));
 }
 
 void QueueUiOverlayManual26Record(UiOverlayState& state, u32 item_id, u32 aux,
@@ -1605,7 +1845,7 @@ void QueueUiOverlaySideSlotRecord(UiOverlayState& state, u32 item_id, u32 aux,
     state.current_record_size = 0x26;
     const u32 index = std::min<u32>(
         state.side_slot_index, static_cast<u32>(state.side_slot_bounds.size() - 1));
-    append_record(state, make_record(item_id, aux, flags,
+    append_fixed_interactive_record(state, make_record(item_id, aux, flags,
         rect_or_default(state.side_slot_bounds[index], 0x26, 0x26), 0));
     ++state.side_slot_index;
 }
@@ -1616,7 +1856,10 @@ void QueueUiOverlayIndexedSlotRecord(UiOverlayState& state, u32 item_id, u32 aux
     if (rect_index < state.indexed_slot_bounds.size()) {
         rect = rect_or_default(state.indexed_slot_bounds[rect_index], 0x26, 0x26);
     }
-    append_record(state, make_record(item_id, aux, flags, rect, 0));
+    // These records are actionable cancel entries.  Their flags dword is the
+    // logical queue index and must survive unchanged into the published packet.
+    append_fixed_interactive_record(
+        state, make_record(item_id, aux, flags, rect, 0));
 }
 
 bool DrawUiOverlaySmallUnitIconRecord(UiOverlayState& state,
@@ -1856,27 +2099,32 @@ std::string stat_delta_text(u32 value, u32 base) {
     return "-" + std::to_string(base - value);
 }
 
-void append_stat_text_with_delta(UiOverlayState& state, u32 value, u32 base,
-    i32 x, i32 y) {
+void append_stat_text_with_delta(UiOverlayState& state, const char* label,
+    u32 value, u32 base, i32 x, i32 y) {
     if (value == 0) {
         return;
     }
-    const std::string value_text = std::to_string(value);
-    append_text(state, value_text, x, y, 0x11);
+    const std::string value_text = std::string(label) + std::to_string(base);
+    append_text(state, value_text, x, y, 0x11,
+        false, false, false, 1, 3);
     const std::string delta = stat_delta_text(value, base);
     if (!delta.empty()) {
         const u8 color = value > base ? 0x41 : 9;
-        const i32 delta_x = x + 0x0b +
-            static_cast<i32>(value_text.size()) * 6;
-        append_text(state, delta, delta_x, y, color);
+        // MeasureTextExtent (0x005021af) measures ASCII through the active
+        // draw font, while its metric font is only used for DBCS glyphs.
+        SelectTextDrawFont(1);
+        SelectTextMetricFont(1);
+        const i32 text_width = MeasureTextExtent(value_text.c_str())
+            ? static_cast<i32>(text_renderer_state().measured_width)
+            : static_cast<i32>(value_text.size() * 6u);
+        const i32 delta_x = x + text_width;
+        append_text(state, delta, delta_x, y, color,
+            false, false, false, 1, 3);
     }
 }
 
 bool selected_unit_command_progress_active(const UiOverlayState& state) {
-    if (state.detail_progress_total == 0) {
-        return false;
-    }
-    const u32 command = state.selected_unit_command_state & 0xffu;
+    const u32 command = state.selected_unit_command_state;
     return command == 0x51 || command == 0x50 ||
         command == 0x4e || command == 0x4d ||
         command == 0x83 || command == 0x82 ||
@@ -1884,9 +2132,30 @@ bool selected_unit_command_progress_active(const UiOverlayState& state) {
 }
 
 void append_selected_unit_command_progress(UiOverlayState& state) {
-    append_progress(state, state.large_slot_x, state.large_slot_y,
-        state.large_slot_x + 0x32, state.large_slot_y + 0x0d,
-        state.detail_progress, state.detail_progress_total);
+    // FUN_004e2bb7 copies these three screen-width-specific endpoint pairs
+    // from DAT_008642dc using DAT_00863588 (640, 800, or other width).  The
+    // progress frame in FUN_004e1544 uses that same layout selector.
+    constexpr std::array<UiOverlayRect, 3> kProgressBounds{{
+        {77, 433, 98, 2}, {129, 537, 126, 2}, {77, 433, 98, 2},
+    }};
+    const u32 layout = std::min<u32>(state.screen_layout_bucket, 2);
+    const UiOverlayRect& rect = kProgressBounds[layout];
+    if (state.emit_sprite_draws &&
+        state.glyph_resource_base != kInvalidResourceEntry) {
+        // DAT_00868600 is the JW2_02 misc-icon base.  Each progress branch in
+        // FUN_004e1544 draws base + layout + 0x24 three pixels outside the bar.
+        DrawResourceSpriteNormal(state.glyph_resource_base + layout + 0x24u,
+            rect.x - 3, rect.y - 3);
+    }
+    // FUN_004e1544 always draws the production/construction frame and then
+    // returns from the detail panel, even when the definition duration is
+    // zero.  Only the filled bar itself is skipped for a zero denominator.
+    if (state.detail_progress_total != 0) {
+        append_progress(state, rect.x, rect.y,
+            rect.x + static_cast<i32>(rect.width),
+            rect.y + static_cast<i32>(rect.height),
+            state.detail_progress, state.detail_progress_total);
+    }
 }
 
 void RenderSelectedUnitInfoPanel(UiOverlayState& state) {
@@ -1894,11 +2163,18 @@ void RenderSelectedUnitInfoPanel(UiOverlayState& state) {
     BlitUiOverlayPaletteTableIcon(state, state.current_palette_selector,
         state.current_detail_item_id, state.large_slot_x, state.large_slot_y);
     append_text(state, state.selected_unit_name_text, state.large_slot_x + 0x38,
-        state.large_slot_y + 1, 1);
-    if (state.selected_unit_health_ratio_max != 0) {
+        state.large_slot_y + 1, 1, false, false, false, 4, 4);
+    if ((state.selected_unit_runtime_flags & 0x20000000u) != 0) {
+        append_text(state, state.selected_unit_indestructible_text,
+            state.large_slot_x + 0x19, state.large_slot_y + 0x3a,
+            0x41, true, false, false, 1, 3);
+    }
+    else if (state.selected_unit_health_ratio_max != 0) {
         append_text(state, ratio_text(state.selected_unit_health,
             state.selected_unit_health_ratio_max), state.large_slot_x + 0x19,
-            state.large_slot_y + 0x3a, 0x51, true);
+            state.large_slot_y + 0x3a,
+            static_cast<u8>(state.selected_unit_health_text_color),
+            true, false, false, 1, 3);
     }
     if (state.selected_unit_type < 0x60) {
         if (state.selected_unit_details_visible) {
@@ -1923,10 +2199,10 @@ void RenderSelectedUnitInfoPanel(UiOverlayState& state) {
 }
 
 void RenderSelectedUnitMaxStatText(UiOverlayState& state) {
-    append_stat_text_with_delta(state, state.selected_unit_max_health,
+    append_stat_text_with_delta(state, "OP ", state.selected_unit_max_health,
         state.selected_unit_base_max_health, state.large_slot_x + 0x3c,
         state.large_slot_y + 0x1a);
-    append_stat_text_with_delta(state, state.selected_unit_max_secondary,
+    append_stat_text_with_delta(state, "DP ", state.selected_unit_max_secondary,
         state.selected_unit_base_max_secondary, state.large_slot_x + 0x78,
         state.large_slot_y + 0x1a);
 }
@@ -1935,31 +2211,34 @@ void RenderSelectedUnitCapabilityLines(UiOverlayState& state) {
     i32 y = state.large_slot_y + 0x1a;
     for (const std::string& line : state.selected_unit_capability_lines) {
         y += 10;
-        append_text(state, line, state.large_slot_x + 0x3c, y, 0x41);
+        append_text(state, line, state.large_slot_x + 0x3c, y, 0x41,
+            false, false, false, 0, 3);
     }
 }
 
 void RenderSelectedUnitCargoLine(UiOverlayState& state) {
-    if (state.selected_unit_secondary != 0 ||
-        state.selected_unit_secondary_ratio_max != 0) {
+    if (state.selected_unit_secondary_line_enabled) {
         append_text(state, ratio_text(state.selected_unit_secondary,
             state.selected_unit_secondary_ratio_max), state.large_slot_x + 0x19,
-            state.large_slot_y + 0x44, 0x51, true);
+            state.large_slot_y + 0x44, 0x51,
+            true, false, false, 1, 3);
     }
 }
 
 void RenderSelectedUnitBaseStatLine(UiOverlayState& state) {
     append_text(state, state.selected_unit_owner_text, state.large_slot_x + 0x3c,
-        state.large_slot_y + 0x0f, 0x11);
+        state.large_slot_y + 0x0f, 0x11, false, false, false, 1, 3);
     append_text(state, state.selected_unit_experience_text,
-        state.large_slot_x + 0x78, state.large_slot_y + 0x0e, 0x31);
+        state.large_slot_x + 0x78, state.large_slot_y + 0x0e, 0x31,
+        false, false, false, 1, 3);
 }
 
 void RenderSelectedUnitOrderStatLine(UiOverlayState& state) {
     append_text(state, state.selected_unit_order_text, state.large_slot_x + 0x3c,
-        state.large_slot_y + 0x0f, 0x11);
+        state.large_slot_y + 0x0f, 0x11, false, false, false, 1, 3);
     append_text(state, state.selected_unit_experience_text,
-        state.large_slot_x + 0x78, state.large_slot_y + 0x0e, 0x31);
+        state.large_slot_x + 0x78, state.large_slot_y + 0x0e, 0x31,
+        false, false, false, 1, 3);
 }
 
 void DrawUiOverlayIconTextGlyphBase(UiOverlayState& state) {
@@ -2102,8 +2381,8 @@ void RenderMinimapObjectAndTerrainMarkers(UiOverlayState& state) {
         for (u32 x = 0; x < width; ++x) {
             const u32 visibility = minimap_layer_value(
                 state, state.minimap_visibility_flags, x, y);
-            const bool explored = (visibility & 0x08000000u) != 0;
-            const bool currently_visible = (visibility & 0x10000000u) != 0;
+            const bool currently_visible = (visibility & 0x08000000u) != 0;
+            const bool explored = (visibility & 0x10000000u) != 0;
             if (!explored && !currently_visible) {
                 continue;
             }
@@ -2120,7 +2399,7 @@ void RenderMinimapObjectAndTerrainMarkers(UiOverlayState& state) {
                 if ((overlay_flags & 0x700u) == 0x100u) {
                     append_minimap_marker(state,
                         UiOverlayMinimapMarkerKind::terrain_overlay,
-                        screen_x, screen_y, 2, 2, state.minimap_terrain_marker_color,
+                        screen_x, screen_y, 1, 2, state.minimap_terrain_marker_color,
                         0, state.local_player_slot);
                 }
                 continue;
@@ -2128,33 +2407,47 @@ void RenderMinimapObjectAndTerrainMarkers(UiOverlayState& state) {
 
             const u32 owner_id = (object_flags >> 8) & 0x0fu;
             FillMinimapFootprintMarker(state, object_id, screen_x, screen_y,
-                minimap_owner_color(state, owner_id));
+                minimap_owner_color(state, owner_id, true));
         }
     }
 }
 
 void RenderMinimapFogMask(UiOverlayState& state) {
-    const u32 width = minimap_width_tiles(state);
-    const u32 height = minimap_height_tiles(state);
-    if (width == 0 || height == 0 || state.reveal_minimap_fog) {
+    const u32 map_width = minimap_width_tiles(state);
+    const u32 map_height = minimap_height_tiles(state);
+    const u32 output_width = state.minimap.minimap_width_pixels;
+    const u32 output_height = state.minimap.minimap_height_pixels;
+    if (map_width == 0 || map_height == 0 || output_width == 0 ||
+        output_height == 0 || state.reveal_minimap_fog) {
         return;
     }
 
-    for (u32 y = 0; y < height; ++y) {
-        for (u32 x = 0; x < width; ++x) {
+    // FUN_004e26f3 visits each minimap output pixel once.  Its accumulators
+    // select the last source tile covered by that pixel; this closed form is
+    // floor((((pixel + 1) * map_dimension) - 1) / output_dimension).
+    for (u32 pixel_y = 0; pixel_y < output_height; ++pixel_y) {
+        const u32 tile_y = static_cast<u32>(
+            ((static_cast<u64>(pixel_y + 1) * map_height) - 1) /
+            output_height);
+        for (u32 pixel_x = 0; pixel_x < output_width; ++pixel_x) {
+            const u32 tile_x = static_cast<u32>(
+                ((static_cast<u64>(pixel_x + 1) * map_width) - 1) /
+                output_width);
             const u32 visibility = minimap_layer_value(
-                state, state.minimap_visibility_flags, x, y);
-            const bool explored = (visibility & 0x08000000u) != 0;
-            const bool currently_visible = (visibility & 0x10000000u) != 0;
+                state, state.minimap_visibility_flags, tile_x, tile_y);
+            // FUN_004e26f3 treats bit 27 as current/full visibility and bit
+            // 28 as the persistent explored/dim state.
+            const bool currently_visible = (visibility & 0x08000000u) != 0;
+            const bool explored = (visibility & 0x10000000u) != 0;
             if (!explored && !currently_visible) {
                 append_minimap_marker(state, UiOverlayMinimapMarkerKind::fog_hidden,
-                    minimap_screen_x_for_tile(state, x),
-                    minimap_screen_y_for_tile(state, y), 1, 1,
+                    state.minimap.output_x + static_cast<i32>(pixel_x),
+                    state.minimap.output_y + static_cast<i32>(pixel_y), 1, 1,
                     state.minimap_hidden_color, 0, state.local_player_slot, false);
             } else if (!currently_visible) {
                 append_minimap_marker(state, UiOverlayMinimapMarkerKind::fog_dimmed,
-                    minimap_screen_x_for_tile(state, x),
-                    minimap_screen_y_for_tile(state, y), 1, 1,
+                    state.minimap.output_x + static_cast<i32>(pixel_x),
+                    state.minimap.output_y + static_cast<i32>(pixel_y), 1, 1,
                     state.minimap_dim_mask, 0, state.local_player_slot, true);
             }
         }
@@ -2171,7 +2464,9 @@ void FillMinimapFootprintMarker(UiOverlayState& state, u32 definition_id,
 
 void RenderMinimapUnitMarkers(UiOverlayState& state) {
     for (const UiOverlayMinimapUnit& unit : state.minimap_units) {
-        if (unit.hidden_from_minimap || !unit.visible_to_local_player) {
+        // FUN_004e284a only draws mobile definitions. Structures already came
+        // from FUN_004e24e9's remembered object/footprint layer above.
+        if (!ShouldRenderMinimapUnitMarker(unit)) {
             continue;
         }
         const i32 x = state.minimap.output_x +
@@ -2179,15 +2474,8 @@ void RenderMinimapUnitMarkers(UiOverlayState& state) {
         const i32 y = state.minimap.output_y +
             MinimapWorldToScreenY(state.minimap, unit.world_y);
         const u16 color = minimap_owner_color(state, unit.owner_id);
-        if (unit.type_id < 0x60) {
-            append_minimap_marker(state, UiOverlayMinimapMarkerKind::active_unit,
-                x, y, 2, 2, color, unit.type_id, unit.owner_id);
-        } else {
-            append_minimap_marker(state, UiOverlayMinimapMarkerKind::active_unit,
-                x, y, std::max<u32>(1, unit.footprint_width_tiles),
-                std::max<u32>(1, unit.footprint_height_tiles),
-                color, unit.type_id, unit.owner_id);
-        }
+        append_minimap_marker(state, UiOverlayMinimapMarkerKind::active_unit,
+            x, y, 2, 2, color, unit.type_id, unit.owner_id);
     }
 }
 
@@ -2215,7 +2503,8 @@ void RenderGameplayResourceCounters(UiOverlayState& state) {
             state.resource_counter_x, state.resource_counter_y);
     }
     append_text(state, std::to_string(state.resource_amount),
-        state.resource_counter_x + 0x12, state.resource_counter_y + 2, 1);
+        state.resource_counter_x + 0x12, state.resource_counter_y + 2,
+        1, false, false, false, 1, kUiOverlayPreserveMetricFont);
 
     if (state.emit_sprite_draws && state.population_icon_entry != 0) {
         DrawResourceSpriteNormal(state.population_icon_entry,
@@ -2224,19 +2513,29 @@ void RenderGameplayResourceCounters(UiOverlayState& state) {
     const u8 used_color =
         (state.population_available < state.population_used ||
             state.population_limit < state.population_used) ? 9 : 1;
-    append_text(state, std::to_string(state.population_used),
-        state.population_counter_x + 0x12, state.population_counter_y + 2,
-        used_color);
-    append_text(state, "/", state.population_counter_x + 0x31,
-        state.population_counter_y + 2, 1);
+    const auto measure_counter_text = [](const std::string& text) -> i32 {
+        SelectTextDrawFont(1);
+        if (MeasureTextExtent(text.c_str())) {
+            return static_cast<i32>(text_renderer_state().measured_width);
+        }
+        return static_cast<i32>(text.size() * 6u);
+    };
+    const std::string used_text = std::to_string(state.population_used);
+    i32 text_x = state.population_counter_x + 0x12;
+    append_text(state, used_text, text_x, state.population_counter_y + 2,
+        used_color, false, false, false, 1, kUiOverlayPreserveMetricFont);
+    text_x += measure_counter_text(used_text);
+    append_text(state, "/", text_x, state.population_counter_y + 2,
+        1, false, false, false, 1, kUiOverlayPreserveMetricFont);
+    text_x += measure_counter_text("/");
     const bool available_capped =
         state.population_limit < state.population_available;
     const u8 available_color = available_capped ? 0x11 : 1;
     const u32 displayed_available = available_capped ?
         state.population_limit : state.population_available;
     append_text(state, std::to_string(displayed_available),
-        state.population_counter_x + 0x39, state.population_counter_y + 2,
-        available_color);
+        text_x, state.population_counter_y + 2, available_color,
+        false, false, false, 1, kUiOverlayPreserveMetricFont);
 }
 
 void StartGameplayHudPulse(UiOverlayState& state, i32 world_x, i32 world_y, u32 tick_ms) {
@@ -2283,93 +2582,211 @@ void ConfigureGameplayUiOverlayLayout(UiOverlayState& state) {
         state.screen_layout_bucket = state.screen_width == 800 ? 1 : 2;
     }
 
-    if (state.screen_layout_bucket == 1) {
-        // Original 800x600 layout table initialized by FUN_004e2bb7.
-        constexpr std::array<UiOverlayRect, 4> kSmallSlot1{{
-            {460, 464, 81, 31}, {460, 467, 84, 29},
-            {467, 467, 80, 27}, {457, 468, 86, 26},
-        }};
-        constexpr std::array<UiOverlayRect, 4> kSmallSlot2{{
-            {273, 464, 40, 31}, {273, 466, 41, 30},
-            {276, 467, 29, 27}, {269, 468, 39, 26},
-        }};
-        constexpr std::array<UiOverlayRect, 4> kSmallSlot3{{
-            {230, 464, 36, 31}, {229, 467, 39, 29},
-            {227, 467, 44, 27}, {227, 468, 38, 26},
-        }};
-        const u32 theme = std::min<u32>(state.interface_theme_index, 3);
-        state.small_slot1_bounds = kSmallSlot1[theme];
-        state.small_slot2_bounds = kSmallSlot2[theme];
-        state.small_slot3_bounds = kSmallSlot3[theme];
-        state.small_slot1_x = state.small_slot1_bounds.x;
-        state.small_slot1_y = state.small_slot1_bounds.y;
-        state.small_slot2_x = state.small_slot2_bounds.x;
-        state.small_slot2_y = state.small_slot2_bounds.y;
-        state.small_slot3_x = state.small_slot3_bounds.x;
-        state.small_slot3_y = state.small_slot3_bounds.y;
-        state.large_slot_x = 570;
-        state.large_slot_y = 450;
-        state.large_slot3_x = 616;
-        state.large_slot3_y = 450;
-        state.large_slot4_x = 662;
-        state.large_slot4_y = 450;
-        state.large_slot5_x = 708;
-        state.large_slot5_y = 450;
-        state.large_slot6_x = 754;
-        state.large_slot6_y = 450;
-        state.large_slot0_bounds = {570, 450, 38, 38};
-        state.large_slot3_bounds = {616, 450, 38, 38};
-        state.large_slot6_bounds = {662, 450, 38, 38};
-        state.large_slot9_bounds = {708, 450, 38, 38};
-        state.large_slot12_bounds = {754, 450, 38, 38};
-        constexpr std::array<UiOverlayRect, 16> kDynamicIconBounds{{
-            {464, 513, 38, 38}, {505, 513, 38, 38},
-            {546, 513, 38, 38}, {587, 513, 38, 38},
-            {628, 513, 38, 38}, {669, 513, 38, 38},
-            {710, 513, 38, 38}, {751, 513, 38, 38},
-            {464, 554, 38, 38}, {505, 554, 38, 38},
-            {546, 554, 38, 38}, {587, 554, 38, 38},
-            {628, 554, 38, 38}, {669, 554, 38, 38},
-            {710, 554, 38, 38}, {751, 554, 38, 38},
-        }};
-        state.dynamic_icon_bounds = kDynamicIconBounds;
-        constexpr std::array<UiOverlayRect, 6> kCommandSlotBounds{{
-            {468, 530, 50, 50}, {521, 530, 50, 50},
-            {574, 530, 50, 50}, {627, 530, 50, 50},
-            {680, 530, 50, 50}, {733, 530, 50, 50},
-        }};
-        for (std::size_t i = 0; i < kCommandSlotBounds.size(); ++i) {
-            state.command_slot_bounds[i] = kCommandSlotBounds[i];
-        }
-        constexpr std::array<UiOverlayRect, 14> kSideSlotBounds{{
-            {15, 513, 38, 38}, {15, 554, 38, 38},
-            {56, 513, 38, 38}, {56, 554, 38, 38},
-            {97, 513, 38, 38}, {97, 554, 38, 38},
-            {138, 513, 38, 38}, {138, 554, 38, 38},
-            {179, 513, 38, 38}, {179, 554, 38, 38},
-            {220, 513, 38, 38}, {220, 554, 38, 38},
-            {261, 513, 38, 38}, {261, 554, 38, 38},
-        }};
-        state.side_slot_bounds.fill({});
-        std::copy(kSideSlotBounds.begin(), kSideSlotBounds.end(),
-            state.side_slot_bounds.begin());
-        state.indexed_slot_bounds = {
-            {84, 537, 38, 38}, {132, 549, 38, 38},
-            {175, 549, 38, 38}, {218, 549, 38, 38},
-            {261, 549, 38, 38},
-        };
-        state.wide_slot_bounds = {19, 518, 50, 50};
+    // FUN_004e2bb7 selects these records by display-layout bucket first and
+    // interface theme second.  Each source record contains an outer anchor,
+    // an inner rectangle origin, and its exclusive end; bucket 2 proves the
+    // outer anchor cannot be reconstructed from the inner rectangle.
+    using FixedSlotRecord = std::array<i32, 6>;
+    constexpr std::array<std::array<FixedSlotRecord, 4>, 3> kSmallSlot1{{
+        {{{364, 372, 364, 372, 429, 398},
+          {364, 372, 364, 372, 429, 398},
+          {364, 372, 364, 372, 429, 398},
+          {364, 372, 364, 372, 429, 398}}},
+        {{{460, 464, 460, 464, 541, 495},
+          {460, 467, 460, 467, 544, 496},
+          {467, 467, 467, 467, 547, 494},
+          {457, 468, 457, 468, 543, 494}}},
+        {{{390, 636, 399, 648, 456, 672},
+          {396, 641, 401, 652, 451, 669},
+          {396, 641, 401, 652, 451, 669},
+          {396, 643, 397, 650, 455, 669}}},
+    }};
+    constexpr std::array<std::array<FixedSlotRecord, 4>, 3> kSmallSlot2{{
+        {{{213, 375, 213, 375, 242, 394},
+          {213, 375, 213, 375, 242, 394},
+          {213, 375, 213, 375, 242, 394},
+          {213, 375, 213, 375, 242, 394}}},
+        {{{273, 464, 273, 464, 313, 495},
+          {273, 466, 273, 466, 314, 496},
+          {276, 467, 276, 467, 305, 494},
+          {269, 468, 269, 468, 308, 494}}},
+        {{{542, 641, 555, 649, 605, 671},
+          {544, 644, 556, 653, 598, 672},
+          {544, 644, 556, 653, 598, 672},
+          {542, 646, 554, 651, 598, 669}}},
+    }};
+    constexpr std::array<std::array<FixedSlotRecord, 4>, 3> kSmallSlot3{{
+        {{{178, 372, 178, 372, 209, 396},
+          {178, 372, 178, 372, 209, 396},
+          {178, 372, 178, 372, 209, 396},
+          {178, 372, 178, 372, 209, 396}}},
+        {{{230, 464, 230, 464, 266, 495},
+          {229, 467, 229, 467, 268, 496},
+          {227, 467, 227, 467, 271, 494},
+          {227, 468, 227, 468, 265, 494}}},
+        {{{384, 722, 392, 736, 452, 756},
+          {385, 721, 388, 731, 445, 765},
+          {385, 721, 388, 731, 445, 765},
+          {384, 722, 388, 734, 449, 752}}},
+    }};
+    const u32 panel_layout = std::min<u32>(state.screen_layout_bucket, 2);
+    const u32 theme = std::min<u32>(state.interface_theme_index, 3);
+    const auto apply_fixed_slot = [](const FixedSlotRecord& source,
+                                     i32& outer_x, i32& outer_y,
+                                     UiOverlayRect& inner) {
+        outer_x = source[0];
+        outer_y = source[1];
+        inner = {source[2], source[3],
+            static_cast<u32>(source[4] - source[2]),
+            static_cast<u32>(source[5] - source[3])};
+    };
+    apply_fixed_slot(kSmallSlot1[panel_layout][theme],
+        state.small_slot1_x, state.small_slot1_y, state.small_slot1_bounds);
+    apply_fixed_slot(kSmallSlot2[panel_layout][theme],
+        state.small_slot2_x, state.small_slot2_y, state.small_slot2_bounds);
+    apply_fixed_slot(kSmallSlot3[panel_layout][theme],
+        state.small_slot3_x, state.small_slot3_y, state.small_slot3_bounds);
+
+    constexpr std::array<FixedSlotRecord, 5> kLargeSlot800{{
+        {570, 450, 570, 450, 608, 488},
+        {616, 450, 616, 450, 654, 488},
+        {662, 450, 662, 450, 700, 488},
+        {708, 450, 708, 450, 746, 488},
+        {754, 450, 754, 450, 792, 488},
+    }};
+    std::array<FixedSlotRecord, 5> large_slots{};
+    if (panel_layout == 0) {
+        large_slots.fill(kSmallSlot3[0][theme]);
+    } else if (panel_layout == 1) {
+        large_slots = kLargeSlot800;
+    } else {
+        large_slots.fill(kSmallSlot3[2][theme]);
     }
+    apply_fixed_slot(large_slots[0], state.large_slot_x, state.large_slot_y,
+        state.large_slot0_bounds);
+    apply_fixed_slot(large_slots[1], state.large_slot3_x, state.large_slot3_y,
+        state.large_slot3_bounds);
+    apply_fixed_slot(large_slots[2], state.large_slot4_x, state.large_slot4_y,
+        state.large_slot6_bounds);
+    apply_fixed_slot(large_slots[3], state.large_slot5_x, state.large_slot5_y,
+        state.large_slot9_bounds);
+    apply_fixed_slot(large_slots[4], state.large_slot6_x, state.large_slot6_y,
+        state.large_slot12_bounds);
+        // FUN_004e2bb7 selects all four panel-coordinate tables with
+        // DAT_00863588.  That global is the three-way display-layout bucket,
+        // not the interface-resource/tribe theme used by the small fixed
+        // controls above.  A live 800x600 original reports DAT_00863588=1
+        // (and copies row-1 x/y) even when the peer reconstruction's resource
+        // theme is 2.  The original tables are:
+        // 0x0086444c (16 dynamic slots), 0x008645fc (six 0x32 slots),
+        // 0x00864170 (14 side slots), and 0x00864354 (five queue slots).
+        // Keeping the display-layout index shared is important: layout 2
+        // reuses layout 0's production grid while its side-selection strip is
+        // at the top.
+        constexpr std::array<std::array<UiOverlayRect, 16>, 3>
+            kDynamicIconBounds{{
+                {{{370, 407, 38, 38}, {403, 407, 38, 38},
+                    {436, 407, 38, 38}, {469, 407, 38, 38},
+                    {502, 407, 38, 38}, {535, 407, 38, 38},
+                    {568, 407, 38, 38}, {601, 407, 38, 38},
+                    {370, 440, 38, 38}, {403, 440, 38, 38},
+                    {436, 440, 38, 38}, {469, 440, 38, 38},
+                    {502, 440, 38, 38}, {535, 440, 38, 38},
+                    {568, 440, 38, 38}, {601, 440, 38, 38}}},
+                {{{464, 513, 38, 38}, {505, 513, 38, 38},
+                    {546, 513, 38, 38}, {587, 513, 38, 38},
+                    {628, 513, 38, 38}, {669, 513, 38, 38},
+                    {710, 513, 38, 38}, {751, 513, 38, 38},
+                    {464, 554, 38, 38}, {505, 554, 38, 38},
+                    {546, 554, 38, 38}, {587, 554, 38, 38},
+                    {628, 554, 38, 38}, {669, 554, 38, 38},
+                    {710, 554, 38, 38}, {751, 554, 38, 38}}},
+                {{{370, 407, 38, 38}, {403, 407, 38, 38},
+                    {436, 407, 38, 38}, {469, 407, 38, 38},
+                    {502, 407, 38, 38}, {535, 407, 38, 38},
+                    {568, 407, 38, 38}, {601, 407, 38, 38},
+                    {370, 440, 38, 38}, {403, 440, 38, 38},
+                    {436, 440, 38, 38}, {469, 440, 38, 38},
+                    {502, 440, 38, 38}, {535, 440, 38, 38},
+                    {568, 440, 38, 38}, {601, 440, 38, 38}}},
+            }};
+        constexpr std::array<std::array<UiOverlayRect, 6>, 3>
+            kCommandSlotBounds{{
+                {{{373, 421, 50, 50}, {416, 421, 50, 50},
+                    {459, 421, 50, 50}, {502, 421, 50, 50},
+                    {545, 421, 50, 50}, {588, 421, 50, 50}}},
+                {{{468, 530, 50, 50}, {521, 530, 50, 50},
+                    {574, 530, 50, 50}, {627, 530, 50, 50},
+                    {680, 530, 50, 50}, {733, 530, 50, 50}}},
+                {{{373, 421, 50, 50}, {416, 421, 50, 50},
+                    {459, 421, 50, 50}, {502, 421, 50, 50},
+                    {545, 421, 50, 50}, {588, 421, 50, 50}}},
+            }};
+        constexpr std::array<std::array<UiOverlayRect, 14>, 3>
+            kSideSlotBounds{{
+                {{{12, 407, 38, 38}, {12, 440, 38, 38},
+                    {45, 407, 38, 38}, {45, 440, 38, 38},
+                    {78, 407, 38, 38}, {78, 440, 38, 38},
+                    {111, 407, 38, 38}, {111, 440, 38, 38},
+                    {144, 407, 38, 38}, {144, 440, 38, 38},
+                    {177, 407, 38, 38}, {177, 440, 38, 38},
+                    {210, 407, 38, 38}, {210, 440, 38, 38}}},
+                {{{15, 513, 38, 38}, {15, 554, 38, 38},
+                    {56, 513, 38, 38}, {56, 554, 38, 38},
+                    {97, 513, 38, 38}, {97, 554, 38, 38},
+                    {138, 513, 38, 38}, {138, 554, 38, 38},
+                    {179, 513, 38, 38}, {179, 554, 38, 38},
+                    {220, 513, 38, 38}, {220, 554, 38, 38},
+                    {261, 513, 38, 38}, {261, 554, 38, 38}}},
+                {{{12, 73, 38, 38}, {12, 40, 38, 38},
+                    {45, 73, 38, 38}, {45, 40, 38, 38},
+                    {78, 73, 38, 38}, {78, 40, 38, 38},
+                    {111, 73, 38, 38}, {111, 40, 38, 38},
+                    {144, 73, 38, 38}, {144, 40, 38, 38},
+                    {177, 73, 38, 38}, {177, 40, 38, 38},
+                    {210, 73, 38, 38}, {210, 40, 38, 38}}},
+            }};
+        constexpr std::array<std::array<UiOverlayRect, 5>, 3>
+            kIndexedSlotBounds{{
+                {{{74, 440, 38, 38}, {113, 440, 38, 38},
+                    {146, 440, 38, 38}, {179, 440, 38, 38},
+                    {212, 440, 38, 38}}},
+                {{{84, 537, 38, 38}, {132, 549, 38, 38},
+                    {175, 549, 38, 38}, {218, 549, 38, 38},
+                    {261, 549, 38, 38}}},
+                {{{74, 440, 38, 38}, {113, 440, 38, 38},
+                    {146, 440, 38, 38}, {179, 440, 38, 38},
+                    {212, 440, 38, 38}}},
+            }};
+        state.dynamic_icon_bounds = kDynamicIconBounds[panel_layout];
+        state.command_slot_bounds.fill({});
+        std::copy(kCommandSlotBounds[panel_layout].begin(),
+            kCommandSlotBounds[panel_layout].end(),
+            state.command_slot_bounds.begin());
+        state.side_slot_bounds.fill({});
+        std::copy(kSideSlotBounds[panel_layout].begin(),
+            kSideSlotBounds[panel_layout].end(),
+            state.side_slot_bounds.begin());
+        state.indexed_slot_bounds.assign(
+            kIndexedSlotBounds[panel_layout].begin(),
+            kIndexedSlotBounds[panel_layout].end());
+        // 0x004e2f8e hardcodes this anchor independently of the display
+        // bucket; only the surrounding panel tables are bucket-selected.
+        state.wide_slot_bounds = {19, 518, 50, 50};
 
     state.minimap.map_width_tiles = minimap_width_tiles(state);
     state.minimap.map_height_tiles = minimap_height_tiles(state);
     if (state.minimap.minimap_width_pixels == 0) {
+        const u32 capacity = state.screen_layout_bucket == 0 ? 0x5fu : 0x73u;
         state.minimap.minimap_width_pixels =
-            std::min<u32>(0x74, std::max<u32>(1, state.minimap.map_width_tiles));
+            std::min<u32>(capacity,
+                std::max<u32>(1, state.minimap.map_width_tiles));
     }
     if (state.minimap.minimap_height_pixels == 0) {
+        const u32 capacity = state.screen_layout_bucket == 0 ? 0x5fu : 0x73u;
         state.minimap.minimap_height_pixels =
-            std::min<u32>(0x74, std::max<u32>(1, state.minimap.map_height_tiles));
+            std::min<u32>(capacity,
+                std::max<u32>(1, state.minimap.map_height_tiles));
     }
     if (state.minimap.scale_percent == 0) {
         const u32 map_width = std::max<u32>(1, state.minimap.map_width_tiles);
@@ -2402,8 +2819,11 @@ void ConfigureGameplayUiOverlayLayout(UiOverlayState& state) {
     const bool pixel_mode_555 = SurfacePixelMode555();
     state.minimap_terrain_marker_color = pixel_mode_555 ? 0x0a5f : 0x149f;
     state.minimap_local_unit_color = pixel_mode_555 ? 0x03e2 : 0x07c2;
+    state.minimap_local_footprint_color = pixel_mode_555 ? 0x02e2 : 0x05e2;
     state.minimap_remote_unit_color = pixel_mode_555 ? 0x02e2 : 0x05e2;
-    state.minimap_dim_mask = pixel_mode_555 ? 0x3000 : 0x6000;
+    state.minimap_remote_footprint_color = pixel_mode_555 ? 0x02e2 : 0x05e2;
+    // DAT_01440000 in FUN_004e26f3 is the repeated half-brightness mask.
+    state.minimap_dim_mask = pixel_mode_555 ? 0x7bde : 0xf7de;
 }
 
 void ResetUiOverlayCommandPanelState(UiOverlayState& state) {
@@ -2436,12 +2856,15 @@ bool HitTestUiOverlayHotRegion(UiOverlayState& state, i32 x, i32 y) {
 bool CheckUiOverlayCommandRecordEnabled(const UiOverlayState& state, u32 item_id) {
     const UiOverlayCommandOption* option = find_command_option(state, item_id);
     if (option != nullptr) {
-        return option->enabled && (option->flags & kUiOverlayFlagDisabled) == 0;
+        return option->enabled &&
+            (is_indexed_queue_command_item(item_id) ||
+                (option->flags & kUiOverlayFlagDisabled) == 0);
     }
     for (const UiOverlayHotRegion& region : state.hot_regions) {
         if (region.record.item_id == item_id) {
             return region.enabled &&
-                (region.record.flags & kUiOverlayFlagDisabled) == 0;
+                (is_indexed_queue_command_item(item_id) ||
+                    (region.record.flags & kUiOverlayFlagDisabled) == 0);
         }
     }
     return true;
@@ -2451,7 +2874,8 @@ u32 ResolveUiOverlayHotkeyCommand(UiOverlayState& state, u8 key) {
     const u8 normalized = uppercase_hotkey(key);
     for (const UiOverlayHotRegion& region : state.hot_regions) {
         if (uppercase_hotkey(region.hotkey) == normalized && region.enabled &&
-            (region.record.flags & kUiOverlayFlagDisabled) == 0) {
+            (is_indexed_queue_command_item(region.record.item_id) ||
+                (region.record.flags & kUiOverlayFlagDisabled) == 0)) {
             set_hot_region_result(state, region);
             return region.record.item_id;
         }
@@ -2496,6 +2920,20 @@ bool CheckUiOverlayIconMaskPixel(const UiOverlayState& state, i32 x, i32 y) {
 void BuildSelectedUnitCommandPanel(UiOverlayState& state) {
     ResetUiOverlayCommandPanelState(state);
     QueueDefaultGameplayCommandSlots(state);
+    // FUN_004e5292 runs before both placement-mode and selected-unit command
+    // branches.  For a single selection it publishes the 0x1a6 portrait first,
+    // followed by any active/deferred production queue records.
+    if (state.selected_unit_count == 1) {
+        QueueUiOverlayWideSlotRecord(
+            state, 0x1a6, state.selected_unit_id, 0);
+    }
+    else if (state.selected_unit_count > 1) {
+        for (u32 unit_id : state.selected_unit_ids) {
+            if (find_unit_by_id(state, unit_id) != nullptr) {
+                QueueUiOverlaySideSlotRecord(state, 0x1a8, unit_id, 0);
+            }
+        }
+    }
     QueueSelectedUnitCurrentOrderButtons(state);
     if (state.placement_mode != 0) {
         state.command_slot_size = 0x32;
@@ -2505,9 +2943,24 @@ void BuildSelectedUnitCommandPanel(UiOverlayState& state) {
     if (state.selected_unit_count == 0) {
         return;
     }
-    if (state.selected_unit_count == 1) {
-        QueueUiOverlayWideSlotRecord(
-            state, 0x1a6, state.selected_unit_id, 0);
+    // 0x004e4020..0x004e4048 keeps FUN_004e5292's portrait/queue-info pass,
+    // then returns before every mobile/structure command builder unless the
+    // scenario override, player-type-2 override, or local ownership applies.
+    // In particular, an enemy structure must not expose production actions or
+    // the construction-cancel c6 record.
+    if (!state.scenario_ai_profile_override && state.local_player_type != 2u &&
+        state.selected_unit_owner != state.local_player_slot) {
+        return;
+    }
+    if (state.selected_unit_type >= 0x60u &&
+        state.selected_unit_action_mode_gate == 1) {
+        // FUN_004e3f6e's construction branch at 0x004e4e93 does not build
+        // the structure's ordinary production/action list.  It tail-calls
+        // FUN_004e5762 with EAX=0xc6, ECX=3 and record size 0x32, leaving a
+        // single large cancel button in the command panel.
+        state.command_slot_size = 0x32;
+        AppendUiOverlayCommandSlot(state, 0xc6u, 3, 0);
+        return;
     }
     if (state.selected_unit_type < 0x60) {
         BuildMultiSelectedUnitCommandPanel(state);
@@ -2631,24 +3084,36 @@ void QueueSelectedUnitCoreActionButtons(UiOverlayState& state) {
     QueueUiOverlayCommandRecordByItemId(state, 0xcbu, 0, 0);
     QueueUiOverlayCommandRecordByItemId(state,
         (mask & 0x10u) != 0 ? 0xaeu : 0xc8u, 0, kUiOverlayFlagHidden);
-    if ((mask & 0x40000u) != 0) {
-        QueueUiOverlayCommandRecordByItemId(state, 0xbcu, 0, 0);
-        QueueUiOverlayCommandRecordByItemId(state, 0xd0u, 0, 0);
-    }
-    if ((mask & 0x80000u) != 0) {
-        QueueUiOverlayCommandRecordByItemId(state, 0xbdu, 0, 0);
-        QueueUiOverlayCommandRecordByItemId(state, 0xd1u, 0, 0);
-    }
-    if ((mask & 0x100000u) != 0) {
-        QueueUiOverlayCommandRecordByItemId(state, 0xbeu, 0, 0);
-        QueueUiOverlayCommandRecordByItemId(state, 0xd2u, 0, 0);
-    }
-    if ((mask & 0x200000u) != 0) {
-        QueueUiOverlayCommandRecordByItemId(state, 0xbfu, 0, 0);
-        QueueUiOverlayCommandRecordByItemId(state, 0xd3u, 0, 0);
+    constexpr std::array<u32, 4> kPrimaryActions{
+        0xbcu, 0xbdu, 0xbeu, 0xbfu};
+    constexpr std::array<u32, 4> kSecondaryActions{
+        0xd0u, 0xd1u, 0xd2u, 0xd3u};
+    for (u32 index = 0; index < kPrimaryActions.size(); ++index) {
+        const u32 action_state =
+            state.selected_unit_special_action_states[index];
+        if (action_state == 0) {
+            continue;
+        }
+        if ((action_state & 1u) != 0) {
+            QueueUiOverlayCommandRecordByItemId(
+                state, kPrimaryActions[index], 0, 0);
+        }
+        else if ((action_state & 0x10u) != 0) {
+            QueueUiOverlayCommandRecordByItemId(
+                state, kPrimaryActions[index], 0, kUiOverlayFlagAlternateC);
+        }
+        else if ((action_state & 4u) == 0) {
+            QueueUiOverlayCommandRecordByItemId(
+                state, kPrimaryActions[index], 0, kUiOverlayFlagDisabled);
+        }
+        if ((action_state & 2u) != 0) {
+            QueueUiOverlayCommandRecordByItemId(
+                state, kSecondaryActions[index], 0, 0);
+        }
     }
     if ((mask & 0x20000u) != 0) {
-        QueueUiOverlayCommandRecordByItemId(state, 0xbbu, 0, 0);
+        QueueUiOverlayCommandRecordByItemId(state, 0xbbu, 0,
+            state.selected_unit_order_2a_available ? 0 : kUiOverlayFlagDisabled);
     }
     if ((mask & 0x08000000u) != 0) {
         QueueUiOverlayCommandRecordByItemId(state, 0xc5u, 0, 0);
@@ -2665,6 +3130,9 @@ void QueueSelectedUnitCoreActionButtons(UiOverlayState& state) {
 
 void BuildMultiSelectedUnitCommandPanel(UiOverlayState& state) {
     state.command_slot_size = 0x26;
+    // FUN_004e4150 restores DAT_00867684 after the 0x1a6 details record has
+    // temporarily selected the 0x32 frame size.
+    state.current_record_size = 0x26;
     CollectSelectedUnitProductionActionMasks(state);
     if (selected_production_category_active(state)) {
         QueueProductionClassButtonsForSelectedUnit(
@@ -2679,6 +3147,7 @@ void QueueAvailableProductionClassButtons(UiOverlayState& state) {
     if ((state.selected_unit_command_bit_mask & 0x40u) == 0) {
         return;
     }
+    PadUiOverlayLargeCommandSlots(state);
     for (u32 category = 0; category < state.selected_production_class_counts.size();
          ++category) {
         if (state.selected_production_class_counts[category] != 0) {
@@ -2704,26 +3173,48 @@ void QueueProductionClassButtonsForSelectedUnit(UiOverlayState& state, u32 categ
 
 void BuildSingleSelectedUnitCommandPanel(UiOverlayState& state) {
     state.command_slot_size = 0x26;
+    // 0x004e4e89 resets DAT_00867684 after the 0x1a6 portrait builder has
+    // temporarily selected 0x32.  Dynamic production/action records and their
+    // hit regions are therefore 0x26, even when no queued command was present.
+    state.current_record_size = 0x26;
     CollectSelectedUnitProductionActionMasks(state);
     QueueSelectedUnitCoreActionButtons(state);
-    bool queued_production_reference = false;
-    for (const UiOverlayCommandOption& option : state.command_options) {
-        if (!option.enabled || option.item_id >= 0xaau) {
-            continue;
-        }
+    for (const UiOverlayCommandOption& option : state.primary_production_options) {
         QueueUiOverlayCommandRecordByItemId(
             state, option.item_id, option.aux, option.flags);
-        queued_production_reference = true;
     }
-    if (queued_production_reference) {
+    // Normal structures reach 0x004e4fee when their raw alternate-reference
+    // count is nonzero, even when owner availability filtered every icon.
+    // The four AVATAR producers reach it unconditionally.
+    if (state.selected_unit_raw_production_reference_count != 0 ||
+        state.selected_unit_uses_avatar_production_slots) {
         QueueUiOverlayCommandRecordByItemId(state, 0xc9u, 0, 0);
     }
+    // 0x004e4ffa calls FUN_004e5269 after the optional production-reference
+    // list and 0xc9 queue button.  It does so even when that list is empty,
+    // except for the original type-0x67 special case.  Consuming the unused
+    // first-row positions makes the following upgrades/orders start in row 2.
+    if (state.selected_unit_type != 0x67u) {
+        PadUiOverlayLargeCommandSlots(state);
+    }
     for (const UiOverlayCommandOption& option : state.command_options) {
-        if (!option.enabled || option.item_id < 0xaau) {
+        if (!option.enabled || option.item_id < 0xaau ||
+            is_indexed_queue_command_item(option.item_id)) {
             continue;
         }
         QueueUiOverlayCommandRecordByItemId(
             state, option.item_id, option.aux, option.flags);
+    }
+    const u32 command = state.selected_unit_command_state & 0xffu;
+    if (command == 0x51u || command == 0x50u ||
+        command == 0x83u || command == 0x82u ||
+        command == 0x4eu || command == 0x4du) {
+        // 0x004e5124 appends the ordinary 0x26-size c6 record with aux=4
+        // after every structure action while one of the six production states
+        // is active.  This is distinct from placement aux 0..2 and the
+        // construction aux=3 cancel button.
+        state.command_slot_size = 0x26;
+        QueueUiOverlayCommandRecordByItemId(state, 0xc6u, 4, 0);
     }
 }
 
@@ -2750,15 +3241,23 @@ bool FindOwnerCarrierLinkedToSlot(const UiOverlayState& state, u32 owner_id,
 }
 
 void PadUiOverlayLargeCommandSlots(UiOverlayState& state) {
-    (void)state;
+    // FUN_004e5269 fills the remainder of the first eight dynamic positions
+    // with disabled 0xc8 records. Following production-class buttons then
+    // begin at dynamic slot 8 (the second row).
+    while (state.dynamic_icon_index < 8) {
+        QueueUiOverlayCommandRecordByItemId(
+            state, 0xc8u, 0, kUiOverlayFlagDisabled);
+    }
 }
 
 void QueueSelectedUnitCurrentOrderButtons(UiOverlayState& state) {
-    if (state.selected_unit_count == 0) {
+    if (state.selected_unit_count != 1 || state.selected_unit_type < 0x60u ||
+        (!state.scenario_ai_profile_override && state.local_player_type != 2u &&
+            state.selected_unit_owner != state.local_player_slot)) {
         return;
     }
     for (const UiOverlayCommandOption& option : state.command_options) {
-        if ((option.flags & kUiOverlayFlagAlternateC) != 0) {
+        if (is_indexed_queue_command_item(option.item_id)) {
             QueueUiOverlayCommandRecordByItemId(state, option.item_id,
                 option.aux, option.flags);
         }
@@ -2771,7 +3270,7 @@ void CollectSelectedUnitProductionActionMasks(UiOverlayState& state) {
     state.selected_production_gate_masks = {};
     state.selected_production_class_counts = {};
     for (const UiOverlayCommandOption& option : state.command_options) {
-        if (!option.enabled) {
+        if (!option.enabled || is_indexed_queue_command_item(option.item_id)) {
             continue;
         }
         if (option.item_id >= 0xf4 && option.item_id <= 0x133) {
@@ -2868,7 +3367,9 @@ void QueueUiOverlayCommandRecordByItemId(UiOverlayState& state, u32 item_id,
     case 0x1aa:
     case 0x1ab:
     case 0x1ac:
-        QueueUiOverlayIndexedSlotRecord(state, item_id, aux, flags, item_id - 0x1aa);
+        // FUN_004e5cca selects DAT_0086432c[EDI], where EDI is the logical
+        // queue index stored in the record flags dword (0=current, 1..4=queued).
+        QueueUiOverlayIndexedSlotRecord(state, item_id, aux, flags, flags);
         return;
     case 0x1ad:
     {
@@ -2922,7 +3423,7 @@ void QueueUnitDefinitionDynamicIconOrHotRegion(UiOverlayState& state, u32 item_i
     state.command_icon_marker =
         vector_value_or_zero(state.unit_definition_icon_markers, item_id);
     if ((flags & 1u) != 0) {
-        AppendUiOverlayCommandSlot(state, item_id, aux, flags);
+        append_offscreen_hotkey_record(state, item_id, aux, flags);
         return;
     }
     state.current_icon_marker = state.command_icon_marker;
@@ -2939,7 +3440,7 @@ void QueueObjectDefinitionDynamicIconOrHotRegion(UiOverlayState& state, u32 item
             state.object_icon_markers, item_id - 0xaa);
     }
     if ((flags & 1u) != 0) {
-        AppendUiOverlayCommandSlot(state, item_id, aux, flags);
+        append_offscreen_hotkey_record(state, item_id, aux, flags);
         return;
     }
     state.current_icon_marker = state.command_icon_marker;
@@ -3395,6 +3896,7 @@ void QueueGameplayChatMessageDisplay(UiOverlayState& state, const std::string& t
 
 void HandleGameplayChatBangCommand(UiOverlayState& state) {
     if (!state.chat_input_text.empty() && state.chat_input_text.front() == '!') {
+        state.pending_unit_action_text = state.chat_input_text;
         state.pending_local_command = true;
     }
 }
@@ -3501,12 +4003,24 @@ void ResetCameraBookmarks(UiOverlayState& state) {
 void UpdateGameplayHoverContextAndTooltip(UiOverlayState& state) {
     ResolveGameplayHoverContext(state);
     set_tooltip_payload_for_hover(state);
+    // FUN_004e9458 publishes the stored hot-region origin (rather than the
+    // moving cursor) to FUN_004de7cf/FUN_004de7f3.  Terrain-resource hover
+    // likewise publishes the vertically nudged screen point returned by
+    // FUN_004c6b5e.  Anchoring these boxes at the raw pointer made them cover
+    // the command icon and placement ghost.
+    const bool use_resolved_anchor =
+        hover_context_is_command_record(state.hover_context) ||
+        state.hover_context.kind == 0x0c;
+    const i32 tooltip_x = use_resolved_anchor ?
+        state.hover_context.x : state.mouse_x;
+    const i32 tooltip_y = use_resolved_anchor ?
+        state.hover_context.y : state.mouse_y;
     if (hover_kind_uses_immediate_tooltip_schedule(state.hover_context.kind)) {
         ScheduleGameplayTooltipImmediate(gameplay_tooltip_state(),
-            state.hover_context.kind, state.mouse_x, state.mouse_y);
+            state.hover_context.kind, tooltip_x, tooltip_y);
     } else {
         ScheduleGameplayTooltip(gameplay_tooltip_state(), state.hover_context.kind,
-            state.mouse_x, state.mouse_y);
+            tooltip_x, tooltip_y);
     }
     if (state.hover_context.kind == 0) {
         NoOpHoverContextHandler(state);
@@ -3533,8 +4047,8 @@ void ResolveGameplayHoverContext(UiOverlayState& state) {
         const i32 local_x = state.mouse_x - state.minimap.output_x;
         const i32 local_y = state.mouse_y - state.minimap.output_y;
         state.hover_context.kind = 1;
-        state.hover_context.x = MinimapScreenToWorldX(state.minimap, local_x);
-        state.hover_context.y = MinimapScreenToWorldY(state.minimap, local_y);
+        state.hover_context.x = minimap_input_screen_to_world_x(state, local_x);
+        state.hover_context.y = minimap_input_screen_to_world_y(state, local_y);
         return;
     }
 
@@ -3557,15 +4071,44 @@ void ResolveGameplayHoverContext(UiOverlayState& state) {
         return;
     }
 
+    // FUN_004e9458's final 0x0c branch is not a generic placement tooltip.
+    // FUN_004c6b5e accepts only a currently-visible terrain resource cell
+    // (terrain class 1), probing y, y-15, then y+15.  Treating every map point
+    // as kind 0x0c caused the spurious "Berry 0" UI while placing buildings.
+    const GameplayTooltipState& tooltip = gameplay_tooltip_state();
     const i32 world_x = state.camera_x + state.mouse_x;
     const i32 world_y = state.camera_y + state.mouse_y;
-    if (state.placement_mode != 0 && world_x >= 0 && world_y >= 0 &&
-        static_cast<u32>(world_x >> 5) < minimap_width_tiles(state) &&
-        static_cast<u32>(world_y >> 5) < minimap_height_tiles(state)) {
-        state.hover_context.kind = 0x0c;
-        state.hover_context.item_id = state.placement_definition_id;
-        state.hover_context.x = world_x & ~0x1f;
-        state.hover_context.y = world_y & ~0x1f;
+    if (world_x >= 0 && world_y >= 0 &&
+        tooltip.map_width_tiles != 0 && tooltip.map_height_tiles != 0) {
+        constexpr std::array<i32, 3> kTerrainHoverYNudges{{0, -0x0f, 0x0f}};
+        const u32 tile_x = static_cast<u32>(world_x >> 5);
+        for (i32 y_nudge : kTerrainHoverYNudges) {
+            const i32 candidate_world_y = world_y + y_nudge;
+            if (candidate_world_y < 0) {
+                continue;
+            }
+            const u32 tile_y = static_cast<u32>(candidate_world_y >> 5);
+            if (tile_x >= tooltip.map_width_tiles ||
+                tile_y >= tooltip.map_height_tiles) {
+                continue;
+            }
+            const std::size_t index =
+                static_cast<std::size_t>(tile_y) * tooltip.map_width_tiles + tile_x;
+            // FindPassableVerticalNudgeTile checks DAT_00798d40, the previous /
+            // explored visibility layer, not the current minimap word.
+            const u32 visibility = minimap_layer_value(
+                state, state.minimap_object_flags, tile_x, tile_y);
+            if ((visibility & 0x10000000u) == 0 ||
+                index >= tooltip.terrain_flags.size() ||
+                (tooltip.terrain_flags[index] & 0x700u) != 0x100u) {
+                continue;
+            }
+            state.hover_context.kind = 0x0c;
+            state.hover_context.item_id = 0x0c;
+            state.hover_context.x = state.mouse_x;
+            state.hover_context.y = state.mouse_y + y_nudge;
+            break;
+        }
     }
 }
 
@@ -3708,7 +4251,24 @@ void HandleGameplayPointerActionFrame(UiOverlayState& state) {
             if (!minimap_action &&
                 !CheckUiOverlayIconMaskPixel(state, state.mouse_x, state.mouse_y) &&
                 state.selected_unit_count != 0) {
-                append_command_action(state, 0xaeu, 0,
+                // The original cursor resolver changes the secondary-click
+                // command from move (4) to harvest (7) while a terrain-class
+                // resource is under the pointer (0x004e914a/0x004e9169/
+                // 0x004e9189).  Keep the resolved terrain class in aux; the
+                // raw action-7 dispatcher consumes it as DAT_00862418 when no
+                // unit target was hit.
+                const bool harvest_point = state.hover_context.kind == 0x0cu &&
+                    (state.selected_unit_command_bit_mask & (1u << 7)) != 0;
+                const u32 action_id = harvest_point ? 0x07u : 0x04u;
+                // DAT_00862418 carries the original terrain selector in its
+                // packet form: class 0x0c occupies bits 8..15.  Subtype 02's
+                // receiver copies packet +0x18 to the unit command word
+                // without shifting it, so publish 0x0c00 here while retaining
+                // the unshifted hover item for tooltip lookup.
+                const u32 contextual_target = harvest_point
+                    ? (state.hover_context.item_id << 8) : 0u;
+                append_command_action(state, 0xaau + action_id,
+                    contextual_target,
                     kCommandActionPlacement);
                 StartGameplayHudPulse(state,
                     state.camera_x + state.mouse_x,
@@ -3779,9 +4339,31 @@ void UpdateCameraFromMinimapDrag(UiOverlayState& state) {
         std::max(0, width - 1));
     const i32 local_y = std::clamp(state.mouse_y - state.minimap.output_y, 0,
         std::max(0, height - 1));
-    ClampCameraToMinimapPoint(state,
-        MinimapScreenToWorldX(state.minimap, local_x),
-        MinimapScreenToWorldY(state.minimap, local_y));
+    const u32 map_width = std::max<u32>(1, state.minimap.map_width_tiles);
+    const u32 map_height = std::max<u32>(1, state.minimap.map_height_tiles);
+    const u32 mini_width = std::max<u32>(1, state.minimap.minimap_width_pixels);
+    const u32 mini_height = std::max<u32>(1, state.minimap.minimap_height_pixels);
+    const u32 view_mini_width = static_cast<u32>(
+        (static_cast<u64>(state.minimap.viewport_width_pixels >> 5) *
+            mini_width) / map_width);
+    const u32 view_mini_height = static_cast<u32>(
+        (static_cast<u64>(state.minimap.viewport_height_pixels >> 5) *
+            mini_height) / map_height);
+
+    // FUN_004ea2d7 centers and clamps in minimap space before converting the
+    // upper-left back to a tile-aligned world coordinate.  Converting the
+    // pointer to world space first changes the integer-rounding order.
+    const i32 max_left = std::max<i32>(0,
+        static_cast<i32>(mini_width) - static_cast<i32>(view_mini_width));
+    const i32 left = std::clamp(
+        local_x - static_cast<i32>(view_mini_width >> 1), 0, max_left);
+    const i32 top = std::max(
+        local_y - static_cast<i32>(view_mini_height >> 1), 0);
+    state.camera_x = static_cast<i32>(
+        ((static_cast<i64>(left) * map_width) / mini_width) * 0x20);
+    state.camera_y = std::min<i32>(static_cast<i32>(
+        ((static_cast<i64>(top) * map_height) / mini_height) * 0x20),
+        state.camera_max_y);
     state.camera_scroll_dirty = true;
 }
 
@@ -3863,8 +4445,8 @@ bool CheckPointerInsideMinimapAndPlacementMode(UiOverlayState& state) {
     }
     const i32 local_x = state.mouse_x - state.minimap.output_x;
     const i32 local_y = state.mouse_y - state.minimap.output_y;
-    const i32 world_x = MinimapScreenToWorldX(state.minimap, local_x);
-    const i32 world_y = MinimapScreenToWorldY(state.minimap, local_y);
+    const i32 world_x = minimap_input_screen_to_world_x(state, local_x);
+    const i32 world_y = minimap_command_screen_to_world_y(state, local_y);
     if (state.staged_unit_action_id != 0xffffffffu) {
         append_command_action_at_world(state,
             0xaau + state.staged_unit_action_id, 0,
@@ -3890,8 +4472,8 @@ bool CheckPointerInsideMinimapForAction(UiOverlayState& state) {
     const i32 local_x = state.mouse_x - state.minimap.output_x;
     const i32 local_y = state.mouse_y - state.minimap.output_y;
     state.hover_context.kind = 1;
-    state.hover_context.x = MinimapScreenToWorldX(state.minimap, local_x);
-    state.hover_context.y = MinimapScreenToWorldY(state.minimap, local_y);
+    state.hover_context.x = minimap_input_screen_to_world_x(state, local_x);
+    state.hover_context.y = minimap_command_screen_to_world_y(state, local_y);
     if (state.selected_unit_count != 0) {
         append_command_action_at_world(state, 0xaeu, 0,
             kCommandActionPlacement, 0,
@@ -3989,7 +4571,7 @@ UiOverlaySelectionRectScanResult ScanVisibleUnitsInSelectionRect(
     UiOverlaySelectionRectScanResult result{};
     const UiOverlayRect selection = normalized_selection_rect(state);
     for (const UiOverlayMinimapUnit& unit : state.minimap_units) {
-        if (unit.hidden_from_minimap || !unit.visible_to_local_player ||
+        if (!UiOverlayUnitVisibleToLocalPlayer(unit) ||
             !rects_intersect(selection, unit_world_rect(unit))) {
             continue;
         }
@@ -4018,7 +4600,7 @@ UiOverlaySelectionRectScanResult ScanVisibleUnitsInSelectionRect(
 
 bool unit_is_local_small_selection_candidate(
     const UiOverlayState& state, const UiOverlayMinimapUnit& unit) {
-    return !unit.hidden_from_minimap && unit.visible_to_local_player &&
+    return UiOverlayUnitVisibleToLocalPlayer(unit) &&
         unit.type_id < 0x60 && unit.owner_id == state.local_player_slot;
 }
 
@@ -4045,7 +4627,7 @@ const UiOverlayMinimapUnit* first_visible_unit_in_selection_rect_by_priority(
     const UiOverlayMinimapUnit* local_object = nullptr;
     const UiOverlayMinimapUnit* enemy_object = nullptr;
     for (const UiOverlayMinimapUnit& unit : state.minimap_units) {
-        if (unit.hidden_from_minimap || !unit.visible_to_local_player ||
+        if (!UiOverlayUnitVisibleToLocalPlayer(unit) ||
             !rects_intersect(selection, unit_world_rect(unit))) {
             continue;
         }
@@ -4307,7 +4889,7 @@ bool DrawUiEncodedGlyphRun11px(const char* text, std::size_t count, i32 slot_x, 
 
 bool DrawUiEncodedDigitRun9px(const char* text, std::size_t count, i32 slot_x, i32 slot_y) {
     return DrawUiGlyphRun(text, count, slot_x + 0x1a, slot_y + 0x16, 9,
-        g_ui_overlay_state.digit_resource_base, '0');
+        g_ui_overlay_state.glyph_resource_base, '0');
 }
 
 bool DrawUiGlyphRun(const char* text, std::size_t count, i32 right_aligned_x, i32 y,

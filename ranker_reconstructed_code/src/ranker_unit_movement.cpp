@@ -9,7 +9,6 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
-#include <deque>
 #include <limits>
 
 namespace ranker {
@@ -60,6 +59,12 @@ constexpr std::array<u32, 16> kMovementStepTriangularThresholds = {
     0, 1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 66, 78, 91, 105, 120,
 };
 constexpr u32 kUnitMovementTurnTimeoutTicks = 10;
+// These two combat percentages are loaded into DAT_012204b0 and
+// DAT_0120c9c8 by the original data bootstrap.  The shipped catalog resolves
+// them to 10 and 100 respectively.  They are consumed only while the matching
+// temporary command/runtime flags are active (0x004084d0 and 0x00408590).
+constexpr u32 kCommandFlag4000MaxHealthBonusPercent = 10;
+constexpr u32 kRuntimeFlag0c00DefenseBonusPercent = 100;
 
 i32 signed_i32_from_wrapped_u32(u32 value) {
     i32 signed_value = 0;
@@ -175,15 +180,6 @@ u32 tile_point_index(const UnitMovementMap& map, UnitMovementPoint tile) {
         map, static_cast<u32>(tile.x), static_cast<u32>(tile.y));
 }
 
-UnitMovementPoint tile_point_from_index(const UnitMovementMap& map, u32 index) {
-    const u32 stride = UnitMovementMapStrideTiles(map);
-    if (stride == 0) {
-        return {};
-    }
-    return UnitMovementPoint{static_cast<i32>(index % stride),
-        static_cast<i32>(index / stride)};
-}
-
 UnitMovementPoint tile_center_point(UnitMovementPoint tile) {
     return UnitMovementPoint{tile_to_center(static_cast<u32>(tile.x)),
         tile_to_center(static_cast<u32>(tile.y))};
@@ -243,21 +239,22 @@ struct UnitMovementRect {
     i32 bottom = 0;
 };
 
-UnitMovementRect unit_bounds_rect(const UnitMovementUnit& unit) {
+UnitMovementRect unit_interaction_bounds_rect(const UnitMovementUnit& unit) {
     UnitMovementRect rect;
-    rect.left = unit.x + unit.definition.bounds_left;
-    rect.top = unit.y + unit.definition.bounds_top;
-    rect.right = rect.left + unit.definition.bounds_width;
-    rect.bottom = rect.top + unit.definition.bounds_height;
+    rect.left = unit.x + unit.definition.interaction_bounds_left;
+    rect.top = unit.y + unit.definition.interaction_bounds_top;
+    rect.right = rect.left + unit.definition.interaction_bounds_width;
+    rect.bottom = rect.top + unit.definition.interaction_bounds_height;
     return rect;
 }
 
-UnitMovementRect unit_bounds_rect_at(const UnitMovementUnit& unit, i32 x, i32 y) {
+UnitMovementRect unit_interaction_bounds_rect_at(const UnitMovementUnit& unit,
+    i32 x, i32 y) {
     UnitMovementRect rect;
-    rect.left = x + unit.definition.bounds_left;
-    rect.top = y + unit.definition.bounds_top;
-    rect.right = rect.left + unit.definition.bounds_width;
-    rect.bottom = rect.top + unit.definition.bounds_height;
+    rect.left = x + unit.definition.interaction_bounds_left;
+    rect.top = y + unit.definition.interaction_bounds_top;
+    rect.right = rect.left + unit.definition.interaction_bounds_width;
+    rect.bottom = rect.top + unit.definition.interaction_bounds_height;
     return rect;
 }
 
@@ -402,7 +399,12 @@ bool legacy_movement_class_can_enter_cell(const UnitMovementUnit& unit,
             (decoration_flags & 0x60000000u) == 0) {
             return false;
         }
-        if (allow_command_shortcut && (unit.command_flags & 1u) != 0) {
+        // Original 0x004c810d tests raw unit +0xac bit zero here.  That word
+        // is movement_flags; command_flags lives at raw +0x9c.  Harvest
+        // commands set command_flags bit zero while approaching a blocked
+        // resource tile, so consulting the wrong word skips the original
+        // nearest-passable-goal adjustment.
+        if (allow_command_shortcut && (unit.movement_flags & 1u) != 0) {
             return true;
         }
         return terrain_clear && brush_clear;
@@ -412,7 +414,7 @@ bool legacy_movement_class_can_enter_cell(const UnitMovementUnit& unit,
         if ((decoration_flags & 0x60000000u) == 0) {
             return false;
         }
-        if (allow_command_shortcut && (unit.command_flags & 1u) != 0) {
+        if (allow_command_shortcut && (unit.movement_flags & 1u) != 0) {
             return true;
         }
         return terrain_clear && brush_clear;
@@ -442,9 +444,10 @@ UnitMovementPoint legacy_fallback_direction_delta(u32 direction) {
     return kLegacySeparationDirectionDeltas[remapped];
 }
 
-bool legacy_ground_fallback_cell_allows(const UnitMovementUnit& unit,
-    const UnitMovementCell& cell) {
-    if (!movement_cell_has_legacy_entry_layers(cell)) {
+bool legacy_ground_fallback_cell_allows(const UnitMovementMap& map,
+    const UnitMovementUnit& unit, const UnitMovementCell& cell) {
+    if (!map.legacy_entry_layers_present &&
+        !movement_cell_has_legacy_entry_layers(cell)) {
         return IsUnoccupiedPassableTerrainCell(cell);
     }
 
@@ -506,10 +509,18 @@ UnitMovementPoint movement_frame_delta_for_direction_with_context(
 
 bool try_blocked_movement_direction_step(UnitMovementContext& context,
     UnitMovementUnit& unit, u32 direction, u32 previous_direction) {
-    if (direction == 0 || direction == previous_direction) {
+    // Each original jump-table arm compares the saved incoming direction
+    // against the *opposite* of the candidate (for example, candidate 2 is
+    // skipped only when the incoming direction was 6).  It then writes the
+    // candidate direction before calculating/probing its frame delta, so a
+    // failed probe also leaves that direction behind for the next arm.
+    if (direction == 0 ||
+        direction >= kLegacyFallbackDirectionRemap.size() ||
+        kLegacyFallbackDirectionRemap[direction] == previous_direction) {
         return false;
     }
 
+    unit.direction = direction;
     const UnitMovementPoint delta =
         movement_frame_delta_for_direction_with_context(context, unit, direction);
     const i32 next_x = unit.x + delta.x;
@@ -545,7 +556,53 @@ bool ProcessBlockedMovementDirectionFallback(UnitMovementContext& context,
     }
 
     const u32 previous_direction = unit.direction;
-    for (u32 direction : kFallbackDirections[desired_direction]) {
+    const auto& fallback_directions = kFallbackDirections[desired_direction];
+    for (std::size_t index = 0; index < 2; ++index) {
+        const u32 direction = fallback_directions[index];
+        if (try_blocked_movement_direction_step(context, unit, direction,
+                previous_direction)) {
+            return true;
+        }
+    }
+
+    // The original blocked-movement jump table has an extra corner probe for
+    // diagonal headings (0x004c7868, 0x004c7a67, 0x004c7c66 and 0x004c7e65).
+    // After both adjacent full animation steps fail, it first checks the
+    // diagonal tile 32 pixels away.  If that tile is enterable, it retries the
+    // two component axes with DAT_0072cee0's one-pixel separation deltas.  The
+    // one-pixel move is important: omitting it makes neutral idle wanderers
+    // choose a different fallback direction, finish their route on a different
+    // tick and consequently consume the shared gameplay RNG in another order.
+    if ((desired_direction & 1u) == 0 && desired_direction != 0) {
+        const UnitMovementPoint diagonal_tile =
+            kUnitMovementTileDirection8Deltas[desired_direction];
+        if (CheckUnitCanEnterTerrainCell(context, unit,
+                unit.x + diagonal_tile.x, unit.y + diagonal_tile.y)) {
+            for (std::size_t index = 0; index < 2; ++index) {
+                const u32 direction = fallback_directions[index];
+                const UnitMovementPoint delta =
+                    kLegacySeparationDirectionDeltas[direction];
+                const i32 next_x = unit.x + delta.x;
+                const i32 next_y = unit.y + delta.y;
+                // The diagonal corner arms likewise store the candidate
+                // before the one-pixel entry probe and retain it on failure.
+                unit.direction = direction;
+                if (!CheckUnitCanEnterTerrainCell(
+                        context, unit, next_x, next_y)) {
+                    continue;
+                }
+                unit.x = next_x;
+                unit.y = next_y;
+                unit.current_cell_x = next_x & ~0x1f;
+                unit.current_cell_y = next_y & ~0x1f;
+                unit.direction = direction;
+                return true;
+            }
+        }
+    }
+
+    for (std::size_t index = 2; index < fallback_directions.size(); ++index) {
+        const u32 direction = fallback_directions[index];
         if (try_blocked_movement_direction_step(context, unit, direction,
                 previous_direction)) {
             return true;
@@ -764,8 +821,8 @@ UnitMovementDirectionTurnResult PrepareUnitMovementDirectionForStep(
             unit.movement_flags |= kUnitMovementFlagInterpolatingTowardTarget;
             unit.movement_residual_x = 0;
             unit.movement_residual_y = 0;
-            unit.movement_interpolation_x = unit.x;
-            unit.movement_interpolation_y = unit.y;
+            unit.movement_interpolation_x = static_cast<float>(unit.x);
+            unit.movement_interpolation_y = static_cast<float>(unit.y);
         }
         result.interpolation_active = true;
         result.can_advance = true;
@@ -1080,7 +1137,12 @@ UnitTargetBoundsMovementStatus CheckUnitTargetBoundsMovementStatus(
         return result;
     }
 
-    const UnitMovementRect source_bounds = unit_bounds_rect(unit);
+    // CalculateUnitTargetBoundsScratch (0x004c6ed5) reads definition
+    // +0x370/+0x374/+0x378/+0x37c for the moving unit.  Those are the
+    // interaction bounds in the reconstructed catalog; +0x360..+0x36c are
+    // the separate name/center rectangle and can make a harvester accept or
+    // reject a dropoff on a different tick.
+    const UnitMovementRect source_bounds = unit_interaction_bounds_rect(unit);
     const UnitMovementRect loose_target = target_footprint_rect(*target, 0x2a);
     if (!rects_overlap(source_bounds, loose_target)) {
         result.status = 1;
@@ -1088,8 +1150,18 @@ UnitTargetBoundsMovementStatus CheckUnitTargetBoundsMovementStatus(
     }
 
     const UnitMovementRect close_target = target_footprint_rect(*target, 5);
-    result.suggested_path_x = close_target.left;
-    result.suggested_path_y = close_target.top;
+    // ProcessWorkerApproachDropoff 0x004ca457 calls 0x004c715a before it
+    // copies the status-2 EDX/EBX result into raw +0x6c/+0x70.  Despite its
+    // old no-op label, 0x004c715a replaces the temporary target.x-5/y-5
+    // rectangle corner with the target definition's +0x370 interaction-
+    // bounds center.  Keeping the corner made returning harvesters approach
+    // the HQ from its top-left instead of following the original center path.
+    result.suggested_path_x = target->x +
+        target->definition.interaction_bounds_left +
+        (target->definition.interaction_bounds_width >> 1);
+    result.suggested_path_y = target->y +
+        target->definition.interaction_bounds_top +
+        (target->definition.interaction_bounds_height >> 1);
     if (!rects_overlap(source_bounds, close_target)) {
         result.status = 2;
         return result;
@@ -1147,14 +1219,31 @@ UnitDropoffSearchResult FindNearestOwnedDropoffBuilding(UnitMovementContext& con
         if (candidate == nullptr || candidate == &source) {
             continue;
         }
-        if (candidate->owner_id != source.owner_id || candidate->movement_state == 1) {
+        // Original FindNearestOwnedDropoffBuilding (0x004c6feb) excludes
+        // construction-gated buildings via raw +0x30, not movement state.
+        if (candidate->owner_id != source.owner_id || candidate->action_mode_gate == 1) {
             continue;
         }
         if (candidate->type_id != 0x60 && candidate->type_id != 0x70 &&
             candidate->type_id != 0x80 && candidate->type_id != 0x90) {
             continue;
         }
-        const u32 distance = default_distance(context, source, *candidate);
+        // FUN_004c3718 obtains both unit centers through FUN_004c36de before
+        // CalculateApproxUnitDistance.  Comparing raw origins biases the
+        // choice toward the top-left corner of large dropoff buildings and
+        // can select a different depot once an owner has more than one.
+        const UnitMovementPoint source_center{
+            source.x + source.definition.center_bounds_left +
+                (source.definition.center_bounds_width >> 1),
+            source.y + source.definition.center_bounds_top +
+                (source.definition.center_bounds_height >> 1)};
+        const UnitMovementPoint candidate_center{
+            candidate->x + candidate->definition.center_bounds_left +
+                (candidate->definition.center_bounds_width >> 1),
+            candidate->y + candidate->definition.center_bounds_top +
+                (candidate->definition.center_bounds_height >> 1)};
+        const u32 distance = CalculateApproxUnitDistance(source_center.x,
+            source_center.y, candidate_center.x, candidate_center.y);
         if (distance <= result.distance) {
             result.unit = candidate;
             result.distance = distance;
@@ -1517,10 +1606,14 @@ void RebuildUnitRuntimeStatsFromDefinitionAndParents(UnitMovementUnit& unit,
         const bool use_second_parent = unit.type_id == 0x2b &&
             parent_b != nullptr && parent_b_stats != nullptr;
         const u32 divisor = use_second_parent ? 3 : 2;
+        // FUN_00408c80 has a deliberate type-0x2b quirk: raw +0x54 from the
+        // first linked parent is added twice when averaging the rebuilt level.
         target_variant = (target_variant + parent_a->production_variant +
-            (use_second_parent ? parent_b->production_variant : 0)) / divisor;
+            (use_second_parent ? parent_a->production_variant : 0)) / divisor;
         progress_value = (progress_value + parent_a->elite_progress_value +
             (use_second_parent ? parent_b->elite_progress_value : 0)) / divisor;
+        unit.elite_progress_count += parent_a->elite_progress_count +
+            (use_second_parent ? parent_b->elite_progress_count : 0);
 
         const u32 max_health_sum = stats.max_health + parent_a_stats->max_health +
             (use_second_parent ? parent_b_stats->max_health : 0);
@@ -1528,9 +1621,12 @@ void RebuildUnitRuntimeStatsFromDefinitionAndParents(UnitMovementUnit& unit,
             (use_second_parent ? parent_b_stats->health : 0);
         health_percent = max_health_sum == 0 ? 100 : health_sum * 100 / max_health_sum;
 
-        const u32 max_secondary_sum = stats.max_secondary_value +
-            parent_a_stats->max_secondary_value +
-            (use_second_parent ? parent_b_stats->max_secondary_value : 0);
+        // The two-parent path divides by self.max_secondary twice in the
+        // original; only type 0x2b sums all three maximums.
+        const u32 max_secondary_sum = use_second_parent ?
+            stats.max_secondary_value + parent_a_stats->max_secondary_value +
+                parent_b_stats->max_secondary_value :
+            stats.max_secondary_value + stats.max_secondary_value;
         const u32 secondary_sum = stats.secondary_value + parent_a_stats->secondary_value +
             (use_second_parent ? parent_b_stats->secondary_value : 0);
         secondary_percent =
@@ -1544,9 +1640,9 @@ void RebuildUnitRuntimeStatsFromDefinitionAndParents(UnitMovementUnit& unit,
     stats.max_secondary_value = unit.definition.initial_max_secondary_value;
     stats.health = stats.max_health;
     stats.secondary_value = stats.max_secondary_value;
-    stats.stat_1c = 0;
-    stats.stat_20 = 0;
-    stats.stat_28 = 0;
+    stats.stat_1c = unit.definition.profile_offense_value;
+    stats.stat_20 = unit.definition.profile_defense_value;
+    stats.stat_28 = unit.definition.initial_secondary_value;
 
     for (u32 i = 0; i < target_variant; ++i) {
         IncreaseUnitVariantStats(unit, stats, random_limit);
@@ -1568,16 +1664,61 @@ u32 ResolveUnitActionProfileIndexForTarget(const UnitMovementUnit& source,
 
 u32 CalculateUnitMaxHealthWithProductionEffects(
     const ProductionOrderRuntimeState& production_state, const UnitMovementUnit& unit) {
-    return AddSignedUnitStatDelta(unit.max_health,
+    // Original 0x004084d0 reads raw unit +0x1c (the mutable OP value), not
+    // raw +0x10/max_health.  This helper's legacy name is misleading: its
+    // result is the source offense used by both damage and the selected HUD.
+    u32 value = AddSignedUnitStatDelta(unit.runtime_stat_1c,
         GetUnitProductionCompletionEffect(production_state, unit,
             kProductionEffectSlotUnitMaxHealth));
+
+    // CalculateUnitMaxHealthWithProductionEffects (0x004084d0) applies both
+    // temporary combat modifiers after production effect slot 2.  Omitting
+    // these made the 0x4000 source buff and the 0x1000 runtime form deal their
+    // unmodified damage even though the effect runtime set the original flags.
+    if ((unit.command_flags & 0x4000u) != 0) {
+        const u64 adjusted = static_cast<u64>(value) +
+            (static_cast<u64>(value) *
+                kCommandFlag4000MaxHealthBonusPercent) / 100u;
+        value = adjusted > 0xffffffffu
+            ? 0xffffffffu : static_cast<u32>(adjusted);
+    }
+    if ((unit.runtime_flags & 0x1000u) != 0) {
+        const u64 adjusted = static_cast<u64>(value) + value / 2u;
+        value = adjusted > 0xffffffffu
+            ? 0xffffffffu : static_cast<u32>(adjusted);
+    }
+    return value;
 }
 
 u32 CalculateUnitMaxSecondaryValueWithProductionEffects(
     const ProductionOrderRuntimeState& production_state, const UnitMovementUnit& unit) {
-    return AddSignedUnitStatDelta(unit.max_secondary_value,
+    // Original 0x004085a8..0x004085c6 reads raw unit +0x20 before adding
+    // production-effect table 3.  That slot is the definition +0x15c runtime
+    // defense value mirrored by runtime_stat_20; raw +0x14/max_secondary_value
+    // is the separate secondary-capacity field used by the HUD/runtime meter.
+    u32 value = AddSignedUnitStatDelta(unit.runtime_stat_20,
         GetUnitProductionCompletionEffect(production_state, unit,
             kProductionEffectSlotUnitMaxSecondaryValue));
+
+    // The original defense helper first adds max-health / 10 + 1 while
+    // command flag 0x20000 is active, then applies the DAT_0120c9c8 percent
+    // bonus for either runtime flag 0x400 or 0x800.  Both flags are emitted by
+    // reconstructed unit effects, so the helper must consume them as well.
+    if ((unit.command_flags & 0x20000u) != 0) {
+        const u32 max_health =
+            CalculateUnitMaxHealthWithProductionEffects(production_state, unit);
+        const u64 adjusted = static_cast<u64>(value) + max_health / 10u + 1u;
+        value = adjusted > 0xffffffffu
+            ? 0xffffffffu : static_cast<u32>(adjusted);
+    }
+    if ((unit.runtime_flags & 0x0c00u) != 0) {
+        const u64 adjusted = static_cast<u64>(value) +
+            (static_cast<u64>(value) *
+                kRuntimeFlag0c00DefenseBonusPercent) / 100u;
+        value = adjusted > 0xffffffffu
+            ? 0xffffffffu : static_cast<u32>(adjusted);
+    }
+    return value;
 }
 
 u32 CalculateUnitActionDamageWithDefinitionModifiers(
@@ -1796,8 +1937,8 @@ void ResetUnitMovementInterpolationState(UnitMovementUnit& unit,
     unit.movement_flags &= ~kUnitMovementFlagInterpolatingTowardTarget;
     unit.movement_residual_x = 0;
     unit.movement_residual_y = 0;
-    unit.movement_interpolation_x = 0;
-    unit.movement_interpolation_y = 0;
+    unit.movement_interpolation_x = 0.0f;
+    unit.movement_interpolation_y = 0.0f;
     unit.movement_turn_ticks = 0;
 
     if ((command_metadata_flags & kUnitCommandMetadataPreserveAnimationFrame) != 0) {
@@ -1860,37 +2001,42 @@ UnitMovementStepAdvanceResult AdvanceUnitMovementPositionTowardTarget(
     }
 
     result.used_interpolation = true;
-    double step_x = 0.0;
-    double step_y = 1.0;
-    const double from_x = static_cast<double>(unit.movement_interpolation_x);
-    const double from_y = static_cast<double>(unit.movement_interpolation_y);
-    const double to_x = static_cast<double>(unit.path_target_x);
-    const double to_y = static_cast<double>(unit.path_target_y);
-    const double dx = to_x - from_x;
-    const double dy = from_y - to_y;
-    if (dx != 0.0) {
-        const double angle = std::atan(dy / dx);
-        step_x = std::abs(std::cos(angle));
-        step_y = std::abs(std::sin(angle));
+    float step_x = 0.0f;
+    float step_y = 1.0f;
+    const float from_x = unit.movement_interpolation_x;
+    const float from_y = unit.movement_interpolation_y;
+    const float to_x = static_cast<float>(unit.path_target_x);
+    const float to_y = static_cast<float>(unit.path_target_y);
+    const float dx = to_x - from_x;
+    const float dy = from_y - to_y;
+    if (dx != 0.0f) {
+        // The original x87 sequence promotes both float operands before FDIV,
+        // so retain the double-precision quotient passed to atan.
+        const double angle = std::atan(
+            static_cast<double>(dy) / static_cast<double>(dx));
+        const float stored_angle = static_cast<float>(angle);
+        step_x = static_cast<float>(std::abs(std::cos(angle)));
+        step_y = static_cast<float>(
+            std::abs(std::sin(static_cast<double>(stored_angle))));
     }
-    step_x *= static_cast<double>(scaled_step);
-    step_y *= static_cast<double>(scaled_step);
+    step_x *= static_cast<float>(scaled_step);
+    step_y *= static_cast<float>(scaled_step);
 
     if (static_cast<u32>(unit.x) < static_cast<u32>(unit.path_target_x)) {
-        unit.movement_interpolation_x = static_cast<i32>(from_x + step_x);
+        unit.movement_interpolation_x = from_x + step_x;
     }
     else if (static_cast<u32>(unit.path_target_x) < static_cast<u32>(unit.x)) {
-        unit.movement_interpolation_x = static_cast<i32>(from_x - step_x);
+        unit.movement_interpolation_x = from_x - step_x;
     }
     if (static_cast<u32>(unit.y) < static_cast<u32>(unit.path_target_y)) {
-        unit.movement_interpolation_y = static_cast<i32>(from_y + step_y);
+        unit.movement_interpolation_y = from_y + step_y;
     }
     else if (static_cast<u32>(unit.path_target_y) < static_cast<u32>(unit.y)) {
-        unit.movement_interpolation_y = static_cast<i32>(from_y - step_y);
+        unit.movement_interpolation_y = from_y - step_y;
     }
 
-    unit.x = unit.movement_interpolation_x;
-    unit.y = unit.movement_interpolation_y;
+    unit.x = static_cast<i32>(unit.movement_interpolation_x);
+    unit.y = static_cast<i32>(unit.movement_interpolation_y);
     result.after_distance = CalculateApproxUnitDistance(unit.x, unit.y,
         unit.path_target_x, unit.path_target_y);
     result.moved = unit.x != old_x || unit.y != old_y;
@@ -2138,7 +2284,12 @@ bool FindNearestPathableGoalTile(UnitMovementContext& context, const UnitMovemen
             consider_candidate(x, min_y);
             consider_candidate(x, max_y);
         }
-        for (i32 y = min_y + 1; y < max_y; ++y) {
+        // Original 0x00508bf1 compares the side cursor against max_y - 1.
+        // The asymmetric perimeter deliberately omits y == max_y - 1 (as
+        // well as the right corners already omitted by x < max_x above).
+        // Including that row can select a closer east-side fallback that the
+        // shipped pathfinder never examines.
+        for (i32 y = min_y + 1; y < max_y - 1; ++y) {
             consider_candidate(min_x, y);
             consider_candidate(max_x, y);
         }
@@ -2233,23 +2384,6 @@ bool RunLegacyUnitPathfinder(UnitMovementContext& context, UnitMovementUnit& uni
 
     UnitMovementPoint resolved_goal = goal_tile;
     bool goal_adjusted = false;
-    auto first_motion_tile_can_enter =
-        [&](UnitMovementPoint candidate_tile) {
-            const UnitMovementPoint candidate_center =
-                tile_center_point(candidate_tile);
-            const u32 direction = CalculateUnitDirectionToPoint(
-                unit, candidate_center.x, candidate_center.y);
-            if (direction == 0 ||
-                direction >= kUnitMovementTileDirection8Deltas.size()) {
-                return true;
-            }
-            const UnitMovementPoint step =
-                kUnitMovementTileDirection8Deltas[direction];
-            const UnitMovementPoint first_tile{
-                start_tile.x + step.x / 32,
-                start_tile.y + step.y / 32};
-            return check_pathfinder_tile_can_enter(context, unit, first_tile);
-        };
     auto apply_legacy_pathfinder_outputs =
         [&](UnitMovementPoint path_target_tile, UnitMovementPoint next_path_tile,
             bool direct_path) {
@@ -2287,8 +2421,7 @@ bool RunLegacyUnitPathfinder(UnitMovementContext& context, UnitMovementUnit& uni
         return true;
     }
 
-    if (CheckStraightUnitPathTiles(context, unit, start_tile, resolved_goal) &&
-        first_motion_tile_can_enter(resolved_goal)) {
+    if (CheckStraightUnitPathTiles(context, unit, start_tile, resolved_goal)) {
         apply_legacy_pathfinder_outputs(resolved_goal, resolved_goal, true);
         if (out_path_tiles != nullptr) {
             *out_path_tiles = BuildStraightUnitPathTiles(start_tile, resolved_goal);
@@ -2305,101 +2438,177 @@ bool RunLegacyUnitPathfinder(UnitMovementContext& context, UnitMovementUnit& uni
         return false;
     }
 
-    std::vector<i32> parent(storage_tiles, -1);
     std::vector<u16> distance(storage_tiles, 0xffffu);
-    std::deque<u32> open;
+    // Original 0x00508e50 keeps a fixed 0x400-entry open list.  It is not a
+    // FIFO queue: every iteration scans the current array and removes the
+    // first strict-minimum Manhattan score by replacing it with the last
+    // entry.  The resulting order (including equal-score ties) is observable
+    // in the chosen path.
+    constexpr u32 kLegacyOpenCapacity = 0x400;
+    std::array<UnitMovementPoint, kLegacyOpenCapacity> open_points{};
+    std::array<u16, kLegacyOpenCapacity> open_scores{};
+
+    const auto heuristic_score = [&](UnitMovementPoint point) {
+        const u32 dx = static_cast<u32>(std::abs(point.x - resolved_goal.x));
+        const u32 dy = static_cast<u32>(std::abs(point.y - resolved_goal.y));
+        return static_cast<u16>(static_cast<u16>(dx) + static_cast<u16>(dy));
+    };
 
     ConfigureLegacyPathfinderGrid(static_cast<i32>(context.map.width),
         static_cast<i32>(context.map.height));
     g_legacy_pathfinder_scratch.neighbor_cursor = start_tile;
-    const u32 visit_budget = std::max<u32>(1,
-        g_legacy_pathfinder_scratch.visit_budget);
+    const u32 visit_budget = g_legacy_pathfinder_scratch.visit_budget;
     u32 checked_count = 0;
-    parent[start_index] = static_cast<i32>(start_index);
-    distance[start_index] = 0;
-    open.push_back(start_index);
+    distance[start_index] = 1;
+    open_points[0] = start_tile;
+    open_scores[0] = heuristic_score(start_tile);
+    u32 open_count = 1;
 
-    u32 best_index = start_index;
+    UnitMovementPoint best_point = start_tile;
     u32 best_score = std::numeric_limits<u32>::max();
     bool reached_goal = false;
 
-    while (!open.empty() && checked_count <= visit_budget) {
-        const u32 current_index = open.front();
-        open.pop_front();
-        const UnitMovementPoint current = tile_point_from_index(context.map, current_index);
-        const u32 score = static_cast<u32>(std::abs(current.x - resolved_goal.x) +
-            std::abs(current.y - resolved_goal.y));
-        if (score < best_score) {
-            best_score = score;
-            best_index = current_index;
+    do {
+        u32 selected = 0;
+        for (u32 index = 0; index < open_count; ++index) {
+            if (open_scores[index] < open_scores[selected]) {
+                selected = index;
+            }
         }
-        if (current_index == goal_index) {
-            reached_goal = true;
-            best_index = current_index;
-            break;
+
+        const UnitMovementPoint current = open_points[selected];
+        const u16 current_score = open_scores[selected];
+        if (current_score < best_score) {
+            best_score = current_score;
+            best_point = current;
         }
+
+        --open_count;
+        open_points[selected] = open_points[open_count];
+        open_scores[selected] = open_scores[open_count];
+
+        const u32 current_index = tile_point_index(context.map, current);
+        const u16 next_distance =
+            static_cast<u16>(distance[current_index] + 1u);
 
         for (const UnitMovementPoint& offset : kLegacyPathfinderNeighborOffsets) {
             const UnitMovementPoint next{current.x + offset.x, current.y + offset.y};
-            if (!tile_point_in_bounds(context.map, next)) {
-                continue;
+            if (tile_point_in_bounds(context.map, next)) {
+                const u32 next_index = tile_point_index(context.map, next);
+                if (next_index < storage_tiles && distance[next_index] == 0xffffu) {
+                    // CheckLegacyPathfinderTileCanEnter increments the visit
+                    // counter only for a previously unseen candidate.
+                    ++checked_count;
+                    if (check_pathfinder_tile_can_enter(context, unit, next)) {
+                        distance[next_index] = next_distance;
+                        open_points[open_count] = next;
+                        open_scores[open_count] = heuristic_score(next);
+                        ++open_count;
+
+                        // The original breaks only this neighbor scan when the
+                        // fixed array reaches 0x400 entries.  Subsequent outer
+                        // iterations pop one entry and may append again.
+                        if (open_count > 0x3ffu) {
+                            break;
+                        }
+                    }
+                }
             }
-            const u32 next_index = tile_point_index(context.map, next);
-            if (next_index >= storage_tiles) {
-                continue;
+
+            // Goal recognition occurs after processing each neighbor, even
+            // when that tile was already visited.  It is deliberately not a
+            // test of the node selected at the top of the outer loop.
+            if (next.x == resolved_goal.x && next.y == resolved_goal.y) {
+                reached_goal = true;
+                break;
             }
-            if (parent[next_index] != -1) {
-                continue;
-            }
-            if (!check_pathfinder_tile_can_enter(context, unit, next, &checked_count)) {
-                continue;
-            }
-            parent[next_index] = static_cast<i32>(current_index);
-            distance[next_index] = static_cast<u16>(distance[current_index] + 1);
-            open.push_back(next_index);
         }
-    }
+    } while (checked_count <= visit_budget && !reached_goal && open_count != 0);
     g_legacy_pathfinder_scratch.checked_tile_count = checked_count;
 
-    if (best_index == start_index && !reached_goal) {
+    if (!reached_goal) {
+        // A budget/open-list failure does not preserve the requested goal.
+        // 0x00509471 marks it adjusted and replaces it with the strict-best
+        // heuristic tile, which the caller writes back to unit.path_target.
         goal_adjusted = true;
-        apply_legacy_pathfinder_outputs(start_tile, start_tile, false);
+        resolved_goal = best_point;
+    }
+
+    // The original has no parent array.  Starting at the reached/strict-best
+    // tile, it scans N,E,S,W,NW,NE,SE,SW and repeatedly chooses the first
+    // strict-minimum u16 visit distance.  The stored reverse path excludes the
+    // goal and includes the start, up to 0x200 entries.
+    std::vector<UnitMovementPoint> reverse_path;
+    reverse_path.reserve(0x200);
+    UnitMovementPoint cursor = resolved_goal;
+    u16 lowest_distance = 0xffffu;
+    bool reconstruction_failed = false;
+    while (cursor.x != start_tile.x || cursor.y != start_tile.y) {
+        UnitMovementPoint predecessor{};
+        bool found_predecessor = false;
+        for (const UnitMovementPoint& offset : kLegacyPathfinderNeighborOffsets) {
+            const UnitMovementPoint candidate{
+                cursor.x + offset.x, cursor.y + offset.y};
+            if (!tile_point_in_bounds(context.map, candidate)) {
+                continue;
+            }
+            const u32 candidate_index = tile_point_index(context.map, candidate);
+            if (candidate_index >= storage_tiles) {
+                continue;
+            }
+            const u16 candidate_distance = distance[candidate_index];
+            if (candidate_distance < lowest_distance) {
+                lowest_distance = candidate_distance;
+                predecessor = candidate;
+                found_predecessor = true;
+            }
+        }
+
+        if (!found_predecessor || reverse_path.size() >= 0x200) {
+            reconstruction_failed = true;
+            break;
+        }
+        reverse_path.push_back(predecessor);
+        cursor = predecessor;
+        // 0x00509639 tests the 0x200 limit immediately after appending and
+        // before the loop can observe that the last predecessor was start.
+        if (reverse_path.size() >= 0x200) {
+            reconstruction_failed = true;
+            break;
+        }
+    }
+
+    if (reconstruction_failed) {
+        // This is the original 512-step overflow fallback: mark the goal as
+        // adjusted to the start and set the direct-path flag, leaving the
+        // caller's already-copied next_path coordinates untouched.
+        goal_adjusted = true;
+        resolved_goal = start_tile;
+        apply_legacy_pathfinder_outputs(start_tile, start_tile, true);
         if (out_path_tiles != nullptr) {
             out_path_tiles->push_back(start_tile);
         }
         return false;
     }
 
-    std::vector<UnitMovementPoint> path;
-    for (u32 at = best_index;; at = static_cast<u32>(parent[at])) {
-        path.push_back(tile_point_from_index(context.map, at));
-        if (at == start_index || parent[at] < 0 || static_cast<u32>(parent[at]) == at) {
-            break;
-        }
-    }
-    std::reverse(path.begin(), path.end());
     if (out_path_tiles != nullptr) {
-        *out_path_tiles = path;
-    }
-
-    UnitMovementPoint waypoint = path.size() > 1 ? path[1] : path.front();
-    for (std::size_t i = path.size(); i-- > 1;) {
-        // The Bresenham tile trace and the eight-direction pixel mover can
-        // choose different first cells for shallow slopes.  Do not smooth to
-        // a waypoint whose actual first motion step is blocked; retain path[1]
-        // so the unit follows the valid BFS edge out of the cell.
-        if (CheckStraightUnitPathTiles(context, unit, start_tile, path[i]) &&
-            first_motion_tile_can_enter(path[i])) {
-            waypoint = path[i];
-            break;
+        out_path_tiles->assign(reverse_path.rbegin(), reverse_path.rend());
+        if (out_path_tiles->empty() ||
+            out_path_tiles->back().x != resolved_goal.x ||
+            out_path_tiles->back().y != resolved_goal.y) {
+            out_path_tiles->push_back(resolved_goal);
         }
     }
 
-    // A bounded search may only find a partial route during this pass.  Keep
-    // the requested (or nearest legal) final goal in path_target and expose
-    // only the partial route through next_path.  ProcessUnitMovementStep will
-    // re-run the pathfinder when that waypoint is reached.  Overwriting the
-    // final target with path.back() makes a long one-click move stop early.
+    UnitMovementPoint waypoint = start_tile;
+    for (std::size_t count = reverse_path.size(); count != 0;) {
+        const UnitMovementPoint candidate = reverse_path[--count];
+        if (!CheckStraightUnitPathTiles(context, unit, start_tile, candidate)) {
+            break;
+        }
+        waypoint = candidate;
+    }
+
     apply_legacy_pathfinder_outputs(resolved_goal, waypoint, false);
     return reached_goal;
 }
@@ -2422,10 +2631,24 @@ u32 ProcessUnitPathToDestination(UnitMovementContext& context, UnitMovementUnit&
         return 0;
     }
 
-    unit.path_target_x = std::clamp(unit.path_target_x, 0,
-        static_cast<i32>(context.map.width * 32) - 32);
-    unit.path_target_y = std::clamp(unit.path_target_y, 0,
-        static_cast<i32>(context.map.height * 32) - 32);
+    // Original 0x004c7440 preserves every coordinate inside the final map
+    // tile (for a 96-wide map, 3040..3071).  Only a value at/after the world
+    // extent is replaced with the final tile origin.  std::clamp to
+    // width*32-32 incorrectly collapsed those valid sub-tile coordinates.
+    const i32 world_width = static_cast<i32>(context.map.width * 32u);
+    const i32 world_height = static_cast<i32>(context.map.height * 32u);
+    if (unit.path_target_x >= world_width) {
+        unit.path_target_x = world_width - 32;
+    }
+    if (unit.path_target_x < 0) {
+        unit.path_target_x = 0;
+    }
+    if (unit.path_target_y >= world_height) {
+        unit.path_target_y = world_height - 32;
+    }
+    if (unit.path_target_y < 0) {
+        unit.path_target_y = 0;
+    }
     unit.next_path_x = unit.path_target_x;
     unit.next_path_y = unit.path_target_y;
 
@@ -2435,7 +2658,10 @@ u32 ProcessUnitPathToDestination(UnitMovementContext& context, UnitMovementUnit&
             unit.next_path_y);
         if (direction != 0) {
             unit.direction = direction;
-            unit.wait_ticks = 4;
+            // Original ProcessUnitPathToDestination (0x004c7440) writes raw
+            // +0xb4 = 4.  UpdateUnitMovementTowardPathTarget uses that same
+            // field as its direction-turn timeout counter.
+            unit.movement_turn_ticks = 4;
             unit.runtime_flags &= ~0x8u;
             const u32 command_metadata_flags =
                 movement_command_metadata_flags(context, unit);
@@ -2448,6 +2674,9 @@ u32 ProcessUnitPathToDestination(UnitMovementContext& context, UnitMovementUnit&
                     unit.definition.movement_animation_frame_count);
             }
             unit.movement_state = 2;
+            // Raw +0x110 is the movement step accumulator.  The original
+            // resets it for every successful ground path replan at 0x004c74a0.
+            unit.movement_step_accumulator = 0;
             if (context.callbacks.on_path_replanned != nullptr) {
                 context.callbacks.on_path_replanned(context, unit);
             }
@@ -2499,7 +2728,8 @@ bool CheckUnitCanEnterTerrainCell(UnitMovementContext& context, const UnitMoveme
     if (cell == nullptr) {
         return false;
     }
-    if (!movement_cell_has_legacy_entry_layers(*cell)) {
+    if (!context.map.legacy_entry_layers_present &&
+        !movement_cell_has_legacy_entry_layers(*cell)) {
         return IsUnoccupiedPassableTerrainCell(*cell);
     }
     return legacy_movement_class_can_enter_cell(unit, *cell, true);
@@ -2523,24 +2753,24 @@ u32 ResolvePathDirectionOrReplan(UnitMovementContext& context, UnitMovementUnit&
 u32 FindPassableDirectionRotatingLeft(UnitMovementContext& context,
     UnitMovementUnit& unit) {
     u32 direction = unit.direction;
-    if (unit.movement_turn_ticks != 0) {
+    if (unit.movement_step_accumulator != 0) {
         direction = rotate_direction8(direction, -1);
-        --unit.movement_turn_ticks;
-        if (unit.movement_turn_ticks != 0) {
+        --unit.movement_step_accumulator;
+        if (unit.movement_step_accumulator != 0) {
             direction = rotate_direction8(direction, -1);
-            --unit.movement_turn_ticks;
+            --unit.movement_step_accumulator;
         }
     }
 
     for (u32 attempts = 0; attempts < 8; ++attempts) {
         if (direction_can_enter(context, unit, direction)) {
-            if (unit.movement_turn_ticks == 0) {
+            if (unit.movement_step_accumulator == 0) {
                 unit.movement_state = 2;
             }
             unit.direction = direction;
             return direction;
         }
-        ++unit.movement_turn_ticks;
+        ++unit.movement_step_accumulator;
         direction = rotate_direction8(direction, 1);
     }
     return 0;
@@ -2549,24 +2779,24 @@ u32 FindPassableDirectionRotatingLeft(UnitMovementContext& context,
 u32 FindPassableDirectionRotatingRight(UnitMovementContext& context,
     UnitMovementUnit& unit) {
     u32 direction = unit.direction;
-    if (unit.movement_turn_ticks != 0) {
+    if (unit.movement_step_accumulator != 0) {
         direction = rotate_direction8(direction, 1);
-        --unit.movement_turn_ticks;
-        if (unit.movement_turn_ticks != 0) {
+        --unit.movement_step_accumulator;
+        if (unit.movement_step_accumulator != 0) {
             direction = rotate_direction8(direction, 1);
-            --unit.movement_turn_ticks;
+            --unit.movement_step_accumulator;
         }
     }
 
     for (u32 attempts = 0; attempts < 8; ++attempts) {
         if (direction_can_enter(context, unit, direction)) {
-            if (unit.movement_turn_ticks == 0) {
+            if (unit.movement_step_accumulator == 0) {
                 unit.movement_state = 2;
             }
             unit.direction = direction;
             return direction;
         }
-        ++unit.movement_turn_ticks;
+        ++unit.movement_step_accumulator;
         direction = rotate_direction8(direction, -1);
     }
     return 0;
@@ -2603,19 +2833,29 @@ UnitTerrainClassProbeResult DispatchTerrainClassEntryProbeDetailed(
 
     const UnitMovementCell* base_cell = GetMovementCell(context.map, world_to_tile(x),
         world_to_tile(y));
-    if (base_cell != nullptr && movement_cell_has_legacy_entry_layers(*base_cell)) {
+    if (base_cell != nullptr &&
+        (context.map.legacy_entry_layers_present ||
+            movement_cell_has_legacy_entry_layers(*base_cell))) {
         if (!legacy_movement_class_can_enter_cell(unit, *base_cell, false)) {
             return UnitTerrainClassProbeResult{1, nullptr};
         }
 
-        const UnitMovementRect probe_bounds = unit_bounds_rect_at(unit, x, y);
+        // Original FUN_004c8270 builds both collision rectangles from the
+        // definition's raw +0x370..+0x37c fields.  Those are the interaction
+        // bounds, not the larger raw +0x360 render/selection bounds.  The
+        // distinction is observable when state 0x49 separates two workers:
+        // their 15x18 interaction rectangles stop on an edge touch, while the
+        // 28x37 bounds rectangles remain overlapped for several extra ticks.
+        const UnitMovementRect probe_bounds =
+            unit_interaction_bounds_rect_at(unit, x, y);
         if (unit.definition.movement_class == 3) {
             for (UnitMovementUnit* other : context.active_units) {
                 if (other == nullptr || other == &unit) {
                     continue;
                 }
                 if (other->definition.movement_class == 3 &&
-                    rects_overlap_strict(probe_bounds, unit_bounds_rect(*other))) {
+                    rects_overlap_strict(probe_bounds,
+                        unit_interaction_bounds_rect(*other))) {
                     return UnitTerrainClassProbeResult{2, other};
                 }
             }
@@ -2631,7 +2871,8 @@ UnitTerrainClassProbeResult DispatchTerrainClassEntryProbeDetailed(
                 (other->runtime_flags & 0x80u) != 0) {
                 continue;
             }
-            if (rects_overlap_strict(probe_bounds, unit_bounds_rect(*other))) {
+            if (rects_overlap_strict(probe_bounds,
+                    unit_interaction_bounds_rect(*other))) {
                 return UnitTerrainClassProbeResult{2, other};
             }
         }
@@ -2679,12 +2920,15 @@ void ProcessGroundUnitTerrainStep(UnitMovementContext& context, UnitMovementUnit
     }
     const UnitMovementCell* cell = GetMovementCell(context.map, world_to_tile(next_x),
         world_to_tile(next_y));
-    if (cell == nullptr || !legacy_ground_fallback_cell_allows(unit, *cell)) {
+    if (cell == nullptr ||
+        !legacy_ground_fallback_cell_allows(context.map, unit, *cell)) {
         return;
     }
     unit.x = next_x;
     unit.y = next_y;
-    refresh_unit_current_cell(unit);
+    // Original FUN_004c852e only applies the one-pixel separation to the
+    // world coordinates.  The cached cell is owned by the main movement
+    // step and deliberately remains unchanged here.
 }
 
 void ProcessAirUnitTerrainStep(UnitMovementContext& context, UnitMovementUnit& unit) {
@@ -2706,7 +2950,8 @@ void ProcessAirUnitTerrainStep(UnitMovementContext& context, UnitMovementUnit& u
     if (in_world_bounds(context.map, next_x, next_y)) {
         unit.x = next_x;
         unit.y = next_y;
-        refresh_unit_current_cell(unit);
+        // FUN_004c8679 has the same contract for air separation: update the
+        // world position, but do not cross/update the cached movement cell.
     }
 }
 
@@ -2824,6 +3069,7 @@ void HandleUnitRuntimeDeathState(UnitMovementContext& context, UnitMovementUnit&
     unit.animation_frame = 0;
     unit.draw_flags = 0;
     unit.command_value = 0;
+    unit.target = nullptr;
     unit.path_target_x = 0;
     unit.command_flags &= 0xfffff7bf;
     unit.command_bits[0] &= static_cast<u8>(~0x80u);
@@ -3108,14 +3354,6 @@ bool ProcessUnitRuntimeStateTick(UnitMovementContext& context, UnitMovementUnit&
         ProcessUnitAnimationTimer(unit);
         --unit.command_lockout_ticks;
         if (unit.command_lockout_ticks == 0) {
-            unit.command_flags &= ~0x10u;
-        }
-    }
-
-    if (unit.wait_ticks != 0) {
-        ProcessUnitAnimationTimer(unit);
-        --unit.wait_ticks;
-        if (unit.wait_ticks == 0) {
             unit.command_flags &= ~0x10u;
         }
     }

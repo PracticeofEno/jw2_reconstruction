@@ -68,6 +68,10 @@ struct UnitMovementMap {
     u32 width = 0;
     u32 height = 0;
     u32 stride_tiles = 0;
+    // Session records 10/12/13 are authoritative even when an individual
+    // tile stores zero in every layer.  A zero-valued tile is not evidence
+    // that the legacy layers are absent.
+    bool legacy_entry_layers_present = false;
     std::vector<UnitMovementCell> cells;
     std::vector<UnitMovementPoint> nearby_tile_offsets;
 };
@@ -95,6 +99,7 @@ struct UnitMovementDefinition {
     u32 passive_recovery_enabled = 0;
     u32 passive_recovery_flags = 0;
     u32 passive_map_effect_seed = 0;
+    u32 effect_adjusted_interaction_range_base = 0;
     u32 effect_command_distance_gate = 0;
     u32 target_acquisition_range = 0;
     u32 cell_render_flags = 0;
@@ -196,6 +201,20 @@ struct UnitMovementDefinition {
     std::array<u32, 8> action_impact_frames{};
     std::array<u32, 8> prerequisite_type_ids{};
     std::array<std::array<UnitMovementPoint, 32>, 9> frame_delta_by_direction{};
+    // Original catalog +0x1f0 initializes mutable unit raw +0xe8.  It is
+    // distinct from immutable support/footprint flags at catalog +0x1f8.
+    u32 initial_script_bit_flags = 0;
+    // Original catalog +0x1d4: type selected by direct linked-unit release.
+    // This is not the morph/owner-accounting alternate at catalog +0x1e4.
+    u32 linked_release_type_id = 0;
+    // Original catalog +0x13f8: animation wrap used by target-progress state
+    // 0x11.  The idle/reservation timer at +0x13d4 is a different field.
+    u32 target_progress_animation_period = 0;
+    // Original catalog +0x284/+0x288 and u8 +0x30f drive construction
+    // placement path probes.  They are not the prerequisite list at +0x1fc.
+    u32 placement_path_reference_count = 0;
+    std::array<u32, 16> placement_path_reference_type_ids{};
+    u32 placement_small_reference_count = 0;
 };
 
 struct UnitQueuedCommand {
@@ -265,15 +284,23 @@ struct UnitMovementUnit {
     u32 animation_frame = 0;
     u32 animation_timer = 0;
     u32 movement_state = 0;
+    // Original raw +0xb4.  ProcessUnitPathToDestination seeds this to four;
+    // the movement core increments it while rotating and times out at ten.
     u32 movement_turn_ticks = 0;
     u32 placement_reset_scratch = 0;
-    std::array<u32, 4> effect_reset_scratch{};
+    // Reserved typed-runtime padding.  The corresponding raw OBC words at
+    // +0x114..+0x120 are represented by the movement fields below; retaining
+    // this padding keeps the public runtime layout stable for live probes.
+    std::array<u32, 4> movement_runtime_padding{};
+    // Original raw +0x110.  This is the movement-speed accumulator and is
+    // temporarily reused as the rotating obstacle-probe counter.
     u32 movement_step_accumulator = 0;
     i32 movement_residual_x = 0;
     i32 movement_residual_y = 0;
-    i32 movement_interpolation_x = 0;
-    i32 movement_interpolation_y = 0;
-    u32 wait_ticks = 0;
+    // Original raw +0x11c/+0x120 are IEEE-754 accumulators.  Integer x/y are
+    // derived only after the fractional movement has been accumulated.
+    float movement_interpolation_x = 0.0f;
+    float movement_interpolation_y = 0.0f;
     u32 cargo_amount = 0;
     u32 cargo_capacity = 0;
     u32 harvest_tile_index = 0;
@@ -306,6 +333,8 @@ struct UnitMovementUnit {
     bool footprint_registered = false;
     bool production_reserved = false;
     UnitMovementDefinition definition;
+    // Mutable original unit raw +0xe8, changed by scenario bit opcodes.
+    u32 script_bit_flags = 0;
 };
 
 struct UnitRuntimeStatBlock {

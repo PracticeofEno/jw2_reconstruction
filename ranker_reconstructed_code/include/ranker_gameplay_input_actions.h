@@ -40,9 +40,17 @@ struct GameplayActionUnitState {
     u32 owner = 0;
     u32 runtime_state = 0;
     u32 command_state = 0;
+    // Original unit raw +0x0c (DAT_00a03fc4). Subtype 0x0b reads and
+    // replaces its high bit; this is distinct from raw +0x9c command flags.
+    u32 area_marker_flags = 0;
     u32 flags = 0;
     u32 runtime_flags = 0;
     u32 action_mode_gate = 0;
+    // Original raw unit +0x124.  Resource-command publishers use this live
+    // deferred-queue count; raw +0x30/action_mode_gate is unrelated.
+    u32 deferred_command_count = 0;
+    u32 target_class = 0;
+    i32 path_target_x = 0;
     i32 x = 0;
     i32 y = 0;
     i32 bounds_left = 0;
@@ -137,6 +145,7 @@ struct GameplayInputActionState {
     std::array<u8, kGameplayActionSelectorCount> selector_modes{};
     std::array<u8, kGameplayActionSelectorCount> selector_result_states{};
     std::array<u8, kGameplayActionSelectorCount> selector_enabled{};
+    std::array<u32, kGameplayActionSelectorCount> selector_target_class_masks{};
     std::vector<GameplayChecksumObject> checksum_units;
     std::vector<GameplayChecksumObject> checksum_effects;
     std::vector<GameplayActionUnitState> units;

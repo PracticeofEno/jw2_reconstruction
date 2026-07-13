@@ -26,7 +26,12 @@ std::string trim_copy(std::string_view text) {
 }
 
 bool parse_indexed_text_line(std::string_view line, u32& index, std::string& value) {
-    line = std::string_view(trim_copy(line));
+    // Keep the trimmed storage alive for every view used below.  Constructing
+    // a string_view directly from trim_copy() left it pointing at a destroyed
+    // temporary; short CP949 rows such as `32 = "다이노스"` then retained a
+    // leading NUL / assignment fragment instead of the quoted value.
+    const std::string trimmed = trim_copy(line);
+    line = trimmed;
     if (line.empty() || line.front() == ';') {
         return false;
     }

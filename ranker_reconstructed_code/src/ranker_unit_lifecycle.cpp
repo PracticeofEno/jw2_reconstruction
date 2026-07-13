@@ -130,9 +130,10 @@ bool is_building_type(u32 type_id) {
     return type_id >= 0x60;
 }
 
-u32 unit_score_value(const UnitMovementUnit& unit) {
-    return unit.definition.production_resource_cost +
-        unit.definition.production_secondary_cost;
+u32 unit_score_value(UnitLifecycleContext& context, UnitMovementUnit& unit) {
+    const UnitMovementDefinition& definition = definition_for(context, unit);
+    return definition.production_resource_cost +
+        definition.production_secondary_cost;
 }
 
 void for_each_footprint_cell(UnitLifecycleContext& context, UnitMovementUnit& unit,
@@ -216,6 +217,7 @@ void reset_runtime_fields(UnitMovementUnit& unit) {
     // The definition word at the similarly inferred catalog offset is a type
     // flag field, not the unit's mutable subtype-06 command-bit state.
     unit.command_bits.fill(0);
+    unit.script_bit_flags = 0;
     unit.runtime_flags = 1;
     unit.draw_flags = 0;
     unit.previous_command_state = 0;
@@ -226,7 +228,7 @@ void reset_runtime_fields(UnitMovementUnit& unit) {
     unit.action_mode_gate = 0;
     unit.target = nullptr;
     unit.linked_unit = nullptr;
-    unit.wait_ticks = 0;
+    unit.movement_step_accumulator = 0;
     unit.work_timer = 0;
     unit.effect_timer = 0;
     unit.distance_check_mode = 0;
@@ -250,7 +252,8 @@ bool same_tile_as_active_unit(UnitLifecycleContext& context, UnitMovementUnit& u
         return false;
     }
     for (UnitMovementUnit* candidate : context.movement->active_units) {
-        if (candidate == nullptr || candidate == &unit || !candidate->active ||
+        if (candidate == nullptr || candidate == &unit ||
+            (unit.id != 0 && candidate->id == unit.id) || !candidate->active ||
             (candidate->runtime_flags & 0x80) != 0) {
             continue;
         }
@@ -336,6 +339,13 @@ bool find_unit_tile(UnitLifecycleContext& context, UnitMovementUnit& unit,
 bool find_large_footprint_tile(UnitLifecycleContext& context, UnitMovementUnit& unit,
     i32& x, i32& y, bool require_matching_terrain) {
     static_cast<void>(require_matching_terrain);
+    const UnitMovementDefinition& definition = definition_for(context, unit);
+    // Original strict/matching helpers 0x004cf546/0x004cf5b7 only enter the
+    // structure cell loop when both definition footprint counts are nonzero.
+    if (definition.footprint_width_tiles == 0 ||
+        definition.footprint_height_tiles == 0) {
+        return false;
+    }
     const i32 signed_tile_x = x >> 5;
     const i32 signed_tile_y = y >> 5;
     if (!signed_tile_in_bounds(context, signed_tile_x, signed_tile_y)) {
@@ -390,8 +400,11 @@ void HandleUnitCreationRegisterFootprint(UnitLifecycleContext& context,
     unit.action_mode_gate = 0;
     unit.linked_object_id = unit.id;
     unit.linked_unit = &unit;
-    // Original 0x004ce42d copies raw +0x78/+0x7c (the aligned current-cell
-    // coordinates) to the saved rally fields at +0xc8/+0xcc.
+    // Original 0x004ce43d copies raw +0xc0/+0xc4 (the aligned current-cell
+    // coordinates) to raw +0xc8/+0xcc.  The typed reconstruction keeps both
+    // the next-path scratch and the saved rally value, so mirror both aliases.
+    unit.next_path_x = unit.current_cell_x;
+    unit.next_path_y = unit.current_cell_y;
     unit.saved_path_target_x = unit.current_cell_x;
     unit.saved_path_target_y = unit.current_cell_y;
     increment_owner_type_count(context, unit.owner_id, unit.type_id);
@@ -481,16 +494,18 @@ void HandleUnitLifecycleGrowthOrDecay(UnitLifecycleContext& context,
     if ((unit.runtime_flags & 0x10) != 0) {
         ++unit.work_timer;
         if (unit.work_timer >= std::max<u32>(definition.production_cycle_period, 1)) {
-            unit.path_target_y = 1;
+            unit.path_target_x = 1;
             unit.command_flags |= 0x80;
             unit.work_timer = 0xdc;
         }
         return;
     }
 
-    if (unit.under_construction ||
-        unit.command_state == kUnitStateLifecycleConstructionActivation) {
-        unit.under_construction = true;
+    // Original HandleUnitLifecycleGrowthOrDecay (0x004ce876) enters the
+    // activation/revival block only for the exact raw state 0x10000077.
+    // under_construction is a typed mirror of raw +0x30 and is not a state
+    // discriminator here.
+    if (unit.command_state == kUnitStateLifecycleConstructionActivation) {
         HandleUnitConstructionActivation(context, unit);
         return;
     }
@@ -511,7 +526,7 @@ void HandleUnitLifecycleGrowthOrDecay(UnitLifecycleContext& context,
         return;
     }
 
-    unit.path_target_y = 1;
+    unit.path_target_x = 1;
     if ((unit.command_flags & 0x400000u) == 0 &&
         ((unit.runtime_flags & 0x40000u) != 0 || definition.lifecycle_class != 1)) {
         unit.command_flags |= 0x80;
@@ -520,7 +535,6 @@ void HandleUnitLifecycleGrowthOrDecay(UnitLifecycleContext& context,
     }
     unit.command_state = kUnitStateLifecycleConstructionActivation;
     unit.work_timer = 0;
-    unit.under_construction = true;
 }
 
 bool HandleUnitConstructionActivation(UnitLifecycleContext& context,
@@ -530,9 +544,6 @@ bool HandleUnitConstructionActivation(UnitLifecycleContext& context,
     if (unit.work_timer < std::max<u32>(definition.production_spawn_time, 1)) {
         return false;
     }
-    if (definition.lifecycle_class == 0) {
-        return false;
-    }
     if (definition.lifecycle_class == 1) {
         unit.action_mode = definition.production_resource_cost;
         unit.owner_id = 8;
@@ -540,18 +551,21 @@ bool HandleUnitConstructionActivation(UnitLifecycleContext& context,
 
     i32 placed_x = unit.anchor_x;
     i32 placed_y = unit.anchor_y;
-    FindStrictUnitPlacementPoint(context, unit, placed_x, placed_y);
+    // Original 0x004ce959..0x004ce96c checks the placement helper's carry
+    // result and retries on a later tick without activating the unit.
+    if (!FindStrictUnitPlacementPoint(context, unit, placed_x, placed_y)) {
+        return false;
+    }
     unit.x = placed_x;
     unit.y = placed_y;
-    unit.destination_x = placed_x;
-    unit.destination_y = placed_y;
+    // Original 0x004ce96e..0x004ce980 updates raw current-cell and world
+    // coordinates but deliberately preserves destination +0x78/+0x7c.
     unit.current_cell_x = placed_x & ~0x1f;
     unit.current_cell_y = placed_y & ~0x1f;
     unit.command_state = kUnitStateRuntimeIdleAcquire;
     unit.work_timer = 0;
     unit.command_flags &= 0x400000u;
     unit.runtime_flags = 1;
-    unit.wait_ticks = 0;
     unit.distance_check_mode = 0;
     unit.deferred_command_count = 0;
     unit.active_command_payload = {};
@@ -560,6 +574,8 @@ bool HandleUnitConstructionActivation(UnitLifecycleContext& context,
     unit.secondary_value = unit.max_secondary_value;
     unit.under_construction = false;
     unit.action_mode_gate = 0;
+    unit.runtime_stat_28 = 0;
+    unit.elite_progress_value = 0;
     unit.status_timer = 0;
     unit.production_variant = 0;
     unit.item_slots = {};
@@ -680,7 +696,11 @@ void HandleOwnerPopulationReservationTotals(UnitLifecycleContext& context) {
             }
         }
         else if ((unit->command_state & 0xffffffu) != kUnitStateLinkedUnitReleaseCycle ||
-            unit->command_value != 0) {
+            // HandleOwnerPopulationReservationTotals (0x004ceeb3) tests raw
+            // unit +0x4c (DAT_00a04004), the cargo/transport occupancy value,
+            // while state 0x60 is releasing a linked unit.  command_value is
+            // raw +0x68 and can hold an unrelated production/type payload.
+            unit->cargo_amount != 0) {
             context.owner_population_reserved[unit->owner_id] += cost;
         }
     }
@@ -906,8 +926,14 @@ bool InitializePlacedUnitFromMapSlot(UnitLifecycleContext& context,
 
     unit.x = x;
     unit.y = y;
-    unit.destination_x = x;
-    unit.destination_y = y;
+    // InitializePlacedUnitFromMapSlot (original 0x004cf229) copies the
+    // resolved point to raw world +0xb8/+0xbc, current-cell +0xc0/+0xc4 and
+    // anchor +0xd0/+0xd4.  It never seeds destination +0x78/+0x7c; the
+    // freshly activated record keeps those fields clear until a command
+    // supplies a destination.  Seeding them with x/y is observable during
+    // the idle frames immediately before the first berry command.
+    unit.destination_x = 0;
+    unit.destination_y = 0;
     unit.current_cell_x = x & ~0x1f;
     unit.current_cell_y = y & ~0x1f;
     // InitializePlacedUnitFromMapSlot (original 0x004cf229) keeps the
@@ -923,6 +949,7 @@ bool InitializePlacedUnitFromMapSlot(UnitLifecycleContext& context,
     unit.anchor_x = x;
     unit.anchor_y = y;
     reset_runtime_fields(unit);
+    unit.script_bit_flags = definition->initial_script_bit_flags;
     unit.direction = lifecycle_random_limit(context, 8) + 1;
     unit.animation_frame = lifecycle_random_limit(context, 0x40);
     unit.max_health = definition->initial_max_health;
@@ -936,10 +963,14 @@ bool InitializePlacedUnitFromMapSlot(UnitLifecycleContext& context,
     unit.runtime_stat_20 = definition->profile_defense_value;
     unit.runtime_stat_28 = definition->initial_secondary_value;
 
-    if ((definition->footprint_flags & 2) != 0 ||
-        (definition->lifecycle_class != 2 &&
-            (definition->footprint_width_tiles != 0 ||
-                definition->footprint_height_tiles != 0))) {
+    // InitializePlacedUnitFromMapSlot gates both the raw +0x1f8 bit and the
+    // reconstructed dimension fallback behind lifecycle class != 2.  Class-2
+    // construction receives command flag 0x40 only when completion registers
+    // its footprint, not at the initial one-HP placement frame.
+    if (definition->lifecycle_class != 2 &&
+        ((definition->footprint_flags & 2) != 0 ||
+            definition->footprint_width_tiles != 0 ||
+            definition->footprint_height_tiles != 0)) {
         unit.command_flags |= 0x40;
     }
 
@@ -1001,21 +1032,27 @@ void HandleUnitRemovalAccounting(UnitLifecycleContext& context, UnitMovementUnit
     }
 }
 
-void HandleUnitCompletionOwnerCounters(UnitLifecycleContext& context,
-    UnitMovementUnit& unit) {
-    if (!has_original_owner_counter_slot(unit.owner_id)) {
+void HandleUnitKillOwnerCounters(UnitLifecycleContext& context,
+    UnitMovementUnit& attacker, UnitMovementUnit& defeated) {
+    // Original 0x004cf911 indexes all four counters by the attacker owner in
+    // ESI: unit/building kills at 0x70726c/0x70728c and cumulative scores at
+    // 0x70736c/0x70738c.  EDI is used only to select the defeated type bucket.
+    if (!has_original_owner_counter_slot(attacker.owner_id)) {
         return;
     }
-    const u32 score = unit_score_value(unit);
-    if (is_building_type(unit.type_id)) {
-        ++context.owner_building_completed_count[unit.owner_id];
-        context.owner_building_score[unit.owner_id] += score;
-        unit.command_value = 0;
-        unit.under_construction = false;
+    const u32 owner_id = attacker.owner_id;
+    const u32 score = unit_score_value(context, attacker);
+    if (is_building_type(defeated.type_id)) {
+        ++context.owner_building_kill_count[owner_id];
+        context.owner_building_score[owner_id] += score;
+        // Original 0x004cf95d clears defeated raw +0x4c.  The same field is
+        // the cargo/transport occupancy value consumed by 0x004ca3b3 and
+        // 0x004ca8e2, represented by cargo_amount in the typed runtime.
+        defeated.cargo_amount = 0;
         return;
     }
-    ++context.owner_unit_completed_count[unit.owner_id];
-    context.owner_unit_score[unit.owner_id] += score;
+    ++context.owner_unit_kill_count[owner_id];
+    context.owner_unit_score[owner_id] += score;
 }
 
 void HandleUnitDeathOwnerCounters(UnitLifecycleContext& context,

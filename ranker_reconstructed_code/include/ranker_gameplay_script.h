@@ -82,6 +82,7 @@ struct GameplayScriptTriggerObjectState {
     const void* object_pointer = nullptr;
     u32 scenario_object_index = 0;
     bool remove_from_triggers = false;
+    bool script_removal_requested = false;
     u32 type_id = 0;
     u32 owner_id = 0;
     u32 flags = 0;
@@ -140,10 +141,13 @@ struct GameplayScriptTriggerObjectState {
     u32 direction = 0;
     u32 movement_flags = 0;
     u32 movement_state = 0;
-    u32 wait_ticks = 0;
-    u32 movement_turn_ticks = 0;
+    u32 movement_turn_ticks = 0;       // OBC raw +0xb4
+    u32 movement_step_accumulator = 0; // OBC raw +0x110
     u32 placement_reset_scratch = 0;
-    std::array<u32, 4> effect_reset_scratch{};
+    i32 movement_residual_x = 0;       // OBC raw +0x114
+    i32 movement_residual_y = 0;       // OBC raw +0x118
+    float movement_interpolation_x = 0.0f; // OBC raw +0x11c
+    float movement_interpolation_y = 0.0f; // OBC raw +0x120
     u32 animation_frame = 0;
     u32 animation_timer = 0;
     u32 command_entry_lockout_ticks = 0;

@@ -137,7 +137,8 @@ struct GameplayTooltipState {
     i32 last_box_top = 0;
     i32 last_box_right = 0;
     i32 last_box_bottom = 0;
-    u8 font_index = 0;
+    // The tooltip renderers at 004de8a0/004de98d select font slot 4.
+    u8 font_index = 4;
     u8 text_color = 1;
     u8 requirement_color = 0x41;
     bool emit_backbuffer_draws = false;

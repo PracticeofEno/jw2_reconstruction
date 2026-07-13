@@ -30,21 +30,21 @@ bool include_unit_for_mode(const UnitMovementUnit& unit,
     case UnitSpatialIndexBuildMode::all_active_units:
         return true;
     case UnitSpatialIndexBuildMode::non_structure_non_terminal_command_units:
-        if (unit.definition.lifecycle_class == 3 ||
-            unit.definition.lifecycle_class == 1) {
+        if (unit.definition.movement_class == 3 ||
+            unit.definition.movement_class == 1) {
             return false;
         }
         return command_category(unit, command_state_categories) != 8 &&
             command_category(unit, command_state_categories) != 0x0e;
     case UnitSpatialIndexBuildMode::non_structure_active_command_units:
-        if (unit.definition.lifecycle_class == 3 ||
-            unit.definition.lifecycle_class == 1 ||
+        if (unit.definition.movement_class == 3 ||
+            unit.definition.movement_class == 1 ||
             unit.command_state == 1) {
             return false;
         }
         return command_category(unit, command_state_categories) != 8;
     case UnitSpatialIndexBuildMode::lifecycle_class3_units:
-        return unit.definition.lifecycle_class == 3;
+        return unit.definition.movement_class == 3;
     }
     return false;
 }
@@ -117,6 +117,59 @@ std::size_t last_index_with_x_at_most(const UnitSpatialIndex& index, i32 x) {
     return static_cast<std::size_t>(std::distance(index.sorted_units.begin(), it - 1));
 }
 
+i32 legacy_signed_query_distance(u32 distance) {
+    if (distance < 0x80000000u) {
+        return static_cast<i32>(distance);
+    }
+    return std::numeric_limits<i32>::min() +
+        static_cast<i32>(distance - 0x80000000u);
+}
+
+// Original 0x0040e180, called for radius-query results at 0x0040eac3.
+// The shared legacy sorter compares the first DWORD as signed and swaps equal
+// keys during its midpoint-pivot partition, so std::sort has a different tie
+// order even though UnitSpatialQueryEntry stores the raw distance as u32.
+void sort_query_entries_by_distance_legacy(
+    std::vector<UnitSpatialQueryEntry>& entries,
+    i32 first_index, i32 last_index) {
+    if (first_index >= last_index) {
+        return;
+    }
+
+    i32 left_index = first_index;
+    i32 right_index = last_index;
+    const i32 pivot_distance = legacy_signed_query_distance(
+        entries[static_cast<std::size_t>(
+            (first_index + last_index) / 2)].distance);
+
+    while (left_index <= right_index) {
+        while (left_index < last_index &&
+               legacy_signed_query_distance(entries[static_cast<std::size_t>(
+                   left_index)].distance) < pivot_distance) {
+            ++left_index;
+        }
+        while (first_index < right_index &&
+               pivot_distance < legacy_signed_query_distance(
+                   entries[static_cast<std::size_t>(right_index)].distance)) {
+            --right_index;
+        }
+        if (left_index <= right_index) {
+            std::swap(entries[static_cast<std::size_t>(left_index)],
+                entries[static_cast<std::size_t>(right_index)]);
+            ++left_index;
+            --right_index;
+        }
+    }
+
+    if (first_index < right_index) {
+        sort_query_entries_by_distance_legacy(
+            entries, first_index, right_index);
+    }
+    if (left_index < last_index) {
+        sort_query_entries_by_distance_legacy(entries, left_index, last_index);
+    }
+}
+
 UnitMovementUnit* activate_query(UnitSpatialIndex& index, bool sort_by_distance) {
     if (index.query_results.empty()) {
         index.query_active = false;
@@ -125,17 +178,54 @@ UnitMovementUnit* activate_query(UnitSpatialIndex& index, bool sort_by_distance)
         return nullptr;
     }
 
-    if (sort_by_distance) {
-        std::sort(index.query_results.begin(), index.query_results.end(),
-            [](const UnitSpatialQueryEntry& left, const UnitSpatialQueryEntry& right) {
-                return left.distance < right.distance;
-            });
+    if (sort_by_distance && index.query_results.size() > 1) {
+        sort_query_entries_by_distance_legacy(index.query_results, 0,
+            static_cast<i32>(index.query_results.size() - 1));
     }
 
     index.query_active = true;
     index.query_cursor = 0;
     index.last_query_distance = index.query_results.front().distance;
     return index.query_results.front().unit;
+}
+
+// Original 0x0040e180.  This is intentionally not std::sort: the legacy
+// midpoint-pivot partition swaps equal-X entries as well, and spatial queries
+// return candidates in that exact tie order.
+void sort_entries_by_x_legacy(std::vector<UnitSpatialIndexEntry>& entries,
+    i32 first_index, i32 last_index) {
+    if (first_index >= last_index) {
+        return;
+    }
+
+    i32 left_index = first_index;
+    i32 right_index = last_index;
+    const i32 pivot_x = entries[static_cast<std::size_t>(
+        (first_index + last_index) / 2)].x;
+
+    while (left_index <= right_index) {
+        while (left_index < last_index &&
+               entries[static_cast<std::size_t>(left_index)].x < pivot_x) {
+            ++left_index;
+        }
+        while (first_index < right_index &&
+               pivot_x < entries[static_cast<std::size_t>(right_index)].x) {
+            --right_index;
+        }
+        if (left_index <= right_index) {
+            std::swap(entries[static_cast<std::size_t>(left_index)],
+                entries[static_cast<std::size_t>(right_index)]);
+            ++left_index;
+            --right_index;
+        }
+    }
+
+    if (first_index < right_index) {
+        sort_entries_by_x_legacy(entries, first_index, right_index);
+    }
+    if (left_index < last_index) {
+        sort_entries_by_x_legacy(entries, left_index, last_index);
+    }
 }
 
 UnitMovementUnit* query_relative_box(UnitSpatialIndex& index,
@@ -189,10 +279,10 @@ void ShutdownUnitSpatialIndex(UnitSpatialIndex& index) {
 }
 
 void SortUnitSpatialIndexEntriesByX(std::vector<UnitSpatialIndexEntry>& entries) {
-    std::sort(entries.begin(), entries.end(),
-        [](const UnitSpatialIndexEntry& left, const UnitSpatialIndexEntry& right) {
-            return left.x < right.x;
-        });
+    if (entries.size() > 1) {
+        sort_entries_by_x_legacy(entries, 0,
+            static_cast<i32>(entries.size() - 1));
+    }
 }
 
 void RebuildUnitSpatialIndex(UnitSpatialIndex& index,

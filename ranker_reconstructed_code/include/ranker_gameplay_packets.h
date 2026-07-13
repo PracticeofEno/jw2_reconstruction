@@ -141,6 +141,10 @@ struct Mode1GameplayPacketDispatchState {
     std::array<u32, kMode1GameplayPacketSubtypeCount> dispatch_counts{};
     std::array<u32, 8> player_wait_budget{};
     std::array<u32, 8> player_cooldowns{};
+    // Original DAT_011b5a2c: each player begins with four network modal
+    // pauses; the first subtype-0x16 show transition from that source spends
+    // one use.
+    std::array<u8, 8> player_modal_pause_uses_remaining{};
     std::array<u8, 8> vote_completion_seen{};
     std::array<Mode1GameplayPlayerPacketState, 8> players{};
     std::unordered_map<u32, Mode1GameplayUnitPacketState> units_by_offset{};

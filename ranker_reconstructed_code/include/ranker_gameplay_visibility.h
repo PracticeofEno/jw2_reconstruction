@@ -46,12 +46,20 @@ struct GameplayVisibilityUnit {
     u32 type_id = 0;
     u32 variant = 0;
     u32 runtime_flags = 0;
-    u32 state_flags = 0;
+    // Raw unit +0x60.  Lifecycle/death state is independent of the command
+    // flags at raw +0x9c; combining them makes ordinary states such as 0x41
+    // look like the special-visibility flag 0x40.
+    u32 command_state = 0;
+    // Raw unit +0x9c.  FUN_004d6cca callers use only bit 0x40 from this word
+    // (or bit 0x80 from the command bitmap below) to request the extra
+    // owner-relation/current-cell visibility gate.
+    u32 command_flags = 0;
     std::array<u8, 32> command_bits{};
     u32 owner_visibility_mask = 0;
     u32 owner_explore_mask = 0;
-    u32 max_health = 0;
-    u32 health = 0;
+    // Raw unit +0x98.  Lifecycle visibility uses this command/death phase
+    // duration, not the combat HP fields at +0x10/+0x18.
+    u32 command_entry_lockout_ticks = 0;
     u32 animation_timer = 0;
     i32 x = 0;
     i32 y = 0;
@@ -138,6 +146,11 @@ GameplayFogRenderMetrics RecalculateGameplayFogViewportMetrics(
     u32 width, u32 height);
 bool LoadGameplayFogMaskTable(std::vector<u8>& table,
     const char* archive_name = "JW2_02.TRC", u32 record_index = 0x153);
+constexpr bool HasUnitSpecialVisibilityGateBits(
+    u32 command_flags, u8 first_command_bitmap_byte) {
+    return (command_flags & 0x40) != 0 ||
+        (first_command_bitmap_byte & 0x80) != 0;
+}
 bool CheckUnitVisibilityGateFlags(const GameplayVisibilityUnit& unit);
 bool CheckUnitOwnerMaskOrCurrentVisibilityBit(const PlayerSlotRuntimeState& players,
     const GameplayVisibilityGrid& grid, const GameplayVisibilityUnit& unit,

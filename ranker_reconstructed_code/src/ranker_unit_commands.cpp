@@ -223,6 +223,14 @@ void path_to_target(UnitCommandContext& context, UnitMovementUnit& unit,
     }
 }
 
+void path_to_target_without_command_flag(UnitCommandContext& context,
+    UnitMovementUnit& unit, UnitMovementUnit& target) {
+    copy_target_position_to_path(unit, target);
+    if (has_movement(context)) {
+        ProcessUnitPathToDestination(movement(context), unit);
+    }
+}
+
 bool simple_target_in_attack_range(UnitMovementUnit& unit, UnitMovementUnit& target) {
     const u32 distance = CalculateApproxUnitDistance(unit.x, unit.y, target.x, target.y);
     const u32 range = std::max<u32>(unit.definition.range_threshold, 0x23);
@@ -253,7 +261,7 @@ u32 unit_center_distance(const UnitMovementUnit& source,
 u32 command_interaction_range(UnitCommandContext& context, const UnitMovementUnit& unit) {
     return CalculateUnitInteractionRangeWithProductionAndEquipmentEffects(
         command_production_state_or_empty(context), unit,
-        unit.definition.effect_command_distance_gate,
+        unit.definition.effect_adjusted_interaction_range_base,
         command_equipment_catalog(context));
 }
 
@@ -283,15 +291,6 @@ bool follow_target_path_point_enterable(UnitCommandContext& context,
     return !has_movement(context) ||
         CheckUnitCanEnterTerrainCell(movement(context), unit, target.current_cell_x,
             target.current_cell_y);
-}
-
-void copy_deferred_path(UnitMovementUnit& unit) {
-    if (unit.wait_ticks == 0) {
-        return;
-    }
-    unit.destination_x = unit.next_path_x;
-    unit.destination_y = unit.next_path_y;
-    --unit.wait_ticks;
 }
 
 bool unit_can_carry(const UnitMovementUnit& unit) {
@@ -363,7 +362,6 @@ void board_unit(UnitCommandContext& context, UnitMovementUnit& carrier,
     passenger.runtime_flags &= ~1u;
     passenger.runtime_flags |= 0x80;
     passenger.command_flags &= ~0x1010u;
-    passenger.wait_ticks = 0;
     passenger.work_timer = 0;
     if (context.callbacks.on_unit_boarded != nullptr) {
         context.callbacks.on_unit_boarded(context, carrier, passenger);
@@ -375,7 +373,7 @@ void refresh_transport_boarding_path(UnitCommandContext& context, UnitMovementUn
     if (unit.animation_frame != 0) {
         return;
     }
-    path_to_target(context, unit, target);
+    path_to_target_without_command_flag(context, unit, target);
     unit.animation_frame = 0;
 }
 
@@ -442,7 +440,6 @@ bool place_unloaded_unit(UnitCommandContext& context, UnitMovementUnit& carrier,
     if (context.callbacks.on_unit_unloaded != nullptr) {
         context.callbacks.on_unit_unloaded(context, carrier, passenger);
     }
-    passenger.wait_ticks = 0;
     passenger.work_timer = 0;
     PopDeferredUnitCommandOrReturnIdle(context, passenger);
     return true;
@@ -476,7 +473,7 @@ void begin_patrol_target_leg(UnitCommandContext& context, UnitMovementUnit& unit
 UnitMovementUnit* scan_patrol_target(UnitCommandContext& context,
     UnitMovementUnit& unit) {
     if ((unit.type_flags & 0x20u) == 0 &&
-        (unit.definition.support_source_flags & 0x7242u) == 0) {
+        (unit.script_bit_flags & 0x7242u) == 0) {
         return nullptr;
     }
     UnitMovementUnit* target = find_target(context, unit);
@@ -518,6 +515,13 @@ void handle_patrol_leg(UnitCommandContext& context, UnitMovementUnit& unit,
 
 void handle_patrol_combat(UnitCommandContext& context, UnitMovementUnit& unit,
     i32 fallback_x, i32 fallback_y, u32 fallback_state) {
+    // States 0x39/0x3a call FUN_004c1c87 before any outer target/range gate.
+    if (context.callbacks.dispatch_attack != nullptr) {
+        dispatch_attack(context, unit);
+        return;
+    }
+
+    // Callback-free harness fallback.
     UnitMovementUnit* target = unit.target;
     if (target != nullptr && can_attack(context, unit, *target)) {
         if (target_in_attack_range(context, unit, *target)) {
@@ -565,6 +569,15 @@ UnitMovementUnit* find_unit_by_id(UnitCommandContext& context, u32 id) {
             return unit;
         }
     }
+    // Resurrection-style ability payloads deliberately name a corpse that is
+    // no longer in active_units.  The original lookup walks the active list
+    // first and then the lifecycle/free list, so retain that ordering when an
+    // id happens to be stale or duplicated.
+    for (UnitMovementUnit* unit : movement(context).lifecycle_units) {
+        if (unit != nullptr && unit->id == id) {
+            return unit;
+        }
+    }
 
     // Saved command payloads may still contain a scenario slot index, while
     // original network commands contain the corresponding byte offset in the
@@ -587,6 +600,11 @@ UnitMovementUnit* find_unit_by_id(UnitCommandContext& context, u32 id) {
     }
 
     for (UnitMovementUnit* unit : movement(context).active_units) {
+        if (unit != nullptr && unit->runtime_slot_index == runtime_slot_index) {
+            return unit;
+        }
+    }
+    for (UnitMovementUnit* unit : movement(context).lifecycle_units) {
         if (unit != nullptr && unit->runtime_slot_index == runtime_slot_index) {
             return unit;
         }
@@ -672,10 +690,11 @@ void set_anchor_to_current_position(UnitMovementUnit& unit) {
 }
 
 void set_saved_anchor_from_current_command(UnitMovementUnit& unit) {
-    if (unit.saved_path_target_x == 0 && unit.saved_path_target_y == 0) {
-        unit.saved_path_target_x = unit.path_target_x;
-        unit.saved_path_target_y = unit.path_target_y;
-    }
+    // Each new guard command replaces the raw active command tuple.  The
+    // original state-0x1c/0x1f entries copy that tuple unconditionally, so a
+    // repeated point order must replace the preceding return anchor.
+    unit.saved_path_target_x = unit.path_target_x;
+    unit.saved_path_target_y = unit.path_target_y;
 }
 
 void path_to_saved_anchor(UnitCommandContext& context, UnitMovementUnit& unit) {
@@ -687,8 +706,12 @@ void path_to_saved_anchor(UnitCommandContext& context, UnitMovementUnit& unit) {
     }
 }
 
-void mark_equipment_slots_changed(UnitMovementUnit& unit) {
+void mark_equipment_slots_changed(UnitCommandContext& context,
+    UnitMovementUnit& unit) {
     unit.equipment_flags |= 1;
+    if (context.callbacks.on_equipment_slots_changed != nullptr) {
+        context.callbacks.on_equipment_slots_changed(context, unit);
+    }
 }
 
 bool try_collect_map_effect_at_command_point(UnitCommandContext& context,
@@ -696,24 +719,16 @@ bool try_collect_map_effect_at_command_point(UnitCommandContext& context,
     if (context.map_effects == nullptr || context.equipment_catalog == nullptr) {
         return false;
     }
-    if (TryCollectUnitEquipmentFromMapEffects(context, *context.map_effects, unit,
-            unit.path_target_x, unit.path_target_y, *context.equipment_catalog)) {
-        return true;
-    }
-    if ((unit.path_target_x & ~0x1f) != (unit.x & ~0x1f) ||
-        (unit.path_target_y & ~0x1f) != (unit.y & ~0x1f)) {
-        return TryCollectUnitEquipmentFromMapEffects(context, *context.map_effects,
-            unit, unit.x, unit.y, *context.equipment_catalog);
-    }
-    return false;
+    return TryCollectUnitEquipmentFromMapEffects(context, *context.map_effects,
+        unit, unit.path_target_x, unit.path_target_y,
+        *context.equipment_catalog);
 }
 
-bool try_start_nearby_map_effect_interaction(UnitCommandContext& context,
+bool try_start_idle_map_effect_interaction(UnitCommandContext& context,
     UnitMovementUnit& unit) {
-    if (context.map_effects == nullptr || context.equipment_catalog == nullptr) {
-        return false;
-    }
-    if ((unit.equipment_flags & kUnitEquipmentPickupEnabledFlag) == 0) {
+    if (context.map_effects == nullptr || context.equipment_catalog == nullptr ||
+        (unit.type_flags & 0x80000000u) == 0 ||
+        (unit.type_flags & kUnitEquipmentPickupEnabledFlag) == 0) {
         return false;
     }
 
@@ -723,37 +738,29 @@ bool try_start_nearby_map_effect_interaction(UnitCommandContext& context,
         return false;
     }
 
-    unit.target = nullptr;
-    unit.linked_object_id = effect->id;
-    unit.command_value = effect->id;
-    unit.saved_path_target_x = effect->x;
-    unit.saved_path_target_y = effect->y;
+    unit.active_command_payload.x = static_cast<i32>(effect->id);
     unit.path_target_x = effect->x;
     unit.path_target_y = effect->y;
-    unit.destination_x = effect->x;
-    unit.destination_y = effect->y;
 
-    if ((unit.x & ~0x1f) == (effect->x & ~0x1f) &&
-        (unit.y & ~0x1f) == (effect->y & ~0x1f) &&
-        TryCollectUnitEquipmentFromMapEffects(context, *context.map_effects, unit,
-            effect->x, effect->y, *context.equipment_catalog)) {
-        mark_equipment_slots_changed(unit);
-        StartUnitCommandLockoutTimer(context, unit, 2);
-        HandleUnitReturnToIdleState(context, unit);
-        return true;
+    // The original idle branch only links and enters state 5.  Even when the
+    // effect is already in the unit's tile, collection occurs on the next
+    // state-5 dispatch.  An immobile unit that still needs an approach falls
+    // through to ordinary enemy acquisition without claiming the effect.
+    if (!CheckPathTargetWithinAxisTile(unit) &&
+        (unit.runtime_flags & 8u) != 0) {
+        return false;
     }
 
-    effect->flags |= kMapEffectLinkedFlag;
+    effect->flags = kMapEffectLinkedFlag;
     effect->linked_unit = &unit;
     unit.command_state = kUnitStateAssistTarget;
-    unit.command_flags &= ~8u;
     return true;
 }
 
 void complete_point_equipment_to_idle(UnitCommandContext& context,
     UnitMovementUnit& unit) {
     try_collect_map_effect_at_command_point(context, unit);
-    mark_equipment_slots_changed(unit);
+    mark_equipment_slots_changed(context, unit);
     StartUnitCommandLockoutTimer(context, unit, 2);
     HandleUnitReturnToIdleState(context, unit);
 }
@@ -766,7 +773,7 @@ void anchor_and_pop_deferred(UnitCommandContext& context, UnitMovementUnit& unit
 void complete_point_equipment_and_pop(UnitCommandContext& context,
     UnitMovementUnit& unit) {
     try_collect_map_effect_at_command_point(context, unit);
-    mark_equipment_slots_changed(unit);
+    mark_equipment_slots_changed(context, unit);
     anchor_and_pop_deferred(context, unit);
 }
 
@@ -897,6 +904,11 @@ UnitMovementUnit* create_legacy_spawned_unit(UnitCommandContext& context,
     spawned->under_construction = true;
     seed_construction_progress(*spawned);
     unit.target = spawned;
+    // FUN_004ca105 (0x004ca13b..0x004ca145) stores the new structure's pool
+    // offset in the builder's shared raw +0x68 target/value word while the
+    // reverse link stores the builder offset in the structure.  Keep the
+    // produced type in spawn_type_id and mirror that persistent forward link.
+    unit.command_value = spawned->id;
     if (context.callbacks.on_unit_spawned != nullptr) {
         context.callbacks.on_unit_spawned(context, unit, *spawned);
     }
@@ -971,11 +983,19 @@ bool try_start_idle_random_relocation(UnitCommandContext& context,
         const i32 offset = static_cast<i32>(
             command_random_limit(context, 0xc0) & ~0x1fu) - 0x60;
         const i64 extent_pixels = static_cast<i64>(tile_extent) * 0x20;
-        const i32 maximum = static_cast<i32>(std::min<i64>(
-            std::max<i64>(extent_pixels - 0x20, 0),
-            std::numeric_limits<i32>::max()));
-        return static_cast<i32>(std::clamp<i64>(
-            static_cast<i64>(anchor) + offset, 0, maximum));
+        const i64 target = static_cast<i64>(anchor) + offset;
+        if (target < 0) {
+            return 0;
+        }
+        // Original 0x004c9243/0x004c9261 preserves sub-tile coordinates in
+        // the final map cell.  It moves to extent-32 only when the generated
+        // coordinate is at/after the full pixel extent; clamping every value
+        // to extent-32 turns a valid 3071 target into 3040 on a 96-tile map.
+        if (extent_pixels <= target) {
+            return static_cast<i32>(std::max<i64>(extent_pixels - 0x20, 0));
+        }
+        return static_cast<i32>(std::min<i64>(
+            target, std::numeric_limits<i32>::max()));
     };
 
     // The original rolls Y first, then X.
@@ -1278,6 +1298,14 @@ void offset_spawn_target_by_footprint(UnitMovementUnit& unit,
     unit.path_target_y += static_cast<i32>(definition.footprint_height_tiles * 16);
 }
 
+void offset_spawn_target_by_interaction_bounds(UnitMovementUnit& unit,
+    const UnitMovementDefinition& definition) {
+    // Original state 0x23 (FUN_004c9e8f) centers the approach point with
+    // definition +0x378/+0x37c, not the tile-footprint dimensions.
+    unit.path_target_x += definition.interaction_bounds_width >> 1;
+    unit.path_target_y += definition.interaction_bounds_height >> 1;
+}
+
 bool targeted_spawn_needs_approach(UnitMovementUnit& unit, UnitMovementUnit& target) {
     if (!CheckCurrentTargetOutsideExpandedFootprint(unit)) {
         return false;
@@ -1325,11 +1353,14 @@ UnitMovementUnit* create_production_unit(UnitCommandContext& context,
         return nullptr;
     }
 
-    // Original HandleUnitProductionSpawnCycle (0x004ce002) always seeds the
-    // placement search from the producer's current position.  path_target is
-    // the rally/command destination and must not be used as a spawn point.
+    // Original HandleUnitProductionSpawnCycle (0x004ce0d5..0x004ce0ed) seeds
+    // placement from the producer position plus definition +0x2410/+0x2414.
+    // path_target is the rally/command destination and must not be used as a
+    // spawn point.
     UnitMovementUnit* produced = context.callbacks.create_unit(
-        context, unit, type_id, unit.x, unit.y);
+        context, unit, type_id,
+        unit.x + unit.definition.transport_offset_x,
+        unit.y + unit.definition.transport_offset_y);
     if (produced == nullptr) {
         return nullptr;
     }
@@ -1380,6 +1411,8 @@ void complete_spawned_construction(UnitCommandContext& context,
     spawned.action_mode_gate = 0;
     spawned.linked_object_id = spawned.id;
     spawned.linked_unit = &spawned;
+    spawned.next_path_x = spawned.current_cell_x;
+    spawned.next_path_y = spawned.current_cell_y;
     spawned.saved_path_target_x = spawned.current_cell_x;
     spawned.saved_path_target_y = spawned.current_cell_y;
     if ((spawned.definition.footprint_flags & 2u) != 0) {
@@ -1473,12 +1506,13 @@ void execute_ability(UnitCommandContext& context, UnitMovementUnit& unit,
     }
 }
 
-void start_ability_attachment(UnitCommandContext& context, UnitMovementUnit& unit,
+bool start_ability_attachment(UnitCommandContext& context, UnitMovementUnit& unit,
     UnitMovementUnit* target) {
     if (context.callbacks.start_ability_attachment != nullptr) {
-        context.callbacks.start_ability_attachment(context, unit, target,
+        return context.callbacks.start_ability_attachment(context, unit, target,
             unit.ability_id);
     }
+    return true;
 }
 
 void set_unit_type_for_command(UnitCommandContext& context, UnitMovementUnit& unit,
@@ -1584,31 +1618,41 @@ bool linked_release_cycle_unit_alive(const UnitMovementUnit* unit) {
         (unit->runtime_flags & 4) == 0;
 }
 
-void release_linked_unit(UnitMovementUnit& parent, UnitMovementUnit& child) {
+UnitRuntimeStatBlock linked_release_runtime_stats(const UnitMovementUnit& unit) {
+    UnitRuntimeStatBlock stats{};
+    stats.max_health = unit.max_health;
+    stats.max_secondary_value = unit.max_secondary_value;
+    stats.health = unit.health;
+    stats.stat_1c = unit.runtime_stat_1c;
+    stats.stat_20 = unit.runtime_stat_20;
+    stats.secondary_value = unit.secondary_value;
+    stats.stat_28 = unit.runtime_stat_28;
+    return stats;
+}
+
+void release_linked_unit(UnitCommandContext& context, UnitMovementUnit& parent,
+    UnitMovementUnit& child) {
     child.runtime_flags |= 1;
     child.runtime_flags &= ~0x80u;
     child.attached_to_parent = false;
-    if ((parent.command_flags & 0x80u) != 0) {
-        child.command_flags |= 0x80u;
-    }
     child.command_state = 0;
     child.target = nullptr;
+    if (context.callbacks.on_linked_unit_detached != nullptr) {
+        context.callbacks.on_linked_unit_detached(context, parent, child);
+    }
 }
 
-void enter_linked_release_child_cycle(UnitMovementUnit& child) {
+void enter_linked_release_child_cycle(UnitCommandContext& context,
+    UnitMovementUnit& parent, UnitMovementUnit& child) {
     child.command_state = kUnitStateLinkedUnitReleaseCycle;
     child.animation_frame = 0;
     child.command_value = 0;
     child.runtime_flags &= ~1u;
     child.runtime_flags |= 0x80;
     child.attached_to_parent = true;
-}
-
-void path_to_target_without_command_flag(UnitCommandContext& context,
-    UnitMovementUnit& unit, UnitMovementUnit& target) {
-    copy_target_position_to_path(unit, target);
-    if (has_movement(context)) {
-        ProcessUnitPathToDestination(movement(context), unit);
+    child.scenario_string_slot &= ~0x80u;
+    if (context.callbacks.on_linked_unit_attached != nullptr) {
+        context.callbacks.on_linked_unit_attached(context, parent, child);
     }
 }
 
@@ -1726,7 +1770,6 @@ void HandleOwnerUnitProductionCostRefund(UnitCommandContext& context,
 
 void ResetUnitCommand(UnitCommandContext& context, UnitMovementUnit& unit) {
     unit.target = nullptr;
-    unit.wait_ticks = 0;
     unit.distance_check_mode = 0;
     unit.anchor_x = unit.x;
     unit.anchor_y = unit.y;
@@ -1956,6 +1999,26 @@ bool PushDeferredUnitCommand(UnitMovementUnit& unit,
     unit.deferred_commands[unit.deferred_command_count] = command;
     ++unit.deferred_command_count;
     return true;
+}
+
+bool CommitThenPushDeferredUnitCommand(UnitMovementUnit& unit,
+    const UnitQueuedCommand& command, u32 max_deferred_count,
+    UnitDeferredCommandCommitCallback commit, void* user_data) {
+    if (commit == nullptr ||
+        !commit(unit, static_cast<u32>(command.x), user_data)) {
+        return false;
+    }
+    // The subtype-0x0c original deliberately performs its debit/lock before
+    // the bounded push.  A full queue reports failure without rolling either
+    // committed mutation back.
+    return PushDeferredUnitCommand(unit, command, max_deferred_count);
+}
+
+bool IsProductionOrderCancelLogicalIndexAllowed(u32 logical_index) {
+    // 0xffffffff is the implicit/latest form.  The explicit original handler
+    // indexes only its five cancellation entries even though enqueue has ten
+    // deferred slots.
+    return logical_index == 0xffffffffu || logical_index < 5u;
 }
 
 bool SetOrQueueUnitCommandPayload(UnitMovementUnit* unit,
@@ -2430,7 +2493,11 @@ void HandlePendingUnitCommandDispatch(UnitCommandContext& context,
 
 void HandleRuntimeDeathPartialResourceRefund(UnitCommandContext& context,
     UnitMovementUnit& unit) {
-    if (unit.owner_id >= context.owner_resources.size() || unit.command_value == 0) {
+    // HandleUnitRuntimeDispatchTick (0x004cdc0a) gates the 75-percent
+    // under-construction refund on raw unit +0x4c (DAT_00a04004).  That field
+    // is the cargo/transport occupancy value in the typed runtime; command_value
+    // is raw +0x68 and can contain an unrelated command payload.
+    if (unit.owner_id >= context.owner_resources.size() || unit.cargo_amount == 0) {
         return;
     }
     const u32 cost = unit.definition.production_resource_cost;
@@ -2474,6 +2541,12 @@ void HandleUnitRuntimeDispatchTick(UnitCommandContext& context, UnitMovementUnit
             HandleRuntimeDeathPartialResourceRefund(context, unit);
         }
         else {
+            // Original high-type death path 0x004cdbfe..0x004cdc03 accounts
+            // the loss after footprint/sound side effects but before walking
+            // the active and deferred production command queues.
+            if (context.callbacks.on_runtime_death_accounting != nullptr) {
+                context.callbacks.on_runtime_death_accounting(context, unit);
+            }
             HandleUnitDeathCommandQueueSideEffects(context, unit);
         }
         return;
@@ -2516,14 +2589,6 @@ void HandleUnitRuntimeDispatchTick(UnitCommandContext& context, UnitMovementUnit
         ProcessUnitAnimationTimer(unit);
         --unit.command_lockout_ticks;
         if (unit.command_lockout_ticks == 0) {
-            unit.command_flags &= ~0x10u;
-        }
-    }
-
-    if (unit.wait_ticks != 0) {
-        ProcessUnitAnimationTimer(unit);
-        --unit.wait_ticks;
-        if (unit.wait_ticks == 0) {
             unit.command_flags &= ~0x10u;
         }
     }
@@ -2904,7 +2969,11 @@ void HandleUnitRuntimeIdleAcquireState(UnitCommandContext& context,
         }
     }
 
-    const u32 frame_limit = unit.definition.animation_frame_count != 0 ?
+    // Original 0x004cda9f selects the definition's frame count only when
+    // movement_animation_frame_count (+0x2218) is nonzero.  Stationary
+    // structures therefore use the hard-coded eight-frame idle cycle even
+    // though the loader normalizes animation_frame_count to one.
+    const u32 frame_limit = unit.definition.movement_animation_frame_count != 0 ?
         unit.definition.animation_frame_count : 8;
     advance_idle_frame(unit, frame_limit);
 }
@@ -3127,6 +3196,11 @@ void StartUnitProductionSpawnCommand(UnitCommandContext& context,
     unit.command_state = kUnitStateProductionSpawnCycle;
     unit.animation_frame = 0;
     unit.effect_timer = 0;
+    // Original StartUnitProductionSpawnCommand (0x004cdf35/0x004cdff6)
+    // clears raw unit +0x7c before immediately dispatching state 0x51.  For
+    // structures that word is the cell flag-0x40 image-frame scratch, not a
+    // movement destination.
+    unit.cell_flag40_animation_frame = 0;
     if (context.callbacks.on_production_started != nullptr) {
         context.callbacks.on_production_started(context, unit);
     }
@@ -3135,10 +3209,16 @@ void StartUnitProductionSpawnCommand(UnitCommandContext& context,
 
 void HandleUnitProductionSpawnCycle(UnitCommandContext& context,
     UnitMovementUnit& unit) {
-    ++unit.effect_timer;
-    if (unit.effect_timer >= production_cycle_duration(unit)) {
-        unit.effect_timer = 0;
+    // Original HandleUnitProductionSpawnCycle (0x004ce00f..0x004ce023)
+    // advances raw unit +0x7c using the producer's cell-animation period
+    // before it advances the production completion timer at raw +0x64.  Keep
+    // the typed compatibility timer mirrored, but make the render scratch the
+    // canonical value so loaded/in-progress structures resume the exact frame.
+    ++unit.cell_flag40_animation_frame;
+    if (unit.cell_flag40_animation_frame >= production_cycle_duration(unit)) {
+        unit.cell_flag40_animation_frame = 0;
     }
+    unit.effect_timer = unit.cell_flag40_animation_frame;
 
     ++unit.animation_frame;
     const u32 type_id = production_type_for_unit(context, unit);
@@ -3193,18 +3273,18 @@ void ProcessUnitIdleAcquireCommand(UnitCommandContext& context, UnitMovementUnit
         return;
     }
 
-    copy_deferred_path(unit);
     unit.command_flags |= 0x20;
-    unit.wait_ticks = 0;
     unit.distance_check_mode = 0;
 
     if ((unit.animation_frame & 0x1f) == 0) {
         if (TryStartNearbyFollowCommand(context, unit)) {
             return;
         }
-
         if ((unit.runtime_flags & 0x40000u) == 0 &&
             (unit.type_flags & 0x20u) != 0) {
+            if (try_start_idle_map_effect_interaction(context, unit)) {
+                return;
+            }
             UnitMovementUnit* target = find_target(context, unit);
             if (target != nullptr) {
                 SetUnitCommandTarget(unit, target);
@@ -3218,7 +3298,7 @@ void ProcessUnitIdleAcquireCommand(UnitCommandContext& context, UnitMovementUnit
                 if ((unit.runtime_flags & 8) == 0) {
                     unit.command_state = kUnitStateAttackTravel;
                     unit.command_flags &= ~8u;
-                    path_to_target(context, unit, *target);
+                    path_to_target_without_command_flag(context, unit, *target);
                     return;
                 }
             }
@@ -3279,6 +3359,14 @@ void ProcessUnitAttackTravelCommand(UnitCommandContext& context, UnitMovementUni
 }
 
 void ProcessUnitAttackTargetCommand(UnitCommandContext& context, UnitMovementUnit& unit) {
+    // State 0x04 begins with FUN_004c1c87 at 0x004c93d7.  Its result handler
+    // owns target loss and travel transitions in the runtime configuration.
+    if (context.callbacks.dispatch_attack != nullptr) {
+        dispatch_attack(context, unit);
+        return;
+    }
+
+    // Callback-free harness fallback.
     UnitMovementUnit* target = unit.target;
     if (target != nullptr && can_attack(context, unit, *target)) {
         if (target_in_attack_range(context, unit, *target)) {
@@ -3347,9 +3435,6 @@ void HandleUnitPointActionTravel(UnitCommandContext& context,
 void StartUnitTargetInteractionCommand(UnitCommandContext& context,
     UnitMovementUnit& unit) {
     UnitMovementUnit* target = resolve_active_payload_target_or_clear(context, unit);
-    if (target == nullptr && try_start_nearby_map_effect_interaction(context, unit)) {
-        return;
-    }
     if (target != nullptr && CheckTargetInteractionNeedsApproach(unit)) {
         path_to_target_without_command_flag(context, unit, *target);
         unit.command_state = kUnitStateTargetInteractionApproach;
@@ -3366,15 +3451,15 @@ void HandleUnitTargetInteractionCycle(UnitCommandContext& context,
             TransferUnitEquipmentSlot(context, unit, *target, unit.command_value,
                 *context.equipment_catalog);
         }
-        mark_equipment_slots_changed(*target);
-        mark_equipment_slots_changed(unit);
+        mark_equipment_slots_changed(context, *target);
+        mark_equipment_slots_changed(context, unit);
         StartUnitCommandLockoutTimer(context, unit, 2);
     }
     else {
         const bool cleared = context.equipment_catalog != nullptr &&
             ClearUnitEquipmentSlot(context, unit, unit.command_value,
                 *context.equipment_catalog);
-        mark_equipment_slots_changed(unit);
+        mark_equipment_slots_changed(context, unit);
         if (!cleared) {
             StartUnitCommandLockoutTimer(context, unit, 2);
         }
@@ -3413,8 +3498,8 @@ void StartUnitTargetProgressCommand(UnitCommandContext& context,
         return;
     }
     if (CheckCurrentTargetOutsideExpandedFootprint(unit)) {
-        path_to_current_target_center(context, unit);
         unit.command_state = kUnitStateTargetProgressApproach;
+        path_to_current_target_center(context, unit);
         return;
     }
     const UnitMovementPoint center = CalculateUnitCenterPoint(*target);
@@ -3434,8 +3519,8 @@ void HandleUnitTargetProgressCycle(UnitCommandContext& context,
         return;
     }
     if (CheckCurrentTargetOutsideExpandedFootprint(unit)) {
-        path_to_current_target_center(context, unit);
         unit.command_state = kUnitStateTargetProgressApproach;
+        path_to_current_target_center(context, unit);
         return;
     }
     if (!CheckCurrentTargetBelowStoredHealthCap(unit)) {
@@ -3444,7 +3529,8 @@ void HandleUnitTargetProgressCycle(UnitCommandContext& context,
     }
 
     ++unit.animation_frame;
-    const u32 period = std::max<u32>(unit.definition.animation_timer_period, 1);
+    const u32 period = std::max<u32>(
+        unit.definition.target_progress_animation_period, 1);
     if (unit.animation_frame >= period) {
         unit.animation_frame = 0;
     }
@@ -3491,7 +3577,7 @@ void StartUnitGuardAnchorCommand(UnitCommandContext& context,
         if (target != nullptr && can_attack(context, unit, *target)) {
             SetUnitCommandTarget(unit, target);
             if (!target_in_attack_range(context, unit, *target)) {
-                path_to_target(context, unit, *target);
+                path_to_target_without_command_flag(context, unit, *target);
                 unit.command_state = kUnitStateGuardReturnTravel;
                 HandleUnitGuardReturnTravel(context, unit);
                 return;
@@ -3512,8 +3598,14 @@ void StartUnitGuardAnchorCommand(UnitCommandContext& context,
         PopDeferredUnitCommandOrReturnIdle(context, unit);
         return;
     case UnitActionTargetStatus::needs_approach:
-        if (unit.target != nullptr) {
-            path_to_target(context, unit, *unit.target);
+        // Original StartUnitGuardAnchorCommand 0x004c99f3 calls
+        // ProcessUnitPathToDestination with the point carried by the input
+        // command.  It does not replace that point with target.x/target.y;
+        // target-origin replanning happens later in the state-0x1d/0x1e
+        // handlers (0x004c9a66 and 0x004c9ae2).  Replacing the initial click
+        // point made attacks on tall sprites begin along a different line.
+        if (has_movement(context)) {
+            ProcessUnitPathToDestination(movement(context), unit);
         }
         unit.command_state = kUnitStateGuardAnchorApproach;
         unit.command_flags |= 8;
@@ -3530,13 +3622,37 @@ void StartUnitGuardAnchorCommand(UnitCommandContext& context,
 
 void HandleUnitGuardAnchorAction(UnitCommandContext& context,
     UnitMovementUnit& unit) {
+    // State 0x1d enters FUN_004c1c87 unconditionally at 0x004c9a53.  The
+    // runtime dispatcher owns dead/transient target handling, range recovery,
+    // and cycle completion.  In particular an already-started cycle still
+    // advances once after an earlier unit kills its target in the same frame.
+    if (context.callbacks.dispatch_attack != nullptr) {
+        dispatch_attack(context, unit);
+        return;
+    }
+
+    // Callback-free harness fallback.
     UnitMovementUnit* target = resolve_command_target(context, unit);
     if (target != nullptr && can_attack(context, unit, *target)) {
+        // Original state 0x1d handler (0x004c9a53) always enters
+        // FUN_004c1c87 first.  Raw command-flags bit 4 takes its already-
+        // running action-cycle path at 0x004c1c93/0x004c1d16 without another
+        // range check.  A nonzero raw +0xf4 recovery counter likewise keeps
+        // the current action state while only advancing its facing/cycle.
+        if ((unit.command_flags & 0x10u) != 0 ||
+            unit.command_lockout_ticks != 0) {
+            dispatch_attack(context, unit);
+            return;
+        }
         if (target_in_attack_range(context, unit, *target)) {
             dispatch_attack(context, unit);
             return;
         }
-        path_to_target(context, unit, *target);
+        // Original state-0x1d out-of-range branch 0x004c9a66..0x004c9a89
+        // copies the moving target position and replans without setting raw
+        // command-flags bit 3.  Only the state-0x1e movement-failure replan
+        // at 0x004c9afa sets that bit.
+        path_to_target_without_command_flag(context, unit, *target);
         unit.command_state = kUnitStateGuardAnchorApproach;
         return;
     }
@@ -3576,7 +3692,7 @@ void StartUnitGuardReturnCommand(UnitCommandContext& context,
     if (target != nullptr && can_attack(context, unit, *target)) {
         SetUnitCommandTarget(unit, target);
         if (!target_in_attack_range(context, unit, *target)) {
-            path_to_target(context, unit, *target);
+            path_to_target_without_command_flag(context, unit, *target);
             unit.command_state = kUnitStateGuardReturnTravel;
             HandleUnitGuardReturnTravel(context, unit);
             return;
@@ -3593,6 +3709,13 @@ void StartUnitGuardReturnCommand(UnitCommandContext& context,
 
 void HandleUnitGuardCombatCycle(UnitCommandContext& context,
     UnitMovementUnit& unit) {
+    // State 0x20 likewise enters FUN_004c1c87 unconditionally (0x004c9be3).
+    if (context.callbacks.dispatch_attack != nullptr) {
+        dispatch_attack(context, unit);
+        return;
+    }
+
+    // Callback-free harness fallback.
     UnitMovementUnit* current = resolve_command_target(context, unit);
     if (current != nullptr && can_attack(context, unit, *current) &&
         target_in_attack_range(context, unit, *current)) {
@@ -3633,10 +3756,10 @@ void HandleUnitGuardReturnTravel(UnitCommandContext& context,
             HandleUnitGuardCombatCycle(context, unit);
             return;
         }
-        path_to_target(context, unit, *target);
         unit.command_state = kUnitStateGuardPursueTarget;
-        unit.command_flags |= 8u;
         unit.animation_frame = 0;
+        unit.command_flags |= 8u;
+        path_to_target(context, unit, *target);
         return;
     }
     if (movement_step(context, unit)) {
@@ -3666,8 +3789,7 @@ void HandleUnitGuardPursueTarget(UnitCommandContext& context,
             HandleUnitGuardCombatCycle(context, unit);
             return;
         }
-        path_to_target(context, unit, *candidate);
-        unit.command_flags |= 8u;
+        path_to_target_without_command_flag(context, unit, *candidate);
         return;
     }
     if (current == nullptr || !can_attack(context, unit, *current)) {
@@ -3685,18 +3807,26 @@ void HandleUnitGuardPursueTarget(UnitCommandContext& context,
         return;
     }
     if (!movement_step(context, unit)) {
-        path_to_target(context, unit, *current);
+        path_to_target_without_command_flag(context, unit, *current);
     }
 }
 
 bool complete_legacy_spawn_placement(UnitCommandContext& context,
     UnitMovementUnit& unit, u32 type_id) {
     if (!reserve_building_primary_resource(context, unit, type_id)) {
+        if (context.callbacks.on_production_start_failed_reason != nullptr) {
+            context.callbacks.on_production_start_failed_reason(
+                context, unit, UnitProductionStartFailure::primary_resources);
+        }
         return false;
     }
     UnitMovementUnit* spawned = create_legacy_spawned_unit(context, unit, type_id);
     if (spawned == nullptr) {
         refund_building_primary_resource(context, unit, type_id);
+        if (context.callbacks.on_production_start_failed_reason != nullptr) {
+            context.callbacks.on_production_start_failed_reason(
+                context, unit, UnitProductionStartFailure::placement_failed);
+        }
         return false;
     }
     // Original FUN_004c9e8f/FUN_004ca105 link the newly allocated structure
@@ -3719,7 +3849,7 @@ void StartUnitLegacySpawnPlacementCommand(UnitCommandContext& context,
     unit.spawn_type_id = type_id;
     const UnitMovementDefinition& spawn_definition =
         definition_for_type_or(context, type_id, unit.definition);
-    offset_spawn_target_by_footprint(unit, spawn_definition);
+    offset_spawn_target_by_interaction_bounds(unit, spawn_definition);
     if (CheckUnitDistanceAtLeastOneTile(unit, unit.path_target_x, unit.path_target_y)) {
         const i32 requested_x = unit.path_target_x;
         const i32 requested_y = unit.path_target_y;
@@ -3752,7 +3882,6 @@ void HandleLegacySpawnedConstructionRelease(UnitCommandContext& context,
     // gate; zero-health special objects still wait out their construction
     // duration before footprint registration and worker release.
     if (!spawned_destroyed && !grow_spawned_unit(*spawned)) {
-        ProcessUnitAnimationTimer(unit);
         return;
     }
 
@@ -3783,8 +3912,6 @@ void HandleLegacySpawnedConstructionRelease(UnitCommandContext& context,
         }
         unit.x = release_point.x;
         unit.y = release_point.y;
-        unit.destination_x = unit.x;
-        unit.destination_y = unit.y;
         unit.current_cell_x = unit.x & ~0x1f;
         unit.current_cell_y = unit.y & ~0x1f;
     }
@@ -3795,11 +3922,13 @@ void HandleUnitLegacySpawnPlacementApproach(UnitCommandContext& context,
     UnitMovementUnit& unit) {
     const UnitMovementDefinition& spawn_definition =
         definition_for_type_or(context, unit.spawn_type_id, unit.definition);
+    // Original state 0x25 (FUN_004ca105) retains the same definition
+    // +0x378/+0x37c half-bounds center calculated by state 0x23.
     const i32 placement_center_x = unit.active_command_payload.y +
-        static_cast<i32>(spawn_definition.footprint_width_tiles * 16u);
+        (spawn_definition.interaction_bounds_width >> 1);
     const i32 placement_center_y =
         static_cast<i32>(unit.active_command_payload.value) +
-        static_cast<i32>(spawn_definition.footprint_height_tiles * 16u);
+        (spawn_definition.interaction_bounds_height >> 1);
     const auto try_complete_placement = [&]() {
         if (CheckUnitDistanceAtLeastOneTile(
                 unit, placement_center_x, placement_center_y)) {
@@ -3902,14 +4031,27 @@ void ProcessUnitFollowHoldRange(UnitCommandContext& context, UnitMovementUnit& u
 
 namespace {
 
-bool TrySelectWorkerDropoffPath(UnitCommandContext& context, UnitMovementUnit& unit) {
+enum class WorkerDropoffPathAnchor {
+    footprint,
+    center_bounds,
+};
+
+bool TrySelectWorkerDropoffPath(UnitCommandContext& context, UnitMovementUnit& unit,
+    WorkerDropoffPathAnchor anchor) {
     UnitMovementUnit* dropoff = find_dropoff(context, unit);
     if (dropoff == nullptr) {
         return false;
     }
 
     SetUnitCommandTarget(unit, dropoff);
-    const UnitMovementPoint point = FindNearestPointInTargetFootprint(unit, *dropoff);
+    // The original uses two distinct target calculations here.  Initial
+    // return setup (0x004ca1e3) calls FindNearestPointInTargetFootprint,
+    // while both ProcessWorkerApproachDropoff recovery branches
+    // (0x004ca4ae and 0x004ca4e7) call 0x004c36de.  The latter returns the
+    // target definition's +0x360 center-bounds center, not a footprint edge.
+    const UnitMovementPoint point = anchor == WorkerDropoffPathAnchor::footprint ?
+        FindNearestPointInTargetFootprint(unit, *dropoff) :
+        CalculateUnitMovementCenterPoint(*dropoff);
     unit.path_target_x = point.x;
     unit.path_target_y = point.y;
     return true;
@@ -3943,7 +4085,8 @@ void ProcessWorkerReturnToDropoff(UnitCommandContext& context, UnitMovementUnit&
         return;
     }
 
-    if (!TrySelectWorkerDropoffPath(context, unit)) {
+    if (!TrySelectWorkerDropoffPath(context, unit,
+            WorkerDropoffPathAnchor::footprint)) {
         PopDeferredUnitCommandOrReturnIdle(context, unit);
         return;
     }
@@ -3962,7 +4105,8 @@ void ProcessWorkerHarvestTile(UnitCommandContext& context, UnitMovementUnit& uni
     // against definition +0x13e4 (DAT_0087d6dc), not the generic animation
     // timer at +0x13d4.  The latter belongs to the blocked/reservation wait
     // loop and can give workers a different harvest cadence.
-    if (unit.animation_frame < unit.definition.timed_flag_phase_b_period) {
+    const u32 harvest_period = unit.definition.timed_flag_phase_b_period;
+    if (unit.animation_frame < harvest_period) {
         return;
     }
     // The original leaves raw +0x64 at the completed harvest frame while the
@@ -3978,6 +4122,14 @@ void ProcessWorkerHarvestTile(UnitCommandContext& context, UnitMovementUnit& uni
         }
     }
 
+    // Original 0x004ca238 records period < frame before releasing the tile.
+    // Equality continues into harvesting; an overshot frame releases the
+    // reservation and then aborts through PopDeferredUnitCommandOrReturnIdle.
+    if (unit.animation_frame > harvest_period) {
+        PopDeferredUnitCommandOrReturnIdle(context, unit);
+        return;
+    }
+
     const u32 amount = context.callbacks.harvest_amount != nullptr ?
         context.callbacks.harvest_amount(context, unit) : kDefaultWorkerHarvestAmount;
     u32 consumed = amount;
@@ -3987,7 +4139,26 @@ void ProcessWorkerHarvestTile(UnitCommandContext& context, UnitMovementUnit& uni
     }
     unit.cargo_amount = consumed;
     unit.command_flags |= 4;
-    ProcessWorkerReturnToDropoff(context, unit);
+
+    // Original ProcessWorkerHarvestTile (0x004ca214) keeps raw target +0x80
+    // across harvest trips and searches for a dropoff only when it is null.
+    UnitMovementUnit* dropoff = unit.target;
+    if (dropoff == nullptr) {
+        dropoff = find_dropoff(context, unit);
+        if (dropoff == nullptr) {
+            PopDeferredUnitCommandOrReturnIdle(context, unit);
+            return;
+        }
+        SetUnitCommandTarget(unit, dropoff);
+        unit.command_value = 0;
+    }
+    const UnitMovementPoint point = FindNearestPointInTargetFootprint(unit, *dropoff);
+    unit.path_target_x = point.x;
+    unit.path_target_y = point.y;
+    unit.command_state = kUnitStateWorkerApproachDropoff;
+    if (has_movement(context)) {
+        ProcessUnitPathToDestination(movement(context), unit);
+    }
 }
 
 void ProcessWorkerApproachHarvestTile(UnitCommandContext& context, UnitMovementUnit& unit) {
@@ -3997,7 +4168,7 @@ void ProcessWorkerApproachHarvestTile(UnitCommandContext& context, UnitMovementU
 
     const UnitArrivalCheck arrival = CheckUnitDestinationArrivalStatus(movement(context), unit);
     if (arrival.direction_ready) {
-        unit.command_flags &= ~1u;
+        unit.movement_flags &= ~1u;
         unit.direction = arrival.direction;
         unit.command_state = kUnitStateWorkerReservedHarvest;
         unit.animation_frame = 0;
@@ -4025,7 +4196,12 @@ void ProcessWorkerApproachHarvestTile(UnitCommandContext& context, UnitMovementU
         if (tile.found) {
             unit.path_target_x = tile.x;
             unit.path_target_y = tile.y;
-            unit.command_state = kUnitStateWorkerReturnToDropoff;
+            // ProcessWorkerApproachHarvestTile (0x004ca2fb..0x004ca325)
+            // re-enters the state-0x28 setup helper after resolving an
+            // unoccupied replacement tile.  State 0x2a is assigned by that
+            // helper only after it has normalized the destination/carry
+            // flags, just like the status-2 recovery path below.
+            unit.command_state = kUnitStateWorkerApproachHarvest;
             ProcessWorkerReturnToDropoff(context, unit);
             return;
         }
@@ -4035,7 +4211,7 @@ void ProcessWorkerApproachHarvestTile(UnitCommandContext& context, UnitMovementU
     }
 
     if (arrival.status != 1) {
-        unit.command_flags |= 1;
+        unit.movement_flags |= 1;
         if (unit.animation_frame == 0) {
             unit.path_target_x = unit.destination_x;
             unit.path_target_y = unit.destination_y;
@@ -4044,7 +4220,7 @@ void ProcessWorkerApproachHarvestTile(UnitCommandContext& context, UnitMovementU
         }
     }
     const bool moved = ProcessUnitMovementStep(movement(context), unit);
-    unit.command_flags &= ~1u;
+    unit.movement_flags &= ~1u;
     if (moved) {
         return;
     }
@@ -4091,7 +4267,7 @@ void ProcessWorkerApproachDropoff(UnitCommandContext& context, UnitMovementUnit&
     const UnitArrivalCheck destination_arrival =
         CheckUnitDestinationArrivalStatus(movement(context), unit);
     if (destination_arrival.direction_ready || destination_arrival.status == 0) {
-        unit.command_flags |= 1u;
+        unit.movement_flags |= 1u;
         if (unit.animation_frame == 0) {
             unit.direction = CalculateUnitDirectionToPoint(unit, unit.path_target_x,
                 unit.path_target_y);
@@ -4101,7 +4277,7 @@ void ProcessWorkerApproachDropoff(UnitCommandContext& context, UnitMovementUnit&
     const UnitTargetBoundsMovementStatus target_status =
         CheckUnitTargetBoundsMovementStatus(unit);
     if (target_status.reached) {
-        unit.command_flags &= ~1u;
+        unit.movement_flags &= ~1u;
         unit.direction = target_status.direction;
         unit.command_state = kUnitStateWorkerDepositCargo;
         StartUnitCommandLockoutTimer(context, unit, 4);
@@ -4110,20 +4286,21 @@ void ProcessWorkerApproachDropoff(UnitCommandContext& context, UnitMovementUnit&
 
     if (target_status.status == 0) {
         unit.target = nullptr;
-        if (!TrySelectWorkerDropoffPath(context, unit)) {
-            unit.command_flags &= ~1u;
+        if (!TrySelectWorkerDropoffPath(context, unit,
+                WorkerDropoffPathAnchor::center_bounds)) {
+            unit.movement_flags &= ~1u;
             PopDeferredUnitCommandOrReturnIdle(context, unit);
             return;
         }
         ProcessUnitPathToDestination(movement(context), unit);
-        unit.command_flags &= ~1u;
+        unit.movement_flags &= ~1u;
         return;
     }
 
     if (target_status.status > 1) {
         unit.path_target_x = target_status.suggested_path_x;
         unit.path_target_y = target_status.suggested_path_y;
-        unit.command_flags |= 1u;
+        unit.movement_flags |= 1u;
         if (unit.animation_frame == 0) {
             unit.direction = CalculateUnitDirectionToPoint(unit, unit.path_target_x,
                 unit.path_target_y);
@@ -4131,20 +4308,21 @@ void ProcessWorkerApproachDropoff(UnitCommandContext& context, UnitMovementUnit&
     }
 
     const bool moved = ProcessUnitMovementStep(movement(context), unit);
-    unit.command_flags &= ~1u;
+    unit.movement_flags &= ~1u;
     if (!moved) {
-        if (!TrySelectWorkerDropoffPath(context, unit)) {
-            unit.command_flags &= ~1u;
+        if (!TrySelectWorkerDropoffPath(context, unit,
+                WorkerDropoffPathAnchor::center_bounds)) {
+            unit.movement_flags &= ~1u;
             PopDeferredUnitCommandOrReturnIdle(context, unit);
             return;
         }
         ProcessUnitPathToDestination(movement(context), unit);
-        unit.command_flags &= ~1u;
+        unit.movement_flags &= ~1u;
     }
 }
 
 void ProcessWorkerReservedHarvestWait(UnitCommandContext& context, UnitMovementUnit& unit) {
-    unit.command_flags &= ~1u;
+    unit.movement_flags &= ~1u;
     if (!has_movement(context)) {
         return;
     }
@@ -4165,7 +4343,16 @@ void ProcessWorkerReservedHarvestWait(UnitCommandContext& context, UnitMovementU
             return;
         }
     }
-    ProcessUnitAnimationTimer(unit);
+    // Original ProcessWorkerReservedHarvestWait (0x004ca513) advances raw
+    // unit +0x64 and wraps it with definition DAT_0087d6cc.  The generic
+    // animation helper advances raw +0xec instead, which can freeze parity.
+    const u32 period = unit.definition.animation_timer_period;
+    if (period != 0) {
+        ++unit.animation_frame;
+        if (unit.animation_frame >= period) {
+            unit.animation_frame = 0;
+        }
+    }
 }
 
 void StartUnitPatrolRouteCommand(UnitCommandContext& context, UnitMovementUnit& unit) {
@@ -4219,7 +4406,7 @@ void BeginUnitCarrierBoardingCommand(UnitCommandContext& context, UnitMovementUn
     }
 
     if (can_start_transport_boarding(context, unit, *target)) {
-        path_to_target(context, unit, *target);
+        path_to_target_without_command_flag(context, unit, *target);
         unit.command_state = kUnitStateCarrierApproachBoarding;
         if (command_is_reciprocal_boarding_candidate(context, *target)) {
             target->target = &unit;
@@ -4234,7 +4421,7 @@ void BeginUnitCarrierBoardingCommand(UnitCommandContext& context, UnitMovementUn
     }
 
     if (can_start_transport_boarding(context, *target, unit)) {
-        path_to_target(context, unit, *target);
+        path_to_target_without_command_flag(context, unit, *target);
         unit.command_state = kUnitStatePassengerApproachCarrier;
         if (command_is_reciprocal_boarding_candidate(context, *target)) {
             target->target = &unit;
@@ -4741,10 +4928,10 @@ void StartTargetedUnitSpawnPlacement(UnitCommandContext& context, UnitMovementUn
         return;
     }
 
-    unit.command_state = kUnitStateTargetedSpawnApproach;
     if (has_movement(context)) {
         ProcessUnitPathToDestination(movement(context), unit);
     }
+    unit.command_state = kUnitStateTargetedSpawnApproach;
 }
 
 void HandleTargetedUnitSpawnCycle(UnitCommandContext& context, UnitMovementUnit& unit) {
@@ -4815,11 +5002,11 @@ void StartLinkedUnitReleaseCommand(UnitCommandContext& context, UnitMovementUnit
     const bool release_reciprocal = unit.type_id == 0x2b &&
         linked_release_cycle_unit_alive(reciprocal);
     if (release_primary) {
-        release_linked_unit(unit, *linked);
+        release_linked_unit(context, unit, *linked);
         PopDeferredUnitCommandOrReturnIdle(context, *linked);
     }
     if (release_reciprocal) {
-        release_linked_unit(unit, *reciprocal);
+        release_linked_unit(context, unit, *reciprocal);
         PopDeferredUnitCommandOrReturnIdle(context, *reciprocal);
     }
 
@@ -4854,24 +5041,67 @@ void HandleLinkedUnitReleaseCycle(UnitCommandContext& context, UnitMovementUnit&
     }
 
     UnitMovementUnit* reciprocal = linked->target != &unit ? linked->target : nullptr;
-    const bool release_reciprocal = unit.type_id == 0x2b &&
+    const bool consume_reciprocal = unit.type_id == 0x2b &&
         linked_release_cycle_unit_alive(reciprocal);
-    release_linked_unit(unit, *linked);
-    PopDeferredUnitCommandOrReturnIdle(context, *linked);
-    if (release_reciprocal) {
-        release_linked_unit(unit, *reciprocal);
-        PopDeferredUnitCommandOrReturnIdle(context, *reciprocal);
+
+    if (context.callbacks.clear_footprint != nullptr) {
+        context.callbacks.clear_footprint(context, unit);
     }
-    if (unit.saved_type_id != 0) {
-        set_unit_type_for_command(context, unit, unit.saved_type_id);
-        unit.saved_type_id = 0;
+
+    UnitRuntimeStatBlock unit_stats = linked_release_runtime_stats(unit);
+    const UnitRuntimeStatBlock linked_stats = linked_release_runtime_stats(*linked);
+    UnitRuntimeStatBlock reciprocal_stats{};
+    if (consume_reciprocal) {
+        reciprocal_stats = linked_release_runtime_stats(*reciprocal);
     }
-    unit.linked_object_id = 0;
+
+    // FUN_00408c80 commits the already-selected +0x1d4/0x2b type.  It does
+    // not restore saved_type_id: the linked children are consumed into the new
+    // unit and their health/secondary ratios, progress and level are merged.
+    unit.type_flags = unit.definition.type_flags;
+    unit.script_bit_flags = unit.definition.initial_script_bit_flags;
+    unit.command_bits.fill(0);
+    const bool equipment_footprint_flag = context.equipment_catalog != nullptr &&
+        CalculateUnitEquipmentCommandFlagModifier(
+            unit, *context.equipment_catalog) != 0;
+    if ((unit.definition.footprint_flags & 2u) != 0 ||
+        equipment_footprint_flag) {
+        unit.command_flags |= 0x40u;
+    }
+    RebuildUnitRuntimeStatsFromDefinitionAndParents(unit, unit_stats,
+        linked, &linked_stats,
+        consume_reciprocal ? reciprocal : nullptr,
+        consume_reciprocal ? &reciprocal_stats : nullptr,
+        context.callbacks.variant_random_limit);
+
+    if (context.callbacks.clear_footprint != nullptr) {
+        context.callbacks.clear_footprint(context, *linked);
+        if (consume_reciprocal) {
+            context.callbacks.clear_footprint(context, *reciprocal);
+        }
+    }
+    linked->command_flags |= 0x100u;
+    if (consume_reciprocal) {
+        reciprocal->command_flags |= 0x100u;
+    }
+
     if (context.callbacks.on_linked_unit_released != nullptr) {
         context.callbacks.on_linked_unit_released(context, unit, *linked);
-        if (release_reciprocal) {
+        if (consume_reciprocal) {
             context.callbacks.on_linked_unit_released(context, unit, *reciprocal);
         }
+    }
+    const u32 old_type = unit.command_value != 0 ?
+        unit.command_value : unit.saved_type_id;
+    if (context.callbacks.on_unit_type_replaced != nullptr &&
+        old_type != unit.type_id) {
+        context.callbacks.on_unit_type_replaced(
+            context, unit, old_type, unit.type_id);
+    }
+    unit.saved_type_id = 0;
+    unit.linked_object_id = 0;
+    if (context.callbacks.set_footprint != nullptr) {
+        context.callbacks.set_footprint(context, unit);
     }
     PopDeferredUnitCommandOrReturnIdle(context, unit);
 }
@@ -4909,16 +5139,15 @@ void HandleLinkedUnitReleaseApproach(UnitCommandContext& context, UnitMovementUn
     unit.saved_type_id = unit.type_id;
     unit.command_value = unit.type_id;
     const bool direct_linked_release = linked->target == &unit;
-    const u32 release_type = direct_linked_release &&
-        unit.definition.alternate_type_id != 0 ?
-        unit.definition.alternate_type_id : 0x2b;
+    const u32 release_type = direct_linked_release ?
+        unit.definition.linked_release_type_id : 0x2b;
     set_unit_type_for_command(context, unit, release_type);
     unit.command_lockout_ticks = unit.definition.production_spawn_time;
     unit.animation_timer = 0;
-    enter_linked_release_child_cycle(*linked);
+    enter_linked_release_child_cycle(context, unit, *linked);
     if (unit.type_id == 0x2b && linked->target != nullptr &&
         linked->target != &unit) {
-        enter_linked_release_child_cycle(*linked->target);
+        enter_linked_release_child_cycle(context, unit, *linked->target);
     }
 }
 
@@ -4948,18 +5177,19 @@ void StartUnitSpecialAbilityCommand(UnitCommandContext& context, UnitMovementUni
         return;
     }
 
-    bool enter_timer = unit.ability_id >= 0x1c;
     if (unit.ability_id == 0x0a || unit.ability_id == 0x1c) {
         if (target == nullptr || (target->runtime_flags & 4u) == 0 ||
             target->path_target_x == 1) {
             PopDeferredUnitCommandOrReturnIdle(context, unit);
             return;
         }
-        enter_timer = target->path_target_x != 0;
     }
 
-    start_ability_attachment(context, unit, target);
-    if (!enter_timer) {
+    // Original helper 0x004ef6cd returns carry only for an unavailable action,
+    // insufficient resources, or an enabled attachment whose pool allocation
+    // fails.  Every successful non-Corrupt action enters state 0x65; corpse
+    // marker zero and action 0x19 are not immediate-pop cases.
+    if (!start_ability_attachment(context, unit, target)) {
         PopDeferredUnitCommandOrReturnIdle(context, unit);
         return;
     }
@@ -5133,7 +5363,7 @@ void HandleUnitMorphEnterTimer(UnitCommandContext& context, UnitMovementUnit& un
     }
     unit.saved_type_flags = unit.type_flags;
     unit.type_flags = 0x08002011;
-    unit.wait_ticks = 0;
+    unit.movement_step_accumulator = 0;
     unit.work_timer = 0;
     unit.pending_command = {};
     unit.deferred_commands = {};
@@ -5156,7 +5386,7 @@ void HandleUnitMorphExitTimer(UnitCommandContext& context, UnitMovementUnit& uni
         unit.runtime_stat_20 -= 0x1e;
     }
     unit.type_flags = unit.saved_type_flags;
-    unit.wait_ticks = 0;
+    unit.movement_step_accumulator = 0;
     unit.work_timer = 0;
     unit.pending_command = {};
     unit.deferred_commands = {};
@@ -5415,7 +5645,7 @@ bool CheckUnitSpawnDistanceThreshold(const UnitCommandContext& context,
     const u32 interaction_range =
         CalculateUnitInteractionRangeWithProductionAndEquipmentEffects(
             command_production_state_or_empty(context), unit,
-            unit.definition.effect_command_distance_gate,
+            unit.definition.effect_adjusted_interaction_range_base,
             command_equipment_catalog(context));
     return distance > (interaction_range >> 1);
 }
@@ -5451,7 +5681,7 @@ bool linked_release_population_gate_allows(UnitCommandContext& context,
     if (linked.target == &unit) {
         before_transport_size = unit.definition.transport_size * 2;
         if (!linked_release_definition_transport_size(context,
-                unit.definition.alternate_type_id, after_transport_size)) {
+                unit.definition.linked_release_type_id, after_transport_size)) {
             return true;
         }
     }
@@ -6664,7 +6894,7 @@ bool CheckOwnerEligibleRetargetUnit(const UnitMovementUnit& unit) {
         return false;
     }
     return (unit.definition.type_flags & 0x20u) != 0 ||
-        (unit.definition.support_source_flags & 0x7242u) != 0;
+        (unit.definition.initial_script_bit_flags & 0x7242u) != 0;
 }
 
 bool CheckOwnerEligibleRetargetUnitWithScriptGate(
@@ -8871,30 +9101,32 @@ bool OwnerProductionPlacementPathProbePasses(
 
 bool OwnerProductionPlacementDefinitionRequiresPathProbe(
     const UnitMovementDefinition& definition) {
-    return definition.prerequisite_count != 0 ||
-        (definition.footprint_flags & 1u) != 0;
+    return definition.placement_path_reference_count != 0 ||
+        definition.placement_small_reference_count != 0;
 }
 
 bool OwnerProductionNearbyPlacementUnitRequiresPathProbe(
     const UnitCommandContext& context, const UnitMovementDefinition& definition) {
-    if ((definition.footprint_flags & 1u) != 0) {
+    if (definition.placement_small_reference_count != 0) {
         return true;
     }
 
-    const u32 prerequisite_count = std::min<u32>(definition.prerequisite_count,
-        static_cast<u32>(definition.prerequisite_type_ids.size()));
-    for (u32 index = 0; index < prerequisite_count; ++index) {
-        const u32 prerequisite_type = definition.prerequisite_type_ids[index];
-        const UnitMovementDefinition* prerequisite_definition = nullptr;
+    const u32 reference_count = std::min<u32>(
+        definition.placement_path_reference_count,
+        static_cast<u32>(definition.placement_path_reference_type_ids.size()));
+    for (u32 index = 0; index < reference_count; ++index) {
+        const u32 reference_type =
+            definition.placement_path_reference_type_ids[index];
+        const UnitMovementDefinition* reference_definition = nullptr;
         if (context.callbacks.find_definition != nullptr) {
             UnitCommandContext& mutable_context =
                 const_cast<UnitCommandContext&>(context);
-            prerequisite_definition =
+            reference_definition =
                 context.callbacks.find_definition(mutable_context,
-                    prerequisite_type);
+                    reference_type);
         }
-        const u32 movement_class = prerequisite_definition != nullptr ?
-            prerequisite_definition->movement_class : 0xffffffffu;
+        const u32 movement_class = reference_definition != nullptr ?
+            reference_definition->movement_class : 0xffffffffu;
         if (movement_class != 1 && movement_class != 3) {
             return true;
         }

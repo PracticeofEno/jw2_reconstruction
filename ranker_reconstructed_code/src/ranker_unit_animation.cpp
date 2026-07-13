@@ -124,7 +124,8 @@ u32 sequence_bias(UnitAnimationSequence sequence) {
 
 void dispatch_draw(UnitAnimationDrawContext& context, const UnitAnimationUnit& unit,
     UnitAnimationSequence sequence, UnitAnimationDrawKind kind, u32 resource_frame,
-    u32 animation_frame, u32 direction_row, bool flipped) {
+    u32 animation_frame, u32 direction_row, bool flipped,
+    u32 resource_draw_mode = 0) {
     const UnitAnimationDrawCommand command{
         &unit,
         sequence,
@@ -135,6 +136,7 @@ void dispatch_draw(UnitAnimationDrawContext& context, const UnitAnimationUnit& u
         unit.screen_x,
         unit.screen_y,
         flipped,
+        resource_draw_mode,
     };
     context.last_command = command;
 
@@ -184,16 +186,8 @@ void prime_tail_draw_command(UnitAnimationDrawContext& context,
         unit.screen_x,
         unit.screen_y,
         flipped,
+        0,
     };
-}
-
-bool owner_related_to_local(UnitAnimationDrawContext& context,
-    const UnitAnimationUnit& unit) {
-    if (unit.owner_id == context.local_owner_id) {
-        return true;
-    }
-    return context.callbacks.is_owner_allied != nullptr &&
-        context.callbacks.is_owner_allied(context, context.local_owner_id, unit.owner_id);
 }
 
 UnitAnimationDrawKind select_tail_draw_kind(UnitAnimationDrawContext& context,
@@ -209,16 +203,16 @@ UnitAnimationDrawKind select_tail_draw_kind(UnitAnimationDrawContext& context,
         return UnitAnimationDrawKind::blend_40;
     }
     if ((unit.command_flags & 0x40) != 0 || (unit.command_bit_mask & 0x80) != 0) {
-        return owner_related_to_local(context, unit)
+        return unit.visible_to_local_owner
             ? UnitAnimationDrawKind::blend_factor_0f
-            : (flipped ? UnitAnimationDrawKind::flipped : UnitAnimationDrawKind::normal);
+            : UnitAnimationDrawKind::neighbor_copy;
     }
     if ((unit.state_flags & kUnitAnimStateDirectSpriteMode) != 0 &&
-        owner_related_to_local(context, unit)) {
+        (unit.owner_id == context.local_owner_id || context.local_owner_is_observer)) {
         return UnitAnimationDrawKind::ally_or_local;
     }
     if ((unit.state_flags & kUnitAnimStateShadowProbe) != 0 &&
-        owner_related_to_local(context, unit)) {
+        unit.visible_to_local_owner) {
         return UnitAnimationDrawKind::shadow_probe_additive_tint;
     }
     return flipped ? UnitAnimationDrawKind::flipped : UnitAnimationDrawKind::normal;
@@ -296,6 +290,11 @@ u32 ratio_31(u32 value, u32 max_value) {
     return static_cast<u32>((static_cast<u64>(value) * 0x1f) / max_value);
 }
 
+u32 cell_health_blend_factor(u32 value, u32 max_value) {
+    // DAT_0072c4b0 clamps the HP ratio plus six to [10, 31].
+    return std::clamp<u32>(ratio_31(value, max_value) + 6u, 10u, 0x1fu);
+}
+
 UnitAnimationDrawKind forced_channel_additive_kind(UnitAnimationSequence sequence) {
     return sequence == UnitAnimationSequence::direct_timed
         ? UnitAnimationDrawKind::timed_channel_additive_tint
@@ -323,6 +322,60 @@ void draw_cell_frame_with_kind(UnitAnimationDrawContext& context,
         context, unit, sequence, resource_frame, resolved_animation_frame, direction_row);
     dispatch_draw(context, unit, sequence, kind, resource_frame, resolved_animation_frame,
         direction_row, false);
+}
+
+void draw_cell_frame_with_resource_mode(UnitAnimationDrawContext& context,
+    const UnitAnimationUnit& unit, UnitAnimationSequence sequence, u32 animation_frame,
+    u32 resource_draw_mode) {
+    const u32 resource_frame = resolve_unit_frame(context, unit, sequence, animation_frame);
+    u32 resolved_animation_frame = 0;
+    u32 direction_row = 0;
+    resource_frame_parts(
+        context, unit, sequence, resource_frame, resolved_animation_frame, direction_row);
+    dispatch_draw(context, unit, sequence, UnitAnimationDrawKind::resource_mode,
+        resource_frame, resolved_animation_frame, direction_row, false,
+        resource_draw_mode);
+}
+
+void draw_cell_resource_layer(UnitAnimationDrawContext& context,
+    const UnitAnimationUnit& unit, UnitAnimationSequence sequence,
+    u32 animation_frame, u32 definition_blit_mode) {
+    // FUN_004c538a/FUN_004c5468/FUN_004c568e use this exact precedence for
+    // the real group-2/group-11/group-1 layer.  The optional group-0
+    // construction-stage layer is drawn separately before reaching here.
+    if ((unit.draw_flags & kUnitAnimDrawMode2) != 0) {
+        const UnitAnimationDrawKind kind =
+            (unit.draw_flags & kUnitAnimDrawMode80) != 0
+            ? UnitAnimationDrawKind::mode_80
+            : UnitAnimationDrawKind::mode_2;
+        draw_cell_frame_with_kind(context, unit, sequence, animation_frame, kind);
+        return;
+    }
+
+    const UnitAnimationDefinition& definition = definition_or_fallback(context);
+    if (definition.cell_construction_special_draw) {
+        if (unit.max_hit_points != 0) {
+            context.highlight_level =
+                cell_health_blend_factor(unit.hit_points, unit.max_hit_points);
+            if (context.highlight_level != 0x1f) {
+                draw_cell_frame_with_kind(context, unit, sequence, animation_frame,
+                    UnitAnimationDrawKind::blend_factor_ramp);
+                return;
+            }
+        }
+        // The original uses an `else if` for the per-layer byte.  A special
+        // definition at full HP therefore draws normally instead of falling
+        // through to +0x348/+0x349/+0x34a.
+        draw_cell_frame(context, unit, sequence, animation_frame);
+        return;
+    }
+
+    if (definition_blit_mode != 0) {
+        draw_cell_frame_with_resource_mode(
+            context, unit, sequence, animation_frame, definition_blit_mode);
+        return;
+    }
+    draw_cell_frame(context, unit, sequence, animation_frame);
 }
 
 u32 construction_progress_frame(const UnitAnimationUnit& unit) {
@@ -493,7 +546,8 @@ void DrawUnitHealthAndSecondaryBars(UnitAnimationDrawContext& context,
     if (unit.max_hit_points != 0) {
         y += 4;
     }
-    if (unit.owner_id == context.local_owner_id && unit.max_secondary_value != 0 &&
+    if (unit.owner_id == context.local_owner_id && unit.secondary_bar_enabled &&
+        unit.max_secondary_value != 0 &&
         context.callbacks.draw_secondary_bar != nullptr) {
         context.callbacks.draw_secondary_bar(context, unit, x, y, width);
     }
@@ -760,13 +814,17 @@ void DrawUnitAnimationFrameForcedNormalHighlight(UnitAnimationDrawContext& conte
 void DispatchUnitCellResourceDraw(UnitAnimationDrawContext& context,
     const UnitAnimationUnit& unit) {
     context.current_unit = &unit;
-    if ((unit.animation_flags & kUnitAnimFlagShowBars) != 0) {
-        ApplyUnitOwnerRelationTint(context, unit);
-    }
-
+    // FUN_004c523d tests raw state bit 2 before entering the ordinary
+    // structure-render tail.  Its direct-sprite/shadow path therefore never
+    // calls ApplyUnitOwnerRelationTint (0x004c526b is only reached when bit 2
+    // is clear).  Keep that gate ahead of the relation overlay so transient
+    // direct-sprite structures do not leave a stray owner marker behind.
     if ((unit.state_flags & kUnitAnimStateDirectSprite) != 0) {
         DrawUnitShadowAndAttachmentSprites(context, unit);
         return;
+    }
+    if ((unit.animation_flags & kUnitAnimFlagShowBars) != 0) {
+        ApplyUnitOwnerRelationTint(context, unit);
     }
     if (unit.cell_construction_progress_active) {
         DrawUnitCellConstructionProgressFrame(context, unit);
@@ -810,8 +868,9 @@ void DrawUnitCellFlag4ResourceFrame(UnitAnimationDrawContext& context,
     if ((unit.definition_cell_flags & 0x2) != 0) {
         DrawUnitCellConstructionStageFrame(context, unit);
     }
-    draw_cell_frame(context, unit, UnitAnimationSequence::cell_flag4,
-        unit.cell_animation_frame);
+    const UnitAnimationDefinition& definition = definition_or_fallback(context);
+    draw_cell_resource_layer(context, unit, UnitAnimationSequence::cell_flag4,
+        unit.cell_animation_frame, definition.cell_flag4_blit_mode);
 }
 
 void DrawUnitCellFlag40ResourceFrame(UnitAnimationDrawContext& context,
@@ -819,8 +878,9 @@ void DrawUnitCellFlag40ResourceFrame(UnitAnimationDrawContext& context,
     if ((unit.definition_cell_flags & 0x4) != 0) {
         DrawUnitCellConstructionStageFrame(context, unit);
     }
-    draw_cell_frame(context, unit, UnitAnimationSequence::cell_flag40,
-        unit.cell_flag40_animation_frame);
+    const UnitAnimationDefinition& definition = definition_or_fallback(context);
+    draw_cell_resource_layer(context, unit, UnitAnimationSequence::cell_flag40,
+        unit.cell_flag40_animation_frame, definition.cell_flag40_blit_mode);
 }
 
 void DrawUnitCellConstructionStageFrame(UnitAnimationDrawContext& context,
@@ -829,6 +889,38 @@ void DrawUnitCellConstructionStageFrame(UnitAnimationDrawContext& context,
         return;
     }
     const u32 frame = unit.construction_stage_count - 1;
+
+    // FUN_004c5546 selects the final group-0 frame, but it does not always
+    // use the normal blitter.  Raw +0xa4 draw modes take precedence, then
+    // raw +0x9c bit 0x40 forces factor 0x0f, and definitions whose +0x5e8
+    // field is 1 fade with the original HP lookup table.
+    if ((unit.draw_flags & kUnitAnimDrawMode2) != 0) {
+        const UnitAnimationDrawKind kind =
+            (unit.draw_flags & kUnitAnimDrawMode80) != 0
+            ? UnitAnimationDrawKind::mode_80
+            : UnitAnimationDrawKind::mode_2;
+        draw_cell_frame_with_kind(context, unit,
+            UnitAnimationSequence::cell_construction, frame, kind);
+        return;
+    }
+    if ((unit.command_flags & 0x40u) != 0) {
+        context.highlight_level = 0x0f;
+        draw_cell_frame_with_kind(context, unit,
+            UnitAnimationSequence::cell_construction, frame,
+            UnitAnimationDrawKind::blend_factor_ramp);
+        return;
+    }
+    const UnitAnimationDefinition& definition = definition_or_fallback(context);
+    if (definition.cell_construction_special_draw && unit.max_hit_points != 0) {
+        context.highlight_level = std::clamp<u32>(
+            ratio_31(unit.hit_points, unit.max_hit_points) + 6u, 10u, 0x1fu);
+        if (context.highlight_level != 0x1f) {
+            draw_cell_frame_with_kind(context, unit,
+                UnitAnimationSequence::cell_construction, frame,
+                UnitAnimationDrawKind::blend_factor_ramp);
+            return;
+        }
+    }
     draw_cell_frame(context, unit, UnitAnimationSequence::cell_construction, frame);
 }
 
@@ -836,14 +928,21 @@ void DrawPlacementPreviewDefinitionSprite(UnitAnimationDrawContext& context,
     const UnitAnimationUnit& unit) {
     UnitAnimationUnit preview = unit;
     preview.owner_id = context.local_owner_id;
+    // FUN_004c5627 prefers the final image from definition group 0 and only
+    // falls back to the first group-1 image when group 0 is empty.
+    if (preview.construction_stage_count != 0) {
+        DrawUnitCellConstructionStageFrame(context, preview);
+        return;
+    }
     draw_cell_frame(context, preview, UnitAnimationSequence::cell_base,
         preview.cell_animation_frame);
 }
 
 void DrawUnitCellBaseResourceFrame(UnitAnimationDrawContext& context,
     const UnitAnimationUnit& unit) {
-    draw_cell_frame(context, unit, UnitAnimationSequence::cell_base,
-        unit.cell_animation_frame);
+    const UnitAnimationDefinition& definition = definition_or_fallback(context);
+    draw_cell_resource_layer(context, unit, UnitAnimationSequence::cell_base,
+        unit.cell_animation_frame, definition.cell_base_blit_mode);
 }
 
 void DrawUnitCellConstructionProgressFrame(UnitAnimationDrawContext& context,
@@ -862,11 +961,17 @@ void DrawUnitCellConstructionProgressFrame(UnitAnimationDrawContext& context,
         return;
     }
 
-    if (unit.construction_stage_count == 1 && unit.construction_progress_limit != 0 &&
+    // FUN_004c573c tests group-0's raw (frame_count - 1) value before it
+    // scales that value by construction progress.  Consequently the HP fade
+    // belongs only to definitions with exactly one construction frame.  A
+    // multi-frame definition may scale to frame zero early in construction,
+    // but the original still draws that frame normally.
+    if (unit.construction_stage_count == 1 &&
+        unit.construction_progress_limit != 0 &&
         unit.max_hit_points != 0) {
         context.highlight_level = ratio_31(unit.hit_points, unit.max_hit_points);
         if (context.highlight_level != 0x1f) {
-            draw_cell_frame_with_kind(context, unit, UnitAnimationSequence::cell_progress, 0,
+            draw_cell_frame_with_kind(context, unit, UnitAnimationSequence::cell_progress, frame,
                 UnitAnimationDrawKind::blend_factor_ramp);
             return;
         }
@@ -892,11 +997,11 @@ void DrawUnitLowHealthDamageOverlay(UnitAnimationDrawContext& context,
     }
     u32 frame = unit.low_health_overlay_frame;
     const u32 quarter = unit.max_hit_points >> 2;
-    if (unit.hit_points < unit.max_hit_points - (quarter * 2)) {
-        frame += 0x2a;
-    }
-    else if (unit.hit_points < unit.max_hit_points - quarter) {
+    if (unit.hit_points < unit.max_hit_points - quarter) {
         frame += 0x15;
+        if (unit.hit_points < unit.max_hit_points - quarter - quarter) {
+            frame += 0x15;
+        }
     }
     draw_cell_frame(context, unit, UnitAnimationSequence::low_health_overlay, frame);
 }

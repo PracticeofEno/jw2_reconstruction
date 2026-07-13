@@ -9,8 +9,10 @@ namespace ranker {
 namespace {
 
 bool is_target_inactive(const UnitRecord& unit) {
-    return (unit.command_state & kUnitStateDead) != 0 ||
-        (unit.runtime_flags & kUnitRuntimeHiddenOrInactive) != 0;
+    // Original automatic target scans reject runtime death/hidden masks.  A
+    // lethal command-state bit can be set earlier in the same active-list
+    // frame, before the target's runtime death dispatch marks those flags.
+    return (unit.runtime_flags & kUnitRuntimeHiddenOrInactive) != 0;
 }
 
 i32 center_x(const UnitRecord& unit) {
