@@ -1062,6 +1062,7 @@ bool stage_default_session_runtime_override_definitions();
 void apply_default_session_fixed44_player_slot_masks();
 bool import_default_owner_ai_snapshot_from_session_records();
 bool export_default_owner_ai_snapshot_to_payload(std::vector<u8>& payload);
+bool import_default_session_owner_unit_availability();
 SessionRuntimeExportState build_default_session_runtime_export_state();
 bool append_default_session_runtime_export_records(
     std::vector<TrcWriteRecord>& records);
@@ -3149,6 +3150,17 @@ bool export_default_loaded_gameplay_session_bundle_to(
             if (!export_default_owner_ai_snapshot_to_payload(record.payload)) {
                 return false;
             }
+        } else if (i == kGameplaySessionOwnerUnitAvailabilityRecordIndex) {
+            record.payload.resize(kGameplaySessionOwnerUnitAvailabilityRecordBytes);
+            for (u32 owner = 0; owner < kGameSessionOwnerCount; ++owner) {
+                const std::size_t offset =
+                    static_cast<std::size_t>(owner) * kGameSessionUnitTypeCount;
+                std::copy(g_runtime.session_runtime_import_state
+                              .owner_unit_availability[owner].begin(),
+                    g_runtime.session_runtime_import_state
+                        .owner_unit_availability[owner].end(),
+                    record.payload.begin() + offset);
+            }
         } else if (i < load.records.size() && load.record_loaded[i]) {
             record.payload = load.records[i];
         } else if (spec.byte_count != 0) {
@@ -3212,6 +3224,7 @@ bool default_gameplay_modal_import_session_bundle(
         g_runtime.active_session_definitions = SessionRuntimeDefinitionTableSet{};
         g_runtime.staged_session_definitions = SessionRuntimeDefinitionTableSet{};
         g_runtime.gameplay_session_runtime_buffers = SessionRuntimeBufferPairs{};
+        import_default_session_owner_unit_availability();
         stage_default_session_runtime_override_definitions();
         state.non_empty_runtime_tables_available =
             g_runtime.gameplay_session_runtime_definitions_staged;
@@ -22711,6 +22724,8 @@ void sync_default_gameplay_script_runtime_context(
     script.opcode_context.enabled = true;
     script.opcode_context.movement = movement;
     script.opcode_context.lifecycle = lifecycle;
+    script.opcode_context.owner_unit_availability =
+        &g_runtime.session_runtime_import_state.owner_unit_availability;
     script.opcode_context.find_strict_placement =
         default_gameplay_script_find_strict_placement;
     script.opcode_context.strict_placement_user = nullptr;

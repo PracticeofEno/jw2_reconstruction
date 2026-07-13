@@ -251,6 +251,10 @@ struct GameplayScriptOpcodeContext {
     std::array<bool, kGameplayScriptOwnerCount> owner_population_limit_dirty{};
     UnitMovementContext* movement = nullptr;
     UnitLifecycleContext* lifecycle = nullptr;
+    // Original DAT_00725474: owner-major 8 x 0xaa byte production UI
+    // availability table shared directly with scenario opcodes 0x38/0x73/0x77.
+    std::array<std::array<u8, kGameplayScriptOwnerUnitTypeCount>,
+        kGameplayScriptOwnerCount>* owner_unit_availability = nullptr;
     GameplayScriptStrictPlacementCallback find_strict_placement = nullptr;
     void* strict_placement_user = nullptr;
     GameplayScriptImmediateSpawnCallback spawn_immediate = nullptr;

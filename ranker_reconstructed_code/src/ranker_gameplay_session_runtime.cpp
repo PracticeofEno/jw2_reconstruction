@@ -419,6 +419,15 @@ void InitializeGameplaySessionRuntimeState(GameplaySessionRuntimeResetState& sta
     }
     state.effect_runtime_reset = true;
 
+    // FUN_00426770 fills DAT_00725474 only for normal sessions, after the
+    // runtime-definition and unit/effect reset passes.  Mode 5 preserves the
+    // availability imported from the session and non-empty overrides.
+    if (state.session_mode != 5 && state.import_state != nullptr) {
+        for (auto& owner : state.import_state->owner_unit_availability) {
+            owner.fill(1);
+        }
+    }
+
     reset_owner_counters(state);
     reset_script_runtime(state);
 

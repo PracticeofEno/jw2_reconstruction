@@ -2169,17 +2169,20 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         return true;
     }
     case 0x38: {
+        if (state.opcode_context.owner_unit_availability == nullptr) {
+            return true;
+        }
         const u8* low_bytes = reinterpret_cast<const u8*>(command.data() + 1);
         const u8* high_bytes = reinterpret_cast<const u8*>(command.data()) + 0x304;
-        for (u32 owner_index = 0; owner_index < state.condition_context.owners.size();
-             ++owner_index) {
-            GameplayScriptOwnerConditionState& owner =
-                state.condition_context.owners[owner_index];
-            for (u32 i = 0; i < 0x60 && i < owner.script_values.size(); ++i) {
-                owner.script_values[i] = low_bytes[owner_index * 0x60 + i];
+        auto& availability = *state.opcode_context.owner_unit_availability;
+        for (u32 owner_index = 0; owner_index < availability.size(); ++owner_index) {
+            for (u32 i = 0; i < 0x60; ++i) {
+                availability[owner_index][i] =
+                    low_bytes[owner_index * 0x60 + i];
             }
-            for (u32 i = 0; i < 0x4a && (0x60 + i) < owner.script_values.size(); ++i) {
-                owner.script_values[0x60 + i] = high_bytes[owner_index * 0x4a + i];
+            for (u32 i = 0; i < 0x4a; ++i) {
+                availability[owner_index][0x60 + i] =
+                    high_bytes[owner_index * 0x4a + i];
             }
         }
         return true;
@@ -2538,10 +2541,11 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     }
     case 0x73:
     case 0x77: {
-        GameplayScriptOwnerConditionState* owner =
-            owner_state(state.condition_context, command[1]);
-        if (owner != nullptr && command[2] < owner->script_values.size()) {
-            owner->script_values[command[2]] = command[0] == 0x73 ? 1 : 0;
+        auto* availability = state.opcode_context.owner_unit_availability;
+        if (availability != nullptr && command[1] < availability->size() &&
+            command[2] < (*availability)[command[1]].size()) {
+            (*availability)[command[1]][command[2]] =
+                command[0] == 0x73 ? 1 : 0;
         }
         return true;
     }
