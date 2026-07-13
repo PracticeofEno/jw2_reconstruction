@@ -396,7 +396,9 @@ u32 group_alive_count(const GameplayScriptTriggerState& state,
     const u32 limit = std::min<u32>(
         group.reference_count, kGameplayScriptTriggerReferencesPerGroup);
     for (u32 slot = 0; slot < limit; ++slot) {
-        if (object_alive(object_state(state, group.object_indices[slot]))) {
+        const GameplayScriptTriggerObjectState* object =
+            object_state(state, group.object_indices[slot]);
+        if (object != nullptr && (object->flags & 4u) == 0) {
             ++count;
         }
     }
@@ -454,6 +456,22 @@ u32 count_group_objects_in_area(const GameplayScriptTriggerState& state,
         const GameplayScriptTriggerObjectState* object =
             object_state(state, group.object_indices[slot]);
         if (object_alive(object) && area_contains_object(area, *object)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+u32 count_raw_group_objects_in_area(const GameplayScriptTriggerState& state,
+    const GameplayScriptTriggerGroup& group, const GameplayScriptArea& area) {
+    u32 count = 0;
+    const u32 limit = std::min<u32>(
+        group.reference_count, kGameplayScriptTriggerReferencesPerGroup);
+    for (u32 slot = 0; slot < limit; ++slot) {
+        const GameplayScriptTriggerObjectState* object =
+            object_state(state, group.object_indices[slot]);
+        if (object != nullptr && (object->flags & 4u) == 0 &&
+            area_contains_object(area, *object)) {
             ++count;
         }
     }
@@ -1255,7 +1273,8 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
         if (group == nullptr || area == nullptr) {
             return false;
         }
-        return count_group_objects_in_area(state, *group, *area) >= words[1];
+        const u32 count = count_raw_group_objects_in_area(state, *group, *area);
+        return count != 0 && static_cast<i32>(count) >= static_cast<i32>(words[1]);
     }
     case 0x11: {
         const GameplayScriptTriggerGroup* group = group_state(state, words[1]);
@@ -1263,7 +1282,9 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
     }
     case 0x12: {
         const GameplayScriptTriggerGroup* group = group_state(state, words[1]);
-        return group != nullptr && group_alive_count(state, *group) <= words[2];
+        return group != nullptr &&
+            static_cast<i32>(group_alive_count(state, *group)) <=
+                static_cast<i32>(words[2]);
     }
     case 0x13: {
         GameplayScriptDialogState& dialog = gameplay_script_dialog_state();
