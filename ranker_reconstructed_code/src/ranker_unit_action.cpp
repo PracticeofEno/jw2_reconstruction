@@ -3669,7 +3669,11 @@ bool BeginSelectedUnitAttachmentEffect(UnitEffectRuntimeState& state,
 }
 
 bool StartSelectedUnitAttachmentEffect(UnitEffectRuntimeState& state,
-    u32 effect_id, UnitMovementUnit& source, UnitMovementUnit* attachment) {
+    u32 effect_id, UnitMovementUnit& source, UnitMovementUnit* attachment,
+    UnitEffectRuntime** created_effect) {
+    if (created_effect != nullptr) {
+        *created_effect = nullptr;
+    }
     const UnitEffectDefinition* definition =
         find_effect_definition(state, effect_id);
     if (definition == nullptr) {
@@ -3697,6 +3701,9 @@ bool StartSelectedUnitAttachmentEffect(UnitEffectRuntimeState& state,
             state, *effect, effect_id, source, attachment)) {
         ReleaseUnitEffectSlot(state, *effect);
         return false;
+    }
+    if (created_effect != nullptr) {
+        *created_effect = effect;
     }
     return true;
 }

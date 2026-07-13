@@ -278,7 +278,8 @@ struct UnitCommandCallbacks {
     UnitCommandTargetProgressPairCallback on_target_progress = nullptr;
     UnitCommandTargetProgressPairCallback on_target_progress_complete = nullptr;
     UnitCommandTargetProgressCallback on_local_target_progress_blocked = nullptr;
-    UnitCommandCallback on_reserved_tile_work_complete = nullptr;
+    UnitCommandCallback on_reserved_tile_impact_frame = nullptr;
+    UnitCommandPredicate on_reserved_tile_work_complete = nullptr;
     UnitCommandAmountCallback harvest_amount = nullptr;
     UnitCommandAmountCallback status_secondary_recharge_amount = nullptr;
     UnitCommandRandomLimitCallback random_limit = nullptr;

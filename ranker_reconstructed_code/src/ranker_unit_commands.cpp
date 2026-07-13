@@ -394,7 +394,15 @@ void advance_wrapping_command_frame(UnitMovementUnit& unit) {
 }
 
 void advance_reserved_tile_work_frame(UnitMovementUnit& unit) {
-    ++unit.animation_frame;
+    // Raw definition +0x247c is retained verbatim in spawn_frame_count.  The
+    // filtered action_impact_frames array drops the original -1 sentinel.
+    const u32 impact_frame = unit.definition.spawn_frame_count;
+    // 0x004cb2f3 omits the frame store once the animation reaches I - 1.
+    // The work timer continues, leaving the worker posed at the impact frame
+    // until the 62-tick completion path runs.
+    if (impact_frame != unit.animation_frame + 1u) {
+        ++unit.animation_frame;
+    }
 }
 
 bool consume_transport_unload_delay(UnitMovementUnit& carrier) {
@@ -4799,10 +4807,15 @@ void HandleReservedTileWorkCycle(UnitCommandContext& context, UnitMovementUnit& 
         unit.reserved_tile_effect = nullptr;
         unit.linked_effect_slot_offset = 0;
     }
-    advance_reserved_tile_work_frame(unit);
     if (context.callbacks.on_harvest_frame != nullptr) {
         context.callbacks.on_harvest_frame(context, unit);
     }
+    const u32 impact_frame = unit.definition.spawn_frame_count;
+    if (impact_frame == unit.animation_frame + 2u &&
+        context.callbacks.on_reserved_tile_impact_frame != nullptr) {
+        context.callbacks.on_reserved_tile_impact_frame(context, unit);
+    }
+    advance_reserved_tile_work_frame(unit);
     ++unit.work_timer;
     if (unit.work_timer < 0x3e) {
         return;
@@ -4826,7 +4839,10 @@ void HandleReservedTileWorkCycle(UnitCommandContext& context, UnitMovementUnit& 
         ProcessHarvestableTileAmount(movement(context).map, release.tile_index, amount);
 
     UnitMovementUnit* target = unit.target;
-    if (target == nullptr || !target_alive(target)) {
+    // The completion path consumes the raw stored pointer even when that
+    // target entered command-dead/hidden state in the same simulation frame.
+    // A replacement dropoff search occurs only for an absent pointer.
+    if (target == nullptr) {
         target = find_dropoff(context, unit);
     }
     if (target == nullptr) {
@@ -4837,8 +4853,11 @@ void HandleReservedTileWorkCycle(UnitCommandContext& context, UnitMovementUnit& 
     unit.reserved_tile_effect = nullptr;
     unit.linked_effect_slot_offset = 0;
 
-    if (context.callbacks.on_reserved_tile_work_complete != nullptr) {
-        context.callbacks.on_reserved_tile_work_complete(context, unit);
+    if (context.callbacks.on_reserved_tile_work_complete != nullptr &&
+        !context.callbacks.on_reserved_tile_work_complete(context, unit)) {
+        // FUN_004ef7b8 allocation/action failure returns directly with state
+        // 0x54 intact; the ordinary deferred/idle completion is not entered.
+        return;
     }
     if (has_reserved_tile_linked_object(unit)) {
         unit.command_state = kUnitStateReservedTileLinkedObject;

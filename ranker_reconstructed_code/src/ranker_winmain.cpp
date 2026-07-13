@@ -19294,8 +19294,9 @@ void default_unit_command_execute_ability(UnitCommandContext&,
         source.path_target_x, source.path_target_y);
 }
 
-bool default_unit_command_start_ability_attachment(UnitCommandContext&,
-    UnitMovementUnit& source, UnitMovementUnit*, u32 ability_id) {
+bool start_default_unit_command_ability_attachment_effect(
+    UnitMovementUnit& source, UnitMovementUnit* attachment, u32 ability_id,
+    UnitEffectRuntime** created_effect = nullptr) {
     constexpr u32 kSelectedActionEffectBase = 0x3d;
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
     if (lifecycle == nullptr || ability_id >= 0x2e) {
@@ -19337,7 +19338,14 @@ bool default_unit_command_start_ability_attachment(UnitCommandContext&,
     }
 
     return StartSelectedUnitAttachmentEffect(effects,
-        kSelectedActionEffectBase + ability_id, source, &source);
+        kSelectedActionEffectBase + ability_id, source, attachment,
+        created_effect);
+}
+
+bool default_unit_command_start_ability_attachment(UnitCommandContext&,
+    UnitMovementUnit& source, UnitMovementUnit*, u32 ability_id) {
+    return start_default_unit_command_ability_attachment_effect(
+        source, &source, ability_id);
 }
 
 bool default_unit_command_start_targeted_spawn_effect(UnitCommandContext& context,
@@ -19549,7 +19557,38 @@ u32 default_unit_command_random_limit(UnitCommandContext&, u32 limit) {
     return default_gameplay_frame_random_limit(limit);
 }
 
-void default_unit_command_reserved_tile_work_complete(UnitCommandContext&,
+void default_unit_command_reserved_tile_impact_frame(UnitCommandContext&,
+    UnitMovementUnit& unit) {
+    constexpr u32 kReservedTileAttachmentActionId = 0x26;
+
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr) {
+        return;
+    }
+
+    UnitEffectRuntime* effect = nullptr;
+    (void)start_default_unit_command_ability_attachment_effect(
+        unit, nullptr, kReservedTileAttachmentActionId, &effect);
+    if (effect != nullptr) {
+        effect->closest_distance = 0;
+    }
+
+    effect = nullptr;
+    (void)start_default_unit_command_ability_attachment_effect(
+        unit, nullptr, kReservedTileAttachmentActionId, &effect);
+    if (effect != nullptr) {
+        effect->x = unit.destination_x;
+        effect->y = unit.destination_y + 0x11;
+        effect->closest_distance = 1;
+    }
+
+    // The executing action is independent of the two best-effort startup
+    // attachments.  Its raw mode/flags field is forced to one on success.
+    (void)dispatch_default_unit_command_action_effect(unit, nullptr, 0x2c,
+        unit.destination_x, unit.destination_y, 1u);
+}
+
+bool default_unit_command_reserved_tile_work_complete(UnitCommandContext&,
     UnitMovementUnit& unit) {
     constexpr u32 kReservedTileCompletionActionId = 0x26;
 
@@ -19558,7 +19597,7 @@ void default_unit_command_reserved_tile_work_complete(UnitCommandContext&,
     if (lifecycle == nullptr || target == nullptr) {
         unit.reserved_tile_effect = nullptr;
         unit.linked_effect_slot_offset = 0;
-        return;
+        return false;
     }
 
     UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
@@ -19569,7 +19608,7 @@ void default_unit_command_reserved_tile_work_complete(UnitCommandContext&,
     if (effect == nullptr) {
         unit.reserved_tile_effect = nullptr;
         unit.linked_effect_slot_offset = 0;
-        return;
+        return false;
     }
 
     if (!DispatchSelectedUnitActionEffect(effects, *effect,
@@ -19578,13 +19617,14 @@ void default_unit_command_reserved_tile_work_complete(UnitCommandContext&,
         ReleaseUnitEffectSlot(effects, *effect);
         unit.reserved_tile_effect = nullptr;
         unit.linked_effect_slot_offset = 0;
-        return;
+        return false;
     }
 
     effect->amount = unit.work_timer;
     unit.reserved_tile_effect = effect;
     unit.linked_effect_slot_offset =
         default_unit_effect_original_slot_offset(effects, effect);
+    return true;
 }
 
 u32 default_unit_command_ability_secondary_cost(UnitCommandContext&,
@@ -19741,6 +19781,10 @@ void configure_default_unit_command_context(UnitCommandContext& command_context,
     if (command_context.callbacks.on_reserved_tile_work_complete == nullptr) {
         command_context.callbacks.on_reserved_tile_work_complete =
             default_unit_command_reserved_tile_work_complete;
+    }
+    if (command_context.callbacks.on_reserved_tile_impact_frame == nullptr) {
+        command_context.callbacks.on_reserved_tile_impact_frame =
+            default_unit_command_reserved_tile_impact_frame;
     }
     if (command_context.callbacks.can_attack_target == nullptr) {
         command_context.callbacks.can_attack_target = default_unit_command_can_attack;

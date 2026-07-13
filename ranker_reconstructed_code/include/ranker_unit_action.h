@@ -338,7 +338,8 @@ bool BeginSelectedUnitAttachmentEffect(UnitEffectRuntimeState& state,
     UnitEffectRuntime& effect, u32 effect_id, UnitMovementUnit& source,
     UnitMovementUnit* attachment);
 bool StartSelectedUnitAttachmentEffect(UnitEffectRuntimeState& state,
-    u32 effect_id, UnitMovementUnit& source, UnitMovementUnit* attachment);
+    u32 effect_id, UnitMovementUnit& source, UnitMovementUnit* attachment,
+    UnitEffectRuntime** created_effect = nullptr);
 bool DispatchSelectedUnitActionEffect(UnitEffectRuntimeState& state,
     UnitEffectRuntime& effect, u32 action_id, UnitMovementUnit& source,
     UnitMovementUnit* target, i32 world_x, i32 world_y);
