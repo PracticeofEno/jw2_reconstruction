@@ -974,19 +974,9 @@ bool InitializePlacedUnitFromMapSlot(UnitLifecycleContext& context,
         unit.command_flags |= 0x40;
     }
 
-    if (definition->movement_class == 1) {
-        unit.under_construction = true;
-        unit.action_mode_gate = 1;
-        unit.animation_frame = 0;
-        unit.work_timer = 0;
-        unit.action_mode = definition->production_spawn_time / 10;
-        unit.runtime_stat_28 = unit.action_mode * definition->initial_max_health;
-        // InitializePlacedUnitFromMapSlot 0x004cf538 writes raw health +0x18
-        // to one unconditionally for construction-class placements, including
-        // definitions whose initial max health is zero.
-        unit.health = 1;
-    }
-
+    // Original 0x004cf499 registers the footprint before 0x004cf4f9 applies
+    // the movement-class-1 construction state.  In particular, raw +0x30 is
+    // still zero while the base footprint payload is written.
     SetUnitFootprintOccupancyBits(context, unit);
     if (owner_id < kUnitOwnerTypeCountOwners) {
         const u32 score = definition->production_resource_cost +
@@ -1000,6 +990,19 @@ bool InitializePlacedUnitFromMapSlot(UnitLifecycleContext& context,
             ++context.owner_building_active_count[owner_id];
             context.owner_building_score[owner_id] += score;
         }
+    }
+
+    if (definition->movement_class == 1) {
+        unit.under_construction = true;
+        unit.action_mode_gate = 1;
+        unit.animation_frame = 0;
+        unit.work_timer = 0;
+        unit.action_mode = definition->production_spawn_time / 10;
+        unit.runtime_stat_28 = unit.action_mode * definition->initial_max_health;
+        // InitializePlacedUnitFromMapSlot 0x004cf538 writes raw health +0x18
+        // to one unconditionally for construction-class placements, including
+        // definitions whose initial max health is zero.
+        unit.health = 1;
     }
     return true;
 }
