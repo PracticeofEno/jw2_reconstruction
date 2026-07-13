@@ -439,6 +439,56 @@ u32 clamp_to_primary_current_range(u32 value, u32 maximum, bool force_nonzero) {
     return value;
 }
 
+void publish_numeric_stat_to_attached_unit(
+    GameplayScriptTriggerObjectState& object, u32 opcode) {
+    UnitMovementUnit* unit = object.unit;
+    if (unit == nullptr) {
+        return;
+    }
+    switch (opcode) {
+    case 0x3c:
+        unit->action_mode = static_cast<u32>(object.stat_2c);
+        break;
+    case 0x3e:
+    case 0x3f:
+        unit->max_health = object.stat_18;
+        unit->health = object.stat_20;
+        break;
+    case 0x40:
+    case 0x41:
+        unit->health = object.stat_20;
+        break;
+    case 0x42:
+    case 0x43:
+        unit->max_secondary_value = object.stat_secondary_max;
+        unit->secondary_value = object.stat_secondary_current;
+        break;
+    case 0x44:
+    case 0x45:
+        unit->secondary_value = object.stat_secondary_current;
+        break;
+    case 0x46:
+    case 0x47:
+        unit->runtime_stat_1c = object.stat_1c;
+        break;
+    case 0x48:
+    case 0x49:
+        unit->runtime_stat_20 = object.stat_24;
+        break;
+    case 0x4a:
+    case 0x4b:
+        unit->status_timer = object.stat_54;
+        unit->production_variant = object.stat_54;
+        break;
+    case 0x4c:
+    case 0x4d:
+        unit->elite_progress_value = object.stat_50;
+        break;
+    default:
+        break;
+    }
+}
+
 void set_object_stat_by_mode(GameplayScriptTriggerObjectState& object, u32 mode, u32 value) {
     switch (mode) {
     case 0:
@@ -2428,7 +2478,8 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
                 mutate_gameplay_script_object_script_bit_flags(
                     object, 0, 1u << (command[2] & 0x1fu));
             } else if (command[0] == 0x3c) {
-                object.stat_2c += static_cast<i32>(command[2]);
+                object.stat_2c = signed_i32_from_wrapped_u32(
+                    static_cast<u32>(object.stat_2c) + command[2]);
             } else if (command[0] == 0x3e) {
                 object.stat_18 += command[2];
                 object.stat_20 = std::min(object.stat_20, object.stat_18);
@@ -2480,6 +2531,14 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
             } else if (command[0] == 0x4d) {
                 object.stat_50 = command[2];
                 object.stat_recompute_required = true;
+            }
+            if (command[0] >= 0x3c) {
+                publish_numeric_stat_to_attached_unit(object, command[0]);
+            }
+            if ((command[0] == 0x4c || command[0] == 0x4d) &&
+                state.opcode_context.apply_variant_progress_immediate != nullptr) {
+                state.opcode_context.apply_variant_progress_immediate(object,
+                    state.opcode_context.apply_variant_progress_immediate_user);
             }
         });
         return true;

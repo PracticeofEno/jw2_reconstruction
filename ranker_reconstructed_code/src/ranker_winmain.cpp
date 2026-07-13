@@ -22645,6 +22645,51 @@ void sync_default_gameplay_script_object_from_unit(
     }
 }
 
+void apply_default_gameplay_script_variant_progress_immediate(
+    GameplayScriptTriggerObjectState& object, void*) {
+    UnitMovementUnit* unit = object.unit;
+    if (unit == nullptr) {
+        return;
+    }
+    UnitRuntimeStatBlock stats{};
+    stats.max_health = unit->max_health;
+    stats.max_secondary_value = unit->max_secondary_value;
+    stats.health = unit->health;
+    stats.stat_1c = unit->runtime_stat_1c;
+    stats.stat_20 = unit->runtime_stat_20;
+    stats.secondary_value = unit->secondary_value;
+    stats.stat_28 = unit->runtime_stat_28;
+
+    bool rank_up = false;
+    ApplyUnitVariantProgressFromStoredValue(
+        g_runtime.gameplay_production_runtime, *unit, stats, &rank_up,
+        default_gameplay_frame_random_limit);
+    if (rank_up) {
+        configure_default_unit_effect_runtime_state(
+            g_runtime.gameplay_unit_effect_runtime);
+        UnitLifecycleContext* lifecycle =
+            g_runtime.gameplay_startup_state.lifecycle;
+        if (lifecycle != nullptr) {
+            sync_default_unit_effect_runtime_units(
+                g_runtime.gameplay_unit_effect_runtime, *lifecycle);
+        }
+        StartSelectedUnitAttachmentEffect(
+            g_runtime.gameplay_unit_effect_runtime, 0x3d + 0x2d,
+            *unit, unit);
+    }
+
+    object.stat_18 = unit->max_health;
+    object.stat_20 = unit->health;
+    object.stat_1c = unit->runtime_stat_1c;
+    object.stat_24 = unit->runtime_stat_20;
+    object.stat_28 = unit->runtime_stat_28;
+    object.stat_secondary_max = unit->max_secondary_value;
+    object.stat_secondary_current = unit->secondary_value;
+    object.stat_50 = unit->elite_progress_value;
+    object.stat_54 = unit->status_timer;
+    object.stat_recompute_required = false;
+}
+
 void append_default_gameplay_script_scenario_active_objects(
     GameplayScriptTriggerState& script) {
     if (!g_runtime.gameplay_script_scenario_objects_loaded) {
@@ -22733,6 +22778,9 @@ void sync_default_gameplay_script_runtime_context(
     script.opcode_context.spawn_immediate =
         dispatch_default_gameplay_script_immediate_spawn;
     script.opcode_context.spawn_immediate_user = &script;
+    script.opcode_context.apply_variant_progress_immediate =
+        apply_default_gameplay_script_variant_progress_immediate;
+    script.opcode_context.apply_variant_progress_immediate_user = nullptr;
     // DAT_00722320/DAT_0072231c are shared by the frame clock and script
     // opcodes 0x1e, 0x29 and 0x3d in the original.  Pull the live value after
     // the frame-clock tick so script arithmetic observes that same ordering.

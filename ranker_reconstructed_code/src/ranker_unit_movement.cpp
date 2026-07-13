@@ -1573,7 +1573,11 @@ bool ApplyUnitVariantProgressFromStoredValue(
         const u32 cost = CalculateOrder2bAdjustedUnitValue(production_state, unit,
             unit.definition.variant_progress_base_cost,
             unit.definition.variant_progress_cost_per_level);
-        if (cost > unit.elite_progress_value) {
+        // FUN_004099e0 uses CMP/JGE: both raw dwords are interpreted as
+        // signed values for the progress gate.  A wrapped high-bit progress
+        // value therefore waits instead of producing spurious rank-ups.
+        if (signed_i32_from_wrapped_u32(unit.elite_progress_value) <
+            signed_i32_from_wrapped_u32(cost)) {
             break;
         }
         unit.elite_progress_value -= cost;

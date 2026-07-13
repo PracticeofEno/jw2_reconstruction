@@ -181,6 +181,9 @@ struct GameplayScriptSpawnRequest {
 using GameplayScriptImmediateSpawnCallback = bool (*)(
     const GameplayScriptSpawnRequest& request, void* user);
 
+using GameplayScriptImmediateVariantProgressCallback = void (*)(
+    GameplayScriptTriggerObjectState& object, void* user);
+
 struct GameplayScriptUnitNameAppendRequest {
     u32 type_id = 0;
     std::string suffix;
@@ -274,6 +277,13 @@ struct GameplayScriptOpcodeContext {
     void* strict_placement_user = nullptr;
     GameplayScriptImmediateSpawnCallback spawn_immediate = nullptr;
     void* spawn_immediate_user = nullptr;
+    // The original scenario group stores direct pointers to live unit records,
+    // so numeric opcodes publish every physical-slot mutation immediately.
+    // In particular 0x4c/0x4d must run variant progress before the next slot
+    // or command consumes the unit.
+    GameplayScriptImmediateVariantProgressCallback
+        apply_variant_progress_immediate = nullptr;
+    void* apply_variant_progress_immediate_user = nullptr;
     std::vector<GameplayScriptSpawnRequest> spawn_requests;
     std::vector<GameplayScriptUnitNameAppendRequest> unit_name_append_requests;
 };
