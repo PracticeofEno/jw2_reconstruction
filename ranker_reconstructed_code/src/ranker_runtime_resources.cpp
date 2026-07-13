@@ -395,6 +395,21 @@ bool load_embedded_wave_slot_stream(TrcRecordReader& reader, u32& slot_out,
     RuntimeResourceFailure& failure, const char* archive_name, u32 record_index) {
 #ifdef _WIN32
     slot_out = 0xffffffffu;
+    if (direct_sound_state().active) {
+        // Unit and auxiliary definition records carry their WAV payloads
+        // inline after the image streams.  The original loader allocates a
+        // real secondary-buffer slot for each entry and records the first
+        // slot of every sound group.  Merely skipping the RIFF bytes left all
+        // group bases at 0xffffffff/zero, so selection, combat, harvest, and
+        // production-complete cues could resolve to the common UI bank.
+        slot_out = LoadOpenTrcWaveIntoSoundBufferSlot(reader);
+        if (slot_out == 0xffffffffu) {
+            set_failure(failure, RuntimeResourceFailureStage::Resource,
+                archive_name, record_index);
+            return false;
+        }
+        return true;
+    }
     if (!skip_embedded_wave_stream(reader)) {
         set_failure(failure, RuntimeResourceFailureStage::Resource, archive_name,
             record_index);

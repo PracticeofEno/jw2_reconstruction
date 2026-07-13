@@ -10,6 +10,7 @@
 #include <array>
 #include <cstring>
 #include <initializer_list>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -653,10 +654,45 @@ bool parse_trc_pcm_wave_stream_header(const u8* bytes, PcmWaveInfo& info) {
     return true;
 }
 
+bool discard_open_trc_record_bytes(TrcRecordReader& reader,
+    std::size_t byte_count) {
+    std::array<u8, 4096> scratch{};
+    while (byte_count != 0) {
+        const std::size_t chunk = std::min<std::size_t>(
+            byte_count, scratch.size());
+        if (!ReadOpenTrcRecordBytes(reader, scratch.data(), chunk)) {
+            return false;
+        }
+        byte_count -= chunk;
+    }
+    return true;
+}
+
+bool finish_trc_pcm_wave_stream(TrcRecordReader& reader,
+    std::size_t start_cursor, const PcmWaveInfo& info) {
+    if (info.riff_total_bytes >
+            std::numeric_limits<std::size_t>::max() - start_cursor) {
+        return false;
+    }
+    const std::size_t end_cursor =
+        start_cursor + static_cast<std::size_t>(info.riff_total_bytes);
+    if (reader.cursor > end_cursor) {
+        return false;
+    }
+    return discard_open_trc_record_bytes(reader, end_cursor - reader.cursor);
+}
+
 bool read_trc_pcm_wave_stream_header(TrcRecordReader& reader, PcmWaveInfo& info) {
     std::array<u8, 0x24> header{};
     if (!ReadOpenTrcRecordBytes(reader, header.data(), header.size()) ||
         !parse_trc_pcm_wave_stream_header(header.data(), info)) {
+        return false;
+    }
+
+    const DWORD fmt_size = read_le_u32(header.data() + 16);
+    if (fmt_size < 0x10 ||
+        (fmt_size > 0x10 && !discard_open_trc_record_bytes(
+            reader, static_cast<std::size_t>(fmt_size - 0x10)))) {
         return false;
     }
 
@@ -1995,6 +2031,7 @@ u32 LoadOpenTrcWaveIntoSoundBufferSlot(TrcRecordReader& reader) {
         return kInvalidDirectSoundBufferSlot;
     }
 
+    const std::size_t start_cursor = reader.cursor;
     const u32 slot = AllocateDirectSoundBufferSlotIndex();
     if (slot == kInvalidDirectSoundBufferSlot) {
         return kInvalidDirectSoundBufferSlot;
@@ -2010,6 +2047,10 @@ u32 LoadOpenTrcWaveIntoSoundBufferSlot(TrcRecordReader& reader) {
         std::array<u8, 0x0a> discard{};
         if (info.data_bytes != 0 &&
             !ReadOpenTrcRecordBytes(reader, discard.data(), info.data_bytes)) {
+            ReleaseDirectSoundBufferSlotsFrom(slot);
+            return kInvalidDirectSoundBufferSlot;
+        }
+        if (!finish_trc_pcm_wave_stream(reader, start_cursor, info)) {
             ReleaseDirectSoundBufferSlotsFrom(slot);
             return kInvalidDirectSoundBufferSlot;
         }
@@ -2029,6 +2070,11 @@ u32 LoadOpenTrcWaveIntoSoundBufferSlot(TrcRecordReader& reader) {
     auto* buffer = direct_sound_buffer_slot(slot);
     if (buffer == nullptr || !UploadOpenTrcRecordToDirectSoundBuffer(buffer, reader,
             info.data_bytes)) {
+        ReleaseDirectSoundBufferSlot(slot);
+        ReleaseDirectSoundBufferSlotsFrom(slot);
+        return kInvalidDirectSoundBufferSlot;
+    }
+    if (!finish_trc_pcm_wave_stream(reader, start_cursor, info)) {
         ReleaseDirectSoundBufferSlot(slot);
         ReleaseDirectSoundBufferSlotsFrom(slot);
         return kInvalidDirectSoundBufferSlot;
