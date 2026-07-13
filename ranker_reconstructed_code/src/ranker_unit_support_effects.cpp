@@ -44,23 +44,6 @@ UnitMovementUnit* first_unit_after(UnitMovementContext& movement_context,
     return it == movement_context.active_units.end() ? nullptr : *it;
 }
 
-UnitMovementUnit* first_unit_from(UnitMovementContext& movement_context,
-    const UnitMovementUnit* start, std::size_t& index) {
-    index = 0;
-    if (start == nullptr) {
-        return movement_context.active_units.empty() ? nullptr : movement_context.active_units[0];
-    }
-
-    auto it = std::find(movement_context.active_units.begin(),
-        movement_context.active_units.end(), start);
-    if (it == movement_context.active_units.end()) {
-        return nullptr;
-    }
-
-    index = static_cast<std::size_t>(it - movement_context.active_units.begin());
-    return *it;
-}
-
 bool unit_distance_in_support_range(const UnitMovementUnit& source,
     const UnitMovementUnit& target) {
     return CalculateApproxUnitDistance(source.x, source.y, target.x, target.y) <=
@@ -175,28 +158,6 @@ UnitMovementUnit* FindNextSecondaryTransferTarget(UnitSupportEffectContext& cont
     return nullptr;
 }
 
-UnitMovementUnit* find_secondary_transfer_target_from_current(
-    UnitSupportEffectContext& context, const UnitMovementUnit& source,
-    const UnitMovementUnit* current_target) {
-    if (context.movement_context == nullptr) {
-        return nullptr;
-    }
-
-    std::size_t index = 0;
-    UnitMovementUnit* current =
-        first_unit_from(*context.movement_context, current_target, index);
-    while (current != nullptr) {
-        if (secondary_transfer_candidate(context, source, *current)) {
-            return current;
-        }
-        ++index;
-        current = index < context.movement_context->active_units.size()
-            ? context.movement_context->active_units[index]
-            : nullptr;
-    }
-    return nullptr;
-}
-
 UnitMovementUnit* FindNextHealthRestoreTarget(UnitSupportEffectContext& context,
     const UnitMovementUnit& source, const UnitMovementUnit* after) {
     if (context.movement_context == nullptr) {
@@ -228,7 +189,7 @@ void ProcessUnitSecondaryTransferSupport(UnitSupportEffectContext& context,
     bool transferred = false;
     UnitMovementUnit* current_target = nullptr;
     while (source.secondary_value != 0) {
-        UnitMovementUnit* target = find_secondary_transfer_target_from_current(
+        UnitMovementUnit* target = FindNextSecondaryTransferTarget(
             context, source, current_target);
         if (target == nullptr) {
             break;
