@@ -4,6 +4,7 @@
 #include "ranker_trc.h"
 #include "ranker_unit_commands.h"
 #include "ranker_unit_equipment.h"
+#include "ranker_unit_movement.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -1807,13 +1808,23 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         return true;
     case 0x21: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
-        const std::string text = command_string_from(command, 2);
-        if (group != nullptr && group->reference_count != 0) {
-            for_each_group_slot_object(state, *group,
-                [&](GameplayScriptTriggerObjectState& object) {
-                object.script_text = text;
-            });
+        if (group == nullptr || static_cast<i32>(group->reference_count) <= 0 ||
+            state.opcode_context.movement == nullptr) {
+            return true;
         }
+        const std::string text = command_string_from(command, 2);
+        const u32 string_slot =
+            InternUnitStringSlot(*state.opcode_context.movement, text.c_str());
+        if (string_slot == kInvalidUnitStringSlot) {
+            return true;
+        }
+        for_each_group_slot_object(state, *group,
+            [string_slot](GameplayScriptTriggerObjectState& object) {
+            object.dynamic_string_slot = string_slot;
+            if (object.unit != nullptr) {
+                object.unit->string_slot = string_slot;
+            }
+        });
         return true;
     }
     case 0x22: {

@@ -22683,6 +22683,7 @@ void sync_default_gameplay_script_runtime_context(
             g_runtime.gameplay_player_slots.rotation_control_value;
     }
     script.opcode_context.enabled = true;
+    script.opcode_context.movement = movement;
     script.opcode_context.find_strict_placement =
         default_gameplay_script_find_strict_placement;
     script.opcode_context.strict_placement_user = nullptr;

@@ -10,6 +10,7 @@
 namespace ranker {
 
 struct UnitMovementUnit;
+struct UnitMovementContext;
 
 struct GameplayScriptCommandPayload {
     u32 state = 0;
@@ -96,7 +97,6 @@ struct GameplayScriptTriggerObjectState {
     u32 definition_class = 0;
     u32 string_slot = 0;
     u32 dynamic_string_slot = 0;
-    std::string script_text;
     i32 x = 0;
     i32 y = 0;
     u32 command_value = 0;
@@ -236,6 +236,7 @@ struct GameplayScriptOpcodeContext {
     std::array<bool, kGameplayScriptOwnerCount> owner_resource_dirty{};
     std::array<bool, kGameplayScriptOwnerCount> owner_score_component_dirty{};
     std::array<bool, kGameplayScriptOwnerCount> owner_score_reset_dirty{};
+    UnitMovementContext* movement = nullptr;
     GameplayScriptStrictPlacementCallback find_strict_placement = nullptr;
     void* strict_placement_user = nullptr;
     std::vector<GameplayScriptSpawnRequest> spawn_requests;

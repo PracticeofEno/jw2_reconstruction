@@ -3264,7 +3264,7 @@ u32 FindUnitStringSlot(const UnitMovementContext& context, const char* text) {
 }
 
 u32 InternUnitStringSlot(UnitMovementContext& context, const char* text) {
-    if (text == nullptr || *text == '\0') {
+    if (text == nullptr) {
         return kInvalidUnitStringSlot;
     }
 
