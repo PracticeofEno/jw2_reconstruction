@@ -233,6 +233,9 @@ struct GameplayScriptOpcodeContext {
     std::array<u32, kGameplayScriptCopiedOwnerTableWords> copied_owner_table_b{};
     std::array<u8, kGameplayScriptOwnerCount> owner_script_flags{};
     std::array<u32, kGameplayScriptOwnerCount> owner_external_values{};
+    std::array<bool, kGameplayScriptOwnerCount> owner_resource_dirty{};
+    std::array<bool, kGameplayScriptOwnerCount> owner_score_component_dirty{};
+    std::array<bool, kGameplayScriptOwnerCount> owner_score_reset_dirty{};
     GameplayScriptStrictPlacementCallback find_strict_placement = nullptr;
     void* strict_placement_user = nullptr;
     std::vector<GameplayScriptSpawnRequest> spawn_requests;

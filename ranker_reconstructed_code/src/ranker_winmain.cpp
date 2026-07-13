@@ -22722,8 +22722,10 @@ void sync_default_gameplay_script_runtime_context(
                 lifecycle->owner_unit_kill_count[owner] +
                 lifecycle->owner_building_kill_count[owner]);
         }
-        condition_owner.score = default_i32_from_u32(
+        condition_owner.score = static_cast<i32>(
             GetOwnerSessionCounterTotal(g_runtime.gameplay_owner_counters, owner));
+        condition_owner.secondary_score = static_cast<i32>(
+            g_runtime.gameplay_owner_counters.tables[2][owner]);
         condition_owner.blocked_relation_mask =
             g_runtime.gameplay_player_slots.owner_relation_masks[owner];
 
@@ -23552,6 +23554,48 @@ void consume_default_gameplay_script_definition_name_append_requests(
     }
 }
 
+void consume_default_gameplay_script_owner_resource_mutations(
+    GameplayScriptTriggerState& script) {
+    GameplayScriptOpcodeContext& opcode = script.opcode_context;
+    for (u32 owner = 0; owner < opcode.owner_resource_dirty.size(); ++owner) {
+        if (!opcode.owner_resource_dirty[owner]) {
+            continue;
+        }
+        const GameplayScriptOwnerConditionState& resources =
+            script.condition_context.owners[owner];
+        sync_default_owner_resource_runtime_slots(owner,
+            static_cast<u32>(resources.resource_a),
+            static_cast<u32>(resources.resource_b));
+        opcode.owner_resource_dirty[owner] = false;
+    }
+    for (u32 owner = 0; owner < opcode.owner_score_component_dirty.size(); ++owner) {
+        if (!opcode.owner_score_component_dirty[owner]) {
+            continue;
+        }
+        const u32 value = static_cast<u32>(
+            script.condition_context.owners[owner].secondary_score);
+        if (opcode.owner_score_reset_dirty[owner]) {
+            SetOwnerSessionCounterTable2Only(
+                g_runtime.gameplay_owner_counters, owner, value);
+            UnitLifecycleContext* lifecycle =
+                g_runtime.gameplay_startup_state.lifecycle;
+            if (lifecycle != nullptr && owner < lifecycle->owner_unit_score.size() &&
+                owner < lifecycle->owner_building_score.size()) {
+                lifecycle->owner_unit_score[owner] = 0;
+                lifecycle->owner_building_score[owner] = 0;
+            }
+            if (owner < g_runtime.gameplay_unit_commands.owner_resource_score.size()) {
+                g_runtime.gameplay_unit_commands.owner_resource_score[owner] = 0;
+            }
+        }
+        else {
+            g_runtime.gameplay_owner_counters.tables[2][owner] = value;
+        }
+        opcode.owner_score_component_dirty[owner] = false;
+        opcode.owner_score_reset_dirty[owner] = false;
+    }
+}
+
 void consume_default_gameplay_script_opcode_context(
     GameplayScriptTriggerState& script, GameplayLoopState& state) {
     GameplayScriptOpcodeContext& opcode = script.opcode_context;
@@ -23562,6 +23606,7 @@ void consume_default_gameplay_script_opcode_context(
     g_runtime.gameplay_player_slots.rotation_countdown_decrements =
         opcode.game_clock_decrements;
     gameplay_modal_ui_state().scenario_message_text = opcode.scenario_message_text;
+    consume_default_gameplay_script_owner_resource_mutations(script);
     consume_default_gameplay_script_camera_request(opcode);
     consume_default_gameplay_script_selection_request(script);
     consume_default_gameplay_script_stage_result(opcode);

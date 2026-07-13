@@ -1583,7 +1583,8 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptOwnerConditionState* owner =
             owner_state(state.condition_context, command[1]);
         if (owner != nullptr) {
-            owner->score = static_cast<i32>(command[2]);
+            owner->resource_a = static_cast<i32>(command[2]);
+            state.opcode_context.owner_resource_dirty[command[1]] = true;
         }
         return true;
     }
@@ -1591,7 +1592,10 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptOwnerConditionState* owner =
             owner_state(state.condition_context, command[1]);
         if (owner != nullptr) {
-            owner->metric = static_cast<i32>(command[2]);
+            owner->secondary_score = static_cast<i32>(command[2]);
+            owner->score = static_cast<i32>(command[2]);
+            state.opcode_context.owner_score_component_dirty[command[1]] = true;
+            state.opcode_context.owner_score_reset_dirty[command[1]] = true;
         }
         return true;
     }
@@ -1845,7 +1849,9 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
             command[1] < state.condition_context.owners.size() ?
             &state.condition_context.owners[command[1]] : nullptr;
         if (owner != nullptr) {
-            owner->score += static_cast<i32>(command[2]);
+            owner->resource_a = wrap_add_i32(
+                owner->resource_a, static_cast<i32>(command[2]));
+            state.opcode_context.owner_resource_dirty[command[1]] = true;
         }
         return true;
     }
@@ -1854,7 +1860,11 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
             command[1] < state.condition_context.owners.size() ?
             &state.condition_context.owners[command[1]] : nullptr;
         if (owner != nullptr) {
-            owner->secondary_score += static_cast<i32>(command[2]);
+            owner->secondary_score = wrap_add_i32(
+                owner->secondary_score, static_cast<i32>(command[2]));
+            owner->score = wrap_add_i32(
+                owner->score, static_cast<i32>(command[2]));
+            state.opcode_context.owner_score_component_dirty[command[1]] = true;
         }
         return true;
     }
@@ -1863,7 +1873,9 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
             command[1] < state.condition_context.owners.size() ?
             &state.condition_context.owners[command[1]] : nullptr;
         if (owner != nullptr) {
-            owner->score = std::max<i32>(0, owner->score - static_cast<i32>(command[2]));
+            owner->resource_a = std::max<i32>(0,
+                wrap_sub_i32(owner->resource_a, static_cast<i32>(command[2])));
+            state.opcode_context.owner_resource_dirty[command[1]] = true;
         }
         return true;
     }
@@ -1872,8 +1884,13 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
             command[1] < state.condition_context.owners.size() ?
             &state.condition_context.owners[command[1]] : nullptr;
         if (owner != nullptr) {
-            owner->secondary_score =
-                std::max<i32>(0, owner->secondary_score - static_cast<i32>(command[2]));
+            const i32 old_component = owner->secondary_score;
+            const i32 new_component = std::max<i32>(0,
+                wrap_sub_i32(old_component, static_cast<i32>(command[2])));
+            owner->secondary_score = new_component;
+            owner->score = wrap_add_i32(
+                owner->score, wrap_sub_i32(new_component, old_component));
+            state.opcode_context.owner_score_component_dirty[command[1]] = true;
         }
         return true;
     }
