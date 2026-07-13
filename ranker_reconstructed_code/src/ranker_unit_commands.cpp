@@ -307,7 +307,7 @@ bool unit_can_carry(const UnitMovementUnit& unit) {
 }
 
 u32 transport_size(const UnitMovementUnit& unit) {
-    return std::max<u32>(unit.definition.transport_size, 1);
+    return unit.definition.transport_size;
 }
 
 bool unit_can_be_boarded(const UnitMovementUnit& unit) {
@@ -370,7 +370,8 @@ void board_unit(UnitCommandContext& context, UnitMovementUnit& carrier,
     passenger.runtime_flags &= ~1u;
     passenger.runtime_flags |= 0x80;
     passenger.command_flags &= ~0x1010u;
-    passenger.work_timer = 0;
+    passenger.pending_command.state = 0;
+    passenger.deferred_command_count = 0;
     if (context.callbacks.on_unit_boarded != nullptr) {
         context.callbacks.on_unit_boarded(context, carrier, passenger);
     }

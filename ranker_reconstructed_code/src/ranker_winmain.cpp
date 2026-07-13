@@ -17812,6 +17812,9 @@ void default_unit_command_set_footprint(UnitCommandContext&,
 
 void default_unit_command_unit_boarded(UnitCommandContext&,
     UnitMovementUnit&, UnitMovementUnit& passenger) {
+    passenger.scenario_string_slot &= ~0x80u;
+    ClearSelectedUnitMembershipFlagAndRefreshSelection(
+        ui_overlay_state(), passenger.id);
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
     if (lifecycle == nullptr) {
         return;
