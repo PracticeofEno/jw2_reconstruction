@@ -277,8 +277,13 @@ void add_equipment_effect_slot(GameplayScriptTriggerObjectState& object, u32 eff
         object.equipment_slots.end()) {
         return;
     }
-    auto empty = std::find(object.equipment_slots.begin(), object.equipment_slots.end(), 0);
-    if (empty != object.equipment_slots.end()) {
+    // Opcode 0x5e checks all six raw +0x30..+0x44 slots for duplicates, but
+    // only +0x30..+0x3c are mutable insertion candidates.  The last two are
+    // passive/reserved equipment fields.
+    constexpr std::size_t kMutableSlotCount = 4;
+    auto mutable_end = object.equipment_slots.begin() + kMutableSlotCount;
+    auto empty = std::find(object.equipment_slots.begin(), mutable_end, 0);
+    if (empty != mutable_end) {
         *empty = effect_id;
     }
 }
@@ -287,9 +292,10 @@ void remove_equipment_effect_slot(GameplayScriptTriggerObjectState& object, u32 
     if ((object_command_flags(object) & 2u) == 0) {
         return;
     }
-    for (u32& slot : object.equipment_slots) {
-        if (slot == effect_id) {
-            slot = 0;
+    constexpr std::size_t kMutableSlotCount = 4;
+    for (std::size_t slot = 0; slot < kMutableSlotCount; ++slot) {
+        if (object.equipment_slots[slot] == effect_id) {
+            object.equipment_slots[slot] = 0;
         }
     }
 }
