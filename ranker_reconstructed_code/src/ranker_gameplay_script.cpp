@@ -315,15 +315,6 @@ void begin_group_gameplay_script_selection_request(
     }
 }
 
-void sync_script_object_identity_to_unit(GameplayScriptTriggerObjectState& object) {
-    if (object.unit == nullptr) {
-        return;
-    }
-    object.unit->type_id = object.type_id;
-    object.unit->owner_id = object.owner_id;
-    object.unit->scenario_string_slot = object.string_slot;
-}
-
 void rebuild_owner_unit_type_counts(GameplayScriptTriggerState& state) {
     for (GameplayScriptOwnerConditionState& owner : state.condition_context.owners) {
         owner.unit_type_counts.fill(0);
@@ -347,20 +338,22 @@ void rebuild_owner_unit_type_counts(GameplayScriptTriggerState& state) {
             continue;
         }
         const GameplayScriptTriggerObjectState& object = state.objects[index];
-        if (object.owner_id >= kUnitOwnerTypeCountOwners ||
-            object.type_id >= kGameplayScriptOwnerUnitTypeCount) {
+        const UnitMovementUnit* unit = object.unit;
+        const u32 owner_id = unit != nullptr ? unit->owner_id : object.owner_id;
+        const u32 type_id = unit != nullptr ? unit->type_id : object.type_id;
+        if (owner_id >= kUnitOwnerTypeCountOwners ||
+            type_id >= kGameplayScriptOwnerUnitTypeCount) {
             continue;
         }
-        if (object.unit != nullptr && !object.unit->active) {
+        if (unit != nullptr && !unit->active) {
             continue;
         }
-        const u32 construction_gate = object.unit != nullptr ?
-            object.unit->action_mode_gate : static_cast<u32>(object.stat_30);
-        if (object.type_id >= 0x60 && construction_gate == 1) {
+        const u32 construction_gate = unit != nullptr ?
+            unit->action_mode_gate : static_cast<u32>(object.stat_30);
+        if (type_id >= 0x60 && construction_gate == 1) {
             continue;
         }
-        ++state.condition_context.owners[object.owner_id]
-            .unit_type_counts[object.type_id];
+        ++state.condition_context.owners[owner_id].unit_type_counts[type_id];
     }
 }
 
@@ -406,12 +399,16 @@ void convert_script_object_type(GameplayScriptTriggerObjectState& object,
 
 void set_script_object_owner(GameplayScriptTriggerObjectState& object, u32 owner_id) {
     object.owner_id = owner_id;
-    sync_script_object_identity_to_unit(object);
+    if (object.unit != nullptr) {
+        object.unit->owner_id = owner_id;
+    }
 }
 
 void set_script_object_type(GameplayScriptTriggerObjectState& object, u32 type_id) {
     object.type_id = type_id;
-    sync_script_object_identity_to_unit(object);
+    if (object.unit != nullptr) {
+        object.unit->type_id = type_id;
+    }
 }
 
 u32 default_gameplay_script_trigger_owner_phase(u32 lookup_index) {
@@ -2596,7 +2593,8 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         return true;
     case 0x58: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
-        if (group != nullptr && group->reference_count != 0) {
+        if (group != nullptr &&
+            signed_i32_from_wrapped_u32(group->reference_count) > 0) {
             for_each_group_slot_object(state, *group,
                 [&](GameplayScriptTriggerObjectState& object) {
                 set_script_object_owner(object, command[2]);

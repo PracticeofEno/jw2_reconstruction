@@ -22735,20 +22735,23 @@ void recount_default_gameplay_script_owner_unit_counts(
             continue;
         }
         const GameplayScriptTriggerObjectState& object = script.objects[index];
-        if (object.owner_id >= kUnitOwnerTypeCountOwners ||
-            object.type_id >= kGameplayScriptOwnerUnitTypeCount) {
+        const UnitMovementUnit* unit = object.unit;
+        const u32 owner_id = unit != nullptr ? unit->owner_id : object.owner_id;
+        const u32 type_id = unit != nullptr ? unit->type_id : object.type_id;
+        if (owner_id >= kUnitOwnerTypeCountOwners ||
+            type_id >= kGameplayScriptOwnerUnitTypeCount) {
             continue;
         }
-        if (object.unit != nullptr && !object.unit->active) {
+        if (unit != nullptr && !unit->active) {
             continue;
         }
-        const u32 construction_gate = object.unit != nullptr ?
-            object.unit->action_mode_gate : static_cast<u32>(object.stat_30);
-        if (object.type_id >= 0x60 && construction_gate == 1) {
+        const u32 construction_gate = unit != nullptr ?
+            unit->action_mode_gate : static_cast<u32>(object.stat_30);
+        if (type_id >= 0x60 && construction_gate == 1) {
             continue;
         }
-        ++script.condition_context.owners[object.owner_id]
-            .unit_type_counts[object.type_id];
+        ++script.condition_context.owners[owner_id]
+            .unit_type_counts[type_id];
     }
 }
 
