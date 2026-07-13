@@ -428,6 +428,63 @@ i32 area_center_y(const GameplayScriptArea& area) {
     return area.top + (area.bottom - area.top) / 2;
 }
 
+i32 area_translation_center_x(const GameplayScriptArea& area) {
+    return static_cast<i32>(
+        static_cast<u32>(area.left) + static_cast<u32>(area.right)) / 2;
+}
+
+i32 area_translation_center_y(const GameplayScriptArea& area) {
+    return static_cast<i32>(
+        static_cast<u32>(area.top) + static_cast<u32>(area.bottom)) / 2;
+}
+
+i32 wrap_add_i32(i32 left, i32 right) {
+    return static_cast<i32>(
+        static_cast<u32>(left) + static_cast<u32>(right));
+}
+
+i32 wrap_sub_i32(i32 left, i32 right) {
+    return static_cast<i32>(
+        static_cast<u32>(left) - static_cast<u32>(right));
+}
+
+bool relocate_script_object_strict(GameplayScriptTriggerState& state,
+    GameplayScriptTriggerObjectState& object, i32 candidate_x, i32 candidate_y) {
+    UnitMovementUnit* unit = object.unit;
+    if (unit == nullptr) {
+        return false;
+    }
+
+    i32 placed_x = candidate_x;
+    i32 placed_y = candidate_y;
+    if (state.opcode_context.find_strict_placement == nullptr ||
+        !state.opcode_context.find_strict_placement(
+            *unit, placed_x, placed_y,
+            state.opcode_context.strict_placement_user)) {
+        return false;
+    }
+
+    // Original 0x00417080/0x00417cdc updates only the world point and the
+    // aligned current-cell cache.  Destination/path/next-path/anchor remain
+    // untouched.  The idle transition is immediate, so later triggers in the
+    // same phase must observe the new state through the script mirror too.
+    unit->x = placed_x;
+    unit->y = placed_y;
+    unit->current_cell_x = placed_x & ~0x1f;
+    unit->current_cell_y = placed_y & ~0x1f;
+    UnitCommandContext command_context{};
+    HandleUnitReturnToIdleState(command_context, *unit);
+
+    object.x = unit->x;
+    object.y = unit->y;
+    object.current_cell_x = unit->current_cell_x;
+    object.current_cell_y = unit->current_cell_y;
+    object.command_state_raw = unit->command_state;
+    object.script_state = unit->command_state & 0x00ffffffu;
+    object.animation_frame = unit->animation_frame;
+    return true;
+}
+
 void set_runtime_trigger_state(GameplayScriptTriggerState& state,
     u32 trigger_index, u8 trigger_state) {
     if (trigger_index >= state.triggers.size()) {
@@ -1460,11 +1517,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         for (u32 index : active_object_indices(state)) {
             GameplayScriptTriggerObjectState* object = object_state(state, index);
             if (object_alive(object) && area_contains_object(*source_area, *object)) {
-                object->x = x;
-                object->y = y;
-                object->scripted_target_x = x;
-                object->scripted_target_y = y;
-                object->scripted_target_updated = true;
+                relocate_script_object_strict(state, *object, x, y);
             }
         }
         return true;
@@ -1531,25 +1584,27 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         if (group == nullptr || area == nullptr || group->reference_count == 0) {
             return true;
         }
-        const i32 target_x = area_center_x(*area);
-        const i32 target_y = area_center_y(*area);
-        i32 average_x = 0;
-        i32 average_y = 0;
-        u32 count = 0;
+        const i32 target_x = area_translation_center_x(*area);
+        const i32 target_y = area_translation_center_y(*area);
+        u32 total_x = 0;
+        u32 total_y = 0;
         for_each_group_object(state, *group, [&](GameplayScriptTriggerObjectState& object) {
-            object.scripted_movement_mode = 4;
-            object.scripted_target_x = target_x;
-            object.scripted_target_y = target_y;
-            object.scripted_target_updated = true;
-            average_x += object.x;
-            average_y += object.y;
-            ++count;
+            object.pending_command = {4, 0, target_x, static_cast<u32>(target_y)};
+            if (object.unit != nullptr) {
+                object.unit->pending_command = {
+                    4, 0, target_x, static_cast<u32>(target_y)};
+            }
+            total_x += static_cast<u32>(object.x);
+            total_y += static_cast<u32>(object.y);
         });
-        if (count != 0) {
-            average_x /= static_cast<i32>(count);
-            average_y /= static_cast<i32>(count);
-            trigger.blocked = area_contains_point(*area, average_x, average_y) ? 0 : 1;
-        }
+        const i32 average_x = static_cast<i32>(total_x) /
+            static_cast<i32>(group->reference_count);
+        const i32 average_y = static_cast<i32>(total_y) /
+            static_cast<i32>(group->reference_count);
+        state.opcode_context.camera_request_active = true;
+        state.opcode_context.camera_x = average_x;
+        state.opcode_context.camera_y = average_y;
+        trigger.blocked = area_contains_point(*area, average_x, average_y) ? 0 : 1;
         return true;
     }
     case 0x11:
@@ -1624,29 +1679,33 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         if (group == nullptr || area == nullptr || group->reference_count == 0) {
             return true;
         }
-        i32 average_x = 0;
-        i32 average_y = 0;
-        u32 count = 0;
+        u32 total_x = 0;
+        u32 total_y = 0;
         for_each_group_slot_object(state, *group,
             [&](GameplayScriptTriggerObjectState& object) {
-            average_x += object.x;
-            average_y += object.y;
-            ++count;
+            total_x += static_cast<u32>(object.x);
+            total_y += static_cast<u32>(object.y);
         });
-        if (count == 0) {
-            return true;
-        }
-        average_x /= static_cast<i32>(count);
-        average_y /= static_cast<i32>(count);
-        const i32 delta_x = area_center_x(*area) - average_x;
-        const i32 delta_y = area_center_y(*area) - average_y;
+        const i32 average_x =
+            static_cast<i32>(total_x) / static_cast<i32>(group->reference_count);
+        const i32 average_y =
+            static_cast<i32>(total_y) / static_cast<i32>(group->reference_count);
+        const i32 fallback_x = area_center_x(*area);
+        const i32 fallback_y = area_center_y(*area);
+        const i32 delta_x = wrap_sub_i32(
+            area_translation_center_x(*area), average_x);
+        const i32 delta_y = wrap_sub_i32(
+            area_translation_center_y(*area), average_y);
         for_each_group_slot_object(state, *group,
             [&](GameplayScriptTriggerObjectState& object) {
-            object.x += delta_x;
-            object.y += delta_y;
-            object.scripted_target_x = object.x;
-            object.scripted_target_y = object.y;
-            object.scripted_target_updated = true;
+            i32 candidate_x = wrap_add_i32(object.x, delta_x);
+            i32 candidate_y = wrap_add_i32(object.y, delta_y);
+            if (!area_contains_point(*area, candidate_x, candidate_y)) {
+                candidate_x = fallback_x;
+                candidate_y = fallback_y;
+            }
+            relocate_script_object_strict(
+                state, object, candidate_x, candidate_y);
         });
         return true;
     }

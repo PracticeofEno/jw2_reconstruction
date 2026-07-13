@@ -16968,6 +16968,13 @@ bool default_unit_command_find_strict_placement_point(UnitCommandContext&,
     return FindStrictUnitPlacementPoint(*lifecycle, unit, point.x, point.y);
 }
 
+bool default_gameplay_script_find_strict_placement(UnitMovementUnit& unit,
+    i32& x, i32& y, void*) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    return lifecycle != nullptr &&
+        FindStrictUnitPlacementPoint(*lifecycle, unit, x, y);
+}
+
 bool default_unit_command_find_matching_terrain_placement_point(
     UnitCommandContext&, UnitMovementUnit& unit, UnitMovementPoint& point) {
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
@@ -22663,6 +22670,9 @@ void sync_default_gameplay_script_runtime_context(
             g_runtime.gameplay_player_slots.rotation_control_value;
     }
     script.opcode_context.enabled = true;
+    script.opcode_context.find_strict_placement =
+        default_gameplay_script_find_strict_placement;
+    script.opcode_context.strict_placement_user = nullptr;
     // DAT_00722320/DAT_0072231c are shared by the frame clock and script
     // opcodes 0x1e, 0x29 and 0x3d in the original.  Pull the live value after
     // the frame-clock tick so script arithmetic observes that same ordering.

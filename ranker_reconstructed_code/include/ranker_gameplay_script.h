@@ -158,6 +158,9 @@ struct GameplayScriptTriggerObjectState {
     std::array<u32, kGameplayScriptObjectEquipmentSlots> equipment_slots{};
 };
 
+using GameplayScriptStrictPlacementCallback = bool (*)(
+    UnitMovementUnit& unit, i32& x, i32& y, void* user);
+
 struct GameplayScriptSpawnRequest {
     u32 opcode = 0;
     u32 owner_id = 0;
@@ -230,6 +233,8 @@ struct GameplayScriptOpcodeContext {
     std::array<u32, kGameplayScriptCopiedCommandTableWords> copied_command_table{};
     std::array<u8, kGameplayScriptOwnerCount> owner_script_flags{};
     std::array<u32, kGameplayScriptOwnerCount> owner_external_values{};
+    GameplayScriptStrictPlacementCallback find_strict_placement = nullptr;
+    void* strict_placement_user = nullptr;
     std::vector<GameplayScriptSpawnRequest> spawn_requests;
     std::vector<GameplayScriptDefinitionPatchRequest> definition_patch_requests;
 };
