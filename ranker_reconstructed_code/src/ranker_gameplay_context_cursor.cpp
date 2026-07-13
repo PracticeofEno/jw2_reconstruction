@@ -121,6 +121,77 @@ GameplayContextCursorResolution resolve_normal_mode(
     const GameplayContextCursorInput& input) {
     const bool mobile = input.selected_unit_type < kMobileUnitTypeLimit;
 
+    if (input.hover_kind == 6u) {
+        if (!mobile) {
+            return set_fixed_cursor(state, 0u);
+        }
+        if ((input.selected_unit_command_bit_mask & 0x08u) != 0u &&
+            input.hover_target_repairable) {
+            // 004e8c5a..004e8c8b -> 004e8f76: repair-capable selection over
+            // a damaged definition-bit-0 target.
+            return animate_cursor(state, input.current_tick_ms,
+                3u, 0x48u, 1u, 100u);
+        }
+        if (input.hover_target_boarding_available) {
+            // 004e8c91..004e8ce2 -> 004e9281: a selected boardable unit fits
+            // in the hovered carrier's remaining production-adjusted space.
+            return animate_cursor(state, input.current_tick_ms,
+                10u, 0x5cu, 4u, 110u);
+        }
+        return animate_cursor(state, input.current_tick_ms,
+            4u, 0x40u, 8u, 100u);
+    }
+
+    if (input.hover_kind == 7u) {
+        // The complete 004e8ce7 handler schedules tooltip kind seven and
+        // falls directly into the cursor-zero handler at 004e9447.
+        return set_fixed_cursor(state, 0u);
+    }
+
+    if (input.hover_kind == 8u) {
+        if ((input.selected_primary_unit_command_bit_mask & 0x100u) != 0u &&
+            input.hover_target_matches_selected_cursor_type) {
+            // 004e8d06..004e8d31 -> 004e91a9.
+            return animate_cursor(state, input.current_tick_ms,
+                8u, 0x50u, 4u, 110u);
+        }
+        if ((input.selected_unit_command_bit_mask & 0x20u) != 0u &&
+            input.hover_target_action_profile_allowed) {
+            // 004e8d37..004e8d66 -> 004e904e.
+            return animate_cursor(state, input.current_tick_ms,
+                5u, 0x28u, 8u, 100u);
+        }
+        return set_fixed_cursor(state, 0u);
+    }
+
+    if (input.hover_kind == 9u) {
+        // FUN_00411230 includes primary capability bit one and the equipment
+        // pickup/type filter.  Success enters the mode-one 0x50 family.
+        if (input.hover_equipment_pickup_eligible) {
+            return animate_cursor(state, input.current_tick_ms,
+                1u, 0x50u, 4u, 110u);
+        }
+        return set_fixed_cursor(state, 0u);
+    }
+
+    if (input.hover_kind == 10u) {
+        // Mode-0 table slot ten is the bare RET at 004e9457.
+        return preserve_cursor(state);
+    }
+
+    if (input.hover_kind == 11u) {
+        if (!mobile) {
+            return set_fixed_cursor(state, 0u);
+        }
+        if ((input.selected_unit_command_bit_mask & kHarvestCapability) != 0u) {
+            // 004e8d95..004e8da4 -> 004e9169 stores target kind 11 and uses
+            // the fixed contextual cursor at index 0x10.
+            return set_target_cursor(state, 11u, 0x10u);
+        }
+        return animate_cursor(state, input.current_tick_ms,
+            4u, 0x40u, 8u, 100u);
+    }
+
     if (input.hover_kind == kBerryHoverKind) {
         if (!mobile) {
             return set_fixed_cursor(state, 0u);
@@ -148,8 +219,7 @@ GameplayContextCursorResolution resolve_normal_mode(
         return set_mode_cursor(state, 0u, 0u);
     }
 
-    // Kinds 6..9 and 11 have target-specific branches which are not collapsed
-    // into an approximation here. Kind 10 is an explicit preserve return.
+    // Remaining routed mode-zero entries have no cursor write.
     return preserve_cursor(state);
 }
 
@@ -212,6 +282,17 @@ GameplayContextCursorResolution ResolveGameplayContextCursor(
         // cursor globals verbatim.
         return preserve_cursor(state);
     }
+}
+
+u32 ResolveGameplayUnitHoverKind(u32 local_owner, u32 target_owner,
+    u32 local_owner_relation_mask) {
+    if (target_owner == local_owner) {
+        return 6u;
+    }
+    // BT at 004e954a uses the low five bits of its register bit index.
+    return ((local_owner_relation_mask >> (target_owner & 0x1fu)) & 1u) != 0u
+        ? 7u
+        : 8u;
 }
 
 }  // namespace ranker

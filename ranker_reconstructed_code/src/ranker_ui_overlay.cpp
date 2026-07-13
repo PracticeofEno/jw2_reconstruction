@@ -1454,13 +1454,11 @@ void set_hover_from_unit(
     state.hover_context.unit_id = unit.unit_id;
     state.hover_context.x = state.camera_x + screen_x;
     state.hover_context.y = state.camera_y + screen_y;
-    if (unit.owner_id == state.local_player_slot) {
-        state.hover_context.kind = 6;
-    } else if (state.scenario_ai_profile_override) {
-        state.hover_context.kind = 7;
-    } else {
-        state.hover_context.kind = 8;
-    }
+    // FUN_004e9458: local owner -> 6, directed relation bit -> 7, otherwise
+    // 8.  Replay/scenario mode is unrelated to this classification.
+    state.hover_context.kind = ResolveGameplayUnitHoverKind(
+        state.local_player_slot, unit.owner_id,
+        state.local_owner_relation_mask);
 }
 
 u32 minimap_screen_width(const UiOverlayState& state) {

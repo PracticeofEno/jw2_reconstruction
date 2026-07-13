@@ -1028,6 +1028,11 @@ UnitMovementContext* default_gameplay_movement_context();
 const ProductionOrderDefinition* default_production_order_definition(u32 order_id);
 u32 default_unit_command_bit_mask(const UnitMovementUnit& unit);
 u32 default_unit_action_capability_mask(const UnitMovementUnit& unit);
+u32 read_runtime_catalog_u32(const std::vector<u8>& bytes,
+    std::size_t offset, u32 fallback);
+bool default_unit_action_profile_allows_target_render_class(
+    UnitActionContext& context, const UnitMovementUnit& source,
+    const UnitMovementUnit& target);
 void apply_default_unit_command_bit_mask(UnitMovementUnit& unit, u32 mask);
 void sync_default_gameplay_production_action_definitions(
     GameplayProductionActionState& production);
@@ -3700,21 +3705,149 @@ void default_gameplay_input_set_cursor_index(GameplayInputActionState& state) {
     ShowGameCursor();
 }
 
+bool default_cursor_target_matches_selected_definition(
+    const UnitMovementUnit& selected, const UnitMovementUnit& target) {
+    // Unit definition/catalog +0x1d0 is read only by the
+    // mode-zero kind-eight cursor branch at 004e8d1f.
+    constexpr std::size_t kCursorTargetTypeOffset = 0x1d0u;
+    if (selected.type_id <
+        g_runtime.active_session_definitions.unit_records.size()) {
+        const std::vector<u8>& active_bytes =
+            g_runtime.active_session_definitions
+                .unit_records[selected.type_id].bytes;
+        if (active_bytes.size() >=
+            kCursorTargetTypeOffset + sizeof(u32)) {
+            return read_runtime_catalog_u32(active_bytes,
+                kCursorTargetTypeOffset, 0xffffffffu) == target.type_id;
+        }
+    }
+    if (!unit_definition_resource_catalog_state().loaded) {
+        LoadUnitDefinitionResourceCatalog();
+    }
+    const UnitDefinitionResourceCatalogState& catalog =
+        unit_definition_resource_catalog_state();
+    if (selected.type_id >= catalog.records.size()) {
+        return false;
+    }
+    const UnitDefinitionResourceRecord& record = catalog.records[selected.type_id];
+    if (!record.loaded || record.definition_bytes.empty()) {
+        return false;
+    }
+    return read_runtime_catalog_u32(record.definition_bytes,
+        kCursorTargetTypeOffset, 0xffffffffu) == target.type_id;
+}
+
+bool default_cursor_target_action_profile_allowed(
+    const UnitMovementUnit& selected, const UnitMovementUnit& target) {
+    // FUN_004c209c first rejects raw target runtime bit 0x20000000, then
+    // checks the selected action profile's target-class/terrain mask.
+    if ((target.runtime_flags & kUnitActionTargetClassBlocked) != 0u) {
+        return false;
+    }
+    UnitActionContext context = g_runtime.gameplay_unit_actions;
+    context.movement_context = default_gameplay_movement_context();
+    return default_unit_action_profile_allows_target_render_class(
+        context, selected, target);
+}
+
+bool default_cursor_target_boarding_available(
+    const UiOverlayState& overlay, const UnitMovementUnit& target) {
+    if (target.type_id >= 0x60u || (target.type_flags & 0x400u) == 0u) {
+        return false;
+    }
+
+    const u32 capacity = CalculateUnitTransportCapacity(
+        target, &g_runtime.gameplay_production_runtime);
+    if (target.cargo_amount >= capacity) {
+        return false;
+    }
+
+    // FUN_004e4150 seeds DAT_00864ba4 to 1000 and takes the minimum raw
+    // transport size among selected definition-bit-2 units.
+    bool boardable_selected = false;
+    u32 minimum_transport_size = 1000u;
+    for (u32 selected_id : overlay.selected_unit_ids) {
+        const UnitMovementUnit* selected =
+            find_default_movement_unit_by_id(selected_id);
+        if (selected == nullptr || !selected->active ||
+            selected->type_id >= 0x60u ||
+            selected->owner_id != overlay.local_player_slot ||
+            (selected->runtime_flags & 1u) == 0u ||
+            (selected->definition.action_effect_flags & 0x04u) == 0u) {
+            continue;
+        }
+        boardable_selected = true;
+        minimum_transport_size = std::min(
+            minimum_transport_size, selected->definition.transport_size);
+    }
+
+    return boardable_selected &&
+        minimum_transport_size <= capacity - target.cargo_amount;
+}
+
+bool default_cursor_equipment_pickup_eligible(
+    const UnitMovementUnit& selected, u32 equipment_id) {
+    UnitEquipmentCatalog& catalog = frontend_bootstrap_state().equipment_catalog;
+    if (catalog.effects.empty()) {
+        LoadUnitEquipmentCatalogFromJw210Trc(catalog);
+    }
+    const UnitEquipmentEffectDefinition* effect =
+        FindUnitEquipmentEffect(catalog, equipment_id);
+    return effect != nullptr &&
+        CheckUnitEquipmentPickupEligible(selected, *effect);
+}
+
 void default_gameplay_input_restore_cursor(GameplayInputActionState& input) {
     UiOverlayState& overlay = ui_overlay_state();
     UpdateGameplayHoverContextAndTooltip(overlay);
 
+    UnitMovementUnit* selected = overlay.selected_unit_id != 0u
+        ? find_default_movement_unit_by_id(overlay.selected_unit_id)
+        : nullptr;
     GameplayContextCursorInput cursor_input{};
     cursor_input.current_tick_ms = overlay.current_tick_ms;
     cursor_input.hover_kind = overlay.hover_context.kind;
     cursor_input.current_mode = overlay.placement_mode;
-    cursor_input.selected_unit_present =
-        overlay.selected_unit_count != 0u && overlay.selected_unit_id != 0u;
-    cursor_input.selected_unit_local =
-        overlay.selected_unit_owner == overlay.local_player_slot;
-    cursor_input.selected_unit_type = overlay.selected_unit_type;
+    cursor_input.selected_unit_present = selected != nullptr;
+    cursor_input.selected_unit_local = selected != nullptr &&
+        selected->owner_id == overlay.local_player_slot;
+    cursor_input.selected_unit_type = selected != nullptr
+        ? selected->type_id
+        : overlay.selected_unit_type;
     cursor_input.selected_unit_command_bit_mask =
         overlay.selected_unit_command_bit_mask;
+    cursor_input.selected_primary_unit_command_bit_mask = selected != nullptr
+        ? default_unit_action_capability_mask(*selected)
+        : 0u;
+
+    UnitMovementUnit* hover_target = nullptr;
+    if ((overlay.hover_context.kind == 6u ||
+            overlay.hover_context.kind == 8u) &&
+        overlay.hover_context.unit_id != 0u) {
+        hover_target = find_default_movement_unit_by_id(
+            overlay.hover_context.unit_id);
+    }
+    if (selected != nullptr && hover_target != nullptr) {
+        if (overlay.hover_context.kind == 6u) {
+            cursor_input.hover_target_repairable =
+                (hover_target->definition.action_effect_flags & 0x01u) != 0u &&
+                hover_target->health < hover_target->max_health;
+            cursor_input.hover_target_boarding_available =
+                default_cursor_target_boarding_available(overlay, *hover_target);
+        } else if (overlay.hover_context.kind == 8u) {
+            cursor_input.hover_target_matches_selected_cursor_type =
+                default_cursor_target_matches_selected_definition(
+                    *selected, *hover_target);
+            cursor_input.hover_target_action_profile_allowed =
+                default_cursor_target_action_profile_allowed(
+                    *selected, *hover_target);
+        }
+    }
+    if (selected != nullptr && overlay.hover_context.kind == 9u) {
+        cursor_input.hover_equipment_pickup_eligible =
+            default_cursor_equipment_pickup_eligible(
+                *selected, overlay.hover_context.item_id);
+    }
 
     const GameplayContextCursorResolution resolution =
         ResolveGameplayContextCursor(overlay.context_cursor, cursor_input);
@@ -15224,6 +15357,12 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
         g_runtime.gameplay_frame_render_context.frame_counter;
     overlay.current_tick_ms = gameplay_loop_state().current_tick_ms;
     overlay.local_player_slot = g_runtime.gameplay_player_slots.local_player_slot;
+    overlay.local_owner_relation_mask =
+        overlay.local_player_slot <
+            g_runtime.gameplay_player_slots.owner_relation_masks.size()
+        ? g_runtime.gameplay_player_slots
+              .owner_relation_masks[overlay.local_player_slot]
+        : 0u;
     if (g_runtime.gameplay_startup_state.lifecycle != nullptr &&
         overlay.local_player_slot < kPlayerSlotCount) {
         const UnitLifecycleContext& lifecycle =

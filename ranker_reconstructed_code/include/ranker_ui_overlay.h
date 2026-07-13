@@ -420,6 +420,7 @@ struct UiOverlayState {
     u32 selected_faction_id = 0;
     u32 local_player_slot = 0;
     u32 local_player_type = 0;
+    u32 local_owner_relation_mask = 0;
     u32 map_width_tiles = 0;
     u32 map_height_tiles = 0;
     i32 camera_x = 0;
