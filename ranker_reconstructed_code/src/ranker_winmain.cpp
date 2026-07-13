@@ -22763,6 +22763,11 @@ void sync_default_gameplay_script_runtime_context(
     script.current_tick = state.simulation_frame_counter;
     script.condition_context.enabled = true;
     script.condition_context.owner_active_counts_available = lifecycle != nullptr;
+    script.condition_context.active_object_order_available = true;
+    script.condition_context.command_runtime_state_table =
+        &original_unit_command_runtime_state_categories();
+    script.condition_context.production_orders =
+        &g_runtime.gameplay_production_runtime;
     // Mode 8 startup writes DAT_00722310 = 0x40 once.  Seed that original
     // global on the first script frame only; later opcode 0x30/0x6a clears
     // must not be undone by OR-ing the startup value on every render.

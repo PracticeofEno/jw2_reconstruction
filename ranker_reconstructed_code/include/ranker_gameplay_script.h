@@ -12,6 +12,7 @@ namespace ranker {
 struct UnitMovementUnit;
 struct UnitMovementContext;
 struct UnitLifecycleContext;
+struct ProductionOrderRuntimeState;
 
 struct GameplayScriptCommandPayload {
     u32 state = 0;
@@ -205,6 +206,7 @@ struct GameplayScriptOwnerConditionState {
 struct GameplayScriptConditionContext {
     bool enabled = false;
     bool owner_active_counts_available = false;
+    bool active_object_order_available = false;
     std::array<GameplayScriptOwnerConditionState, kGameplayScriptOwnerCount> owners{};
     // Original DAT_007071ec / DAT_0070720c.  These lifecycle totals include
     // constructing buildings that the owner/type-count table intentionally
@@ -215,6 +217,12 @@ struct GameplayScriptConditionContext {
     // population capacity supplied by lifecycle-class-2 units.
     std::array<i32, kGameplayScriptOwnerCount> owner_population_demand{};
     std::array<i32, kGameplayScriptOwnerCount> owner_population_capacity{};
+    // Conditions 0x29/0x2a resolve the command's runtime-state table entry
+    // before converting it to the scenario category.
+    const std::vector<u32>* command_runtime_state_table = nullptr;
+    // Conditions 0x2e/0x2f read the owner/order upgrade byte table, not unit
+    // population counts.
+    const ProductionOrderRuntimeState* production_orders = nullptr;
     std::vector<u32> active_object_order;
 };
 
