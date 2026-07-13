@@ -9083,8 +9083,11 @@ void default_gameplay_hud_draw_shadow_text(
         return;
     }
     GameplayScriptDialogState& dialog = gameplay_script_dialog_state();
-    if (dialog.advance_flags[1] != 0 &&
-        text == dialog.visible_text.c_str()) {
+    const bool dialog_multiline = dialog.advance_flags[1] != 0 &&
+        text == dialog.visible_text.c_str();
+    const bool opcode59_multiline =
+        text == g_runtime.gameplay_script_hud_text.c_str();
+    if (dialog_multiline || opcode59_multiline) {
         SelectTextMetricFont(3);
         SelectTextDrawFont(2);
         const i32 line_height = static_cast<i32>(
@@ -23649,15 +23652,14 @@ void publish_default_gameplay_script_hud_text(
     if (!g_runtime.gameplay_script_hud_text.empty()) {
         GameplayHudTextState& hud = g_runtime.gameplay_hud_text;
         hud.current_tick_ms = state.current_tick_ms;
-        if (opcode.text_x == 0 && opcode.text_y == 0) {
-            QueueGameplayHudMessage(hud, g_runtime.gameplay_script_hud_text.c_str());
-        } else {
-            hud.current_message.text = g_runtime.gameplay_script_hud_text.c_str();
-            hud.current_message.x = opcode.text_x;
-            hud.current_message.y = opcode.text_y;
-            hud.current_message.tick_ms = state.current_tick_ms;
-            hud.queued_message = GameplayHudMessage{};
-        }
+        // Opcode 0x59 (0x00417964..0x00417a0d) selects the same metric/draw
+        // fonts as opcode 0x01, draws every CRLF-delimited line immediately at
+        // the requested coordinates, and retains no timed HUD message.  Zero,
+        // zero is a real draw position rather than the bottom-message sentinel.
+        hud.frame_message.text = g_runtime.gameplay_script_hud_text.c_str();
+        hud.frame_message.x = opcode.text_x;
+        hud.frame_message.y = opcode.text_y;
+        hud.frame_message.tick_ms = state.current_tick_ms;
     }
 
     opcode.text_overlay_active = false;

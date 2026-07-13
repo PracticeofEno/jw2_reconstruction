@@ -269,6 +269,15 @@ void render_current_message(GameplayHudTextState& state) {
     }
 }
 
+void render_frame_message(GameplayHudTextState& state) {
+    if (current_message_text(state.frame_message) == nullptr) {
+        return;
+    }
+    draw_shadow_text(state, state.frame_message.text, state.frame_message.x,
+        state.frame_message.y, 1);
+    state.frame_message = {};
+}
+
 void frame_callback(GameplayFrameRenderContext& context, GameplayFrameCallback callback) {
     if (callback != nullptr) {
         callback(context);
@@ -1668,6 +1677,7 @@ void RenderGameplayHudText(GameplayHudTextState& state) {
     select_draw_font(state);
     render_queued_message(state);
     render_current_message(state);
+    render_frame_message(state);
     if (state.callbacks.flush_status_tail != nullptr) {
         state.callbacks.flush_status_tail(state);
     }
