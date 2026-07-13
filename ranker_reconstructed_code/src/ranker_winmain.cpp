@@ -19383,9 +19383,6 @@ bool default_unit_command_can_use_ability(UnitCommandContext&,
         find_default_unit_effect_definition(effects, 0x3du + ability_id);
     const bool lifecycle_target =
         definition != nullptr && definition->action_direction_mode >= 4;
-    if (target != nullptr && !target->active && !lifecycle_target) {
-        return false;
-    }
     if (target != nullptr && lifecycle_target &&
         ((target->runtime_flags & 4u) == 0 || target->path_target_x == 1)) {
         return false;
@@ -19415,9 +19412,6 @@ UnitCommandAbilityGateResult default_unit_command_ability_gate(UnitCommandContex
         find_default_unit_effect_definition(effects, 0x3du + ability_id);
     const bool lifecycle_target =
         definition != nullptr && definition->action_direction_mode >= 4;
-    if (target != nullptr && !target->active && !lifecycle_target) {
-        return UnitCommandAbilityGateResult::fail;
-    }
     if (target != nullptr && lifecycle_target &&
         ((target->runtime_flags & 4u) == 0 || target->path_target_x == 1)) {
         return UnitCommandAbilityGateResult::fail;

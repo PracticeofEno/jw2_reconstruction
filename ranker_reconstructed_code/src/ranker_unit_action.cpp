@@ -4913,13 +4913,15 @@ UnitEffectActionTargetGateResult EvaluateUnitEffectActionTargetGate(
     case 0:
         return UnitEffectActionTargetGateResult{action_id, false};
     case 1:
-        return compare_point(source.saved_path_target_x, source.saved_path_target_y);
+        return compare_point(source.active_command_payload.y,
+            static_cast<i32>(source.active_command_payload.value));
     case 2:
         if (source.target != nullptr &&
             (source.target->runtime_flags & kUnitActionTargetTransient) == 0) {
             return compare_point(source.target->x, source.target->y);
         }
-        return compare_point(source.saved_path_target_x, source.saved_path_target_y);
+        return compare_point(source.active_command_payload.y,
+            static_cast<i32>(source.active_command_payload.value));
     case 3:
         if (source.target == nullptr ||
             (source.target->runtime_flags &

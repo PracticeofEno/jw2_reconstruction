@@ -5313,8 +5313,6 @@ void HandleLinkedUnitReleaseApproach(UnitCommandContext& context, UnitMovementUn
 }
 
 void StartUnitSpecialAbilityCommand(UnitCommandContext& context, UnitMovementUnit& unit) {
-    unit.saved_path_target_x = unit.path_target_x;
-    unit.saved_path_target_y = unit.path_target_y;
     unit.active_command_payload.y = unit.path_target_x;
     unit.active_command_payload.value = static_cast<u32>(unit.path_target_y);
     UnitMovementUnit* target = resolve_active_payload_target_or_clear(context, unit);
@@ -5655,8 +5653,6 @@ void HandleUnitTimedFlagPhaseB(UnitCommandContext&, UnitMovementUnit& unit) {
 }
 
 void StartUnitItemSlotUseCommand(UnitCommandContext& context, UnitMovementUnit& unit) {
-    unit.saved_path_target_x = unit.path_target_x;
-    unit.saved_path_target_y = unit.path_target_y;
     unit.active_command_payload.y = unit.path_target_x;
     unit.active_command_payload.value = static_cast<u32>(unit.path_target_y);
     if (CheckSavedCommandPointWithinOneTile(unit)) {
@@ -5684,8 +5680,9 @@ void HandleUnitItemSlotUseAction(UnitCommandContext& context, UnitMovementUnit& 
         return;
     }
 
-    execute_item_slot_use(context, unit, item_id);
-    *slot = 0;
+    if (execute_item_slot_use(context, unit, item_id)) {
+        *slot = 0;
+    }
     PopDeferredUnitCommandOrReturnIdle(context, unit);
 }
 
@@ -5947,8 +5944,9 @@ bool CheckLinkedUnitReleaseReady(UnitCommandContext& context, UnitMovementUnit& 
 }
 
 bool CheckSavedCommandPointWithinOneTile(const UnitMovementUnit& unit) {
-    return CalculateApproxUnitDistance(unit.x, unit.y, unit.saved_path_target_x,
-        unit.saved_path_target_y) < 0x20;
+    return CalculateApproxUnitDistance(unit.x, unit.y,
+        unit.active_command_payload.y,
+        static_cast<i32>(unit.active_command_payload.value)) < 0x20;
 }
 
 u32 CalculateOwnerTransportGroupRequiredCarrierCount(const UnitCommandContext& context,
