@@ -14345,6 +14345,7 @@ void clear_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
     overlay.selected_unit_max_secondary = 0;
     overlay.selected_unit_base_max_secondary = 0;
     overlay.selected_unit_slot_value = 0;
+    overlay.selected_unit_equipment_slots = {};
     overlay.selected_unit_command_state = 0;
     overlay.selected_unit_command_flags = 0;
     overlay.selected_unit_runtime_flags = 0;
@@ -14908,6 +14909,7 @@ void sync_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
     overlay.selected_unit_base_max_secondary =
         unit->definition.profile_defense_value;
     overlay.selected_unit_slot_value = unit->action_mode;
+    overlay.selected_unit_equipment_slots = unit->equipment_slots;
     overlay.selected_unit_command_state = unit->command_state;
     overlay.selected_unit_command_flags = unit->command_flags;
     overlay.selected_unit_runtime_flags = unit->runtime_flags;

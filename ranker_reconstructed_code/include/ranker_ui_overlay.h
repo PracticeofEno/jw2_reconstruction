@@ -386,6 +386,9 @@ struct UiOverlayState {
     u32 selected_unit_max_secondary = 0;
     u32 selected_unit_base_max_secondary = 0;
     u32 selected_unit_slot_value = 0;
+    // Original raw unit +0x30..+0x44.  The command overlay presents these in
+    // the non-linear 4,5,0,1,2,3 order used by dispatch ids 0x1ae..0x1b3.
+    std::array<u32, 6> selected_unit_equipment_slots{};
     u32 selected_unit_command_state = 0;
     u32 selected_unit_command_flags = 0;
     u32 selected_unit_runtime_flags = 0;

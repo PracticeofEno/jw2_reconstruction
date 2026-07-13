@@ -1011,6 +1011,115 @@ bool draw_indexed_queue_command_record(
     return drawn;
 }
 
+u32 selected_equipment_slot_index_for_dispatch(u32 item_id) {
+    switch (item_id) {
+    case 0x1ae:
+        return 4;
+    case 0x1af:
+        return 5;
+    case 0x1b0:
+        return 0;
+    case 0x1b1:
+        return 1;
+    case 0x1b2:
+        return 2;
+    case 0x1b3:
+        return 3;
+    default:
+        return 6;
+    }
+}
+
+void draw_selected_unit_slot_value_at(
+    UiOverlayState& state, u32 value, i32 x, i32 y) {
+    if (value == 0) {
+        return;
+    }
+
+    // FUN_004e21c3 selects one of four item.trt frames from the exact raw
+    // +0x2c thresholds before printing the unscaled value over the icon.
+    u32 icon_id = 1;
+    if (value > 100u) {
+        ++icon_id;
+    }
+    if (value > 500u) {
+        ++icon_id;
+    }
+    if (value > 1000u) {
+        ++icon_id;
+    }
+    const u32 previous_record_size = state.current_record_size;
+    state.current_record_size = 0x26;
+    BlitUiOverlayEquipmentIcon(state, icon_id, x, y);
+    state.current_record_size = previous_record_size;
+    append_text(state, std::to_string(value), x + 0x22, y + 0x24, 1,
+        false, true, true, 0, 0);
+}
+
+void draw_equipment_command_icon_at(
+    UiOverlayState& state, u32 item_id, i32 x, i32 y) {
+    if (item_id < 0x1b4 || item_id >= 0x24a) {
+        return;
+    }
+
+    // FUN_004e2129 indexes item.trt with dispatch_id - 0x1b4.  For the first
+    // five entries it overlays the selected unit's raw +0x2c value; this is
+    // not a one-based command shortcut despite the tempting 0..4 range.
+    const u32 equipment_id = item_id - 0x1b4;
+    const u32 previous_record_size = state.current_record_size;
+    state.current_record_size = 0x26;
+    BlitUiOverlayEquipmentIcon(state, equipment_id, x, y);
+    state.current_record_size = previous_record_size;
+    if (equipment_id < 5) {
+        append_text(state, std::to_string(state.selected_unit_slot_value),
+            x + 0x22, y + 0x24, 1, false, true, true, 0, 0);
+    }
+}
+
+bool draw_selected_unit_slot_value_record(
+    UiOverlayState& state, const UiOverlayDrawRecord& record) {
+    if (!record_visible(state, record) || state.selected_unit_slot_value == 0) {
+        return false;
+    }
+    const UiOverlayDrawRecord adjusted = selected_adjusted_record(state, record, false);
+    draw_selected_unit_slot_value_at(state, state.selected_unit_slot_value,
+        adjusted.x, adjusted.y);
+    return true;
+}
+
+bool draw_selected_unit_equipment_slot_record(
+    UiOverlayState& state, const UiOverlayDrawRecord& record) {
+    if (!record_visible(state, record)) {
+        return false;
+    }
+    const u32 slot = selected_equipment_slot_index_for_dispatch(record.item_id);
+    if (slot >= state.selected_unit_equipment_slots.size()) {
+        return false;
+    }
+    const u32 equipment_id = state.selected_unit_equipment_slots[slot];
+    if (equipment_id == 0) {
+        return false;
+    }
+
+    const UiOverlayDrawRecord adjusted = selected_adjusted_record(state, record, false);
+    const u32 previous_record_size = state.current_record_size;
+    state.current_record_size = 0x13;
+    BlitUiOverlayEquipmentIconHalfSampled(
+        state, equipment_id, adjusted.x, adjusted.y);
+    state.current_record_size = previous_record_size;
+    return true;
+}
+
+bool draw_equipment_command_icon_record(
+    UiOverlayState& state, const UiOverlayDrawRecord& record) {
+    if (!record_visible(state, record)) {
+        return false;
+    }
+    const UiOverlayDrawRecord adjusted = selected_adjusted_record(state, record, false);
+    draw_equipment_command_icon_at(state, record.item_id, adjusted.x, adjusted.y);
+    return true;
+}
+
 u32 selected_production_category_index(const UiOverlayState& state) {
     if (state.selected_production_category == 2) {
         return 1;
@@ -1649,6 +1758,13 @@ void InstallDefaultUiOverlayDispatchHandlers(UiOverlayState& state) {
     state.dispatch_handlers[0x1aa] = draw_indexed_queue_command_record;
     state.dispatch_handlers[0x1ab] = draw_indexed_queue_command_record;
     state.dispatch_handlers[0x1ac] = draw_indexed_queue_command_record;
+    state.dispatch_handlers[0x1ad] = draw_selected_unit_slot_value_record;
+    for (u32 id = 0x1ae; id <= 0x1b3; ++id) {
+        state.dispatch_handlers[id] = draw_selected_unit_equipment_slot_record;
+    }
+    for (u32 id = 0x1b4; id < 0x24a; ++id) {
+        state.dispatch_handlers[id] = draw_equipment_command_icon_record;
+    }
 }
 
 void RenderGameplayWorldAndUiOverlay(UiOverlayState& state) {
@@ -2263,23 +2379,13 @@ void DrawUiOverlayIconTextGlyphEquipment(UiOverlayState& state) {
 }
 
 void DrawUiOverlayIndexedIconNumber(UiOverlayState& state, u32 item_id) {
-    if (item_id < 0x1b4 || item_id >= 0x1b9) {
-        return;
-    }
-    BlitUiOverlayEquipmentIcon(state, item_id,
-        state.small_slot1_x, state.small_slot1_y);
-    append_text(state, std::to_string(item_id - 0x1b4 + 1),
-        state.small_slot1_x + 0x22, state.small_slot1_y + 0x24, 1,
-        false, true, true);
+    draw_equipment_command_icon_at(
+        state, item_id, state.small_slot1_x, state.small_slot1_y);
 }
 
 void DrawUiOverlaySelectedUnitSlotNumber(UiOverlayState& state) {
-    if (state.selected_unit_slot_value == 0) {
-        return;
-    }
-    append_text(state, std::to_string(state.selected_unit_slot_value),
-        state.small_slot1_x + 0x22, state.small_slot1_y + 0x24, 1,
-        false, true, true);
+    draw_selected_unit_slot_value_at(state, state.selected_unit_slot_value,
+        state.small_slot1_x, state.small_slot1_y);
 }
 
 void DrawEquipmentDefinitionSpriteIfAvailable(UiOverlayState& state, u32 item_id) {
