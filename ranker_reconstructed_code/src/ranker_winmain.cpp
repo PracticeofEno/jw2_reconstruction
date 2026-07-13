@@ -23318,13 +23318,48 @@ void consume_default_gameplay_script_selection_request(
         return;
     }
 
+    if (opcode.group_selection_request) {
+        sync_default_ui_overlay_runtime_from_gameplay_state();
+        UiOverlayState& overlay = ui_overlay_state();
+        ResetGameplaySelectionState(overlay);
+        overlay.selected_unit_ids.reserve(opcode.group_selected_object_count);
+        for (u32 slot = 0; slot < opcode.group_selected_object_count; ++slot) {
+            const u32 object_index = opcode.group_selected_object_indices[slot];
+            if (object_index >= script.objects.size()) {
+                continue;
+            }
+            const GameplayScriptTriggerObjectState& object =
+                script.objects[object_index];
+            if (object.unit != nullptr && object.unit->id != 0) {
+                // Do not deduplicate: FUN_004ead09's caller increments the
+                // original selected-count global for every nonzero group ref.
+                overlay.selected_unit_ids.push_back(object.unit->id);
+            }
+        }
+        if (!overlay.selected_unit_ids.empty()) {
+            overlay.selected_unit_id = overlay.selected_unit_ids.front();
+        }
+        RecountGameplaySelectedUnits(overlay);
+        sync_default_ui_overlay_selected_unit_details(overlay);
+        BuildSelectedUnitCommandPanel(overlay);
+        // Unlike ordinary click/opcode-0x14 selection, 0x5d/0x60 does not
+        // call the unit-selected feedback function (and therefore no voice).
+
+        opcode.selection_request_active = false;
+        opcode.selected_object_index = 0;
+        opcode.group_selection_request = false;
+        opcode.group_selected_object_count = 0;
+        opcode.group_selected_object_indices.fill(0);
+        return;
+    }
+
     GameplayScriptTriggerObjectState* selected = nullptr;
     if (opcode.selected_object_index < script.objects.size()) {
         selected = &script.objects[opcode.selected_object_index];
     }
     if (selected == nullptr || selected->unit == nullptr) {
         for (GameplayScriptTriggerObjectState& object : script.objects) {
-            if ((object.flags & 0x80u) != 0 && object.unit != nullptr) {
+            if ((object.string_slot & 0x80u) != 0 && object.unit != nullptr) {
                 selected = &object;
                 break;
             }
@@ -23350,6 +23385,9 @@ void consume_default_gameplay_script_selection_request(
 
     opcode.selection_request_active = false;
     opcode.selected_object_index = 0;
+    opcode.group_selection_request = false;
+    opcode.group_selected_object_count = 0;
+    opcode.group_selected_object_indices.fill(0);
 }
 
 void consume_default_gameplay_script_stage_result(

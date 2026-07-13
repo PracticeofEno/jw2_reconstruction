@@ -62,6 +62,7 @@ constexpr u32 kGameplayScriptOwnerScriptValueCount = 0xaa;
 constexpr u32 kGameplayScriptOwnerUnitTypeCount = 0xaa;
 constexpr u32 kGameplayScriptObjectEquipmentSlots = 6;
 constexpr u32 kGameplayScriptCopiedOwnerTableWords = 8;
+constexpr u32 kGameplayScriptSelectionGroupLimit = 0x0e;
 
 struct GameplayScriptArea {
     i32 left = 0;
@@ -227,6 +228,14 @@ struct GameplayScriptOpcodeContext {
     i32 camera_y = 0;
     bool selection_request_active = false;
     u32 selected_object_index = 0;
+    // Scenario opcodes 0x5d/0x60 replace the complete UI selection with the
+    // first fourteen physical group slots.  Keep slot order and duplicates:
+    // the original increments its selected-count global for every nonzero
+    // reference, even when two slots point at the same unit.
+    bool group_selection_request = false;
+    u32 group_selected_object_count = 0;
+    std::array<u32, kGameplayScriptSelectionGroupLimit>
+        group_selected_object_indices{};
     bool text_overlay_active = false;
     i32 text_x = 100;
     i32 text_y = 300;

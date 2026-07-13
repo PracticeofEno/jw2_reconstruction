@@ -189,6 +189,98 @@ void mutate_gameplay_script_object_runtime_flags(
     }
 }
 
+void mutate_gameplay_script_object_selection_flag(
+    GameplayScriptTriggerObjectState& object, bool selected) {
+    if (selected) {
+        object.string_slot |= 0x80u;
+    } else {
+        object.string_slot &= ~0x80u;
+    }
+    if (object.unit != nullptr) {
+        if (selected) {
+            object.unit->scenario_string_slot |= 0x80u;
+        } else {
+            object.unit->scenario_string_slot &= ~0x80u;
+        }
+    }
+}
+
+void mutate_gameplay_script_object_direction(
+    GameplayScriptTriggerObjectState& object, u32 direction) {
+    object.direction = direction;
+    if (object.unit != nullptr) {
+        object.unit->direction = direction;
+    }
+}
+
+u32 gameplay_script_object_lifecycle_class(
+    const GameplayScriptTriggerObjectState& object) {
+    return object.unit != nullptr ?
+        object.unit->definition.lifecycle_class : object.definition_class;
+}
+
+void begin_single_gameplay_script_selection_request(
+    GameplayScriptOpcodeContext& opcode, u32 object_index) {
+    opcode.selection_request_active = true;
+    opcode.selected_object_index = object_index;
+    opcode.group_selection_request = false;
+    opcode.group_selected_object_count = 0;
+    opcode.group_selected_object_indices.fill(0);
+}
+
+void clear_active_gameplay_script_selection(GameplayScriptTriggerState& state) {
+    // FUN_004ead09 walks the active-unit list, clearing raw +0x08 bit 0x80.
+    // Mirror the same field on scenario objects so the later object publish
+    // pass cannot restore a stale selected bit.
+    for (GameplayScriptTriggerObjectState& object : state.objects) {
+        if (object.unit != nullptr) {
+            if (object.unit->active) {
+                mutate_gameplay_script_object_selection_flag(object, false);
+            }
+        } else if (object_alive(&object)) {
+            mutate_gameplay_script_object_selection_flag(object, false);
+        }
+    }
+
+    // Some active runtime units may not yet have a scenario-object mirror.
+    if (state.opcode_context.movement != nullptr) {
+        for (UnitMovementUnit* unit : state.opcode_context.movement->active_units) {
+            if (unit != nullptr && unit->active) {
+                unit->scenario_string_slot &= ~0x80u;
+            }
+        }
+    }
+}
+
+void begin_group_gameplay_script_selection_request(
+    GameplayScriptTriggerState& state, const GameplayScriptTriggerGroup& group) {
+    clear_active_gameplay_script_selection(state);
+
+    GameplayScriptOpcodeContext& opcode = state.opcode_context;
+    opcode.selection_request_active = true;
+    opcode.selected_object_index = 0;
+    opcode.group_selection_request = true;
+    opcode.group_selected_object_count = 0;
+    opcode.group_selected_object_indices.fill(0);
+
+    const u32 limit = std::min<u32>(
+        group.reference_count, kGameplayScriptSelectionGroupLimit);
+    for (u32 slot = 0; slot < limit; ++slot) {
+        const u32 object_index = group.object_indices[slot];
+        GameplayScriptTriggerObjectState* object = object_state(state, object_index);
+        if (object == nullptr) {
+            continue;
+        }
+
+        mutate_gameplay_script_object_selection_flag(*object, true);
+        if (opcode.selected_object_index == 0) {
+            opcode.selected_object_index = object_index;
+        }
+        opcode.group_selected_object_indices[opcode.group_selected_object_count++] =
+            object_index;
+    }
+}
+
 void sync_script_object_identity_to_unit(GameplayScriptTriggerObjectState& object) {
     if (object.unit == nullptr) {
         return;
@@ -1780,8 +1872,8 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
             for (u32 slot = 0; slot < limit; ++slot) {
                 const u32 object_index = group->object_indices[slot];
                 if (object_index != 0) {
-                    state.opcode_context.selection_request_active = true;
-                    state.opcode_context.selected_object_index = object_index;
+                    begin_single_gameplay_script_selection_request(
+                        state.opcode_context, object_index);
                     break;
                 }
             }
@@ -2055,7 +2147,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         trigger.blocked = 0;
         return true;
     case 0x2a:
-        state.opcode_context.selection_request_active = true;
+        begin_single_gameplay_script_selection_request(state.opcode_context, 0);
         return true;
     case 0x2b: {
         const GameplayScriptArea* area = area_state(state, command[1]);
@@ -2386,15 +2478,17 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         return true;
     }
     case 0x5a: {
-        if (command[2] == 0 || command[2] >= 9) {
+        const i32 direction = signed_i32_from_wrapped_u32(command[2]);
+        if (direction <= 0 || direction >= 9) {
             return true;
         }
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
-        if (group != nullptr && group->reference_count != 0) {
+        if (group != nullptr &&
+            signed_i32_from_wrapped_u32(group->reference_count) > 0) {
             for_each_group_slot_object(state, *group,
                 [&](GameplayScriptTriggerObjectState& object) {
-                if (object.definition_class != 2) {
-                    object.script_state = command[2];
+                if (gameplay_script_object_lifecycle_class(object) != 2) {
+                    mutate_gameplay_script_object_direction(object, command[2]);
                 }
             });
         }
@@ -2409,22 +2503,18 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x5d:
     case 0x60: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
-        if (group == nullptr || group->reference_count == 0) {
+        if (group == nullptr ||
+            signed_i32_from_wrapped_u32(group->reference_count) <= 0) {
             return true;
         }
-        const u32 limit = std::min<u32>(group->reference_count, 0x0e);
-        for (u32 slot = 0; slot < limit; ++slot) {
-            GameplayScriptTriggerObjectState* object =
-                object_state(state, group->object_indices[slot]);
-            if (object != nullptr) {
-                object->flags |= 0x80u;
-            }
-        }
-        if (command[0] == 0x5d && command[2] != 0 && command[2] < 9) {
+
+        begin_group_gameplay_script_selection_request(state, *group);
+        const i32 direction = signed_i32_from_wrapped_u32(command[2]);
+        if (command[0] == 0x5d && direction > 0 && direction < 9) {
             for_each_group_slot_object(state, *group,
                 [&](GameplayScriptTriggerObjectState& object) {
-                if (object.definition_class != 2) {
-                    object.script_state = command[2];
+                if (gameplay_script_object_lifecycle_class(object) != 2) {
+                    mutate_gameplay_script_object_direction(object, command[2]);
                 }
             });
         }
