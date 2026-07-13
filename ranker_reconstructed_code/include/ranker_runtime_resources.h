@@ -253,8 +253,10 @@ bool LoadJw207GameplayResourcePacks();
 bool LoadUnitDefinitionResourceRecord(const char* archive_name, u32 source_record_index,
     u32 definition_id);
 bool LoadUnitDefinitionResourceCatalog();
-bool PatchLoadedUnitDefinitionResourceRecord(u32 unit_type, const u8* bytes,
-    std::size_t byte_count);
+bool AppendLoadedUnitDefinitionResourceName(u32 unit_type, const char* suffix,
+    std::size_t suffix_length);
+bool SetLoadedUnitDefinitionResourceNameField(u32 unit_type, const u8* field,
+    std::size_t field_length);
 bool ReloadUnitImageResourcesFromJw209Archive();
 bool ReloadUnitImageResourcesFromJw220Archive();
 bool LoadJw212RuntimeCatalogRecord(const char* archive_name, u32 record_index,

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstdarg>
 #include <cstdio>
+#include <cstring>
 
 namespace ranker {
 namespace {
@@ -22,6 +23,8 @@ constexpr u32 kInterfaceThemeRecordStride = 8;
 constexpr u32 kUnitDefinitionImageCountOffset = 0x2214;
 constexpr u32 kUnitDefinitionSoundCountOffset = 0x2424;
 constexpr u32 kUnitDefinitionConstructionTimerOffset = 0x18c;
+constexpr std::size_t kUnitDefinitionNameOffset = 0x10c;
+constexpr std::size_t kUnitDefinitionNameBytes = 0x40;
 constexpr u32 kSetupUnitResourcePackVariantBit = 0x20;
 constexpr std::size_t kUnitDefinitionAnimationFrameOffsetTableBase = 0x140c;
 constexpr std::size_t kUnitDefinitionAnimationFrameOffsetTableStride = 0x100;
@@ -37,6 +40,32 @@ AuxiliaryRuntimeCatalogState g_jw212_catalog;
 AuxiliaryRuntimeCatalogState g_jw211_catalog;
 GameplaySessionLoadState g_gameplay_session_load;
 GameplaySessionExportState g_gameplay_session_export;
+
+bool append_bounded_unit_definition_name(std::vector<u8>& bytes,
+    const char* suffix, std::size_t suffix_length) {
+    if (suffix == nullptr ||
+        bytes.size() < kUnitDefinitionNameOffset + kUnitDefinitionNameBytes) {
+        return false;
+    }
+
+    u8* const name = bytes.data() + kUnitDefinitionNameOffset;
+    std::size_t name_length = 0;
+    while (name_length < kUnitDefinitionNameBytes && name[name_length] != 0) {
+        ++name_length;
+    }
+    if (name_length == kUnitDefinitionNameBytes) {
+        name[kUnitDefinitionNameBytes - 1] = 0;
+        return true;
+    }
+
+    const std::size_t append_length = std::min<std::size_t>(
+        suffix_length, kUnitDefinitionNameBytes - name_length - 1);
+    if (append_length != 0) {
+        std::memcpy(name + name_length, suffix, append_length);
+    }
+    name[name_length + append_length] = 0;
+    return true;
+}
 
 void append_runtime_resource_log(const char* format, ...) {
     FILE* file = std::fopen("Jw2.log", "a");
@@ -1339,10 +1368,9 @@ bool LoadUnitDefinitionResourceCatalog() {
     return true;
 }
 
-bool PatchLoadedUnitDefinitionResourceRecord(u32 unit_type, const u8* bytes,
-    std::size_t byte_count) {
-    if (unit_type >= g_unit_definition_resources.records.size() ||
-        bytes == nullptr || byte_count == 0) {
+bool AppendLoadedUnitDefinitionResourceName(u32 unit_type, const char* suffix,
+    std::size_t suffix_length) {
+    if (unit_type >= g_unit_definition_resources.records.size() || suffix == nullptr) {
         return false;
     }
     if (!g_unit_definition_resources.loaded && !LoadUnitDefinitionResourceCatalog()) {
@@ -1351,12 +1379,28 @@ bool PatchLoadedUnitDefinitionResourceRecord(u32 unit_type, const u8* bytes,
 
     UnitDefinitionResourceRecord& record =
         g_unit_definition_resources.records[unit_type];
-    record.loaded = true;
-    record.source_record_index = unit_type;
-    record.definition_bytes.assign(bytes, bytes + byte_count);
-    g_unit_definition_resources.definition_record_size =
-        static_cast<u32>(std::max<std::size_t>(
-            g_unit_definition_resources.definition_record_size, byte_count));
+    return record.loaded && append_bounded_unit_definition_name(
+        record.definition_bytes, suffix, suffix_length);
+}
+
+bool SetLoadedUnitDefinitionResourceNameField(u32 unit_type, const u8* field,
+    std::size_t field_length) {
+    if (unit_type >= g_unit_definition_resources.records.size() || field == nullptr ||
+        field_length < kUnitDefinitionNameBytes) {
+        return false;
+    }
+    if (!g_unit_definition_resources.loaded && !LoadUnitDefinitionResourceCatalog()) {
+        return false;
+    }
+
+    UnitDefinitionResourceRecord& record =
+        g_unit_definition_resources.records[unit_type];
+    if (!record.loaded || record.definition_bytes.size() <
+            kUnitDefinitionNameOffset + kUnitDefinitionNameBytes) {
+        return false;
+    }
+    std::memcpy(record.definition_bytes.data() + kUnitDefinitionNameOffset,
+        field, kUnitDefinitionNameBytes);
     return true;
 }
 

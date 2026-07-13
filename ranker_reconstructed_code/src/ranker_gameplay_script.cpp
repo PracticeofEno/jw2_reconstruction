@@ -544,12 +544,13 @@ void append_spawn_request(GameplayScriptTriggerState& state, u32 opcode, u32 own
     state.opcode_context.spawn_requests.push_back(request);
 }
 
-void copy_definition_patch_request(GameplayScriptTriggerState& state,
-    u32 type_id, const std::array<u32, 0x155>& command) {
-    GameplayScriptDefinitionPatchRequest request{};
+void append_definition_name_request(GameplayScriptTriggerState& state,
+    u32 type_id, std::string suffix) {
+    GameplayScriptUnitNameAppendRequest request{};
     request.type_id = type_id;
-    request.words = command;
-    state.opcode_context.definition_patch_requests.push_back(request);
+    request.suffix = std::move(suffix);
+    state.opcode_context.unit_name_append_requests.push_back(
+        std::move(request));
 }
 
 u32 trigger_runtime_id(const GameplayScriptTriggerState& state,
@@ -1777,7 +1778,8 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         return true;
     }
     case 0x20:
-        copy_definition_patch_request(state, command[1], command);
+        append_definition_name_request(
+            state, command[1], command_string_from(command, 2));
         return true;
     case 0x21: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);

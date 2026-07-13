@@ -176,9 +176,9 @@ struct GameplayScriptSpawnRequest {
     bool has_area_bounds = false;
 };
 
-struct GameplayScriptDefinitionPatchRequest {
+struct GameplayScriptUnitNameAppendRequest {
     u32 type_id = 0;
-    std::array<u32, 0x155> words{};
+    std::string suffix;
 };
 
 struct GameplayScriptOwnerConditionState {
@@ -236,7 +236,7 @@ struct GameplayScriptOpcodeContext {
     GameplayScriptStrictPlacementCallback find_strict_placement = nullptr;
     void* strict_placement_user = nullptr;
     std::vector<GameplayScriptSpawnRequest> spawn_requests;
-    std::vector<GameplayScriptDefinitionPatchRequest> definition_patch_requests;
+    std::vector<GameplayScriptUnitNameAppendRequest> unit_name_append_requests;
 };
 
 struct GameplayScriptTriggerGroup {

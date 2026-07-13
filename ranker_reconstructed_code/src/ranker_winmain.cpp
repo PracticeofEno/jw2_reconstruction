@@ -283,7 +283,14 @@ std::string startup_platform_ratio_value(
         std::to_string(value) + "/" + std::to_string(std::max<u32>(total, 1));
 }
 
+std::array<std::string, kUnitDefinitionResourceCount>
+    g_gameplay_unit_name_overrides;
+
 std::string startup_unit_name_or_fallback(u32 type_id) {
+    if (type_id < g_gameplay_unit_name_overrides.size() &&
+        !g_gameplay_unit_name_overrides[type_id].empty()) {
+        return g_gameplay_unit_name_overrides[type_id];
+    }
     std::string_view name =
         GetIndexedTextTableRow(StartupAuxiliaryIndexedTextTable(0), type_id);
     if (!name.empty()) {
@@ -981,8 +988,8 @@ struct RuntimeGlobals {
     std::vector<u32> gameplay_serialized_free_unit_slots;
     u32 gameplay_highest_scenario_unit_slot = 0;
     std::vector<GameplayScriptSpawnRequest> gameplay_script_unhandled_spawn_requests;
-    std::vector<GameplayScriptDefinitionPatchRequest>
-        gameplay_script_last_definition_patch_requests;
+    std::vector<GameplayScriptUnitNameAppendRequest>
+        gameplay_script_last_unit_name_append_requests;
     GameplayEndConditionState gameplay_end_condition_state;
     bool gameplay_result_screen_rendered = false;
     bool gameplay_leave_reset_processed = false;
@@ -8226,7 +8233,10 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     g_runtime.gameplay_script_hud_text.clear();
     g_runtime.gameplay_script_spawned_units.clear();
     g_runtime.gameplay_script_unhandled_spawn_requests.clear();
-    g_runtime.gameplay_script_last_definition_patch_requests.clear();
+    g_runtime.gameplay_script_last_unit_name_append_requests.clear();
+    for (std::string& name : g_gameplay_unit_name_overrides) {
+        name.clear();
+    }
     g_runtime.gameplay_end_condition_units.clear();
     g_runtime.gameplay_script_triggers_loaded = false;
     g_runtime.gameplay_script_scenario_objects_loaded = false;
@@ -23460,54 +23470,86 @@ void consume_default_gameplay_script_spawn_requests(
     opcode.spawn_requests.clear();
 }
 
-void apply_default_gameplay_script_definition_patch(
-    const GameplayScriptDefinitionPatchRequest& request) {
-    if (request.type_id >= kGameSessionUnitTypeCount) {
-        return;
+std::string default_gameplay_script_definition_name(
+    const std::vector<u8>& bytes) {
+    constexpr std::size_t kDefinitionNameOffset = 0x10c;
+    constexpr std::size_t kDefinitionNameBytes = 0x40;
+    if (bytes.size() < kDefinitionNameOffset + kDefinitionNameBytes) {
+        return {};
     }
-    if (g_runtime.active_session_definitions.unit_records.size() <= request.type_id) {
-        g_runtime.active_session_definitions.unit_records.resize(request.type_id + 1);
+    const char* const name = reinterpret_cast<const char*>(
+        bytes.data() + kDefinitionNameOffset);
+    std::size_t length = 0;
+    while (length < kDefinitionNameBytes && name[length] != 0) {
+        ++length;
     }
-
-    RuntimeDefinitionRecord& record =
-        g_runtime.active_session_definitions.unit_records[request.type_id];
-    record.bytes.assign(request.words.size() * sizeof(u32), 0);
-    for (std::size_t index = 0; index < request.words.size(); ++index) {
-        const u32 word = request.words[index];
-        const std::size_t offset = index * sizeof(u32);
-        record.bytes[offset + 0] = static_cast<u8>(word & 0xffu);
-        record.bytes[offset + 1] = static_cast<u8>((word >> 8) & 0xffu);
-        record.bytes[offset + 2] = static_cast<u8>((word >> 16) & 0xffu);
-        record.bytes[offset + 3] = static_cast<u8>((word >> 24) & 0xffu);
-    }
-
-    PatchLoadedUnitDefinitionResourceRecord(
-        request.type_id, record.bytes.data(), record.bytes.size());
-    if (request.type_id < g_runtime.unit_definition_cache_valid.size()) {
-        g_runtime.unit_definition_cache_valid[request.type_id] = false;
-    }
-    if (UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
-        lifecycle != nullptr && lifecycle->movement != nullptr) {
-        for (UnitMovementUnit* unit : lifecycle->movement->active_units) {
-            if (unit != nullptr && unit->active && unit->type_id == request.type_id) {
-                refresh_default_unit_definition_runtime_fields(*unit);
-            }
-        }
-    }
-    rebuild_default_unit_reference_tables_from_catalog();
-    configure_default_gameplay_render_unit_sprite_definitions();
-    sync_default_gameplay_tooltip_unit_definitions();
+    return std::string(name, length);
 }
 
-void consume_default_gameplay_script_definition_patch_requests(
-    GameplayScriptOpcodeContext& opcode) {
-    g_runtime.gameplay_script_last_definition_patch_requests =
-        opcode.definition_patch_requests;
-    for (const GameplayScriptDefinitionPatchRequest& request :
-         g_runtime.gameplay_script_last_definition_patch_requests) {
-        apply_default_gameplay_script_definition_patch(request);
+bool apply_default_gameplay_script_definition_name_append(
+    const GameplayScriptUnitNameAppendRequest& request) {
+    if (request.type_id >= kGameSessionUnitTypeCount) {
+        return false;
     }
-    opcode.definition_patch_requests.clear();
+
+    constexpr std::size_t kDefinitionNameOffset = 0x10c;
+    constexpr std::size_t kDefinitionNameBytes = 0x40;
+    if (request.type_id <
+        g_runtime.active_session_definitions.unit_records.size()) {
+        RuntimeDefinitionRecord& record =
+            g_runtime.active_session_definitions.unit_records[request.type_id];
+        if (record.bytes.size() >= kDefinitionNameOffset + kDefinitionNameBytes) {
+            u8* const name = record.bytes.data() + kDefinitionNameOffset;
+            std::size_t name_length = 0;
+            while (name_length < kDefinitionNameBytes && name[name_length] != 0) {
+                ++name_length;
+            }
+            if (name_length == kDefinitionNameBytes) {
+                name[kDefinitionNameBytes - 1] = 0;
+            } else {
+                const std::size_t append_length = std::min<std::size_t>(
+                    request.suffix.size(), kDefinitionNameBytes - name_length - 1);
+                if (append_length != 0) {
+                    std::memcpy(
+                        name + name_length, request.suffix.data(), append_length);
+                }
+                name[name_length + append_length] = 0;
+            }
+            SetLoadedUnitDefinitionResourceNameField(
+                request.type_id, name, kDefinitionNameBytes);
+            g_gameplay_unit_name_overrides[request.type_id] =
+                default_gameplay_script_definition_name(record.bytes);
+            return true;
+        }
+    }
+
+    if (!AppendLoadedUnitDefinitionResourceName(
+            request.type_id, request.suffix.data(), request.suffix.size())) {
+        return false;
+    }
+    const UnitDefinitionResourceCatalogState& catalog =
+        unit_definition_resource_catalog_state();
+    g_gameplay_unit_name_overrides[request.type_id] =
+        default_gameplay_script_definition_name(
+            catalog.records[request.type_id].definition_bytes);
+    return true;
+}
+
+void consume_default_gameplay_script_definition_name_append_requests(
+    GameplayScriptOpcodeContext& opcode) {
+    g_runtime.gameplay_script_last_unit_name_append_requests =
+        opcode.unit_name_append_requests;
+    bool name_changed = false;
+    for (const GameplayScriptUnitNameAppendRequest& request :
+         g_runtime.gameplay_script_last_unit_name_append_requests) {
+        name_changed =
+            apply_default_gameplay_script_definition_name_append(request) ||
+            name_changed;
+    }
+    opcode.unit_name_append_requests.clear();
+    if (name_changed) {
+        sync_default_gameplay_tooltip_unit_definitions();
+    }
 }
 
 void consume_default_gameplay_script_opcode_context(
@@ -23524,7 +23566,7 @@ void consume_default_gameplay_script_opcode_context(
     consume_default_gameplay_script_stage_result(opcode);
     publish_default_gameplay_script_hud_text(opcode, state);
     consume_default_gameplay_script_spawn_requests(opcode);
-    consume_default_gameplay_script_definition_patch_requests(opcode);
+    consume_default_gameplay_script_definition_name_append_requests(opcode);
 }
 
 void run_default_gameplay_script_phase(GameplayLoopState& state, u32 phase) {
