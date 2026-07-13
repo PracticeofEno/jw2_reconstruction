@@ -16145,6 +16145,7 @@ void select_default_ui_overlay_unit_only(UiOverlayState& overlay,
     overlay.selected_unit_count = 1;
     RecountGameplaySelectedUnits(overlay);
     BuildSelectedUnitCommandPanel(overlay);
+    NotifyPrimaryGameplayUnitSelected(overlay);
     overlay.pending_local_command = true;
 }
 
@@ -16171,6 +16172,7 @@ void select_default_ui_overlay_same_type_units(UiOverlayState& overlay,
     overlay.selected_unit_count = static_cast<u32>(overlay.selected_unit_ids.size());
     RecountGameplaySelectedUnits(overlay);
     BuildSelectedUnitCommandPanel(overlay);
+    NotifyPrimaryGameplayUnitSelected(overlay);
     overlay.pending_local_command = true;
 }
 
@@ -16215,6 +16217,7 @@ void select_default_ui_overlay_side_slot_same_type_units(
     overlay.selected_unit_count = static_cast<u32>(overlay.selected_unit_ids.size());
     RecountGameplaySelectedUnits(overlay);
     BuildSelectedUnitCommandPanel(overlay);
+    NotifyPrimaryGameplayUnitSelected(overlay);
     overlay.pending_local_command = true;
 }
 

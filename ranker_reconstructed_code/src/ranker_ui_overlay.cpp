@@ -1634,11 +1634,11 @@ void clear_primary_selection_command_state(UiOverlayState& state) {
     state.command_button_press_active = false;
 }
 
-void select_unit(UiOverlayState& state, const UiOverlayMinimapUnit& unit,
+bool select_unit(UiOverlayState& state, const UiOverlayMinimapUnit& unit,
     bool make_primary = true) {
     if (unit_already_selected(state, unit.unit_id) ||
         state.selected_unit_ids.size() >= state.max_selected_unit_count) {
-        return;
+        return false;
     }
     state.selected_unit_ids.push_back(unit.unit_id);
     if (make_primary || state.selected_unit_id == 0) {
@@ -1647,9 +1647,7 @@ void select_unit(UiOverlayState& state, const UiOverlayMinimapUnit& unit,
         state.selected_unit_owner = unit.owner_id;
     }
     state.selected_unit_count = static_cast<u32>(state.selected_unit_ids.size());
-    if (state.callbacks.on_unit_selected != nullptr) {
-        state.callbacks.on_unit_selected(state, unit);
-    }
+    return true;
 }
 
 void deselect_unit(UiOverlayState& state, u32 unit_id) {
@@ -3939,11 +3937,7 @@ void SelectUnitsInControlGroup(UiOverlayState& state, u32 group) {
     }
     state.selected_unit_ids = state.control_groups[group].unit_ids;
     RecountGameplaySelectedUnits(state);
-    if (const UiOverlayMinimapUnit* unit = find_unit_by_id(state, state.selected_unit_id)) {
-        if (state.callbacks.on_unit_selected != nullptr) {
-            state.callbacks.on_unit_selected(state, *unit);
-        }
-    }
+    NotifyPrimaryGameplayUnitSelected(state);
 }
 
 void CycleSelectedControlGroup(UiOverlayState& state) {
@@ -4807,6 +4801,16 @@ void RecountGameplaySelectedUnits(UiOverlayState& state) {
     }
 }
 
+void NotifyPrimaryGameplayUnitSelected(UiOverlayState& state) {
+    if (state.selected_unit_id == 0 || state.callbacks.on_unit_selected == nullptr) {
+        return;
+    }
+    if (const UiOverlayMinimapUnit* unit =
+            find_unit_by_id(state, state.selected_unit_id)) {
+        state.callbacks.on_unit_selected(state, *unit);
+    }
+}
+
 bool ClearSelectedUnitMembershipFlagAndRefreshSelection(UiOverlayState& state,
     u32 unit_id) {
     const bool was_primary = state.selected_unit_id == unit_id;
@@ -4923,12 +4927,16 @@ const UiOverlayMinimapUnit* first_visible_unit_in_selection_rect_by_priority(
 bool select_clicked_unit_by_original_priority(UiOverlayState& state) {
     if (const UiOverlayMinimapUnit* local =
             best_local_small_unit_in_selection_rect(state)) {
-        select_unit(state, *local, true);
+        if (select_unit(state, *local, true)) {
+            NotifyPrimaryGameplayUnitSelected(state);
+        }
         return true;
     }
     if (const UiOverlayMinimapUnit* unit =
             first_visible_unit_in_selection_rect_by_priority(state)) {
-        select_unit(state, *unit, true);
+        if (select_unit(state, *unit, true)) {
+            NotifyPrimaryGameplayUnitSelected(state);
+        }
         return true;
     }
     return false;
@@ -4950,28 +4958,30 @@ void SelectLocalSameTypeUnitsFromDragRectangle(UiOverlayState& state) {
 
     const u32 reference_type = primary->type_id;
     const u32 reference_flags = primary->runtime_flags & 0x31u;
-    select_unit(state, *primary, true);
-    if (state.selected_unit_ids.size() >= state.max_selected_unit_count) {
-        return;
-    }
+    bool selection_changed = select_unit(state, *primary, true);
 
-    UiOverlayRect viewport{};
-    viewport.x = state.camera_x;
-    viewport.y = state.camera_y;
-    viewport.width = std::max<u32>(1, state.screen_width);
-    viewport.height = std::max<u32>(1, state.screen_height);
-    for (const UiOverlayMinimapUnit& unit : state.minimap_units) {
-        if (unit.unit_id == primary->unit_id ||
-            !unit_is_local_small_selection_candidate(state, unit) ||
-            unit.type_id != reference_type ||
-            (unit.runtime_flags & 0x31u) != reference_flags ||
-            !rects_intersect(viewport, unit_world_rect(unit))) {
-            continue;
+    if (state.selected_unit_ids.size() < state.max_selected_unit_count) {
+        UiOverlayRect viewport{};
+        viewport.x = state.camera_x;
+        viewport.y = state.camera_y;
+        viewport.width = std::max<u32>(1, state.screen_width);
+        viewport.height = std::max<u32>(1, state.screen_height);
+        for (const UiOverlayMinimapUnit& unit : state.minimap_units) {
+            if (unit.unit_id == primary->unit_id ||
+                !unit_is_local_small_selection_candidate(state, unit) ||
+                unit.type_id != reference_type ||
+                (unit.runtime_flags & 0x31u) != reference_flags ||
+                !rects_intersect(viewport, unit_world_rect(unit))) {
+                continue;
+            }
+            selection_changed = select_unit(state, unit, false) || selection_changed;
+            if (state.selected_unit_ids.size() >= state.max_selected_unit_count) {
+                break;
+            }
         }
-        select_unit(state, unit, false);
-        if (state.selected_unit_ids.size() >= state.max_selected_unit_count) {
-            break;
-        }
+    }
+    if (selection_changed) {
+        NotifyPrimaryGameplayUnitSelected(state);
     }
 }
 
@@ -5007,7 +5017,9 @@ void ResolveGameplayClickSelection(UiOverlayState& state) {
         } else if (const UiOverlayMinimapUnit* unit =
                        find_unit_by_id(state, state.hover_context.unit_id)) {
             if (unit_is_local_small_selection_candidate(state, *unit)) {
-                select_unit(state, *unit, false);
+                if (select_unit(state, *unit, false)) {
+                    NotifyPrimaryGameplayUnitSelected(state);
+                }
             }
         }
     } else {
@@ -5037,6 +5049,7 @@ void AddUnitsInDragRectangleToSelection(UiOverlayState& state) {
         }
     }
 
+    bool selection_changed = false;
     for (const UiOverlayMinimapUnit& unit : state.minimap_units) {
         if (!unit_is_local_small_selection_candidate(state, unit)) {
             continue;
@@ -5045,13 +5058,16 @@ void AddUnitsInDragRectangleToSelection(UiOverlayState& state) {
             continue;
         }
         if (rects_intersect(selection, unit_world_rect(unit))) {
-            select_unit(state, unit);
+            selection_changed = select_unit(state, unit, false) || selection_changed;
         }
         if (state.selected_unit_ids.size() >= state.max_selected_unit_count) {
             break;
         }
     }
     RecountGameplaySelectedUnits(state);
+    if (selection_changed) {
+        NotifyPrimaryGameplayUnitSelected(state);
+    }
 }
 
 void AddLocalUnitsInDragRectangleWithModifiers(UiOverlayState& state) {

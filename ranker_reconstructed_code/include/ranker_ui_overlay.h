@@ -784,6 +784,7 @@ void DispatchUiOverlayCommandAction(UiOverlayState& state, u32 item_id);
 void DispatchUiOverlayHeldCommandAction(UiOverlayState& state, u32 item_id);
 void ResetGameplaySelectionState(UiOverlayState& state);
 void RecountGameplaySelectedUnits(UiOverlayState& state);
+void NotifyPrimaryGameplayUnitSelected(UiOverlayState& state);
 bool ClearSelectedUnitMembershipFlagAndRefreshSelection(UiOverlayState& state,
     u32 unit_id);
 UiOverlaySelectionRectScanResult ScanVisibleUnitsInSelectionRect(
