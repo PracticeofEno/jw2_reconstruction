@@ -79,6 +79,21 @@ bool unit_matches_owner(const GameplayEndConditionState& state, u32 owner,
     return false;
 }
 
+bool active_list_has_normal_defeat_elite(
+    const GameplayEndConditionState& state, u32 owner) {
+    for (const GameplayEndUnit* unit : state.active_units) {
+        // CheckNoLocalEliteUnitDefeat (0x004d561b) deliberately treats a
+        // dead-flagged elite as present until the simulation list moves it
+        // out of the active chain.  Scenario presence checks below use the
+        // separate live-unit matcher.
+        if (unit != nullptr && unit_owned_by(*unit, owner) &&
+            victory_elite_unit_type(unit->type_id)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool unit_matches_local(const GameplayEndConditionState& state,
     bool (*type_predicate)(u32), bool exclude_special_elite) {
     return unit_matches_owner(state, local_slot_for_defeat(state), type_predicate,
@@ -239,8 +254,8 @@ void CheckLocalDefeatCondition(GameplayEndConditionState& state) {
 }
 
 void CheckNoLocalEliteUnitDefeat(GameplayEndConditionState& state) {
-    if (!unit_matches_owner(state, normal_defeat_owner_slot(state),
-            victory_elite_unit_type, true)) {
+    if (!active_list_has_normal_defeat_elite(
+            state, normal_defeat_owner_slot(state))) {
         mark_game_end(state, kGameplayEndResultDefeat);
     }
 }
