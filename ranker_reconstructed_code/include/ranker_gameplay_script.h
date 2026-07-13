@@ -255,6 +255,8 @@ struct GameplayScriptOpcodeContext {
     // DAT_00d5fe56 prevents the synchronous camera-transition renderer from
     // recursively starting the same transition through phase-one scripts.
     bool camera_transition_active = false;
+    // Opcode 0x00 uses the adjacent but independent DAT_00d5fe54 guard.
+    bool area_camera_transition_active = false;
     bool selection_request_active = false;
     u32 selected_object_index = 0;
     // Scenario opcodes 0x5d/0x60 replace the complete UI selection with the

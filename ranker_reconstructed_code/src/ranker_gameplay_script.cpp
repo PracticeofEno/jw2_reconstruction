@@ -1836,11 +1836,30 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     auto& command = trigger.command_words;
 
     switch (command[0]) {
-    case 0x00:
-        state.opcode_context.camera_request_active = true;
-        state.opcode_context.camera_x = static_cast<i32>(command[1]);
-        state.opcode_context.camera_y = static_cast<i32>(command[2]);
+    case 0x00: {
+        const GameplayScriptArea* area = area_state(state, command[1]);
+        if (area == nullptr) {
+            return true;
+        }
+        if (state.opcode_context.area_camera_transition_active) {
+            trigger.blocked = 0;
+            return true;
+        }
+        state.opcode_context.area_camera_transition_active = true;
+        const i32 target_x = area_translation_center_x(*area);
+        const i32 target_y = area_translation_center_y(*area);
+        if (state.opcode_context.transition_camera_immediate != nullptr) {
+            state.opcode_context.transition_camera_immediate(target_x, target_y,
+                state.opcode_context.transition_camera_immediate_user);
+        }
+        else {
+            state.opcode_context.camera_request_active = true;
+            state.opcode_context.camera_x = target_x;
+            state.opcode_context.camera_y = target_y;
+        }
+        state.opcode_context.area_camera_transition_active = false;
         return true;
+    }
     case 0x01: {
         const std::string text = command_string_from(command, 1);
         GameplayScriptTextCueCommand cue{};
@@ -1911,8 +1930,15 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         }
         for (u32 index : active_object_indices(state)) {
             GameplayScriptTriggerObjectState* object = object_state(state, index);
-            if (object_alive(object) && area_contains_object(*area, *object)) {
-                set_script_object_owner(*object, command[1]);
+            if (object == nullptr ||
+                (gameplay_script_object_runtime_flags(*object) & 4u) != 0 ||
+                !area_contains_live_object(*area, *object)) {
+                continue;
+            }
+            set_script_object_owner(*object, command[1]);
+            if (object->unit != nullptr && state.opcode_context.lifecycle != nullptr) {
+                SetUnitFootprintOccupancyBits(
+                    *state.opcode_context.lifecycle, *object->unit);
             }
         }
         rebuild_owner_unit_type_counts(state);
@@ -1937,11 +1963,13 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         const GameplayScriptArea* area = area_state(state, command[3]);
         GameplayScriptTriggerObjectState* object =
-            group != nullptr && group->reference_count != 0 ?
+            group != nullptr &&
+                signed_i32_from_wrapped_u32(group->reference_count) > 0 ?
                 first_group_slot_object(state, *group) : nullptr;
         if (object != nullptr && object->unit != nullptr && area != nullptr) {
             SetOrQueueUnitAlignedPointCommand06(object->unit, command[2],
-                area_center_x(*area), area_center_y(*area), true);
+                area_translation_center_x(*area),
+                area_translation_center_y(*area), true);
         }
         return true;
     }
@@ -1955,7 +1983,9 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         const i32 y = area_center_y(*target_area);
         for (u32 index : active_object_indices(state)) {
             GameplayScriptTriggerObjectState* object = object_state(state, index);
-            if (object_alive(object) && area_contains_object(*source_area, *object)) {
+            if (object != nullptr &&
+                (gameplay_script_object_runtime_flags(*object) & 4u) == 0 &&
+                area_contains_live_object(*source_area, *object)) {
                 relocate_script_object_strict(state, *object, x, y);
             }
         }
@@ -1987,7 +2017,8 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x0c: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         GameplayScriptTriggerObjectState* object =
-            group != nullptr && group->reference_count != 0 ?
+            group != nullptr &&
+                signed_i32_from_wrapped_u32(group->reference_count) > 0 ?
                 first_group_slot_object(state, *group) : nullptr;
         if (object != nullptr && object->unit != nullptr) {
             SetOrQueueUnitCommand10(object->unit, command[2], true);
