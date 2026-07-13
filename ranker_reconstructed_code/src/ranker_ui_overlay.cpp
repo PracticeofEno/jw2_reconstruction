@@ -4468,13 +4468,11 @@ void HandleGameplayPointerActionFrame(UiOverlayState& state) {
                 const bool harvest_point = state.hover_context.kind == 0x0cu &&
                     (state.selected_unit_command_bit_mask & (1u << 7)) != 0;
                 const u32 action_id = harvest_point ? 0x07u : 0x04u;
-                // DAT_00862418 carries the original terrain selector in its
-                // packet form: class 0x0c occupies bits 8..15.  Subtype 02's
-                // receiver copies packet +0x18 to the unit command word
-                // without shifting it, so publish 0x0c00 here while retaining
-                // the unshifted hover item for tooltip lookup.
+                // FUN_004e9458 stores both the terrain hover kind and its aux
+                // selector as raw 0x0c.  Action 7 publishes that selector at
+                // subtype-02 +0x18 without shifting it.
                 const u32 contextual_target = harvest_point
-                    ? (state.hover_context.item_id << 8) : 0u;
+                    ? state.hover_context.item_id : 0u;
                 append_command_action(state, 0xaau + action_id,
                     contextual_target,
                     kCommandActionPlacement);
