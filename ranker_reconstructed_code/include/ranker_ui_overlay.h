@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ranker_gameplay_context_cursor.h"
 #include "ranker_map_brush.h"
 #include "ranker_resource_store.h"
 #include "ranker_types.h"
@@ -540,6 +541,7 @@ struct UiOverlayState {
     u32 last_control_group_frame = 0;
     u32 camera_scroll_ramp = 0;
     u32 camera_scroll_tick_bucket = 0;
+    GameplayContextCursorState context_cursor;
     UiOverlayHoverContext hover_context;
     u32 pointer_state = 0;
     u32 pressed_command_id = 0xffffffffu;

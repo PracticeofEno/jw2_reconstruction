@@ -105,6 +105,7 @@ add_executable(ranker_rebuild WIN32
     src/ranker_gameplay_result_screen.cpp
     src/ranker_gameplay_menu_control.cpp
     src/ranker_gameplay_session_flow.cpp
+    src/ranker_gameplay_context_cursor.cpp
     src/ranker_gameplay_input_actions.cpp
     src/ranker_gameplay_production_actions.cpp
     src/ranker_gameplay_tooltips.cpp

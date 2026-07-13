@@ -17,6 +17,7 @@
 #include "ranker_figs_address_book.h"
 #include "ranker_game_session_tables.h"
 #include "ranker_game_loop.h"
+#include "ranker_gameplay_context_cursor.h"
 #include "ranker_gameplay_end_conditions.h"
 #include "ranker_gameplay_frame_render.h"
 #include "ranker_gameplay_input_actions.h"
@@ -3699,9 +3700,32 @@ void default_gameplay_input_set_cursor_index(GameplayInputActionState& state) {
     ShowGameCursor();
 }
 
-void default_gameplay_input_restore_cursor(GameplayInputActionState&) {
+void default_gameplay_input_restore_cursor(GameplayInputActionState& input) {
     UiOverlayState& overlay = ui_overlay_state();
     UpdateGameplayHoverContextAndTooltip(overlay);
+
+    GameplayContextCursorInput cursor_input{};
+    cursor_input.current_tick_ms = overlay.current_tick_ms;
+    cursor_input.hover_kind = overlay.hover_context.kind;
+    cursor_input.current_mode = overlay.placement_mode;
+    cursor_input.selected_unit_present =
+        overlay.selected_unit_count != 0u && overlay.selected_unit_id != 0u;
+    cursor_input.selected_unit_local =
+        overlay.selected_unit_owner == overlay.local_player_slot;
+    cursor_input.selected_unit_type = overlay.selected_unit_type;
+    cursor_input.selected_unit_command_bit_mask =
+        overlay.selected_unit_command_bit_mask;
+
+    const GameplayContextCursorResolution resolution =
+        ResolveGameplayContextCursor(overlay.context_cursor, cursor_input);
+    if (resolution.applied) {
+        input.cursor_index = resolution.cursor_index;
+        gameplay_loop_state().current_cursor_index = resolution.cursor_index;
+        if (g_runtime.directx_initialized) {
+            SetGameCursorIndex(resolution.cursor_index);
+            ShowGameCursor();
+        }
+    }
     publish_default_ui_overlay_camera(overlay);
 }
 
