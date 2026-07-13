@@ -331,16 +331,10 @@ void ApplyStartupUnitEquipmentText(UnitEquipmentCatalog& catalog) {
 }
 
 UnitEquipmentCategory category_from_u32(u32 value) {
-    if (value == static_cast<u32>(UnitEquipmentCategory::Primary)) {
-        return UnitEquipmentCategory::Primary;
-    }
-    if (value == static_cast<u32>(UnitEquipmentCategory::Secondary)) {
-        return UnitEquipmentCategory::Secondary;
-    }
-    if (value == static_cast<u32>(UnitEquipmentCategory::Amount)) {
-        return UnitEquipmentCategory::Amount;
-    }
-    return UnitEquipmentCategory::Generic;
+    // JW2_10 +0x84 is a raw DWORD.  FUN_00411350 performs the category > 3
+    // rejection itself; normalizing unknown values to Generic would bypass
+    // that unsigned boundary and consume malformed effects.
+    return static_cast<UnitEquipmentCategory>(value);
 }
 
 bool type_filter_contains(const UnitEquipmentEffectDefinition& effect, u32 type_id) {
