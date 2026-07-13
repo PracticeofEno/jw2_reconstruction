@@ -726,8 +726,12 @@ bool try_collect_map_effect_at_command_point(UnitCommandContext& context,
 
 bool try_start_idle_map_effect_interaction(UnitCommandContext& context,
     UnitMovementUnit& unit) {
+    // Original ProcessUnitIdleAcquireCommand (0x004c8fd9) branches on raw
+    // unit +0x0c bit 31 before its nearby MapEffect scan.  That word maps to
+    // area_marker_flags; pickup capability bit 2 remains at raw +0x58
+    // (type_flags).
     if (context.map_effects == nullptr || context.equipment_catalog == nullptr ||
-        (unit.type_flags & 0x80000000u) == 0 ||
+        (unit.area_marker_flags & 0x80000000u) == 0 ||
         (unit.type_flags & kUnitEquipmentPickupEnabledFlag) == 0) {
         return false;
     }
