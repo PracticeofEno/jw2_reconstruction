@@ -2596,6 +2596,26 @@ void HandleUnitRuntimeDispatchTick(UnitCommandContext& context, UnitMovementUnit
     DispatchExtendedUnitRuntimeCommandState(context, unit);
 }
 
+namespace {
+
+void HandleLowUnitCompletionAnnouncementTimer(UnitCommandContext& context,
+    UnitMovementUnit& unit) {
+    // The low-type dispatch entry at 0x004cb195 only advances the production
+    // order once.  Unlike the high-type 0x4e entry, it does not advance the
+    // visual timer, publish the completion announcement, or redispatch the
+    // command popped from the deferred queue in the same simulation tick.
+    const bool completed =
+        context.callbacks.advance_completion_announcement != nullptr ?
+        context.callbacks.advance_completion_announcement(context, unit) : true;
+    if (!completed) {
+        return;
+    }
+
+    PopDeferredUnitCommandOrReturnIdle(context, unit);
+}
+
+} // namespace
+
 void DispatchUnitRuntimeCommandState(UnitCommandContext& context,
     UnitMovementUnit& unit) {
     // The original dispatch table is indexed by the raw low-24-bit command
@@ -2766,7 +2786,7 @@ void DispatchUnitRuntimeCommandState(UnitCommandContext& context,
         StartUnitCompletionAnnouncementCommand(context, unit);
         return;
     case kUnitStateCompletionAnnouncementTimer:
-        HandleUnitCompletionAnnouncementTimer(context, unit);
+        HandleLowUnitCompletionAnnouncementTimer(context, unit);
         return;
     case kUnitStateReservedTileStart:
         StartReservedTileWorkCommand(context, unit);
