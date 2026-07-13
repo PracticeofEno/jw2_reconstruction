@@ -1023,9 +1023,11 @@ void HandleUnitRemovalAccounting(UnitLifecycleContext& context, UnitMovementUnit
     }
     if (has_original_owner_counter_slot(unit.owner_id)) {
         if (is_building_type(unit.type_id)) {
-            --context.owner_building_active_count[unit.owner_id];
+            if (context.owner_building_active_count[unit.owner_id] != 0) {
+                --context.owner_building_active_count[unit.owner_id];
+            }
         }
-        else {
+        else if (context.owner_unit_active_count[unit.owner_id] != 0) {
             --context.owner_unit_active_count[unit.owner_id];
         }
     }

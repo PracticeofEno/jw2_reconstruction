@@ -8400,6 +8400,25 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     append_startup_log("start-slots: instantiate script scenario units ok active=%zu spawned=%zu",
         g_runtime.gameplay_movement_context.active_units.size(),
         g_runtime.gameplay_script_spawned_units.size());
+    // The original imports record 7 into the live unit pool before
+    // FUN_00426770.  Our archive decoder materializes those objects later, so
+    // replay just the unit portion now: normal sessions remove owners 0..7
+    // and clear only six generic slots on neutral survivors; mode 5 preserves
+    // every survivor byte except disabled-player removal.
+    GameplaySessionRuntimeResetState imported_unit_reset{};
+    imported_unit_reset.players = &g_runtime.gameplay_player_slots;
+    imported_unit_reset.lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    imported_unit_reset.session_mode =
+        g_runtime.gameplay_startup_state.session_mode;
+    imported_unit_reset.callbacks.on_unit_reset_or_removed =
+        default_gameplay_session_unit_reset_or_removed;
+    ResetGameplaySessionRuntimeUnits(imported_unit_reset);
+    sync_default_gameplay_session_runtime_views_after_reset();
+    append_startup_log(
+        "start-slots: imported unit reset removed=%lu preserved=%lu active=%zu",
+        static_cast<unsigned long>(imported_unit_reset.units_removed),
+        static_cast<unsigned long>(imported_unit_reset.units_preserved),
+        g_runtime.gameplay_movement_context.active_units.size());
     append_startup_log("start-slots: StartGameplaySessionFromScenarioSlots begin");
     StartGameplaySessionFromScenarioSlots(g_runtime.gameplay_startup_state);
     append_startup_log("start-slots: StartGameplaySessionFromScenarioSlots ok placed=%zu active=%zu",
@@ -22510,7 +22529,6 @@ void initialize_default_gameplay_original_unit_pool_slots() {
             used[unit->runtime_slot_index] = 1;
         }
     }
-
     std::vector<u32> allocation_order;
     allocation_order.reserve(kGameplayScenarioObjectMaxSlots - 1);
     const auto append_available = [&](u32 slot) {
@@ -22520,6 +22538,15 @@ void initialize_default_gameplay_original_unit_pool_slots() {
             allocation_order.push_back(slot);
         }
     };
+
+    // FUN_00426770 moves removed imported player units to the front of the
+    // live free list.  They are the first slots consumed by the subsequently
+    // placed starting units.
+    for (UnitMovementUnit* unit : movement.free_units) {
+        if (unit != nullptr) {
+            append_available(unit->runtime_slot_index);
+        }
+    }
 
     // The serialized-list traversal yields rejected nodes in the same order
     // that the original archive repair path exposes them on its free list.
@@ -22552,11 +22579,33 @@ void initialize_default_gameplay_original_unit_pool_slots() {
             break;
         }
         const u32 slot = allocation_order[allocation_index++];
+        auto existing_free = std::find_if(movement.free_units.begin(),
+            movement.free_units.end(), [&](const UnitMovementUnit* candidate) {
+                return candidate != nullptr &&
+                    candidate->runtime_slot_index == slot;
+            });
+        if (existing_free != movement.free_units.end()) {
+            UnitMovementUnit* replaced = *existing_free;
+            movement.free_units.erase(existing_free);
+            replaced->runtime_slot_index = kInvalidUnitRuntimeSlotIndex;
+            replaced->id = 0;
+            replaced->linked_object_id = 0;
+            replaced->linked_unit = nullptr;
+        }
         used[slot] = 1;
         unit.runtime_slot_index = slot;
         unit.id = slot * kGameplayScenarioObjectStride;
         unit.linked_object_id = unit.id;
         unit.linked_unit = &unit;
+        GameplayScriptTriggerState& script = gameplay_script_trigger_state();
+        if (slot < script.objects.size()) {
+            GameplayScriptTriggerObjectState& object = script.objects[slot];
+            object.unit = &unit;
+            object.object_pointer = &unit;
+            object.scenario_object_index = slot;
+            object.remove_from_triggers = false;
+            object.script_removal_requested = false;
+        }
         append_startup_log(
             "start-slots: original pool slot=%lu offset=%lu type=%lu owner=%lu",
             static_cast<unsigned long>(slot),
@@ -22572,6 +22621,16 @@ void initialize_default_gameplay_original_unit_pool_slots() {
          ++index) {
         const u32 slot = allocation_order[index];
         if (used[slot]) {
+            continue;
+        }
+        const bool already_materialized = std::any_of(
+            movement.free_units.begin(), movement.free_units.end(),
+            [&](const UnitMovementUnit* candidate) {
+                return candidate != nullptr &&
+                    candidate->runtime_slot_index == slot;
+            });
+        if (already_materialized) {
+            used[slot] = 1;
             continue;
         }
         auto free_unit = std::make_unique<UnitMovementUnit>();

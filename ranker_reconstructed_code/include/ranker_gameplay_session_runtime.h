@@ -176,6 +176,7 @@ struct GameplayLeaveState {
 };
 
 void ConfigureGameplayDisplay800x600(GameplayDisplayState& state);
+void ResetGameplaySessionRuntimeUnits(GameplaySessionRuntimeResetState& state);
 void InitializeGameplaySessionRuntimeState(GameplaySessionRuntimeResetState& state);
 void StartGameplaySessionFromScenarioSlots(GameplaySessionStartupState& state);
 void StartGameplaySessionFromScenarioSlotsIncludingObservers(

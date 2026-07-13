@@ -34,29 +34,18 @@ bool owner_slot_is_disabled(const GameplaySessionRuntimeResetState& state,
         slot_state_is_disabled(state.players->slot_states[owner]);
 }
 
-void reset_non_owner_unit_runtime(UnitMovementUnit& unit) {
-    unit.command_state = 0;
-    unit.command_flags = 0;
-    unit.command_bits = {};
-    unit.runtime_flags = 0;
-    unit.previous_command_state = 0;
-    unit.cell_channel_additive_frame = 0;
-    unit.cell_flag40_animation_frame = 0;
-    unit.deferred_command_state = 0;
-    unit.command_entry_lockout_ticks = 0;
-    unit.command_lockout_ticks = 0;
-    unit.animation_timer = 0;
-    unit.ability_id = 0;
-    unit.action_mode = 0;
-    unit.action_mode_gate = 0;
-    unit.distance_check_mode = 0;
-    unit.command_value = 0;
-    unit.pending_command = UnitQueuedCommand{};
-    unit.active_command_payload = UnitQueuedCommand{};
-    unit.deferred_commands = {};
-    unit.deferred_command_count = 0;
-    unit.target = nullptr;
-    unit.linked_unit = nullptr;
+void clear_normal_session_preserved_unit_slots(UnitMovementUnit& unit) {
+    // FUN_00426770 clears exactly the six raw +0x30..+0x44 words of a
+    // preserved owner>=8 unit.  Command state, action_mode (neutral meat
+    // amount), targets and deferred commands all survive this pass.
+    unit.equipment_slots.fill(0);
+    unit.item_slots.fill(0);
+    if (unit.type_id >= 0x60) {
+        // Structures interpret the first raw word as the construction gate
+        // rather than an equipment id; keep that typed alias coherent too.
+        unit.action_mode_gate = 0;
+        unit.under_construction = false;
+    }
 }
 
 void erase_inactive_units(UnitMovementContext& movement) {
@@ -94,7 +83,9 @@ void reset_units_for_session_runtime(GameplaySessionRuntimeResetState& state) {
             ++state.units_removed;
         }
         else {
-            reset_non_owner_unit_runtime(*unit);
+            if (state.session_mode != 5) {
+                clear_normal_session_preserved_unit_slots(*unit);
+            }
             ++state.units_preserved;
         }
 
@@ -410,9 +401,13 @@ void ConfigureGameplayDisplay800x600(GameplayDisplayState& state) {
     }
 }
 
+void ResetGameplaySessionRuntimeUnits(GameplaySessionRuntimeResetState& state) {
+    reset_units_for_session_runtime(state);
+}
+
 void InitializeGameplaySessionRuntimeState(GameplaySessionRuntimeResetState& state) {
     import_session_runtime_tables(state);
-    reset_units_for_session_runtime(state);
+    ResetGameplaySessionRuntimeUnits(state);
 
     if (state.callbacks.reset_effect_runtime != nullptr) {
         state.callbacks.reset_effect_runtime(state);

@@ -815,20 +815,23 @@ void BuildSimpleTooltipFromCurrentText(GameplayTooltipState& state) {
 }
 
 void BuildIndexedValueTooltip(GameplayTooltipState& state) {
-    if (state.current_payload < state.indexed_values.size() &&
-        state.indexed_values[state.current_payload] < 5) {
+    if (state.current_payload < state.indexed_values.size()) {
         const u32 value = state.indexed_values[state.current_payload];
-        const u32 amount = state.current_payload < state.indexed_amounts.size() ?
-            state.indexed_amounts[state.current_payload] :
-            value;
         const GameplayTooltipEquipmentDefinition* equipment =
             find_equipment_definition(state, value);
         if (equipment != nullptr && has_text(equipment->name)) {
             state.current_text = equipment->name;
         }
-        std::ostringstream text;
-        text << state.current_text << '=' << amount;
-        state.current_text = text.str();
+        // FUN_004df316 resolves the catalog name for every map-effect id, but
+        // only the four resource kinds append their live repeat count.
+        if (value < 5) {
+            const u32 amount =
+                state.current_payload < state.indexed_amounts.size() ?
+                    state.indexed_amounts[state.current_payload] : value;
+            std::ostringstream text;
+            text << state.current_text << '=' << amount;
+            state.current_text = text.str();
+        }
     }
     DrawGameplayTooltipTextBox(state);
 }
