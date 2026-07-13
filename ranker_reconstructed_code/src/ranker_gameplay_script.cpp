@@ -356,9 +356,19 @@ u32 group_dead_count(const GameplayScriptTriggerState& state,
     return count;
 }
 
-bool group_any_alive(const GameplayScriptTriggerState& state,
+bool group_all_dead(const GameplayScriptTriggerState& state,
     const GameplayScriptTriggerGroup& group) {
-    return group_alive_count(state, group) != 0;
+    const u32 limit = std::min<u32>(
+        group.reference_count, kGameplayScriptTriggerReferencesPerGroup);
+    for (u32 slot = 0; slot < limit; ++slot) {
+        const u32 object_index = group.object_indices[slot];
+        const GameplayScriptTriggerObjectState* object =
+            object_state(state, object_index);
+        if (object != nullptr && (object->flags & 4u) == 0) {
+            return false;
+        }
+    }
+    return true;
 }
 
 const GameplayScriptTriggerObjectState* first_group_slot_object(
@@ -1187,7 +1197,7 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
     }
     case 0x11: {
         const GameplayScriptTriggerGroup* group = group_state(state, words[1]);
-        return group != nullptr && group_any_alive(state, *group);
+        return group != nullptr && group_all_dead(state, *group);
     }
     case 0x12: {
         const GameplayScriptTriggerGroup* group = group_state(state, words[1]);
