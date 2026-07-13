@@ -1647,7 +1647,9 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         for (u32 i = 0; i < state.opcode_context.copied_owner_table_a.size(); ++i) {
             state.opcode_context.copied_owner_table_a[i] = command[1 + i];
             state.opcode_context.copied_owner_table_b[i] = command[9 + i];
+            state.condition_context.owners[i].blocked_relation_mask = command[1 + i];
         }
+        state.opcode_context.copied_owner_tables_dirty = true;
         return true;
     case 0x0c: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);

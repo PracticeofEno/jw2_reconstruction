@@ -232,6 +232,7 @@ struct GameplayScriptOpcodeContext {
     i32 resource_hud_start_y = 10;
     std::array<u32, kGameplayScriptCopiedOwnerTableWords> copied_owner_table_a{};
     std::array<u32, kGameplayScriptCopiedOwnerTableWords> copied_owner_table_b{};
+    bool copied_owner_tables_dirty = false;
     std::array<u8, kGameplayScriptOwnerCount> owner_script_flags{};
     std::array<u32, kGameplayScriptOwnerCount> owner_external_values{};
     std::array<bool, kGameplayScriptOwnerCount> owner_resource_dirty{};

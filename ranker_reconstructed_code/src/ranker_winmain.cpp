@@ -23614,6 +23614,29 @@ void consume_default_gameplay_script_owner_resource_mutations(
     }
 }
 
+void consume_default_gameplay_script_owner_mask_tables(
+    GameplayScriptTriggerState& script) {
+    GameplayScriptOpcodeContext& opcode = script.opcode_context;
+    if (!opcode.copied_owner_tables_dirty) {
+        return;
+    }
+
+    PlayerSlotRuntimeState& players = g_runtime.gameplay_player_slots;
+    for (u32 owner = 0;
+         owner < kGameplayScriptCopiedOwnerTableWords &&
+         owner < players.owner_relation_masks.size() &&
+         owner < players.owner_visibility_masks.size();
+         ++owner) {
+        // Script opcode 0x0b overwrites both original eight-entry globals.
+        // These are assignments, not incremental alliance/visibility updates.
+        players.owner_relation_masks[owner] =
+            opcode.copied_owner_table_a[owner];
+        players.owner_visibility_masks[owner] =
+            opcode.copied_owner_table_b[owner];
+    }
+    opcode.copied_owner_tables_dirty = false;
+}
+
 void consume_default_gameplay_script_opcode_context(
     GameplayScriptTriggerState& script, GameplayLoopState& state) {
     GameplayScriptOpcodeContext& opcode = script.opcode_context;
@@ -23624,6 +23647,7 @@ void consume_default_gameplay_script_opcode_context(
     g_runtime.gameplay_player_slots.rotation_countdown_decrements =
         opcode.game_clock_decrements;
     gameplay_modal_ui_state().scenario_message_text = opcode.scenario_message_text;
+    consume_default_gameplay_script_owner_mask_tables(script);
     consume_default_gameplay_script_owner_resource_mutations(script);
     consume_default_gameplay_script_camera_request(opcode);
     consume_default_gameplay_script_selection_request(script);
