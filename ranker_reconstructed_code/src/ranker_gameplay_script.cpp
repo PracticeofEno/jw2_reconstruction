@@ -393,6 +393,13 @@ GameplayScriptTriggerObjectState* first_alive_group_object(
     return nullptr;
 }
 
+GameplayScriptTriggerObjectState* first_group_slot_object(
+    GameplayScriptTriggerState& state, const GameplayScriptTriggerGroup& group) {
+    // Several command opcodes use the raw first pointer, even when that unit
+    // is already dead.  They do not search forward for the first live entry.
+    return object_state(state, group.object_indices[0]);
+}
+
 u32 count_group_objects_in_area(const GameplayScriptTriggerState& state,
     const GameplayScriptTriggerGroup& group, const GameplayScriptArea& area) {
     u32 count = 0;
@@ -1455,7 +1462,8 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         const GameplayScriptArea* area = area_state(state, command[3]);
         GameplayScriptTriggerObjectState* object =
-            group != nullptr ? first_alive_group_object(state, *group) : nullptr;
+            group != nullptr && group->reference_count != 0 ?
+                first_group_slot_object(state, *group) : nullptr;
         if (object != nullptr && object->unit != nullptr && area != nullptr) {
             SetOrQueueUnitAlignedPointCommand06(object->unit, command[2],
                 area_center_x(*area), area_center_y(*area), true);
@@ -1506,7 +1514,8 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x0c: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         GameplayScriptTriggerObjectState* object =
-            group != nullptr ? first_alive_group_object(state, *group) : nullptr;
+            group != nullptr && group->reference_count != 0 ?
+                first_group_slot_object(state, *group) : nullptr;
         if (object != nullptr && object->unit != nullptr) {
             SetOrQueueUnitCommand10(object->unit, command[2], true);
         }
@@ -1586,7 +1595,10 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x14: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         if (group != nullptr) {
-            for (u32 object_index : group->object_indices) {
+            const u32 limit = std::min<u32>(
+                group->reference_count, kGameplayScriptTriggerReferencesPerGroup);
+            for (u32 slot = 0; slot < limit; ++slot) {
+                const u32 object_index = group->object_indices[slot];
                 if (object_index != 0) {
                     state.opcode_context.selection_request_active = true;
                     state.opcode_context.selected_object_index = object_index;
@@ -1813,7 +1825,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptTriggerGroup* source_group = group_state(state, command[1]);
         GameplayScriptTriggerGroup* target_group = group_state(state, command[2]);
         GameplayScriptTriggerObjectState* source =
-            source_group != nullptr ? first_alive_group_object(state, *source_group) : nullptr;
+            source_group != nullptr ? first_group_slot_object(state, *source_group) : nullptr;
         if (source != nullptr && target_group != nullptr &&
             target_group->reference_count != 0) {
             for_each_group_slot_object(state, *target_group,
@@ -1858,7 +1870,8 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x2d: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         GameplayScriptTriggerObjectState* object =
-            group != nullptr ? first_alive_group_object(state, *group) : nullptr;
+            group != nullptr && group->reference_count != 0 ?
+                first_group_slot_object(state, *group) : nullptr;
         if (object != nullptr && object->unit != nullptr) {
             SetOrQueueUnitCommand17(object->unit, command[2], true);
         }
@@ -1868,7 +1881,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptTriggerGroup* source_group = group_state(state, command[1]);
         GameplayScriptTriggerGroup* target_group = group_state(state, command[2]);
         GameplayScriptTriggerObjectState* target =
-            target_group != nullptr ? first_alive_group_object(state, *target_group) : nullptr;
+            target_group != nullptr ? first_group_slot_object(state, *target_group) : nullptr;
         if (source_group == nullptr || source_group->reference_count == 0 ||
             target == nullptr) {
             return true;
@@ -1896,7 +1909,8 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x31: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         GameplayScriptTriggerObjectState* object =
-            group != nullptr ? first_alive_group_object(state, *group) : nullptr;
+            group != nullptr && group->reference_count != 0 ?
+                first_group_slot_object(state, *group) : nullptr;
         if (object != nullptr && object->unit != nullptr) {
             SetOrQueueUnitCommand22(object->unit, command[2], true);
         }
@@ -1908,7 +1922,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptTriggerGroup* source_group = group_state(state, command[1]);
         GameplayScriptTriggerGroup* target_group = group_state(state, command[2]);
         GameplayScriptTriggerObjectState* source =
-            source_group != nullptr ? first_alive_group_object(state, *source_group) : nullptr;
+            source_group != nullptr ? first_group_slot_object(state, *source_group) : nullptr;
         if (source == nullptr || source->unit == nullptr || target_group == nullptr ||
             target_group->reference_count == 0) {
             return true;
@@ -1930,7 +1944,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x34: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         GameplayScriptTriggerObjectState* object =
-            group != nullptr ? first_alive_group_object(state, *group) : nullptr;
+            group != nullptr ? first_group_slot_object(state, *group) : nullptr;
         const GameplayScriptArea* area = area_state(state, command[2]);
         if (object != nullptr && object->unit != nullptr && area != nullptr) {
             const i32 x = area->left + (area->right - area->left) / 2;
@@ -1981,9 +1995,11 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptTriggerGroup* first_group = group_state(state, command[1]);
         GameplayScriptTriggerGroup* second_group = group_state(state, command[2]);
         GameplayScriptTriggerObjectState* first =
-            first_group != nullptr ? first_alive_group_object(state, *first_group) : nullptr;
+            first_group != nullptr && first_group->reference_count != 0 ?
+                first_group_slot_object(state, *first_group) : nullptr;
         GameplayScriptTriggerObjectState* second =
-            second_group != nullptr ? first_alive_group_object(state, *second_group) : nullptr;
+            second_group != nullptr && second_group->reference_count != 0 ?
+                first_group_slot_object(state, *second_group) : nullptr;
         if (first != nullptr && first->unit != nullptr &&
             second != nullptr && second->unit != nullptr) {
             SetOrQueueUnitTargetCommand0b(first->unit, second->unit, true);
