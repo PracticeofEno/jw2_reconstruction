@@ -405,16 +405,21 @@ void advance_reserved_tile_work_frame(UnitMovementUnit& unit) {
     }
 }
 
-bool consume_transport_unload_delay(UnitMovementUnit& carrier) {
-    if (carrier.work_timer == 0) {
-        return false;
+void advance_transport_unload_frame(UnitMovementUnit& carrier) {
+    ++carrier.animation_frame;
+    if (carrier.definition.animation_timer_period <= carrier.animation_frame) {
+        carrier.animation_frame = 0;
     }
-    --carrier.work_timer;
-    return true;
+}
+
+bool transport_unload_locked(const UnitMovementUnit& carrier) {
+    // The outer runtime tick owns the decrement of raw +0xf4.  States 0x41
+    // and 0x42 only observe the already-updated value.
+    return carrier.command_lockout_ticks != 0;
 }
 
 bool place_unloaded_unit(UnitCommandContext& context, UnitMovementUnit& carrier,
-    UnitMovementUnit& passenger) {
+    UnitMovementUnit& passenger, bool carrier_driven) {
     UnitMovementPoint point{
         carrier.x + carrier.definition.transport_offset_x,
         carrier.y + carrier.definition.transport_offset_y};
@@ -433,32 +438,40 @@ bool place_unloaded_unit(UnitCommandContext& context, UnitMovementUnit& carrier,
 
     passenger.x = point.x;
     passenger.y = point.y;
-    passenger.saved_path_target_x = point.x;
-    passenger.saved_path_target_y = point.y;
-    passenger.destination_x = point.x & ~0x1f;
-    passenger.destination_y = point.y & ~0x1f;
+    passenger.anchor_x = point.x;
+    passenger.anchor_y = point.y;
     passenger.current_cell_x = point.x & ~0x1f;
     passenger.current_cell_y = point.y & ~0x1f;
-    passenger.path_target_x = point.x;
-    passenger.path_target_y = point.y;
-    passenger.target = nullptr;
-    passenger.command_state = 0;
     passenger.runtime_flags |= 1u;
     passenger.runtime_flags &= ~0x88u;
-    passenger.attached_to_parent = false;
-    if (carrier.cargo_amount >= transport_size(passenger)) {
-        carrier.cargo_amount -= transport_size(passenger);
+    if (carrier_driven) {
+        passenger.command_flags &= ~0x10u;
     }
-    else {
-        carrier.cargo_amount = 0;
+    carrier.cargo_amount -= passenger.definition.transport_size;
+    if (!carrier_driven) {
+        // Passenger-driven state 0x41 stores the carrier cooldown before the
+        // footprint callback; state 0x42 stores it after passenger idle.
+        carrier.command_lockout_ticks = 2;
     }
-    carrier.work_timer = 2;
     if (context.callbacks.on_unit_unloaded != nullptr) {
         context.callbacks.on_unit_unloaded(context, carrier, passenger);
     }
-    passenger.work_timer = 0;
+    passenger.pending_command.state = 0;
+    passenger.deferred_command_count = 0;
     PopDeferredUnitCommandOrReturnIdle(context, passenger);
+    if (carrier_driven) {
+        carrier.command_lockout_ticks = 2;
+    }
     return true;
+}
+
+void finish_transport_unload_children(UnitCommandContext& context,
+    UnitMovementUnit& carrier) {
+    // 0x004cafb1/0x004cafb7 both load raw x (+0xb8).  Preserve the original
+    // anchor_y=(x) quirk instead of correcting it to carrier.y.
+    carrier.anchor_x = carrier.x;
+    carrier.anchor_y = carrier.x;
+    PopDeferredUnitCommandOrReturnIdle(context, carrier);
 }
 
 void process_patrol_path(UnitCommandContext& context, UnitMovementUnit& unit) {
@@ -4620,10 +4633,10 @@ void ProcessTransportUnloadStart(UnitCommandContext& context, UnitMovementUnit& 
             PopDeferredUnitCommandOrReturnIdle(context, unit);
             return;
         }
-        if (consume_transport_unload_delay(*unit.target)) {
+        if (transport_unload_locked(*unit.target)) {
             return;
         }
-        if (!place_unloaded_unit(context, *unit.target, unit)) {
+        if (!place_unloaded_unit(context, *unit.target, unit, false)) {
             unit.command_state = kUnitStateTransportAttached;
         }
         return;
@@ -4643,33 +4656,25 @@ void ProcessTransportUnloadStart(UnitCommandContext& context, UnitMovementUnit& 
 }
 
 void ProcessTransportUnloadChildren(UnitCommandContext& context, UnitMovementUnit& unit) {
-    advance_wrapping_command_frame(unit);
-    if (consume_transport_unload_delay(unit)) {
+    advance_transport_unload_frame(unit);
+    if (transport_unload_locked(unit)) {
         return;
     }
 
-    if (!unit_can_carry(unit) || unit.cargo_amount == 0) {
-        PopDeferredUnitCommandOrReturnIdle(context, unit);
+    if (unit.cargo_amount == 0) {
+        finish_transport_unload_children(context, unit);
         return;
     }
 
     UnitMovementUnit* child = find_attached_child(context, unit);
     if (child == nullptr) {
-        unit.cargo_amount = 0;
-        PopDeferredUnitCommandOrReturnIdle(context, unit);
+        finish_transport_unload_children(context, unit);
         return;
     }
 
-    if (!place_unloaded_unit(context, unit, *child)) {
-        PopDeferredUnitCommandOrReturnIdle(context, unit);
+    if (!place_unloaded_unit(context, unit, *child, true)) {
+        finish_transport_unload_children(context, unit);
         return;
-    }
-
-    if (unit.cargo_amount != 0) {
-        unit.command_state = kUnitStateTransportUnloadChildren;
-    }
-    else {
-        PopDeferredUnitCommandOrReturnIdle(context, unit);
     }
 }
 
