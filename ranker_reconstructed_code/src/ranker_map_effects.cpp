@@ -410,9 +410,7 @@ void HandleMapEffectTimerTick(MapEffectContext& context) {
         }
 
         effect.frame_timer = definition->frame_period;
-        if (effect.repeat_count > 0) {
-            --effect.repeat_count;
-        }
+        --effect.repeat_count;
         if (effect.repeat_count == 0) {
             ReleaseMapEffect(context, effect);
             continue;
