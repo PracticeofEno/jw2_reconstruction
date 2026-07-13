@@ -15533,8 +15533,18 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
 
     configure_default_map_effect_context();
     overlay.map_effects.clear();
-    overlay.map_effects.reserve(g_runtime.map_effect_context.effects.size());
-    for (const MapEffectInstance& effect : g_runtime.map_effect_context.effects) {
+    overlay.map_effects.reserve(
+        g_runtime.map_effect_context.active_effect_indices.size());
+    // FUN_004e9621 walks the intrusive active list from DAT_007071e0 and
+    // returns its first matching tile.  Preserve that order instead of the
+    // physical effect-pool slot order when overlapping fallback spawns exist.
+    for (const u32 effect_index :
+            g_runtime.map_effect_context.active_effect_indices) {
+        if (effect_index >= g_runtime.map_effect_context.effects.size()) {
+            continue;
+        }
+        const MapEffectInstance& effect =
+            g_runtime.map_effect_context.effects[effect_index];
         if (!effect.active) {
             continue;
         }
