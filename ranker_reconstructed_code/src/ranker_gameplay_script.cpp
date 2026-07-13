@@ -949,6 +949,49 @@ std::size_t trigger_offset(u32 trigger_index) {
         static_cast<std::size_t>(trigger_index) * kGameplayScriptTriggerRuntimeRecordSize;
 }
 
+void write_trigger_runtime_byte(GameplayScriptTriggerState& state,
+    u32 trigger_index, std::size_t field_offset, u8 value) {
+    if (trigger_index >= state.triggers.size()) {
+        return;
+    }
+    const std::size_t offset = trigger_offset(trigger_index) + field_offset;
+    if (offset < state.serialized_triggers.size()) {
+        state.serialized_triggers[offset] = value;
+    }
+}
+
+void dispatch_gameplay_script_text_cue(GameplayScriptTriggerState& state,
+    GameplayScriptTriggerRuntimeRecord& trigger,
+    const GameplayScriptTextCueCommand& cue) {
+    GameplayScriptDialogState& dialog = gameplay_script_dialog_state();
+    const bool new_cue = dialog.active_cue_id != cue.cue_id;
+    const u32 current_index = cue.cue_id != 0 && cue.cue_id != 0xffffffffu ?
+        cue.cue_id - 1 : 0xffffffffu;
+    if (new_cue) {
+        if (dialog.previous_trigger_index < state.triggers.size()) {
+            GameplayScriptTriggerRuntimeRecord& previous =
+                state.triggers[dialog.previous_trigger_index];
+            previous.state = 1;
+            write_trigger_runtime_byte(
+                state, dialog.previous_trigger_index, 0x00, 1);
+        }
+        dialog.previous_trigger_index = current_index;
+    }
+
+    HandleGameplayScriptTextEffectCue(dialog, cue, state.current_tick);
+    trigger.blocked = dialog.advance_flags[1] != 0 ? 1 : 0;
+    if (current_index < state.triggers.size()) {
+        write_trigger_runtime_byte(
+            state, current_index, 0x01, trigger.blocked);
+    }
+    if (trigger.blocked == 0) {
+        trigger.condition_enabled = false;
+        if (current_index < state.triggers.size()) {
+            write_trigger_runtime_byte(state, current_index, 0x02, 0);
+        }
+    }
+}
+
 void decode_area(GameplayScriptTriggerState& state, u32 area_index) {
     const std::size_t base = area_offset(area_index);
     if (base + 0x11 > state.serialized_triggers.size()) {
@@ -1092,7 +1135,7 @@ void ResetGameplayScriptDialogRuntimeState(GameplayScriptDialogState& state) {
     state.force_complete = false;
     state.condition13_latch = false;
     state.advance_flags.fill(0);
-    state.previous_advance_flag = nullptr;
+    state.previous_trigger_index = 0xffffffffu;
     state.visible_text.clear();
 }
 
@@ -1117,27 +1160,22 @@ void HandleGameplayScriptTextEffectCue(GameplayScriptDialogState& state,
             state.elapsed_frames = status == 0 ? state.last_duration_frames :
                 state.last_duration_frames - 1;
         }
+        if (state.force_complete) {
+            state.elapsed_frames = state.last_duration_frames;
+            if (state.effect_playback_enabled &&
+                GetMilesEffectPlaylistEntryStatus(command.effect_entry_index) != 0) {
+                CloseMilesEffectPlaylistEntry(command.effect_entry_index);
+            }
+            state.force_complete = false;
+        }
     } else {
         state.active_cue_id = command.cue_id;
         state.elapsed_frames = 0;
-        if (state.previous_advance_flag != nullptr) {
-            *state.previous_advance_flag = 1;
-        }
-        state.previous_advance_flag = state.advance_flags.data();
 
         if (command.wait_for_effect && state.effect_playback_enabled &&
             GetMilesEffectPlaylistEntryStatus(command.effect_entry_index) == 0) {
             PlayMilesEffectPlaylistEntry(command.effect_entry_index);
         }
-    }
-
-    if (state.force_complete) {
-        state.elapsed_frames = state.last_duration_frames;
-        if (state.effect_playback_enabled &&
-            GetMilesEffectPlaylistEntryStatus(command.effect_entry_index) != 0) {
-            CloseMilesEffectPlaylistEntry(command.effect_entry_index);
-        }
-        state.force_complete = false;
     }
 
     if (state.elapsed_frames < state.last_duration_frames) {
@@ -1571,8 +1609,9 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
     }
     case 0x13: {
         GameplayScriptDialogState& dialog = gameplay_script_dialog_state();
-        if (dialog.force_complete && dialog.last_effect_entry == 0) {
-            dialog.force_complete = false;
+        if (state.opcode_context.stage_result_pending &&
+            state.opcode_context.stage_result == 0) {
+            state.opcode_context.stage_result_pending = false;
             dialog.condition13_latch = true;
         }
         return dialog.condition13_latch;
@@ -1865,9 +1904,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptTextCueCommand cue{};
         cue.cue_id = trigger_runtime_id(state, trigger);
         cue.text = text.c_str();
-        HandleGameplayScriptTextEffectCue(gameplay_script_dialog_state(), cue,
-            state.current_tick);
-        trigger.blocked = gameplay_script_dialog_state().advance_flags[1] != 0 ? 1 : 0;
+        dispatch_gameplay_script_text_cue(state, trigger, cue);
         return true;
     }
     case 0x02: {
@@ -1909,8 +1946,6 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
             dialog.condition13_latch = true;
             return true;
         }
-        dialog.force_complete = true;
-        dialog.last_effect_entry = 0;
         state.opcode_context.stage_result_pending = true;
         state.opcode_context.stage_result = 0;
         return true;
@@ -2302,9 +2337,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         cue.wait_for_effect = command[4] != 0;
         cue.effect_entry_index = command[5];
         cue.text = text.c_str();
-        HandleGameplayScriptTextEffectCue(gameplay_script_dialog_state(), cue,
-            state.current_tick);
-        trigger.blocked = gameplay_script_dialog_state().advance_flags[1] != 0 ? 1 : 0;
+        dispatch_gameplay_script_text_cue(state, trigger, cue);
         return true;
     }
     case 0x23: {

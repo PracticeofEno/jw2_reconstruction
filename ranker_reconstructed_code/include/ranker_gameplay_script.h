@@ -33,7 +33,8 @@ struct GameplayScriptDialogState {
     bool condition13_latch = false;
     bool effect_playback_enabled = true;
     std::array<u8, 3> advance_flags{};
-    u8* previous_advance_flag = nullptr;
+    // DAT_00d11644 points to the previous cue trigger's raw state byte.
+    u32 previous_trigger_index = 0xffffffffu;
     std::string visible_text;
 };
 

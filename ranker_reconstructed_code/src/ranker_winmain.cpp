@@ -9082,6 +9082,32 @@ void default_gameplay_hud_draw_shadow_text(
     if (text == nullptr || text[0] == '\0') {
         return;
     }
+    GameplayScriptDialogState& dialog = gameplay_script_dialog_state();
+    if (dialog.advance_flags[1] != 0 &&
+        text == dialog.visible_text.c_str()) {
+        SelectTextMetricFont(3);
+        SelectTextDrawFont(2);
+        const i32 line_height = static_cast<i32>(
+            text_renderer_state().metric_font.height);
+        const char* line = text;
+        i32 line_y = y;
+        do {
+            SetTextCursor(x, line_y, color);
+            DrawTextLineUntilCrLf(line);
+            const char* next = line;
+            while (*next != '\0' &&
+                !(next[0] == '\r' && next[1] == '\n')) {
+                ++next;
+            }
+            if (*next == '\0') {
+                break;
+            }
+            line = next + 2;
+            line_y += line_height;
+        } while (*line != '\0');
+        return;
+    }
+
     default_select_gameplay_hud_font();
     TextRendererState& renderer = text_renderer_state();
     const TextRenderCursor saved = renderer.cursor;
