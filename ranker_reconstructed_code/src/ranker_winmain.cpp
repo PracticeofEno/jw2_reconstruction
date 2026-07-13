@@ -9189,9 +9189,9 @@ void sync_default_gameplay_player_resource_hud(
     const GameplayUiResourceState& ui_resources = gameplay_ui_resource_state();
     const Jw207ResourcePackState& jw207 = jw207_resource_pack_state();
 
-    hud.flags = (opcode.cinematic_flags & 0xffu) | players.rotation_control_value;
-    hud.start_x = static_cast<i32>(opcode.global_value_a);
-    hud.start_y = static_cast<i32>(opcode.global_value_b);
+    hud.flags = opcode.resource_hud_flags & 0xffu;
+    hud.start_x = opcode.resource_hud_start_x;
+    hud.start_y = opcode.resource_hud_start_y;
     hud.primary_resource_icon =
         ui_resources.misc_icons_start != kInvalidResourceEntry ?
         ui_resources.misc_icons_start + 0x20u : kInvalidResourceEntry;
@@ -9200,10 +9200,9 @@ void sync_default_gameplay_player_resource_hud(
         ui_resources.misc_icons_start + 0x23u : kInvalidResourceEntry;
     hud.player_icon_base = jw207.start_location_start;
     hud.rotation_countdown_ticks = players.rotation_countdown_ticks;
-    hud.rotation_countdown_x =
-        static_cast<i32>(std::max<u32>(context.viewport_width, 1) >> 1);
-    hud.rotation_countdown_y = 0x0c;
-    hud.rotation_countdown_color = 1;
+    hud.rotation_countdown_x = opcode.countdown_x;
+    hud.rotation_countdown_y = opcode.countdown_y;
+    hud.rotation_countdown_color = static_cast<u8>(opcode.countdown_color);
     hud.normal_color = 1;
     hud.warning_color = 9;
     hud.capped_color = 0x11;
@@ -22645,7 +22644,21 @@ void sync_default_gameplay_script_runtime_context(
         lifecycle != nullptr ? lifecycle->movement : default_gameplay_movement_context();
     script.current_tick = state.simulation_frame_counter;
     script.condition_context.enabled = true;
+    // Mode 8 startup writes DAT_00722310 = 0x40 once.  Seed that original
+    // global on the first script frame only; later opcode 0x30/0x6a clears
+    // must not be undone by OR-ing the startup value on every render.
+    if (!script.opcode_context.enabled) {
+        script.opcode_context.resource_hud_flags |=
+            g_runtime.gameplay_player_slots.rotation_control_value;
+    }
     script.opcode_context.enabled = true;
+    // DAT_00722320/DAT_0072231c are shared by the frame clock and script
+    // opcodes 0x1e, 0x29 and 0x3d in the original.  Pull the live value after
+    // the frame-clock tick so script arithmetic observes that same ordering.
+    script.opcode_context.game_clock_ticks =
+        g_runtime.gameplay_player_slots.rotation_countdown_ticks;
+    script.opcode_context.game_clock_decrements =
+        g_runtime.gameplay_player_slots.rotation_countdown_decrements;
     script.opcode_context.local_owner_id =
         std::min<u32>(g_runtime.gameplay_player_slots.local_player_slot,
             kGameplayScriptOwnerCount - 1);
@@ -23476,6 +23489,12 @@ void consume_default_gameplay_script_definition_patch_requests(
 void consume_default_gameplay_script_opcode_context(
     GameplayScriptTriggerState& script, GameplayLoopState& state) {
     GameplayScriptOpcodeContext& opcode = script.opcode_context;
+    // Commit script clock mutations before the later rotation/resource phase,
+    // matching ProcessGameplayFrameTick's original call order.
+    g_runtime.gameplay_player_slots.rotation_countdown_ticks =
+        opcode.game_clock_ticks;
+    g_runtime.gameplay_player_slots.rotation_countdown_decrements =
+        opcode.game_clock_decrements;
     consume_default_gameplay_script_camera_request(opcode);
     consume_default_gameplay_script_selection_request(script);
     consume_default_gameplay_script_stage_result(opcode);
@@ -23635,10 +23654,13 @@ void default_gameplay_loop_simulation_phase(GameplayLoopState& state) {
     static_assert(Index < kGameplaySimulationPhaseCount, "simulation phase index");
     ++g_runtime.gameplay_simulation_phase_counts[Index];
     if constexpr (Index == 0) {
-        if (g_runtime.gameplay_player_slots.rotation_enabled) {
-            TickTeamReserveRotationCountdown(g_runtime.gameplay_player_slots,
-                state.simulation_frame_counter);
-        }
+        // The original ProcessGameplayFrameTick calls FUN_0042a0a0 on every
+        // simulated frame (0x004c1179), independently of whether team-reserve
+        // rotation is enabled.  DAT_00722320 therefore doubles as the elapsed
+        // game clock while DAT_0072231c is clear, and as a countdown while it
+        // is set by a script/rotation mode.
+        TickTeamReserveRotationCountdown(g_runtime.gameplay_player_slots,
+            state.simulation_frame_counter);
         g_runtime.gameplay_hud_text.current_tick_ms = state.current_tick_ms;
         TickGameplayDebugFrameCounter(g_runtime.gameplay_hud_text);
         rebuild_default_unit_spatial_indexes();

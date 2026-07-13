@@ -1695,12 +1695,12 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         return true;
     }
     case 0x1e:
-        state.opcode_context.cinematic_flags |= 0x40;
-        state.opcode_context.cinematic_duration = 400;
-        state.opcode_context.cinematic_mode = 0x0c;
-        state.opcode_context.cinematic_enabled = 1;
-        state.opcode_context.cinematic_target_enabled = true;
-        state.opcode_context.cinematic_target = command[1];
+        state.opcode_context.resource_hud_flags |= 0x40;
+        state.opcode_context.countdown_x = 400;
+        state.opcode_context.countdown_y = 0x0c;
+        state.opcode_context.countdown_color = 1;
+        state.opcode_context.game_clock_decrements = true;
+        state.opcode_context.game_clock_ticks = command[1];
         return true;
     case 0x1f: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
@@ -1805,11 +1805,12 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         return true;
     }
     case 0x29:
-        state.opcode_context.cinematic_flags |= 0x40;
-        state.opcode_context.cinematic_duration = 400;
-        state.opcode_context.cinematic_mode = 0x0c;
-        state.opcode_context.cinematic_enabled = 1;
-        state.opcode_context.cinematic_target = command[1];
+        state.opcode_context.resource_hud_flags |= 0x40;
+        state.opcode_context.countdown_x = 400;
+        state.opcode_context.countdown_y = 0x0c;
+        state.opcode_context.countdown_color = 1;
+        state.opcode_context.game_clock_decrements = false;
+        state.opcode_context.game_clock_ticks = command[1];
         trigger.blocked = 0;
         return true;
     case 0x2a:
@@ -1864,13 +1865,13 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         return true;
     }
     case 0x2f:
-        state.opcode_context.cinematic_flags |= 0x40;
-        state.opcode_context.cinematic_duration = 400;
-        state.opcode_context.cinematic_mode = 0x0c;
-        state.opcode_context.cinematic_enabled = 1;
+        state.opcode_context.resource_hud_flags |= 0x40;
+        state.opcode_context.countdown_x = 400;
+        state.opcode_context.countdown_y = 0x0c;
+        state.opcode_context.countdown_color = 1;
         return true;
     case 0x30:
-        state.opcode_context.cinematic_flags &= ~0x40u;
+        state.opcode_context.resource_hud_flags &= ~0x40u;
         return true;
     case 0x31: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
@@ -1921,10 +1922,10 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         return true;
     }
     case 0x35:
-        state.opcode_context.cinematic_flags |= 1u << (command[1] & 0x1fu);
+        state.opcode_context.resource_hud_flags |= 1u << (command[1] & 0x1fu);
         return true;
     case 0x36:
-        state.opcode_context.cinematic_flags &= ~(1u << (command[1] & 0x1fu));
+        state.opcode_context.resource_hud_flags &= ~(1u << (command[1] & 0x1fu));
         return true;
     case 0x37: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
@@ -2053,7 +2054,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         return true;
     }
     case 0x3d:
-        state.opcode_context.cinematic_target += command[1];
+        state.opcode_context.game_clock_ticks += command[1];
         return true;
     case 0x4e: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
@@ -2254,26 +2255,26 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         return true;
     case 0x69:
         if (command[1] < 7) {
-            state.opcode_context.cinematic_flags |= 1u << command[1];
+            state.opcode_context.resource_hud_flags |= 1u << command[1];
             if (command[1] == 6) {
-                state.opcode_context.cinematic_duration = 400;
-                state.opcode_context.cinematic_mode = 0x0c;
-                state.opcode_context.cinematic_enabled = 1;
+                state.opcode_context.countdown_x = 400;
+                state.opcode_context.countdown_y = 0x0c;
+                state.opcode_context.countdown_color = 1;
             }
         }
         return true;
     case 0x6a:
         if (command[1] < 7) {
-            state.opcode_context.cinematic_flags &= ~(1u << command[1]);
+            state.opcode_context.resource_hud_flags &= ~(1u << command[1]);
         }
         return true;
     case 0x6b:
     case 0x71:
-        state.opcode_context.cinematic_flags &= ~0x80u;
+        state.opcode_context.resource_hud_flags &= ~0x80u;
         return true;
     case 0x6c:
     case 0x72:
-        state.opcode_context.cinematic_flags |= 0x80u;
+        state.opcode_context.resource_hud_flags |= 0x80u;
         return true;
     case 0x6d: {
         GameplayScriptOwnerConditionState* owner =
@@ -2312,8 +2313,8 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         return true;
     }
     case 0x76:
-        state.opcode_context.global_value_a = command[1];
-        state.opcode_context.global_value_b = command[2];
+        state.opcode_context.resource_hud_start_x = static_cast<i32>(command[1]);
+        state.opcode_context.resource_hud_start_y = static_cast<i32>(command[2]);
         return true;
     case 0x78: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);

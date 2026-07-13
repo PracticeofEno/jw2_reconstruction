@@ -201,18 +201,18 @@ struct GameplayScriptConditionContext {
 
 struct GameplayScriptOpcodeContext {
     bool enabled = false;
-    u32 cinematic_flags = 0;
-    u32 cinematic_duration = 0;
-    u32 cinematic_mode = 0;
-    u32 cinematic_enabled = 0;
-    u32 cinematic_target = 0;
+    u32 resource_hud_flags = 0;
+    i32 countdown_x = 400;
+    i32 countdown_y = 12;
+    u32 countdown_color = 1;
+    u32 game_clock_ticks = 0;
     u32 local_owner_id = 0;
     u32 stage_result = 0;
     bool stage_result_pending = false;
     bool global_flag_22344 = false;
     bool global_flag_22348 = false;
     bool global_flag_22358 = false;
-    bool cinematic_target_enabled = false;
+    bool game_clock_decrements = false;
     bool camera_request_active = false;
     i32 camera_x = 0;
     i32 camera_y = 0;
@@ -223,8 +223,8 @@ struct GameplayScriptOpcodeContext {
     i32 text_y = 300;
     u32 text_counter_owner = 0;
     std::string text_overlay;
-    u32 global_value_a = 0;
-    u32 global_value_b = 0;
+    i32 resource_hud_start_x = 10;
+    i32 resource_hud_start_y = 10;
     std::array<u32, kGameplayScriptCopiedOwnerTableWords> copied_owner_table_a{};
     std::array<u32, kGameplayScriptCopiedOwnerTableWords> copied_owner_table_b{};
     std::array<u32, kGameplayScriptCopiedCommandTableWords> copied_command_table{};
