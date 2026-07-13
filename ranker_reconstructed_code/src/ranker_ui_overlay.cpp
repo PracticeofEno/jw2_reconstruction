@@ -1625,6 +1625,89 @@ bool unit_selectable_for_local_player(
         (unit.owner_id == state.local_player_slot || CheckScenarioSelectionOverride(state));
 }
 
+bool double_click_unit_visibility_passes(const UiOverlayState& state,
+    const UiOverlayMinimapUnit& unit, bool require_current_visibility) {
+    // FUN_004e96ae/FUN_004ead82 apply the raw hidden bit and the special
+    // owner/cell visibility predicate before reading fog bits 28 and 27.
+    if ((unit.runtime_flags & 0x80u) != 0 || unit.hidden_from_minimap ||
+        !unit.visible_to_local_player || !unit.special_visibility_gate_passed ||
+        unit.world_x < 0 || unit.world_y < 0) {
+        return false;
+    }
+
+    const u32 tile_x = static_cast<u32>(unit.world_x) >> 5;
+    const u32 tile_y = static_cast<u32>(unit.world_y) >> 5;
+    const u32 visibility = minimap_layer_value(
+        state, state.minimap_visibility_flags, tile_x, tile_y);
+    if ((visibility & 0x10000000u) == 0) {
+        return false;
+    }
+    return (!require_current_visibility && state.reveal_minimap_fog) ||
+        (visibility & 0x08000000u) != 0;
+}
+
+bool double_click_unit_contains_world_point(
+    const UiOverlayMinimapUnit& unit, i32 world_x, i32 world_y) {
+    const i64 left = static_cast<i64>(unit.world_x) + unit.bounds_left;
+    const i64 top = static_cast<i64>(unit.world_y) + unit.bounds_top;
+    const i64 right = left + unit.bounds_width;
+    const i64 bottom = top + unit.bounds_height;
+    return static_cast<i64>(world_x) >= left &&
+        static_cast<i64>(world_x) <= right &&
+        static_cast<i64>(world_y) >= top &&
+        static_cast<i64>(world_y) <= bottom;
+}
+
+bool double_click_unit_intersects_viewport(
+    const UiOverlayState& state, const UiOverlayMinimapUnit& unit) {
+    const i64 viewport_left = state.camera_x;
+    const i64 viewport_top = state.camera_y;
+    const i64 viewport_right = viewport_left + state.screen_width;
+    const i64 viewport_bottom = viewport_top + state.world_viewport_height;
+    const i64 unit_left = static_cast<i64>(unit.world_x) + unit.bounds_left;
+    const i64 unit_top = static_cast<i64>(unit.world_y) + unit.bounds_top;
+    const i64 unit_right = unit_left + unit.bounds_width;
+    const i64 unit_bottom = unit_top + unit.bounds_height;
+    // Original comparisons exclude only strict separation.  Both the sprite
+    // bounds and camera+extent endpoints are therefore inclusive.
+    return unit_right >= viewport_left && unit_left <= viewport_right &&
+        unit_bottom >= viewport_top && unit_top <= viewport_bottom;
+}
+
+const UiOverlayMinimapUnit* double_click_unit_at_screen_point(
+    const UiOverlayState& state) {
+    const i32 world_x = state.camera_x + state.mouse_x;
+    const i32 world_y = state.camera_y + state.mouse_y;
+    const UiOverlayMinimapUnit* enemy_unit = nullptr;
+    const UiOverlayMinimapUnit* local_object = nullptr;
+    const UiOverlayMinimapUnit* enemy_object = nullptr;
+    for (const UiOverlayMinimapUnit& unit : state.minimap_units) {
+        if (!double_click_unit_visibility_passes(state, unit, false) ||
+            !double_click_unit_contains_world_point(unit, world_x, world_y)) {
+            continue;
+        }
+        if (unit.type_id < 0x60u) {
+            if (unit.owner_id == state.local_player_slot) {
+                return &unit;
+            }
+            enemy_unit = &unit;
+        }
+        else if (unit.owner_id == state.local_player_slot) {
+            local_object = &unit;
+        }
+        else {
+            enemy_object = &unit;
+        }
+    }
+    if (enemy_unit != nullptr) {
+        return enemy_unit;
+    }
+    if (local_object != nullptr) {
+        return local_object;
+    }
+    return enemy_object;
+}
+
 void clear_primary_selection_command_state(UiOverlayState& state) {
     state.placement_mode = 0;
     state.placement_definition_id = 0;
@@ -2778,16 +2861,18 @@ void ConfigureGameplayUiOverlayLayout(UiOverlayState& state) {
     // DAT_0083f3b8 / DAT_0086358c are the camera-center anchors consumed by
     // FUN_004e29d1.  The vertical anchor is a separate layout-table field,
     // not the top edge of the lower HUD artwork.
-    constexpr std::array<std::array<i32, 4>, 3> kCameraViewportHeight{{
+    constexpr std::array<std::array<i32, 4>, 3> kWorldViewportHeight{{
         {{356, 362, 356, 364}},
-        {{329, 329, 329, 329}},
-        {{329, 329, 329, 329}},
+        {{439, 436, 421, 452}},
+        {{446, 458, 447, 460}},
     }};
     const u32 camera_layout = std::min<u32>(state.screen_layout_bucket, 2);
     const u32 camera_theme = std::min<u32>(state.interface_theme_index, 3);
+    state.world_viewport_height = static_cast<u32>(
+        kWorldViewportHeight[camera_layout][camera_theme]);
     state.minimap_camera_anchor_x = static_cast<i32>(state.screen_width / 2);
     state.minimap_camera_anchor_y =
-        kCameraViewportHeight[camera_layout][camera_theme] / 2;
+        static_cast<i32>(state.world_viewport_height >> 1);
 
     // FUN_004e2bb7 selects these records by display-layout bucket first and
     // interface theme second.  Each source record contains an outer anchor,
@@ -5027,6 +5112,125 @@ void ResolveGameplayClickSelection(UiOverlayState& state) {
         select_clicked_unit_by_original_priority(state);
     }
     BuildSelectedUnitCommandPanel(state);
+}
+
+UiOverlayDoubleClickSelectionResult ResolveGameplayDoubleClickSelection(
+    UiOverlayState& state) {
+    // FUN_004e9ed0 handles code 0x20 before the ordinary press/release state.
+    // Preserve its gate order: scripted lockout, actionable hot record,
+    // minimap/placement side effects, opaque interface pixel, then point scan.
+    if (state.scripted_input_restricted) {
+        return UiOverlayDoubleClickSelectionResult::ignored;
+    }
+
+    if (const UiOverlayHotRegion* region =
+            hot_region_at(state, state.mouse_x, state.mouse_y)) {
+        set_hot_region_result(state, *region);
+        if (can_capture_ui_command_button_press(state, *region)) {
+            return UiOverlayDoubleClickSelectionResult::ignored;
+        }
+    }
+
+    if (CheckPointerInsideMinimapAndPlacementMode(state)) {
+        return UiOverlayDoubleClickSelectionResult::ignored;
+    }
+    if (state.mouse_y >= static_cast<i32>(state.world_viewport_height) &&
+        CheckUiOverlayIconMaskPixel(state, state.mouse_x, state.mouse_y)) {
+        return UiOverlayDoubleClickSelectionResult::ignored;
+    }
+
+    const UiOverlayMinimapUnit* target =
+        double_click_unit_at_screen_point(state);
+    if (target == nullptr) {
+        // Carry clear at 004ea1c6 jumps directly to the ignored exit.  It does
+        // not rewrite code 0x20 into the release fallback.
+        return UiOverlayDoubleClickSelectionResult::ignored;
+    }
+    if (target->owner_id != state.local_player_slot || target->type_id >= 0x60u) {
+        return UiOverlayDoubleClickSelectionResult::fallback_release;
+    }
+
+    bool primary_is_remote = false;
+    if (state.selected_unit_id != 0) {
+        const UiOverlayMinimapUnit* primary =
+            find_unit_by_id(state, state.selected_unit_id);
+        primary_is_remote = primary != nullptr
+            ? primary->owner_id != state.local_player_slot
+            : state.selected_unit_owner != state.local_player_slot;
+    }
+    if (!state.shift_modifier_down || primary_is_remote) {
+        ResetGameplaySelectionState(state);
+    }
+    else {
+        RecountGameplaySelectedUnits(state);
+    }
+
+    constexpr std::size_t kOriginalSelectionCapacity = 14;
+    const std::size_t configured_capacity = state.max_selected_unit_count == 0
+        ? kOriginalSelectionCapacity
+        : static_cast<std::size_t>(state.max_selected_unit_count);
+    const std::size_t selection_capacity =
+        std::min(kOriginalSelectionCapacity, configured_capacity);
+    std::size_t selection_budget =
+        std::min(state.selected_unit_ids.size(), selection_capacity);
+    const auto append_expansion_if_room = [&](const UiOverlayMinimapUnit& unit) {
+        if (unit_already_selected(state, unit.unit_id) ||
+            selection_budget >= selection_capacity) {
+            return false;
+        }
+        state.selected_unit_ids.push_back(unit.unit_id);
+        ++selection_budget;
+        return true;
+    };
+
+    bool target_selected = unit_already_selected(state, target->unit_id);
+    if (selection_budget < selection_capacity) {
+        // FUN_004ead82 consumes one local-count slot for the clicked unit even
+        // when Shift preserved its existing membership.  Keep the vector
+        // unique, but retain that original cap-budget quirk.
+        ++selection_budget;
+        if (!target_selected) {
+            state.selected_unit_ids.push_back(target->unit_id);
+            target_selected = true;
+        }
+    }
+    const u32 reference_type = target->type_id;
+    const u32 reference_flags = target->runtime_flags & 0x31u;
+    if (target_selected) {
+        state.selected_unit_id = target->unit_id;
+        state.selected_unit_type = target->type_id;
+        state.selected_unit_owner = target->owner_id;
+    }
+
+    if (selection_budget < selection_capacity) {
+        for (const UiOverlayMinimapUnit& unit : state.minimap_units) {
+            if (unit.unit_id == target->unit_id ||
+                unit.owner_id != target->owner_id || unit.type_id != reference_type ||
+                (unit.runtime_flags & 0x31u) != reference_flags ||
+                !double_click_unit_visibility_passes(state, unit, true) ||
+                !double_click_unit_intersects_viewport(state, unit)) {
+                continue;
+            }
+            append_expansion_if_room(unit);
+            if (selection_budget >= selection_capacity) {
+                break;
+            }
+        }
+    }
+
+    RecountGameplaySelectedUnits(state);
+    if (target_selected && unit_already_selected(state, target->unit_id)) {
+        // Recount may discard stale preserved ids; restore the clicked unit as
+        // the finalized primary exactly once before panel rebuild and voice.
+        state.selected_unit_id = target->unit_id;
+        state.selected_unit_type = target->type_id;
+        state.selected_unit_owner = target->owner_id;
+    }
+    BuildSelectedUnitCommandPanel(state);
+    if (target_selected) {
+        NotifyPrimaryGameplayUnitSelected(state);
+    }
+    return UiOverlayDoubleClickSelectionResult::selected;
 }
 
 void AddUnitsInDragRectangleToSelection(UiOverlayState& state) {

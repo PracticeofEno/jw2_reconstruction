@@ -144,6 +144,12 @@ enum class UiOverlayMinimapMarkerKind : u8 {
     placement_preview = 5,
 };
 
+enum class UiOverlayDoubleClickSelectionResult : u8 {
+    ignored = 0,
+    selected = 1,
+    fallback_release = 2,
+};
+
 struct UiOverlayMinimapMarker {
     UiOverlayMinimapMarkerKind kind = UiOverlayMinimapMarkerKind::terrain_overlay;
     i32 x = 0;
@@ -430,6 +436,7 @@ struct UiOverlayState {
     i32 camera_max_y = 0;
     i32 minimap_camera_anchor_x = 0;
     i32 minimap_camera_anchor_y = 0;
+    u32 world_viewport_height = 0;
     i32 stored_minimap_world_x = 0;
     i32 stored_minimap_world_y = 0;
     bool stored_minimap_point_valid = false;
@@ -791,6 +798,8 @@ UiOverlaySelectionRectScanResult ScanVisibleUnitsInSelectionRect(
     UiOverlayState& state);
 void SelectUnitsInDragRectangle(UiOverlayState& state);
 void ResolveGameplayClickSelection(UiOverlayState& state);
+UiOverlayDoubleClickSelectionResult ResolveGameplayDoubleClickSelection(
+    UiOverlayState& state);
 void AddUnitsInDragRectangleToSelection(UiOverlayState& state);
 void AddLocalUnitsInDragRectangleWithModifiers(UiOverlayState& state);
 bool FindSelectableUnitInDragRectangle(UiOverlayState& state);

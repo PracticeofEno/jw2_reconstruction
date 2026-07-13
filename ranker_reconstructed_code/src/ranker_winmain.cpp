@@ -3665,9 +3665,22 @@ void default_gameplay_input_handle_pointer_event(GameplayInputActionState& state
     bool resolve_selection = false;
     switch (event.message) {
     case 0x0201:
-    case 0x0203:
         pointer_state = kUiOverlayPointerPress;
         break;
+    case 0x0203: {
+        // Code 0x20 has its own FUN_004e9ed0 branch.  Read the key table at
+        // the point of dispatch so Shift is not inherited from the last
+        // drained keyboard event or the unused additive-selection mirror.
+        const InputState& input = input_state();
+        overlay.shift_modifier_down = input.key_down[VK_SHIFT] != 0;
+        const UiOverlayDoubleClickSelectionResult double_click_result =
+            ResolveGameplayDoubleClickSelection(overlay);
+        if (double_click_result ==
+            UiOverlayDoubleClickSelectionResult::fallback_release) {
+            pointer_state = kUiOverlayPointerRelease;
+        }
+        break;
+    }
     case 0x0202:
         pointer_state = kUiOverlayPointerRelease;
         resolve_selection = overlay.selection_rectangle_active;
