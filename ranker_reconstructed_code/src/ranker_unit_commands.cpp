@@ -1671,12 +1671,6 @@ bool execute_item_slot_use(UnitCommandContext& context, UnitMovementUnit& unit,
     return true;
 }
 
-bool linked_release_cycle_unit_alive(const UnitMovementUnit* unit) {
-    return unit != nullptr && unit->active &&
-        (unit->command_state & kUnitCommandDead) == 0 &&
-        (unit->runtime_flags & 4) == 0;
-}
-
 UnitRuntimeStatBlock linked_release_runtime_stats(const UnitMovementUnit& unit) {
     UnitRuntimeStatBlock stats{};
     stats.max_health = unit.max_health;
@@ -1694,8 +1688,6 @@ void release_linked_unit(UnitCommandContext& context, UnitMovementUnit& parent,
     child.runtime_flags |= 1;
     child.runtime_flags &= ~0x80u;
     child.attached_to_parent = false;
-    child.command_state = 0;
-    child.target = nullptr;
     if (context.callbacks.on_linked_unit_detached != nullptr) {
         context.callbacks.on_linked_unit_detached(context, parent, child);
     }
@@ -1705,7 +1697,7 @@ void enter_linked_release_child_cycle(UnitCommandContext& context,
     UnitMovementUnit& parent, UnitMovementUnit& child) {
     child.command_state = kUnitStateLinkedUnitReleaseCycle;
     child.animation_frame = 0;
-    child.command_value = 0;
+    child.saved_type_id = 0;
     child.runtime_flags &= ~1u;
     child.runtime_flags |= 0x80;
     child.attached_to_parent = true;
@@ -5174,7 +5166,11 @@ void HandleTargetedUnitSpawnApproach(UnitCommandContext& context, UnitMovementUn
 void StartLinkedUnitReleaseCommand(UnitCommandContext& context, UnitMovementUnit& unit) {
     UnitMovementUnit* linked = unit.target != nullptr ?
         unit.target : find_unit_by_id(context, unit.linked_object_id);
-    if (unit.path_target_y != -1 && linked != nullptr && target_alive(linked)) {
+    if (unit.path_target_y != -1) {
+        if (linked == nullptr) {
+            PopDeferredUnitCommandOrReturnIdle(context, unit);
+            return;
+        }
         SetUnitCommandTarget(unit, linked);
         unit.command_state = kUnitStateLinkedUnitReleaseApproach;
         unit.animation_frame = 0;
@@ -5184,37 +5180,27 @@ void StartLinkedUnitReleaseCommand(UnitCommandContext& context, UnitMovementUnit
 
     UnitMovementUnit* reciprocal = linked != nullptr && linked->target != &unit ?
         linked->target : nullptr;
-    const bool release_primary = linked_release_cycle_unit_alive(linked);
-    const bool release_reciprocal = unit.type_id == 0x2b &&
-        linked_release_cycle_unit_alive(reciprocal);
-    if (release_primary) {
+    if (linked != nullptr) {
         release_linked_unit(context, unit, *linked);
         PopDeferredUnitCommandOrReturnIdle(context, *linked);
     }
-    if (release_reciprocal) {
+    if (unit.type_id == 0x2b && reciprocal != nullptr) {
         release_linked_unit(context, unit, *reciprocal);
         PopDeferredUnitCommandOrReturnIdle(context, *reciprocal);
     }
 
-    const u32 restore_type = unit.command_value != 0 ?
-        unit.command_value : unit.saved_type_id;
-    if (restore_type != 0) {
-        set_unit_type_for_command(context, unit, restore_type);
-        unit.saved_type_id = 0;
-    }
+    set_unit_type_for_command(context, unit, unit.saved_type_id);
     unit.command_lockout_ticks = 0;
-    unit.animation_timer = 0;
-    unit.linked_object_id = 0;
     PopDeferredUnitCommandOrReturnIdle(context, unit);
 }
 
 void HandleLinkedUnitReleaseCycle(UnitCommandContext& context, UnitMovementUnit& unit) {
     UnitMovementUnit* linked = unit.target;
-    if (!linked_release_cycle_unit_alive(linked)) {
+    if (linked == nullptr || (linked->runtime_flags & 4u) != 0) {
         unit.command_state |= kUnitCommandDead;
         return;
     }
-    if (unit.command_value == 0) {
+    if (unit.saved_type_id == 0) {
         return;
     }
 
@@ -5227,8 +5213,7 @@ void HandleLinkedUnitReleaseCycle(UnitCommandContext& context, UnitMovementUnit&
     }
 
     UnitMovementUnit* reciprocal = linked->target != &unit ? linked->target : nullptr;
-    const bool consume_reciprocal = unit.type_id == 0x2b &&
-        linked_release_cycle_unit_alive(reciprocal);
+    const bool consume_reciprocal = unit.type_id == 0x2b && reciprocal != nullptr;
 
     if (context.callbacks.clear_footprint != nullptr) {
         context.callbacks.clear_footprint(context, unit);
@@ -5277,15 +5262,12 @@ void HandleLinkedUnitReleaseCycle(UnitCommandContext& context, UnitMovementUnit&
             context.callbacks.on_linked_unit_released(context, unit, *reciprocal);
         }
     }
-    const u32 old_type = unit.command_value != 0 ?
-        unit.command_value : unit.saved_type_id;
+    const u32 old_type = unit.saved_type_id;
     if (context.callbacks.on_unit_type_replaced != nullptr &&
         old_type != unit.type_id) {
         context.callbacks.on_unit_type_replaced(
             context, unit, old_type, unit.type_id);
     }
-    unit.saved_type_id = 0;
-    unit.linked_object_id = 0;
     if (context.callbacks.set_footprint != nullptr) {
         context.callbacks.set_footprint(context, unit);
     }
@@ -5302,11 +5284,13 @@ LinkedUnitReleaseReadiness CheckLinkedUnitReleaseReadiness(
     UnitCommandContext& context, UnitMovementUnit& unit);
 
 void HandleLinkedUnitReleaseApproach(UnitCommandContext& context, UnitMovementUnit& unit) {
-    UnitMovementUnit* linked = unit.target;
-    if (linked == nullptr || !target_alive(linked)) {
+    UnitMovementUnit* linked = unit.target != nullptr ?
+        unit.target : find_unit_by_id(context, unit.linked_object_id);
+    if (linked == nullptr) {
         PopDeferredUnitCommandOrReturnIdle(context, unit);
         return;
     }
+    unit.target = linked;
     const LinkedUnitReleaseReadiness readiness =
         CheckLinkedUnitReleaseReadiness(context, unit);
     if (readiness == LinkedUnitReleaseReadiness::blocked) {
@@ -5323,13 +5307,11 @@ void HandleLinkedUnitReleaseApproach(UnitCommandContext& context, UnitMovementUn
     unit.command_state = kUnitStateLinkedUnitReleaseCycle;
     unit.animation_frame = 0;
     unit.saved_type_id = unit.type_id;
-    unit.command_value = unit.type_id;
     const bool direct_linked_release = linked->target == &unit;
     const u32 release_type = direct_linked_release ?
         unit.definition.linked_release_type_id : 0x2b;
     set_unit_type_for_command(context, unit, release_type);
     unit.command_lockout_ticks = unit.definition.production_spawn_time;
-    unit.animation_timer = 0;
     enter_linked_release_child_cycle(context, unit, *linked);
     if (unit.type_id == 0x2b && linked->target != nullptr &&
         linked->target != &unit) {
@@ -5909,7 +5891,7 @@ LinkedUnitReleaseReadiness CheckLinkedUnitReleaseReadiness(
     UnitCommandContext& context, UnitMovementUnit& unit) {
     UnitMovementUnit* linked = unit.target != nullptr ?
         unit.target : find_unit_by_id(context, unit.linked_object_id);
-    if (linked == nullptr || !target_alive(linked)) {
+    if (linked == nullptr) {
         return LinkedUnitReleaseReadiness::blocked;
     }
     UnitProductionStartFailure population_failure =
@@ -5938,7 +5920,7 @@ LinkedUnitReleaseReadiness CheckLinkedUnitReleaseReadiness(
 
     UnitMovementUnit* reciprocal = linked->target;
     if (reciprocal == nullptr || reciprocal->target != &unit ||
-        !target_alive(reciprocal) || (reciprocal->runtime_flags & 4) != 0 ||
+        (reciprocal->runtime_flags & 4) != 0 ||
         (command_metadata_flags(context, *reciprocal) & 0x80u) == 0) {
         return LinkedUnitReleaseReadiness::blocked;
     }
