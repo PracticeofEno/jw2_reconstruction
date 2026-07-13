@@ -323,37 +323,36 @@ bool transport_capacity_allows(UnitCommandContext& context, UnitMovementUnit& ca
 
 bool can_start_transport_boarding(UnitCommandContext& context, UnitMovementUnit& carrier,
     UnitMovementUnit& passenger) {
-    if (&carrier == &passenger || !target_alive(&carrier) || !target_alive(&passenger)) {
-        return false;
-    }
     if (!unit_can_carry(carrier) || unit_can_carry(passenger)) {
         return false;
     }
     return transport_capacity_allows(context, carrier, passenger);
 }
 
-bool can_continue_transport_boarding(UnitCommandContext& context, UnitMovementUnit& carrier,
+bool transport_boarding_callback_allows(UnitCommandContext& context,
+    UnitMovementUnit& carrier,
     UnitMovementUnit& passenger) {
-    if (!can_start_transport_boarding(context, carrier, passenger)) {
-        return false;
-    }
-    if (passenger.command_state == kUnitStateTransportAttached ||
-        (passenger.runtime_flags & 0x86) != 0) {
-        return false;
-    }
-    return true;
-}
-
-bool can_board_transport(UnitCommandContext& context, UnitMovementUnit& carrier,
-    UnitMovementUnit& passenger) {
-    if (!can_continue_transport_boarding(context, carrier, passenger) ||
-        !unit_can_be_boarded(passenger)) {
-        return false;
-    }
     if (context.callbacks.can_board_transport != nullptr) {
         return context.callbacks.can_board_transport(context, carrier, passenger);
     }
     return true;
+}
+
+bool can_finish_carrier_immediate_boarding(UnitCommandContext& context,
+    UnitMovementUnit& carrier, UnitMovementUnit& passenger) {
+    return passenger.command_state != kUnitStateTransportAttached &&
+        (passenger.runtime_flags & 0x86u) == 0 &&
+        transport_capacity_allows(context, carrier, passenger) &&
+        unit_can_be_boarded(passenger) &&
+        transport_boarding_callback_allows(context, carrier, passenger);
+}
+
+bool can_finish_passenger_approach_boarding(UnitCommandContext& context,
+    UnitMovementUnit& carrier, UnitMovementUnit& passenger) {
+    return (passenger.runtime_flags & 0x86u) == 0 &&
+        transport_capacity_allows(context, carrier, passenger) &&
+        unit_can_be_boarded(passenger) &&
+        transport_boarding_callback_allows(context, carrier, passenger);
 }
 
 bool command_is_reciprocal_boarding_candidate(UnitCommandContext& context,
@@ -384,6 +383,13 @@ void refresh_transport_boarding_path(UnitCommandContext& context, UnitMovementUn
     }
     path_to_target_without_command_flag(context, unit, target);
     unit.animation_frame = 0;
+}
+
+void anchor_transport_xx_and_pop(UnitCommandContext& context,
+    UnitMovementUnit& unit) {
+    unit.anchor_x = unit.x;
+    unit.anchor_y = unit.x;
+    PopDeferredUnitCommandOrReturnIdle(context, unit);
 }
 
 void advance_wrapping_command_frame(UnitMovementUnit& unit) {
@@ -4518,12 +4524,27 @@ void HandleUnitPatrolOutboundCombatTarget(UnitCommandContext& context,
 
 void BeginUnitCarrierBoardingCommand(UnitCommandContext& context, UnitMovementUnit& unit) {
     UnitMovementUnit* target = unit.target;
-    if (target == nullptr) {
-        PopDeferredUnitCommandOrReturnIdle(context, unit);
+    if (!unit_can_carry(unit)) {
+        if (target != nullptr &&
+            can_start_transport_boarding(context, *target, unit)) {
+            path_to_target_without_command_flag(context, unit, *target);
+            unit.command_state = kUnitStatePassengerApproachCarrier;
+            if (command_is_reciprocal_boarding_candidate(context, *target)) {
+                target->target = &unit;
+                target->command_state = kUnitStateCarrierApproachBoarding;
+                target->path_target_x = unit.x;
+                target->path_target_y = unit.y;
+                if (has_movement(context)) {
+                    ProcessUnitPathToDestination(movement(context), *target);
+                }
+            }
+            return;
+        }
+        anchor_transport_xx_and_pop(context, unit);
         return;
     }
 
-    if (can_start_transport_boarding(context, unit, *target)) {
+    if (target != nullptr && can_start_transport_boarding(context, unit, *target)) {
         path_to_target_without_command_flag(context, unit, *target);
         unit.command_state = kUnitStateCarrierApproachBoarding;
         if (command_is_reciprocal_boarding_candidate(context, *target)) {
@@ -4538,38 +4559,23 @@ void BeginUnitCarrierBoardingCommand(UnitCommandContext& context, UnitMovementUn
         return;
     }
 
-    if (can_start_transport_boarding(context, *target, unit)) {
-        path_to_target_without_command_flag(context, unit, *target);
-        unit.command_state = kUnitStatePassengerApproachCarrier;
-        if (command_is_reciprocal_boarding_candidate(context, *target)) {
-            target->target = &unit;
-            target->command_state = kUnitStateCarrierApproachBoarding;
-            target->path_target_x = unit.x;
-            target->path_target_y = unit.y;
-            if (has_movement(context)) {
-                ProcessUnitPathToDestination(movement(context), *target);
-            }
-        }
-        return;
-    }
-
     PopDeferredUnitCommandOrReturnIdle(context, unit);
 }
 
 void HandleCarrierImmediateBoarding(UnitCommandContext& context, UnitMovementUnit& unit) {
     UnitMovementUnit* passenger = unit.target;
-    if (passenger != nullptr && can_board_transport(context, unit, *passenger)) {
+    if (passenger != nullptr &&
+        can_finish_carrier_immediate_boarding(context, unit, *passenger)) {
         board_unit(context, unit, *passenger);
     }
-    PopDeferredUnitCommandOrReturnIdle(context, unit);
+    anchor_transport_xx_and_pop(context, unit);
 }
 
 void HandleCarrierApproachBoardingTarget(UnitCommandContext& context,
     UnitMovementUnit& unit) {
     UnitMovementUnit* passenger = unit.target;
-    if (passenger == nullptr ||
-        !can_continue_transport_boarding(context, unit, *passenger)) {
-        PopDeferredUnitCommandOrReturnIdle(context, unit);
+    if (passenger == nullptr) {
+        anchor_transport_xx_and_pop(context, unit);
         return;
     }
 
@@ -4578,58 +4584,66 @@ void HandleCarrierApproachBoardingTarget(UnitCommandContext& context,
         return;
     }
 
-    if (movement_step(context, unit)) {
-        refresh_transport_boarding_path(context, unit, *passenger);
-        return;
-    }
-
-    if (!can_continue_transport_boarding(context, unit, *passenger)) {
-        PopDeferredUnitCommandOrReturnIdle(context, unit);
-        return;
+    if (!movement_step(context, unit)) {
+        passenger = unit.target;
+        if (passenger == nullptr ||
+            passenger->command_state == kUnitStateTransportAttached ||
+            (passenger->runtime_flags & 0x86u) != 0 ||
+            !transport_capacity_allows(context, unit, *passenger)) {
+            anchor_transport_xx_and_pop(context, unit);
+            return;
+        }
     }
     refresh_transport_boarding_path(context, unit, *passenger);
 }
 
 void HandlePassengerApproachCarrier(UnitCommandContext& context, UnitMovementUnit& unit) {
     UnitMovementUnit* carrier = unit.target;
-    if (carrier == nullptr ||
-        !can_continue_transport_boarding(context, *carrier, unit)) {
-        PopDeferredUnitCommandOrReturnIdle(context, unit);
+    if (carrier == nullptr) {
+        anchor_transport_xx_and_pop(context, unit);
         return;
     }
 
     if (target_in_transport_boarding_range(unit, *carrier)) {
-        if (can_board_transport(context, *carrier, unit)) {
+        if (can_finish_passenger_approach_boarding(context, *carrier, unit)) {
             board_unit(context, *carrier, unit);
             return;
         }
-        PopDeferredUnitCommandOrReturnIdle(context, unit);
+        anchor_transport_xx_and_pop(context, unit);
         return;
     }
 
-    if (movement_step(context, unit)) {
-        refresh_transport_boarding_path(context, unit, *carrier);
-        return;
-    }
-
-    if (!can_continue_transport_boarding(context, *carrier, unit)) {
-        PopDeferredUnitCommandOrReturnIdle(context, unit);
-        return;
-    }
-
-    if (unit.animation_frame == 0 &&
-        carrier->command_state == kUnitStateRuntimeIdleAcquire &&
-        can_continue_transport_boarding(context, *carrier, unit)) {
-        carrier->target = &unit;
-        carrier->path_target_x = unit.x;
-        carrier->path_target_y = unit.y;
-        carrier->command_state = kUnitStateCarrierApproachBoarding;
-        if (has_movement(context)) {
-            ProcessUnitPathToDestination(movement(context), *carrier);
+    if (!movement_step(context, unit)) {
+        carrier = unit.target;
+        if (carrier == nullptr || (carrier->runtime_flags & 0x86u) != 0) {
+            anchor_transport_xx_and_pop(context, unit);
+            return;
         }
-        carrier->animation_frame = 0;
+        if (!transport_capacity_allows(context, *carrier, unit)) {
+            PopDeferredUnitCommandOrReturnIdle(context, unit);
+            return;
+        }
     }
-    refresh_transport_boarding_path(context, unit, *carrier);
+
+    if (unit.animation_frame == 0) {
+        carrier = unit.target;
+        if (carrier == nullptr) {
+            anchor_transport_xx_and_pop(context, unit);
+            return;
+        }
+        if (carrier->command_state == kUnitStateRuntimeIdleAcquire &&
+            transport_capacity_allows(context, *carrier, unit)) {
+            carrier->target = &unit;
+            carrier->path_target_x = unit.x;
+            carrier->path_target_y = unit.y;
+            carrier->command_state = kUnitStateCarrierApproachBoarding;
+            if (has_movement(context)) {
+                ProcessUnitPathToDestination(movement(context), *carrier);
+            }
+            carrier->animation_frame = 0;
+        }
+        refresh_transport_boarding_path(context, unit, *carrier);
+    }
 }
 
 void ProcessTransportUnloadStart(UnitCommandContext& context, UnitMovementUnit& unit) {
