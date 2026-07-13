@@ -1357,14 +1357,16 @@ void offset_spawn_target_by_interaction_bounds(UnitMovementUnit& unit,
     unit.path_target_y += definition.interaction_bounds_height >> 1;
 }
 
-bool targeted_spawn_needs_approach(UnitMovementUnit& unit, UnitMovementUnit& target) {
-    if (!CheckCurrentTargetOutsideExpandedFootprint(unit)) {
-        return false;
+bool targeted_spawn_target_outside(UnitCommandContext& context,
+    UnitMovementUnit& unit, UnitMovementUnit& target) {
+    if (unit.type_id == kUnitTargetHelperSpecialSpawnType) {
+        const UnitMovementPoint center = CalculateUnitCenterPoint(target);
+        unit.path_target_x = center.x;
+        unit.path_target_y = center.y;
+        return CheckUnitSpawnDistanceThreshold(
+            context, unit, center.x, center.y);
     }
-    const UnitMovementPoint center = CalculateUnitCenterPoint(target);
-    unit.path_target_x = center.x;
-    unit.path_target_y = center.y;
-    return true;
+    return CheckCurrentTargetOutsideExpandedFootprint(unit);
 }
 
 void enter_spawn_cycle(UnitCommandContext&, UnitMovementUnit& unit,
@@ -5050,7 +5052,7 @@ void HandleUnitSpawnPlacementWait(UnitCommandContext& context, UnitMovementUnit&
 
 void StartTargetedUnitSpawnPlacement(UnitCommandContext& context, UnitMovementUnit& unit) {
     UnitMovementUnit* target = unit.target;
-    if (target == nullptr || !target_alive(target)) {
+    if (target == nullptr) {
         PopDeferredUnitCommandOrReturnIdle(context, unit);
         return;
     }
@@ -5073,16 +5075,20 @@ void StartTargetedUnitSpawnPlacement(UnitCommandContext& context, UnitMovementUn
 
 void HandleTargetedUnitSpawnCycle(UnitCommandContext& context, UnitMovementUnit& unit) {
     UnitMovementUnit* target = unit.target;
-    if (target == nullptr || !target_alive(target) ||
-        !CheckCurrentTargetBelowStoredHealthCap(unit)) {
-        anchor_and_pop_deferred(context, unit);
-        return;
-    }
-    if (targeted_spawn_needs_approach(unit, *target)) {
+    if (target != nullptr &&
+        targeted_spawn_target_outside(context, unit, *target)) {
+        const UnitMovementPoint center = CalculateUnitCenterPoint(*target);
+        unit.path_target_x = center.x;
+        unit.path_target_y = center.y;
         unit.command_state = kUnitStateTargetedSpawnApproach;
         if (has_movement(context)) {
             ProcessUnitPathToDestination(movement(context), unit);
         }
+        return;
+    }
+    if (target == nullptr || (target->runtime_flags & 4u) != 0 ||
+        target->health >= target->max_health) {
+        anchor_and_pop_deferred(context, unit);
         return;
     }
 
@@ -5151,12 +5157,12 @@ void HandleTargetedUnitSpawnCycle(UnitCommandContext& context, UnitMovementUnit&
 
 void HandleTargetedUnitSpawnApproach(UnitCommandContext& context, UnitMovementUnit& unit) {
     UnitMovementUnit* target = unit.target;
-    if (target == nullptr || !target_alive(target) ||
-        !CheckCurrentTargetBelowStoredHealthCap(unit)) {
+    if (target == nullptr || (target->runtime_flags & 4u) != 0 ||
+        target->health >= target->max_health) {
         PopDeferredUnitCommandOrReturnIdle(context, unit);
         return;
     }
-    if (!targeted_spawn_needs_approach(unit, *target)) {
+    if (!targeted_spawn_target_outside(context, unit, *target)) {
         enter_spawn_cycle(context, unit, kUnitStateTargetedSpawnCycle);
         return;
     }
