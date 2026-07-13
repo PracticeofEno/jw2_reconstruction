@@ -724,6 +724,98 @@ void flush_minimap_output_to_backbuffer(UiOverlayState& state) {
     }
 }
 
+void flush_minimap_object_footprint_spill_to_backbuffer(UiOverlayState& state) {
+    if (!state.emit_sprite_draws) {
+        return;
+    }
+
+    const MinimapRenderState& minimap = state.minimap;
+    if (minimap.output_pitch_pixels == 0 || minimap.minimap_width_pixels == 0 ||
+        minimap.minimap_height_pixels == 0 || minimap.output_pixels.empty()) {
+        return;
+    }
+
+    const i64 logical_left = minimap.output_x;
+    const i64 logical_top = minimap.output_y;
+    const i64 logical_right = logical_left + minimap.minimap_width_pixels;
+    const i64 logical_bottom = logical_top + minimap.minimap_height_pixels;
+    const i64 backing_width = minimap.output_width_pixels != 0
+        ? std::min<u32>(minimap.output_width_pixels, minimap.output_pitch_pixels)
+        : minimap.output_pitch_pixels;
+    const i64 available_rows = static_cast<i64>(
+        minimap.output_pixels.size() / minimap.output_pitch_pixels);
+    const i64 backing_height = minimap.output_height_pixels != 0
+        ? std::min<i64>(minimap.output_height_pixels, available_rows)
+        : available_rows;
+    if (logical_right <= 0 || logical_bottom <= 0 || backing_width <= 0 ||
+        backing_height <= 0) {
+        return;
+    }
+
+    const auto flush_rectangle = [&](i64 left, i64 top, i64 right, i64 bottom) {
+        left = std::max<i64>(left, 0);
+        top = std::max<i64>(top, 0);
+        right = std::min<i64>(right, backing_width);
+        bottom = std::min<i64>(bottom, backing_height);
+        if (left >= right || top >= bottom) {
+            return;
+        }
+
+        for (i64 y = top; y < bottom; ++y) {
+            const std::size_t row =
+                static_cast<std::size_t>(y) * minimap.output_pitch_pixels;
+            i64 run_left = left;
+            while (run_left < right) {
+                const u16 color = minimap.output_pixels[
+                    row + static_cast<std::size_t>(run_left)];
+                i64 run_right = run_left + 1;
+                while (run_right < right && minimap.output_pixels[
+                    row + static_cast<std::size_t>(run_right)] == color) {
+                    ++run_right;
+                }
+                DrawBackBufferFilledRectangle16(static_cast<i32>(run_left),
+                    static_cast<i32>(y), static_cast<i32>(run_right - 1),
+                    static_cast<i32>(y), color);
+                run_left = run_right;
+            }
+        }
+    };
+
+    for (const UiOverlayMinimapMarker& marker : state.minimap_markers) {
+        if (marker.kind != UiOverlayMinimapMarkerKind::object_footprint ||
+            marker.width == 0 || marker.height == 0) {
+            continue;
+        }
+
+        const i64 marker_left = marker.x;
+        const i64 marker_top = marker.y;
+        // FUN_004e24e9 always supplies an anchor inside the logical minimap.
+        // Restricting the spill path to that contract prevents another caller's
+        // arbitrary footprint marker from expanding the ordinary flush region.
+        if (marker_left < logical_left || marker_left >= logical_right ||
+            marker_top < logical_top || marker_top >= logical_bottom) {
+            continue;
+        }
+
+        const i64 marker_right = marker_left + marker.width;
+        const i64 marker_bottom = marker_top + marker.height;
+
+        // FUN_004e27f8 writes the complete remembered-building footprint at
+        // 0x004e282a and advances rows at 0x004e2833/0x004e2839 without a
+        // logical minimap bounds check.  Present only those right/bottom spill
+        // pixels; terrain, fog, active-unit, placement and viewport output keep
+        // the original logical minimap flush bounds above.
+        if (marker_right > logical_right) {
+            flush_rectangle(logical_right, marker_top,
+                marker_right, marker_bottom);
+        }
+        if (marker_bottom > logical_bottom) {
+            flush_rectangle(marker_left, logical_bottom,
+                std::min<i64>(marker_right, logical_right), marker_bottom);
+        }
+    }
+}
+
 void flush_placement_preview_markers_to_backbuffer(UiOverlayState& state) {
     if (!state.emit_sprite_draws) {
         return;
@@ -2472,6 +2564,7 @@ void RenderGameplayMinimapOverlay(UiOverlayState& state) {
     apply_minimap_markers_to_output(state);
     DrawMinimapViewportBorder(state.minimap, state.camera_x, state.camera_y);
     flush_minimap_output_to_backbuffer(state);
+    flush_minimap_object_footprint_spill_to_backbuffer(state);
 }
 
 void RenderMinimapObjectAndTerrainMarkers(UiOverlayState& state) {
