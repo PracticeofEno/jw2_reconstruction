@@ -546,15 +546,25 @@ const GameplayScriptTriggerGroup* group_state(const GameplayScriptTriggerState& 
     return &state.groups[group_index];
 }
 
+u32 signed_group_prefix_limit(const GameplayScriptTriggerGroup& group) {
+    const i32 signed_reference_count =
+        signed_i32_from_wrapped_u32(group.reference_count);
+    if (signed_reference_count <= 0) {
+        return 0;
+    }
+    return std::min<u32>(static_cast<u32>(signed_reference_count),
+        kGameplayScriptTriggerReferencesPerGroup);
+}
+
 u32 group_alive_count(const GameplayScriptTriggerState& state,
     const GameplayScriptTriggerGroup& group) {
     u32 count = 0;
-    const u32 limit = std::min<u32>(
-        group.reference_count, kGameplayScriptTriggerReferencesPerGroup);
+    const u32 limit = signed_group_prefix_limit(group);
     for (u32 slot = 0; slot < limit; ++slot) {
         const GameplayScriptTriggerObjectState* object =
             object_state(state, group.object_indices[slot]);
-        if (object != nullptr && (object->flags & 4u) == 0) {
+        if (object != nullptr &&
+            (gameplay_script_object_runtime_flags(*object) & 4u) == 0) {
             ++count;
         }
     }
@@ -564,12 +574,13 @@ u32 group_alive_count(const GameplayScriptTriggerState& state,
 u32 group_dead_count(const GameplayScriptTriggerState& state,
     const GameplayScriptTriggerGroup& group) {
     u32 count = 0;
-    const u32 limit = std::min<u32>(
-        group.reference_count, kGameplayScriptTriggerReferencesPerGroup);
+    const u32 limit = signed_group_prefix_limit(group);
     for (u32 slot = 0; slot < limit; ++slot) {
         const u32 object_index = group.object_indices[slot];
-        if (object_index != 0 &&
-            !object_alive(object_state(state, object_index))) {
+        const GameplayScriptTriggerObjectState* object =
+            object_state(state, object_index);
+        if (object != nullptr &&
+            (gameplay_script_object_runtime_flags(*object) & 4u) != 0) {
             ++count;
         }
     }
@@ -578,13 +589,13 @@ u32 group_dead_count(const GameplayScriptTriggerState& state,
 
 bool group_all_dead(const GameplayScriptTriggerState& state,
     const GameplayScriptTriggerGroup& group) {
-    const u32 limit = std::min<u32>(
-        group.reference_count, kGameplayScriptTriggerReferencesPerGroup);
+    const u32 limit = signed_group_prefix_limit(group);
     for (u32 slot = 0; slot < limit; ++slot) {
         const u32 object_index = group.object_indices[slot];
         const GameplayScriptTriggerObjectState* object =
             object_state(state, object_index);
-        if (object != nullptr && (object->flags & 4u) == 0) {
+        if (object != nullptr &&
+            (gameplay_script_object_runtime_flags(*object) & 4u) == 0) {
             return false;
         }
     }
@@ -621,13 +632,7 @@ u32 count_group_objects_in_area(const GameplayScriptTriggerState& state,
 u32 count_raw_group_objects_in_area(const GameplayScriptTriggerState& state,
     const GameplayScriptTriggerGroup& group, const GameplayScriptArea& area) {
     u32 count = 0;
-    const i32 signed_reference_count =
-        signed_i32_from_wrapped_u32(group.reference_count);
-    if (signed_reference_count <= 0) {
-        return 0;
-    }
-    const u32 limit = std::min<u32>(static_cast<u32>(signed_reference_count),
-        kGameplayScriptTriggerReferencesPerGroup);
+    const u32 limit = signed_group_prefix_limit(group);
     for (u32 slot = 0; slot < limit; ++slot) {
         const GameplayScriptTriggerObjectState* object =
             object_state(state, group.object_indices[slot]);
@@ -1484,7 +1489,9 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
     }
     case 0x16: {
         const GameplayScriptTriggerGroup* group = group_state(state, words[1]);
-        return group != nullptr && group_dead_count(state, *group) > words[2];
+        return group != nullptr &&
+            static_cast<i32>(group_dead_count(state, *group)) >
+                static_cast<i32>(words[2]);
     }
     case 0x17:
         if (state.current_tick - words[2] >= words[1]) {
@@ -1493,10 +1500,14 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
         }
         return false;
     case 0x18: {
+        if (words[2] > 4) {
+            return false;
+        }
         const GameplayScriptTriggerGroup* group = group_state(state, words[1]);
         const GameplayScriptTriggerObjectState* object =
             group != nullptr ? first_group_slot_object(state, *group) : nullptr;
-        return object != nullptr && (object->flags & 4u) == 0 &&
+        return object != nullptr &&
+            (gameplay_script_object_runtime_flags(*object) & 4u) == 0 &&
             object_stat_by_mode(*object, words[2]) <= words[3];
     }
     case 0x19: {
@@ -1511,16 +1522,16 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
             return false;
         }
         u32 count = 0;
-        const u32 limit = std::min<u32>(
-            group->reference_count, kGameplayScriptTriggerReferencesPerGroup);
+        const u32 limit = signed_group_prefix_limit(*group);
         for (u32 slot = 0; slot < limit; ++slot) {
             const GameplayScriptTriggerObjectState* object =
                 object_state(state, group->object_indices[slot]);
-            if (!object_alive(object)) {
+            if (object == nullptr ||
+                (gameplay_script_object_runtime_flags(*object) & 4u) != 0) {
                 continue;
             }
             count += object_equipment_count(*object, words[2]);
-            if (count >= words[3]) {
+            if (static_cast<i32>(count) >= static_cast<i32>(words[3])) {
                 return true;
             }
         }
@@ -1546,7 +1557,9 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
         }
         for (u32 index : active_object_indices(state)) {
             const GameplayScriptTriggerObjectState* object = object_state(state, index);
-            if (object_alive(object) && object->owner_id == words[1] &&
+            if (object != nullptr &&
+                (gameplay_script_object_runtime_flags(*object) & 4u) == 0 &&
+                object->owner_id == words[1] &&
                 area_contains_object(*area, *object)) {
                 return true;
             }
@@ -1560,7 +1573,9 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
         const GameplayScriptTriggerGroup* group = group_state(state, words[2]);
         const GameplayScriptTriggerObjectState* object =
             group != nullptr ? first_group_slot_object(state, *group) : nullptr;
-        return object != nullptr && object->script_state == 1;
+        const u32 type_flags = object != nullptr && object->unit != nullptr ?
+            object->unit->type_flags : (object != nullptr ? object->type_flags : 0);
+        return object != nullptr && type_flags == 1;
     }
     case 0x20: {
         const GameplayScriptArea* area = area_state(state, words[1]);
@@ -1570,10 +1585,12 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
         u32 count = 0;
         for (u32 index : active_object_indices(state)) {
             const GameplayScriptTriggerObjectState* object = object_state(state, index);
-            if (object_alive(object) && area_contains_object(*area, *object) &&
+            if (object != nullptr &&
+                (gameplay_script_object_runtime_flags(*object) & 4u) == 0 &&
+                area_contains_object(*area, *object) &&
                 object->type_id == words[2]) {
                 ++count;
-                if (count >= words[3]) {
+                if (static_cast<i32>(count) >= static_cast<i32>(words[3])) {
                     return true;
                 }
             }
@@ -1587,7 +1604,9 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
         }
         for (u32 index : active_object_indices(state)) {
             const GameplayScriptTriggerObjectState* object = object_state(state, index);
-            if (object_alive(object) && area_contains_object(*area, *object)) {
+            if (object != nullptr &&
+                (gameplay_script_object_runtime_flags(*object) & 4u) == 0 &&
+                area_contains_object(*area, *object)) {
                 return true;
             }
         }
