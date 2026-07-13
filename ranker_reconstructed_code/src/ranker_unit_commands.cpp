@@ -5512,18 +5512,12 @@ void HandleUnitMorphEnterTimer(UnitCommandContext& context, UnitMovementUnit& un
         unit.runtime_stat_20 += 0x1e;
     }
     const u32 morph_type = unit.definition.morph_type_id;
-    if (morph_type != 0) {
-        set_unit_type_for_command(context, unit, morph_type);
-    }
+    set_unit_type_for_command(context, unit, morph_type);
     unit.saved_type_flags = unit.type_flags;
     unit.type_flags = 0x08002011;
     unit.movement_step_accumulator = 0;
-    unit.work_timer = 0;
-    unit.pending_command = {};
-    unit.deferred_commands = {};
+    unit.pending_command.state = 0;
     unit.deferred_command_count = 0;
-    unit.action_mode_gate = 0;
-    unit.linked_object_id = 0;
     PopDeferredUnitCommandOrReturnIdle(context, unit);
 }
 
@@ -5541,20 +5535,14 @@ void HandleUnitMorphExitTimer(UnitCommandContext& context, UnitMovementUnit& uni
     }
     unit.type_flags = unit.saved_type_flags;
     unit.movement_step_accumulator = 0;
-    unit.work_timer = 0;
-    unit.pending_command = {};
-    unit.deferred_commands = {};
+    unit.pending_command.state = 0;
     unit.deferred_command_count = 0;
-    unit.action_mode_gate = 0;
-    unit.linked_object_id = 0;
     if (unit.type_id == 0x25 &&
         context.callbacks.find_strict_placement_point != nullptr) {
         UnitMovementPoint point{unit.x, unit.y};
         if (context.callbacks.find_strict_placement_point(context, unit, point)) {
             unit.x = point.x;
             unit.y = point.y;
-            unit.current_cell_x = point.x & ~0x1f;
-            unit.current_cell_y = point.y & ~0x1f;
         }
     }
     PopDeferredUnitCommandOrReturnIdle(context, unit);
