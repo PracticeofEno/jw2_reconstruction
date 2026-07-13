@@ -1091,6 +1091,10 @@ void handle_player_inactive_packet(const Mode1ReliablePacket& packet, void*) {
         return;
     }
 
+    // HandleSubtype13PlayerInactivePacket writes the shared status byte read
+    // by PumpMode1ReliablePackets, not only its gameplay-dispatch mirror.  The
+    // setter also removes a departed channel from an already-open sync round.
+    SetMode1ReliablePlayerStatus(player, 0x14);
     auto& state = g_packet_dispatch_state.players[player];
     state.status = 0x14;
     state.inactive = true;

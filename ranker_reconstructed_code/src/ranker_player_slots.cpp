@@ -401,7 +401,10 @@ void MarkPlayerInactiveAndBroadcastIfLocal(PlayerSlotRuntimeState& state,
         return;
     }
 
-    publish(target_slot, false);
+    // ApplySubtype15ConsensusDecision disables the remote source when the
+    // decision targets this local slot.  Publishing target_slot here would
+    // incorrectly mark the local player inactive after a remote disconnect.
+    publish(source_slot, false);
 }
 
 }
