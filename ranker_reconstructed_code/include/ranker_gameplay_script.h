@@ -11,6 +11,7 @@ namespace ranker {
 
 struct UnitMovementUnit;
 struct UnitMovementContext;
+struct UnitLifecycleContext;
 
 struct GameplayScriptCommandPayload {
     u32 state = 0;
@@ -58,7 +59,7 @@ constexpr u32 kGameplayScriptTriggerRuntimeOffset = 0x6774;
 constexpr u32 kGameplayScriptOwnerCount = 8;
 constexpr u32 kGameplayScriptOwnerInactiveStatus = 0x14;
 constexpr u32 kGameplayScriptOwnerScriptValueCount = 0xaa;
-constexpr u32 kGameplayScriptOwnerUnitTypeCount = 0x40;
+constexpr u32 kGameplayScriptOwnerUnitTypeCount = 0xaa;
 constexpr u32 kGameplayScriptObjectEquipmentSlots = 6;
 constexpr u32 kGameplayScriptCopiedOwnerTableWords = 8;
 
@@ -191,7 +192,7 @@ struct GameplayScriptOwnerConditionState {
     u32 blocked_relation_mask = 0;
     u32 trigger_counter = 0;
     std::array<u32, kGameplayScriptOwnerScriptValueCount> script_values{};
-    std::array<u8, kGameplayScriptOwnerUnitTypeCount> unit_type_counts{};
+    std::array<u32, kGameplayScriptOwnerUnitTypeCount> unit_type_counts{};
 };
 
 struct GameplayScriptConditionContext {
@@ -237,6 +238,7 @@ struct GameplayScriptOpcodeContext {
     std::array<bool, kGameplayScriptOwnerCount> owner_score_component_dirty{};
     std::array<bool, kGameplayScriptOwnerCount> owner_score_reset_dirty{};
     UnitMovementContext* movement = nullptr;
+    UnitLifecycleContext* lifecycle = nullptr;
     GameplayScriptStrictPlacementCallback find_strict_placement = nullptr;
     void* strict_placement_user = nullptr;
     std::vector<GameplayScriptSpawnRequest> spawn_requests;

@@ -4,6 +4,7 @@
 #include "ranker_trc.h"
 #include "ranker_unit_commands.h"
 #include "ranker_unit_equipment.h"
+#include "ranker_unit_lifecycle.h"
 #include "ranker_unit_movement.h"
 
 #include <algorithm>
@@ -75,7 +76,7 @@ bool owner_has_active_objects(
     const GameplayScriptOwnerConditionState* owner = owner_state(context, owner_id);
     return owner != nullptr &&
         std::any_of(owner->unit_type_counts.begin(), owner->unit_type_counts.end(),
-            [](u8 count) { return count != 0; });
+            [](u32 count) { return count != 0; });
 }
 
 const GameplayScriptTriggerObjectState* object_state(
@@ -187,18 +188,78 @@ void rebuild_owner_unit_type_counts(GameplayScriptTriggerState& state) {
         owner.unit_type_counts.fill(0);
     }
 
-    for (u32 index = 1; index < state.objects.size(); ++index) {
+    if (state.opcode_context.lifecycle != nullptr) {
+        HandleOwnerUnitTypeCountRebuild(*state.opcode_context.lifecycle);
+        const UnitLifecycleContext& lifecycle = *state.opcode_context.lifecycle;
+        const u32 owner_limit = std::min<u32>(
+            static_cast<u32>(lifecycle.owner_unit_type_counts.size()),
+            static_cast<u32>(state.condition_context.owners.size()));
+        for (u32 owner = 0; owner < owner_limit; ++owner) {
+            state.condition_context.owners[owner].unit_type_counts =
+                lifecycle.owner_unit_type_counts[owner];
+        }
+        return;
+    }
+
+    for (u32 index : state.condition_context.active_object_order) {
+        if (index >= state.objects.size()) {
+            continue;
+        }
         const GameplayScriptTriggerObjectState& object = state.objects[index];
-        if (!object_alive(&object) ||
-            object.owner_id >= state.condition_context.owners.size() ||
+        if (object.owner_id >= kUnitOwnerTypeCountOwners ||
             object.type_id >= kGameplayScriptOwnerUnitTypeCount) {
             continue;
         }
-        u8& count =
-            state.condition_context.owners[object.owner_id].unit_type_counts[object.type_id];
-        if (count != 0xff) {
-            ++count;
+        if (object.unit != nullptr && !object.unit->active) {
+            continue;
         }
+        const u32 construction_gate = object.unit != nullptr ?
+            object.unit->action_mode_gate : static_cast<u32>(object.stat_30);
+        if (object.type_id >= 0x60 && construction_gate == 1) {
+            continue;
+        }
+        ++state.condition_context.owners[object.owner_id]
+            .unit_type_counts[object.type_id];
+    }
+}
+
+void convert_script_object_type(GameplayScriptTriggerObjectState& object,
+    u32 new_type, const UnitMovementDefinition& definition,
+    UnitLifecycleContext* lifecycle) {
+    object.type_id = new_type;
+    object.definition_class = definition.lifecycle_class;
+    object.stat_18 = definition.initial_max_health;
+    object.stat_20 = definition.initial_max_health;
+    object.stat_1c = definition.profile_offense_value;
+    object.stat_24 = definition.profile_defense_value;
+    object.stat_secondary_max = definition.initial_max_secondary_value;
+    object.stat_secondary_current = definition.initial_max_secondary_value;
+    object.stat_28 = definition.initial_secondary_value;
+    object.type_flags = definition.type_flags;
+    object.script_bit_flags = definition.initial_script_bit_flags;
+    object.bounds.left = definition.bounds_left;
+    object.bounds.top = definition.bounds_top;
+    object.bounds.right = definition.bounds_width;
+    object.bounds.bottom = definition.bounds_height;
+    object.stat_recompute_required = false;
+
+    if (object.unit == nullptr) {
+        return;
+    }
+    UnitMovementUnit& unit = *object.unit;
+    unit.type_id = new_type;
+    unit.definition = definition;
+    unit.max_health = definition.initial_max_health;
+    unit.health = definition.initial_max_health;
+    unit.runtime_stat_1c = definition.profile_offense_value;
+    unit.runtime_stat_20 = definition.profile_defense_value;
+    unit.max_secondary_value = definition.initial_max_secondary_value;
+    unit.secondary_value = definition.initial_max_secondary_value;
+    unit.runtime_stat_28 = definition.initial_secondary_value;
+    unit.type_flags = definition.type_flags;
+    unit.script_bit_flags = definition.initial_script_bit_flags;
+    if (lifecycle != nullptr) {
+        SetUnitFootprintOccupancyBits(*lifecycle, unit);
     }
 }
 
@@ -1637,14 +1698,21 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         return true;
     case 0x13: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
-        if (group == nullptr) {
-            return true;
+        const UnitMovementDefinition* definition = nullptr;
+        if (state.opcode_context.lifecycle != nullptr &&
+            state.opcode_context.lifecycle->callbacks.find_definition != nullptr) {
+            definition = state.opcode_context.lifecycle->callbacks.find_definition(
+                *state.opcode_context.lifecycle, command[3]);
         }
-        for_each_group_object(state, *group, [&](GameplayScriptTriggerObjectState& object) {
-            if (object.type_id == command[2]) {
-                set_script_object_type(object, command[3]);
-            }
-        });
+        if (group != nullptr && definition != nullptr) {
+            for_each_group_object(state, *group,
+                [&](GameplayScriptTriggerObjectState& object) {
+                if (object.type_id == command[2]) {
+                    convert_script_object_type(object, command[3], *definition,
+                        state.opcode_context.lifecycle);
+                }
+            });
+        }
         rebuild_owner_unit_type_counts(state);
         return true;
     }

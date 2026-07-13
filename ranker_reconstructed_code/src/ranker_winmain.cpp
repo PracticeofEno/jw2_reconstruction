@@ -22650,21 +22650,37 @@ void recount_default_gameplay_script_owner_unit_counts(
         owner.unit_type_counts.fill(0);
     }
 
+    UnitLifecycleContext* lifecycle = script.opcode_context.lifecycle;
+    if (lifecycle != nullptr) {
+        const u32 owner_limit = std::min<u32>(
+            static_cast<u32>(lifecycle->owner_unit_type_counts.size()),
+            static_cast<u32>(script.condition_context.owners.size()));
+        for (u32 owner = 0; owner < owner_limit; ++owner) {
+            script.condition_context.owners[owner].unit_type_counts =
+                lifecycle->owner_unit_type_counts[owner];
+        }
+        return;
+    }
+
     for (u32 index : script.condition_context.active_object_order) {
         if (index >= script.objects.size()) {
             continue;
         }
         const GameplayScriptTriggerObjectState& object = script.objects[index];
-        if (!default_gameplay_script_object_alive(object) ||
-            object.owner_id >= script.condition_context.owners.size() ||
+        if (object.owner_id >= kUnitOwnerTypeCountOwners ||
             object.type_id >= kGameplayScriptOwnerUnitTypeCount) {
             continue;
         }
-        u8& count =
-            script.condition_context.owners[object.owner_id].unit_type_counts[object.type_id];
-        if (count != 0xff) {
-            ++count;
+        if (object.unit != nullptr && !object.unit->active) {
+            continue;
         }
+        const u32 construction_gate = object.unit != nullptr ?
+            object.unit->action_mode_gate : static_cast<u32>(object.stat_30);
+        if (object.type_id >= 0x60 && construction_gate == 1) {
+            continue;
+        }
+        ++script.condition_context.owners[object.owner_id]
+            .unit_type_counts[object.type_id];
     }
 }
 
@@ -22684,6 +22700,7 @@ void sync_default_gameplay_script_runtime_context(
     }
     script.opcode_context.enabled = true;
     script.opcode_context.movement = movement;
+    script.opcode_context.lifecycle = lifecycle;
     script.opcode_context.find_strict_placement =
         default_gameplay_script_find_strict_placement;
     script.opcode_context.strict_placement_user = nullptr;
