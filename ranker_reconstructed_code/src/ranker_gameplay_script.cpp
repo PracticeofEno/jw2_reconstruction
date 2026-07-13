@@ -719,6 +719,7 @@ void ResetGameplayScriptDialogRuntimeState(GameplayScriptDialogState& state) {
     state.active_cue_id = 0;
     state.elapsed_frames = 0;
     state.force_complete = false;
+    state.condition13_latch = false;
     state.advance_flags.fill(0);
     state.previous_advance_flag = nullptr;
     state.visible_text.clear();
@@ -1192,13 +1193,14 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
         const GameplayScriptTriggerGroup* group = group_state(state, words[1]);
         return group != nullptr && group_alive_count(state, *group) <= words[2];
     }
-    case 0x13:
-        if (gameplay_script_dialog_state().force_complete &&
-            gameplay_script_dialog_state().last_effect_entry == 0) {
-            gameplay_script_dialog_state().force_complete = false;
-            gameplay_script_dialog_state().elapsed_frames = 1;
+    case 0x13: {
+        GameplayScriptDialogState& dialog = gameplay_script_dialog_state();
+        if (dialog.force_complete && dialog.last_effect_entry == 0) {
+            dialog.force_complete = false;
+            dialog.condition13_latch = true;
         }
-        return gameplay_script_dialog_state().elapsed_frames != 0;
+        return dialog.condition13_latch;
+    }
     case 0x14: {
         if (words[1] >= state.triggers.size()) {
             return false;
@@ -1452,10 +1454,24 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
             area_center_y(*area), map_effect);
         return true;
     }
-    case 0x03:
+    case 0x03: {
+        GameplayScriptDialogState& dialog = gameplay_script_dialog_state();
+        const bool has_condition13 = std::any_of(
+            state.triggers.begin(), state.triggers.end(),
+            [](const GameplayScriptTriggerRuntimeRecord& candidate) {
+                return candidate.condition_enabled &&
+                    candidate.condition_words[0] == 0x13;
+            });
+        if (has_condition13 && !dialog.condition13_latch) {
+            dialog.condition13_latch = true;
+            return true;
+        }
+        dialog.force_complete = true;
+        dialog.last_effect_entry = 0;
         state.opcode_context.stage_result_pending = true;
         state.opcode_context.stage_result = 0;
         return true;
+    }
     case 0x04:
         state.opcode_context.stage_result_pending = true;
         state.opcode_context.stage_result = 1;

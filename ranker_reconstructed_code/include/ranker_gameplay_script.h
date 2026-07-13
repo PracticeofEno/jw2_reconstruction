@@ -27,6 +27,7 @@ struct GameplayScriptDialogState {
     i32 text_x = 100;
     i32 text_y = 300;
     bool force_complete = false;
+    bool condition13_latch = false;
     bool effect_playback_enabled = true;
     std::array<u8, 3> advance_flags{};
     u8* previous_advance_flag = nullptr;
