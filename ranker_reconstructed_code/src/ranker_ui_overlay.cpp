@@ -4148,18 +4148,22 @@ bool DispatchGameplayChatSlashCommand(UiOverlayState& state, const std::string& 
 }
 
 void ScrollCameraLeft(UiOverlayState& state) {
-    const u32 step = ResolveCameraScrollStep(state);
-    if (state.camera_x >= static_cast<i32>(step) && state.camera_x > 0) {
+    if (state.camera_x > 0) {
+        const u32 step = ResolveCameraScrollStep(state);
+        if (state.camera_x < static_cast<i32>(step)) {
+            state.camera_x = 0;
+            return;
+        }
         state.camera_x -= static_cast<i32>(step);
         state.camera_scroll_dirty = true;
-    } else {
-        state.camera_x = 0;
+        return;
     }
+    state.camera_x = 0;
 }
 
 void ScrollCameraRight(UiOverlayState& state) {
-    const u32 step = ResolveCameraScrollStep(state);
     if (state.camera_x < state.camera_max_x) {
+        const u32 step = ResolveCameraScrollStep(state);
         state.camera_x = std::min(state.camera_x + static_cast<i32>(step),
             state.camera_max_x);
         state.camera_scroll_dirty = true;
@@ -4169,18 +4173,22 @@ void ScrollCameraRight(UiOverlayState& state) {
 }
 
 void ScrollCameraUp(UiOverlayState& state) {
-    const u32 step = ResolveCameraScrollStep(state);
-    if (state.camera_y >= static_cast<i32>(step) && state.camera_y > 0) {
+    if (state.camera_y > 0) {
+        const u32 step = ResolveCameraScrollStep(state);
+        if (state.camera_y < static_cast<i32>(step)) {
+            state.camera_y = 0;
+            return;
+        }
         state.camera_y -= static_cast<i32>(step);
         state.camera_scroll_dirty = true;
-    } else {
-        state.camera_y = 0;
+        return;
     }
+    state.camera_y = 0;
 }
 
 void ScrollCameraDown(UiOverlayState& state) {
-    const u32 step = ResolveCameraScrollStep(state);
     if (state.camera_y < state.camera_max_y) {
+        const u32 step = ResolveCameraScrollStep(state);
         state.camera_y = std::min(state.camera_y + static_cast<i32>(step),
             state.camera_max_y);
         state.camera_scroll_dirty = true;
@@ -4516,8 +4524,6 @@ void HandleGameplayPointerActionFrame(UiOverlayState& state) {
         state.pending_local_command = true;
     }
 
-    ScrollCameraFromEdgeOrKeys(state);
-    UpdateCameraScrollRamp(state);
 }
 
 void DispatchGameplayPointerUnitCommand(UiOverlayState& state, u32 command_id) {
@@ -4593,22 +4599,49 @@ void UpdateCameraFromMinimapDrag(UiOverlayState& state) {
     state.camera_y = std::min<i32>(static_cast<i32>(
         ((static_cast<i64>(top) * map_height) / mini_height) * 0x20),
         state.camera_max_y);
-    state.camera_scroll_dirty = true;
 }
 
 void ScrollCameraFromEdgeOrKeys(UiOverlayState& state) {
-    if (state.mouse_x <= 0) {
+    // FUN_004ea3c9 publishes the edge bit mask itself as the directional
+    // cursor index: up=1, right=2, down=4 and left=8.  Only exact client-edge
+    // coordinates participate; captured negative/outside coordinates do not.
+    state.camera_edge_cursor_index = 0;
+    if (state.camera_edge_pointer_valid) {
+        if (state.mouse_x == 0) {
+            ScrollCameraLeft(state);
+            state.camera_edge_cursor_index += 8;
+        }
+        if (state.screen_width != 0 &&
+            state.mouse_x + 1 == static_cast<i32>(state.screen_width)) {
+            ScrollCameraRight(state);
+            state.camera_edge_cursor_index += 2;
+        }
+        if (state.mouse_y == 0) {
+            ScrollCameraUp(state);
+            state.camera_edge_cursor_index += 1;
+        }
+        if (state.screen_height != 0 &&
+            state.mouse_y + 1 == static_cast<i32>(state.screen_height)) {
+            ScrollCameraDown(state);
+            state.camera_edge_cursor_index += 4;
+        }
+    }
+
+    // DAT_00868140 suppresses the DIK arrow-key pass when an edge direction
+    // actually moved the camera.  At a clamped edge the keys remain live.
+    if (state.camera_scroll_dirty) {
+        return;
+    }
+    if (state.camera_left_key_down) {
         ScrollCameraLeft(state);
     }
-    if (state.screen_width != 0 &&
-        state.mouse_x >= static_cast<i32>(state.screen_width) - 1) {
+    if (state.camera_right_key_down) {
         ScrollCameraRight(state);
     }
-    if (state.mouse_y <= 0) {
+    if (state.camera_up_key_down) {
         ScrollCameraUp(state);
     }
-    if (state.screen_height != 0 &&
-        state.mouse_y >= static_cast<i32>(state.screen_height) - 1) {
+    if (state.camera_down_key_down) {
         ScrollCameraDown(state);
     }
 }

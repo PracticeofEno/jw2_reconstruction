@@ -129,16 +129,6 @@ bool unit_can_block_input_action(const GameplayActionUnitState& unit) {
         (unit.command_state & kUnitCommandDead) == 0;
 }
 
-bool unit_target_class_allowed(const GameplayInputActionState& state,
-    u32 selector, const GameplayActionUnitState& unit) {
-    if (selector >= state.selector_target_class_masks.size() ||
-        unit.target_class >= 32) {
-        return false;
-    }
-    return (state.selector_target_class_masks[selector] &
-        (1u << unit.target_class)) != 0;
-}
-
 void record_validation_hit(GameplayInputActionState& state,
     const GameplayActionUnitState& unit) {
     state.last_validation_unit_offset = unit.offset;
@@ -202,10 +192,10 @@ bool resolve_low_validation_hit(GameplayInputActionState& state) {
 
 bool default_validate_low_action(GameplayInputActionState& state,
     u32 selector, i32 world_x, i32 world_y) {
+    (void)selector;
     reset_validation_state(state);
     for (const GameplayActionUnitState& unit : state.units) {
         if (!unit_can_block_input_action(unit) ||
-            !unit_target_class_allowed(state, selector, unit) ||
             !point_in_unit_action_bounds(unit, world_x, world_y)) {
             continue;
         }
@@ -219,11 +209,11 @@ bool default_validate_low_action(GameplayInputActionState& state,
 
 bool default_validate_high_action(GameplayInputActionState& state,
     u32 selector, i32 world_x, i32 world_y) {
+    (void)selector;
     reset_validation_state(state);
     for (const GameplayActionUnitState& unit : state.units) {
         if (unit.active || !unit.visible || unit.runtime_state != 4 ||
             unit.type >= 0x60 || (unit.runtime_flags & 4u) == 0 ||
-            !unit_target_class_allowed(state, selector, unit) ||
             !point_in_unit_action_bounds(unit, world_x, world_y)) {
             continue;
         }
@@ -690,10 +680,11 @@ bool PublishSelectedUnitProductionAction(GameplayInputActionState& state, u32 pr
         return false;
     }
 
-    // Normal subtype-0x0c publisher 0x004d9f89 keeps EBX=local owner through
-    // FUN_004de65f, placing it at packet +0x20.
+    // FUN_004d9fd4..0x004d9fea publishes the secondary cost at +0x18 and
+    // explicitly clears both trailing dwords.  The local owner is already in
+    // the packed opcode/channel byte; it is not repeated at packet +0x20.
     publish(state, make_action(state, kSubtypePlacementCommand, unit->offset,
-        production, availability.secondary_cost, 0, state.local_player_index));
+        production, availability.secondary_cost, 0, 0));
     return true;
 }
 

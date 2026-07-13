@@ -3707,7 +3707,7 @@ void default_gameplay_input_handle_keyboard_event(GameplayInputActionState& stat
     publish_default_ui_overlay_camera(overlay);
 }
 
-void default_gameplay_input_pre_cursor_update(GameplayInputActionState&) {
+void default_gameplay_input_pre_cursor_update(GameplayInputActionState& state) {
     const InputState& input = input_state();
     sync_default_ui_overlay_runtime_from_gameplay_state();
     UiOverlayState& overlay = ui_overlay_state();
@@ -3721,13 +3721,19 @@ void default_gameplay_input_pre_cursor_update(GameplayInputActionState&) {
     if ((overlay.pointer_state & kUiOverlayPointerMinimapDrag) != 0) {
         UpdateCameraFromMinimapDrag(overlay);
     }
-    // The original edge-scroll routine consumes the last coordinates written by
-    // a real window pointer message.  A command-line P2P client can enter the
-    // session in the background before receiving one, leaving our zero-filled
-    // InputState to look like a pointer held at the upper-left corner.  Do not
-    // turn that missing sample into continuous camera input.
-    if (g_runtime.app_active && input.pointer_motion_seen) {
-        ScrollCameraFromEdgeOrKeys(overlay);
+    // FUN_004ea3c9 runs even while the game window is inactive.  This matters
+    // when original and reconstructed clients are compared side by side.  The
+    // validity bit only prevents the startup zero-filled InputState from
+    // masquerading as a real upper-left pointer sample; arrow keys remain live.
+    overlay.camera_edge_pointer_valid = input.pointer_motion_seen;
+    overlay.camera_left_key_down = input.key_down[VK_LEFT] != 0;
+    overlay.camera_right_key_down = input.key_down[VK_RIGHT] != 0;
+    overlay.camera_up_key_down = input.key_down[VK_UP] != 0;
+    overlay.camera_down_key_down = input.key_down[VK_DOWN] != 0;
+    ScrollCameraFromEdgeOrKeys(overlay);
+    if (overlay.camera_scroll_dirty) {
+        state.cursor_index = overlay.camera_edge_cursor_index;
+        state.cursor_mode = 1;
     }
     publish_default_ui_overlay_camera(overlay);
 
@@ -4381,14 +4387,10 @@ bool default_gameplay_input_dispatch_action(
         state.selector_modes[action_index] >= 4;
     if (state.last_validation_unit_offset != 0) {
         const auto target = std::find_if(state.units.begin(), state.units.end(),
-            [&state, action_index, lifecycle_target_action](
+            [&state, lifecycle_target_action](
                 const GameplayActionUnitState& unit) {
                 if (unit.offset != state.last_validation_unit_offset ||
-                    !unit.visible || action_index >=
-                        state.selector_target_class_masks.size() ||
-                    unit.target_class >= 32 ||
-                    (state.selector_target_class_masks[action_index] &
-                        (1u << unit.target_class)) == 0) {
+                    !unit.visible) {
                     return false;
                 }
                 if (lifecycle_target_action) {
@@ -11672,8 +11674,10 @@ bool default_mode1_packet_set_unit_deferred_resource_command(void*,
     }
 
     if (production_order_resource) {
-        if (mode == 0 ||
-            !default_mode1_packet_production_order_available_for_enqueue(
+        // HandleSubtype0cPlacementResourcePacket treats only raw +0x18 == 1
+        // as cancellation.  Enqueue mode is every other value, including
+        // zero: many original upgrades have a zero secondary-resource cost.
+        if (!default_mode1_packet_production_order_available_for_enqueue(
                 *unit, payload)) {
             return false;
         }
@@ -18219,8 +18223,59 @@ bool default_unit_command_start_completion_announcement(UnitCommandContext&,
     }
 
     unit.command_value = runtime.current_order_id;
-    unit.work_timer = runtime.progress_ticks;
+    // FUN_004ebed0 and ProcessProductionOrderProgressTick share raw unit
+    // +0x2c for upgrade progress.  For structures this is the same typed
+    // union field named action_mode; work_timer is a different raw slot.
+    unit.action_mode = runtime.progress_ticks;
     return true;
+}
+
+void refresh_default_order_2b_active_unit_progress() {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr || lifecycle->movement == nullptr) {
+        return;
+    }
+
+    UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
+    bool effect_runtime_synced = false;
+    for (UnitMovementUnit* candidate : lifecycle->movement->active_units) {
+        // ApplyProductionOrderCompletionEffects (0x0043a33b..0x0043a386)
+        // walks the complete active-unit list and calls FUN_004099e0 for
+        // definitions whose raw +0x49c flag has bit 1 set.  In the typed
+        // catalog that flag is support_target_flags bit 1.
+        if (candidate == nullptr || !candidate->active ||
+            (candidate->definition.support_target_flags & 2u) == 0) {
+            continue;
+        }
+
+        UnitRuntimeStatBlock stats{};
+        stats.max_health = candidate->max_health;
+        stats.max_secondary_value = candidate->max_secondary_value;
+        stats.health = candidate->health;
+        stats.stat_1c = candidate->runtime_stat_1c;
+        stats.stat_20 = candidate->runtime_stat_20;
+        stats.secondary_value = candidate->secondary_value;
+        stats.stat_28 = candidate->runtime_stat_28;
+
+        bool rank_up = false;
+        ApplyUnitVariantProgressFromStoredValue(
+            g_runtime.gameplay_production_runtime, *candidate, stats, &rank_up,
+            default_gameplay_frame_random_limit);
+        if (!rank_up) {
+            continue;
+        }
+
+        // FUN_004099e0 publishes attachment action 0x2d after at least one
+        // stored-progress rank-up.  Reuse the already reconstructed script
+        // path's original JW2_11 effect-id translation (0x3d + 0x2d).
+        if (!effect_runtime_synced) {
+            configure_default_unit_effect_runtime_state(effects);
+            sync_default_unit_effect_runtime_units(effects, *lifecycle);
+            effect_runtime_synced = true;
+        }
+        StartSelectedUnitAttachmentEffect(
+            effects, 0x3du + 0x2du, *candidate, candidate);
+    }
 }
 
 bool default_unit_command_advance_completion_announcement(UnitCommandContext&,
@@ -18233,7 +18288,10 @@ bool default_unit_command_advance_completion_announcement(UnitCommandContext&,
 
     const ProductionOrderCompletionResult result =
         AdvanceProductionOrderProgress(g_runtime.gameplay_production_runtime,
-            *definition, unit.owner_id, unit.work_timer);
+            *definition, unit.owner_id, unit.action_mode);
+    if (result.order_2b_refresh_requested) {
+        refresh_default_order_2b_active_unit_progress();
+    }
     return result.completed;
 }
 
@@ -25777,6 +25835,18 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
         break;
     case WM_ACTIVATEAPP:
         g_runtime.app_active = wparam != 0;
+        if (!g_runtime.app_active) {
+            // A foreground WM_KEYUP is not delivered after focus moves to a
+            // different client.  The original DirectInput keyboard device is
+            // unacquired at that point, so its directional state reads clear;
+            // discard our event-cache equivalents before the background edge
+            // scroll pass can mistake them for held arrow keys.
+            InputState& input = input_state();
+            input.key_down[VK_LEFT] = 0;
+            input.key_down[VK_RIGHT] = 0;
+            input.key_down[VK_UP] = 0;
+            input.key_down[VK_DOWN] = 0;
+        }
         if (g_runtime.app_active && g_runtime.directx_initialized &&
             g_runtime.input_enabled) {
             SetFocus(window);

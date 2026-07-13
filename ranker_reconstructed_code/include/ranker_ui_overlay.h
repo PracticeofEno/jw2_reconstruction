@@ -531,6 +531,11 @@ struct UiOverlayState {
     bool ctrl_modifier_down = false;
     bool alt_modifier_down = false;
     bool control_group_assign_mode = false;
+    bool camera_edge_pointer_valid = true;
+    bool camera_left_key_down = false;
+    bool camera_right_key_down = false;
+    bool camera_up_key_down = false;
+    bool camera_down_key_down = false;
     u32 chat_channel = 0;
     u32 default_chat_channel = 0;
     u32 chat_expire_frame = 0;
@@ -543,6 +548,7 @@ struct UiOverlayState {
     u32 last_control_group_frame = 0;
     u32 camera_scroll_ramp = 0;
     u32 camera_scroll_tick_bucket = 0;
+    u32 camera_edge_cursor_index = 0;
     GameplayContextCursorState context_cursor;
     UiOverlayHoverContext hover_context;
     u32 pointer_state = 0;
