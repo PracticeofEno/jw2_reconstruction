@@ -18502,6 +18502,14 @@ void default_unit_command_dispatch_attack(UnitCommandContext& context,
             ? target.definition.target_selection_priority
             : target.type_id;
     };
+    const auto find_valid_replacement = [&]() -> UnitMovementUnit* {
+        UnitMovementUnit* replacement = context.callbacks.find_target != nullptr
+            ? context.callbacks.find_target(context, unit)
+            : nullptr;
+        return replacement != nullptr && can_attack_replacement(*replacement)
+            ? replacement
+            : nullptr;
+    };
     const auto copy_attack_path_target = [&](UnitMovementUnit& target) {
         unit.path_target_x = target.x;
         unit.path_target_y = target.y;
@@ -18584,6 +18592,145 @@ void default_unit_command_dispatch_attack(UnitCommandContext& context,
 
     const UnitActionTickResult result =
         ProcessUnitActionCycle(action_context, unit);
+
+    if (!extended_runtime_table_unit && command_state == kUnitStateAttackTarget) {
+        // Original low-unit state 0x04 (0x004c93d1, table 0x0072d2a8)
+        // distinguishes the action result and carry paths.  In particular,
+        // recovery result 4 must revalidate the target because the action
+        // helper deliberately skipped class/range validation while locked out.
+        if (result.code == UnitActionTickCode::cycle_started ||
+            result.code == UnitActionTickCode::cycle_in_progress) {
+            return;
+        }
+        if (result.code == UnitActionTickCode::cycle_complete) {
+            if (UnitMovementUnit* replacement = find_valid_replacement()) {
+                SetUnitCommandTarget(unit, replacement);
+                copy_attack_path_target(*replacement);
+            }
+            return;
+        }
+        if (result.code == UnitActionTickCode::turning_to_target) {
+            UnitMovementUnit* current = result.target != nullptr
+                ? result.target
+                : unit.target;
+            if (current == nullptr || !can_attack_replacement(*current)) {
+                pop_extended_runtime_action();
+                return;
+            }
+            if (target_in_command_action_range(*current)) {
+                return;
+            }
+            if ((unit.runtime_flags & 0x8u) != 0) {
+                pop_extended_runtime_action();
+                return;
+            }
+            SetUnitCommandTarget(unit, current);
+            copy_attack_path_target(*current);
+            unit.command_state = kUnitStateAttackTravel;
+            if (context.movement != nullptr) {
+                ProcessUnitPathToDestination(*context.movement, unit);
+            }
+            return;
+        }
+
+        if (!result.valid_target || result.target == nullptr) {
+            if (UnitMovementUnit* replacement = find_valid_replacement()) {
+                SetUnitCommandTarget(unit, replacement);
+                copy_attack_path_target(*replacement);
+                return;
+            }
+            pop_extended_runtime_action();
+            return;
+        }
+        if ((unit.runtime_flags & 0x8u) != 0) {
+            pop_extended_runtime_action();
+            return;
+        }
+        SetUnitCommandTarget(unit, result.target);
+        copy_attack_path_target(*result.target);
+        unit.command_state = kUnitStateAttackTravel;
+        if (context.movement != nullptr) {
+            ProcessUnitPathToDestination(*context.movement, unit);
+        }
+        return;
+    }
+
+    if (!extended_runtime_table_unit &&
+        command_state == kUnitStateGuardCombatCycle) {
+        // State 0x20 (0x004c9bdd) scans on carry/loss and results 0/1.
+        // Result 0 keeps the old target unless the candidate has a strictly
+        // better priority; result 1 accepts any candidate returned by the scan.
+        const bool lost_or_out_of_range =
+            result.code == UnitActionTickCode::lost_target;
+        const bool completed = result.code == UnitActionTickCode::cycle_complete;
+        if (!lost_or_out_of_range && !completed) {
+            return;
+        }
+
+        UnitMovementUnit* current = result.target != nullptr
+            ? result.target
+            : unit.target;
+        UnitMovementUnit* replacement = find_valid_replacement();
+        if (lost_or_out_of_range && !result.valid_target) {
+            if (replacement == nullptr) {
+                path_point_to_state(unit.saved_path_target_x,
+                    unit.saved_path_target_y, kUnitStateGuardReturnTravel, true);
+                return;
+            }
+            current = replacement;
+        }
+        else if (replacement != nullptr &&
+            (completed || current == nullptr ||
+                command_target_priority(*replacement) <
+                    command_target_priority(*current))) {
+            current = replacement;
+        }
+
+        if (current == nullptr) {
+            path_point_to_state(unit.saved_path_target_x,
+                unit.saved_path_target_y, kUnitStateGuardReturnTravel, true);
+            return;
+        }
+        SetUnitCommandTarget(unit, current);
+        copy_attack_path_target(*current);
+        if (!target_in_command_action_range(*current)) {
+            path_current_target_to_state(
+                *current, kUnitStateGuardPursueTarget, false);
+        }
+        return;
+    }
+
+    if (!extended_runtime_table_unit &&
+        (command_state == kUnitStatePatrolReturnCombat ||
+            command_state == kUnitStatePatrolOutboundCombat)) {
+        // Patrol combat states 0x39/0x3a (0x004ca790/0x004ca818) scan only
+        // for the action helper's carry/loss or result-0 paths.  Results 1..4
+        // leave the current combat state untouched.
+        if (result.code != UnitActionTickCode::lost_target) {
+            return;
+        }
+        const u32 leg_state = command_state == kUnitStatePatrolReturnCombat
+            ? kUnitStatePatrolReturnLeg
+            : kUnitStatePatrolOutboundLeg;
+        UnitMovementUnit* replacement = find_valid_replacement();
+        if (replacement == nullptr) {
+            const i32 route_x = command_state == kUnitStatePatrolReturnCombat
+                ? unit.anchor_x
+                : unit.destination_x;
+            const i32 route_y = command_state == kUnitStatePatrolReturnCombat
+                ? unit.anchor_y
+                : unit.destination_y;
+            path_point_to_state(route_x, route_y, leg_state, true);
+            return;
+        }
+        SetUnitCommandTarget(unit, replacement);
+        copy_attack_path_target(*replacement);
+        if (!target_in_command_action_range(*replacement)) {
+            path_current_target_to_state(*replacement, leg_state, false);
+        }
+        return;
+    }
+
     if (result.code != UnitActionTickCode::lost_target) {
         if (extended_runtime_table_unit && unit.type_id == 0x73 &&
             result.target != nullptr &&
