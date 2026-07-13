@@ -177,6 +177,9 @@ struct GameplayScriptSpawnRequest {
     bool has_area_bounds = false;
 };
 
+using GameplayScriptImmediateSpawnCallback = bool (*)(
+    const GameplayScriptSpawnRequest& request, void* user);
+
 struct GameplayScriptUnitNameAppendRequest {
     u32 type_id = 0;
     std::string suffix;
@@ -244,6 +247,8 @@ struct GameplayScriptOpcodeContext {
     UnitLifecycleContext* lifecycle = nullptr;
     GameplayScriptStrictPlacementCallback find_strict_placement = nullptr;
     void* strict_placement_user = nullptr;
+    GameplayScriptImmediateSpawnCallback spawn_immediate = nullptr;
+    void* spawn_immediate_user = nullptr;
     std::vector<GameplayScriptSpawnRequest> spawn_requests;
     std::vector<GameplayScriptUnitNameAppendRequest> unit_name_append_requests;
 };

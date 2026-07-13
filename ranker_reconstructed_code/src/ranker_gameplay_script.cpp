@@ -631,6 +631,11 @@ void append_spawn_request(GameplayScriptTriggerState& state, u32 opcode, u32 own
         request.area_bottom = area->bottom;
         request.has_area_bounds = true;
     }
+    if (state.opcode_context.spawn_immediate != nullptr) {
+        state.opcode_context.spawn_immediate(
+            request, state.opcode_context.spawn_immediate_user);
+        return;
+    }
     state.opcode_context.spawn_requests.push_back(request);
 }
 
@@ -1541,10 +1546,23 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         if (area == nullptr) {
             return true;
         }
-        const bool map_effect = command[2] >= 1000;
-        append_spawn_request(state, command[0], command[3],
-            map_effect ? command[2] - 1000 : command[2], area_center_x(*area),
-            area_center_y(*area), map_effect);
+        const i32 x = area_translation_center_x(*area);
+        const i32 y = area_translation_center_y(*area);
+        const bool map_effect = static_cast<i32>(command[2]) >= 1000;
+        if (map_effect) {
+            // Original 0x00416ab2 ignores command[1] on the effect branch.
+            append_spawn_request(state, command[0], command[3],
+                command[2] - 1000u, x, y, true);
+            return true;
+        }
+
+        // The original uses a DEC/JNZ do-loop and malformed count zero would
+        // run 2^32 attempts.  No shipped scenario uses zero; keep malformed
+        // input safe while preserving every valid count exactly.
+        for (u32 attempt = 0; attempt < command[1]; ++attempt) {
+            append_spawn_request(state, command[0], command[3] & 0xffu,
+                command[2] & 0xffu, x, y, false);
+        }
         return true;
     }
     case 0x03: {

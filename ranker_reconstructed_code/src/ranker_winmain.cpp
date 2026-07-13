@@ -1022,6 +1022,8 @@ bool default_unit_visibility_allows_target(const UnitMovementUnit& source,
 UnitMovementUnit* default_unit_command_find_nearby_follow_target(
     UnitCommandContext& context, UnitMovementUnit& unit);
 void run_default_gameplay_script_phase(GameplayLoopState& state, u32 phase);
+bool dispatch_default_gameplay_script_immediate_spawn(
+    const GameplayScriptSpawnRequest& request, void* user);
 void instantiate_default_gameplay_script_scenario_units(GameplayScriptTriggerState& script);
 void initialize_default_gameplay_original_unit_pool_slots();
 bool default_gameplay_script_object_alive(
@@ -22710,6 +22712,9 @@ void sync_default_gameplay_script_runtime_context(
     script.opcode_context.find_strict_placement =
         default_gameplay_script_find_strict_placement;
     script.opcode_context.strict_placement_user = nullptr;
+    script.opcode_context.spawn_immediate =
+        dispatch_default_gameplay_script_immediate_spawn;
+    script.opcode_context.spawn_immediate_user = &script;
     // DAT_00722320/DAT_0072231c are shared by the frame clock and script
     // opcodes 0x1e, 0x29 and 0x3d in the original.  Pull the live value after
     // the frame-clock tick so script arithmetic observes that same ordering.
@@ -23412,24 +23417,17 @@ void release_default_map_effects_near_request(
     }
 }
 
-bool spawn_default_gameplay_script_unit(
+UnitMovementUnit* spawn_default_gameplay_script_unit(
     const GameplayScriptSpawnRequest& request) {
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
     if (lifecycle == nullptr || lifecycle->movement == nullptr) {
-        return false;
+        return nullptr;
     }
 
     UnitMovementContext& movement = *lifecycle->movement;
-    UnitMovementUnit* unit = nullptr;
-    std::unique_ptr<UnitMovementUnit> owned_unit;
-    if (!movement.free_units.empty()) {
-        unit = take_default_free_unit_head(movement);
-    } else {
-        owned_unit = std::make_unique<UnitMovementUnit>();
-        unit = owned_unit.get();
-    }
+    UnitMovementUnit* unit = take_default_free_unit_head(movement);
     if (unit == nullptr) {
-        return false;
+        return nullptr;
     }
 
     const u32 unit_id = unit->id != 0 ? unit->id :
@@ -23437,28 +23435,55 @@ bool spawn_default_gameplay_script_unit(
     const u32 runtime_slot_index =
         unit->runtime_slot_index != kInvalidUnitRuntimeSlotIndex ?
             unit->runtime_slot_index : unit_id;
-    UnitMovementUnit initialized{};
-    if (!InitializePlacedUnitFromMapSlot(*lifecycle, initialized,
+    *unit = UnitMovementUnit{};
+    unit->id = unit_id;
+    unit->runtime_slot_index = runtime_slot_index;
+    // HandleFreeUnitActivation (0x004d04b0) links the fixed-pool node at the
+    // active-list head before InitializePlacedUnitFromMapSlot runs.
+    activate_default_gameplay_script_unit(movement, *unit);
+    if (!InitializePlacedUnitFromMapSlot(*lifecycle, *unit,
             request.type_or_effect_id, request.owner_id, request.x, request.y)) {
-        if (owned_unit == nullptr) {
-            return_default_free_unit_head(movement, unit);
-        }
-        return false;
+        return_default_free_unit_head(movement, unit);
+        return nullptr;
     }
 
-    initialized.id = unit_id;
-    initialized.runtime_slot_index = runtime_slot_index;
-    *unit = initialized;
     unit->id = unit_id;
     unit->runtime_slot_index = runtime_slot_index;
     unit->active = true;
     unit->linked_unit = unit;
     refresh_default_unit_definition_runtime_fields(*unit);
-    if (owned_unit != nullptr) {
-        g_runtime.gameplay_script_spawned_units.push_back(std::move(owned_unit));
-    }
-    activate_default_gameplay_script_unit(movement, *unit);
     HandleOwnerUnitTypeCountRebuild(*lifecycle);
+    return unit;
+}
+
+bool dispatch_default_gameplay_script_immediate_spawn(
+    const GameplayScriptSpawnRequest& request, void* user) {
+    GameplayScriptTriggerState* script =
+        static_cast<GameplayScriptTriggerState*>(user);
+    if (request.map_effect) {
+        configure_default_map_effect_context();
+        if (request.remove_from_area) {
+            release_default_map_effects_near_request(request);
+            return true;
+        }
+        return HandleMapEffectNearestTileSpawn(g_runtime.map_effect_context,
+            request.type_or_effect_id, request.x, request.y) != nullptr;
+    }
+
+    UnitMovementUnit* unit = spawn_default_gameplay_script_unit(request);
+    if (unit == nullptr || script == nullptr) {
+        return false;
+    }
+    const u32 object_index =
+        ensure_default_gameplay_script_object_index_for_unit(*script, *unit);
+    sync_default_gameplay_script_object_from_unit(
+        script->objects[object_index], *unit);
+    auto& active_order = script->condition_context.active_object_order;
+    active_order.erase(
+        std::remove(active_order.begin(), active_order.end(), object_index),
+        active_order.end());
+    active_order.insert(active_order.begin(), object_index);
+    recount_default_gameplay_script_owner_unit_counts(*script);
     return true;
 }
 
@@ -23484,7 +23509,7 @@ void consume_default_gameplay_script_spawn_requests(
             continue;
         }
 
-        if (!spawn_default_gameplay_script_unit(request)) {
+        if (spawn_default_gameplay_script_unit(request) == nullptr) {
             g_runtime.gameplay_script_unhandled_spawn_requests.push_back(request);
         }
     }
