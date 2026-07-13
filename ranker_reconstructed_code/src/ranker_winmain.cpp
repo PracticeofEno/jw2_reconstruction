@@ -17261,7 +17261,6 @@ void default_unit_damage_reaction(UnitDamageContext&, UnitRecord& source,
     }
 
     if (target_owner < kOwnerAiOwnerCount && target_owner < kPlayerSlotCount &&
-        source.owner_id < kPlayerSlotCount &&
         g_runtime.gameplay_player_slots.slot_states[target_owner] ==
             static_cast<u8>(PlayerSlotState::player_controlled)) {
         sync_default_owner_threat_points_from_ai(target_owner);
