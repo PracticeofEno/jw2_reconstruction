@@ -2901,8 +2901,7 @@ void ProcessGroundUnitTerrainStep(UnitMovementContext& context, UnitMovementUnit
         context.callbacks.query_ground_separation_target != nullptr
             ? context.callbacks.query_ground_separation_target(context, unit)
             : nullptr;
-    if (target == nullptr || target == &unit ||
-        (target->runtime_flags & 4u) != 0) {
+    if (target == nullptr || target == &unit) {
         return;
     }
     if ((movement_command_metadata_flags(context, unit) & 1u) != 0) {
@@ -2936,8 +2935,7 @@ void ProcessAirUnitTerrainStep(UnitMovementContext& context, UnitMovementUnit& u
         context.callbacks.query_air_separation_target != nullptr
             ? context.callbacks.query_air_separation_target(context, unit)
             : nullptr;
-    if (target == nullptr || target == &unit ||
-        (target->runtime_flags & 4u) != 0) {
+    if (target == nullptr || target == &unit) {
         return;
     }
     u32 direction = CalculateUnitDirectionToPoint(unit, target->x, target->y);
