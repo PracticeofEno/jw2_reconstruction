@@ -431,18 +431,26 @@ void add_equipment_effect_slot(GameplayScriptTriggerObjectState& object, u32 eff
     if ((object_command_flags(object) & 2u) == 0 || effect_id == 0) {
         return;
     }
-    if (std::find(object.equipment_slots.begin(), object.equipment_slots.end(), effect_id) !=
-        object.equipment_slots.end()) {
+    const auto& current_slots = object.unit != nullptr ?
+        object.unit->equipment_slots : object.equipment_slots;
+    if (std::find(current_slots.begin(), current_slots.end(), effect_id) !=
+        current_slots.end()) {
         return;
     }
     // Opcode 0x5e checks all six raw +0x30..+0x44 slots for duplicates, but
     // only +0x30..+0x3c are mutable insertion candidates.  The last two are
     // passive/reserved equipment fields.
     constexpr std::size_t kMutableSlotCount = 4;
-    auto mutable_end = object.equipment_slots.begin() + kMutableSlotCount;
-    auto empty = std::find(object.equipment_slots.begin(), mutable_end, 0);
-    if (empty != mutable_end) {
-        *empty = effect_id;
+    for (std::size_t slot = 0; slot < kMutableSlotCount; ++slot) {
+        if (current_slots[slot] != 0) {
+            continue;
+        }
+        object.equipment_slots[slot] = effect_id;
+        if (object.unit != nullptr) {
+            object.unit->equipment_slots[slot] = effect_id;
+            object.unit->item_slots[slot] = effect_id;
+        }
+        break;
     }
 }
 
@@ -451,9 +459,16 @@ void remove_equipment_effect_slot(GameplayScriptTriggerObjectState& object, u32 
         return;
     }
     constexpr std::size_t kMutableSlotCount = 4;
+    const auto& current_slots = object.unit != nullptr ?
+        object.unit->equipment_slots : object.equipment_slots;
     for (std::size_t slot = 0; slot < kMutableSlotCount; ++slot) {
-        if (object.equipment_slots[slot] == effect_id) {
-            object.equipment_slots[slot] = 0;
+        if (current_slots[slot] != effect_id) {
+            continue;
+        }
+        object.equipment_slots[slot] = 0;
+        if (object.unit != nullptr) {
+            object.unit->equipment_slots[slot] = 0;
+            object.unit->item_slots[slot] = 0;
         }
     }
 }
@@ -693,7 +708,15 @@ void set_runtime_trigger_enabled(GameplayScriptTriggerState& state,
         return;
     }
     state.triggers[trigger_index].trigger_enabled = enabled;
-    encode_trigger(state, trigger_index);
+    // Opcodes 0x5b/0x5c write only raw trigger byte +3.  Re-encoding the
+    // complete 0x608-byte record here can publish unrelated mirror fields
+    // that the original command never touches.
+    const std::size_t enabled_offset = kGameplayScriptTriggerRuntimeOffset +
+        static_cast<std::size_t>(trigger_index) *
+            kGameplayScriptTriggerRuntimeRecordSize + 3;
+    if (enabled_offset < state.serialized_triggers.size()) {
+        state.serialized_triggers[enabled_offset] = enabled ? 1 : 0;
+    }
 }
 
 std::string command_string_from(
@@ -2526,7 +2549,8 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     }
     case 0x5e: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
-        if (group != nullptr && group->reference_count != 0) {
+        if (group != nullptr &&
+            signed_i32_from_wrapped_u32(group->reference_count) > 0) {
             for_each_group_slot_object(state, *group,
                 [&](GameplayScriptTriggerObjectState& object) {
                 add_equipment_effect_slot(object, command[2]);
@@ -2536,7 +2560,8 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     }
     case 0x5f: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
-        if (group != nullptr && group->reference_count != 0) {
+        if (group != nullptr &&
+            signed_i32_from_wrapped_u32(group->reference_count) > 0) {
             for_each_group_slot_object(state, *group,
                 [&](GameplayScriptTriggerObjectState& object) {
                 remove_equipment_effect_slot(object, command[2]);
