@@ -121,7 +121,10 @@ bool is_valid_sound_slot(u32 slot_index) {
 
 bool throttle_allows(GameplaySoundState& state, const UnitMovementUnit& unit,
     bool& valid, u32& last_tick, const UnitMovementUnit*& tracked_unit) {
-    if (valid && state.current_tick - last_tick < kGameplaySoundResponseThrottleTicks) {
+    // The original compares the unsigned tick delta against 1000 even before
+    // the first accepted response.  Its zero-initialized last-tick globals
+    // therefore keep selection/command voices silent during the first 999 ms.
+    if (state.current_tick - last_tick < kGameplaySoundResponseThrottleTicks) {
         return false;
     }
     valid = true;

@@ -9910,9 +9910,20 @@ UnitMovementUnit* find_default_movement_unit_by_id(u32 unit_id) {
     return nullptr;
 }
 
+bool default_ui_overlay_selection_sound_allowed(
+    const UiOverlayState& state, u32 selected_owner) {
+    // FUN_004e9ed0 allows the selected response for scenario/neutral owners,
+    // observers, the scenario-AI override, and the local owner.  Ordinary
+    // remote-player selections remain silent.
+    return selected_owner >= 8 || state.local_player_type == 2 ||
+        state.scenario_ai_profile_override ||
+        selected_owner == state.local_player_slot;
+}
+
 void default_ui_overlay_unit_selected(UiOverlayState& state,
     const UiOverlayMinimapUnit& selected_unit) {
-    if (selected_unit.owner_id != state.local_player_slot) {
+    if (!default_ui_overlay_selection_sound_allowed(
+            state, selected_unit.owner_id)) {
         return;
     }
 
@@ -17837,15 +17848,6 @@ void default_unit_action_sound(UnitActionContext&, UnitMovementUnit& source) {
     HandleUnitAttackFrameVoiceCue(g_runtime.gameplay_sound, source, definition, base_slots);
 }
 
-void default_unit_lifecycle_became_active(UnitLifecycleContext&, UnitMovementUnit& unit) {
-    GameplayUnitSoundDefinition definition;
-    GameplayUnitSoundBaseSlots base_slots;
-    if (!resolve_default_unit_sound_profile(unit, definition, base_slots)) {
-        return;
-    }
-    HandleUnitSpawnCompleteVoiceCue(g_runtime.gameplay_sound, unit, definition, base_slots);
-}
-
 void queue_default_unit_death_voice(UnitMovementUnit& unit) {
     GameplayUnitSoundDefinition definition;
     GameplayUnitSoundBaseSlots base_slots;
@@ -18078,7 +18080,7 @@ void default_unit_command_construction_completed(UnitCommandContext& context,
     sync_default_owner_type_count_for_unit(completed);
 
     UnitMovementUnit* builder = completed.target;
-    if (completed.owner_id != context.local_owner_id || builder == nullptr) {
+    if (builder == nullptr || builder->owner_id != context.local_owner_id) {
         return;
     }
 
@@ -18097,14 +18099,14 @@ void default_unit_command_construction_completed(UnitCommandContext& context,
             builder->x, builder->y);
     }
     else if (builder_state == kUnitStateLegacySpawnConstruction) {
-        // Original state 0x24 completion (0x004ca00b..0x004ca050) plays the
-        // completed structure's spawn cue, then places kind-2 HUD feedback at
-        // the builder's pre-release position.
+        // Original state 0x24 completion restores ESI to the builder before
+        // both its local-owner gate and spawn cue (0x004ca00b..0x004ca01a),
+        // then places kind-2 HUD feedback at the builder's pre-release point.
         GameplayUnitSoundDefinition definition;
         GameplayUnitSoundBaseSlots base_slots;
-        if (resolve_default_unit_sound_profile(completed, definition, base_slots)) {
+        if (resolve_default_unit_sound_profile(*builder, definition, base_slots)) {
             HandleUnitSpawnCompleteVoiceCue(
-                g_runtime.gameplay_sound, completed, definition, base_slots);
+                g_runtime.gameplay_sound, *builder, definition, base_slots);
         }
         QueueGameplayHudAlertMarker(g_runtime.gameplay_hud_alert_markers, 2,
             builder->x, builder->y);
@@ -18705,9 +18707,6 @@ void default_unit_command_deferred_death_refund(UnitCommandContext& context,
 }
 
 void configure_default_unit_lifecycle_callbacks(UnitLifecycleContext& lifecycle) {
-    if (lifecycle.callbacks.on_unit_became_active == nullptr) {
-        lifecycle.callbacks.on_unit_became_active = default_unit_lifecycle_became_active;
-    }
     if (lifecycle.callbacks.on_before_active_simulation == nullptr) {
         lifecycle.callbacks.on_before_active_simulation =
             run_default_periodic_unit_support_effects;
