@@ -22847,6 +22847,12 @@ void transition_default_gameplay_script_camera_immediate(
     render_transition_frame();
 }
 
+void clear_default_gameplay_script_visibility_owner_bits_immediate(void*) {
+    ClearGameplayVisibilityOwnerBits(g_runtime.gameplay_visibility_grid);
+    mirror_default_gameplay_visibility_to_consumers(
+        g_runtime.gameplay_visibility_grid);
+}
+
 void sync_default_gameplay_script_runtime_context(
     GameplayLoopState& state, GameplayScriptTriggerState& script) {
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
@@ -22890,6 +22896,9 @@ void sync_default_gameplay_script_runtime_context(
     script.opcode_context.transition_camera_immediate =
         transition_default_gameplay_script_camera_immediate;
     script.opcode_context.transition_camera_immediate_user = nullptr;
+    script.opcode_context.clear_visibility_owner_bits_immediate =
+        clear_default_gameplay_script_visibility_owner_bits_immediate;
+    script.opcode_context.clear_visibility_owner_bits_immediate_user = nullptr;
     // DAT_00722320/DAT_0072231c are shared by the frame clock and script
     // opcodes 0x1e, 0x29 and 0x3d in the original.  Pull the live value after
     // the frame-clock tick so script arithmetic observes that same ordering.

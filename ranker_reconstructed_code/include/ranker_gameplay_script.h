@@ -192,6 +192,8 @@ using GameplayScriptImmediateOwnerValueCallback = void (*)(
 using GameplayScriptImmediateCameraTransitionCallback = void (*)(
     i32 target_x, i32 target_y, void* user);
 
+using GameplayScriptImmediateVoidCallback = void (*)(void* user);
+
 struct GameplayScriptUnitNameAppendRequest {
     u32 type_id = 0;
     std::string suffix;
@@ -318,6 +320,9 @@ struct GameplayScriptOpcodeContext {
     GameplayScriptImmediateCameraTransitionCallback
         transition_camera_immediate = nullptr;
     void* transition_camera_immediate_user = nullptr;
+    GameplayScriptImmediateVoidCallback clear_visibility_owner_bits_immediate =
+        nullptr;
+    void* clear_visibility_owner_bits_immediate_user = nullptr;
     std::vector<GameplayScriptSpawnRequest> spawn_requests;
     std::vector<GameplayScriptUnitNameAppendRequest> unit_name_append_requests;
 };

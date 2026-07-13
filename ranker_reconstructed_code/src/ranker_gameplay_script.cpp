@@ -2435,7 +2435,10 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         trigger.blocked = 0;
         return true;
     case 0x2a:
-        begin_single_gameplay_script_selection_request(state.opcode_context, 0);
+        if (state.opcode_context.clear_visibility_owner_bits_immediate != nullptr) {
+            state.opcode_context.clear_visibility_owner_bits_immediate(
+                state.opcode_context.clear_visibility_owner_bits_immediate_user);
+        }
         return true;
     case 0x2b: {
         const GameplayScriptArea* area = area_state(state, command[1]);
