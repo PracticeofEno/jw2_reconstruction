@@ -3337,6 +3337,28 @@ void QueueSelectedUnitCoreActionButtons(UiOverlayState& state) {
     }
 }
 
+void QueueSingleSelectedUnitHeldItemSlots(UiOverlayState& state) {
+    // FUN_004e4150 publishes these seven fixed records only for a single
+    // mobile-unit selection.  ECX is the selected unit's raw pool offset for
+    // every record; the draw handlers then read the live +0x2c amount and the
+    // six +0x30..+0x44 equipment fields from the selected-unit snapshot.
+    if (state.selected_unit_count != 1) {
+        return;
+    }
+    if (state.selected_unit_slot_value != 0) {
+        QueueUiOverlayCommandRecordByItemId(
+            state, 0x1adu, state.selected_unit_id, 0);
+    }
+    constexpr std::array<std::size_t, 6> kStorageOrder{4, 5, 0, 1, 2, 3};
+    for (std::size_t ui_index = 0; ui_index < kStorageOrder.size(); ++ui_index) {
+        if (state.selected_unit_equipment_slots[kStorageOrder[ui_index]] == 0) {
+            continue;
+        }
+        QueueUiOverlayCommandRecordByItemId(state,
+            0x1aeu + static_cast<u32>(ui_index), state.selected_unit_id, 0);
+    }
+}
+
 void BuildMultiSelectedUnitCommandPanel(UiOverlayState& state) {
     state.command_slot_size = 0x26;
     // FUN_004e4150 restores DAT_00867684 after the 0x1a6 details record has
@@ -3349,6 +3371,7 @@ void BuildMultiSelectedUnitCommandPanel(UiOverlayState& state) {
         return;
     }
     QueueSelectedUnitCoreActionButtons(state);
+    QueueSingleSelectedUnitHeldItemSlots(state);
     QueueAvailableProductionClassButtons(state);
 }
 
