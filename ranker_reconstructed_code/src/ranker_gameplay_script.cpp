@@ -1229,8 +1229,8 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
         for (u32 other = 0; other < kGameplayScriptOwnerCount; ++other) {
             const u32 mask = 1u << other;
             if ((owner->blocked_relation_mask & mask) == 0 &&
-                (context.relation_a_counts[other] != 0 ||
-                    context.relation_b_counts[other] != 0)) {
+                (context.owner_population_demand[other] != 0 ||
+                    context.owner_population_capacity[other] != 0)) {
                 ++count;
             }
         }
@@ -1357,8 +1357,8 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
     }
     case 0x1d:
         return !owner_active(context, words[1]) ||
-            (context.relation_a_counts[words[1]] <= 0 &&
-                context.relation_b_counts[words[1]] <= 0);
+            (context.owner_population_demand[words[1]] <= 0 &&
+                context.owner_population_capacity[words[1]] <= 0);
     case 0x1e: {
         if (!owner_active(context, words[1])) {
             return false;

@@ -22747,23 +22747,17 @@ void sync_default_gameplay_script_runtime_context(
         condition_owner.blocked_relation_mask =
             g_runtime.gameplay_player_slots.owner_relation_masks[owner];
 
-        i32 related = 0;
-        i32 hostile = 0;
-        for (u32 slot = 0; slot < kGameplayScriptOwnerCount; ++slot) {
-            if (slot == owner ||
-                g_runtime.gameplay_player_slots.slot_states[slot] ==
-                    static_cast<u8>(PlayerSlotState::disabled)) {
-                continue;
-            }
-            const u32 bit = 1u << slot;
-            if ((g_runtime.gameplay_player_slots.owner_relation_masks[owner] & bit) != 0) {
-                ++related;
-            } else {
-                ++hostile;
-            }
-        }
-        script.condition_context.relation_a_counts[owner] = related;
-        script.condition_context.relation_b_counts[owner] = hostile;
+        script.condition_context.owner_population_demand[owner] =
+            lifecycle != nullptr &&
+                owner < lifecycle->owner_population_reserved.size()
+            ? default_i32_from_u32(lifecycle->owner_population_reserved[owner])
+            : default_i32_from_u32(
+                g_runtime.gameplay_unit_commands.owner_population_reserved[owner]);
+        script.condition_context.owner_population_capacity[owner] =
+            lifecycle != nullptr && owner < lifecycle->owner_population_used.size()
+            ? default_i32_from_u32(lifecycle->owner_population_used[owner])
+            : default_i32_from_u32(
+                g_runtime.gameplay_unit_commands.owner_population_used[owner]);
     }
 
     if (movement != nullptr) {

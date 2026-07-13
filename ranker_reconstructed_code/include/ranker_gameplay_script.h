@@ -198,8 +198,10 @@ struct GameplayScriptOwnerConditionState {
 struct GameplayScriptConditionContext {
     bool enabled = false;
     std::array<GameplayScriptOwnerConditionState, kGameplayScriptOwnerCount> owners{};
-    std::array<i32, kGameplayScriptOwnerCount> relation_a_counts{};
-    std::array<i32, kGameplayScriptOwnerCount> relation_b_counts{};
+    // Original DAT_00725a14 / DAT_007259c4: live population demand and
+    // population capacity supplied by lifecycle-class-2 units.
+    std::array<i32, kGameplayScriptOwnerCount> owner_population_demand{};
+    std::array<i32, kGameplayScriptOwnerCount> owner_population_capacity{};
     std::vector<u32> active_object_order;
 };
 
