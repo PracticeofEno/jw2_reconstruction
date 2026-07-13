@@ -98,6 +98,8 @@ using GameplayInputActionSelectCallback =
     u32 (*)(GameplayInputActionState& state, u32 selector, i32 world_x, i32 world_y);
 using GameplayInputActionDispatchCallback =
     bool (*)(GameplayInputActionState& state, u32 action_index);
+using GameplayInputActionUnitCallback =
+    void (*)(GameplayInputActionState& state, u32 unit_offset);
 using GameplayInputActionPointCallback =
     void (*)(GameplayInputActionState& state, i32 world_x, i32 world_y);
 using GameplayInputActionProductionAvailabilityCallback =
@@ -130,6 +132,7 @@ struct GameplayInputActionCallbacks {
         check_production_availability = nullptr;
     GameplayInputActionIndexedPayloadGateCallback indexed_payload_blocked = nullptr;
     GameplayInputActionSimpleCallback rejected_action_feedback = nullptr;
+    GameplayInputActionUnitCallback accepted_action_feedback = nullptr;
 };
 
 struct GameplayInputActionState {

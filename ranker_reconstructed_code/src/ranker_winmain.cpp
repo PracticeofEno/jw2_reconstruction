@@ -4021,10 +4021,9 @@ bool default_gameplay_production_rejected_action_feedback(GameplayProductionActi
     return false;
 }
 
-void default_gameplay_production_accepted_action_feedback(
-    GameplayProductionActionState& state, u32 unit_offset) {
+void play_default_gameplay_command_acknowledgement(u32 unit_offset) {
     UnitMovementUnit* unit = find_default_movement_unit_by_id(unit_offset);
-    if (unit == nullptr || unit->owner_id != state.local_player_index) {
+    if (unit == nullptr) {
         return;
     }
 
@@ -4035,6 +4034,16 @@ void default_gameplay_production_accepted_action_feedback(
     }
     HandleCommandAcknowledgementVoiceCue(g_runtime.gameplay_sound, *unit, definition,
         base_slots);
+}
+
+void default_gameplay_input_accepted_action_feedback(
+    GameplayInputActionState&, u32 unit_offset) {
+    play_default_gameplay_command_acknowledgement(unit_offset);
+}
+
+void default_gameplay_production_accepted_action_feedback(
+    GameplayProductionActionState&, u32 unit_offset) {
+    play_default_gameplay_command_acknowledgement(unit_offset);
 }
 
 void default_gameplay_input_start_hud_pulse(
@@ -4283,6 +4292,18 @@ bool default_gameplay_input_dispatch_action(
         }
         return false;
     };
+    const auto acknowledge_unit = [&state](u32 unit_offset) {
+        if (state.callbacks.accepted_action_feedback != nullptr) {
+            state.callbacks.accepted_action_feedback(state, unit_offset);
+        }
+    };
+    const auto primary_unit_offset = [&state]() {
+        return state.current_unit_offset != 0 ? state.current_unit_offset :
+            state.selected_unit_offset;
+    };
+    const auto acknowledge_primary = [&]() {
+        acknowledge_unit(primary_unit_offset());
+    };
 
     // These entries are literal jump-table tails and do not depend on the
     // current selection.  Handle them before rebuilding the selected-local
@@ -4463,6 +4484,8 @@ bool default_gameplay_input_dispatch_action(
     case 0x00u: { // guard / idle
         const u32 queued = input_state().shift_down ? 0x80000000u : 0;
         if (publish_group_action(0x02u, queued, target_unit_id, true)) {
+            // Original 0x004da410 reloads DAT_007071e8 after the group loop.
+            acknowledge_primary();
             return true;
         }
         return reject_with_common_feedback();
@@ -4483,10 +4506,15 @@ bool default_gameplay_input_dispatch_action(
             return reject_with_common_feedback();
         }
         const u32 queued = input_state().shift_down ? 0x80000000u : 0;
-        return PublishLocalMode1GameplayPacket(
+        const bool published = PublishLocalMode1GameplayPacket(
             (0x02u << 24) | (state.local_player_index & 0xffu),
             action_index | queued, primary->offset, target_unit_id,
             state.last_action_world_x, state.last_action_world_y);
+        if (published) {
+            // Original 0x004da1e2 uses the direct primary ESI.
+            acknowledge_unit(primary->offset);
+        }
+        return published;
     }
     case 0x02u: { // primary-only paired/equipment target order
         GameplayActionUnitState* primary = primary_action_unit();
@@ -4522,10 +4550,15 @@ bool default_gameplay_input_dispatch_action(
         }
 
         const u32 queued = input_state().shift_down ? 0x80000000u : 0;
-        return PublishLocalMode1GameplayPacket(
+        const bool published = PublishLocalMode1GameplayPacket(
             (0x02u << 24) | (state.local_player_index & 0xffu),
             0x02u | queued, primary->offset, packet_target, packet_x,
             state.last_action_world_y);
+        if (published) {
+            // Original 0x004da24c keeps the direct primary in ESI.
+            acknowledge_unit(primary->offset);
+        }
+        return published;
     }
     case 0x03u: { // definition-gated selected group order
         UnitMovementUnit* target =
@@ -4539,6 +4572,8 @@ bool default_gameplay_input_dispatch_action(
         const u32 queued = input_state().shift_down ? 0x80000000u : 0;
         if (publish_group_action(
                 0x02u, 0x03u | queued, target_unit_id, true)) {
+            // Selector three joins the selected-group tail at 0x004da410.
+            acknowledge_primary();
             return true;
         }
         return reject_with_common_feedback();
@@ -4573,6 +4608,8 @@ bool default_gameplay_input_dispatch_action(
                 static_cast<u32>(action.world_y)) && publish_succeeded;
         }
         if (!actions.empty() && publish_succeeded) {
+            // Original 0x004da484 acknowledges once after formation flush.
+            acknowledge_primary();
             return true;
         }
         return reject_with_common_feedback();
@@ -4612,6 +4649,8 @@ bool default_gameplay_input_dispatch_action(
         if (published && publish_succeeded) {
             StartTerrainTilePulse(g_runtime.gameplay_terrain_pulse_state,
                 movement->map, harvest_tile.x >> 5, harvest_tile.y >> 5);
+            // Original 0x004da7d2 queues the voice after the terrain pulse.
+            acknowledge_primary();
             return true;
         }
         return reject_with_common_feedback();
@@ -4631,6 +4670,8 @@ bool default_gameplay_input_dispatch_action(
         if (PublishLocalMode1GameplayPacket(
             (0x02u << 24) | (state.local_player_index & 0xffu),
             0x06u | queued, primary->offset, building_index, world_x, world_y)) {
+            // Original 0x004da745 uses the validated direct primary.
+            acknowledge_unit(primary->offset);
             return true;
         }
         return reject_with_common_feedback();
@@ -4669,6 +4710,9 @@ bool default_gameplay_input_dispatch_action(
                 publish_succeeded;
         }
         if (!actions.empty() && publish_succeeded) {
+            // Target and point variants reach 0x004da525/0x004da5b7, both of
+            // which restore the primary ESI and acknowledge only once.
+            acknowledge_primary();
             return true;
         }
         return reject_with_common_feedback();
@@ -4723,6 +4767,8 @@ bool default_gameplay_input_dispatch_action(
                 publish_succeeded;
         }
         if (published && publish_succeeded) {
+            // Original 0x004da8b2 restores the primary after all valid pairs.
+            acknowledge_primary();
             return true;
         }
         return reject_with_common_feedback();
@@ -4791,6 +4837,7 @@ bool default_gameplay_input_dispatch_action(
 
         bool publish_succeeded = true;
         u32 completed_groups = 0;
+        u32 last_completed_group_source = 0;
         for (std::size_t outer_index = 0;
              outer_index < selected_units.size(); ++outer_index) {
             GameplayActionUnitState* outer_state = selected_units[outer_index];
@@ -4892,11 +4939,18 @@ bool default_gameplay_input_dispatch_action(
                     0x0bu | queued, outer->id, nearest_primary->id,
                     state.last_action_world_x, 0) && publish_succeeded;
             }
+            last_completed_group_source = outer->id;
             ++completed_groups;
         }
         // The original clears temporary bit 0x100 from every selected unit
         // before returning; the reconstruction keeps that marker local.
-        return completed_groups != 0 && publish_succeeded;
+        if (completed_groups != 0 && publish_succeeded) {
+            // 0x004dabbe reloads DAT_008624b0, which is the outer source of
+            // the final completed pair/triad rather than DAT_007071e8.
+            acknowledge_unit(last_completed_group_source);
+            return true;
+        }
+        return false;
     }
     case 0x0du: { // selected-unit area/status high-bit toggle
         // Raw jump-table index 0x0d lands at thunk 0x0040332d ->
@@ -4955,7 +5009,12 @@ bool default_gameplay_input_dispatch_action(
                 state.last_action_world_x, state.last_action_world_y) &&
                 publish_succeeded;
         }
-        return published && publish_succeeded;
+        if (published && publish_succeeded) {
+            // Original 0x004da338 restores the primary after the morph loop.
+            acknowledge_primary();
+            return true;
+        }
+        return false;
     }
     case 0x12u:
     case 0x13u:
@@ -4979,6 +5038,9 @@ bool default_gameplay_input_dispatch_action(
                 publish_succeeded;
         }
         if (published && publish_succeeded) {
+            // Original 0x004daece handles all four shared selectors and
+            // acknowledges only once after their selected-unit loop.
+            acknowledge_primary();
             return true;
         }
         return reject_with_common_feedback();
@@ -5004,7 +5066,12 @@ bool default_gameplay_input_dispatch_action(
                 state.last_action_world_x, state.last_action_world_y) &&
                 publish_succeeded;
         }
-        return published && publish_succeeded;
+        if (published && publish_succeeded) {
+            // Original 0x004da3aa restores the primary after morph-exit.
+            acknowledge_primary();
+            return true;
+        }
+        return false;
     }
     case 0x1cu:
         if (publish_default_nested_selected_action(state,
@@ -5057,6 +5124,8 @@ bool default_gameplay_input_dispatch_action(
                 publish_succeeded;
         }
         if (published && publish_succeeded) {
+            // Original 0x004dade7 uses the primary after all return orders.
+            acknowledge_primary();
             return true;
         }
         return reject_with_common_feedback();
@@ -5075,6 +5144,9 @@ bool default_gameplay_input_dispatch_action(
                 publish_succeeded;
         }
         if (published && publish_succeeded) {
+            // Original 0x004dae5b acknowledges once after subtype-0x0a group
+            // publishing, not once per pending simulation command.
+            acknowledge_primary();
             return true;
         }
         return reject_with_common_feedback();
@@ -5153,6 +5225,11 @@ bool default_gameplay_input_dispatch_action(
             }
         }
         // 0x004db0a0 reaches a shared CLC tail even when no pair was found.
+        if (!paired_recipients.empty()) {
+            // Original 0x004db0b3 is reached only when at least one balancing
+            // packet was emitted; any number of pairs still yields one voice.
+            acknowledge_primary();
+        }
         return true;
     }
     case 0x24u: { // transport unload group (capability is action 0x0a)
@@ -5173,6 +5250,8 @@ bool default_gameplay_input_dispatch_action(
                 publish_succeeded;
         }
         if (published && publish_succeeded) {
+            // Original 0x004dac34 restores the primary after unload commands.
+            acknowledge_primary();
             return true;
         }
         return reject_with_common_feedback();
@@ -5209,6 +5288,8 @@ bool default_gameplay_input_dispatch_action(
                 state.last_action_world_y) && publish_succeeded;
         }
         if (published && publish_succeeded) {
+            // Original 0x004daf6f is the common success tail for 0x26..0x29.
+            acknowledge_primary();
             return true;
         }
         return reject_with_common_feedback();
@@ -5334,6 +5415,10 @@ void configure_default_gameplay_input_action_context(
     if (state.callbacks.rejected_action_feedback == nullptr) {
         state.callbacks.rejected_action_feedback =
             default_gameplay_input_rejected_action_feedback;
+    }
+    if (state.callbacks.accepted_action_feedback == nullptr) {
+        state.callbacks.accepted_action_feedback =
+            default_gameplay_input_accepted_action_feedback;
     }
 }
 
@@ -17952,21 +18037,6 @@ void default_unit_command_cargo_deposited(UnitCommandContext& context,
     sync_default_owner_command_runtime_slots(context, unit.owner_id);
 }
 
-void default_unit_command_acknowledged_sound(UnitCommandContext& context,
-    UnitMovementUnit& unit) {
-    if (unit.owner_id != context.local_owner_id) {
-        return;
-    }
-
-    GameplayUnitSoundDefinition definition;
-    GameplayUnitSoundBaseSlots base_slots;
-    if (!resolve_default_unit_sound_profile(unit, definition, base_slots)) {
-        return;
-    }
-    HandleCommandAcknowledgementVoiceCue(g_runtime.gameplay_sound, unit, definition,
-        base_slots);
-}
-
 void default_unit_command_runtime_death_marked(UnitCommandContext&,
     UnitMovementUnit& unit) {
     ClearSelectedUnitMembershipFlagAndRefreshSelection(ui_overlay_state(), unit.id);
@@ -20119,10 +20189,6 @@ void configure_default_unit_command_context(UnitCommandContext& command_context,
     if (command_context.callbacks.can_board_transport == nullptr) {
         command_context.callbacks.can_board_transport =
             default_unit_command_can_board_transport;
-    }
-    if (command_context.callbacks.on_command_acknowledged == nullptr) {
-        command_context.callbacks.on_command_acknowledged =
-            default_unit_command_acknowledged_sound;
     }
     if (command_context.callbacks.on_harvest_frame == nullptr) {
         command_context.callbacks.on_harvest_frame = default_unit_command_harvest_sound;

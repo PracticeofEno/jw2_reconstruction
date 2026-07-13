@@ -131,6 +131,11 @@ GameplayProductionUnitState* selected_unit(GameplayProductionActionState& state)
     return find_unit(state, unit_offset);
 }
 
+u32 primary_unit_offset(const GameplayProductionActionState& state) {
+    return state.current_unit_offset != 0 ? state.current_unit_offset :
+        state.selected_unit_offset;
+}
+
 bool unit_is_local_active(const GameplayProductionActionState& state,
     const GameplayProductionUnitState& unit) {
     return unit.active && unit.owner == state.local_player_index;
@@ -630,7 +635,7 @@ bool dispatch_action_index(GameplayProductionActionState& state, u32 action_inde
             reject_action(state);
             return false;
         }
-        acknowledge_action(state, state.selected_unit_offset);
+        acknowledge_action(state, primary_unit_offset(state));
         return finish_dispatch_success(
             state, target, action_index, write_result_state);
     }
@@ -643,7 +648,7 @@ bool dispatch_action_index(GameplayProductionActionState& state, u32 action_inde
             return false;
         }
         FlushQueuedProductionPlacementCommands(state);
-        acknowledge_action(state, state.selected_unit_offset);
+        acknowledge_action(state, primary_unit_offset(state));
         return finish_dispatch_success(
             state, target, action_index, write_result_state);
     }
@@ -654,7 +659,7 @@ bool dispatch_action_index(GameplayProductionActionState& state, u32 action_inde
             reject_action(state);
             return false;
         }
-        acknowledge_action(state, state.selected_unit_offset);
+        acknowledge_action(state, primary_unit_offset(state));
         return finish_dispatch_success(
             state, target, action_index, write_result_state);
     }
