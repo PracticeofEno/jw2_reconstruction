@@ -1360,13 +1360,17 @@ bool targeted_spawn_needs_approach(UnitMovementUnit& unit, UnitMovementUnit& tar
     return true;
 }
 
-void enter_spawn_cycle(UnitCommandContext& context, UnitMovementUnit& unit,
+void enter_spawn_cycle(UnitCommandContext&, UnitMovementUnit& unit,
     u32 state) {
     unit.command_state = state;
     unit.animation_frame = 0;
-    unit.work_timer = 0;
-    unit.direction = CalculateUnitDirectionToPoint(unit, unit.path_target_x,
-        unit.path_target_y);
+    // Raw +0x4c is the spawn-effect one-shot latch in states 0x5b/0x7e.
+    // The direction is derived from the active command tuple, not the shifted
+    // path destination used to approach the placement footprint.
+    unit.cargo_amount = 0;
+    unit.direction = CalculateUnitDirectionToPoint(unit,
+        unit.active_command_payload.y,
+        static_cast<i32>(unit.active_command_payload.value));
 }
 
 bool create_spawned_unit(UnitCommandContext& context, UnitMovementUnit& unit,
