@@ -365,32 +365,9 @@ bool group_any_alive(const GameplayScriptTriggerState& state,
     return group_alive_count(state, group) != 0;
 }
 
-const GameplayScriptTriggerObjectState* first_alive_group_object(
+const GameplayScriptTriggerObjectState* first_group_slot_object(
     const GameplayScriptTriggerState& state, const GameplayScriptTriggerGroup& group) {
-    const u32 limit = std::min<u32>(
-        group.reference_count, kGameplayScriptTriggerReferencesPerGroup);
-    for (u32 slot = 0; slot < limit; ++slot) {
-        const GameplayScriptTriggerObjectState* object =
-            object_state(state, group.object_indices[slot]);
-        if (object_alive(object)) {
-            return object;
-        }
-    }
-    return nullptr;
-}
-
-GameplayScriptTriggerObjectState* first_alive_group_object(
-    GameplayScriptTriggerState& state, const GameplayScriptTriggerGroup& group) {
-    const u32 limit = std::min<u32>(
-        group.reference_count, kGameplayScriptTriggerReferencesPerGroup);
-    for (u32 slot = 0; slot < limit; ++slot) {
-        GameplayScriptTriggerObjectState* object =
-            object_state(state, group.object_indices[slot]);
-        if (object_alive(object)) {
-            return object;
-        }
-    }
-    return nullptr;
+    return object_state(state, group.object_indices[0]);
 }
 
 GameplayScriptTriggerObjectState* first_group_slot_object(
@@ -1192,8 +1169,9 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
     case 0x18: {
         const GameplayScriptTriggerGroup* group = group_state(state, words[1]);
         const GameplayScriptTriggerObjectState* object =
-            group != nullptr ? first_alive_group_object(state, *group) : nullptr;
-        return object != nullptr && object_stat_by_mode(*object, words[2]) <= words[3];
+            group != nullptr ? first_group_slot_object(state, *group) : nullptr;
+        return object != nullptr && (object->flags & 4u) == 0 &&
+            object_stat_by_mode(*object, words[2]) <= words[3];
     }
     case 0x19: {
         const GameplayScriptOwnerConditionState* owner = owner_state(context, words[1]);
@@ -1255,7 +1233,7 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
         }
         const GameplayScriptTriggerGroup* group = group_state(state, words[2]);
         const GameplayScriptTriggerObjectState* object =
-            group != nullptr ? first_alive_group_object(state, *group) : nullptr;
+            group != nullptr ? first_group_slot_object(state, *group) : nullptr;
         return object != nullptr && object->script_state == 1;
     }
     case 0x20: {
@@ -1292,8 +1270,9 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
     case 0x22: {
         const GameplayScriptTriggerGroup* group = group_state(state, words[3]);
         const GameplayScriptTriggerObjectState* object =
-            group != nullptr ? first_alive_group_object(state, *group) : nullptr;
-        return object != nullptr && object_stat_by_mode(*object, words[2]) > words[1];
+            group != nullptr ? first_group_slot_object(state, *group) : nullptr;
+        return object != nullptr && (object->flags & 4u) == 0 &&
+            object_stat_by_mode(*object, words[2]) > words[1];
     }
     case 0x23: {
         const GameplayScriptArea* area = area_state(state, words[1]);
