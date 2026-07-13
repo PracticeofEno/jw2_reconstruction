@@ -1567,13 +1567,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         return true;
     }
     case 0x0d:
-        for (u32& word : state.opcode_context.copied_command_table) {
-            word = 0;
-        }
-        for (u32 i = 0; i < state.opcode_context.copied_command_table.size() &&
-             (1 + i) < command.size(); ++i) {
-            state.opcode_context.copied_command_table[i] = command[1 + i];
-        }
+        state.opcode_context.scenario_message_text = command_string_from(command, 1);
         return true;
     case 0x0e: {
         GameplayScriptOwnerConditionState* owner =

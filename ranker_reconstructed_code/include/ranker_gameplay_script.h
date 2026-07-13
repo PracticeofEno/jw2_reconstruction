@@ -60,7 +60,6 @@ constexpr u32 kGameplayScriptOwnerScriptValueCount = 0xaa;
 constexpr u32 kGameplayScriptOwnerUnitTypeCount = 0x40;
 constexpr u32 kGameplayScriptObjectEquipmentSlots = 6;
 constexpr u32 kGameplayScriptCopiedOwnerTableWords = 8;
-constexpr u32 kGameplayScriptCopiedCommandTableWords = 0x200;
 
 struct GameplayScriptArea {
     i32 left = 0;
@@ -227,11 +226,11 @@ struct GameplayScriptOpcodeContext {
     i32 text_y = 300;
     u32 text_counter_owner = 0;
     std::string text_overlay;
+    std::string scenario_message_text;
     i32 resource_hud_start_x = 10;
     i32 resource_hud_start_y = 10;
     std::array<u32, kGameplayScriptCopiedOwnerTableWords> copied_owner_table_a{};
     std::array<u32, kGameplayScriptCopiedOwnerTableWords> copied_owner_table_b{};
-    std::array<u32, kGameplayScriptCopiedCommandTableWords> copied_command_table{};
     std::array<u8, kGameplayScriptOwnerCount> owner_script_flags{};
     std::array<u32, kGameplayScriptOwnerCount> owner_external_values{};
     GameplayScriptStrictPlacementCallback find_strict_placement = nullptr;

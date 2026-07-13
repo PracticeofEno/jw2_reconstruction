@@ -23561,6 +23561,7 @@ void consume_default_gameplay_script_opcode_context(
         opcode.game_clock_ticks;
     g_runtime.gameplay_player_slots.rotation_countdown_decrements =
         opcode.game_clock_decrements;
+    gameplay_modal_ui_state().scenario_message_text = opcode.scenario_message_text;
     consume_default_gameplay_script_camera_request(opcode);
     consume_default_gameplay_script_selection_request(script);
     consume_default_gameplay_script_stage_result(opcode);
