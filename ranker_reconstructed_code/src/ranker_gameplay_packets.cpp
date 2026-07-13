@@ -613,13 +613,14 @@ void apply_high_cluster_command(u32 command_index, const Mode1ReliablePacket& pa
         return;
     }
     if (command_index == 0x12) {
-        if (channel < g_packet_dispatch_state.player_cooldowns.size()) {
-            g_packet_dispatch_state.player_cooldowns[channel] = 500;
-        }
-        if (g_packet_dispatch_state.runtime_callbacks.set_player_cooldown !=
-            nullptr) {
-            g_packet_dispatch_state.runtime_callbacks.set_player_cooldown(
-                g_packet_dispatch_state.runtime_user_data, channel, 500);
+        if (channel < g_packet_dispatch_state.owner_population_limits.size()) {
+            g_packet_dispatch_state.owner_population_limits[channel] = 500;
+            if (g_packet_dispatch_state.runtime_callbacks
+                    .set_owner_population_limit != nullptr) {
+                g_packet_dispatch_state.runtime_callbacks
+                    .set_owner_population_limit(
+                        g_packet_dispatch_state.runtime_user_data, channel, 500);
+            }
         }
         return;
     }
@@ -1267,6 +1268,7 @@ Mode1GameplayPacketDispatchState make_initial_dispatch_state() {
     state.original_low_subtype_targets = kOriginalLowSubtypeTargets;
     state.original_nested_subtype13_targets = kOriginalSubtype13NestedTargets;
     state.active_player_count = kPlayerSlotCount;
+    state.owner_population_limits.fill(180);
     state.player_modal_pause_uses_remaining.fill(4);
 
     state.handlers[0x00] = handle_no_op_packet;
@@ -1335,6 +1337,7 @@ void ResetMode1GameplayPacketDispatch() {
     g_packet_dispatch_state.generic_ai_profile_mode = generic_ai_profile_mode;
     g_packet_dispatch_state.active_player_count =
         active_player_count != 0 ? active_player_count : kPlayerSlotCount;
+    g_packet_dispatch_state.owner_population_limits.fill(180);
     g_packet_dispatch_state.player_modal_pause_uses_remaining.fill(4);
     g_packet_dispatch_state.user_data = user_data;
     g_packet_dispatch_state.runtime_callbacks = runtime_callbacks;

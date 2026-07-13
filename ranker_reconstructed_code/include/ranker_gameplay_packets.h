@@ -48,8 +48,8 @@ using Mode1GameplayGlobalResetCallback = void (*)(void* user_data);
 using Mode1GameplayCatchupTargetCallback = void (*)(void* user_data,
     u32 raw_value, bool enabled);
 using Mode1GameplayModalPauseCallback = void (*)(void* user_data, bool visible);
-using Mode1GameplayPlayerCooldownCallback = void (*)(void* user_data,
-    u32 player, u32 ticks);
+using Mode1GameplayPopulationLimitCallback = void (*)(void* user_data,
+    u32 owner, u32 limit);
 using Mode1GameplayHighClusterTransitionCallback = void (*)(void* user_data,
     i32 transition_index, bool write_transition_index,
     bool local_scene_change);
@@ -76,7 +76,7 @@ struct Mode1GameplayRuntimeCallbacks {
     Mode1GameplayGlobalResetCallback apply_global_reset = nullptr;
     Mode1GameplayCatchupTargetCallback apply_catchup_target = nullptr;
     Mode1GameplayModalPauseCallback set_modal_pause = nullptr;
-    Mode1GameplayPlayerCooldownCallback set_player_cooldown = nullptr;
+    Mode1GameplayPopulationLimitCallback set_owner_population_limit = nullptr;
     Mode1GameplayHighClusterTransitionCallback apply_high_cluster_transition =
         nullptr;
     Mode1GameplayPlayerInactiveNotificationCallback
@@ -140,7 +140,7 @@ struct Mode1GameplayPacketDispatchState {
     std::array<Mode1GameplayPacketHandler, kMode1GameplayPacketSubtypeCount> handlers{};
     std::array<u32, kMode1GameplayPacketSubtypeCount> dispatch_counts{};
     std::array<u32, 8> player_wait_budget{};
-    std::array<u32, 8> player_cooldowns{};
+    std::array<u32, 8> owner_population_limits{};
     // Original DAT_011b5a2c: each player begins with four network modal
     // pauses; the first subtype-0x16 show transition from that source spends
     // one use.

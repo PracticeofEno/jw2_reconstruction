@@ -12003,12 +12003,13 @@ void default_mode1_packet_set_modal_pause(void*, bool visible) {
     ResetInputState();
 }
 
-void default_mode1_packet_set_player_cooldown(void*, u32 player, u32 ticks) {
-    if (player >= kPlayerSlotCount) {
+void default_mode1_packet_set_owner_population_limit(
+    void*, u32 owner, u32 limit) {
+    if (owner >= kPlayerSlotCount) {
         return;
     }
-    player_slot_state().owner_cooldown_timers[player] = ticks;
-    g_runtime.gameplay_player_slots.owner_cooldown_timers[player] = ticks;
+    g_runtime.gameplay_lifecycle_context.owner_population_limit[owner] = limit;
+    g_runtime.gameplay_unit_commands.owner_population_limit[owner] = limit;
 }
 
 void default_mode1_packet_apply_high_cluster_transition(void*,
@@ -12279,7 +12280,8 @@ void configure_default_mode1_gameplay_runtime_callbacks() {
     callbacks.apply_catchup_target =
         default_mode1_packet_apply_catchup_target;
     callbacks.set_modal_pause = default_mode1_packet_set_modal_pause;
-    callbacks.set_player_cooldown = default_mode1_packet_set_player_cooldown;
+    callbacks.set_owner_population_limit =
+        default_mode1_packet_set_owner_population_limit;
     callbacks.apply_high_cluster_transition =
         default_mode1_packet_apply_high_cluster_transition;
     callbacks.queue_player_inactive_notification =
