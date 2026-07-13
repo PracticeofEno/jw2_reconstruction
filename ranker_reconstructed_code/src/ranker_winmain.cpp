@@ -18237,8 +18237,18 @@ void default_unit_command_production_started(UnitCommandContext& context,
     sync_default_owner_command_runtime_slots(context, unit.owner_id);
 }
 
+bool default_unit_command_avatar_slot_record(const UnitMovementUnit& unit,
+    GameSessionAvatarRecord& record);
+
 void default_unit_command_production_completed(UnitCommandContext& context,
     UnitMovementUnit& producer, UnitMovementUnit& produced) {
+    GameSessionAvatarRecord avatar;
+    if (default_unit_command_avatar_slot_record(producer, avatar)) {
+        ApplyGameSessionAvatarProductionRecord(context, produced,
+            g_runtime.gameplay_avatar_runtime, producer.owner_id,
+            static_cast<u32>(producer.path_target_y));
+    }
+
     if (producer.owner_id != context.local_owner_id) {
         return;
     }
@@ -19378,6 +19388,19 @@ const UnitMovementDefinition* default_unit_command_production_definition(
         g_runtime.gameplay_lifecycle_context, type_id);
 }
 
+bool default_unit_command_avatar_slot_record(const UnitMovementUnit& unit,
+    GameSessionAvatarRecord& record) {
+    if (!g_runtime.gameplay_avatar_runtime_loaded ||
+        !IsUiOverlayAvatarProductionStructureType(unit.type_id) ||
+        unit.owner_id >= kGameSessionAvatarPlayerCount ||
+        unit.path_target_y <= 0 ||
+        unit.path_target_y > static_cast<i32>(kGameSessionAvatarSlotCount)) {
+        return false;
+    }
+    return ReadGameSessionAvatarRecord(g_runtime.gameplay_avatar_runtime,
+        unit.owner_id, static_cast<u32>(unit.path_target_y - 1), record);
+}
+
 u32 default_unit_command_production_type_id(UnitCommandContext&,
     UnitMovementUnit& unit) {
     return ResolveQueuedOwnerProductionUnitType(unit);
@@ -19385,6 +19408,16 @@ u32 default_unit_command_production_type_id(UnitCommandContext&,
 
 u32 default_unit_command_production_resource_cost(UnitCommandContext&,
     UnitMovementUnit& unit) {
+    GameSessionAvatarRecord avatar;
+    if (default_unit_command_avatar_slot_record(unit, avatar)) {
+        if (const UnitMovementDefinition* definition =
+                default_unit_lifecycle_find_definition(
+                    g_runtime.gameplay_lifecycle_context, avatar.unit_type)) {
+            // FUN_004abeb0: the avatar placement-failure/cancel refund is the
+            // record type's base primary cost plus level * 10.
+            return definition->production_resource_cost + avatar.level * 10u;
+        }
+    }
     const UnitMovementDefinition* definition =
         default_unit_command_production_definition(unit);
     return definition != nullptr ? definition->production_resource_cost :
@@ -19393,6 +19426,11 @@ u32 default_unit_command_production_resource_cost(UnitCommandContext&,
 
 u32 default_unit_command_production_secondary_cost(UnitCommandContext&,
     UnitMovementUnit& unit) {
+    GameSessionAvatarRecord avatar;
+    if (default_unit_command_avatar_slot_record(unit, avatar)) {
+        // The subtype-05 avatar path debits and refunds primary resources only.
+        return 0;
+    }
     const UnitMovementDefinition* definition =
         default_unit_command_production_definition(unit);
     return definition != nullptr ? definition->production_secondary_cost :
@@ -19405,6 +19443,23 @@ u32 default_unit_command_production_population_cost(UnitCommandContext&,
         default_unit_command_production_definition(unit);
     return definition != nullptr ? definition->production_population_cost :
         unit.definition.production_population_cost;
+}
+
+u32 default_unit_command_production_spawn_duration(UnitCommandContext&,
+    UnitMovementUnit& unit) {
+    GameSessionAvatarRecord avatar;
+    if (default_unit_command_avatar_slot_record(unit, avatar)) {
+        if (const UnitMovementDefinition* definition =
+                default_unit_lifecycle_find_definition(
+                    g_runtime.gameplay_lifecycle_context, avatar.unit_type)) {
+            return CalculateGameSessionAvatarBuildTicks(avatar.unit_type,
+                avatar.level, definition->production_spawn_time);
+        }
+    }
+    const UnitMovementDefinition* definition =
+        default_unit_command_production_definition(unit);
+    return definition != nullptr ? definition->production_spawn_time :
+        unit.definition.production_spawn_time;
 }
 
 u32 default_unit_command_harvest_amount(UnitCommandContext& context,
@@ -19760,6 +19815,10 @@ void configure_default_unit_command_context(UnitCommandContext& command_context,
     if (command_context.callbacks.production_population_cost == nullptr) {
         command_context.callbacks.production_population_cost =
             default_unit_command_production_population_cost;
+    }
+    if (command_context.callbacks.production_spawn_duration == nullptr) {
+        command_context.callbacks.production_spawn_duration =
+            default_unit_command_production_spawn_duration;
     }
     if (command_context.callbacks.command_metadata_flags == nullptr) {
         command_context.callbacks.command_metadata_flags =

@@ -386,6 +386,40 @@ void ResetGameSessionAvatarRuntime(GameSessionAvatarRuntime& state) {
     }
 }
 
+bool ReadGameSessionAvatarRecord(const GameSessionAvatarRuntime& state,
+        u32 player_index, u32 avatar_slot, GameSessionAvatarRecord& record) {
+    record = GameSessionAvatarRecord{};
+    if (!avatar_record_bounds(player_index, avatar_slot)) {
+        return false;
+    }
+
+    const std::size_t offset = avatar_record_offset(player_index, avatar_slot);
+    record.name = avatar_record_name(state, offset);
+    record.unit_type = read_avatar_u32(
+        state, offset + kGameSessionAvatarInvalidMarkerOffset);
+    record.max_health = read_avatar_u32(
+        state, offset + kGameSessionAvatarMaxHealthOffset);
+    record.max_secondary_value = read_avatar_u32(
+        state, offset + kGameSessionAvatarMaxSecondaryOffset);
+    record.runtime_stat_1c = read_avatar_u32(
+        state, offset + kGameSessionAvatarStat1cOffset);
+    record.runtime_stat_20 = read_avatar_u32(
+        state, offset + kGameSessionAvatarStat20Offset);
+    record.level = read_avatar_u32(
+        state, offset + kGameSessionAvatarLevelOffset);
+    record.progress = read_avatar_u32(
+        state, offset + kGameSessionAvatarProgressOffset);
+    record.primary_equipment = read_avatar_u32(
+        state, offset + kGameSessionAvatarPrimaryEquipmentOffset);
+    record.secondary_equipment = read_avatar_u32(
+        state, offset + kGameSessionAvatarSecondaryEquipmentOffset);
+    for (u32 index = 0; index < record.pickup_effects.size(); ++index) {
+        record.pickup_effects[index] = read_avatar_u32(state,
+            offset + kGameSessionAvatarPickupEffectOffset + index * sizeof(u32));
+    }
+    return record.unit_type != kInvalidGameSessionUnitType;
+}
+
 bool LoadGameSessionAvatarRuntimeRecord(GameSessionAvatarRuntime& state,
         const char* archive_name, u32 record_index) {
     ResetGameSessionAvatarRuntime(state);
@@ -445,12 +479,17 @@ u32 CalculateGameSessionAvatarBuildTicks(const GameSessionAvatarRuntime& state,
         return 0;
     }
     const u32 avatar_id = avatar_record_id(state, player_index, avatar_slot);
-    const u32 base_ticks = uses_tripled_avatar_build_ticks(avatar_id)
-        ? definition->build_ticks * 3
-        : definition->build_ticks;
-    return base_ticks +
-        (avatar_record_level(state, player_index, avatar_slot) *
-            definition->build_ticks) / 10;
+    return CalculateGameSessionAvatarBuildTicks(avatar_id,
+        avatar_record_level(state, player_index, avatar_slot),
+        definition->build_ticks);
+}
+
+u32 CalculateGameSessionAvatarBuildTicks(
+        u32 avatar_id, u32 avatar_level, u32 base_ticks) {
+    const u32 adjusted_base_ticks = uses_tripled_avatar_build_ticks(avatar_id)
+        ? base_ticks * 3
+        : base_ticks;
+    return adjusted_base_ticks + (avatar_level * base_ticks) / 10;
 }
 
 u32 GetGameSessionAvatarSupportCost(const GameSessionAvatarRuntime& state,

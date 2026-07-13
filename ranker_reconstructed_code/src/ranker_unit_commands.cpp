@@ -1,5 +1,6 @@
 #include "ranker_unit_commands.h"
 
+#include "ranker_game_session_tables.h"
 #include "ranker_map_effects.h"
 #include "ranker_production_orders.h"
 #include "ranker_unit_action.h"
@@ -956,6 +957,14 @@ u32 production_cycle_duration(const UnitMovementUnit& unit) {
 
 u32 production_spawn_duration(const UnitMovementUnit& unit) {
     return unit.definition.production_spawn_time;
+}
+
+u32 production_spawn_duration_for_unit(UnitCommandContext& context,
+    UnitMovementUnit& unit, const UnitMovementDefinition& produced_definition) {
+    if (context.callbacks.production_spawn_duration != nullptr) {
+        return context.callbacks.production_spawn_duration(context, unit);
+    }
+    return produced_definition.production_spawn_time;
 }
 
 bool advance_idle_frame(UnitMovementUnit& unit, u32 frame_limit) {
@@ -3215,6 +3224,79 @@ void StartUnitProductionSpawnCommand(UnitCommandContext& context,
     HandleUnitProductionSpawnCycle(context, unit);
 }
 
+bool ApplyGameSessionAvatarProductionRecord(UnitCommandContext& context,
+        UnitMovementUnit& produced, const GameSessionAvatarRuntime& runtime,
+        u32 player_index, u32 slot_id) {
+    if (slot_id == 0 || slot_id > kGameSessionAvatarSlotCount) {
+        return false;
+    }
+
+    GameSessionAvatarRecord record;
+    if (!ReadGameSessionAvatarRecord(
+            runtime, player_index, slot_id - 1u, record)) {
+        return false;
+    }
+
+    // Original HandleUnitProductionSpawnCycle (0x004ce1d2..0x004ce25c)
+    // applies the persistent avatar record after the normal rally command.
+    produced.command_flags =
+        (produced.command_flags & 0xffc3ffffu) | (slot_id << 18);
+    produced.max_health = record.max_health;
+    produced.health = record.max_health;
+    produced.max_secondary_value = record.max_secondary_value;
+    const i32 signed_secondary =
+        signed_i32_from_wrapped_u32(record.max_secondary_value);
+    produced.secondary_value = static_cast<u32>(
+        (signed_secondary >> 2) + (signed_secondary >> 3));
+    produced.runtime_stat_1c = record.runtime_stat_1c;
+    produced.runtime_stat_20 = record.runtime_stat_20;
+    produced.status_timer = record.level;
+    produced.production_variant = record.level;
+    produced.elite_progress_value = record.progress;
+
+    // 0x004ce262..0x004ce2c8 stores both dedicated ids before applying
+    // either effect.  A rejected/missing effect therefore still occupies its
+    // original slot.
+    produced.equipment_slots[kUnitEquipmentPrimarySlot] =
+        record.primary_equipment;
+    produced.equipment_slots[kUnitEquipmentSecondarySlot] =
+        record.secondary_equipment;
+    if (context.equipment_catalog != nullptr) {
+        const auto apply_dedicated = [&](u32 effect_id) {
+            if (signed_i32_from_wrapped_u32(effect_id) < 1) {
+                return;
+            }
+            if (const UnitEquipmentEffectDefinition* effect =
+                    FindUnitEquipmentEffect(*context.equipment_catalog, effect_id)) {
+                ApplyUnitEquipmentEffect(context, produced, *effect);
+            }
+        };
+        apply_dedicated(record.primary_equipment);
+        apply_dedicated(record.secondary_equipment);
+
+        // 0x004ce2c9..0x004ce360 routes these through FUN_00411350 in record
+        // order, allowing the effect category/mode to choose a generic or
+        // dedicated slot exactly like an in-world pickup.
+        for (u32 effect_id : record.pickup_effects) {
+            if (signed_i32_from_wrapped_u32(effect_id) >= 1) {
+                TryApplyUnitEquipmentEffectToUnit(context, produced, effect_id,
+                    0, *context.equipment_catalog);
+            }
+        }
+    }
+
+    // 0x004ce362..0x004ce374 interns the raw 0x14-byte record name, not the
+    // frontend's formatted "name Lv.N" label.
+    if (context.movement != nullptr && !record.name.empty()) {
+        const u32 string_slot = InternUnitStringSlot(*context.movement,
+            record.name.c_str());
+        if (string_slot != kInvalidUnitStringSlot) {
+            produced.string_slot = string_slot;
+        }
+    }
+    return true;
+}
+
 void HandleUnitProductionSpawnCycle(UnitCommandContext& context,
     UnitMovementUnit& unit) {
     // Original HandleUnitProductionSpawnCycle (0x004ce00f..0x004ce023)
@@ -3238,7 +3320,9 @@ void HandleUnitProductionSpawnCycle(UnitCommandContext& context,
     // 220 ticks.
     const UnitMovementDefinition& produced_definition =
         definition_for_type_or(context, type_id, unit.definition);
-    if (unit.animation_frame < produced_definition.production_spawn_time) {
+    const u32 spawn_duration = production_spawn_duration_for_unit(
+        context, unit, produced_definition);
+    if (unit.animation_frame < spawn_duration) {
         return;
     }
 

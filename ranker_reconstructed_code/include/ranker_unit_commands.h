@@ -155,6 +155,7 @@ constexpr std::array<u32, 4> kOwnerTransportRouteTargetUnitTypes{
 
 struct UnitCommandContext;
 struct UnitTargetHelperContext;
+struct GameSessionAvatarRuntime;
 struct OwnerProductionRouteObjectCandidate;
 struct OwnerProductionPlacementAnchorSet;
 
@@ -309,6 +310,7 @@ struct UnitCommandCallbacks {
     UnitCommandAmountCallback production_resource_cost = nullptr;
     UnitCommandAmountCallback production_secondary_cost = nullptr;
     UnitCommandAmountCallback production_population_cost = nullptr;
+    UnitCommandAmountCallback production_spawn_duration = nullptr;
     UnitCommandPredicate can_start_completion_announcement = nullptr;
     UnitCommandPredicate advance_completion_effect = nullptr;
     UnitCommandPredicate advance_completion_announcement = nullptr;
@@ -990,6 +992,9 @@ void StartUnitProductionSpawnCommand(UnitCommandContext& context,
     UnitMovementUnit& unit);
 void HandleUnitProductionSpawnCycle(UnitCommandContext& context,
     UnitMovementUnit& unit);
+bool ApplyGameSessionAvatarProductionRecord(UnitCommandContext& context,
+    UnitMovementUnit& produced, const GameSessionAvatarRuntime& runtime,
+    u32 player_index, u32 slot_id);
 void ProcessUnitIdleAcquireCommand(UnitCommandContext& context, UnitMovementUnit& unit);
 void ProcessUnitTravelCommand(UnitCommandContext& context, UnitMovementUnit& unit);
 void ProcessUnitAttackTravelCommand(UnitCommandContext& context, UnitMovementUnit& unit);

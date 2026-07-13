@@ -27,7 +27,15 @@ constexpr u32 kGameSessionAvatarPlayerBytes = 0x3f4;
 constexpr u32 kGameSessionAvatarRuntimeBytes =
     kGameSessionAvatarPlayerCount * kGameSessionAvatarPlayerBytes;
 constexpr u32 kGameSessionAvatarInvalidMarkerOffset = 0x14;
+constexpr u32 kGameSessionAvatarMaxHealthOffset = 0x18;
+constexpr u32 kGameSessionAvatarMaxSecondaryOffset = 0x1c;
+constexpr u32 kGameSessionAvatarStat1cOffset = 0x20;
+constexpr u32 kGameSessionAvatarStat20Offset = 0x24;
 constexpr u32 kGameSessionAvatarLevelOffset = 0x28;
+constexpr u32 kGameSessionAvatarProgressOffset = 0x2c;
+constexpr u32 kGameSessionAvatarPrimaryEquipmentOffset = 0x34;
+constexpr u32 kGameSessionAvatarSecondaryEquipmentOffset = 0x38;
+constexpr u32 kGameSessionAvatarPickupEffectOffset = 0x3c;
 constexpr u32 kInvalidGameSessionUnitType = 0xffffffffu;
 constexpr u32 kSessionRuntimeBufferPairCount = 5;
 constexpr u32 kSessionRuntimeForcesRecordIndex = 0;
@@ -77,6 +85,20 @@ struct PostInitTransitionSnapshot {
 
 struct GameSessionAvatarRuntime {
     std::array<u8, kGameSessionAvatarRuntimeBytes> bytes{};
+};
+
+struct GameSessionAvatarRecord {
+    std::string name;
+    u32 unit_type = kInvalidGameSessionUnitType;
+    u32 max_health = 0;
+    u32 max_secondary_value = 0;
+    u32 runtime_stat_1c = 0;
+    u32 runtime_stat_20 = 0;
+    u32 level = 0;
+    u32 progress = 0;
+    u32 primary_equipment = 0;
+    u32 secondary_equipment = 0;
+    std::array<u32, 4> pickup_effects{};
 };
 
 struct GameSessionAvatarProductionDefinition {
@@ -131,6 +153,8 @@ void SnapshotPostInitTransitionRuntimeSnapshot(PostInitTransitionSnapshot& state
 void RestorePostInitTransitionRuntimeSnapshot(PostInitTransitionSnapshot& state);
 void ApplyPostInitUnitRequirementToggle(GameSessionUnitReferenceTables& state);
 void ResetGameSessionAvatarRuntime(GameSessionAvatarRuntime& state);
+bool ReadGameSessionAvatarRecord(const GameSessionAvatarRuntime& state,
+    u32 player_index, u32 avatar_slot, GameSessionAvatarRecord& record);
 bool LoadGameSessionAvatarRuntimeRecord(GameSessionAvatarRuntime& state,
     const char* archive_name, u32 record_index);
 bool AppendGameSessionAvatarRuntimeRecord(const GameSessionAvatarRuntime& state,
@@ -143,6 +167,8 @@ u32 CalculateGameSessionAvatarResourceCost(const GameSessionAvatarRuntime& state
 u32 CalculateGameSessionAvatarBuildTicks(const GameSessionAvatarRuntime& state,
     u32 player_index, u32 avatar_slot,
     const std::vector<GameSessionAvatarProductionDefinition>& definitions);
+u32 CalculateGameSessionAvatarBuildTicks(
+    u32 avatar_id, u32 avatar_level, u32 base_ticks);
 u32 GetGameSessionAvatarSupportCost(const GameSessionAvatarRuntime& state,
     u32 player_index, u32 avatar_slot,
     const std::vector<GameSessionAvatarProductionDefinition>& definitions);
