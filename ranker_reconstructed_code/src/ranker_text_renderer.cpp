@@ -841,7 +841,10 @@ bool DrawTextString(const char* text) {
 }
 
 bool RenderAsciiOnlyTextLine(const char* text) {
-    if (uses_win32_font_path()) {
+    // Original 0x00502269 tests only DAT_0086ad98 (the draw-font flags).
+    // The generic DBCS renderer also tests the metric font at 0x0086adc8,
+    // but this ASCII-only entry point deliberately ignores it.
+    if ((g_text_renderer_state.draw_font.flags & 8u) != 0) {
         return RenderWin32FontTextRun(text);
     }
     if (text == nullptr) {

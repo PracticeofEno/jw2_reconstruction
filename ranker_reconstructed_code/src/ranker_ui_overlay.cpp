@@ -579,6 +579,13 @@ void flush_ui_overlay_text_commands(UiOverlayState& state) {
         SetTextCursor(x, y, command.color);
         if (command.centered) {
             DrawCenterAlignedText(command.text.c_str());
+        } else if (command.metric_font == kUiOverlayPreserveMetricFont) {
+            // The draw-only HUD paths (FUN_004e2042 and the counters at
+            // 0x004e2a86/ef/0x004e2b2d) call DrawTextGlyph or
+            // RenderAsciiOnlyTextLine.  Both inspect only the draw font;
+            // letting the preserved metric font select the generic DBCS path
+            // incorrectly switches these small numerals to the Win32 font.
+            RenderAsciiOnlyTextLine(command.text.c_str());
         } else {
             DrawTextString(command.text.c_str());
         }
@@ -2807,10 +2814,14 @@ void RenderGameplayResourceCounters(UiOverlayState& state) {
             state.population_limit < state.population_used) ? 9 : 1;
     const auto measure_counter_text = [](const std::string& text) -> i32 {
         SelectTextDrawFont(1);
-        if (MeasureTextExtent(text.c_str())) {
-            return static_cast<i32>(text_renderer_state().measured_width);
+        i32 width = 0;
+        for (const unsigned char ch : text) {
+            if (MeasureAsciiGlyphMetrics(ch)) {
+                width += static_cast<i32>(
+                    text_renderer_state().measured_width);
+            }
         }
-        return static_cast<i32>(text.size() * 6u);
+        return width;
     };
     const std::string used_text = std::to_string(state.population_used);
     i32 text_x = state.population_counter_x + 0x12;
