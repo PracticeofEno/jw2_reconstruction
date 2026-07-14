@@ -59,7 +59,7 @@ struct GameplaySoundState {
     i32 viewport_center_x = 400;
     i32 viewport_center_y = 300;
     u32 current_tick = 0;
-    u32 variant_seed = 0;
+    u32 variant_seed = 1;
     std::array<u32, 16> variant_scramble{
         0xa075a321u, 0xb304323cu, 0xc43a2059u, 0xd3d4f745u,
         0xe9999996u, 0xf124e654u, 0x158c6670u, 0x28374832u,

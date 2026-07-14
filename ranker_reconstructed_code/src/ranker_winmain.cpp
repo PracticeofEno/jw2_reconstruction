@@ -495,6 +495,20 @@ constexpr std::size_t kGameplayHeaderMapEffectFreeListHeadOffset = 0x144c;
 constexpr std::size_t kGameplayHeaderRandomLimitOffset = 0x1420;
 constexpr std::size_t kGameplayHeaderRandomSeedOffset = 0x1424;
 constexpr std::size_t kGameplayHeaderRandomCallCountOffset = 0x1428;
+constexpr std::size_t kGameplayHeaderOwnerUnitTypeCountOffset = 0x1698;
+constexpr std::size_t kGameplayHeaderOwnerUnitTypeCountStride =
+    kProductionOrderTypeCount;
+constexpr std::size_t kGameplayHeaderProductionOrderStateOffset = 0x2bd8;
+constexpr std::size_t kGameplayHeaderProductionOwnerStride = 0x100;
+constexpr std::size_t kGameplayHeaderProductionOrderStride = 4;
+constexpr std::size_t kGameplayHeaderOrder2bBonusOffset = 0x469c;
+constexpr std::size_t kGameplayHeaderProductionEffectOffset = 0x46ec;
+constexpr std::size_t kGameplayHeaderProductionEffectStride = 0x1540;
+constexpr std::size_t kGameplayHeaderProductionEffectOwnerStride = 0x2a8;
+constexpr std::size_t kGameplayHeaderProductionRuntimeEndOffset =
+    kGameplayHeaderProductionEffectOffset +
+    kProductionOrderCompletionEffectCount *
+        kGameplayHeaderProductionEffectStride;
 constexpr u32 kGameplayMapEffectObjectRecordIndex = 8;
 constexpr u32 kGameplayMapEffectObjectStride = 0x3c;
 constexpr u32 kGameplayMapEffectObjectMaxSlots = 0x200;
@@ -931,6 +945,7 @@ struct RuntimeGlobals {
     SessionRuntimeBufferPairs gameplay_session_runtime_buffers;
     SessionRuntimeImportState session_runtime_import_state;
     SessionRuntimeDefinitionTableSet active_session_definitions;
+    SessionRuntimeDefinitionTableSet base_session_definitions;
     SessionRuntimeDefinitionTableSet staged_session_definitions;
     std::vector<u8> gameplay_session_forces_fixed_records;
     GameSessionAvatarRuntime gameplay_avatar_runtime;
@@ -967,6 +982,8 @@ struct RuntimeGlobals {
     OwnerAiRuntimeState gameplay_owner_ai_state;
     ProductionOrderCatalog gameplay_production_catalog;
     ProductionOrderRuntimeState gameplay_production_runtime;
+    std::vector<std::array<i32, kProductionOrderOwnerCount>>
+        gameplay_pending_order_2b_bonus_snapshots;
     std::array<OwnerTransportQueueState, kOwnerAiOwnerCount>
         gameplay_owner_transport_queues{};
     std::array<OwnerTransportRouteState, kOwnerAiOwnerCount>
@@ -1083,12 +1100,27 @@ void purge_default_inactive_movement_units(UnitMovementContext& movement);
 void rebuild_default_unit_spatial_indexes();
 void rebuild_default_damage_record_links(UnitMovementContext* movement,
     UnitMovementUnit* source, UnitMovementUnit* target);
+void sync_default_owner_type_counts_from_lifecycle(
+    const UnitLifecycleContext& lifecycle, u32 owner);
 bool stage_default_session_runtime_override_definitions();
+bool seed_default_active_session_unit_definitions_from_catalog();
+bool sync_default_production_catalog_from_runtime_records(
+    const std::vector<RuntimeDefinitionRecord>& records,
+    std::size_t record_body_offset);
+bool restore_default_production_runtime_from_session_header();
+void sync_default_production_runtime_to_session_header(
+    std::vector<u8>& header);
+void mirror_default_production_variants_to_session_import_state();
+void prepare_default_base_session_runtime_definition_import();
+void prepare_default_non_empty_session_runtime_definition_import();
+void finalize_default_session_runtime_definition_import();
+void refresh_default_unit_definition_runtime_fields(UnitMovementUnit& unit);
+void refresh_default_order_2b_active_unit_progress();
+void replay_pending_default_order_2b_active_unit_progress();
 void apply_default_session_fixed44_player_slot_masks();
 bool import_default_owner_ai_snapshot_from_session_records();
 bool export_default_owner_ai_snapshot_to_payload(std::vector<u8>& payload);
 bool import_default_session_owner_unit_availability();
-SessionRuntimeExportState build_default_session_runtime_export_state();
 bool append_default_session_runtime_export_records(
     std::vector<TrcWriteRecord>& records);
 bool load_default_gameplay_terrain_tile_sheet_bank();
@@ -1096,6 +1128,8 @@ void run_default_owner_ai_maintenance(GameplayLoopState& state);
 void initialize_default_gameplay_terrain_layer_from_session_records();
 void write_default_session_buffer_u32(
     std::vector<u8>& bytes, std::size_t offset, u32 value);
+u32 read_default_session_record_u32(
+    const std::vector<u8>& record, std::size_t offset, u32 fallback);
 void default_gameplay_frame_draw_terrain(
     GameplayFrameRenderContext& context, i32 camera_x, i32 camera_y);
 void default_gameplay_frame_draw_terrain_decorations(
@@ -3191,6 +3225,12 @@ bool export_default_loaded_gameplay_session_bundle_to(
         } else if (spec.byte_count != 0) {
             record.payload.assign(spec.byte_count, 0);
         }
+        if (i == 0) {
+            // The original JW2 primary record owns the live production
+            // variants, lock cells and accumulated upgrade effects.  US_UPG
+            // remains a raw definition override and is exported separately.
+            sync_default_production_runtime_to_session_header(record.payload);
+        }
         if (i == kGameplaySessionMapRecordIndex) {
             stamp_default_gameplay_save_title(record.payload, save_title);
         }
@@ -3247,6 +3287,7 @@ bool default_gameplay_modal_import_session_bundle(
             load_default_gameplay_terrain_tile_sheet_bank();
         g_runtime.session_runtime_import_state = SessionRuntimeImportState{};
         g_runtime.active_session_definitions = SessionRuntimeDefinitionTableSet{};
+        g_runtime.base_session_definitions = SessionRuntimeDefinitionTableSet{};
         g_runtime.staged_session_definitions = SessionRuntimeDefinitionTableSet{};
         g_runtime.gameplay_session_runtime_buffers = SessionRuntimeBufferPairs{};
         import_default_session_owner_unit_availability();
@@ -3281,13 +3322,21 @@ bool default_gameplay_modal_export_session_bundle(
 }
 
 void default_gameplay_modal_import_runtime_tables(GameplayModalUiState&) {
+    prepare_default_base_session_runtime_definition_import();
+    // Gameplay save/load uses the mode-5 preservation path: primary JW2 state
+    // is live before pristine definitions and marked user overrides catch up.
+    restore_default_production_runtime_from_session_header();
+    mirror_default_production_variants_to_session_import_state();
     ImportSessionRuntimeDefinitionTables(g_runtime.session_runtime_import_state,
-        g_runtime.active_session_definitions, g_runtime.staged_session_definitions);
+        g_runtime.active_session_definitions, g_runtime.base_session_definitions);
+    finalize_default_session_runtime_definition_import();
 }
 
 void default_gameplay_modal_import_non_empty_runtime_tables(GameplayModalUiState&) {
+    prepare_default_non_empty_session_runtime_definition_import();
     ImportNonEmptySessionRuntimeDefinitionTables(g_runtime.session_runtime_import_state,
         g_runtime.active_session_definitions, g_runtime.staged_session_definitions);
+    finalize_default_session_runtime_definition_import();
 }
 
 void default_gameplay_modal_rebuild_unit_type_references(GameplayModalUiState&) {
@@ -6499,6 +6548,104 @@ void write_default_session_buffer_u32(
     bytes[offset + 3] = static_cast<u8>((value >> 24) & 0xffu);
 }
 
+bool write_default_session_pair_snapshot_record(SessionRuntimeBufferPair& pair,
+    u32 index, const RuntimeDefinitionRecord& record) {
+    if (index >= pair.count || record.bytes.size() < pair.record_size) {
+        return false;
+    }
+    const std::size_t offset = static_cast<std::size_t>(index) * pair.record_size;
+    if (offset > pair.snapshot.size() ||
+        pair.record_size > pair.snapshot.size() - offset) {
+        return false;
+    }
+    std::memcpy(pair.snapshot.data() + offset,
+        record.bytes.data(), pair.record_size);
+    return true;
+}
+
+void seed_default_session_runtime_base_unit_snapshot(
+    SessionRuntimeBufferPairs& buffers) {
+    if (!unit_definition_resource_catalog_state().loaded &&
+        !LoadUnitDefinitionResourceCatalog()) {
+        return;
+    }
+
+    SessionRuntimeBufferPair& units = buffers.categories[1];
+    const UnitDefinitionResourceCatalogState& catalog =
+        unit_definition_resource_catalog_state();
+    const u32 count = std::min<u32>(
+        units.count, static_cast<u32>(catalog.records.size()));
+    for (u32 type = 0; type < count; ++type) {
+        const UnitDefinitionResourceRecord& catalog_record = catalog.records[type];
+        if (!catalog_record.loaded || catalog_record.definition_bytes.empty()) {
+            continue;
+        }
+        RuntimeDefinitionRecord live{};
+        live.bytes = catalog_record.definition_bytes;
+        RuntimeDefinitionRecord compact{};
+        if (ExportUnitSessionRuntimeDefinitionRecord(type, compact, live)) {
+            write_default_session_pair_snapshot_record(units, type, compact);
+        }
+    }
+}
+
+void seed_default_session_runtime_base_production_snapshot(
+    SessionRuntimeBufferPairs& buffers) {
+    constexpr std::size_t kHeaderBytes = 8;
+    constexpr std::size_t kRecordBytes = 0x44c;
+    std::vector<u8> payload;
+    if (!LoadTrcRecordAlloc("JW2_10.TRC", 0, payload) ||
+        payload.size() < kHeaderBytes) {
+        return;
+    }
+
+    SessionRuntimeBufferPair& orders = buffers.categories[2];
+    const u32 payload_count = read_runtime_catalog_u32(payload, 4, 0);
+    const u32 count = std::min(orders.count, payload_count);
+    SessionRuntimeExportState base_export{};
+    const GameplaySessionLoadState& load = gameplay_session_load_state();
+    if (!load.records.empty() && load.record_loaded[0]) {
+        const std::vector<u8>& header = load.records[0];
+        for (u32 owner = 0; owner < kProductionOrderOwnerCount; ++owner) {
+            for (u32 order = 0; order < kProductionOrderCount; ++order) {
+                const std::size_t header_offset =
+                    kGameplayHeaderProductionOrderStateOffset +
+                    static_cast<std::size_t>(owner) *
+                        kGameplayHeaderProductionOwnerStride +
+                    static_cast<std::size_t>(order) *
+                        kGameplayHeaderProductionOrderStride;
+                const std::size_t variant_offset =
+                    static_cast<std::size_t>(order) * sizeof(u32);
+                if (header_offset >= header.size() ||
+                    variant_offset >=
+                        base_export.owner_order_variants[owner].size()) {
+                    continue;
+                }
+                // FUN_00451d90 exports the live primary-record variant + 1
+                // into the pristine US_UPG snapshot.  The primary JW2 record
+                // is loaded before this snapshot is made.
+                base_export.owner_order_variants[owner][variant_offset] =
+                    header[header_offset];
+            }
+        }
+    }
+    for (u32 order = 0; order < count; ++order) {
+        const std::size_t offset = kHeaderBytes +
+            static_cast<std::size_t>(order) * kRecordBytes;
+        if (offset > payload.size() || kRecordBytes > payload.size() - offset) {
+            break;
+        }
+        RuntimeDefinitionRecord live{};
+        live.bytes.assign(payload.begin() + offset,
+            payload.begin() + offset + kRecordBytes);
+        RuntimeDefinitionRecord compact{};
+        if (ExportProductionOrderSessionRuntimeRecord(
+                base_export, order, compact, live)) {
+            write_default_session_pair_snapshot_record(orders, order, compact);
+        }
+    }
+}
+
 void initialize_default_session_runtime_staging_buffers(
     SessionRuntimeBufferPairs& buffers) {
     InitializeSessionRuntimeBufferPairs(buffers);
@@ -6521,6 +6668,12 @@ void initialize_default_session_runtime_staging_buffers(
         write_default_session_buffer_u32(fixed.snapshot, offset + 0x2c, 1);
         write_default_session_buffer_u32(fixed.snapshot, offset + 0x30, 1);
     }
+
+    // DAT_01243270/74/78 are compact backups of the pristine live definition
+    // tables.  Map US_* records are read into the separate active buffers at
+    // DAT_01243284/88/8c and are only overlaid by the mode-5 branch.
+    seed_default_session_runtime_base_unit_snapshot(buffers);
+    seed_default_session_runtime_base_production_snapshot(buffers);
 }
 
 bool unpack_default_session_runtime_records(
@@ -6545,25 +6698,29 @@ bool unpack_default_session_runtime_records(
     return true;
 }
 
-bool unpack_default_session_runtime_active_definitions(
+bool unpack_default_session_runtime_definitions(
     const SessionRuntimeBufferPairs& buffers,
-    SessionRuntimeDefinitionTableSet& definitions) {
+    SessionRuntimeDefinitionTableSet& definitions, bool snapshot) {
+    const auto& bytes = [snapshot](const SessionRuntimeBufferPair& pair)
+        -> const std::vector<u8>& {
+        return snapshot ? pair.snapshot : pair.active;
+    };
     return
         unpack_default_session_runtime_records(
             definitions.fixed44_records, buffers.categories[0],
-            buffers.categories[0].active) &&
+            bytes(buffers.categories[0])) &&
         unpack_default_session_runtime_records(
             definitions.unit_records, buffers.categories[1],
-            buffers.categories[1].active) &&
+            bytes(buffers.categories[1])) &&
         unpack_default_session_runtime_records(
             definitions.production_order_records, buffers.categories[2],
-            buffers.categories[2].active) &&
+            bytes(buffers.categories[2])) &&
         unpack_default_session_runtime_records(
             definitions.tail8_records, buffers.categories[3],
-            buffers.categories[3].active) &&
+            bytes(buffers.categories[3])) &&
         unpack_default_session_runtime_records(
             definitions.tail4_records, buffers.categories[4],
-            buffers.categories[4].active);
+            bytes(buffers.categories[4]));
 }
 
 bool unpack_default_session_runtime_fixed_records(
@@ -6591,6 +6748,8 @@ bool stage_default_session_runtime_override_definitions() {
     g_runtime.gameplay_session_forces_record_loaded = false;
     g_runtime.gameplay_session_runtime_definitions_staged = false;
     g_runtime.gameplay_session_forces_fixed_records.clear();
+    g_runtime.base_session_definitions = SessionRuntimeDefinitionTableSet{};
+    g_runtime.staged_session_definitions = SessionRuntimeDefinitionTableSet{};
 
     if (g_runtime.gameplay_session_archive_path.empty()) {
         return false;
@@ -6608,6 +6767,12 @@ bool stage_default_session_runtime_override_definitions() {
         return false;
     }
 
+    SessionRuntimeDefinitionTableSet base;
+    if (!unpack_default_session_runtime_definitions(buffers, base, true)) {
+        return false;
+    }
+    g_runtime.base_session_definitions = std::move(base);
+
     const char* archive_name = g_runtime.gameplay_session_archive_path.c_str();
     const bool user_records_available =
         default_session_runtime_user_override_records_available(
@@ -6615,8 +6780,8 @@ bool stage_default_session_runtime_override_definitions() {
     if (user_records_available &&
         LoadUserSessionRuntimeOverrideRecords(archive_name, buffers)) {
         SessionRuntimeDefinitionTableSet staged;
-        if (unpack_default_session_runtime_active_definitions(
-                buffers, staged)) {
+        if (unpack_default_session_runtime_definitions(
+                buffers, staged, false)) {
             g_runtime.staged_session_definitions = std::move(staged);
             g_runtime.gameplay_session_user_runtime_overrides_loaded = true;
         }
@@ -6643,6 +6808,333 @@ bool stage_default_session_runtime_override_definitions() {
         g_runtime.gameplay_session_user_runtime_overrides_loaded ||
         g_runtime.gameplay_session_forces_record_loaded;
     return g_runtime.gameplay_session_runtime_definitions_staged;
+}
+
+bool seed_default_active_session_unit_definitions_from_catalog() {
+    if (!unit_definition_resource_catalog_state().loaded &&
+        !LoadUnitDefinitionResourceCatalog()) {
+        return false;
+    }
+
+    const UnitDefinitionResourceCatalogState& catalog =
+        unit_definition_resource_catalog_state();
+    std::vector<RuntimeDefinitionRecord>& active_records =
+        g_runtime.active_session_definitions.unit_records;
+    active_records.clear();
+    active_records.resize(catalog.records.size());
+    for (std::size_t type = 0; type < catalog.records.size(); ++type) {
+        const UnitDefinitionResourceRecord& source = catalog.records[type];
+        if (source.loaded) {
+            active_records[type].bytes = source.definition_bytes;
+        }
+    }
+    g_runtime.unit_definition_cache_valid.fill(false);
+    return true;
+}
+
+bool sync_default_production_catalog_from_runtime_records(
+    const std::vector<RuntimeDefinitionRecord>& records,
+    std::size_t record_body_offset) {
+    constexpr std::size_t kRuntimeProductionRecordBytes = 0x44c;
+    constexpr std::size_t kRuntimeProductionHeaderBytes = 8;
+    const std::size_t count = std::min<std::size_t>(
+        records.size(), kProductionOrderCount);
+    if (count == 0) {
+        return false;
+    }
+
+    std::vector<u8> payload(kRuntimeProductionHeaderBytes +
+        count * kRuntimeProductionRecordBytes, 0);
+    write_default_session_buffer_u32(payload, 0, 0x64);
+    write_default_session_buffer_u32(payload, sizeof(u32),
+        static_cast<u32>(count));
+    for (std::size_t order = 0; order < count; ++order) {
+        const std::vector<u8>& source = records[order].bytes;
+        if (record_body_offset > source.size() ||
+            source.size() - record_body_offset < kRuntimeProductionRecordBytes) {
+            return false;
+        }
+        std::memcpy(payload.data() + kRuntimeProductionHeaderBytes +
+                order * kRuntimeProductionRecordBytes,
+            source.data() + record_body_offset,
+            kRuntimeProductionRecordBytes);
+    }
+
+    ProductionOrderCatalog catalog;
+    if (!LoadProductionOrderCatalogFromBytes(
+            payload.data(), payload.size(), catalog)) {
+        return false;
+    }
+    g_runtime.gameplay_production_catalog = std::move(catalog);
+    return true;
+}
+
+bool restore_default_production_runtime_from_session_header() {
+    const GameplaySessionLoadState& load = gameplay_session_load_state();
+    if (load.records.empty() || !load.record_loaded[0]) {
+        return false;
+    }
+
+    const std::vector<u8>& header = load.records[0];
+    if (header.size() < kGameplayHeaderProductionRuntimeEndOffset) {
+        return false;
+    }
+
+    ProductionOrderRuntimeState& production =
+        g_runtime.gameplay_production_runtime;
+    for (u32 owner = 0; owner < kProductionOrderOwnerCount; ++owner) {
+        for (u32 type = 0; type < kProductionOrderTypeCount; ++type) {
+            const std::size_t count_offset =
+                kGameplayHeaderOwnerUnitTypeCountOffset +
+                static_cast<std::size_t>(owner) *
+                    kGameplayHeaderOwnerUnitTypeCountStride +
+                type;
+            production.completed_type_counts[owner][type] =
+                header[count_offset];
+        }
+        for (u32 order = 0; order < kProductionOrderCount; ++order) {
+            const std::size_t offset =
+                kGameplayHeaderProductionOrderStateOffset +
+                static_cast<std::size_t>(owner) *
+                    kGameplayHeaderProductionOwnerStride +
+                static_cast<std::size_t>(order) *
+                    kGameplayHeaderProductionOrderStride;
+            production.variant_counts[owner][order] = header[offset];
+            production.lock_flags[owner][order] = header[offset + 1];
+            production.order_cell_opaque_bytes[owner][order][0] =
+                header[offset + 2];
+            production.order_cell_opaque_bytes[owner][order][1] =
+                header[offset + 3];
+        }
+        production.order_2b_bonus_totals[owner] = static_cast<i32>(
+            read_default_session_record_u32(header,
+                kGameplayHeaderOrder2bBonusOffset +
+                    static_cast<std::size_t>(owner) * sizeof(u32),
+                0));
+    }
+
+    for (u32 effect = 0;
+         effect < kProductionOrderCompletionEffectCount; ++effect) {
+        for (u32 owner = 0; owner < kProductionOrderOwnerCount; ++owner) {
+            for (u32 type = 0; type < kProductionOrderTypeCount; ++type) {
+                const std::size_t offset =
+                    kGameplayHeaderProductionEffectOffset +
+                    static_cast<std::size_t>(effect) *
+                        kGameplayHeaderProductionEffectStride +
+                    static_cast<std::size_t>(owner) *
+                        kGameplayHeaderProductionEffectOwnerStride +
+                    static_cast<std::size_t>(type) * sizeof(u32);
+                production.completion_effect_totals[effect][owner][type] =
+                    static_cast<i32>(
+                        read_default_session_record_u32(header, offset, 0));
+            }
+        }
+    }
+    production.order_2b_refresh_requests = 0;
+    return true;
+}
+
+void sync_default_production_runtime_to_session_header(
+    std::vector<u8>& header) {
+    if (header.size() < kGameplayHeaderProductionRuntimeEndOffset) {
+        return;
+    }
+
+    const ProductionOrderRuntimeState& production =
+        g_runtime.gameplay_production_runtime;
+    const UnitLifecycleContext* lifecycle =
+        g_runtime.gameplay_startup_state.lifecycle;
+    for (u32 owner = 0; owner < kProductionOrderOwnerCount; ++owner) {
+        for (u32 type = 0; type < kProductionOrderTypeCount; ++type) {
+            u32 count = production.completed_type_counts[owner][type];
+            if (lifecycle != nullptr &&
+                owner < lifecycle->owner_unit_type_counts.size() &&
+                type < lifecycle->owner_unit_type_counts[owner].size()) {
+                // DAT_00707430 is the live unit-lifecycle byte table inside
+                // JW2, rebuilt from the active unit list before export.
+                count = lifecycle->owner_unit_type_counts[owner][type];
+            }
+            const std::size_t count_offset =
+                kGameplayHeaderOwnerUnitTypeCountOffset +
+                static_cast<std::size_t>(owner) *
+                    kGameplayHeaderOwnerUnitTypeCountStride +
+                type;
+            header[count_offset] = static_cast<u8>(count);
+        }
+        for (u32 order = 0; order < kProductionOrderCount; ++order) {
+            const std::size_t offset =
+                kGameplayHeaderProductionOrderStateOffset +
+                static_cast<std::size_t>(owner) *
+                    kGameplayHeaderProductionOwnerStride +
+                static_cast<std::size_t>(order) *
+                    kGameplayHeaderProductionOrderStride;
+            header[offset] = production.variant_counts[owner][order];
+            header[offset + 1] = production.lock_flags[owner][order];
+            header[offset + 2] =
+                production.order_cell_opaque_bytes[owner][order][0];
+            header[offset + 3] =
+                production.order_cell_opaque_bytes[owner][order][1];
+        }
+        write_default_session_buffer_u32(header,
+            kGameplayHeaderOrder2bBonusOffset +
+                static_cast<std::size_t>(owner) * sizeof(u32),
+            static_cast<u32>(production.order_2b_bonus_totals[owner]));
+    }
+
+    for (u32 effect = 0;
+         effect < kProductionOrderCompletionEffectCount; ++effect) {
+        for (u32 owner = 0; owner < kProductionOrderOwnerCount; ++owner) {
+            for (u32 type = 0; type < kProductionOrderTypeCount; ++type) {
+                const std::size_t offset =
+                    kGameplayHeaderProductionEffectOffset +
+                    static_cast<std::size_t>(effect) *
+                        kGameplayHeaderProductionEffectStride +
+                    static_cast<std::size_t>(owner) *
+                        kGameplayHeaderProductionEffectOwnerStride +
+                    static_cast<std::size_t>(type) * sizeof(u32);
+                write_default_session_buffer_u32(header, offset,
+                    static_cast<u32>(
+                        production.completion_effect_totals[effect][owner][type]));
+            }
+        }
+    }
+}
+
+void mirror_default_production_variants_to_session_import_state() {
+    SessionRuntimeImportState& import = g_runtime.session_runtime_import_state;
+    for (u32 owner = 0;
+         owner < import.owner_order_variants.size() &&
+         owner < g_runtime.gameplay_production_runtime.variant_counts.size();
+         ++owner) {
+        for (u32 order = 0;
+             order < g_runtime.gameplay_production_runtime.variant_counts[owner].size();
+             ++order) {
+            const std::size_t offset =
+                static_cast<std::size_t>(order) * sizeof(u32);
+            if (offset >= import.owner_order_variants[owner].size()) {
+                break;
+            }
+            import.owner_order_variants[owner][offset] =
+                g_runtime.gameplay_production_runtime.variant_counts[owner][order];
+        }
+    }
+}
+
+void default_session_apply_production_completion(u32 owner, u32 order_id) {
+    const ProductionOrderDefinition* definition =
+        default_production_order_definition(order_id);
+    if (definition == nullptr || owner >= kProductionOrderOwnerCount ||
+        order_id >= kProductionOrderCount) {
+        return;
+    }
+
+    const ProductionOrderCompletionResult result = CompleteProductionOrder(
+        g_runtime.gameplay_production_runtime, *definition, owner);
+    const std::size_t variant_offset =
+        static_cast<std::size_t>(order_id) * sizeof(u32);
+    if (variant_offset < g_runtime.session_runtime_import_state
+            .owner_order_variants[owner].size()) {
+        g_runtime.session_runtime_import_state.owner_order_variants[owner]
+            [variant_offset] =
+            g_runtime.gameplay_production_runtime.variant_counts[owner][order_id];
+    }
+    if (result.order_2b_refresh_requested) {
+        UnitMovementContext* movement = default_gameplay_movement_context();
+        const bool active_units_materialized = movement != nullptr &&
+            std::any_of(movement->active_units.begin(), movement->active_units.end(),
+                [](const UnitMovementUnit* unit) {
+                    return unit != nullptr && unit->active;
+                });
+        if (active_units_materialized) {
+            refresh_default_order_2b_active_unit_progress();
+        } else {
+            // The original has already materialized record 7 when FUN_00450f90
+            // replays saved US_UPG variants.  Our session flow decodes record 7
+            // later, so retain the exact owner-bonus state after each 0x2b
+            // completion and replay those list walks once those units exist.
+            g_runtime.gameplay_pending_order_2b_bonus_snapshots.push_back(
+                g_runtime.gameplay_production_runtime.order_2b_bonus_totals);
+        }
+    }
+}
+
+void prepare_default_base_session_runtime_definition_import() {
+    g_runtime.gameplay_pending_order_2b_bonus_snapshots.clear();
+    // Clear the prior session first.  Callers then hydrate the newly loaded
+    // primary JW2 record before the compact tables perform their monotonic
+    // catch-up, matching 0x4d1ccc -> 0x450f90.
+    ResetProductionOrderRuntimeState(g_runtime.gameplay_production_runtime);
+    seed_default_active_session_unit_definitions_from_catalog();
+    if (!sync_default_production_catalog_from_runtime_records(
+            g_runtime.base_session_definitions.production_order_records, 4)) {
+        ProductionOrderCatalog base_catalog;
+        if (LoadProductionOrderCatalogFromJw210Trc(base_catalog)) {
+            g_runtime.gameplay_production_catalog = std::move(base_catalog);
+        }
+    }
+    mirror_default_production_variants_to_session_import_state();
+    g_runtime.session_runtime_import_state.apply_production_completion =
+        default_session_apply_production_completion;
+}
+
+void prepare_default_non_empty_session_runtime_definition_import() {
+    sync_default_production_catalog_from_runtime_records(
+        g_runtime.staged_session_definitions.production_order_records, 4);
+    g_runtime.session_runtime_import_state.apply_production_completion =
+        default_session_apply_production_completion;
+}
+
+void default_gameplay_session_prepare_non_empty_runtime_definition_import(
+    GameplaySessionRuntimeResetState&) {
+    prepare_default_non_empty_session_runtime_definition_import();
+}
+
+void sync_default_active_session_unit_names() {
+    for (std::size_t type = 0; type < g_gameplay_unit_name_overrides.size(); ++type) {
+        g_gameplay_unit_name_overrides[type].clear();
+        if (type >= g_runtime.active_session_definitions.unit_records.size()) {
+            continue;
+        }
+        const std::vector<u8>& bytes =
+            g_runtime.active_session_definitions.unit_records[type].bytes;
+        constexpr std::size_t kNameOffset = 0x10c;
+        constexpr std::size_t kNameCapacity = 0x40;
+        if (bytes.size() < kNameOffset + kNameCapacity) {
+            continue;
+        }
+        const char* name = reinterpret_cast<const char*>(bytes.data() + kNameOffset);
+        std::size_t length = 0;
+        while (length < kNameCapacity && name[length] != '\0') {
+            ++length;
+        }
+        g_gameplay_unit_name_overrides[type].assign(name, length);
+    }
+}
+
+void refresh_default_units_after_runtime_definition_import() {
+    g_runtime.unit_definition_cache_valid.fill(false);
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    if (movement == nullptr) {
+        return;
+    }
+    for (UnitMovementUnit* unit : movement->active_units) {
+        if (unit != nullptr) {
+            refresh_default_unit_definition_runtime_fields(*unit);
+        }
+    }
+    for (UnitMovementUnit* unit : movement->lifecycle_units) {
+        if (unit != nullptr) {
+            refresh_default_unit_definition_runtime_fields(*unit);
+        }
+    }
+}
+
+void finalize_default_session_runtime_definition_import() {
+    sync_default_production_catalog_from_runtime_records(
+        g_runtime.active_session_definitions.production_order_records, 0);
+    sync_default_active_session_unit_names();
+    refresh_default_units_after_runtime_definition_import();
+    sync_default_gameplay_tooltip_unit_definitions();
 }
 
 u32 read_default_session_record_u32(
@@ -7180,47 +7672,14 @@ bool export_default_owner_ai_snapshot_to_payload(std::vector<u8>& payload) {
     return true;
 }
 
-SessionRuntimeExportState build_default_session_runtime_export_state() {
-    SessionRuntimeExportState state{};
-    for (u32 owner = 0;
-         owner < state.owner_order_variants.size() &&
-         owner < g_runtime.gameplay_production_runtime.variant_counts.size();
-         ++owner) {
-        for (u32 order = 0;
-             order < g_runtime.gameplay_production_runtime.variant_counts[owner].size();
-             ++order) {
-            const std::size_t variant_offset =
-                static_cast<std::size_t>(order) * sizeof(u32);
-            if (variant_offset >= state.owner_order_variants[owner].size()) {
-                break;
-            }
-            state.owner_order_variants[owner][variant_offset] =
-                g_runtime.gameplay_production_runtime.variant_counts[owner][order];
-        }
-    }
-    return state;
-}
-
 bool append_default_session_runtime_export_records(
     std::vector<TrcWriteRecord>& records) {
-    SessionRuntimeBufferPairs buffers;
-    if (!ResizeSessionRuntimeBufferPairs(buffers,
-            kGameplaySessionRuntimeFixedRecordCount,
-            kGameSessionUnitTypeCount,
-            kGameplaySessionRuntimeProductionOrderRecordCount,
-            kGameplaySessionRuntimeTail8RecordCount,
-            kGameplaySessionRuntimeTail4RecordCount,
-            initialize_default_session_runtime_staging_buffers)) {
-        return false;
-    }
-
-    const SessionRuntimeExportState export_state =
-        build_default_session_runtime_export_state();
-    if (!BuildDefaultSessionRuntimeStagingBuffers(buffers,
-            g_runtime.active_session_definitions, export_state)) {
-        return false;
-    }
-    SnapshotSessionRuntimeBufferPairs(buffers);
+    // HandleGameplaySessionBundleExport -> FUN_004506a0 writes the active
+    // compact buffers verbatim.  Their first DWORD is an archive/editor-owned
+    // marker; rebuilding rows from the live definitions would zero or invent
+    // those markers and change the next mode-5 import.
+    const SessionRuntimeBufferPairs& buffers =
+        g_runtime.gameplay_session_runtime_buffers;
 
     if (!AppendUserSessionRuntimeOverrideWriteRecords(records, buffers)) {
         return false;
@@ -7236,14 +7695,17 @@ bool append_default_session_runtime_export_records(
 }
 
 void apply_default_session_fixed44_player_slot_masks() {
-    if (!g_runtime.gameplay_session_runtime_definitions_staged ||
-        g_runtime.staged_session_definitions.fixed44_records.empty()) {
+    // FUN_00450ba0 applies the active/user fixed table only in mode 5.
+    // Normal P2P sessions have already imported the base table and must not
+    // interpret the map's US_FORCE records as live player-team masks.
+    if (g_runtime.gameplay_startup_state.session_mode != 5 ||
+        g_runtime.active_session_definitions.fixed44_records.empty()) {
         return;
     }
 
     RebuildSessionPlayerSlotMasksFromFixed44Records(
         g_runtime.gameplay_player_slots,
-        g_runtime.staged_session_definitions.fixed44_records);
+        g_runtime.active_session_definitions.fixed44_records);
     // The synthesized default FORCES record uses a shared 0xff mask.  Direct
     // link modes do not use that record as a team declaration: each active
     // player is an opponent unless a dedicated team mode grouped the slots.
@@ -8360,7 +8822,8 @@ void run_default_gameplay_session_runtime_reset(
     GameplaySessionRuntimeResetState reset{};
     reset.import_state = &g_runtime.session_runtime_import_state;
     reset.active_definitions = &g_runtime.active_session_definitions;
-    reset.staged_definitions = &g_runtime.staged_session_definitions;
+    reset.staged_definitions = &g_runtime.base_session_definitions;
+    reset.non_empty_staged_definitions = &g_runtime.staged_session_definitions;
     reset.players = &g_runtime.gameplay_player_slots;
     reset.lifecycle = startup.lifecycle;
     reset.owner_counters = &g_runtime.gameplay_owner_counters;
@@ -8377,12 +8840,26 @@ void run_default_gameplay_session_runtime_reset(
         default_gameplay_session_reset_effect_runtime;
     reset.callbacks.reset_ui_runtime_flags =
         default_gameplay_session_reset_ui_runtime_flags;
+    reset.callbacks.before_non_empty_runtime_tables_import =
+        default_gameplay_session_prepare_non_empty_runtime_definition_import;
     reset.callbacks.on_unit_reset_or_removed =
         default_gameplay_session_unit_reset_or_removed;
     reset.callbacks.update_owner_display_name =
         default_gameplay_session_update_owner_display_name;
 
+    prepare_default_base_session_runtime_definition_import();
+    restore_default_production_runtime_from_session_header();
+    mirror_default_production_variants_to_session_import_state();
     InitializeGameplaySessionRuntimeState(reset);
+    if (startup.session_mode != 5) {
+        // FUN_00426770 clears the complete 0x800 order-cell block and all
+        // accumulated production effects only on fresh/normal sessions, after
+        // the definition import.  Mode 5 keeps the primary-record state.
+        ResetProductionOrderRuntimeState(g_runtime.gameplay_production_runtime);
+        g_runtime.gameplay_pending_order_2b_bonus_snapshots.clear();
+        mirror_default_production_variants_to_session_import_state();
+    }
+    finalize_default_session_runtime_definition_import();
     restore_default_gameplay_random_state_from_session_header();
     sync_default_gameplay_session_runtime_views_after_reset();
     rebuild_default_unit_reference_tables_from_catalog();
@@ -8399,6 +8876,7 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     g_runtime.p2p_session_start_state = P2PGameSessionStartState{};
     g_runtime.session_runtime_import_state = SessionRuntimeImportState{};
     g_runtime.active_session_definitions = SessionRuntimeDefinitionTableSet{};
+    g_runtime.base_session_definitions = SessionRuntimeDefinitionTableSet{};
     g_runtime.staged_session_definitions = SessionRuntimeDefinitionTableSet{};
     g_runtime.gameplay_session_runtime_buffers = SessionRuntimeBufferPairs{};
     g_runtime.gameplay_session_forces_fixed_records.clear();
@@ -8455,7 +8933,7 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     P2PGameSessionStartInput input{};
     input.import_state = &g_runtime.session_runtime_import_state;
     input.active_definitions = &g_runtime.active_session_definitions;
-    input.staged_definitions = &g_runtime.staged_session_definitions;
+    input.staged_definitions = &g_runtime.base_session_definitions;
     input.reference_tables = &g_runtime.unit_reference_tables;
     input.map_path = g_runtime.gameplay_session_archive_path;
     input.network_player_count = 1;
@@ -8578,6 +9056,7 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     append_startup_log("start-slots: terrain layer init ok");
     append_startup_log("start-slots: instantiate script scenario units begin");
     instantiate_default_gameplay_script_scenario_units(gameplay_script_trigger_state());
+    replay_pending_default_order_2b_active_unit_progress();
     append_startup_log("start-slots: instantiate script scenario units ok active=%zu spawned=%zu",
         g_runtime.gameplay_movement_context.active_units.size(),
         g_runtime.gameplay_script_spawned_units.size());
@@ -8594,6 +9073,12 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     imported_unit_reset.callbacks.on_unit_reset_or_removed =
         default_gameplay_session_unit_reset_or_removed;
     ResetGameplaySessionRuntimeUnits(imported_unit_reset);
+    if (g_runtime.gameplay_startup_state.lifecycle != nullptr) {
+        for (u32 owner = 0; owner < kProductionOrderOwnerCount; ++owner) {
+            sync_default_owner_type_counts_from_lifecycle(
+                *g_runtime.gameplay_startup_state.lifecycle, owner);
+        }
+    }
     sync_default_gameplay_session_runtime_views_after_reset();
     append_startup_log(
         "start-slots: imported unit reset removed=%lu preserved=%lu active=%zu",
@@ -8645,6 +9130,7 @@ void default_frontend_stage_reset_runtime(FrontendStageFlowState& state) {
 
     g_runtime.session_runtime_import_state = SessionRuntimeImportState{};
     g_runtime.active_session_definitions = SessionRuntimeDefinitionTableSet{};
+    g_runtime.base_session_definitions = SessionRuntimeDefinitionTableSet{};
     g_runtime.staged_session_definitions = SessionRuntimeDefinitionTableSet{};
     g_runtime.gameplay_session_runtime_buffers = SessionRuntimeBufferPairs{};
     g_runtime.gameplay_session_forces_fixed_records.clear();
@@ -12467,8 +12953,11 @@ void sync_default_owner_type_counts_from_lifecycle(
          type < g_runtime.gameplay_production_runtime.completed_type_counts[owner].size();
          ++type) {
         const u32 count = lifecycle.owner_unit_type_counts[owner][type];
-        g_runtime.gameplay_owner_ai_state.owner_unit_type_counts[owner][type] = count;
-        g_runtime.gameplay_production_runtime.completed_type_counts[owner][type] = count;
+        const u8 original_byte_count = static_cast<u8>(count);
+        g_runtime.gameplay_owner_ai_state.owner_unit_type_counts[owner][type] =
+            original_byte_count;
+        g_runtime.gameplay_production_runtime.completed_type_counts[owner][type] =
+            original_byte_count;
     }
 }
 
@@ -13144,6 +13633,32 @@ void fill_default_small_reverse_reference_table(std::array<u32, 0x100>& reverse,
     }
 }
 
+const std::vector<u8>* default_live_unit_definition_bytes(u32 unit_type) {
+    if (unit_type < g_runtime.active_session_definitions.unit_records.size()) {
+        const std::vector<u8>& active =
+            g_runtime.active_session_definitions.unit_records[unit_type].bytes;
+        // A compact US_UB row is only 0xd0 bytes.  It is not a standalone
+        // definition: FUN_00450ba0 overlays it on the already loaded JW2_09
+        // row.  Prefer the live table only after that base-seeding step has
+        // produced the complete 0x24bc-byte definition.
+        if (active.size() >= kUnitDefinitionRecordBytes) {
+            return &active;
+        }
+    }
+    if (!unit_definition_resource_catalog_state().loaded &&
+        !LoadUnitDefinitionResourceCatalog()) {
+        return nullptr;
+    }
+    const UnitDefinitionResourceCatalogState& catalog =
+        unit_definition_resource_catalog_state();
+    if (unit_type >= catalog.records.size()) {
+        return nullptr;
+    }
+    const UnitDefinitionResourceRecord& record = catalog.records[unit_type];
+    return record.loaded && !record.definition_bytes.empty() ?
+        &record.definition_bytes : nullptr;
+}
+
 void rebuild_default_unit_reference_tables_from_catalog() {
     if (!unit_definition_resource_catalog_state().loaded) {
         LoadUnitDefinitionResourceCatalog();
@@ -13157,25 +13672,26 @@ void rebuild_default_unit_reference_tables_from_catalog() {
     tables.small_reverse.fill(kInvalidGameSessionUnitType);
 
     for (u32 unit_type = 0; unit_type < catalog.records.size(); ++unit_type) {
-        const UnitDefinitionResourceRecord& record = catalog.records[unit_type];
-        if (!record.loaded || record.definition_bytes.empty() ||
-            read_runtime_catalog_u32(record.definition_bytes, 0, 0) == 0) {
+        const std::vector<u8>* definition_bytes =
+            default_live_unit_definition_bytes(unit_type);
+        if (definition_bytes == nullptr ||
+            read_runtime_catalog_u32(*definition_bytes, 0, 0) == 0) {
             continue;
         }
 
         fill_default_unit_reverse_reference_table(
-            tables.primary_or_alternate_reverse, record.definition_bytes,
+            tables.primary_or_alternate_reverse, *definition_bytes,
             kUnitDefinitionPrimaryReferenceCountOffset,
             kUnitDefinitionPrimaryReferenceBaseOffset, unit_type);
         fill_default_unit_reverse_reference_table(
-            tables.primary_or_alternate_reverse, record.definition_bytes,
+            tables.primary_or_alternate_reverse, *definition_bytes,
             kUnitDefinitionAlternateReferenceCountOffset,
             kUnitDefinitionAlternateReferenceBaseOffset, unit_type);
         fill_default_completion_reverse_reference_table(tables.completion_reverse,
-            record.definition_bytes, kUnitDefinitionCompletionReferenceCountOffset,
+            *definition_bytes, kUnitDefinitionCompletionReferenceCountOffset,
             kUnitDefinitionCompletionReferenceBaseOffset, unit_type);
         fill_default_small_reverse_reference_table(tables.small_reverse,
-            record.definition_bytes, unit_type);
+            *definition_bytes, unit_type);
     }
 }
 
@@ -13187,12 +13703,15 @@ void refresh_default_unit_definition_runtime_fields(UnitMovementUnit& unit) {
         LoadUnitDefinitionResourceCatalog();
     }
 
-    const UnitDefinitionResourceCatalogState& catalog =
-        unit_definition_resource_catalog_state();
-    const UnitDefinitionResourceRecord& record = catalog.records[unit.type_id];
-    if (!record.loaded || record.definition_bytes.empty()) {
+    const std::vector<u8>* live_definition_bytes =
+        default_live_unit_definition_bytes(unit.type_id);
+    if (live_definition_bytes == nullptr) {
         return;
     }
+    struct DefinitionBytesView {
+        const std::vector<u8>& definition_bytes;
+    };
+    const DefinitionBytesView record{*live_definition_bytes};
 
     UnitMovementDefinition& definition = unit.definition;
     definition.initial_max_health = read_runtime_catalog_u32(
@@ -17138,7 +17657,26 @@ void default_unit_damage_shield_broken(UnitDamageContext&, UnitRecord& target) {
 
 bool resolve_default_unit_sound_profile(const UnitMovementUnit& unit,
     GameplayUnitSoundDefinition& definition, GameplayUnitSoundBaseSlots& base_slots) {
-    return GetUnitDefinitionGameplaySoundProfile(unit.type_id, definition, base_slots);
+    if (!GetUnitDefinitionGameplaySoundProfile(
+            unit.type_id, definition, base_slots)) {
+        return false;
+    }
+
+    // The resource catalog owns the sound-buffer base slots, while the
+    // definition fields are read through the live JW2_09 row.  A mode-5
+    // US_UB import can therefore change group counts and special sound fields
+    // without relocating the already loaded sound buffers.
+    const std::vector<u8>* live_definition =
+        default_live_unit_definition_bytes(unit.type_id);
+    if (live_definition != nullptr &&
+        live_definition->size() >= kUnitDefinitionRecordBytes) {
+        GameplayUnitSoundDefinition live_profile{};
+        if (DecodeGameplayUnitSoundDefinition(live_definition->data(),
+                live_definition->size(), live_profile)) {
+            definition = live_profile;
+        }
+    }
+    return true;
 }
 
 u32 default_owner_slot_bit(u32 owner) {
@@ -18172,15 +18710,16 @@ void sync_default_owner_type_count(u32 owner, u32 type) {
     }
 
     const u32 count = lifecycle->owner_unit_type_counts[owner][type];
+    const u8 original_byte_count = static_cast<u8>(count);
     if (owner < g_runtime.gameplay_owner_ai_state.owner_unit_type_counts.size() &&
         type < g_runtime.gameplay_owner_ai_state.owner_unit_type_counts[owner].size()) {
         g_runtime.gameplay_owner_ai_state.owner_unit_type_counts[owner][type] =
-            count;
+            original_byte_count;
     }
     if (owner < g_runtime.gameplay_production_runtime.completed_type_counts.size() &&
         type < g_runtime.gameplay_production_runtime.completed_type_counts[owner].size()) {
         g_runtime.gameplay_production_runtime.completed_type_counts[owner][type] =
-            count;
+            original_byte_count;
     }
 }
 
@@ -18303,8 +18842,9 @@ void default_unit_command_linked_unit_released(UnitCommandContext&,
     const u32 owner = child.owner_id;
     if (owner < lifecycle->owner_unit_type_counts.size()) {
         auto& counts = lifecycle->owner_unit_type_counts[owner];
-        if (child.type_id < counts.size() && counts[child.type_id] != 0) {
-            --counts[child.type_id];
+        if (child.type_id < counts.size()) {
+            counts[child.type_id] =
+                static_cast<u8>(counts[child.type_id] - 1u);
         }
         if (child.type_id < 0x60) {
             if (lifecycle->owner_unit_active_count[owner] != 0) {
@@ -18329,11 +18869,11 @@ void default_unit_command_unit_type_replaced(UnitCommandContext&,
     }
 
     auto& counts = lifecycle->owner_unit_type_counts[owner];
-    if (old_type < counts.size() && counts[old_type] != 0) {
-        --counts[old_type];
-    }
     if (new_type < counts.size()) {
-        ++counts[new_type];
+        counts[new_type] = static_cast<u8>(counts[new_type] + 1u);
+    }
+    if (old_type < counts.size()) {
+        counts[old_type] = static_cast<u8>(counts[old_type] - 1u);
     }
     sync_default_owner_type_count(owner, old_type);
     sync_default_owner_type_count(owner, new_type);
@@ -18557,6 +19097,24 @@ void refresh_default_order_2b_active_unit_progress() {
         StartSelectedUnitAttachmentEffect(
             effects, 0x3du + 0x2du, *candidate, candidate);
     }
+}
+
+void replay_pending_default_order_2b_active_unit_progress() {
+    if (g_runtime.gameplay_pending_order_2b_bonus_snapshots.empty()) {
+        return;
+    }
+
+    ProductionOrderRuntimeState& production =
+        g_runtime.gameplay_production_runtime;
+    const std::array<i32, kProductionOrderOwnerCount> final_bonuses =
+        production.order_2b_bonus_totals;
+    for (const std::array<i32, kProductionOrderOwnerCount>& snapshot :
+         g_runtime.gameplay_pending_order_2b_bonus_snapshots) {
+        production.order_2b_bonus_totals = snapshot;
+        refresh_default_order_2b_active_unit_progress();
+    }
+    production.order_2b_bonus_totals = final_bonuses;
+    g_runtime.gameplay_pending_order_2b_bonus_snapshots.clear();
 }
 
 bool default_unit_command_advance_completion_announcement(UnitCommandContext&,
@@ -20832,10 +21390,12 @@ void sync_default_owner_ai_runtime_metadata(GameplayLoopState* loop_state) {
             owner < lifecycle->owner_population_reserved.size() ?
             lifecycle->owner_population_reserved[owner] : 0;
         for (u32 type = 0; type < kOwnerAiUnitTypeCount; ++type) {
+            const u8 original_byte_count = static_cast<u8>(
+                lifecycle->owner_unit_type_counts[owner][type]);
             owner_ai.owner_unit_type_counts[owner][type] =
-                lifecycle->owner_unit_type_counts[owner][type];
+                original_byte_count;
             g_runtime.gameplay_production_runtime.completed_type_counts[owner][type] =
-                lifecycle->owner_unit_type_counts[owner][type];
+                original_byte_count;
         }
         g_runtime.gameplay_production_runtime.owner_primary_resources[owner] =
             lifecycle->owner_primary_resources[owner];
@@ -20847,7 +21407,13 @@ void sync_default_owner_ai_runtime_metadata(GameplayLoopState* loop_state) {
 void reset_default_owner_ai_runtime() {
     ResetOwnerAiRuntime(g_runtime.gameplay_owner_ai_state);
     configure_default_owner_ai_runtime(g_runtime.gameplay_owner_ai_state);
-    ResetProductionOrderRuntimeState(g_runtime.gameplay_production_runtime);
+    // FUN_00426770 clears the live owner upgrade/effect tables only on the
+    // normal-session branch.  Mode 5 has just replayed the compact US_UPG
+    // target variants through ApplyProductionOrderCompletionEffects and must
+    // preserve that reconstructed state across the owner-AI startup reset.
+    if (g_runtime.gameplay_startup_state.session_mode != 5) {
+        ResetProductionOrderRuntimeState(g_runtime.gameplay_production_runtime);
+    }
     g_runtime.gameplay_owner_transport_queues = {};
     g_runtime.gameplay_owner_transport_routes = {};
     g_runtime.gameplay_owner_strategic_targets = {};

@@ -71,6 +71,7 @@ using GameplaySessionRuntimeResetOwnerCallback =
 struct GameplaySessionRuntimeResetCallbacks {
     GameplaySessionRuntimeResetCallback reset_effect_runtime = nullptr;
     GameplaySessionRuntimeResetCallback reset_ui_runtime_flags = nullptr;
+    GameplaySessionRuntimeResetCallback before_non_empty_runtime_tables_import = nullptr;
     GameplaySessionRuntimeResetUnitCallback on_unit_reset_or_removed = nullptr;
     GameplaySessionRuntimeResetOwnerCallback update_owner_display_name = nullptr;
 };
@@ -79,6 +80,7 @@ struct GameplaySessionRuntimeResetState {
     SessionRuntimeImportState* import_state = nullptr;
     SessionRuntimeDefinitionTableSet* active_definitions = nullptr;
     const SessionRuntimeDefinitionTableSet* staged_definitions = nullptr;
+    const SessionRuntimeDefinitionTableSet* non_empty_staged_definitions = nullptr;
     PlayerSlotRuntimeState* players = nullptr;
     UnitLifecycleContext* lifecycle = nullptr;
     OwnerSessionCounterTables* owner_counters = nullptr;

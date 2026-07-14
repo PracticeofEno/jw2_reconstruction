@@ -53,6 +53,8 @@ struct ProductionOrderRuntimeState {
         variant_counts{};
     std::array<std::array<u8, kProductionOrderCount>, kProductionOrderOwnerCount>
         lock_flags{};
+    std::array<std::array<std::array<u8, 2>, kProductionOrderCount>,
+        kProductionOrderOwnerCount> order_cell_opaque_bytes{};
     std::array<std::array<u32, kProductionOrderTypeCount>, kProductionOrderOwnerCount>
         completed_type_counts{};
     std::array<ProductionOrderOwnerTypeTable, kProductionOrderCompletionEffectCount>

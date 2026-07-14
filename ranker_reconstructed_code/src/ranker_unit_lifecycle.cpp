@@ -63,14 +63,16 @@ u32 population_cost_for_type(UnitLifecycleContext& context, u32 type_id,
 void increment_owner_type_count(UnitLifecycleContext& context, u32 owner_id,
     u32 type_id) {
     if (has_owner_type_count_slot(owner_id, type_id)) {
-        ++context.owner_unit_type_counts[owner_id][type_id];
+        u32& count = context.owner_unit_type_counts[owner_id][type_id];
+        count = static_cast<u8>(count + 1u);
     }
 }
 
 void decrement_owner_type_count(UnitLifecycleContext& context, u32 owner_id,
     u32 type_id) {
     if (has_owner_type_count_slot(owner_id, type_id)) {
-        --context.owner_unit_type_counts[owner_id][type_id];
+        u32& count = context.owner_unit_type_counts[owner_id][type_id];
+        count = static_cast<u8>(count - 1u);
     }
 }
 
@@ -1102,7 +1104,9 @@ void HandleOwnerUnitTypeCountRebuild(UnitLifecycleContext& context) {
         if (unit->type_id >= 0x60 && unit->action_mode_gate == 1) {
             continue;
         }
-        ++context.owner_unit_type_counts[unit->owner_id][unit->type_id];
+        u32& count =
+            context.owner_unit_type_counts[unit->owner_id][unit->type_id];
+        count = static_cast<u8>(count + 1u);
     }
 }
 

@@ -109,9 +109,15 @@ void import_session_runtime_tables(GameplaySessionRuntimeResetState& state) {
     state.definition_tables_imported = base_imported;
 
     if (state.session_mode == 5) {
+        if (state.callbacks.before_non_empty_runtime_tables_import != nullptr) {
+            state.callbacks.before_non_empty_runtime_tables_import(state);
+        }
+        const SessionRuntimeDefinitionTableSet& non_empty_staged =
+            state.non_empty_staged_definitions != nullptr ?
+                *state.non_empty_staged_definitions : *state.staged_definitions;
         state.non_empty_runtime_tables_imported =
             ImportNonEmptySessionRuntimeDefinitionTables(*state.import_state,
-                *state.active_definitions, *state.staged_definitions);
+                *state.active_definitions, non_empty_staged);
         state.definition_tables_imported =
             base_imported && state.non_empty_runtime_tables_imported;
     }

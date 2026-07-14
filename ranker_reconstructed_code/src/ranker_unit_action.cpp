@@ -256,7 +256,9 @@ void reactivate_effect_target(UnitEffectRuntimeState& state,
         }
         if (target.owner_id < kUnitOwnerTypeCountOwners &&
             target.type_id < kUnitOwnerTypeCountTypes) {
-            ++lifecycle->owner_unit_type_counts[target.owner_id][target.type_id];
+            u32& count =
+                lifecycle->owner_unit_type_counts[target.owner_id][target.type_id];
+            count = static_cast<u8>(count + 1u);
         }
     }
     else {

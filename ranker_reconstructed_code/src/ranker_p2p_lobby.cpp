@@ -770,15 +770,6 @@ bool PrepareP2PGameSessionStart(P2PGameSessionStartState& state,
     ReplayRecordingState& replay = replay_recording_state();
     const bool replay_header_available =
         replay.playback_mode && replay.playback_payload.size() >= kReplayHeaderBytes;
-    if (input.import_state != nullptr && input.active_definitions != nullptr &&
-        input.staged_definitions != nullptr) {
-        ImportSessionRuntimeDefinitionTables(*input.import_state,
-            *input.active_definitions, *input.staged_definitions);
-        if (input.import_nonempty_staged_definitions) {
-            ImportNonEmptySessionRuntimeDefinitionTables(*input.import_state,
-                *input.active_definitions, *input.staged_definitions);
-        }
-    }
     if (input.reference_tables != nullptr) {
         RebuildUnitTypeReverseReferenceTables(*input.reference_tables);
     }

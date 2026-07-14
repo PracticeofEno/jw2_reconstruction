@@ -173,6 +173,8 @@ bool SwapProductionOrderOwnerState(ProductionOrderRuntimeState& state, u32 first
             state.variant_counts[second_owner][order]);
         std::swap(state.lock_flags[first_owner][order],
             state.lock_flags[second_owner][order]);
+        std::swap(state.order_cell_opaque_bytes[first_owner][order],
+            state.order_cell_opaque_bytes[second_owner][order]);
     }
 
     std::swap(state.order_2b_bonus_totals[first_owner],
