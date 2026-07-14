@@ -10878,7 +10878,11 @@ void configure_default_ui_overlay_callbacks() {
 void initialize_default_gameplay_sound_state() {
     SetDefaultFrontendGameplaySoundState(&g_runtime.gameplay_sound);
     const GameplaySoundState& bootstrap_sound = frontend_bootstrap_state().gameplay_sound;
-    if (bootstrap_sound.bank_loaded) {
+    // DAT_007071c4 is one process-global sound-variant seed in the original.
+    // It is initialized once and has no session-reset writer.  Copying the
+    // pristine bootstrap state on every gameplay entry rewound group 7/8
+    // variants (and the response throttles) for a second P2P match.
+    if (bootstrap_sound.bank_loaded && !g_runtime.gameplay_sound.bank_loaded) {
         g_runtime.gameplay_sound = bootstrap_sound;
     }
     g_runtime.gameplay_sound.direct_sound_available =
@@ -14796,6 +14800,11 @@ void sync_default_unit_effect_runtime_units(UnitEffectRuntimeState& effects,
         effects.owner_primary_resources[owner] =
             lifecycle.owner_primary_resources[owner];
     }
+    for (std::size_t owner = 0; owner < effects.owner_resource_score.size() &&
+         owner < g_runtime.gameplay_owner_counters.tables[6].size(); ++owner) {
+        effects.owner_resource_score[owner] =
+            g_runtime.gameplay_owner_counters.tables[6][owner];
+    }
 }
 
 void commit_default_unit_effect_runtime_resources(
@@ -14804,6 +14813,11 @@ void commit_default_unit_effect_runtime_resources(
          owner < lifecycle.owner_primary_resources.size(); ++owner) {
         lifecycle.owner_primary_resources[owner] =
             effects.owner_primary_resources[owner];
+    }
+    for (std::size_t owner = 0; owner < effects.owner_resource_score.size() &&
+         owner < g_runtime.gameplay_owner_counters.tables[6].size(); ++owner) {
+        g_runtime.gameplay_owner_counters.tables[6][owner] =
+            effects.owner_resource_score[owner];
     }
 }
 
@@ -14820,10 +14834,15 @@ void drain_default_unit_effect_sound_events(const UnitEffectRuntimeState& effect
 void default_unit_effect_camera_shake(
     UnitEffectRuntimeState& effects, const UnitEffectRuntime&) {
     UiOverlayState& overlay = ui_overlay_state();
+    // The effect-0x4b impact branch calls the process-global gameplay-sound
+    // selector twice (X, then Y).  Using the simulation-frame RNG here both
+    // desynchronized P2P state and failed to advance DAT_007071c4.
     const i32 dx =
-        static_cast<i32>(default_gameplay_frame_random_limit(0x20)) - 0x10;
+        static_cast<i32>(SelectGameplaySoundVariant(
+            g_runtime.gameplay_sound, 0x20)) - 0x10;
     const i32 dy =
-        static_cast<i32>(default_gameplay_frame_random_limit(0x20)) - 0x10;
+        static_cast<i32>(SelectGameplaySoundVariant(
+            g_runtime.gameplay_sound, 0x20)) - 0x10;
     overlay.camera_x = std::clamp(overlay.camera_x + dx, 0, overlay.camera_max_x);
     overlay.camera_y = std::clamp(overlay.camera_y + dy, 0, overlay.camera_max_y);
     publish_default_ui_overlay_camera(overlay);
@@ -20783,7 +20802,9 @@ bool default_unit_command_reserved_tile_work_complete(UnitCommandContext&,
         return false;
     }
 
-    effect->amount = unit.work_timer;
+    // FUN_004cb255 copies the harvested value from raw unit +0x4c before it
+    // overwrites that union with the allocated effect-pool offset.
+    effect->amount = unit.cargo_amount;
     unit.reserved_tile_effect = effect;
     unit.linked_effect_slot_offset =
         default_unit_effect_original_slot_offset(effects, effect);
@@ -21264,34 +21285,16 @@ void default_unit_support_health_restore_effect(UnitSupportEffectContext&,
         source, &source);
 }
 
-UnitMovementUnit* default_unit_support_marker_aura_sound_unit(
-    const UnitSupportEffectContext& context) {
-    if (context.movement_context == nullptr) {
-        return nullptr;
-    }
-    for (UnitMovementUnit* unit : context.movement_context->active_units) {
-        if (unit != nullptr && unit->runtime_slot_index == 0) {
-            return unit;
-        }
-    }
-    return nullptr;
-}
-
 void default_unit_support_marker_aura_sound(UnitSupportEffectContext& context) {
-    if (context.marker_aura_sound_offset == 0xffffffffu) {
+    if (context.marker_aura_sound_offset == 0xffffffffu ||
+        !context.marker_aura_sound_point_valid) {
         return;
     }
 
     const u32 slot = context.marker_aura_sound_base_slot +
         context.marker_aura_sound_offset;
-    UnitMovementUnit* sound_unit =
-        default_unit_support_marker_aura_sound_unit(context);
-    if (sound_unit != nullptr) {
-        HandleVisibleCurrentTileGameplaySoundQueued(g_runtime.gameplay_sound, slot,
-            sound_unit->x, sound_unit->y, 0, 0);
-        return;
-    }
-    HandleCurrentGameplaySoundQueued(g_runtime.gameplay_sound, slot, 0, 0);
+    HandleVisibleCurrentTileGameplaySoundQueued(g_runtime.gameplay_sound, slot,
+        context.marker_aura_sound_x, context.marker_aura_sound_y, 0, 0);
 }
 
 void commit_default_unit_command_context(UnitLifecycleContext& lifecycle,
@@ -21312,6 +21315,9 @@ void commit_default_unit_command_context(UnitLifecycleContext& lifecycle,
 void configure_default_unit_support_context(UnitSupportEffectContext& support_context,
     UnitLifecycleContext& lifecycle, u32 frame_counter) {
     support_context = UnitSupportEffectContext{};
+    // A missing/failed JW2_11 sound reference is silent, not common UI slot
+    // zero.  Record 43 supplies the periodic marker-aura cue below.
+    support_context.marker_aura_sound_offset = 0xffffffffu;
     support_context.production_state = &g_runtime.gameplay_production_runtime;
     support_context.movement_context = lifecycle.movement;
     support_context.frame_counter = frame_counter;
@@ -21326,11 +21332,38 @@ void configure_default_unit_support_context(UnitSupportEffectContext& support_co
     support_context.callbacks.on_marker_aura_sound =
         default_unit_support_marker_aura_sound;
 
+    // FUN_004c17d3 exhausts the active-list offset in ESI before calling the
+    // current-tile sound wrapper.  ESI is therefore zero and the wrapper
+    // reads x/y from fixed OBC pool record zero, including its fog/spatial
+    // gate.  Scenario object zero retains those raw coordinates even though
+    // it is deliberately not materialized as an active UnitMovementUnit.
+    const GameplayScriptTriggerState& script = gameplay_script_trigger_state();
+    if (!script.objects.empty()) {
+        support_context.marker_aura_sound_x = script.objects[0].x;
+        support_context.marker_aura_sound_y = script.objects[0].y;
+        support_context.marker_aura_sound_point_valid = true;
+    }
+
     if (jw211_runtime_catalog_state().records.empty()) {
         LoadJw211RuntimeCatalog();
     }
     const AuxiliaryRuntimeCatalogState& action_catalog =
         jw211_runtime_catalog_state();
+    constexpr u32 kMarkerAuraSoundRecordIndex = 43;
+    if (kMarkerAuraSoundRecordIndex < action_catalog.records.size()) {
+        const AuxiliaryRuntimeCatalogRecord& marker_aura =
+            action_catalog.records[kMarkerAuraSoundRecordIndex];
+        if (marker_aura.loaded && !marker_aura.sound_slots.empty()) {
+            // FUN_004c17d3 reads record 43 raw +0x834 and queues
+            // DAT_0120a734 (the record's first loaded sound slot) plus that
+            // reference.  The shipped record contains count=1, reference=0.
+            support_context.marker_aura_sound_base_slot =
+                marker_aura.sound_slots.front();
+            support_context.marker_aura_sound_offset =
+                read_runtime_catalog_u32(marker_aura.definition_bytes,
+                    kAuxiliaryEffectStartSoundOffset, 0xffffffffu);
+        }
+    }
     const u32 restore_record_index =
         kJw211RestoreLinkedHealthEffectId - kJw211FirstRecordId;
     if (restore_record_index < action_catalog.records.size()) {

@@ -258,6 +258,7 @@ struct UnitEffectRuntimeState {
     std::vector<UnitEffectEvent> events;
     std::vector<UnitEffectTrailSegment> trail_segments;
     std::array<u32, kProductionOrderOwnerCount> owner_primary_resources{};
+    std::array<u32, kProductionOrderOwnerCount> owner_resource_score{};
     UnitEffectRuntimeCallbacks callbacks;
     const ProductionOrderRuntimeState* production_state = nullptr;
     const UnitEquipmentCatalog* equipment_catalog = nullptr;

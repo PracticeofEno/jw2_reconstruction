@@ -308,14 +308,37 @@ u32 absolute_delta(i32 a, i32 b) {
     return value > 0xffffffffull ? 0xffffffffu : static_cast<u32>(value);
 }
 
-void configure_projectile_step_fields(UnitEffectRuntime& effect) {
-    effect.direction = LookupUnitEffectDirection(effect);
-    const UnitMovementPoint step =
-        effect.direction < kUnitEffectProjectileStepByDirection.size()
-            ? kUnitEffectProjectileStepByDirection[effect.direction]
-            : UnitMovementPoint{};
-    effect.step_x = step.x;
-    effect.step_y = step.y;
+u32 lookup_unit_effect_direction(UnitEffectRuntimeState& state,
+    const UnitEffectRuntime& effect) {
+    if (state.lifecycle_context != nullptr &&
+        state.lifecycle_context->movement != nullptr &&
+        state.lifecycle_context->movement->direction_lookup_8 != nullptr) {
+        return CalculatePointDirectionFromLookup(
+            UnitMovementPoint{effect.x, effect.y},
+            UnitMovementPoint{effect.target_x, effect.target_y},
+            *state.lifecycle_context->movement->direction_lookup_8);
+    }
+    return LookupUnitEffectDirection(effect);
+}
+
+void configure_projectile_axis_steps(UnitEffectRuntime& effect,
+    i32 delta_x, i32 delta_y) {
+    effect.step_x = delta_x < 0 ? -2 : (delta_x > 0 ? 2 : 0);
+    effect.step_y = delta_y < 0 ? -2 : (delta_y > 0 ? 2 : 0);
+    if (delta_x == 0 && delta_y == 0) {
+        // Sign-quadrant selector zero indexes the original direction-1 step.
+        effect.step_y = -2;
+    }
+}
+
+void configure_projectile_step_fields(UnitEffectRuntimeState& state,
+    UnitEffectRuntime& effect) {
+    effect.direction = lookup_unit_effect_direction(state, effect);
+    // The original 0x004f2d7b direction and step lookups are independent:
+    // EAX selects the JW2_07 octant, while ECX selects a delta-sign quadrant.
+    // Thus shallow horizontal/vertical octants still advance both non-zero
+    // axes during the Bresenham minor-axis step.
+    configure_projectile_axis_steps(effect, effect.delta_x, effect.delta_y);
     effect.abs_delta_x = absolute_delta(effect.target_x, effect.x);
     effect.abs_delta_y = absolute_delta(effect.target_y, effect.y);
     effect.accumulator_x = effect.abs_delta_x;
@@ -3162,7 +3185,7 @@ UnitMovementUnit* find_reserved_tile_completion_dropoff(UnitEffectRuntimeState& 
     return best;
 }
 
-void initialize_reserved_tile_completion_path(UnitEffectRuntimeState&,
+void initialize_reserved_tile_completion_path(UnitEffectRuntimeState& state,
     UnitEffectRuntime& effect, UnitMovementUnit& source, UnitMovementUnit& target,
     i32 start_x, i32 start_y) {
     effect.source_unit_id = source.id;
@@ -3180,29 +3203,44 @@ void initialize_reserved_tile_completion_path(UnitEffectRuntimeState&,
     effect.tick = 0;
     effect.range = 0xffffffffu;
     effect.closest_distance = 0xffffffffu;
-    configure_projectile_step_fields(effect);
+    configure_projectile_step_fields(state, effect);
     effect.flags &=
         ~(kUnitEffectFlagImpact | kUnitEffectFlagProjectileBoundsEntered);
 }
 
 bool advance_reserved_tile_completion_path(UnitEffectRuntimeState& state,
     UnitEffectRuntime& effect) {
-    AdvanceUnitEffectProjectileTowardTarget(state, effect);
-    if ((effect.flags & kUnitEffectFlagImpact) != 0) {
+    // FUN_004f082d advances one Bresenham step and completes on the first
+    // point inside the linked unit's bounds.  It does not run the generic
+    // closest-distance/range/rewind projectile path.
+    if (AdvanceUnitEffectPathStepAndCheckTargetBounds(state, effect)) {
         return true;
     }
     tick_unit_effect_projectile_loop_timer(state, effect);
     return false;
 }
 
+void credit_reserved_tile_completion_resources(UnitEffectRuntimeState& state,
+    UnitEffectRuntime& effect, const UnitMovementUnit& source) {
+    const u32 owner = source.owner_id;
+    if (owner < state.owner_primary_resources.size()) {
+        state.owner_primary_resources[owner] += effect.amount;
+    }
+    if (owner < state.owner_resource_score.size()) {
+        state.owner_resource_score[owner] += effect.amount;
+    }
+    if (owner < state.owner_primary_resources.size()) {
+        append_effect_event(state, UnitEffectEventKind::refunded, effect,
+            source.id, effect.amount);
+    }
+}
+
 void finish_reserved_tile_completion_path(UnitEffectRuntimeState& state,
     UnitEffectRuntime& effect, bool deposit_amount) {
     if (deposit_amount) {
         UnitMovementUnit* source = find_effect_unit(state, effect.source_unit_id);
-        if (source != nullptr && source->owner_id < state.owner_primary_resources.size()) {
-            state.owner_primary_resources[source->owner_id] += effect.amount;
-            append_effect_event(state, UnitEffectEventKind::refunded, effect,
-                source->id, effect.amount);
+        if (source != nullptr) {
+            credit_reserved_tile_completion_resources(state, effect, *source);
         }
         effect.source_unit_id = 0;
     }
@@ -3469,11 +3507,7 @@ void TickUnitEffectLoopOrRefund(UnitEffectRuntimeState& state, UnitEffectRuntime
     }
     if ((effect.flags & kUnitEffectFlagRefundOnFinish) == 0) {
         if (UnitMovementUnit* source = find_effect_unit(state, effect.source_unit_id)) {
-            if (source->owner_id < state.owner_primary_resources.size()) {
-                state.owner_primary_resources[source->owner_id] += effect.amount;
-                append_effect_event(state, UnitEffectEventKind::refunded, effect,
-                    source->id, effect.amount);
-            }
+            credit_reserved_tile_completion_resources(state, effect, *source);
         }
         effect.source_unit_id = 0;
     }
@@ -4096,11 +4130,17 @@ bool DispatchSelectedUnitActionEffect(UnitEffectRuntimeState& state,
         initialized = true;
         break;
     case 0x26:
-        // Berry-fly's dedicated initializer 0x004efb9d seeds the path-frame
-        // field to -1 before the first movement/render step.
+        // Berry-fly's dedicated initializer 0x004efb9d keeps the incoming
+        // EDX/EBX point as effect raw +0x20/+0x24.  The reserved-tile caller
+        // at 0x004cb350 passes unit raw +0x6c/+0x70 here; replacing that point
+        // with the worker's source center changes both the projectile path and
+        // state 0x58's `(effect.x + effect.y) & 7` direction-update cadence.
         if (target != nullptr) {
-            InitializeUnitEffectPathToTarget(state, effect, source, *target);
-            effect.frame = 0xffffffffu;
+            // Unlike the generic unit-to-unit initializer, this table entry
+            // also seeds the unlimited path sentinel and clears every flag
+            // except the Bresenham major-axis bit.
+            initialize_reserved_tile_completion_path(
+                state, effect, source, *target, world_x, world_y);
             initialized = true;
         }
         break;
@@ -4197,7 +4237,8 @@ bool DispatchSelectedUnitActionEffect(UnitEffectRuntimeState& state,
     return true;
 }
 
-void InitializeUnitEffectProjectilePath(UnitEffectRuntimeState&, UnitEffectRuntime& effect,
+void InitializeUnitEffectProjectilePath(UnitEffectRuntimeState& state,
+    UnitEffectRuntime& effect,
     UnitMovementUnit& source, UnitMovementUnit* target, i32 world_x, i32 world_y) {
     effect.source_unit_id = source.id;
     effect.target_unit_id = target != nullptr ? target->id : 0;
@@ -4209,7 +4250,7 @@ void InitializeUnitEffectProjectilePath(UnitEffectRuntimeState&, UnitEffectRunti
     effect.delta_y = effect.target_y - effect.y;
     effect.previous_x = effect.x;
     effect.previous_y = effect.y;
-    configure_projectile_step_fields(effect);
+    configure_projectile_step_fields(state, effect);
     effect.range = 0xffffffffu;
     effect.closest_distance = 0xffffffffu;
     effect.tick = 0;
@@ -4314,7 +4355,7 @@ void InitializeUnitEffectPathToTarget(UnitEffectRuntimeState& state,
     effect.previous_x = effect.x;
     effect.previous_y = effect.y;
     effect.tick = 0;
-    configure_projectile_step_fields(effect);
+    configure_projectile_step_fields(state, effect);
     effect.closest_distance = 0xffffffffu;
     effect.flags &= kUnitEffectFlagProjectileYMajor;
 }
@@ -4409,18 +4450,15 @@ void RetargetUnitEffectProjectilePath(UnitEffectRuntimeState& state,
     UnitEffectRuntime scratch = effect;
     scratch.target_x = new_x;
     scratch.target_y = new_y;
-    const u32 new_direction = LookupUnitEffectDirection(scratch);
+    const u32 new_direction = lookup_unit_effect_direction(state, scratch);
     if (new_direction == effect.direction) {
         return;
     }
 
     effect.direction = new_direction;
-    const UnitMovementPoint step =
-        effect.direction < kUnitEffectProjectileStepByDirection.size()
-            ? kUnitEffectProjectileStepByDirection[effect.direction]
-            : UnitMovementPoint{};
-    effect.step_x = step.x;
-    effect.step_y = step.y;
+    const i32 delta_x = new_x - effect.x;
+    const i32 delta_y = new_y - effect.y;
+    configure_projectile_axis_steps(effect, delta_x, delta_y);
     effect.abs_delta_x = absolute_delta(new_x, effect.x);
     effect.abs_delta_y = absolute_delta(new_y, effect.y);
     effect.accumulator_x = effect.abs_delta_x;
@@ -4569,7 +4607,11 @@ bool DispatchUnitEffectProjectileTrailRenderer(UnitEffectRuntimeState& state,
         }
         return true;
     case 0x4b:
-        if ((effect.flags & kUnitEffectFlagImpact) != 0) {
+        // FUN_004f1ae0 gives startup precedence over the impact bit.  A
+        // transient record carrying both flags must not shake or consume the
+        // two shared sound-variant rolls.
+        if ((effect.flags & kUnitEffectFlagStartup) == 0 &&
+            (effect.flags & kUnitEffectFlagImpact) != 0) {
             request_projectile_camera_shake(state, effect);
         }
         return generic_tail_suppressed();
@@ -5060,7 +5102,6 @@ bool AdvanceUnitEffectPathStepAndCheckTargetBounds(UnitEffectRuntimeState& state
     if (UnitMovementUnit* target = find_effect_unit(state, effect.target_unit_id)) {
         if (point_inside_unit_bounds(*target, effect.x, effect.y)) {
             effect.flags = kUnitEffectFlagImpact;
-            effect.range = 0;
             effect.frame = 0;
             return true;
         }

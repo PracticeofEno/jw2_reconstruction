@@ -272,7 +272,6 @@ void ProcessPeriodicUnitSupportMarkerAura(UnitSupportEffectContext& context) {
         return;
     }
 
-    context.marker_aura_sound_point_valid = false;
     for (UnitMovementUnit* unit : context.movement_context->active_units) {
         if (unit != nullptr) {
             unit->runtime_flags &= ~kUnitSupportRuntimeMarkedByAura;

@@ -16,10 +16,6 @@ namespace ranker {
 namespace {
 
 constexpr u32 kDefaultWorkerHarvestAmount = 12;
-constexpr u32 kReservedTileCompletionActionId = 0x26;
-constexpr u32 kSelectedUnitActionEffectBase = 0x3d;
-constexpr u32 kReservedTileCompletionEffectId =
-    kSelectedUnitActionEffectBase + kReservedTileCompletionActionId;
 
 i32 signed_i32_from_wrapped_u32(u32 value) {
     i32 signed_value = 0;
@@ -888,9 +884,11 @@ bool prefer_guard_target(const UnitMovementUnit* candidate,
 
 bool has_reserved_tile_linked_object(const UnitMovementUnit& unit) {
     const UnitEffectRuntime* effect = unit.reserved_tile_effect;
-    return effect != nullptr && effect->active &&
-        effect->effect_id == kReservedTileCompletionEffectId &&
-        effect->source_unit_id == unit.id;
+    // HandleReservedTileLinkedObject (0x004cb380) treats raw +0x4c solely as
+    // an effect-pool offset and validates the slot's source word at +0x20.
+    // It does not inspect the effect id or list-membership flags: a slot that
+    // was recycled for another effect from the same source remains linked.
+    return effect != nullptr && effect->source_unit_id == unit.id;
 }
 
 u32 construction_health_step(const UnitMovementUnit& unit) {
@@ -4950,6 +4948,11 @@ void StartReservedTileWorkCommand(UnitCommandContext& context, UnitMovementUnit&
 
 void HandleReservedTileWorkCycle(UnitCommandContext& context, UnitMovementUnit& unit) {
     if (unit.animation_frame == 0) {
+        // HandleReservedTileWorkCycle (0x004cb255) uses raw unit +0x4c as
+        // the 62-tick work counter.  That same state-local union is ordinary
+        // worker cargo elsewhere, so keep cargo_amount authoritative and only
+        // mirror it into the detached progress field used by reconstructed UI.
+        unit.cargo_amount = 0;
         unit.work_timer = 0;
         unit.reserved_tile_effect = nullptr;
         unit.linked_effect_slot_offset = 0;
@@ -4963,8 +4966,9 @@ void HandleReservedTileWorkCycle(UnitCommandContext& context, UnitMovementUnit& 
         context.callbacks.on_reserved_tile_impact_frame(context, unit);
     }
     advance_reserved_tile_work_frame(unit);
-    ++unit.work_timer;
-    if (unit.work_timer < 0x3e) {
+    ++unit.cargo_amount;
+    unit.work_timer = unit.cargo_amount;
+    if (unit.cargo_amount < 0x3e) {
         return;
     }
 
@@ -4982,8 +4986,9 @@ void HandleReservedTileWorkCycle(UnitCommandContext& context, UnitMovementUnit& 
 
     const u32 amount = context.callbacks.harvest_amount != nullptr ?
         context.callbacks.harvest_amount(context, unit) : kDefaultWorkerHarvestAmount;
-    unit.work_timer =
+    unit.cargo_amount =
         ProcessHarvestableTileAmount(movement(context).map, release.tile_index, amount);
+    unit.work_timer = unit.cargo_amount;
 
     UnitMovementUnit* target = unit.target;
     // The completion path consumes the raw stored pointer even when that
@@ -5007,6 +5012,10 @@ void HandleReservedTileWorkCycle(UnitCommandContext& context, UnitMovementUnit& 
         return;
     }
     if (has_reserved_tile_linked_object(unit)) {
+        // On success the original copies raw +0x4c into the effect amount,
+        // then reuses +0x4c for the allocated effect-pool offset while state
+        // 0x58 owns the linked object.
+        unit.cargo_amount = unit.linked_effect_slot_offset;
         unit.command_state = kUnitStateReservedTileLinkedObject;
         return;
     }
@@ -5066,6 +5075,8 @@ void HandleReservedTileApproach(UnitCommandContext& context, UnitMovementUnit& u
             return;
         }
         unit.command_state = kUnitStateReservedTileBlockedWait;
+        // HandleReservedTileApproach (0x004cb3c5) clears raw +0x4c here.
+        unit.cargo_amount = 0;
         unit.work_timer = 0;
         return;
     }
@@ -5095,6 +5106,9 @@ void HandleReservedTileWait(UnitCommandContext& context, UnitMovementUnit& unit)
         if (arrival.direction_ready) {
             unit.direction = arrival.direction;
             unit.command_state = kUnitStateReservedTileWork;
+            // HandleReservedTileWait (0x004cb47b) resets raw animation +0x64
+            // on the transition, regardless of the wrapping wait frame.
+            unit.animation_frame = 0;
             unit.work_timer = 0;
             RegisterUnitReservedMapTile(movement(context), unit);
             StartUnitCommandLockoutTimer(context, unit, 4);
