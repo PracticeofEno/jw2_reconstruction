@@ -1,5 +1,7 @@
 #include "ranker_runtime_resources.h"
 
+#include "ranker_indexed_text_table.h"
+
 #include "ranker_directx.h"
 #include "ranker_miles.h"
 #include "ranker_setup_data.h"
@@ -1106,6 +1108,22 @@ bool LoadUnitDefinitionResourceRecord(const char* archive_name, u32 source_recor
         set_failure(g_unit_definition_resources.last_failure,
             RuntimeResourceFailureStage::TrcBlob, archive_name, source_record_index);
         return false;
+    }
+
+    // FUN_0040abc0 replaces the internal JW2_09 name immediately after the
+    // 0x24bc definition body is read: FUN_00437fd0(definition_id) resolves
+    // the localized JW2_17 row and FUN_0051e070 copies it to raw +0x10c.
+    // Keeping the English archive name here leaks names such as TyranoNest
+    // into the selected-unit HUD and into session-runtime name snapshots.
+    const std::string_view localized_name = GetIndexedTextTableRow(
+        StartupAuxiliaryIndexedTextTable(0), definition_id);
+    if (!localized_name.empty()) {
+        u8* const destination =
+            record.definition_bytes.data() + kUnitDefinitionNameOffset;
+        std::fill_n(destination, kUnitDefinitionNameBytes, 0);
+        const std::size_t copy_size = std::min<std::size_t>(
+            localized_name.size(), kUnitDefinitionNameBytes - 1);
+        std::memcpy(destination, localized_name.data(), copy_size);
     }
 
     if (reader.entry.original_size == kUnitDefinitionRecordBytes) {

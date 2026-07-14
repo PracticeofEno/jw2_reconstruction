@@ -16303,7 +16303,8 @@ void sync_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
     }
 
     overlay.selected_unit_name_text.clear();
-    if (movement != nullptr && unit->string_slot < movement->string_slots.size()) {
+    if (movement != nullptr && unit->string_slot != 0 &&
+        unit->string_slot < movement->string_slots.size()) {
         const auto& slot = movement->string_slots[unit->string_slot];
         if (slot[0] != '\0') {
             std::size_t length = 0;
