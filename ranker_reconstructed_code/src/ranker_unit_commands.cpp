@@ -5041,7 +5041,7 @@ void HandleReservedTileApproach(UnitCommandContext& context, UnitMovementUnit& u
 
     if (arrival.status == 2) {
         const UnitTileSearchResult tile = FindNearestPassableTerrainTile(movement(context),
-            unit.anchor_x, unit.anchor_y);
+            unit.destination_x, unit.destination_y);
         if (tile.found) {
             unit.path_target_x = tile.x;
             unit.path_target_y = tile.y;
@@ -5053,7 +5053,7 @@ void HandleReservedTileApproach(UnitCommandContext& context, UnitMovementUnit& u
     }
     else if (arrival.status > 2) {
         const UnitTileSearchResult tile = FindNearestUnoccupiedTerrainTile(movement(context),
-            unit.anchor_x, unit.anchor_y);
+            unit.destination_x, unit.destination_y);
         if (tile.found) {
             unit.path_target_x = tile.x;
             unit.path_target_y = tile.y;
@@ -5072,7 +5072,7 @@ void HandleReservedTileApproach(UnitCommandContext& context, UnitMovementUnit& u
     }
 
     const UnitTileSearchResult tile = FindNearestPassableTerrainTile(movement(context),
-        unit.anchor_x, unit.anchor_y);
+        unit.destination_x, unit.destination_y);
     if (tile.found) {
         unit.path_target_x = tile.x;
         unit.path_target_y = tile.y;
@@ -10958,6 +10958,15 @@ OwnerProductionPlacementSearchResult find_owner_extended_placement_point(
         ignored_route_units.empty() ? nullptr : &ignored_route_units;
 
     if (input.placement_anchors == nullptr) {
+        return result;
+    }
+
+    // FindOwnerProductionPlacementPoint 0x0044705f..0x00447105 has cases
+    // only for placement classes 1..5.  A zero/out-of-range class leaves its
+    // debug-filled anchor locals invalid, so the 30-ring scan cannot publish
+    // a placement point.  Do not turn that original no-placement branch into
+    // a base-anchor placement through the selector's convenience fallback.
+    if (definition->placement_class < 1 || definition->placement_class > 5) {
         return result;
     }
 
