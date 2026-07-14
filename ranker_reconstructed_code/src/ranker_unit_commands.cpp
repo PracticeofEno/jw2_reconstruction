@@ -1343,12 +1343,6 @@ void pop_completed_runtime_state(UnitCommandContext& context, UnitMovementUnit& 
     PopDeferredUnitCommandOrReturnIdle(context, unit);
 }
 
-void offset_spawn_target_by_footprint(UnitMovementUnit& unit,
-    const UnitMovementDefinition& definition) {
-    unit.path_target_x += static_cast<i32>(definition.footprint_width_tiles * 16);
-    unit.path_target_y += static_cast<i32>(definition.footprint_height_tiles * 16);
-}
-
 void offset_spawn_target_by_interaction_bounds(UnitMovementUnit& unit,
     const UnitMovementDefinition& definition) {
     // Original state 0x23 (FUN_004c9e8f) centers the approach point with
@@ -5140,7 +5134,11 @@ void StartUnitSpawnPlacementCommand(UnitCommandContext& context, UnitMovementUni
     unit.spawn_type_id = type_id;
     const UnitMovementDefinition& spawn_definition =
         definition_for_type_or(context, type_id, unit.definition);
-    offset_spawn_target_by_footprint(unit, spawn_definition);
+    // StartUnitSpawnPlacementCommand 0x004cb57b..0x004cb594 centers the
+    // requested point with definition +0x378/+0x37c.  Those interaction
+    // bounds are not interchangeable with the tile footprint: type 0x72 is
+    // 76x80 here but only 4x4 footprint tiles.
+    offset_spawn_target_by_interaction_bounds(unit, spawn_definition);
     if (!CheckUnitSpawnDistanceThreshold(
             context, unit, unit.path_target_x, unit.path_target_y)) {
         enter_spawn_cycle(context, unit, kUnitStateSpawnCreateCycle);
@@ -9634,7 +9632,15 @@ u32 CountOwnerQueuedExtendedProductionUnits(
                 context, unit, owner_id, producer_unit_type, 7)) {
             continue;
         }
-        if (unit->extended_production_type_index + extended_type_base == unit_type) {
+        // CountOwnerQueuedExtendedProductionUnits (original 0x004466e0) reads
+        // raw unit +0xd8 after requiring runtime category seven.  +0xd8 is
+        // the active command's value/target word, which still contains the
+        // building-table index while legacy construction state 0x24 is live.
+        // The reconstruction's detached extended_production_type_index cache
+        // is not part of that raw command tuple and made an in-progress build
+        // invisible to the owner AI, so it ordered the same building again.
+        if (static_cast<u32>(unit->active_command_payload.x) +
+                extended_type_base == unit_type) {
             ++count;
         }
     }
