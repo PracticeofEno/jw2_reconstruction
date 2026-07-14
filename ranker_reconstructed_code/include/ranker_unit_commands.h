@@ -387,7 +387,10 @@ struct OwnerStrategicTargetState {
     u32 target_owner_id = kInvalidOwnerTransportQueueSlot;
     u32 blocked_owner_mask = 0;
     UnitMovementUnit* preferred_target = nullptr;
-    UnitMovementPoint preferred_target_point{-1, -1};
+    // DAT_012334e8/eec are zero-initialized and are not populated by the
+    // startup placement-target lookup; UpdateOwnerStrategicTargetPoint writes
+    // them only when the strategic retarget pass actually runs.
+    UnitMovementPoint preferred_target_point{0, 0};
     UnitMovementPoint strategic_point{-1, -1};
     bool has_preferred_target = false;
     bool has_strategic_point = false;

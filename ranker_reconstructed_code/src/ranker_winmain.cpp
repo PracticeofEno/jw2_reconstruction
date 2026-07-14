@@ -21746,6 +21746,27 @@ u32 default_owner_ai_random_value(OwnerAiRuntimeState&, u32 limit, void*) {
     return default_gameplay_frame_random_limit(limit);
 }
 
+void reset_default_owner_strategic_target_after_owner_reset(
+    OwnerAiRuntimeState& state, u32 owner, void*) {
+    if (owner >= kOwnerAiOwnerCount) {
+        return;
+    }
+
+    OwnerStrategicTargetState& target =
+        g_runtime.gameplay_owner_strategic_targets[owner];
+    const OwnerAiSlotRuntime& ai_owner = state.owners[owner];
+    // FUN_0043cc00 clears DAT_012334c8 but never touches
+    // DAT_012334e8/eec, so the preferred point survives profile reloads.
+    target.preferred_target = nullptr;
+    target.has_preferred_target = false;
+    target.target_owner_id = ai_owner.primary_target_owner >= 0 ?
+        static_cast<u32>(ai_owner.primary_target_owner) :
+        kInvalidOwnerTransportQueueSlot;
+    target.strategic_point = {
+        ai_owner.primary_target_point.x, ai_owner.primary_target_point.y};
+    target.has_strategic_point = target.strategic_point.x != -1;
+}
+
 void configure_default_owner_ai_runtime(OwnerAiRuntimeState& owner_ai) {
     owner_ai.load_profile_text = default_owner_ai_profile_text_loader;
     owner_ai.load_profile_text_user_data = nullptr;
@@ -21754,6 +21775,9 @@ void configure_default_owner_ai_runtime(OwnerAiRuntimeState& owner_ai) {
     owner_ai.eligible_unit_summary_user_data = nullptr;
     owner_ai.random_value = default_owner_ai_random_value;
     owner_ai.random_value_user_data = nullptr;
+    owner_ai.profile_reload_reset =
+        reset_default_owner_strategic_target_after_owner_reset;
+    owner_ai.profile_reload_reset_user_data = nullptr;
 }
 
 void sync_default_owner_ai_runtime_metadata(GameplayLoopState* loop_state) {
@@ -21811,7 +21835,21 @@ void reset_default_owner_ai_runtime() {
     }
     g_runtime.gameplay_owner_transport_queues = {};
     g_runtime.gameplay_owner_transport_routes = {};
-    g_runtime.gameplay_owner_strategic_targets = {};
+    // The raw preferred-point table is not part of FUN_0043cc00's reset and
+    // therefore survives session/profile re-entry.  Reset its pointer mirror
+    // while restoring only the primary strategic point from the owner starts.
+    for (u32 owner = 0; owner < kOwnerAiOwnerCount; ++owner) {
+        OwnerStrategicTargetState& target =
+            g_runtime.gameplay_owner_strategic_targets[owner];
+        target.target_owner_id = kInvalidOwnerTransportQueueSlot;
+        target.blocked_owner_mask = 0;
+        target.preferred_target = nullptr;
+        target.has_preferred_target = false;
+        target.strategic_point = {
+            g_runtime.gameplay_player_slots.owner_start_x[owner],
+            g_runtime.gameplay_player_slots.owner_start_y[owner]};
+        target.has_strategic_point = target.strategic_point.x != -1;
+    }
     g_runtime.gameplay_owner_threat_points = {};
     g_runtime.gameplay_owner_production_placement_anchors = {};
     g_runtime.gameplay_owner_production_placement_anchor_valid.fill(false);
@@ -21974,10 +22012,8 @@ void sync_default_owner_strategic_target_from_ai(u32 owner) {
         kInvalidOwnerTransportQueueSlot;
     target.strategic_point = {
         ai_owner.primary_target_point.x, ai_owner.primary_target_point.y};
-    target.preferred_target_point = target.strategic_point;
-    target.has_strategic_point =
-        target.strategic_point.x != -1 && target.strategic_point.y != -1;
-    target.has_preferred_target = target.has_strategic_point;
+    // Every original consumer tests only DAT_01238ee8 (X) against -1.
+    target.has_strategic_point = target.strategic_point.x != -1;
 }
 
 constexpr i32 default_owner_ai_shr_world_to_tile(i32 world_coord) {
@@ -22041,10 +22077,13 @@ void set_default_owner_ai_preferred_strategic_target(
 
 void clear_default_owner_ai_strategic_target(
     OwnerStrategicTargetState& target) {
-    target.preferred_target = nullptr;
-    target.preferred_target_point = {-1, -1};
-    target.strategic_point = {-1, -1};
-    target.has_preferred_target = false;
+    // Original UpdateOwnerStrategicTargetPoint only invalidates the X words
+    // in DAT_012334e8 and DAT_01238ee8.  It neither clears the preferred-unit
+    // pointer nor overwrites the corresponding Y words.
+    target.preferred_target_point.x = -1;
+    target.strategic_point.x = -1;
+    // The preferred pointer is deliberately retained, so its pointer-valid
+    // mirror must be retained as well.  Preferred points have no validity bit.
     target.has_strategic_point = false;
 }
 
@@ -22068,25 +22107,25 @@ UnitMovementUnit* default_owner_ai_primary_route_target_unit(
 
 UnitMovementUnit* default_owner_ai_strategic_path_probe_unit(
     UnitMovementContext& movement) {
-    auto find_by_movement_class = [&movement](u32 first_class,
+    auto find_by_lifecycle_class = [&movement](u32 first_class,
         u32 second_class = 0xffffffffu) -> UnitMovementUnit* {
         for (UnitMovementUnit* unit : movement.active_units) {
             if (unit == nullptr) {
                 continue;
             }
-            const u32 movement_class = unit->definition.movement_class;
-            if (movement_class == first_class ||
-                movement_class == second_class) {
+            const u32 lifecycle_class = unit->definition.lifecycle_class;
+            if (lifecycle_class == first_class ||
+                lifecycle_class == second_class) {
                 return unit;
             }
         }
         return nullptr;
     };
 
-    if (UnitMovementUnit* unit = find_by_movement_class(0)) {
+    if (UnitMovementUnit* unit = find_by_lifecycle_class(0)) {
         return unit;
     }
-    return find_by_movement_class(2, 3);
+    return find_by_lifecycle_class(2, 3);
 }
 
 void sync_default_owner_strategic_target_to_ai(
@@ -22108,7 +22147,7 @@ void refine_default_owner_strategic_target_path_window(
     u32 owner, OwnerStrategicTargetState& target) {
     UnitMovementContext* movement = default_gameplay_movement_context();
     if (movement == nullptr || !default_movement_map_ready(movement->map) ||
-        !target.has_preferred_target || owner >= kOwnerAiOwnerCount) {
+        target.preferred_target == nullptr || owner >= kOwnerAiOwnerCount) {
         return;
     }
 
@@ -22120,25 +22159,36 @@ void refine_default_owner_strategic_target_path_window(
         return;
     }
 
-    const UnitMovementPoint start_tile =
+    const UnitMovementPoint route_center_tile =
         default_owner_ai_unit_center_tile(*route_unit);
-    const UnitMovementPoint start_world{start_tile.x * 32, start_tile.y * 32};
+    const UnitMovementPoint route_center_world =
+        default_owner_ai_tile_to_world(route_center_tile);
+    const UnitMovementPoint preferred_raw_world{
+        target.preferred_target->x, target.preferred_target->y};
     UnitMovementUnit* probe_unit =
         default_owner_ai_strategic_path_probe_unit(*movement);
-    if (probe_unit == nullptr) {
-        probe_unit = route_unit;
-    }
     const OwnerAiRoutePathProbeResult path_probe =
-        ProbeOwnerAiRoutePath(*movement, probe_unit, start_world,
-            target.preferred_target_point);
-    if (!path_probe.reachable || path_probe.path_tiles.empty()) {
+        ProbeOwnerAiRoutePath(*movement, probe_unit, preferred_raw_world,
+            route_center_world);
+    if (!path_probe.reachable || path_probe.direct_path ||
+        path_probe.path_tiles.size() <= 1) {
         return;
+    }
+
+    // DAT_0162ec78 is goal-predecessor -> ... -> start.  The reconstructed
+    // path is start -> ... -> goal, so reverse it and omit the route goal.
+    std::vector<UnitMovementPoint> original_reverse_path;
+    original_reverse_path.reserve(path_probe.path_tiles.size() - 1);
+    auto reverse_tile = path_probe.path_tiles.rbegin();
+    ++reverse_tile;
+    for (; reverse_tile != path_probe.path_tiles.rend(); ++reverse_tile) {
+        original_reverse_path.push_back(*reverse_tile);
     }
 
     const u32 progress_percent =
         g_runtime.gameplay_owner_ai_state.owners[owner].route_radius;
     const OwnerPathWindowSelection selection =
-        SelectOwnerBestOpenPathWindowPoint(movement->map, path_probe.path_tiles,
+        SelectOwnerBestOpenPathWindowPoint(movement->map, original_reverse_path,
             progress_percent, 10, 0x50);
     if (selection.has_point) {
         target.strategic_point = selection.world_point;
@@ -22627,6 +22677,14 @@ void default_owner_ai_refresh_placement_anchors(
             target, default_owner_ai_preferred_route_target,
             default_owner_ai_preferred_building_target);
     const bool placement_target_is_preferred = placement_target != nullptr;
+    if (placement_target_is_preferred) {
+        // HandleOwnerPreferredTargetLookupThunk (0x00401dbb) stores the first
+        // matching active-list unit in DAT_012334c8 as part of the lookup.
+        // Keep the already-synchronised strategic points intact here: only
+        // this pointer side effect was missing from the reconstructed path.
+        target.preferred_target = placement_target;
+        target.has_preferred_target = true;
+    }
     if (placement_target == nullptr) {
         placement_target = FindOwnerFallbackTargetForCurrentTargetOwner(
             command_context, target,
@@ -22726,7 +22784,7 @@ void default_owner_ai_refresh_placement_anchors(
     g_runtime.gameplay_owner_production_placement_anchors[owner] =
         BuildOwnerProductionPlacementAnchorSet(base_tile, source_center_tile,
             direction, clearance_predicate, &clearance_context);
-    if (placement_target_is_preferred && !original_reverse_path.empty()) {
+    if (target.preferred_target != nullptr && !original_reverse_path.empty()) {
         const OwnerPathWindowSelection selection =
             SelectOwnerBestOpenPathWindowPoint(movement->map,
                 original_reverse_path, ai_owner.placement_radius, 10, 0x50);

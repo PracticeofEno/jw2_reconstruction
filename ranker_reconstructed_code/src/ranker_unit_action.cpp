@@ -1703,6 +1703,10 @@ void TickUnitEffectChainImpact(UnitEffectRuntimeState& state, UnitEffectRuntime&
         TickUnitEffectFrameAndApplyImpacts(state, effect);
         return;
     }
+    // The low-id default path initializer clears raw +0x4c before recording
+    // any chain hits at +0x50.  This vector is the reconstruction-only mirror
+    // of that count/list pair and must not survive pool reuse.
+    child->hit_unit_ids.clear();
     QueueUnitEffectStartSoundIfAny(state, *child);
     InitializeUnitEffectPathToTarget(state, *child, *current_target, *next_target);
     child->source_unit_id = effect.source_unit_id;
@@ -1823,10 +1827,16 @@ void TickUnitEffectPathActive(UnitEffectRuntimeState& state, UnitEffectRuntime& 
 
     if (effect.effect_id == 0x20) {
         if (UnitEffectRuntime* child = AllocateUnitEffectSlot(state)) {
-            *child = effect;
+            // The 0x004ec69c afterimage initializer copies only the visual
+            // position/direction words from its parent.  Every other payload
+            // word remains whatever this recycled pool node already held.
+            child->effect_id = effect.effect_id;
             child->flags = effect.flags | kUnitEffectFlagAfterimageClone;
             child->tick = 0;
             child->frame = 0;
+            child->x = effect.x;
+            child->y = effect.y;
+            child->direction = effect.direction;
         }
     }
 
@@ -1895,18 +1905,21 @@ void TickUnitEffectPathActive(UnitEffectRuntimeState& state, UnitEffectRuntime& 
 
 bool BeginUnitEffectStartup(UnitEffectRuntimeState& state, UnitEffectRuntime& effect,
     u32 effect_id, UnitMovementUnit& source, UnitMovementUnit* target) {
+    static_cast<void>(target);
     const UnitEffectDefinition* definition = find_effect_definition(state, effect_id);
     if (definition == nullptr || definition->startup_ticks == 0) {
         return false;
     }
-    effect = {};
+
+    // FUN_004ece98 writes only raw +0x00, +0x08, +0x0c, +0x10, +0x18,
+    // +0x20 and +0x24.  Direction, amount, target and all path payload words
+    // deliberately survive effect-pool reuse.
     effect.active = true;
     effect.effect_id = effect_id;
     effect.flags = kUnitEffectFlagStartup;
-    effect.amount = definition->damage_amount;
+    effect.tick = 0;
+    effect.frame = 0;
     effect.source_unit_id = source.id;
-    effect.target_unit_id = target != nullptr ? target->id : 0;
-    effect.linked_unit_id = effect.target_unit_id;
     if (definition->startup_uses_source_muzzle) {
         const UnitMovementPoint source_delta = unit_effect_source_offset(source);
         effect.x = source.x + source_delta.x;
@@ -1915,8 +1928,6 @@ bool BeginUnitEffectStartup(UnitEffectRuntimeState& state, UnitEffectRuntime& ef
         effect.x = source.x;
         effect.y = source.y;
     }
-    effect.target_x = target != nullptr ? target->x : source.x;
-    effect.target_y = target != nullptr ? target->y : source.y;
     append_effect_event(state, UnitEffectEventKind::started, effect);
     return true;
 }
@@ -1931,6 +1942,9 @@ void DispatchUnitEffectStartByAction(UnitEffectRuntimeState& state,
         return;
     }
 
+    const u32 retained_slot_direction = effect.direction;
+    const i32 retained_slot_target_x = effect.target_x;
+    const i32 retained_slot_target_y = effect.target_y;
     if (!BeginUnitEffectImmediate(state, effect, effect_id, source, target)) {
         return;
     }
@@ -1939,30 +1953,41 @@ void DispatchUnitEffectStartByAction(UnitEffectRuntimeState& state,
         target != nullptr) {
         effect.x = action_center_x(*target);
         effect.y = action_center_y(*target);
-        effect.target_x = effect.x;
-        effect.target_y = effect.y;
-        effect.previous_x = effect.x;
-        effect.previous_y = effect.y;
-        effect.flags |= kUnitEffectFlagImpact;
+        effect.direction = 0;
+        effect.flags = kUnitEffectFlagImpact;
+        // Reconstruction-only latch; unlike raw effect payload it starts
+        // fresh for every one-shot 0x22 impact.
+        effect.initial_impact_applied = false;
         return;
     }
     if (start_kind == UnitEffectActionStartKind::source_position_impact) {
         effect.x = source.x;
         effect.y = source.y;
-        effect.target_x = effect.x;
-        effect.target_y = effect.y;
-        effect.previous_x = effect.x;
-        effect.previous_y = effect.y;
-        effect.flags |= kUnitEffectFlagImpact;
+        effect.direction = 0;
+        effect.flags = kUnitEffectFlagImpact;
+        effect.initial_impact_applied = false;
         return;
     }
     if (start_kind == UnitEffectActionStartKind::source_muzzle_to_target_impact) {
         CalculateUnitEffectSourceAndTargetCenters(state, effect, source, target);
-        effect.previous_x = effect.target_x;
-        effect.previous_y = effect.target_y;
-        effect.flags |= kUnitEffectFlagImpact;
+        const i32 target_center_x = effect.target_x;
+        const i32 target_center_y = effect.target_y;
+        // The 0x004ed01c initializer never writes raw +0x04.  Its shared
+        // center calculation is direction-free in the original and writes
+        // the target center to raw +0x30/+0x34, leaving +0x28/+0x2c stale.
+        effect.direction = retained_slot_direction;
+        effect.target_x = retained_slot_target_x;
+        effect.target_y = retained_slot_target_y;
+        effect.previous_x = target_center_x;
+        effect.previous_y = target_center_y;
+        effect.flags = kUnitEffectFlagImpact;
         return;
     }
+    // FUN_004ed189 initializes the low-id path scratch with +0x48=-1 and
+    // +0x4c=0.  Keep these semantic mirrors scoped to this common path; the
+    // fixed-point impact initializers above intentionally preserve them.
+    effect.closest_distance = 0xffffffffu;
+    effect.hit_unit_ids.clear();
     if (target != nullptr) {
         InitializeUnitEffectPathToTarget(state, effect, source, *target);
     }
@@ -1978,18 +2003,17 @@ bool BeginUnitEffectImmediate(UnitEffectRuntimeState& state, UnitEffectRuntime& 
     if (definition == nullptr) {
         return false;
     }
-    effect = {};
+    // Low-id action initializers fill only their own raw fields after moving
+    // a node out of the free list.  Preserve unwritten payload on reuse.
     effect.active = true;
     effect.effect_id = effect_id;
-    effect.amount = definition->damage_amount;
     effect.source_unit_id = source.id;
     effect.target_unit_id = target != nullptr ? target->id : 0;
     effect.linked_unit_id = effect.target_unit_id;
     effect.x = source.x;
     effect.y = source.y;
-    effect.target_x = target != nullptr ? target->x : source.x;
-    effect.target_y = target != nullptr ? target->y : source.y;
     effect.tick = 0;
+    effect.frame = 0;
     append_effect_event(state, UnitEffectEventKind::started, effect);
     return true;
 }
@@ -2617,7 +2641,10 @@ void TickUnitEffectMidpointChildHealthDrain(UnitEffectRuntimeState& state,
             }
             child->effect_id = 0x4d;
             child->flags = kUnitEffectFlagImpact;
+            child->tick = 0;
+            child->frame = 0;
             child->source_unit_id = source != nullptr ? source->id : effect.source_unit_id;
+            child->target_unit_id = unit.id;
             child->linked_unit_id = unit.id;
             child->x = unit.x;
             child->y = unit.y;
@@ -2729,6 +2756,7 @@ void TickUnitEffectTimedCommandMarkerChildren(UnitEffectRuntimeState& state,
         child->effect_id = effect.effect_id;
         child->flags = kChildMarkerEffectFlag;
         child->source_unit_id = effect.source_unit_id;
+        child->target_unit_id = unit.id;
         child->linked_unit_id = unit.id;
         child->frame = effect.frame;
         child->amount = effect.amount;
@@ -3204,8 +3232,10 @@ void initialize_reserved_tile_completion_path(UnitEffectRuntimeState& state,
     effect.range = 0xffffffffu;
     effect.closest_distance = 0xffffffffu;
     configure_projectile_step_fields(state, effect);
-    effect.flags &=
-        ~(kUnitEffectFlagImpact | kUnitEffectFlagProjectileBoundsEntered);
+    // Berry-fly initializer 0x004efc54 writes raw flags to zero and then sets
+    // only the Bresenham Y-major bit at 0x004efc63.  Do not retain the startup
+    // bit from the preceding attachment reservation.
+    effect.flags &= kUnitEffectFlagProjectileYMajor;
 }
 
 bool advance_reserved_tile_completion_path(UnitEffectRuntimeState& state,
@@ -3681,13 +3711,16 @@ bool BeginSelectedUnitAttachmentEffect(UnitEffectRuntimeState& state,
         return false;
     }
 
-    // FUN_004ef6cd's optional attachment record contains only the source
-    // pointer.  Raw +0x1c remains zero; treating the caster as a linked target
-    // makes several action ticks mutate the caster accidentally.
-    effect = {};
+    // FUN_004ef6cd writes only raw +0x00, +0x08, +0x0c, +0x10, +0x18,
+    // +0x20 and +0x24.  The original effect allocator/releaser only relinks
+    // raw +0xa0/+0xa4, so every other payload word intentionally survives a
+    // slot reuse.  In particular the first reserved-tile attachment can retain
+    // the preceding berry-dropoff direction, amount and target metadata.
     effect.active = true;
     effect.effect_id = effect_id;
     effect.flags = kUnitEffectFlagStartup;
+    effect.tick = 0;
+    effect.frame = 0;
     effect.source_unit_id = source.id;
     effect.x = source.x;
     effect.y = source.y;
@@ -3698,8 +3731,6 @@ bool BeginSelectedUnitAttachmentEffect(UnitEffectRuntimeState& state,
         effect.x += delta.x;
         effect.y += delta.y;
     }
-    effect.target_x = effect.x;
-    effect.target_y = effect.y;
     append_effect_event(state, UnitEffectEventKind::started, effect);
     return true;
 }
@@ -3821,20 +3852,21 @@ bool DispatchSelectedUnitScatterActionEffect(UnitEffectRuntimeState& state,
                 continue;
             }
 
-            BeginUnitEffectImmediate(state, *reserved, 0x46u, source, nullptr);
+            // Original Meteo child setup writes only the raw effect fields
+            // touched at 0x004ef8c4..0x004ef974.  Recycled direction and
+            // target-coordinate payload deliberately survives allocation.
+            reserved->effect_id = 0x46u;
             reserved->amount = definition->damage_amount;
             reserved->flags = kUnitEffectFlagImpact;
             reserved->tick = 0;
             reserved->frame = 0;
+            reserved->source_unit_id = source.id;
             reserved->target_unit_id = 0;
             reserved->linked_unit_id = 0;
             reserved->x = x;
             reserved->y = y;
-            reserved->target_x = x;
-            reserved->target_y = y;
-            reserved->previous_x = x;
-            reserved->previous_y = y;
             reserved->abs_delta_x = counter;
+            append_effect_event(state, UnitEffectEventKind::started, *reserved);
             reserved = nullptr;
         }
         return true;
@@ -3869,17 +3901,19 @@ bool DispatchSelectedUnitScatterActionEffect(UnitEffectRuntimeState& state,
             // alive and still consumes all remaining RNG/create iterations.
             continue;
         }
-        BeginUnitEffectImmediate(state, *spawned, 0x4cu, source, created);
-        spawned->amount = 0;
+        // Rise Death uses a narrower initializer at
+        // 0x004efa40..0x004efa8c.  In particular amount, direction, and the
+        // target-coordinate payload remain stale when this slot is recycled.
+        spawned->effect_id = 0x4cu;
         spawned->flags = kUnitEffectFlagImpact;
         spawned->tick = 0;
         spawned->frame = 0;
+        spawned->source_unit_id = source.id;
+        spawned->target_unit_id = created->id;
+        spawned->linked_unit_id = created->id;
         spawned->x = created->x;
         spawned->y = created->y;
-        spawned->target_x = created->x;
-        spawned->target_y = created->y;
-        spawned->previous_x = created->x;
-        spawned->previous_y = created->y;
+        append_effect_event(state, UnitEffectEventKind::started, *spawned);
     }
     return true;
 }
@@ -4054,9 +4088,17 @@ bool DispatchSelectedUnitActionEffect(UnitEffectRuntimeState& state,
         }
     }
 
-    if (!BeginUnitEffectImmediate(state, effect, effect_id, source, target)) {
-        return false;
-    }
+    // FUN_004efb6f..0x004efb96 writes only amount, frame, tick and id before
+    // dispatching through the selected-action initializer table.  Preserve
+    // every other payload word from the recycled pool node.
+    const u32 retained_slot_direction = effect.direction;
+    const u32 retained_slot_flags = effect.flags;
+    effect.active = true;
+    effect.effect_id = effect_id;
+    effect.amount = definition->damage_amount;
+    effect.frame = 0;
+    effect.tick = 0;
+    append_effect_event(state, UnitEffectEventKind::started, effect);
     // FUN_004ef7b8 scales the absolute JW2_11 +0x1e8 effect amount by the
     // source unit's level bonus from JW2_09 +0x324/+0x32c.  Callers that use
     // the allocated effect as a reservation token may still deliberately
@@ -4070,10 +4112,6 @@ bool DispatchSelectedUnitActionEffect(UnitEffectRuntimeState& state,
         effect.linked_unit_id = effect.target_unit_id;
         effect.x = x;
         effect.y = y;
-        effect.target_x = x;
-        effect.target_y = y;
-        effect.previous_x = x;
-        effect.previous_y = y;
         effect.flags = kUnitEffectFlagImpact;
         effect.frame = 0;
         effect.tick = 0;
@@ -4113,10 +4151,6 @@ bool DispatchSelectedUnitActionEffect(UnitEffectRuntimeState& state,
         effect.linked_unit_id = effect.target_unit_id;
         effect.x = world_x;
         effect.y = world_y;
-        effect.target_x = world_x;
-        effect.target_y = world_y;
-        effect.previous_x = world_x;
-        effect.previous_y = world_y;
         effect.flags = 0;
         effect.frame = 0;
         effect.tick = 0;
@@ -4144,26 +4178,31 @@ bool DispatchSelectedUnitActionEffect(UnitEffectRuntimeState& state,
             initialized = true;
         }
         break;
-    case 0x2c:
+    case 0x2c: {
         // Bline's initializer (0x004efc8a) stores source/target centers while
         // leaving flags at mode zero; its tick handler interprets flags as
         // command modes 0/1/2, not as generic impact/projectile flags.
         CalculateUnitEffectSourceAndTargetCenters(
             state, effect, source, target, world_x, world_y);
+        // The Bline initializer at 0x004efc8a..0x004efce7 writes only the
+        // source/target links and their center coordinates.  Raw +0x04 is
+        // untouched, as is raw +0x08.  Both therefore retain their prior
+        // payload values when a pool node is reused.  The shared center helper
+        // derives a direction, so restore both incoming words afterward.
+        effect.direction = retained_slot_direction;
         effect.linked_unit_id = target != nullptr ? target->id : 0;
-        effect.flags = 0;
+        effect.flags = retained_slot_flags;
         effect.frame = 0;
         effect.tick = 0;
         initialized = true;
         break;
+    }
     default:
         break;
     }
 
     if (!initialized) {
         if (target != nullptr) {
-            effect.target_x = target->x;
-            effect.target_y = target->y;
             InitializeUnitEffectProjectileOrMeleePath(
                 state, effect, source, target);
         }
@@ -4512,13 +4551,14 @@ void ApplyUnitEffectPointImpactAndSpawnChildren(UnitEffectRuntimeState& state,
         }
         child->effect_id = parent_effect_id;
         child->flags = kUnitEffectFlagImpact;
+        child->tick = 0;
+        child->frame = 0;
+        child->amount = 0;
         child->source_unit_id = parent_source_id;
         child->target_unit_id = target_id;
         child->linked_unit_id = target_id;
         child->x = parent_x;
         child->y = parent_y;
-        child->target_x = parent_x;
-        child->target_y = parent_y;
     }
 }
 
@@ -4538,9 +4578,11 @@ UnitEffectRuntime* AllocateUnitEffectSlot(UnitEffectRuntimeState& state) {
         }
 
         UnitEffectRuntime& effect = state.effect_slots[index];
-        effect = {};
+        // FUN_004f3490 moves the raw 0xa8-byte node between the free and active
+        // lists by updating only +0xa0/+0xa4.  Payload initialization belongs
+        // to the selected effect initializer and stale, unwritten words remain
+        // observable after reuse.
         effect.active = true;
-        effect.closest_distance = 0xffffffffu;
         remove_effect_slot_index(state.active_effect_indices, index);
         state.active_effect_indices.insert(state.active_effect_indices.begin(), index);
         return &effect;
@@ -4554,7 +4596,10 @@ void ReleaseUnitEffectSlot(UnitEffectRuntimeState& state, UnitEffectRuntime& eff
     if (effect.active) {
         append_effect_event(state, UnitEffectEventKind::finished, effect);
     }
-    effect = {};
+    // FUN_004f34db likewise unlinks/relinks only raw +0xa0/+0xa4.  Preserve
+    // the payload for the next allocation; `active` represents list ownership
+    // in this reconstruction rather than a raw payload word.
+    effect.active = false;
     if (index == invalid_effect_slot_index()) {
         return;
     }
@@ -4876,8 +4921,25 @@ bool InitializeUnitEffectProjectileOrMeleePath(UnitEffectRuntimeState& state,
     if (definition == nullptr) {
         return false;
     }
+    // Original raw +0x1c is both the target pointer and the later linked
+    // effect reference.  The reconstruction splits those meanings, so keep
+    // both aliases synchronized for every selected target initializer.
+    effect.linked_unit_id = target->id;
     if (!selected_action_effect_uses_projectile_path(*definition)) {
+        const u32 retained_direction = effect.direction;
+        const i32 retained_target_x = effect.target_x;
+        const i32 retained_target_y = effect.target_y;
+        const i32 retained_previous_x = effect.previous_x;
+        const i32 retained_previous_y = effect.previous_y;
         CalculateUnitEffectSourceAndTargetCenters(state, effect, source, target);
+        // Generic non-projectile initializer 0x004f02b2 writes neither raw
+        // +0x04 nor +0x28..+0x34.  The shared center helper derives direction
+        // and target coordinates, so restore every recycled word it touches.
+        effect.direction = retained_direction;
+        effect.target_x = retained_target_x;
+        effect.target_y = retained_target_y;
+        effect.previous_x = retained_previous_x;
+        effect.previous_y = retained_previous_y;
         effect.flags = kUnitEffectFlagImpact;
         effect.frame = 0;
         effect.tick = 0;

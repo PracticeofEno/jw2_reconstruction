@@ -1052,6 +1052,11 @@ bool try_start_idle_random_relocation(UnitCommandContext& context,
     const i32 target_x = relocation_axis(unit.anchor_x, map.width);
 
     unit.target = nullptr;
+    // ProcessUnitIdleAcquireCommand clears raw +0x68 before writing the new
+    // destination.  command_value is the reconstructed mirror of that raw
+    // target-id field; leaving it intact lets resolve_command_target revive a
+    // stale target while the neutral unit is already travelling elsewhere.
+    unit.command_value = 0;
     unit.path_target_x = target_x;
     unit.path_target_y = target_y;
     unit.command_state = kUnitStateTravel;
@@ -3327,6 +3332,31 @@ void HandleUnitCompletionAnnouncementTimer(UnitCommandContext& context,
 
 void StartUnitProductionSpawnCommand(UnitCommandContext& context,
     UnitMovementUnit& unit) {
+    // StartUnitProductionSpawnCommand revalidates a non-zero avatar slot at
+    // execution time (0x004cdf96..0x004cdfa7), after the command may have
+    // waited in the deferred queue.  FUN_004e5140 walks both original unit
+    // lists and drops the command silently when another avatar already owns
+    // the same owner/slot pair.
+    if (unit.path_target_y != 0 && has_movement(context)) {
+        const u32 slot_bits =
+            static_cast<u32>(unit.path_target_y) << 18;
+        const auto list_contains_avatar_slot = [&](const auto& units) {
+            for (const UnitMovementUnit* candidate : units) {
+                if (candidate != nullptr &&
+                    candidate->owner_id == unit.owner_id &&
+                    (candidate->command_flags & 0x003c0000u) == slot_bits) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        if (list_contains_avatar_slot(movement(context).active_units) ||
+            list_contains_avatar_slot(movement(context).lifecycle_units)) {
+            PopDeferredUnitCommandOrReturnIdle(context, unit);
+            return;
+        }
+    }
+
     const UnitProductionResourceCheck check =
         check_production_population_capacity(context, unit);
     if (!check.available) {
@@ -6313,10 +6343,9 @@ UnitMovementPoint owner_transport_preferred_target_point(
     if (strategic_target == nullptr) {
         return {-1, -1};
     }
-    if (strategic_target->has_preferred_target) {
-        return strategic_target->preferred_target_point;
-    }
-    return strategic_target->strategic_point;
+    // Transport states 0x16/0x17 copy DAT_012334e8/eec unconditionally.
+    // Fresh BSS 0,0 and a preserved point after pointer reset are observable.
+    return strategic_target->preferred_target_point;
 }
 
 UnitMovementPoint owner_transport_primary_target_point(
@@ -7297,11 +7326,14 @@ bool SelectNearestAttackableOwnerForStrategicTarget(
 
 void SetOwnerStrategicPointFromUnit(OwnerStrategicTargetState& state,
     const UnitMovementUnit& target) {
-    state.preferred_target = const_cast<UnitMovementUnit*>(&target);
+    // UpdateOwnerStrategicTargetPoint's fallback branch writes both point
+    // tables but does not replace DAT_012334c8.  That pointer belongs only to
+    // the preferred route/building lookup and may deliberately remain stale.
     state.preferred_target_point = {target.x, target.y};
     state.strategic_point = state.preferred_target_point;
-    state.has_preferred_target = true;
-    state.has_strategic_point = true;
+    // The fallback path does not touch DAT_012334c8.  Keep the pointer-valid
+    // mirror unchanged and derive strategic validity from X only.
+    state.has_strategic_point = state.strategic_point.x != -1;
 }
 
 bool CheckOwnerStrategicPathWindowTileOpen(const UnitMovementCell& cell) {

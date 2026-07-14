@@ -289,6 +289,11 @@ struct OwnerAiRuntimeState {
     void* load_profile_text_user_data = nullptr;
     OwnerAiCommandHandler command_handler = nullptr;
     void* command_handler_user_data = nullptr;
+    // Owner AI opcode 96 reloads a profile and then executes the same
+    // per-owner reset as startup.  The gameplay host mirrors its separate
+    // strategic-target globals through this hook.
+    OwnerAiMaintenanceCallback profile_reload_reset = nullptr;
+    void* profile_reload_reset_user_data = nullptr;
     OwnerAiEligibleUnitSummaryCallback eligible_unit_summary = nullptr;
     void* eligible_unit_summary_user_data = nullptr;
     OwnerAiRandomCallback random_value = nullptr;

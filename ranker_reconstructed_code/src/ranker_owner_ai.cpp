@@ -2244,6 +2244,10 @@ void ApplyOwnerAiCommand(OwnerAiRuntimeState& state, u32 owner_slot,
             PlayerSlotRuntimeState fallback_slots;
             ResetOwnerAiSlotRuntime(state, fallback_slots, owner_slot);
         }
+        if (state.profile_reload_reset != nullptr) {
+            state.profile_reload_reset(state, owner_slot,
+                state.profile_reload_reset_user_data);
+        }
         command_index = 0;
         return;
     }
