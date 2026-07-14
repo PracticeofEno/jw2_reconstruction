@@ -192,17 +192,17 @@ bool mode_sets_runtime_command_defaults(u32 session_mode) {
 }
 
 bool should_place_start_units(
-    const GameplayScenarioOwnerSlot& slot, u32 session_mode, bool exclude_observer_slots) {
-    if (slot_state_is_disabled(slot.slot_state) || session_mode == 5) {
+    u8 lobby_slot_state, u32 session_mode, bool exclude_observer_slots) {
+    if (slot_state_is_disabled(lobby_slot_state) || session_mode == 5) {
         return false;
     }
-    if (slot_state_is_player(slot.slot_state)) {
+    if (slot_state_is_player(lobby_slot_state)) {
         return true;
     }
-    if (slot_state_is_rotation_reserve(slot.slot_state)) {
+    if (slot_state_is_rotation_reserve(lobby_slot_state)) {
         return false;
     }
-    if (exclude_observer_slots && slot_state_is_observer(slot.slot_state)) {
+    if (exclude_observer_slots && slot_state_is_observer(lobby_slot_state)) {
         return false;
     }
     return true;
@@ -213,9 +213,12 @@ void mirror_owner_slots(GameplaySessionStartupState& state) {
         return;
     }
 
+    state.players->active_slot_count = std::min<u32>(
+        std::max<u32>(state.active_slot_count, 1), kPlayerSlotCount);
     for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
         const GameplayScenarioOwnerSlot& slot = state.owner_slots[owner];
         state.players->slot_states[owner] = slot.slot_state;
+        state.players->lobby_slot_states[owner] = slot.slot_state;
         state.owner_faction_ids[owner] = slot.faction_id;
         state.owner_tribe_ids[owner] = slot.tribe_id;
         // The original runtime keeps its start-coordinate table in raw map
@@ -362,10 +365,15 @@ void start_gameplay_session(GameplaySessionStartupState& state,
 
     for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
         const GameplayScenarioOwnerSlot& slot = state.owner_slots[owner];
-        if (!slot_state_is_disabled(slot.slot_state) && !slot_state_is_player(slot.slot_state)) {
+        const u8 lobby_slot_state = state.players != nullptr
+            ? state.players->lobby_slot_states[owner]
+            : slot.slot_state;
+        if (!slot_state_is_disabled(lobby_slot_state) &&
+            !slot_state_is_player(lobby_slot_state)) {
             ++state.non_player_slot_count;
         }
-        if (!should_place_start_units(slot, state.session_mode, exclude_observer_slots)) {
+        if (!should_place_start_units(
+                lobby_slot_state, state.session_mode, exclude_observer_slots)) {
             continue;
         }
 

@@ -237,7 +237,10 @@ void release_direct_play4a(LPDIRECTPLAY4A& direct_play) {
 
 void notify_player_slot_inactive(u32 cleared_slot) {
     PlayerSlotRuntimeState& slots = player_slot_state();
-    if (cleared_slot < slots.active_slot_count) {
+    // DirectPlay player records retain the original raw 0..7 owner index.
+    // active_slot_count only partitions lobby/team UI and must not suppress a
+    // valid tail-slot departure notification.
+    if (cleared_slot < kPlayerSlotCount) {
         MarkPlayerInactiveAndBroadcastIfLocal(slots, cleared_slot, slots.local_player_slot);
     }
 }

@@ -363,11 +363,18 @@ void refund_command_cost(Mode1GameplayUnitPacketState& unit, u32 primary = 1,
 }
 
 bool active_player(u32 player) {
-    if (player >= g_packet_dispatch_state.players.size()) {
+    const PlayerSlotRuntimeState& slots = player_slot_state();
+    if (player >= slots.slot_states.size()) {
         return false;
     }
-    const auto& state = g_packet_dispatch_state.players[player];
-    return state.status != 1 && state.status != 0x14 && !state.inactive;
+
+    // HandleSubtype15PlayerConsensusPacket (0x004ddc90) reads the eight raw
+    // DAT_007251F4 bytes for every vote/authority decision.  Its packet-side
+    // mirrors may legitimately be stale immediately after a reset or a
+    // DirectPlay departure and are not an additional eligibility gate.
+    const u8 state = slots.slot_states[player];
+    return state != static_cast<u8>(PlayerSlotState::player_controlled) &&
+        state != static_cast<u8>(PlayerSlotState::disabled);
 }
 
 bool active_players_have_vote(u32 vote_bit) {
@@ -381,13 +388,15 @@ bool active_players_have_vote(u32 vote_bit) {
 }
 
 void apply_inactive_player_slot_side_effects(PlayerSlotRuntimeState& slots,
-    u32 player, u8 lobby_code) {
+    u32 player, u8 lobby_code, bool update_lobby_rotation) {
     if (player >= kPlayerSlotCount) {
         return;
     }
 
     slots.slot_states[player] = static_cast<u8>(PlayerSlotState::disabled);
-    HandleTeamRotationPlayerSlotDisabled(slots, player);
+    if (update_lobby_rotation) {
+        HandleTeamRotationPlayerSlotDisabled(slots, player);
+    }
 
     const u32 bit = 1u << player;
     for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
@@ -402,7 +411,7 @@ void apply_inactive_player_slot_side_effects(PlayerSlotRuntimeState& slots,
 
 void apply_inactive_player_slot_side_effects(u32 player, u8 lobby_code) {
     apply_inactive_player_slot_side_effects(player_slot_state(), player,
-        lobby_code);
+        lobby_code, true);
 }
 
 void record_player_inactive_notification(u32 target_slot, u32 source_slot,
@@ -430,11 +439,6 @@ bool apply_subtype15_inactive_marker(PlayerSlotRuntimeState& slots,
 
     Mode1GameplayPlayerPacketState& player =
         g_packet_dispatch_state.players[target_slot];
-    if (player.status == static_cast<u8>(PlayerSlotState::disabled) ||
-        player.status == static_cast<u8>(PlayerSlotState::player_controlled) ||
-        player.inactive) {
-        return false;
-    }
 
     slots.inactive_target_slot = target_slot;
     slots.inactive_source_slot = source_slot;
@@ -456,8 +460,11 @@ bool apply_subtype15_inactive_marker(PlayerSlotRuntimeState& slots,
     player.relation_mask = 0xffffffffu;
     player.relation_block_mask = 0;
 
+    // MarkPlayerInactiveAndBroadcastSubtype15 (0x004ddd0f) changes only the
+    // gameplay/runtime status table.  The mode-8 lobby rotation helper is
+    // exclusive to subtype 0x13 (0x004ddaf3 -> 0x00427320).
     apply_inactive_player_slot_side_effects(slots, target_slot,
-        player.lobby_code);
+        player.lobby_code, false);
     SetMode1ReliablePlayerStatus(target_slot,
         static_cast<u8>(PlayerSlotState::disabled));
 
@@ -472,6 +479,7 @@ bool apply_subtype15_inactive_marker(PlayerSlotRuntimeState& slots,
 
 void ApplySubtype15ConsensusDecision(u32 source_slot, u32 target_slot) {
     const u32 local = g_packet_dispatch_state.local_player_index;
+    PlayerSlotRuntimeState& slots = player_slot_state();
     if (local >= kPlayerSlotCount || target_slot != local ||
         !active_player(local)) {
         return;
@@ -480,7 +488,6 @@ void ApplySubtype15ConsensusDecision(u32 source_slot, u32 target_slot) {
     g_packet_dispatch_state.last_consensus_target = local;
     g_packet_dispatch_state.last_consensus_source = source_slot;
 
-    PlayerSlotRuntimeState& slots = player_slot_state();
     slots.local_player_slot = local;
     if (source_slot == local) {
         for (u32 slot = 0; slot < kPlayerSlotCount; ++slot) {

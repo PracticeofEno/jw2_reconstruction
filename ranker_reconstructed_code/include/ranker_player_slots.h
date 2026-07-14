@@ -54,9 +54,16 @@ struct PlayerSlotRuntimeState {
     OwnerSlotTransferCallback transfer_owner_slot = nullptr;
     PlayerSlotTargetRefreshCallback refresh_owner_target = nullptr;
     PlayerInactiveBroadcastCallback broadcast_player_inactive = nullptr;
+    // DAT_012448F0 is the lobby/rotation state table.  It is distinct from
+    // slot_states (DAT_007251F4), which remains the live gameplay state table.
+    // 0xff is an internal compatibility sentinel for callers that only seed
+    // the legacy slot_states member before entering the slot APIs.
+    std::array<u8, kPlayerSlotCount> lobby_slot_states{
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 };
 
 PlayerSlotRuntimeState& player_slot_state();
+void BindPlayerSlotRuntimeState(PlayerSlotRuntimeState* state);
 void ResetPlayerSlotRuntime(PlayerSlotRuntimeState& state);
 void CopyRotationAnchorResourcesToLocalPlayer(PlayerSlotRuntimeState& state);
 bool TransferPlayerSlotOwnershipAndState(PlayerSlotRuntimeState& state, u32 from_slot,

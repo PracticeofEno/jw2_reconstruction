@@ -9,6 +9,19 @@ namespace ranker {
 namespace {
 
 PlayerSlotRuntimeState g_player_slot_state;
+PlayerSlotRuntimeState* g_bound_player_slot_state = nullptr;
+
+constexpr u8 kUninitializedLobbySlotState = 0xff;
+
+void ensure_lobby_slot_states_initialized(PlayerSlotRuntimeState& state) {
+    const bool uninitialized = std::all_of(state.lobby_slot_states.begin(),
+        state.lobby_slot_states.end(), [](u8 slot_state) {
+            return slot_state == kUninitializedLobbySlotState;
+        });
+    if (uninitialized) {
+        state.lobby_slot_states = state.slot_states;
+    }
+}
 
 bool active_slot_valid(const PlayerSlotRuntimeState& state, u32 slot) {
     return slot < std::min<u32>(state.active_slot_count, kPlayerSlotCount);
@@ -26,9 +39,22 @@ u32 slot_bit(u32 slot) {
     return slot < 32 ? (1u << slot) : 0;
 }
 
-bool slot_has_state(const PlayerSlotRuntimeState& state, u32 slot, PlayerSlotState value) {
-    return active_slot_valid(state, slot) &&
+bool raw_runtime_slot_has_state(
+    const PlayerSlotRuntimeState& state, u32 slot, PlayerSlotState value) {
+    return slot < kPlayerSlotCount &&
         state.slot_states[slot] == static_cast<u8>(value);
+}
+
+bool lobby_slot_has_state(
+    const PlayerSlotRuntimeState& state, u32 slot, PlayerSlotState value) {
+    return active_slot_valid(state, slot) &&
+        state.lobby_slot_states[slot] == static_cast<u8>(value);
+}
+
+bool raw_lobby_slot_has_state(
+    const PlayerSlotRuntimeState& state, u32 slot, PlayerSlotState value) {
+    return slot < kPlayerSlotCount &&
+        state.lobby_slot_states[slot] == static_cast<u8>(value);
 }
 
 std::optional<u32> find_last_active_slot_in_range(
@@ -37,7 +63,7 @@ std::optional<u32> find_last_active_slot_in_range(
     const u32 limit = std::min<u32>(end, std::min<u32>(state.active_slot_count,
         kPlayerSlotCount));
     for (u32 slot = begin; slot < limit; ++slot) {
-        if (slot_has_state(state, slot, PlayerSlotState::active)) {
+        if (lobby_slot_has_state(state, slot, PlayerSlotState::active)) {
             active_slot = slot;
         }
     }
@@ -49,12 +75,12 @@ u32 find_next_reserve_slot_wrapped(
     const u32 limit = std::min<u32>(end, std::min<u32>(state.active_slot_count,
         kPlayerSlotCount));
     for (u32 slot = source_slot + 1; slot < limit; ++slot) {
-        if (slot_has_state(state, slot, PlayerSlotState::rotation_reserve)) {
+        if (lobby_slot_has_state(state, slot, PlayerSlotState::rotation_reserve)) {
             return slot;
         }
     }
     for (u32 slot = begin; slot < source_slot; ++slot) {
-        if (slot_has_state(state, slot, PlayerSlotState::rotation_reserve)) {
+        if (lobby_slot_has_state(state, slot, PlayerSlotState::rotation_reserve)) {
             return slot;
         }
     }
@@ -100,7 +126,7 @@ void build_half_team_relation_masks(PlayerSlotRuntimeState& state) {
 void build_observer_relation_masks(PlayerSlotRuntimeState& state) {
     u32 observer_mask = 0;
     for (u32 slot = 0; slot < kPlayerSlotCount; ++slot) {
-        if (!slot_has_state(state, slot, PlayerSlotState::observer)) {
+        if (!raw_lobby_slot_has_state(state, slot, PlayerSlotState::observer)) {
             continue;
         }
         for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
@@ -112,7 +138,8 @@ void build_observer_relation_masks(PlayerSlotRuntimeState& state) {
     }
 
     if (state.local_player_slot < kPlayerSlotCount &&
-        slot_has_state(state, state.local_player_slot, PlayerSlotState::observer)) {
+        raw_lobby_slot_has_state(
+            state, state.local_player_slot, PlayerSlotState::observer)) {
         state.local_observer_interaction_enabled = false;
         state.local_observer_slot_mask = observer_mask;
     }
@@ -120,14 +147,16 @@ void build_observer_relation_masks(PlayerSlotRuntimeState& state) {
 
 void build_player_controlled_relation_masks(PlayerSlotRuntimeState& state) {
     for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
-        if (!slot_has_state(state, owner, PlayerSlotState::player_controlled)) {
+        if (!raw_lobby_slot_has_state(
+                state, owner, PlayerSlotState::player_controlled)) {
             continue;
         }
         // Original mode 1/5/6 behavior: the local active(0) slot keeps a zero
         // relation mask while player-controlled(1) Computer slots share their
         // bits with one another.  With one Computer this produces {0, 2}.
         for (u32 slot = 0; slot < kPlayerSlotCount; ++slot) {
-            if (slot_has_state(state, slot, PlayerSlotState::player_controlled)) {
+            if (raw_lobby_slot_has_state(
+                    state, slot, PlayerSlotState::player_controlled)) {
                 add_owner_slot_relation(state, owner, slot);
             }
         }
@@ -145,7 +174,12 @@ bool mode_uses_player_controlled_masks(u32 session_mode) {
 }
 
 PlayerSlotRuntimeState& player_slot_state() {
-    return g_player_slot_state;
+    return g_bound_player_slot_state != nullptr ?
+        *g_bound_player_slot_state : g_player_slot_state;
+}
+
+void BindPlayerSlotRuntimeState(PlayerSlotRuntimeState* state) {
+    g_bound_player_slot_state = state;
 }
 
 void ResetPlayerSlotRuntime(PlayerSlotRuntimeState& state) {
@@ -175,6 +209,7 @@ void CopyRotationAnchorResourcesToLocalPlayer(PlayerSlotRuntimeState& state) {
 
 bool TransferPlayerSlotOwnershipAndState(PlayerSlotRuntimeState& state, u32 from_slot,
     u32 to_slot) {
+    ensure_lobby_slot_states_initialized(state);
     if (!active_slot_valid(state, from_slot) || !active_slot_valid(state, to_slot)) {
         return false;
     }
@@ -182,8 +217,9 @@ bool TransferPlayerSlotOwnershipAndState(PlayerSlotRuntimeState& state, u32 from
         return true;
     }
 
-    state.slot_states[from_slot] = static_cast<u8>(PlayerSlotState::rotation_reserve);
-    state.slot_states[to_slot] = static_cast<u8>(PlayerSlotState::active);
+    state.lobby_slot_states[from_slot] =
+        static_cast<u8>(PlayerSlotState::rotation_reserve);
+    state.lobby_slot_states[to_slot] = static_cast<u8>(PlayerSlotState::active);
     if (state.rotation_anchor_slot == from_slot) {
         state.rotation_anchor_slot = to_slot;
     }
@@ -195,10 +231,12 @@ bool TransferPlayerSlotOwnershipAndState(PlayerSlotRuntimeState& state, u32 from
 }
 
 void RotateLowerTeamReservePlayerSlot(PlayerSlotRuntimeState& state) {
+    ensure_lobby_slot_states_initialized(state);
     rotate_reserve_slot_range(state, 0, state.active_slot_count >> 1);
 }
 
 void RotateUpperTeamReservePlayerSlot(PlayerSlotRuntimeState& state) {
+    ensure_lobby_slot_states_initialized(state);
     rotate_reserve_slot_range(state, state.active_slot_count >> 1, state.active_slot_count);
 }
 
@@ -219,11 +257,12 @@ void MirrorTeamRotationResourcesForLocalPlayer(PlayerSlotRuntimeState& state) {
 }
 
 void HandleTeamRotationPlayerSlotDisabled(PlayerSlotRuntimeState& state, u32 slot) {
+    ensure_lobby_slot_states_initialized(state);
     if (!state.rotation_enabled || !active_slot_valid(state, slot)) {
         return;
     }
 
-    if (slot_has_state(state, slot, PlayerSlotState::active)) {
+    if (lobby_slot_has_state(state, slot, PlayerSlotState::active)) {
         if (slot < (state.active_slot_count >> 1)) {
             RotateLowerTeamReservePlayerSlot(state);
         } else {
@@ -231,12 +270,13 @@ void HandleTeamRotationPlayerSlotDisabled(PlayerSlotRuntimeState& state, u32 slo
         }
     }
 
-    if (slot_has_state(state, slot, PlayerSlotState::rotation_reserve)) {
-        state.slot_states[slot] = static_cast<u8>(PlayerSlotState::disabled);
+    if (lobby_slot_has_state(state, slot, PlayerSlotState::rotation_reserve)) {
+        state.lobby_slot_states[slot] = static_cast<u8>(PlayerSlotState::disabled);
     }
 }
 
 void ConfigureTeamReserveRotation(PlayerSlotRuntimeState& state, u32 reset_units) {
+    ensure_lobby_slot_states_initialized(state);
     const u32 limit = active_slot_limit(state);
     const u32 half = limit >> 1;
     if (limit == 0 || half == 0) {
@@ -248,25 +288,30 @@ void ConfigureTeamReserveRotation(PlayerSlotRuntimeState& state, u32 reset_units
     state.rotation_anchor_slot = (state.local_player_slot / half) * half;
 
     for (u32 slot = 0; slot < limit; ++slot) {
-        if (state.slot_states[slot] == static_cast<u8>(PlayerSlotState::active)) {
-            state.slot_states[slot] = static_cast<u8>(PlayerSlotState::rotation_reserve);
+        if (state.lobby_slot_states[slot] ==
+            static_cast<u8>(PlayerSlotState::active)) {
+            state.lobby_slot_states[slot] =
+                static_cast<u8>(PlayerSlotState::rotation_reserve);
         }
     }
 
     for (u32 slot = 0; slot < half; ++slot) {
-        if (state.slot_states[slot] == static_cast<u8>(PlayerSlotState::rotation_reserve)) {
-            state.slot_states[slot] = static_cast<u8>(PlayerSlotState::active);
+        if (state.lobby_slot_states[slot] ==
+            static_cast<u8>(PlayerSlotState::rotation_reserve)) {
+            state.lobby_slot_states[slot] = static_cast<u8>(PlayerSlotState::active);
             break;
         }
     }
     for (u32 slot = half; slot < limit; ++slot) {
-        if (state.slot_states[slot] == static_cast<u8>(PlayerSlotState::rotation_reserve)) {
-            state.slot_states[slot] = static_cast<u8>(PlayerSlotState::active);
+        if (state.lobby_slot_states[slot] ==
+            static_cast<u8>(PlayerSlotState::rotation_reserve)) {
+            state.lobby_slot_states[slot] = static_cast<u8>(PlayerSlotState::active);
             break;
         }
     }
     for (u32 slot = 0; slot < limit; ++slot) {
-        if (state.slot_states[slot] == static_cast<u8>(PlayerSlotState::rotation_reserve)) {
+        if (state.lobby_slot_states[slot] ==
+            static_cast<u8>(PlayerSlotState::rotation_reserve)) {
             state.owner_primary_resources[slot] = 0;
         }
     }
@@ -305,6 +350,7 @@ void ResetPlayerSlotRelationMasks(PlayerSlotRuntimeState& state) {
 
 void BuildGameplaySessionPlayerRelationMasks(PlayerSlotRuntimeState& state,
     u32 session_mode) {
+    ensure_lobby_slot_states_initialized(state);
     ResetPlayerSlotRelationMasks(state);
 
     if (mode_uses_half_team_masks(session_mode)) {
@@ -318,7 +364,8 @@ void BuildGameplaySessionPlayerRelationMasks(PlayerSlotRuntimeState& state,
     }
 
     for (u32 slot = 0; slot < kPlayerSlotCount; ++slot) {
-        if (slot_has_state(state, slot, PlayerSlotState::player_controlled)) {
+        if (raw_lobby_slot_has_state(
+                state, slot, PlayerSlotState::player_controlled)) {
             state.global_active_slot_mask |= slot_bit(slot);
         }
     }
@@ -326,6 +373,7 @@ void BuildGameplaySessionPlayerRelationMasks(PlayerSlotRuntimeState& state,
 
 void InitializeGameplaySessionPlayerSlotState(PlayerSlotRuntimeState& state,
     u32 session_mode, u32 rotation_reset_units) {
+    ensure_lobby_slot_states_initialized(state);
     state.rotation_control_value = 0;
     if (session_mode != 5) {
         CopyOwnerResourcesFromSlotZero(state);
@@ -375,10 +423,14 @@ void SelectNearestHostilePlayerSlots(PlayerSlotRuntimeState& state) {
 
 void MarkPlayerInactiveAndBroadcastIfLocal(PlayerSlotRuntimeState& state,
     u32 source_slot, u32 target_slot) {
-    if (!active_slot_valid(state, target_slot) ||
+    // ApplySubtype15ConsensusDecision reads DAT_007251F4 directly.  Its
+    // target gate and local-source fan-out both cover all eight runtime
+    // entries, including lobby-tail slots beyond active_slot_count.
+    if (target_slot >= kPlayerSlotCount ||
         target_slot != state.local_player_slot ||
-        slot_has_state(state, target_slot, PlayerSlotState::disabled) ||
-        slot_has_state(state, target_slot, PlayerSlotState::player_controlled)) {
+        raw_runtime_slot_has_state(state, target_slot, PlayerSlotState::disabled) ||
+        raw_runtime_slot_has_state(
+            state, target_slot, PlayerSlotState::player_controlled)) {
         return;
     }
 
@@ -394,10 +446,11 @@ void MarkPlayerInactiveAndBroadcastIfLocal(PlayerSlotRuntimeState& state,
     };
 
     if (source_slot == state.local_player_slot) {
-        for (u32 slot = 0; slot < active_slot_limit(state); ++slot) {
+        for (u32 slot = 0; slot < kPlayerSlotCount; ++slot) {
             if (slot == state.local_player_slot ||
-                slot_has_state(state, slot, PlayerSlotState::disabled) ||
-                slot_has_state(state, slot, PlayerSlotState::player_controlled)) {
+                raw_runtime_slot_has_state(state, slot, PlayerSlotState::disabled) ||
+                raw_runtime_slot_has_state(
+                    state, slot, PlayerSlotState::player_controlled)) {
                 continue;
             }
             publish(slot, true);

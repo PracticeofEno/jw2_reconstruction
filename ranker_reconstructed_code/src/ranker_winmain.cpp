@@ -6394,6 +6394,7 @@ void mirror_startup_slots_to_player_runtime(
     for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
         const GameplayScenarioOwnerSlot& slot = startup.owner_slots[owner];
         players.slot_states[owner] = slot.slot_state;
+        players.lobby_slot_states[owner] = slot.slot_state;
         // DAT_007253D4/D8 is indexed by the raw map-start slot.  The lobby's
         // owner-to-map permutation is applied only when the owner's actual
         // starting units are placed; AI target selection still reads this raw
@@ -6445,13 +6446,14 @@ void reset_default_mode1_packet_state_from_player_slots() {
     const PlayerSlotRuntimeState& players = g_runtime.gameplay_player_slots;
     Mode1GameplayPacketDispatchState& packets = mode1_gameplay_packet_dispatch_state();
     u32 active_count = 0;
-    const u32 active_limit = std::min<u32>(
-        std::max<u32>(players.active_slot_count, 1), kPlayerSlotCount);
 
     for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
         Mode1GameplayPlayerPacketState& packet_player = packets.players[owner];
-        const bool disabled = owner >= active_limit ||
-            players.slot_states[owner] == static_cast<u8>(PlayerSlotState::disabled);
+        // The reliable runtime is initialized from all eight raw
+        // DAT_007251F4 state bytes.  active_slot_count only bounds lobby team
+        // partitioning; it must not erase a restored/resynchronized tail slot.
+        const bool disabled = players.slot_states[owner] ==
+            static_cast<u8>(PlayerSlotState::disabled);
         packet_player.status = disabled ?
             static_cast<u8>(PlayerSlotState::disabled) :
             players.slot_states[owner];
@@ -7108,6 +7110,7 @@ bool apply_pending_link_lobby_start_parameters_to_gameplay_startup() {
         startup.owner_faction_ids[owner] = faction;
         startup.owner_tribe_ids[owner] = faction;
         players.slot_states[owner] = slot.slot_state;
+        players.lobby_slot_states[owner] = slot.slot_state;
         players.owner_start_x[map_slot] = slot.start_x;
         players.owner_start_y[map_slot] = slot.start_y;
 
@@ -12629,6 +12632,11 @@ void default_mode1_reliable_sync_timeout(void*) {
 }
 
 void configure_default_mode1_gameplay_runtime_callbacks() {
+    // Gameplay packet/direct-play handlers and the renderer/simulation must
+    // mutate the same DAT_007251F4-style runtime slot table.  The standalone
+    // player-slot module keeps an internal fallback for focused tests, while
+    // the real session binds it to the WinMain runtime instance here.
+    BindPlayerSlotRuntimeState(&g_runtime.gameplay_player_slots);
     Mode1GameplayRuntimeCallbacks callbacks{};
     callbacks.clear_unit_string = default_mode1_packet_clear_unit_string;
     callbacks.intern_unit_string = default_mode1_packet_intern_unit_string;
@@ -20891,6 +20899,8 @@ void activate_default_player_slots_from_active_units() {
             g_runtime.gameplay_startup_state.owner_slots[owner];
         if (players.slot_states[owner] == static_cast<u8>(PlayerSlotState::disabled)) {
             players.slot_states[owner] =
+                static_cast<u8>(PlayerSlotState::player_controlled);
+            players.lobby_slot_states[owner] =
                 static_cast<u8>(PlayerSlotState::player_controlled);
             slot.slot_state = static_cast<u8>(PlayerSlotState::player_controlled);
             changed = true;
