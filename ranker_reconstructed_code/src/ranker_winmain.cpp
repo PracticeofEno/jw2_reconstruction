@@ -17585,6 +17585,13 @@ bool default_unit_damage_reaction_replace_target_by_priority(
 
 bool default_unit_damage_reaction_guard_return_acquire_attacker(
     UnitMovementUnit& target, UnitMovementUnit& threat) {
+    // 0x004c2914/0x004c2982 first compare raw +0x68 with the incoming
+    // attacker and return when it is already the stored target.  Re-running
+    // the range branch here would advance guard state 0x1f/0x21 one tick
+    // early on repeated hits from that target.
+    if (target.target == &threat) {
+        return false;
+    }
     if ((target.type_flags & 0x20u) == 0) {
         return false;
     }
@@ -17609,20 +17616,6 @@ bool default_unit_damage_reaction_guard_return_acquire_attacker(
     return true;
 }
 
-bool default_unit_damage_reaction_patrol_leg_acquire_attacker(
-    UnitMovementUnit& target, UnitMovementUnit& threat, u32 combat_state) {
-    const UnitActionTargetValidation validation =
-        default_unit_damage_reaction_validate_target(target, threat);
-    if (!validation.valid) {
-        return false;
-    }
-
-    SetUnitCommandTarget(target, &threat);
-    target.command_state = combat_state;
-    target.command_flags &= ~0x8u;
-    return true;
-}
-
 bool default_unit_damage_reaction_dispatch_attacker(UnitMovementUnit& target,
     UnitMovementUnit& threat) {
     switch (target.command_state & 0x00ffffffu) {
@@ -17644,11 +17637,15 @@ bool default_unit_damage_reaction_dispatch_attacker(UnitMovementUnit& target,
         return default_unit_damage_reaction_replace_target_by_priority(
             target, threat, true, false, false);
     case kUnitStatePatrolReturnLeg:
-        return default_unit_damage_reaction_patrol_leg_acquire_attacker(
-            target, threat, kUnitStatePatrolReturnCombat);
     case kUnitStatePatrolOutboundLeg:
-        return default_unit_damage_reaction_patrol_leg_acquire_attacker(
-            target, threat, kUnitStatePatrolOutboundCombat);
+        // Original jump-table entries 0x37/0x38 land at 0x004c2a1d and
+        // 0x004c2a61.  Both handlers immediately return when raw definition
+        // flags +0x58 bit 0x20 is set.  The outer self/ally dispatch gates at
+        // 0x004c2568 and 0x004c266f already require that same bit, so these
+        // patrol-leg reactions are intentionally unreachable no-ops.  Do not
+        // retarget the patrol or advance it to combat merely because it was
+        // damaged.
+        return false;
     case kUnitStatePatrolReturnCombat:
     case kUnitStatePatrolOutboundCombat:
         return default_unit_damage_reaction_replace_target_by_priority(

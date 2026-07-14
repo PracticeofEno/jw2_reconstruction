@@ -2495,6 +2495,18 @@ OwnerAiRoutePathProbeResult ProbeOwnerAiRoutePath(UnitMovementContext& movement,
         result.final_path_target.x != destination.x ||
         result.final_path_target.y != destination.y;
 
+    // RunLegacyUnitPathfinder 0x00508f0f..0x00508f51 publishes found=0,
+    // direct=0 and path_count=0 when a blocked requested goal is adjusted
+    // all the way back to the start tile.  The reconstructed pathfinder's
+    // convenient same-tile return is true, so restore the original probe
+    // metadata before any owner-AI caller consumes it.
+    if (result.path_target_adjusted &&
+        result.final_path_target_tile.x == result.start_tile.x &&
+        result.final_path_target_tile.y == result.start_tile.y) {
+        result.reachable = false;
+        result.path_tiles.clear();
+    }
+
     if (!result.reachable) {
         result.path_cost = 0xffffffffu;
         return result;
@@ -2509,6 +2521,7 @@ OwnerAiRoutePathProbeResult ProbeOwnerAiRoutePath(UnitMovementContext& movement,
     if (result.direct_path) {
         // Legacy direct paths leave path_count at zero and publish the goal
         // as next_path.  Route-helper scoring consumes that zero directly.
+        result.path_tiles.clear();
         result.path_cost = 0;
         result.next_path_point = result.final_path_target;
         result.next_path_tile = result.final_path_target_tile;

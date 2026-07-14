@@ -8338,10 +8338,26 @@ OwnerTransportRouteTargetMaintenanceResult HandleOwnerTransportRouteTargetMainte
     if (result.route_count != 0 && route_state.targets[0].unit != nullptr) {
         const UnitMovementUnit& route_origin = *route_state.targets[0].unit;
         route_helper_origin_world = {route_origin.x, route_origin.y};
-        route_helper_reference_tile = {
-            static_cast<i32>(static_cast<u32>(route_origin.x) >> 5),
-            static_cast<i32>(static_cast<u32>(route_origin.y) >> 5),
-        };
+    }
+
+    // FUN_00449180 0x00449368..0x004493a4 indexes the route pointer table
+    // with its one-based count, whose backing array starts one pointer later.
+    // Consequently the full 0x34-cluster replacement pass measures from the
+    // last route target, while FUN_00448a50's later placement/path pass still
+    // starts at the first route target above.  The original also passes raw
+    // +0xb8/+0xbc world coordinates straight to the distance helper against
+    // the tile-coordinate cluster centers (there is no >> 5 in this branch).
+    if (result.route_count != 0) {
+        const u32 replacement_route_index = result.route_count - 1;
+        if (replacement_route_index < route_state.targets.size() &&
+            route_state.targets[replacement_route_index].unit != nullptr) {
+            const UnitMovementUnit& replacement_reference =
+                *route_state.targets[replacement_route_index].unit;
+            route_helper_reference_tile = {
+                replacement_reference.x,
+                replacement_reference.y,
+            };
+        }
     }
 
     std::array<u32, 4> helper_types{
