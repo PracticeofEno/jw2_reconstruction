@@ -4380,9 +4380,24 @@ bool default_gameplay_input_dispatch_action(
         ++state.validation_fail_count;
         ++state.rejected_feedback_count;
         state.last_dispatch_failed = true;
-        if (state.callbacks.rejected_action_feedback != nullptr) {
-            state.callbacks.rejected_action_feedback(state);
-        }
+        // 0x004db0ba calls FUN_004de7b0, which clears the staged placement,
+        // contextual-cursor and production-category globals.  This is not
+        // FUN_004e2b56 (the click-marker stop callback): a rejected command
+        // leaves that marker's normal animation lifetime intact.
+        ResetGameplayInputPointerState(state);
+        UiOverlayState& overlay = ui_overlay_state();
+        overlay.placement_mode = 0;
+        overlay.staged_unit_action_id = 0xffffffffu;
+        overlay.context_cursor.animation_mode = 0;
+        overlay.selected_production_category = 0;
+
+        // The remaining common tail is sound slot 2 first, then the fixed
+        // platform row 102.  Resource/production rejection has a separate
+        // code-indexed callback and must not leak into this path.
+        HandleCurrentGameplaySoundQueued(g_runtime.gameplay_sound,
+            kGameplayCommandFailureSoundSlot, 0, 0);
+        QueueGameplayHudMessage(g_runtime.gameplay_hud_text,
+            startup_platform_row(102, "Cannot use action"));
         return false;
     };
     const auto acknowledge_unit = [&state](u32 unit_offset) {
@@ -4892,15 +4907,35 @@ bool default_gameplay_input_dispatch_action(
                 const u32 projected = release_cost +
                     lifecycle.owner_population_reserved[owner] -
                     composite_cost;
-                const u32 capacity = std::min(
-                    lifecycle.owner_population_used[owner],
-                    lifecycle.owner_population_limit[owner]);
+                const u32 hard_limit =
+                    lifecycle.owner_population_limit[owner];
+                u32 capacity = lifecycle.owner_population_used[owner];
+                // 0x004da929 uses signed JLE when selecting the lower cap.
+                // Preserve that comparison even for wrapped scenario state.
+                if (static_cast<i32>(capacity) >
+                    static_cast<i32>(hard_limit)) {
+                    capacity = hard_limit;
+                }
                 if (static_cast<i32>(projected) >
                     static_cast<i32>(capacity)) {
-                    // The original queues its population-specific HUD row and
-                    // then reaches the silent STC table tail.  Reuse the raw
-                    // action feedback callback while keeping it distinct from
-                    // the common 0x004db0ba rejection path.
+                    // 0x004da93d..0x004da962 selects code 3 when the hard
+                    // population limit is the binding cap, otherwise
+                    // 0x0b+faction for insufficient supplied capacity.  It
+                    // then reaches the silent STC table tail after feedback.
+                    const u32 faction = owner <
+                            g_runtime.gameplay_startup_state
+                                .owner_faction_ids.size()
+                        ? g_runtime.gameplay_startup_state
+                              .owner_faction_ids[owner]
+                        : 0u;
+                    state.last_production_availability_code =
+                        static_cast<i32>(capacity) <
+                            static_cast<i32>(hard_limit)
+                        ? static_cast<u32>(
+                              UnitProductionRequirementCode::
+                                  population_reserved_base) + faction
+                        : static_cast<u32>(
+                              UnitProductionRequirementCode::population_limit);
                     ++state.rejected_feedback_count;
                     if (state.callbacks.rejected_action_feedback != nullptr) {
                         state.callbacks.rejected_action_feedback(state);
