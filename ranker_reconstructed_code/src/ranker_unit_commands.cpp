@@ -1226,21 +1226,6 @@ void reserve_production_population(UnitCommandContext& context,
     unit.production_reserved = true;
 }
 
-void release_production_population(UnitCommandContext& context,
-    UnitMovementUnit& unit) {
-    if (!unit.production_reserved) {
-        return;
-    }
-    if (has_owner_slot(context, unit.owner_id)) {
-        const u32 owner = unit.owner_id;
-        const u32 population_cost = production_population_cost_for_unit(context, unit);
-        context.owner_population_reserved[owner] =
-            context.owner_population_reserved[owner] >= population_cost ?
-            context.owner_population_reserved[owner] - population_cost : 0;
-    }
-    unit.production_reserved = false;
-}
-
 void refund_production_resources(UnitCommandContext& context, UnitMovementUnit& unit) {
     if (!unit.production_reserved) {
         return;
@@ -1253,7 +1238,12 @@ void refund_production_resources(UnitCommandContext& context, UnitMovementUnit& 
             production_secondary_cost_for_unit(context, unit));
     }
 
-    release_production_population(context, unit);
+    // HandleUnitProductionSpawnCycle's create/placement-failure branch
+    // (0x004ce0f4..0x004ce16d) refunds the debited production resources but
+    // never writes the owner's reserved-population total at 0x00725a14.  The
+    // failed command no longer owns a live reservation, so retire only the
+    // typed per-unit latch here and preserve that original immediate total.
+    unit.production_reserved = false;
     if (context.callbacks.on_production_refunded != nullptr) {
         context.callbacks.on_production_refunded(context, unit);
     }
@@ -1310,7 +1300,12 @@ void refund_active_production_on_death(UnitCommandContext& context,
         context.owner_resources[unit.owner_id] +=
             production_resource_cost_for_unit(context, unit);
     }
-    release_production_population(context, unit);
+    // HandleUnitDeathCommandQueueSideEffects (0x004cdc99) calls the original
+    // primary-only refund helper and does not update the owner population
+    // total at 0x00725a14.  The following lifecycle totals pass rebuilds that
+    // value after the dead producer leaves the active simulation list; here
+    // retire only the typed ownership latch to preserve the immediate frame.
+    unit.production_reserved = false;
     if (context.callbacks.on_production_refunded != nullptr) {
         context.callbacks.on_production_refunded(context, unit);
     }

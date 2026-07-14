@@ -12430,28 +12430,12 @@ bool default_mode1_packet_set_unit_deferred_resource_command(void*,
                     command_context.owner_secondary_resources[owner] +=
                         secondary_cost;
                 }
-                if (unit->production_reserved &&
-                    owner < command_context.owner_population_reserved.size()) {
-                    UnitLifecycleContext* lifecycle =
-                        g_runtime.gameplay_startup_state.lifecycle;
-                    const UnitMovementDefinition* definition = lifecycle != nullptr
-                        ? default_unit_lifecycle_find_definition(*lifecycle, payload)
-                        : nullptr;
-                    if (definition != nullptr) {
-                        u32& reserved_population =
-                            command_context.owner_population_reserved[owner];
-                        reserved_population = reserved_population >=
-                                definition->production_population_cost
-                            ? reserved_population -
-                                definition->production_population_cost
-                            : 0;
-                    }
-                }
-
                 // HandleSubtype01ProductionCommandPacket (0x004dca58) sets
                 // unit +0x20 to -1 and pops only for active logical slot zero.
-                // The reconstruction also has explicit cached spawn and live
-                // population-reservation fields, so retire those together.
+                // Its active-cancel branch refunds both resources but never
+                // decrements the owner reserved-population total at
+                // 0x00725a14.  Retire the typed per-unit latch/cache without
+                // repairing that original immediate accounting behavior.
                 unit->command_value = 0xffffffffu;
                 unit->spawn_type_id = 0;
                 unit->queued_production_type_id = 0;
@@ -12479,25 +12463,11 @@ bool default_mode1_packet_set_unit_deferred_resource_command(void*,
                     UnitCommandContext& command_context =
                         prepare_default_mode1_packet_command_context();
                     const u32 owner = unit->owner_id;
-                    u32 ignored_primary_cost = 0;
-                    u32 reserved_population_cost = 0;
-                    if (unit->production_reserved &&
-                        default_mode1_packet_avatar_slot_costs(owner,
-                            removed_command.value, ignored_primary_cost,
-                            reserved_population_cost) &&
-                        owner < command_context.owner_population_reserved.size()) {
-                        u32& reserved_population =
-                            command_context.owner_population_reserved[owner];
-                        reserved_population = reserved_population >=
-                                reserved_population_cost
-                            ? reserved_population - reserved_population_cost
-                            : 0;
-                    }
-
                     // HandleSubtype05ResourceBuildPacket (0x004dccee) refunds
                     // only the avatar's primary cost before setting unit +0x20
-                    // to -1 and popping.  The reconstructed 0x10 runtime shares
-                    // the spawn cache/reservation fields with normal training.
+                    // to -1 and popping.  Like ordinary active cancellation it
+                    // does not decrement 0x00725a14; clear only the typed
+                    // per-unit reservation/cache before the pop.
                     unit->command_value = 0xffffffffu;
                     unit->spawn_type_id = 0;
                     unit->queued_production_type_id = 0;
