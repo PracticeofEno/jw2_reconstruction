@@ -1093,7 +1093,12 @@ const ProductionOrderDefinition* owner_ai_find_production_order_definition(
 }
 
 u32 owner_ai_primary_production_unit_type(
-    const ProductionOrderDefinition& definition) {
+    const ProductionOrderDefinition& definition, u32 order_id,
+    const OwnerAiProductionOrderPlanningInput& input) {
+    if (input.order_producer_unit_types != nullptr &&
+        order_id < input.order_producer_unit_types->size()) {
+        return (*input.order_producer_unit_types)[order_id];
+    }
     if (definition.affected_type_ids.empty()) {
         return 0xffffffffu;
     }
@@ -2574,7 +2579,8 @@ OwnerAiProductionOrderSelection SelectOwnerAiProductionOrderAction(
         return selection;
     }
 
-    const u32 primary_unit_type = owner_ai_primary_production_unit_type(*definition);
+    const u32 primary_unit_type = owner_ai_primary_production_unit_type(
+        *definition, order_id, input);
     if (primary_unit_type < kOwnerAiUnitTypeCount &&
         state.owner_unit_type_counts[owner_slot][primary_unit_type] == 0) {
         selection.action = OwnerAiProductionOrderActionCode::demand_primary_unit;

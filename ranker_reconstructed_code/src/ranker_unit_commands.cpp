@@ -2633,7 +2633,11 @@ void HandlePendingUnitCommandDispatch(UnitCommandContext& context,
     unit.path_target_x = command.y;
     unit.path_target_y = static_cast<i32>(command.value);
     DispatchUnitCommandStateEntry(context, unit, command.state);
-    unit.pending_command = {};
+    // HandlePendingUnitCommandDispatch (original 0x004cfe37) clears only the
+    // pending state word at raw +0x84 after promotion.  The value and point
+    // words at +0x88..+0x90 deliberately remain as residual payload until a
+    // later command overwrites them.
+    unit.pending_command.state = 0;
     if (context.callbacks.on_command_acknowledged != nullptr) {
         context.callbacks.on_command_acknowledged(context, unit);
     }
@@ -3301,15 +3305,21 @@ void StartUnitCompletionAnnouncementCommand(UnitCommandContext& context,
         }
     }
     unit.effect_timer = 0;
+    // Original raw +0x7c is the high-type cell image-frame scratch used by
+    // state 0x4e as its visible completion timer.
+    unit.cell_flag40_animation_frame = 0;
     unit.command_state = kUnitStateCompletionAnnouncementTimer;
 }
 
 void HandleUnitCompletionAnnouncementTimer(UnitCommandContext& context,
     UnitMovementUnit& unit) {
-    ++unit.effect_timer;
+    ++unit.cell_flag40_animation_frame;
+    unit.effect_timer = unit.cell_flag40_animation_frame;
     const u32 visual_duration = completion_announcement_duration(unit);
-    const bool visual_cycle_done = visual_duration <= unit.effect_timer;
+    const bool visual_cycle_done =
+        visual_duration <= unit.cell_flag40_animation_frame;
     if (visual_cycle_done) {
+        unit.cell_flag40_animation_frame = 0;
         unit.effect_timer = 0;
     }
 

@@ -943,12 +943,12 @@ bool InitializePlacedUnitFromMapSlot(UnitLifecycleContext& context,
     unit.destination_y = 0;
     unit.current_cell_x = x & ~0x1f;
     unit.current_cell_y = y & ~0x1f;
-    // InitializePlacedUnitFromMapSlot (original 0x004cf229) keeps the
-    // command path fields clear for a freshly placed unit.  It copies the
-    // placement point to raw +0xb8/+0xbc, +0xc0/+0xc4 and +0xd0/+0xd4, but
-    // explicitly leaves the path target (+0x6c/+0x70) and next path
-    // (+0xc8/+0xcc) at zero.  Seeding these fields with x/y changes the first
-    // idle/docking transition and consumes an extra gameplay RNG call.
+    // InitializePlacedUnitFromMapSlot (original 0x004cf229) clears the path
+    // target at raw +0x6c/+0x70 and copies the placement point to +0xb8/+0xbc,
+    // +0xc0/+0xc4 and +0xd0/+0xd4.  It does not write +0xc8/+0xcc at all.
+    // Detached typed startup records begin with zero here; the later fixed-
+    // pool assignment restores the consumed scenario node's residual words.
+    // HandleUnitCreationRegisterFootprint overwrites them for the first base.
     unit.path_target_x = 0;
     unit.path_target_y = 0;
     unit.next_path_x = 0;

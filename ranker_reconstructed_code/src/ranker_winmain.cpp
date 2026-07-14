@@ -853,6 +853,9 @@ constexpr std::array<u32, 4> kDefaultOwnerAiCarrierUnitTypes{{
     0x05, 0x18, 0x29, 0x34,
 }};
 constexpr std::array<u32, 4> kDefaultOwnerAiOpeningOrderIds{{
+    0x00, 0x0b, 0x14, 0x1f,
+}};
+constexpr std::array<u32, 4> kDefaultOwnerAiOversizedPassengerOrderIds{{
     0x08, 0xffffffffu, 0xffffffffu, 0xffffffffu,
 }};
 
@@ -22601,6 +22604,8 @@ void default_owner_ai_process_production_orders(
     input.production_state = &g_runtime.gameplay_production_runtime;
     input.faction_primary_unit_types = kDefaultOwnerAiPrimaryUnitTypes;
     input.faction_opening_order_ids = kDefaultOwnerAiOpeningOrderIds;
+    input.order_producer_unit_types =
+        &g_runtime.unit_reference_tables.completion_reverse;
     input.producer_ready = default_owner_ai_producer_ready_for_planning;
     input.queued_extended_count = default_owner_ai_queued_extended_production_count;
     input.issue_order = default_owner_ai_issue_production_order;
@@ -22912,11 +22917,11 @@ void default_unit_command_oversized_transport_passenger(const UnitCommandContext
     }
     const u32 faction =
         g_runtime.gameplay_owner_ai_state.owner_faction_ids[owner];
-    if (faction >= kDefaultOwnerAiOpeningOrderIds.size()) {
+    if (faction >= kDefaultOwnerAiOversizedPassengerOrderIds.size()) {
         return;
     }
 
-    const u32 order_id = kDefaultOwnerAiOpeningOrderIds[faction];
+    const u32 order_id = kDefaultOwnerAiOversizedPassengerOrderIds[faction];
     if (order_id >= kProductionOrderCount) {
         return;
     }
@@ -23923,25 +23928,52 @@ void initialize_default_gameplay_original_unit_pool_slots() {
             break;
         }
         const u32 slot = allocation_order[allocation_index++];
+        GameplayScriptTriggerState& script = gameplay_script_trigger_state();
+        // The parsed record vector covers both serialized active and free
+        // fixed-pool nodes.  Most serialized free nodes are intentionally not
+        // materialized as UnitMovementUnit objects until after the starting
+        // units consume their slots, so retain their raw residual here too.
+        i32 residual_next_path_x = 0;
+        i32 residual_next_path_y = 0;
+        if (slot < script.objects.size()) {
+            residual_next_path_x = script.objects[slot].next_path_x;
+            residual_next_path_y = script.objects[slot].next_path_y;
+        }
         auto existing_free = std::find_if(movement.free_units.begin(),
             movement.free_units.end(), [&](const UnitMovementUnit* candidate) {
                 return candidate != nullptr &&
                     candidate->runtime_slot_index == slot;
             });
+        const bool creation_footprint_registered =
+            unit.id != 0 && unit.linked_object_id == unit.id;
         if (existing_free != movement.free_units.end()) {
             UnitMovementUnit* replaced = *existing_free;
             movement.free_units.erase(existing_free);
+            residual_next_path_x = replaced->next_path_x;
+            residual_next_path_y = replaced->next_path_y;
+            // InitializePlacedUnitFromMapSlot (0x004cf229) deliberately does
+            // not write raw +0xc8/+0xcc.  A secondary starting unit therefore
+            // inherits those two words from the fixed-pool node consumed by
+            // HandleFreeUnitActivation.  The first structure goes through
+            // HandleUnitCreationRegisterFootprint afterwards, which replaces
+            // them with +0xc0/+0xc4; linked_object_id == id records that path
+            // before the temporary startup id is replaced below.
             replaced->runtime_slot_index = kInvalidUnitRuntimeSlotIndex;
             replaced->id = 0;
             replaced->linked_object_id = 0;
             replaced->linked_unit = nullptr;
+        }
+        if (!creation_footprint_registered) {
+            unit.next_path_x = residual_next_path_x;
+            unit.next_path_y = residual_next_path_y;
+            unit.saved_path_target_x = residual_next_path_x;
+            unit.saved_path_target_y = residual_next_path_y;
         }
         used[slot] = 1;
         unit.runtime_slot_index = slot;
         unit.id = slot * kGameplayScenarioObjectStride;
         unit.linked_object_id = unit.id;
         unit.linked_unit = &unit;
-        GameplayScriptTriggerState& script = gameplay_script_trigger_state();
         if (slot < script.objects.size()) {
             GameplayScriptTriggerObjectState& object = script.objects[slot];
             object.unit = &unit;

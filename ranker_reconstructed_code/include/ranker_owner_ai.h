@@ -222,6 +222,11 @@ struct OwnerAiProductionOrderPlanningInput {
         0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu};
     std::array<u32, kOwnerAiCounterRuleFactionCount> faction_opening_order_ids{
         0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu};
+    // Original DAT_0123d144: order id -> structure type whose raw unit
+    // definition +0x2c8/+0x2cc lists that completion order.  This is distinct
+    // from the order's affected unit types in JW2_10.
+    const std::array<u32, kProductionOrderCount>* order_producer_unit_types =
+        nullptr;
     OwnerAiProductionProducerPredicate producer_ready = nullptr;
     OwnerAiProductionQueuedCountCallback queued_extended_count = nullptr;
     OwnerAiProductionIssueOrderCallback issue_order = nullptr;
