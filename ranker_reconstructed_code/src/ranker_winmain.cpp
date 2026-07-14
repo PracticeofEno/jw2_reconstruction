@@ -11209,6 +11209,8 @@ void default_gameplay_loop_pre_update_phase(GameplayLoopState& state) {
     GameplayInputActionState& input = gameplay_input_action_state();
     configure_default_gameplay_input_action_context(input);
     input.cursor_index = gameplay_loop_state().current_cursor_index;
+    input.keyboard_filter_active =
+        gameplay_script_trigger_state().opcode_context.global_flag_22358;
     input.modal_route_blocked = gameplay_modal_ui_is_active(gameplay_modal_ui_state());
     PumpGameplayInputAndCursorFrame(input);
     apply_default_ui_overlay_runtime_mutations();
