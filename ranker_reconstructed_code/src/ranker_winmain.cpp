@@ -3941,12 +3941,16 @@ bool default_cursor_target_boarding_available(
     // transport size among selected definition-bit-2 units.
     bool boardable_selected = false;
     u32 minimum_transport_size = 1000u;
-    for (u32 selected_id : overlay.selected_unit_ids) {
-        const UnitMovementUnit* selected =
-            find_default_movement_unit_by_id(selected_id);
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    if (movement == nullptr) {
+        return false;
+    }
+    for (const UnitMovementUnit* selected : movement->active_units) {
         if (selected == nullptr || !selected->active ||
+            std::find(overlay.selected_unit_ids.begin(),
+                overlay.selected_unit_ids.end(), selected->id) ==
+                overlay.selected_unit_ids.end() ||
             selected->type_id >= 0x60u ||
-            selected->owner_id != overlay.local_player_slot ||
             (selected->runtime_flags & 1u) == 0u ||
             (selected->definition.action_effect_flags & 0x04u) == 0u) {
             continue;
@@ -5448,10 +5452,83 @@ bool default_ui_overlay_check_selected_production_action_gate(
     UiOverlayState& overlay, u32 selector, u32& failure_code) {
     GameplayProductionActionState& production = gameplay_production_action_state();
     sync_default_gameplay_production_action_units(production, overlay);
-    const bool allowed =
-        CheckSelectedUnitProductionActionGate(production, selector);
-    failure_code = static_cast<u32>(production.last_gate_failure);
-    return allowed;
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    if (movement == nullptr || selector >= 32u) {
+        failure_code = 0xffffffffu;
+        return false;
+    }
+
+    const u32 saved_current = production.current_unit_offset;
+    const u32 selector_bit = 1u << selector;
+    bool contributed = false;
+    u32 best_failure = 0;
+    u32 best_priority = 4;
+    for (const UnitMovementUnit* selected : movement->active_units) {
+        if (selected == nullptr || !selected->active ||
+            selected->type_id >= 0x60u ||
+            (selected->runtime_flags & 1u) == 0 ||
+            std::find(overlay.selected_unit_ids.begin(),
+                overlay.selected_unit_ids.end(), selected->id) ==
+                overlay.selected_unit_ids.end()) {
+            continue;
+        }
+
+        const auto mirrored = std::find_if(production.units.begin(),
+            production.units.end(), [selected](
+                const GameplayProductionUnitState& candidate) {
+                return candidate.offset == selected->id;
+            });
+        const bool attachment_candidate = selector != 0u &&
+            mirrored != production.units.end() &&
+            std::find(mirrored->attachment_definition_ids.begin(),
+                mirrored->attachment_definition_ids.end(), selector) !=
+                mirrored->attachment_definition_ids.end();
+        const bool script_candidate =
+            (selected->script_bit_flags & selector_bit) != 0 &&
+            (selector != 0x13u ||
+                (selected->command_flags & 0x800u) == 0);
+        if (attachment_candidate) {
+            // FUN_004e555c..0x004e5620 BTSes the attachment selector into
+            // the success mask after all gate checks and clears its three
+            // failure-mask bits.  It does not re-run FUN_004db92c.
+            production.current_unit_offset = saved_current;
+            failure_code = 0;
+            return true;
+        }
+        if (!script_candidate) {
+            continue;
+        }
+
+        contributed = true;
+        production.current_unit_offset = selected->id;
+        if (CheckSelectedUnitProductionActionGate(production, selector)) {
+            production.current_unit_offset = saved_current;
+            failure_code = 0;
+            return true;
+        }
+
+        const u32 candidate_failure =
+            static_cast<u32>(production.last_gate_failure);
+        u32 candidate_priority = 1;
+        if (production.last_gate_failure ==
+                GameplayProductionGateFailure::resource_limit) {
+            candidate_priority = 2;
+        }
+        else if (production.last_gate_failure ==
+                    GameplayProductionGateFailure::owner_requirement ||
+                 production.last_gate_failure ==
+                    GameplayProductionGateFailure::active_limit) {
+            candidate_priority = 3;
+        }
+        if (candidate_priority < best_priority) {
+            best_priority = candidate_priority;
+            best_failure = candidate_failure;
+        }
+    }
+
+    production.current_unit_offset = saved_current;
+    failure_code = contributed ? best_failure : 0xffffffffu;
+    return false;
 }
 
 void configure_default_gameplay_input_action_context(
@@ -15604,6 +15681,17 @@ void clear_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
     overlay.selected_unit_command_flags = 0;
     overlay.selected_unit_runtime_flags = 0;
     overlay.selected_unit_action_mode_gate = 0;
+    overlay.selected_mobile_unit_count = 0;
+    overlay.selected_mobile_action_mode_sum = 0;
+    overlay.selected_mobile_command_flags_or = 0;
+    overlay.selected_mobile_production_action_mask = 0;
+    overlay.selected_mobile_runtime_command_mask = 0;
+    overlay.selected_grouped_mobile_type_counts = {};
+    overlay.selected_transport_load_flags = 0x02u;
+    overlay.selected_transport_unload_flags = 0x02u;
+    overlay.selected_transport_passengers.clear();
+    overlay.all_selected_mobile_can_produce = false;
+    overlay.all_selected_mobile_command_state_60 = false;
     overlay.selected_unit_command_bit_mask = 0;
     overlay.selected_unit_special_action_states = {};
     overlay.selected_unit_order_2a_available = false;
@@ -15659,7 +15747,9 @@ void append_default_ui_overlay_selected_unit_queue_options(
 
     UiOverlayCommandOption active{};
     active.item_id = active_item;
-    active.aux = unit.command_value;
+    // FUN_004e534f reads raw +0x68, the live target pointer, for the active
+    // queue record.  command_value is the distinct preceding payload field.
+    active.aux = unit.target != nullptr ? unit.target->id : 0u;
     active.flags = 0; // logical index 0 is the active command
     active.enabled = true;
     overlay.command_options.push_back(active);
@@ -15756,9 +15846,10 @@ void append_default_ui_overlay_avatar_production_options(
         if (!blocked && avatar_type < overlay.unit_definition_icon_markers.size()) {
             option.icon_marker = overlay.unit_definition_icon_markers[avatar_type];
         }
-        // Original item 0xc8 consumes the slot but has no actionable command.
-        // Keep record flags at zero while disabling the reconstructed hot region.
-        option.enabled = !blocked;
+        // Original item 0xc8 consumes the slot with EDI/flags zero.  Press
+        // capture already rejects c8 by item id, so synthesizing disabled bit
+        // 0x02 here would only corrupt hit/hotkey flags.
+        option.enabled = true;
         overlay.primary_production_options.push_back(option);
     }
 }
@@ -15990,7 +16081,9 @@ u32 default_selected_unit_avatar_progress_total(const UnitMovementUnit& unit) {
 }
 
 u32 default_selected_unit_progress_total(const UnitMovementUnit& unit) {
-    const u32 command = unit.command_state & 0xffu;
+    // Match FUN_004e1544's full-dword state comparisons.  A state such as
+    // 0x10000050 is not a production state merely because its low byte is 50.
+    const u32 command = unit.command_state;
     if (command == 0x4e || command == 0x4d) {
         const u32 order_id = unit.command_value != 0
             ? unit.command_value
@@ -16171,28 +16264,111 @@ void sync_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
         unit->owner_id < production.variant_counts.size() &&
         0x2au < production.variant_counts[unit->owner_id].size() &&
         production.variant_counts[unit->owner_id][0x2au] != 0;
+    // These are fresh FUN_004e4150 aggregates, not persistent selected-unit
+    // attributes.  Clear them on mobile->structure transitions as well; the
+    // separate selected_production_status_latch intentionally survives.
+    overlay.selected_mobile_unit_count = 0;
+    overlay.selected_mobile_action_mode_sum = 0;
+    overlay.selected_mobile_command_flags_or = 0;
+    overlay.selected_mobile_production_action_mask = 0;
+    overlay.selected_mobile_runtime_command_mask = 0;
+    overlay.selected_grouped_mobile_type_counts = {};
+    overlay.selected_transport_load_flags = 0x02u;
+    overlay.selected_transport_unload_flags = 0x02u;
+    overlay.selected_transport_passengers.clear();
+    overlay.all_selected_mobile_can_produce = false;
+    overlay.all_selected_mobile_command_state_60 = false;
     if (unit->type_id < 0x60u) {
         GameplayProductionActionState& production_actions =
             gameplay_production_action_state();
         sync_default_gameplay_production_action_definitions(production_actions);
+        UnitEquipmentCatalog& selected_equipment_catalog =
+            frontend_bootstrap_state().equipment_catalog;
+        if (selected_equipment_catalog.effects.empty()) {
+            LoadUnitEquipmentCatalogFromJw210Trc(selected_equipment_catalog);
+        }
         u32 aggregate_mask = 0;
-        bool any_selected_mobile = false;
         bool all_selected_can_produce = true;
-        for (u32 selected_id : overlay.selected_unit_ids) {
-            const UnitMovementUnit* selected =
-                find_default_movement_unit_by_id(selected_id);
-            if (selected == nullptr || !selected->active ||
+        overlay.selected_mobile_unit_count = 0;
+        overlay.selected_mobile_action_mode_sum = 0;
+        overlay.selected_mobile_command_flags_or = 0;
+        overlay.selected_mobile_production_action_mask = 0;
+        overlay.selected_mobile_runtime_command_mask = 0;
+        overlay.selected_grouped_mobile_type_counts = {};
+        overlay.selected_transport_load_flags = 0x02u;
+        overlay.selected_transport_unload_flags = 0x02u;
+        overlay.selected_transport_passengers.clear();
+        overlay.all_selected_mobile_can_produce = true;
+        overlay.all_selected_mobile_command_state_60 = true;
+        if (movement != nullptr) {
+          for (const UnitMovementUnit* selected : movement->active_units) {
+            // Script group opcodes retain duplicate reference counts, while
+            // FUN_004e4150 walks the physical active list once and tests each
+            // unit's selection bit.  Membership filtering reproduces both
+            // that deduplication and the original active-list order.
+            if (selected == nullptr ||
+                std::find(overlay.selected_unit_ids.begin(),
+                    overlay.selected_unit_ids.end(), selected->id) ==
+                    overlay.selected_unit_ids.end()) {
+                continue;
+            }
+            if (!selected->active ||
                 selected->type_id >= 0x60u ||
-                selected->owner_id != overlay.local_player_slot ||
                 (selected->runtime_flags & 1u) == 0) {
                 continue;
             }
+            ++overlay.selected_mobile_unit_count;
+            overlay.selected_mobile_action_mode_sum += selected->action_mode;
+            overlay.selected_mobile_command_flags_or |= selected->command_flags;
+            u32 script_action_bits = selected->script_bit_flags;
+            if ((selected->command_flags & 0x800u) != 0) {
+                script_action_bits &= ~(1u << 0x13u);
+            }
+            // FUN_004e555c..0x004e5620 promotes each equipped attachment's
+            // nonzero action selector into the success mask even when raw
+            // +0xe8 did not contain that bit (and even for selector 0x13).
+            for (u32 equipment_id : selected->item_slots) {
+                const UnitEquipmentEffectDefinition* equipment =
+                    FindUnitEquipmentEffect(
+                        selected_equipment_catalog, equipment_id);
+                if (equipment != nullptr &&
+                    equipment->attachment_definition_id != 0 &&
+                    equipment->attachment_definition_id < 32u) {
+                    script_action_bits |=
+                        1u << equipment->attachment_definition_id;
+                }
+            }
+            overlay.selected_mobile_production_action_mask |= script_action_bits;
+            overlay.selected_mobile_runtime_command_mask |=
+                default_unit_command_bit_mask(*selected);
+            if (selected->command_state != 0x60u) {
+                overlay.all_selected_mobile_command_state_60 = false;
+            }
             const u32 selected_mask =
                 default_unit_action_capability_mask(*selected);
+            if (selected->command_state != 0x60u &&
+                (selected_mask & 0x800u) != 0 &&
+                selected->type_id <
+                    overlay.selected_grouped_mobile_type_counts.size()) {
+                ++overlay.selected_grouped_mobile_type_counts[
+                    selected->type_id];
+            }
+            if ((selected_mask & 0x400u) != 0) {
+                const u32 transport_capacity = CalculateUnitTransportCapacity(
+                    *selected, &production);
+                if (selected->cargo_amount != transport_capacity) {
+                    overlay.selected_transport_load_flags = 0;
+                }
+                // 0x004e4303..0x004e4340 clears CE for non-empty cargo and
+                // also for the exact cargo==capacity case (including 0==0).
+                if (selected->cargo_amount != 0 ||
+                    selected->cargo_amount == transport_capacity) {
+                    overlay.selected_transport_unload_flags = 0;
+                }
+            }
             aggregate_mask |= selected_mask;
             all_selected_can_produce =
                 all_selected_can_produce && (selected_mask & 0x40u) != 0;
-            any_selected_mobile = true;
 
             // FUN_004e4414..0x004e48ad aggregates four special-action
             // availability words independently of the ordinary capability
@@ -16235,12 +16411,38 @@ void sync_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
                     action_state |= 0x10u;
                 }
             }
+          }
         }
-        if (any_selected_mobile) {
-            if (!all_selected_can_produce) {
-                aggregate_mask &= ~0x40u;
+        if (!all_selected_can_produce) {
+            // 0x004e42d6..0x004e42e8 clears DAT_00864bb4 only after the
+            // outer command-panel ownership/scenario gate has admitted this
+            // mobile selection.  Clear both mirrors so a later all-capable
+            // selection cannot resurrect the previously open category page.
+            if (overlay.scenario_ai_profile_override ||
+                overlay.local_player_type == 2u ||
+                unit->owner_id == overlay.local_player_slot) {
+                overlay.selected_production_category = 0;
+                gameplay_input_action_state().pointer_aux_state = 0;
             }
-            overlay.selected_unit_command_bit_mask = aggregate_mask;
+        }
+        overlay.all_selected_mobile_can_produce = all_selected_can_produce;
+        overlay.selected_unit_command_bit_mask = aggregate_mask;
+        if (overlay.selected_mobile_unit_count == 1 &&
+            (overlay.selected_transport_unload_flags & 0x02u) == 0 &&
+            movement != nullptr) {
+            // 0x004e4aba walks the active list in list order and matches the
+            // passenger's exact state 0x45 plus raw command target against
+            // the primary selected transport pool offset.
+            for (const UnitMovementUnit* passenger : movement->active_units) {
+                if (passenger == nullptr || !passenger->active ||
+                    passenger->command_state != 0x45u ||
+                    passenger->target != unit) {
+                    continue;
+                }
+                overlay.selected_transport_passengers.push_back(
+                    UiOverlayTransportPassenger{
+                        passenger->id, passenger->type_id});
+            }
         }
     }
     overlay.selected_unit_details_visible =

@@ -243,6 +243,11 @@ struct UiOverlayCommandOption {
     bool enabled = true;
 };
 
+struct UiOverlayTransportPassenger {
+    u32 unit_id = 0;
+    u32 type_id = 0;
+};
+
 struct UiOverlayHotRegion {
     UiOverlayDrawRecord record;
     u8 hotkey = 0;
@@ -333,6 +338,7 @@ struct UiOverlayState {
     std::vector<UiOverlayHudPulseCommand> pulse_commands;
     std::vector<UiOverlayCommandOption> command_options;
     std::vector<UiOverlayCommandOption> primary_production_options;
+    std::vector<UiOverlayTransportPassenger> selected_transport_passengers;
     std::vector<UiOverlayHotRegion> hot_regions;
     std::vector<u32> selected_unit_ids;
     std::vector<UiOverlayChatMessage> chat_messages;
@@ -414,6 +420,18 @@ struct UiOverlayState {
     u32 selected_unit_command_flags = 0;
     u32 selected_unit_runtime_flags = 0;
     u32 selected_unit_action_mode_gate = 0;
+    // FUN_004e4150 aggregates every active selected mobile, including units
+    // selected through script paths whose owner is not the local player.
+    u32 selected_mobile_unit_count = 0;
+    u32 selected_mobile_action_mode_sum = 0;
+    u32 selected_mobile_command_flags_or = 0;
+    u32 selected_mobile_production_action_mask = 0;
+    u32 selected_mobile_runtime_command_mask = 0;
+    std::array<u32, 0x60> selected_grouped_mobile_type_counts{};
+    u32 selected_transport_load_flags = 0x02u;
+    u32 selected_transport_unload_flags = 0x02u;
+    bool all_selected_mobile_can_produce = false;
+    bool all_selected_mobile_command_state_60 = false;
     u32 selected_unit_raw_production_reference_count = 0;
     bool selected_unit_uses_avatar_production_slots = false;
     bool selected_unit_details_visible = false;
@@ -510,6 +528,10 @@ struct UiOverlayState {
     u32 max_selected_unit_count = 0x0e;
     u32 selected_unit_capability_mask = 0;
     u32 selected_unit_status_mask = 0;
+    // DAT_00864b94 is intentionally not cleared at FUN_004e4150 entry.  It
+    // survives category/cancel early returns until the 32-action loop shifts
+    // it completely out.
+    u32 selected_production_status_latch = 0;
     u32 selected_unit_command_bit_mask = 0;
     std::array<u32, 4> selected_unit_special_action_states{};
     bool selected_unit_order_2a_available = false;

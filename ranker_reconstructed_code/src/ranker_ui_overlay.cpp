@@ -40,6 +40,7 @@ constexpr u32 kCommandActionContextual = 6;
 constexpr u32 kProductionGateFailureOwnerRequirement = 1;
 constexpr u32 kProductionGateFailureActiveLimit = 3;
 constexpr u32 kProductionGateFailureResourceLimit = 4;
+constexpr u32 kProductionGateNoContribution = 0xffffffffu;
 constexpr u32 kProductionGateFlagQueuedOrOther = 0x04;
 constexpr u32 kProductionGateFlagResourceLimit = 0x10;
 constexpr u32 kProductionGateFlagOwnerOrActiveLimit = 0x02;
@@ -1231,12 +1232,12 @@ u32 selected_production_category_index(const UiOverlayState& state) {
 }
 
 bool selected_production_category_active(const UiOverlayState& state) {
-    if (state.selected_production_category == 0) {
-        return false;
-    }
-    const u32 category = selected_production_category_index(state);
-    return category < state.selected_production_class_counts.size() &&
-        state.selected_production_class_counts[category] != 0;
+    // DAT_00864b9c is the aggregate "every selected mobile can produce" bit.
+    // Once a category page is open the original keeps it open even when that
+    // category currently has no available definitions, and still publishes
+    // its cancel button.  The per-category count is therefore not a gate.
+    return state.selected_production_category != 0 &&
+        state.all_selected_mobile_can_produce;
 }
 
 bool should_probe_selected_production_action(const UiOverlayState& state, u32 bit) {
@@ -1246,7 +1247,7 @@ bool should_probe_selected_production_action(const UiOverlayState& state, u32 bi
     if ((state.selected_unit_capability_mask & (1u << bit)) == 0) {
         return false;
     }
-    return bit != 0x13u || (state.selected_unit_command_flags & 0x800u) == 0;
+    return true;
 }
 
 std::size_t selected_production_gate_mask_index_for_failure(u32 failure_code) {
@@ -1790,7 +1791,10 @@ bool MatchesUiOverlayAvatarProducerQueueSlot(const UnitMovementUnit& unit,
 
 u32 ResolveUiOverlaySelectedUnitProgressValue(u32 command_state,
     u32 action_mode_gate, u32 action_mode, u32 animation_frame, u32 work_timer) {
-    const u32 command = command_state & 0xffu;
+    // FUN_004e1544 compares the complete command-state dword with each known
+    // progress state.  Scenario objects may carry flags in the high bytes;
+    // those values must fall through to the construction/action-mode branch.
+    const u32 command = command_state;
     if (command == 0x50u || command == 0x51u) {
         return animation_frame;
     }
@@ -2159,7 +2163,9 @@ bool DrawUiOverlaySmallUnitIconRecord(UiOverlayState& state,
     if (!record_visible(state, record)) {
         return false;
     }
-    UiOverlayDrawRecord adjusted = selected_adjusted_record(state, record, true);
+    // FUN_004e0f94 compares only the dispatch item id.  The record aux dword
+    // is the source-unit offset and is not part of the pressed-state test.
+    UiOverlayDrawRecord adjusted = selected_adjusted_record(state, record, false);
     adjusted.width = adjusted.height = 0x26;
     const bool disabled = (adjusted.flags & kUiOverlayFlagDisabled) != 0;
     return draw_record_command_icon_blit(state, adjusted,
@@ -2224,7 +2230,9 @@ bool DrawUiOverlayEquipmentIconRecord(UiOverlayState& state,
     if (!record_visible(state, record)) {
         return false;
     }
-    UiOverlayDrawRecord adjusted = record;
+    UiOverlayDrawRecord adjusted = record.item_id >= 0x24au
+        ? selected_adjusted_record(state, record, false)
+        : record;
     adjusted.width = adjusted.height = 0x26;
     if (adjusted.item_id >= 0x24au) {
         // FUN_004e22d5 subtracts 0x24a and FUN_004e66c7 resolves the
@@ -2382,7 +2390,7 @@ void NoOpUiOverlayDetailHandler(UiOverlayState&) {
 }
 
 std::string stat_delta_text(u32 value, u32 base) {
-    if (base == 0 || value == base) {
+    if (value == base) {
         return {};
     }
     if (value > base) {
@@ -3253,10 +3261,16 @@ void BuildSelectedUnitCommandPanel(UiOverlayState& state) {
             state, 0x1a6, state.selected_unit_id, 0);
     }
     else if (state.selected_unit_count > 1) {
-        for (u32 unit_id : state.selected_unit_ids) {
-            if (find_unit_by_id(state, unit_id) != nullptr) {
-                QueueUiOverlaySideSlotRecord(state, 0x1a8, unit_id, 0);
+        // FUN_004e5292 walks the active list and tests its selection bit.
+        // minimap_units mirrors that unique list order, while selected_unit_ids
+        // deliberately retains duplicate script references for the count gate.
+        for (const UiOverlayMinimapUnit& unit : state.minimap_units) {
+            if (std::find(state.selected_unit_ids.begin(),
+                    state.selected_unit_ids.end(), unit.unit_id) ==
+                state.selected_unit_ids.end()) {
+                continue;
             }
+            QueueUiOverlaySideSlotRecord(state, 0x1a8, unit.unit_id, 0);
         }
     }
     QueueSelectedUnitCurrentOrderButtons(state);
@@ -3296,9 +3310,13 @@ void BuildSelectedUnitCommandPanel(UiOverlayState& state) {
 
 u32 CountSelectedUnitsOfType(const UiOverlayState& state, u32 type_id) {
     u32 count = 0;
-    for (u32 unit_id : state.selected_unit_ids) {
-        const UiOverlayMinimapUnit* unit = find_unit_by_id(state, unit_id);
-        if (unit != nullptr && unit->type_id == type_id) {
+    for (const UiOverlayMinimapUnit& unit : state.minimap_units) {
+        if (std::find(state.selected_unit_ids.begin(),
+                state.selected_unit_ids.end(), unit.unit_id) ==
+            state.selected_unit_ids.end()) {
+            continue;
+        }
+        if (unit.type_id == type_id) {
             ++count;
         }
     }
@@ -3338,7 +3356,8 @@ u32 CheckGroupedMorphCommandDisabled(const UiOverlayState& state,
 
 void QueueGroupedSpecialUnitCommandIfPresent(UiOverlayState& state,
     u32 source_type, u32 command_type) {
-    if (CountSelectedUnitsOfType(state, source_type) < 2) {
+    if (source_type >= state.selected_grouped_mobile_type_counts.size() ||
+        state.selected_grouped_mobile_type_counts[source_type] < 2) {
         return;
     }
     QueueUiOverlayCommandRecordByItemId(state, 0xb5, command_type,
@@ -3354,9 +3373,9 @@ void QueueGroupedSpecialUnitCommands(UiOverlayState& state) {
     QueueGroupedSpecialUnitCommandIfPresent(state, 0x22, 0x23);
     QueueGroupedSpecialUnitCommandIfPresent(state, 0x25, 0x26);
     QueueGroupedSpecialUnitCommandIfPresent(state, 0x27, 0x2d);
-    if (CountSelectedUnitsOfType(state, 0x24) != 0 &&
-        CountSelectedUnitsOfType(state, 0x27) != 0 &&
-        CountSelectedUnitsOfType(state, 0x28) != 0) {
+    if (state.selected_grouped_mobile_type_counts[0x24] != 0 &&
+        state.selected_grouped_mobile_type_counts[0x27] != 0 &&
+        state.selected_grouped_mobile_type_counts[0x28] != 0) {
         QueueUiOverlayCommandRecordByItemId(state, 0xb5, 0x2b,
             CheckGroupedMorphCommandDisabled(
                 state, 0x2b, state.local_player_slot));
@@ -3444,21 +3463,57 @@ void QueueSelectedUnitCoreActionButtons(UiOverlayState& state) {
         QueueUiOverlayCommandRecordByItemId(state, 0xc5u, 0, 0);
     }
     QueueGroupedSpecialUnitCommands(state);
-    if ((state.selected_unit_command_flags & 0x800u) != 0) {
+    // 0x004e49c1..0x004e4a56 emits at most one d4..f3 record per selector
+    // using the four per-unit aggregate gate masks.  Raw +0x5c contributes
+    // the record aux bit independently of the +0xe8 candidate mask.
+    for (u32 action_id = 0; action_id < 32u; ++action_id) {
+        u32 flags = 0;
+        if (!production_action_gate_flags(state, action_id, flags)) {
+            continue;
+        }
+        QueueUiOverlayCommandRecordByItemId(state, 0xd4u + action_id,
+            (state.selected_unit_status_mask >> action_id) & 1u, flags);
+    }
+    // The original loop shifts DAT_00864b94 once for every selector, leaving
+    // it zero only when this ordinary core path is actually reached.
+    state.selected_production_status_latch = 0;
+    if ((state.selected_mobile_command_flags_or & 0x800u) != 0) {
         QueueUiOverlayCommandRecordByItemId(state, 0xf3u, 0, 0);
     }
     if ((mask & 0x400u) != 0) {
-        QueueUiOverlayCommandRecordByItemId(state, 0xb4u, 0, 0);
-        QueueUiOverlayCommandRecordByItemId(state, 0xceu, 0, 0);
+        QueueUiOverlayCommandRecordByItemId(
+            state, 0xb4u, 0, state.selected_transport_load_flags);
+        QueueUiOverlayCommandRecordByItemId(
+            state, 0xceu, 0, state.selected_transport_unload_flags);
+        // 0x004e4aa0..0x004e4af5 places every passenger of a single loaded
+        // transport after the first eight dynamic slots.  Its record aux is
+        // the passenger pool offset, which the existing 0x134..0x193 click
+        // dispatcher uses to publish that passenger's release command.
+        if (state.selected_mobile_unit_count == 1 &&
+            (state.selected_transport_unload_flags &
+                kUiOverlayFlagDisabled) == 0) {
+            state.command_slot_size = 0x26;
+            PadUiOverlayLargeCommandSlots(state);
+            for (const UiOverlayTransportPassenger& passenger :
+                    state.selected_transport_passengers) {
+                // 0x00401055 -> FUN_004e57d7 forces marker zero and then
+                // tail-calls the 0x26 dynamic-grid appender FUN_004e5919.
+                state.current_icon_marker = 0;
+                state.current_record_size = 0x26;
+                QueueUiOverlayDynamicIconRecord(state,
+                    passenger.type_id + 0x134u, passenger.unit_id, 0);
+            }
+        }
     }
 }
 
 void QueueSingleSelectedUnitHeldItemSlots(UiOverlayState& state) {
-    // FUN_004e4150 publishes these seven fixed records only for a single
-    // mobile-unit selection.  ECX is the selected unit's raw pool offset for
+    // FUN_004e4150 publishes these seven fixed records whenever its physical
+    // eligible count is below two (including the zero-eligible script edge).
+    // ECX is the primary selected unit's raw pool offset for
     // every record; the draw handlers then read the live +0x2c amount and the
     // six +0x30..+0x44 equipment fields from the selected-unit snapshot.
-    if (state.selected_unit_count != 1) {
+    if (state.selected_mobile_unit_count >= 2) {
         return;
     }
     if (state.selected_unit_slot_value != 0) {
@@ -3475,6 +3530,16 @@ void QueueSingleSelectedUnitHeldItemSlots(UiOverlayState& state) {
     }
 }
 
+void QueueMultiSelectedUnitHeldItemAggregate(UiOverlayState& state) {
+    // 0x004e4af7..0x004e4b1f publishes item 0xcd with the sum of raw mobile
+    // +0x24/action-mode values when at least two eligible mobiles are selected.
+    if (state.selected_mobile_unit_count > 1 &&
+        state.selected_mobile_action_mode_sum != 0) {
+        QueueUiOverlayCommandRecordByItemId(
+            state, 0xcdu, state.selected_mobile_action_mode_sum, 0);
+    }
+}
+
 void BuildMultiSelectedUnitCommandPanel(UiOverlayState& state) {
     state.command_slot_size = 0x26;
     // FUN_004e4150 restores DAT_00867684 after the 0x1a6 details record has
@@ -3486,13 +3551,28 @@ void BuildMultiSelectedUnitCommandPanel(UiOverlayState& state) {
             state, selected_production_category_index(state));
         return;
     }
+    // The active production-category page has priority over both special
+    // cancellation states (0x004e45c3..0x004e45d3).  Only after that page is
+    // ruled out does FUN_004e4150 expose one of these large buttons.
+    if (state.all_selected_mobile_command_state_60) {
+        state.command_slot_size = 0x32;
+        AppendUiOverlayCommandSlot(state, 0xc6u, 5, 0);
+        return;
+    }
+    if (state.selected_mobile_unit_count == 1 &&
+        (state.selected_unit_command_state & 0x00ffffffu) == 0x5bu) {
+        state.command_slot_size = 0x32;
+        AppendUiOverlayCommandSlot(state, 0xc6u, 6, 0);
+        return;
+    }
     QueueSelectedUnitCoreActionButtons(state);
     QueueSingleSelectedUnitHeldItemSlots(state);
+    QueueMultiSelectedUnitHeldItemAggregate(state);
     QueueAvailableProductionClassButtons(state);
 }
 
 void QueueAvailableProductionClassButtons(UiOverlayState& state) {
-    if ((state.selected_unit_command_bit_mask & 0x40u) == 0) {
+    if (!state.all_selected_mobile_can_produce) {
         return;
     }
     PadUiOverlayLargeCommandSlots(state);
@@ -3616,17 +3696,18 @@ void QueueSelectedUnitCurrentOrderButtons(UiOverlayState& state) {
 }
 
 void CollectSelectedUnitProductionActionMasks(UiOverlayState& state) {
-    state.selected_unit_capability_mask = state.selected_unit_command_bit_mask;
-    state.selected_unit_status_mask = 0;
+    // FUN_004e54db uses mutable raw +0xe8 (plus attachment overrides) for
+    // d4..f3 candidates.  Raw +0x58 is the unrelated AA/AF/core-action mask.
+    state.selected_unit_capability_mask =
+        state.selected_mobile_production_action_mask;
+    state.selected_production_status_latch |=
+        state.selected_mobile_runtime_command_mask;
+    state.selected_unit_status_mask = state.selected_production_status_latch;
     state.selected_production_gate_masks = {};
     state.selected_production_class_counts = {};
     for (const UiOverlayCommandOption& option : state.command_options) {
         if (!option.enabled || is_indexed_queue_command_item(option.item_id)) {
             continue;
-        }
-        if (option.item_id >= 0xf4 && option.item_id <= 0x133) {
-            const u32 bit = (option.item_id - 0xf4) & 0x1f;
-            state.selected_unit_status_mask |= 1u << bit;
         }
         if (option.aux < state.selected_production_class_counts.size()) {
             ++state.selected_production_class_counts[option.aux];
@@ -3649,6 +3730,9 @@ void CollectSelectedUnitProductionActionMasks(UiOverlayState& state) {
         if (state.callbacks.check_selected_production_action_gate(
                 state, bit, failure_code)) {
             state.selected_production_gate_masks[0] |= mask;
+            continue;
+        }
+        if (failure_code == kProductionGateNoContribution) {
             continue;
         }
         state.selected_production_gate_masks[
@@ -3800,11 +3884,15 @@ void QueueObjectDefinitionDynamicIconOrHotRegion(UiOverlayState& state, u32 item
 
 void QueueProductionDefinitionCommandSlot(UiOverlayState& state, u32 item_id,
     u32 aux, u32 flags) {
+    (void)aux;
     const UiOverlayCommandOption* option = find_command_option(state, item_id);
     const u32 icon_marker = option != nullptr ?
         option->icon_marker :
         vector_value_or_zero(state.unit_definition_icon_markers, item_id);
-    AppendUiOverlayCommandSlot(state, item_id, aux, flags, icon_marker);
+    // FUN_004e5731 resets ECX before tail-calling the record appender.  The
+    // production category selects which icons are enumerated but is never
+    // retained in the published record's aux dword.
+    AppendUiOverlayCommandSlot(state, item_id, 0, flags, icon_marker);
 }
 
 void AppendUiOverlayCommandSlot(UiOverlayState& state, u32 item_id, u32 aux,
