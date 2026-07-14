@@ -15456,10 +15456,6 @@ void sync_default_gameplay_visibility_and_render_inputs(u32 frame_counter) {
 }
 
 bool default_world_tile_currently_visible(i32 world_x, i32 world_y) {
-    if (g_runtime.gameplay_startup_state.fog_reveal_disabled) {
-        return true;
-    }
-
     const GameplayVisibilityGrid& grid = g_runtime.gameplay_visibility_grid;
     if (grid.width == 0 || grid.height == 0 || grid.current.empty()) {
         return true;
@@ -15475,13 +15471,16 @@ bool default_world_tile_currently_visible(i32 world_x, i32 world_y) {
     }
     const std::size_t index =
         static_cast<std::size_t>(tile_y) * grid.width + tile_x;
-    // FUN_004e284a requires bit 28 (explored) and, while fog is active,
-    // bit 27 (current/full visibility) before drawing a mobile-unit marker.
-    // This helper feeds both minimap markers and the shared selection scan, so
-    // accepting bit 28 alone leaked/selectable enemy units through stale fog.
-    return index < grid.current.size() &&
-        (grid.current[index] & kGameplayVisibilityLocalMask) ==
-            kGameplayVisibilityLocalMask;
+    if (index >= grid.current.size()) {
+        return false;
+    }
+    // FUN_004e284a/FUN_004e96ae always require bit 28 (explored/ever visible).
+    // DAT_007334c0 == 0 only bypasses their additional bit-27 (current/full
+    // visibility) gate; it does not expose units on unexplored map tiles.
+    const u32 flags = grid.current[index];
+    return (flags & kGameplayVisibilityVisible) != 0 &&
+        (g_runtime.gameplay_startup_state.fog_reveal_disabled ||
+            (flags & kGameplayVisibilityRevealed) != 0);
 }
 
 u32 default_owner_ai_route_object_visibility_mask(i32 world_x, i32 world_y) {
@@ -16701,7 +16700,12 @@ void sync_default_gameplay_input_action_units(
             }
         }
         action_unit.active = unit->active;
-        action_unit.visible = true;
+        const auto overlay_unit = std::find_if(overlay.minimap_units.begin(),
+            overlay.minimap_units.end(), [unit](const UiOverlayMinimapUnit& value) {
+                return value.unit_id == unit->id;
+            });
+        action_unit.visible = overlay_unit != overlay.minimap_units.end() &&
+            UiOverlayUnitVisibleToLocalPlayer(*overlay_unit);
         input.units.push_back(action_unit);
     }
 
