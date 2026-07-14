@@ -10725,8 +10725,11 @@ void apply_owner_production_generated_demands(
             input.faction_resource_budget_unit_types[faction];
         const UnitMovementDefinition* definition =
             lookup_owner_production_definition(input, resource_unit_type);
+        // HandleOwnerProductionDemandAndBuildPlan (0x00443d10) divides the
+        // capped population budget by definition +0x184.  That field is the
+        // population cost, not the primary resource cost at +0x190.
         const u32 unit_cost = definition != nullptr ?
-            std::max<u32>(definition->production_resource_cost, 1) : 1;
+            std::max<u32>(definition->production_population_cost, 1) : 1;
         const u32 resource_demand = CalculateOwnerResourceBudgetUnitDemand(
             input.resource_budget_base, input.resource_budget_percent,
             input.resource_budget_cap_base, unit_cost);
