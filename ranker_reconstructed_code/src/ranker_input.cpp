@@ -47,6 +47,7 @@ void update_mouse_position(u32 lparam) {
     g_input_state.mouse_dy = static_cast<i32>(g_input_state.mouse_y) - y;
     g_input_state.mouse_x = static_cast<u32>(x);
     g_input_state.mouse_y = static_cast<u32>(y);
+    g_input_state.pointer_motion_seen = true;
 }
 
 void refresh_modifier_state() {
@@ -77,7 +78,6 @@ bool handle_mouse_button(u32 message, u32 code, u32 wparam, u32 lparam, u32 butt
 
 void reset_input_state_only() {
     g_input_state.mouse_button_mask = 0;
-    g_input_state.pointer_motion_seen = false;
     g_input_state.left_button_down_seen = false;
     g_input_state.left_button_up_seen = false;
     g_input_state.right_button_down_seen = false;
@@ -214,14 +214,9 @@ bool HandlePointerMotion(u32 lparam) {
 #endif
     g_input_state.mouse_x = static_cast<u32>(x);
     g_input_state.mouse_y = static_cast<u32>(y);
-#ifdef _WIN32
-    const bool cursor_visible = cursor.visible;
-    SetGameCursorPointerPosition(x, y);
-    if (cursor_visible) {
-        g_input_state.pointer_motion_seen = true;
-    }
-#else
     g_input_state.pointer_motion_seen = true;
+#ifdef _WIN32
+    SetGameCursorPointerPosition(x, y);
 #endif
     return true;
 }
