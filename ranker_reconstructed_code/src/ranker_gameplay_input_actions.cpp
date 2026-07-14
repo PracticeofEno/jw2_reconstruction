@@ -124,9 +124,11 @@ bool point_in_unit_action_bounds(
 }
 
 bool unit_can_block_input_action(const GameplayActionUnitState& unit) {
-    return unit.active && unit.visible && unit.runtime_state != 4 &&
-        (unit.runtime_flags & 0x80u) == 0 &&
-        (unit.command_state & kUnitCommandDead) == 0;
+    // FUN_004e96ae walks the active list and applies only the raw hidden,
+    // special-visibility, and fog gates.  A unit whose death command bit was
+    // set during this frame remains targetable until it actually migrates to
+    // the lifecycle list.
+    return unit.active && unit.visible && (unit.runtime_flags & 0x80u) == 0;
 }
 
 void record_validation_hit(GameplayInputActionState& state,
