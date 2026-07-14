@@ -284,15 +284,29 @@ u32 effect_growth_countdown(const UnitMovementUnit& target) {
 }
 
 void append_effect_event(UnitEffectRuntimeState& state, UnitEffectEventKind kind,
-    const UnitEffectRuntime& effect, u32 target_id = 0, u32 value = 0) {
+    const UnitEffectRuntime& effect, u32 target_id = 0, u32 value = 0,
+    UnitEffectSoundSpatialKind sound_spatial =
+        UnitEffectSoundSpatialKind::world_point,
+    const UnitMovementUnit* sound_spatial_anchor = nullptr) {
     UnitEffectEvent event{};
     event.kind = kind;
+    event.sound_spatial = sound_spatial;
     event.effect_id = effect.effect_id;
     event.unit_id = effect.source_unit_id;
     event.target_id = target_id;
     event.value = value;
     event.x = effect.x;
     event.y = effect.y;
+    if (sound_spatial != UnitEffectSoundSpatialKind::world_point) {
+        event.sound_spatial_position_valid = sound_spatial_anchor != nullptr;
+        if (sound_spatial_anchor != nullptr) {
+            // The original wrappers consume the raw unit pointer immediately.
+            // Snapshot that call-time tile so later pool/list mutation cannot
+            // change or suppress an already-published sound event.
+            event.x = sound_spatial_anchor->x;
+            event.y = sound_spatial_anchor->y;
+        }
+    }
     state.events.push_back(event);
 }
 
@@ -2023,8 +2037,13 @@ void QueueUnitEffectStartSoundIfAny(UnitEffectRuntimeState& state,
     const UnitEffectDefinition* definition =
         find_effect_definition(state, effect.effect_id);
     if (definition != nullptr && definition->start_sound_slot != 0xffffffffu) {
+        // FUN_004ed1d0 is the separate start-sound path.  It spatializes from
+        // the caller's current ESI unit; it must not inherit FUN_004ef2c6's
+        // effect-0x62 world-point exception.
         append_effect_event(state, UnitEffectEventKind::frame_sound, effect,
-            effect.target_unit_id, definition->start_sound_slot);
+            effect.target_unit_id, definition->start_sound_slot,
+            UnitEffectSoundSpatialKind::source_unit_current_tile,
+            find_effect_unit(state, effect.source_unit_id));
     }
 }
 
@@ -3561,14 +3580,29 @@ void PlayUnitEffectFrameSound(UnitEffectRuntimeState& state, UnitEffectRuntime& 
     }
     for (const auto& frame_sound : definition->frame_sound_slots) {
         if (frame_sound.first == effect.frame) {
+            // FUN_004ef2c6 reads raw +0x1c (the target/later-linked alias) for
+            // every effect except 0x62.  Only 0x62 spatializes from raw
+            // +0x20/+0x24, so retain both the alias identity and point.
             append_effect_event(state, UnitEffectEventKind::frame_sound, effect,
-                effect.target_unit_id, frame_sound.second);
+                effect.linked_unit_id, frame_sound.second,
+                effect.effect_id == 0x62
+                    ? UnitEffectSoundSpatialKind::world_point
+                    : UnitEffectSoundSpatialKind::linked_unit_current_tile,
+                effect.effect_id == 0x62
+                    ? nullptr
+                    : find_effect_unit(state, effect.linked_unit_id));
             return;
         }
     }
     if (frame_in_list(definition->sound_frames, effect.frame)) {
         append_effect_event(state, UnitEffectEventKind::frame_sound, effect,
-            effect.target_unit_id, effect.frame);
+            effect.linked_unit_id, effect.frame,
+            effect.effect_id == 0x62
+                ? UnitEffectSoundSpatialKind::world_point
+                : UnitEffectSoundSpatialKind::linked_unit_current_tile,
+            effect.effect_id == 0x62
+                ? nullptr
+                : find_effect_unit(state, effect.linked_unit_id));
     }
 }
 
@@ -3623,6 +3657,8 @@ void TickUnitEffectAreaStunFrames(UnitEffectRuntimeState& state, UnitEffectRunti
             if (definition->start_sound_slot != 0xffffffffu) {
                 UnitEffectEvent event{};
                 event.kind = UnitEffectEventKind::frame_sound;
+                event.sound_spatial =
+                    UnitEffectSoundSpatialKind::linked_unit_current_tile;
                 event.effect_id = effect.effect_id;
                 event.unit_id = effect.source_unit_id;
                 event.target_id = unit.id;

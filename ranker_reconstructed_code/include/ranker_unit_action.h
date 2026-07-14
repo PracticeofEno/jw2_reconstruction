@@ -129,6 +129,12 @@ enum class UnitEffectEventKind : u32 {
     finished = 5,
 };
 
+enum class UnitEffectSoundSpatialKind : u32 {
+    world_point = 0,
+    source_unit_current_tile = 1,
+    linked_unit_current_tile = 2,
+};
+
 struct UnitEffectDefinition {
     u32 id = 0;
     u32 startup_ticks = 0;
@@ -221,6 +227,9 @@ struct UnitEffectRuntime {
 
 struct UnitEffectEvent {
     UnitEffectEventKind kind = UnitEffectEventKind::started;
+    UnitEffectSoundSpatialKind sound_spatial =
+        UnitEffectSoundSpatialKind::world_point;
+    bool sound_spatial_position_valid = true;
     u32 effect_id = 0;
     u32 unit_id = 0;
     u32 target_id = 0;

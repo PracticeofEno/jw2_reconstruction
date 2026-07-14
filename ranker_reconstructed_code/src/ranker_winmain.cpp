@@ -15831,7 +15831,18 @@ void drain_default_unit_effect_sound_events(const UnitEffectRuntimeState& effect
         if (event.kind != UnitEffectEventKind::frame_sound) {
             continue;
         }
-        HandleVisibleWorldPointGameplaySoundQueued(g_runtime.gameplay_sound,
+        if (!event.sound_spatial_position_valid) {
+            continue;
+        }
+        if (event.sound_spatial == UnitEffectSoundSpatialKind::world_point) {
+            HandleVisibleWorldPointGameplaySoundQueued(g_runtime.gameplay_sound,
+                event.value, event.x, event.y, 0, 0);
+            continue;
+        }
+        // Unit-tile positions were captured at the original call site.  Do
+        // not look the ID up here: the target may already have moved lists or
+        // the effect slot may have been released/reused before this drain.
+        HandleVisibleCurrentTileGameplaySoundQueued(g_runtime.gameplay_sound,
             event.value, event.x, event.y, 0, 0);
     }
 }
