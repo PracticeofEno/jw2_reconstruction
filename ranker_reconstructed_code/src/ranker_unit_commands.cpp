@@ -4082,6 +4082,11 @@ void StartUnitLegacySpawnPlacementCommand(UnitCommandContext& context,
             unit.command_state = kUnitStateLegacySpawnPlacementApproach;
         }
         else {
+            // FUN_004c9e8f routes a path helper that rewrites either centered
+            // placement coordinate through 0x004c9f1b before popping the
+            // command.  Local owners receive DAT_011c3120 (row 98) and the
+            // queued failure cue in slot two on that shared tail.
+            notify_spawn_failure(context, unit);
             PopDeferredUnitCommandOrReturnIdle(context, unit);
         }
         return;
@@ -4179,6 +4184,9 @@ void HandleUnitLegacySpawnPlacementApproach(UnitCommandContext& context,
         return;
     }
     if (!moved) {
+        // FUN_004ca105's zero movement result reaches the same local row-98
+        // plus queued-slot-two failure tail before removing state 0x25.
+        notify_spawn_failure(context, unit);
         PopDeferredUnitCommandOrReturnIdle(context, unit);
     }
 }
