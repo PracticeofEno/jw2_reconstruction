@@ -3118,9 +3118,15 @@ void ConfigureGameplayUiOverlayLayout(UiOverlayState& state) {
                 static_cast<i32>(state.screen_width)));
     }
     if (state.camera_max_y == 0 && state.map_height_tiles != 0) {
+        // FUN_004e2bb7 writes DAT_0086359c from the map height minus the
+        // interface-theme table at DAT_008635a0, not minus the physical
+        // display height.  The lower HUD remains outside the scrollable world
+        // viewport at every display-layout bucket.
+        constexpr std::array<i32, 4> kCameraEffectiveHeight{
+            {496, 487, 487, 480}};
         state.camera_max_y = static_cast<i32>(
             std::max<i32>(0, static_cast<i32>(state.map_height_tiles * 0x20) -
-                static_cast<i32>(state.screen_height)));
+                kCameraEffectiveHeight[theme]));
     }
     if (state.resource_counter_x == 0) {
         state.resource_counter_x = static_cast<i32>(state.screen_width) - 0x8c;
