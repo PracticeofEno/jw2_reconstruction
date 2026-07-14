@@ -4921,8 +4921,10 @@ void StartReservedTileWorkCommand(UnitCommandContext& context, UnitMovementUnit&
     unit.destination_x = unit.path_target_x;
     unit.destination_y = unit.path_target_y;
     unit.destination_aux_state = 0;
-    unit.anchor_x = unit.path_target_x;
-    unit.anchor_y = unit.path_target_y;
+    // StartReservedTileWorkCommand (0x004cb1b0) writes raw path target
+    // +0x6c/+0x70 and destination +0x78/+0x7c only.  Anchor +0xd0/+0xd4
+    // remains at the worker's current cell until a later command transition.
+    // Copying the berry point into the anchor forked AI workers at frame 1.
 
     const UnitArrivalCheck arrival = CheckUnitRangeDestinationStatus(movement(context), unit);
     if (arrival.direction_ready) {

@@ -338,7 +338,11 @@ void InitializeGameplaySessionPlayerSlotState(PlayerSlotRuntimeState& state,
 
 void SelectNearestHostilePlayerSlots(PlayerSlotRuntimeState& state) {
     for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
-        if (!slot_has_state(state, owner, PlayerSlotState::player_controlled)) {
+        // FUN_0043c5c0 scans all eight raw slot-state bytes.  This lookup is
+        // deliberately independent of active_slot_count: inactive tail slots
+        // still carry state 0x14 and must be excluded from the distance scan.
+        if (state.slot_states[owner] !=
+            static_cast<u8>(PlayerSlotState::player_controlled)) {
             continue;
         }
 
@@ -346,9 +350,10 @@ void SelectNearestHostilePlayerSlots(PlayerSlotRuntimeState& state) {
         u32 target_slot = 0;
         for (u32 candidate = 0; candidate < kPlayerSlotCount; ++candidate) {
             const bool related = (state.owner_relation_masks[owner] & slot_bit(candidate)) != 0;
+            const u8 candidate_state = state.slot_states[candidate];
             if (related ||
-                slot_has_state(state, candidate, PlayerSlotState::disabled) ||
-                slot_has_state(state, candidate, PlayerSlotState::observer)) {
+                candidate_state == static_cast<u8>(PlayerSlotState::disabled) ||
+                candidate_state == static_cast<u8>(PlayerSlotState::observer)) {
                 continue;
             }
 

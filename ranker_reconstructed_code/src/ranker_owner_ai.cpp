@@ -72,6 +72,8 @@ constexpr u32 kRouteRadius = 0x8fa0;
 constexpr u32 kPrimaryTargetPoint = 0x8fc0;
 constexpr u32 kPrimaryTargetRadius = 0x9000;
 constexpr u32 kPrimaryTargetFlags = 0x9020;
+constexpr u32 kNeutralRouteTargetPoint = 0x9040;
+constexpr u32 kNeutralRouteTargetOwnerStride = 0x20;
 constexpr u32 kPlacementRadius = 0x9140;
 constexpr u32 kPlacementRecord = 0x9160;
 constexpr u32 kPlacementRecordOwnerStride = 0x30;
@@ -175,10 +177,10 @@ void hydrate_owner_ai_runtime_from_snapshot(OwnerAiRuntimeState& state) {
             bytes, owner_dword(kSupportMode, owner_index));
         owner.support_budget = read_owner_ai_snapshot_u32(
             bytes, owner_dword(kSupportBudget, owner_index));
-        // The original value is the X half of an {x,y} point.  The current
-        // runtime exposes only the legacy scalar; preserve the Y half raw.
         owner.support_anchor = read_owner_ai_snapshot_i32(
             bytes, owner_point(kSupportAnchorPoint, owner_index));
+        owner.support_anchor_y = read_owner_ai_snapshot_i32(
+            bytes, owner_point(kSupportAnchorPoint, owner_index) + sizeof(i32));
         owner.secondary_budget = read_owner_ai_snapshot_u32(
             bytes, owner_dword(kSecondaryBudget, owner_index));
         owner.resource_budget_percent = read_owner_ai_snapshot_u32(
@@ -235,6 +237,12 @@ void hydrate_owner_ai_runtime_from_snapshot(OwnerAiRuntimeState& state) {
             bytes, owner_dword(kPrimaryTargetRadius, owner_index));
         owner.primary_target_flags = read_owner_ai_snapshot_u32(
             bytes, owner_dword(kPrimaryTargetFlags, owner_index));
+        owner.neutral_route_target_point.x = read_owner_ai_snapshot_i32(
+            bytes, kNeutralRouteTargetPoint +
+                owner_index * kNeutralRouteTargetOwnerStride);
+        owner.neutral_route_target_point.y = read_owner_ai_snapshot_i32(
+            bytes, kNeutralRouteTargetPoint +
+                owner_index * kNeutralRouteTargetOwnerStride + sizeof(i32));
         owner.placement_radius = read_owner_ai_snapshot_u32(
             bytes, owner_dword(kPlacementRadius, owner_index));
 
@@ -325,6 +333,9 @@ void overlay_owner_ai_runtime_on_snapshot(const OwnerAiRuntimeState& state,
             bytes, owner_dword(kSupportBudget, owner_index), owner.support_budget);
         write_owner_ai_snapshot_i32(bytes,
             owner_point(kSupportAnchorPoint, owner_index), owner.support_anchor);
+        write_owner_ai_snapshot_i32(bytes,
+            owner_point(kSupportAnchorPoint, owner_index) + sizeof(i32),
+            owner.support_anchor_y);
         write_owner_ai_snapshot_u32(bytes,
             owner_dword(kSecondaryBudget, owner_index), owner.secondary_budget);
         write_owner_ai_snapshot_u32(bytes,
@@ -390,6 +401,14 @@ void overlay_owner_ai_runtime_on_snapshot(const OwnerAiRuntimeState& state,
         write_owner_ai_snapshot_u32(bytes,
             owner_dword(kPrimaryTargetFlags, owner_index),
             owner.primary_target_flags);
+        write_owner_ai_snapshot_i32(bytes,
+            kNeutralRouteTargetPoint +
+                owner_index * kNeutralRouteTargetOwnerStride,
+            owner.neutral_route_target_point.x);
+        write_owner_ai_snapshot_i32(bytes,
+            kNeutralRouteTargetPoint +
+                owner_index * kNeutralRouteTargetOwnerStride + sizeof(i32),
+            owner.neutral_route_target_point.y);
         write_owner_ai_snapshot_u32(bytes,
             owner_dword(kPlacementRadius, owner_index), owner.placement_radius);
 
@@ -2478,6 +2497,21 @@ OwnerAiRoutePathProbeResult ProbeOwnerAiRoutePath(UnitMovementContext& movement,
 
     if (!result.reachable) {
         result.path_cost = 0xffffffffu;
+        return result;
+    }
+
+    // RunLegacyUnitPathfinder's direct-path flag is distinct from both
+    // reachability and target adjustment.  Preserve it explicitly instead
+    // of inferring it from next_path, whose straight-path output has legacy
+    // global semantics that differ from the probe's initialized value.
+    result.direct_path = CheckStraightUnitPathTiles(movement, probe,
+        result.start_tile, result.final_path_target_tile);
+    if (result.direct_path) {
+        // Legacy direct paths leave path_count at zero and publish the goal
+        // as next_path.  Route-helper scoring consumes that zero directly.
+        result.path_cost = 0;
+        result.next_path_point = result.final_path_target;
+        result.next_path_tile = result.final_path_target_tile;
         return result;
     }
 

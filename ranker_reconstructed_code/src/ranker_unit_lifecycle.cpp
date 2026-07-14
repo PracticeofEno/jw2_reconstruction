@@ -916,7 +916,12 @@ bool InitializePlacedUnitFromMapSlot(UnitLifecycleContext& context,
         }
     }
     else {
-        const bool placed = definition->movement_class == 3
+        // InitializePlacedUnitFromMapSlot (0x004cf258) selects the strict
+        // placement search from definition +0x14 (lifecycle_class), not the
+        // movement class.  Type 7 is lifecycle class 0 / movement class 3;
+        // using movement_class made the AI route-helper scratch unit take a
+        // different placement branch and conditionally consume extra RNG.
+        const bool placed = definition->lifecycle_class == 3
             ? FindStrictUnitPlacementPoint(context, unit, x, y)
             : FindMatchingTerrainUnitPlacementPoint(context, unit, x, y);
         if (!placed) {

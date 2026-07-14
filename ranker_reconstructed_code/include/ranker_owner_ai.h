@@ -66,6 +66,7 @@ struct OwnerAiRoutePathProbeResult {
     std::vector<UnitMovementPoint> path_tiles;
     u32 path_cost = 0;
     bool path_target_adjusted = false;
+    bool direct_path = false;
 };
 
 struct OwnerAiCounterUnitRule {
@@ -91,6 +92,7 @@ struct OwnerAiSlotRuntime {
     u32 support_mode = 0;
     u32 support_budget = 0;
     i32 support_anchor = -1;
+    i32 support_anchor_y = 0;
     u32 secondary_budget = 0;
     u32 resource_budget_percent = 0x7d;
     u32 secondary_mode = 0;
@@ -115,6 +117,7 @@ struct OwnerAiSlotRuntime {
     OwnerAiPoint primary_target_point{};
     u32 primary_target_radius = 0x14;
     u32 primary_target_flags = 0;
+    OwnerAiPoint neutral_route_target_point{};
     u32 placement_radius = 0x14;
     std::array<i32, kOwnerAiPlacementRecordDwordCount> placement_record{};
     u32 placement_target_radius = 0x14;

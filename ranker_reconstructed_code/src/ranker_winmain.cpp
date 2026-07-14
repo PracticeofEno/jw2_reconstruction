@@ -6381,6 +6381,7 @@ void reset_default_gameplay_startup_slots(GameplaySessionStartupState& startup) 
         kDefaultFactionSecondaryStartingUnitTypes[0];
     for (std::size_t slot = 1; slot < startup.owner_slots.size(); ++slot) {
         startup.owner_slots[slot].slot_state = static_cast<u8>(PlayerSlotState::disabled);
+        startup.owner_slots[slot].map_slot = static_cast<u32>(slot);
     }
 }
 
@@ -6393,8 +6394,13 @@ void mirror_startup_slots_to_player_runtime(
     for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
         const GameplayScenarioOwnerSlot& slot = startup.owner_slots[owner];
         players.slot_states[owner] = slot.slot_state;
-        players.owner_start_x[owner] = slot.start_x;
-        players.owner_start_y[owner] = slot.start_y;
+        // DAT_007253D4/D8 is indexed by the raw map-start slot.  The lobby's
+        // owner-to-map permutation is applied only when the owner's actual
+        // starting units are placed; AI target selection still reads this raw
+        // coordinate table directly by owner index.
+        const u32 map_slot = std::min<u32>(slot.map_slot, kPlayerSlotCount - 1);
+        players.owner_start_x[map_slot] = slot.start_x;
+        players.owner_start_y[map_slot] = slot.start_y;
     }
 }
 
@@ -7102,8 +7108,8 @@ bool apply_pending_link_lobby_start_parameters_to_gameplay_startup() {
         startup.owner_faction_ids[owner] = faction;
         startup.owner_tribe_ids[owner] = faction;
         players.slot_states[owner] = slot.slot_state;
-        players.owner_start_x[owner] = slot.start_x;
-        players.owner_start_y[owner] = slot.start_y;
+        players.owner_start_x[map_slot] = slot.start_x;
+        players.owner_start_y[map_slot] = slot.start_y;
 
         std::string display_name = link_lobby_startup_player_name(lobby, owner);
         if (!display_name.empty()) {
@@ -11969,8 +11975,21 @@ bool default_mode1_packet_set_unit_deferred_resource_command(void*,
         static_cast<i32>(arg1),
         arg2};
     if (production_order_resource) {
-        return CommitThenPushDeferredUnitCommand(*unit, command, 10,
-            default_mode1_packet_commit_production_order_before_push);
+        if (!default_mode1_packet_commit_production_order_before_push(
+                *unit, payload, nullptr)) {
+            return false;
+        }
+        const bool queued = PushDeferredUnitCommand(*unit, command, 10);
+        if (!queued &&
+            unit->owner_id == mode1_reliable_state().local_player_index) {
+            // FUN_004dd866 commits subtype-0x0c's debit/lock before its
+            // ten-slot queue check.  Overflow at 0x004dd97c..0x004dd996
+            // retains those mutations and displays platform row 57 without
+            // the command-failure sound used by resource rejections.
+            QueueGameplayHudMessage(g_runtime.gameplay_hud_text,
+                startup_platform_row(57, "Unit command buffer full"));
+        }
+        return queued;
     }
     if (!PushDeferredUnitCommand(*unit, command,
             default_mode1_packet_deferred_resource_queue_limit(
@@ -20876,9 +20895,11 @@ void activate_default_player_slots_from_active_units() {
             slot.slot_state = static_cast<u8>(PlayerSlotState::player_controlled);
             changed = true;
         }
-        if (players.owner_start_x[owner] == 0 && players.owner_start_y[owner] == 0) {
-            players.owner_start_x[owner] = first_x;
-            players.owner_start_y[owner] = first_y;
+        const u32 map_slot = std::min<u32>(slot.map_slot, kPlayerSlotCount - 1);
+        if (players.owner_start_x[map_slot] == 0 &&
+            players.owner_start_y[map_slot] == 0) {
+            players.owner_start_x[map_slot] = first_x;
+            players.owner_start_y[map_slot] = first_y;
             slot.start_x = first_x;
             slot.start_y = first_y;
             changed = true;
@@ -21157,8 +21178,17 @@ void refine_default_owner_strategic_target_path_window(
     }
 }
 
-u32 default_owner_ai_direction8_between_tiles(UnitMovementPoint source,
+u32 default_owner_ai_direction8_between_tiles(
+    const UnitMovementContext* movement, UnitMovementPoint source,
     UnitMovementPoint target) {
+    // PointDirectionLookupLowThunk (0x0042b680) uses JW2_07 record 1 to
+    // quantize by angle ratio.  A sign-only octant test incorrectly turns
+    // every non-axis-aligned vector into a diagonal.
+    if (movement != nullptr && movement->direction_lookup_8 != nullptr) {
+        return CalculatePointDirectionFromLookup(
+            source, target, *movement->direction_lookup_8);
+    }
+
     const i32 dx = target.x > source.x ? 1 : (target.x < source.x ? -1 : 0);
     const i32 dy = target.y > source.y ? 1 : (target.y < source.y ? -1 : 0);
     if (dx == 0 && dy < 0) {
@@ -21212,14 +21242,15 @@ UnitMovementPoint default_owner_ai_direction8_tile_delta(u32 direction) {
 }
 
 UnitMovementPoint default_owner_ai_directional_anchor_tile(
-    UnitMovementPoint source_tile, UnitMovementPoint target_tile,
-    u32 forward_steps) {
+    const UnitMovementContext* movement, UnitMovementPoint source_tile,
+    UnitMovementPoint target_tile, u32 forward_steps) {
     if (source_tile.x == target_tile.x && source_tile.y == target_tile.y) {
         return source_tile;
     }
 
     const UnitMovementPoint delta = default_owner_ai_direction8_tile_delta(
-        default_owner_ai_direction8_between_tiles(source_tile, target_tile));
+        default_owner_ai_direction8_between_tiles(
+            movement, source_tile, target_tile));
     const i32 steps = static_cast<i32>(forward_steps);
     return {
         source_tile.x + delta.x * steps,
@@ -21232,12 +21263,15 @@ UnitMovementPoint default_owner_ai_select_production_placement_target_point(
     UnitMovementPoint fallback_target_tile) {
     constexpr u32 kOriginalLongPathThreshold = 0x23;
     const bool direct_path =
-        path_probe.reachable && !path_probe.path_target_adjusted &&
-        path_probe.next_path_point.x == path_probe.start.x &&
-        path_probe.next_path_point.y == path_probe.start.y;
-    if (!direct_path && !path_probe.path_tiles.empty() &&
-        path_probe.path_cost > kOriginalLongPathThreshold) {
-        return path_probe.path_tiles.back();
+        path_probe.reachable && path_probe.direct_path;
+    // The original long-path read is 35 entries before the reverse-path
+    // buffer base plus path_count.  Translating reverse [goal-1..start] to
+    // reconstructed forward [start..goal] makes that fixed forward index 34.
+    constexpr std::size_t kOriginalLongPathForwardIndex =
+        kOriginalLongPathThreshold - 1;
+    if (!direct_path &&
+        path_probe.path_tiles.size() > kOriginalLongPathThreshold + 1u) {
+        return path_probe.path_tiles[kOriginalLongPathForwardIndex];
     }
     if (default_owner_ai_point_valid(path_probe.final_path_target_tile)) {
         return path_probe.final_path_target_tile;
@@ -21256,6 +21290,12 @@ struct DefaultOwnerAiPathProbeContext {
     u32 owner_id = 0;
 };
 
+struct DefaultOwnerAiTemporaryPathProbeLease {
+    UnitLifecycleContext* lifecycle = nullptr;
+    UnitMovementUnit* unit = nullptr;
+    const UnitMovementDefinition* cleanup_definition = nullptr;
+};
+
 const UnitMovementDefinition* find_default_owner_ai_lifecycle_definition(
     UnitLifecycleContext& lifecycle, u32 unit_type) {
     return lifecycle.callbacks.find_definition != nullptr
@@ -21266,29 +21306,42 @@ const UnitMovementDefinition* find_default_owner_ai_lifecycle_definition(
 OwnerAiRoutePathProbeResult default_owner_ai_path_probe_fallback(
     UnitMovementContext* movement, const UnitMovementUnit* fallback_unit,
     UnitMovementPoint start, UnitMovementPoint destination) {
-    if (movement == nullptr) {
-        OwnerAiRoutePathProbeResult result;
-        result.attempted = true;
-        result.start = start;
-        result.destination = destination;
-        result.start_tile = {start.x / 32, start.y / 32};
-        result.destination_tile = {destination.x / 32, destination.y / 32};
-        result.path_cost = 0xffffffffu;
-        return result;
+    (void)fallback_unit;
+    if (movement != nullptr) {
+        // The acquire-failure branch of the original route helper reuses the
+        // first active lifecycle-class-0 unit, not the helper definition that
+        // the caller was evaluating.
+        for (const UnitMovementUnit* unit : movement->active_units) {
+            if (unit != nullptr && unit->definition.lifecycle_class == 0) {
+                return ProbeOwnerAiRoutePath(
+                    *movement, unit, start, destination);
+            }
+        }
     }
-    return ProbeOwnerAiRoutePath(*movement, fallback_unit, start, destination);
+
+    OwnerAiRoutePathProbeResult result;
+    result.attempted = true;
+    result.start = start;
+    result.destination = destination;
+    result.start_tile = {start.x / 32, start.y / 32};
+    result.destination_tile = {destination.x / 32, destination.y / 32};
+    result.final_path_target = destination;
+    result.final_path_target_tile = result.destination_tile;
+    result.next_path_point = start;
+    result.next_path_tile = result.start_tile;
+    result.path_cost = 0xffffffffu;
+    return result;
 }
 
-OwnerAiRoutePathProbeResult default_owner_ai_temporary_unit_path_probe(
-    UnitLifecycleContext* lifecycle, u32 owner_id,
-    const UnitMovementUnit* fallback_unit, UnitMovementPoint start,
-    UnitMovementPoint destination) {
+bool default_owner_ai_acquire_temporary_path_probe(
+    UnitLifecycleContext* lifecycle, UnitMovementPoint initialization_point,
+    DefaultOwnerAiTemporaryPathProbeLease& lease) {
+    lease = {};
     UnitMovementContext* movement =
         lifecycle != nullptr ? lifecycle->movement : nullptr;
     if (lifecycle == nullptr || movement == nullptr ||
-        owner_id >= lifecycle->owner_unit_score.size()) {
-        return default_owner_ai_path_probe_fallback(movement, fallback_unit,
-            start, destination);
+        lifecycle->owner_unit_score.empty()) {
+        return false;
     }
 
     const UnitMovementDefinition* cleanup_definition =
@@ -21299,14 +21352,12 @@ OwnerAiRoutePathProbeResult default_owner_ai_temporary_unit_path_probe(
             kDefaultOwnerAiTemporaryPathProbeMovementType);
     if (cleanup_definition == nullptr || movement_definition == nullptr ||
         movement->free_units.empty()) {
-        return default_owner_ai_path_probe_fallback(movement, fallback_unit,
-            start, destination);
+        return false;
     }
 
     UnitMovementUnit* unit = take_default_free_unit_head(*movement);
     if (unit == nullptr) {
-        return default_owner_ai_path_probe_fallback(movement, fallback_unit,
-            start, destination);
+        return false;
     }
 
     const u32 unit_id = unit->id != 0 ? unit->id :
@@ -21315,12 +21366,16 @@ OwnerAiRoutePathProbeResult default_owner_ai_temporary_unit_path_probe(
         unit->runtime_slot_index != kInvalidUnitRuntimeSlotIndex ?
             unit->runtime_slot_index : unit_id;
     UnitMovementUnit initialized{};
+    // Both original scratch probes create type 7 for owner 0.  Their spawn
+    // point is independent of the subsequent path start: the anchor probe
+    // uses the map center, while the route-helper probe uses world (10,10).
+    constexpr u32 kOriginalTemporaryProbeOwner = 0;
     if (!InitializePlacedUnitFromMapSlot(*lifecycle, initialized,
-            kDefaultOwnerAiTemporaryPathProbePlacementType, owner_id,
-            start.x, start.y)) {
+            kDefaultOwnerAiTemporaryPathProbePlacementType,
+            kOriginalTemporaryProbeOwner,
+            initialization_point.x, initialization_point.y)) {
         return_default_free_unit_head(*movement, unit);
-        return default_owner_ai_path_probe_fallback(movement, fallback_unit,
-            start, destination);
+        return false;
     }
 
     *unit = initialized;
@@ -21333,16 +21388,49 @@ OwnerAiRoutePathProbeResult default_owner_ai_temporary_unit_path_probe(
     unit->definition = *movement_definition;
     unit->type_flags = movement_definition->type_flags;
     refresh_default_unit_definition_runtime_fields(*unit);
-    OwnerAiRoutePathProbeResult result =
-        ProbeOwnerAiRoutePath(*movement, *unit, start, destination);
+    lease.lifecycle = lifecycle;
+    lease.unit = unit;
+    lease.cleanup_definition = cleanup_definition;
+    return true;
+}
 
-    unit->type_id = kDefaultOwnerAiTemporaryPathProbePlacementType;
-    unit->definition = *cleanup_definition;
-    unit->type_flags = cleanup_definition->type_flags;
-    refresh_default_unit_definition_runtime_fields(*unit);
-    lifecycle->owner_unit_score[owner_id] -=
-        cleanup_definition->production_resource_cost;
-    HandleUnitRemovalAccounting(*lifecycle, *unit);
+void default_owner_ai_release_temporary_path_probe(
+    DefaultOwnerAiTemporaryPathProbeLease& lease) {
+    if (lease.lifecycle == nullptr || lease.unit == nullptr ||
+        lease.cleanup_definition == nullptr ||
+        lease.lifecycle->owner_unit_score.empty()) {
+        lease = {};
+        return;
+    }
+
+    constexpr u32 kOriginalTemporaryProbeOwner = 0;
+    lease.unit->type_id = kDefaultOwnerAiTemporaryPathProbePlacementType;
+    lease.unit->definition = *lease.cleanup_definition;
+    lease.unit->type_flags = lease.cleanup_definition->type_flags;
+    refresh_default_unit_definition_runtime_fields(*lease.unit);
+    lease.lifecycle->owner_unit_score[kOriginalTemporaryProbeOwner] -=
+        lease.cleanup_definition->production_resource_cost;
+    HandleUnitRemovalAccounting(*lease.lifecycle, *lease.unit);
+    lease = {};
+}
+
+OwnerAiRoutePathProbeResult default_owner_ai_temporary_unit_path_probe(
+    UnitLifecycleContext* lifecycle, u32 owner_id,
+    const UnitMovementUnit* fallback_unit, UnitMovementPoint start,
+    UnitMovementPoint destination, UnitMovementPoint initialization_point) {
+    (void)owner_id;
+    UnitMovementContext* movement =
+        lifecycle != nullptr ? lifecycle->movement : nullptr;
+    DefaultOwnerAiTemporaryPathProbeLease lease;
+    if (!default_owner_ai_acquire_temporary_path_probe(
+            lifecycle, initialization_point, lease)) {
+        return default_owner_ai_path_probe_fallback(movement, fallback_unit,
+            start, destination);
+    }
+
+    OwnerAiRoutePathProbeResult result =
+        ProbeOwnerAiRoutePath(*movement, *lease.unit, start, destination);
+    default_owner_ai_release_temporary_path_probe(lease);
     return result;
 }
 
@@ -21535,61 +21623,132 @@ void default_owner_ai_refresh_placement_anchors(
     }
 
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    UnitMovementContext* movement = default_gameplay_movement_context();
     g_runtime.gameplay_owner_production_placement_anchor_valid[owner] = false;
     g_runtime.gameplay_owner_production_placement_target_points[owner] = {-1, -1};
-    sync_default_owner_strategic_target_from_ai(owner);
-    const OwnerStrategicTargetState& target =
-        g_runtime.gameplay_owner_strategic_targets[owner];
-    if (!target.has_strategic_point) {
+    if (movement == nullptr) {
         return;
     }
 
-    UnitMovementUnit* source = nullptr;
+    OwnerAiSlotRuntime& ai_owner = owner_ai.owners[owner];
+    UnitCommandContext& command_context = g_runtime.gameplay_unit_commands;
     OwnerTransportRouteState& route_state =
         g_runtime.gameplay_owner_transport_routes[owner];
-    source = default_owner_ai_last_route_target_unit(route_state);
-    if (source == nullptr) {
-        const u32 faction = owner_ai.owner_faction_ids[owner];
-        if (faction >= kDefaultOwnerAiPrimaryUnitTypes.size()) {
-            return;
+    // RefreshOwnerProductionPlacementAnchors calls the owner-8 neutral probe
+    // before selecting the hostile placement target.  A missing primary
+    // route leaves the prior flag untouched; a valid route with no candidate
+    // clears it while preserving the old point.
+    if (!route_state.targets.empty() && route_state.targets[0].unit != nullptr) {
+        const OwnerRouteTargetProbe neutral_probe =
+            FindNearestNeutralUnitToPrimaryRouteTarget(
+                command_context, route_state, kOwnerNeutralRouteProbeOwnerId);
+        ai_owner.primary_target_flags = neutral_probe.has_point ? 1u : 0u;
+        if (neutral_probe.has_point) {
+            ai_owner.neutral_route_target_point = {
+                neutral_probe.point.x, neutral_probe.point.y};
         }
-        source = default_owner_ai_find_anchor_source_unit(owner,
-            kDefaultOwnerAiPrimaryUnitTypes[faction], target.strategic_point);
     }
+
+    sync_default_owner_strategic_target_from_ai(owner);
+    OwnerStrategicTargetState& target =
+        g_runtime.gameplay_owner_strategic_targets[owner];
+    target.blocked_owner_mask = owner < command_context.owner_relation_masks.size()
+        ? command_context.owner_relation_masks[owner] : 0;
+    UnitMovementUnit* placement_target =
+        FindOwnerRouteOrBuildingTargetForCurrentTargetOwner(command_context,
+            target, default_owner_ai_preferred_route_target,
+            default_owner_ai_preferred_building_target);
+    const bool placement_target_is_preferred = placement_target != nullptr;
+    if (placement_target == nullptr) {
+        placement_target = FindOwnerFallbackTargetForCurrentTargetOwner(
+            command_context, target,
+            default_owner_ai_fallback_strategic_target);
+    }
+    if (placement_target == nullptr) {
+        return;
+    }
+
+    const u32 route_count = std::min<u32>(route_state.route_count,
+        static_cast<u32>(route_state.targets.size()));
+    UnitMovementUnit* source = default_owner_ai_last_route_target_unit(route_state);
     if (source == nullptr) {
         return;
     }
 
-    const UnitMovementPoint source_tile =
+    const UnitMovementPoint source_center_tile =
         default_owner_ai_unit_center_tile(*source);
+    const UnitMovementPoint source_center_world =
+        default_owner_ai_tile_to_world(source_center_tile);
+    const UnitMovementPoint target_world{
+        placement_target->x,
+        placement_target->y,
+    };
     const UnitMovementPoint target_tile =
-        default_owner_ai_world_to_tile(target.strategic_point);
-    const u32 anchor_distance =
-        g_runtime.gameplay_owner_ai_state.owners[owner].route_radius + 5;
+        default_owner_ai_world_to_tile(target_world);
+    const UnitMovementPoint map_center_tile{
+        static_cast<i32>(movement->map.width >> 1),
+        static_cast<i32>(movement->map.height >> 1),
+    };
+    const UnitMovementPoint map_center_world =
+        default_owner_ai_tile_to_world(map_center_tile);
+
+    ai_owner.support_target_owner = static_cast<i32>(route_count - 1);
+    ai_owner.support_mode += 5;
+    const u32 anchor_distance = ai_owner.support_mode;
+
+    // If the map-centre scratch unit cannot be created, the original takes
+    // its dedicated map-centre directional fallback.  A successfully
+    // created type-0 scratch unit remains alive for both pathfinder passes.
     UnitMovementPoint base_tile = default_owner_ai_directional_anchor_tile(
-        source_tile, target_tile, anchor_distance);
-    UnitMovementContext* movement = default_gameplay_movement_context();
-    if (movement != nullptr && default_movement_map_ready(movement->map)) {
-        const UnitMovementPoint start_world{source_tile.x * 32, source_tile.y * 32};
-        const OwnerAiRoutePathProbeResult path_probe =
-            default_owner_ai_temporary_unit_path_probe(lifecycle, owner,
-                source, start_world,
-                target.strategic_point);
-        if (path_probe.reachable && !path_probe.path_tiles.empty()) {
-            base_tile = path_probe.path_tiles.back();
-            for (const UnitMovementPoint& tile : path_probe.path_tiles) {
-                if (CalculateApproxUnitDistance(source_tile.x, source_tile.y,
-                        tile.x, tile.y) >= anchor_distance) {
+        movement, source_center_tile, map_center_tile, anchor_distance);
+    DefaultOwnerAiTemporaryPathProbeLease probe_lease;
+    std::vector<UnitMovementPoint> original_reverse_path;
+    const bool temporary_probe_ready =
+        default_owner_ai_acquire_temporary_path_probe(
+            lifecycle, map_center_world, probe_lease);
+    if (temporary_probe_ready) {
+        base_tile = default_owner_ai_directional_anchor_tile(
+            movement, source_center_tile, target_tile, anchor_distance);
+        const OwnerAiRoutePathProbeResult path_probe = ProbeOwnerAiRoutePath(
+            *movement, *probe_lease.unit, target_world, source_center_world);
+        if (path_probe.reachable && !path_probe.direct_path &&
+            path_probe.path_tiles.size() > 1) {
+            // The original path buffer is goal-predecessor -> ... -> start.
+            // The reconstructed path is start -> ... -> goal, so walk it in
+            // reverse and skip the goal to reproduce the original indexing.
+            original_reverse_path.reserve(path_probe.path_tiles.size() - 1);
+            auto reverse_tile = path_probe.path_tiles.rbegin();
+            ++reverse_tile;
+            for (; reverse_tile != path_probe.path_tiles.rend();
+                    ++reverse_tile) {
+                original_reverse_path.push_back(*reverse_tile);
+            }
+            bool selected = false;
+            for (const UnitMovementPoint& tile : original_reverse_path) {
+                if (CalculateApproxUnitDistance(source_center_tile.x,
+                        source_center_tile.y, tile.x, tile.y) >=
+                        anchor_distance) {
                     base_tile = tile;
+                    selected = true;
                     break;
                 }
             }
+            if (!selected) {
+                base_tile = path_probe.path_tiles.front();
+            }
+        }
+        else if (!path_probe.reachable) {
+            ai_owner.profile_state_flag = 1;
         }
     }
-    const u32 direction =
-        default_owner_ai_direction8_between_tiles(source_tile, base_tile);
+
+    const u32 direction = default_owner_ai_direction8_between_tiles(
+        movement, source_center_tile, base_tile);
+    ai_owner.support_budget = direction;
+    ai_owner.support_anchor = base_tile.x;
+    ai_owner.support_anchor_y = base_tile.y;
     DefaultOwnerPlacementAnchorClearanceContext clearance_context;
-    clearance_context.source = source;
+    clearance_context.source = temporary_probe_ready ? probe_lease.unit : source;
     clearance_context.unit_type = kDefaultOwnerAiRouteHelperUnitTypes[0];
     clearance_context.definition = default_owner_ai_definition_lookup(
         clearance_context.unit_type, lifecycle);
@@ -21597,31 +21756,38 @@ void default_owner_ai_refresh_placement_anchors(
         clearance_context.definition != nullptr ?
         default_owner_ai_anchor_clearance_blocked : nullptr;
     g_runtime.gameplay_owner_production_placement_anchors[owner] =
-        BuildOwnerProductionPlacementAnchorSet(base_tile, source_tile,
+        BuildOwnerProductionPlacementAnchorSet(base_tile, source_center_tile,
             direction, clearance_predicate, &clearance_context);
+    if (placement_target_is_preferred && !original_reverse_path.empty()) {
+        const OwnerPathWindowSelection selection =
+            SelectOwnerBestOpenPathWindowPoint(movement->map,
+                original_reverse_path, ai_owner.placement_radius, 10, 0x50);
+        if (selection.has_point) {
+            ai_owner.placement_record[0] = selection.world_point.x;
+            ai_owner.placement_record[1] = selection.world_point.y;
+        }
+    }
     g_runtime.gameplay_owner_production_placement_target_points[owner] =
-        default_owner_ai_world_to_tile(target.strategic_point);
-    if (movement != nullptr && default_movement_map_ready(movement->map) &&
-        target.preferred_target != nullptr) {
+        target_tile;
+    if (default_movement_map_ready(movement->map)) {
         const UnitMovementPoint source_raw_tile{
             default_owner_ai_shr_world_to_tile(source->x),
             default_owner_ai_shr_world_to_tile(source->y),
         };
         const UnitMovementPoint source_raw_world =
             default_owner_ai_tile_to_world(source_raw_tile);
-        const UnitMovementPoint target_world{
-            target.preferred_target->x,
-            target.preferred_target->y,
-        };
-        const UnitMovementPoint target_tile =
-            default_owner_ai_world_to_tile(target_world);
         const OwnerAiRoutePathProbeResult placement_probe =
-            default_owner_ai_temporary_unit_path_probe(lifecycle, owner,
-                source, source_raw_world,
-                target_world);
+            temporary_probe_ready
+            ? ProbeOwnerAiRoutePath(*movement, *probe_lease.unit,
+                source_raw_world, target_world)
+            : ProbeOwnerAiRoutePath(*movement, source,
+                source_raw_world, target_world);
         g_runtime.gameplay_owner_production_placement_target_points[owner] =
             default_owner_ai_select_production_placement_target_point(
                 placement_probe, target_tile);
+    }
+    if (temporary_probe_ready) {
+        default_owner_ai_release_temporary_path_probe(probe_lease);
     }
     g_runtime.gameplay_owner_production_placement_anchor_valid[owner] = true;
 }
@@ -21814,13 +21980,12 @@ bool default_owner_ai_placement_path_probe(
         request.start_tile.x * 32, request.start_tile.y * 32};
     const UnitMovementPoint target =
         default_owner_ai_tile_to_world(request.target_point);
-    auto* probe_context =
-        static_cast<DefaultOwnerAiPathProbeContext*>(user_data);
+    (void)user_data;
+    // CheckOwnerProductionPlacementPathAvailability (0x004467c0) stores the
+    // existing producer in the legacy pathfinder-unit global and probes it
+    // directly.  It never calls InitializePlacedUnitFromMapSlot here.
     const OwnerAiRoutePathProbeResult result =
-        default_owner_ai_temporary_unit_path_probe(
-            probe_context != nullptr ? probe_context->lifecycle : nullptr,
-            probe_context != nullptr ? probe_context->owner_id : producer.owner_id,
-            &producer, start, target);
+        ProbeOwnerAiRoutePath(*context.movement, &producer, start, target);
     return result.reachable;
 }
 
@@ -21845,13 +22010,11 @@ bool default_owner_ai_placement_target_refresh(
         return false;
     }
 
-    auto* probe_context =
-        static_cast<DefaultOwnerAiPathProbeContext*>(user_data);
+    (void)user_data;
+    // The blocked-target refresh branch in 0x004467c0 also reuses the
+    // producer; creating a temporary unit here forked the synchronized RNG.
     const OwnerAiRoutePathProbeResult result =
-        default_owner_ai_temporary_unit_path_probe(
-            probe_context != nullptr ? probe_context->lifecycle :
-                g_runtime.gameplay_startup_state.lifecycle,
-            request.owner_id, &producer,
+        ProbeOwnerAiRoutePath(*context.movement, &producer,
             {source->x, source->y},
             default_owner_ai_tile_to_world(request.current_target_point));
     refreshed_target_point =
@@ -21871,13 +22034,12 @@ bool default_owner_ai_placement_producer_path_probe(
         return true;
     }
 
-    auto* probe_context =
-        static_cast<DefaultOwnerAiPathProbeContext*>(user_data);
+    (void)user_data;
+    // SelectOwnerProductionPlacementBuildAction (0x00446400) tests each
+    // existing producer with RunLegacyUnitPathfinder.  No temporary unit is
+    // allocated on this path in the original.
     const OwnerAiRoutePathProbeResult result =
-        default_owner_ai_temporary_unit_path_probe(
-            probe_context != nullptr ? probe_context->lifecycle :
-                g_runtime.gameplay_startup_state.lifecycle,
-            producer.owner_id, &producer,
+        ProbeOwnerAiRoutePath(*movement, &producer,
             {producer.x, producer.y}, placement_point);
     return result.reachable && !result.path_target_adjusted;
 }
@@ -21896,7 +22058,7 @@ bool default_owner_ai_route_helper_path_score(
     const OwnerAiRoutePathProbeResult result =
         default_owner_ai_temporary_unit_path_probe(context->lifecycle,
             context->owner_id, &probe, origin_world,
-            candidate_world);
+            candidate_world, {10, 10});
     if (!result.reachable) {
         return false;
     }
@@ -22961,14 +23123,15 @@ void instantiate_default_gameplay_script_scenario_units(
 
         initialize_default_unit_from_scenario_object(*lifecycle, *unit, object, index);
 
-        // Type 0x44 records are scenario placement markers, not live units.
-        // The Chaos archive also contains two records for the same type-0x4d
-        // object in one map cell; the intrusive-list import keeps the first
-        // record encountered (slot 51) and returns the later duplicate (slot
-        // 11) to the runtime free list.  Terrain-footprint validation is not
-        // appropriate here: the original accepts several edge resources whose
-        // large definition footprint extends beyond the playable border.
-        const bool placement_marker = object.type_id == 0x44u;
+        // Serialized active-list membership is authoritative.  Type 0x44 is
+        // not intrinsically a placement marker: Medusa keeps six live owner-8
+        // type-0x44 neutral units in its active chain, while Chaos stores its two
+        // inactive type-0x44 records on the serialized free chain.  Rejecting
+        // the type globally removed those six live units, consumed their pool
+        // slots for player starts, and forked the multiplayer RNG at frame 2.
+        // Terrain-footprint validation is not appropriate here either: the
+        // original accepts several edge resources whose large definition
+        // footprint extends beyond the playable border.
         const bool duplicate_map_object = std::any_of(
             movement.active_units.begin(), movement.active_units.end(),
             [&](const UnitMovementUnit* candidate) {
@@ -22977,7 +23140,7 @@ void instantiate_default_gameplay_script_scenario_units(
                     std::abs(candidate->x - unit->x) <= 16 &&
                     std::abs(candidate->y - unit->y) <= 16;
             });
-        if (placement_marker || duplicate_map_object) {
+        if (duplicate_map_object) {
             object.unit = nullptr;
             object.object_pointer = nullptr;
             object.remove_from_triggers = true;

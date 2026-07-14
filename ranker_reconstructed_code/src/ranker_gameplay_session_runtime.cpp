@@ -218,8 +218,12 @@ void mirror_owner_slots(GameplaySessionStartupState& state) {
         state.players->slot_states[owner] = slot.slot_state;
         state.owner_faction_ids[owner] = slot.faction_id;
         state.owner_tribe_ids[owner] = slot.tribe_id;
-        state.players->owner_start_x[owner] = slot.start_x;
-        state.players->owner_start_y[owner] = slot.start_y;
+        // The original runtime keeps its start-coordinate table in raw map
+        // slot order (DAT_007253D4/D8), separately from the owner-to-map-slot
+        // permutation used to place each owner's units.
+        const u32 map_slot = std::min<u32>(slot.map_slot, kPlayerSlotCount - 1);
+        state.players->owner_start_x[map_slot] = slot.start_x;
+        state.players->owner_start_y[map_slot] = slot.start_y;
         if (state.lifecycle != nullptr &&
             owner < state.lifecycle->owner_faction_ids.size()) {
             state.lifecycle->owner_faction_ids[owner] = slot.faction_id;
