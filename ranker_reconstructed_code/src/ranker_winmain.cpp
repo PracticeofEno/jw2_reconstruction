@@ -18920,6 +18920,8 @@ void default_unit_command_construction_completed(UnitCommandContext& context,
             HandleUnitSpawnCompleteVoiceCue(
                 g_runtime.gameplay_sound, *builder, definition, base_slots);
         }
+        QueueGameplayHudMessage(g_runtime.gameplay_hud_text,
+            startup_platform_row(100, "Work completed..."));
         QueueGameplayHudAlertMarker(g_runtime.gameplay_hud_alert_markers, 2,
             builder->x, builder->y);
     }
@@ -18933,6 +18935,8 @@ void default_unit_command_construction_completed(UnitCommandContext& context,
             HandleUnitSpawnCompleteVoiceCue(
                 g_runtime.gameplay_sound, *builder, definition, base_slots);
         }
+        QueueGameplayHudMessage(g_runtime.gameplay_hud_text,
+            startup_platform_row(100, "Work completed..."));
         QueueGameplayHudAlertMarker(g_runtime.gameplay_hud_alert_markers, 2,
             builder->x, builder->y);
     }
