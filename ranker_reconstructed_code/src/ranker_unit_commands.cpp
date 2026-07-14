@@ -8843,10 +8843,6 @@ UnitMovementUnit* FindNearestOwnerRouteHelperProducer(
         return nullptr;
     }
 
-    UnitMovementPoint target_world{
-        static_cast<i32>(static_cast<u32>(target_tile.x) << 5),
-        static_cast<i32>(static_cast<u32>(target_tile.y) << 5),
-    };
     UnitMovementUnit* best = nullptr;
     u32 best_distance = 0xffffffff;
     for (UnitMovementUnit* unit : context.movement->active_units) {
@@ -8862,8 +8858,12 @@ UnitMovementUnit* FindNearestOwnerRouteHelperProducer(
             continue;
         }
 
+        // HandleOwnerRouteHelperDispatch 0x0044872c..0x00448748 compares
+        // producer +0xb8/+0xbc world coordinates directly with FUN_00448a50's
+        // returned tile coordinates.  Only the later queue/command writes at
+        // 0x0044883f..0x004488cb shift the selected tile by five.
         const u32 distance = CalculateApproxUnitDistance(unit->x, unit->y,
-            target_world.x, target_world.y);
+            target_tile.x, target_tile.y);
         if (distance < best_distance) {
             best_distance = distance;
             best = unit;
@@ -8907,7 +8907,13 @@ OwnerRouteHelperDispatchResult DispatchOwnerRouteHelperProducer(
     slot.target_y = result.target_world_point.y;
     slot.route_index = next_route_index;
     slot.aux_value = helper_unit_type;
-    AssignUnitToOwnerTransportQueueSlot(queue, *result.producer_unit, slot_index);
+    // HandleOwnerRouteHelperDispatch 0x004487d3..0x004487ee writes only the
+    // queue-slot index into the producer's low area-marker byte.  Unlike the
+    // general assignment helper, this path does not increment the new state-4
+    // slot's unit count; that count represents workers assigned after the
+    // helper route is promoted, not the producer constructing the helper.
+    result.producer_unit->area_marker_flags =
+        (result.producer_unit->area_marker_flags & 0xffffff00u) | slot_index;
     SetOrQueueUnitAlignedPointCommand06(result.producer_unit,
         helper_unit_type - kOwnerExtendedProductionUnitTypeBase,
         result.target_world_point.x, result.target_world_point.y, false);
@@ -10831,9 +10837,10 @@ struct OwnerExtendedPlacementSearchContext {
     const UnitMovementUnit* anchor_unit = nullptr;
     const std::vector<const UnitMovementUnit*>* ignored_route_units = nullptr;
     UnitMovementPoint owner_target_point{-1, -1};
+    UnitMovementPoint last_gate_candidate{};
     u32 owner_id = 0;
     u32 unit_type = 0;
-    bool require_path_availability = true;
+    bool found_gate_candidate = false;
 };
 
 bool owner_extended_placement_candidate(UnitMovementPoint world_point,
@@ -10853,8 +10860,14 @@ bool owner_extended_placement_candidate(UnitMovementPoint world_point,
     if (gate.blocked) {
         return false;
     }
-    if (!search->require_path_availability ||
-        !owner_production_point_valid(search->owner_target_point)) {
+    // FindOwnerProductionPlacementPoint 0x00447176..0x0044718a (and the
+    // corresponding other three spiral legs) publishes out_xy immediately
+    // after the footprint gate succeeds, before testing path availability.
+    // If every path probe fails, the caller therefore still consumes the
+    // final gate-valid coordinate visited by the single 30-ring search.
+    search->last_gate_candidate = world_point;
+    search->found_gate_candidate = true;
+    if (!owner_production_point_valid(search->owner_target_point)) {
         return true;
     }
 
@@ -10944,41 +10957,25 @@ OwnerProductionPlacementSearchResult find_owner_extended_placement_point(
     search.ignored_route_units =
         ignored_route_units.empty() ? nullptr : &ignored_route_units;
 
-    // The refreshed placement anchors are strategic hints, not a permanent
-    // reason to stop production.  They can be stale after a worker moves or a
-    // route target changes.  Preserve the original, fully path-constrained
-    // search first, then retry around the actual primary/producer unit.
-    if (input.placement_anchors != nullptr) {
-        const UnitMovementPoint anchor_tile =
-            SelectOwnerProductionPlacementAnchorPoint(*input.placement_anchors,
-                definition->placement_class, owner_count_for_type(owner_counts,
-                    unit_type));
-        result = FindOwnerProductionPlacementPointSpiral(anchor_tile,
-            owner_extended_placement_candidate, &search);
-        if (result.found) {
-            return result;
-        }
+    if (input.placement_anchors == nullptr) {
+        return result;
     }
 
-    const UnitMovementPoint producer_tile{
-        ConvertOwnerProductionWorldToTileSar(anchor_unit->x),
-        ConvertOwnerProductionWorldToTileSar(anchor_unit->y),
-    };
-    result = FindOwnerProductionPlacementPointSpiral(producer_tile,
-        owner_extended_placement_candidate, &search, 0x10);
+    const UnitMovementPoint anchor_tile =
+        SelectOwnerProductionPlacementAnchorPoint(*input.placement_anchors,
+            definition->placement_class, owner_count_for_type(owner_counts,
+                unit_type));
+    result = FindOwnerProductionPlacementPointSpiral(anchor_tile,
+        owner_extended_placement_candidate, &search);
     if (result.found) {
         return result;
     }
 
-    // A temporarily unreachable/stale strategic target must not deadlock the
-    // owner's entire construction tree.  The final retry is deliberately
-    // local to the producer and relaxes only that route-to-target probe.  The
-    // normal footprint, bounds, terrain, occupancy and unit-collision gates
-    // still run for every candidate, and the worker must still accept command
-    // 0x06 before any resources are reserved.
-    search.require_path_availability = false;
-    return FindOwnerProductionPlacementPointSpiral(producer_tile,
-        owner_extended_placement_candidate, &search, 8);
+    if (search.found_gate_candidate) {
+        result.found = true;
+        result.point = search.last_gate_candidate;
+    }
+    return result;
 }
 
 void issue_owner_extended_placement_command(UnitCommandContext& context,
