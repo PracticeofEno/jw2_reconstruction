@@ -527,6 +527,11 @@ struct LegacyPathfinderScratchState {
     u32 checked_tile_count = 0;
     UnitMovementPoint neighbor_cursor{};
     u32 neighbor_direction = 0;
+    // Original DAT_0162fc80 and DAT_0162fc90/94 are process globals.  They
+    // intentionally survive between pathfinder calls; one zero-length failed
+    // reconstruction consumes the previous call's waypoint.
+    u32 direct_path = 0;
+    UnitMovementPoint waypoint_tile{};
 };
 
 u32 UnitMovementMapStrideTiles(const UnitMovementMap& map);

@@ -2390,15 +2390,20 @@ bool RunLegacyUnitPathfinder(UnitMovementContext& context, UnitMovementUnit& uni
     bool goal_adjusted = false;
     auto apply_legacy_pathfinder_outputs =
         [&](UnitMovementPoint path_target_tile, UnitMovementPoint next_path_tile,
-            bool direct_path) {
+            bool direct_path, bool publish_waypoint = true) {
+            g_legacy_pathfinder_scratch.direct_path = direct_path ? 1u : 0u;
+            if (publish_waypoint) {
+                g_legacy_pathfinder_scratch.waypoint_tile = next_path_tile;
+            }
             if (goal_adjusted) {
                 const UnitMovementPoint target_center =
                     tile_center_point(path_target_tile);
                 unit.path_target_x = target_center.x;
                 unit.path_target_y = target_center.y;
             }
-            if (!direct_path) {
-                const UnitMovementPoint next_center = tile_center_point(next_path_tile);
+            if (g_legacy_pathfinder_scratch.direct_path != 1u) {
+                const UnitMovementPoint next_center = tile_center_point(
+                    g_legacy_pathfinder_scratch.waypoint_tile);
                 unit.next_path_x = next_center.x;
                 unit.next_path_y = next_center.y;
             }
@@ -2604,7 +2609,10 @@ bool RunLegacyUnitPathfinder(UnitMovementContext& context, UnitMovementUnit& uni
         }
     }
 
-    UnitMovementPoint waypoint = start_tile;
+    const bool reconstructed_waypoint = !reverse_path.empty();
+    UnitMovementPoint waypoint = reconstructed_waypoint
+        ? start_tile
+        : g_legacy_pathfinder_scratch.waypoint_tile;
     for (std::size_t count = reverse_path.size(); count != 0;) {
         const UnitMovementPoint candidate = reverse_path[--count];
         if (!CheckStraightUnitPathTiles(context, unit, start_tile, candidate)) {
@@ -2613,7 +2621,12 @@ bool RunLegacyUnitPathfinder(UnitMovementContext& context, UnitMovementUnit& uni
         waypoint = candidate;
     }
 
-    apply_legacy_pathfinder_outputs(resolved_goal, waypoint, false);
+    // RunLegacyUnitPathfinder 0x00509662 exits before DAT_0162fc90/94 when
+    // strict-best is the start tile and the reconstructed reverse path has no
+    // entries.  DAT_0162fc80 is still zero, so the caller writes the waypoint
+    // left by an earlier pathfinder invocation into unit.next_path.
+    apply_legacy_pathfinder_outputs(
+        resolved_goal, waypoint, false, reconstructed_waypoint);
     return reached_goal;
 }
 
