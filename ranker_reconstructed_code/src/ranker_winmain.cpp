@@ -488,6 +488,11 @@ constexpr u32 kGameplayResultMetricRecordBytes = 0x1c960;
 constexpr u32 kGameplayScenarioObjectRecordIndex = 7;
 constexpr u32 kGameplayScenarioObjectStride = 0x1d0;
 constexpr u32 kGameplayScenarioObjectMaxSlots = 0x800;
+constexpr u32 kGameplayOriginalUnitPoolBaseAddress = 0x00a03fb8;
+constexpr u32 kGameplayOriginalUnitPoolByteCount =
+    kGameplayScenarioObjectStride * kGameplayScenarioObjectMaxSlots;
+constexpr std::size_t kGameplayHeaderPresentFrameOffset = 0x1408;
+constexpr std::size_t kGameplayHeaderSimulationFrameOffset = 0x140c;
 constexpr std::size_t kGameplayHeaderUnitActiveListHeadOffset = 0x143c;
 constexpr std::size_t kGameplayHeaderUnitFreeListHeadOffset = 0x1440;
 constexpr std::size_t kGameplayHeaderMapEffectActiveListHeadOffset = 0x1448;
@@ -495,6 +500,59 @@ constexpr std::size_t kGameplayHeaderMapEffectFreeListHeadOffset = 0x144c;
 constexpr std::size_t kGameplayHeaderRandomLimitOffset = 0x1420;
 constexpr std::size_t kGameplayHeaderRandomSeedOffset = 0x1424;
 constexpr std::size_t kGameplayHeaderRandomCallCountOffset = 0x1428;
+
+// DAT_0122ff28 is both the original live owner-AI state and record 19's
+// serialized image.  These transport tables are structure-of-arrays in that
+// image, while the reconstruction keeps them as typed per-owner structures.
+constexpr std::size_t kOwnerAiRouteCountOffset = 0x0080;
+constexpr std::size_t kOwnerAiRouteUnitPointerOffset = 0x00a0;
+constexpr std::size_t kOwnerAiRouteNearestTileOffset = 0x0160;
+constexpr std::size_t kOwnerAiRouteDesiredCountOffset = 0x02e0;
+constexpr std::size_t kOwnerAiRouteSecondaryCountOffset = 0x03a0;
+constexpr std::size_t kOwnerAiRoutePriorityOffset = 0x0460;
+constexpr std::size_t kOwnerAiRouteFlagsOffset = 0x0520;
+constexpr std::size_t kOwnerAiRouteLoadPercentOffset = 0x05e0;
+constexpr std::size_t kOwnerAiRouteOwnerStride = 0x18;
+constexpr std::size_t kOwnerAiRoutePointOwnerStride = 0x30;
+constexpr std::size_t kOwnerAiRoutePointStride = 0x08;
+constexpr std::size_t kOwnerAiTransportQueueOffset = 0x37a0;
+constexpr std::size_t kOwnerAiTransportQueueOwnerStride = 0x0b00;
+constexpr std::size_t kOwnerAiTransportQueueSlotStride = 0x58;
+constexpr std::size_t kOwnerAiTransportQueueKnownBytes = 0x28;
+constexpr std::size_t kOwnerAiStrategicPreferredUnitPointerOffset = 0x35a0;
+constexpr std::size_t kOwnerAiStrategicPreferredPointOffset = 0x35c0;
+constexpr std::size_t kOwnerAiPlacementBasePointOffset = 0x06a0;
+constexpr std::size_t kOwnerAiPlacementClass1PointsOffset = 0x0740;
+constexpr std::size_t kOwnerAiPlacementClass2PointsOffset = 0x07c0;
+constexpr std::size_t kOwnerAiPlacementClass3PointsOffset = 0x0880;
+constexpr std::size_t kOwnerAiPlacementClass4PointsOffset = 0x0900;
+constexpr std::size_t kOwnerAiPlacementClass5PointOffset = 0x09c0;
+constexpr std::size_t kOwnerAiProductionPathTargetPointOffset = 0x9d40;
+constexpr std::size_t kOwnerAiSerializedPointStride = 2 * sizeof(i32);
+constexpr u32 kOwnerAiRouteCountInvalid = 0xffffffffu;
+
+static_assert(kOwnerAiTransportQueueOffset +
+        kOwnerAiOwnerCount * kOwnerAiTransportQueueOwnerStride == 0x8fa0,
+    "owner AI transport queue span must match the original record");
+static_assert(kOwnerAiTransportQueueKnownBytes ==
+        10 * sizeof(u32),
+    "only the ten evidenced queue dwords may be overlaid");
+static_assert(kOwnerAiPlacementClass1PointsOffset +
+        kOwnerAiOwnerCount * 2 * kOwnerAiSerializedPointStride ==
+        kOwnerAiPlacementClass2PointsOffset);
+static_assert(kOwnerAiPlacementClass2PointsOffset +
+        kOwnerAiOwnerCount * 3 * kOwnerAiSerializedPointStride ==
+        kOwnerAiPlacementClass3PointsOffset);
+static_assert(kOwnerAiPlacementClass3PointsOffset +
+        kOwnerAiOwnerCount * 2 * kOwnerAiSerializedPointStride ==
+        kOwnerAiPlacementClass4PointsOffset);
+static_assert(kOwnerAiPlacementClass4PointsOffset +
+        kOwnerAiOwnerCount * 3 * kOwnerAiSerializedPointStride ==
+        kOwnerAiPlacementClass5PointOffset);
+static_assert(kOwnerAiProductionPathTargetPointOffset +
+        kOwnerAiOwnerCount * kOwnerAiSerializedPointStride ==
+        kOwnerAiSnapshotByteCount,
+    "owner AI production path targets must end at the record boundary");
 constexpr std::size_t kGameplayHeaderOwnerUnitTypeCountOffset = 0x1698;
 constexpr std::size_t kGameplayHeaderOwnerUnitTypeCountStride =
     kProductionOrderTypeCount;
@@ -917,6 +975,20 @@ struct GameplayDamageRecordLink {
     UnitRecord record;
 };
 
+struct GameplayInGameLoadResumeState {
+    P2PGameSessionStartState p2p_session_start;
+    u32 frontend_mode = 0;
+    u32 session_mode = 0;
+    u32 local_player_index = 0;
+    u32 local_faction_id = 0;
+    i32 network_transport_mode = 0;
+    bool p2p_session_start_prepared = false;
+    bool generic_ai_profile_mode = false;
+    bool network_ai_profile_override = false;
+    bool generic_ai_scenario_active = false;
+    bool pending = false;
+};
+
 struct RuntimeGlobals {
     HINSTANCE instance = nullptr;
     HWND main_window = nullptr;
@@ -973,6 +1045,7 @@ struct RuntimeGlobals {
     bool link_lobby_start_parameters_pending = false;
     std::string gameplay_session_archive_path;
     P2PGameSessionStartState p2p_session_start_state;
+    GameplayInGameLoadResumeState gameplay_in_game_load_resume;
     SessionRuntimeBufferPairs gameplay_session_runtime_buffers;
     SessionRuntimeImportState session_runtime_import_state;
     SessionRuntimeDefinitionTableSet active_session_definitions;
@@ -1019,14 +1092,43 @@ struct RuntimeGlobals {
         gameplay_owner_transport_queues{};
     std::array<OwnerTransportRouteState, kOwnerAiOwnerCount>
         gameplay_owner_transport_routes{};
+    // The original route count uses 0xffffffff as an invalid/rebuild
+    // sentinel.  Typed consumers need a safe count of zero, so retain that
+    // serialized distinction out-of-band until a route rebuild occurs.
+    std::array<bool, kOwnerAiOwnerCount>
+        gameplay_owner_transport_route_count_invalid{};
     std::array<OwnerStrategicTargetState, kOwnerAiOwnerCount>
         gameplay_owner_strategic_targets{};
+    // Stable original-pool references retained until record 7 is materialized.
+    std::array<u32, kOwnerAiOwnerCount>
+        gameplay_owner_strategic_preferred_target_ids{};
     std::array<OwnerStrategicPointList, kOwnerAiOwnerCount>
         gameplay_owner_threat_points{};
     std::array<OwnerProductionPlacementAnchorSet, kOwnerAiOwnerCount>
-        gameplay_owner_production_placement_anchors{};
+        gameplay_owner_production_placement_anchors = [] {
+            // The original serialized arrays begin as zeroed BSS.  Their
+            // point type uses -1 member defaults in the reconstruction, so
+            // explicitly retain the original first-session raw values.
+            std::array<OwnerProductionPlacementAnchorSet, kOwnerAiOwnerCount>
+                anchors{};
+            for (OwnerProductionPlacementAnchorSet& anchor : anchors) {
+                anchor.base_tile = {};
+                anchor.placement_class_1_points.fill({});
+                anchor.placement_class_2_points.fill({});
+                anchor.placement_class_3_points.fill({});
+                anchor.placement_class_4_points.fill({});
+                anchor.placement_class_5_point = {};
+            }
+            return anchors;
+        }();
     std::array<bool, kOwnerAiOwnerCount>
-        gameplay_owner_production_placement_anchor_valid{};
+        gameplay_owner_production_placement_anchor_valid = [] {
+            // The original selector has no separate validity gate: its BSS
+            // point arrays are always readable, including after owner reset.
+            std::array<bool, kOwnerAiOwnerCount> valid{};
+            valid.fill(true);
+            return valid;
+        }();
     std::array<UnitMovementPoint, kOwnerAiOwnerCount>
         gameplay_owner_production_placement_target_points{};
     std::array<u32, kOwnerAiOwnerCount>
@@ -1075,6 +1177,7 @@ struct RuntimeGlobals {
 };
 
 RuntimeGlobals g_runtime;
+bool g_default_owner_ai_bss_bootstrapped = false;
 
 void sync_default_ui_overlay_runtime_from_gameplay_state();
 void apply_default_ui_overlay_runtime_mutations();
@@ -1124,6 +1227,7 @@ void sync_default_gameplay_production_action_units(
 const GameplayProductionActionDefinition* default_jw211_production_action_definition(
     u32 action_id);
 void sync_default_gameplay_end_condition_state();
+void sync_default_owner_ai_runtime_metadata(GameplayLoopState* loop_state);
 void reset_default_owner_ai_runtime();
 void refresh_default_owner_ai_target_profiles();
 void activate_default_player_slots_from_active_units();
@@ -1140,6 +1244,8 @@ bool sync_default_production_catalog_from_runtime_records(
     std::size_t record_body_offset);
 bool restore_default_production_runtime_from_session_header();
 void sync_default_production_runtime_to_session_header(
+    std::vector<u8>& header);
+void sync_default_gameplay_clock_and_random_state_to_session_header(
     std::vector<u8>& header);
 void mirror_default_production_variants_to_session_import_state();
 void prepare_default_base_session_runtime_definition_import();
@@ -3257,6 +3363,8 @@ bool export_default_loaded_gameplay_session_bundle_to(
             record.payload.assign(spec.byte_count, 0);
         }
         if (i == 0) {
+            sync_default_gameplay_clock_and_random_state_to_session_header(
+                record.payload);
             // The original JW2 primary record owns the live production
             // variants, lock cells and accumulated upgrade effects.  US_UPG
             // remains a raw definition override and is exported separately.
@@ -3291,6 +3399,53 @@ void default_gameplay_modal_scan_save_slot_headers(GameplayModalUiState& state) 
     sync_default_modal_save_slots_from_session_flow(state, flow);
 }
 
+bool default_gameplay_active_session_import() {
+    return gameplay_loop_state().session_active &&
+        g_runtime.gameplay_startup_slots_started;
+}
+
+void configure_default_gameplay_modal_load_retry_policy(
+    GameplayModalUiState& state) {
+    // DAT_00725c08 is set while the original game is replacing an active
+    // session.  Once an import has damaged/replaced the raw record set, the
+    // load dialog must stay open until a subsequent attempt succeeds.
+    state.require_cancel_confirmation = default_gameplay_active_session_import();
+}
+
+bool patch_default_in_game_load_player_record_bytes(std::vector<u8>& record,
+    const GameplayInGameLoadResumeState& resume) {
+    if (resume.local_player_index >= kPlayerSlotCount ||
+        resume.local_faction_id > 3 ||
+        record.size() < kGameplaySessionPlayerRecordBytes) {
+        return false;
+    }
+
+    write_default_session_buffer_u32(
+        record, kSessionPlayerRecordLocalOwnerOffset,
+        resume.local_player_index);
+    write_default_session_buffer_u32(record,
+        kSessionPlayerRecordFactionBaseOffset +
+            static_cast<std::size_t>(resume.local_player_index) * sizeof(u32),
+        resume.local_faction_id);
+    return true;
+}
+
+bool patch_default_in_game_load_player_record(
+    const GameplayInGameLoadResumeState& resume) {
+    std::vector<u8>* record =
+        MutableGameplaySessionLoadedRecord(kGameplaySessionPlayerRecordIndex);
+    return record != nullptr &&
+        patch_default_in_game_load_player_record_bytes(*record, resume);
+}
+
+bool default_gameplay_modal_import_materialization_ready(
+    bool active_session_import, bool bundle_loaded, bool terrain_loaded) {
+    // Preserve the existing inactive/frontend import contract.  An active
+    // session, however, cannot enter the deferred restart with an empty tile
+    // bank: the original 0x004d1ccc success chain includes FUN_00425340.
+    return bundle_loaded && (!active_session_import || terrain_loaded);
+}
+
 bool default_gameplay_modal_import_session_bundle(
     GameplayModalUiState& state, u32 slot_index) {
     GameplaySessionFlowState& flow = prepare_default_modal_session_flow();
@@ -3303,12 +3458,49 @@ bool default_gameplay_modal_import_session_bundle(
         return false;
     }
 
+    const bool active_session_import = default_gameplay_active_session_import();
+    state.require_cancel_confirmation = active_session_import;
+    GameplayInGameLoadResumeState resume{};
+    if (active_session_import) {
+        resume.p2p_session_start = g_runtime.p2p_session_start_state;
+        resume.frontend_mode = g_runtime.frontend_mode;
+        resume.session_mode = g_runtime.gameplay_startup_state.session_mode;
+        resume.local_player_index = mode1_reliable_state().local_player_index;
+        const u32 local_player = std::min<u32>(
+            resume.local_player_index, kPlayerSlotCount - 1);
+        resume.local_faction_id =
+            g_runtime.gameplay_startup_state.owner_faction_ids[local_player];
+        if (resume.local_faction_id > 3) {
+            resume.local_faction_id =
+                g_runtime.gameplay_startup_state.owner_slots[local_player]
+                    .faction_id;
+        }
+        if (resume.local_faction_id > 3) {
+            resume.local_faction_id = 0;
+        }
+        resume.network_transport_mode =
+            async_com_state().active_network_transport_mode;
+        resume.p2p_session_start_prepared =
+            g_runtime.p2p_session_start_prepared;
+        resume.generic_ai_profile_mode = g_runtime.generic_ai_profile_mode;
+        resume.network_ai_profile_override =
+            g_runtime.network_ai_profile_override;
+        resume.generic_ai_scenario_active =
+            g_runtime.generic_ai_scenario_active;
+    }
+
     g_runtime.gameplay_session_archive_path = path;
     const bool bundle_imported = HandleGameplaySessionBundleImport(path.c_str(), 0);
     if (!bundle_imported) {
         report_gameplay_session_import_resource_failure();
     }
     g_runtime.gameplay_session_bundle_loaded = bundle_imported;
+    if (g_runtime.gameplay_session_bundle_loaded && active_session_import &&
+        !patch_default_in_game_load_player_record(resume)) {
+        append_startup_log(
+            "modal-load: failed to preserve local record3 owner/faction");
+        g_runtime.gameplay_session_bundle_loaded = false;
+    }
     if (g_runtime.gameplay_session_bundle_loaded &&
         !import_default_owner_ai_snapshot_from_session_records()) {
         g_runtime.gameplay_session_bundle_loaded = false;
@@ -3316,6 +3508,16 @@ bool default_gameplay_modal_import_session_bundle(
     if (g_runtime.gameplay_session_bundle_loaded) {
         g_runtime.gameplay_terrain_tile_sheet_loaded =
             load_default_gameplay_terrain_tile_sheet_bank();
+        if (!default_gameplay_modal_import_materialization_ready(
+                active_session_import,
+                g_runtime.gameplay_session_bundle_loaded,
+                g_runtime.gameplay_terrain_tile_sheet_loaded)) {
+            append_startup_log(
+                "modal-load: active import terrain bank failed; retry required");
+            g_runtime.gameplay_session_bundle_loaded = false;
+        }
+    }
+    if (g_runtime.gameplay_session_bundle_loaded) {
         g_runtime.session_runtime_import_state = SessionRuntimeImportState{};
         g_runtime.active_session_definitions = SessionRuntimeDefinitionTableSet{};
         g_runtime.base_session_definitions = SessionRuntimeDefinitionTableSet{};
@@ -3329,6 +3531,17 @@ bool default_gameplay_modal_import_session_bundle(
         ReleaseTerrainTileSheetBankResources(g_runtime.gameplay_terrain_tile_sheet);
         g_runtime.gameplay_terrain_tile_sheet_loaded = false;
         state.non_empty_runtime_tables_available = false;
+    }
+
+    if (g_runtime.gameplay_session_bundle_loaded && active_session_import) {
+        resume.pending = true;
+        g_runtime.gameplay_in_game_load_resume = std::move(resume);
+        append_startup_log(
+            "modal-load: deferred active materialization local=%lu transport=%ld",
+            static_cast<unsigned long>(
+                g_runtime.gameplay_in_game_load_resume.local_player_index),
+            static_cast<long>(
+                g_runtime.gameplay_in_game_load_resume.network_transport_mode));
     }
 
     return g_runtime.gameplay_session_bundle_loaded;
@@ -3353,6 +3566,9 @@ bool default_gameplay_modal_export_session_bundle(
 }
 
 void default_gameplay_modal_import_runtime_tables(GameplayModalUiState&) {
+    if (g_runtime.gameplay_in_game_load_resume.pending) {
+        return;
+    }
     prepare_default_base_session_runtime_definition_import();
     // Gameplay save/load uses the mode-5 preservation path: primary JW2 state
     // is live before pristine definitions and marked user overrides catch up.
@@ -3364,6 +3580,9 @@ void default_gameplay_modal_import_runtime_tables(GameplayModalUiState&) {
 }
 
 void default_gameplay_modal_import_non_empty_runtime_tables(GameplayModalUiState&) {
+    if (g_runtime.gameplay_in_game_load_resume.pending) {
+        return;
+    }
     prepare_default_non_empty_session_runtime_definition_import();
     ImportNonEmptySessionRuntimeDefinitionTables(g_runtime.session_runtime_import_state,
         g_runtime.active_session_definitions, g_runtime.staged_session_definitions);
@@ -3371,6 +3590,9 @@ void default_gameplay_modal_import_non_empty_runtime_tables(GameplayModalUiState
 }
 
 void default_gameplay_modal_rebuild_unit_type_references(GameplayModalUiState&) {
+    if (g_runtime.gameplay_in_game_load_resume.pending) {
+        return;
+    }
     rebuild_default_unit_reference_tables_from_catalog();
 }
 
@@ -3559,6 +3781,7 @@ void configure_default_gameplay_modal_ui_callbacks(GameplayModalUiState& state) 
     constexpr std::size_t kStartupExportErrorTextRow = 238;
     constexpr std::size_t kStartupDefaultMessageTextRow = 239;
     constexpr std::size_t kStartupWaitRemainingFormatRow = 240;
+    configure_default_gameplay_modal_load_retry_policy(state);
     sync_default_gameplay_options_from_setup_once();
     if (const char* post_result_text =
             startup_platform_row(kStartupPostResultTextRow, nullptr)) {
@@ -6448,6 +6671,12 @@ void default_gameplay_startup_initialize_local_camera(i32 x, i32 y) {
 
 void default_gameplay_startup_after_session_snapshot(
     const std::vector<u8>& snapshot) {
+    if (g_runtime.gameplay_in_game_load_resume.pending) {
+        // A mode-5 in-game load must retain the imported record3 verbatim.
+        // The common fresh-start callback's compact reconstruction snapshot is
+        // not record3-layout-compatible and would erase result/faction data.
+        return;
+    }
     std::vector<u8>* record =
         MutableGameplaySessionLoadedRecord(kGameplaySessionPlayerRecordIndex);
     if (record != nullptr) {
@@ -7906,6 +8135,493 @@ bool import_default_session_owner_unit_availability() {
     return true;
 }
 
+bool decode_default_owner_ai_unit_pointer(u32 raw_pointer, u32& unit_id) {
+    unit_id = 0;
+    if (raw_pointer == 0) {
+        return true;
+    }
+
+    const u32 first_unit_pointer =
+        kGameplayOriginalUnitPoolBaseAddress + kGameplayScenarioObjectStride;
+    const u32 pool_end_pointer =
+        kGameplayOriginalUnitPoolBaseAddress + kGameplayOriginalUnitPoolByteCount;
+    if (raw_pointer < first_unit_pointer || raw_pointer >= pool_end_pointer) {
+        return false;
+    }
+
+    const u32 offset = raw_pointer - kGameplayOriginalUnitPoolBaseAddress;
+    if (offset % kGameplayScenarioObjectStride != 0) {
+        return false;
+    }
+    unit_id = offset;
+    return true;
+}
+
+bool encode_default_owner_ai_unit_pointer(u32 runtime_reference,
+    const UnitMovementUnit* unit, u32& raw_pointer) {
+    raw_pointer = 0;
+    const auto encode_runtime_slot = [&](u32 runtime_slot) {
+        if (runtime_slot == 0 ||
+            runtime_slot >= kGameplayScenarioObjectMaxSlots) {
+            return false;
+        }
+        raw_pointer = kGameplayOriginalUnitPoolBaseAddress +
+            runtime_slot * kGameplayScenarioObjectStride;
+        return true;
+    };
+
+    if (unit != nullptr &&
+        encode_runtime_slot(unit->runtime_slot_index)) {
+        return true;
+    }
+    if (runtime_reference == 0) {
+        return true;
+    }
+
+    // Imported active units can temporarily keep a legacy slot-index id
+    // (for example 54) rather than slot*0x1d0.  Resolve the live unit first so
+    // export always uses its fixed-pool slot and never rejects that valid id.
+    const UnitMovementUnit* resolved =
+        find_default_movement_unit_by_id(runtime_reference);
+    if (resolved != nullptr &&
+        encode_runtime_slot(resolved->runtime_slot_index)) {
+        return true;
+    }
+
+    // Unresolved stale route entries retain the canonical pool-byte id decoded
+    // from the raw pointer.  A small unresolved value is accepted as the
+    // legacy slot-index form only after the canonical-offset test.
+    if (runtime_reference >= kGameplayScenarioObjectStride &&
+        runtime_reference < kGameplayOriginalUnitPoolByteCount &&
+        runtime_reference % kGameplayScenarioObjectStride == 0) {
+        raw_pointer =
+            kGameplayOriginalUnitPoolBaseAddress + runtime_reference;
+        return true;
+    }
+    return encode_runtime_slot(runtime_reference);
+}
+
+i32 read_default_owner_ai_snapshot_i32(
+    const std::vector<u8>& snapshot, std::size_t offset) {
+    const u32 raw = read_default_session_record_u32(snapshot, offset, 0);
+    i32 value = 0;
+    std::memcpy(&value, &raw, sizeof(value));
+    return value;
+}
+
+bool import_default_owner_transport_state_from_snapshot(
+    const std::vector<u8>& snapshot) {
+    if (snapshot.size() != kOwnerAiSnapshotByteCount) {
+        return false;
+    }
+
+    std::array<OwnerTransportQueueState, kOwnerAiOwnerCount> queues{};
+    std::array<OwnerTransportRouteState, kOwnerAiOwnerCount> routes{};
+    std::array<bool, kOwnerAiOwnerCount> invalid_route_counts{};
+    std::array<OwnerStrategicTargetState, kOwnerAiOwnerCount>
+        strategic_targets{};
+    std::array<u32, kOwnerAiOwnerCount> strategic_preferred_target_ids{};
+    std::array<OwnerProductionPlacementAnchorSet, kOwnerAiOwnerCount>
+        placement_anchors{};
+    std::array<UnitMovementPoint, kOwnerAiOwnerCount>
+        production_path_targets{};
+
+    const auto read_point = [&](std::size_t offset) {
+        return UnitMovementPoint{
+            read_default_owner_ai_snapshot_i32(snapshot, offset),
+            read_default_owner_ai_snapshot_i32(
+                snapshot, offset + sizeof(i32))};
+    };
+
+    for (u32 owner = 0; owner < kOwnerAiOwnerCount; ++owner) {
+        OwnerStrategicTargetState& strategic = strategic_targets[owner];
+        const OwnerAiSlotRuntime& ai_owner =
+            g_runtime.gameplay_owner_ai_state.owners[owner];
+        strategic.target_owner_id = ai_owner.primary_target_owner >= 0 ?
+            static_cast<u32>(ai_owner.primary_target_owner) :
+            kInvalidOwnerTransportQueueSlot;
+        strategic.strategic_point = {
+            ai_owner.primary_target_point.x, ai_owner.primary_target_point.y};
+        strategic.has_strategic_point = strategic.strategic_point.x != -1;
+        strategic.blocked_owner_mask = 0;
+        const u32 preferred_raw_pointer = read_default_session_record_u32(
+            snapshot,
+            kOwnerAiStrategicPreferredUnitPointerOffset + owner * sizeof(u32),
+            0);
+        if (!decode_default_owner_ai_unit_pointer(preferred_raw_pointer,
+                strategic_preferred_target_ids[owner])) {
+            return false;
+        }
+        strategic.preferred_target = nullptr;
+        strategic.has_preferred_target = false;
+        strategic.preferred_target_point = {
+            read_default_owner_ai_snapshot_i32(snapshot,
+                kOwnerAiStrategicPreferredPointOffset + owner * 2 * sizeof(i32)),
+            read_default_owner_ai_snapshot_i32(snapshot,
+                kOwnerAiStrategicPreferredPointOffset +
+                    owner * 2 * sizeof(i32) + sizeof(i32))};
+
+        OwnerProductionPlacementAnchorSet& anchors = placement_anchors[owner];
+        anchors.base_tile = read_point(kOwnerAiPlacementBasePointOffset +
+            owner * kOwnerAiSerializedPointStride);
+        for (u32 index = 0; index < anchors.placement_class_1_points.size();
+             ++index) {
+            anchors.placement_class_1_points[index] = read_point(
+                kOwnerAiPlacementClass1PointsOffset +
+                owner * anchors.placement_class_1_points.size() *
+                    kOwnerAiSerializedPointStride +
+                index * kOwnerAiSerializedPointStride);
+        }
+        for (u32 index = 0; index < anchors.placement_class_2_points.size();
+             ++index) {
+            anchors.placement_class_2_points[index] = read_point(
+                kOwnerAiPlacementClass2PointsOffset +
+                owner * anchors.placement_class_2_points.size() *
+                    kOwnerAiSerializedPointStride +
+                index * kOwnerAiSerializedPointStride);
+        }
+        for (u32 index = 0; index < anchors.placement_class_3_points.size();
+             ++index) {
+            anchors.placement_class_3_points[index] = read_point(
+                kOwnerAiPlacementClass3PointsOffset +
+                owner * anchors.placement_class_3_points.size() *
+                    kOwnerAiSerializedPointStride +
+                index * kOwnerAiSerializedPointStride);
+        }
+        for (u32 index = 0; index < anchors.placement_class_4_points.size();
+             ++index) {
+            anchors.placement_class_4_points[index] = read_point(
+                kOwnerAiPlacementClass4PointsOffset +
+                owner * anchors.placement_class_4_points.size() *
+                    kOwnerAiSerializedPointStride +
+                index * kOwnerAiSerializedPointStride);
+        }
+        anchors.placement_class_5_point = read_point(
+            kOwnerAiPlacementClass5PointOffset +
+            owner * kOwnerAiSerializedPointStride);
+        production_path_targets[owner] = read_point(
+            kOwnerAiProductionPathTargetPointOffset +
+            owner * kOwnerAiSerializedPointStride);
+
+        OwnerTransportRouteState& route = routes[owner];
+        const u32 raw_route_count = read_default_session_record_u32(snapshot,
+            kOwnerAiRouteCountOffset + owner * sizeof(u32), 0);
+        if (raw_route_count == kOwnerAiRouteCountInvalid) {
+            route.route_count = 0;
+            invalid_route_counts[owner] = true;
+        }
+        else if (raw_route_count <= route.targets.size()) {
+            route.route_count = raw_route_count;
+        }
+        else {
+            return false;
+        }
+
+        route.load_percent = read_default_session_record_u32(snapshot,
+            kOwnerAiRouteLoadPercentOffset + owner * sizeof(u32), 0);
+        for (u32 index = 0; index < route.targets.size(); ++index) {
+            OwnerTransportRouteTarget& target = route.targets[index];
+            const std::size_t value_offset =
+                static_cast<std::size_t>(owner) * kOwnerAiRouteOwnerStride +
+                static_cast<std::size_t>(index) * sizeof(u32);
+            const std::size_t point_offset =
+                static_cast<std::size_t>(owner) *
+                    kOwnerAiRoutePointOwnerStride +
+                static_cast<std::size_t>(index) * kOwnerAiRoutePointStride;
+            const u32 raw_pointer = read_default_session_record_u32(snapshot,
+                kOwnerAiRouteUnitPointerOffset + value_offset, 0);
+            if (!decode_default_owner_ai_unit_pointer(
+                    raw_pointer, target.target.match_value)) {
+                return false;
+            }
+            target.unit = nullptr;
+            target.target.target_x = read_default_owner_ai_snapshot_i32(snapshot,
+                kOwnerAiRouteNearestTileOffset + point_offset);
+            target.target.target_y = read_default_owner_ai_snapshot_i32(snapshot,
+                kOwnerAiRouteNearestTileOffset + point_offset + sizeof(i32));
+            target.target.route_index = index;
+            target.desired_count_base = read_default_session_record_u32(snapshot,
+                kOwnerAiRouteDesiredCountOffset + value_offset, 0);
+            target.secondary_count_base = read_default_session_record_u32(snapshot,
+                kOwnerAiRouteSecondaryCountOffset + value_offset, 0);
+            target.priority = read_default_session_record_u32(snapshot,
+                kOwnerAiRoutePriorityOffset + value_offset, 0);
+            target.flags = read_default_session_record_u32(snapshot,
+                kOwnerAiRouteFlagsOffset + value_offset, 0);
+        }
+
+        OwnerTransportQueueState& queue = queues[owner];
+        for (u32 index = 0; index < queue.slots.size(); ++index) {
+            OwnerTransportQueueSlot& slot = queue.slots[index];
+            const std::size_t slot_offset = kOwnerAiTransportQueueOffset +
+                static_cast<std::size_t>(owner) *
+                    kOwnerAiTransportQueueOwnerStride +
+                static_cast<std::size_t>(index) *
+                    kOwnerAiTransportQueueSlotStride;
+            slot.count = read_default_session_record_u32(
+                snapshot, slot_offset + 0x00, 0);
+            slot.state = read_default_session_record_u32(
+                snapshot, slot_offset + 0x04, 0);
+            slot.completed_count = read_default_session_record_u32(
+                snapshot, slot_offset + 0x08, 0);
+            slot.phase_ticks = read_default_session_record_u32(
+                snapshot, slot_offset + 0x0c, 0);
+            slot.aux_value = read_default_session_record_u32(
+                snapshot, slot_offset + 0x10, 0);
+            const u32 raw_pointer = read_default_session_record_u32(
+                snapshot, slot_offset + 0x14, 0);
+            if (!decode_default_owner_ai_unit_pointer(
+                    raw_pointer, slot.match_value)) {
+                return false;
+            }
+            slot.target_x = read_default_owner_ai_snapshot_i32(
+                snapshot, slot_offset + 0x18);
+            slot.target_y = read_default_owner_ai_snapshot_i32(
+                snapshot, slot_offset + 0x1c);
+            slot.route_index = read_default_session_record_u32(
+                snapshot, slot_offset + 0x20, 0);
+            slot.linked_group = read_default_session_record_u32(
+                snapshot, slot_offset + 0x24, 0);
+        }
+    }
+
+    g_runtime.gameplay_owner_transport_queues = std::move(queues);
+    g_runtime.gameplay_owner_transport_routes = std::move(routes);
+    g_runtime.gameplay_owner_transport_route_count_invalid =
+        invalid_route_counts;
+    g_runtime.gameplay_owner_strategic_targets =
+        std::move(strategic_targets);
+    g_runtime.gameplay_owner_strategic_preferred_target_ids =
+        strategic_preferred_target_ids;
+    g_runtime.gameplay_owner_production_placement_anchors =
+        std::move(placement_anchors);
+    g_runtime.gameplay_owner_production_placement_anchor_valid.fill(true);
+    g_runtime.gameplay_owner_production_placement_target_points =
+        production_path_targets;
+    return true;
+}
+
+bool overlay_default_owner_transport_state_on_snapshot(
+    std::vector<u8>& snapshot) {
+    if (snapshot.size() != kOwnerAiSnapshotByteCount) {
+        return false;
+    }
+
+    const auto write_point = [&](std::size_t offset,
+                                 const UnitMovementPoint& point) {
+        write_default_session_buffer_u32(
+            snapshot, offset, static_cast<u32>(point.x));
+        write_default_session_buffer_u32(snapshot, offset + sizeof(i32),
+            static_cast<u32>(point.y));
+    };
+
+    for (u32 owner = 0; owner < kOwnerAiOwnerCount; ++owner) {
+        const OwnerStrategicTargetState& strategic =
+            g_runtime.gameplay_owner_strategic_targets[owner];
+        const u32 preferred_reference = strategic.preferred_target != nullptr ?
+            strategic.preferred_target->id :
+            g_runtime.gameplay_owner_strategic_preferred_target_ids[owner];
+        u32 preferred_raw_pointer = 0;
+        if (!encode_default_owner_ai_unit_pointer(preferred_reference,
+                strategic.preferred_target, preferred_raw_pointer)) {
+            return false;
+        }
+        write_default_session_buffer_u32(snapshot,
+            kOwnerAiStrategicPreferredUnitPointerOffset + owner * sizeof(u32),
+            preferred_raw_pointer);
+        write_default_session_buffer_u32(snapshot,
+            kOwnerAiStrategicPreferredPointOffset + owner * 2 * sizeof(i32),
+            static_cast<u32>(strategic.preferred_target_point.x));
+        write_default_session_buffer_u32(snapshot,
+            kOwnerAiStrategicPreferredPointOffset +
+                owner * 2 * sizeof(i32) + sizeof(i32),
+            static_cast<u32>(strategic.preferred_target_point.y));
+
+        const OwnerProductionPlacementAnchorSet& anchors =
+            g_runtime.gameplay_owner_production_placement_anchors[owner];
+        write_point(kOwnerAiPlacementBasePointOffset +
+                owner * kOwnerAiSerializedPointStride,
+            anchors.base_tile);
+        for (u32 index = 0; index < anchors.placement_class_1_points.size();
+             ++index) {
+            write_point(kOwnerAiPlacementClass1PointsOffset +
+                    owner * anchors.placement_class_1_points.size() *
+                        kOwnerAiSerializedPointStride +
+                    index * kOwnerAiSerializedPointStride,
+                anchors.placement_class_1_points[index]);
+        }
+        for (u32 index = 0; index < anchors.placement_class_2_points.size();
+             ++index) {
+            write_point(kOwnerAiPlacementClass2PointsOffset +
+                    owner * anchors.placement_class_2_points.size() *
+                        kOwnerAiSerializedPointStride +
+                    index * kOwnerAiSerializedPointStride,
+                anchors.placement_class_2_points[index]);
+        }
+        for (u32 index = 0; index < anchors.placement_class_3_points.size();
+             ++index) {
+            write_point(kOwnerAiPlacementClass3PointsOffset +
+                    owner * anchors.placement_class_3_points.size() *
+                        kOwnerAiSerializedPointStride +
+                    index * kOwnerAiSerializedPointStride,
+                anchors.placement_class_3_points[index]);
+        }
+        for (u32 index = 0; index < anchors.placement_class_4_points.size();
+             ++index) {
+            write_point(kOwnerAiPlacementClass4PointsOffset +
+                    owner * anchors.placement_class_4_points.size() *
+                        kOwnerAiSerializedPointStride +
+                    index * kOwnerAiSerializedPointStride,
+                anchors.placement_class_4_points[index]);
+        }
+        write_point(kOwnerAiPlacementClass5PointOffset +
+                owner * kOwnerAiSerializedPointStride,
+            anchors.placement_class_5_point);
+        write_point(kOwnerAiProductionPathTargetPointOffset +
+                owner * kOwnerAiSerializedPointStride,
+            g_runtime.gameplay_owner_production_placement_target_points[owner]);
+
+        const OwnerTransportRouteState& route =
+            g_runtime.gameplay_owner_transport_routes[owner];
+        if (route.route_count > route.targets.size()) {
+            return false;
+        }
+        const bool invalid_count =
+            g_runtime.gameplay_owner_transport_route_count_invalid[owner] &&
+            route.route_count == 0;
+        write_default_session_buffer_u32(snapshot,
+            kOwnerAiRouteCountOffset + owner * sizeof(u32),
+            invalid_count ? kOwnerAiRouteCountInvalid : route.route_count);
+        // route_load_percent is a single original dword shared by the owner-AI
+        // script and the typed route view; the script field is authoritative.
+        write_default_session_buffer_u32(snapshot,
+            kOwnerAiRouteLoadPercentOffset + owner * sizeof(u32),
+            g_runtime.gameplay_owner_ai_state.owners[owner].route_load_percent);
+
+        for (u32 index = 0; index < route.targets.size(); ++index) {
+            const OwnerTransportRouteTarget& target = route.targets[index];
+            const std::size_t value_offset =
+                static_cast<std::size_t>(owner) * kOwnerAiRouteOwnerStride +
+                static_cast<std::size_t>(index) * sizeof(u32);
+            const std::size_t point_offset =
+                static_cast<std::size_t>(owner) *
+                    kOwnerAiRoutePointOwnerStride +
+                static_cast<std::size_t>(index) * kOwnerAiRoutePointStride;
+            u32 raw_pointer = 0;
+            if (!encode_default_owner_ai_unit_pointer(
+                    target.target.match_value, target.unit, raw_pointer)) {
+                return false;
+            }
+            write_default_session_buffer_u32(snapshot,
+                kOwnerAiRouteUnitPointerOffset + value_offset, raw_pointer);
+            write_default_session_buffer_u32(snapshot,
+                kOwnerAiRouteNearestTileOffset + point_offset,
+                static_cast<u32>(target.target.target_x));
+            write_default_session_buffer_u32(snapshot,
+                kOwnerAiRouteNearestTileOffset + point_offset + sizeof(i32),
+                static_cast<u32>(target.target.target_y));
+            write_default_session_buffer_u32(snapshot,
+                kOwnerAiRouteDesiredCountOffset + value_offset,
+                target.desired_count_base);
+            write_default_session_buffer_u32(snapshot,
+                kOwnerAiRouteSecondaryCountOffset + value_offset,
+                target.secondary_count_base);
+            write_default_session_buffer_u32(snapshot,
+                kOwnerAiRoutePriorityOffset + value_offset, target.priority);
+            write_default_session_buffer_u32(snapshot,
+                kOwnerAiRouteFlagsOffset + value_offset, target.flags);
+        }
+
+        const OwnerTransportQueueState& queue =
+            g_runtime.gameplay_owner_transport_queues[owner];
+        for (u32 index = 0; index < queue.slots.size(); ++index) {
+            const OwnerTransportQueueSlot& slot = queue.slots[index];
+            const std::size_t slot_offset = kOwnerAiTransportQueueOffset +
+                static_cast<std::size_t>(owner) *
+                    kOwnerAiTransportQueueOwnerStride +
+                static_cast<std::size_t>(index) *
+                    kOwnerAiTransportQueueSlotStride;
+            u32 raw_pointer = 0;
+            if (!encode_default_owner_ai_unit_pointer(
+                    slot.match_value, nullptr, raw_pointer)) {
+                return false;
+            }
+            write_default_session_buffer_u32(
+                snapshot, slot_offset + 0x00, slot.count);
+            write_default_session_buffer_u32(
+                snapshot, slot_offset + 0x04, slot.state);
+            write_default_session_buffer_u32(
+                snapshot, slot_offset + 0x08, slot.completed_count);
+            write_default_session_buffer_u32(
+                snapshot, slot_offset + 0x0c, slot.phase_ticks);
+            write_default_session_buffer_u32(
+                snapshot, slot_offset + 0x10, slot.aux_value);
+            write_default_session_buffer_u32(
+                snapshot, slot_offset + 0x14, raw_pointer);
+            write_default_session_buffer_u32(snapshot,
+                slot_offset + 0x18, static_cast<u32>(slot.target_x));
+            write_default_session_buffer_u32(snapshot,
+                slot_offset + 0x1c, static_cast<u32>(slot.target_y));
+            write_default_session_buffer_u32(
+                snapshot, slot_offset + 0x20, slot.route_index);
+            write_default_session_buffer_u32(
+                snapshot, slot_offset + 0x24, slot.linked_group);
+            // +0x28..+0x54 have no evidenced consumers.  They deliberately
+            // remain whatever ExportOwnerAiSnapshot copied from raw backing.
+        }
+    }
+    return true;
+}
+
+void bind_default_owner_transport_route_units() {
+    u32 unresolved_live_target_count = 0;
+    for (u32 owner = 0; owner < kOwnerAiOwnerCount; ++owner) {
+        OwnerStrategicTargetState& strategic =
+            g_runtime.gameplay_owner_strategic_targets[owner];
+        strategic.preferred_target = find_default_movement_unit_by_id(
+            g_runtime.gameplay_owner_strategic_preferred_target_ids[owner]);
+        strategic.has_preferred_target =
+            strategic.preferred_target != nullptr;
+        if (strategic.preferred_target != nullptr) {
+            g_runtime.gameplay_owner_strategic_preferred_target_ids[owner] =
+                strategic.preferred_target->id;
+        }
+
+        OwnerTransportRouteState& route =
+            g_runtime.gameplay_owner_transport_routes[owner];
+        for (u32 index = 0; index < route.targets.size(); ++index) {
+            OwnerTransportRouteTarget& target = route.targets[index];
+            target.unit = find_default_movement_unit_by_id(
+                target.target.match_value);
+            if (target.unit != nullptr) {
+                // Runtime queue comparisons use the reconstruction object's
+                // actual id, which can still be a legacy slot index.
+                target.target.match_value = target.unit->id;
+            }
+            if (index < route.route_count && target.target.match_value != 0 &&
+                target.unit == nullptr) {
+                ++unresolved_live_target_count;
+            }
+        }
+        for (OwnerTransportQueueSlot& slot :
+             g_runtime.gameplay_owner_transport_queues[owner].slots) {
+            if (slot.match_value == 0) {
+                continue;
+            }
+            UnitMovementUnit* unit =
+                find_default_movement_unit_by_id(slot.match_value);
+            if (unit != nullptr) {
+                slot.match_value = unit->id;
+            }
+        }
+    }
+    if (unresolved_live_target_count != 0) {
+        append_startup_log(
+            "owner AI route bind unresolved_live_targets=%lu",
+            static_cast<unsigned long>(unresolved_live_target_count));
+    }
+}
+
 bool import_default_owner_ai_snapshot_from_session_records() {
     const GameplaySessionLoadState& load = gameplay_session_load_state();
     if (kGameplaySessionOwnerAiRecordIndex >= load.records.size() ||
@@ -7914,14 +8630,41 @@ bool import_default_owner_ai_snapshot_from_session_records() {
     }
 
     const std::vector<u8>& record = load.records[kGameplaySessionOwnerAiRecordIndex];
-    return ImportOwnerAiSnapshot(g_runtime.gameplay_owner_ai_state, record.data(),
-        static_cast<u32>(record.size()));
+    OwnerAiRuntimeState previous_owner_ai = g_runtime.gameplay_owner_ai_state;
+    if (!ImportOwnerAiSnapshot(g_runtime.gameplay_owner_ai_state, record.data(),
+            static_cast<u32>(record.size())) ||
+        !import_default_owner_transport_state_from_snapshot(record)) {
+        // Keep a failed/invalid load atomic.  The transport decoder commits
+        // only after validating its complete temporary image, whereas the
+        // typed owner-AI decoder necessarily hydrates in place first.
+        g_runtime.gameplay_owner_ai_state = std::move(previous_owner_ai);
+        return false;
+    }
+    // A loaded record replaces the process BSS image.  A later fresh session
+    // must apply FUN_0043cc00's partial owner reset to this image rather than
+    // incorrectly bootstrapping a second all-zero record.
+    g_default_owner_ai_bss_bootstrapped = true;
+    for (u32 owner = 0; owner < kOwnerAiOwnerCount; ++owner) {
+        g_runtime.gameplay_owner_ai_reserved_primary_cost[owner] =
+            g_runtime.gameplay_owner_ai_state.owners[owner]
+                .route_refresh_counter;
+    }
+    return true;
 }
 
 bool export_default_owner_ai_snapshot_to_payload(std::vector<u8>& payload) {
+    for (u32 owner = 0; owner < kOwnerAiOwnerCount; ++owner) {
+        OwnerAiSlotRuntime& ai_owner =
+            g_runtime.gameplay_owner_ai_state.owners[owner];
+        ai_owner.route_refresh_counter =
+            g_runtime.gameplay_owner_ai_reserved_primary_cost[owner];
+        g_runtime.gameplay_owner_transport_routes[owner].load_percent =
+            ai_owner.route_load_percent;
+    }
     payload.assign(kOwnerAiSnapshotByteCount, 0);
     if (!ExportOwnerAiSnapshot(g_runtime.gameplay_owner_ai_state, payload.data(),
-            static_cast<u32>(payload.size()))) {
+            static_cast<u32>(payload.size())) ||
+        !overlay_default_owner_transport_state_on_snapshot(payload)) {
         payload.clear();
         return false;
     }
@@ -9044,6 +9787,38 @@ void default_gameplay_frame_draw_terrain_decorations(
     }
 }
 
+void sync_default_gameplay_clock_and_random_state_to_session_header(
+    std::vector<u8>& header) {
+    const GameplayLoopState& loop = gameplay_loop_state();
+    const GameplayFrameRandomState& random =
+        g_runtime.gameplay_frame_random_state;
+    write_default_session_buffer_u32(header,
+        kGameplayHeaderPresentFrameOffset,
+        loop.present_frame_counter);
+    write_default_session_buffer_u32(header,
+        kGameplayHeaderSimulationFrameOffset,
+        loop.simulation_frame_counter);
+    write_default_session_buffer_u32(header,
+        kGameplayHeaderRandomLimitOffset, random.limit);
+    write_default_session_buffer_u32(header,
+        kGameplayHeaderRandomSeedOffset, random.seed);
+    write_default_session_buffer_u32(header,
+        kGameplayHeaderRandomCallCountOffset, random.call_count);
+}
+
+void restore_default_gameplay_simulation_frame_from_session_header() {
+    const GameplaySessionLoadState& load = gameplay_session_load_state();
+    if (load.records.empty() || !load.record_loaded[0]) {
+        return;
+    }
+    const std::vector<u8>& header = load.records[0];
+    GameplayLoopState& loop = gameplay_loop_state();
+    loop.present_frame_counter = read_default_session_record_u32(
+        header, kGameplayHeaderPresentFrameOffset, 0);
+    loop.simulation_frame_counter = read_default_session_record_u32(
+        header, kGameplayHeaderSimulationFrameOffset, 0);
+}
+
 void restore_default_gameplay_random_state_from_session_header() {
     const GameplaySessionLoadState& load = gameplay_session_load_state();
     if (load.records.empty() || !load.record_loaded[0]) {
@@ -9056,10 +9831,12 @@ void restore_default_gameplay_random_state_from_session_header() {
     }
 
     // HandleGameplaySessionBundleImport (0x004d1ccc) copies record 0 to
-    // DAT_00705d98.  Consequently the original frame RNG globals at
-    // 0x007071b8/0x007071bc/0x007071c0 are archive-backed fields +0x1420,
-    // +0x1424 and +0x1428.  Starting from a zeroed reconstruction changes
-    // every placement facing and all later deterministic simulation rolls.
+    // DAT_00705d98.  The present/simulation clocks at DAT_007071a0/a4 are
+    // therefore +0x1408/+0x140c, and the frame RNG globals at
+    // 0x007071b8/0x007071bc/0x007071c0 are +0x1420/+0x1424/+0x1428.
+    // Treating a loaded game as frame zero reruns FUN_0043cc00 and changes
+    // every later deterministic roll.
+    restore_default_gameplay_simulation_frame_from_session_header();
     GameplayFrameRandomState& random = g_runtime.gameplay_frame_random_state;
     random.limit = read_default_session_record_u32(
         header, kGameplayHeaderRandomLimitOffset, random.limit);
@@ -9221,16 +9998,31 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     stage_default_session_runtime_override_definitions();
     append_startup_log("start-slots: stage runtime definitions ok");
 
-    append_startup_log("start-slots: PrepareP2PGameSessionStart begin");
-    g_runtime.p2p_session_start_prepared =
-        PrepareP2PGameSessionStart(g_runtime.p2p_session_start_state, input);
-    append_startup_log(
-        "start-slots: PrepareP2PGameSessionStart ok prepared=%s network_players=%lu local=%lu",
-        g_runtime.p2p_session_start_prepared ? "yes" : "no",
-        static_cast<unsigned long>(
-            g_runtime.p2p_session_start_state.network_player_count),
-        static_cast<unsigned long>(
-            g_runtime.p2p_session_start_state.local_player_slot));
+    if (g_runtime.gameplay_in_game_load_resume.pending) {
+        const GameplayInGameLoadResumeState& resume =
+            g_runtime.gameplay_in_game_load_resume;
+        // PrepareP2PGameSessionStart also resets the reliable/replay recorder
+        // and can restart DirectMusic.  An in-game load keeps those outer
+        // wrappers alive, so install the captured state without invoking any
+        // of those new-session side effects.
+        g_runtime.p2p_session_start_state = resume.p2p_session_start;
+        g_runtime.p2p_session_start_prepared =
+            resume.p2p_session_start_prepared;
+        append_startup_log(
+            "start-slots: PrepareP2PGameSessionStart skipped for active load");
+    }
+    else {
+        append_startup_log("start-slots: PrepareP2PGameSessionStart begin");
+        g_runtime.p2p_session_start_prepared =
+            PrepareP2PGameSessionStart(g_runtime.p2p_session_start_state, input);
+        append_startup_log(
+            "start-slots: PrepareP2PGameSessionStart ok prepared=%s network_players=%lu local=%lu",
+            g_runtime.p2p_session_start_prepared ? "yes" : "no",
+            static_cast<unsigned long>(
+                g_runtime.p2p_session_start_state.network_player_count),
+            static_cast<unsigned long>(
+                g_runtime.p2p_session_start_state.local_player_slot));
+    }
     gameplay_loop_state().fixed_step_mode = 4;
     if (link_lobby_start_parameters_available_for_start) {
         const u32 local_player = input.copied_runtime_local_player;
@@ -9248,6 +10040,26 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
         g_runtime.p2p_session_start_state.scenario_ai_profile_override);
     SetRankerMainWindowNetworkAiProfileOverride(
         g_runtime.p2p_session_start_state.network_ai_profile_override);
+    if (g_runtime.gameplay_in_game_load_resume.pending) {
+        const GameplayInGameLoadResumeState& resume =
+            g_runtime.gameplay_in_game_load_resume;
+        const u32 local_player = std::min<u32>(
+            resume.local_player_index, kPlayerSlotCount - 1);
+        // The captured P2P wrapper was installed above.  Restore the remaining
+        // outer transport/profile/local identity before any session reset or
+        // owner-AI callback observes the loaded simulation.
+        g_runtime.frontend_mode = resume.frontend_mode;
+        SetActiveNetworkTransportMode(resume.network_transport_mode);
+        SetRankerMainWindowGenericAiProfileState(
+            resume.generic_ai_profile_mode,
+            resume.generic_ai_scenario_active);
+        SetRankerMainWindowNetworkAiProfileOverride(
+            resume.network_ai_profile_override);
+        SetMode1ReliableLocalPlayerIndex(local_player);
+        gameplay_input_action_state().local_player_index = local_player;
+        gameplay_production_action_state().local_player_index = local_player;
+        mode1_gameplay_packet_dispatch_state().local_player_index = local_player;
+    }
 
     append_startup_log("start-slots: reset startup slots begin");
     reset_default_gameplay_startup_slots(g_runtime.gameplay_startup_state);
@@ -9272,6 +10084,17 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     append_startup_log("start-slots: import starting unit types ok");
     append_startup_log("start-slots: apply pending link params begin");
     apply_pending_link_lobby_start_parameters_to_gameplay_startup();
+    if (g_runtime.gameplay_in_game_load_resume.pending) {
+        const u32 local_player = std::min<u32>(
+            g_runtime.gameplay_in_game_load_resume.local_player_index,
+            kPlayerSlotCount - 1);
+        // Saved map/scenario records retain the mode they were originally
+        // played in.  The original load entry nevertheless runs all reset
+        // logic as mode 5, preserving record-7 units and record-19 AI state.
+        g_runtime.gameplay_startup_state.session_mode = 5;
+        g_runtime.gameplay_startup_state.local_owner_id = local_player;
+        g_runtime.gameplay_player_slots.local_player_slot = local_player;
+    }
     append_startup_log("start-slots: apply pending link params ok mode=%lu active_slots=%lu local=%lu",
         static_cast<unsigned long>(g_runtime.gameplay_startup_state.session_mode),
         static_cast<unsigned long>(g_runtime.gameplay_startup_state.active_slot_count),
@@ -9346,6 +10169,15 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     append_startup_log("start-slots: StartGameplaySessionFromScenarioSlots ok placed=%zu active=%zu",
         g_runtime.gameplay_startup_state.placed_units.size(),
         g_runtime.gameplay_movement_context.active_units.size());
+    if (g_runtime.gameplay_startup_state.session_mode == 5) {
+        // start_gameplay_session invokes the common fresh-session callback,
+        // which zeros the reconstruction loop clock.  The original mode-5
+        // loader keeps primary-record +0x140c and the reliable gate observes
+        // that same frame before the next simulation tick.
+        restore_default_gameplay_simulation_frame_from_session_header();
+        g_runtime.gameplay_startup_state.frame_counter =
+            gameplay_loop_state().simulation_frame_counter;
+    }
     initialize_default_gameplay_original_unit_pool_slots();
     append_startup_log("start-slots: activate player slots begin");
     activate_default_player_slots_from_active_units();
@@ -9360,6 +10192,13 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     append_startup_log("start-slots: fixed slot masks ok");
     append_startup_log("start-slots: packet reset begin");
     reset_default_mode1_packet_state_from_player_slots();
+    if (g_runtime.gameplay_startup_state.session_mode == 5) {
+        // ResetMode1ReliablePacketState clears the replay tick.  Restore the
+        // loaded lockstep frame only after that reset so the first packet gate
+        // observes the primary-record clock instead of a transient zero.
+        SetMode1ReliableReplayFrameTick(
+            gameplay_loop_state().simulation_frame_counter);
+    }
     append_startup_log("start-slots: packet reset ok");
     append_startup_log("start-slots: owner AI refresh begin");
     refresh_default_owner_ai_target_profiles();
@@ -9815,6 +10654,72 @@ bool default_gameplay_loop_try_restart_session(GameplayLoopState& state) {
     mode1_reliable_state().corrective_packet_pending = false;
     SetGameCursorIndex(state.current_cursor_index);
     state.session_active = false;
+    if (g_runtime.gameplay_in_game_load_resume.pending) {
+        const GameplayInGameLoadResumeState resume =
+            g_runtime.gameplay_in_game_load_resume;
+
+        // The modal stack has now unwound, so none of its controls retain
+        // pointers into the old runtime.  Reuse the ordinary mode-5 startup
+        // path to replace every unit, map/effect view, clock, RNG and AI
+        // pointer as one restart transaction.
+        GameplaySessionFlowState& flow = prepare_default_modal_session_flow();
+        flow.generic_ai_profile_mode =
+            resume.generic_ai_profile_mode ? 1u : 0u;
+        append_startup_log(
+            "modal-load: restart materialization begin archive=%s",
+            g_runtime.gameplay_session_archive_path.c_str());
+        default_gameplay_flow_start_session_from_slots(flow);
+
+        // Mode 5 is only the load/reset policy.  Resume the active game mode
+        // afterwards so relation masks, owner-AI metadata and victory rules
+        // keep their pre-load P2P/local semantics.
+        const u32 local_player = std::min<u32>(
+            resume.local_player_index, kPlayerSlotCount - 1);
+        g_runtime.gameplay_startup_state.session_mode = resume.session_mode;
+        g_runtime.gameplay_startup_state.local_owner_id = local_player;
+        g_runtime.gameplay_player_slots.local_player_slot = local_player;
+        g_runtime.gameplay_display_state.local_owner_id = local_player;
+        g_runtime.gameplay_damage_context.local_player_owner_id = local_player;
+        g_runtime.gameplay_unit_commands.local_owner_id = local_player;
+        g_runtime.gameplay_unit_render_queue.local_owner_id = local_player;
+        g_runtime.p2p_session_start_state.local_player_slot = local_player;
+        g_runtime.p2p_session_start_state.copied_runtime_local_player =
+            local_player;
+        gameplay_input_action_state().local_player_index = local_player;
+        gameplay_production_action_state().local_player_index = local_player;
+        mode1_gameplay_packet_dispatch_state().local_player_index = local_player;
+        gameplay_modal_ui_state().local_player_index = local_player;
+        ui_overlay_state().local_player_slot = local_player;
+        SetMode1ReliableLocalPlayerIndex(local_player);
+        gameplay_modal_ui_state().session_mode = resume.session_mode;
+        BuildGameplaySessionPlayerRelationMasks(
+            g_runtime.gameplay_player_slots, resume.session_mode);
+        SelectNearestHostilePlayerSlots(g_runtime.gameplay_player_slots);
+        sync_default_gameplay_modal_players(gameplay_modal_ui_state());
+        sync_default_owner_ai_runtime_metadata(&state);
+        sync_default_gameplay_end_condition_state();
+
+        // Packet reset occurs inside the materialization path.  Re-open the
+        // lockstep round and its timeout budgets before publishing the loaded
+        // simulation frame; outer-loop reentry does not call this initializer.
+        InitializeMode1ReliableSyncRuntime(RefreshLegacyTickTime());
+        SetMode1ReliableReplayFrameTick(state.simulation_frame_counter);
+
+        state.generic_ai_profile_mode = resume.generic_ai_profile_mode;
+        state.reenter_session_requested = true;
+        g_runtime.gameplay_in_game_load_resume =
+            GameplayInGameLoadResumeState{};
+        append_startup_log(
+            "modal-load: restart materialization complete mode=%lu local=%lu frame=%lu present=%lu active_units=%zu effects=%zu",
+            static_cast<unsigned long>(
+                g_runtime.gameplay_startup_state.session_mode),
+            static_cast<unsigned long>(local_player),
+            static_cast<unsigned long>(state.simulation_frame_counter),
+            static_cast<unsigned long>(state.present_frame_counter),
+            g_runtime.gameplay_movement_context.active_units.size(),
+            g_runtime.map_effect_context.active_effect_indices.size());
+        return false;
+    }
     if (g_runtime.network_ai_profile_override) {
         return false;
     }
@@ -11306,6 +12211,21 @@ bool default_gameplay_loop_external_turn_wait(GameplayLoopState&) {
 }
 
 void default_gameplay_loop_pre_update_phase(GameplayLoopState& state) {
+    const auto request_deferred_load_restart = [&]() {
+        if (!g_runtime.gameplay_in_game_load_resume.pending) {
+            return false;
+        }
+        // The archive and raw mode-5 state are already imported, but the old
+        // live objects must remain valid until the modal call stack unwinds.
+        // Suppress every remaining phase of this frame and let the established
+        // restart branch perform the materialization immediately afterwards.
+        state.phase_flags = GameplayFramePhaseFlags{};
+        state.restart_requested = true;
+        return true;
+    };
+    if (request_deferred_load_restart()) {
+        return;
+    }
     // Original PumpMode1ReliablePackets stays inside 0x00429955..0x004299A9
     // until every active channel reaches its subtype-10 boundary.  Our pump
     // yields to the window loop on a temporarily empty ring, so do not drain
@@ -11330,6 +12250,7 @@ void default_gameplay_loop_pre_update_phase(GameplayLoopState& state) {
     if (!gameplay_modal_ui_is_active(gameplay_modal_ui_state())) {
         process_default_ui_overlay_command_actions();
     }
+    (void)request_deferred_load_restart();
 }
 
 void default_unit_command_reset_to_idle(UnitCommandContext& context,
@@ -21752,6 +22673,25 @@ void reset_default_owner_strategic_target_after_owner_reset(
         return;
     }
 
+    // FUN_0043cc00 invalidates only this owner's route count/load dwords, but
+    // clears all owners' three route counters and complete 0x5800 transport
+    // queue block.  It intentionally preserves route unit pointers, nearest
+    // tiles and flags for the subsequent rebuild pass.
+    g_runtime.gameplay_owner_transport_queues = {};
+    for (OwnerTransportRouteState& route :
+         g_runtime.gameplay_owner_transport_routes) {
+        for (OwnerTransportRouteTarget& route_target : route.targets) {
+            route_target.desired_count_base = 0;
+            route_target.secondary_count_base = 0;
+            route_target.priority = 0;
+        }
+    }
+    OwnerTransportRouteState& route =
+        g_runtime.gameplay_owner_transport_routes[owner];
+    route.route_count = 0;
+    route.load_percent = 10;
+    g_runtime.gameplay_owner_transport_route_count_invalid[owner] = true;
+
     OwnerStrategicTargetState& target =
         g_runtime.gameplay_owner_strategic_targets[owner];
     const OwnerAiSlotRuntime& ai_owner = state.owners[owner];
@@ -21759,12 +22699,26 @@ void reset_default_owner_strategic_target_after_owner_reset(
     // DAT_012334e8/eec, so the preferred point survives profile reloads.
     target.preferred_target = nullptr;
     target.has_preferred_target = false;
+    g_runtime.gameplay_owner_strategic_preferred_target_ids[owner] = 0;
     target.target_owner_id = ai_owner.primary_target_owner >= 0 ?
         static_cast<u32>(ai_owner.primary_target_owner) :
         kInvalidOwnerTransportQueueSlot;
     target.strategic_point = {
         ai_owner.primary_target_point.x, ai_owner.primary_target_point.y};
     target.has_strategic_point = target.strategic_point.x != -1;
+
+    // FUN_0043cc00 invalidates only the X dword of each threat point for the
+    // selected owner.  Its Y dwords and every non-selected owner's points
+    // remain live across a fresh session/profile reload.
+    for (UnitMovementPoint& point :
+         g_runtime.gameplay_owner_threat_points[owner].points) {
+        point.x = -1;
+    }
+
+    // FUN_0043cc00 writes only DAT_012305c8[owner].x = -1.  The base Y,
+    // every class anchor and the path target at DAT_01239c68 survive.
+    g_runtime.gameplay_owner_production_placement_anchors[owner].base_tile.x = -1;
+    g_runtime.gameplay_owner_production_placement_anchor_valid[owner] = true;
 }
 
 void configure_default_owner_ai_runtime(OwnerAiRuntimeState& owner_ai) {
@@ -21824,37 +22778,63 @@ void sync_default_owner_ai_runtime_metadata(GameplayLoopState* loop_state) {
 }
 
 void reset_default_owner_ai_runtime() {
-    ResetOwnerAiRuntime(g_runtime.gameplay_owner_ai_state);
+    // The reconstruction shares this startup callback between fresh sessions
+    // and mode-5 saved-game materialization.  The original mode-5 path has
+    // already restored DAT_0122ff28 and must not clear owner AI, route/queue
+    // state, its invalid-count sentinels or +0x0ae0 reserved cost here.
+    if (g_runtime.gameplay_startup_state.session_mode == 5) {
+        configure_default_owner_ai_runtime(g_runtime.gameplay_owner_ai_state);
+        if (g_runtime.gameplay_production_catalog.definitions.empty()) {
+            LoadProductionOrderCatalogFromJw210Trc(
+                g_runtime.gameplay_production_catalog);
+        }
+        return;
+    }
+
+    if (!g_default_owner_ai_bss_bootstrapped) {
+        // The original 0x9d80-byte owner-AI span is zeroed by the PE loader
+        // once, not at the start of every game.  Hydrate that process-first
+        // BSS image explicitly because several C++ mirror types use useful
+        // non-zero member defaults which are not the original raw bytes.
+        const std::array<u8, kOwnerAiSnapshotByteCount> zero_snapshot{};
+        if (!ImportOwnerAiSnapshot(g_runtime.gameplay_owner_ai_state,
+                zero_snapshot.data(),
+                static_cast<u32>(zero_snapshot.size()))) {
+            return;
+        }
+        g_runtime.gameplay_owner_transport_queues = {};
+        g_runtime.gameplay_owner_transport_routes = {};
+        g_runtime.gameplay_owner_transport_route_count_invalid.fill(false);
+        g_runtime.gameplay_owner_strategic_preferred_target_ids.fill(0);
+        g_runtime.gameplay_owner_strategic_targets = {};
+        for (OwnerStrategicTargetState& target :
+             g_runtime.gameplay_owner_strategic_targets) {
+            target.target_owner_id = 0;
+            target.strategic_point = {};
+        }
+        g_runtime.gameplay_owner_threat_points = {};
+        for (OwnerStrategicPointList& points :
+             g_runtime.gameplay_owner_threat_points) {
+            points.points.fill({});
+        }
+        for (OwnerProductionPlacementAnchorSet& anchor :
+             g_runtime.gameplay_owner_production_placement_anchors) {
+            anchor = OwnerProductionPlacementAnchorSet{};
+            anchor.base_tile = {};
+            anchor.source_center_tile = {};
+            anchor.placement_class_1_points.fill({});
+            anchor.placement_class_2_points.fill({});
+            anchor.placement_class_3_points.fill({});
+            anchor.placement_class_4_points.fill({});
+            anchor.placement_class_5_point = {};
+        }
+        g_runtime.gameplay_owner_production_placement_anchor_valid.fill(true);
+        g_runtime.gameplay_owner_production_placement_target_points.fill({});
+        g_runtime.gameplay_owner_ai_reserved_primary_cost.fill(0);
+        g_default_owner_ai_bss_bootstrapped = true;
+    }
     configure_default_owner_ai_runtime(g_runtime.gameplay_owner_ai_state);
-    // FUN_00426770 clears the live owner upgrade/effect tables only on the
-    // normal-session branch.  Mode 5 has just replayed the compact US_UPG
-    // target variants through ApplyProductionOrderCompletionEffects and must
-    // preserve that reconstructed state across the owner-AI startup reset.
-    if (g_runtime.gameplay_startup_state.session_mode != 5) {
-        ResetProductionOrderRuntimeState(g_runtime.gameplay_production_runtime);
-    }
-    g_runtime.gameplay_owner_transport_queues = {};
-    g_runtime.gameplay_owner_transport_routes = {};
-    // The raw preferred-point table is not part of FUN_0043cc00's reset and
-    // therefore survives session/profile re-entry.  Reset its pointer mirror
-    // while restoring only the primary strategic point from the owner starts.
-    for (u32 owner = 0; owner < kOwnerAiOwnerCount; ++owner) {
-        OwnerStrategicTargetState& target =
-            g_runtime.gameplay_owner_strategic_targets[owner];
-        target.target_owner_id = kInvalidOwnerTransportQueueSlot;
-        target.blocked_owner_mask = 0;
-        target.preferred_target = nullptr;
-        target.has_preferred_target = false;
-        target.strategic_point = {
-            g_runtime.gameplay_player_slots.owner_start_x[owner],
-            g_runtime.gameplay_player_slots.owner_start_y[owner]};
-        target.has_strategic_point = target.strategic_point.x != -1;
-    }
-    g_runtime.gameplay_owner_threat_points = {};
-    g_runtime.gameplay_owner_production_placement_anchors = {};
-    g_runtime.gameplay_owner_production_placement_anchor_valid.fill(false);
-    g_runtime.gameplay_owner_production_placement_target_points.fill({-1, -1});
-    g_runtime.gameplay_owner_ai_reserved_primary_cost.fill(0);
+    ResetProductionOrderRuntimeState(g_runtime.gameplay_production_runtime);
 
     if (g_runtime.gameplay_production_catalog.definitions.empty()) {
         LoadProductionOrderCatalogFromJw210Trc(g_runtime.gameplay_production_catalog);
@@ -21985,7 +22965,10 @@ void sync_default_gameplay_end_condition_state() {
 }
 
 void refresh_default_owner_ai_target_profiles() {
-    sync_default_owner_ai_runtime_metadata(nullptr);
+    // Loaded mode-5 sessions restore DAT_007071a4 from primary record +0x140c.
+    // Passing a synthetic frame zero here would execute the fresh-start
+    // FUN_0043cc00 path and destroy the imported AI transport state.
+    sync_default_owner_ai_runtime_metadata(&gameplay_loop_state());
     SelectNearestHostilePlayerSlots(g_runtime.gameplay_player_slots);
 
     OwnerAiRuntimeState& owner_ai = g_runtime.gameplay_owner_ai_state;
@@ -22066,8 +23049,15 @@ UnitMovementPoint default_owner_ai_preferred_target_world_point(
 }
 
 void set_default_owner_ai_preferred_strategic_target(
-    OwnerStrategicTargetState& target, UnitMovementUnit& unit) {
+    u32 owner, OwnerStrategicTargetState& target, UnitMovementUnit& unit) {
     target.preferred_target = &unit;
+    if (owner < g_runtime.gameplay_owner_strategic_preferred_target_ids.size()) {
+        // Keep a stable fixed-pool identity beside the transient C++ pointer.
+        // Original pointers remain valid because the unit pool has a fixed
+        // address; this mirror lets a reconstructed fresh-session rebuild
+        // rebind the same slot after its objects are materialized again.
+        g_runtime.gameplay_owner_strategic_preferred_target_ids[owner] = unit.id;
+    }
     target.preferred_target_point =
         default_owner_ai_preferred_target_world_point(unit);
     target.strategic_point = target.preferred_target_point;
@@ -22642,8 +23632,6 @@ void default_owner_ai_refresh_placement_anchors(
 
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
     UnitMovementContext* movement = default_gameplay_movement_context();
-    g_runtime.gameplay_owner_production_placement_anchor_valid[owner] = false;
-    g_runtime.gameplay_owner_production_placement_target_points[owner] = {-1, -1};
     if (movement == nullptr) {
         return;
     }
@@ -22684,6 +23672,8 @@ void default_owner_ai_refresh_placement_anchors(
         // this pointer side effect was missing from the reconstructed path.
         target.preferred_target = placement_target;
         target.has_preferred_target = true;
+        g_runtime.gameplay_owner_strategic_preferred_target_ids[owner] =
+            placement_target->id;
     }
     if (placement_target == nullptr) {
         placement_target = FindOwnerFallbackTargetForCurrentTargetOwner(
@@ -22856,6 +23846,7 @@ void default_owner_ai_rebuild_route_targets(
     RebuildOwnerTransportRouteTargetsForOwnedUnits(
         g_runtime.gameplay_unit_commands,
         g_runtime.gameplay_owner_transport_routes[owner], owner);
+    g_runtime.gameplay_owner_transport_route_count_invalid[owner] = false;
 }
 
 void default_owner_ai_maintain_transport_route_targets(
@@ -22864,6 +23855,7 @@ void default_owner_ai_maintain_transport_route_targets(
         return;
     }
     g_runtime.gameplay_owner_ai_reserved_primary_cost[owner] = 0;
+    owner_ai.owners[owner].route_refresh_counter = 0;
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
     const u32 faction =
         g_runtime.gameplay_owner_ai_state.owner_faction_ids[owner];
@@ -22921,6 +23913,11 @@ void default_owner_ai_maintain_transport_route_targets(
         g_runtime.gameplay_owner_ai_reserved_primary_cost[owner] +=
             helper_resource_cost;
     }
+    owner_ai.owners[owner].route_refresh_counter =
+        g_runtime.gameplay_owner_ai_reserved_primary_cost[owner];
+    if (g_runtime.gameplay_owner_transport_routes[owner].route_count != 0) {
+        g_runtime.gameplay_owner_transport_route_count_invalid[owner] = false;
+    }
     sync_default_owner_command_runtime_slots(g_runtime.gameplay_unit_commands, owner);
 }
 
@@ -22952,6 +23949,8 @@ void default_owner_ai_process_production_orders(
         ProcessOwnerAiProductionOrderRequests(owner_ai, owner, input);
     g_runtime.gameplay_owner_ai_reserved_primary_cost[owner] +=
         result.reserved_primary_cost;
+    owner_ai.owners[owner].route_refresh_counter =
+        g_runtime.gameplay_owner_ai_reserved_primary_cost[owner];
 
     if (lifecycle != nullptr && owner < lifecycle->owner_primary_resources.size()) {
         lifecycle->owner_primary_resources[owner] =
@@ -23165,7 +24164,8 @@ bool UpdateOwnerStrategicTargetPoint(UnitCommandContext& context,
                 context, target, default_owner_ai_preferred_route_target,
                 default_owner_ai_preferred_building_target);
         if (preferred != nullptr) {
-            set_default_owner_ai_preferred_strategic_target(target, *preferred);
+            set_default_owner_ai_preferred_strategic_target(
+                owner, target, *preferred);
             refine_default_owner_strategic_target_path_window(owner, target);
             sync_default_owner_strategic_target_to_ai(owner, target);
             return true;
@@ -23429,6 +24429,8 @@ void default_owner_ai_process_production_demand(
         ProcessOwnerProductionDemandAndBuildPlan(
             g_runtime.gameplay_unit_commands, owner, demand_state, input);
     g_runtime.gameplay_owner_ai_reserved_primary_cost[owner] =
+        result.reserved_resource_cost;
+    owner_ai.owners[owner].route_refresh_counter =
         result.reserved_resource_cost;
     sync_default_owner_ai_route_object_candidates(route_object_candidates);
 
@@ -24371,6 +25373,10 @@ void initialize_default_gameplay_original_unit_pool_slots() {
         "start-slots: original pool active=%zu free=%zu rejected=%zu serialized_free=%zu",
         movement.active_units.size(), movement.free_units.size(), rejected.size(),
         g_runtime.gameplay_serialized_free_unit_slots.size());
+    // Record 19 is decoded before record 7's fixed pool has been materialized.
+    // Its original 32-bit pointers were retained as pool-byte ids during
+    // import; bind the typed route view only after every live pool node exists.
+    bind_default_owner_transport_route_units();
 }
 
 void purge_default_inactive_movement_units(UnitMovementContext& movement) {

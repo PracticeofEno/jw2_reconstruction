@@ -99,6 +99,9 @@ struct OwnerAiSlotRuntime {
     u32 profile_counter = 0;
     std::array<u32, kOwnerAiUnitTypeCount> unit_demand{};
     std::array<u32, kOwnerAiUnitTypeCount> unit_demand_shadow{};
+    // Original DAT_01230a08.  Despite the historical name, this is the
+    // per-owner primary-resource amount reserved by the current AI pass.
+    // Route maintenance clears it; profile reload/reset deliberately does not.
     u32 route_refresh_counter = 0;
     u32 script_cycle_counter = 0;
     i32 previous_script_cycle_counter = -1;

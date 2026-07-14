@@ -107,7 +107,7 @@ const std::vector<GameplaySessionExportRecordSpec>& default_session_export_specs
         {"HILL", 4, 0},
         {"FOGMAP3", 0x40000, 2},
         {"VSBGI", 0x40000, 2},
-        {"OWNER_AI", 0, 2},
+        {"AI", 0x9d80, 2},
     };
     return specs;
 }
@@ -131,7 +131,7 @@ const std::vector<GameplaySessionFixedRecordSpec>& default_session_import_specs(
         {14, "FOGBGI", 0x40000, 2},
         {17, "FOGMAP3", 0x40000, 2},
         {18, "VSBGI", 0x40000, 2},
-        {19, "OWNER_AI", 0, 2},
+        {19, "AI", 0x9d80, 2},
     };
     return specs;
 }

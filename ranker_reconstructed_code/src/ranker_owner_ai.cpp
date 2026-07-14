@@ -46,6 +46,7 @@ constexpr u32 kSecondaryBudget = 0x06e0;
 constexpr u32 kResourceBudgetPercent = 0x0700;
 constexpr u32 kSecondaryMode = 0x0720;
 constexpr u32 kProfileCounter = 0x0a00;
+constexpr u32 kRouteRefreshCounter = 0x0ae0;
 
 constexpr u32 kUnitDemand = 0x0b00;
 constexpr u32 kUnitDemandShadow = 0x2040;
@@ -66,6 +67,7 @@ constexpr u32 kReserveDelay = 0x3700;
 constexpr u32 kStrategicRetargetQuotaFloor = 0x3720;
 constexpr u32 kRouteTargetScore = 0x3740;
 constexpr u32 kProfileGateFlag = 0x3760;
+constexpr u32 kProfileResetAuxiliaryFlag = 0x3780;
 constexpr u32 kSharedPlannerTable = 0x37a0;
 
 constexpr u32 kRouteRadius = 0x8fa0;
@@ -189,6 +191,8 @@ void hydrate_owner_ai_runtime_from_snapshot(OwnerAiRuntimeState& state) {
             bytes, owner_dword(kSecondaryMode, owner_index));
         owner.profile_counter = read_owner_ai_snapshot_u32(
             bytes, owner_dword(kProfileCounter, owner_index));
+        owner.route_refresh_counter = read_owner_ai_snapshot_u32(
+            bytes, owner_dword(kRouteRefreshCounter, owner_index));
 
         const u32 demand_base =
             kUnitDemand + owner_index * kUnitDemandOwnerStride;
@@ -345,6 +349,9 @@ void overlay_owner_ai_runtime_on_snapshot(const OwnerAiRuntimeState& state,
             owner_dword(kSecondaryMode, owner_index), owner.secondary_mode);
         write_owner_ai_snapshot_u32(bytes,
             owner_dword(kProfileCounter, owner_index), owner.profile_counter);
+        write_owner_ai_snapshot_u32(bytes,
+            owner_dword(kRouteRefreshCounter, owner_index),
+            owner.route_refresh_counter);
 
         const u32 demand_base =
             kUnitDemand + owner_index * kUnitDemandOwnerStride;
@@ -1624,6 +1631,14 @@ void RefreshOwnerTargetDataForSlot(OwnerAiRuntimeState& state,
 
     if (state.frame_counter == 0) {
         ResetOwnerAiSlotRuntime(state, player_slots, owner_slot);
+        if (state.profile_reload_reset != nullptr) {
+            // FUN_0043c730 uses the same FUN_0043cc00 reset for a frame-zero
+            // startup as opcode 96 uses for a profile reload.  Notify the
+            // gameplay host so its separately typed queue/route mirrors make
+            // the identical transition too.
+            state.profile_reload_reset(state, owner_slot,
+                state.profile_reload_reset_user_data);
+        }
     }
 }
 
@@ -1672,7 +1687,9 @@ void ResetOwnerAiSlotRuntime(OwnerAiRuntimeState& state,
     owner.profile_counter = 0;
     owner.unit_demand.fill(0);
     owner.unit_demand_shadow.fill(0);
-    owner.route_refresh_counter = 0;
+    // DAT_01230a08 is not part of FUN_0043cc00.  It is cleared at the start
+    // of HandleOwnerTransportRouteTargetMaintenance instead, so a profile
+    // reload must preserve the in-progress reserved-resource value.
     owner.script_cycle_counter = 0;
     owner.previous_script_cycle_counter = -1;
     owner.script_enabled = 1;
@@ -1685,7 +1702,13 @@ void ResetOwnerAiSlotRuntime(OwnerAiRuntimeState& state,
     owner.strategic_retarget_quota_floor = 0xffffffffu;
     owner.route_target_score = 100;
     owner.profile_gate_flag = 0;
-    owner.production_pause_flag = 0;
+    // FUN_0043cc00 clears the otherwise-untyped owner dword at +0x3780.
+    // +0x94c0 (production_pause_flag) is a reserved production cost and is
+    // deliberately preserved here; FUN_0044e200 clears it at frame one.
+    write_owner_ai_snapshot_u32(state.snapshot_bytes,
+        owner_ai_snapshot_layout::kProfileResetAuxiliaryFlag +
+            owner_slot * sizeof(u32),
+        0);
     owner.route_radius = 0x46;
     owner.primary_target_point = start;
     owner.primary_target_radius = 0x14;
