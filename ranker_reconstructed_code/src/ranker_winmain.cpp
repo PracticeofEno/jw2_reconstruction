@@ -23573,6 +23573,16 @@ void run_default_owner_ai_maintenance(GameplayLoopState& state) {
         return;
     }
 
+    // The original direction tables are global and already live when the
+    // first owner-AI placement-anchor refresh runs.  Phase 1 calls owner AI
+    // before prepare_default_unit_runtime_command_dispatch, so waiting for
+    // that later preparation leaves direction_lookup_8 null on the first
+    // refresh and changes shallow axis vectors into diagonal fallback
+    // directions (for example (2,-5): original 1, fallback 2).
+    if (lifecycle->movement != nullptr) {
+        configure_default_unit_movement_callbacks(*lifecycle->movement);
+    }
+
     HandleOwnerUnitTypeCountRebuild(*lifecycle);
     configure_default_unit_command_context(g_runtime.gameplay_unit_commands,
         *lifecycle, state.simulation_frame_counter);
