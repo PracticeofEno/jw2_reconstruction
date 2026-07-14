@@ -2667,7 +2667,6 @@ OwnerAiProductionOrderPlanResult ProcessOwnerAiProductionOrderRequests(
                 reserved_primary_cost, input);
         switch (selection.action) {
         case OwnerAiProductionOrderActionCode::reserve_primary_cost:
-            result.reserved_primary_cost += selection.primary_cost;
             owner.production_pause_flag += selection.primary_cost;
             break;
         case OwnerAiProductionOrderActionCode::demand_primary_unit:
