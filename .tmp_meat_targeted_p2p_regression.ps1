@@ -712,11 +712,37 @@ try {
         $dy = [Int64]([int]$_.world[1] - [int]$spawn.rebuild.y)
         $dx * $dx + $dy * $dy
     }})
-    $collector = @($collectors | Select-Object -First 1)[0]
-    if ($null -eq $collector) { throw 'No live collector remained after combat.' }
+    if ($collectors.Count -eq 0) {
+        throw 'No live collector remained after combat.'
+    }
+
+    # Combatants frequently finish stacked on the meat/neutral corpse.  A
+    # click at the first candidate's sprite centre can therefore select a
+    # different survivor even though the candidate is still alive.  Try the
+    # remaining live candidates before classifying this as product failure.
+    $collector = $null
+    $selected = $null
+    $collectorSelectionErrors = @()
+    foreach ($candidate in $collectors) {
+        try {
+            $selected = Select-Unit (Get-RebuildSnapshot) $candidate
+            $collector = $candidate
+            break
+        }
+        catch {
+            $collectorSelectionErrors += [ordered]@{
+                slot = [int]$candidate.slot
+                id = [int]$candidate.id
+                error = $_.Exception.Message
+            }
+        }
+    }
+    if ($null -eq $collector -or $null -eq $selected) {
+        throw ('No live collector could be selected after combat: ' +
+            ($collectorSelectionErrors | ConvertTo-Json -Compress -Depth 4))
+    }
     $collectorSlot = [int]$collector.slot
     $markerBefore = Get-PairedUnitCondition $collectorSlot 'snapshot' 10
-    $selected = Select-Unit $collectorSnapshot $collector
     $selectedWithMarkerButton = Click-HotItem $selected 183
     $markerAfter = Get-PairedUnitCondition $collectorSlot 'marker' 15
     $markerPass = [bool]$markerAfter.matched -and
@@ -728,6 +754,7 @@ try {
         hot_item = 183
         action = 0x0d
         collector_slot = $collectorSlot
+        selection_fallbacks = $collectorSelectionErrors
         before = $markerBefore
         after = $markerAfter
     }
