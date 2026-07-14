@@ -859,6 +859,34 @@ constexpr std::array<u32, 4> kDefaultOwnerAiOversizedPassengerOrderIds{{
     0x08, 0xffffffffu, 0xffffffffu, 0xffffffffu,
 }};
 
+constexpr std::array<u32, kOwnerUnitTypeCountSlots>
+build_default_owner_ai_placement_selector_classes() {
+    std::array<u32, kOwnerUnitTypeCountSlots> result{};
+    for (u32 unit_type = 0; unit_type < 80; unit_type += 2) {
+        result[unit_type] = 0xffffffffu;
+    }
+    constexpr std::array<u32, 90> tail{{
+        0xffffffffu, 0, 0xffffffffu, 0, 0xffffffffu, 0, 15, 23,
+        0xffffffffu, 0, 92, 24, 2, 25, 6, 26,
+        0, 5, 1, 4, 2, 2, 2, 2, 3, 3, 4, 3, 3, 5, 5, 5,
+        0, 5, 1, 4, 2, 2, 2, 2, 3, 3, 3, 2, 3, 5, 5, 5,
+        0, 5, 1, 4, 2, 3, 3, 2, 3, 3, 3, 5, 5, 5, 5, 5,
+        0, 5, 1, 4, 2, 2, 2, 2, 3, 3, 3, 3, 5, 5, 5, 5,
+        5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    }};
+    for (u32 index = 0; index < tail.size(); ++index) {
+        result[80 + index] = tail[index];
+    }
+    return result;
+}
+
+// Original DAT_00704cf8.  FindOwnerProductionPlacementPoint indexes this
+// fixed selector table rather than the similarly named JW2_09 raw field.
+constexpr auto kDefaultOwnerAiPlacementSelectorClasses =
+    build_default_owner_ai_placement_selector_classes();
+static_assert(kDefaultOwnerAiPlacementSelectorClasses[0x82] == 1);
+static_assert(kDefaultOwnerAiPlacementSelectorClasses[0x84] == 2);
+
 OriginalRoutineRef kWinMainRoutines[] = {
     {"Ranker_WinMain", 0x00407250, "Game WinMain reached from MSVC CRT startup."},
     {"RouteMainWindowFrontendNetworkMessage", 0x00406190,
@@ -23042,6 +23070,8 @@ void default_owner_ai_process_production_demand(
         target_owner < kOwnerAiOwnerCount ? &target_counts : nullptr;
     input.producer_unit_types =
         &g_runtime.unit_reference_tables.primary_or_alternate_reverse;
+    input.placement_selector_classes =
+        &kDefaultOwnerAiPlacementSelectorClasses;
     input.route_object_requirements =
         &default_owner_ai_route_object_requirements();
     input.route_state = &g_runtime.gameplay_owner_transport_routes[owner];

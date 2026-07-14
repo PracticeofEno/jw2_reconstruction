@@ -559,6 +559,8 @@ struct OwnerProductionDemandBuildPlanInput {
     const OwnerUnitTypeCounts* owner_unit_counts = nullptr;
     const OwnerUnitTypeCounts* target_owner_counts = nullptr;
     const std::array<u32, kOwnerUnitTypeCountSlots>* producer_unit_types = nullptr;
+    const std::array<u32, kOwnerUnitTypeCountSlots>* placement_selector_classes =
+        nullptr;
     const std::array<OwnerProductionRouteObjectRequirement,
         kOwnerUnitTypeCountSlots>* route_object_requirements = nullptr;
     const std::array<u32, kOwnerProductionAuxDependencySlotCount>*

@@ -10971,18 +10971,27 @@ OwnerProductionPlacementSearchResult find_owner_extended_placement_point(
         return result;
     }
 
+    // FindOwnerProductionPlacementPoint 0x00446ff8 reads the unit-type
+    // selector from DAT_00704cf8.  This table is distinct from JW2_09 raw
+    // definition +0x150, despite both values describing placement behavior.
+    const u32 placement_class =
+        input.placement_selector_classes != nullptr &&
+            unit_type < input.placement_selector_classes->size()
+        ? (*input.placement_selector_classes)[unit_type]
+        : definition->placement_class;
+
     // FindOwnerProductionPlacementPoint 0x0044705f..0x00447105 has cases
     // only for placement classes 1..5.  A zero/out-of-range class leaves its
     // debug-filled anchor locals invalid, so the 30-ring scan cannot publish
     // a placement point.  Do not turn that original no-placement branch into
     // a base-anchor placement through the selector's convenience fallback.
-    if (definition->placement_class < 1 || definition->placement_class > 5) {
+    if (placement_class < 1 || placement_class > 5) {
         return result;
     }
 
     const UnitMovementPoint anchor_tile =
         SelectOwnerProductionPlacementAnchorPoint(*input.placement_anchors,
-            definition->placement_class, owner_count_for_type(owner_counts,
+            placement_class, owner_count_for_type(owner_counts,
                 unit_type));
     result = FindOwnerProductionPlacementPointSpiral(anchor_tile,
         owner_extended_placement_candidate, &search);
