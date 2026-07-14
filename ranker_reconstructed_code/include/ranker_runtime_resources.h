@@ -262,9 +262,16 @@ bool ReloadUnitImageResourcesFromJw220Archive();
 bool LoadJw212RuntimeCatalogRecord(const char* archive_name, u32 record_index,
     u32 catalog_index);
 bool LoadJw212RuntimeCatalog(const char* archive_name = "JW2_12.TRC");
+bool CopyPristineJw212RuntimeDefinitionBytes(
+    std::vector<std::vector<u8>>& definitions);
 bool LoadJw211RuntimeCatalogRecord(const char* archive_name, u32 record_index,
     u32 catalog_index);
 bool LoadJw211RuntimeCatalog(const char* archive_name = "JW2_11.TRC");
+bool CopyPristineJw211RuntimeDefinitionBytes(
+    std::vector<std::vector<u8>>& definitions);
+bool PublishJw21xSessionRuntimeTailDefinitionBytes(
+    std::vector<std::vector<u8>> jw212_definitions,
+    std::vector<std::vector<u8>> jw211_definitions);
 bool ReloadUnitResourcePackForCurrentVariant();
 bool ToggleUnitResourcePackVariantAndReload(bool* setup_write_requested = nullptr);
 u32 ResetLoadedUnitDefinitionConstructionTimers(u32 ticks = 10);

@@ -6563,6 +6563,113 @@ bool write_default_session_pair_snapshot_record(SessionRuntimeBufferPair& pair,
     return true;
 }
 
+bool copy_default_pristine_auxiliary_runtime_records(
+    std::vector<RuntimeDefinitionRecord>& tail8_records,
+    std::vector<RuntimeDefinitionRecord>& tail4_records) {
+    tail8_records.clear();
+    tail4_records.clear();
+
+    std::vector<std::vector<u8>> jw212_definitions;
+    std::vector<std::vector<u8>> jw211_definitions;
+    if (!CopyPristineJw212RuntimeDefinitionBytes(jw212_definitions) ||
+        !CopyPristineJw211RuntimeDefinitionBytes(jw211_definitions)) {
+        return false;
+    }
+
+    tail8_records.resize(jw212_definitions.size());
+    for (std::size_t index = 0; index < jw212_definitions.size(); ++index) {
+        tail8_records[index].bytes = std::move(jw212_definitions[index]);
+    }
+    tail4_records.resize(jw211_definitions.size());
+    for (std::size_t index = 0; index < jw211_definitions.size(); ++index) {
+        tail4_records[index].bytes = std::move(jw211_definitions[index]);
+    }
+    return true;
+}
+
+void seed_default_session_runtime_base_auxiliary_snapshots(
+    SessionRuntimeBufferPairs& buffers) {
+    std::vector<RuntimeDefinitionRecord> tail8_records;
+    std::vector<RuntimeDefinitionRecord> tail4_records;
+    if (!copy_default_pristine_auxiliary_runtime_records(
+            tail8_records, tail4_records)) {
+        return;
+    }
+
+    SessionRuntimeBufferPair& tail8 = buffers.categories[3];
+    const u32 tail8_count = std::min<u32>(tail8.count,
+        static_cast<u32>(tail8_records.size()));
+    for (u32 index = 0; index < tail8_count; ++index) {
+        RuntimeDefinitionRecord compact{};
+        if (ExportEightDwordSessionRuntimeTailRecord(
+                compact, tail8_records[index])) {
+            write_default_session_pair_snapshot_record(
+                tail8, index, compact);
+        }
+    }
+
+    SessionRuntimeBufferPair& tail4 = buffers.categories[4];
+    const u32 tail4_count = std::min<u32>(tail4.count,
+        static_cast<u32>(tail4_records.size()));
+    for (u32 index = 0; index < tail4_count; ++index) {
+        RuntimeDefinitionRecord compact{};
+        if (ExportFourDwordSessionRuntimeTailRecord(
+                compact, tail4_records[index])) {
+            write_default_session_pair_snapshot_record(
+                tail4, index, compact);
+        }
+    }
+}
+
+bool seed_default_active_session_auxiliary_definitions_from_catalog() {
+    return copy_default_pristine_auxiliary_runtime_records(
+        g_runtime.active_session_definitions.tail8_records,
+        g_runtime.active_session_definitions.tail4_records);
+}
+
+bool publish_default_active_session_auxiliary_definitions() {
+    const auto& tail8_records =
+        g_runtime.active_session_definitions.tail8_records;
+    const auto& tail4_records =
+        g_runtime.active_session_definitions.tail4_records;
+    if (tail8_records.size() != kJw212RuntimeCatalogCount ||
+        tail4_records.size() != kJw211RuntimeCatalogCount) {
+        return false;
+    }
+
+    std::vector<std::vector<u8>> jw212_definitions(tail8_records.size());
+    for (std::size_t index = 0; index < tail8_records.size(); ++index) {
+        if (tail8_records[index].bytes.size() !=
+            kAuxiliaryRuntimeCatalogRecordBytes) {
+            return false;
+        }
+        jw212_definitions[index] = tail8_records[index].bytes;
+    }
+    std::vector<std::vector<u8>> jw211_definitions(tail4_records.size());
+    for (std::size_t index = 0; index < tail4_records.size(); ++index) {
+        if (tail4_records[index].bytes.size() !=
+            kAuxiliaryRuntimeCatalogRecordBytes) {
+            return false;
+        }
+        jw211_definitions[index] = tail4_records[index].bytes;
+    }
+
+    if (!PublishJw21xSessionRuntimeTailDefinitionBytes(
+            std::move(jw212_definitions), std::move(jw211_definitions))) {
+        return false;
+    }
+
+    g_runtime.gameplay_action_damage_profiles = UnitActionDamageProfileTable{};
+    g_runtime.gameplay_action_damage_profiles_initialized = false;
+    g_runtime.gameplay_unit_effect_runtime.definitions.clear();
+    g_runtime.gameplay_unit_effect_runtime.linked_health_restore_secondary_cost = 0;
+    g_runtime.gameplay_unit_effect_runtime.linked_health_restore_amount = 0;
+    g_runtime.gameplay_unit_effect_runtime.linked_health_restore_globals_loaded = false;
+    g_runtime.gameplay_unit_effect_definitions_initialized = false;
+    gameplay_production_action_state().definitions.clear();
+    return true;
+}
+
 void seed_default_session_runtime_base_unit_snapshot(
     SessionRuntimeBufferPairs& buffers) {
     if (!unit_definition_resource_catalog_state().loaded &&
@@ -6674,6 +6781,7 @@ void initialize_default_session_runtime_staging_buffers(
     // DAT_01243284/88/8c and are only overlaid by the mode-5 branch.
     seed_default_session_runtime_base_unit_snapshot(buffers);
     seed_default_session_runtime_base_production_snapshot(buffers);
+    seed_default_session_runtime_base_auxiliary_snapshots(buffers);
 }
 
 bool unpack_default_session_runtime_records(
@@ -7065,6 +7173,7 @@ void prepare_default_base_session_runtime_definition_import() {
     // catch-up, matching 0x4d1ccc -> 0x450f90.
     ResetProductionOrderRuntimeState(g_runtime.gameplay_production_runtime);
     seed_default_active_session_unit_definitions_from_catalog();
+    seed_default_active_session_auxiliary_definitions_from_catalog();
     if (!sync_default_production_catalog_from_runtime_records(
             g_runtime.base_session_definitions.production_order_records, 4)) {
         ProductionOrderCatalog base_catalog;
@@ -7130,6 +7239,10 @@ void refresh_default_units_after_runtime_definition_import() {
 }
 
 void finalize_default_session_runtime_definition_import() {
+    if (!publish_default_active_session_auxiliary_definitions()) {
+        append_startup_log(
+            "session runtime auxiliary tail publication failed");
+    }
     sync_default_production_catalog_from_runtime_records(
         g_runtime.active_session_definitions.production_order_records, 0);
     sync_default_active_session_unit_names();

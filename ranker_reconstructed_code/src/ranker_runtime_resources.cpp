@@ -38,6 +38,8 @@ Jw207ResourcePackState g_jw207_resources;
 UnitDefinitionResourceCatalogState g_unit_definition_resources;
 AuxiliaryRuntimeCatalogState g_jw212_catalog;
 AuxiliaryRuntimeCatalogState g_jw211_catalog;
+std::vector<std::vector<u8>> g_jw212_pristine_definition_bytes;
+std::vector<std::vector<u8>> g_jw211_pristine_definition_bytes;
 GameplaySessionLoadState g_gameplay_session_load;
 GameplaySessionExportState g_gameplay_session_export;
 
@@ -506,6 +508,81 @@ bool load_auxiliary_runtime_catalog_record(AuxiliaryRuntimeCatalogState& state,
     }
     CloseTrcRecordReader(reader);
     return true;
+}
+
+bool snapshot_auxiliary_runtime_definition_bytes(
+    const AuxiliaryRuntimeCatalogState& state, std::size_t expected_count,
+    std::vector<std::vector<u8>>& definitions) {
+    definitions.clear();
+    if (state.records.size() != expected_count) {
+        return false;
+    }
+    definitions.reserve(state.records.size());
+    for (const AuxiliaryRuntimeCatalogRecord& record : state.records) {
+        if (!record.loaded) {
+            if (!record.definition_bytes.empty()) {
+                definitions.clear();
+                return false;
+            }
+            // The original allocates the complete live table up front.  TRC
+            // sentinel records (original size < 0x14) therefore remain valid
+            // zero-filled 0xadc rows even though no auxiliary resources were
+            // loaded for them.
+            definitions.emplace_back(kAuxiliaryRuntimeCatalogRecordBytes, 0);
+            continue;
+        }
+        if (record.definition_bytes.size() !=
+            kAuxiliaryRuntimeCatalogRecordBytes) {
+            definitions.clear();
+            return false;
+        }
+        definitions.push_back(record.definition_bytes);
+    }
+    return true;
+}
+
+template <std::size_t TailCount>
+bool validate_auxiliary_session_tail_definition_bytes(
+    const AuxiliaryRuntimeCatalogState& state, std::size_t expected_count,
+    const std::vector<std::vector<u8>>& definitions,
+    const std::vector<std::vector<u8>>& pristine_definitions,
+    const std::array<std::size_t, TailCount>& tail_offsets) {
+    if (!state.loaded || state.records.size() != expected_count ||
+        definitions.size() != expected_count ||
+        pristine_definitions.size() != expected_count) {
+        return false;
+    }
+    for (std::size_t index = 0; index < definitions.size(); ++index) {
+        const std::vector<u8>& definition = definitions[index];
+        const std::vector<u8>& pristine = pristine_definitions[index];
+        if (definition.size() != kAuxiliaryRuntimeCatalogRecordBytes ||
+            pristine.size() != kAuxiliaryRuntimeCatalogRecordBytes) {
+            return false;
+        }
+        for (std::size_t offset = 0; offset < definition.size(); ++offset) {
+            const bool session_tail_byte = std::any_of(
+                tail_offsets.begin(), tail_offsets.end(),
+                [offset](std::size_t tail_offset) {
+                    return offset >= tail_offset &&
+                        offset < tail_offset + sizeof(u32);
+                });
+            if (!session_tail_byte && definition[offset] != pristine[offset]) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+void commit_auxiliary_runtime_definition_bytes(
+    AuxiliaryRuntimeCatalogState& state,
+    std::vector<std::vector<u8>>& definitions) {
+    for (std::size_t index = 0; index < definitions.size(); ++index) {
+        // Map runtime overrides change only the live 0xadc definition row.
+        // Palette/image/sound allocations remain owned by the pristine TRC
+        // record exactly as they do in the original live-table copies.
+        state.records[index].definition_bytes.swap(definitions[index]);
+    }
 }
 
 void reset_gameplay_session_load_state(const char* archive_name, u32 base_record_index) {
@@ -1424,11 +1501,14 @@ bool LoadJw212RuntimeCatalogRecord(const char* archive_name, u32 record_index,
     if (g_jw212_catalog.records.empty()) {
         reset_auxiliary_catalog(g_jw212_catalog, archive_name, kJw212RuntimeCatalogCount);
     }
+    g_jw212_catalog.loaded = false;
+    g_jw212_pristine_definition_bytes.clear();
     return load_auxiliary_runtime_catalog_record(g_jw212_catalog, archive_name, record_index,
         catalog_index);
 }
 
 bool LoadJw212RuntimeCatalog(const char* archive_name) {
+    g_jw212_pristine_definition_bytes.clear();
     reset_auxiliary_catalog(g_jw212_catalog, archive_name, kJw212RuntimeCatalogCount);
     if (g_jw212_catalog.archive_name.empty()) {
         return false;
@@ -1442,6 +1522,30 @@ bool LoadJw212RuntimeCatalog(const char* archive_name) {
         }
     }
     g_jw212_catalog.loaded = true;
+    if (!snapshot_auxiliary_runtime_definition_bytes(g_jw212_catalog,
+            kJw212RuntimeCatalogCount, g_jw212_pristine_definition_bytes)) {
+        g_jw212_catalog.loaded = false;
+        return false;
+    }
+    return true;
+}
+
+bool CopyPristineJw212RuntimeDefinitionBytes(
+    std::vector<std::vector<u8>>& definitions) {
+    if (g_jw212_pristine_definition_bytes.size() !=
+        kJw212RuntimeCatalogCount) {
+        if (!g_jw212_catalog.loaded && !LoadJw212RuntimeCatalog()) {
+            definitions.clear();
+            return false;
+        }
+        if (!snapshot_auxiliary_runtime_definition_bytes(g_jw212_catalog,
+                kJw212RuntimeCatalogCount,
+                g_jw212_pristine_definition_bytes)) {
+            definitions.clear();
+            return false;
+        }
+    }
+    definitions = g_jw212_pristine_definition_bytes;
     return true;
 }
 
@@ -1450,11 +1554,14 @@ bool LoadJw211RuntimeCatalogRecord(const char* archive_name, u32 record_index,
     if (g_jw211_catalog.records.empty()) {
         reset_auxiliary_catalog(g_jw211_catalog, archive_name, kJw211RuntimeCatalogCount);
     }
+    g_jw211_catalog.loaded = false;
+    g_jw211_pristine_definition_bytes.clear();
     return load_auxiliary_runtime_catalog_record(g_jw211_catalog, archive_name, record_index,
         catalog_index);
 }
 
 bool LoadJw211RuntimeCatalog(const char* archive_name) {
+    g_jw211_pristine_definition_bytes.clear();
     reset_auxiliary_catalog(g_jw211_catalog, archive_name, kJw211RuntimeCatalogCount);
     if (g_jw211_catalog.archive_name.empty()) {
         return false;
@@ -1476,7 +1583,71 @@ bool LoadJw211RuntimeCatalog(const char* archive_name) {
         }
     }
     g_jw211_catalog.loaded = true;
+    if (!snapshot_auxiliary_runtime_definition_bytes(g_jw211_catalog,
+            kJw211RuntimeCatalogCount, g_jw211_pristine_definition_bytes)) {
+        g_jw211_catalog.loaded = false;
+        return false;
+    }
     append_runtime_resource_log("jw211 catalog ok");
+    return true;
+}
+
+bool CopyPristineJw211RuntimeDefinitionBytes(
+    std::vector<std::vector<u8>>& definitions) {
+    if (g_jw211_pristine_definition_bytes.size() !=
+        kJw211RuntimeCatalogCount) {
+        if (!g_jw211_catalog.loaded && !LoadJw211RuntimeCatalog()) {
+            definitions.clear();
+            return false;
+        }
+        if (!snapshot_auxiliary_runtime_definition_bytes(g_jw211_catalog,
+                kJw211RuntimeCatalogCount,
+                g_jw211_pristine_definition_bytes)) {
+            definitions.clear();
+            return false;
+        }
+    }
+    definitions = g_jw211_pristine_definition_bytes;
+    return true;
+}
+
+bool PublishJw21xSessionRuntimeTailDefinitionBytes(
+    std::vector<std::vector<u8>> jw212_definitions,
+    std::vector<std::vector<u8>> jw211_definitions) {
+    // Session publication is deliberately side-effect free on failure.  The
+    // bootstrap/pristine-copy path must have prepared both catalogs first;
+    // attempting a sequential lazy reload here could otherwise leave only
+    // one resource catalog replaced when the second archive is damaged.
+    if (!g_jw212_catalog.loaded || !g_jw211_catalog.loaded ||
+        g_jw212_pristine_definition_bytes.size() !=
+            kJw212RuntimeCatalogCount ||
+        g_jw211_pristine_definition_bytes.size() !=
+            kJw211RuntimeCatalogCount) {
+        return false;
+    }
+
+    static constexpr std::array<std::size_t, 8> kJw212TailOffsets{
+        0x170, 0x174, 0x178, 0x17c, 0x180, 0x184, 0x188, 0x18c,
+    };
+    static constexpr std::array<std::size_t, 4> kJw211TailOffsets{
+        0x1e0, 0x1e4, 0x15c, 0x160,
+    };
+    if (!validate_auxiliary_session_tail_definition_bytes(g_jw212_catalog,
+            kJw212RuntimeCatalogCount, jw212_definitions,
+            g_jw212_pristine_definition_bytes, kJw212TailOffsets) ||
+        !validate_auxiliary_session_tail_definition_bytes(g_jw211_catalog,
+            kJw211RuntimeCatalogCount, jw211_definitions,
+            g_jw211_pristine_definition_bytes, kJw211TailOffsets)) {
+        return false;
+    }
+
+    // All validation and allocation happened before this point.  Vector swap
+    // makes the two live-table commits non-throwing, so a failed second table
+    // can never leave a mixed JW2_12/JW2_11 session catalog.
+    commit_auxiliary_runtime_definition_bytes(
+        g_jw212_catalog, jw212_definitions);
+    commit_auxiliary_runtime_definition_bytes(
+        g_jw211_catalog, jw211_definitions);
     return true;
 }
 
