@@ -260,6 +260,150 @@ void test_normal_and_reserved_harvest_frame_order() {
     g_harvest_probe = nullptr;
 }
 
+UnitMovementUnit* g_reserved_dropoff = nullptr;
+u32 g_reserved_dropoff_calls = 0;
+u32 g_reserved_completion_calls = 0;
+
+UnitMovementUnit* find_reserved_dropoff(UnitCommandContext&,
+    UnitMovementUnit&) {
+    ++g_reserved_dropoff_calls;
+    return g_reserved_dropoff;
+}
+
+bool hold_reserved_completion(UnitCommandContext&, UnitMovementUnit&) {
+    ++g_reserved_completion_calls;
+    return false;
+}
+
+UnitMovementContext make_reserved_tile_movement(u32 width, u32 height) {
+    UnitMovementContext movement{};
+    movement.map.width = width;
+    movement.map.height = height;
+    movement.map.stride_tiles = width;
+    movement.map.cells.resize(static_cast<std::size_t>(width) * height);
+    for (UnitMovementCell& cell : movement.map.cells) {
+        cell.flags = kMapCellPassableTerrain;
+    }
+    return movement;
+}
+
+void test_reserved_tile_raw_dropoff_contract() {
+    // StartReservedTileWorkCommand 0x004cb1ed clears raw +0x74 and preserves
+    // the raw +0x80 dropoff override.
+    UnitMovementContext start_movement = make_reserved_tile_movement(4, 4);
+    UnitCommandContext start_context{};
+    start_context.movement = &start_movement;
+    UnitMovementUnit start{};
+    start.id = 0x1d0;
+    start.type_id = 0x10;
+    start.x = 63;
+    start.y = 47;
+    start.path_target_x = 32;
+    start.path_target_y = 32;
+    start.definition.range_threshold = 128;
+    start.previous_command_state = 1;
+    start.destination_aux_state = 0x5a0;
+    StartReservedTileWorkCommand(start_context, start);
+    require(start.previous_command_state == 0,
+        "reserved work start did not clear raw +0x74 previous state");
+    require(start.destination_aux_state == 0x5a0,
+        "reserved work start cleared the raw +0x80 dropoff override");
+
+    const auto run_completion = [](u32 override_id,
+                                    u32 expected_search_calls) {
+        UnitMovementContext movement = make_reserved_tile_movement(1, 1);
+        movement.map.cells[0].flags |=
+            100u << kMapCellHarvestAmountShift;
+
+        UnitMovementUnit stale{};
+        stale.id = 0x3a0;
+        stale.active = true;
+        UnitMovementUnit selected{};
+        selected.id = 0x570;
+        selected.active = true;
+        UnitMovementUnit worker{};
+        worker.id = 0x1d0;
+        worker.type_id = 0x10;
+        worker.active = true;
+        worker.command_state = kUnitStateReservedTileWork;
+        worker.animation_frame = 7;
+        worker.cargo_amount = 61;
+        worker.work_timer = 61;
+        worker.definition.spawn_frame_count = 0xffffffffu;
+        worker.destination_x = 0;
+        worker.destination_y = 0;
+        worker.target = &stale;
+        worker.command_value = stale.id;
+        worker.destination_aux_state = override_id;
+        movement.active_units = {&worker, &stale, &selected};
+        RegisterUnitReservedMapTile(movement, worker);
+
+        UnitCommandContext context{};
+        context.movement = &movement;
+        context.callbacks.find_dropoff = find_reserved_dropoff;
+        context.callbacks.on_reserved_tile_work_complete =
+            hold_reserved_completion;
+        g_reserved_dropoff = &selected;
+        g_reserved_dropoff_calls = 0;
+        g_reserved_completion_calls = 0;
+
+        HandleReservedTileWorkCycle(context, worker);
+        require(g_reserved_dropoff_calls == expected_search_calls,
+            "reserved completion used the wrong dropoff selection branch");
+        require(g_reserved_completion_calls == 1,
+            "reserved completion did not reach its completion callback");
+        require(worker.target == &selected &&
+                worker.command_value == selected.id,
+            "reserved completion did not persist selected dropoff at raw +0x68");
+        require(worker.command_state == kUnitStateReservedTileWork,
+            "completion-allocation failure did not retain state 0x54");
+    };
+
+    // A zero +0x80 must ignore the stale +0x68 target and search again.
+    run_completion(0, 1);
+    // A nonzero +0x80 resolves that unit without running nearest search, and
+    // still writes the selected offset back to raw +0x68.
+    run_completion(0x570, 0);
+    g_reserved_dropoff = nullptr;
+}
+
+void test_spawn_cancel_clears_structure_reverse_link() {
+    UnitMovementContext movement{};
+    UnitCommandContext context{};
+    context.movement = &movement;
+
+    UnitMovementUnit builder{};
+    builder.id = 0x1d0;
+    builder.type_id = 0x10;
+    builder.active = true;
+    builder.command_state = kUnitStateSpawnCreateCycle;
+    UnitMovementUnit structure{};
+    structure.id = 0x3a0;
+    structure.active = true;
+    builder.target = &structure;
+    builder.command_value = structure.id;
+    structure.target = &builder;
+    structure.command_value = builder.id;
+    movement.active_units = {&builder, &structure};
+
+    // The state-0x5b c6/aux6 button publishes command 0x06 with y == -1 and
+    // carries the linked structure offset as its command value.
+    builder.pending_command = UnitQueuedCommand{
+        0x06, static_cast<i32>(structure.id), 0x1234, 0xffffffffu};
+    HandlePendingUnitCommandDispatch(context, builder);
+    require(builder.command_state == kUnitStateSpawnPlacementStart &&
+            builder.target == nullptr &&
+            builder.command_value == structure.id &&
+            builder.path_target_y == -1,
+        "spawn cancel promotion did not reproduce the raw 0x06 tuple");
+
+    StartUnitSpawnPlacementCommand(context, builder);
+    require(structure.target == nullptr && structure.command_value == 0,
+        "spawn cancel left the structure's reciprocal raw +0x68 link intact");
+    require(builder.command_state == kUnitStateRuntimeIdleAcquire,
+        "spawn cancel did not return the builder to idle");
+}
+
 enum class HitTraceEvent {
     SimRandomY,
     SimRandomX,
@@ -492,6 +636,8 @@ int main() {
 
     test_meat_pipeline_is_silent();
     test_normal_and_reserved_harvest_frame_order();
+    test_reserved_tile_raw_dropoff_contract();
+    test_spawn_cancel_clears_structure_reverse_link();
     test_neutral_hit_rng_order();
     test_patrol_route_payload_and_saved_origin();
     test_patrol_distance_mode_preserves_raw_candidate();
@@ -499,6 +645,8 @@ int main() {
         "GAMEPLAY_RESOURCE_SOUND_BRANCH_PASS "
         "meat=silent spawn/pickup/right-click "
         "harvest=normal-post/reserved-pre "
+        "reserved=raw74/raw80/dropoff68 "
+        "spawn-cancel=reverse-link-clear "
         "neutral-hit=sim-Y/X/1-in-4-then-group0 "
         "patrol=active-payload/origin/raw-candidate\n";
     return EXIT_SUCCESS;

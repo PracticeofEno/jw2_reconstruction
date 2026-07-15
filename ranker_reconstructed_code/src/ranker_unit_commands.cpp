@@ -4998,10 +4998,15 @@ void StartReservedTileWorkCommand(UnitCommandContext& context, UnitMovementUnit&
     unit.path_target_y = static_cast<i32>(tile_y * 32 + 15);
     unit.destination_x = unit.path_target_x;
     unit.destination_y = unit.path_target_y;
-    unit.destination_aux_state = 0;
-    // StartReservedTileWorkCommand (0x004cb1b0) writes raw path target
-    // +0x6c/+0x70 and destination +0x78/+0x7c only.  Anchor +0xd0/+0xd4
-    // remains at the worker's current cell until a later command transition.
+    // StartReservedTileWorkCommand 0x004cb1ed clears raw unit +0x74.  The
+    // cached dropoff override at raw +0x80 is deliberately retained for the
+    // completion branch; clearing it here sends the worker to a different
+    // structure and leaves the previous-command auxiliary-timer gate armed.
+    unit.previous_command_state = 0;
+    // Apart from the +0x74 reset, StartReservedTileWorkCommand (0x004cb1b0)
+    // writes raw path target +0x6c/+0x70 and destination +0x78/+0x7c only.
+    // Anchor +0xd0/+0xd4 remains at the worker's current cell until a later
+    // command transition.
     // Copying the berry point into the anchor forked AI workers at frame 1.
 
     const UnitArrivalCheck arrival = CheckUnitRangeDestinationStatus(movement(context), unit);
@@ -5066,18 +5071,21 @@ void HandleReservedTileWorkCycle(UnitCommandContext& context, UnitMovementUnit& 
         ProcessHarvestableTileAmount(movement(context).map, release.tile_index, amount);
     unit.work_timer = unit.cargo_amount;
 
-    UnitMovementUnit* target = unit.target;
-    // The completion path consumes the raw stored pointer even when that
-    // target entered command-dead/hidden state in the same simulation frame.
-    // A replacement dropoff search occurs only for an absent pointer.
-    if (target == nullptr) {
-        target = find_dropoff(context, unit);
-    }
+    // HandleReservedTileWorkCycle 0x004cb327 reads the cached raw +0x80
+    // override, or performs a fresh nearest-owner dropoff search when it is
+    // zero.  The stale typed target/raw +0x68 from an earlier cycle is never
+    // the selector for this state.
+    UnitMovementUnit* target = unit.destination_aux_state != 0 ?
+        find_unit_by_id(context, unit.destination_aux_state) :
+        find_dropoff(context, unit);
     if (target == nullptr) {
         PopDeferredUnitCommandOrReturnIdle(context, unit);
         return;
     }
+    // 0x004cb33c always persists the selected pool offset at raw +0x68,
+    // including the +0x80 override case.
     unit.target = target;
+    unit.command_value = target->id;
     unit.reserved_tile_effect = nullptr;
     unit.reserved_tile_effect_slot_offset = 0;
 
@@ -5211,8 +5219,15 @@ void HandleReservedTileRetryDelay(UnitCommandContext& context, UnitMovementUnit&
 
 void StartUnitSpawnPlacementCommand(UnitCommandContext& context, UnitMovementUnit& unit) {
     if (unit.path_target_y == -1) {
-        if (unit.target != nullptr) {
-            unit.target->target = nullptr;
+        // Command 0x06 promotion clears the typed target before entering
+        // state 0x5a, but preserves the linked structure's pool offset in raw
+        // +0x68.  Resolve that offset and clear the structure's reciprocal raw
+        // link exactly as 0x004cb669..0x004cb66f does.
+        UnitMovementUnit* linked = unit.target != nullptr ?
+            unit.target : find_unit_by_id(context, unit.command_value);
+        if (linked != nullptr) {
+            linked->target = nullptr;
+            linked->command_value = 0;
         }
         PopDeferredUnitCommandOrReturnIdle(context, unit);
         return;
