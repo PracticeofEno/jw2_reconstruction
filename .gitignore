@@ -18,6 +18,7 @@ ranker_reconstructed_code/*
 ranker_reconstructed_code/tests/*
 !ranker_reconstructed_code/tests/production_order_rule_wrap_regression.cpp
 !ranker_reconstructed_code/tests/directdraw_presentation_mode_regression.cpp
+!ranker_reconstructed_code/tests/gameplay_resource_sound_branch_regression.cpp
 !ranker_reconstructed_code/third_party/
 !ranker_reconstructed_code/third_party/**
 
