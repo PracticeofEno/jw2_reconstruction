@@ -791,7 +791,13 @@ bool try_start_idle_map_effect_interaction(UnitCommandContext& context,
         return false;
     }
 
-    unit.active_command_payload.x = static_cast<i32>(effect->id);
+    // ProcessUnitIdleAcquireCommand 0x004c9055 writes the OBD fixed-pool byte
+    // offset to raw unit +0x68.  The finder returns an offset in 0x3c-byte
+    // records; it does not overwrite the active command tuple at raw +0xd8.
+    // This write deliberately precedes the immobile approach rejection below,
+    // matching the original residual state on that failed claim path.
+    unit.command_value =
+        effect->id * static_cast<u32>(kMapEffectRawRecordSize);
     unit.path_target_x = effect->x;
     unit.path_target_y = effect->y;
 

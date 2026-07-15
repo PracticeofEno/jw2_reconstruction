@@ -488,8 +488,13 @@ bool StartUnitProgressMapEffect(MapEffectContext& context, UnitMovementUnit& uni
         update_repeat = true;
     }
 
+    // FUN_00411890 stores raw flags +0x0c = 1 and the source unit pool
+    // offset at +0x10 for every successfully cleared slot.  The timer keeps
+    // that link until the source command loses metadata bit 0x10, preventing
+    // the just-dropped effect from being acquired during the same command.
     MapEffectInstance* effect = HandleMapEffectNearestTileSpawn(
-        context, spawn_effect_id, unit.path_target_x, unit.path_target_y);
+        context, spawn_effect_id, unit.path_target_x, unit.path_target_y,
+        &unit);
     if (effect == nullptr) {
         return false;
     }

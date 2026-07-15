@@ -109,6 +109,9 @@ struct MeatFixture {
 
         effects.map = &map;
         effects.effects.resize(4);
+        for (u32 index = 0; index < effects.effects.size(); ++index) {
+            effects.effects[index].id = index;
+        }
         effects.free_effect_indices = {1, 2, 3};
         effects.callbacks.find_definition = find_map_effect_definition;
 
@@ -121,6 +124,7 @@ struct MeatFixture {
         amount.category = UnitEquipmentCategory::Amount;
         amount.pickup_filter_mode = 2;
         catalog.effects.push_back(amount);
+        commands.equipment_catalog = &catalog;
     }
 };
 
@@ -195,6 +199,65 @@ void test_meat_pipeline_is_silent() {
     require_sound_snapshot(sound, initial_seed, initial_requests,
         "right-click meat consumption changed the gameplay sound state");
     SetDefaultFrontendGameplaySoundState(nullptr);
+}
+
+void test_idle_map_effect_claim_raw_offset_contract() {
+    constexpr i32 kActivePayloadSentinel = 0x13579;
+
+    MeatFixture success_fixture;
+    MapEffectInstance* success_effect = HandleMapEffectNearestTileSpawn(
+        success_fixture.effects, 1, 0x40, 0x40);
+    require(success_effect != nullptr && success_effect->id == 3,
+        "idle claim fixture did not allocate the expected map-effect slot");
+
+    UnitMovementUnit success{};
+    success.id = 0x1d0;
+    success.x = 0x40;
+    success.y = 0x40;
+    success.command_state = kUnitStateRuntimeIdleAcquire;
+    success.area_marker_flags = 0x80000000u;
+    success.type_flags = 0x22u;
+    success.command_value = 0xfeedu;
+    success.active_command_payload.x = kActivePayloadSentinel;
+    ProcessUnitIdleAcquireCommand(success_fixture.commands, success);
+
+    require(success.command_value ==
+                success_effect->id * kMapEffectRawRecordSize &&
+            success.active_command_payload.x == kActivePayloadSentinel &&
+            success.path_target_x == success_effect->x &&
+            success.path_target_y == success_effect->y &&
+            success.command_state == kUnitStateAssistTarget &&
+            success_effect->flags == kMapEffectLinkedFlag &&
+            success_effect->linked_unit == &success,
+        "successful idle map-effect claim did not preserve raw +0x68/+0xd8");
+
+    MeatFixture rejected_fixture;
+    MapEffectInstance* rejected_effect = HandleMapEffectNearestTileSpawn(
+        rejected_fixture.effects, 1, 0x80, 0x20);
+    require(rejected_effect != nullptr && rejected_effect->id == 3,
+        "rejected idle claim fixture did not allocate the expected slot");
+
+    UnitMovementUnit rejected{};
+    rejected.id = 0x3a0;
+    rejected.x = 0x20;
+    rejected.y = 0x20;
+    rejected.command_state = kUnitStateRuntimeIdleAcquire;
+    rejected.area_marker_flags = 0x80000000u;
+    rejected.type_flags = 0x22u;
+    rejected.runtime_flags = 8u;
+    rejected.command_value = 0xbeefu;
+    rejected.active_command_payload.x = kActivePayloadSentinel;
+    ProcessUnitIdleAcquireCommand(rejected_fixture.commands, rejected);
+
+    require(rejected.command_value ==
+                rejected_effect->id * kMapEffectRawRecordSize &&
+            rejected.active_command_payload.x == kActivePayloadSentinel &&
+            rejected.path_target_x == rejected_effect->x &&
+            rejected.path_target_y == rejected_effect->y &&
+            rejected.command_state == kUnitStateRuntimeIdleAcquire &&
+            rejected_effect->flags == 0 &&
+            rejected_effect->linked_unit == nullptr,
+        "rejected idle map-effect claim did not retain the original raw residue");
 }
 
 struct HarvestProbe {
@@ -635,6 +698,7 @@ int main() {
     }
 
     test_meat_pipeline_is_silent();
+    test_idle_map_effect_claim_raw_offset_contract();
     test_normal_and_reserved_harvest_frame_order();
     test_reserved_tile_raw_dropoff_contract();
     test_spawn_cancel_clears_structure_reverse_link();
@@ -643,7 +707,7 @@ int main() {
     test_patrol_distance_mode_preserves_raw_candidate();
     std::cout <<
         "GAMEPLAY_RESOURCE_SOUND_BRANCH_PASS "
-        "meat=silent spawn/pickup/right-click "
+        "meat=silent spawn/pickup/right-click idle-claim=raw-offset "
         "harvest=normal-post/reserved-pre "
         "reserved=raw74/raw80/dropoff68 "
         "spawn-cancel=reverse-link-clear "

@@ -43,6 +43,13 @@ u32 random_limit(MapEffectContext&, u32 limit) {
     return g_random_result;
 }
 
+bool linked_source_keeps_effect(const MapEffectContext&,
+    const UnitMovementUnit& unit, const MapEffectInstance&) {
+    // Runtime wiring resolves metadata bit 0x10 from the original command
+    // table.  State 0x0d is the clear/transfer cycle that owns this drop.
+    return (unit.command_state & 0x00ffffffu) == 0x0du;
+}
+
 void reset_random_probe() {
     g_random_call_count = 0;
     g_random_limit = 0;
@@ -66,6 +73,8 @@ struct Fixture {
         effects.effects.resize(4);
         effects.free_effect_indices = {1, 2, 3};
         effects.callbacks.find_definition = find_effect_definition;
+        effects.callbacks.linked_unit_keeps_effect =
+            linked_source_keeps_effect;
         effects.callbacks.random_limit = random_limit;
     }
 };
@@ -200,6 +209,45 @@ void test_right_click_split_boundaries() {
     require_progress_split(117, 67, 50);
 }
 
+void test_right_click_drop_link_lifetime() {
+    Fixture fixture;
+    UnitMovementUnit source{};
+    source.id = 0x3a0;
+    source.path_target_x = 0x40;
+    source.path_target_y = 0x40;
+    source.action_mode = 117;
+    source.command_state = 0x0d;
+
+    require(StartUnitProgressMapEffect(fixture.effects, source, 1),
+        "right-click meat drop did not start");
+    const MapEffectInstance* drop = active_food_effect(fixture.effects);
+    require(drop != nullptr &&
+            (drop->flags & kMapEffectLinkedFlag) != 0 &&
+            drop->linked_unit == &source &&
+            drop->linked_unit_raw_offset == source.id,
+        "right-click meat drop was not linked to its source unit");
+
+    UnitMovementUnit collector{};
+    collector.x = drop->x;
+    collector.y = drop->y;
+    require(FindNearbyInteractableMapEffectForUnit(
+                fixture.effects, collector) == nullptr,
+        "source-linked meat was immediately available for auto pickup");
+
+    source.command_state = 1;
+    fixture.effects.frame_counter = 31;
+    HandleMapEffectTimerTick(fixture.effects);
+    require((drop->flags & kMapEffectLinkedFlag) != 0,
+        "meat link cleared before the original 32-tick timer boundary");
+
+    fixture.effects.frame_counter = 32;
+    HandleMapEffectTimerTick(fixture.effects);
+    require((drop->flags & kMapEffectLinkedFlag) == 0 &&
+            FindNearbyInteractableMapEffectForUnit(
+                fixture.effects, collector) == drop,
+        "meat link did not clear on the first metadata timer boundary");
+}
+
 void test_recovery_rejection_gates() {
     UnitMovementUnit unit{};
     unit.max_health = 100;
@@ -324,11 +372,13 @@ int main() {
     test_drop_plan_boundaries_and_randomization();
     test_spawn_gates_retain_reserve();
     test_right_click_split_boundaries();
+    test_right_click_drop_link_lifetime();
     test_recovery_rejection_gates();
     test_spawn_pickup_and_low_health_consumption();
     std::cout <<
         "MEAT_PIPELINE_REGRESSION_PASS "
         "spawn=118/tier2 pickup=action_mode cargo=unchanged "
-        "consume=117/health+1 full-health=retained right-click=67+50\n";
+        "consume=117/health+1 full-health=retained right-click=67+50 "
+        "drop-link=source/unlock32\n";
     return EXIT_SUCCESS;
 }
