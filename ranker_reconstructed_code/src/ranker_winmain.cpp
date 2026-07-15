@@ -3950,7 +3950,10 @@ void sync_default_map_effect_context_session_record() {
         }
         const MapEffectInstance& effect =
             g_runtime.map_effect_context.effects[index];
-        if (!effect.active || effect.effect_id == 0) {
+        // AllocateMapEffect/ReleaseMapEffect (0x004d1bc0/0x004d1c0b) use
+        // intrusive-list ownership as the active/free discriminator.  Type 0
+        // is a valid terrain effect selected by raw unit +0x68.
+        if (!effect.active) {
             continue;
         }
         active[index] = true;
@@ -10262,6 +10265,10 @@ bool recover_default_session_map_effect_chain_from_head(
 std::vector<u32> recover_default_session_active_map_effect_indices(
     const std::vector<u8>& record, u32 object_count) {
     std::vector<u32> best_indices;
+    const GameplaySessionLoadState& load = gameplay_session_load_state();
+    const bool occupancy_layer_loaded =
+        kGameplayMapEffectLayerRecordIndex < load.records.size() &&
+        load.record_loaded[kGameplayMapEffectLayerRecordIndex];
 
     for (u32 head_index = 1; head_index < object_count; ++head_index) {
         const std::size_t head_base =
@@ -10303,8 +10310,14 @@ std::vector<u32> recover_default_session_active_map_effect_indices(
                 break;
             }
 
-            if (read_default_scenario_object_u32(
-                    record, object_base, kGameplayMapEffectObjectTypeOffset) != 0) {
+            const u32 effect_id = read_default_scenario_object_u32(
+                record, object_base, kGameplayMapEffectObjectTypeOffset);
+            // With no authoritative header list, the BGI occupancy bit is the
+            // only evidence that distinguishes active type 0 from a free node
+            // whose stale payload is also zero.  Older/headerless bundles can
+            // omit that layer, so retain the prior nonzero-type fallback then.
+            if (default_session_map_effect_slot_has_occupancy(record, index) &&
+                (effect_id != 0 || occupancy_layer_loaded)) {
                 indices.push_back(index);
             }
             previous_offset = current_offset;
@@ -10324,9 +10337,10 @@ std::vector<u32> recover_default_session_active_map_effect_indices(
     for (u32 index = 1; index < object_count; ++index) {
         const std::size_t object_base =
             static_cast<std::size_t>(index) * kGameplayMapEffectObjectStride;
-        if (read_default_scenario_object_u32(
-                record, object_base, kGameplayMapEffectObjectTypeOffset) != 0 &&
-            default_session_map_effect_slot_has_occupancy(record, index)) {
+        const u32 effect_id = read_default_scenario_object_u32(
+            record, object_base, kGameplayMapEffectObjectTypeOffset);
+        if (default_session_map_effect_slot_has_occupancy(record, index) &&
+            (effect_id != 0 || occupancy_layer_loaded)) {
             best_indices.push_back(index);
         }
     }
@@ -10378,12 +10392,7 @@ void initialize_default_map_effect_context_from_session_records() {
             std::vector<bool> listed(object_count, false);
             restored_header_lists = true;
             for (u32 index : active_indices) {
-                const std::size_t object_base =
-                    static_cast<std::size_t>(index) *
-                    kGameplayMapEffectObjectStride;
-                if (listed[index] || read_default_scenario_object_u32(
-                        *record, object_base,
-                        kGameplayMapEffectObjectTypeOffset) == 0) {
+                if (listed[index]) {
                     restored_header_lists = false;
                     break;
                 }
@@ -10424,9 +10433,6 @@ void initialize_default_map_effect_context_from_session_records() {
             static_cast<std::size_t>(index) * kGameplayMapEffectObjectStride;
         const u32 effect_id = read_default_scenario_object_u32(
             *record, object_base, kGameplayMapEffectObjectTypeOffset);
-        if (effect_id == 0) {
-            continue;
-        }
 
         MapEffectInstance& effect = context.effects[index];
         effect.active = true;
@@ -22505,10 +22511,13 @@ UnitMovementUnit* default_unit_command_create_unit(UnitCommandContext&,
     const u32 runtime_slot_index =
         unit->runtime_slot_index != kInvalidUnitRuntimeSlotIndex ?
             unit->runtime_slot_index : unit_id;
+    const i32 residual_next_path_x = unit->next_path_x;
+    const i32 residual_next_path_y = unit->next_path_y;
 
     UnitMovementUnit initialized{};
     // HandleFreeUnitActivation preserves the fixed node's entire payload;
-    // InitializePlacedUnitFromMapSlot never writes original raw +0xf0.
+    // InitializePlacedUnitFromMapSlot never writes original raw +0xc8/+0xcc
+    // or +0xf0.
     initialized.linked_effect_slot_offset =
         unit->linked_effect_slot_offset;
     const u32 saved_terrain_class = lifecycle->placement_terrain_class_override;
@@ -22535,6 +22544,11 @@ UnitMovementUnit* default_unit_command_create_unit(UnitCommandContext&,
         }
         return nullptr;
     }
+
+    initialized.next_path_x = residual_next_path_x;
+    initialized.next_path_y = residual_next_path_y;
+    initialized.saved_path_target_x = residual_next_path_x;
+    initialized.saved_path_target_y = residual_next_path_y;
 
     initialized.id = unit_id;
     initialized.runtime_slot_index = runtime_slot_index;
@@ -24465,6 +24479,8 @@ bool default_owner_ai_acquire_temporary_path_probe(
     const u32 runtime_slot_index =
         unit->runtime_slot_index != kInvalidUnitRuntimeSlotIndex ?
             unit->runtime_slot_index : unit_id;
+    const i32 residual_next_path_x = unit->next_path_x;
+    const i32 residual_next_path_y = unit->next_path_y;
     UnitMovementUnit initialized{};
     initialized.linked_effect_slot_offset =
         unit->linked_effect_slot_offset;
@@ -24479,6 +24495,11 @@ bool default_owner_ai_acquire_temporary_path_probe(
         return_default_free_unit_head(*movement, unit);
         return false;
     }
+
+    initialized.next_path_x = residual_next_path_x;
+    initialized.next_path_y = residual_next_path_y;
+    initialized.saved_path_target_x = residual_next_path_x;
+    initialized.saved_path_target_y = residual_next_path_y;
 
     *unit = initialized;
     unit->id = unit_id;
@@ -26571,6 +26592,10 @@ void initialize_default_gameplay_original_unit_pool_slots() {
         const GameplayScriptTriggerState& script =
             gameplay_script_trigger_state();
         if (slot < script.objects.size()) {
+            free_unit->next_path_x = script.objects[slot].next_path_x;
+            free_unit->next_path_y = script.objects[slot].next_path_y;
+            free_unit->saved_path_target_x = script.objects[slot].next_path_x;
+            free_unit->saved_path_target_y = script.objects[slot].next_path_y;
             free_unit->linked_effect_slot_offset =
                 script.objects[slot].linked_effect_slot_offset;
         }
@@ -27771,6 +27796,8 @@ UnitMovementUnit* spawn_default_gameplay_script_unit(
     const u32 runtime_slot_index =
         unit->runtime_slot_index != kInvalidUnitRuntimeSlotIndex ?
             unit->runtime_slot_index : unit_id;
+    const i32 residual_next_path_x = unit->next_path_x;
+    const i32 residual_next_path_y = unit->next_path_y;
     const u32 residual_linked_effect_slot_offset =
         unit->linked_effect_slot_offset;
     *unit = UnitMovementUnit{};
@@ -27780,8 +27807,15 @@ UnitMovementUnit* spawn_default_gameplay_script_unit(
     // HandleFreeUnitActivation (0x004d04b0) links the fixed-pool node at the
     // active-list head before InitializePlacedUnitFromMapSlot runs.
     activate_default_gameplay_script_unit(movement, *unit);
-    if (!InitializePlacedUnitFromMapSlot(*lifecycle, *unit,
-            request.type_or_effect_id, request.owner_id, request.x, request.y)) {
+    const bool placed = InitializePlacedUnitFromMapSlot(*lifecycle, *unit,
+        request.type_or_effect_id, request.owner_id, request.x, request.y);
+    // Original 0x004cf229 leaves raw +0xc8/+0xcc untouched on both success
+    // and failure; the typed initializer clears them for detached records.
+    unit->next_path_x = residual_next_path_x;
+    unit->next_path_y = residual_next_path_y;
+    unit->saved_path_target_x = residual_next_path_x;
+    unit->saved_path_target_y = residual_next_path_y;
+    if (!placed) {
         return_default_free_unit_head(movement, unit);
         return nullptr;
     }

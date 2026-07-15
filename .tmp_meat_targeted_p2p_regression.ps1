@@ -47,7 +47,8 @@ if ($missing.Count -eq 0) {
     try {
         $layout = (& (Join-Path $root '.tmp_resolve_rebuild_layout.ps1') `
             -Executable (Join-Path $working 'ranker_rebuild.exe') `
-            -LayoutProbe (Join-Path $root '.tmp_runtime_globals_layout_probe.exe') |
+            -LayoutProbe (Join-Path $root '.tmp_runtime_globals_layout_probe.exe') `
+            -AllowExactExecutableLayoutReuse |
             ConvertFrom-Json)
     }
     catch {
@@ -156,6 +157,21 @@ $script:meatProbeProcess = $null
 $script:launchStartedUtc = $null
 $script:freshPids = @()
 
+if (-not ('MeatTargetedWindowInput' -as [type])) {
+    Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class MeatTargetedWindowInput {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct Rect {
+        public int Left, Top, Right, Bottom;
+    }
+    [DllImport("user32.dll")]
+    public static extern bool GetClientRect(IntPtr handle, out Rect rect);
+}
+'@
+}
+
 function Invoke-PythonJson([string]$Script, [object[]]$Arguments) {
     $token = [Guid]::NewGuid().ToString('N')
     $stdout = Join-Path $output ('.python-json-{0}.out' -f $token)
@@ -224,6 +240,19 @@ function Get-PairedUnitCondition(
 function Invoke-WindowClick(
     [int]$X, [int]$Y, [switch]$Right,
     [int]$HoldMilliseconds = 35) {
+    $rect = [MeatTargetedWindowInput+Rect]::new()
+    if ([MeatTargetedWindowInput]::GetClientRect(
+            $script:rebuildWindow, [ref]$rect)) {
+        $width = [Math]::Max(1, $rect.Right - $rect.Left)
+        $height = [Math]::Max(1, $rect.Bottom - $rect.Top)
+        # Snapshot coordinates are on the game's logical 800x600 surface.
+        # Aim at the centre of the corresponding presented pixel so this is
+        # identity at 800x600 and remains exact for scaled client windows.
+        $X = [Math]::Max(0, [Math]::Min($width - 1, [int][Math]::Floor(
+            (([int64]$X * 2 + 1) * $width) / (2 * 800))))
+        $Y = [Math]::Max(0, [Math]::Min($height - 1, [int][Math]::Floor(
+            (([int64]$Y * 2 + 1) * $height) / (2 * 600))))
+    }
     $arguments = @{
         ProcessId = $script:rebuildPid
         WindowHandle = $script:rebuildWindow.ToInt64()
