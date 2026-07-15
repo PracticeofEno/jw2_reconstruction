@@ -12333,12 +12333,7 @@ void sync_default_gameplay_tooltip_context(
         return;
     }
 
-    tooltip.selected_unit.offset = unit->id;
-    tooltip.selected_unit.type = unit->type_id;
-    tooltip.selected_unit.owner = unit->owner_id;
-    tooltip.selected_unit.area_marker_flags = unit->area_marker_flags;
-    tooltip.selected_unit.tier_value = unit->elite_progress_value;
-    tooltip.selected_unit.equipment_slots = unit->equipment_slots;
+    tooltip.selected_unit = BuildGameplayTooltipSelectedUnitState(*unit);
 }
 
 void default_gameplay_frame_draw_selection_overlay(GameplayFrameRenderContext&) {

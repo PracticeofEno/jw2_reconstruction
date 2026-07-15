@@ -70,6 +70,16 @@ if (BUILD_TESTING)
     add_test(NAME unit_production_sound_regression
         COMMAND unit_production_sound_regression
     )
+
+    add_executable(meat_tooltip_amount_regression
+        tests/meat_tooltip_amount_regression.cpp
+    )
+    target_include_directories(meat_tooltip_amount_regression PRIVATE
+        include
+    )
+    add_test(NAME meat_tooltip_amount_regression
+        COMMAND meat_tooltip_amount_regression
+    )
 endif()
 
 add_executable(ranker_rebuild WIN32

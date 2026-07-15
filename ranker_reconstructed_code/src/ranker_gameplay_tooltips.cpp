@@ -482,20 +482,8 @@ u32 selected_equipment_value(const GameplayTooltipState& state) {
     }
     switch (state.current_object_id) {
     case 0x1ad: {
-        const u32 value = state.selected_unit.tier_value;
-        if (value == 0) {
-            return 0;
-        }
-        if (value > 1000) {
-            return 4;
-        }
-        if (value > 500) {
-            return 3;
-        }
-        if (value > 100) {
-            return 2;
-        }
-        return 1;
+        return GameplayTooltipMeatTierForAmount(
+            state.selected_unit.meat_amount);
     }
     case 0x1ae:
         return state.selected_unit.equipment_slots[4];

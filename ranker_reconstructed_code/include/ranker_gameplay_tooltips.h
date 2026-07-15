@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ranker_types.h"
+#include "ranker_unit_movement.h"
 
 #include <array>
 #include <string>
@@ -95,9 +96,40 @@ struct GameplayTooltipSelectedUnitState {
     u32 type = 0;
     u32 owner = 0;
     u32 area_marker_flags = 0;
-    u32 tier_value = 0;
+    u32 meat_amount = 0;
     std::array<u32, 6> equipment_slots{};
 };
+
+inline GameplayTooltipSelectedUnitState BuildGameplayTooltipSelectedUnitState(
+    const UnitMovementUnit& unit) {
+    GameplayTooltipSelectedUnitState state{};
+    state.offset = unit.id;
+    state.type = unit.type_id;
+    state.owner = unit.owner_id;
+    state.area_marker_flags = unit.area_marker_flags;
+    // Original selected-unit raw +0x2c is both the carried-meat amount and
+    // the source for object 0x1ad's four tooltip tiers.  Experience lives at
+    // raw +0x50 and must not influence this tooltip.
+    state.meat_amount = unit.action_mode;
+    state.equipment_slots = unit.equipment_slots;
+    return state;
+}
+
+constexpr u32 GameplayTooltipMeatTierForAmount(u32 meat_amount) {
+    if (meat_amount == 0) {
+        return 0;
+    }
+    if (meat_amount > 1000) {
+        return 4;
+    }
+    if (meat_amount > 500) {
+        return 3;
+    }
+    if (meat_amount > 100) {
+        return 2;
+    }
+    return 1;
+}
 
 struct GameplayTooltipState;
 
