@@ -16146,6 +16146,12 @@ void refresh_default_unit_definition_runtime_fields(UnitMovementUnit& unit) {
             kUnitDefinitionPrerequisiteTypeBaseOffset + index * sizeof(u32),
             definition.prerequisite_type_ids[index]);
     }
+    const u32 completion_reference_count = read_runtime_catalog_u32(
+        record.definition_bytes, kUnitDefinitionCompletionReferenceCountOffset, 0);
+    definition.first_completion_order_id = completion_reference_count != 0
+        ? read_runtime_catalog_u32(record.definition_bytes,
+            kUnitDefinitionCompletionReferenceBaseOffset, 0xffffffffu)
+        : 0xffffffffu;
     const u32 raw_placement_path_reference_count = read_runtime_catalog_u32(
         record.definition_bytes, kUnitDefinitionAlternateReferenceCountOffset,
         definition.placement_path_reference_count);
@@ -24551,8 +24557,13 @@ OwnerAiRoutePathProbeResult default_owner_ai_temporary_unit_path_probe(
             start, destination);
     }
 
-    OwnerAiRoutePathProbeResult result =
-        ProbeOwnerAiRoutePath(*movement, *lease.unit, start, destination);
+    // FUN_00440680 publishes its route-helper start/destination through the
+    // pathfinder globals at 0x00440792..0x004407d6.  RunLegacyUnitPathfinder
+    // never writes the temporary unit's raw +0xc8/+0xcc words.  Probe a copy
+    // so the typed pathfinder can still use unit fields without contaminating
+    // the live fixed-pool node that is returned to the free-list head.
+    OwnerAiRoutePathProbeResult result = ProbeOwnerAiRoutePath(*movement,
+        static_cast<const UnitMovementUnit*>(lease.unit), start, destination);
     default_owner_ai_release_temporary_path_probe(lease);
     return result;
 }
@@ -24841,7 +24852,9 @@ void default_owner_ai_refresh_placement_anchors(
         base_tile = default_owner_ai_directional_anchor_tile(
             movement, source_center_tile, target_tile, anchor_distance);
         const OwnerAiRoutePathProbeResult path_probe = ProbeOwnerAiRoutePath(
-            *movement, *probe_lease.unit, target_world, source_center_world);
+            *movement,
+            static_cast<const UnitMovementUnit*>(probe_lease.unit),
+            target_world, source_center_world);
         if (path_probe.reachable && !path_probe.direct_path &&
             path_probe.path_tiles.size() > 1) {
             // The original path buffer is goal-predecessor -> ... -> start.
@@ -24909,7 +24922,8 @@ void default_owner_ai_refresh_placement_anchors(
             default_owner_ai_tile_to_world(source_raw_tile);
         const OwnerAiRoutePathProbeResult placement_probe =
             temporary_probe_ready
-            ? ProbeOwnerAiRoutePath(*movement, *probe_lease.unit,
+            ? ProbeOwnerAiRoutePath(*movement,
+                static_cast<const UnitMovementUnit*>(probe_lease.unit),
                 source_raw_world, target_world)
             : ProbeOwnerAiRoutePath(*movement, source,
                 source_raw_world, target_world);
@@ -25689,7 +25703,9 @@ void default_owner_ai_tick_transport_queue_unit(UnitCommandContext& context,
     OwnerTransportQueueSlot& slot = queue.slots[slot_index];
     const u32 command_id = GetUnitCommandIdLow24(unit);
     const auto tile_to_world = [](i32 tile) {
-        return tile < 0 ? tile : tile * 32;
+        // FUN_0044be10 uses a raw 32-bit SHL, including for sentinel/negative
+        // values.  Preserve the wrap instead of exempting negative inputs.
+        return static_cast<i32>(static_cast<u32>(tile) << 5);
     };
     const auto primary_dropoff_target = [&]() {
         OwnerTransportQueueTargetSnapshot target;
@@ -25707,102 +25723,9 @@ void default_owner_ai_tick_transport_queue_unit(UnitCommandContext& context,
         }
         return target;
     };
-    const auto find_strategic_attack_target = [&]() -> UnitMovementUnit* {
-        if (context.movement == nullptr || owner >= kOwnerAiOwnerCount ||
-            !CheckOwnerEligibleRetargetUnit(unit)) {
-            return nullptr;
-        }
-
-        const OwnerStrategicTargetState& strategic_target =
-            g_runtime.gameplay_owner_strategic_targets[owner];
-        if (strategic_target.target_owner_id == owner ||
-            !CheckOwnerCanTargetOwner(strategic_target,
-                strategic_target.target_owner_id)) {
-            return nullptr;
-        }
-
-        UnitMovementUnit* best_target = nullptr;
-        UnitMovementUnit* best_worker_fallback = nullptr;
-        u32 best_distance = std::numeric_limits<u32>::max();
-        u32 best_priority = std::numeric_limits<u32>::max();
-        u32 best_worker_distance = std::numeric_limits<u32>::max();
-        u32 best_worker_priority = std::numeric_limits<u32>::max();
-        const auto can_attack = [&](UnitMovementUnit& candidate) {
-            return context.callbacks.can_attack_target != nullptr
-                ? context.callbacks.can_attack_target(context, unit, candidate)
-                : default_unit_command_can_attack(context, unit, candidate);
-        };
-        const auto better_candidate = [](u32 distance, u32 priority,
-                                          const UnitMovementUnit& candidate,
-                                          u32 best_candidate_distance,
-                                          u32 best_candidate_priority,
-                                          const UnitMovementUnit* current) {
-            return current == nullptr || distance < best_candidate_distance ||
-                (distance == best_candidate_distance &&
-                    (priority < best_candidate_priority ||
-                        (priority == best_candidate_priority &&
-                            candidate.id < current->id)));
-        };
-
-        for (UnitMovementUnit* candidate : context.movement->active_units) {
-            if (candidate == nullptr || candidate == &unit ||
-                candidate->owner_id != strategic_target.target_owner_id ||
-                !candidate->active ||
-                (candidate->command_state & kUnitCommandDead) != 0 ||
-                (candidate->runtime_flags & 0x84u) != 0 ||
-                candidate->definition.lifecycle_class > 1 ||
-                !can_attack(*candidate)) {
-                continue;
-            }
-
-            const u32 distance = CalculateApproxUnitDistance(
-                unit.x, unit.y, candidate->x, candidate->y);
-            const u32 priority =
-                candidate->definition.target_selection_priority != 0xffffffffu
-                    ? candidate->definition.target_selection_priority
-                    : candidate->type_id;
-            const bool worker =
-                (candidate->definition.type_flags & 0x40u) != 0;
-            if (!worker && better_candidate(distance, priority, *candidate,
-                    best_distance, best_priority, best_target)) {
-                best_target = candidate;
-                best_distance = distance;
-                best_priority = priority;
-            }
-            else if (worker && better_candidate(distance, priority, *candidate,
-                         best_worker_distance, best_worker_priority,
-                         best_worker_fallback)) {
-                best_worker_fallback = candidate;
-                best_worker_distance = distance;
-                best_worker_priority = priority;
-            }
-        }
-        return best_target != nullptr ? best_target : best_worker_fallback;
-    };
-    const auto advance_or_move = [&](u32 base_tiles, bool target_point_command,
-                                     bool attack_strategic_target) {
+    const auto advance_or_move = [&](u32 base_tiles, bool target_point_command) {
         if (command_id != 1) {
             return;
-        }
-        if (attack_strategic_target) {
-            if (UnitMovementUnit* target = find_strategic_attack_target()) {
-                // Raw command 0x04 enters the follow state.  The public 0x05
-                // helper is conditional and deliberately degrades to a
-                // target-less 0x04 command when command flag 0x20 is absent,
-                // which is not guaranteed for AI combat units.  Queue the
-                // same target-bearing raw 0x05 payload used by a player attack
-                // action so it enters target validation and combat dispatch.
-                const UnitQueuedCommand attack_command{
-                    5,
-                    static_cast<i32>(target->id),
-                    target->x,
-                    static_cast<u32>(target->y),
-                };
-                if (SetOrQueueUnitCommandPayload(
-                        &unit, attack_command, false)) {
-                    return;
-                }
-            }
         }
         if (AdvanceOwnerTransportQueueProgressNearTarget(
                 unit, slot, base_tiles)) {
@@ -25873,8 +25796,7 @@ void default_owner_ai_tick_transport_queue_unit(UnitCommandContext& context,
         const u32 unit_runtime_state = command_id < runtime_states.size()
             ? runtime_states[command_id]
             : ResolveUnitRuntimeStateFromCommandTable(unit);
-        if (slot.aux_value >= kOwnerExtendedProductionUnitTypeBase &&
-            unit_runtime_state != 7) {
+        if (unit_runtime_state != 7) {
             SetOrQueueUnitAlignedPointCommand06(&unit,
                 slot.aux_value - kOwnerExtendedProductionUnitTypeBase,
                 slot.target_x, slot.target_y, false);
@@ -25886,11 +25808,11 @@ void default_owner_ai_tick_transport_queue_unit(UnitCommandContext& context,
         ++slot.completed_count;
         break;
     case 7:
-        advance_or_move(3, false, false);
+        advance_or_move(3, false);
         break;
     case 8:
         if (command_id == 1) {
-            advance_or_move(8, false, false);
+            advance_or_move(8, false);
             if (CheckOwnerTransportQueueUnitWithinTargetThreshold(unit, slot,
                     8)) {
                 unit.area_marker_flags |= 0x80000000u;
@@ -25900,7 +25822,7 @@ void default_owner_ai_tick_transport_queue_unit(UnitCommandContext& context,
     case kOwnerTransportQueueStateRelay0aPending:
     case kOwnerTransportQueueStateRelay0ePending:
         if (slot.target_x != -1) {
-            advance_or_move(6, true, false);
+            advance_or_move(6, true);
         }
         break;
     case kOwnerTransportQueueStateLinkedGroup0a:
@@ -25941,7 +25863,11 @@ void default_owner_ai_tick_transport_queue_unit(UnitCommandContext& context,
     case 0x17:
     case kOwnerTransportQueueStateStrategicTargetHold:
     case 0x1c:
-        advance_or_move(8, false, true);
+        // FUN_0044be10 issues the original target-less conditional point
+        // command here.  State 0x05 is attack-move and acquires targets while
+        // travelling; preselecting an entity changes target priority and
+        // causes different combat outcomes between peers.
+        advance_or_move(8, false);
         break;
     case kOwnerTransportQueueStateThreatResponse:
         if (CalculateApproxUnitDistance(unit.x, unit.y,

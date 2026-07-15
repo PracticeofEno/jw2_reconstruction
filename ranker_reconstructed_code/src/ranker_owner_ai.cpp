@@ -1023,9 +1023,12 @@ bool owner_ai_population_gap_open(const OwnerAiStrategicRetargetGateInput& input
 }
 
 bool owner_ai_default_pressure_unit_eligible(const UnitMovementUnit& unit) {
-    return unit.active && unit.type_id < kOwnerAiCounterRuleUnitTypeCount &&
-        (unit.command_state & kUnitCommandDead) == 0 &&
-        (unit.runtime_flags & 0x80u) == 0;
+    // FUN_00440e70 filters the active-list entry only through immutable
+    // definition +0x1ec/+0x1f0.  Lifecycle/death state is not consulted in
+    // this route-local pressure pass.
+    return ((unit.definition.type_flags & 0x40u) == 0 &&
+            (unit.definition.type_flags & 0x20u) != 0) ||
+        (unit.definition.initial_script_bit_flags & 0x7242u) != 0;
 }
 
 bool owner_ai_pressure_unit_eligible(const UnitMovementUnit& unit,
@@ -1041,7 +1044,8 @@ u32 owner_ai_unit_weight(const UnitMovementUnit& unit,
     if (input.unit_weight != nullptr) {
         return input.unit_weight(unit, input.user_data);
     }
-    return 1;
+    // Original raw unit +0x18/+0x1c/+0x20.
+    return unit.health + unit.runtime_stat_1c + unit.runtime_stat_20;
 }
 
 bool owner_ai_counter_rule_gate_satisfied(const OwnerAiRuntimeState& state,
@@ -2370,19 +2374,24 @@ OwnerAiStrategicPressureSummary CalculateOwnerAiStrategicTargetPressureSummary(
     (void)state;
     OwnerAiStrategicPressureSummary summary;
     if (!owner_slot_valid(owner_slot)) {
-        summary.weight = 20000;
+        summary.count = 20000;
+        summary.weight = 0x00895440u;
         return summary;
     }
 
     if (input.movement == nullptr) {
-        summary.weight = 20000;
+        summary.count = 20000;
+        summary.weight = 0x00895440u;
         return summary;
     }
 
     const UnitMovementUnit* route_target =
         input.strategic_route_targets[owner_slot];
     if (route_target == nullptr) {
-        summary.weight = 20000;
+        // FUN_00440e70 writes these exact sentinels when route_count - 1 is
+        // negative (00440eb0..00440ebc).
+        summary.count = 20000;
+        summary.weight = 0x00895440u;
         return summary;
     }
 
@@ -2447,9 +2456,11 @@ bool ShouldOwnerAiRunStrategicQueueRetarget(OwnerAiRuntimeState& state,
         const OwnerAiEligibleUnitSummary& summary = load_own_summary();
         const u32 target_owner =
             owner_ai_current_target_owner(state, owner_slot);
-        const OwnerAiStrategicPressureSummary target_summary =
-            CalculateOwnerAiStrategicTargetPressureSummary(state, target_owner,
-                input);
+        // FUN_004408b0 calls HandleOwnerEligibleUnitCountWeight for both
+        // owners in the rally-delay branch.  The route-local pressure helper
+        // (FUN_00440e70) is used only by the later reserve-delay branch.
+        const OwnerAiEligibleUnitSummary target_summary =
+            owner_ai_eligible_summary_or_unit_counts(state, target_owner);
         const u32 ratio = static_cast<u32>(
             (static_cast<u64>(std::max<i32>(summary.weight, 0)) * 100u) /
             (target_summary.weight + 1u));

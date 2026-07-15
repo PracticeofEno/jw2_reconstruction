@@ -155,6 +155,9 @@ struct UnitMovementDefinition {
     u32 production_secondary_cost = 0;
     u32 production_population_cost = 0;
     u32 prerequisite_count = 0;
+    // Original definition +0x2cc: the first production-order reference.
+    // Owner AI type 0x2b checks this order before starting its triad pairing.
+    u32 first_completion_order_id = 0xffffffffu;
     i32 spatial_query_left = 0;
     i32 spatial_query_top = 0;
     i32 spatial_query_right = 0;

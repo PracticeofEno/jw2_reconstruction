@@ -1551,17 +1551,20 @@ void start_spawn_attachment_27(UnitCommandContext& context,
 void start_produced_unit_rally_command(UnitCommandContext& context,
     const UnitMovementUnit& producer, UnitMovementUnit& produced) {
     // Original HandleUnitProductionSpawnCycle (0x004ce182..0x004ce1b3)
-    // copies the producer's saved rally target and point to the new unit and
-    // enters command state 0x14.  Without this, trained workers remain at the
-    // producer even when the player has set a rally point.
+    // copies raw producer +0x94 -> produced +0x68 and producer +0xc8/+0xcc
+    // -> produced +0x6c/+0x70 before entering command state 0x14.  Keep the
+    // raw command reference authoritative even when its typed target cannot
+    // currently be resolved, and do not substitute the typed saved mirror for
+    // the producer's fixed-pool rally words.
     if (producer.linked_object_id == producer.id) {
         return;
     }
 
+    produced.command_value = producer.linked_object_id;
     produced.target = producer.linked_object_id != 0 ?
         find_unit_by_id(context, producer.linked_object_id) : nullptr;
-    produced.path_target_x = producer.saved_path_target_x;
-    produced.path_target_y = producer.saved_path_target_y;
+    produced.path_target_x = producer.next_path_x;
+    produced.path_target_y = producer.next_path_y;
     StartUnitState14AndClearRuntimeFlag(context, produced);
 }
 
@@ -7578,23 +7581,18 @@ bool owner_threat_primary_response_source_state(u32 state) {
     return state == 6 || state == 7 || state == 8;
 }
 
-bool owner_threat_unit_active(const UnitMovementUnit& unit) {
-    return unit.active;
-}
-
 u32 owner_threat_unit_weight(const UnitMovementUnit& unit,
     OwnerTransportQueueUnitWeightCallback weight_callback) {
     if (weight_callback == nullptr) {
         return 1;
     }
-    return std::max<u32>(1, weight_callback(unit));
+    // FUN_00441d50 adds the raw +0x18/+0x1c/+0x20 sum.  A zero-weight unit
+    // still contributes to the nearby hostile count, but not to pressure.
+    return weight_callback(unit);
 }
 
 bool owner_threat_unit_hostile_to_owner(const UnitCommandContext& context,
     u32 owner_id, const UnitMovementUnit& unit) {
-    if (unit.owner_id == owner_id) {
-        return false;
-    }
     if (owner_id >= context.owner_relation_masks.size() || unit.owner_id >= 32) {
         return true;
     }
@@ -7642,22 +7640,12 @@ OwnerThreatPointResponseResult HandleOwnerThreatPointResponseQueue(
 
     result.slot_index = FindOwnerThreatResponseQueueSlotNearPoint(queue, point,
         max_distance);
-    if (result.slot_index == kInvalidOwnerTransportQueueSlot) {
-        result.slot_index = PrepareOwnerThreatResponseQueueSlot(queue, point);
-        result.allocated_slot =
-            result.slot_index != kInvalidOwnerTransportQueueSlot;
-    }
-    if (result.slot_index == kInvalidOwnerTransportQueueSlot) {
-        return result;
-    }
-
-    OwnerTransportQueueSlot& response_slot = queue.slots[result.slot_index];
-    response_slot.state = kOwnerTransportQueueStateThreatResponse;
-    response_slot.target_x = point.x;
-    response_slot.target_y = point.y;
 
     for (const UnitMovementUnit* unit : context.movement->active_units) {
-        if (unit == nullptr || !owner_threat_unit_active(*unit)) {
+        // context.movement->active_units is the reconstructed counterpart of
+        // the original active linked list; there is no second raw active-bit
+        // predicate in FUN_00441d50.
+        if (unit == nullptr) {
             continue;
         }
         if (hostile_pressure_eligibility != nullptr) {
@@ -7687,11 +7675,24 @@ OwnerThreatPointResponseResult HandleOwnerThreatPointResponseQueue(
         return result;
     }
 
+    // FUN_00441d50 measures hostile pressure before allocating a response
+    // slot.  It also leaves the coordinates of an existing nearby slot
+    // unchanged; only a newly allocated slot receives the threat point.
+    if (result.slot_index == kInvalidOwnerTransportQueueSlot) {
+        result.slot_index = PrepareOwnerThreatResponseQueueSlot(queue, point);
+        result.allocated_slot =
+            result.slot_index != kInvalidOwnerTransportQueueSlot;
+    }
+    if (result.slot_index == kInvalidOwnerTransportQueueSlot) {
+        return result;
+    }
+
+    OwnerTransportQueueSlot& response_slot = queue.slots[result.slot_index];
+
     const u32 multiplier = std::max<u32>(response_weight_multiplier, 1);
-    result.requested_weight =
-        result.pressure.weight >
-            std::numeric_limits<u32>::max() / multiplier ?
-        std::numeric_limits<u32>::max() : result.pressure.weight * multiplier;
+    // The original uses a 32-bit left shift for the default x2 response
+    // target, so retain unsigned wrap instead of saturating the product.
+    result.requested_weight = result.pressure.weight * multiplier;
     if (response_slot.aux_value >= result.pressure.weight) {
         return result;
     }
@@ -7699,10 +7700,12 @@ OwnerThreatPointResponseResult HandleOwnerThreatPointResponseQueue(
     u32 matched_weight = response_slot.aux_value;
     auto reassign_response_unit = [&](UnitMovementUnit& unit, u32 source_slot) {
         const u32 weight = owner_threat_unit_weight(unit, weight_callback);
-        AssignUnitToOwnerTransportQueueSlot(queue, unit, result.slot_index);
-        if (queue.slots[source_slot].count != 0) {
-            --queue.slots[source_slot].count;
-        }
+        unit.area_marker_flags = (unit.area_marker_flags & 0xffffff00u) |
+            result.slot_index;
+        // FUN_00441d50 performs raw unsigned decrement/increment operations;
+        // queue-count consistency is rebuilt by the later maintenance pass.
+        --queue.slots[source_slot].count;
+        ++queue.slots[result.slot_index].count;
         ++result.moved_count;
         result.moved_weight += weight;
         matched_weight += weight;
@@ -7714,7 +7717,7 @@ OwnerThreatPointResponseResult HandleOwnerThreatPointResponseQueue(
             break;
         }
         if (unit == nullptr || unit->owner_id != owner_id ||
-            unit->type_id >= 0x60 || !owner_threat_unit_active(*unit)) {
+            unit->type_id >= 0x60) {
             continue;
         }
         if (response_unit_eligibility != nullptr &&
@@ -7767,8 +7770,7 @@ OwnerThreatPointResponseResult HandleOwnerThreatPointResponseQueue(
                 break;
             }
             if (unit == nullptr || unit->owner_id >= cross_owner_slots.size() ||
-                unit->owner_id == owner_id || unit->type_id >= 0x60 ||
-                !owner_threat_unit_active(*unit)) {
+                unit->owner_id == owner_id || unit->type_id >= 0x60) {
                 continue;
             }
             if (response_unit_eligibility != nullptr &&
@@ -7796,15 +7798,23 @@ OwnerThreatPointResponseResult HandleOwnerThreatPointResponseQueue(
             }
 
             const u32 weight = owner_threat_unit_weight(*unit, weight_callback);
-            AssignUnitToOwnerTransportQueueSlot(*response_queue, *unit,
-                destination_slot);
-            if (response_queue->slots[source_slot].count != 0) {
-                --response_queue->slots[source_slot].count;
+            unit->area_marker_flags =
+                (unit->area_marker_flags & 0xffffff00u) | destination_slot;
+            // The original 0x004423a0..0x0044245a deliberately indexes the
+            // count/weight writes with the threatened owner (param_1), even
+            // though the allied unit and destination slot belong to the
+            // response owner.  Preserve that transient bookkeeping quirk;
+            // each owner's following queue-maintenance pass rebuilds counts.
+            if (source_slot < queue.slots.size()) {
+                --queue.slots[source_slot].count;
+            }
+            if (destination_slot < queue.slots.size()) {
+                ++queue.slots[destination_slot].count;
+                queue.slots[destination_slot].aux_value += weight;
             }
             ++result.moved_count;
             result.moved_weight += weight;
             matched_weight += weight;
-            response_slot.aux_value += weight;
         }
     }
 
@@ -7817,7 +7827,7 @@ OwnerThreatPointResponseResult HandleOwnerThreatPointResponseQueue(
             break;
         }
         if (unit == nullptr || unit->owner_id != owner_id ||
-            unit->type_id >= 0x60 || !owner_threat_unit_active(*unit)) {
+            unit->type_id >= 0x60) {
             continue;
         }
         if (response_unit_eligibility != nullptr &&
@@ -10677,6 +10687,7 @@ lookup_owner_production_route_object_requirement(
 }
 
 OwnerProductionDependencyRequest build_owner_production_dependency_request(
+    const UnitCommandContext& context, u32 owner_id,
     const OwnerProductionDemandBuildPlanInput& input, u32 unit_type) {
     OwnerProductionDependencyRequest request;
     request.unit_type = unit_type;
@@ -10707,6 +10718,16 @@ OwnerProductionDependencyRequest build_owner_production_dependency_request(
             definition->prerequisite_type_ids[index];
     }
     request.special_dependency_count = request.prerequisite_count;
+    if (unit_type == 0x2b &&
+        definition->first_completion_order_id < kProductionOrderCount) {
+        request.unlock_dependency_unit_type =
+            definition->first_completion_order_id;
+        request.unlock_dependency_available =
+            context.production_state != nullptr &&
+            owner_id < context.production_state->variant_counts.size() &&
+            context.production_state->variant_counts[owner_id]
+                [definition->first_completion_order_id] != 0;
+    }
     return request;
 }
 
@@ -11114,7 +11135,8 @@ void process_owner_extended_production_demand(UnitCommandContext& context,
         }
 
         OwnerProductionDependencyRequest request =
-            build_owner_production_dependency_request(input, unit_type);
+            build_owner_production_dependency_request(
+                context, owner_id, input, unit_type);
         OwnerProductionBuildActionResult action =
             SelectOwnerProductionPlacementBuildAction(context, owner_id,
                 owner_counts, request, placement.point, nullptr,
@@ -11252,7 +11274,8 @@ ProcessOwnerProductionDemandAndBuildPlan(UnitCommandContext& context,
         u32 guard = 0;
         while (current_count < desired_count && guard++ < 64) {
             OwnerProductionDependencyRequest request =
-                build_owner_production_dependency_request(input, unit_type);
+                build_owner_production_dependency_request(
+                    context, owner_id, input, unit_type);
             OwnerProductionBuildActionResult action =
                 SelectOwnerProductionDependencyBuildAction(context, owner_id,
                     owner_counts, request, producer_cursor,
