@@ -314,7 +314,24 @@ void apply_visibility_radii(GameplayVisibilityContext& context,
     }
 }
 
-u16 apply_fog_factor_to_pixel(u16 pixel, u8 factor, bool preserve_factor_30) {
+struct FogPixelMasks {
+    u16 red_blue;
+    u16 green;
+    u16 sixteenth;
+    u16 eighth;
+    u16 fourth;
+    u16 half;
+};
+
+FogPixelMasks current_fog_pixel_masks() {
+    if (SurfacePixelMode555()) {
+        return {0x7c1fu, 0x03e0u, 0x4210u, 0x6318u, 0x739cu, 0x7bdeu};
+    }
+    return {0xf81fu, 0x07e0u, 0x8610u, 0xc718u, 0xe79cu, 0xf7deu};
+}
+
+u16 apply_fog_factor_to_pixel(u16 pixel, u8 factor, bool preserve_factor_30,
+    const FogPixelMasks& masks) {
     if (factor == 0) {
         return 0;
     }
@@ -322,29 +339,21 @@ u16 apply_fog_factor_to_pixel(u16 pixel, u8 factor, bool preserve_factor_30) {
         return pixel;
     }
 
-    const bool pixel_mode_555 = SurfacePixelMode555();
-    const u16 rb_mask = pixel_mode_555 ? 0x7c1fu : 0xf81fu;
-    const u16 green_mask = pixel_mode_555 ? 0x03e0u : 0x07e0u;
-    const u16 sixteenth_mask = pixel_mode_555 ? 0x4210u : 0x8610u;
-    const u16 eighth_mask = pixel_mode_555 ? 0x6318u : 0xc718u;
-    const u16 fourth_mask = pixel_mode_555 ? 0x739cu : 0xe79cu;
-    const u16 half_mask = pixel_mode_555 ? 0x7bdeu : 0xf7deu;
-
     switch (factor) {
     case 1:
     case 2:
-        return static_cast<u16>((pixel & sixteenth_mask) >> 4);
+        return static_cast<u16>((pixel & masks.sixteenth) >> 4);
     case 4:
-        return static_cast<u16>((pixel & eighth_mask) >> 3);
+        return static_cast<u16>((pixel & masks.eighth) >> 3);
     case 8:
-        return static_cast<u16>((pixel & fourth_mask) >> 2);
+        return static_cast<u16>((pixel & masks.fourth) >> 2);
     case 0x0f:
     case 0x10:
-        return static_cast<u16>((pixel & half_mask) >> 1);
+        return static_cast<u16>((pixel & masks.half) >> 1);
     default:
         return static_cast<u16>(
-            ((((pixel & rb_mask) * factor) >> 5) & rb_mask) |
-            ((((pixel & green_mask) * factor) >> 5) & green_mask));
+            ((((pixel & masks.red_blue) * factor) >> 5) & masks.red_blue) |
+            ((((pixel & masks.green) * factor) >> 5) & masks.green));
     }
 }
 
@@ -731,6 +740,11 @@ void DrawGameplayFogBlock(
 
     GameplayFogRenderTarget& target = context.target;
     const u8* block = context.fog_mask_table + offset;
+    // The surface pixel mode is stable for the duration of a block draw.
+    // Querying DirectDraw state for every one of the 1024 pixels made the
+    // software fog pass dominate the frame and delayed gameplay hotkeys and
+    // edge scrolling even though the resulting pixels were identical.
+    const FogPixelMasks pixel_masks = current_fog_pixel_masks();
     const bool fully_inside = x >= 0 && y >= 0 &&
         static_cast<u32>(x) + kGameplayFogBlockPixels <= target.width &&
         static_cast<u32>(y) + kGameplayFogBlockPixels <= target.height;
@@ -745,8 +759,10 @@ void DrawGameplayFogBlock(
                 kGameplayFogBlockPixels;
             for (u32 col = 0; col < kGameplayFogBlockPixels; col += 2) {
                 const u8 factor = src[col];
-                dst[col] = apply_fog_factor_to_pixel(dst[col], factor, true);
-                dst[col + 1] = apply_fog_factor_to_pixel(dst[col + 1], factor, true);
+                dst[col] = apply_fog_factor_to_pixel(
+                    dst[col], factor, true, pixel_masks);
+                dst[col + 1] = apply_fog_factor_to_pixel(
+                    dst[col + 1], factor, true, pixel_masks);
             }
         }
         return;
@@ -766,7 +782,8 @@ void DrawGameplayFogBlock(
             if (px < 0 || static_cast<u32>(px) >= target.width) {
                 continue;
             }
-            dst[px] = apply_fog_factor_to_pixel(dst[px], src[col], false);
+            dst[px] = apply_fog_factor_to_pixel(
+                dst[px], src[col], false, pixel_masks);
         }
     }
 }

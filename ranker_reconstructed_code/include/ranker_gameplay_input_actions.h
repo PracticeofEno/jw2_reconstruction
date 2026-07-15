@@ -231,6 +231,7 @@ u32 DefaultSelectGameplayInputActionIndex(
 void InitializeOriginalGameplayInputActionTables(GameplayInputActionState& state);
 
 void PumpGameplayInputAndCursorFrame(GameplayInputActionState& state);
+void PumpGameplayCursorFrameOnly(GameplayInputActionState& state);
 void DrainGameplayInputEvents(GameplayInputActionState& state);
 // Gameplay reset is a consumer-side flush: the producer owns write_offset and
 // must remain monotonic across a reset, while read_offset catches up to the

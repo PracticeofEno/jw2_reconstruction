@@ -147,8 +147,10 @@ std::size_t green_index(u32 dst, u32 src) {
 
 void ensure_blend_tables() {
     const bool pixel_mode_555 = surface_pixel_mode_555();
-    if (!g_sprite_render_state.blend_tables_built ||
-        g_sprite_render_state.blend_tables_pixel_mode_555 != pixel_mode_555) {
+    if (ShouldRebuildSpriteBlendTables(
+            g_sprite_render_state.blend_tables_built,
+            g_sprite_render_state.blend_tables_pixel_mode_555,
+            pixel_mode_555)) {
         BuildSpriteBlendTables(pixel_mode_555);
     }
 }
@@ -616,6 +618,18 @@ void ClearIndexedSpriteRenderTarget() {
 }
 
 void BuildSpriteBlendTables(bool pixel_mode_555) {
+    // FUN_004f4060 builds these division-heavy channel tables when the
+    // DirectDraw pixel format is configured.  BindGameplayRenderTarget runs
+    // every gameplay frame, but rebinding the same 555/565 surface must not
+    // rebuild all 43k entries again: that reconstruction-only work delayed
+    // input, edge scrolling, and the next lockstep round by roughly 50 ms.
+    if (!ShouldRebuildSpriteBlendTables(
+            g_sprite_render_state.blend_tables_built,
+            g_sprite_render_state.blend_tables_pixel_mode_555,
+            pixel_mode_555)) {
+        return;
+    }
+
     const u32 red_shift = red_shift_for_mode(pixel_mode_555);
     for (auto& table : g_blend_tables.red) {
         table.fill(0);

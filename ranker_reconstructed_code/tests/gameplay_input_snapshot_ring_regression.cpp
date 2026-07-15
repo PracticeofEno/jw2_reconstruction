@@ -143,6 +143,100 @@ void reset_global_input_streams() {
     }
 }
 
+struct CursorOnlyProbe {
+    u32 pre = 0;
+    u32 set = 0;
+    u32 restore = 0;
+    u32 post = 0;
+    u32 finalize = 0;
+};
+
+CursorOnlyProbe g_cursor_only_probe;
+
+void cursor_only_pre(GameplayInputActionState&) {
+    ++g_cursor_only_probe.pre;
+}
+
+void cursor_only_set(GameplayInputActionState&) {
+    ++g_cursor_only_probe.set;
+}
+
+void cursor_only_restore(GameplayInputActionState&) {
+    ++g_cursor_only_probe.restore;
+}
+
+void cursor_only_post(GameplayInputActionState&) {
+    ++g_cursor_only_probe.post;
+}
+
+void cursor_only_finalize(GameplayInputActionState&) {
+    ++g_cursor_only_probe.finalize;
+}
+
+bool cursor_only_skip_drain(GameplayInputActionState&) {
+    return true;
+}
+
+void test_cursor_only_pump_preserves_deterministic_input_batch() {
+    reset_global_input_streams();
+    REQUIRE(PushKeyboardInputEvent(0x31u));
+
+    GameplayInputActionState state{};
+    state.callbacks.pre_cursor_update = cursor_only_pre;
+    state.callbacks.set_game_cursor_index = cursor_only_set;
+    state.callbacks.restore_game_cursor = cursor_only_restore;
+    state.callbacks.post_cursor_update = cursor_only_post;
+    state.callbacks.finalize_cursor_frame = cursor_only_finalize;
+
+    g_cursor_only_probe = {};
+    state.cursor_mode = 1;
+    PumpGameplayCursorFrameOnly(state);
+    REQUIRE(HasQueuedInputEvent());
+    REQUIRE(g_cursor_only_probe.pre == 1);
+    REQUIRE(g_cursor_only_probe.set == 1);
+    REQUIRE(g_cursor_only_probe.restore == 0);
+    REQUIRE(g_cursor_only_probe.post == 1);
+    REQUIRE(g_cursor_only_probe.finalize == 1);
+
+    state.cursor_mode = 0;
+    PumpGameplayCursorFrameOnly(state);
+    REQUIRE(HasQueuedInputEvent());
+    REQUIRE(g_cursor_only_probe.pre == 2);
+    REQUIRE(g_cursor_only_probe.set == 1);
+    REQUIRE(g_cursor_only_probe.restore == 1);
+    REQUIRE(g_cursor_only_probe.post == 2);
+    REQUIRE(g_cursor_only_probe.finalize == 2);
+
+    state.keyboard_filter_active = true;
+    PumpGameplayCursorFrameOnly(state);
+    REQUIRE(HasQueuedInputEvent());
+    REQUIRE(g_cursor_only_probe.pre == 2);
+    REQUIRE(g_cursor_only_probe.set == 1);
+    REQUIRE(g_cursor_only_probe.restore == 1);
+    REQUIRE(g_cursor_only_probe.post == 2);
+    REQUIRE(g_cursor_only_probe.finalize == 3);
+
+    state.modal_route_blocked = true;
+    PumpGameplayCursorFrameOnly(state);
+    REQUIRE(HasQueuedInputEvent());
+    REQUIRE(g_cursor_only_probe.pre == 3);
+    REQUIRE(g_cursor_only_probe.set == 1);
+    REQUIRE(g_cursor_only_probe.restore == 2);
+    REQUIRE(g_cursor_only_probe.post == 3);
+    REQUIRE(g_cursor_only_probe.finalize == 4);
+
+    state.modal_route_blocked = false;
+    state.callbacks.can_skip_input_drain = cursor_only_skip_drain;
+    PumpGameplayInputAndCursorFrame(state);
+    REQUIRE(HasQueuedInputEvent());
+    REQUIRE(g_cursor_only_probe.pre == 4);
+    REQUIRE(g_cursor_only_probe.set == 1);
+    REQUIRE(g_cursor_only_probe.restore == 3);
+    REQUIRE(g_cursor_only_probe.post == 4);
+    REQUIRE(g_cursor_only_probe.finalize == 5);
+    reset_global_input_streams();
+}
+
 void test_full_main_ring_does_not_publish_an_orphan_snapshot() {
     reset_global_input_streams();
     GameplayInputActionState& gameplay = gameplay_input_action_state();
@@ -318,12 +412,14 @@ int main() {
 
     test_threaded_spsc_publication_preserves_every_snapshot();
     test_reset_flushes_only_the_consumer_cursor();
+    test_cursor_only_pump_preserves_deterministic_input_batch();
     test_full_main_ring_does_not_publish_an_orphan_snapshot();
     test_threaded_mouse_event_and_snapshot_streams_stay_paired();
     test_concurrent_resets_do_not_split_paired_publication();
     std::cout << "GAMEPLAY_INPUT_SNAPSHOT_RING_PASS snapshot-count=50000"
               << " paired-mouse-count=30000 live-scratch=isolated"
               << " main-full=no-orphan"
+              << " cursor-only=no-input-drain+filter-modal-safe"
               << " concurrent-reset-count=100000"
               << " reset=consumer-tail-only abi=u32\n";
     return 0;

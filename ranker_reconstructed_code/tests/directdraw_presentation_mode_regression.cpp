@@ -1,4 +1,6 @@
 #include "ranker_winmain.h"
+#include "ranker_directx.h"
+#include "ranker_sprite_renderer.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -28,6 +30,14 @@ int main() {
         "logical height no longer matches DAT_01440004");
     require(kOriginalColorDepth == 16,
         "logical color depth no longer matches DAT_0143ffec");
+    require((kGameplayBackSurfaceCaps & DDSCAPS_OFFSCREENPLAIN) != 0 &&
+            (kGameplayBackSurfaceCaps & DDSCAPS_SYSTEMMEMORY) != 0 &&
+            (kGameplayBackSurfaceCaps & DDSCAPS_VIDEOMEMORY) == 0,
+        "software gameplay back surface is no longer pinned to system memory");
+    require(ShouldRebuildSpriteBlendTables(false, false, false) &&
+            !ShouldRebuildSpriteBlendTables(true, false, false) &&
+            ShouldRebuildSpriteBlendTables(true, false, true),
+        "sprite blend tables are no longer cached by pixel format");
     require(ScalePresentationCoordinateToLogical(0, 1280, 800) == 0,
         "left edge did not stay at logical zero");
     require(ScalePresentationCoordinateToLogical(640, 1280, 800) == 400,
@@ -65,6 +75,7 @@ int main() {
 
     std::cout <<
         "DIRECTDRAW_PRESENTATION_MODE_PASS logical=800x600x16 "
-        "client=1280x960/640x480 mapping=cnc-round+clamp outside=separate\n";
+        "client=1280x960/640x480 mapping=cnc-round+clamp outside=separate "
+        "backbuffer=system-memory blend-table=same-mode-cached\n";
     return EXIT_SUCCESS;
 }

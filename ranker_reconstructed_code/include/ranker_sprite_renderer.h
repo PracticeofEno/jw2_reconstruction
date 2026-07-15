@@ -32,6 +32,13 @@ struct SpriteRenderState {
     bool blend_tables_pixel_mode_555 = false;
 };
 
+constexpr bool ShouldRebuildSpriteBlendTables(
+    bool tables_built, bool cached_pixel_mode_555,
+    bool requested_pixel_mode_555) {
+    return !tables_built ||
+        cached_pixel_mode_555 != requested_pixel_mode_555;
+}
+
 struct SpritePixelMaskConstants {
     u16 high_red = 0;
     u16 high_green = 0;

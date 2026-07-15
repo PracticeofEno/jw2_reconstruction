@@ -18,6 +18,9 @@
 namespace ranker {
 
 #ifdef _WIN32
+constexpr DWORD kGameplayBackSurfaceCaps =
+    DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY;
+
 struct SpriteRenderTarget;
 struct TrcRecordReader;
 

@@ -403,15 +403,7 @@ void InitializeOriginalGameplayInputActionTables(GameplayInputActionState& state
     state.selector_target_class_masks.fill(0xffffffffu);
 }
 
-void PumpGameplayInputAndCursorFrame(GameplayInputActionState& state) {
-    if (!call_bool(state, state.callbacks.can_skip_input_drain, false)) {
-        DrainGameplayInputEvents(state);
-        if (state.keyboard_filter_active || state.modal_route_blocked) {
-            call(state, state.callbacks.finalize_cursor_frame);
-            return;
-        }
-    }
-
+static void pump_gameplay_cursor_callbacks(GameplayInputActionState& state) {
     call(state, state.callbacks.pre_cursor_update);
     if (state.cursor_mode == 1) {
         call(state, state.callbacks.set_game_cursor_index);
@@ -421,6 +413,28 @@ void PumpGameplayInputAndCursorFrame(GameplayInputActionState& state) {
     }
     call(state, state.callbacks.post_cursor_update);
     call(state, state.callbacks.finalize_cursor_frame);
+}
+
+void PumpGameplayCursorFrameOnly(GameplayInputActionState& state) {
+    if (state.keyboard_filter_active && !state.modal_route_blocked) {
+        call(state, state.callbacks.finalize_cursor_frame);
+        return;
+    }
+    pump_gameplay_cursor_callbacks(state);
+}
+
+void PumpGameplayInputAndCursorFrame(GameplayInputActionState& state) {
+    const bool skipped_input_drain =
+        call_bool(state, state.callbacks.can_skip_input_drain, false);
+    if (!skipped_input_drain) {
+        DrainGameplayInputEvents(state);
+        if (state.keyboard_filter_active || state.modal_route_blocked) {
+            call(state, state.callbacks.finalize_cursor_frame);
+            return;
+        }
+    }
+
+    pump_gameplay_cursor_callbacks(state);
 }
 
 void DrainGameplayInputEvents(GameplayInputActionState& state) {

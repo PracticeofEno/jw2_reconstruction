@@ -12345,14 +12345,12 @@ void default_gameplay_frame_draw_selection_overlay(GameplayFrameRenderContext&) 
 }
 
 void default_gameplay_frame_draw_hud_pulse(GameplayFrameRenderContext& context) {
-    sync_default_ui_overlay_runtime_from_gameplay_state();
     // FUN_004e2b61 advances the pulse when DAT_0162ea48 (the current tick
     // value) changes, not on every presentation pass.
     RenderGameplayHudPulse(ui_overlay_state(), context.current_tick_ms);
 }
 
 void default_gameplay_frame_draw_world_ui_overlay(GameplayFrameRenderContext&) {
-    sync_default_ui_overlay_runtime_from_gameplay_state();
     UiOverlayState& overlay = ui_overlay_state();
     // The queue/order strip is derived from live command_state and deferred
     // commands.  Rebuild it after the per-frame runtime mirror; previously the
@@ -13289,13 +13287,6 @@ void default_gameplay_loop_pre_update_phase(GameplayLoopState& state) {
     if (request_deferred_load_restart()) {
         return;
     }
-    // Original PumpMode1ReliablePackets stays inside 0x00429955..0x004299A9
-    // until every active channel reaches its subtype-10 boundary.  Our pump
-    // yields to the window loop on a temporarily empty ring, so do not drain
-    // or publish a second input batch into that still-open lockstep round.
-    if (IsMode1ReliableSyncRoundPending()) {
-        return;
-    }
     g_runtime.gameplay_sound.current_tick = state.current_tick_ms;
     configure_default_map_effect_context();
     configure_default_ui_overlay_callbacks();
@@ -13307,6 +13298,15 @@ void default_gameplay_loop_pre_update_phase(GameplayLoopState& state) {
     input.keyboard_filter_active =
         gameplay_script_trigger_state().opcode_context.global_flag_22358;
     input.modal_route_blocked = gameplay_modal_ui_is_active(gameplay_modal_ui_state());
+    if (IsMode1ReliableSyncRoundPending()) {
+        // The original frame loop calls FUN_004d9b40 at 0x004c1153 before
+        // entering the reliable gate.  Our non-blocking reliable pump can
+        // yield in the middle of the original channel loop; keep its local
+        // cursor/camera phase alive without draining or publishing another
+        // deterministic gameplay input batch into that open sync round.
+        PumpGameplayCursorFrameOnly(input);
+        return;
+    }
     PumpGameplayInputAndCursorFrame(input);
     apply_default_ui_overlay_runtime_mutations();
     PumpActiveGameplayModalUiFlow(gameplay_modal_ui_state());

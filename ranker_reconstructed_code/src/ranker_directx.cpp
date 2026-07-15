@@ -825,7 +825,12 @@ HRESULT create_back_surface(int width, int height) {
     desc.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT;
     desc.dwWidth = static_cast<DWORD>(width);
     desc.dwHeight = static_cast<DWORD>(height);
-    desc.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN;
+    // ConfigureDirectDrawSurfaces at 0x004f4060 creates the gameplay back
+    // surface with DDSCAPS_SYSTEMMEMORY (0x800).  Leaving this as a generic
+    // OFFSCREENPLAIN surface lets modern DirectDraw choose video memory, where
+    // the CPU software renderer pays a large read/modify/write penalty for
+    // every sprite and fog pixel.
+    desc.ddsCaps.dwCaps = kGameplayBackSurfaceCaps;
     desc.ddpfPixelFormat.dwSize = sizeof(desc.ddpfPixelFormat);
     desc.ddpfPixelFormat.dwFlags = DDPF_RGB;
     desc.ddpfPixelFormat.dwRGBBitCount = 16;
