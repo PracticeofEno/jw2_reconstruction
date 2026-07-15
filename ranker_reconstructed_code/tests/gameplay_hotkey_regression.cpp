@@ -7,7 +7,9 @@
 #ifdef NDEBUG
 #undef NDEBUG
 #endif
+#include <atomic>
 #include <cassert>
+#include <thread>
 
 namespace ranker {
 
@@ -20,6 +22,8 @@ GameplayInputActionState& gameplay_input_action_state() {
 void ResetGameplayInputSnapshotRing(GameplayInputActionState&) {}
 bool PopGameplayInputSnapshot(GameplayInputActionState&) { return true; }
 bool PushGameplayInputSnapshot(GameplayInputActionState&) { return true; }
+bool PushGameplayInputSnapshot(
+    GameplayInputActionState&, const GameplayInputSnapshot&) { return true; }
 SoftwareCursorState& software_cursor_state() {
     static SoftwareCursorState state{};
     return state;
@@ -66,6 +70,150 @@ void test_scan_code_and_modifier_pipeline() {
     assert(input_state().events[3].code == 0x4bu);
     HandleKeyUp(0x25u);
     assert(input_state().key_down[0x25] == 0);
+}
+
+void test_focus_loss_releases_every_held_key_and_modifier() {
+    input_state() = InputState{};
+    HandleKeyDown(0x11u, 0x1du); // Ctrl
+    HandleKeyDown(0x10u, 0x2au); // Shift
+    HandleAltKeyPress(0x12u, 0x38u); // Alt
+    HandleKeyDown(0x25u, 0x4bu); // Left
+    HandleKeyDown(0x57u, 0x11u); // W
+    assert(HasQueuedInputEvent());
+
+    ClearInputHeldKeysForFocusLoss();
+
+    for (u8 down : input_state().key_down) {
+        assert(down == 0);
+    }
+    assert(!input_state().shift_down);
+    assert(!input_state().ctrl_down);
+    assert(!input_state().alt_down);
+    // Losing focus releases held state; it does not silently discard the
+    // already published input records which the worker still owns.
+    assert(HasQueuedInputEvent());
+}
+
+void test_atomic_held_key_bytes_preserve_layout_and_value_semantics() {
+    static_assert(sizeof(InputAtomicByte) == sizeof(u8));
+    static_assert(alignof(InputAtomicByte) == alignof(u8));
+
+    InputState source{};
+    source.key_down[0x10] = 1;
+    source.key_down[0x25] = 1;
+    source.shift_down = true;
+    source.ctrl_down = true;
+
+    InputState copied = source;
+    source.key_down.fill(0);
+    source.shift_down = false;
+    source.ctrl_down = false;
+    assert(copied.key_down[0x10] == 1);
+    assert(copied.key_down[0x25] == 1);
+    assert(copied.shift_down);
+    assert(copied.ctrl_down);
+
+    InputState assigned{};
+    assigned = copied;
+    assert(assigned.key_down[0x10] == 1);
+    assert(assigned.key_down[0x25] == 1);
+    assert(assigned.shift_down);
+    assert(assigned.ctrl_down);
+}
+
+void test_window_key_writes_are_safe_during_gameplay_live_reads() {
+    input_state() = InputState{};
+    constexpr u32 kTransitionCount = 100000u;
+    std::atomic<bool> reader_ready{false};
+    std::atomic<bool> producer_done{false};
+    std::atomic<u32> read_count{0};
+
+    std::thread reader([&]() {
+        reader_ready.store(true, std::memory_order_release);
+        while (!producer_done.load(std::memory_order_acquire)) {
+            // These are independent live globals in the original too; do not
+            // require a cross-field snapshot, only valid one-byte values.
+            const u8 held = input_state().key_down[0x10];
+            const u8 shift = input_state().shift_down;
+            assert(held <= 1);
+            assert(shift <= 1);
+            read_count.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+
+    while (!reader_ready.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    for (u32 transition = 0; transition < kTransitionCount; ++transition) {
+        HandleKeyDown(0x10u, 0x2au);
+        HandleKeyUp(0x10u);
+        if ((transition & 0xffu) == 0) {
+            std::this_thread::yield();
+        }
+    }
+    producer_done.store(true, std::memory_order_release);
+    reader.join();
+
+    assert(read_count.load(std::memory_order_relaxed) != 0);
+    assert(input_state().key_down[0x10] == 0);
+    assert(!input_state().shift_down);
+}
+
+void test_reset_flush_preserves_the_producer_owned_cursor() {
+    input_state() = InputState{};
+    assert(PushKeyboardInputEvent(0x11u));
+    assert(PushKeyboardInputEvent(0x22u));
+    const u32 published_head =
+        input_state().head.load(std::memory_order_acquire);
+    assert(published_head == 2u);
+
+    ResetInputState();
+
+    assert(input_state().head.load(std::memory_order_relaxed) ==
+        published_head);
+    assert(input_state().tail.load(std::memory_order_relaxed) ==
+        published_head);
+    assert(!HasQueuedInputEvent());
+
+    assert(PushKeyboardInputEvent(0x33u));
+    InputEvent event{};
+    assert(PopInputEvent(event));
+    assert(event.code == 0x33u);
+    assert(!HasQueuedInputEvent());
+}
+
+void test_window_producer_and_gameplay_consumer_preserve_ring_order() {
+    input_state() = InputState{};
+    constexpr u32 kEventCount = 20000u;
+    std::atomic<bool> producer_done{false};
+
+    std::thread producer([&]() {
+        for (u32 value = 1; value <= kEventCount; ++value) {
+            while (!PushKeyboardInputEvent(value)) {
+                std::this_thread::yield();
+            }
+        }
+        producer_done.store(true, std::memory_order_release);
+    });
+
+    u32 received = 0;
+    while (received < kEventCount) {
+        InputEvent event{};
+        if (PopInputEvent(event)) {
+            ++received;
+            assert(event.kind == InputEventKind::keyboard);
+            assert(event.code == received);
+            continue;
+        }
+        if (producer_done.load(std::memory_order_acquire) &&
+            !HasQueuedInputEvent()) {
+            break;
+        }
+        std::this_thread::yield();
+    }
+    producer.join();
+    assert(received == kEventCount);
+    assert(!HasQueuedInputEvent());
 }
 
 void test_original_scan_marker_and_record_marker_pipeline() {
@@ -159,6 +307,11 @@ void test_keyboard_routes_and_wm_char_deduplication() {
 
 int main() {
     test_scan_code_and_modifier_pipeline();
+    test_focus_loss_releases_every_held_key_and_modifier();
+    test_atomic_held_key_bytes_preserve_layout_and_value_semantics();
+    test_window_key_writes_are_safe_during_gameplay_live_reads();
+    test_reset_flush_preserves_the_producer_owned_cursor();
+    test_window_producer_and_gameplay_consumer_preserve_ring_order();
     test_original_scan_marker_and_record_marker_pipeline();
     test_keyboard_routes_and_wm_char_deduplication();
     return 0;

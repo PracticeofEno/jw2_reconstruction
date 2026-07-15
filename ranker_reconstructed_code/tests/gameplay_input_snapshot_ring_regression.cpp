@@ -1,0 +1,330 @@
+#include "ranker_gameplay_input_actions.h"
+#include "ranker_gameplay_packets.h"
+#include "ranker_reliable_packets.h"
+
+#ifdef _WIN32
+#include "ranker_cursor.h"
+#include "ranker_screenshot.h"
+#endif
+
+#include <atomic>
+#include <cstdlib>
+#include <iostream>
+#include <thread>
+
+namespace ranker {
+
+// The focused target links the production input translation units directly.
+// These unrelated backends are referenced by sections outside the ring path
+// on PE/COFF linkers, so provide inert test-local endpoints for them.
+Mode1ReliableRuntimeState& mode1_reliable_state() {
+    static Mode1ReliableRuntimeState state{};
+    return state;
+}
+
+void ResetMode1GameplayVoteCompletionGate() {}
+
+#ifdef _WIN32
+SoftwareCursorState& software_cursor_state() {
+    static SoftwareCursorState state{};
+    return state;
+}
+
+void SetGameCursorPointerPosition(i32, i32) {}
+void RequestScreenshotCapture() {}
+void SetContinuousScreenshotCapture(bool) {}
+#endif
+
+} // namespace ranker
+
+namespace {
+
+using namespace ranker;
+
+#define REQUIRE(condition)                                                     \
+    do {                                                                       \
+        if (!(condition)) {                                                    \
+            std::cerr << "FAIL line " << __LINE__ << ": " #condition "\n"; \
+            std::exit(1);                                                      \
+        }                                                                      \
+    } while (false)
+
+GameplayInputSnapshot make_snapshot(u32 sequence) {
+    GameplayInputSnapshot snapshot{};
+    snapshot.field0 = sequence;
+    snapshot.field1 = sequence ^ 0xa5a55a5au;
+    snapshot.field2 = sequence * 3u;
+    snapshot.field3 = ~sequence;
+    snapshot.field4 = sequence + 0x10203040u;
+    return snapshot;
+}
+
+bool snapshot_matches(
+    const GameplayInputSnapshot& snapshot, u32 sequence) {
+    const GameplayInputSnapshot expected = make_snapshot(sequence);
+    return snapshot.field0 == expected.field0 &&
+        snapshot.field1 == expected.field1 &&
+        snapshot.field2 == expected.field2 &&
+        snapshot.field3 == expected.field3 &&
+        snapshot.field4 == expected.field4;
+}
+
+void test_threaded_spsc_publication_preserves_every_snapshot() {
+    GameplayInputActionState state{};
+    constexpr u32 kSnapshotCount = 50000;
+    std::atomic<bool> begin{false};
+    std::atomic<bool> mismatch{false};
+
+    std::thread producer([&] {
+        while (!begin.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        for (u32 sequence = 0; sequence < kSnapshotCount; ++sequence) {
+            state.live_snapshot = make_snapshot(sequence);
+            while (!PushGameplayInputSnapshot(state)) {
+                std::this_thread::yield();
+            }
+        }
+    });
+
+    std::thread consumer([&] {
+        begin.store(true, std::memory_order_release);
+        for (u32 sequence = 0; sequence < kSnapshotCount; ++sequence) {
+            while (!PopGameplayInputSnapshot(state)) {
+                std::this_thread::yield();
+            }
+            if (!snapshot_matches(state.current_snapshot, sequence)) {
+                mismatch.store(true, std::memory_order_relaxed);
+            }
+        }
+    });
+
+    producer.join();
+    consumer.join();
+
+    REQUIRE(!mismatch.load(std::memory_order_relaxed));
+    REQUIRE(state.snapshot_read_offset.load(std::memory_order_acquire) ==
+        state.snapshot_write_offset.load(std::memory_order_acquire));
+}
+
+void test_reset_flushes_only_the_consumer_cursor() {
+    GameplayInputActionState state{};
+    for (u32 sequence = 0; sequence < 7; ++sequence) {
+        state.live_snapshot = make_snapshot(sequence);
+        REQUIRE(PushGameplayInputSnapshot(state));
+    }
+
+    const u32 producer_cursor =
+        state.snapshot_write_offset.load(std::memory_order_acquire);
+    REQUIRE(producer_cursor != 0);
+    state.snapshot_side_flag = true;
+
+    ResetGameplayInputSnapshotRing(state);
+
+    REQUIRE(state.snapshot_write_offset.load(std::memory_order_acquire) ==
+        producer_cursor);
+    REQUIRE(state.snapshot_read_offset.load(std::memory_order_acquire) ==
+        producer_cursor);
+    REQUIRE(!state.snapshot_side_flag);
+    REQUIRE(!PopGameplayInputSnapshot(state));
+
+    constexpr u32 kPostResetSequence = 0x1234u;
+    state.live_snapshot = make_snapshot(kPostResetSequence);
+    REQUIRE(PushGameplayInputSnapshot(state));
+    REQUIRE(PopGameplayInputSnapshot(state));
+    REQUIRE(snapshot_matches(state.current_snapshot, kPostResetSequence));
+    REQUIRE(!PopGameplayInputSnapshot(state));
+}
+
+void reset_global_input_streams() {
+    ResetInputEventState();
+    InputEvent event{};
+    while (PopInputEvent(event)) {
+    }
+}
+
+void test_full_main_ring_does_not_publish_an_orphan_snapshot() {
+    reset_global_input_streams();
+    GameplayInputActionState& gameplay = gameplay_input_action_state();
+
+    for (u32 index = 0; index + 1 < kInputEventQueueSize; ++index) {
+        REQUIRE(PushKeyboardInputEvent(index + 1));
+    }
+    const u32 snapshot_write_before =
+        gameplay.snapshot_write_offset.load(std::memory_order_acquire);
+
+    input_state().mouse_x = 17;
+    input_state().mouse_y = 29;
+    REQUIRE(!PushMouseInputEvent(0x0200u, 0x55u, 0, 0));
+    REQUIRE(gameplay.snapshot_write_offset.load(std::memory_order_acquire) ==
+        snapshot_write_before);
+
+    InputEvent event{};
+    for (u32 index = 0; index + 1 < kInputEventQueueSize; ++index) {
+        REQUIRE(PopInputEvent(event));
+        REQUIRE(event.kind == InputEventKind::keyboard);
+    }
+    REQUIRE(!PopInputEvent(event));
+    REQUIRE(!PopGameplayInputSnapshot(gameplay));
+
+    input_state().mouse_x = 31;
+    input_state().mouse_y = 47;
+    REQUIRE(PushMouseInputEvent(0x0200u, 0x66u, 0, 0));
+    REQUIRE(PopInputEvent(event));
+    REQUIRE(event.kind == InputEventKind::mouse);
+    REQUIRE(gameplay.current_snapshot.field1 == 0x66u);
+    REQUIRE(gameplay.current_snapshot.field2 == 31u);
+    REQUIRE(gameplay.current_snapshot.field3 == 47u);
+    REQUIRE(!PopInputEvent(event));
+    REQUIRE(!PopGameplayInputSnapshot(gameplay));
+}
+
+void test_threaded_mouse_event_and_snapshot_streams_stay_paired() {
+    reset_global_input_streams();
+    GameplayInputActionState& gameplay = gameplay_input_action_state();
+    constexpr u32 kEventCount = 30000;
+    std::atomic<bool> begin{false};
+    std::atomic<bool> consumer_done{false};
+    std::atomic<bool> mismatch{false};
+
+    std::thread producer([&] {
+        while (!begin.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        for (u32 sequence = 1; sequence <= kEventCount; ++sequence) {
+            input_state().mouse_x = sequence;
+            input_state().mouse_y = sequence ^ 0x55aau;
+            while (!PushMouseInputEvent(0x0200u, sequence, 0, 0)) {
+                std::this_thread::yield();
+            }
+        }
+    });
+
+    std::thread consumer([&] {
+        begin.store(true, std::memory_order_release);
+        InputEvent event{};
+        for (u32 sequence = 1; sequence <= kEventCount; ++sequence) {
+            while (!PopInputEvent(event)) {
+                std::this_thread::yield();
+            }
+            if (event.kind != InputEventKind::mouse ||
+                event.code != sequence ||
+                event.x != static_cast<i32>(sequence) ||
+                event.y != static_cast<i32>(sequence ^ 0x55aau) ||
+                gameplay.current_snapshot.field1 != sequence ||
+                gameplay.current_snapshot.field2 != sequence ||
+                gameplay.current_snapshot.field3 != (sequence ^ 0x55aau)) {
+                mismatch.store(true, std::memory_order_relaxed);
+            }
+        }
+        consumer_done.store(true, std::memory_order_release);
+    });
+
+    // The gameplay worker clears its unrelated live pointer scratch during
+    // ordinary frame handling.  Mouse publication must use a producer-local
+    // snapshot so those clears cannot tear a queued payload.
+    std::thread live_snapshot_resetter([&] {
+        while (!begin.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        while (!consumer_done.load(std::memory_order_acquire)) {
+            ResetGameplayInputPointerState(gameplay);
+            std::this_thread::yield();
+        }
+    });
+
+    producer.join();
+    consumer.join();
+    live_snapshot_resetter.join();
+
+    REQUIRE(!mismatch.load(std::memory_order_relaxed));
+    REQUIRE(!HasQueuedInputEvent());
+    REQUIRE(!PopGameplayInputSnapshot(gameplay));
+}
+
+void test_concurrent_resets_do_not_split_paired_publication() {
+    reset_global_input_streams();
+    GameplayInputActionState& gameplay = gameplay_input_action_state();
+    constexpr u32 kEventCount = 100000;
+    std::atomic<bool> begin{false};
+    std::atomic<bool> producer_done{false};
+    std::atomic<bool> mismatch{false};
+    u32 received = 0;
+    u32 reset_count = 0;
+
+    std::thread producer([&] {
+        while (!begin.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        for (u32 sequence = 1; sequence <= kEventCount; ++sequence) {
+            const u32 x = sequence & 0x7fffu;
+            const u32 y = (sequence ^ 0x33ccu) & 0x7fffu;
+            const u32 lparam = x | (y << 16);
+            const auto publish_button = [&] {
+                return (sequence & 1u) != 0
+                    ? HandleLeftButtonDown(0, lparam)
+                    : HandleLeftButtonUp(0, lparam);
+            };
+            while (!publish_button()) {
+                std::this_thread::yield();
+            }
+        }
+        producer_done.store(true, std::memory_order_release);
+    });
+
+    std::thread consumer([&] {
+        begin.store(true, std::memory_order_release);
+        InputEvent event{};
+        u32 iteration = 0;
+        while (!producer_done.load(std::memory_order_acquire) ||
+            HasQueuedInputEvent()) {
+            ++iteration;
+            if ((iteration % 5u) == 0u) {
+                ResetInputEventState();
+                ++reset_count;
+                continue;
+            }
+            if (!PopInputEvent(event)) {
+                std::this_thread::yield();
+                continue;
+            }
+            ++received;
+            if (event.kind != InputEventKind::mouse ||
+                gameplay.current_snapshot.field1 != event.code ||
+                gameplay.current_snapshot.field2 !=
+                    static_cast<u32>(event.x) ||
+                gameplay.current_snapshot.field3 !=
+                    static_cast<u32>(event.y)) {
+                mismatch.store(true, std::memory_order_relaxed);
+            }
+        }
+    });
+
+    producer.join();
+    consumer.join();
+
+    REQUIRE(!mismatch.load(std::memory_order_relaxed));
+    REQUIRE(reset_count != 0);
+    REQUIRE(received != 0);
+    REQUIRE(!HasQueuedInputEvent());
+    REQUIRE(!PopGameplayInputSnapshot(gameplay));
+}
+
+} // namespace
+
+int main() {
+    static_assert(sizeof(GameplayInputSnapshotCursor) == sizeof(u32));
+    static_assert(alignof(GameplayInputSnapshotCursor) == alignof(u32));
+
+    test_threaded_spsc_publication_preserves_every_snapshot();
+    test_reset_flushes_only_the_consumer_cursor();
+    test_full_main_ring_does_not_publish_an_orphan_snapshot();
+    test_threaded_mouse_event_and_snapshot_streams_stay_paired();
+    test_concurrent_resets_do_not_split_paired_publication();
+    std::cout << "GAMEPLAY_INPUT_SNAPSHOT_RING_PASS snapshot-count=50000"
+              << " paired-mouse-count=30000 live-scratch=isolated"
+              << " main-full=no-orphan"
+              << " concurrent-reset-count=100000"
+              << " reset=consumer-tail-only abi=u32\n";
+    return 0;
+}

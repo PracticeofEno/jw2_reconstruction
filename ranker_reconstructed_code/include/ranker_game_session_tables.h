@@ -111,6 +111,37 @@ struct RuntimeDefinitionRecord {
     std::vector<u8> bytes;
 };
 
+constexpr std::size_t kSessionUnitDefinitionNameOffset = 0x10c;
+constexpr std::size_t kSessionUnitDefinitionNameBytes = 0x40;
+
+struct SessionUnitDefinitionNameField {
+    bool present = false;
+    std::string text;
+};
+
+inline SessionUnitDefinitionNameField ReadSessionUnitDefinitionNameField(
+    const std::vector<u8>& bytes) {
+    SessionUnitDefinitionNameField field{};
+    if (bytes.size() < kSessionUnitDefinitionNameOffset +
+            kSessionUnitDefinitionNameBytes) {
+        return field;
+    }
+    field.present = true;
+    const char* const name = reinterpret_cast<const char*>(
+        bytes.data() + kSessionUnitDefinitionNameOffset);
+    std::size_t length = 0;
+    while (length < kSessionUnitDefinitionNameBytes && name[length] != '\0') {
+        ++length;
+    }
+    field.text.assign(name, length);
+    return field;
+}
+
+inline SessionUnitDefinitionNameField ReadSessionUnitDefinitionNameField(
+    const RuntimeDefinitionRecord& record) {
+    return ReadSessionUnitDefinitionNameField(record.bytes);
+}
+
 struct SessionRuntimeDefinitionTableSet {
     std::vector<RuntimeDefinitionRecord> fixed44_records;
     std::vector<RuntimeDefinitionRecord> unit_records;

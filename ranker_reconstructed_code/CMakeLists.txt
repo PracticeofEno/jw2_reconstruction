@@ -203,6 +203,16 @@ if (BUILD_TESTING)
         COMMAND selected_unit_name_slot_regression
     )
 
+    add_executable(selected_info_draw_order_regression
+        tests/selected_info_draw_order_regression.cpp
+    )
+    target_include_directories(selected_info_draw_order_regression PRIVATE
+        include
+    )
+    add_test(NAME selected_info_draw_order_regression
+        COMMAND selected_info_draw_order_regression
+    )
+
     add_executable(fog_smoothing_mask_regression
         tests/fog_smoothing_mask_regression.cpp
         src/ranker_gameplay_visibility.cpp
@@ -295,6 +305,31 @@ if (BUILD_TESTING)
         COMMAND gameplay_hotkey_regression
     )
 
+    add_executable(gameplay_input_snapshot_ring_regression
+        tests/gameplay_input_snapshot_ring_regression.cpp
+        src/ranker_gameplay_input_actions.cpp
+        src/ranker_input.cpp
+    )
+    target_include_directories(gameplay_input_snapshot_ring_regression PRIVATE
+        include
+    )
+    if (MSVC)
+        target_compile_options(gameplay_input_snapshot_ring_regression PRIVATE /Gy)
+        target_link_options(gameplay_input_snapshot_ring_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(gameplay_input_snapshot_ring_regression PRIVATE
+            -O1
+            -ffunction-sections
+            -fdata-sections
+        )
+        target_link_options(gameplay_input_snapshot_ring_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME gameplay_input_snapshot_ring_regression
+        COMMAND gameplay_input_snapshot_ring_regression
+    )
+
     add_executable(gameplay_hotkey_dispatch_regression
         tests/gameplay_hotkey_dispatch_regression.cpp
         src/ranker_control_group_persistence.cpp
@@ -311,6 +346,7 @@ if (BUILD_TESTING)
         target_link_options(gameplay_hotkey_dispatch_regression PRIVATE /OPT:REF)
     else()
         target_compile_options(gameplay_hotkey_dispatch_regression PRIVATE
+            -O1
             -ffunction-sections
             -fdata-sections
         )
@@ -320,6 +356,29 @@ if (BUILD_TESTING)
     endif()
     add_test(NAME gameplay_hotkey_dispatch_regression
         COMMAND gameplay_hotkey_dispatch_regression
+    )
+
+    add_executable(gameplay_script_escape_regression
+        tests/gameplay_script_escape_regression.cpp
+        src/ranker_gameplay_script_dialog.cpp
+    )
+    target_include_directories(gameplay_script_escape_regression PRIVATE
+        include
+    )
+    if (MSVC)
+        target_compile_options(gameplay_script_escape_regression PRIVATE /Gy)
+        target_link_options(gameplay_script_escape_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(gameplay_script_escape_regression PRIVATE
+            -ffunction-sections
+            -fdata-sections
+        )
+        target_link_options(gameplay_script_escape_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME gameplay_script_escape_regression
+        COMMAND gameplay_script_escape_regression
     )
 
     add_executable(control_group_persistence_regression
@@ -404,6 +463,7 @@ add_executable(ranker_rebuild WIN32
     src/ranker_game_loop.cpp
     src/ranker_game_session_tables.cpp
     src/ranker_gameplay_script.cpp
+    src/ranker_gameplay_script_dialog.cpp
     src/ranker_gameplay_packets.cpp
     src/ranker_gameplay_sound.cpp
     src/ranker_gameplay_end_conditions.cpp

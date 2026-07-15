@@ -5,6 +5,7 @@
 #include "ranker_resource_store.h"
 #include "ranker_types.h"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <string>
@@ -602,6 +603,7 @@ struct UiOverlayCallbacks {
     UiOverlayProductionGateCallback check_selected_production_action_gate = nullptr;
     UiOverlayFrameCallback on_chat_input_begin = nullptr;
     UiOverlayFrameCallback on_chat_input_end = nullptr;
+    UiOverlayFrameCallback request_script_wait_break = nullptr;
     UiOverlayFrameCallback play_click_sound = nullptr;
     UiOverlayFrameCallback open_save_session_dialog = nullptr;
     UiOverlayFrameCallback open_load_session_dialog = nullptr;
@@ -619,6 +621,11 @@ struct UiOverlayState {
     std::vector<UiOverlayIconBlitRequest> icon_blit_requests;
     std::vector<UiOverlayTextCommand> text_commands;
     std::vector<UiOverlayProgressCommand> progress_commands;
+    // Keep the diagnostic command streams intact after an immediate
+    // record-level draw.  These parallel bytes prevent the frame-tail pass
+    // from drawing that command a second time.
+    std::vector<u8> text_command_flushed;
+    std::vector<u8> progress_command_flushed;
     std::vector<UiOverlayMinimapMarker> minimap_markers;
     std::vector<UiOverlayHudPulseCommand> pulse_commands;
     std::vector<UiOverlayCommandOption> command_options;
@@ -909,6 +916,34 @@ struct UiOverlayState {
     bool emit_sprite_draws = false;
     bool clear_queue_after_flush = false;
 };
+
+// FUN_004e030b dispatches the selected-info record (0x1a6) before the command
+// records which follow it.  Its HP/name/progress draws complete at that record
+// boundary.  The record itself draws portrait/text before its progress frame
+// and fill.  Keep the deferred diagnostic streams, but flush only the suffix
+// created by this record so later command icons retain the original z-order.
+template <typename DrawRecord, typename FlushText, typename DrawProgressFrame,
+    typename FlushProgress>
+void DrawUiOverlayRecordAndFlushSuffixCore(UiOverlayState& state,
+    DrawRecord draw_record, FlushText flush_text,
+    DrawProgressFrame draw_progress_frame, FlushProgress flush_progress) {
+    const std::size_t first_progress = state.progress_commands.size();
+    const std::size_t first_text = state.text_commands.size();
+    draw_record(state);
+    if (!state.emit_sprite_draws) {
+        return;
+    }
+
+    flush_text(state, first_text);
+    draw_progress_frame(state);
+    flush_progress(state, first_progress);
+    state.progress_command_flushed.resize(state.progress_commands.size(), 0);
+    std::fill(state.progress_command_flushed.begin() + first_progress,
+        state.progress_command_flushed.end(), 1);
+    state.text_command_flushed.resize(state.text_commands.size(), 0);
+    std::fill(state.text_command_flushed.begin() + first_text,
+        state.text_command_flushed.end(), 1);
+}
 
 UiOverlayState& ui_overlay_state();
 void ResetUiOverlayState();

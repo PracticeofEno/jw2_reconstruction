@@ -24,6 +24,13 @@ struct GameplayInputSnapshot {
     u32 field4 = 0;
 };
 
+// WndProc publishes mouse snapshots while the gameplay worker consumes them.
+// Reuse the four-byte lock-free cursor used by the main input SPSC ring so the
+// original state layout is retained while cross-thread publication is explicit.
+using GameplayInputSnapshotCursor = InputQueueIndex;
+static_assert(sizeof(GameplayInputSnapshotCursor) == sizeof(u32));
+static_assert(alignof(GameplayInputSnapshotCursor) == alignof(u32));
+
 struct GameplayChecksumObject {
     u32 offset = 0;
     u32 identity = 0;
@@ -169,8 +176,8 @@ struct GameplayInputActionState {
     std::vector<GameplayActionUnitState> units;
     std::vector<u32> indexed_payloads;
     std::vector<GameplayPublishedAction> published_actions;
-    u32 snapshot_write_offset = 0;
-    u32 snapshot_read_offset = 0;
+    GameplayInputSnapshotCursor snapshot_write_offset{};
+    GameplayInputSnapshotCursor snapshot_read_offset{};
     u32 local_player_index = 0;
     u32 cursor_mode = 0;
     u32 cursor_index = 0;
@@ -225,9 +232,17 @@ void InitializeOriginalGameplayInputActionTables(GameplayInputActionState& state
 
 void PumpGameplayInputAndCursorFrame(GameplayInputActionState& state);
 void DrainGameplayInputEvents(GameplayInputActionState& state);
+// Gameplay reset is a consumer-side flush: the producer owns write_offset and
+// must remain monotonic across a reset, while read_offset catches up to the
+// latest snapshot published before the acquire load.  During live window
+// input, use ResetInputEventState so the main ring and this ring are covered by
+// the paired-stream gate; call this directly only while the producer is
+// quiescent or that gate is already held.
 void ResetGameplayInputSnapshotRing(GameplayInputActionState& state);
 bool PopGameplayInputSnapshot(GameplayInputActionState& state);
 bool PushGameplayInputSnapshot(GameplayInputActionState& state);
+bool PushGameplayInputSnapshot(GameplayInputActionState& state,
+    const GameplayInputSnapshot& snapshot);
 void ResetGameplayInputPointerState(GameplayInputActionState& state);
 
 void SnapshotLocalGameplayChecksum(GameplayInputActionState& state);

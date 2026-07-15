@@ -39,6 +39,7 @@ u32 pause_menu_call_count = 0;
 u32 save_menu_call_count = 0;
 u32 load_menu_call_count = 0;
 u32 click_sound_call_count = 0;
+u32 script_wait_break_call_count = 0;
 
 void count_pause_menu_open(UiOverlayState&) {
     ++pause_menu_call_count;
@@ -54,6 +55,10 @@ void count_load_menu_open(UiOverlayState&) {
 
 void count_click_sound(UiOverlayState&) {
     ++click_sound_call_count;
+}
+
+void count_script_wait_break(UiOverlayState&) {
+    ++script_wait_break_call_count;
 }
 
 void test_w_keydown_activates_exactly_once_and_wm_char_does_not_repeat() {
@@ -237,6 +242,42 @@ void test_escape_cancels_placement_or_activates_first_back_record() {
     DispatchGameplayUiKeyboardInput(option_disabled, 0x01u, 0u);
     REQUIRE(option_disabled.command_actions.empty());
     REQUIRE(click_sound_call_count == 3u);
+
+    UiOverlayState scenario_wait{};
+    scenario_wait.callbacks.request_script_wait_break = count_script_wait_break;
+    script_wait_break_call_count = 0;
+    CancelCurrentUiModeOrActivateCommand(scenario_wait);
+    REQUIRE(script_wait_break_call_count == 1u);
+
+    UiOverlayState p2p_wait{};
+    p2p_wait.generic_ai_profile_mode = true;
+    p2p_wait.callbacks.request_script_wait_break = count_script_wait_break;
+    CancelCurrentUiModeOrActivateCommand(p2p_wait);
+    REQUIRE(script_wait_break_call_count == 1u);
+}
+
+void test_chat_channel_hotkeys_follow_generic_p2p_profile() {
+    const auto begin_chat = [](bool generic, bool scenario, u32 player_type,
+                                bool shift, bool ctrl, bool alt) {
+        UiOverlayState state{};
+        state.generic_ai_profile_mode = generic;
+        state.scenario_ai_profile_override = scenario;
+        state.local_player_type = player_type;
+        state.default_chat_channel = 7u;
+        state.shift_modifier_down = shift;
+        state.ctrl_modifier_down = ctrl;
+        state.alt_modifier_down = alt;
+        BeginGameplayChatInput(state);
+        return state.chat_channel;
+    };
+
+    REQUIRE(begin_chat(true, false, 0u, true, false, false) == 3u);
+    REQUIRE(begin_chat(true, false, 0u, false, true, false) == 1u);
+    REQUIRE(begin_chat(true, false, 0u, false, false, true) == 2u);
+    REQUIRE(begin_chat(true, false, 0u, false, false, false) == 7u);
+    REQUIRE(begin_chat(true, false, 0u, true, true, true) == 3u);
+    REQUIRE(begin_chat(true, false, 2u, true, true, true) == 7u);
+    REQUIRE(begin_chat(false, true, 0u, true, true, true) == 4u);
 }
 
 void test_f11_toggles_gameplay_debug_overlay_flag() {
@@ -265,10 +306,15 @@ void test_speed_keys_follow_generic_profile_gate_and_boundaries() {
     REQUIRE(scenario.game_speed == 4u);
 
     UiOverlayState bounded{};
-    bounded.max_game_speed = 3u;
+    bounded.max_game_speed = 3u; // setup mirror does not change the legacy cap
     bounded.game_speed = 3u;
     DispatchGameplayUiKeyboardInput(bounded, 0x0cu, 0u);
-    REQUIRE(bounded.game_speed == 3u);
+    REQUIRE(bounded.game_speed == 4u);
+    bounded.game_speed = 14u;
+    IncreaseGameplaySpeed(bounded);
+    REQUIRE(bounded.game_speed == 15u);
+    IncreaseGameplaySpeed(bounded);
+    REQUIRE(bounded.game_speed == 15u);
     bounded.game_speed = 0u;
     DispatchGameplayUiKeyboardInput(bounded, 0x0du, 0u);
     REQUIRE(bounded.game_speed == 0u);
@@ -505,6 +551,7 @@ int main() {
     test_f10_opens_pause_menu_once_without_mutating_selected_stats();
     test_f2_f3_bookmarks_only_in_generic_ai_profile_mode();
     test_escape_cancels_placement_or_activates_first_back_record();
+    test_chat_channel_hotkeys_follow_generic_p2p_profile();
     test_f11_toggles_gameplay_debug_overlay_flag();
     test_speed_keys_follow_generic_profile_gate_and_boundaries();
     test_loaded_control_groups_recall_and_cycle_through_dispatcher();

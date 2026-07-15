@@ -457,28 +457,46 @@ void DrainGameplayInputEvents(GameplayInputActionState& state) {
 }
 
 void ResetGameplayInputSnapshotRing(GameplayInputActionState& state) {
-    state.snapshot_write_offset = 0;
-    state.snapshot_read_offset = 0;
+    const u32 published_write =
+        state.snapshot_write_offset.load(std::memory_order_acquire);
+    state.snapshot_read_offset.store(
+        published_write, std::memory_order_release);
     call(state, state.callbacks.reset_snapshot_side_state);
     state.snapshot_side_flag = false;
 }
 
 bool PopGameplayInputSnapshot(GameplayInputActionState& state) {
-    const u32 slot = offset_to_slot(state.snapshot_read_offset);
+    const u32 read_offset =
+        state.snapshot_read_offset.load(std::memory_order_relaxed);
+    if (state.snapshot_write_offset.load(std::memory_order_acquire) ==
+        read_offset) {
+        return false;
+    }
+
+    const u32 slot = offset_to_slot(read_offset);
     state.current_snapshot = state.snapshot_ring[slot];
-    state.snapshot_read_offset = advance_offset(state.snapshot_read_offset);
+    state.snapshot_read_offset.store(
+        advance_offset(read_offset), std::memory_order_release);
     return true;
 }
 
 bool PushGameplayInputSnapshot(GameplayInputActionState& state) {
-    const u32 next_offset = advance_offset(state.snapshot_write_offset);
-    if (state.snapshot_read_offset == next_offset) {
+    return PushGameplayInputSnapshot(state, state.live_snapshot);
+}
+
+bool PushGameplayInputSnapshot(GameplayInputActionState& state,
+    const GameplayInputSnapshot& snapshot) {
+    const u32 write_offset =
+        state.snapshot_write_offset.load(std::memory_order_relaxed);
+    const u32 next_offset = advance_offset(write_offset);
+    if (state.snapshot_read_offset.load(std::memory_order_acquire) ==
+        next_offset) {
         return false;
     }
 
-    const u32 slot = offset_to_slot(state.snapshot_write_offset);
-    state.snapshot_ring[slot] = state.live_snapshot;
-    state.snapshot_write_offset = next_offset;
+    const u32 slot = offset_to_slot(write_offset);
+    state.snapshot_ring[slot] = snapshot;
+    state.snapshot_write_offset.store(next_offset, std::memory_order_release);
     return true;
 }
 

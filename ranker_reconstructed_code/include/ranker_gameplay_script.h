@@ -44,6 +44,9 @@ struct GameplayScriptTextCueCommand {
     i32 x = 100;
     i32 y = 300;
     bool wait_for_effect = false;
+    // Opcode 0x22 checks the Escape wait-break flag even when this is the
+    // cue's first frame.  Opcode 0x01 checks it only on subsequent frames.
+    bool extended_text_effect_opcode = false;
     u32 effect_entry_index = 0;
     const char* text = "";
 };

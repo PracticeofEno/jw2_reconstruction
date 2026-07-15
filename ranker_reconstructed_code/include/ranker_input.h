@@ -3,6 +3,7 @@
 #include "ranker_types.h"
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 
 namespace ranker {
@@ -39,11 +40,84 @@ struct InputEvent {
     u32 button_mask = 0;
 };
 
+// The original Win32 message thread writes one-byte held-key globals while
+// the gameplay worker reads their current values.  Preserve that live-read
+// behavior (an input record does not snapshot modifiers), but make the same
+// cross-thread byte loads/stores well-defined in C++.
+struct InputAtomicByte {
+    InputAtomicByte() noexcept = default;
+    InputAtomicByte(u8 initial) noexcept : value(initial) {}
+    InputAtomicByte(const InputAtomicByte& other) noexcept :
+        value(other.load()) {}
+    InputAtomicByte& operator=(const InputAtomicByte& other) noexcept {
+        store(other.load());
+        return *this;
+    }
+    InputAtomicByte& operator=(u8 next) noexcept {
+        store(next);
+        return *this;
+    }
+    operator u8() const noexcept {
+        return load();
+    }
+    u8 load(
+        std::memory_order order = std::memory_order_relaxed) const noexcept {
+        return value.load(order);
+    }
+    void store(u8 next,
+        std::memory_order order = std::memory_order_relaxed) noexcept {
+        value.store(next, order);
+    }
+
+    std::atomic<u8> value{0};
+};
+
+static_assert(sizeof(InputAtomicByte) == sizeof(u8));
+static_assert(alignof(InputAtomicByte) == alignof(u8));
+static_assert(sizeof(InputAtomicByte) == sizeof(bool));
+static_assert(alignof(InputAtomicByte) == alignof(bool));
+static_assert(std::atomic<u8>::is_always_lock_free);
+
+// The Win32 window thread publishes events while the gameplay worker drains
+// them.  Keep the original four-byte indices and make their SPSC hand-off
+// explicit.  The copy operations retain InputState's value semantics for
+// resets and focused regressions.
+struct InputQueueIndex {
+    InputQueueIndex() noexcept = default;
+    explicit InputQueueIndex(u32 initial) noexcept : value(initial) {}
+    InputQueueIndex(const InputQueueIndex& other) noexcept :
+        value(other.load(std::memory_order_relaxed)) {}
+    InputQueueIndex& operator=(const InputQueueIndex& other) noexcept {
+        store(other.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        return *this;
+    }
+    InputQueueIndex& operator=(u32 next) noexcept {
+        store(next, std::memory_order_relaxed);
+        return *this;
+    }
+    operator u32() const noexcept {
+        return load(std::memory_order_relaxed);
+    }
+    u32 load(std::memory_order order = std::memory_order_seq_cst) const noexcept {
+        return value.load(order);
+    }
+    void store(u32 next,
+        std::memory_order order = std::memory_order_seq_cst) noexcept {
+        value.store(next, order);
+    }
+
+    std::atomic<u32> value{0};
+};
+
+static_assert(sizeof(InputQueueIndex) == sizeof(u32));
+static_assert(alignof(InputQueueIndex) == alignof(u32));
+static_assert(std::atomic<u32>::is_always_lock_free);
+
 struct InputState {
-    std::array<u8, kInputKeyCount> key_down{};
+    std::array<InputAtomicByte, kInputKeyCount> key_down{};
     std::array<InputEvent, kInputEventQueueSize> events{};
-    u32 head = 0;
-    u32 tail = 0;
+    InputQueueIndex head{};
+    InputQueueIndex tail{};
     u32 mouse_x = 0;
     u32 mouse_y = 0;
     i32 mouse_dx = 0;
@@ -60,16 +134,27 @@ struct InputState {
     bool middle_button_up_seen = false;
     bool left_button_double_seen = false;
     bool right_button_double_seen = false;
-    bool shift_down = false;
-    bool ctrl_down = false;
-    bool alt_down = false;
+    InputAtomicByte shift_down{};
+    InputAtomicByte ctrl_down{};
+    InputAtomicByte alt_down{};
     bool print_screen_pressed = false;
     bool print_screen_toggled = false;
     bool alt_f4_seen = false;
     InputEvent current_event{};
 };
 
+static_assert(offsetof(InputState, events) ==
+    sizeof(decltype(InputState::key_down)));
+static_assert(offsetof(InputState, ctrl_down) ==
+    offsetof(InputState, shift_down) + sizeof(InputAtomicByte));
+static_assert(offsetof(InputState, alt_down) ==
+    offsetof(InputState, ctrl_down) + sizeof(InputAtomicByte));
+static_assert(sizeof(InputState) == 0x658u);
+
 InputState& input_state();
+// Queue reset is a consumer-side flush during gameplay.  Call it from the
+// gameplay consumer or while the producer is quiescent; it deliberately does
+// not rewrite the producer-owned head cursor.
 void ResetInputState();
 void ResetInputEventState();
 bool HasQueuedInputEvent();
@@ -95,5 +180,6 @@ bool HandleAltKeyPress(u32 key, u32 legacy_scan_code);
 void HandleAltKeyRelease(u32 key);
 bool HandleCharacterInput(u32 character);
 bool HandleWindowInputMessage(u32 message, u32 wparam, u32 lparam);
+void ClearInputHeldKeysForFocusLoss();
 
 }

@@ -1126,11 +1126,6 @@ bool default_command_result(GameplayScriptTriggerState& state,
 
 }
 
-u32 CalculateGameplayScriptTextDurationFrames(const char* text) {
-    const std::size_t length = text != nullptr ? std::strlen(text) : 0;
-    return static_cast<u32>((length >> 1) + 0x50);
-}
-
 void ResetGameplayScriptDialogRuntimeState(GameplayScriptDialogState& state) {
     state.active_cue_id = 0;
     state.elapsed_frames = 0;
@@ -1139,54 +1134,6 @@ void ResetGameplayScriptDialogRuntimeState(GameplayScriptDialogState& state) {
     state.advance_flags.fill(0);
     state.previous_trigger_index = 0xffffffffu;
     state.visible_text.clear();
-}
-
-void HandleGameplayScriptTextEffectCue(GameplayScriptDialogState& state,
-    const GameplayScriptTextCueCommand& command, u32 frame_tick) {
-    state.visible_text = command.text != nullptr ? command.text : "";
-    state.text_x = command.use_custom_position ? command.x : 100;
-    state.text_y = command.use_custom_position ? command.y : 300;
-    state.last_duration_frames =
-        CalculateGameplayScriptTextDurationFrames(state.visible_text.c_str());
-    state.last_effect_entry = command.effect_entry_index;
-
-    if (state.active_cue_id == command.cue_id) {
-        if (state.last_frame_tick != frame_tick) {
-            state.last_frame_tick = frame_tick;
-            ++state.elapsed_frames;
-        }
-
-        if (command.wait_for_effect && state.effect_playback_enabled) {
-            const int status =
-                GetMilesEffectPlaylistEntryStatus(command.effect_entry_index);
-            state.elapsed_frames = status == 0 ? state.last_duration_frames :
-                state.last_duration_frames - 1;
-        }
-        if (state.force_complete) {
-            state.elapsed_frames = state.last_duration_frames;
-            if (state.effect_playback_enabled &&
-                GetMilesEffectPlaylistEntryStatus(command.effect_entry_index) != 0) {
-                CloseMilesEffectPlaylistEntry(command.effect_entry_index);
-            }
-            state.force_complete = false;
-        }
-    } else {
-        state.active_cue_id = command.cue_id;
-        state.elapsed_frames = 0;
-
-        if (command.wait_for_effect && state.effect_playback_enabled &&
-            GetMilesEffectPlaylistEntryStatus(command.effect_entry_index) == 0) {
-            PlayMilesEffectPlaylistEntry(command.effect_entry_index);
-        }
-    }
-
-    if (state.elapsed_frames < state.last_duration_frames) {
-        state.advance_flags[1] = 1;
-    } else {
-        state.advance_flags[1] = 0;
-        state.advance_flags[2] = 0;
-        state.active_cue_id = 0;
-    }
 }
 
 void HandleGameplayScriptImmediateEffectCue(GameplayScriptDialogState& state,
@@ -2337,6 +2284,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         cue.x = static_cast<i32>(command[2]);
         cue.y = static_cast<i32>(command[3]);
         cue.wait_for_effect = command[4] != 0;
+        cue.extended_text_effect_opcode = true;
         cue.effect_entry_index = command[5];
         cue.text = text.c_str();
         dispatch_gameplay_script_text_cue(state, trigger, cue);

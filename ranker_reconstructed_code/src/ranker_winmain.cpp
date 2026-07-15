@@ -317,13 +317,13 @@ std::string startup_platform_ratio_value(
         std::to_string(value) + "/" + std::to_string(std::max<u32>(total, 1));
 }
 
-std::array<std::string, kUnitDefinitionResourceCount>
+std::array<SessionUnitDefinitionNameField, kUnitDefinitionResourceCount>
     g_gameplay_unit_name_overrides;
 
 std::string startup_unit_name_or_fallback(u32 type_id) {
     if (type_id < g_gameplay_unit_name_overrides.size() &&
-        !g_gameplay_unit_name_overrides[type_id].empty()) {
-        return g_gameplay_unit_name_overrides[type_id];
+        g_gameplay_unit_name_overrides[type_id].present) {
+        return g_gameplay_unit_name_overrides[type_id].text;
     }
     std::string_view name =
         GetIndexedTextTableRow(StartupAuxiliaryIndexedTextTable(0), type_id);
@@ -8360,23 +8360,13 @@ void default_gameplay_session_prepare_non_empty_runtime_definition_import(
 
 void sync_default_active_session_unit_names() {
     for (std::size_t type = 0; type < g_gameplay_unit_name_overrides.size(); ++type) {
-        g_gameplay_unit_name_overrides[type].clear();
+        g_gameplay_unit_name_overrides[type] = {};
         if (type >= g_runtime.active_session_definitions.unit_records.size()) {
             continue;
         }
-        const std::vector<u8>& bytes =
-            g_runtime.active_session_definitions.unit_records[type].bytes;
-        constexpr std::size_t kNameOffset = 0x10c;
-        constexpr std::size_t kNameCapacity = 0x40;
-        if (bytes.size() < kNameOffset + kNameCapacity) {
-            continue;
-        }
-        const char* name = reinterpret_cast<const char*>(bytes.data() + kNameOffset);
-        std::size_t length = 0;
-        while (length < kNameCapacity && name[length] != '\0') {
-            ++length;
-        }
-        g_gameplay_unit_name_overrides[type].assign(name, length);
+        g_gameplay_unit_name_overrides[type] =
+            ReadSessionUnitDefinitionNameField(
+                g_runtime.active_session_definitions.unit_records[type]);
     }
 }
 
@@ -10983,8 +10973,9 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     g_runtime.gameplay_script_spawned_units.clear();
     g_runtime.gameplay_script_unhandled_spawn_requests.clear();
     g_runtime.gameplay_script_last_unit_name_append_requests.clear();
-    for (std::string& name : g_gameplay_unit_name_overrides) {
-        name.clear();
+    for (SessionUnitDefinitionNameField& name :
+         g_gameplay_unit_name_overrides) {
+        name = {};
     }
     g_runtime.gameplay_end_condition_units.clear();
     g_runtime.gameplay_script_triggers_loaded = false;
@@ -12753,6 +12744,10 @@ void default_ui_overlay_chat_input_end(UiOverlayState&) {
     }
 }
 
+void default_ui_overlay_request_script_wait_break(UiOverlayState&) {
+    gameplay_script_dialog_state().force_complete = true;
+}
+
 void default_ui_overlay_frame_noop(UiOverlayState&) {}
 
 void default_ui_overlay_play_click_sound(UiOverlayState&) {
@@ -12923,6 +12918,10 @@ void configure_default_ui_overlay_callbacks() {
     }
     if (overlay.callbacks.on_chat_input_end == nullptr) {
         overlay.callbacks.on_chat_input_end = default_ui_overlay_chat_input_end;
+    }
+    if (overlay.callbacks.request_script_wait_break == nullptr) {
+        overlay.callbacks.request_script_wait_break =
+            default_ui_overlay_request_script_wait_break;
     }
     if (overlay.callbacks.play_click_sound == nullptr) {
         overlay.callbacks.play_click_sound = default_ui_overlay_play_click_sound;
@@ -27821,22 +27820,6 @@ void consume_default_gameplay_script_spawn_requests(
     opcode.spawn_requests.clear();
 }
 
-std::string default_gameplay_script_definition_name(
-    const std::vector<u8>& bytes) {
-    constexpr std::size_t kDefinitionNameOffset = 0x10c;
-    constexpr std::size_t kDefinitionNameBytes = 0x40;
-    if (bytes.size() < kDefinitionNameOffset + kDefinitionNameBytes) {
-        return {};
-    }
-    const char* const name = reinterpret_cast<const char*>(
-        bytes.data() + kDefinitionNameOffset);
-    std::size_t length = 0;
-    while (length < kDefinitionNameBytes && name[length] != 0) {
-        ++length;
-    }
-    return std::string(name, length);
-}
-
 bool apply_default_gameplay_script_definition_name_append(
     const GameplayScriptUnitNameAppendRequest& request) {
     if (request.type_id >= kGameSessionUnitTypeCount) {
@@ -27869,7 +27852,7 @@ bool apply_default_gameplay_script_definition_name_append(
             SetLoadedUnitDefinitionResourceNameField(
                 request.type_id, name, kDefinitionNameBytes);
             g_gameplay_unit_name_overrides[request.type_id] =
-                default_gameplay_script_definition_name(record.bytes);
+                ReadSessionUnitDefinitionNameField(record);
             return true;
         }
     }
@@ -27881,7 +27864,7 @@ bool apply_default_gameplay_script_definition_name_append(
     const UnitDefinitionResourceCatalogState& catalog =
         unit_definition_resource_catalog_state();
     g_gameplay_unit_name_overrides[request.type_id] =
-        default_gameplay_script_definition_name(
+        ReadSessionUnitDefinitionNameField(
             catalog.records[request.type_id].definition_bytes);
     return true;
 }
@@ -29642,10 +29625,7 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
             // discard our event-cache equivalents before the background edge
             // scroll pass can mistake them for held arrow keys.
             InputState& input = input_state();
-            input.key_down[VK_LEFT] = 0;
-            input.key_down[VK_RIGHT] = 0;
-            input.key_down[VK_UP] = 0;
-            input.key_down[VK_DOWN] = 0;
+            ClearInputHeldKeysForFocusLoss();
             input.pointer_inside_client = false;
         }
         if (g_runtime.app_active && g_runtime.directx_initialized &&

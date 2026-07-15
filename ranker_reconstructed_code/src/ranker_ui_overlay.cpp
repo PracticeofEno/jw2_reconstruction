@@ -530,6 +530,7 @@ void append_text(UiOverlayState& state, std::string text, i32 x, i32 y, u8 color
     command.right_aligned = right_aligned;
     command.bottom_aligned = bottom_aligned;
     state.text_commands.push_back(std::move(command));
+    state.text_command_flushed.push_back(0);
 }
 
 void append_progress(UiOverlayState& state, i32 left, i32 top, i32 right, i32 bottom,
@@ -542,6 +543,7 @@ void append_progress(UiOverlayState& state, i32 left, i32 top, i32 right, i32 bo
     command.numerator = numerator;
     command.denominator = denominator;
     state.progress_commands.push_back(command);
+    state.progress_command_flushed.push_back(0);
 }
 
 void reset_frame_output_commands(UiOverlayState& state) {
@@ -549,15 +551,26 @@ void reset_frame_output_commands(UiOverlayState& state) {
     state.icon_blit_requests.clear();
     state.text_commands.clear();
     state.progress_commands.clear();
+    state.text_command_flushed.clear();
+    state.progress_command_flushed.clear();
     state.minimap_markers.clear();
 }
 
-void flush_ui_overlay_text_commands(UiOverlayState& state) {
+void flush_ui_overlay_text_commands(UiOverlayState& state,
+    std::size_t first_command = 0) {
     if (!state.emit_sprite_draws) {
         return;
     }
 
-    for (const UiOverlayTextCommand& command : state.text_commands) {
+    first_command = std::min(first_command, state.text_commands.size());
+    state.text_command_flushed.resize(state.text_commands.size(), 0);
+    for (std::size_t index = first_command;
+         index < state.text_commands.size(); ++index) {
+        if (state.text_command_flushed[index] != 0) {
+            continue;
+        }
+        state.text_command_flushed[index] = 1;
+        const UiOverlayTextCommand& command = state.text_commands[index];
         if (command.text.empty()) {
             continue;
         }
@@ -593,12 +606,21 @@ void flush_ui_overlay_text_commands(UiOverlayState& state) {
     }
 }
 
-void flush_ui_overlay_progress_commands(UiOverlayState& state) {
+void flush_ui_overlay_progress_commands(UiOverlayState& state,
+    std::size_t first_command = 0) {
     if (!state.emit_sprite_draws) {
         return;
     }
 
-    for (const UiOverlayProgressCommand& command : state.progress_commands) {
+    first_command = std::min(first_command, state.progress_commands.size());
+    state.progress_command_flushed.resize(state.progress_commands.size(), 0);
+    for (std::size_t index = first_command;
+         index < state.progress_commands.size(); ++index) {
+        if (state.progress_command_flushed[index] != 0) {
+            continue;
+        }
+        state.progress_command_flushed[index] = 1;
+        const UiOverlayProgressCommand& command = state.progress_commands[index];
         if (command.denominator == 0 || command.right < command.left ||
             command.bottom < command.top) {
             continue;
@@ -1845,6 +1867,8 @@ void ResetUiOverlayDrawQueue(UiOverlayState& state) {
     state.icon_blit_requests.clear();
     state.text_commands.clear();
     state.progress_commands.clear();
+    state.text_command_flushed.clear();
+    state.progress_command_flushed.clear();
     state.minimap_markers.clear();
     state.pulse_commands.clear();
     state.dynamic_icon_index = 0;
@@ -1918,7 +1942,21 @@ void InstallDefaultUiOverlayDispatchHandlers(UiOverlayState& state) {
             const i32 previous_y = overlay.large_slot_y;
             overlay.large_slot_x = overlay.wide_slot_bounds.x;
             overlay.large_slot_y = overlay.wide_slot_bounds.y;
-            RenderSelectedUnitInfoPanel(overlay);
+            DrawUiOverlayRecordAndFlushSuffixCore(overlay,
+                [](UiOverlayState& selected_overlay) {
+                    RenderSelectedUnitInfoPanel(selected_overlay);
+                },
+                [](UiOverlayState& selected_overlay,
+                    std::size_t first_command) {
+                    flush_ui_overlay_text_commands(
+                        selected_overlay, first_command);
+                },
+                [](UiOverlayState&) {},
+                [](UiOverlayState& selected_overlay,
+                    std::size_t first_command) {
+                    flush_ui_overlay_progress_commands(
+                        selected_overlay, first_command);
+                });
             overlay.large_slot_x = previous_x;
             overlay.large_slot_y = previous_y;
             return true;
@@ -2452,7 +2490,8 @@ bool selected_unit_command_progress_active(const UiOverlayState& state) {
         state.selected_unit_action_mode_gate == 1;
 }
 
-void append_selected_unit_command_progress(UiOverlayState& state) {
+UiOverlayRect selected_unit_command_progress_bounds(
+    const UiOverlayState& state) {
     // FUN_004e2bb7 copies these three screen-width-specific endpoint pairs
     // from DAT_008642dc using DAT_00863588 (640, 800, or other width).  The
     // progress frame in FUN_004e1544 uses that same layout selector.
@@ -2460,7 +2499,17 @@ void append_selected_unit_command_progress(UiOverlayState& state) {
         {77, 433, 98, 2}, {129, 537, 126, 2}, {77, 433, 98, 2},
     }};
     const u32 layout = std::min<u32>(state.screen_layout_bucket, 2);
-    const UiOverlayRect& rect = kProgressBounds[layout];
+    return kProgressBounds[layout];
+}
+
+void append_selected_unit_command_progress(UiOverlayState& state,
+    std::size_t first_text_command) {
+    const u32 layout = std::min<u32>(state.screen_layout_bucket, 2);
+    const UiOverlayRect rect = selected_unit_command_progress_bounds(state);
+    // The original font renderer is immediate.  Flush the selected record's
+    // HP/name/detail suffix before its progress frame while retaining the
+    // commands for diagnostic snapshots.
+    flush_ui_overlay_text_commands(state, first_text_command);
     if (state.emit_sprite_draws &&
         state.glyph_resource_base != kInvalidResourceEntry) {
         // DAT_00868600 is the JW2_02 misc-icon base.  Each progress branch in
@@ -2480,6 +2529,7 @@ void append_selected_unit_command_progress(UiOverlayState& state) {
 }
 
 void RenderSelectedUnitInfoPanel(UiOverlayState& state) {
+    const std::size_t first_text_command = state.text_commands.size();
     state.current_record_size = 0x32;
     BlitUiOverlayPaletteTableIcon(state, state.current_palette_selector,
         state.current_detail_item_id, state.large_slot_x, state.large_slot_y);
@@ -2523,7 +2573,7 @@ void RenderSelectedUnitInfoPanel(UiOverlayState& state) {
     RenderSelectedUnitCargoLine(state);
     if (state.selected_unit_details_visible) {
         if (selected_unit_command_progress_active(state)) {
-            append_selected_unit_command_progress(state);
+            append_selected_unit_command_progress(state, first_text_command);
             return;
         }
         RenderSelectedUnitCapabilityLines(state);
@@ -4045,11 +4095,11 @@ void ClampCameraToStoredMinimapPoint(UiOverlayState& state, i32 world_x, i32 wor
 }
 
 void IncreaseGameplaySpeed(UiOverlayState& state) {
-    const u32 original_cap = std::min<u32>(state.max_game_speed, 0x0f);
     // FUN_004e7263 gates this on DAT_00725bf8 (the generic/P2P profile), not
     // DAT_01242a20's replay/scenario override.  P2P must not let one peer
-    // change its local lockstep interval with the +/- shortcuts.
-    if (!state.generic_ai_profile_mode && state.game_speed < original_cap) {
+    // change its local lockstep interval with the +/- shortcuts.  The CMP at
+    // 0x004e726c uses the fixed legacy cap 0x0f rather than a setup value.
+    if (!state.generic_ai_profile_mode && state.game_speed < 0x0fu) {
         ++state.game_speed;
     }
 }
@@ -4098,6 +4148,13 @@ void CancelCurrentUiModeOrActivateCommand(UiOverlayState& state, u32 command_id)
         }
         DispatchUiOverlayCommandAction(state, target_command);
         return;
+    }
+    // 0x004e72c7..0x004e72d7: outside the generic/P2P profile, an Escape
+    // which cannot find the 0xc6 back record raises DAT_00d11648.  The script
+    // text/effect wait paths consume that flag and complete the current cue.
+    if (!state.generic_ai_profile_mode &&
+        state.callbacks.request_script_wait_break != nullptr) {
+        state.callbacks.request_script_wait_break(state);
     }
 }
 
@@ -4398,7 +4455,9 @@ void BeginGameplayChatInput(UiOverlayState& state) {
     state.chat_active = true;
     state.chat_cursor_visible = true;
     state.chat_input_text.clear();
-    if (!state.scenario_ai_profile_override) {
+    // 0x004e77f1 compares DAT_00725bf8.  P2P/generic sessions use modifier
+    // channel shortcuts; ordinary sessions force channel four.
+    if (!state.generic_ai_profile_mode) {
         state.chat_channel = 4;
         return;
     }
