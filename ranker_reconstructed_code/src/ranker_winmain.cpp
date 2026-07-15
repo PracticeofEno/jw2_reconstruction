@@ -75,6 +75,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -359,9 +360,6 @@ u32 default_selected_unit_next_experience_threshold(
     return static_cast<u32>(signed_threshold);
 }
 
-constexpr int kOriginalClientWidth = 800;
-constexpr int kOriginalClientHeight = 600;
-constexpr int kOriginalColorDepth = 16;
 constexpr std::array<i32, 8> kGameplayTerrainTileOffsets{
     0x000, 0x0c8, 0x190, 0x258, 0x320, 0x3e8, 0x4b0, 0x960};
 constexpr std::array<u32, 6> kGameplayTerrainBlendCodeShifts{
@@ -1042,7 +1040,18 @@ struct RuntimeGlobals {
     std::string last_external_launch_parameters;
     INT_PTR last_external_launch_result = 0;
     u32 frontend_mode = 0;
+    // The original 32-bit executable enters exclusive DirectDraw and the local
+    // 32-bit cnc-ddraw scales its 800x600 surface. ranker_rebuild is 64-bit, so
+    // that DLL cannot load; native windowed DirectDraw performs the equivalent
+    // stretch presentation while retaining the original logical dimensions.
     bool windowed_mode = true;
+    int presentation_client_width = kOriginalClientWidth;
+    int presentation_client_height = kOriginalClientHeight;
+    int presentation_client_x = 0;
+    int presentation_client_y = 0;
+    bool presentation_position_set = false;
+    bool presentation_resizable = true;
+    bool presentation_border = true;
     bool app_active = false;
     bool input_enabled = true;
     bool last_external_launch_succeeded = false;
@@ -1374,6 +1383,160 @@ bool default_owner_ai_route_helper_path_score(
 
 bool rect_has_extent(const RECT& rect) {
     return rect.right > rect.left && rect.bottom > rect.top;
+}
+
+const char* main_window_ddraw_ini_path() {
+    static char path[MAX_PATH]{};
+    if (path[0] == '\0') {
+        const DWORD length = GetFullPathNameA("ddraw.ini",
+            static_cast<DWORD>(sizeof(path)), path, nullptr);
+        if (length == 0 || length >= sizeof(path)) {
+            std::strncpy(path, "ddraw.ini", sizeof(path) - 1);
+        }
+    }
+    return path;
+}
+
+bool read_ddraw_ini_boolean(const char* key, bool fallback) {
+    char value[32]{};
+    GetPrivateProfileStringA("ddraw", key, fallback ? "true" : "false",
+        value, static_cast<DWORD>(sizeof(value)), main_window_ddraw_ini_path());
+    std::string normalized(value);
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+        [](unsigned char character) {
+            return static_cast<char>(std::tolower(character));
+        });
+    if (normalized == "true" || normalized == "yes" ||
+        normalized == "on" || normalized == "1") {
+        return true;
+    }
+    if (normalized == "false" || normalized == "no" ||
+        normalized == "off" || normalized == "0") {
+        return false;
+    }
+    return fallback;
+}
+
+bool read_ddraw_ini_integer(const char* key, int& value) {
+    char text[32]{};
+    if (GetPrivateProfileStringA("ddraw", key, "", text,
+            static_cast<DWORD>(sizeof(text)), main_window_ddraw_ini_path()) == 0) {
+        return false;
+    }
+    char* end = nullptr;
+    const long parsed = std::strtol(text, &end, 10);
+    if (end == text || *end != '\0' ||
+        parsed < std::numeric_limits<int>::min() ||
+        parsed > std::numeric_limits<int>::max()) {
+        return false;
+    }
+    value = static_cast<int>(parsed);
+    return true;
+}
+
+void load_main_window_presentation_settings() {
+    g_runtime.presentation_client_width = kOriginalClientWidth;
+    g_runtime.presentation_client_height = kOriginalClientHeight;
+    g_runtime.presentation_position_set = false;
+    g_runtime.presentation_resizable = true;
+    g_runtime.presentation_border = true;
+
+    if (GetFileAttributesA(main_window_ddraw_ini_path()) == INVALID_FILE_ATTRIBUTES ||
+        !read_ddraw_ini_boolean("windowed", false)) {
+        return;
+    }
+
+    int width = kOriginalClientWidth;
+    int height = kOriginalClientHeight;
+    if (!read_ddraw_ini_integer("width", width) || width <= 0 || width > 0x7fff) {
+        width = kOriginalClientWidth;
+    }
+    if (!read_ddraw_ini_integer("height", height) || height <= 0 || height > 0x7fff) {
+        height = kOriginalClientHeight;
+    }
+    g_runtime.presentation_client_width = width;
+    g_runtime.presentation_client_height = height;
+    g_runtime.presentation_resizable = read_ddraw_ini_boolean("resizing", true);
+    g_runtime.presentation_border = read_ddraw_ini_boolean("border", true);
+
+    int x = 0;
+    int y = 0;
+    if (read_ddraw_ini_integer("posX", x) &&
+        read_ddraw_ini_integer("posY", y)) {
+        g_runtime.presentation_client_x = x;
+        g_runtime.presentation_client_y = y;
+        g_runtime.presentation_position_set = true;
+    }
+}
+
+struct MainWindowPlacement {
+    DWORD style = 0;
+    int x = CW_USEDEFAULT;
+    int y = CW_USEDEFAULT;
+    int width = kOriginalClientWidth;
+    int height = kOriginalClientHeight;
+};
+
+MainWindowPlacement make_main_window_placement(DWORD ex_style) {
+    MainWindowPlacement placement{};
+    placement.style = g_runtime.presentation_border
+        ? (WS_POPUP | WS_CLIPSIBLINGS | WS_OVERLAPPEDWINDOW)
+        : (WS_POPUP | WS_CLIPSIBLINGS);
+    if (!g_runtime.presentation_resizable) {
+        placement.style &= ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
+    }
+
+    RECT work_area{};
+    if (!SystemParametersInfoA(SPI_GETWORKAREA, 0, &work_area, 0)) {
+        work_area.right = GetSystemMetrics(SM_CXSCREEN);
+        work_area.bottom = GetSystemMetrics(SM_CYSCREEN);
+    }
+    const int work_left = static_cast<int>(work_area.left);
+    const int work_top = static_cast<int>(work_area.top);
+    const int work_right = static_cast<int>(work_area.right);
+    const int work_bottom = static_cast<int>(work_area.bottom);
+
+    RECT frame{0, 0, g_runtime.presentation_client_width,
+        g_runtime.presentation_client_height};
+    AdjustWindowRectEx(&frame, placement.style, FALSE, ex_style);
+    const int nonclient_width = (frame.right - frame.left) -
+        g_runtime.presentation_client_width;
+    const int nonclient_height = (frame.bottom - frame.top) -
+        g_runtime.presentation_client_height;
+    const int maximum_client_width = std::max(
+        1, work_right - work_left - nonclient_width);
+    const int maximum_client_height = std::max(
+        1, work_bottom - work_top - nonclient_height);
+
+    if (g_runtime.presentation_client_width > maximum_client_width ||
+        g_runtime.presentation_client_height > maximum_client_height) {
+        const double scale = std::min(
+            static_cast<double>(maximum_client_width) /
+                g_runtime.presentation_client_width,
+            static_cast<double>(maximum_client_height) /
+                g_runtime.presentation_client_height);
+        g_runtime.presentation_client_width = std::max(1,
+            static_cast<int>(g_runtime.presentation_client_width * scale));
+        g_runtime.presentation_client_height = std::max(1,
+            static_cast<int>(g_runtime.presentation_client_height * scale));
+        frame = RECT{0, 0, g_runtime.presentation_client_width,
+            g_runtime.presentation_client_height};
+        AdjustWindowRectEx(&frame, placement.style, FALSE, ex_style);
+    }
+
+    placement.width = frame.right - frame.left;
+    placement.height = frame.bottom - frame.top;
+    if (g_runtime.presentation_position_set) {
+        // cnc-ddraw stores the client origin. CreateWindowEx expects the
+        // outer-window origin, so preserve the non-client offset here.
+        placement.x = g_runtime.presentation_client_x + frame.left;
+        placement.y = g_runtime.presentation_client_y + frame.top;
+        placement.x = std::clamp(placement.x, work_left,
+            std::max(work_left, work_right - placement.width));
+        placement.y = std::clamp(placement.y, work_top,
+            std::max(work_top, work_bottom - placement.height));
+    }
+    return placement;
 }
 
 RECT frontend_client_screen_rect_or_default() {
@@ -28927,6 +29090,46 @@ i32 signed_lparam_coord(LPARAM value, u32 shift) {
     return static_cast<i16>((static_cast<u32>(value) >> shift) & 0xffffu);
 }
 
+bool is_main_client_mouse_message(UINT message) {
+    switch (message) {
+    case WM_MOUSEMOVE:
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONUP:
+    case WM_LBUTTONDBLCLK:
+    case WM_RBUTTONDOWN:
+    case WM_RBUTTONUP:
+    case WM_RBUTTONDBLCLK:
+    case WM_MBUTTONDOWN:
+    case WM_MBUTTONUP:
+    case WM_MBUTTONDBLCLK:
+        return true;
+    default:
+        return false;
+    }
+}
+
+LPARAM logical_main_client_mouse_lparam(
+    HWND window, UINT message, LPARAM presentation_lparam) {
+    if (!is_main_client_mouse_message(message)) {
+        return presentation_lparam;
+    }
+
+    RECT client{};
+    if (!GetClientRect(window, &client)) {
+        return presentation_lparam;
+    }
+    const i32 presentation_width = client.right - client.left;
+    const i32 presentation_height = client.bottom - client.top;
+    const i32 logical_x = ScalePresentationCoordinateToLogical(
+        signed_lparam_coord(presentation_lparam, 0), presentation_width,
+        kOriginalClientWidth);
+    const i32 logical_y = ScalePresentationCoordinateToLogical(
+        signed_lparam_coord(presentation_lparam, 16), presentation_height,
+        kOriginalClientHeight);
+    return static_cast<LPARAM>(MAKELPARAM(
+        static_cast<WORD>(logical_x), static_cast<WORD>(logical_y)));
+}
+
 bool title_menu_entry_contains_point(const UiScreenEntry& entry, i32 x, i32 y) {
     return UiScreenEntryI32(entry, 0x20) <= x && x <= UiScreenEntryI32(entry, 0x28) &&
         UiScreenEntryI32(entry, 0x24) <= y && y <= UiScreenEntryI32(entry, 0x2c);
@@ -29408,12 +29611,14 @@ void paint_main_window_black(HWND window) {
 }
 
 LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+    const LPARAM input_lparam = logical_main_client_mouse_lparam(
+        window, message, lparam);
     if (HandleWindowInputMessage(message, static_cast<u32>(wparam),
-            static_cast<u32>(lparam))) {
+            static_cast<u32>(input_lparam))) {
         if (g_runtime.suppress_paint && bink_video_state().active) {
             CancelBinkVideoPlayback();
         }
-        if (handle_title_main_menu_input(window, message, wparam, lparam)) {
+        if (handle_title_main_menu_input(window, message, wparam, input_lparam)) {
             return 0;
         }
         return 0;
@@ -29422,9 +29627,9 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
     switch (message) {
     case WM_MOVE:
     case WM_SIZE:
-        if (g_runtime.app_active && g_runtime.directx_initialized &&
-            g_runtime.windowed_mode) {
+        if (g_runtime.directx_initialized && g_runtime.windowed_mode) {
             refresh_window_rects(window);
+            RefreshDirectDrawPresentationRect(window);
         }
         break;
     case WM_ACTIVATEAPP:
@@ -29451,18 +29656,17 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
         SetCursor(LoadCursorA(nullptr, IDC_ARROW));
         return TRUE;
     case WM_GETMINMAXINFO:
-        if (lparam != 0) {
+        if (lparam != 0 && !g_runtime.presentation_resizable) {
             auto* minmax = reinterpret_cast<MINMAXINFO*>(lparam);
-            const DirectDrawRuntimeState& draw = direct_draw_state();
-            const int client_width = draw.width != 0 ?
-                static_cast<int>(draw.width) : kOriginalClientWidth;
-            const int client_height = draw.height != 0 ?
-                static_cast<int>(draw.height) : kOriginalClientHeight;
-            const int frame_x = GetSystemMetrics(SM_CXSIZEFRAME);
-            const int frame_y = GetSystemMetrics(SM_CYSIZEFRAME);
-            const int caption_y = GetSystemMetrics(SM_CYCAPTION);
-            minmax->ptMinTrackSize.x = client_width + frame_x * 2;
-            minmax->ptMinTrackSize.y = client_height + frame_y * 2 + caption_y;
+            RECT fixed_client{0, 0, g_runtime.presentation_client_width,
+                g_runtime.presentation_client_height};
+            const DWORD style = static_cast<DWORD>(
+                GetWindowLongPtrA(window, GWL_STYLE));
+            const DWORD ex_style = static_cast<DWORD>(
+                GetWindowLongPtrA(window, GWL_EXSTYLE));
+            AdjustWindowRectEx(&fixed_client, style, FALSE, ex_style);
+            minmax->ptMinTrackSize.x = fixed_client.right - fixed_client.left;
+            minmax->ptMinTrackSize.y = fixed_client.bottom - fixed_client.top;
             minmax->ptMaxTrackSize = minmax->ptMinTrackSize;
             return 0;
         }
@@ -30228,6 +30432,16 @@ int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_c
     append_startup_log("startup text loaded=%s platform_rows=%zu message_rows=%zu",
         startup_text_loaded ? "yes" : "no",
         startup_platform_text_count(), startup_message_text_count());
+    load_main_window_presentation_settings();
+    append_startup_log(
+        "presentation logical=%dx%d client=%dx%d position=%s,%d,%d resize=%s border=%s",
+        kOriginalClientWidth, kOriginalClientHeight,
+        g_runtime.presentation_client_width,
+        g_runtime.presentation_client_height,
+        g_runtime.presentation_position_set ? "set" : "default",
+        g_runtime.presentation_client_x, g_runtime.presentation_client_y,
+        g_runtime.presentation_resizable ? "yes" : "no",
+        g_runtime.presentation_border ? "yes" : "no");
     g_runtime.single_instance_mutex =
         CreateMutexA(nullptr, FALSE, ranker_single_instance_mutex_name());
     if (g_runtime.single_instance_mutex != nullptr && GetLastError() == ERROR_ALREADY_EXISTS) {
@@ -30265,13 +30479,18 @@ int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_c
 
     DWORD window_ex_style = 0;
     DWORD window_style = WS_OVERLAPPEDWINDOW;
+    int window_x = 0;
+    int window_y = 0;
     int window_width = kOriginalClientWidth;
     int window_height = kOriginalClientHeight;
     if (g_runtime.windowed_mode) {
-        RECT client_rect{0, 0, kOriginalClientWidth, kOriginalClientHeight};
-        AdjustWindowRectEx(&client_rect, window_style, FALSE, window_ex_style);
-        window_width = client_rect.right - client_rect.left;
-        window_height = client_rect.bottom - client_rect.top;
+        const MainWindowPlacement placement =
+            make_main_window_placement(window_ex_style);
+        window_style = placement.style;
+        window_x = placement.x;
+        window_y = placement.y;
+        window_width = placement.width;
+        window_height = placement.height;
     }
     else {
         window_ex_style = WS_EX_TOPMOST;
@@ -30281,7 +30500,8 @@ int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_c
     }
 
     g_runtime.main_window = CreateWindowExA(window_ex_style, window_class.lpszClassName,
-        ranker_window_title(), window_style, 0, 0, window_width, window_height,
+        ranker_window_title(), window_style, window_x, window_y,
+        window_width, window_height,
         nullptr, nullptr, instance, nullptr);
     if (g_runtime.main_window == nullptr) {
         show_startup_blocker("CreateWindowExA failed in the reconstructed WinMain shell.");

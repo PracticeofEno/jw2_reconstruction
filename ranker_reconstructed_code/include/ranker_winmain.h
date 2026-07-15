@@ -23,6 +23,28 @@ struct OriginalRoutineRef {
 constexpr u32 kRankerWinMainAddress = 0x00407250;
 constexpr u32 kRankerPeEntryAddress = 0x005257d0;
 constexpr std::size_t kRankerReplayPlayerNameCount = 8;
+// Ranker_WinMain initializes DAT_0143fff0/01440004/0143ffec to 800x600x16.
+// Keep these logical/back-buffer dimensions separate from the presentation
+// client size: the original 32-bit process is stretched by cnc-ddraw, whereas
+// the reconstructed 64-bit process must perform that presentation step itself.
+constexpr int kOriginalClientWidth = 800;
+constexpr int kOriginalClientHeight = 600;
+constexpr int kOriginalColorDepth = 16;
+
+constexpr i32 ScalePresentationCoordinateToLogical(
+    i32 coordinate, i32 presentation_extent, i32 logical_extent) {
+    if (presentation_extent <= 0 || logical_extent <= 0) {
+        return 0;
+    }
+    if (coordinate <= 0) {
+        return 0;
+    }
+    if (coordinate >= presentation_extent) {
+        return logical_extent - 1;
+    }
+    return static_cast<i32>(
+        (static_cast<i64>(coordinate) * logical_extent) / presentation_extent);
+}
 
 const OriginalRoutineRef* winmain_routine_map(std::size_t& count);
 

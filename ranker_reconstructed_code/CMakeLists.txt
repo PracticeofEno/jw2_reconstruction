@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 project(ranker_reconstruction LANGUAGES C CXX RC)
 
+include(CTest)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -26,6 +28,18 @@ target_include_directories(zlib113 PUBLIC
 
 if (MSVC)
     target_compile_definitions(zlib113 PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+
+if (BUILD_TESTING)
+    add_executable(directdraw_presentation_mode_regression
+        tests/directdraw_presentation_mode_regression.cpp
+    )
+    target_include_directories(directdraw_presentation_mode_regression PRIVATE
+        include
+    )
+    add_test(NAME directdraw_presentation_mode_regression
+        COMMAND directdraw_presentation_mode_regression
+    )
 endif()
 
 add_executable(ranker_rebuild WIN32

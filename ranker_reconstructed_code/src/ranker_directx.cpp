@@ -1013,6 +1013,23 @@ HRESULT attach_window_clipper(HWND window) {
     return g_direct_draw_state.primary_surface->SetClipper(g_direct_draw_state.clipper);
 }
 
+void refresh_windowed_presentation_rect(HWND window, int logical_width,
+    int logical_height) {
+    SetRect(&g_direct_draw_state.client_rect, 0, 0,
+        logical_width, logical_height);
+
+    RECT destination{};
+    if (!GetClientRect(window, &destination)) {
+        destination = g_direct_draw_state.client_rect;
+    }
+    POINT top_left{destination.left, destination.top};
+    POINT bottom_right{destination.right, destination.bottom};
+    ClientToScreen(window, &top_left);
+    ClientToScreen(window, &bottom_right);
+    g_direct_draw_state.screen_rect = RECT{
+        top_left.x, top_left.y, bottom_right.x, bottom_right.y};
+}
+
 HRESULT configure_direct_draw_surfaces(HWND window, int width, int height, int color_depth,
     bool windowed) {
     g_direct_draw_state.active = false;
@@ -1038,10 +1055,10 @@ HRESULT configure_direct_draw_surfaces(HWND window, int width, int height, int c
             return result;
         }
 
-        GetClientRect(window, &g_direct_draw_state.client_rect);
-        g_direct_draw_state.screen_rect = g_direct_draw_state.client_rect;
-        ClientToScreen(window, reinterpret_cast<POINT*>(&g_direct_draw_state.screen_rect.left));
-        ClientToScreen(window, reinterpret_cast<POINT*>(&g_direct_draw_state.screen_rect.right));
+        // The source rectangle is always the logical DirectDraw surface.  The
+        // destination is the independently sized client rectangle in screen
+        // coordinates, matching cnc-ddraw's original stretch presentation.
+        refresh_windowed_presentation_rect(window, width, height);
 
         result = attach_window_clipper(window);
         if (FAILED(result)) {
@@ -1166,6 +1183,15 @@ void ShutdownDirectDrawSubsystem(HWND window) {
     release_com(g_direct_draw_state.back_surface);
     release_com(g_direct_draw_state.primary_surface);
     g_direct_draw_state.active = false;
+}
+
+void RefreshDirectDrawPresentationRect(HWND window) {
+    if (!g_direct_draw_state.windowed || window == nullptr) {
+        return;
+    }
+    refresh_windowed_presentation_rect(window,
+        static_cast<int>(g_direct_draw_state.width),
+        static_cast<int>(g_direct_draw_state.height));
 }
 
 HRESULT PresentBackBufferToPrimary() {

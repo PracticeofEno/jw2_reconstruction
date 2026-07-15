@@ -108,6 +108,7 @@ HRESULT ConfigureDirectDrawSurfaces(HWND window, int width, int height, int colo
 HRESULT ConfigureDirectDrawSurfaces(HWND window, int width, int height, int color_depth,
     bool windowed);
 void ShutdownDirectDrawSubsystem(HWND window);
+void RefreshDirectDrawPresentationRect(HWND window);
 HRESULT PresentBackBufferToPrimary();
 HRESULT LockBackBufferSpriteRenderTarget(SpriteRenderTarget& target);
 HRESULT UnlockBackBufferSpriteRenderTarget();
