@@ -105,6 +105,15 @@ struct GameplayUnitSoundDefinition {
         -1, -1, -1, -1, -1, -1, -1, -1};
 };
 
+// HandleUnitProductionSpawnCycle (0x004ce37a..0x004ce385) gates the
+// completion marker, voice, and message on the newly produced unit's owner.
+// The producer normally has the same owner, but scripted ownership transfer
+// makes the distinction observable.
+constexpr bool UnitProductionCompleteFeedbackAllowed(
+    u32 local_owner_id, u32 produced_owner_id) {
+    return produced_owner_id == local_owner_id;
+}
+
 bool DecodeGameplayUnitSoundDefinition(const u8* definition_bytes,
     std::size_t definition_size, GameplayUnitSoundDefinition& definition);
 GameplayUnitSoundBaseSlots BuildGameplayUnitSoundBaseSlots(

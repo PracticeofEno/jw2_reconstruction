@@ -59,6 +59,17 @@ if (BUILD_TESTING)
     add_test(NAME d3d9_cubic_presentation_regression
         COMMAND d3d9_cubic_presentation_regression
     )
+
+    add_executable(unit_production_sound_regression
+        tests/unit_production_sound_regression.cpp
+        src/ranker_gameplay_sound.cpp
+    )
+    target_include_directories(unit_production_sound_regression PRIVATE
+        include
+    )
+    add_test(NAME unit_production_sound_regression
+        COMMAND unit_production_sound_regression
+    )
 endif()
 
 add_executable(ranker_rebuild WIN32

@@ -21657,7 +21657,8 @@ void default_unit_command_production_completed(UnitCommandContext& context,
     // the newly produced unit's owner (0x004ce37a..0x004ce385), not the
     // producer's owner.  They normally match, but ownership-transfer and
     // scripted production paths can make them differ.
-    if (produced.owner_id != context.local_owner_id) {
+    if (!UnitProductionCompleteFeedbackAllowed(
+            context.local_owner_id, produced.owner_id)) {
         return;
     }
 

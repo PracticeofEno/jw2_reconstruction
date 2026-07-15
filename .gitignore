@@ -20,6 +20,7 @@ ranker_reconstructed_code/tests/*
 !ranker_reconstructed_code/tests/directdraw_presentation_mode_regression.cpp
 !ranker_reconstructed_code/tests/d3d9_cubic_presentation_regression.cpp
 !ranker_reconstructed_code/tests/gameplay_resource_sound_branch_regression.cpp
+!ranker_reconstructed_code/tests/unit_production_sound_regression.cpp
 !ranker_reconstructed_code/third_party/
 !ranker_reconstructed_code/third_party/**
 
