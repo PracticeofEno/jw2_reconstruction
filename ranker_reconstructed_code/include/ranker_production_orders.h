@@ -31,6 +31,17 @@ constexpr u32 ResolveProductionOrderPacketEnqueueOwner(u8 source_channel) {
     return static_cast<u32>(source_channel);
 }
 
+// HandleSubtype01ProductionCommandPacket and
+// HandleSubtype1aProductionCostPacket likewise retain packet byte +0x0c as
+// the authoritative requirement/debit owner.  The referenced producer owner
+// remains relevant to its queue and to cancellation refunds, but not enqueue
+// resource accounting.
+constexpr u32 ResolveDeferredResourcePacketEnqueueOwner(
+    u8 source_channel, u32 referenced_unit_owner) {
+    (void)referenced_unit_owner;
+    return static_cast<u32>(source_channel);
+}
+
 // Unlike the ordinary production path, subtype 0x0c's receive-side failure
 // branch reports raw resource codes on every peer.  Its jump at 0x004dcf93
 // reaches the code check directly and bypasses the nearby local-owner compare.

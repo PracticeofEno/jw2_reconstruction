@@ -12820,11 +12820,14 @@ void default_ui_overlay_draw_placement_preview(UiOverlayState& state) {
     state.placement_preview_cell_validity.assign(
         static_cast<std::size_t>(width) * height, 0);
 
-    const i32 signed_tile_x = (state.placement_pointer_x + state.camera_x) >> 5;
-    const i32 signed_tile_y = (state.placement_pointer_y + state.camera_y) >> 5;
-    if (signed_tile_x < 0 || signed_tile_y < 0) {
+    UiOverlayPlacementGridCoordinates coordinates{};
+    if (!ResolveUiOverlayPlacementGridCoordinates(state.placement_pointer_x,
+            state.placement_pointer_y, state.camera_x, state.camera_y,
+            coordinates)) {
         return;
     }
+    const i32 signed_tile_x = coordinates.tile_x;
+    const i32 signed_tile_y = coordinates.tile_y;
     const u32 tile_x = static_cast<u32>(signed_tile_x);
     const u32 tile_y = static_cast<u32>(signed_tile_y);
     const u32 terrain_class = GetPlacementTerrainClass(*lifecycle, tile_x, tile_y);
@@ -12837,8 +12840,8 @@ void default_ui_overlay_draw_placement_preview(UiOverlayState& state) {
     preview.id = state.selected_unit_id;
     preview.type_id = type_id;
     preview.owner_id = state.selected_unit_owner;
-    preview.x = signed_tile_x << 5;
-    preview.y = signed_tile_y << 5;
+    preview.x = coordinates.aligned_world_x;
+    preview.y = coordinates.aligned_world_y;
     preview.definition = *definition;
 
     // FUN_004e2338 calls FUN_004c5627 at 0x004e23d8 before testing the
@@ -12851,7 +12854,7 @@ void default_ui_overlay_draw_placement_preview(UiOverlayState& state) {
             gameplay_loop_state().simulation_frame_counter;
         DispatchPlacementPreviewDefinitionSprite(
             g_runtime.gameplay_unit_render_queue, preview_item,
-            preview.x - state.camera_x, preview.y - state.camera_y);
+            coordinates.screen_x, coordinates.screen_y);
     }
 
     if (definition->footprint_width_tiles == 0 ||
@@ -12870,10 +12873,17 @@ void default_ui_overlay_draw_placement_preview(UiOverlayState& state) {
         type_id == 0x80 || type_id == 0x90;
     for (u32 y = 0; y < height; ++y) {
         for (u32 x = 0; x < width; ++x) {
-            const bool valid = CheckPreviewProductionPlacementGateCell(
-                preview_gate, static_cast<i32>(tile_x + x),
-                static_cast<i32>(tile_y + y), state.selected_unit_id,
-                allow_nearby_probe);
+            const i64 cell_x = static_cast<i64>(signed_tile_x) + x;
+            const i64 cell_y = static_cast<i64>(signed_tile_y) + y;
+            const bool coordinate_valid =
+                cell_x >= std::numeric_limits<i32>::min() &&
+                cell_x <= std::numeric_limits<i32>::max() &&
+                cell_y >= std::numeric_limits<i32>::min() &&
+                cell_y <= std::numeric_limits<i32>::max();
+            const bool valid = coordinate_valid &&
+                CheckPreviewProductionPlacementGateCell(preview_gate,
+                    static_cast<i32>(cell_x), static_cast<i32>(cell_y),
+                    state.selected_unit_id, allow_nearby_probe);
             state.placement_preview_cell_validity[
                 static_cast<std::size_t>(y) * width + x] = valid ? 1 : 0;
             state.placement_preview_valid = state.placement_preview_valid && valid;
@@ -12881,13 +12891,15 @@ void default_ui_overlay_draw_placement_preview(UiOverlayState& state) {
     }
 }
 
-void default_ui_overlay_draw_world_surface(UiOverlayState&) {
+void default_ui_overlay_draw_world_surface(UiOverlayState& state) {
     const InterfaceResourceState& resources = interface_resource_state();
     if (resources.loaded &&
         resources.background_image_entry != kInvalidResourceEntry) {
-        constexpr std::array<i32, 4> kHudY{{439, 436, 421, 452}};
-        const u32 theme = std::min<u32>(resources.theme_index, 3);
-        BlitImageResourceNormal(resources.background_image_entry, 0, kHudY[theme]);
+        // FUN_004e2bb7 publishes the interface origin from the complete
+        // resolution/theme table.  The former four-value shortcut represented
+        // only the 800-wide bucket and misplaced 640/other HUD artwork.
+        BlitImageResourceNormal(resources.background_image_entry, 0,
+            ResolveUiOverlayInterfaceTop(state));
     }
 }
 
@@ -14628,8 +14640,14 @@ bool default_mode1_packet_set_unit_deferred_resource_command(void*,
         // lifecycle requirement check before its queue/accounting helpers
         // (audited at 0x004cf145 and 0x004dcf81).  Avatar and production-order
         // commands have separate gates above.
+        // 0x004dca58 loads EBX from packet +0x0c.  The requirement helper and
+        // both later debits retain that source owner even when the referenced
+        // producer belongs to another player.
+        const u32 resource_owner =
+            ResolveDeferredResourcePacketEnqueueOwner(
+                source_channel, unit->owner_id);
         const UnitProductionRequirementCode requirement = lifecycle != nullptr ?
-            CheckUnitProductionRequirements(*lifecycle, unit->owner_id, payload) :
+            CheckUnitProductionRequirements(*lifecycle, resource_owner, payload) :
             UnitProductionRequirementCode::missing_prerequisite;
         if (requirement != UnitProductionRequirementCode::ok) {
             // The ordinary subtype-01 handler publishes first, then performs
@@ -14656,7 +14674,11 @@ bool default_mode1_packet_set_unit_deferred_resource_command(void*,
     if (production_effect_resource) {
         UnitCommandContext& command_context =
             prepare_default_mode1_packet_command_context();
-        const u32 owner = unit->owner_id;
+        // HandleSubtype1aProductionCostPacket uses the same packet-source
+        // owner contract at 0x004dd3b7/0x004d1916/0x004d1949.
+        const u32 owner =
+            ResolveDeferredResourcePacketEnqueueOwner(
+                source_channel, unit->owner_id);
         if (owner >= command_context.owner_resources.size() ||
             owner >= command_context.owner_secondary_resources.size()) {
             return false;
@@ -14723,7 +14745,9 @@ bool default_mode1_packet_set_unit_deferred_resource_command(void*,
     if (cost_model_applies) {
         UnitCommandContext& command_context =
             prepare_default_mode1_packet_command_context();
-        const u32 owner = unit->owner_id;
+        const u32 owner =
+            ResolveDeferredResourcePacketEnqueueOwner(
+                source_channel, unit->owner_id);
         if (owner < command_context.owner_resources.size() &&
             owner < command_context.owner_secondary_resources.size()) {
             if (command_context.owner_resources[owner] < primary_cost ||
@@ -17331,6 +17355,9 @@ UnitRenderItem make_default_unit_render_item(UnitMovementUnit& unit) {
     // not a substitute for that renderer gate.
     item.cell_construction_progress_active = unit.action_mode_gate == 1;
     item.cell_channel_additive_active = unit.previous_command_state == 1;
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    item.display_name_slot_present = movement != nullptr &&
+        unit.string_slot != 0 && unit.string_slot < movement->string_slots.size();
     item.display_name = default_unit_display_name(unit);
     return item;
 }

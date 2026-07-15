@@ -292,6 +292,15 @@ struct UiOverlayRect {
     u32 height = 0;
 };
 
+struct UiOverlayPlacementGridCoordinates {
+    i32 tile_x = 0;
+    i32 tile_y = 0;
+    i32 aligned_world_x = 0;
+    i32 aligned_world_y = 0;
+    i32 screen_x = 0;
+    i32 screen_y = 0;
+};
+
 struct UiOverlayDrawRecord {
     u32 item_id = 0;
     u32 aux = 0;
@@ -1047,6 +1056,8 @@ void DrawUiOverlayIconTextGlyphEquipment(UiOverlayState& state);
 void DrawUiOverlayIndexedIconNumber(UiOverlayState& state, u32 item_id);
 void DrawUiOverlaySelectedUnitSlotNumber(UiOverlayState& state);
 void DrawEquipmentDefinitionSpriteIfAvailable(UiOverlayState& state, u32 item_id);
+bool ResolveUiOverlayPlacementGridCoordinates(i32 pointer_x, i32 pointer_y,
+    i32 camera_x, i32 camera_y, UiOverlayPlacementGridCoordinates& coordinates);
 void RenderProductionPlacementPreviewOverlay(UiOverlayState& state);
 void RenderGameplayMinimapOverlay(UiOverlayState& state);
 void RenderMinimapObjectAndTerrainMarkers(UiOverlayState& state);
@@ -1061,6 +1072,7 @@ void RenderGameplayResourceCounters(UiOverlayState& state);
 void StartGameplayHudPulse(UiOverlayState& state, i32 world_x, i32 world_y, u32 tick_ms);
 void StopGameplayHudPulse(UiOverlayState& state);
 void RenderGameplayHudPulse(UiOverlayState& state, u32 tick_ms);
+i32 ResolveUiOverlayInterfaceTop(const UiOverlayState& state);
 void ConfigureGameplayUiOverlayLayout(UiOverlayState& state);
 void ResetUiOverlayCommandPanelState(UiOverlayState& state);
 bool HitTestUiOverlayHotRegion(UiOverlayState& state, i32 x, i32 y);

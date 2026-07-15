@@ -1,4 +1,5 @@
 #include "ranker_input.h"
+#include "ranker_resource_store.h"
 #include "ranker_ui_overlay.h"
 
 #include <array>
@@ -35,6 +36,15 @@ UiOverlayState make_state() {
     state.mouse_y = 300;
     state.camera_edge_pointer_valid = true;
     return state;
+}
+
+void synthesize_negative_boundary_preview(UiOverlayState& state) {
+    state.placement_pointer_x = state.mouse_x;
+    state.placement_pointer_y = state.mouse_y;
+    state.placement_footprint_width_tiles = 2;
+    state.placement_footprint_height_tiles = 2;
+    state.placement_preview_valid = false;
+    state.placement_preview_cell_validity = {0, 1, 0, 1};
 }
 
 void apply_set1_camera_directions(
@@ -220,6 +230,9 @@ void test_resolution_theme_map_bounds() {
             state.interface_theme_index = theme;
             state.map_width_tiles = 128;
             state.map_height_tiles = 96;
+            require(ResolveUiOverlayInterfaceTop(state) ==
+                        world_viewport_heights[resolution.bucket][theme],
+                "lower interface top did not select the full layout/theme table");
             ConfigureGameplayUiOverlayLayout(state);
 
             require(state.screen_layout_bucket == resolution.bucket,
@@ -249,6 +262,99 @@ void test_resolution_theme_map_bounds() {
     ConfigureGameplayUiOverlayLayout(tiny);
     require(tiny.camera_max_x == 0 && tiny.camera_max_y == 0,
         "map bounds must clamp to zero when the viewport exceeds the map");
+}
+
+void test_interface_mask_uses_table_top() {
+    struct Resolution {
+        u32 width;
+        u32 height;
+        u32 bucket;
+    };
+    constexpr std::array<Resolution, 4> resolutions{{
+        {640, 480, 0}, {800, 600, 1}, {1024, 768, 2}, {777, 555, 2},
+    }};
+    constexpr std::array<std::array<i32, 4>, 3> interface_tops{{
+        {{356, 362, 356, 364}},
+        {{439, 436, 421, 452}},
+        {{446, 458, 447, 460}},
+    }};
+
+    ResetResourceStore();
+    u32 mask_entry = kInvalidResourceEntry;
+    void* payload = nullptr;
+    require(AllocateResourceEntry(2, &mask_entry, &payload) && payload != nullptr,
+        "could not allocate synthetic interface mask");
+    static_cast<u8*>(payload)[0] = 1;
+    static_cast<u8*>(payload)[1] = 0;
+    std::array<u32, 6> metadata{};
+    metadata[0] = 1;
+    metadata[1] = 2;
+    require(ConfigureResourceEntry(mask_entry, metadata, 0),
+        "could not configure synthetic interface mask");
+
+    for (const Resolution& resolution : resolutions) {
+        for (u32 theme = 0; theme < 4; ++theme) {
+            UiOverlayState state{};
+            state.screen_width = resolution.width;
+            state.screen_height = resolution.height;
+            state.interface_theme_index = theme;
+            state.small_icon_resource_base = mask_entry;
+            const i32 expected_top = interface_tops[resolution.bucket][theme];
+            require(CheckUiOverlayIconMaskPixel(state, 0, expected_top),
+                "placement mask did not begin at original table top");
+            require(!CheckUiOverlayIconMaskPixel(state, 0, expected_top - 1),
+                "placement mask leaked above original table top");
+            require(!CheckUiOverlayIconMaskPixel(state, 0, expected_top + 1),
+                "placement mask ignored its row payload at table top");
+        }
+    }
+}
+
+void test_negative_placement_grid_uses_signed_floor_and_clipping_origin() {
+    struct CoordinateCase {
+        i32 pointer_x;
+        i32 camera_x;
+        i32 tile_x;
+        i32 aligned_x;
+        i32 screen_x;
+    };
+    constexpr std::array<CoordinateCase, 6> cases{{
+        {-1, 0, -1, -32, -32},
+        {0, -1, -1, -32, -31},
+        {-32, 0, -1, -32, -32},
+        {-33, 0, -2, -64, -64},
+        {31, 0, 0, 0, 0},
+        {32, 0, 1, 32, 32},
+    }};
+    for (const CoordinateCase& test : cases) {
+        UiOverlayPlacementGridCoordinates coordinates{};
+        require(ResolveUiOverlayPlacementGridCoordinates(test.pointer_x, 0,
+                    test.camera_x, 0, coordinates),
+            "reachable placement coordinate unexpectedly overflowed");
+        require(coordinates.tile_x == test.tile_x &&
+                coordinates.aligned_world_x == test.aligned_x &&
+                coordinates.screen_x == test.screen_x,
+            "placement coordinate did not match original SAR/SHL grid floor");
+    }
+
+    UiOverlayState state{};
+    state.placement_mode = 6;
+    state.mouse_x = -1;
+    state.mouse_y = 33;
+    state.small_icon_resource_base = kInvalidResourceEntry;
+    state.callbacks.draw_placement_preview = synthesize_negative_boundary_preview;
+    RenderProductionPlacementPreviewOverlay(state);
+    require(state.minimap_markers.size() == 4,
+        "negative boundary preview did not retain the complete footprint");
+    require(state.minimap_markers[0].x == -32 &&
+            state.minimap_markers[0].y == 32 &&
+            !state.minimap_markers[0].valid &&
+            state.minimap_markers[1].x == 0 &&
+            state.minimap_markers[1].valid &&
+            state.minimap_markers[3].x == 0 &&
+            state.minimap_markers[3].y == 64 &&
+            state.minimap_markers[3].valid,
+        "negative boundary preview lost per-cell validity or clip coordinates");
 }
 
 void test_all_edges_corners_outside_and_hud() {
@@ -345,9 +451,13 @@ int main() {
     test_boundary_does_not_consume_replay_step();
     test_ramp_and_minimap_drag_contract();
     test_resolution_theme_map_bounds();
+    test_interface_mask_uses_table_top();
+    test_negative_placement_grid_uses_signed_floor_and_clipping_origin();
     test_all_edges_corners_outside_and_hud();
     std::cout << "EDGE_SCROLL_PARITY_PASS exact=4 masks=1/2/4/8 "
                  "keys=edge-priority replay=boundary-safe minimap=no-ramp "
                  "resolutions=640/800/1024/777 themes=4 bounds=table "
-                 "corners=4 outside=8 hud=interior/bottom\n";
+                 "interface-mask=table-top placement=negative-floor/clip "
+                 "corners=4 outside=8 "
+                 "hud=interior/bottom\n";
 }

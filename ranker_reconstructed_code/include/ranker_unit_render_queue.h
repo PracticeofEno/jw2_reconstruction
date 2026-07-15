@@ -77,6 +77,10 @@ struct UnitRenderItem {
     i32 center_height = 0;
     bool cell_construction_progress_active = false;
     bool cell_channel_additive_active = false;
+    // The original name tail gates on raw unit +0x48, independently of the
+    // bytes stored in that string slot.  An allocated empty slot must still
+    // execute the font/color/cursor setup and empty text draw.
+    bool display_name_slot_present = false;
     std::string display_name;
 };
 

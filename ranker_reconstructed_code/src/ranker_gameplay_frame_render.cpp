@@ -1331,9 +1331,6 @@ void draw_unit_marker(UnitAnimationDrawContext& context,
 
 void draw_unit_display_name(UnitAnimationDrawContext&,
     const UnitAnimationUnit& unit, i32 center_x, i32 baseline_y) {
-    if (unit.display_name.empty()) {
-        return;
-    }
     // Original unit-name tail selects font 4 for both drawing and metrics at
     // 0x004c50fc/0x004c5103 before centering the dynamic name.
     SelectTextDrawFont(4);
@@ -1412,6 +1409,7 @@ UnitAnimationUnit make_unit_animation_unit(const UnitRenderItem& item,
     unit.ability_id = item.ability_id;
     unit.cell_construction_progress_active = item.cell_construction_progress_active;
     unit.cell_channel_additive_active = item.cell_channel_additive_active;
+    unit.display_name_slot_present = item.display_name_slot_present;
     unit.display_name = item.display_name;
     return unit;
 }

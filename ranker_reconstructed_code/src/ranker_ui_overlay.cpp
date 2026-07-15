@@ -9,6 +9,7 @@
 #include "ranker_unit_movement.h"
 
 #include <algorithm>
+#include <limits>
 #include <utility>
 
 namespace ranker {
@@ -2689,6 +2690,46 @@ void DrawEquipmentDefinitionSpriteIfAvailable(UiOverlayState& state, u32 item_id
     }
 }
 
+bool ResolveUiOverlayPlacementGridCoordinates(i32 pointer_x, i32 pointer_y,
+    i32 camera_x, i32 camera_y, UiOverlayPlacementGridCoordinates& coordinates) {
+    // FUN_004e2338 uses signed SAR 5 followed by SHL 5.  Express the same
+    // floor-to-grid operation without overflowing pointer+camera or shifting
+    // a negative signed value (undefined in C++).
+    const auto floor_divide_32 = [](i64 value) {
+        i64 quotient = value / 0x20;
+        if (value < 0 && value % 0x20 != 0) {
+            --quotient;
+        }
+        return quotient;
+    };
+    const auto fits_i32 = [](i64 value) {
+        return value >= std::numeric_limits<i32>::min() &&
+            value <= std::numeric_limits<i32>::max();
+    };
+
+    const i64 world_x = static_cast<i64>(pointer_x) + camera_x;
+    const i64 world_y = static_cast<i64>(pointer_y) + camera_y;
+    const i64 tile_x = floor_divide_32(world_x);
+    const i64 tile_y = floor_divide_32(world_y);
+    const i64 aligned_x = tile_x * 0x20;
+    const i64 aligned_y = tile_y * 0x20;
+    const i64 screen_x = aligned_x - camera_x;
+    const i64 screen_y = aligned_y - camera_y;
+    if (!fits_i32(tile_x) || !fits_i32(tile_y) ||
+        !fits_i32(aligned_x) || !fits_i32(aligned_y) ||
+        !fits_i32(screen_x) || !fits_i32(screen_y)) {
+        return false;
+    }
+
+    coordinates.tile_x = static_cast<i32>(tile_x);
+    coordinates.tile_y = static_cast<i32>(tile_y);
+    coordinates.aligned_world_x = static_cast<i32>(aligned_x);
+    coordinates.aligned_world_y = static_cast<i32>(aligned_y);
+    coordinates.screen_x = static_cast<i32>(screen_x);
+    coordinates.screen_y = static_cast<i32>(screen_y);
+    return true;
+}
+
 void RenderProductionPlacementPreviewOverlay(UiOverlayState& state) {
     if (state.placement_mode != 6 && state.placement_mode != 0x41) {
         return;
@@ -2716,10 +2757,12 @@ void RenderProductionPlacementPreviewOverlay(UiOverlayState& state) {
         return;
     }
 
-    const i32 tile_x = (state.placement_pointer_x + state.camera_x) >> 5;
-    const i32 tile_y = (state.placement_pointer_y + state.camera_y) >> 5;
-    const i32 screen_x = (tile_x << 5) - state.camera_x;
-    const i32 screen_y = (tile_y << 5) - state.camera_y;
+    UiOverlayPlacementGridCoordinates coordinates{};
+    if (!ResolveUiOverlayPlacementGridCoordinates(state.placement_pointer_x,
+            state.placement_pointer_y, state.camera_x, state.camera_y,
+            coordinates)) {
+        return;
+    }
     const u32 width = state.placement_footprint_width_tiles;
     const u32 height = state.placement_footprint_height_tiles;
 
@@ -2732,8 +2775,8 @@ void RenderProductionPlacementPreviewOverlay(UiOverlayState& state) {
                     ? state.placement_preview_cell_validity[cell_index] != 0
                     : state.placement_preview_valid;
             append_minimap_marker(state, UiOverlayMinimapMarkerKind::placement_preview,
-                screen_x + static_cast<i32>(x * 0x20),
-                screen_y + static_cast<i32>(y * 0x20), 0x20, 0x20,
+                coordinates.screen_x + static_cast<i32>(x * 0x20),
+                coordinates.screen_y + static_cast<i32>(y * 0x20), 0x20, 0x20,
                 cell_valid ? 0x07e0 : 0xf800,
                 state.placement_definition_id, state.local_player_slot,
                 cell_valid);
@@ -2987,6 +3030,22 @@ void RenderGameplayHudPulse(UiOverlayState& state, u32 tick_ms) {
     }
 }
 
+i32 ResolveUiOverlayInterfaceTop(const UiOverlayState& state) {
+    // FUN_004e2bb7 indexes DAT_008635c8 with layout * 0x60 and
+    // theme * 0x18, then copies record +4 to DAT_0086358c.  This value is the
+    // common top edge for the lower interface artwork and its placement mask.
+    constexpr std::array<std::array<i32, 4>, 3> kInterfaceTop{{
+        {{356, 362, 356, 364}},
+        {{439, 436, 421, 452}},
+        {{446, 458, 447, 460}},
+    }};
+    u32 layout = 0;
+    if (state.screen_width != 0x280u) {
+        layout = state.screen_width == 800u ? 1u : 2u;
+    }
+    return kInterfaceTop[layout][std::min<u32>(state.interface_theme_index, 3)];
+}
+
 void ConfigureGameplayUiOverlayLayout(UiOverlayState& state) {
     state.screen_layout_bucket = 0;
     if (state.screen_width != 0x280) {
@@ -2994,13 +3053,8 @@ void ConfigureGameplayUiOverlayLayout(UiOverlayState& state) {
     }
 
     // DAT_0083f3b8 / DAT_0086358c are the camera-center anchors consumed by
-    // FUN_004e29d1.  The vertical anchor is a separate layout-table field,
-    // not the top edge of the lower HUD artwork.
-    constexpr std::array<std::array<i32, 4>, 3> kWorldViewportHeight{{
-        {{356, 362, 356, 364}},
-        {{439, 436, 421, 452}},
-        {{446, 458, 447, 460}},
-    }};
+    // FUN_004e29d1.  FUN_004e2bb7 also copies the same table Y coordinate to
+    // DAT_008635b4, making it the lower-interface artwork and mask top edge.
     // DAT_008635d0..DAT_008635dc in the same 0x18-byte records provide the
     // minimap origin and exclusive end.  FUN_004e2bb7 copies these on every
     // call, then uses its two documented map-smaller-than-panel branches to
@@ -3016,7 +3070,7 @@ void ConfigureGameplayUiOverlayLayout(UiOverlayState& state) {
     const u32 camera_layout = std::min<u32>(state.screen_layout_bucket, 2);
     const u32 camera_theme = std::min<u32>(state.interface_theme_index, 3);
     state.world_viewport_height = static_cast<u32>(
-        kWorldViewportHeight[camera_layout][camera_theme]);
+        ResolveUiOverlayInterfaceTop(state));
     state.minimap_camera_anchor_x = static_cast<i32>(state.screen_width / 2);
     state.minimap_camera_anchor_y =
         static_cast<i32>(state.world_viewport_height >> 1);
@@ -3349,8 +3403,11 @@ bool CheckUiOverlayIconMaskPixel(const UiOverlayState& state, i32 x, i32 y) {
                 GetResourceEntry(state.small_icon_resource_base)) {
             const u32 width = entry->metadata[0];
             const u32 height = entry->metadata[1];
-            const i32 top = state.screen_height > height ?
-                static_cast<i32>(state.screen_height - height) : 0;
+            // FUN_004e3f43 subtracts DAT_0086358c, the resolution/theme table
+            // value installed by FUN_004e2bb7.  It does not derive the mask
+            // origin from client height minus image height; that shortcut only
+            // agrees in the 800-wide layout bucket.
+            const i32 top = ResolveUiOverlayInterfaceTop(state);
             const i32 local_y = y - top;
             if (width != 0 && height != 0 && x < static_cast<i32>(width) &&
                 local_y >= 0 && local_y < static_cast<i32>(height)) {

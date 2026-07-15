@@ -14,6 +14,13 @@ int main() {
     assert(ResolveProductionOrderPacketEnqueueOwner(2u) == 2u);
     assert(ResolveProductionOrderPacketEnqueueOwner(7u) == 7u);
 
+    // Subtypes 0x01 and 0x1a share that source-owner contract.  These values
+    // intentionally model a packet that targets a producer owned by player 1:
+    // its source zero must still own requirement checks and both resource
+    // debits, while source seven must retain owner seven.
+    assert(ResolveDeferredResourcePacketEnqueueOwner(0u, 1u) == 0u);
+    assert(ResolveDeferredResourcePacketEnqueueOwner(7u, 1u) == 7u);
+
     const u32 primary = static_cast<u32>(
         ProductionOrderAvailabilityCode::missing_primary_resource);
     const u32 secondary = static_cast<u32>(

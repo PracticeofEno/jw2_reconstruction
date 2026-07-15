@@ -341,6 +341,29 @@ if (BUILD_TESTING)
         COMMAND production_order_rule_wrap_regression
     )
 
+    add_executable(placement_preview_boundary_regression
+        tests/placement_preview_boundary_regression.cpp
+        src/ranker_gameplay_production_actions.cpp
+    )
+    target_include_directories(placement_preview_boundary_regression PRIVATE
+        include
+    )
+    if (MSVC)
+        target_compile_options(placement_preview_boundary_regression PRIVATE /Gy)
+        target_link_options(placement_preview_boundary_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(placement_preview_boundary_regression PRIVATE
+            -ffunction-sections
+            -fdata-sections
+        )
+        target_link_options(placement_preview_boundary_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME placement_preview_boundary_regression
+        COMMAND placement_preview_boundary_regression
+    )
+
     add_executable(selected_health_text_color_regression
         tests/selected_health_text_color_regression.cpp
     )
@@ -359,6 +382,29 @@ if (BUILD_TESTING)
     )
     add_test(NAME selected_unit_name_slot_regression
         COMMAND selected_unit_name_slot_regression
+    )
+
+    add_executable(world_unit_name_slot_regression
+        tests/world_unit_name_slot_regression.cpp
+        src/ranker_unit_animation.cpp
+    )
+    target_include_directories(world_unit_name_slot_regression PRIVATE
+        include
+    )
+    if (MSVC)
+        target_compile_options(world_unit_name_slot_regression PRIVATE /Gy)
+        target_link_options(world_unit_name_slot_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(world_unit_name_slot_regression PRIVATE
+            -ffunction-sections
+            -fdata-sections
+        )
+        target_link_options(world_unit_name_slot_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME world_unit_name_slot_regression
+        COMMAND world_unit_name_slot_regression
     )
 
     add_executable(selected_info_draw_order_regression
@@ -519,6 +565,7 @@ if (BUILD_TESTING)
     add_executable(edge_scroll_parity_regression
         tests/edge_scroll_parity_regression.cpp
         src/ranker_control_group_persistence.cpp
+        src/ranker_resource_store.cpp
         src/ranker_ui_overlay.cpp
     )
     target_include_directories(edge_scroll_parity_regression PRIVATE

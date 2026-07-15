@@ -555,7 +555,11 @@ void DrawUnitHealthAndSecondaryBars(UnitAnimationDrawContext& context,
 
 void DrawUnitDisplayNameIfPresent(UnitAnimationDrawContext& context,
     const UnitAnimationUnit& unit) {
-    if (unit.display_name.empty() || context.callbacks.draw_display_name == nullptr) {
+    // FUN_004c523d / 0x004c50ed gate this tail on the raw string-slot word,
+    // not on the first byte stored in the slot.  Script-created empty slots
+    // therefore still select font four and issue an empty draw.
+    if (!unit.display_name_slot_present ||
+        context.callbacks.draw_display_name == nullptr) {
         return;
     }
 

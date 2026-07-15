@@ -155,6 +155,7 @@ struct UnitAnimationUnit {
     bool visible_to_local_owner = false;
     bool cell_construction_progress_active = false;
     bool cell_channel_additive_active = false;
+    bool display_name_slot_present = false;
     std::string display_name;
 };
 
