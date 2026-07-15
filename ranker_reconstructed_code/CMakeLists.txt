@@ -183,6 +183,85 @@ if (BUILD_TESTING)
         COMMAND production_order_packet_owner_regression
     )
 
+    add_executable(selected_health_text_color_regression
+        tests/selected_health_text_color_regression.cpp
+    )
+    target_include_directories(selected_health_text_color_regression PRIVATE
+        include
+    )
+    add_test(NAME selected_health_text_color_regression
+        COMMAND selected_health_text_color_regression
+    )
+
+    add_executable(fog_smoothing_mask_regression
+        tests/fog_smoothing_mask_regression.cpp
+        src/ranker_gameplay_visibility.cpp
+    )
+    target_include_directories(fog_smoothing_mask_regression PRIVATE
+        include
+    )
+    if (MSVC)
+        target_compile_options(fog_smoothing_mask_regression PRIVATE /Gy)
+        target_link_options(fog_smoothing_mask_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(fog_smoothing_mask_regression PRIVATE
+            -ffunction-sections
+            -fdata-sections
+        )
+        target_link_options(fog_smoothing_mask_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME fog_smoothing_mask_regression
+        COMMAND fog_smoothing_mask_regression
+    )
+
+    add_executable(fog_viewport_composite_regression
+        tests/fog_viewport_composite_regression.cpp
+        src/ranker_gameplay_visibility.cpp
+    )
+    target_include_directories(fog_viewport_composite_regression PRIVATE
+        include
+    )
+    if (MSVC)
+        target_compile_options(fog_viewport_composite_regression PRIVATE /Gy)
+        target_link_options(fog_viewport_composite_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(fog_viewport_composite_regression PRIVATE
+            -ffunction-sections
+            -fdata-sections
+        )
+        target_link_options(fog_viewport_composite_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME fog_viewport_composite_regression
+        COMMAND fog_viewport_composite_regression
+    )
+
+    add_executable(construction_progress_frame_parity_regression
+        tests/construction_progress_frame_parity_regression.cpp
+        src/ranker_unit_animation.cpp
+    )
+    target_include_directories(construction_progress_frame_parity_regression PRIVATE
+        include
+    )
+    if (MSVC)
+        target_compile_options(construction_progress_frame_parity_regression PRIVATE /Gy)
+        target_link_options(construction_progress_frame_parity_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(construction_progress_frame_parity_regression PRIVATE
+            -ffunction-sections
+            -fdata-sections
+        )
+        target_link_options(construction_progress_frame_parity_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME construction_progress_frame_parity_regression
+        COMMAND construction_progress_frame_parity_regression
+    )
+
     add_executable(gameplay_hotkey_regression
         tests/gameplay_hotkey_regression.cpp
         src/ranker_input.cpp
