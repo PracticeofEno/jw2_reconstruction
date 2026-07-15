@@ -2,6 +2,7 @@
 
 #include "ranker_unit_movement.h"
 
+#include <array>
 #include <vector>
 
 namespace ranker {
@@ -13,6 +14,7 @@ constexpr u32 kMapEffectVisibleTileFlag = 0x08000000;
 constexpr u32 kMapEffectLinkedFlag = 0x00000001;
 constexpr u32 kMapEffectTerrainClassMask = 0x1c000000;
 constexpr u32 kMapEffectSearchRadius = 0x0f;
+constexpr std::size_t kMapEffectRawRecordSize = 0x3c;
 
 struct MapEffectViewport {
     i32 left = 0;
@@ -40,6 +42,15 @@ struct MapEffectInstance {
     i32 x = 0;
     i32 y = 0;
     UnitMovementUnit* linked_unit = nullptr;
+    // The original fixed-pool record is written as one untouched 0x3c-byte
+    // block.  Keep the fields without a typed runtime meaning (+0x04/+0x08
+    // and +0x14..+0x20) as well as the stale free-node image available for
+    // byte-faithful save/load round trips.
+    std::array<u8, kMapEffectRawRecordSize> raw_record{};
+    // Raw +0x10 is an original unit-pool offset.  A free node, or a loaded
+    // node whose target is not currently materialized, cannot represent that
+    // value with linked_unit alone.
+    u32 linked_unit_raw_offset = 0;
 };
 
 struct MapEffectContext;
@@ -75,6 +86,10 @@ struct MapEffectContext {
     u32 frame_counter = 0;
 };
 
+bool HydrateMapEffectRawRecord(MapEffectInstance& effect,
+    const u8* record, std::size_t record_size);
+bool StoreMapEffectRawRecord(const MapEffectInstance& effect,
+    u8* record, std::size_t record_size);
 UnitMovementCell* GetMapEffectCell(MapEffectContext& context, i32 x, i32 y);
 const UnitMovementCell* GetMapEffectCell(const MapEffectContext& context, i32 x, i32 y);
 bool CheckMapEffectPlacementTile(const MapEffectContext& context, i32 x, i32 y,

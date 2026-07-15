@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstring>
 
 namespace ranker {
 namespace {
@@ -9,6 +10,23 @@ namespace {
 constexpr u32 kMapEffectPlacementSourceFlag = 0x20000000;
 constexpr u32 kPassivePrimaryEquipmentSlot = 4;
 constexpr u32 kPassiveSecondaryEquipmentSlot = 5;
+constexpr std::size_t kRawTypeOffset = 0x00;
+constexpr std::size_t kRawFlagsOffset = 0x0c;
+constexpr std::size_t kRawLinkedUnitOffset = 0x10;
+constexpr std::size_t kRawXOffset = 0x24;
+constexpr std::size_t kRawYOffset = 0x28;
+constexpr std::size_t kRawFrameTimerOffset = 0x2c;
+constexpr std::size_t kRawRepeatCountOffset = 0x30;
+
+u32 read_raw_u32(const u8* record, std::size_t offset) {
+    u32 value = 0;
+    std::memcpy(&value, record + offset, sizeof(value));
+    return value;
+}
+
+void write_raw_u32(u8* record, std::size_t offset, u32 value) {
+    std::memcpy(record + offset, &value, sizeof(value));
+}
 
 u32 tile_index(const UnitMovementMap& map, u32 tile_x, u32 tile_y) {
     return UnitMovementMapTileIndex(map, tile_x, tile_y);
@@ -79,14 +97,17 @@ bool initialize_effect(MapEffectContext& context, MapEffectInstance& effect,
     u32 effect_id, i32 x, i32 y, UnitMovementUnit* linked_unit) {
     const MapEffectDefinition* definition = lookup_definition(context, effect_id);
     const u32 slot_id = effect.id;
+    const auto raw_record = effect.raw_record;
     effect = MapEffectInstance{};
     effect.active = true;
     effect.id = slot_id;
+    effect.raw_record = raw_record;
     effect.effect_id = effect_id;
     effect.flags = linked_unit != nullptr ? kMapEffectLinkedFlag : 0;
     effect.x = x & ~0x1f;
     effect.y = y & ~0x1f;
     effect.linked_unit = linked_unit;
+    effect.linked_unit_raw_offset = linked_unit != nullptr ? linked_unit->id : 0;
     effect.repeat_count = definition != nullptr ?
         std::max<u32>(definition->default_repeat_count, 1) : 1;
     effect.frame_timer = definition != nullptr ? definition->frame_period : 0;
@@ -170,6 +191,41 @@ bool spawn_unit_passive_slot_effect(MapEffectContext& context, UnitMovementUnit&
 
 } // namespace
 
+bool HydrateMapEffectRawRecord(MapEffectInstance& effect,
+    const u8* record, std::size_t record_size) {
+    if (record == nullptr || record_size < kMapEffectRawRecordSize) {
+        return false;
+    }
+    std::copy_n(record, kMapEffectRawRecordSize, effect.raw_record.begin());
+    effect.effect_id = read_raw_u32(record, kRawTypeOffset);
+    effect.flags = read_raw_u32(record, kRawFlagsOffset);
+    effect.linked_unit_raw_offset = read_raw_u32(record, kRawLinkedUnitOffset);
+    effect.x = static_cast<i32>(read_raw_u32(record, kRawXOffset));
+    effect.y = static_cast<i32>(read_raw_u32(record, kRawYOffset));
+    effect.frame_timer = read_raw_u32(record, kRawFrameTimerOffset);
+    effect.repeat_count = read_raw_u32(record, kRawRepeatCountOffset);
+    effect.linked_unit = nullptr;
+    return true;
+}
+
+bool StoreMapEffectRawRecord(const MapEffectInstance& effect,
+    u8* record, std::size_t record_size) {
+    if (record == nullptr || record_size < kMapEffectRawRecordSize) {
+        return false;
+    }
+    std::copy(effect.raw_record.begin(), effect.raw_record.end(), record);
+    write_raw_u32(record, kRawTypeOffset, effect.effect_id);
+    write_raw_u32(record, kRawFlagsOffset, effect.flags);
+    write_raw_u32(record, kRawLinkedUnitOffset,
+        effect.active && effect.linked_unit != nullptr ?
+            effect.linked_unit->id : effect.linked_unit_raw_offset);
+    write_raw_u32(record, kRawXOffset, static_cast<u32>(effect.x));
+    write_raw_u32(record, kRawYOffset, static_cast<u32>(effect.y));
+    write_raw_u32(record, kRawFrameTimerOffset, effect.frame_timer);
+    write_raw_u32(record, kRawRepeatCountOffset, effect.repeat_count);
+    return true;
+}
+
 UnitMovementCell* GetMapEffectCell(MapEffectContext& context, i32 x, i32 y) {
     if (context.map == nullptr || x < 0 || y < 0) {
         return nullptr;
@@ -243,8 +299,6 @@ MapEffectInstance* AllocateMapEffect(MapEffectContext& context) {
         context.free_effect_indices.pop_back();
         if (index != 0 && index < context.effects.size() &&
             !context.effects[index].active) {
-            context.effects[index] = MapEffectInstance{};
-            context.effects[index].id = index;
             context.effects[index].active = true;
             context.active_effect_indices.insert(
                 context.active_effect_indices.begin(), index);
@@ -258,7 +312,6 @@ void ReleaseMapEffect(MapEffectContext& context, MapEffectInstance& effect) {
     const u32 index = effect_slot_index(context, effect);
     ClearMapEffectTileOccupied(context, effect);
     if (index >= context.effects.size()) {
-        effect = MapEffectInstance{};
         return;
     }
     if (!context.effects[index].active) {
@@ -266,8 +319,7 @@ void ReleaseMapEffect(MapEffectContext& context, MapEffectInstance& effect) {
     }
 
     remove_effect_index(context.active_effect_indices, index);
-    context.effects[index] = MapEffectInstance{};
-    context.effects[index].id = index;
+    context.effects[index].active = false;
     if (!contains_effect_index(context.free_effect_indices, index)) {
         context.free_effect_indices.push_back(index);
     }

@@ -3938,6 +3938,24 @@ void sync_default_map_effect_context_session_record() {
     const u32 object_count = std::min<u32>(
         static_cast<u32>(record->size() / kGameplayMapEffectObjectStride),
         kGameplayMapEffectObjectMaxSlots);
+
+    // HandleGameplaySessionBundleExport writes DAT_012ce970 as one raw
+    // 0x7800-byte record (0x004d236d..0x004d238b).  Rebuild that physical
+    // pool image for every slot before replacing only its intrusive links.
+    // This retains untyped +0x04/+0x08 and +0x14..+0x20 bytes as well as the
+    // stale payload of free nodes, just as AllocateMapEffect/ReleaseMapEffect
+    // (0x004d1bc0/0x004d1c0b) do in the original.
+    const u32 materialized_count = std::min<u32>(object_count,
+        static_cast<u32>(g_runtime.map_effect_context.effects.size()));
+    for (u32 index = 0; index < materialized_count; ++index) {
+        const MapEffectInstance& effect =
+            g_runtime.map_effect_context.effects[index];
+        const std::size_t object_base =
+            static_cast<std::size_t>(index) * kGameplayMapEffectObjectStride;
+        StoreMapEffectRawRecord(effect, record->data() + object_base,
+            record->size() - object_base);
+    }
+
     std::vector<bool> active(object_count, false);
     std::vector<bool> free(object_count, false);
     std::vector<u32> active_indices;
@@ -3986,42 +4004,12 @@ void sync_default_map_effect_context_session_record() {
 
     for (std::size_t position = 0; position < active_indices.size(); ++position) {
         const u32 index = active_indices[position];
-        const MapEffectInstance& effect =
-            g_runtime.map_effect_context.effects[index];
         const std::size_t object_base =
             static_cast<std::size_t>(index) * kGameplayMapEffectObjectStride;
         const u32 previous_offset = position == 0 ? 0 :
             active_indices[position - 1] * kGameplayMapEffectObjectStride;
         const u32 next_offset = position + 1 >= active_indices.size() ? 0 :
             active_indices[position + 1] * kGameplayMapEffectObjectStride;
-        const bool linked_unit_valid = effect.linked_unit != nullptr;
-        const u32 stored_flags = linked_unit_valid ?
-            (effect.flags | kMapEffectLinkedFlag) :
-            (effect.flags & ~kMapEffectLinkedFlag);
-        const u32 linked_unit_offset = linked_unit_valid ?
-            effect.linked_unit->id : 0;
-
-        write_default_session_buffer_u32(
-            *record, object_base + kGameplayMapEffectObjectTypeOffset,
-            effect.effect_id);
-        write_default_session_buffer_u32(
-            *record, object_base + kGameplayMapEffectObjectFlagsOffset,
-            stored_flags);
-        write_default_session_buffer_u32(
-            *record, object_base + kGameplayMapEffectObjectLinkedUnitOffset,
-            linked_unit_offset);
-        write_default_session_buffer_u32(
-            *record, object_base + kGameplayMapEffectObjectXOffset,
-            static_cast<u32>(effect.x));
-        write_default_session_buffer_u32(
-            *record, object_base + kGameplayMapEffectObjectYOffset,
-            static_cast<u32>(effect.y));
-        write_default_session_buffer_u32(
-            *record, object_base + kGameplayMapEffectObjectFrameTimerOffset,
-            effect.frame_timer);
-        write_default_session_buffer_u32(
-            *record, object_base + kGameplayMapEffectObjectRepeatCountOffset,
-            effect.repeat_count);
         write_default_session_buffer_u32(
             *record, object_base + kGameplayMapEffectObjectPreviousOffset,
             previous_offset);
@@ -4038,16 +4026,6 @@ void sync_default_map_effect_context_session_record() {
             free_indices[position - 1] * kGameplayMapEffectObjectStride;
         const u32 next_offset = position + 1 >= free_indices.size() ? 0 :
             free_indices[position + 1] * kGameplayMapEffectObjectStride;
-        write_default_session_buffer_u32(
-            *record, object_base + kGameplayMapEffectObjectTypeOffset, 0);
-        write_default_session_buffer_u32(
-            *record, object_base + kGameplayMapEffectObjectFlagsOffset, 0);
-        write_default_session_buffer_u32(
-            *record, object_base + kGameplayMapEffectObjectLinkedUnitOffset, 0);
-        write_default_session_buffer_u32(
-            *record, object_base + kGameplayMapEffectObjectFrameTimerOffset, 0);
-        write_default_session_buffer_u32(
-            *record, object_base + kGameplayMapEffectObjectRepeatCountOffset, 0);
         write_default_session_buffer_u32(
             *record, object_base + kGameplayMapEffectObjectPreviousOffset,
             previous_offset);
@@ -10366,7 +10344,12 @@ void initialize_default_map_effect_context_from_session_records() {
         kGameplayMapEffectObjectMaxSlots);
     context.effects.assign(object_count, MapEffectInstance{});
     for (u32 index = 0; index < object_count; ++index) {
-        context.effects[index].id = index;
+        const std::size_t object_base =
+            static_cast<std::size_t>(index) * kGameplayMapEffectObjectStride;
+        MapEffectInstance& effect = context.effects[index];
+        effect.id = index;
+        HydrateMapEffectRawRecord(effect, record->data() + object_base,
+            record->size() - object_base);
     }
 
     std::vector<u32> active_indices;
@@ -10429,36 +10412,12 @@ void initialize_default_map_effect_context_from_session_records() {
             continue;
         }
 
-        const std::size_t object_base =
-            static_cast<std::size_t>(index) * kGameplayMapEffectObjectStride;
-        const u32 effect_id = read_default_scenario_object_u32(
-            *record, object_base, kGameplayMapEffectObjectTypeOffset);
-
         MapEffectInstance& effect = context.effects[index];
         effect.active = true;
-        effect.id = index;
-        effect.effect_id = effect_id;
-        effect.flags = read_default_scenario_object_u32(
-            *record, object_base, kGameplayMapEffectObjectFlagsOffset);
-        const u32 linked_unit_offset = read_default_scenario_object_u32(
-            *record, object_base, kGameplayMapEffectObjectLinkedUnitOffset);
-        if (linked_unit_offset != 0) {
-            effect.linked_unit = find_default_movement_unit_by_id(linked_unit_offset);
-            if (effect.linked_unit != nullptr) {
-                effect.flags |= kMapEffectLinkedFlag;
-            }
+        if (effect.linked_unit_raw_offset != 0) {
+            effect.linked_unit = find_default_movement_unit_by_id(
+                effect.linked_unit_raw_offset);
         }
-        if (effect.linked_unit == nullptr) {
-            effect.flags &= ~kMapEffectLinkedFlag;
-        }
-        effect.frame_timer = read_default_scenario_object_u32(
-            *record, object_base, kGameplayMapEffectObjectFrameTimerOffset);
-        effect.repeat_count = read_default_scenario_object_u32(
-            *record, object_base, kGameplayMapEffectObjectRepeatCountOffset);
-        effect.x = read_default_scenario_object_i32(
-            *record, object_base, kGameplayMapEffectObjectXOffset);
-        effect.y = read_default_scenario_object_i32(
-            *record, object_base, kGameplayMapEffectObjectYOffset);
         context.active_effect_indices.push_back(index);
         active[index] = true;
     }
@@ -24721,6 +24680,8 @@ void sync_default_owner_ai_route_object_candidates(
                     effect.flags = stored_flags;
                     effect.linked_unit = assigned_unit_valid ?
                         candidate.assigned_unit : nullptr;
+                    effect.linked_unit_raw_offset = assigned_unit_valid ?
+                        candidate.assigned_unit->id : 0;
                 }
             }
             if (map_effect_record != nullptr) {
