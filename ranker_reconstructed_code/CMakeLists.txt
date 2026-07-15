@@ -193,6 +193,16 @@ if (BUILD_TESTING)
         COMMAND selected_health_text_color_regression
     )
 
+    add_executable(selected_unit_name_slot_regression
+        tests/selected_unit_name_slot_regression.cpp
+    )
+    target_include_directories(selected_unit_name_slot_regression PRIVATE
+        include
+    )
+    add_test(NAME selected_unit_name_slot_regression
+        COMMAND selected_unit_name_slot_regression
+    )
+
     add_executable(fog_smoothing_mask_regression
         tests/fog_smoothing_mask_regression.cpp
         src/ranker_gameplay_visibility.cpp

@@ -410,22 +410,8 @@ bool uses_win32_font_path() {
 }
 
 #ifdef _WIN32
-COLORREF color_ref_from_text_pixel(u8 index) {
-    const u16 pixel = color_pixel(index);
-    u32 red = 0;
-    u32 green = 0;
-    u32 blue = 0;
-    if (SurfacePixelMode555()) {
-        red = ((pixel >> 10) & 0x1fu) << 3;
-        green = ((pixel >> 5) & 0x1fu) << 3;
-        blue = (pixel & 0x1fu) << 3;
-    }
-    else {
-        red = ((pixel >> 11) & 0x1fu) << 3;
-        green = ((pixel >> 5) & 0x3fu) << 2;
-        blue = (pixel & 0x1fu) << 3;
-    }
-    return RGB(red, green, blue);
+COLORREF color_ref_from_text_index(u8 index) {
+    return static_cast<COLORREF>(ResolveTextColorRef(index));
 }
 
 void ensure_win32_text_font(HDC dc) {
@@ -662,11 +648,11 @@ bool render_win32_text_run(const char* text, std::size_t length) {
         }
         else {
             SetBkMode(dc, OPAQUE);
-            SetBkColor(dc, color_ref_from_text_pixel(g_text_renderer_state.cursor.background));
+            SetBkColor(dc, color_ref_from_text_index(g_text_renderer_state.cursor.background));
         }
 
         SelectObject(dc, system_ui_state().fonts.selected);
-        SetTextColor(dc, color_ref_from_text_pixel(g_text_renderer_state.cursor.foreground));
+        SetTextColor(dc, color_ref_from_text_index(g_text_renderer_state.cursor.foreground));
         const int count = static_cast<int>(length);
         const BOOL out_ok = TextOutA(dc, g_text_renderer_state.cursor.x,
             g_text_renderer_state.cursor.y, text, count);
@@ -713,9 +699,9 @@ bool draw_win32_text_at(i32 x, i32 y, HFONT font, u8 foreground, u8 background,
         }
         else {
             SetBkMode(dc, OPAQUE);
-            SetBkColor(dc, color_ref_from_text_pixel(background));
+            SetBkColor(dc, color_ref_from_text_index(background));
         }
-        SetTextColor(dc, color_ref_from_text_pixel(foreground));
+        SetTextColor(dc, color_ref_from_text_index(foreground));
 
         const int count = static_cast<int>(length);
         i32 draw_x = x;
@@ -753,9 +739,9 @@ bool render_win32_text_shadow_and_advance(const char* text) {
         const int count = static_cast<int>(std::strlen(text));
         const TextRenderCursor& cursor = g_text_renderer_state.cursor;
         const u8 shadow = cursor.shadow_foreground != 0 ? cursor.shadow_foreground : 0;
-        SetTextColor(dc, color_ref_from_text_pixel(shadow));
+        SetTextColor(dc, color_ref_from_text_index(shadow));
         const BOOL shadow_ok = TextOutA(dc, cursor.x + 1, cursor.y + 1, text, count);
-        SetTextColor(dc, color_ref_from_text_pixel(cursor.foreground));
+        SetTextColor(dc, color_ref_from_text_index(cursor.foreground));
         const BOOL text_ok = TextOutA(dc, cursor.x, cursor.y, text, count);
         const BOOL extent_ok = GetTextExtentPoint32A(dc, text, count, &extent);
 
@@ -858,7 +844,34 @@ void SetTextFontDefinition(u32 index, const TextFontDefinition& font) {
 void SetTextColorPixel(u32 index, u16 pixel) {
     if (index < kTextRendererColorCount) {
         g_text_renderer_state.color_pixels[index] = pixel;
+        u32 red = 0;
+        u32 green = 0;
+        u32 blue = 0;
+        if (SurfacePixelMode555()) {
+            red = ((pixel >> 10) & 0x1fu) << 3;
+            green = ((pixel >> 5) & 0x1fu) << 3;
+            blue = (pixel & 0x1fu) << 3;
+        }
+        else {
+            red = ((pixel >> 11) & 0x1fu) << 3;
+            green = ((pixel >> 5) & 0x3fu) << 2;
+            blue = (pixel & 0x1fu) << 3;
+        }
+        // COLORREF is 0x00bbggrr.  This fallback preserves the old setter's
+        // standalone behavior until a raw palette entry is published.
+        g_text_renderer_state.color_refs[index] =
+            red | (green << 8) | (blue << 16);
     }
+}
+
+void SetTextColorRef(u32 index, u32 color_ref) {
+    if (index < kTextRendererColorCount) {
+        g_text_renderer_state.color_refs[index] = color_ref & 0x00ffffffu;
+    }
+}
+
+u32 ResolveTextColorRef(u8 index) {
+    return g_text_renderer_state.color_refs[index];
 }
 
 void SetTextClipRect(i32 left, i32 top, i32 right, i32 bottom) {

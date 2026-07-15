@@ -43,6 +43,11 @@ struct TextRenderCursor {
 struct TextRendererState {
     std::array<TextFontDefinition, kTextRendererFontCount> fonts{};
     std::array<u16, kTextRendererColorCount> color_pixels{};
+    // FUN_005077f0 indexes DAT_0086afec as three raw RGB bytes and passes
+    // that little-endian value directly to GDI.  Keep it separate from the
+    // 16-bit pixels used by bitmap glyphs so Win32 font colors do not make a
+    // lossy 555/565 round trip.
+    std::array<u32, kTextRendererColorCount> color_refs{};
     TextFontDefinition draw_font{};
     TextFontDefinition metric_font{};
     TextRenderCursor cursor{};
@@ -89,6 +94,8 @@ void RegisterTextFontDefinition(
     std::size_t glyph_data_size = 0);
 void SetTextFontDefinition(u32 index, const TextFontDefinition& font);
 void SetTextColorPixel(u32 index, u16 pixel);
+void SetTextColorRef(u32 index, u32 color_ref);
+u32 ResolveTextColorRef(u8 index);
 void SetTextClipRect(i32 left, i32 top, i32 right, i32 bottom);
 void SetTextCursor(i32 x, i32 y, u8 foreground, u8 background = 0);
 

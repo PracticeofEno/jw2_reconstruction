@@ -252,6 +252,15 @@ constexpr u32 ResolveSelectedUnitHealthTextColor(u32 health_color_step) {
         ? kOriginalSelectedHealthTextColors[health_color_step]
         : 0u;
 }
+
+// FUN_004e1544 tests raw unit +0x48 before looking at the selected name.  A
+// valid nonzero slot owns the name even when its first byte is NUL; only a
+// missing slot selects the unit-definition fallback.
+constexpr bool UsesSelectedUnitDynamicNameSlot(bool movement_available,
+    u32 string_slot, std::size_t string_slot_count) {
+    return movement_available && string_slot != 0 &&
+        string_slot < string_slot_count;
+}
 constexpr std::size_t kCameraScrollSpeedCount = 16;
 constexpr std::size_t kCameraScrollRampCount = 8;
 constexpr std::array<std::array<u32, kCameraScrollRampCount>,

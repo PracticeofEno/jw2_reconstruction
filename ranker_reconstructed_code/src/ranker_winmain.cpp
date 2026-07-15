@@ -18504,18 +18504,18 @@ void sync_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
     }
 
     overlay.selected_unit_name_text.clear();
-    if (movement != nullptr && unit->string_slot != 0 &&
-        unit->string_slot < movement->string_slots.size()) {
+    const bool has_dynamic_name_slot = UsesSelectedUnitDynamicNameSlot(
+        movement != nullptr, unit->string_slot,
+        movement != nullptr ? movement->string_slots.size() : 0u);
+    if (has_dynamic_name_slot) {
         const auto& slot = movement->string_slots[unit->string_slot];
-        if (slot[0] != '\0') {
-            std::size_t length = 0;
-            while (length < slot.size() && slot[length] != '\0') {
-                ++length;
-            }
-            overlay.selected_unit_name_text.assign(slot.data(), length);
+        std::size_t length = 0;
+        while (length < slot.size() && slot[length] != '\0') {
+            ++length;
         }
+        overlay.selected_unit_name_text.assign(slot.data(), length);
     }
-    if (overlay.selected_unit_name_text.empty()) {
+    if (!has_dynamic_name_slot) {
         overlay.selected_unit_name_text =
             startup_unit_name_or_fallback(unit->type_id);
     }

@@ -176,6 +176,11 @@ void publish_frontend_palette_copy(FrontendBootstrapState& state, u32 slot) {
     state.frontend_palette_raw = cache.raw_slots[slot];
     for (u32 i = 0; i < kPalettePixelCount; ++i) {
         SetTextColorPixel(i, state.frontend_palette_555[i]);
+        const std::size_t base = static_cast<std::size_t>(i) * 4u;
+        SetTextColorRef(i,
+            static_cast<u32>(state.frontend_palette_raw[base]) |
+                (static_cast<u32>(state.frontend_palette_raw[base + 1]) << 8) |
+                (static_cast<u32>(state.frontend_palette_raw[base + 2]) << 16));
     }
 }
 

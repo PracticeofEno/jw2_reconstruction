@@ -83,6 +83,19 @@ int main() {
     expect(SelectTextMetricFont(4), "font-4 metric selection failed");
     SetTextColorPixel(1, 0xf800);
     SetTextColorPixel(0xe9, 0x0000);
+    expect(ResolveTextColorRef(1) == 0x000000f8u,
+        "16-bit-only text color fallback changed");
+    // JW2_01.TRC record 4 entries used by selected names and dynamic world
+    // names.  The original forwards these three raw bytes to SetTextColor;
+    // it does not expand the already-quantized surface pixel.
+    SetTextColorRef(1, 0x00f2f2f2u);
+    expect(ResolveTextColorRef(1) == 0x00f2f2f2u,
+        "selected-name raw RGB was quantized through the 16-bit palette");
+    SetTextColorRef(0xff, 0x00fffffcu);
+    expect(ResolveTextColorRef(0xff) == 0x00fffffcu,
+        "world-name raw RGB was quantized through the 16-bit palette");
+    expect(text_renderer_state().color_pixels[1] == 0xf800u,
+        "raw Win32 color publication changed bitmap glyph pixels");
 
     expect(MeasureTextExtent("Need more berries"),
         "memory-DC text measurement failed without a DirectDraw DC");
