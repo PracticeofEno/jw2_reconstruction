@@ -82,6 +82,17 @@ if (BUILD_TESTING)
         COMMAND under_attack_sound_regression
     )
 
+    add_executable(audio_branch_matrix_regression
+        tests/audio_branch_matrix_regression.cpp
+        src/ranker_gameplay_sound.cpp
+    )
+    target_include_directories(audio_branch_matrix_regression PRIVATE
+        include
+    )
+    add_test(NAME audio_branch_matrix_regression
+        COMMAND audio_branch_matrix_regression
+    )
+
     add_executable(gameplay_resource_sound_branch_regression
         tests/gameplay_resource_sound_branch_regression.cpp
         src/ranker_gameplay_frame_render.cpp
