@@ -117,8 +117,15 @@ Assert-Contains $mainSource "`$collectorSlot 'damage-consume'" `
     'diagnostic damage followed by consume probe'
 Assert-Contains $mainSource '$consumeEventDamageObserved' `
     'exact trace proves real pre-consume damage'
-Assert-Contains $mainSource '$consumePass = $consumeEventPass' `
-    'long-lived finalized exact-frame event is authoritative'
+Assert-Contains $mainSource '$pairedConsumePass =' `
+    'targeted paired condition is independent consume evidence'
+Assert-Contains $mainSource `
+    '$consumePass = $consumeEventPass -or $pairedConsumePass' `
+    'either finalized exact-frame probe can prove consumption'
+Assert-Contains $mainSource "'paired_condition'" `
+    'consume result records the exact-frame coverage source'
+Assert-Contains $mainSource '$integratedConsumeCoverage' `
+    'trace and targeted consume coverage are integrated'
 Assert-Contains $mainSource '[int]$consumeEvent.original.action_delta -lt 0' `
     'consume decrements action mode'
 Assert-Contains $mainSource `

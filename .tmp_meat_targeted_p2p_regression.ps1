@@ -606,6 +606,7 @@ $results = [ordered]@{
     consume = [ordered]@{ pass = $false }
     cargo_clean = $false
     meat_probe = $null
+    integrated_full_coverage_pass = $false
     failure = $null
     cleanup = $null
     pass = $false
@@ -876,11 +877,12 @@ try {
     }
     $consumeEvent = Wait-MeatTraceEvent $meatTracePath 'consume' `
         10 $collectorSlot
-    # The long-lived exact-frame trace starts before combat.  It can observe
-    # the damage/consume transition while the synchronous one-shot condition
-    # probe is still being launched after the UI attack attempts.  Treat that
-    # finalized parity event as authoritative instead of requiring the later
-    # probe to see the already-consumed edge a second time.
+    # The long-lived trace and the targeted condition probe finalize the same
+    # peer frame independently, but their observation lifetimes differ.  A
+    # far-away hostile can make the long trace expire before the targeted
+    # probe sees the edge, while a fast consume can happen before the targeted
+    # probe starts.  Accept either complete same-frame proof; do not require
+    # the same transition to be observed twice.
     $consumeEventDamageObserved =
         $null -ne $consumeEvent -and
         [int]$consumeEvent.original.health_before -lt
@@ -906,7 +908,32 @@ try {
             [int]$consumeEvent.rebuild.health_before -and
         [int]$consumeEvent.original.health_after -eq
             [int]$consumeEvent.rebuild.health_after
-    $consumePass = $consumeEventPass
+    $pairedConsumePass =
+        [bool]$damageConsume.matched -and
+        [int]$damageConsume.parity_mismatch_samples -eq 0 -and
+        [bool]$damageConsume.damage_observed -and
+        [bool]$damageConsume.detail.parity -and
+        [bool]$damageConsume.detail.damage_observed -and
+        [bool]$damageConsume.detail.original_transition.matched -and
+        [bool]$damageConsume.detail.rebuild_transition.matched -and
+        [int]$damageConsume.detail.original_transition.action_delta -lt 0 -and
+        [int]$damageConsume.detail.original_transition.health_delta -eq
+            -[int]$damageConsume.detail.original_transition.action_delta -and
+        [int]$damageConsume.detail.original_transition.cargo_delta -eq 0 -and
+        [int]$damageConsume.detail.rebuild_transition.action_delta -lt 0 -and
+        [int]$damageConsume.detail.rebuild_transition.health_delta -eq
+            -[int]$damageConsume.detail.rebuild_transition.action_delta -and
+        [int]$damageConsume.detail.rebuild_transition.cargo_delta -eq 0
+    $consumePass = $consumeEventPass -or $pairedConsumePass
+    $consumeCoverageSource = if ($consumeEventPass) {
+        'trace'
+    }
+    elseif ($pairedConsumePass) {
+        'paired_condition'
+    }
+    else {
+        'none'
+    }
     $results.consume = [ordered]@{
         pass = $consumePass
         hostile = [ordered]@{
@@ -920,6 +947,8 @@ try {
         paired_damage_consume = $damageConsume
         exact_event_damage_observed = $consumeEventDamageObserved
         exact_event_pass = $consumeEventPass
+        paired_condition_pass = $pairedConsumePass
+        coverage_source = $consumeCoverageSource
         event = $consumeEvent
     }
     if (-not $consumePass) {
@@ -944,6 +973,14 @@ try {
         [int]$summary.parity.tracked_unit_mismatch_samples -eq 0 -and
         [int]$summary.parity.event_mismatches -eq 0
 
+    $traceConsumeCoverage =
+        [bool]$summary.coverage.consume -and
+        [bool]$summary.verdict.consumption_decrements_action_and_heals
+    $integratedConsumeCoverage =
+        $traceConsumeCoverage -or $pairedConsumePass
+    $results.consume.trace_coverage_pass = $traceConsumeCoverage
+    $results.consume.integrated_coverage_pass = $integratedConsumeCoverage
+
     $results.generation.pass = [bool]$results.generation.pass -and
         [bool]$summary.coverage.neutral_transition -and
         [bool]$summary.coverage.spawn -and
@@ -952,15 +989,23 @@ try {
         [bool]$summary.coverage.pickup -and
         [bool]$summary.verdict.pickup_uses_action_not_cargo
     $results.consume.pass = [bool]$results.consume.pass -and
-        [bool]$summary.coverage.consume -and
-        [bool]$summary.verdict.consumption_decrements_action_and_heals
+        $integratedConsumeCoverage
+    $results.integrated_full_coverage_pass =
+        [bool]$summary.verdict.full_coverage_pass -or
+        ($pairedConsumePass -and
+         [bool]$summary.coverage.neutral_transition -and
+         [bool]$summary.coverage.spawn -and
+         [bool]$summary.coverage.pickup -and
+         [bool]$summary.verdict.generation_matches -and
+         [bool]$summary.verdict.pickup_uses_action_not_cargo -and
+         [bool]$results.cargo_clean)
     $results.pass =
         [bool]$results.generation.pass -and
         [bool]$results.marker.pass -and
         [bool]$results.pickup.pass -and
         [bool]$results.consume.pass -and
         [bool]$results.cargo_clean -and
-        [bool]$summary.verdict.full_coverage_pass
+        [bool]$results.integrated_full_coverage_pass
     $exitCode = if ($results.pass) { 0 } else { 2 }
 }
 catch {
