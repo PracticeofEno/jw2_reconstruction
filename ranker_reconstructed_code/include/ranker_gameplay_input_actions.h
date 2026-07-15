@@ -64,6 +64,21 @@ struct GameplayActionUnitState {
     bool selected = false;
 };
 
+constexpr bool GameplayActionDispatchTargetAllowed(
+    const GameplayActionUnitState& unit, bool lifecycle_target_action) {
+    if (!unit.visible) {
+        return false;
+    }
+    if (lifecycle_target_action) {
+        return !unit.active && unit.runtime_state == 4 &&
+            (unit.runtime_flags & 4u) != 0;
+    }
+    // FUN_004e96ae scans the active list without filtering the command-dead
+    // bit.  Until migration to the lifecycle list, that one-frame target is
+    // still packetized by the ordinary action-5 path.
+    return unit.active;
+}
+
 struct GameplayPublishedAction {
     u32 subtype = 0;
     u32 player = 0;

@@ -80,6 +80,16 @@ if (BUILD_TESTING)
     add_test(NAME meat_tooltip_amount_regression
         COMMAND meat_tooltip_amount_regression
     )
+
+    add_executable(neutral_attack_target_regression
+        tests/neutral_attack_target_regression.cpp
+    )
+    target_include_directories(neutral_attack_target_regression PRIVATE
+        include
+    )
+    add_test(NAME neutral_attack_target_regression
+        COMMAND neutral_attack_target_regression
+    )
 endif()
 
 add_executable(ranker_rebuild WIN32

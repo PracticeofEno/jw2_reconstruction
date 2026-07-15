@@ -40,6 +40,7 @@ struct InputState {
     u32 mouse_button_mask = 0;
     u32 last_mouse_code = 0;
     bool pointer_motion_seen = false;
+    bool pointer_inside_client = false;
     bool left_button_down_seen = false;
     bool left_button_up_seen = false;
     bool right_button_down_seen = false;

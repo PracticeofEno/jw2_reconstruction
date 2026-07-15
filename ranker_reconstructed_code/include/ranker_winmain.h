@@ -3,6 +3,7 @@
 #include "ranker_types.h"
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -31,19 +32,30 @@ constexpr int kOriginalClientWidth = 800;
 constexpr int kOriginalClientHeight = 600;
 constexpr int kOriginalColorDepth = 16;
 
-constexpr i32 ScalePresentationCoordinateToLogical(
+constexpr bool PresentationCoordinateInsideClient(
+    i32 coordinate, i32 presentation_extent) {
+    return presentation_extent > 0 &&
+        coordinate >= 0 && coordinate < presentation_extent;
+}
+
+inline i32 ScalePresentationCoordinateToLogical(
     i32 coordinate, i32 presentation_extent, i32 logical_extent) {
     if (presentation_extent <= 0 || logical_extent <= 0) {
         return 0;
     }
-    if (coordinate <= 0) {
+    if (presentation_extent == 1 || logical_extent == 1) {
         return 0;
     }
-    if (coordinate >= presentation_extent) {
-        return logical_extent - 1;
-    }
-    return static_cast<i32>(
-        (static_cast<i64>(coordinate) * logical_extent) / presentation_extent);
+    // cnc-ddraw 7.1.0 stores mouse.unscale as float, multiplies in float, then
+    // calls roundf before its upper clamp.  Do not replace this with exact
+    // rational arithmetic: resizable widths such as 777 expose the float32
+    // rounding difference at individual hit-test pixels.
+    const i32 nonnegative = coordinate < 0 ? 0 : coordinate;
+    volatile float unscale = static_cast<float>(logical_extent - 1) /
+        static_cast<float>(presentation_extent - 1);
+    volatile float scaled = static_cast<float>(nonnegative) * unscale;
+    const i32 rounded = static_cast<i32>(std::roundf(scaled));
+    return rounded >= logical_extent ? logical_extent - 1 : rounded;
 }
 
 const OriginalRoutineRef* winmain_routine_map(std::size_t& count);

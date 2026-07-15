@@ -4846,9 +4846,11 @@ void default_gameplay_input_pre_cursor_update(GameplayInputActionState& state) {
     }
     // FUN_004ea3c9 runs even while the game window is inactive.  This matters
     // when original and reconstructed clients are compared side by side.  The
-    // validity bit only prevents the startup zero-filled InputState from
-    // masquerading as a real upper-left pointer sample; arrow keys remain live.
-    overlay.camera_edge_pointer_valid = input.pointer_motion_seen;
+    // The validity bit prevents both the startup zero-filled InputState and a
+    // captured pointer outside the client from masquerading as an exact edge;
+    // arrow keys remain live in either case.
+    overlay.camera_edge_pointer_valid =
+        input.pointer_motion_seen && input.pointer_inside_client;
     overlay.camera_left_key_down = input.key_down[VK_LEFT] != 0;
     overlay.camera_right_key_down = input.key_down[VK_RIGHT] != 0;
     overlay.camera_up_key_down = input.key_down[VK_UP] != 0;
@@ -5552,15 +5554,11 @@ bool default_gameplay_input_dispatch_action(
         const auto target = std::find_if(state.units.begin(), state.units.end(),
             [&state, lifecycle_target_action](
                 const GameplayActionUnitState& unit) {
-                if (unit.offset != state.last_validation_unit_offset ||
-                    !unit.visible) {
+                if (unit.offset != state.last_validation_unit_offset) {
                     return false;
                 }
-                if (lifecycle_target_action) {
-                    return !unit.active && unit.runtime_state == 4 &&
-                        (unit.runtime_flags & 4u) != 0;
-                }
-                return unit.active && unit.runtime_state < 4;
+                return GameplayActionDispatchTargetAllowed(
+                    unit, lifecycle_target_action);
             });
         if (target != state.units.end()) {
             target_unit_id = target->offset;
@@ -29027,17 +29025,33 @@ LPARAM logical_main_client_mouse_lparam(
     }
 
     RECT client{};
+    InputState& input = input_state();
     if (!GetClientRect(window, &client)) {
+        input.pointer_inside_client = false;
         return presentation_lparam;
     }
     const i32 presentation_width = client.right - client.left;
     const i32 presentation_height = client.bottom - client.top;
+    const i32 presentation_x =
+        signed_lparam_coord(presentation_lparam, 0);
+    const i32 presentation_y =
+        signed_lparam_coord(presentation_lparam, 16);
+    input.pointer_inside_client =
+        PresentationCoordinateInsideClient(
+            presentation_x, presentation_width) &&
+        PresentationCoordinateInsideClient(
+            presentation_y, presentation_height);
+    if (message == WM_MOUSEMOVE && input.pointer_inside_client) {
+        TRACKMOUSEEVENT tracking{};
+        tracking.cbSize = sizeof(tracking);
+        tracking.dwFlags = TME_LEAVE;
+        tracking.hwndTrack = window;
+        TrackMouseEvent(&tracking);
+    }
     const i32 logical_x = ScalePresentationCoordinateToLogical(
-        signed_lparam_coord(presentation_lparam, 0), presentation_width,
-        kOriginalClientWidth);
+        presentation_x, presentation_width, kOriginalClientWidth);
     const i32 logical_y = ScalePresentationCoordinateToLogical(
-        signed_lparam_coord(presentation_lparam, 16), presentation_height,
-        kOriginalClientHeight);
+        presentation_y, presentation_height, kOriginalClientHeight);
     return static_cast<LPARAM>(MAKELPARAM(
         static_cast<WORD>(logical_x), static_cast<WORD>(logical_y)));
 }
@@ -29547,6 +29561,13 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
             RefreshDirectDrawPresentationRect(window);
         }
         break;
+    case WM_MOUSELEAVE:
+    case WM_NCMOUSEMOVE:
+        // A bordered resizable window can leave the client without another
+        // client WM_MOUSEMOVE.  Clear the physical-inside gate so the last
+        // clamped logical edge does not scroll indefinitely over the frame.
+        input_state().pointer_inside_client = false;
+        break;
     case WM_ACTIVATEAPP:
         g_runtime.app_active = wparam != 0;
         if (!g_runtime.app_active) {
@@ -29560,6 +29581,7 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
             input.key_down[VK_RIGHT] = 0;
             input.key_down[VK_UP] = 0;
             input.key_down[VK_DOWN] = 0;
+            input.pointer_inside_client = false;
         }
         if (g_runtime.app_active && g_runtime.directx_initialized &&
             g_runtime.input_enabled) {
