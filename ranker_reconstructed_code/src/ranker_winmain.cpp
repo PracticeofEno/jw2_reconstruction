@@ -14053,10 +14053,10 @@ default_mode1_packet_production_order_definition_for_payload(u32 payload) {
 }
 
 ProductionOrderCheckResult default_mode1_packet_production_order_check_for_enqueue(
-    const UnitMovementUnit& unit, u32 payload) {
+    u32 owner, u32 payload) {
     ProductionOrderCheckResult result{};
     result.order_id = payload;
-    result.owner = unit.owner_id;
+    result.owner = owner;
     result.code = static_cast<u32>(ProductionOrderAvailabilityCode::locked);
     const ProductionOrderDefinition* definition =
         default_mode1_packet_production_order_definition_for_payload(payload);
@@ -14067,12 +14067,12 @@ ProductionOrderCheckResult default_mode1_packet_production_order_check_for_enque
     UnitCommandContext& command_context =
         prepare_default_mode1_packet_command_context();
     if (!default_mode1_packet_sync_production_resources_from_command_context(
-            command_context, unit.owner_id)) {
+            command_context, owner)) {
         return result;
     }
 
     return CheckProductionOrderAvailability(g_runtime.gameplay_production_runtime,
-        *definition, unit.owner_id);
+        *definition, owner);
 }
 
 u32 default_unit_production_requirement_message_code(
@@ -14094,27 +14094,22 @@ void queue_default_production_failure_feedback(u32 message_code) {
 }
 
 bool default_mode1_packet_commit_production_order_enqueue(
-    const UnitMovementUnit& unit, u32 payload) {
+    u32 owner, u32 payload) {
     const ProductionOrderDefinition* definition =
         default_mode1_packet_production_order_definition_for_payload(payload);
     if (definition == nullptr ||
         !DebitProductionOrderPrimaryCost(g_runtime.gameplay_production_runtime,
-            *definition, unit.owner_id)) {
+            *definition, owner)) {
         return false;
     }
 
-    if (unit.owner_id < g_runtime.gameplay_production_runtime.lock_flags.size() &&
+    if (owner < g_runtime.gameplay_production_runtime.lock_flags.size() &&
         definition->id < kProductionOrderCount) {
-        g_runtime.gameplay_production_runtime.lock_flags[unit.owner_id]
-            [definition->id] |= 2u;
+        g_runtime.gameplay_production_runtime.lock_flags[owner][definition->id] |=
+            2u;
     }
-    default_mode1_packet_sync_owner_from_production_runtime(unit.owner_id);
+    default_mode1_packet_sync_owner_from_production_runtime(owner);
     return true;
-}
-
-bool default_mode1_packet_commit_production_order_before_push(
-    UnitMovementUnit& unit, u32 payload, void*) {
-    return default_mode1_packet_commit_production_order_enqueue(unit, payload);
 }
 
 void default_mode1_packet_refund_production_order(
@@ -14581,15 +14576,23 @@ bool default_mode1_packet_set_unit_deferred_resource_command(void*,
         // HandleSubtype0cPlacementResourcePacket treats only raw +0x18 == 1
         // as cancellation.  Enqueue mode is every other value, including
         // zero: many original upgrades have a zero secondary-resource cost.
+        // Original 0x004dcf81 loads EBX from packet byte +0x0c and uses EBX
+        // for availability, debit, and lock indexing.  It does not substitute
+        // the referenced unit's owner for this enqueue path.
+        const u32 production_order_owner =
+            ResolveProductionOrderPacketEnqueueOwner(source_channel);
         const ProductionOrderCheckResult check =
             default_mode1_packet_production_order_check_for_enqueue(
-                *unit, payload);
+                production_order_owner, payload);
         if (!check.available) {
             // HandleSubtype0cPlacementResourcePacket rechecks after packet
             // ordering.  A same-frame debit can make this fail even though
             // the sender-side click gate passed; resource failures still use
             // the common message and queued slot-two error cue.
-            if (check.code <= 1) {
+            // Original 0x004dcf93 jumps directly to the raw-code test at
+            // 0x004dcfc4.  That failure edge bypasses the local-owner compare
+            // at 0x004dcfb8, so subtype 0x0c reports codes 0/1 on every peer.
+            if (IsProductionOrderPacketResourceFailureFeedbackCode(check.code)) {
                 queue_default_production_failure_feedback(check.code);
             }
             return false;
@@ -14682,8 +14685,10 @@ bool default_mode1_packet_set_unit_deferred_resource_command(void*,
         static_cast<i32>(arg1),
         arg2};
     if (production_order_resource) {
-        if (!default_mode1_packet_commit_production_order_before_push(
-                *unit, payload, nullptr)) {
+        const u32 production_order_owner =
+            ResolveProductionOrderPacketEnqueueOwner(source_channel);
+        if (!default_mode1_packet_commit_production_order_enqueue(
+                production_order_owner, payload)) {
             return false;
         }
         const bool queued = PushDeferredUnitCommand(*unit, command, 10);

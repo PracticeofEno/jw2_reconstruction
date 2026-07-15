@@ -25,6 +25,22 @@ enum class ProductionOrderAvailabilityCode : u32 {
     locked = 0x10,
 };
 
+// Subtype 0x0c carries the authoritative resource owner in packet byte +0x0c.
+// The referenced unit owner is intentionally not part of this decision.
+constexpr u32 ResolveProductionOrderPacketEnqueueOwner(u8 source_channel) {
+    return static_cast<u32>(source_channel);
+}
+
+// Unlike the ordinary production path, subtype 0x0c's receive-side failure
+// branch reports raw resource codes on every peer.  Its jump at 0x004dcf93
+// reaches the code check directly and bypasses the nearby local-owner compare.
+constexpr bool IsProductionOrderPacketResourceFailureFeedbackCode(
+    u32 availability_code) {
+    return availability_code <=
+        static_cast<u32>(
+            ProductionOrderAvailabilityCode::missing_secondary_resource);
+}
+
 struct ProductionOrderCostRule {
     i32 base = 0;
     u32 mode = 0;

@@ -173,6 +173,16 @@ if (BUILD_TESTING)
         COMMAND meat_pipeline_regression
     )
 
+    add_executable(production_order_packet_owner_regression
+        tests/production_order_packet_owner_regression.cpp
+    )
+    target_include_directories(production_order_packet_owner_regression PRIVATE
+        include
+    )
+    add_test(NAME production_order_packet_owner_regression
+        COMMAND production_order_packet_owner_regression
+    )
+
     add_executable(gameplay_hotkey_regression
         tests/gameplay_hotkey_regression.cpp
         src/ranker_input.cpp
