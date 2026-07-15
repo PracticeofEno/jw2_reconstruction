@@ -1,3 +1,7 @@
+#include "ranker_directx.h"
+#include "ranker_runtime_resources.h"
+#include "ranker_sprite_renderer.h"
+#include "ranker_system_ui.h"
 #include "ranker_text_renderer.h"
 #include "ranker_ui_overlay.h"
 
@@ -9,12 +13,65 @@
 
 namespace ranker {
 
+i32 g_progress_fill_left = 0;
+i32 g_progress_fill_top = 0;
+i32 g_progress_fill_right = 0;
+i32 g_progress_fill_bottom = 0;
+u16 g_progress_fill_color = 0;
+u32 g_progress_fill_count = 0;
+
 bool SurfacePixelMode555() {
     return false;
 }
 
 bool DrawResourceSpriteNormal(u32, i32, i32) {
     return false;
+}
+
+bool DrawResourceSpriteDirectToken1Shadow(u32, i32, i32) {
+    return false;
+}
+
+u32 GetUnitDefinitionImageResourceEntry(u32, u32) {
+    return kInvalidResourceEntry;
+}
+
+const SpriteRenderState& sprite_render_state() {
+    static const SpriteRenderState state{};
+    return state;
+}
+
+RankerSystemUiState& system_ui_state() {
+    static RankerSystemUiState state{};
+    return state;
+}
+
+bool InitializeWin32UiFontMetrics(HDC) {
+    return false;
+}
+
+void InitializeUiFontHandles() {
+}
+
+const DirectDrawRuntimeState& direct_draw_state() {
+    static const DirectDrawRuntimeState state{};
+    return state;
+}
+
+const CommandThemeResourceState& command_theme_resource_state() {
+    static const CommandThemeResourceState state{};
+    return state;
+}
+
+bool DrawBackBufferStippledRectangle16(
+    i32 left, i32 top, i32 right, i32 bottom, u16 color) {
+    g_progress_fill_left = left;
+    g_progress_fill_top = top;
+    g_progress_fill_right = right;
+    g_progress_fill_bottom = bottom;
+    g_progress_fill_color = color;
+    ++g_progress_fill_count;
+    return true;
 }
 
 } // namespace ranker
@@ -50,6 +107,13 @@ const UiOverlayTextCommand& text_for(
     require(found != state.text_commands.end(),
         "expected top-right HUD text command is missing");
     return *found;
+}
+
+const UiOverlayProgressCommand& only_progress_command(
+    const UiOverlayState& state) {
+    require(state.progress_commands.size() == 1,
+        "selected construction must retain one diagnostic progress command");
+    return state.progress_commands.front();
 }
 
 UiOverlayState make_tyrano_state(u32 width, u32 height, u32 theme) {
@@ -172,6 +236,141 @@ void verify_top_right_hud(u32 width, u32 height, u32 theme, u32 bucket) {
     }
 }
 
+void verify_selected_construction_info(
+    u32 width, u32 height, u32 theme, u32 bucket) {
+    UiOverlayState state{};
+    state.screen_width = width;
+    state.screen_height = height;
+    state.interface_theme_index = theme;
+    state.current_detail_item_id = 0x82;
+    state.selected_unit_count = 1;
+    state.selected_unit_id = 0x1d0;
+    state.selected_unit_type = 0x82;
+    state.selected_unit_owner = 2;
+    state.local_player_slot = 2;
+    state.selected_unit_health = 37;
+    state.selected_unit_health_ratio_max = 100;
+    state.selected_unit_health_text_color = 0x11;
+    state.selected_unit_name_text = "CONSTRUCTION";
+    state.selected_unit_details_visible = true;
+    state.selected_unit_action_mode_gate = 1;
+    state.detail_progress = 73;
+    state.detail_progress_total = 200;
+    state.emit_sprite_draws = false;
+    ConfigureGameplayUiOverlayLayout(state);
+
+    // Dispatch record 0x1a6 temporarily uses this fixed wide-slot anchor.
+    state.large_slot_x = state.wide_slot_bounds.x;
+    state.large_slot_y = state.wide_slot_bounds.y;
+    RenderSelectedUnitInfoPanel(state);
+
+    const UiOverlayTextCommand& health = text_for(state, "37/100");
+    require(health.x == 44 && health.y == 576 && health.color == 0x11 &&
+            health.draw_font == 1 && health.metric_font == 3 &&
+            health.centered,
+        "construction HP position/color/font differs from FUN_004e1544");
+    const UiOverlayTextCommand& name = text_for(state, "CONSTRUCTION");
+    require(name.x == 75 && name.y == 519 && name.color == 1 &&
+            name.draw_font == 4 && name.metric_font == 4 &&
+            !name.centered,
+        "construction name position/color/font differs from FUN_004e1544");
+
+    constexpr std::array<UiOverlayRect, 3> kOriginalProgressBounds{{
+        {77, 433, 98, 2}, {129, 537, 126, 2}, {77, 433, 98, 2},
+    }};
+    const UiOverlayRect expected = kOriginalProgressBounds[bucket];
+    const UiOverlayProgressCommand& progress = only_progress_command(state);
+    require(progress.left == expected.x && progress.top == expected.y &&
+            progress.right == expected.x + static_cast<i32>(expected.width) &&
+            progress.bottom == expected.y + static_cast<i32>(expected.height),
+        "construction progress endpoints differ from DAT_008642dc");
+    require(progress.numerator == 73 && progress.denominator == 200,
+        "construction progress numerator/denominator were not preserved");
+
+    // A completed record leaves its diagnostic command in the vector even
+    // after immediate drawing.  A live empty snapshot can therefore only be
+    // a sample taken in reset_frame_output_commands()'s short clear window.
+    require(state.progress_commands.size() == 1,
+        "selected-info diagnostic progress stream was cleared after rendering");
+
+    // Exercise the real 0x1a6 immediate-flush path as well.  The 565 fixture
+    // must derive the original three-quarter green and use inclusive fill
+    // endpoints after floor(width * numerator / denominator).
+    state.text_commands.clear();
+    state.progress_commands.clear();
+    state.text_command_flushed.clear();
+    state.progress_command_flushed.clear();
+    state.emit_sprite_draws = true;
+    InstallDefaultUiOverlayDispatchHandlers(state);
+    UiOverlayDrawRecord selected_record{};
+    selected_record.item_id = 0x1a6;
+    g_progress_fill_count = 0;
+    require(DispatchUiOverlayDrawRecord(state, selected_record),
+        "selected-info dispatch record was rejected");
+    const i32 fill_width = static_cast<i32>(
+        (static_cast<u64>(expected.width) * 73u) / 200u);
+    require(g_progress_fill_count == 1 &&
+            g_progress_fill_left == expected.x &&
+            g_progress_fill_top == expected.y &&
+            g_progress_fill_right == expected.x + fill_width &&
+            g_progress_fill_bottom ==
+                expected.y + static_cast<i32>(expected.height) &&
+            g_progress_fill_color == 0x05e0,
+        "construction progress fill endpoint/color differs from FUN_004e1544");
+    require(state.progress_commands.size() == 1 &&
+            state.progress_command_flushed.size() == 1 &&
+            state.progress_command_flushed.front() == 1,
+        "immediate progress draw must preserve and mark its diagnostic command");
+}
+
+void verify_construction_hides_production_buttons(
+    u32 width, u32 height, u32 theme, u32 bucket) {
+    UiOverlayState state{};
+    state.screen_width = width;
+    state.screen_height = height;
+    state.interface_theme_index = theme;
+    state.selected_unit_count = 1;
+    state.selected_unit_id = 0x1d0;
+    state.selected_unit_type = 0x82;
+    state.selected_unit_owner = 2;
+    state.local_player_slot = 2;
+    state.selected_unit_action_mode_gate = 1;
+    state.selected_unit_command_bit_mask = 0xffffffffu;
+    state.selected_unit_raw_production_reference_count = 2;
+    state.primary_production_options.push_back({0x20, 0, 0, 0, 0, true});
+    state.primary_production_options.push_back({0x2c, 0, 0, 0, 0, true});
+    state.command_options.push_back({0x108, 0, 0, 0, 0, true});
+    ConfigureGameplayUiOverlayLayout(state);
+    BuildSelectedUnitCommandPanel(state);
+
+    const auto count_item = [&state](u32 item) {
+        return static_cast<std::size_t>(std::count_if(
+            state.queued_records.begin(), state.queued_records.end(),
+            [item](const UiOverlayDrawRecord& record) {
+                return record.item_id == item;
+            }));
+    };
+    require(count_item(0x1a6) == 1,
+        "construction panel must retain the selected-info record");
+    require(count_item(0xc6) == 1,
+        "construction panel must expose exactly one large cancel button");
+    require(count_item(0x20) == 0 && count_item(0x2c) == 0 &&
+            count_item(0x108) == 0,
+        "ordinary production/upgrade buttons leaked into construction mode");
+
+    const UiOverlayDrawRecord& cancel = record_for(state, 0xc6);
+    const std::array<UiOverlayRect, 3> expected_cancel{{
+        {373, 421, 50, 50}, {468, 530, 50, 50}, {373, 421, 50, 50},
+    }};
+    const UiOverlayRect expected = expected_cancel[bucket];
+    require(cancel.aux == 3 && cancel.flags == 0 &&
+            cancel.x == expected.x && cancel.y == expected.y &&
+            cancel.width == expected.width && cancel.height == expected.height,
+        "construction cancel button differs from FUN_004e4e93/FUN_004e5762");
+    require(state.queued_records.size() == 5,
+        "construction panel must contain defaults, selected info, and cancel only");
+}
+
 }  // namespace
 
 int main() {
@@ -185,8 +384,13 @@ int main() {
                 widths[bucket], heights[bucket], theme, bucket);
             verify_top_right_hud(
                 widths[bucket], heights[bucket], theme, bucket);
+            verify_selected_construction_info(
+                widths[bucket], heights[bucket], theme, bucket);
+            verify_construction_hides_production_buttons(
+                widths[bucket], heights[bucket], theme, bucket);
         }
     }
-    std::cout << "TYRANO_HUD_ROWS_PASS buckets=3 themes=4 draw_hit=exact font=1\n";
+    std::cout << "TYRANO_HUD_ROWS_PASS buckets=3 themes=4 draw_hit=exact "
+                 "font=1 construction_info=exact production_hidden\n";
     return EXIT_SUCCESS;
 }
