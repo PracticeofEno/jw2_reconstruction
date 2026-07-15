@@ -14,6 +14,9 @@ ranker_reconstructed_code/*
 !ranker_reconstructed_code/resources/**
 !ranker_reconstructed_code/src/
 !ranker_reconstructed_code/src/**
+!ranker_reconstructed_code/tests/
+ranker_reconstructed_code/tests/*
+!ranker_reconstructed_code/tests/production_order_rule_wrap_regression.cpp
 !ranker_reconstructed_code/third_party/
 !ranker_reconstructed_code/third_party/**
 

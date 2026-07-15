@@ -27,6 +27,24 @@ constexpr std::array<std::size_t, kProductionOrderCompletionEffectCount>
         0x394, 0x3ac, 0x3c4, 0x3dc, 0x3f4, 0x40c,
     };
 
+constexpr i32 signed_i32_from_u32(u32 value) {
+    // A cast above INT32_MAX is implementation-defined in C++.  The original
+    // x86 code simply keeps the low DWORD and subsequently interprets it as a
+    // signed value, so spell out that two's-complement interpretation.
+    return value <= 0x7fffffffu ? static_cast<i32>(value) :
+        -1 - static_cast<i32>(0xffffffffu - value);
+}
+
+constexpr i32 wrapped_i32_add(i32 lhs, i32 rhs) {
+    return signed_i32_from_u32(
+        static_cast<u32>(lhs) + static_cast<u32>(rhs));
+}
+
+constexpr i32 wrapped_i32_multiply(i32 lhs, i32 rhs) {
+    return signed_i32_from_u32(
+        static_cast<u32>(lhs) * static_cast<u32>(rhs));
+}
+
 u32 read_le_u32(const u8* data) {
     return static_cast<u32>(data[0]) |
         (static_cast<u32>(data[1]) << 8) |
@@ -35,7 +53,7 @@ u32 read_le_u32(const u8* data) {
 }
 
 i32 read_le_i32(const u8* data) {
-    return static_cast<i32>(read_le_u32(data));
+    return signed_i32_from_u32(read_le_u32(data));
 }
 
 bool has_range(std::size_t size, std::size_t offset, std::size_t bytes) {
@@ -97,10 +115,6 @@ bool has_prerequisites(const ProductionOrderRuntimeState& state,
     return true;
 }
 
-u32 positive_cost(i32 value) {
-    return value > 0 ? static_cast<u32>(value) : 0;
-}
-
 ProductionOrderCostRule read_cost_rule(const u8* record, std::size_t offset) {
     ProductionOrderCostRule rule{};
     rule.base = read_le_i32(record + offset);
@@ -117,27 +131,40 @@ ProductionOrderCostRule read_cost_rule(const u8* record, std::size_t offset) {
 
 i32 CalculateProductionOrderRuleValue(const ProductionOrderCostRule& rule, u32 variant) {
     i32 value = rule.base;
-    const i32 signed_variant = static_cast<i32>(variant);
+    const i32 signed_variant = signed_i32_from_u32(variant);
     switch (rule.mode) {
     case 0:
         break;
     case 1:
-        value += rule.linear * signed_variant;
+        value = wrapped_i32_add(value,
+            wrapped_i32_multiply(rule.linear, signed_variant));
         break;
     case 2:
-        value += rule.linear * signed_variant + rule.extra;
+        value = wrapped_i32_add(wrapped_i32_add(value,
+            wrapped_i32_multiply(rule.linear, signed_variant)), rule.extra);
         break;
     case 3:
         if (rule.extra != 0) {
-            value += rule.linear * (signed_variant / rule.extra);
+            // 0043b5e6 uses CDQ/IDIV, so division remains signed and truncates
+            // toward zero.  The surrounding IMUL/ADD instructions retain only
+            // their low DWORD just like the explicit wrappers here.
+            const i32 quotient = signed_variant / rule.extra;
+            value = wrapped_i32_add(value,
+                wrapped_i32_multiply(rule.linear, quotient));
         }
         break;
     case 4: {
         i32 triangular = 0;
-        for (u32 index = 1; index <= variant; ++index) {
-            triangular += rule.extra * static_cast<i32>(index);
+        // 0043b613..0043b619 compares the loop index and variant with JG,
+        // i.e. as signed DWORDs.  This also makes a high-bit variant skip the
+        // accumulation instead of attempting billions of unsigned steps.
+        for (i32 index = 1; index <= signed_variant;
+             index = wrapped_i32_add(index, 1)) {
+            triangular = wrapped_i32_add(triangular,
+                wrapped_i32_multiply(rule.extra, index));
         }
-        value += rule.linear * signed_variant + triangular;
+        value = wrapped_i32_add(wrapped_i32_add(value,
+            wrapped_i32_multiply(rule.linear, signed_variant)), triangular);
         break;
     }
     default:
@@ -147,12 +174,18 @@ i32 CalculateProductionOrderRuleValue(const ProductionOrderCostRule& rule, u32 v
 }
 
 u32 CalculateProductionOrderCost(const ProductionOrderCostRule& rule, u32 variant) {
-    return positive_cost(CalculateProductionOrderRuleValue(rule, variant));
+    // CheckProductionOrderAvailability (0x004ec0d7/0x004ec0f4) compares each
+    // returned DWORD to the owner's resource DWORD with CMP/JC.  Negative rule
+    // results are therefore large unsigned costs, not zero-cost orders.
+    return static_cast<u32>(CalculateProductionOrderRuleValue(rule, variant));
 }
 
 u32 CalculateProductionOrderDuration(const ProductionOrderDefinition& definition,
     u32 variant) {
-    return positive_cost(CalculateProductionOrderRuleValue(definition.duration_ticks, variant));
+    // ProcessProductionOrderProgressTick (0x00439d5b..0x00439d64) compares the
+    // raw duration DWORD to progress with CMP/JA, completing on unsigned <=.
+    return static_cast<u32>(
+        CalculateProductionOrderRuleValue(definition.duration_ticks, variant));
 }
 
 void ResetProductionOrderRuntimeState(ProductionOrderRuntimeState& state) {
