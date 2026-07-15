@@ -82,6 +82,40 @@ if (BUILD_TESTING)
         COMMAND under_attack_sound_regression
     )
 
+    add_executable(gameplay_resource_sound_branch_regression
+        tests/gameplay_resource_sound_branch_regression.cpp
+        src/ranker_gameplay_frame_render.cpp
+        src/ranker_gameplay_sound.cpp
+        src/ranker_map_effects.cpp
+        src/ranker_production_orders.cpp
+        src/ranker_unit_commands.cpp
+        src/ranker_unit_damage.cpp
+        src/ranker_unit_equipment.cpp
+        src/ranker_unit_movement.cpp
+    )
+    target_include_directories(gameplay_resource_sound_branch_regression PRIVATE
+        include
+    )
+    set_property(TARGET gameplay_resource_sound_branch_regression PROPERTY
+        INTERPROCEDURAL_OPTIMIZATION TRUE
+    )
+    if (MSVC)
+        target_compile_options(gameplay_resource_sound_branch_regression PRIVATE /Gy)
+        target_link_options(gameplay_resource_sound_branch_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(gameplay_resource_sound_branch_regression PRIVATE
+            -O1
+            -ffunction-sections
+            -fdata-sections
+        )
+        target_link_options(gameplay_resource_sound_branch_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME gameplay_resource_sound_branch_regression
+        COMMAND gameplay_resource_sound_branch_regression
+    )
+
     add_executable(meat_tooltip_amount_regression
         tests/meat_tooltip_amount_regression.cpp
     )
@@ -181,6 +215,29 @@ if (BUILD_TESTING)
     )
     add_test(NAME production_order_packet_owner_regression
         COMMAND production_order_packet_owner_regression
+    )
+
+    add_executable(production_order_rule_wrap_regression
+        tests/production_order_rule_wrap_regression.cpp
+        src/ranker_production_orders.cpp
+    )
+    target_include_directories(production_order_rule_wrap_regression PRIVATE
+        include
+    )
+    if (MSVC)
+        target_compile_options(production_order_rule_wrap_regression PRIVATE /Gy)
+        target_link_options(production_order_rule_wrap_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(production_order_rule_wrap_regression PRIVATE
+            -ffunction-sections
+            -fdata-sections
+        )
+        target_link_options(production_order_rule_wrap_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME production_order_rule_wrap_regression
+        COMMAND production_order_rule_wrap_regression
     )
 
     add_executable(selected_health_text_color_regression
