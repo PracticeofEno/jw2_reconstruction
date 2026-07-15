@@ -487,7 +487,7 @@ const ProductionOrderRuntimeState& movement_production_state_or_empty(
 
 i32 movement_additional_modifier_for_unit(const UnitMovementContext& context,
     const UnitMovementUnit& unit) {
-    return (unit.runtime_flags & 0x10000u) != 0 ?
+    return (unit.command_flags & 0x10000u) != 0 ?
         context.additional_movement_modifier : 0;
 }
 

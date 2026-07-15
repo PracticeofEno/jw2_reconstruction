@@ -4861,10 +4861,12 @@ void default_gameplay_input_pre_cursor_update(GameplayInputActionState& state) {
     // arrow keys remain live in either case.
     overlay.camera_edge_pointer_valid =
         input.pointer_motion_seen && input.pointer_inside_client;
-    overlay.camera_left_key_down = input.key_down[VK_LEFT] != 0;
-    overlay.camera_right_key_down = input.key_down[VK_RIGHT] != 0;
-    overlay.camera_up_key_down = input.key_down[VK_UP] != 0;
-    overlay.camera_down_key_down = input.key_down[VK_DOWN] != 0;
+    const InputCameraDirectionState camera_keys =
+        ResolveSet1CameraDirectionState(input);
+    overlay.camera_left_key_down = camera_keys.left;
+    overlay.camera_right_key_down = camera_keys.right;
+    overlay.camera_up_key_down = camera_keys.up;
+    overlay.camera_down_key_down = camera_keys.down;
     ScrollCameraFromEdgeOrKeys(overlay);
     if (overlay.camera_scroll_dirty) {
         state.cursor_index = overlay.camera_edge_cursor_index;
@@ -7450,6 +7452,7 @@ void default_gameplay_startup_initialize_local_camera(i32 x, i32 y) {
     UiOverlayState& overlay = ui_overlay_state();
     ConfigureGameplayUiOverlayLayout(overlay);
     ClampCameraToMinimapPoint(overlay, x, y);
+    SeedInitialCameraBookmark(overlay);
     publish_default_ui_overlay_camera(overlay);
 
     GameplayHudAlertMarkerState& markers = g_runtime.gameplay_hud_alert_markers;
@@ -12991,7 +12994,7 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
     initialize_default_unit_effect_runtime_from_session_records();
     g_runtime.gameplay_action_damage_profiles = UnitActionDamageProfileTable{};
     g_runtime.gameplay_action_damage_profiles_initialized = false;
-    ResetUiOverlayState();
+    ResetUiOverlayStatePreservingSessionCamera();
     if (UnitMovementContext* movement = default_gameplay_movement_context()) {
         // Record-7 load/rejoin units are fully materialized before this
         // callback.  Capture their persistent raw +0x08 group nibble before
@@ -22195,6 +22198,7 @@ void default_unit_command_dispatch_attack(UnitCommandContext& context,
         };
     const auto path_point_to_state = [&](i32 x, i32 y, u32 state, bool set_path_flag) {
         unit.target = nullptr;
+        unit.command_value = 0;
         unit.path_target_x = x;
         unit.path_target_y = y;
         if (context.movement != nullptr) {
@@ -22245,12 +22249,9 @@ void default_unit_command_dispatch_attack(UnitCommandContext& context,
                 kUnitStateGuardReturnTravel, true);
             return true;
         case kUnitStatePatrolReturnCombat:
-            path_point_to_state(unit.anchor_x, unit.anchor_y,
-                kUnitStatePatrolReturnLeg, true);
-            return true;
         case kUnitStatePatrolOutboundCombat:
-            path_point_to_state(unit.destination_x, unit.destination_y,
-                kUnitStatePatrolOutboundLeg, true);
+            ResumeUnitPatrolRouteAfterCombatTargetLoss(
+                context, unit, command_state);
             return true;
         default:
             return false;
@@ -22379,15 +22380,15 @@ void default_unit_command_dispatch_attack(UnitCommandContext& context,
         const u32 leg_state = command_state == kUnitStatePatrolReturnCombat
             ? kUnitStatePatrolReturnLeg
             : kUnitStatePatrolOutboundLeg;
-        UnitMovementUnit* replacement = find_valid_replacement();
+        // FindBestUnitTargetUsingSpatialIndex returns the raw candidate before
+        // FUN_004c1e85 applies its action/range result.  In particular,
+        // distance_check_mode 1 must retain and approach that candidate.
+        UnitMovementUnit* replacement = context.callbacks.find_target != nullptr
+            ? context.callbacks.find_target(context, unit)
+            : nullptr;
         if (replacement == nullptr) {
-            const i32 route_x = command_state == kUnitStatePatrolReturnCombat
-                ? unit.anchor_x
-                : unit.destination_x;
-            const i32 route_y = command_state == kUnitStatePatrolReturnCombat
-                ? unit.anchor_y
-                : unit.destination_y;
-            path_point_to_state(route_x, route_y, leg_state, true);
+            ResumeUnitPatrolRouteAfterCombatTargetLoss(
+                context, unit, command_state);
             return;
         }
         SetUnitCommandTarget(unit, replacement);

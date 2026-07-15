@@ -52,24 +52,87 @@ void test_scan_code_and_modifier_pipeline() {
     HandleKeyDown(0x11u, 0x1du); // Ctrl
     assert(input_state().ctrl_down && input_state().key_down[0x11] == 1);
     assert(input_state().events[0].code == 0x1du);
-    HandleKeyUp(0x11u);
+    HandleKeyUp(0x11u, 0x1du);
     assert(!input_state().ctrl_down);
 
     HandleKeyDown(0x10u, 0x2au); // Shift
     assert(input_state().shift_down);
-    HandleKeyUp(0x10u);
+    HandleKeyUp(0x10u, 0x2au);
     assert(!input_state().shift_down);
 
     HandleKeyDown(0x12u, 0x38u); // Alt
     assert(input_state().alt_down);
-    HandleKeyUp(0x12u);
+    HandleKeyUp(0x12u, 0x38u);
     assert(!input_state().alt_down);
 
     HandleKeyDown(0x25u, 0x4bu); // VK_LEFT + physical scan
     assert(input_state().key_down[0x25] == 1);
+    assert(input_state().set1_scan_down[0x4b] == 1);
     assert(input_state().events[3].code == 0x4bu);
-    HandleKeyUp(0x25u);
+    HandleKeyUp(0x25u, 0x4bu);
     assert(input_state().key_down[0x25] == 0);
+    assert(input_state().set1_scan_down[0x4b] == 0);
+}
+
+bool camera_direction_held(const InputCameraDirectionState& directions,
+    u32 direction) {
+    switch (direction) {
+    case 0: return directions.left;
+    case 1: return directions.right;
+    case 2: return directions.up;
+    case 3: return directions.down;
+    default: return false;
+    }
+}
+
+void test_set1_extended_and_numlock_keypad_arrows_press_release() {
+    struct ArrowCase {
+        u32 extended_vk;
+        u32 keypad_vk;
+        u32 scan;
+    };
+    constexpr std::array<ArrowCase, 4> cases{{
+        {0x25u, 0x64u, kSet1ScanArrowLeft},  // Left / Numpad 4
+        {0x27u, 0x66u, kSet1ScanArrowRight}, // Right / Numpad 6
+        {0x26u, 0x68u, kSet1ScanArrowUp},    // Up / Numpad 8
+        {0x28u, 0x62u, kSet1ScanArrowDown},  // Down / Numpad 2
+    }};
+
+    for (u32 direction = 0; direction < cases.size(); ++direction) {
+        const ArrowCase& arrow = cases[direction];
+        const u32 scan_lparam = arrow.scan << 16;
+
+        // Extended cursor keys and the corresponding NumLock-on keypad keys
+        // have different VKs but the same set-1 scan byte in the original.
+        input_state() = InputState{};
+        assert(HandleWindowInputMessage(
+            0x0100u, arrow.extended_vk, scan_lparam | 0x01000000u));
+        assert(input_state().key_down[arrow.extended_vk] == 1);
+        assert(input_state().set1_scan_down[arrow.scan] == 1);
+        assert(camera_direction_held(
+            ResolveSet1CameraDirectionState(input_state()), direction));
+        assert(HandleWindowInputMessage(
+            0x0101u, arrow.extended_vk, scan_lparam | 0x01000000u));
+        assert(input_state().key_down[arrow.extended_vk] == 0);
+        assert(input_state().set1_scan_down[arrow.scan] == 0);
+        assert(!camera_direction_held(
+            ResolveSet1CameraDirectionState(input_state()), direction));
+
+        input_state() = InputState{};
+        assert(HandleWindowInputMessage(
+            0x0100u, arrow.keypad_vk, scan_lparam));
+        assert(input_state().key_down[arrow.keypad_vk] == 1);
+        assert(input_state().key_down[arrow.extended_vk] == 0);
+        assert(input_state().set1_scan_down[arrow.scan] == 1);
+        assert(camera_direction_held(
+            ResolveSet1CameraDirectionState(input_state()), direction));
+        assert(HandleWindowInputMessage(
+            0x0101u, arrow.keypad_vk, scan_lparam));
+        assert(input_state().key_down[arrow.keypad_vk] == 0);
+        assert(input_state().set1_scan_down[arrow.scan] == 0);
+        assert(!camera_direction_held(
+            ResolveSet1CameraDirectionState(input_state()), direction));
+    }
 }
 
 void test_focus_loss_releases_every_held_key_and_modifier() {
@@ -84,6 +147,9 @@ void test_focus_loss_releases_every_held_key_and_modifier() {
     ClearInputHeldKeysForFocusLoss();
 
     for (u8 down : input_state().key_down) {
+        assert(down == 0);
+    }
+    for (u8 down : input_state().set1_scan_down) {
         assert(down == 0);
     }
     assert(!input_state().shift_down);
@@ -101,6 +167,7 @@ void test_atomic_held_key_bytes_preserve_layout_and_value_semantics() {
     InputState source{};
     source.key_down[0x10] = 1;
     source.key_down[0x25] = 1;
+    source.set1_scan_down[kSet1ScanArrowLeft] = 1;
     source.shift_down = true;
     source.ctrl_down = true;
 
@@ -110,6 +177,7 @@ void test_atomic_held_key_bytes_preserve_layout_and_value_semantics() {
     source.ctrl_down = false;
     assert(copied.key_down[0x10] == 1);
     assert(copied.key_down[0x25] == 1);
+    assert(copied.set1_scan_down[kSet1ScanArrowLeft] == 1);
     assert(copied.shift_down);
     assert(copied.ctrl_down);
 
@@ -117,6 +185,7 @@ void test_atomic_held_key_bytes_preserve_layout_and_value_semantics() {
     assigned = copied;
     assert(assigned.key_down[0x10] == 1);
     assert(assigned.key_down[0x25] == 1);
+    assert(assigned.set1_scan_down[kSet1ScanArrowLeft] == 1);
     assert(assigned.shift_down);
     assert(assigned.ctrl_down);
 }
@@ -146,7 +215,7 @@ void test_window_key_writes_are_safe_during_gameplay_live_reads() {
     }
     for (u32 transition = 0; transition < kTransitionCount; ++transition) {
         HandleKeyDown(0x10u, 0x2au);
-        HandleKeyUp(0x10u);
+        HandleKeyUp(0x10u, 0x2au);
         if ((transition & 0xffu) == 0) {
             std::this_thread::yield();
         }
@@ -307,6 +376,7 @@ void test_keyboard_routes_and_wm_char_deduplication() {
 
 int main() {
     test_scan_code_and_modifier_pipeline();
+    test_set1_extended_and_numlock_keypad_arrows_press_release();
     test_focus_loss_releases_every_held_key_and_modifier();
     test_atomic_held_key_bytes_preserve_layout_and_value_semantics();
     test_window_key_writes_are_safe_during_gameplay_live_reads();

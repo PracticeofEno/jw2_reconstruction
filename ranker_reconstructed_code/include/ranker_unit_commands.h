@@ -1053,6 +1053,8 @@ void ProcessWorkerReservedHarvestWait(UnitCommandContext& context, UnitMovementU
 void StartUnitPatrolRouteCommand(UnitCommandContext& context, UnitMovementUnit& unit);
 void HandleUnitPatrolReturnLeg(UnitCommandContext& context, UnitMovementUnit& unit);
 void HandleUnitPatrolOutboundLeg(UnitCommandContext& context, UnitMovementUnit& unit);
+void ResumeUnitPatrolRouteAfterCombatTargetLoss(UnitCommandContext& context,
+    UnitMovementUnit& unit, u32 combat_state);
 void HandleUnitPatrolReturnCombatTarget(UnitCommandContext& context,
     UnitMovementUnit& unit);
 void HandleUnitPatrolOutboundCombatTarget(UnitCommandContext& context,

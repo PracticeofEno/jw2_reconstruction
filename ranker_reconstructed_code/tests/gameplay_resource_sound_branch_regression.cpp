@@ -367,6 +367,120 @@ void test_neutral_hit_rng_order() {
         "rejected neutral hit consumed group-zero sound RNG");
 }
 
+UnitMovementUnit* g_patrol_candidate = nullptr;
+
+UnitMovementUnit* find_patrol_candidate(UnitCommandContext&,
+    UnitMovementUnit&) {
+    return g_patrol_candidate;
+}
+
+bool reject_patrol_action_target(UnitCommandContext&,
+    UnitMovementUnit&, UnitMovementUnit&) {
+    return false;
+}
+
+void test_patrol_route_payload_and_saved_origin() {
+    UnitCommandContext context{};
+    UnitMovementUnit unit{};
+    UnitMovementUnit stale_target{};
+    unit.x = 100;
+    unit.y = 120;
+    unit.destination_x = 17;
+    unit.destination_y = 19;
+    unit.anchor_x = 31;
+    unit.anchor_y = 37;
+    unit.command_value = 0xfeedu;
+    unit.active_command_payload.y = 500;
+    unit.active_command_payload.value = static_cast<u32>(-600);
+
+    StartUnitPatrolRouteCommand(context, unit);
+    require(unit.destination_x == 100 && unit.destination_y == 120,
+        "patrol start did not save raw +0x78/+0x7c route origin");
+    require(unit.anchor_x == 31 && unit.anchor_y == 37,
+        "patrol start overwrote unrelated raw +0xd0/+0xd4 anchors");
+    require(unit.path_target_x == 500 && unit.path_target_y == -600 &&
+            unit.command_state == kUnitStatePatrolOutboundLeg,
+        "patrol start did not path to active +0xdc/+0xe0 payload");
+    require(unit.target == nullptr && unit.command_value == 0,
+        "patrol point route did not clear raw +0x68 target mirror");
+
+    unit.command_value = 0xbeefu;
+    HandleUnitPatrolReturnLeg(context, unit);
+    require(unit.path_target_x == 500 && unit.path_target_y == -600 &&
+            unit.command_state == kUnitStatePatrolOutboundLeg &&
+            unit.command_value == 0,
+        "patrol return leg did not alternate to active command payload");
+
+    unit.command_value = 0xbeefu;
+    HandleUnitPatrolOutboundLeg(context, unit);
+    require(unit.path_target_x == 100 && unit.path_target_y == 120 &&
+            unit.command_state == kUnitStatePatrolReturnLeg &&
+            unit.command_value == 0,
+        "patrol outbound leg did not alternate to saved route origin");
+
+    unit.command_flags = 0;
+    unit.command_value = 0xbeefu;
+    unit.target = &stale_target;
+    ResumeUnitPatrolRouteAfterCombatTargetLoss(
+        context, unit, kUnitStatePatrolReturnCombat);
+    require(unit.path_target_x == 100 && unit.path_target_y == 120 &&
+            unit.command_state == kUnitStatePatrolReturnLeg &&
+            (unit.command_flags & 8u) != 0 && unit.target == nullptr &&
+            unit.command_value == 0,
+        "product patrol return fallback did not restore the saved origin");
+
+    unit.command_flags = 0;
+    unit.command_value = 0xbeefu;
+    unit.target = &stale_target;
+    ResumeUnitPatrolRouteAfterCombatTargetLoss(
+        context, unit, kUnitStatePatrolOutboundCombat);
+    require(unit.path_target_x == 500 && unit.path_target_y == -600 &&
+            unit.command_state == kUnitStatePatrolOutboundLeg &&
+            (unit.command_flags & 8u) != 0 && unit.target == nullptr &&
+            unit.command_value == 0,
+        "product patrol outbound fallback did not restore command payload");
+}
+
+void test_patrol_distance_mode_preserves_raw_candidate() {
+    UnitMovementUnit candidate{};
+    candidate.id = 0x1234u;
+    candidate.x = 240;
+    candidate.y = 260;
+
+    UnitCommandContext context{};
+    context.callbacks.find_target = find_patrol_candidate;
+    context.callbacks.can_attack_target = reject_patrol_action_target;
+    context.callbacks.target_in_action_range = reject_patrol_action_target;
+    g_patrol_candidate = &candidate;
+
+    UnitMovementUnit unit{};
+    unit.x = 100;
+    unit.y = 120;
+    unit.type_flags = 0x20u;
+    unit.distance_check_mode = 1;
+    unit.active_command_payload.y = 500;
+    unit.active_command_payload.value = 600;
+    StartUnitPatrolRouteCommand(context, unit);
+    require(unit.target == &candidate && unit.command_value == candidate.id,
+        "distance mode one discarded the acquired raw +0x68 candidate");
+    require(unit.path_target_x == candidate.x &&
+            unit.path_target_y == candidate.y &&
+            unit.command_state == kUnitStatePatrolOutboundLeg,
+        "distance mode one did not approach its acquired patrol candidate");
+
+    unit.target = nullptr;
+    unit.command_value = 0;
+    unit.command_flags = 0;
+    HandleUnitPatrolReturnCombatTarget(context, unit);
+    require(unit.target == &candidate && unit.command_value == candidate.id &&
+            unit.path_target_x == candidate.x &&
+            unit.path_target_y == candidate.y &&
+            unit.command_state == kUnitStatePatrolReturnLeg &&
+            (unit.command_flags & 8u) == 0,
+        "patrol combat replacement filtered the raw distance-mode candidate");
+    g_patrol_candidate = nullptr;
+}
+
 } // namespace
 
 int main() {
@@ -379,10 +493,13 @@ int main() {
     test_meat_pipeline_is_silent();
     test_normal_and_reserved_harvest_frame_order();
     test_neutral_hit_rng_order();
+    test_patrol_route_payload_and_saved_origin();
+    test_patrol_distance_mode_preserves_raw_candidate();
     std::cout <<
         "GAMEPLAY_RESOURCE_SOUND_BRANCH_PASS "
         "meat=silent spawn/pickup/right-click "
         "harvest=normal-post/reserved-pre "
-        "neutral-hit=sim-Y/X/1-in-4-then-group0\n";
+        "neutral-hit=sim-Y/X/1-in-4-then-group0 "
+        "patrol=active-payload/origin/raw-candidate\n";
     return EXIT_SUCCESS;
 }

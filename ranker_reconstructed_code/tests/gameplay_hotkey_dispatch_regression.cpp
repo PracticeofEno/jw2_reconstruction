@@ -183,6 +183,85 @@ void test_f2_f3_bookmarks_only_in_generic_ai_profile_mode() {
     REQUIRE(load_menu_call_count == 2u);
 }
 
+void test_f1_recalls_seeded_local_start_camera() {
+    UiOverlayState state{};
+    state.camera_x = 317;
+    state.camera_y = 229;
+    SeedInitialCameraBookmark(state);
+    REQUIRE(state.camera_bookmarks[0].valid);
+    REQUIRE(state.camera_bookmarks[0].camera_x == 317);
+    REQUIRE(state.camera_bookmarks[0].camera_y == 229);
+
+    state.camera_x = 901;
+    state.camera_y = 777;
+    DispatchGameplayUiKeyboardInput(state, 0x3bu, 0u); // F1
+    REQUIRE(state.camera_x == 317);
+    REQUIRE(state.camera_y == 229);
+}
+
+void test_session_render_reset_preserves_camera_and_bookmarks() {
+    ResetUiOverlayState();
+    UiOverlayState& state = ui_overlay_state();
+    state.camera_x = 317;
+    state.camera_y = 229;
+    SeedInitialCameraBookmark(state);
+    state.camera_bookmarks[4].valid = true;
+    state.camera_bookmarks[4].camera_x = 811;
+    state.camera_bookmarks[4].camera_y = 577;
+    state.selected_unit_id = 0x1234u;
+
+    ResetUiOverlayStatePreservingSessionCamera();
+
+    UiOverlayState& reset = ui_overlay_state();
+    REQUIRE(reset.camera_x == 317);
+    REQUIRE(reset.camera_y == 229);
+    REQUIRE(reset.camera_bookmarks[0].valid);
+    REQUIRE(reset.camera_bookmarks[0].camera_x == 317);
+    REQUIRE(reset.camera_bookmarks[0].camera_y == 229);
+    REQUIRE(reset.camera_bookmarks[4].valid);
+    REQUIRE(reset.camera_bookmarks[4].camera_x == 811);
+    REQUIRE(reset.camera_bookmarks[4].camera_y == 577);
+    REQUIRE(reset.selected_unit_id == 0u);
+}
+
+void test_new_session_and_mode5_camera_bookmark_lifecycle() {
+    ResetUiOverlayState();
+    UiOverlayState& state = ui_overlay_state();
+    state.camera_bookmarks[5].valid = true;
+    state.camera_bookmarks[5].camera_x = 999;
+    state.camera_bookmarks[5].camera_y = 888;
+
+    // A new ordinary session clears every stale slot, then seeds only F1
+    // from the newly placed local starting unit.
+    ResetCameraBookmarks(state);
+    state.camera_x = 121;
+    state.camera_y = 343;
+    SeedInitialCameraBookmark(state);
+    ResetUiOverlayStatePreservingSessionCamera();
+
+    UiOverlayState& ordinary = ui_overlay_state();
+    REQUIRE(ordinary.camera_bookmarks[0].valid);
+    REQUIRE(ordinary.camera_bookmarks[0].camera_x == 121);
+    REQUIRE(ordinary.camera_bookmarks[0].camera_y == 343);
+    for (std::size_t index = 1; index < ordinary.camera_bookmarks.size(); ++index) {
+        REQUIRE(!ordinary.camera_bookmarks[index].valid);
+    }
+
+    // Original mode 5 does not place a fresh local starting unit, so the
+    // common reset leaves F1 invalid and recalling it must be a no-op.
+    ResetCameraBookmarks(ordinary);
+    ordinary.camera_x = 707;
+    ordinary.camera_y = 606;
+    ResetUiOverlayStatePreservingSessionCamera();
+    UiOverlayState& mode5 = ui_overlay_state();
+    for (const UiOverlayCameraBookmark& bookmark : mode5.camera_bookmarks) {
+        REQUIRE(!bookmark.valid);
+    }
+    DispatchGameplayUiKeyboardInput(mode5, 0x3bu, 0u);
+    REQUIRE(mode5.camera_x == 707);
+    REQUIRE(mode5.camera_y == 606);
+}
+
 void test_escape_cancels_placement_or_activates_first_back_record() {
     UiOverlayState placement{};
     placement.placement_mode = 6u;
@@ -542,6 +621,38 @@ void test_control_group_assignment_publishes_raw_nibble_before_next_event() {
     REQUIRE((unit.scenario_string_slot & 0x80u) != 0u);
 }
 
+void test_transport_passenger_generic_dispatch_uses_markerless_dynamic_record() {
+    UiOverlayState state{};
+    constexpr u32 kPassengerItemId = 0x134u + 7u;
+    state.dynamic_icon_bounds[0] = {123, 456, 1, 1};
+    state.command_slot_bounds[0] = {700, 500, 0x32, 0x32};
+    state.current_icon_marker = 'N';
+    state.current_record_size = 0x32u;
+    state.command_icon_marker = 'W';
+    state.command_slot_size = 0x32u;
+
+    QueueUiOverlayCommandRecordByItemId(
+        state, kPassengerItemId, 0x1234u, 0u);
+
+    REQUIRE(state.queued_records.size() == 1u);
+    const UiOverlayDrawRecord& record = state.queued_records.front();
+    REQUIRE(record.item_id == kPassengerItemId);
+    REQUIRE(record.aux == 0x1234u);
+    REQUIRE(record.flags == 0u);
+    REQUIRE(record.x == 123);
+    REQUIRE(record.y == 456);
+    REQUIRE(record.width == 0x26u);
+    REQUIRE(record.height == 0x26u);
+    REQUIRE(record.icon_marker == 0u);
+    REQUIRE(state.dynamic_icon_index == 1u);
+    REQUIRE(state.command_slot_count == 0u);
+    REQUIRE(state.hot_regions.size() == 1u);
+    REQUIRE(state.hot_regions.front().hotkey == 0u);
+
+    DispatchGameplayUiKeyboardInput(state, 0x11u, 0u); // W
+    REQUIRE(state.command_actions.empty());
+}
+
 } // namespace
 
 int main() {
@@ -550,6 +661,9 @@ int main() {
     test_chat_scan_escape_is_ignored_and_wm_char_escape_closes();
     test_f10_opens_pause_menu_once_without_mutating_selected_stats();
     test_f2_f3_bookmarks_only_in_generic_ai_profile_mode();
+    test_f1_recalls_seeded_local_start_camera();
+    test_session_render_reset_preserves_camera_and_bookmarks();
+    test_new_session_and_mode5_camera_bookmark_lifecycle();
     test_escape_cancels_placement_or_activates_first_back_record();
     test_chat_channel_hotkeys_follow_generic_p2p_profile();
     test_f11_toggles_gameplay_debug_overlay_flag();
@@ -561,5 +675,6 @@ int main() {
     test_control_group_recall_silently_cancels_placement_and_panel();
     test_control_group_cycle_scans_past_unselected_member_in_same_group();
     test_control_group_assignment_publishes_raw_nibble_before_next_event();
+    test_transport_passenger_generic_dispatch_uses_markerless_dynamic_record();
     return EXIT_SUCCESS;
 }

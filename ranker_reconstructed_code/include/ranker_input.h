@@ -115,6 +115,10 @@ static_assert(std::atomic<u32>::is_always_lock_free);
 
 struct InputState {
     std::array<InputAtomicByte, kInputKeyCount> key_down{};
+    // HandleKeyDown/HandleKeyUp in the original index the byte table at
+    // 0x0145907c with the set-1 scan byte from lParam, independently of the
+    // Win32 virtual-key table used by modifiers and other reconstructed code.
+    std::array<InputAtomicByte, kInputKeyCount> set1_scan_down{};
     std::array<InputEvent, kInputEventQueueSize> events{};
     InputQueueIndex head{};
     InputQueueIndex tail{};
@@ -144,12 +148,35 @@ struct InputState {
 };
 
 static_assert(offsetof(InputState, events) ==
-    sizeof(decltype(InputState::key_down)));
+    sizeof(decltype(InputState::key_down)) +
+        sizeof(decltype(InputState::set1_scan_down)));
 static_assert(offsetof(InputState, ctrl_down) ==
     offsetof(InputState, shift_down) + sizeof(InputAtomicByte));
 static_assert(offsetof(InputState, alt_down) ==
     offsetof(InputState, ctrl_down) + sizeof(InputAtomicByte));
-static_assert(sizeof(InputState) == 0x658u);
+static_assert(sizeof(InputState) == 0x758u);
+
+constexpr u32 kSet1ScanArrowUp = 0x48u;
+constexpr u32 kSet1ScanArrowLeft = 0x4bu;
+constexpr u32 kSet1ScanArrowRight = 0x4du;
+constexpr u32 kSet1ScanArrowDown = 0x50u;
+
+struct InputCameraDirectionState {
+    bool left = false;
+    bool right = false;
+    bool up = false;
+    bool down = false;
+};
+
+inline InputCameraDirectionState ResolveSet1CameraDirectionState(
+    const InputState& state) {
+    return InputCameraDirectionState{
+        state.set1_scan_down[kSet1ScanArrowLeft] != 0,
+        state.set1_scan_down[kSet1ScanArrowRight] != 0,
+        state.set1_scan_down[kSet1ScanArrowUp] != 0,
+        state.set1_scan_down[kSet1ScanArrowDown] != 0,
+    };
+}
 
 InputState& input_state();
 // Queue reset is a consumer-side flush during gameplay.  Call it from the
@@ -175,9 +202,9 @@ bool HandleMiddleButtonUp(u32 wparam, u32 lparam);
 bool HandleLeftButtonDoubleClick(u32 wparam, u32 lparam);
 bool HandleRightButtonDoubleClick(u32 wparam, u32 lparam);
 bool HandleKeyDown(u32 key, u32 legacy_scan_code);
-void HandleKeyUp(u32 key);
+void HandleKeyUp(u32 key, u32 legacy_scan_code);
 bool HandleAltKeyPress(u32 key, u32 legacy_scan_code);
-void HandleAltKeyRelease(u32 key);
+void HandleAltKeyRelease(u32 key, u32 legacy_scan_code);
 bool HandleCharacterInput(u32 character);
 bool HandleWindowInputMessage(u32 message, u32 wparam, u32 lparam);
 void ClearInputHeldKeysForFocusLoss();

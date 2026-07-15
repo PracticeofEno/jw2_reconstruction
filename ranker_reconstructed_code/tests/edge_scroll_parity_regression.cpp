@@ -1,3 +1,4 @@
+#include "ranker_input.h"
 #include "ranker_ui_overlay.h"
 
 #include <array>
@@ -34,6 +35,55 @@ UiOverlayState make_state() {
     state.mouse_y = 300;
     state.camera_edge_pointer_valid = true;
     return state;
+}
+
+void apply_set1_camera_directions(
+    UiOverlayState& state, const InputState& input) {
+    const InputCameraDirectionState directions =
+        ResolveSet1CameraDirectionState(input);
+    state.camera_left_key_down = directions.left;
+    state.camera_right_key_down = directions.right;
+    state.camera_up_key_down = directions.up;
+    state.camera_down_key_down = directions.down;
+}
+
+void test_set1_arrow_table_drives_camera() {
+    struct DirectionCase {
+        u32 scan;
+        i32 x_sign;
+        i32 y_sign;
+    };
+    constexpr std::array<DirectionCase, 4> cases{{
+        {kSet1ScanArrowLeft, -1, 0},
+        {kSet1ScanArrowRight, 1, 0},
+        {kSet1ScanArrowUp, 0, -1},
+        {kSet1ScanArrowDown, 0, 1},
+    }};
+
+    for (const DirectionCase& direction : cases) {
+        InputState input{};
+        input.set1_scan_down[direction.scan] = 1;
+        UiOverlayState state = make_state();
+        state.camera_edge_pointer_valid = false;
+        apply_set1_camera_directions(state, input);
+        const i32 old_x = state.camera_x;
+        const i32 old_y = state.camera_y;
+        ScrollCameraFromEdgeOrKeys(state);
+        require((state.camera_x - old_x) * direction.x_sign > 0 ||
+                direction.x_sign == 0,
+            "set-1 held scan moved the camera on the wrong horizontal axis");
+        require((state.camera_y - old_y) * direction.y_sign > 0 ||
+                direction.y_sign == 0,
+            "set-1 held scan moved the camera on the wrong vertical axis");
+
+        input.set1_scan_down[direction.scan] = 0;
+        UiOverlayState released = make_state();
+        released.camera_edge_pointer_valid = false;
+        apply_set1_camera_directions(released, input);
+        ScrollCameraFromEdgeOrKeys(released);
+        require(released.camera_x == 400 && released.camera_y == 400,
+            "released set-1 direction remained held by the camera path");
+    }
 }
 
 void test_exact_edges_and_cursor_masks() {
@@ -289,6 +339,7 @@ void test_all_edges_corners_outside_and_hud() {
 }
 
 int main() {
+    test_set1_arrow_table_drives_camera();
     test_exact_edges_and_cursor_masks();
     test_edge_priority_and_arrow_keys();
     test_boundary_does_not_consume_replay_step();

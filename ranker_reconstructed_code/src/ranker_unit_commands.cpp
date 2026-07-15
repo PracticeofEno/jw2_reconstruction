@@ -200,7 +200,7 @@ const UnitEquipmentCatalog* command_equipment_catalog(
 
 i32 command_additional_movement_modifier(const UnitCommandContext& context,
     const UnitMovementUnit& unit) {
-    if (context.movement == nullptr || (unit.runtime_flags & 0x10000u) == 0) {
+    if (context.movement == nullptr || (unit.command_flags & 0x10000u) == 0) {
         return 0;
     }
     return context.movement->additional_movement_modifier;
@@ -484,9 +484,21 @@ void process_patrol_path(UnitCommandContext& context, UnitMovementUnit& unit) {
     }
 }
 
+i32 patrol_command_x(const UnitMovementUnit& unit) {
+    // HandlePendingUnitCommandDispatch copies raw pending +0x6c to active
+    // payload +0xdc, represented by the legacy-named `y` member.
+    return unit.active_command_payload.y;
+}
+
+i32 patrol_command_y(const UnitMovementUnit& unit) {
+    // The active payload's legacy-named `value` member mirrors raw +0xe0.
+    return signed_i32_from_wrapped_u32(unit.active_command_payload.value);
+}
+
 void begin_patrol_leg(UnitCommandContext& context, UnitMovementUnit& unit,
     i32 x, i32 y, u32 state, bool set_command_flag = false) {
     unit.target = nullptr;
+    unit.command_value = 0;
     unit.path_target_x = x;
     unit.path_target_y = y;
     process_patrol_path(context, unit);
@@ -510,10 +522,11 @@ UnitMovementUnit* scan_patrol_target(UnitCommandContext& context,
         return nullptr;
     }
     UnitMovementUnit* target = find_target(context, unit);
-    if (target == nullptr || !can_attack(context, unit, *target)) {
+    if (target == nullptr) {
         return nullptr;
     }
     unit.target = target;
+    unit.command_value = target->id;
     return target;
 }
 
@@ -547,7 +560,10 @@ void handle_patrol_leg(UnitCommandContext& context, UnitMovementUnit& unit,
 }
 
 void handle_patrol_combat(UnitCommandContext& context, UnitMovementUnit& unit,
-    i32 fallback_x, i32 fallback_y, u32 fallback_state) {
+    u32 combat_state) {
+    const u32 fallback_state = combat_state == kUnitStatePatrolReturnCombat
+        ? kUnitStatePatrolReturnLeg
+        : kUnitStatePatrolOutboundLeg;
     // States 0x39/0x3a call FUN_004c1c87 before any outer target/range gate.
     if (context.callbacks.dispatch_attack != nullptr) {
         dispatch_attack(context, unit);
@@ -566,7 +582,7 @@ void handle_patrol_combat(UnitCommandContext& context, UnitMovementUnit& unit,
     }
 
     UnitMovementUnit* replacement = find_target(context, unit);
-    if (replacement != nullptr && can_attack(context, unit, *replacement)) {
+    if (replacement != nullptr) {
         SetUnitCommandTarget(unit, replacement);
         if (target_in_attack_range(context, unit, *replacement)) {
             dispatch_attack(context, unit);
@@ -576,7 +592,7 @@ void handle_patrol_combat(UnitCommandContext& context, UnitMovementUnit& unit,
         return;
     }
 
-    begin_patrol_leg(context, unit, fallback_x, fallback_y, fallback_state, true);
+    ResumeUnitPatrolRouteAfterCombatTargetLoss(context, unit, combat_state);
 }
 
 UnitMovementUnit* find_attached_child(UnitCommandContext& context,
@@ -4647,9 +4663,11 @@ void ProcessWorkerReservedHarvestWait(UnitCommandContext& context, UnitMovementU
 }
 
 void StartUnitPatrolRouteCommand(UnitCommandContext& context, UnitMovementUnit& unit) {
-    unit.anchor_x = unit.x;
-    unit.anchor_y = unit.y;
-    if (unit.destination_x == unit.x && unit.destination_y == unit.y) {
+    unit.destination_x = unit.x;
+    unit.destination_y = unit.y;
+    const i32 command_x = patrol_command_x(unit);
+    const i32 command_y = patrol_command_y(unit);
+    if (command_x == unit.x && command_y == unit.y) {
         PopDeferredUnitCommandOrReturnIdle(context, unit);
         return;
     }
@@ -4663,30 +4681,40 @@ void StartUnitPatrolRouteCommand(UnitCommandContext& context, UnitMovementUnit& 
         begin_patrol_target_leg(context, unit, *target, kUnitStatePatrolOutboundLeg);
         return;
     }
-    begin_patrol_leg(context, unit, unit.destination_x, unit.destination_y,
+    begin_patrol_leg(context, unit, command_x, command_y,
         kUnitStatePatrolOutboundLeg);
 }
 
 void HandleUnitPatrolReturnLeg(UnitCommandContext& context, UnitMovementUnit& unit) {
-    handle_patrol_leg(context, unit, unit.destination_x, unit.destination_y,
+    handle_patrol_leg(context, unit, patrol_command_x(unit), patrol_command_y(unit),
         kUnitStatePatrolOutboundLeg, kUnitStatePatrolReturnCombat);
 }
 
 void HandleUnitPatrolOutboundLeg(UnitCommandContext& context, UnitMovementUnit& unit) {
-    handle_patrol_leg(context, unit, unit.anchor_x, unit.anchor_y,
+    handle_patrol_leg(context, unit, unit.destination_x, unit.destination_y,
         kUnitStatePatrolReturnLeg, kUnitStatePatrolOutboundCombat);
+}
+
+void ResumeUnitPatrolRouteAfterCombatTargetLoss(UnitCommandContext& context,
+    UnitMovementUnit& unit, u32 combat_state) {
+    if (combat_state == kUnitStatePatrolReturnCombat) {
+        begin_patrol_leg(context, unit, unit.destination_x, unit.destination_y,
+            kUnitStatePatrolReturnLeg, true);
+    }
+    else if (combat_state == kUnitStatePatrolOutboundCombat) {
+        begin_patrol_leg(context, unit, patrol_command_x(unit),
+            patrol_command_y(unit), kUnitStatePatrolOutboundLeg, true);
+    }
 }
 
 void HandleUnitPatrolReturnCombatTarget(UnitCommandContext& context,
     UnitMovementUnit& unit) {
-    handle_patrol_combat(context, unit, unit.anchor_x, unit.anchor_y,
-        kUnitStatePatrolReturnLeg);
+    handle_patrol_combat(context, unit, kUnitStatePatrolReturnCombat);
 }
 
 void HandleUnitPatrolOutboundCombatTarget(UnitCommandContext& context,
     UnitMovementUnit& unit) {
-    handle_patrol_combat(context, unit, unit.destination_x, unit.destination_y,
-        kUnitStatePatrolOutboundLeg);
+    handle_patrol_combat(context, unit, kUnitStatePatrolOutboundCombat);
 }
 
 void BeginUnitCarrierBoardingCommand(UnitCommandContext& context, UnitMovementUnit& unit) {

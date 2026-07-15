@@ -947,6 +947,7 @@ void DrawUiOverlayRecordAndFlushSuffixCore(UiOverlayState& state,
 
 UiOverlayState& ui_overlay_state();
 void ResetUiOverlayState();
+void ResetUiOverlayStatePreservingSessionCamera();
 void ResetUiOverlayDrawQueue(UiOverlayState& state);
 void InstallDefaultUiOverlayDispatchHandlers(UiOverlayState& state);
 
@@ -1139,6 +1140,7 @@ u32 ResolveCameraScrollStep(UiOverlayState& state);
 void IncreaseCameraScrollRamp(UiOverlayState& state);
 void DecreaseCameraScrollRamp(UiOverlayState& state);
 void ResetCameraBookmarks(UiOverlayState& state);
+void SeedInitialCameraBookmark(UiOverlayState& state);
 void UpdateGameplayHoverContextAndTooltip(UiOverlayState& state);
 void ResolveGameplayHoverContext(UiOverlayState& state);
 bool FindUnitUnderMousePointer(UiOverlayState& state, i32 screen_x, i32 screen_y);

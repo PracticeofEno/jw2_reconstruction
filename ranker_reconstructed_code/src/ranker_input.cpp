@@ -152,6 +152,12 @@ void set_key_state(u32 key, bool down) {
     }
 }
 
+void set_set1_scan_state(u32 legacy_scan_code, bool down) {
+    if (legacy_scan_code < g_input_state.set1_scan_down.size()) {
+        g_input_state.set1_scan_down[legacy_scan_code] = down ? 1 : 0;
+    }
+}
+
 bool handle_mouse_button(u32 message, u32 code, u32 wparam, u32 lparam,
     u32 button, bool down) {
     MouseEventSnapshotGuard paired_stream_guard;
@@ -237,6 +243,7 @@ bool PopInputEvent(InputEvent& event) {
 
 void ClearInputHeldKeysForFocusLoss() {
     g_input_state.key_down.fill(0);
+    g_input_state.set1_scan_down.fill(0);
     g_input_state.shift_down = false;
     g_input_state.ctrl_down = false;
     g_input_state.alt_down = false;
@@ -368,11 +375,13 @@ bool HandleRightButtonDoubleClick(u32 wparam, u32 lparam) {
 
 bool HandleKeyDown(u32 key, u32 legacy_scan_code) {
     set_key_state(key, true);
+    set_set1_scan_state(legacy_scan_code & 0xffu, true);
     return PushKeyboardInputEvent(legacy_scan_code & 0xffu);
 }
 
-void HandleKeyUp(u32 key) {
+void HandleKeyUp(u32 key, u32 legacy_scan_code) {
     set_key_state(key, false);
+    set_set1_scan_state(legacy_scan_code & 0xffu, false);
 }
 
 bool HandleAltKeyPress(u32 key, u32 legacy_scan_code) {
@@ -380,12 +389,14 @@ bool HandleAltKeyPress(u32 key, u32 legacy_scan_code) {
         return false;
     }
     set_key_state(key, true);
+    set_set1_scan_state(legacy_scan_code & 0xffu, true);
     return PushKeyboardInputEvent(legacy_scan_code & 0xffu);
 }
 
-void HandleAltKeyRelease(u32 key) {
+void HandleAltKeyRelease(u32 key, u32 legacy_scan_code) {
     if (key != 0) {
         set_key_state(key, false);
+        set_set1_scan_state(legacy_scan_code & 0xffu, false);
     }
 }
 
@@ -420,7 +431,7 @@ bool HandleWindowInputMessage(u32 message, u32 wparam, u32 lparam) {
         }
         return true;
     case 0x0101:
-        HandleKeyUp(wparam);
+        HandleKeyUp(wparam, ResolveLegacyKeyboardScanCode(wparam, lparam));
         if (wparam == 0x2c) {
             if (g_input_state.ctrl_down) {
                 g_input_state.print_screen_toggled =
@@ -447,7 +458,8 @@ bool HandleWindowInputMessage(u32 message, u32 wparam, u32 lparam) {
         }
         return true;
     case 0x0105:
-        HandleAltKeyRelease(wparam);
+        HandleAltKeyRelease(
+            wparam, ResolveLegacyKeyboardScanCode(wparam, lparam));
         return true;
     default:
         refresh_modifier_state();

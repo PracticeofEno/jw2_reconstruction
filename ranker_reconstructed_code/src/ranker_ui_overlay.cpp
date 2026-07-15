@@ -1861,6 +1861,22 @@ void ResetUiOverlayState() {
     g_ui_overlay_state = {};
 }
 
+void ResetUiOverlayStatePreservingSessionCamera() {
+    // ProcessGameplaySessionLoop initializes render resources after the
+    // session-start path has already clamped the local camera and populated
+    // F1's bookmark.  The render reset must not erase that session state.
+    // A genuinely new session clears the bookmark table earlier through
+    // ResetCameraBookmarks, so preserving it here cannot leak old-session
+    // bookmarks across matches.
+    const i32 camera_x = g_ui_overlay_state.camera_x;
+    const i32 camera_y = g_ui_overlay_state.camera_y;
+    const auto camera_bookmarks = g_ui_overlay_state.camera_bookmarks;
+    g_ui_overlay_state = {};
+    g_ui_overlay_state.camera_x = camera_x;
+    g_ui_overlay_state.camera_y = camera_y;
+    g_ui_overlay_state.camera_bookmarks = camera_bookmarks;
+}
+
 void ResetUiOverlayDrawQueue(UiOverlayState& state) {
     state.queued_records.clear();
     state.dispatched_records.clear();
@@ -3867,7 +3883,12 @@ void QueueUiOverlayCommandRecordByItemId(UiOverlayState& state, u32 item_id,
         return;
     }
     if (item_id < 0x194) {
-        QueueEquipmentDefinitionCommandSlot(state, item_id, aux, flags);
+        // Original 004e57d7 emits transport/passenger entries through the
+        // dynamic 0x26 record path with no keyboard marker.  In particular,
+        // do not inherit a stale command-grid marker here.
+        state.current_icon_marker = 0;
+        state.current_record_size = 0x26;
+        QueueUiOverlayDynamicIconRecord(state, item_id, aux, flags);
         return;
     }
 
@@ -4648,6 +4669,19 @@ void ResetCameraBookmarks(UiOverlayState& state) {
     for (UiOverlayCameraBookmark& bookmark : state.camera_bookmarks) {
         bookmark = {};
     }
+}
+
+void SeedInitialCameraBookmark(UiOverlayState& state) {
+    if (state.camera_bookmarks.empty()) {
+        return;
+    }
+    // After FUN_004e7e94 clears all twelve slots, both gameplay-start paths
+    // store the clamped local-start camera in F1's slot at
+    // 0x004d70db/e1 and 0x004d74fc/0x004d7502.
+    UiOverlayCameraBookmark& bookmark = state.camera_bookmarks[0];
+    bookmark.valid = true;
+    bookmark.camera_x = state.camera_x;
+    bookmark.camera_y = state.camera_y;
 }
 
 void UpdateGameplayHoverContextAndTooltip(UiOverlayState& state) {

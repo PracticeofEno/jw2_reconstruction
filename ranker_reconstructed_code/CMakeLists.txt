@@ -542,6 +542,37 @@ if (BUILD_TESTING)
     add_test(NAME control_group_persistence_regression
         COMMAND control_group_persistence_regression
     )
+
+    add_executable(movement_modifier_command_flag_regression
+        tests/movement_modifier_command_flag_regression.cpp
+        src/ranker_production_orders.cpp
+        src/ranker_unit_commands.cpp
+        src/ranker_unit_damage.cpp
+        src/ranker_unit_equipment.cpp
+        src/ranker_unit_movement.cpp
+    )
+    target_include_directories(movement_modifier_command_flag_regression PRIVATE
+        include
+    )
+    set_property(TARGET movement_modifier_command_flag_regression PROPERTY
+        INTERPROCEDURAL_OPTIMIZATION TRUE
+    )
+    if (MSVC)
+        target_compile_options(movement_modifier_command_flag_regression PRIVATE /Gy)
+        target_link_options(movement_modifier_command_flag_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(movement_modifier_command_flag_regression PRIVATE
+            -O1
+            -ffunction-sections
+            -fdata-sections
+        )
+        target_link_options(movement_modifier_command_flag_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME movement_modifier_command_flag_regression
+        COMMAND movement_modifier_command_flag_regression
+    )
 endif()
 
 add_executable(ranker_rebuild WIN32
