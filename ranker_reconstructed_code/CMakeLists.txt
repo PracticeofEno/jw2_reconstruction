@@ -40,6 +40,25 @@ if (BUILD_TESTING)
     add_test(NAME directdraw_presentation_mode_regression
         COMMAND directdraw_presentation_mode_regression
     )
+
+    add_executable(d3d9_cubic_presentation_regression
+        tests/d3d9_cubic_presentation_regression.cpp
+    )
+    target_include_directories(d3d9_cubic_presentation_regression PRIVATE
+        include
+    )
+    if (WIN32)
+        target_sources(d3d9_cubic_presentation_regression PRIVATE
+            src/ranker_d3d9_presentation.cpp
+        )
+        target_link_libraries(d3d9_cubic_presentation_regression PRIVATE
+            d3d9
+            ddraw
+        )
+    endif()
+    add_test(NAME d3d9_cubic_presentation_regression
+        COMMAND d3d9_cubic_presentation_regression
+    )
 endif()
 
 add_executable(ranker_rebuild WIN32
@@ -49,6 +68,7 @@ add_executable(ranker_rebuild WIN32
     src/ranker_winmain.cpp
     src/ranker_cd_audio.cpp
     src/ranker_directx.cpp
+    src/ranker_d3d9_presentation.cpp
     src/ranker_cursor.cpp
     src/ranker_directplay.cpp
     src/ranker_reliable_packets.cpp
@@ -177,6 +197,7 @@ if (WIN32)
         advapi32
         wsock32
         ddraw
+        d3d9
         dsound
         dxguid
         gdiplus

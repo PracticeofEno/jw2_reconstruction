@@ -1,6 +1,7 @@
 #include "ranker_cursor.h"
 
 #ifdef _WIN32
+#include "ranker_d3d9_presentation.h"
 #include "ranker_directx.h"
 #include "ranker_screenshot.h"
 #include "ranker_trc.h"
@@ -530,24 +531,40 @@ HRESULT LockAndUnlockSoftwareCursorSurface(u32 cursor_index) {
 }
 
 HRESULT HandlePrimaryCursorBackgroundRestore() {
+    if (IsD3D9CubicPresentationActive()) {
+        g_cursor_state.last_result = DD_OK;
+        return DD_OK;
+    }
     return copy_backup_to_surface(direct_draw_state().primary_surface,
         g_cursor_state.primary_backup_surface, g_cursor_state.previous_cursor_x,
         g_cursor_state.previous_cursor_y, true);
 }
 
 HRESULT HandlePrimaryCursorBackgroundSave() {
+    if (IsD3D9CubicPresentationActive()) {
+        g_cursor_state.last_result = DD_OK;
+        return DD_OK;
+    }
     return copy_surface_to_backup(g_cursor_state.primary_backup_surface,
         direct_draw_state().primary_surface, g_cursor_state.cursor_x,
         g_cursor_state.cursor_y, true);
 }
 
 HRESULT HandlePrimaryCursorBackupRefreshUsingBackBuffer() {
+    if (IsD3D9CubicPresentationActive()) {
+        g_cursor_state.last_result = DD_OK;
+        return DD_OK;
+    }
     return copy_surface_to_backup(g_cursor_state.primary_backup_surface,
         direct_draw_state().back_surface, g_cursor_state.presented_cursor_x,
         g_cursor_state.presented_cursor_y);
 }
 
 HRESULT HandlePrimaryRefreshUsingPresentedBackBackup() {
+    if (IsD3D9CubicPresentationActive()) {
+        g_cursor_state.last_result = DD_OK;
+        return DD_OK;
+    }
     return copy_backup_to_surface(direct_draw_state().primary_surface,
         g_cursor_state.back_backup_surface, g_cursor_state.presented_cursor_x,
         g_cursor_state.presented_cursor_y, true);
@@ -566,6 +583,10 @@ HRESULT HandleBackCursorBackgroundRestoreAfterPresent() {
 }
 
 HRESULT HandleCurrentCursorDrawOnPrimary() {
+    if (IsD3D9CubicPresentationActive()) {
+        g_cursor_state.last_result = DD_OK;
+        return DD_OK;
+    }
     return draw_cursor_surface(direct_draw_state().primary_surface, g_cursor_state.cursor_x,
         g_cursor_state.cursor_y, true);
 }

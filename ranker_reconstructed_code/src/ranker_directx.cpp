@@ -1,5 +1,6 @@
 #include "ranker_directx.h"
 #include "ranker_cursor.h"
+#include "ranker_d3d9_presentation.h"
 #include "ranker_miles.h"
 #include "ranker_palette_cache.h"
 #include "ranker_sprite_renderer.h"
@@ -1032,6 +1033,7 @@ void refresh_windowed_presentation_rect(HWND window, int logical_width,
 
 HRESULT configure_direct_draw_surfaces(HWND window, int width, int height, int color_depth,
     bool windowed) {
+    ShutdownD3D9CubicPresentation();
     g_direct_draw_state.active = false;
 
     if (g_direct_draw_state.direct_draw == nullptr) {
@@ -1055,9 +1057,9 @@ HRESULT configure_direct_draw_surfaces(HWND window, int width, int height, int c
             return result;
         }
 
-        // The source rectangle is always the logical DirectDraw surface.  The
-        // destination is the independently sized client rectangle in screen
-        // coordinates, matching cnc-ddraw's original stretch presentation.
+        // The source rectangle is always the logical DirectDraw surface. The
+        // independently sized screen rectangle is retained for the native
+        // DirectDraw fallback when the D3D9 cubic presenter is unavailable.
         refresh_windowed_presentation_rect(window, width, height);
 
         result = attach_window_clipper(window);
@@ -1133,6 +1135,10 @@ HRESULT configure_direct_draw_surfaces(HWND window, int width, int height, int c
     g_direct_draw_state.color_depth = actual_color_depth;
     g_direct_draw_state.windowed = windowed;
     g_direct_draw_state.active = true;
+    ConfigureD3D9CubicPresentation(window, g_direct_draw_state.width,
+        g_direct_draw_state.height, g_direct_draw_state.color_depth,
+        g_direct_draw_state.windowed, g_direct_draw_state.red_mask,
+        g_direct_draw_state.green_mask, g_direct_draw_state.blue_mask);
     return DD_OK;
 }
 
@@ -1175,6 +1181,7 @@ HRESULT ConfigureDirectDrawSurfaces(HWND window, int width, int height, int colo
 }
 
 void ShutdownDirectDrawSubsystem(HWND window) {
+    ShutdownD3D9CubicPresentation();
     if (g_direct_draw_state.direct_draw != nullptr) {
         g_direct_draw_state.direct_draw->SetCooperativeLevel(window, DDSCL_NORMAL);
     }
@@ -1198,6 +1205,13 @@ HRESULT PresentBackBufferToPrimary() {
     if (!g_direct_draw_state.active || g_direct_draw_state.primary_surface == nullptr ||
         g_direct_draw_state.back_surface == nullptr) {
         return g_direct_draw_state.last_result;
+    }
+
+    const HRESULT cubic_result =
+        TryPresentBackBufferWithD3D9Cubic(g_direct_draw_state.back_surface);
+    if (cubic_result == S_OK) {
+        g_direct_draw_state.last_result = DD_OK;
+        return DD_OK;
     }
 
     HRESULT result = DD_OK;

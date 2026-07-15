@@ -7,6 +7,8 @@
 #include "ranker_crt_runtime.h"
 #include "ranker_create_game.h"
 #include "ranker_cursor.h"
+#include "ranker_d3d9_presentation.h"
+#include "ranker_ddraw_ini.h"
 #include "ranker_directx.h"
 #include "ranker_directplay.h"
 #include "ranker_emoticon_popup.h"
@@ -1042,8 +1044,9 @@ struct RuntimeGlobals {
     u32 frontend_mode = 0;
     // The original 32-bit executable enters exclusive DirectDraw and the local
     // 32-bit cnc-ddraw scales its 800x600 surface. ranker_rebuild is 64-bit, so
-    // that DLL cannot load; native windowed DirectDraw performs the equivalent
-    // stretch presentation while retaining the original logical dimensions.
+    // that DLL cannot load; the window remains native while the presentation
+    // layer reproduces cnc-ddraw's configured D3D9 cubic filter, with the
+    // windowed DirectDraw stretch retained as a failure fallback.
     bool windowed_mode = true;
     int presentation_client_width = kOriginalClientWidth;
     int presentation_client_height = kOriginalClientHeight;
@@ -1386,15 +1389,7 @@ bool rect_has_extent(const RECT& rect) {
 }
 
 const char* main_window_ddraw_ini_path() {
-    static char path[MAX_PATH]{};
-    if (path[0] == '\0') {
-        const DWORD length = GetFullPathNameA("ddraw.ini",
-            static_cast<DWORD>(sizeof(path)), path, nullptr);
-        if (length == 0 || length >= sizeof(path)) {
-            std::strncpy(path, "ddraw.ini", sizeof(path) - 1);
-        }
-    }
-    return path;
+    return RankerDdrawIniPath().c_str();
 }
 
 bool read_ddraw_ini_boolean(const char* key, bool fallback) {
@@ -21130,7 +21125,7 @@ void default_unit_command_construction_completed(UnitCommandContext& context,
 
     const u32 builder_state = builder->command_state & kUnitCommandStateMask;
     if (builder_state == kUnitStateSpawnCreateCycle) {
-        // HandleUnitSpawnCreateCycle (0x004cb8e4..0x004cb924) mirrors the
+        // HandleUnitSpawnCreateCycle (0x004cb80c..0x004cb81b) mirrors the
         // builder's spawn-complete cue and places kind-2 HUD feedback at the
         // builder, not at the completed structure.
         GameplayUnitSoundDefinition definition;
@@ -29546,6 +29541,9 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
     }
 
     switch (message) {
+    case kD3D9CubicPresentationOwnerThreadMessage:
+        HandleD3D9CubicPresentationOwnerThreadRequest(window, wparam);
+        return 0;
     case WM_MOVE:
     case WM_SIZE:
         if (g_runtime.directx_initialized && g_runtime.windowed_mode) {
