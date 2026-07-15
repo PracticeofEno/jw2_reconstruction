@@ -232,6 +232,12 @@ void reset_runtime_fields(UnitMovementUnit& unit) {
     unit.linked_unit = nullptr;
     unit.movement_step_accumulator = 0;
     unit.work_timer = 0;
+    // InitializePlacedUnitFromMapSlot clears raw +0x4c.  State 0x58's typed
+    // OBB mirror follows that union, while independent raw +0xf0 deliberately
+    // retains its fixed-pool backing value until a shield writes it again.
+    unit.cargo_amount = 0;
+    unit.reserved_tile_effect = nullptr;
+    unit.reserved_tile_effect_slot_offset = 0;
     unit.effect_timer = 0;
     unit.distance_check_mode = 0;
     unit.placement_reset_scratch = 0;
@@ -461,6 +467,10 @@ void HandleUnitLifecycleDispatchListTick(UnitLifecycleContext& context) {
         if ((unit->command_flags & 0x80) != 0) {
             --unit->work_timer;
             if (unit->work_timer == 0) {
+                // The original uses one raw +0x64 word for the active frame
+                // and the lifecycle countdown.  Keep the split typed views
+                // coherent before this fixed-pool node enters the free list.
+                unit->animation_frame = unit->work_timer;
                 if (unit->string_slot != 0) {
                     const u32 string_slot = unit->string_slot;
                     unit->string_slot = 0;
@@ -476,6 +486,9 @@ void HandleUnitLifecycleDispatchListTick(UnitLifecycleContext& context) {
 
         if ((unit->command_flags & 0x200) != 0) {
             unit->command_flags &= ~0x200u;
+            // Lifecycle activation exposes raw +0x64 as an animation frame
+            // again; carry over the same physical word's current value.
+            unit->animation_frame = unit->work_timer;
             HandleLifecycleUnitActiveListMove(*context.movement, *unit);
             continue;
         }
@@ -713,6 +726,7 @@ void HandleUnitDeathLifecycleTransition(UnitLifecycleContext& context,
     unit.runtime_flags |= 4;
     unit.command_state &= ~0x40000000u;
     unit.animation_frame = 0;
+    unit.work_timer = 0;
     unit.draw_flags = 0;
     ClearUnitFootprintOccupancyBits(context, unit);
     if (unit.action_mode_gate == 1) {

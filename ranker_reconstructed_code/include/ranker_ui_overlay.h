@@ -482,6 +482,9 @@ struct UiOverlayState {
     std::vector<u8> placement_preview_cell_validity;
     bool reveal_minimap_fog = false;
     bool scenario_ai_profile_override = false;
+    // Mirrors original DAT_00725bf8.  Both P2P and the worker-driven
+    // single-player profile use this non-modal gameplay path.
+    bool generic_ai_profile_mode = false;
     bool replay_timing_enabled = false;
     bool scripted_input_restricted = false;
     std::vector<u32> minimap_visibility_flags;

@@ -885,7 +885,7 @@ bool prefer_guard_target(const UnitMovementUnit* candidate,
 bool has_reserved_tile_linked_object(const UnitMovementUnit& unit) {
     const UnitEffectRuntime* effect = unit.reserved_tile_effect;
     // HandleReservedTileLinkedObject (0x004cb380) treats raw +0x4c solely as
-    // an effect-pool offset and validates the slot's source word at +0x20.
+    // an effect-pool offset and validates the slot's source word at +0x18.
     // It does not inspect the effect id or list-membership flags: a slot that
     // was recycled for another effect from the same source remains linked.
     return effect != nullptr && effect->source_unit_id == unit.id;
@@ -941,6 +941,7 @@ UnitMovementUnit* create_legacy_spawned_unit(UnitCommandContext& context,
     }
     spawned->owner_id = unit.owner_id;
     spawned->target = &unit;
+    spawned->command_value = unit.id;
     spawned->animation_frame = 0;
     spawned->under_construction = true;
     seed_construction_progress(*spawned);
@@ -1421,6 +1422,8 @@ UnitMovementUnit* create_spawned_unit(UnitCommandContext& context,
 
     unit.target = spawned;
     spawned->target = &unit;
+    unit.command_value = spawned->id;
+    spawned->command_value = unit.id;
     spawned->owner_id = unit.owner_id;
     seed_construction_progress(*spawned);
     if (context.callbacks.on_unit_spawned != nullptr) {
@@ -1827,6 +1830,10 @@ u32 GetUnitCommandMetadataFlags(const UnitMovementUnit& unit,
 void SetUnitCommandTarget(UnitMovementUnit& unit, UnitMovementUnit* target) {
     unit.target = target;
     if (target != nullptr) {
+        // Original target acquisition writes the 0x1d0-byte pool offset to
+        // raw +0x68.  Keep the typed pointer and serialized union mirror in
+        // lockstep so a mid-command save restores the same target.
+        unit.command_value = target->id;
         unit.path_target_x = target->x;
         unit.path_target_y = target->y;
     }
@@ -2671,6 +2678,10 @@ void HandleUnitRuntimeDispatchTick(UnitCommandContext& context, UnitMovementUnit
         unit.runtime_flags |= 4;
         unit.command_state &= ~0x40000000u;
         unit.animation_frame = 0;
+        // High-type units bypass HandleUnitDeathLifecycleTransition, but the
+        // original death branch still clears the same raw +0x64 word later
+        // consumed as the lifecycle work timer.
+        unit.work_timer = 0;
         unit.draw_flags = 0;
         if (context.callbacks.on_runtime_death_marked != nullptr) {
             context.callbacks.on_runtime_death_marked(context, unit);
@@ -4943,7 +4954,7 @@ void StartReservedTileWorkCommand(UnitCommandContext& context, UnitMovementUnit&
         return;
     }
     unit.reserved_tile_effect = nullptr;
-    unit.linked_effect_slot_offset = 0;
+    unit.reserved_tile_effect_slot_offset = 0;
     u32 tile_x = static_cast<u32>(unit.path_target_x) >> 5;
     const u32 tile_y = static_cast<u32>(unit.path_target_y) >> 5;
     const UnitMovementCell* cell = GetMovementCell(movement(context).map, tile_x, tile_y);
@@ -4988,7 +4999,7 @@ void HandleReservedTileWorkCycle(UnitCommandContext& context, UnitMovementUnit& 
         unit.cargo_amount = 0;
         unit.work_timer = 0;
         unit.reserved_tile_effect = nullptr;
-        unit.linked_effect_slot_offset = 0;
+        unit.reserved_tile_effect_slot_offset = 0;
     }
     if (context.callbacks.on_harvest_frame != nullptr) {
         context.callbacks.on_harvest_frame(context, unit);
@@ -5036,7 +5047,7 @@ void HandleReservedTileWorkCycle(UnitCommandContext& context, UnitMovementUnit& 
     }
     unit.target = target;
     unit.reserved_tile_effect = nullptr;
-    unit.linked_effect_slot_offset = 0;
+    unit.reserved_tile_effect_slot_offset = 0;
 
     if (context.callbacks.on_reserved_tile_work_complete != nullptr &&
         !context.callbacks.on_reserved_tile_work_complete(context, unit)) {
@@ -5048,7 +5059,7 @@ void HandleReservedTileWorkCycle(UnitCommandContext& context, UnitMovementUnit& 
         // On success the original copies raw +0x4c into the effect amount,
         // then reuses +0x4c for the allocated effect-pool offset while state
         // 0x58 owns the linked object.
-        unit.cargo_amount = unit.linked_effect_slot_offset;
+        unit.cargo_amount = unit.reserved_tile_effect_slot_offset;
         unit.command_state = kUnitStateReservedTileLinkedObject;
         return;
     }
@@ -5058,7 +5069,7 @@ void HandleReservedTileWorkCycle(UnitCommandContext& context, UnitMovementUnit& 
 void HandleReservedTileLinkedObject(UnitCommandContext& context, UnitMovementUnit& unit) {
     if (!has_reserved_tile_linked_object(unit)) {
         unit.reserved_tile_effect = nullptr;
-        unit.linked_effect_slot_offset = 0;
+        unit.reserved_tile_effect_slot_offset = 0;
         unit.command_state = kUnitStateReservedTileStart;
         unit.animation_frame = 0;
         return;

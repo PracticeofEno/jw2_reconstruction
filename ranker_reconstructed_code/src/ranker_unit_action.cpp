@@ -72,6 +72,18 @@ i32 action_center_y(const UnitMovementUnit& unit) {
         unit.definition.center_bounds_height);
 }
 
+UnitEffectRuntime* effect_slot_from_original_offset_allow_inactive(
+    UnitEffectRuntimeState& state, u32 offset) {
+    constexpr u32 kOriginalEffectStride = 0xa8u;
+    if (offset == 0 || (offset % kOriginalEffectStride) != 0) {
+        return nullptr;
+    }
+    const std::size_t index = offset / kOriginalEffectStride - 1u;
+    return index < state.effect_slots.size()
+        ? &state.effect_slots[index]
+        : nullptr;
+}
+
 constexpr u32 action_direction_or_previous(u32 previous_direction,
     u32 calculated_direction) {
     return calculated_direction != 0 ? calculated_direction : previous_direction;
@@ -166,6 +178,9 @@ const UnitEffectDefinition* find_effect_definition(
 }
 
 UnitMovementUnit* find_effect_unit(UnitEffectRuntimeState& state, u32 unit_id) {
+    if (unit_id == 0) {
+        return nullptr;
+    }
     for (UnitMovementUnit* unit : state.unit_refs) {
         if (unit != nullptr && unit->id == unit_id) {
             return unit;
@@ -176,11 +191,36 @@ UnitMovementUnit* find_effect_unit(UnitEffectRuntimeState& state, u32 unit_id) {
         [unit_id](const UnitMovementUnit& unit) {
             return unit.id == unit_id;
         });
-    return it == state.units.end() ? nullptr : &*it;
+    if (it != state.units.end()) {
+        return &*it;
+    }
+
+    // OBB raw +0x18/+0x1c references the physical record-7 pool, not merely
+    // its active list.  Preserve active scan order above, then resolve legal
+    // corpse/transition and stale free-node references by fixed-pool id.
+    UnitMovementContext* movement = state.lifecycle_context != nullptr
+        ? state.lifecycle_context->movement
+        : nullptr;
+    if (movement != nullptr) {
+        for (UnitMovementUnit* unit : movement->lifecycle_units) {
+            if (unit != nullptr && unit->id == unit_id) {
+                return unit;
+            }
+        }
+        for (UnitMovementUnit* unit : movement->free_units) {
+            if (unit != nullptr && unit->id == unit_id) {
+                return unit;
+            }
+        }
+    }
+    return nullptr;
 }
 
 const UnitMovementUnit* find_effect_unit(
     const UnitEffectRuntimeState& state, u32 unit_id) {
+    if (unit_id == 0) {
+        return nullptr;
+    }
     for (const UnitMovementUnit* unit : state.unit_refs) {
         if (unit != nullptr && unit->id == unit_id) {
             return unit;
@@ -191,7 +231,26 @@ const UnitMovementUnit* find_effect_unit(
         [unit_id](const UnitMovementUnit& unit) {
             return unit.id == unit_id;
         });
-    return it == state.units.end() ? nullptr : &*it;
+    if (it != state.units.end()) {
+        return &*it;
+    }
+
+    const UnitMovementContext* movement = state.lifecycle_context != nullptr
+        ? state.lifecycle_context->movement
+        : nullptr;
+    if (movement != nullptr) {
+        for (const UnitMovementUnit* unit : movement->lifecycle_units) {
+            if (unit != nullptr && unit->id == unit_id) {
+                return unit;
+            }
+        }
+        for (const UnitMovementUnit* unit : movement->free_units) {
+            if (unit != nullptr && unit->id == unit_id) {
+                return unit;
+            }
+        }
+    }
+    return nullptr;
 }
 
 const UnitMovementDefinition* find_effect_unit_definition(
@@ -1180,23 +1239,19 @@ bool apply_unit_effect_raw_health_damage(UnitEffectRuntimeState& state,
     // record before touching HP.  This is intentionally not an impact event:
     // action 0x18 calls the helper directly and the shared event drain would
     // apply the same point of damage a second time.
-    if ((target.runtime_flags & 0x100u) != 0 &&
-        target.linked_effect_slot_offset >= 0xa8u &&
-        (target.linked_effect_slot_offset % 0xa8u) == 0) {
-        const std::size_t shield_index =
-            target.linked_effect_slot_offset / 0xa8u - 1u;
-        if (shield_index < state.effect_slots.size()) {
-            UnitEffectRuntime& shield = state.effect_slots[shield_index];
-            if (shield.active && shield.effect_id == 0x3fu &&
-                shield.linked_unit_id == target.id) {
-                if (shield.amount > amount) {
-                    shield.amount -= amount;
-                    return false;
-                }
-                amount -= shield.amount;
-                target.runtime_flags &= ~0x100u;
-                ReleaseUnitEffectSlot(state, shield);
+    if ((target.runtime_flags & 0x100u) != 0) {
+        if (UnitEffectRuntime* shield =
+                effect_slot_from_original_offset_allow_inactive(
+                    state, target.linked_effect_slot_offset)) {
+            // FUN_004c212c follows raw unit +0xf0 directly.  It neither tests
+            // list ownership nor revalidates the stale node's id/source.
+            if (shield->amount > amount) {
+                shield->amount -= amount;
+                return false;
             }
+            amount -= shield->amount;
+            target.runtime_flags &= ~0x100u;
+            ReleaseUnitEffectSlot(state, *shield);
         }
     }
 
@@ -4104,23 +4159,16 @@ bool DispatchSelectedUnitActionEffect(UnitEffectRuntimeState& state,
     // target.  Recasting an active shield refreshes that record instead of
     // allocating a second effect (0x004ef7fa..0x004ef86d).
     if (action_id == 2 && target != nullptr &&
-        (target->runtime_flags & 0x100u) != 0 &&
-        target->linked_effect_slot_offset >= 0xa8u &&
-        (target->linked_effect_slot_offset % 0xa8u) == 0) {
-        const std::size_t shield_index =
-            target->linked_effect_slot_offset / 0xa8u - 1u;
-        if (shield_index < state.effect_slots.size()) {
-            UnitEffectRuntime& shield = state.effect_slots[shield_index];
-            if (shield.active && shield.effect_id == effect_id &&
-                shield.linked_unit_id == target->id) {
-                shield.amount = scaled_effect_amount();
-                // The caller already reserved this pool slot.  Return it
-                // silently; the original refresh path never publishes a
-                // start/finish event for a second effect.
-                effect.active = false;
-                ReleaseUnitEffectSlot(state, effect);
-                return true;
-            }
+        (target->runtime_flags & 0x100u) != 0) {
+        if (UnitEffectRuntime* shield =
+                effect_slot_from_original_offset_allow_inactive(
+                    state, target->linked_effect_slot_offset)) {
+            shield->amount = scaled_effect_amount();
+            // The caller already reserved this pool slot.  Return it silently;
+            // the original refresh path never publishes a second effect.
+            effect.active = false;
+            ReleaseUnitEffectSlot(state, effect);
+            return true;
         }
     }
 
@@ -4218,13 +4266,23 @@ bool DispatchSelectedUnitActionEffect(UnitEffectRuntimeState& state,
         // Bline's initializer (0x004efc8a) stores source/target centers while
         // leaving flags at mode zero; its tick handler interprets flags as
         // command modes 0/1/2, not as generic impact/projectile flags.
+        const i32 retained_target_x = effect.target_x;
+        const i32 retained_target_y = effect.target_y;
         CalculateUnitEffectSourceAndTargetCenters(
             state, effect, source, target, world_x, world_y);
+        const i32 target_center_x = effect.target_x;
+        const i32 target_center_y = effect.target_y;
         // The Bline initializer at 0x004efc8a..0x004efce7 writes only the
-        // source/target links and their center coordinates.  Raw +0x04 is
-        // untouched, as is raw +0x08.  Both therefore retain their prior
-        // payload values when a pool node is reused.  The shared center helper
-        // derives a direction, so restore both incoming words afterward.
+        // source/target links, source center at +0x20/+0x24, and target center
+        // at +0x30/+0x34.  Raw +0x28/+0x2c, +0x04 and +0x08 remain recycled
+        // payload.  Keep both typed aliases of +0x30/+0x34 coherent because
+        // rendering reads previous_x/y while save export reads abs_delta_x/y.
+        effect.previous_x = target_center_x;
+        effect.previous_y = target_center_y;
+        effect.abs_delta_x = static_cast<u32>(target_center_x);
+        effect.abs_delta_y = static_cast<u32>(target_center_y);
+        effect.target_x = retained_target_x;
+        effect.target_y = retained_target_y;
         effect.direction = retained_slot_direction;
         effect.linked_unit_id = target != nullptr ? target->id : 0;
         effect.flags = retained_slot_flags;

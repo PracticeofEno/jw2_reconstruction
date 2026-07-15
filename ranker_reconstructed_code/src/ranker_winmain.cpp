@@ -83,6 +83,7 @@
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -113,6 +114,12 @@ void sync_default_gameplay_tooltip_object_texts(GameplayTooltipState& tooltip);
 void set_default_primary_miles_music_policy_mode(u32 mode);
 void send_startup_fatal_and_close(const char* detail);
 u32 pump_default_p2p_replay_frame_gate(GameplayLoopState& state);
+u32 ensure_default_gameplay_script_object_index_for_unit(
+    GameplayScriptTriggerState& script, UnitMovementUnit& unit);
+void sync_default_gameplay_script_object_from_unit(
+    GameplayScriptTriggerObjectState& object, UnitMovementUnit& unit);
+void sync_default_gameplay_script_scenario_record(
+    const GameplayScriptTriggerState& script);
 
 void append_startup_log(const char* format, ...) {
     if (format == nullptr) {
@@ -493,8 +500,11 @@ constexpr u32 kGameplayOriginalUnitPoolByteCount =
     kGameplayScenarioObjectStride * kGameplayScenarioObjectMaxSlots;
 constexpr std::size_t kGameplayHeaderPresentFrameOffset = 0x1408;
 constexpr std::size_t kGameplayHeaderSimulationFrameOffset = 0x140c;
+constexpr std::size_t kGameplayHeaderUnitEffectActiveListHeadOffset = 0x1434;
+constexpr std::size_t kGameplayHeaderUnitEffectFreeListHeadOffset = 0x1438;
 constexpr std::size_t kGameplayHeaderUnitActiveListHeadOffset = 0x143c;
 constexpr std::size_t kGameplayHeaderUnitFreeListHeadOffset = 0x1440;
+constexpr std::size_t kGameplayHeaderUnitLifecycleListHeadOffset = 0x1444;
 constexpr std::size_t kGameplayHeaderMapEffectActiveListHeadOffset = 0x1448;
 constexpr std::size_t kGameplayHeaderMapEffectFreeListHeadOffset = 0x144c;
 constexpr std::size_t kGameplayHeaderRandomLimitOffset = 0x1420;
@@ -570,6 +580,35 @@ constexpr std::size_t kGameplayHeaderProductionRuntimeEndOffset =
 constexpr u32 kGameplayMapEffectObjectRecordIndex = 8;
 constexpr u32 kGameplayMapEffectObjectStride = 0x3c;
 constexpr u32 kGameplayMapEffectObjectMaxSlots = 0x200;
+constexpr u32 kGameplayUnitEffectObjectRecordIndex = 6;
+constexpr u32 kGameplayUnitEffectObjectStride = 0xa8;
+constexpr u32 kGameplayUnitEffectRawBlockCount = 0x200;
+constexpr u32 kGameplayUnitEffectUsableSlotCount =
+    kGameplayUnitEffectRawBlockCount - 1;
+constexpr std::size_t kGameplayUnitEffectObjectIdOffset = 0x00;
+constexpr std::size_t kGameplayUnitEffectObjectDirectionOffset = 0x04;
+constexpr std::size_t kGameplayUnitEffectObjectFlagsOffset = 0x08;
+constexpr std::size_t kGameplayUnitEffectObjectCounter0cOffset = 0x0c;
+constexpr std::size_t kGameplayUnitEffectObjectState10Offset = 0x10;
+constexpr std::size_t kGameplayUnitEffectObjectAmountOffset = 0x14;
+constexpr std::size_t kGameplayUnitEffectObjectSourceUnitOffset = 0x18;
+constexpr std::size_t kGameplayUnitEffectObjectTargetUnitOffset = 0x1c;
+constexpr std::size_t kGameplayUnitEffectObjectXOffset = 0x20;
+constexpr std::size_t kGameplayUnitEffectObjectYOffset = 0x24;
+constexpr std::size_t kGameplayUnitEffectObjectTargetXOffset = 0x28;
+constexpr std::size_t kGameplayUnitEffectObjectTargetYOffset = 0x2c;
+constexpr std::size_t kGameplayUnitEffectObjectAxis30Offset = 0x30;
+constexpr std::size_t kGameplayUnitEffectObjectAxis34Offset = 0x34;
+constexpr std::size_t kGameplayUnitEffectObjectAbsXOffset = 0x38;
+constexpr std::size_t kGameplayUnitEffectObjectAbsYOffset = 0x3c;
+constexpr std::size_t kGameplayUnitEffectObjectStepXOffset = 0x40;
+constexpr std::size_t kGameplayUnitEffectObjectStepYOffset = 0x44;
+constexpr std::size_t kGameplayUnitEffectObjectClosestDistanceOffset = 0x48;
+constexpr std::size_t kGameplayUnitEffectObjectHitCountOffset = 0x4c;
+constexpr std::size_t kGameplayUnitEffectObjectHitHistoryOffset = 0x50;
+constexpr u32 kGameplayUnitEffectHitHistoryCapacity = 0x10;
+constexpr std::size_t kGameplayUnitEffectObjectPreviousOffset = 0xa0;
+constexpr std::size_t kGameplayUnitEffectObjectNextOffset = 0xa4;
 constexpr std::size_t kGameplayScenarioObjectTypeOffset = 0x00;
 constexpr std::size_t kGameplayScenarioObjectOwnerOffset = 0x04;
 constexpr std::size_t kGameplayScenarioObjectStringSlotOffset = 0x08;
@@ -718,7 +757,7 @@ constexpr std::size_t kJw211EffectSoundFrameBaseOffset = 0x878;
 constexpr std::size_t kJw211EffectImpactFrameCountOffset = 0x8b8;
 constexpr std::size_t kJw211EffectImpactFrameBaseOffset = 0x8bc;
 constexpr u32 kJw21xEffectMaxTimerValue = 0x1000;
-constexpr u32 kUnitEffectOriginalSlotStride = 0xa8;
+constexpr u32 kUnitEffectOriginalSlotStride = kGameplayUnitEffectObjectStride;
 constexpr u32 kJw211EffectMaxFrameSoundEntries = 8;
 constexpr u32 kJw211EffectMaxImpactFrameEntries = 64;
 constexpr u32 kAuxiliaryEffectMaxImageIndexEntries = 128;
@@ -3133,6 +3172,80 @@ void sync_default_gameplay_modal_players(GameplayModalUiState& modal) {
     }
 }
 
+void sync_default_gameplay_player_session_record() {
+    std::vector<u8>* record =
+        MutableGameplaySessionLoadedRecord(kGameplaySessionPlayerRecordIndex);
+    if (record == nullptr ||
+        record->size() < kGameplaySessionPlayerRecordBytes) {
+        return;
+    }
+
+    const GameplaySessionStartupState& startup =
+        g_runtime.gameplay_startup_state;
+    const PlayerSlotRuntimeState& players = g_runtime.gameplay_player_slots;
+    const UnitLifecycleContext* lifecycle = startup.lifecycle;
+
+    write_default_session_buffer_u32(*record,
+        kSessionPlayerRecordLocalOwnerOffset,
+        std::min<u32>(players.local_player_slot, kPlayerSlotCount - 1));
+
+    for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+        const std::size_t name_offset =
+            kSessionPlayerRecordNameBaseOffset +
+            static_cast<std::size_t>(owner) *
+                kSessionPlayerRecordNameStride;
+        std::fill_n(record->begin() + name_offset,
+            kSessionPlayerRecordNameStride, u8{0});
+        const std::string name = default_gameplay_modal_player_display_name(owner);
+        const std::size_t name_bytes = std::min<std::size_t>(
+            name.size(), kSessionPlayerRecordNameStride - 1);
+        std::copy_n(name.begin(), name_bytes,
+            record->begin() + name_offset);
+
+        const GameplayScenarioOwnerSlot& slot = startup.owner_slots[owner];
+        write_default_session_buffer_u32(*record,
+            kSessionPlayerRecordFactionBaseOffset + owner * sizeof(u32),
+            slot.faction_id);
+        write_default_session_buffer_u32(*record,
+            kSessionPlayerRecordSlotStateBaseOffset + owner * sizeof(u32),
+            players.slot_states[owner]);
+        const std::size_t start_offset =
+            kSessionPlayerRecordStartCoordinateBaseOffset +
+            static_cast<std::size_t>(owner) *
+                kSessionPlayerRecordStartCoordinateStride;
+        write_default_session_buffer_u32(
+            *record, start_offset, static_cast<u32>(slot.start_x));
+        write_default_session_buffer_u32(
+            *record, start_offset + sizeof(u32),
+            static_cast<u32>(slot.start_y));
+    }
+
+    for (u32 owner = 0; owner < kPlayerOwnerResourceSlots; ++owner) {
+        const std::size_t resource_offset =
+            static_cast<std::size_t>(owner) * sizeof(u32);
+        const u32 primary = lifecycle != nullptr &&
+                owner < lifecycle->owner_primary_resources.size()
+            ? lifecycle->owner_primary_resources[owner]
+            : players.owner_primary_resources[owner];
+        const u32 secondary = lifecycle != nullptr &&
+                owner < lifecycle->owner_secondary_resources.size()
+            ? lifecycle->owner_secondary_resources[owner]
+            : players.owner_secondary_resources[owner];
+        write_default_session_buffer_u32(*record,
+            kSessionPlayerRecordOwnerResourcePrimaryBaseOffset +
+                resource_offset,
+            primary);
+        write_default_session_buffer_u32(*record,
+            kSessionPlayerRecordOwnerResourceSecondaryBaseOffset +
+                resource_offset,
+            secondary);
+        write_default_session_buffer_u32(*record,
+            kSessionPlayerRecordOwnerResourceAuxBaseOffset +
+                resource_offset,
+            players.owner_aux_resources[owner]);
+    }
+}
+
 void sync_default_gameplay_movement_layer_record(
     u32 relative_record, u32 UnitMovementCell::* field) {
     std::vector<u8>* record = MutableGameplaySessionLoadedRecord(relative_record);
@@ -3164,6 +3277,491 @@ void sync_default_gameplay_movement_map_session_records() {
         kGameplayMapSourceLayerRecordIndex, &UnitMovementCell::alternate_flags);
     sync_default_gameplay_movement_layer_record(
         kGameplayMapEffectLayerRecordIndex, &UnitMovementCell::visibility_flags);
+}
+
+void sync_default_gameplay_unit_pool_list_session_records() {
+    std::vector<u8>* header = MutableGameplaySessionLoadedRecord(0);
+    std::vector<u8>* record =
+        MutableGameplaySessionLoadedRecord(kGameplayScenarioObjectRecordIndex);
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    if (header == nullptr || record == nullptr || movement == nullptr ||
+        header->size() <
+            kGameplayHeaderUnitLifecycleListHeadOffset + sizeof(u32) ||
+        record->size() < kGameplayScenarioObjectStride * 2) {
+        return;
+    }
+
+    const u32 object_count = std::min<u32>(
+        static_cast<u32>(record->size() / kGameplayScenarioObjectStride),
+        kGameplayScenarioObjectMaxSlots);
+    std::vector<u8> claimed(object_count, 0);
+    std::vector<u32> active_indices;
+    std::vector<u32> lifecycle_indices;
+    std::vector<u32> free_indices;
+    active_indices.reserve(movement->active_units.size());
+    lifecycle_indices.reserve(movement->lifecycle_units.size());
+    free_indices.reserve(movement->free_units.size());
+
+    const auto append_unit_slot = [&](const UnitMovementUnit* unit,
+                                      bool require_active,
+                                      std::vector<u32>& indices) {
+        if (unit == nullptr || unit->active != require_active ||
+            unit->runtime_slot_index == 0 ||
+            unit->runtime_slot_index == kInvalidUnitRuntimeSlotIndex ||
+            unit->runtime_slot_index >= object_count ||
+            claimed[unit->runtime_slot_index] != 0) {
+            return;
+        }
+        claimed[unit->runtime_slot_index] = 1;
+        indices.push_back(unit->runtime_slot_index);
+    };
+    for (const UnitMovementUnit* unit : movement->active_units) {
+        append_unit_slot(unit, true, active_indices);
+    }
+    for (const UnitMovementUnit* unit : movement->lifecycle_units) {
+        append_unit_slot(unit, false, lifecycle_indices);
+    }
+    for (const UnitMovementUnit* unit : movement->free_units) {
+        append_unit_slot(unit, false, free_indices);
+    }
+
+    // A fixed-pool slot omitted by a malformed runtime list belongs at the
+    // free-list tail.  This preserves the next allocation while keeping the
+    // serialized pool complete, matching the map-effect pool exporter.
+    for (u32 slot = 1; slot < object_count; ++slot) {
+        if (claimed[slot] == 0) {
+            claimed[slot] = 1;
+            free_indices.push_back(slot);
+        }
+    }
+
+    const auto write_chain = [&](const std::vector<u32>& indices) {
+        for (std::size_t position = 0; position < indices.size(); ++position) {
+            const u32 slot = indices[position];
+            const std::size_t object_base =
+                static_cast<std::size_t>(slot) *
+                kGameplayScenarioObjectStride;
+            const u32 previous = position == 0 ? 0 :
+                indices[position - 1] * kGameplayScenarioObjectStride;
+            const u32 next = position + 1 >= indices.size() ? 0 :
+                indices[position + 1] * kGameplayScenarioObjectStride;
+            write_default_session_buffer_u32(*record,
+                object_base + kGameplayScenarioObjectPreviousLinkOffset,
+                previous);
+            write_default_session_buffer_u32(*record,
+                object_base + kGameplayScenarioObjectNextLinkOffset,
+                next);
+        }
+    };
+    write_chain(active_indices);
+    write_chain(lifecycle_indices);
+    write_chain(free_indices);
+
+    write_default_session_buffer_u32(*header,
+        kGameplayHeaderUnitActiveListHeadOffset,
+        active_indices.empty() ? 0 :
+            active_indices.front() * kGameplayScenarioObjectStride);
+    write_default_session_buffer_u32(*header,
+        kGameplayHeaderUnitFreeListHeadOffset,
+        free_indices.empty() ? 0 :
+            free_indices.front() * kGameplayScenarioObjectStride);
+    write_default_session_buffer_u32(*header,
+        kGameplayHeaderUnitLifecycleListHeadOffset,
+        lifecycle_indices.empty() ? 0 :
+            lifecycle_indices.front() * kGameplayScenarioObjectStride);
+}
+
+bool default_unit_effect_serialized_offset_to_index(
+    const std::vector<u8>& record, u32 offset, std::size_t& index) {
+    index = 0;
+    if (offset == 0 ||
+        (offset % kGameplayUnitEffectObjectStride) != 0) {
+        return false;
+    }
+    const u32 physical_index = offset / kGameplayUnitEffectObjectStride;
+    if (physical_index == 0 ||
+        physical_index > kGameplayUnitEffectUsableSlotCount) {
+        return false;
+    }
+    const std::size_t object_base =
+        static_cast<std::size_t>(physical_index) *
+        kGameplayUnitEffectObjectStride;
+    if (object_base > record.size() ||
+        record.size() - object_base < kGameplayUnitEffectObjectStride) {
+        return false;
+    }
+    index = physical_index - 1u;
+    return true;
+}
+
+bool read_default_unit_effect_serialized_chain(
+    const std::vector<u8>& record, u32 head,
+    std::vector<std::size_t>& head_to_tail) {
+    head_to_tail.clear();
+    std::vector<u8> visited(kGameplayUnitEffectUsableSlotCount, 0);
+    u32 previous = 0;
+    u32 cursor = head;
+    while (cursor != 0) {
+        std::size_t index = 0;
+        if (!default_unit_effect_serialized_offset_to_index(
+                record, cursor, index) ||
+            index >= visited.size() || visited[index] != 0) {
+            head_to_tail.clear();
+            return false;
+        }
+        const std::size_t object_base =
+            (index + 1u) * kGameplayUnitEffectObjectStride;
+        if (read_default_session_record_u32(record,
+                object_base + kGameplayUnitEffectObjectPreviousOffset,
+                0xffffffffu) != previous) {
+            head_to_tail.clear();
+            return false;
+        }
+        visited[index] = 1;
+        head_to_tail.push_back(index);
+        previous = cursor;
+        cursor = read_default_session_record_u32(record,
+            object_base + kGameplayUnitEffectObjectNextOffset, 0);
+    }
+    return true;
+}
+
+bool recover_default_unit_effect_serialized_lists(
+    const std::vector<u8>& header, const std::vector<u8>& record,
+    std::vector<std::size_t>& active_head_to_tail,
+    std::vector<std::size_t>& free_head_to_tail) {
+    active_head_to_tail.clear();
+    free_head_to_tail.clear();
+    if (header.size() <
+            kGameplayHeaderUnitEffectFreeListHeadOffset + sizeof(u32) ||
+        record.size() < static_cast<std::size_t>(
+            kGameplayUnitEffectRawBlockCount) *
+            kGameplayUnitEffectObjectStride) {
+        return false;
+    }
+
+    const u32 active_head = read_default_session_record_u32(header,
+        kGameplayHeaderUnitEffectActiveListHeadOffset, 0);
+    const u32 free_head = read_default_session_record_u32(header,
+        kGameplayHeaderUnitEffectFreeListHeadOffset, 0);
+    if (!read_default_unit_effect_serialized_chain(
+            record, active_head, active_head_to_tail) ||
+        !read_default_unit_effect_serialized_chain(
+            record, free_head, free_head_to_tail)) {
+        active_head_to_tail.clear();
+        free_head_to_tail.clear();
+        return false;
+    }
+
+    std::vector<u8> claimed(kGameplayUnitEffectUsableSlotCount, 0);
+    for (const std::size_t index : active_head_to_tail) {
+        if (index >= claimed.size() || claimed[index] != 0) {
+            active_head_to_tail.clear();
+            free_head_to_tail.clear();
+            return false;
+        }
+        claimed[index] = 1;
+    }
+    for (const std::size_t index : free_head_to_tail) {
+        if (index >= claimed.size() || claimed[index] != 0) {
+            active_head_to_tail.clear();
+            free_head_to_tail.clear();
+            return false;
+        }
+        claimed[index] = 1;
+    }
+    // Both intrusive roots must cover the physical pool exactly.  Treating a
+    // node orphaned by a truncated active chain as free would silently change
+    // live effects; reject the whole recovery and use the all-free fallback.
+    if (std::find(claimed.begin(), claimed.end(), u8{0}) != claimed.end()) {
+        active_head_to_tail.clear();
+        free_head_to_tail.clear();
+        return false;
+    }
+    return true;
+}
+
+bool default_unit_effect_uses_serialized_path_axes(
+    const UnitEffectRuntimeState& effects, const UnitEffectRuntime& effect) {
+    if ((effect.flags & kUnitEffectFlagStartup) != 0) {
+        return false;
+    }
+    // Effect 0x20's afterimage clone stays in the active dispatcher, but its
+    // tick handler advances only the frame/timer union.  Raw +0x30..+0x3c
+    // therefore remain opaque saved-state words rather than path axes.
+    if (effect.effect_id == 0x20u &&
+        (effect.flags & kUnitEffectFlagAfterimageClone) != 0) {
+        return false;
+    }
+    if ((effect.flags & kUnitEffectFlagImpact) != 0) {
+        // Generic low projectiles retain their live Bresenham scratch after
+        // entering impact.  Three fixed-impact handlers instead own opaque
+        // +0x30/+0x34 unions and must preserve their backing words.
+        return effect.effect_id < 0x3du && effect.effect_id != 0x1eu &&
+            effect.effect_id != 0x22u && effect.effect_id != 0x26u;
+    }
+    // Sky Fallout, Blasting, and Bline have dedicated in-place active
+    // handlers.  Their definition loop fields do not turn raw +0x30..+0x3c
+    // into path scratch (and mode-5 overrides must not do so either).
+    if (effect.effect_id == 0x4du || effect.effect_id == 0x62u ||
+        effect.effect_id == 0x69u) {
+        return false;
+    }
+    // Berry-fly (selected action 0x26) owns a dedicated path initializer and
+    // active handler.  Its movement does not depend on mutable definition
+    // path-control fields, including mode-5 tail overrides.
+    if (effect.effect_id == 0x63u) {
+        return true;
+    }
+    if (effect.effect_id < 0x3du) {
+        return true;
+    }
+    const UnitEffectDefinition* definition =
+        find_default_unit_effect_definition(effects, effect.effect_id);
+    return definition != nullptr &&
+        (definition->action_path_control == 1 ||
+            definition->action_projectile_loop_ticks != 0);
+}
+
+void rebind_default_reserved_tile_effect_from_raw_cargo(
+    UnitMovementUnit& unit) {
+    unit.reserved_tile_effect = nullptr;
+    unit.reserved_tile_effect_slot_offset = 0;
+    if ((unit.command_state & kUnitCommandStateMask) !=
+            kUnitStateReservedTileLinkedObject) {
+        return;
+    }
+
+    const u32 effect_offset = unit.cargo_amount;
+    if (effect_offset == 0 ||
+        (effect_offset % kGameplayUnitEffectObjectStride) != 0) {
+        return;
+    }
+    const u32 physical_index =
+        effect_offset / kGameplayUnitEffectObjectStride;
+    if (physical_index == 0 ||
+        physical_index > kGameplayUnitEffectUsableSlotCount) {
+        return;
+    }
+
+    UnitEffectRuntimeState& effects =
+        g_runtime.gameplay_unit_effect_runtime;
+    const std::size_t index = physical_index - 1u;
+    if (index >= effects.effect_slots.size()) {
+        return;
+    }
+    unit.reserved_tile_effect_slot_offset = effect_offset;
+    UnitEffectRuntime& effect = effects.effect_slots[index];
+    // Original state 0x58 accepts an inactive/recycled OBB node and validates
+    // only the source reference at effect raw +0x18.
+    if (effect.source_unit_id == unit.id) {
+        unit.reserved_tile_effect = &effect;
+    }
+}
+
+void sync_default_unit_effect_runtime_session_record() {
+    std::vector<u8>* header = MutableGameplaySessionLoadedRecord(0);
+    std::vector<u8>* record = MutableGameplaySessionLoadedRecord(
+        kGameplayUnitEffectObjectRecordIndex);
+    if (header == nullptr || record == nullptr ||
+        header->size() <
+            kGameplayHeaderUnitEffectFreeListHeadOffset + sizeof(u32) ||
+        record->size() < static_cast<std::size_t>(
+            kGameplayUnitEffectRawBlockCount) *
+            kGameplayUnitEffectObjectStride) {
+        return;
+    }
+
+    UnitEffectRuntimeState& effects =
+        g_runtime.gameplay_unit_effect_runtime;
+    std::vector<u8> claimed(kGameplayUnitEffectUsableSlotCount, 0);
+    std::vector<std::size_t> active_indices;
+    std::vector<std::size_t> free_indices;
+    active_indices.reserve(effects.active_effect_indices.size());
+    free_indices.reserve(effects.free_effect_indices.size());
+
+    const auto append_active = [&](std::size_t index) {
+        if (index >= claimed.size() || index >= effects.effect_slots.size() ||
+            claimed[index] != 0 || !effects.effect_slots[index].active) {
+            return;
+        }
+        claimed[index] = 1;
+        active_indices.push_back(index);
+    };
+    for (const std::size_t index : effects.active_effect_indices) {
+        append_active(index);
+    }
+    // Preserve a live effect even if a malformed typed list omitted it.
+    for (std::size_t index = 0;
+         index < effects.effect_slots.size() && index < claimed.size(); ++index) {
+        append_active(index);
+    }
+
+    const auto append_free = [&](std::size_t index) {
+        if (index >= claimed.size() || claimed[index] != 0 ||
+            (index < effects.effect_slots.size() &&
+                effects.effect_slots[index].active)) {
+            return;
+        }
+        claimed[index] = 1;
+        free_indices.push_back(index);
+    };
+    for (const std::size_t index : effects.free_effect_indices) {
+        append_free(index);
+    }
+    for (std::size_t index = 0; index < claimed.size(); ++index) {
+        append_free(index);
+    }
+
+    const auto write_chain = [&](const std::vector<std::size_t>& indices) {
+        for (std::size_t position = 0; position < indices.size(); ++position) {
+            const std::size_t index = indices[position];
+            const std::size_t object_base =
+                (index + 1u) * kGameplayUnitEffectObjectStride;
+            const u32 previous = position == 0 ? 0 : static_cast<u32>(
+                (indices[position - 1] + 1u) *
+                kGameplayUnitEffectObjectStride);
+            const u32 next = position + 1 >= indices.size() ? 0 :
+                static_cast<u32>((indices[position + 1] + 1u) *
+                    kGameplayUnitEffectObjectStride);
+            write_default_session_buffer_u32(*record,
+                object_base + kGameplayUnitEffectObjectPreviousOffset,
+                previous);
+            write_default_session_buffer_u32(*record,
+                object_base + kGameplayUnitEffectObjectNextOffset, next);
+        }
+    };
+    write_chain(active_indices);
+    write_chain(free_indices);
+
+    write_default_session_buffer_u32(*header,
+        kGameplayHeaderUnitEffectActiveListHeadOffset,
+        active_indices.empty() ? 0 : static_cast<u32>(
+            (active_indices.front() + 1u) *
+            kGameplayUnitEffectObjectStride));
+    write_default_session_buffer_u32(*header,
+        kGameplayHeaderUnitEffectFreeListHeadOffset,
+        free_indices.empty() ? 0 : static_cast<u32>(
+            (free_indices.front() + 1u) *
+            kGameplayUnitEffectObjectStride));
+
+    for (std::size_t index = 0;
+         index < effects.effect_slots.size() && index < claimed.size(); ++index) {
+        const UnitEffectRuntime& effect = effects.effect_slots[index];
+        const std::size_t object_base =
+            (index + 1u) * kGameplayUnitEffectObjectStride;
+        const auto write_field = [&](std::size_t field, u32 value) {
+            write_default_session_buffer_u32(
+                *record, object_base + field, value);
+        };
+
+        write_field(kGameplayUnitEffectObjectIdOffset, effect.effect_id);
+        write_field(kGameplayUnitEffectObjectDirectionOffset, effect.direction);
+        write_field(kGameplayUnitEffectObjectFlagsOffset, effect.flags);
+        write_field(kGameplayUnitEffectObjectAmountOffset, effect.amount);
+        write_field(kGameplayUnitEffectObjectSourceUnitOffset,
+            effect.source_unit_id);
+        const u32 target_reference = effect.effect_id < 0x3du
+            ? (effect.target_unit_id != 0 ?
+                effect.target_unit_id : effect.linked_unit_id)
+            : (effect.linked_unit_id != 0 ?
+                effect.linked_unit_id : effect.target_unit_id);
+        write_field(kGameplayUnitEffectObjectTargetUnitOffset,
+            target_reference);
+        write_field(kGameplayUnitEffectObjectXOffset,
+            static_cast<u32>(effect.x));
+        write_field(kGameplayUnitEffectObjectYOffset,
+            static_cast<u32>(effect.y));
+        write_field(kGameplayUnitEffectObjectTargetXOffset,
+            static_cast<u32>(effect.target_x));
+        write_field(kGameplayUnitEffectObjectTargetYOffset,
+            static_cast<u32>(effect.target_y));
+        write_field(kGameplayUnitEffectObjectStepXOffset,
+            static_cast<u32>(effect.step_x));
+        write_field(kGameplayUnitEffectObjectStepYOffset,
+            static_cast<u32>(effect.step_y));
+        write_field(kGameplayUnitEffectObjectClosestDistanceOffset,
+            effect.closest_distance);
+
+        const bool uses_serialized_path_axes =
+            default_unit_effect_uses_serialized_path_axes(effects, effect);
+        if (effect.effect_id >= 0x3du && uses_serialized_path_axes) {
+            // Selected-action projectiles use +0x0c as their loop tick and
+            // +0x10 as the remaining path budget until impact begins.
+            write_field(kGameplayUnitEffectObjectCounter0cOffset, effect.tick);
+            write_field(kGameplayUnitEffectObjectState10Offset, effect.range);
+        } else if (effect.effect_id >= 0x3du) {
+            write_field(kGameplayUnitEffectObjectCounter0cOffset, effect.tick);
+            write_field(kGameplayUnitEffectObjectState10Offset, effect.frame);
+        } else if (effect.effect_id == 0x1eu ||
+            (effect.effect_id == 0x20u &&
+                (effect.flags & kUnitEffectFlagAfterimageClone) != 0)) {
+            write_field(kGameplayUnitEffectObjectCounter0cOffset, effect.frame);
+            write_field(kGameplayUnitEffectObjectState10Offset, effect.tick);
+        } else if ((effect.flags & kUnitEffectFlagStartup) != 0) {
+            write_field(kGameplayUnitEffectObjectCounter0cOffset, effect.tick);
+        } else {
+            write_field(kGameplayUnitEffectObjectCounter0cOffset, effect.frame);
+            if ((effect.flags & kUnitEffectFlagImpact) == 0) {
+                write_field(kGameplayUnitEffectObjectState10Offset, effect.range);
+            } else if (effect.effect_id == 0x22u ||
+                effect.effect_id == 0x26u) {
+                write_field(kGameplayUnitEffectObjectState10Offset,
+                    effect.initial_impact_applied ? 1u : 0u);
+            }
+        }
+
+        if (uses_serialized_path_axes) {
+            const bool y_major =
+                (effect.flags & kUnitEffectFlagProjectileYMajor) != 0;
+            write_field(kGameplayUnitEffectObjectAxis30Offset,
+                y_major ? effect.accumulator_x : effect.abs_delta_x);
+            write_field(kGameplayUnitEffectObjectAxis34Offset,
+                y_major ? effect.abs_delta_y : effect.accumulator_y);
+            write_field(kGameplayUnitEffectObjectAbsXOffset,
+                effect.abs_delta_x);
+            write_field(kGameplayUnitEffectObjectAbsYOffset,
+                effect.abs_delta_y);
+        } else if (effect.effect_id >= 0x3du) {
+            // High-id action handlers reuse +0x30/+0x34 for lifetime and
+            // counters.  +0x38/+0x3c remain untouched backing bytes here.
+            write_field(kGameplayUnitEffectObjectAxis30Offset,
+                effect.abs_delta_x);
+            write_field(kGameplayUnitEffectObjectAxis34Offset,
+                effect.abs_delta_y);
+        } else if (effect.effect_id == 0x1eu) {
+            write_field(kGameplayUnitEffectObjectAxis30Offset,
+                static_cast<u32>(effect.previous_x));
+            write_field(kGameplayUnitEffectObjectAxis34Offset,
+                static_cast<u32>(effect.previous_y));
+        }
+
+        if (effect.effect_id == 0x17u) {
+            // FUN_004ed189 clears raw +0x4c when a live chain projectile is
+            // initialized.  Free nodes retain their stale payload verbatim.
+            if (effect.active) {
+                write_field(kGameplayUnitEffectObjectHitCountOffset, 0);
+            }
+            write_field(kGameplayUnitEffectObjectHitHistoryOffset,
+                effect.chain_remaining);
+            for (std::size_t chain = 0;
+                 chain < effect.chained_target_ids.size(); ++chain) {
+                write_field(kGameplayUnitEffectObjectHitHistoryOffset +
+                    (chain + 1u) * sizeof(u32),
+                    effect.chained_target_ids[chain]);
+            }
+        } else if (effect.effect_id < 0x3du) {
+            const u32 hit_count = static_cast<u32>(std::min<std::size_t>(
+                effect.hit_unit_ids.size(),
+                kGameplayUnitEffectHitHistoryCapacity));
+            write_field(kGameplayUnitEffectObjectHitCountOffset, hit_count);
+            for (u32 hit = 0; hit < hit_count; ++hit) {
+                write_field(kGameplayUnitEffectObjectHitHistoryOffset +
+                    static_cast<std::size_t>(hit) * sizeof(u32),
+                    effect.hit_unit_ids[hit]);
+            }
+        }
+    }
 }
 
 void sync_default_map_effect_context_session_record() {
@@ -3331,6 +3929,50 @@ bool export_default_loaded_gameplay_session_bundle_to(
     }
 
     sync_default_gameplay_movement_map_session_records();
+    sync_default_gameplay_player_session_record();
+    // Script mirroring runs before the unit-runtime phase, so its record-7
+    // image can be one simulation tick behind (or still contain a free node
+    // for a unit produced later that tick).  Snapshot every live active node
+    // into its physical fixed-pool slot immediately before serializing.
+    if (UnitMovementContext* movement = default_gameplay_movement_context()) {
+        GameplayScriptTriggerState& script = gameplay_script_trigger_state();
+        script.condition_context.active_object_order.clear();
+        for (UnitMovementUnit* unit : movement->active_units) {
+            if (unit == nullptr || !unit->active) {
+                continue;
+            }
+            const u32 object_index =
+                ensure_default_gameplay_script_object_index_for_unit(
+                    script, *unit);
+            if (object_index >= script.objects.size()) {
+                continue;
+            }
+            sync_default_gameplay_script_object_from_unit(
+                script.objects[object_index], *unit);
+            script.condition_context.active_object_order.push_back(object_index);
+        }
+        for (UnitMovementUnit* unit : movement->lifecycle_units) {
+            if (unit == nullptr || unit->active) {
+                continue;
+            }
+            const u32 object_index =
+                ensure_default_gameplay_script_object_index_for_unit(
+                    script, *unit);
+            if (object_index >= script.objects.size()) {
+                continue;
+            }
+            sync_default_gameplay_script_object_from_unit(
+                script.objects[object_index], *unit);
+            // Lifecycle-list raw +0x64 aliases the work/death/growth timer.
+            // The typed runtime keeps it separate from the active animation
+            // frame, so project the list-specific value immediately before
+            // serializing record 7.
+            script.objects[object_index].animation_frame = unit->work_timer;
+        }
+        sync_default_gameplay_script_scenario_record(script);
+    }
+    sync_default_gameplay_unit_pool_list_session_records();
+    sync_default_unit_effect_runtime_session_record();
     sync_default_map_effect_context_session_record();
 
     std::vector<TrcWriteRecord> records;
@@ -3810,6 +4452,9 @@ void configure_default_gameplay_modal_ui_callbacks(GameplayModalUiState& state) 
     state.transport_mode = static_cast<u32>(
         std::max<i32>(async_com_state().active_network_transport_mode, 0));
     state.session_mode = g_runtime.gameplay_startup_state.session_mode;
+    state.generic_ai_profile_mode = g_runtime.generic_ai_profile_mode;
+    state.scenario_ai_profile_override =
+        g_runtime.generic_ai_scenario_active;
     state.network_ai_profile_override = g_runtime.network_ai_profile_override;
     state.modal_pause_suppressed =
         gameplay_loop_state().modal_pause_suppressed ||
@@ -6671,17 +7316,13 @@ void default_gameplay_startup_initialize_local_camera(i32 x, i32 y) {
 
 void default_gameplay_startup_after_session_snapshot(
     const std::vector<u8>& snapshot) {
-    if (g_runtime.gameplay_in_game_load_resume.pending) {
-        // A mode-5 in-game load must retain the imported record3 verbatim.
-        // The common fresh-start callback's compact reconstruction snapshot is
-        // not record3-layout-compatible and would erase result/faction data.
-        return;
-    }
-    std::vector<u8>* record =
-        MutableGameplaySessionLoadedRecord(kGameplaySessionPlayerRecordIndex);
-    if (record != nullptr) {
-        *record = snapshot;
-    }
+    (void)snapshot;
+    // append_snapshot is a reconstruction-only compact diagnostic view
+    // (eight bytes per owner), not the original 0x374-byte P_PLAYE layout.
+    // Copying it over record 3 corrupts factions, resources and start points
+    // before the first save.  Keep the imported raw record and update only its
+    // evidenced live fields in their original offsets.
+    sync_default_gameplay_player_session_record();
 }
 
 void default_gameplay_session_update_owner_display_name(
@@ -7704,10 +8345,9 @@ const std::vector<u8>* default_session_player_record() {
     const GameplaySessionLoadState& load = gameplay_session_load_state();
     if (kGameplaySessionPlayerRecordIndex >= load.records.size() ||
         !load.record_loaded[kGameplaySessionPlayerRecordIndex]) {
-        if (g_runtime.gameplay_startup_state.snapshot.size() >=
-            kGameplaySessionPlayerRecordBytes) {
-            return &g_runtime.gameplay_startup_state.snapshot;
-        }
+        // GameplaySessionStartupState::snapshot is a compact diagnostic view,
+        // not the original P_PLAYE layout.  Treating it as record 3 reads
+        // owner bytes as local/faction/resource dwords.
         return nullptr;
     }
 
@@ -8946,34 +9586,105 @@ bool default_command_payload_uses_unit_reference(u32 state, u32 command_value) {
     }
 }
 
-u32 default_command_payload_reference_to_unit_id(u32 state, u32 value) {
-    if (!default_command_payload_uses_unit_reference(state, value)) {
-        return value;
+bool default_unit_command_value_uses_target_reference(u32 state) {
+    switch (state & kUnitCommandStateMask) {
+    case 0x03:
+    case 0x04:
+    case 0x14:
+    case 0x16:
+    case 0x17:
+    case 0x1c:
+    case 0x1d:
+    case 0x1e:
+    case 0x1f:
+    case 0x20:
+    case 0x21:
+    case 0x22:
+    case 0x24:
+    case 0x2b:
+    case 0x2c:
+    case 0x37:
+    case 0x38:
+    case 0x39:
+    case 0x3a:
+    case 0x3c:
+    case 0x3d:
+    case 0x3e:
+    case 0x3f:
+    case 0x41:
+    case 0x45:
+    case 0x48:
+    case 0x49:
+    case 0x5b:
+    case 0x5f:
+    case 0x60:
+    case 0x61:
+        return true;
+    default:
+        return false;
     }
-    return default_scenario_object_reference_to_unit_id(value);
+}
+
+bool default_active_command_payload_uses_target_reference(u32 state) {
+    switch (state & kUnitCommandStateMask) {
+    case 0x0c:
+    case 0x0d:
+    case 0x0e:
+    case 0x10:
+    case 0x11:
+    case 0x12:
+    case 0x64:
+    case 0x65:
+    case 0x66:
+    case 0x69:
+    case 0x6a:
+    case 0x73:
+    case 0x74:
+    case 0x75:
+    case 0x7d:
+    case 0x7e:
+    case 0x7f:
+    case 0x87:
+    case 0x88:
+    case 0x89:
+        return true;
+    default:
+        return false;
+    }
+}
+
+u32 default_unit_target_reference(const UnitMovementUnit& unit) {
+    // Raw +0x68 is a state-dependent union.  Construction nodes and the
+    // target-bearing runtime states store a fixed-pool offset directly.
+    if (unit.action_mode_gate == 1 ||
+        default_unit_command_value_uses_target_reference(unit.command_state)) {
+        return unit.command_value;
+    }
+
+    // Several active command tuples retain the target offset at raw +0xd8
+    // while typed runtime code uses +0x68 for an amount, type or counter.
+    if (default_active_command_payload_uses_target_reference(
+            unit.active_command_payload.state)) {
+        return static_cast<u32>(unit.active_command_payload.x);
+    }
+    return 0;
+}
+
+u32 default_command_payload_reference_to_unit_id(u32 state, u32 value) {
+    // Record 7 is a byte-for-byte image of the original fixed unit pool.
+    // Target-bearing queued commands already store the target's 0x1d0-byte
+    // pool offset, which is also the reconstructed runtime unit id.  Dividing
+    // it into a scenario slot here made a restored command point at a unit id
+    // that can never be resolved.
+    (void)state;
+    return value;
 }
 
 u32 default_unit_id_to_command_payload_reference(u32 state, u32 value) {
-    if (!default_command_payload_uses_unit_reference(state, value)) {
-        return value;
-    }
-
-    // Small raw offsets are numerically indistinguishable from legacy object
-    // indices by range alone (slots 1..4 are 0x1d0..0x740).  Prefer the live
-    // unit's stable runtime slot before applying the legacy index conversion,
-    // otherwise those valid wire ids would be multiplied by 0x1d0 twice.
-    if (const UnitMovementUnit* target =
-            find_default_movement_unit_by_id(value)) {
-        const u32 slot = target->runtime_slot_index;
-        if (slot != 0 && slot != kInvalidUnitRuntimeSlotIndex &&
-            slot < kGameplayScenarioObjectMaxSlots) {
-            return slot * kGameplayScenarioObjectStride;
-        }
-    }
-    if (value >= kGameplayScenarioObjectMaxSlots) {
-        return value;
-    }
-    return default_scenario_object_id_to_reference(value);
+    // The command tuple shares the raw fixed-pool namespace used at runtime;
+    // no slot-index conversion occurs when the original saves this record.
+    (void)state;
+    return value;
 }
 
 u32 compose_default_scenario_object_command_state(
@@ -9110,9 +9821,9 @@ void load_default_gameplay_script_scenario_object(
         kGameplayScenarioObjectPendingCommandValueOffset,
         kGameplayScenarioObjectPendingCommandXOffset,
         kGameplayScenarioObjectPendingCommandYOffset);
-    object.linked_object_id = default_scenario_object_reference_to_unit_id(
-        read_default_scenario_object_u32(
-            bytes, object_base, kGameplayScenarioObjectLinkedObjectOffset));
+    // Raw +0x94 is another fixed-pool byte offset, not an intrusive-list slot.
+    object.linked_object_id = read_default_scenario_object_u32(
+        bytes, object_base, kGameplayScenarioObjectLinkedObjectOffset);
     object.command_entry_lockout_ticks = read_default_scenario_object_u32(
         bytes, object_base, kGameplayScenarioObjectCommandEntryLockoutTicksOffset);
     object.command_flags = read_default_scenario_object_u32(
@@ -9599,6 +10310,202 @@ void initialize_default_map_effect_context_from_session_records() {
     configure_default_map_effect_context();
 }
 
+void initialize_default_unit_effect_runtime_from_session_records() {
+    UnitEffectRuntimeState& effects =
+        g_runtime.gameplay_unit_effect_runtime;
+    effects.effect_slot_capacity = kGameplayUnitEffectUsableSlotCount;
+    effects.effect_slots.assign(
+        kGameplayUnitEffectUsableSlotCount, UnitEffectRuntime{});
+    effects.active_effect_indices.clear();
+    effects.free_effect_indices.clear();
+    configure_default_unit_effect_runtime_state(effects);
+
+    const GameplaySessionLoadState& load = gameplay_session_load_state();
+    const std::vector<u8>* record = nullptr;
+    if (kGameplayUnitEffectObjectRecordIndex < load.records.size() &&
+        load.record_loaded[kGameplayUnitEffectObjectRecordIndex] &&
+        load.records[kGameplayUnitEffectObjectRecordIndex].size() >=
+            static_cast<std::size_t>(kGameplayUnitEffectRawBlockCount) *
+                kGameplayUnitEffectObjectStride) {
+        record = &load.records[kGameplayUnitEffectObjectRecordIndex];
+    }
+
+    if (record != nullptr) {
+        for (std::size_t index = 0;
+             index < effects.effect_slots.size(); ++index) {
+            UnitEffectRuntime& effect = effects.effect_slots[index];
+            const std::size_t object_base =
+                (index + 1u) * kGameplayUnitEffectObjectStride;
+            const auto read_field = [&](std::size_t field, u32 fallback = 0u) {
+                return read_default_session_record_u32(
+                    *record, object_base + field, fallback);
+            };
+            const auto read_signed_field = [&](std::size_t field) {
+                const u32 raw = read_field(field);
+                i32 value = 0;
+                std::memcpy(&value, &raw, sizeof(value));
+                return value;
+            };
+
+            effect.effect_id = read_field(kGameplayUnitEffectObjectIdOffset);
+            effect.direction = read_field(
+                kGameplayUnitEffectObjectDirectionOffset);
+            effect.flags = read_field(kGameplayUnitEffectObjectFlagsOffset);
+            effect.amount = read_field(kGameplayUnitEffectObjectAmountOffset);
+            effect.source_unit_id = read_field(
+                kGameplayUnitEffectObjectSourceUnitOffset);
+            const u32 target_reference = read_field(
+                kGameplayUnitEffectObjectTargetUnitOffset);
+            effect.target_unit_id = target_reference;
+            effect.linked_unit_id = target_reference;
+            effect.x = read_signed_field(kGameplayUnitEffectObjectXOffset);
+            effect.y = read_signed_field(kGameplayUnitEffectObjectYOffset);
+            effect.target_x = read_signed_field(
+                kGameplayUnitEffectObjectTargetXOffset);
+            effect.target_y = read_signed_field(
+                kGameplayUnitEffectObjectTargetYOffset);
+            effect.delta_x = effect.target_x - effect.x;
+            effect.delta_y = effect.target_y - effect.y;
+            effect.step_x = read_signed_field(
+                kGameplayUnitEffectObjectStepXOffset);
+            effect.step_y = read_signed_field(
+                kGameplayUnitEffectObjectStepYOffset);
+            effect.closest_distance = read_field(
+                kGameplayUnitEffectObjectClosestDistanceOffset,
+                0xffffffffu);
+
+            const u32 raw_counter0c = read_field(
+                kGameplayUnitEffectObjectCounter0cOffset);
+            const u32 raw_state10 = read_field(
+                kGameplayUnitEffectObjectState10Offset);
+            const bool uses_serialized_path_axes =
+                default_unit_effect_uses_serialized_path_axes(effects, effect);
+            if (effect.effect_id >= 0x3du && uses_serialized_path_axes) {
+                effect.tick = raw_counter0c;
+                effect.range = raw_state10;
+                // Keep the dynamic raw +0x10 alias coherent for render paths
+                // that inspect frame immediately as impact is entered.
+                effect.frame = raw_state10;
+            } else if (effect.effect_id >= 0x3du) {
+                effect.tick = raw_counter0c;
+                effect.frame = raw_state10;
+            } else if (effect.effect_id == 0x1eu ||
+                (effect.effect_id == 0x20u &&
+                    (effect.flags & kUnitEffectFlagAfterimageClone) != 0)) {
+                effect.frame = raw_counter0c;
+                effect.tick = raw_state10;
+            } else if ((effect.flags & kUnitEffectFlagStartup) != 0) {
+                effect.tick = raw_counter0c;
+                effect.frame = raw_state10;
+            } else {
+                effect.frame = raw_counter0c;
+                effect.tick = raw_counter0c;
+                if ((effect.flags & kUnitEffectFlagImpact) == 0) {
+                    effect.range = raw_state10;
+                }
+            }
+            if ((effect.effect_id == 0x22u || effect.effect_id == 0x26u) &&
+                (effect.flags & kUnitEffectFlagImpact) != 0) {
+                // The original increments raw +0x10 before its one-shot
+                // impact call; restoring false would apply the damage twice.
+                effect.initial_impact_applied = raw_state10 != 0;
+            }
+
+            const u32 raw_axis30 = read_field(
+                kGameplayUnitEffectObjectAxis30Offset);
+            const u32 raw_axis34 = read_field(
+                kGameplayUnitEffectObjectAxis34Offset);
+            const u32 raw_abs_x = read_field(
+                kGameplayUnitEffectObjectAbsXOffset);
+            const u32 raw_abs_y = read_field(
+                kGameplayUnitEffectObjectAbsYOffset);
+            effect.previous_x = static_cast<i32>(raw_axis30);
+            effect.previous_y = static_cast<i32>(raw_axis34);
+            if (uses_serialized_path_axes) {
+                effect.previous_x = effect.x;
+                effect.previous_y = effect.y;
+                effect.abs_delta_x = raw_abs_x;
+                effect.abs_delta_y = raw_abs_y;
+                if ((effect.flags &
+                        kUnitEffectFlagProjectileYMajor) != 0) {
+                    effect.accumulator_x = raw_axis30;
+                    effect.accumulator_y = raw_abs_y;
+                } else {
+                    effect.accumulator_x = raw_abs_x;
+                    effect.accumulator_y = raw_axis34;
+                }
+            } else {
+                // High-id handlers reuse +0x30/+0x34 for typed counters.
+                // Seed all aliases; export overlays only the evidenced one.
+                effect.abs_delta_x = raw_axis30;
+                effect.abs_delta_y = raw_axis34;
+                effect.accumulator_x = raw_abs_x;
+                effect.accumulator_y = raw_abs_y;
+            }
+
+            if (effect.effect_id == 0x17u) {
+                effect.chain_remaining = read_field(
+                    kGameplayUnitEffectObjectHitHistoryOffset);
+                for (std::size_t chain = 0;
+                     chain < effect.chained_target_ids.size(); ++chain) {
+                    effect.chained_target_ids[chain] = read_field(
+                        kGameplayUnitEffectObjectHitHistoryOffset +
+                        (chain + 1u) * sizeof(u32));
+                }
+            } else if (effect.effect_id < 0x3du) {
+                const u32 hit_count = std::min<u32>(read_field(
+                    kGameplayUnitEffectObjectHitCountOffset),
+                    kGameplayUnitEffectHitHistoryCapacity);
+                effect.hit_unit_ids.reserve(hit_count);
+                for (u32 hit = 0; hit < hit_count; ++hit) {
+                    effect.hit_unit_ids.push_back(read_field(
+                        kGameplayUnitEffectObjectHitHistoryOffset +
+                        static_cast<std::size_t>(hit) * sizeof(u32)));
+                }
+            }
+        }
+    }
+
+    std::vector<std::size_t> active_head_to_tail;
+    std::vector<std::size_t> free_head_to_tail;
+    bool restored_lists = false;
+    if (record != nullptr && !load.records.empty() && load.record_loaded[0]) {
+        restored_lists = recover_default_unit_effect_serialized_lists(
+            load.records[0], *record,
+            active_head_to_tail, free_head_to_tail);
+    }
+    if (!restored_lists) {
+        active_head_to_tail.clear();
+        free_head_to_tail.resize(kGameplayUnitEffectUsableSlotCount);
+        std::iota(free_head_to_tail.begin(), free_head_to_tail.end(), 0u);
+    }
+    effects.active_effect_indices = active_head_to_tail;
+    effects.free_effect_indices = free_head_to_tail;
+    for (const std::size_t index : effects.active_effect_indices) {
+        if (index < effects.effect_slots.size()) {
+            effects.effect_slots[index].active = true;
+        }
+    }
+
+    UnitLifecycleContext* lifecycle =
+        g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle != nullptr && lifecycle->movement != nullptr) {
+        const auto bind_reserved_effects = [&](
+            const std::vector<UnitMovementUnit*>& units) {
+            for (UnitMovementUnit* unit : units) {
+                if (unit == nullptr) {
+                    continue;
+                }
+                rebind_default_reserved_tile_effect_from_raw_cargo(*unit);
+            }
+        };
+        bind_reserved_effects(lifecycle->movement->active_units);
+        bind_reserved_effects(lifecycle->movement->lifecycle_units);
+        bind_reserved_effects(lifecycle->movement->free_units);
+        sync_default_unit_effect_runtime_units(effects, *lifecycle);
+    }
+}
+
 void initialize_default_gameplay_terrain_layer_from_session_records() {
     MinimapTerrainLayer layer{};
     layer.width_tiles = default_gameplay_session_map_width_tiles();
@@ -9892,6 +10799,12 @@ void run_default_gameplay_session_runtime_reset(
         g_runtime.gameplay_pending_order_2b_bonus_snapshots.clear();
         mirror_default_production_variants_to_session_import_state();
     }
+    // Player record 3 owns the live resources for mode-5 loads.  The startup
+    // lifecycle was freshly constructed after the record was decoded, so
+    // publish the imported player values to lifecycle, command and production
+    // views only after their reset passes have completed.
+    sync_link_lobby_startup_resources_to_lifecycle(
+        g_runtime.gameplay_player_slots, startup.lifecycle);
     finalize_default_session_runtime_definition_import();
     restore_default_gameplay_random_state_from_session_header();
     sync_default_gameplay_session_runtime_views_after_reset();
@@ -11718,10 +12631,16 @@ void default_ui_overlay_play_click_sound(UiOverlayState&) {
 }
 
 void default_ui_overlay_open_save_session_dialog(UiOverlayState&) {
+    if (g_runtime.generic_ai_profile_mode) {
+        return;
+    }
     OpenGameplaySaveSessionDialog();
 }
 
 void default_ui_overlay_open_load_session_dialog(UiOverlayState&) {
+    if (g_runtime.generic_ai_profile_mode) {
+        return;
+    }
     OpenGameplayLoadSessionDialog();
 }
 
@@ -11925,10 +12844,9 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
     g_runtime.gameplay_script_hud_text.clear();
     g_runtime.gameplay_unit_render_queue = UnitRenderQueueContext{};
     g_runtime.gameplay_fog_context = GameplayFogRenderContext{};
-    // The session-record stage has already materialized the fixed 512-node
-    // map-effect pool.  Clearing it here leaves every passive death effect
-    // without a free node, skips its RNG call, and keeps the unit's passive
-    // seed in action_mode (first observed at exact P2P frame 2217).
+    // ProcessGameplaySessionLoop enters this callback after record-7 units
+    // have stable original pool ids.  Recreate OBB only after this final
+    // reset, otherwise mode-5 load loses every in-flight projectile/effect.
     g_runtime.gameplay_unit_effect_runtime = UnitEffectRuntimeState{};
     g_runtime.gameplay_map_brush_viewport = MapBrushViewportState{};
     g_runtime.gameplay_minimap_render_config = MinimapTerrainRenderConfig{};
@@ -11937,6 +12855,7 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
     g_runtime.gameplay_terrain_decoration_render_state =
         TerrainDecorationRenderState{};
     g_runtime.gameplay_unit_effect_definitions_initialized = false;
+    initialize_default_unit_effect_runtime_from_session_records();
     g_runtime.gameplay_action_damage_profiles = UnitActionDamageProfileTable{};
     g_runtime.gameplay_action_damage_profiles_initialized = false;
     ResetUiOverlayState();
@@ -12572,7 +13491,7 @@ i32 default_unit_damage_center_y(const UnitMovementUnit& unit) {
         (unit.definition.center_bounds_height >> 1);
 }
 
-UnitEffectRuntime* default_unit_effect_from_original_slot_offset(
+UnitEffectRuntime* default_unit_effect_from_original_slot_offset_allow_inactive(
     UnitEffectRuntimeState& effects, u32 offset) {
     if (offset == 0 || (offset % kUnitEffectOriginalSlotStride) != 0) {
         return nullptr;
@@ -12583,16 +13502,17 @@ UnitEffectRuntime* default_unit_effect_from_original_slot_offset(
         return nullptr;
     }
 
-    UnitEffectRuntime& effect = effects.effect_slots[raw_index];
-    return effect.active ? &effect : nullptr;
+    return &effects.effect_slots[raw_index];
 }
 
 u32 default_unit_damage_shield_points(const UnitMovementUnit& unit) {
     if ((unit.runtime_flags & kUnitRuntimeShielded) == 0) {
         return 0;
     }
-    UnitEffectRuntime* shield_effect = default_unit_effect_from_original_slot_offset(
-        g_runtime.gameplay_unit_effect_runtime, unit.linked_effect_slot_offset);
+    UnitEffectRuntime* shield_effect =
+        default_unit_effect_from_original_slot_offset_allow_inactive(
+            g_runtime.gameplay_unit_effect_runtime,
+            unit.linked_effect_slot_offset);
     return shield_effect != nullptr ? shield_effect->amount : 0;
 }
 
@@ -12607,8 +13527,9 @@ void commit_default_unit_damage_shield_record(UnitMovementUnit& unit,
     }
 
     UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
-    UnitEffectRuntime* shield_effect = default_unit_effect_from_original_slot_offset(
-        effects, unit.linked_effect_slot_offset);
+    UnitEffectRuntime* shield_effect =
+        default_unit_effect_from_original_slot_offset_allow_inactive(
+            effects, unit.linked_effect_slot_offset);
 
     if (remains_shielded) {
         if (shield_effect != nullptr) {
@@ -12620,7 +13541,6 @@ void commit_default_unit_damage_shield_record(UnitMovementUnit& unit,
     if (shield_effect != nullptr) {
         ReleaseUnitEffectSlot(effects, *shield_effect);
     }
-    unit.linked_effect_slot_offset = 0;
 }
 
 UnitRecord make_default_unit_damage_record(const UnitMovementUnit& unit) {
@@ -17474,6 +18394,7 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
     overlay.screen_height = kOriginalClientHeight;
     overlay.reveal_minimap_fog =
         g_runtime.gameplay_startup_state.fog_reveal_disabled;
+    overlay.generic_ai_profile_mode = g_runtime.generic_ai_profile_mode;
     overlay.replay_timing_enabled = gameplay_loop_state().replay_timing_enabled;
     overlay.scripted_input_restricted =
         gameplay_script_trigger_state().opcode_context.global_flag_22358;
@@ -18957,11 +19878,10 @@ void default_unit_damage_shield_broken(UnitDamageContext&, UnitRecord& target) {
 
     UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
     if (UnitEffectRuntime* shield_effect =
-            default_unit_effect_from_original_slot_offset(
+            default_unit_effect_from_original_slot_offset_allow_inactive(
                 effects, unit->linked_effect_slot_offset)) {
         ReleaseUnitEffectSlot(effects, *shield_effect);
     }
-    unit->linked_effect_slot_offset = 0;
 }
 
 bool resolve_default_unit_sound_profile(const UnitMovementUnit& unit,
@@ -21424,6 +22344,10 @@ UnitMovementUnit* default_unit_command_create_unit(UnitCommandContext&,
             unit->runtime_slot_index : unit_id;
 
     UnitMovementUnit initialized{};
+    // HandleFreeUnitActivation preserves the fixed node's entire payload;
+    // InitializePlacedUnitFromMapSlot never writes original raw +0xf0.
+    initialized.linked_effect_slot_offset =
+        unit->linked_effect_slot_offset;
     const u32 saved_terrain_class = lifecycle->placement_terrain_class_override;
     const bool saved_terrain_override =
         lifecycle->placement_terrain_class_override_enabled;
@@ -21529,22 +22453,16 @@ bool dispatch_default_unit_command_action_effect(UnitMovementUnit& source,
     // Shield refresh is a pre-allocation special case.  The original can
     // refresh an existing shield even when the effect pool has no free node.
     if (action_id == 2 && target != nullptr &&
-        (target->runtime_flags & 0x100u) != 0 &&
-        target->linked_effect_slot_offset >= 0xa8u &&
-        (target->linked_effect_slot_offset % 0xa8u) == 0) {
-        const std::size_t shield_index =
-            target->linked_effect_slot_offset / 0xa8u - 1u;
-        if (shield_index < effects.effect_slots.size()) {
-            UnitEffectRuntime& shield = effects.effect_slots[shield_index];
-            if (shield.active && shield.effect_id == 0x3fu &&
-                shield.linked_unit_id == target->id) {
-                if (!ordinary_cost_available()) {
-                    return false;
-                }
-                debit_ordinary_cost();
-                shield.amount = scaled_effect_amount();
-                return true;
+        (target->runtime_flags & 0x100u) != 0) {
+        if (UnitEffectRuntime* shield =
+                default_unit_effect_from_original_slot_offset_allow_inactive(
+                    effects, target->linked_effect_slot_offset)) {
+            if (!ordinary_cost_available()) {
+                return false;
             }
+            debit_ordinary_cost();
+            shield->amount = scaled_effect_amount();
+            return true;
         }
     }
 
@@ -21924,7 +22842,7 @@ bool default_unit_command_reserved_tile_work_complete(UnitCommandContext&,
     UnitMovementUnit* target = unit.target;
     if (lifecycle == nullptr || target == nullptr) {
         unit.reserved_tile_effect = nullptr;
-        unit.linked_effect_slot_offset = 0;
+        unit.reserved_tile_effect_slot_offset = 0;
         return false;
     }
 
@@ -21935,7 +22853,7 @@ bool default_unit_command_reserved_tile_work_complete(UnitCommandContext&,
     UnitEffectRuntime* effect = AllocateUnitEffectSlot(effects);
     if (effect == nullptr) {
         unit.reserved_tile_effect = nullptr;
-        unit.linked_effect_slot_offset = 0;
+        unit.reserved_tile_effect_slot_offset = 0;
         return false;
     }
 
@@ -21944,7 +22862,7 @@ bool default_unit_command_reserved_tile_work_complete(UnitCommandContext&,
             unit.path_target_x, unit.path_target_y)) {
         ReleaseUnitEffectSlot(effects, *effect);
         unit.reserved_tile_effect = nullptr;
-        unit.linked_effect_slot_offset = 0;
+        unit.reserved_tile_effect_slot_offset = 0;
         return false;
     }
 
@@ -21952,7 +22870,7 @@ bool default_unit_command_reserved_tile_work_complete(UnitCommandContext&,
     // overwrites that union with the allocated effect-pool offset.
     effect->amount = unit.cargo_amount;
     unit.reserved_tile_effect = effect;
-    unit.linked_effect_slot_offset =
+    unit.reserved_tile_effect_slot_offset =
         default_unit_effect_original_slot_offset(effects, effect);
     return true;
 }
@@ -23385,6 +24303,8 @@ bool default_owner_ai_acquire_temporary_path_probe(
         unit->runtime_slot_index != kInvalidUnitRuntimeSlotIndex ?
             unit->runtime_slot_index : unit_id;
     UnitMovementUnit initialized{};
+    initialized.linked_effect_slot_offset =
+        unit->linked_effect_slot_offset;
     // Both original scratch probes create type 7 for owner 0.  Their spawn
     // point is independent of the subsequent path start: the anchor probe
     // uses the map center, while the route-helper probe uses world (10,10).
@@ -25039,8 +25959,7 @@ void initialize_default_unit_from_scenario_object(
         unit.deferred_commands[slot] =
             to_unit_queued_command(object.deferred_commands[slot]);
     }
-    unit.linked_object_id =
-        object.linked_object_id != 0 ? object.linked_object_id : unit.id;
+    unit.linked_object_id = object.linked_object_id;
 
     unit.max_health = object.stat_18;
     unit.health = object.stat_20;
@@ -25070,7 +25989,9 @@ void initialize_default_unit_from_scenario_object(
         unit.item_slots[slot] = unit.equipment_slots[slot];
     }
     unit.active = true;
-    unit.linked_unit = &unit;
+    // The linked node can appear later in either serialized chain.  Bind the
+    // typed pointer only after both chains have been materialized.
+    unit.linked_unit = nullptr;
 
     if (lifecycle.callbacks.find_definition != nullptr) {
         if (const UnitMovementDefinition* definition =
@@ -25106,11 +26027,13 @@ void instantiate_default_gameplay_script_scenario_units(
     const u32 object_count = std::min<u32>(
         static_cast<u32>(script.objects.size()), kGameplayScenarioObjectMaxSlots);
 
-    // Record 0 stores the heads of record 7's active/free intrusive lists as
-    // 0x1d0-byte pool offsets.  Following the active head is essential: the
+    // Record 0 stores the heads of record 7's active/free/lifecycle intrusive
+    // lists as 0x1d0-byte pool offsets.  Following each head is essential: the
     // lowest root is not consistently the active list across map archives.
     std::vector<u32> import_order;
+    std::vector<u32> lifecycle_order;
     import_order.reserve(object_count);
+    lifecycle_order.reserve(object_count);
     const auto append_serialized_chain = [&](u32 head, std::vector<u32>& order) {
         std::vector<u8> visited(object_count, 0);
         u32 cursor = head;
@@ -25122,7 +26045,11 @@ void instantiate_default_gameplay_script_scenario_units(
     };
 
     const GameplaySessionLoadState& load = gameplay_session_load_state();
-    if (!load.records.empty() && load.record_loaded[0]) {
+    bool serialized_unit_roots_available = false;
+    if (!load.records.empty() && load.record_loaded[0] &&
+        load.records[0].size() >=
+            kGameplayHeaderUnitLifecycleListHeadOffset + sizeof(u32)) {
+        serialized_unit_roots_available = true;
         const std::vector<u8>& header = load.records[0];
         const u32 active_head = default_scenario_object_reference_to_unit_id(
             read_default_session_record_u32(header,
@@ -25130,13 +26057,17 @@ void instantiate_default_gameplay_script_scenario_units(
         const u32 free_head = default_scenario_object_reference_to_unit_id(
             read_default_session_record_u32(header,
                 kGameplayHeaderUnitFreeListHeadOffset, 0));
+        const u32 lifecycle_head = default_scenario_object_reference_to_unit_id(
+            read_default_session_record_u32(header,
+                kGameplayHeaderUnitLifecycleListHeadOffset, 0));
         append_serialized_chain(active_head, import_order);
+        append_serialized_chain(lifecycle_head, lifecycle_order);
         append_serialized_chain(
             free_head, g_runtime.gameplay_serialized_free_unit_slots);
     }
 
     // Keep a deterministic recovery path for malformed/headerless archives.
-    if (import_order.empty()) {
+    if (import_order.empty() && !serialized_unit_roots_available) {
         std::vector<u8> visited(object_count, 0);
         for (u32 index = 1; index < object_count; ++index) {
             const GameplayScriptTriggerObjectState& object = script.objects[index];
@@ -25155,7 +26086,12 @@ void instantiate_default_gameplay_script_scenario_units(
 
     for (u32 index : import_order) {
         GameplayScriptTriggerObjectState& object = script.objects[index];
-        if (!default_gameplay_script_object_alive(object)) {
+        // A serialized active-list root is authoritative.  Raw +0xa0 can be
+        // zero or carry bit 4 transiently until the original post-runtime
+        // list pass; only the headerless recovery scan needs the alive
+        // heuristic that discovered its order.
+        if (!serialized_unit_roots_available &&
+            !default_gameplay_script_object_alive(object)) {
             continue;
         }
         g_runtime.gameplay_highest_scenario_unit_slot = std::max(
@@ -25208,20 +26144,102 @@ void instantiate_default_gameplay_script_scenario_units(
         }
         unit->runtime_slot_index = index;
         unit->id = index * kGameplayScenarioObjectStride;
-        unit->linked_object_id = unit->id;
         object.unit = unit;
         object.object_pointer = unit;
         object.scenario_object_index = index;
         if (owned_unit != nullptr) {
             g_runtime.gameplay_script_spawned_units.push_back(std::move(owned_unit));
         }
-        SetUnitFootprintOccupancyBits(*lifecycle, *unit);
+        // A command-dead node can legitimately remain on the serialized
+        // active chain until the next list pass.  Its footprint has already
+        // been cleared and must not be manufactured again during hydration.
+        if ((unit->runtime_flags & 4u) == 0) {
+            SetUnitFootprintOccupancyBits(*lifecycle, *unit);
+        }
         // Record 0 stores DAT_007071d4 as the head of record 7's serialized
         // active list.  import_order already follows that head-to-tail chain;
         // appending preserves the original simulation order.  Inserting every
         // imported node at the head reverses all 51 Chaos scenario units.
         activate_default_gameplay_script_unit(movement, *unit, false);
     }
+
+    // DAT_007071dc is a third fixed-pool chain for corpses, construction
+    // activation and decay/growth nodes.  Chain membership is authoritative
+    // even when raw flags mark the object dead, so do not apply the active
+    // script-object predicate or footprint occupancy path here.
+    for (u32 index : lifecycle_order) {
+        if (index == 0 || index >= script.objects.size()) {
+            continue;
+        }
+        GameplayScriptTriggerObjectState& object = script.objects[index];
+        g_runtime.gameplay_highest_scenario_unit_slot = std::max(
+            g_runtime.gameplay_highest_scenario_unit_slot, index);
+
+        UnitMovementUnit* unit = object.unit;
+        if (unit == nullptr && object.scenario_object_index != 0) {
+            unit = find_default_movement_unit_by_id(object.scenario_object_index);
+        }
+        std::unique_ptr<UnitMovementUnit> owned_unit;
+        if (unit == nullptr) {
+            owned_unit = std::make_unique<UnitMovementUnit>();
+            unit = owned_unit.get();
+        }
+        if (unit == nullptr) {
+            continue;
+        }
+
+        initialize_default_unit_from_scenario_object(
+            *lifecycle, *unit, object, index);
+        unit->runtime_slot_index = index;
+        unit->id = index * kGameplayScenarioObjectStride;
+        // On the lifecycle list raw +0x64 is the work/death/growth countdown,
+        // not the active-list animation frame.
+        unit->work_timer = object.animation_frame;
+        unit->active = false;
+        object.unit = unit;
+        object.object_pointer = unit;
+        object.scenario_object_index = index;
+        if (owned_unit != nullptr) {
+            g_runtime.gameplay_script_spawned_units.push_back(
+                std::move(owned_unit));
+        }
+        remove_default_unit_pointer(movement.active_units, unit);
+        remove_default_unit_pointer(movement.free_units, unit);
+        remove_default_unit_pointer(movement.lifecycle_units, unit);
+        // A construction/revival node carrying the 0x200 hand-off flag has
+        // already registered its footprint but has not moved back to active
+        // yet.  Recreate that typed registration; ordinary corpses and decay
+        // nodes deliberately remain non-occupying.
+        if ((unit->command_flags & 0x200u) != 0 &&
+            (unit->runtime_flags & 4u) == 0) {
+            SetUnitFootprintOccupancyBits(*lifecycle, *unit);
+        }
+        movement.lifecycle_units.push_back(unit);
+    }
+
+    // Raw +0x94 can link forward, backward, or across active/lifecycle lists.
+    // Resolve it in a second pass after every serialized node has its stable
+    // original pool id.
+    const auto bind_linked_units = [](std::vector<UnitMovementUnit*>& units) {
+        for (UnitMovementUnit* unit : units) {
+            if (unit == nullptr) {
+                continue;
+            }
+            unit->linked_unit = unit->linked_object_id != 0
+                ? find_default_movement_unit_by_id(unit->linked_object_id)
+                : nullptr;
+            // Raw +0x68 is a state-dependent union.  Bind a typed pointer only
+            // for states where the original interprets the selected raw word
+            // as a fixed-pool reference; counters and type ids can otherwise
+            // collide with a valid 0x1d0-byte slot offset by accident.
+            const u32 target_reference = default_unit_target_reference(*unit);
+            unit->target = target_reference != 0
+                ? find_default_movement_unit_by_id(target_reference)
+                : nullptr;
+        }
+    };
+    bind_linked_units(movement.active_units);
+    bind_linked_units(movement.lifecycle_units);
 
     HandleOwnerUnitTypeCountRebuild(*lifecycle);
 }
@@ -25235,6 +26253,12 @@ void initialize_default_gameplay_original_unit_pool_slots() {
     UnitMovementContext& movement = *lifecycle->movement;
     std::array<u8, kGameplayScenarioObjectMaxSlots> used{};
     for (UnitMovementUnit* unit : movement.active_units) {
+        if (unit != nullptr && unit->runtime_slot_index != 0 &&
+            unit->runtime_slot_index < used.size()) {
+            used[unit->runtime_slot_index] = 1;
+        }
+    }
+    for (UnitMovementUnit* unit : movement.lifecycle_units) {
         if (unit != nullptr && unit->runtime_slot_index != 0 &&
             unit->runtime_slot_index < used.size()) {
             used[unit->runtime_slot_index] = 1;
@@ -25297,9 +26321,12 @@ void initialize_default_gameplay_original_unit_pool_slots() {
         // units consume their slots, so retain their raw residual here too.
         i32 residual_next_path_x = 0;
         i32 residual_next_path_y = 0;
+        u32 residual_linked_effect_slot_offset = 0;
         if (slot < script.objects.size()) {
             residual_next_path_x = script.objects[slot].next_path_x;
             residual_next_path_y = script.objects[slot].next_path_y;
+            residual_linked_effect_slot_offset =
+                script.objects[slot].linked_effect_slot_offset;
         }
         auto existing_free = std::find_if(movement.free_units.begin(),
             movement.free_units.end(), [&](const UnitMovementUnit* candidate) {
@@ -25313,6 +26340,8 @@ void initialize_default_gameplay_original_unit_pool_slots() {
             movement.free_units.erase(existing_free);
             residual_next_path_x = replaced->next_path_x;
             residual_next_path_y = replaced->next_path_y;
+            residual_linked_effect_slot_offset =
+                replaced->linked_effect_slot_offset;
             // InitializePlacedUnitFromMapSlot (0x004cf229) deliberately does
             // not write raw +0xc8/+0xcc.  A secondary starting unit therefore
             // inherits those two words from the fixed-pool node consumed by
@@ -25331,6 +26360,7 @@ void initialize_default_gameplay_original_unit_pool_slots() {
             unit.saved_path_target_x = residual_next_path_x;
             unit.saved_path_target_y = residual_next_path_y;
         }
+        unit.linked_effect_slot_offset = residual_linked_effect_slot_offset;
         used[slot] = 1;
         unit.runtime_slot_index = slot;
         unit.id = slot * kGameplayScenarioObjectStride;
@@ -25375,6 +26405,12 @@ void initialize_default_gameplay_original_unit_pool_slots() {
         free_unit->runtime_slot_index = slot;
         free_unit->id = slot * kGameplayScenarioObjectStride;
         free_unit->active = false;
+        const GameplayScriptTriggerState& script =
+            gameplay_script_trigger_state();
+        if (slot < script.objects.size()) {
+            free_unit->linked_effect_slot_offset =
+                script.objects[slot].linked_effect_slot_offset;
+        }
         UnitMovementUnit* free_pointer = free_unit.get();
         g_runtime.gameplay_script_spawned_units.push_back(std::move(free_unit));
         movement.free_units.push_back(free_pointer);
@@ -25429,9 +26465,32 @@ u32 ensure_default_gameplay_script_object_index_for_unit(
         return existing;
     }
 
+    // Record 7 is the original fixed 0x800-node unit pool.  A produced unit
+    // must be mirrored into its physical runtime slot, not appended at the
+    // end of the parsed vector: otherwise save export writes that unit into an
+    // unrelated node while the active-list links point at the real slot.
+    const u32 runtime_slot = unit.runtime_slot_index;
+    if (runtime_slot != 0 && runtime_slot != kInvalidUnitRuntimeSlotIndex &&
+        runtime_slot < kGameplayScenarioObjectMaxSlots) {
+        if (script.objects.size() <= runtime_slot) {
+            script.objects.resize(runtime_slot + 1);
+        }
+        GameplayScriptTriggerObjectState& object = script.objects[runtime_slot];
+        if (object.unit == nullptr || object.unit == &unit ||
+            !object.unit->active) {
+            object.unit = &unit;
+            object.object_pointer = &unit;
+            object.scenario_object_index = runtime_slot;
+            object.remove_from_triggers = false;
+            object.script_removal_requested = false;
+            return runtime_slot;
+        }
+    }
+
     GameplayScriptTriggerObjectState object{};
     object.unit = &unit;
     object.object_pointer = &unit;
+    object.scenario_object_index = runtime_slot;
     script.objects.push_back(std::move(object));
     return static_cast<u32>(script.objects.size() - 1);
 }
@@ -25460,16 +26519,10 @@ void sync_default_gameplay_script_object_from_unit(
     object.area_marker_flags = unit.area_marker_flags;
     object.command_flags = unit.command_flags;
     object.command_bit_mask = default_unit_command_bit_mask(unit);
+    object.flags = unit.runtime_flags;
     object.script_bit_flags = unit.script_bit_flags;
     object.linked_effect_slot_offset = unit.linked_effect_slot_offset;
     object.linked_object_id = unit.linked_object_id;
-    if (unit.reserved_tile_effect != nullptr) {
-        const u32 effect_offset = default_unit_effect_original_slot_offset(
-            g_runtime.gameplay_unit_effect_runtime, unit.reserved_tile_effect);
-        if (effect_offset != 0) {
-            object.linked_effect_slot_offset = effect_offset;
-        }
-    }
     object.command_state_raw = unit.command_state;
     object.script_state = unit.command_state & 0x00ffffffu;
     object.definition_class = unit.definition.lifecycle_class;
@@ -25496,6 +26549,9 @@ void sync_default_gameplay_script_object_from_unit(
     object.movement_interpolation_y = unit.movement_interpolation_y;
     object.x = unit.x;
     object.y = unit.y;
+    // Raw unit +0x4c is authoritative.  State 0x58 happens to reinterpret it
+    // as an OBB offset, but save export must not synthesize a different value
+    // from a typed pointer that may have been recycled or detached.
     object.cargo_amount = unit.cargo_amount;
     object.command_value = unit.command_value;
     object.scripted_target_x = unit.path_target_x;
@@ -25550,7 +26606,6 @@ void sync_default_gameplay_script_object_from_unit(
     }
 
     if ((unit.command_state & kUnitCommandDead) != 0 || !unit.active) {
-        object.flags |= 4u;
         object.remove_from_triggers = true;
         object.script_removal_requested = false;
     } else {
@@ -25560,7 +26615,6 @@ void sync_default_gameplay_script_object_from_unit(
         // immediately reapplies the stale death flag to the new unit.
         object.remove_from_triggers = false;
         object.script_removal_requested = false;
-        object.flags &= ~4u;
     }
 }
 
@@ -25913,16 +26967,12 @@ void apply_default_gameplay_script_object_to_unit(
             (unit->command_state & kUnitCommandDead) != 0) {
             return;
         }
-        // Original HandleUnitLifecycleGrowthOrDecay (0x004ce866) restores a
-        // lifecycle-class-1 object to state 1/full health, then sets raw
-        // command flag 0x200 while the node is still on the lifecycle list.
-        // HandleUnitLifecycleDispatchListTick moves it back to the active list
-        // on the following runtime phase.  The script mirror can still carry
-        // the object's preceding death flag during that one-phase hand-off;
-        // reapplying it here kills the restored node before active-list sync
-        // gets a chance to revive the mirror and incorrectly sends it free.
-        if (!object.script_removal_requested && !unit->active &&
-            (unit->command_flags & 0x200u) != 0) {
+        // List membership is not a scenario removal request.  The mirror marks
+        // lifecycle and free nodes non-alive so script conditions omit them,
+        // but the original never ORs the death bit into raw +0x60 merely
+        // because a node is on either inactive list.  This also covers the
+        // one-phase 0x200 lifecycle-to-active handoff.
+        if (!object.script_removal_requested && !unit->active) {
             return;
         }
         unit->command_state |= kUnitCommandDead;
@@ -25993,6 +27043,9 @@ void apply_default_gameplay_script_object_to_unit(
     apply_default_unit_command_bit_mask(*unit, object.command_bit_mask);
     unit->script_bit_flags = object.script_bit_flags;
     unit->linked_effect_slot_offset = object.linked_effect_slot_offset;
+    // Script mutation may restore or replace raw +0x4c.  Rebuild state 0x58's
+    // typed OBB mirror without touching the independent raw +0xf0 link.
+    rebind_default_reserved_tile_effect_from_raw_cargo(*unit);
     unit->linked_object_id = object.linked_object_id;
     unit->area_marker_flags = object.area_marker_flags;
     unit->max_health = object.stat_18;
@@ -26239,7 +27292,7 @@ void sync_default_gameplay_script_scenario_record(
             object.pending_command);
         write_default_scenario_object_u32(
             *record, object_base, kGameplayScenarioObjectLinkedObjectOffset,
-            default_scenario_object_id_to_reference(object.linked_object_id));
+            object.linked_object_id);
         write_default_scenario_object_u32(*record, object_base,
             kGameplayScenarioObjectCommandEntryLockoutTicksOffset,
             object.command_entry_lockout_ticks);
@@ -26555,7 +27608,10 @@ UnitMovementUnit* spawn_default_gameplay_script_unit(
     const u32 runtime_slot_index =
         unit->runtime_slot_index != kInvalidUnitRuntimeSlotIndex ?
             unit->runtime_slot_index : unit_id;
+    const u32 residual_linked_effect_slot_offset =
+        unit->linked_effect_slot_offset;
     *unit = UnitMovementUnit{};
+    unit->linked_effect_slot_offset = residual_linked_effect_slot_offset;
     unit->id = unit_id;
     unit->runtime_slot_index = runtime_slot_index;
     // HandleFreeUnitActivation (0x004d04b0) links the fixed-pool node at the

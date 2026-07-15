@@ -4053,7 +4053,7 @@ void RecallOrStoreCameraBookmark(UiOverlayState& state, u32 bookmark_index,
 }
 
 void HandleGameplayMenuKey3c(UiOverlayState& state, u32 bookmark_index, bool store) {
-    if (state.scenario_ai_profile_override) {
+    if (state.scenario_ai_profile_override || state.generic_ai_profile_mode) {
         RecallOrStoreCameraBookmark(state, bookmark_index, store);
         return;
     }
@@ -4066,7 +4066,7 @@ void HandleGameplayMenuKey3c(UiOverlayState& state, u32 bookmark_index, bool sto
 }
 
 void HandleGameplayMenuKey3d(UiOverlayState& state, u32 bookmark_index, bool store) {
-    if (state.scenario_ai_profile_override) {
+    if (state.scenario_ai_profile_override || state.generic_ai_profile_mode) {
         RecallOrStoreCameraBookmark(state, bookmark_index, store);
         return;
     }

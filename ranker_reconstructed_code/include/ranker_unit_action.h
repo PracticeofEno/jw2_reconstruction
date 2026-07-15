@@ -118,7 +118,9 @@ constexpr u32 kUnitEffectFlagRefundOnFinish = 0x40;
 constexpr u32 kUnitEffectFlagProjectileYMajor = 0x01;
 constexpr u32 kUnitEffectFlagProjectileBoundsEntered = 0x100;
 constexpr u32 kUnitEffectFlagAfterimageClone = 0x400;
-constexpr u32 kUnitEffectDefaultSlotCapacity = 1024;
+// DAT_01426c00 contains 512 raw 0xa8-byte blocks, but offset zero is the
+// intrusive-list null sentinel.  Only offsets 0xa8..0x14f58 are allocatable.
+constexpr u32 kUnitEffectDefaultSlotCapacity = 511;
 
 enum class UnitEffectEventKind : u32 {
     started = 0,

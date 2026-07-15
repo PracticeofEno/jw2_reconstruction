@@ -305,6 +305,10 @@ struct UnitMovementUnit {
     u32 cargo_capacity = 0;
     u32 harvest_tile_index = 0;
     u32 work_timer = 0;
+    // State 0x58 stores its reserved UnitEffect pool offset in original raw
+    // unit +0x4c (the cargo_amount union).  Keep a detached typed mirror so it
+    // never aliases raw +0xf0, which independently owns shield/effect links.
+    u32 reserved_tile_effect_slot_offset = 0;
     u32 linked_effect_slot_offset = 0;
     UnitEffectRuntime* reserved_tile_effect = nullptr;
     u32 effect_timer = 0;
