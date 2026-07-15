@@ -2901,6 +2901,18 @@ void ConfigureGameplayUiOverlayLayout(UiOverlayState& state) {
         {{439, 436, 421, 452}},
         {{446, 458, 447, 460}},
     }};
+    // DAT_008635d0..DAT_008635dc in the same 0x18-byte records provide the
+    // minimap origin and exclusive end.  FUN_004e2bb7 copies these on every
+    // call, then uses its two documented map-smaller-than-panel branches to
+    // shrink and center the active extent.
+    constexpr std::array<std::array<UiOverlayRect, 4>, 3> kMinimapPanelBounds{{
+        {{{258, 376, 95, 95}, {258, 376, 95, 95},
+          {258, 376, 95, 95}, {258, 376, 95, 95}}},
+        {{{329, 470, 115, 115}, {329, 474, 115, 115},
+          {329, 474, 115, 115}, {329, 474, 115, 115}}},
+        {{{329, 474, 115, 115}, {329, 474, 115, 115},
+          {329, 474, 115, 115}, {329, 474, 115, 115}}},
+    }};
     const u32 camera_layout = std::min<u32>(state.screen_layout_bucket, 2);
     const u32 camera_theme = std::min<u32>(state.interface_theme_index, 3);
     state.world_viewport_height = static_cast<u32>(
@@ -3103,51 +3115,66 @@ void ConfigureGameplayUiOverlayLayout(UiOverlayState& state) {
 
     state.minimap.map_width_tiles = minimap_width_tiles(state);
     state.minimap.map_height_tiles = minimap_height_tiles(state);
-    if (state.minimap.minimap_width_pixels == 0) {
-        const u32 capacity = state.screen_layout_bucket == 0 ? 0x5fu : 0x73u;
-        state.minimap.minimap_width_pixels =
-            std::min<u32>(capacity,
-                std::max<u32>(1, state.minimap.map_width_tiles));
+    const UiOverlayRect& minimap_panel =
+        kMinimapPanelBounds[camera_layout][camera_theme];
+    // The original immediately divides by both map dimensions later in this
+    // function, so zero-sized maps are outside its valid domain.  Preserve an
+    // explicitly supplied synthetic/test surface only in that invalid state;
+    // every real map follows the unconditional table rewrite above.
+    if (state.minimap.map_width_tiles != 0) {
+        state.minimap.output_x = minimap_panel.x;
+        state.minimap.minimap_width_pixels = minimap_panel.width;
+        if (state.minimap.map_width_tiles < state.minimap.minimap_width_pixels) {
+            state.minimap.minimap_width_pixels = state.minimap.map_width_tiles;
+            state.minimap.output_x += static_cast<i32>(
+                (0x74u - state.minimap.map_width_tiles) >> 1);
+        }
+    } else if (state.minimap.minimap_width_pixels == 0) {
+        state.minimap.minimap_width_pixels = 1;
     }
-    if (state.minimap.minimap_height_pixels == 0) {
-        const u32 capacity = state.screen_layout_bucket == 0 ? 0x5fu : 0x73u;
-        state.minimap.minimap_height_pixels =
-            std::min<u32>(capacity,
-                std::max<u32>(1, state.minimap.map_height_tiles));
+    if (state.minimap.map_height_tiles != 0) {
+        state.minimap.output_y = minimap_panel.y;
+        state.minimap.minimap_height_pixels = minimap_panel.height;
+        if (state.minimap.map_height_tiles < state.minimap.minimap_height_pixels) {
+            state.minimap.minimap_height_pixels = state.minimap.map_height_tiles;
+            state.minimap.output_y += static_cast<i32>(
+                (0x74u - state.minimap.map_height_tiles) >> 1);
+        }
+    } else if (state.minimap.minimap_height_pixels == 0) {
+        state.minimap.minimap_height_pixels = 1;
     }
+    // DAT_008635c0/c4 are recomputed from the physical client dimensions on
+    // every original call.  These are the equivalent inputs used by
+    // DrawMinimapViewportBorder in the reconstruction.
+    state.minimap.viewport_width_pixels = state.screen_width;
+    state.minimap.viewport_height_pixels = state.screen_height;
     if (state.minimap.scale_percent == 0) {
         const u32 map_width = std::max<u32>(1, state.minimap.map_width_tiles);
         state.minimap.scale_percent =
             std::max<u32>(1, (state.minimap.minimap_width_pixels * 100) / map_width);
     }
-    if (state.camera_max_x == 0 && state.map_width_tiles != 0) {
-        state.camera_max_x = static_cast<i32>(
-            std::max<i32>(0, static_cast<i32>(state.map_width_tiles * 0x20) -
-                static_cast<i32>(state.screen_width)));
-    }
-    if (state.camera_max_y == 0 && state.map_height_tiles != 0) {
-        // FUN_004e2bb7 writes DAT_0086359c from the map height minus the
-        // interface-theme table at DAT_008635a0, not minus the physical
-        // display height.  The lower HUD remains outside the scrollable world
-        // viewport at every display-layout bucket.
-        constexpr std::array<i32, 4> kCameraEffectiveHeight{
-            {496, 487, 487, 480}};
-        state.camera_max_y = static_cast<i32>(
-            std::max<i32>(0, static_cast<i32>(state.map_height_tiles * 0x20) -
-                kCameraEffectiveHeight[theme]));
-    }
-    if (state.resource_counter_x == 0) {
-        state.resource_counter_x = static_cast<i32>(state.screen_width) - 0x8c;
-    }
-    if (state.population_counter_x == 0) {
-        state.population_counter_x = static_cast<i32>(state.screen_width) - 0x46;
-    }
-    for (std::size_t i = 0; i < state.manual_equipment_slot_bounds.size(); ++i) {
-        if (state.manual_equipment_slot_bounds[i].width == 0 ||
-            state.manual_equipment_slot_bounds[i].height == 0) {
-            state.manual_equipment_slot_bounds[i] = kDefaultManualEquipmentSlotBounds[i];
-        }
-    }
+    state.camera_max_x = state.map_width_tiles != 0 ? static_cast<i32>(
+        std::max<i32>(0, static_cast<i32>(state.map_width_tiles * 0x20) -
+            static_cast<i32>(state.screen_width))) : 0;
+    // FUN_004e2bb7 writes DAT_0086359c from the map height minus the
+    // interface-theme table at DAT_008635a0, not minus the physical display
+    // height.  Both camera bounds are unconditional original outputs.
+    constexpr std::array<i32, 4> kCameraEffectiveHeight{
+        {496, 487, 487, 480}};
+    state.camera_max_y = state.map_height_tiles != 0 ? static_cast<i32>(
+        std::max<i32>(0, static_cast<i32>(state.map_height_tiles * 0x20) -
+            kCameraEffectiveHeight[theme])) : 0;
+    // FUN_004e2bb7 rewrites all four counter anchors whenever the gameplay
+    // layout is configured.  Reusing this state after a resolution change
+    // must not retain the previous screen's coordinates.
+    state.resource_counter_x = static_cast<i32>(state.screen_width) - 0x8c;
+    state.resource_counter_y = 5;
+    state.population_counter_x = static_cast<i32>(state.screen_width) - 0x46;
+    state.population_counter_y = 5;
+    // 004e3100..004e311f copies all seven 0x008646c4 table entries every
+    // time.  The three bucket rows happen to be identical, but preserving a
+    // prior override still differs from the original write semantics.
+    state.manual_equipment_slot_bounds = kDefaultManualEquipmentSlotBounds;
 
     const bool pixel_mode_555 = SurfacePixelMode555();
     state.minimap_terrain_marker_color = pixel_mode_555 ? 0x0a5f : 0x149f;
@@ -3155,6 +3182,7 @@ void ConfigureGameplayUiOverlayLayout(UiOverlayState& state) {
     state.minimap_local_footprint_color = pixel_mode_555 ? 0x02e2 : 0x05e2;
     state.minimap_remote_unit_color = pixel_mode_555 ? 0x02e2 : 0x05e2;
     state.minimap_remote_footprint_color = pixel_mode_555 ? 0x02e2 : 0x05e2;
+    state.minimap_hidden_color = 0;
     // DAT_01440000 in FUN_004e26f3 is the repeated half-brightness mask.
     state.minimap_dim_mask = pixel_mode_555 ? 0x7bde : 0xf7de;
 }
