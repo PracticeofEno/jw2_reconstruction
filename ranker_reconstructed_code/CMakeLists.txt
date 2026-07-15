@@ -167,6 +167,41 @@ if (BUILD_TESTING)
         COMMAND hud_shortage_message_layout_regression
     )
 
+    add_executable(owner_palette_output_regression
+        tests/owner_palette_output_regression.cpp
+        src/ranker_map_brush.cpp
+        src/ranker_palette_cache.cpp
+        src/ranker_resource_store.cpp
+        src/ranker_sprite_renderer.cpp
+        src/ranker_trc.cpp
+        src/ranker_ui_overlay.cpp
+    )
+    target_include_directories(owner_palette_output_regression PRIVATE
+        include
+    )
+    target_link_libraries(owner_palette_output_regression PRIVATE
+        zlib113
+    )
+    set_property(TARGET owner_palette_output_regression PROPERTY
+        INTERPROCEDURAL_OPTIMIZATION TRUE
+    )
+    if (MSVC)
+        target_compile_options(owner_palette_output_regression PRIVATE /Gy)
+        target_link_options(owner_palette_output_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(owner_palette_output_regression PRIVATE
+            -O1
+            -ffunction-sections
+            -fdata-sections
+        )
+        target_link_options(owner_palette_output_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME owner_palette_output_regression
+        COMMAND owner_palette_output_regression
+    )
+
     add_executable(ui_layout_bucket_completion_regression
         tests/ui_layout_bucket_completion_regression.cpp
         src/ranker_ui_overlay.cpp

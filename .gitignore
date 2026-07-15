@@ -26,6 +26,7 @@ ranker_reconstructed_code/tests/*
 !ranker_reconstructed_code/tests/neutral_attack_target_regression.cpp
 !ranker_reconstructed_code/tests/active_queue_icon_payload_regression.cpp
 !ranker_reconstructed_code/tests/hud_shortage_message_layout_regression.cpp
+!ranker_reconstructed_code/tests/owner_palette_output_regression.cpp
 !ranker_reconstructed_code/tests/win32_text_locked_surface_regression.cpp
 !ranker_reconstructed_code/tests/berry_cursor_selector_regression.cpp
 !ranker_reconstructed_code/tests/meat_pipeline_regression.cpp
