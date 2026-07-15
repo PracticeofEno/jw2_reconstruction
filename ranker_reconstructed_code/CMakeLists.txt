@@ -167,6 +167,61 @@ if (BUILD_TESTING)
         COMMAND hud_shortage_message_layout_regression
     )
 
+    add_executable(ui_layout_bucket_completion_regression
+        tests/ui_layout_bucket_completion_regression.cpp
+        src/ranker_ui_overlay.cpp
+    )
+    target_include_directories(ui_layout_bucket_completion_regression PRIVATE
+        include
+    )
+    set_property(TARGET ui_layout_bucket_completion_regression PROPERTY
+        INTERPROCEDURAL_OPTIMIZATION TRUE
+    )
+    if (MSVC)
+        target_compile_options(ui_layout_bucket_completion_regression PRIVATE /Gy)
+        target_link_options(ui_layout_bucket_completion_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(ui_layout_bucket_completion_regression PRIVATE
+            -O1
+            -ffunction-sections
+            -fdata-sections
+        )
+        target_link_options(ui_layout_bucket_completion_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME ui_layout_bucket_completion_regression
+        COMMAND ui_layout_bucket_completion_regression
+    )
+
+    add_executable(tyrano_hud_rows_regression
+        tests/tyrano_hud_rows_regression.cpp
+        src/ranker_text_renderer.cpp
+        src/ranker_ui_overlay.cpp
+    )
+    target_include_directories(tyrano_hud_rows_regression PRIVATE
+        include
+    )
+    set_property(TARGET tyrano_hud_rows_regression PROPERTY
+        INTERPROCEDURAL_OPTIMIZATION TRUE
+    )
+    if (MSVC)
+        target_compile_options(tyrano_hud_rows_regression PRIVATE /Gy)
+        target_link_options(tyrano_hud_rows_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(tyrano_hud_rows_regression PRIVATE
+            -O1
+            -ffunction-sections
+            -fdata-sections
+        )
+        target_link_options(tyrano_hud_rows_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME tyrano_hud_rows_regression
+        COMMAND tyrano_hud_rows_regression
+    )
+
     if (WIN32)
         add_executable(win32_text_locked_surface_regression
             tests/win32_text_locked_surface_regression.cpp
@@ -424,6 +479,34 @@ if (BUILD_TESTING)
     endif()
     add_test(NAME gameplay_hotkey_dispatch_regression
         COMMAND gameplay_hotkey_dispatch_regression
+    )
+
+    add_executable(edge_scroll_parity_regression
+        tests/edge_scroll_parity_regression.cpp
+        src/ranker_control_group_persistence.cpp
+        src/ranker_ui_overlay.cpp
+    )
+    target_include_directories(edge_scroll_parity_regression PRIVATE
+        include
+    )
+    set_property(TARGET edge_scroll_parity_regression PROPERTY
+        INTERPROCEDURAL_OPTIMIZATION TRUE
+    )
+    if (MSVC)
+        target_compile_options(edge_scroll_parity_regression PRIVATE /Gy)
+        target_link_options(edge_scroll_parity_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(edge_scroll_parity_regression PRIVATE
+            -O1
+            -ffunction-sections
+            -fdata-sections
+        )
+        target_link_options(edge_scroll_parity_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME edge_scroll_parity_regression
+        COMMAND edge_scroll_parity_regression
     )
 
     add_executable(gameplay_script_escape_regression
