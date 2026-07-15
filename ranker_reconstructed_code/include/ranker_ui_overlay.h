@@ -243,6 +243,34 @@ struct UiOverlayCommandOption {
     bool enabled = true;
 };
 
+// FUN_004e5292 at 0x004e534f copies original raw unit +0x68 into ECX for the
+// active 0x1aa/0x1ab/0x1ac queue record.  The reconstruction splits that raw
+// state-dependent word from its optional typed target pointer; the UI must
+// keep the raw command value even when the pointer is null or names another
+// unit.  Taking both values here makes that original choice explicit.
+constexpr u32 ResolveUiOverlayActiveQueueRecordPayload(
+    u32 raw_command_value, u32 typed_target_id) {
+    (void)typed_target_id;
+    return raw_command_value;
+}
+
+// FUN_004e2042/FUN_004e208f/FUN_004e20dc consume the aux dword as the frame
+// index in the base-unit, production-order, or equipment command table.  Keep
+// this resolution shared with the draw dispatcher so regression tests observe
+// the exact request that the renderer consumes.
+constexpr UiOverlayIconBlitRequest ResolveUiOverlayIndexedQueueIconRequest(
+    u32 dispatch_item_id, u32 payload) {
+    UiOverlayIconBlitRequest request{};
+    request.item_id = payload;
+    if (dispatch_item_id == 0x1abu) {
+        request.kind = UiOverlayIconBlitKind::production;
+    }
+    else if (dispatch_item_id == 0x1acu) {
+        request.kind = UiOverlayIconBlitKind::equipment;
+    }
+    return request;
+}
+
 struct UiOverlayTransportPassenger {
     u32 unit_id = 0;
     u32 type_id = 0;
@@ -405,6 +433,10 @@ struct UiOverlayState {
     u32 selected_unit_health = 0;
     u32 selected_unit_health_ratio_max = 0;
     u32 selected_unit_health_text_color = 0x11;
+    // FUN_004e1d25 renders raw unit +0x54 plus one over the single-selected
+    // mobile portrait when definition +0x1f4 bit 1 is set.
+    u32 selected_unit_level = 0;
+    bool selected_unit_level_glyph_enabled = false;
     u32 selected_unit_max_health = 0;
     u32 selected_unit_base_max_health = 0;
     u32 selected_unit_secondary = 0;

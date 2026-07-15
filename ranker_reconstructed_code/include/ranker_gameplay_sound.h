@@ -186,6 +186,11 @@ bool HandleBuildRepairProgressSoundCue(GameplaySoundState& state,
     const UnitMovementUnit& unit);
 bool HandleIndexedTwoVariantGameplaySoundCue(GameplaySoundState& state,
     u32 base_index, i32 world_delta);
+// NotifyLocalPlayerUnitUnderAttack (0x004c2457) passes the owning player's
+// raw faction-table value to the indexed two-variant cue.  The original does
+// not clamp that value to the four normally selectable lobby factions.
+bool HandleLocalUnderAttackGameplaySoundCue(GameplaySoundState& state,
+    u32 raw_owner_faction);
 bool HandleImmediateGameplaySoundSlotWithPan(GameplaySoundState& state,
     u32 slot_index, i32 world_delta, i32 pan);
 

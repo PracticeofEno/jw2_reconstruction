@@ -1090,18 +1090,13 @@ bool draw_indexed_queue_command_record(
         return false;
     }
 
-    UiOverlayIconBlitKind kind = UiOverlayIconBlitKind::base;
-    if (record.item_id == 0x1abu) {
-        kind = UiOverlayIconBlitKind::production;
-    }
-    else if (record.item_id == 0x1acu) {
-        kind = UiOverlayIconBlitKind::equipment;
-    }
+    const UiOverlayIconBlitRequest request =
+        ResolveUiOverlayIndexedQueueIconRequest(record.item_id, record.aux);
 
     UiOverlayDrawRecord icon = record;
     icon.width = icon.height = 0x26;
     const bool drawn = draw_record_command_icon_blit(
-        state, icon, kind, record.aux);
+        state, icon, request.kind, request.item_id);
 
     // FUN_004e2042/FUN_004e208f/FUN_004e20dc draw '1' + logical index at
     // (slot_x + 0x21, slot_y + 0x1e) after the queued command icon.  Those
@@ -2462,8 +2457,6 @@ void RenderSelectedUnitInfoPanel(UiOverlayState& state) {
     state.current_record_size = 0x32;
     BlitUiOverlayPaletteTableIcon(state, state.current_palette_selector,
         state.current_detail_item_id, state.large_slot_x, state.large_slot_y);
-    append_text(state, state.selected_unit_name_text, state.large_slot_x + 0x38,
-        state.large_slot_y + 1, 1, false, false, false, 4, 4);
     if ((state.selected_unit_runtime_flags & 0x20000000u) != 0) {
         append_text(state, state.selected_unit_indestructible_text,
             state.large_slot_x + 0x19, state.large_slot_y + 0x3a,
@@ -2476,11 +2469,26 @@ void RenderSelectedUnitInfoPanel(UiOverlayState& state) {
             static_cast<u8>(state.selected_unit_health_text_color),
             true, false, false, 1, 3);
     }
+    // FUN_004e1544 restores font 4 and appends the name only after the HP (or
+    // indestructible) text.  Text records are flushed in append order, so keep
+    // the original ordering even though the two rows ordinarily do not overlap.
+    append_text(state, state.selected_unit_name_text, state.large_slot_x + 0x38,
+        state.large_slot_y + 1, 1, false, false, false, 4, 4);
     if (state.selected_unit_type < 0x60) {
         if (state.selected_unit_details_visible) {
             RenderSelectedUnitCargoLine(state);
         }
         RenderSelectedUnitBaseStatLine(state);
+        // FUN_004e1d25 uses the encoded UI-number resource run, not the font
+        // renderer used by the nearby Level/Exp strings.  It right-aligns at
+        // portrait (+0x23,+0x1f), advances eleven pixels, and maps each byte
+        // through DAT_00868600 with the original 0x26 bias.
+        if (state.selected_unit_level_glyph_enabled && state.emit_sprite_draws) {
+            const std::string level = std::to_string(state.selected_unit_level);
+            DrawUiGlyphRun(level.c_str(), level.size(),
+                state.large_slot_x + 0x23, state.large_slot_y + 0x1f, 0x0b,
+                state.glyph_resource_base, 0x26);
+        }
         RenderSelectedUnitMaxStatText(state);
         RenderSelectedUnitCapabilityLines(state);
         return;

@@ -71,6 +71,17 @@ if (BUILD_TESTING)
         COMMAND unit_production_sound_regression
     )
 
+    add_executable(under_attack_sound_regression
+        tests/under_attack_sound_regression.cpp
+        src/ranker_gameplay_sound.cpp
+    )
+    target_include_directories(under_attack_sound_regression PRIVATE
+        include
+    )
+    add_test(NAME under_attack_sound_regression
+        COMMAND under_attack_sound_regression
+    )
+
     add_executable(meat_tooltip_amount_regression
         tests/meat_tooltip_amount_regression.cpp
     )
@@ -89,6 +100,16 @@ if (BUILD_TESTING)
     )
     add_test(NAME neutral_attack_target_regression
         COMMAND neutral_attack_target_regression
+    )
+
+    add_executable(active_queue_icon_payload_regression
+        tests/active_queue_icon_payload_regression.cpp
+    )
+    target_include_directories(active_queue_icon_payload_regression PRIVATE
+        include
+    )
+    add_test(NAME active_queue_icon_payload_regression
+        COMMAND active_queue_icon_payload_regression
     )
 endif()
 

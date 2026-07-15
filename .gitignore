@@ -21,8 +21,10 @@ ranker_reconstructed_code/tests/*
 !ranker_reconstructed_code/tests/d3d9_cubic_presentation_regression.cpp
 !ranker_reconstructed_code/tests/gameplay_resource_sound_branch_regression.cpp
 !ranker_reconstructed_code/tests/unit_production_sound_regression.cpp
+!ranker_reconstructed_code/tests/under_attack_sound_regression.cpp
 !ranker_reconstructed_code/tests/meat_tooltip_amount_regression.cpp
 !ranker_reconstructed_code/tests/neutral_attack_target_regression.cpp
+!ranker_reconstructed_code/tests/active_queue_icon_payload_regression.cpp
 !ranker_reconstructed_code/third_party/
 !ranker_reconstructed_code/third_party/**
 

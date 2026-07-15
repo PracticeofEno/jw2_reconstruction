@@ -604,6 +604,12 @@ bool HandleIndexedTwoVariantGameplaySoundCue(GameplaySoundState& state,
     return HandlePositionalGameplaySoundQueueRequest(state, slot, 0, 0);
 }
 
+bool HandleLocalUnderAttackGameplaySoundCue(GameplaySoundState& state,
+    u32 raw_owner_faction) {
+    return HandleIndexedTwoVariantGameplaySoundCue(
+        state, raw_owner_faction, 0);
+}
+
 bool HandleImmediateGameplaySoundSlotWithPan(GameplaySoundState& state,
     u32 slot_index, i32 world_delta, i32 pan) {
     if (!state.bank_loaded || slot_index == kInvalidGameplaySoundSlot) {

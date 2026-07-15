@@ -17642,6 +17642,8 @@ void clear_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
     overlay.selected_unit_health = 0;
     overlay.selected_unit_health_ratio_max = 0;
     overlay.selected_unit_health_text_color = 0x11;
+    overlay.selected_unit_level = 0;
+    overlay.selected_unit_level_glyph_enabled = false;
     overlay.selected_unit_max_health = 0;
     overlay.selected_unit_base_max_health = 0;
     overlay.selected_unit_secondary = 0;
@@ -17721,9 +17723,14 @@ void append_default_ui_overlay_selected_unit_queue_options(
 
     UiOverlayCommandOption active{};
     active.item_id = active_item;
-    // FUN_004e534f reads raw +0x68, the live target pointer, for the active
-    // queue record.  command_value is the distinct preceding payload field.
-    active.aux = unit.target != nullptr ? unit.target->id : 0u;
+    // 0x004e534f loads raw unit +0x68 into ECX, then FUN_004e5cca stores ECX
+    // as the active record aux.  FUN_004e2042/208f/20dc use that aux as the
+    // unit/order/equipment icon index.  In the typed runtime command_value is
+    // the +0x68 union mirror; target is a separately resolved pointer and is
+    // deliberately not the icon payload (a null target otherwise draws unit
+    // frame zero, Buildman, for every ordinary production order).
+    active.aux = ResolveUiOverlayActiveQueueRecordPayload(unit.command_value,
+        unit.target != nullptr ? unit.target->id : 0u);
     active.flags = 0; // logical index 0 is the active command
     active.enabled = true;
     overlay.command_options.push_back(active);
@@ -18458,7 +18465,10 @@ void sync_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
                 startup_platform_row(121, "Healing"));
         }
     }
-    if ((unit->definition.action_effect_flags & 2u) != 0) {
+    overlay.selected_unit_level_glyph_enabled =
+        (unit->definition.action_effect_flags & 2u) != 0;
+    overlay.selected_unit_level = unit->status_timer + 1u;
+    if (overlay.selected_unit_level_glyph_enabled) {
         overlay.selected_unit_owner_text =
             startup_platform_label_value(178, "Level ", unit->status_timer + 1);
         overlay.selected_unit_experience_text =
@@ -20669,11 +20679,11 @@ void default_unit_damage_local_under_attack(
     u32 faction = 0;
     if (target.owner_id <
         g_runtime.gameplay_startup_state.owner_faction_ids.size()) {
-        faction = std::min<u32>(
-            g_runtime.gameplay_startup_state.owner_faction_ids[target.owner_id], 3);
+        faction =
+            g_runtime.gameplay_startup_state.owner_faction_ids[target.owner_id];
     }
-    HandleIndexedTwoVariantGameplaySoundCue(
-        g_runtime.gameplay_sound, faction, 0);
+    HandleLocalUnderAttackGameplaySoundCue(
+        g_runtime.gameplay_sound, faction);
 }
 
 void configure_default_unit_damage_context(UnitDamageContext& damage_context) {
