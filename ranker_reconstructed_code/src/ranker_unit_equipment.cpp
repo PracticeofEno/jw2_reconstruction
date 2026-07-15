@@ -2,6 +2,7 @@
 
 #include "ranker_indexed_text_table.h"
 #include "ranker_map_effects.h"
+#include "ranker_meat_pipeline.h"
 #include "ranker_miles.h"
 #include "ranker_trc.h"
 
@@ -507,7 +508,7 @@ PickupApplyResult apply_unit_equipment_effect_to_unit(UnitCommandContext& contex
         // Original FUN_00411350 category 3 adds the map-effect repeat count
         // to raw unit +0x2c.  That word is the passive food/recovery reserve
         // (typed action_mode), while raw +0x4c/cargo_amount is worker cargo.
-        unit.action_mode += amount;
+        AddUnitMeatReserve(unit, amount);
         return PickupApplyResult::consume_map_effect;
     }
     // FUN_00411350 compares the raw category with 3 and takes an unsigned JA

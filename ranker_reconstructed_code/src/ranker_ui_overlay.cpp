@@ -1002,10 +1002,13 @@ UiOverlayRect command_slot_rect(const UiOverlayState& state) {
 }
 
 void append_hot_region(UiOverlayState& state, const UiOverlayDrawRecord& record,
-    u8 hotkey, bool enabled) {
+    bool enabled) {
     UiOverlayHotRegion region{};
     region.record = record;
-    region.hotkey = hotkey;
+    // FUN_004e5731/FUN_004e5919 publish the TRC marker in record +0x1c;
+    // FUN_004e3ece scans that byte directly.  UiOverlayCommandOption::hotkey
+    // is not an original parallel source and was never populated by loaders.
+    region.hotkey = ResolveUiOverlayRecordHotkey(record.icon_marker);
     region.enabled = enabled;
     state.hot_regions.push_back(region);
 }
@@ -1288,8 +1291,8 @@ bool handle_local_command_panel_selector(UiOverlayState& state, u32 item_id) {
 }
 
 u32 original_effective_hot_region_flags(const UiOverlayHotRegion& region) {
-    return region.enabled ? region.record.flags :
-        (region.record.flags | kUiOverlayFlagDisabled);
+    return ResolveUiOverlayEffectiveHotkeyFlags(
+        region.record.flags, region.enabled);
 }
 
 bool can_capture_ui_command_button_press(
@@ -1393,6 +1396,30 @@ void set_hot_region_result(UiOverlayState& state, const UiOverlayHotRegion& regi
     state.last_hotkey_aux = region.record.aux;
     state.last_hotkey_flags = original_effective_hot_region_flags(region);
     state.last_hotkey_hover_kind = hover_kind_for_command_item(region.record.item_id);
+}
+
+const UiOverlayHotRegion* resolve_hotkey_region(
+    UiOverlayState& state, u8 key) {
+    const u8 normalized = uppercase_hotkey(key);
+    for (const UiOverlayHotRegion& region : state.hot_regions) {
+        if (region.hotkey != normalized) {
+            continue;
+        }
+
+        const u32 effective_flags = original_effective_hot_region_flags(region);
+        // FUN_004e3ece skips bit-1 records and keeps scanning.  Once it finds
+        // the first same-marker non-bit-1 record, FUN_004e77a5 rejects any of
+        // bits 0x04/0x10/0x20 without looking for a later duplicate marker.
+        if ((effective_flags & kUiOverlayFlagDisabled) != 0) {
+            continue;
+        }
+        set_hot_region_result(state, region);
+        if ((effective_flags & 0x36u) != 0) {
+            return nullptr;
+        }
+        return &region;
+    }
+    return nullptr;
 }
 
 bool hover_kind_uses_immediate_tooltip_schedule(u32 kind) {
@@ -2027,20 +2054,20 @@ void append_fixed_interactive_record(
     UiOverlayState& state, const UiOverlayDrawRecord& record) {
     append_record(state, record);
     const UiOverlayCommandOption* option = find_command_option(state, record.item_id);
-    append_hot_region(state, record, option != nullptr ? option->hotkey : 0,
-        option == nullptr || option->enabled);
+    append_hot_region(state, record, option == nullptr || option->enabled);
 }
 
 void append_offscreen_hotkey_record(
     UiOverlayState& state, u32 item_id, u32 aux, u32 flags) {
     // FUN_004e5621/FUN_004e56a2 store flag-1 commands at the screen
-    // dimensions without advancing DAT_008663b4. They remain available to
-    // the hotkey scan but do not occupy (or overlap) a dynamic icon slot.
+    // dimensions without advancing DAT_008663b4.  Both paths write zero to
+    // record +0x1c, so they do not occupy a slot and cannot be hotkey-scanned.
     const UiOverlayRect rect{static_cast<i32>(state.screen_width),
         static_cast<i32>(state.screen_height), state.current_record_size,
         state.current_record_size};
     append_fixed_interactive_record(
-        state, make_record(item_id, aux, flags, rect, 0));
+        state, make_record(item_id, aux, flags, rect,
+            ResolveUiOverlayOffscreenRecordMarker(state.command_icon_marker)));
 }
 
 void QueueUiOverlayManual26Record(UiOverlayState& state, u32 item_id, u32 aux,
@@ -2070,8 +2097,7 @@ void QueueUiOverlayDynamicIconRecord(UiOverlayState& state, u32 item_id, u32 aux
         make_record(item_id, aux, flags, rect, state.current_icon_marker);
     append_record(state, record);
     const UiOverlayCommandOption* option = find_command_option(state, item_id);
-    append_hot_region(state, record, option != nullptr ? option->hotkey : 0,
-        option == nullptr || option->enabled);
+    append_hot_region(state, record, option == nullptr || option->enabled);
     ++state.dynamic_icon_index;
 }
 
@@ -3240,16 +3266,8 @@ bool CheckUiOverlayCommandRecordEnabled(const UiOverlayState& state, u32 item_id
 }
 
 u32 ResolveUiOverlayHotkeyCommand(UiOverlayState& state, u8 key) {
-    const u8 normalized = uppercase_hotkey(key);
-    for (const UiOverlayHotRegion& region : state.hot_regions) {
-        if (uppercase_hotkey(region.hotkey) == normalized && region.enabled &&
-            (is_indexed_queue_command_item(region.record.item_id) ||
-                (region.record.flags & kUiOverlayFlagDisabled) == 0)) {
-            set_hot_region_result(state, region);
-            return region.record.item_id;
-        }
-    }
-    return 0;
+    const UiOverlayHotRegion* region = resolve_hotkey_region(state, key);
+    return region != nullptr ? region->record.item_id : 0;
 }
 
 bool HitTestUiOverlayHotRegionFromPointer(UiOverlayState& state, i32 x, i32 y) {
@@ -3939,8 +3957,7 @@ void AppendUiOverlayCommandSlot(UiOverlayState& state, u32 item_id, u32 aux,
         make_record(item_id, aux, flags, rect, icon_marker);
     append_record(state, record);
     const UiOverlayCommandOption* option = find_command_option(state, item_id);
-    append_hot_region(state, record, option != nullptr ? option->hotkey : 0,
-        option == nullptr || option->enabled);
+    append_hot_region(state, record, option == nullptr || option->enabled);
     ++state.command_slot_count;
 }
 
@@ -3949,70 +3966,73 @@ void QueueEquipmentDefinitionCommandSlot(UiOverlayState& state, u32 item_id,
     AppendUiOverlayCommandSlot(state, item_id, aux, flags, state.command_icon_marker);
 }
 
-void DispatchGameplayUiKeyboardInput(UiOverlayState& state, u32 virtual_key,
+void DispatchGameplayUiKeyboardInput(UiOverlayState& state, u32 legacy_scan_code,
     u8 ascii) {
-    if (state.chat_active) {
-        HandleGameplayChatKey(state, ascii != 0 ? ascii : static_cast<u8>(virtual_key));
+    const UiOverlayGameplayKeyboardRoute route =
+        ResolveUiOverlayGameplayKeyboardRoute(
+            legacy_scan_code, ascii, state.chat_active);
+    switch (route) {
+    case UiOverlayGameplayKeyboardRoute::chat_character:
+        HandleGameplayChatKey(state, ascii);
         return;
-    }
-    if (ascii == '\r' || ascii == '\n') {
+    case UiOverlayGameplayKeyboardRoute::chat_escape:
+        HandleGameplayChatKey(state, 0x1b);
+        return;
+    case UiOverlayGameplayKeyboardRoute::begin_chat:
         BeginGameplayChatInput(state);
         return;
-    }
-
-    switch (virtual_key) {
-    case 1:
+    case UiOverlayGameplayKeyboardRoute::cancel_mode:
         CancelCurrentUiModeOrActivateCommand(state);
         return;
-    case 2: case 3: case 4: case 5: case 6:
-    case 7: case 8: case 9: case 10: case 11:
-        SelectControlGroupFromDigit(state, virtual_key - 1);
+    case UiOverlayGameplayKeyboardRoute::control_group:
+        SelectControlGroupFromDigit(state, legacy_scan_code - 1);
         return;
-    case 0x0c:
-    case 0x4a:
+    case UiOverlayGameplayKeyboardRoute::increase_speed:
         IncreaseGameplaySpeed(state);
         return;
-    case 0x0d:
-    case 0x4e:
+    case UiOverlayGameplayKeyboardRoute::decrease_speed:
         DecreaseGameplaySpeed(state);
         return;
-    case 0x0f:
+    case UiOverlayGameplayKeyboardRoute::toggle_minimap:
         ToggleMinimapModeAndPersistSetup(state);
         return;
-    case 0x29:
+    case UiOverlayGameplayKeyboardRoute::cycle_control_group:
         CycleSelectedControlGroup(state);
         return;
-    case 0x39:
+    case UiOverlayGameplayKeyboardRoute::stored_minimap_point:
         ClampCameraToStoredMinimapPoint(state, state.stored_minimap_world_x,
             state.stored_minimap_world_y, state.stored_minimap_point_valid);
         return;
-    case 0x3b:
-    case 0x3f:
-    case 0x40:
-    case 0x41:
-    case 0x42:
-    case 0x43:
-        RecallOrStoreCameraBookmark(state, virtual_key - 0x3b,
+    case UiOverlayGameplayKeyboardRoute::camera_bookmark:
+        RecallOrStoreCameraBookmark(state, legacy_scan_code - 0x3b,
             state.shift_modifier_down);
         return;
-    case 0x3c:
-        HandleGameplayMenuKey3c(state, virtual_key - 0x3b,
+    case UiOverlayGameplayKeyboardRoute::save_menu:
+        HandleGameplayMenuKey3c(state, legacy_scan_code - 0x3b,
             state.shift_modifier_down);
         return;
-    case 0x3d:
-        HandleGameplayMenuKey3d(state, virtual_key - 0x3b,
+    case UiOverlayGameplayKeyboardRoute::load_menu:
+        HandleGameplayMenuKey3d(state, legacy_scan_code - 0x3b,
             state.shift_modifier_down);
         return;
-    case 0x3e:
+    case UiOverlayGameplayKeyboardRoute::options_menu:
         OpenGameplayMenuKey3e(state);
         return;
-    case 0x57:
+    case UiOverlayGameplayKeyboardRoute::pause_menu:
+        OpenGameplayPauseMenuKey44(state);
+        return;
+    case UiOverlayGameplayKeyboardRoute::toggle_overlay:
         ToggleGameplayOverlayFlag(state);
         return;
+    case UiOverlayGameplayKeyboardRoute::command_hotkey:
+        ActivateCommandHotkey(state,
+            ResolveUiOverlayGameplayCommandMarker(
+                legacy_scan_code, ascii, state.chat_active));
+        return;
+    case UiOverlayGameplayKeyboardRoute::none:
     default:
-        if (ascii != 0) {
-            ActivateCommandHotkey(state, ascii);
-        }
+        // WM_CHAR is text-only outside chat. The matching WM_KEYDOWN already
+        // handled any gameplay command, preventing a duplicate publisher hit.
         return;
     }
 }
@@ -4026,13 +4046,17 @@ void ClampCameraToStoredMinimapPoint(UiOverlayState& state, i32 world_x, i32 wor
 
 void IncreaseGameplaySpeed(UiOverlayState& state) {
     const u32 original_cap = std::min<u32>(state.max_game_speed, 0x0f);
-    if (!state.scenario_ai_profile_override && state.game_speed < original_cap) {
+    // FUN_004e7263 gates this on DAT_00725bf8 (the generic/P2P profile), not
+    // DAT_01242a20's replay/scenario override.  P2P must not let one peer
+    // change its local lockstep interval with the +/- shortcuts.
+    if (!state.generic_ai_profile_mode && state.game_speed < original_cap) {
         ++state.game_speed;
     }
 }
 
 void DecreaseGameplaySpeed(UiOverlayState& state) {
-    if (!state.scenario_ai_profile_override && state.game_speed != 0) {
+    // FUN_004e727c uses the same DAT_00725bf8-only guard.
+    if (!state.generic_ai_profile_mode && state.game_speed != 0) {
         --state.game_speed;
     }
 }
@@ -4055,9 +4079,25 @@ void CancelCurrentUiModeOrActivateCommand(UiOverlayState& state, u32 command_id)
         }
         return;
     }
-    if (command_id != 0 && CheckUiOverlayCommandRecordEnabled(state, command_id)) {
-        state.pending_local_command = true;
-        state.last_hotkey_command = command_id;
+
+    // FUN_004e72a7 routes Escape through FUN_004e3ea6 with item 0xc6 when
+    // there is no active placement.  That lookup returns the first matching
+    // draw record in publication order; a disabled (0x02) record blocks it
+    // instead of allowing a later duplicate to win.  Preserve the record's
+    // aux/flags so category-back and production/build cancellation select the
+    // same 0xc6 branch as a mouse click.
+    const u32 target_command = command_id != 0 ? command_id : 0xc6u;
+    for (const UiOverlayHotRegion& region : state.hot_regions) {
+        if (region.record.item_id != target_command) {
+            continue;
+        }
+        set_hot_region_result(state, region);
+        if ((original_effective_hot_region_flags(region) &
+                kUiOverlayFlagDisabled) != 0) {
+            return;
+        }
+        DispatchUiOverlayCommandAction(state, target_command);
+        return;
     }
 }
 
@@ -4083,13 +4123,18 @@ void RecallOrStoreCameraBookmark(UiOverlayState& state, u32 bookmark_index,
         return;
     }
     if (bookmark.valid) {
-        state.camera_x = std::clamp(bookmark.camera_x, 0, state.camera_max_x);
-        state.camera_y = std::clamp(bookmark.camera_y, 0, state.camera_max_y);
+        // FUN_004e7328 copies the stored pair directly into DAT_007071a8/ac.
+        // It does not re-clamp against the current resolution's camera range.
+        state.camera_x = bookmark.camera_x;
+        state.camera_y = bookmark.camera_y;
     }
 }
 
 void HandleGameplayMenuKey3c(UiOverlayState& state, u32 bookmark_index, bool store) {
-    if (state.scenario_ai_profile_override || state.generic_ai_profile_mode) {
+    // 0x004e7376 tests only DAT_00725bf8 (the generic/P2P profile mode).
+    // DAT_01242a20's replay/scenario override does not redirect F2 away from
+    // the save dialog.
+    if (state.generic_ai_profile_mode) {
         RecallOrStoreCameraBookmark(state, bookmark_index, store);
         return;
     }
@@ -4102,7 +4147,8 @@ void HandleGameplayMenuKey3c(UiOverlayState& state, u32 bookmark_index, bool sto
 }
 
 void HandleGameplayMenuKey3d(UiOverlayState& state, u32 bookmark_index, bool store) {
-    if (state.scenario_ai_profile_override || state.generic_ai_profile_mode) {
+    // 0x004e738a mirrors the same DAT_00725bf8-only gate for F3.
+    if (state.generic_ai_profile_mode) {
         RecallOrStoreCameraBookmark(state, bookmark_index, store);
         return;
     }
@@ -4123,6 +4169,15 @@ void OpenGameplayMenuKey3e(UiOverlayState& state) {
     }
 }
 
+void OpenGameplayPauseMenuKey44(UiOverlayState& state) {
+    // Scan 0x44 (F10) targets thunk 0x00401f32 -> FUN_0042d5f0, the complete
+    // gameplay pause menu.  It is not the small cooldown-decrement helper at
+    // 0x004e72ff and must not be silently ignored.
+    if (state.callbacks.open_pause_menu != nullptr) {
+        state.callbacks.open_pause_menu(state);
+    }
+}
+
 void ToggleGameplayOverlayFlag(UiOverlayState& state) {
     state.gameplay_overlay_flag = !state.gameplay_overlay_flag;
 }
@@ -4139,12 +4194,15 @@ void SelectControlGroupFromDigit(UiOverlayState& state, u32 group) {
     if (state.selected_unit_id == 0) {
         return;
     }
+    // 0x004e744a reads DAT_0162ea48, not the lockstep simulation frame.  At
+    // 30 fps a frame counter made the 400 ms double-tap window last ~13 s.
     if (state.last_control_group == group &&
-        state.current_frame_counter - state.last_control_group_frame < 0x191) {
+        IsOriginalControlGroupDoubleTap(
+            state.current_tick_ms, state.last_control_group_tick_ms)) {
         FocusCameraOnSelectedUnitsBounds(state);
     }
     state.last_control_group = group;
-    state.last_control_group_frame = state.current_frame_counter;
+    state.last_control_group_tick_ms = state.current_tick_ms;
 }
 
 void AssignSelectedUnitsToControlGroup(UiOverlayState& state, u32 group) {
@@ -4174,14 +4232,64 @@ void AssignSelectedUnitsToControlGroup(UiOverlayState& state, u32 group) {
             }), unit_ids.end());
     }
     state.control_groups[group].unit_ids = state.selected_unit_ids;
+    state.control_groups_dirty_for_unit_flags = true;
 }
 
 void SelectUnitsInControlGroup(UiOverlayState& state, u32 group) {
     if (group >= state.control_groups.size()) {
         return;
     }
-    state.selected_unit_ids = state.control_groups[group].unit_ids;
-    RecountGameplaySelectedUnits(state);
+    // FUN_004e74e2 begins with FUN_004e3de0/FUN_004ead09 and clears the
+    // placement globals before rebuilding selection from the active list.
+    // Digit recall and the scan-0x29 cycle therefore cancel a staged build
+    // silently and discard the previous command-panel records.
+    ResetUiOverlayCommandPanelState(state);
+    state.placement_mode = 0;
+    state.placement_definition_id = 0;
+    state.placement_equipment_slot_code = 0;
+    state.staged_unit_action_id = 0xffffffffu;
+    state.selected_production_category = 0;
+
+    // FUN_004e74e2 recalls by walking the current active-unit list, not the
+    // stored assignment vector.  Units with raw +0xa0 bit 0x80 are excluded,
+    // and DAT_00864b78 stops growing after the fourteenth selection.
+    const auto& group_ids = state.control_groups[group].unit_ids;
+    state.selected_unit_ids.clear();
+    state.selected_unit_ids.reserve(
+        std::min<std::size_t>(group_ids.size(), 14u));
+    u32 primary_unit_id = 0;
+    u32 primary_selection_score = 0;
+    for (const UiOverlayMinimapUnit& unit : state.minimap_units) {
+        if ((unit.runtime_flags & 0x80u) != 0 ||
+            std::find(group_ids.begin(), group_ids.end(), unit.unit_id) ==
+                group_ids.end()) {
+            continue;
+        }
+        state.selected_unit_ids.push_back(unit.unit_id);
+        // The recall scan sums the six selection-stat fields and replaces the
+        // primary only on strict greater-than.  Thus an active-list tie keeps
+        // its first eligible unit.
+        if (unit.selection_score > primary_selection_score) {
+            primary_unit_id = unit.unit_id;
+            primary_selection_score = unit.selection_score;
+        }
+        if (state.selected_unit_ids.size() >= 14u) {
+            break;
+        }
+    }
+    state.selected_unit_id = primary_unit_id;
+    state.selected_unit_count = static_cast<u32>(state.selected_unit_ids.size());
+    state.control_group_recall_primary_intentionally_null =
+        primary_unit_id == 0 && !state.selected_unit_ids.empty();
+    state.selected_unit_type = 0;
+    state.selected_unit_owner = 0;
+    if (primary_unit_id != 0) {
+        if (const UiOverlayMinimapUnit* primary =
+                find_unit_by_id(state, primary_unit_id)) {
+            state.selected_unit_type = primary->type_id;
+            state.selected_unit_owner = primary->owner_id;
+        }
+    }
     NotifyPrimaryGameplayUnitSelected(state);
 }
 
@@ -4197,20 +4305,28 @@ void CycleSelectedControlGroup(UiOverlayState& state) {
         std::min<u32>(static_cast<u32>(state.control_groups.size()),
             static_cast<u32>(group_present.size()));
     for (u32 group = 1; group < group_count; ++group) {
-        for (u32 unit_id : state.control_groups[group].unit_ids) {
-            const UiOverlayMinimapUnit* unit = find_unit_by_id(state, unit_id);
-            if (unit == nullptr || unit->owner_id != state.local_player_slot) {
+        bool selected_member_present = false;
+        const auto& group_ids = state.control_groups[group].unit_ids;
+        for (const UiOverlayMinimapUnit& unit : state.minimap_units) {
+            if (unit.owner_id != state.local_player_slot ||
+                std::find(group_ids.begin(), group_ids.end(), unit.unit_id) ==
+                    group_ids.end()) {
                 continue;
             }
             group_present[group] = true;
-            any_group = true;
-            min_group = std::min(min_group, group);
-            if (unit_already_selected(state, unit_id)) {
-                any_selected_group = true;
-                min_selected_group = std::min(min_selected_group, group);
-                max_selected_group = std::max(max_selected_group, group);
+            if (unit_already_selected(state, unit.unit_id)) {
+                selected_member_present = true;
             }
-            break;
+        }
+        if (!group_present[group]) {
+            continue;
+        }
+        any_group = true;
+        min_group = std::min(min_group, group);
+        if (selected_member_present) {
+            any_selected_group = true;
+            min_selected_group = std::min(min_selected_group, group);
+            max_selected_group = std::max(max_selected_group, group);
         }
     }
 
@@ -4237,7 +4353,6 @@ void CycleSelectedControlGroup(UiOverlayState& state) {
     }
 
     SelectUnitsInControlGroup(state, target_group);
-    state.last_control_group = target_group;
 }
 
 void FocusCameraOnSelectedUnitsBounds(UiOverlayState& state) {
@@ -4271,12 +4386,8 @@ void FocusCameraOnSelectedUnitsBounds(UiOverlayState& state) {
 }
 
 void ActivateCommandHotkey(UiOverlayState& state, u8 key) {
-    if (key >= 0x59) {
-        return;
-    }
-    const u32 command = ResolveUiOverlayHotkeyCommand(state, key);
-    if (command != 0 && CheckUiOverlayCommandRecordEnabled(state, command)) {
-        DispatchUiOverlayCommandAction(state, command);
+    if (const UiOverlayHotRegion* region = resolve_hotkey_region(state, key)) {
+        DispatchUiOverlayCommandAction(state, region->record.item_id);
     }
 }
 
@@ -5052,6 +5163,7 @@ void ResetGameplaySelectionState(UiOverlayState& state) {
     state.selected_unit_type = 0;
     state.selected_unit_owner = 0;
     state.selected_unit_count = 0;
+    state.control_group_recall_primary_intentionally_null = false;
     clear_primary_selection_command_state(state);
     state.selection_rectangle_active = false;
 }
@@ -5063,7 +5175,14 @@ void RecountGameplaySelectedUnits(UiOverlayState& state) {
         }), state.selected_unit_ids.end());
     state.selected_unit_count = static_cast<u32>(state.selected_unit_ids.size());
     if (state.selected_unit_ids.empty()) {
+        state.control_group_recall_primary_intentionally_null = false;
         state.selected_unit_id = 0;
+        state.selected_unit_type = 0;
+        state.selected_unit_owner = 0;
+        return;
+    }
+    if (state.selected_unit_id == 0 &&
+        state.control_group_recall_primary_intentionally_null) {
         state.selected_unit_type = 0;
         state.selected_unit_owner = 0;
         return;
@@ -5071,6 +5190,7 @@ void RecountGameplaySelectedUnits(UiOverlayState& state) {
     if (!unit_already_selected(state, state.selected_unit_id)) {
         state.selected_unit_id = state.selected_unit_ids.front();
     }
+    state.control_group_recall_primary_intentionally_null = false;
     if (const UiOverlayMinimapUnit* unit = find_unit_by_id(state, state.selected_unit_id)) {
         state.selected_unit_type = unit->type_id;
         state.selected_unit_owner = unit->owner_id;

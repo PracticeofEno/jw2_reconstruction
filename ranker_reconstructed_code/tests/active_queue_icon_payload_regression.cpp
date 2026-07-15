@@ -61,12 +61,63 @@ void test_other_active_queue_kinds_share_the_raw_union() {
         "0x1ac did not dispatch the raw payload through the equipment table");
 }
 
+void test_exact_active_and_deferred_state_dispatch() {
+    expect(ranker::ResolveUiOverlayActiveQueueDispatchItem(0x50u) == 0x1aau &&
+            ranker::ResolveUiOverlayActiveQueueDispatchItem(0x51u) == 0x1aau,
+        "unit-production states did not dispatch item 0x1aa");
+    expect(ranker::ResolveUiOverlayActiveQueueDispatchItem(0x4du) == 0x1abu &&
+            ranker::ResolveUiOverlayActiveQueueDispatchItem(0x4eu) == 0x1abu,
+        "production-order states did not dispatch item 0x1ab");
+    expect(ranker::ResolveUiOverlayActiveQueueDispatchItem(0x82u) == 0x1acu &&
+            ranker::ResolveUiOverlayActiveQueueDispatchItem(0x83u) == 0x1acu,
+        "equipment states did not dispatch item 0x1ac");
+    expect(ranker::ResolveUiOverlayActiveQueueDispatchItem(0x10000050u) == 0u &&
+            ranker::ResolveUiOverlayActiveQueueDispatchItem(0x52u) == 0u,
+        "active queue state dispatch compared only the low byte");
+
+    expect(ranker::ResolveUiOverlayDeferredQueueDispatchItem(0x10u) == 0x1aau,
+        "deferred unit-production state did not dispatch item 0x1aa");
+    expect(ranker::ResolveUiOverlayDeferredQueueDispatchItem(0x17u) == 0x1abu,
+        "deferred production-order state did not dispatch item 0x1ab");
+    expect(ranker::ResolveUiOverlayDeferredQueueDispatchItem(0x22u) == 0x1acu,
+        "deferred equipment state did not dispatch item 0x1ac");
+    expect(ranker::ResolveUiOverlayDeferredQueueDispatchItem(0x10000010u) == 0u &&
+            ranker::ResolveUiOverlayDeferredQueueDispatchItem(0x11u) == 0u,
+        "deferred queue state dispatch compared only the low byte");
+}
+
+void test_original_queue_publication_gate() {
+    using ranker::ShouldPublishUiOverlaySelectedStructureQueue;
+
+    expect(ShouldPublishUiOverlaySelectedStructureQueue(
+               1u, 0x80u, false, 0u, 0u, 0u),
+        "local single selected structure queue was hidden");
+    expect(!ShouldPublishUiOverlaySelectedStructureQueue(
+               1u, 0x80u, false, 0u, 1u, 0u),
+        "remote or allied structure queue leaked without an override");
+    expect(ShouldPublishUiOverlaySelectedStructureQueue(
+               1u, 0x80u, false, 2u, 1u, 0u),
+        "player-type-2 observer could not inspect a remote queue");
+    expect(ShouldPublishUiOverlaySelectedStructureQueue(
+               1u, 0x80u, true, 0u, 1u, 0u),
+        "replay/scenario override could not inspect a remote queue");
+    expect(!ShouldPublishUiOverlaySelectedStructureQueue(
+               2u, 0x80u, true, 2u, 0u, 0u),
+        "multi-selection incorrectly published the primary structure queue");
+    expect(!ShouldPublishUiOverlaySelectedStructureQueue(
+               1u, 0x20u, true, 2u, 0u, 0u),
+        "mobile selection incorrectly published a structure queue");
+}
+
 } // namespace
 
 int main() {
     test_active_production_uses_raw_command_value();
     test_other_active_queue_kinds_share_the_raw_union();
+    test_exact_active_and_deferred_state_dispatch();
+    test_original_queue_publication_gate();
     std::cout << "ACTIVE_QUEUE_ICON_PAYLOAD_PASS tyrano-worker=0x20 "
-                 "source=raw+0x68 tables=base+production+equipment\n";
+                 "source=raw+0x68 tables=base+production+equipment "
+                 "state-map=exact gate=single-owned-or-observer\n";
     return 0;
 }

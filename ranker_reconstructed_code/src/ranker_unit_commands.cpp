@@ -2,6 +2,7 @@
 
 #include "ranker_game_session_tables.h"
 #include "ranker_map_effects.h"
+#include "ranker_meat_pipeline.h"
 #include "ranker_production_orders.h"
 #include "ranker_unit_action.h"
 #include "ranker_unit_damage.h"
@@ -5901,15 +5902,11 @@ void HandleUnitPassiveRecoveryAndTimedRemoval(UnitCommandContext& context,
     if (max_health != 0 && unit.health < max_health &&
         unit.definition.passive_recovery_enabled != 0 &&
         (unit.command_flags & 0x2000) == 0) {
-        bool recover_health = false;
-        if (unit.action_mode != 0) {
-            --unit.action_mode;
-            recover_health = true;
-        } else if ((context.frame_counter & 0x1f) == 0 &&
+        const bool recovered_from_meat =
+            TryConsumeUnitMeatReserveForRecovery(unit);
+        if (!recovered_from_meat && unit.action_mode == 0 &&
+            (context.frame_counter & 0x1f) == 0 &&
             unit.definition.passive_recovery_flags == 0) {
-            recover_health = true;
-        }
-        if (recover_health) {
             ++unit.health;
             if (unit.health > max_health) {
                 unit.health = max_health;

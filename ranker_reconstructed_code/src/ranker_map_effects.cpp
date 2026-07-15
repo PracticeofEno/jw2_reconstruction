@@ -1,5 +1,7 @@
 #include "ranker_map_effects.h"
 
+#include "ranker_meat_pipeline.h"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
@@ -137,20 +139,6 @@ UnitMovementPoint find_nearest_tile(const MapEffectContext& context, i32 x, i32 
     return {x, y};
 }
 
-u32 passive_counter_effect_id(u32 value) {
-    u32 effect_id = 1;
-    if (value > 100) {
-        ++effect_id;
-    }
-    if (value > 500) {
-        ++effect_id;
-    }
-    if (value > 1000) {
-        ++effect_id;
-    }
-    return effect_id;
-}
-
 bool spawn_unit_passive_counter_effect(MapEffectContext& context,
     UnitMovementUnit& unit) {
     const u32 value = unit.action_mode;
@@ -159,20 +147,24 @@ bool spawn_unit_passive_counter_effect(MapEffectContext& context,
     }
 
     MapEffectInstance* effect = HandleMapEffectNearestTileSpawn(
-        context, passive_counter_effect_id(value), unit.x, unit.y);
+        context, SelectUnitMeatMapEffectId(value), unit.x, unit.y);
     if (effect == nullptr) {
         return false;
     }
 
-    u32 repeat = value;
+    u32 random_bonus = 0;
     if ((unit.definition.passive_recovery_flags & 2u) == 0) {
         const u32 limit = value >> 2;
-        if (limit != 0 && context.callbacks.random_limit != nullptr) {
-            repeat += context.callbacks.random_limit(context, limit);
+        // Original 0x004d1593 calls its RNG helper even when value >> 2 is
+        // zero.  The helper returns zero without advancing RNG state, but the
+        // callback boundary itself remains observable to parity probes.
+        if (context.callbacks.random_limit != nullptr) {
+            random_bonus = context.callbacks.random_limit(context, limit);
         }
     }
-    effect->repeat_count = repeat;
-    unit.action_mode = 0;
+    CommitUnitMeatDrop(unit, *effect,
+        PlanUnitMeatDrop(value, unit.definition.passive_recovery_flags,
+            random_bonus));
     return true;
 }
 
@@ -492,7 +484,7 @@ bool StartUnitProgressMapEffect(MapEffectContext& context, UnitMovementUnit& uni
         if (repeat > 50) {
             repeat -= 50;
         }
-        spawn_effect_id = passive_counter_effect_id(repeat);
+        spawn_effect_id = SelectUnitMeatMapEffectId(repeat);
         update_repeat = true;
     }
 

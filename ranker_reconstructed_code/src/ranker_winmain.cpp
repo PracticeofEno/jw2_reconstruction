@@ -4,6 +4,7 @@
 #include "ranker_change_password.h"
 #include "ranker_change_lobby.h"
 #include "ranker_connect_frontend.h"
+#include "ranker_control_group_persistence.h"
 #include "ranker_crt_runtime.h"
 #include "ranker_create_game.h"
 #include "ranker_cursor.h"
@@ -4820,10 +4821,19 @@ void default_gameplay_input_handle_keyboard_event(GameplayInputActionState& stat
     const u32 raw_code = event.code;
     const u8 ascii = (raw_code & 0xff00u) != 0 ?
         static_cast<u8>((raw_code >> 8) & 0xffu) : 0;
-    const u32 virtual_key = ascii != 0 ? 0 : raw_code;
-    const bool cancel_mode = virtual_key == 1u && overlay.placement_mode != 0;
-    DispatchGameplayUiKeyboardInput(overlay, virtual_key, ascii);
-    if (cancel_mode) {
+    const u32 legacy_scan_code = ascii == 0 ? (raw_code & 0xffu) : 0;
+    const bool cancel_mode =
+        legacy_scan_code == 1u && overlay.placement_mode != 0;
+    DispatchGameplayUiKeyboardInput(overlay, legacy_scan_code, ascii);
+    const bool recalled_control_group =
+        !overlay.control_group_assign_mode &&
+        ((legacy_scan_code >= 2u && legacy_scan_code <= 0x0bu) ||
+            legacy_scan_code == 0x29u) &&
+        overlay.selected_production_category == 0;
+    if (cancel_mode || recalled_control_group) {
+        // DAT_00864bb4 is mirrored by pointer_aux_state on the next frame.
+        // FUN_004e74e2 clears it for digit recall/cycle; clear both views so
+        // sync cannot resurrect the just-cancelled production category.
         state.pointer_aux_state = 0;
     }
     apply_default_ui_overlay_runtime_mutations();
@@ -11913,8 +11923,11 @@ void default_gameplay_frame_present_cursor(GameplayFrameRenderContext&) {
 }
 
 void default_select_gameplay_hud_font() {
-    SelectTextDrawFont(0);
-    SelectTextMetricFont(0);
+    // Original FUN_004d7919 and QueueGameplayHudMessage (0x004d7c1b)
+    // select draw-font slot four. Slot four is the Win32/GDI text path used
+    // for Korean gameplay messages; bitmap slot zero makes the same row 80
+    // pixels narrower at 800x600 (x=307 instead of the original x=267).
+    SelectTextDrawFont(kGameplayHudTextDrawFontIndex);
 }
 
 GameplayTextExtent default_gameplay_hud_measure_text(
@@ -12764,6 +12777,10 @@ void default_ui_overlay_open_options_menu(UiOverlayState&) {
     OpenGameplayOptionsDialog();
 }
 
+void default_ui_overlay_open_pause_menu(UiOverlayState&) {
+    OpenGameplayPauseMenu();
+}
+
 void default_ui_overlay_update_catchup_target_if_active(UiOverlayState&) {
     UpdateGameplayCatchupTargetIfActive(gameplay_loop_state());
 }
@@ -12921,6 +12938,9 @@ void configure_default_ui_overlay_callbacks() {
     if (overlay.callbacks.open_options_menu == nullptr) {
         overlay.callbacks.open_options_menu = default_ui_overlay_open_options_menu;
     }
+    if (overlay.callbacks.open_pause_menu == nullptr) {
+        overlay.callbacks.open_pause_menu = default_ui_overlay_open_pause_menu;
+    }
     if (overlay.callbacks.update_catchup_target_if_active == nullptr) {
         overlay.callbacks.update_catchup_target_if_active =
             default_ui_overlay_update_catchup_target_if_active;
@@ -12975,6 +12995,13 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
     g_runtime.gameplay_action_damage_profiles = UnitActionDamageProfileTable{};
     g_runtime.gameplay_action_damage_profiles_initialized = false;
     ResetUiOverlayState();
+    if (UnitMovementContext* movement = default_gameplay_movement_context()) {
+        // Record-7 load/rejoin units are fully materialized before this
+        // callback.  Capture their persistent raw +0x08 group nibble before
+        // any render-time UI mirror is allowed to publish an empty overlay.
+        InitializeUiOverlayControlGroupsFromUnitFlagsOnce(
+            ui_overlay_state(), movement->active_units);
+    }
     initialize_default_gameplay_sound_state();
     g_runtime.gameplay_render_command_queue.callbacks.default_dispatch =
         NoOpQueuedRenderCommand;
@@ -13116,6 +13143,8 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
         &g_runtime.gameplay_unit_render_queue;
     g_runtime.gameplay_hud_text.screen_width = kOriginalClientWidth;
     g_runtime.gameplay_hud_text.screen_height = kOriginalClientHeight;
+    g_runtime.gameplay_hud_text.world_viewport_height =
+        ui_overlay_state().world_viewport_height;
     configure_default_gameplay_hud_text_callbacks(g_runtime.gameplay_hud_text);
     ResetGameplayHudTextLayout(g_runtime.gameplay_hud_text);
     ResetGameplayHudAlertMarkers(g_runtime.gameplay_hud_alert_markers);
@@ -17452,29 +17481,22 @@ void sync_default_gameplay_visibility_and_render_inputs(u32 frame_counter) {
         g_runtime.gameplay_player_slots.owner_visibility_masks;
 
     // Raw unit +0x08 combines the selected bit (0x80) and the persistent
-    // control-group number (low nibble).  The reconstructed UI keeps those in
-    // vectors, so mirror them back immediately before producing render items.
-    const UiOverlayState& overlay = ui_overlay_state();
+    // control-group number (low nibble).  Session initialization imports a
+    // loaded/rejoined nibble once; from then on the overlay is authoritative,
+    // including an intentionally empty group after Ctrl+number replacement.
+    UiOverlayState& overlay = ui_overlay_state();
+    SynchronizeUiOverlayControlGroupsWithUnitFlags(
+        overlay, movement->active_units);
     for (UnitMovementUnit* unit : movement->active_units) {
         if (unit == nullptr || !unit->active) {
             continue;
         }
 
-        unit->scenario_string_slot &= ~0x8fu;
+        unit->scenario_string_slot &= ~0x80u;
         if (std::find(overlay.selected_unit_ids.begin(),
                 overlay.selected_unit_ids.end(), unit->id) !=
             overlay.selected_unit_ids.end()) {
             unit->scenario_string_slot |= 0x80u;
-        }
-        for (u32 group = 1;
-             group < overlay.control_groups.size() && group <= 0x0fu;
-             ++group) {
-            const auto& group_units = overlay.control_groups[group].unit_ids;
-            if (std::find(group_units.begin(), group_units.end(), unit->id) !=
-                group_units.end()) {
-                unit->scenario_string_slot |= group;
-                break;
-            }
         }
     }
 
@@ -17679,37 +17701,19 @@ void clear_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
 }
 
 u32 default_ui_overlay_active_queue_item(u32 command_state) {
-    switch (command_state) {
-    case 0x50u:
-    case 0x51u:
-        return 0x1aau;
-    case 0x82u:
-    case 0x83u:
-        return 0x1acu;
-    case 0x4du:
-    case 0x4eu:
-        return 0x1abu;
-    default:
-        return 0;
-    }
+    return ResolveUiOverlayActiveQueueDispatchItem(command_state);
 }
 
 u32 default_ui_overlay_deferred_queue_item(u32 command_state) {
-    switch (command_state) {
-    case 0x10u:
-        return 0x1aau;
-    case 0x22u:
-        return 0x1acu;
-    case 0x17u:
-        return 0x1abu;
-    default:
-        return 0;
-    }
+    return ResolveUiOverlayDeferredQueueDispatchItem(command_state);
 }
 
 void append_default_ui_overlay_selected_unit_queue_options(
     UiOverlayState& overlay, const UnitMovementUnit& unit) {
-    if (unit.type_id < 0x60u) {
+    if (!ShouldPublishUiOverlaySelectedStructureQueue(
+            overlay.selected_unit_count, unit.type_id,
+            overlay.scenario_ai_profile_override, overlay.local_player_type,
+            unit.owner_id, overlay.local_player_slot)) {
         return;
     }
 
@@ -18526,6 +18530,17 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
     overlay.screen_height = kOriginalClientHeight;
     overlay.reveal_minimap_fog =
         g_runtime.gameplay_startup_state.fog_reveal_disabled;
+    // Scan 0x57 toggles DAT_0083f498, which gates both the simulation-tick
+    // and render FPS counters at 0x004d7d32/0x004d7d72.  Keep the UI-facing
+    // mirror tied to the counter state so a later sync cannot erase F11.
+    overlay.gameplay_overlay_flag =
+        g_runtime.gameplay_hud_text.debug_counter.enabled;
+    // DAT_01242a20 is raised by the replay-load path and admits the same
+    // remote-player queue inspection as the original observer branch.  The
+    // main-window runtime owns that mirror; keep the per-frame overlay copy
+    // live instead of leaving its default false value latched forever.
+    overlay.scenario_ai_profile_override =
+        g_runtime.generic_ai_scenario_active;
     overlay.generic_ai_profile_mode = g_runtime.generic_ai_profile_mode;
     overlay.replay_timing_enabled = gameplay_loop_state().replay_timing_enabled;
     overlay.scripted_input_restricted =
@@ -18763,6 +18778,24 @@ void apply_default_ui_overlay_runtime_mutations() {
     const u32 speed = default_gameplay_speed_index(overlay.game_speed);
     if (gameplay_loop_state().frame_interval_index != speed) {
         apply_default_gameplay_speed_index(speed, true);
+    }
+
+    // ToggleGameplayOverlayFlag is the reconstructed scan-0x57 branch.  This
+    // assignment must precede the setup-write early return because F11 does
+    // not modify persistent setup data in the original.
+    g_runtime.gameplay_hud_text.debug_counter.enabled =
+        overlay.gameplay_overlay_flag;
+
+    // Ctrl+digit writes every affected raw +0x08 nibble inside the original
+    // key handler. Publish after each reconstructed input event as well, so a
+    // following save-menu event in the same pump cannot serialize old groups
+    // before the render phase eventually mirrors them.
+    if (overlay.control_groups_dirty_for_unit_flags) {
+        if (UnitMovementContext* movement = default_gameplay_movement_context()) {
+            MirrorUiOverlayControlGroupsToUnitFlags(
+                overlay, movement->active_units);
+            overlay.control_groups_dirty_for_unit_flags = false;
+        }
     }
 
     if (!overlay.setup_write_requested) {
@@ -22431,6 +22464,14 @@ UnitMovementUnit* take_default_free_unit_head(UnitMovementContext& movement) {
     }
     UnitMovementUnit* unit = movement.free_units.front();
     movement.free_units.erase(movement.free_units.begin());
+    if (unit != nullptr) {
+        // InitializePlacedUnitFromMapSlot clears raw +0x08 for every new
+        // fixed-pool generation. The UI vectors use the stable pool id, so
+        // forget the previous occupant before a later render mirror can make
+        // the newly produced unit inherit its selection/control group.
+        ForgetUiOverlayUnitIdentityForNewGeneration(
+            ui_overlay_state(), unit->id);
+    }
     return unit;
 }
 
@@ -28261,13 +28302,12 @@ void default_gameplay_loop_present_phase(GameplayLoopState& state) {
     context.viewport_height = kOriginalClientHeight;
     context.render_command_queue = &g_runtime.gameplay_render_command_queue;
     context.unit_render_queue = &g_runtime.gameplay_unit_render_queue;
-    g_runtime.gameplay_hud_text.screen_width = kOriginalClientWidth;
-    g_runtime.gameplay_hud_text.screen_height = kOriginalClientHeight;
-    configure_default_gameplay_hud_text_callbacks(g_runtime.gameplay_hud_text);
+    GameplayHudTextState& hud = g_runtime.gameplay_hud_text;
+    const u32 hud_viewport_height = ui_overlay_state().world_viewport_height;
+    configure_default_gameplay_hud_text_callbacks(hud);
     sync_default_gameplay_hud_alert_markers();
-    g_runtime.gameplay_hud_text.alert_markers =
-        &g_runtime.gameplay_hud_alert_markers;
-    context.hud = &g_runtime.gameplay_hud_text;
+    hud.alert_markers = &g_runtime.gameplay_hud_alert_markers;
+    context.hud = &hud;
     context.fog = &g_runtime.gameplay_fog_context;
     context.render_command_queue->callbacks.default_dispatch =
         NoOpQueuedRenderCommand;
@@ -28338,8 +28378,14 @@ void default_gameplay_loop_present_phase(GameplayLoopState& state) {
                 previous_fog_metrics = context.fog->metrics;
             }
             BindGameplayRenderTarget(context, target);
-            g_runtime.gameplay_hud_text.screen_width = target.width;
-            g_runtime.gameplay_hud_text.screen_height = target.height;
+            if (UpdateGameplayHudSurfaceLayoutMetrics(hud, target.width,
+                    target.height, hud_viewport_height)) {
+                // FUN_004e2bb7 resets the HUD only after the selected
+                // resolution/theme layout has supplied its real surface and
+                // world-boundary values.  Resetting to fixed 800x600 before
+                // Lock made a 640 frame briefly retain the wrong anchors.
+                ResetGameplayHudTextLayout(hud);
+            }
 
             context.callbacks.present_cursor = nullptr;
             RenderGameplayFrameComposite(context);
@@ -28362,6 +28408,10 @@ void default_gameplay_loop_present_phase(GameplayLoopState& state) {
     }
 #endif
 
+    if (UpdateGameplayHudSurfaceLayoutMetrics(hud, context.viewport_width,
+            context.viewport_height, hud_viewport_height)) {
+        ResetGameplayHudTextLayout(hud);
+    }
     RenderGameplayFrameComposite(context);
 }
 

@@ -19,11 +19,48 @@ constexpr std::size_t kGameplayRenderCommandCapacity = 3000;
 constexpr std::size_t kGameplayRenderCommandDispatchCount = 16;
 constexpr u32 kGameplayHudMessageLifetimeMs = 5000;
 constexpr u32 kGameplayHudScrollStepDelayMs = 10;
+// FUN_004d7919 and the message enqueue helper at 0x004d7c1b both select
+// draw-font slot four before measuring or drawing gameplay HUD text.
+constexpr u8 kGameplayHudTextDrawFontIndex = 4;
 constexpr u32 kGameplayRenderPackedTypeMask = 0x000000ff;
 constexpr u32 kGameplayRenderPackedPaletteRampMask = 0x00000f00;
 constexpr u32 kGameplayRenderPackedOverlayMask = 0x0003f000;
 constexpr u32 kGameplayRenderPackedBlendMask = 0x07c00000;
 constexpr u32 kGameplayRenderPackedRawUnitRamp = 0x80000000;
+
+// The original keeps two different vertical layout values for gameplay HUD
+// messages.  DAT_01440004 is the full logical back-buffer height and is used
+// as the queued message's off-screen/scroll-in origin.  DAT_0086358c is the
+// theme-specific world viewport boundary and is used as the final baseline.
+// Falling back to the full height keeps standalone/test states compatible.
+constexpr u32 ResolveGameplayHudViewportBoundary(
+    u32 screen_height, u32 world_viewport_height) {
+    return world_viewport_height != 0 ? world_viewport_height : screen_height;
+}
+
+constexpr i32 ResolveGameplayHudViewportOffsetY(
+    u32 screen_height, u32 world_viewport_height, i32 offset) {
+    return static_cast<i32>(ResolveGameplayHudViewportBoundary(
+               screen_height, world_viewport_height)) + offset;
+}
+
+constexpr i32 ResolveGameplayHudBottomTextY(
+    u32 screen_height, u32 world_viewport_height) {
+    return ResolveGameplayHudViewportOffsetY(
+        screen_height, world_viewport_height, -0x14);
+}
+
+constexpr i32 ResolveGameplayHudQueuedMessageStartY(
+    u32 screen_height, u32 text_height) {
+    return static_cast<i32>(screen_height) -
+        static_cast<i32>(text_height) * 2;
+}
+
+constexpr i32 ResolveGameplayHudCenteredTextX(
+    u32 screen_width, u32 text_width) {
+    // 0x004d7c3f..0x004d7c4b performs unsigned SUB/SHR without clamping.
+    return static_cast<i32>((screen_width - text_width) >> 1);
+}
 
 enum class GameplayRenderSpriteVariant : u32 {
     unit_ramp_token1_shadow = 0,
@@ -221,6 +258,9 @@ struct GameplayHudTextState {
     GameplayHudCallbacks callbacks;
     u32 screen_width = 800;
     u32 screen_height = 600;
+    // Mirrors DAT_0086358c.  This is not the full screen height: it is the
+    // top-level world/HUD boundary selected by resolution bucket and theme.
+    u32 world_viewport_height = 0;
     u32 frame_counter = 0;
     u32 current_tick_ms = 0;
     i32 bottom_text_y = 0;
@@ -237,6 +277,26 @@ struct GameplayHudTextState {
     GameplayDebugCounterState debug_counter;
     GameplayHudAlertMarkerState* alert_markers = nullptr;
 };
+
+constexpr bool GameplayHudSurfaceLayoutChanged(u32 current_screen_width,
+    u32 current_screen_height, u32 current_world_viewport_height,
+    u32 next_screen_width, u32 next_screen_height,
+    u32 next_world_viewport_height) {
+    return current_screen_width != next_screen_width ||
+        current_screen_height != next_screen_height ||
+        current_world_viewport_height != next_world_viewport_height;
+}
+
+inline bool UpdateGameplayHudSurfaceLayoutMetrics(GameplayHudTextState& state,
+    u32 screen_width, u32 screen_height, u32 world_viewport_height) {
+    const bool changed = GameplayHudSurfaceLayoutChanged(state.screen_width,
+        state.screen_height, state.world_viewport_height, screen_width,
+        screen_height, world_viewport_height);
+    state.screen_width = screen_width;
+    state.screen_height = screen_height;
+    state.world_viewport_height = world_viewport_height;
+    return changed;
+}
 
 using GameplayFrameCallback = void (*)(GameplayFrameRenderContext& context);
 using GameplayFrameDrawTerrainCallback =

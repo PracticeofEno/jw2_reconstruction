@@ -35,6 +35,210 @@ constexpr u32 kUiOverlayCommandActionMinimap = 3;
 constexpr u32 kUiOverlayCommandActionPlacement = 4;
 constexpr u32 kUiOverlayCommandActionSelection = 5;
 constexpr u32 kUiOverlayCommandActionContextual = 6;
+
+// DAT_0086a860, indexed by the low-byte scan code in FUN_004e77a5.  The
+// resulting byte is compared with the TRC marker stored at command record
+// +0x1c by FUN_004e3ece.  This deliberately follows physical scan codes and
+// is independent of the active Win32 keyboard layout.
+constexpr std::array<u8, 0x59> MakeOriginalGameplayHotkeyMarkerTable() {
+    std::array<u8, 0x59> markers{};
+    markers[0x02] = '1';
+    markers[0x03] = '2';
+    markers[0x04] = '3';
+    markers[0x05] = '4';
+    markers[0x06] = '5';
+    markers[0x07] = '6';
+    markers[0x08] = '7';
+    markers[0x09] = '8';
+    markers[0x0a] = '9';
+    markers[0x0b] = '0';
+    markers[0x0c] = '-';
+    markers[0x0d] = '=';
+    markers[0x10] = 'Q';
+    markers[0x11] = 'W';
+    markers[0x12] = 'E';
+    markers[0x13] = 'R';
+    markers[0x14] = 'T';
+    markers[0x15] = 'Y';
+    markers[0x16] = 'U';
+    markers[0x17] = 'I';
+    markers[0x18] = 'O';
+    markers[0x19] = 'P';
+    markers[0x1a] = '[';
+    markers[0x1b] = ']';
+    markers[0x1e] = 'A';
+    markers[0x1f] = 'S';
+    markers[0x20] = 'D';
+    markers[0x21] = 'F';
+    markers[0x22] = 'G';
+    markers[0x23] = 'H';
+    markers[0x24] = 'J';
+    markers[0x25] = 'K';
+    markers[0x26] = 'L';
+    markers[0x27] = ';';
+    markers[0x28] = '`';
+    markers[0x29] = '\'';
+    markers[0x2b] = '\\';
+    markers[0x2c] = 'Z';
+    markers[0x2d] = 'X';
+    markers[0x2e] = 'C';
+    markers[0x2f] = 'V';
+    markers[0x30] = 'B';
+    markers[0x31] = 'N';
+    markers[0x32] = 'M';
+    markers[0x33] = ',';
+    markers[0x34] = '.';
+    markers[0x35] = '/';
+    markers[0x39] = ' ';
+    markers[0x58] = 0xffu;
+    return markers;
+}
+
+constexpr std::array<u8, 0x59> kOriginalGameplayHotkeyMarkers =
+    MakeOriginalGameplayHotkeyMarkerTable();
+
+constexpr u8 ResolveUiOverlayGameplayHotkeyMarker(u32 legacy_scan_code) {
+    return legacy_scan_code < kOriginalGameplayHotkeyMarkers.size()
+        ? kOriginalGameplayHotkeyMarkers[legacy_scan_code]
+        : 0;
+}
+
+// The 91-entry switch table at 0x004e70cc does not send every nonzero marker
+// through FUN_004e77a5.  Brackets, space, digits, function keys, and the
+// speed/minimap keys have dedicated branches (or return immediately).  Keep
+// the exact set of switch entries which target the command-hotkey thunk at
+// 0x004030f8; otherwise '['/']' and F12 can activate unrelated records.
+constexpr bool OriginalGameplayScanRoutesToCommandHotkey(
+    u32 legacy_scan_code) {
+    switch (legacy_scan_code) {
+    case 0x10: case 0x11: case 0x12: case 0x13: case 0x14:
+    case 0x15: case 0x16: case 0x17: case 0x18: case 0x19:
+    case 0x1e: case 0x1f: case 0x20: case 0x21: case 0x22:
+    case 0x23: case 0x24: case 0x25: case 0x26: case 0x27:
+    case 0x28:
+    case 0x2b: case 0x2c: case 0x2d: case 0x2e: case 0x2f:
+    case 0x30: case 0x31: case 0x32: case 0x33: case 0x34:
+    case 0x35:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// WM_KEYDOWN supplies the scan code. WM_CHAR is retained solely for chat
+// text; otherwise one physical key press would publish the same command twice.
+constexpr u8 ResolveUiOverlayGameplayCommandMarker(
+    u32 legacy_scan_code, u8 ascii, bool chat_active) {
+    return !chat_active && ascii == 0 &&
+            OriginalGameplayScanRoutesToCommandHotkey(legacy_scan_code)
+        ? ResolveUiOverlayGameplayHotkeyMarker(legacy_scan_code)
+        : 0;
+}
+
+enum class UiOverlayGameplayKeyboardRoute : u8 {
+    none = 0,
+    chat_character,
+    chat_escape,
+    begin_chat,
+    cancel_mode,
+    control_group,
+    increase_speed,
+    decrease_speed,
+    toggle_minimap,
+    cycle_control_group,
+    stored_minimap_point,
+    camera_bookmark,
+    save_menu,
+    load_menu,
+    options_menu,
+    pause_menu,
+    toggle_overlay,
+    command_hotkey,
+};
+
+constexpr UiOverlayGameplayKeyboardRoute ResolveUiOverlayGameplayKeyboardRoute(
+    u32 legacy_scan_code, u8 ascii, bool chat_active) {
+    if (chat_active) {
+        // At 0x004e70c2 the original returns for scan-only messages while
+        // chat is active. Escape closes chat only when WM_CHAR supplies 0x1b.
+        if (ascii == 0) {
+            return UiOverlayGameplayKeyboardRoute::none;
+        }
+        return ascii == 0x1b
+            ? UiOverlayGameplayKeyboardRoute::chat_escape
+            : UiOverlayGameplayKeyboardRoute::chat_character;
+    }
+    if (ascii != 0) {
+        return ascii == '\r' || ascii == '\n'
+            ? UiOverlayGameplayKeyboardRoute::begin_chat
+            : UiOverlayGameplayKeyboardRoute::none;
+    }
+    switch (legacy_scan_code) {
+    case 1:
+        return UiOverlayGameplayKeyboardRoute::cancel_mode;
+    case 2: case 3: case 4: case 5: case 6:
+    case 7: case 8: case 9: case 10: case 11:
+        return UiOverlayGameplayKeyboardRoute::control_group;
+    case 0x0c: case 0x4a:
+        return UiOverlayGameplayKeyboardRoute::increase_speed;
+    case 0x0d: case 0x4e:
+        return UiOverlayGameplayKeyboardRoute::decrease_speed;
+    case 0x0f:
+        return UiOverlayGameplayKeyboardRoute::toggle_minimap;
+    case 0x29:
+        return UiOverlayGameplayKeyboardRoute::cycle_control_group;
+    case 0x39:
+        return UiOverlayGameplayKeyboardRoute::stored_minimap_point;
+    case 0x3b: case 0x3f: case 0x40: case 0x41: case 0x42: case 0x43:
+        return UiOverlayGameplayKeyboardRoute::camera_bookmark;
+    case 0x3c:
+        return UiOverlayGameplayKeyboardRoute::save_menu;
+    case 0x3d:
+        return UiOverlayGameplayKeyboardRoute::load_menu;
+    case 0x3e:
+        return UiOverlayGameplayKeyboardRoute::options_menu;
+    case 0x44:
+        return UiOverlayGameplayKeyboardRoute::pause_menu;
+    case 0x57:
+        return UiOverlayGameplayKeyboardRoute::toggle_overlay;
+    default:
+        return ResolveUiOverlayGameplayCommandMarker(
+                   legacy_scan_code, ascii, chat_active) != 0
+            ? UiOverlayGameplayKeyboardRoute::command_hotkey
+            : UiOverlayGameplayKeyboardRoute::none;
+    }
+}
+
+constexpr u8 ResolveUiOverlayRecordHotkey(u32 icon_marker) {
+    return static_cast<u8>(icon_marker & 0xffu);
+}
+
+// Both flag-1 offscreen paths in FUN_004e5621/FUN_004e56a2 explicitly write
+// zero to record +0x1c.  Their records preserve original bookkeeping geometry
+// but are deliberately unavailable to the keyboard scan.
+constexpr u32 ResolveUiOverlayOffscreenRecordMarker(u32 command_icon_marker) {
+    (void)command_icon_marker;
+    return 0;
+}
+
+constexpr u32 ResolveUiOverlayEffectiveHotkeyFlags(
+    u32 record_flags, bool enabled) {
+    return enabled ? record_flags : (record_flags | 0x02u);
+}
+
+constexpr bool IsUiOverlayHotkeyActionBlocked(
+    u32 record_flags, bool enabled) {
+    return (ResolveUiOverlayEffectiveHotkeyFlags(record_flags, enabled) &
+        0x36u) != 0;
+}
+
+// DAT_0162ea48 is a wrapping legacy millisecond tick.  The repeated control
+// group press focuses the camera for deltas through 0x190 (400 ms), inclusive.
+constexpr bool IsOriginalControlGroupDoubleTap(
+    u32 current_tick_ms, u32 previous_tick_ms) {
+    return current_tick_ms - previous_tick_ms <= 0x190u;
+}
+
 constexpr std::array<u32, 10> kOriginalSelectedHealthTextColors{{
     0x09u, 0x09u, 0x99u, 0x11u, 0x11u,
     0xa9u, 0xc1u, 0xc9u, 0xd1u, 0x71u,
@@ -254,6 +458,49 @@ constexpr u32 ResolveUiOverlayActiveQueueRecordPayload(
     return raw_command_value;
 }
 
+// FUN_004e5292 compares the complete command-state dword before choosing the
+// indexed queue record kind.  In particular, high flag bits must not turn an
+// unrelated state into a production state merely because its low byte agrees.
+constexpr u32 ResolveUiOverlayActiveQueueDispatchItem(u32 command_state) {
+    switch (command_state) {
+    case 0x50u:
+    case 0x51u:
+        return 0x1aau;
+    case 0x4du:
+    case 0x4eu:
+        return 0x1abu;
+    case 0x82u:
+    case 0x83u:
+        return 0x1acu;
+    default:
+        return 0;
+    }
+}
+
+constexpr u32 ResolveUiOverlayDeferredQueueDispatchItem(u32 command_state) {
+    switch (command_state) {
+    case 0x10u:
+        return 0x1aau;
+    case 0x17u:
+        return 0x1abu;
+    case 0x22u:
+        return 0x1acu;
+    default:
+        return 0;
+    }
+}
+
+// 0x004e5298/0x004e52c9 and 0x004e52d6..0x004e5300 admit queue records only
+// for one selected structure that the local player may inspect.  Player type
+// 2 and the replay/scenario override retain the original observer access.
+constexpr bool ShouldPublishUiOverlaySelectedStructureQueue(
+    u32 selected_count, u32 selected_type, bool replay_or_scenario_override,
+    u32 local_player_type, u32 selected_owner, u32 local_owner) {
+    return selected_count == 1u && selected_type >= 0x60u &&
+        (replay_or_scenario_override || local_player_type == 2u ||
+            selected_owner == local_owner);
+}
+
 // FUN_004e2042/FUN_004e208f/FUN_004e20dc consume the aux dword as the frame
 // index in the base-unit, production-order, or equipment command table.  Keep
 // this resolution shared with the draw dispatcher so regression tests observe
@@ -350,6 +597,7 @@ struct UiOverlayCallbacks {
     UiOverlayFrameCallback open_save_session_dialog = nullptr;
     UiOverlayFrameCallback open_load_session_dialog = nullptr;
     UiOverlayFrameCallback open_options_menu = nullptr;
+    UiOverlayFrameCallback open_pause_menu = nullptr;
     UiOverlayFrameCallback update_catchup_target_if_active = nullptr;
 };
 
@@ -590,6 +838,15 @@ struct UiOverlayState {
     std::array<UiOverlayRect, 8> command_slot_bounds{};
     std::array<UiOverlayCameraBookmark, 12> camera_bookmarks{};
     std::array<UiOverlayControlGroup, 16> control_groups{};
+    // False only between a session UI reset and the one-time import from raw
+    // unit +0x08.  It prevents a deliberate Ctrl+group clear from being
+    // repopulated by the old unit nibble on a later render frame.
+    bool control_groups_initialized_from_unit_flags = false;
+    bool control_groups_dirty_for_unit_flags = false;
+    // FUN_004e74e2 can select units yet leave the primary pointer null when
+    // every six-stat selection score is zero. Preserve that exact result
+    // across the following per-frame recount only for this recall path.
+    bool control_group_recall_primary_intentionally_null = false;
     std::array<std::array<u32, kCameraScrollRampCount>, kCameraScrollSpeedCount>
         camera_scroll_steps = kDefaultCameraScrollSteps;
     bool chat_active = false;
@@ -622,7 +879,7 @@ struct UiOverlayState {
     u32 max_game_speed = 0x0f;
     u32 camera_scroll_speed_index = 0;
     u32 last_control_group = 0xffffffffu;
-    u32 last_control_group_frame = 0;
+    u32 last_control_group_tick_ms = 0;
     u32 camera_scroll_ramp = 0;
     u32 camera_scroll_tick_bucket = 0;
     u32 camera_edge_cursor_index = 0;
@@ -801,7 +1058,7 @@ void AppendUiOverlayCommandSlot(UiOverlayState& state, u32 item_id, u32 aux = 0,
     u32 flags = 0, u32 icon_marker = 0);
 void QueueEquipmentDefinitionCommandSlot(UiOverlayState& state, u32 item_id,
     u32 aux = 0, u32 flags = 0);
-void DispatchGameplayUiKeyboardInput(UiOverlayState& state, u32 virtual_key,
+void DispatchGameplayUiKeyboardInput(UiOverlayState& state, u32 legacy_scan_code,
     u8 ascii = 0);
 void ClampCameraToStoredMinimapPoint(UiOverlayState& state, i32 world_x, i32 world_y,
     bool valid);
@@ -815,6 +1072,7 @@ void RecallOrStoreCameraBookmark(UiOverlayState& state, u32 bookmark_index,
 void HandleGameplayMenuKey3c(UiOverlayState& state, u32 bookmark_index, bool store);
 void HandleGameplayMenuKey3d(UiOverlayState& state, u32 bookmark_index, bool store);
 void OpenGameplayMenuKey3e(UiOverlayState& state);
+void OpenGameplayPauseMenuKey44(UiOverlayState& state);
 void ToggleGameplayOverlayFlag(UiOverlayState& state);
 void SelectControlGroupFromDigit(UiOverlayState& state, u32 group);
 void AssignSelectedUnitsToControlGroup(UiOverlayState& state, u32 group);

@@ -459,6 +459,157 @@ bool with_back_buffer_dc(const std::function<bool(HDC)>& callback) {
     return ok;
 }
 
+bool with_memory_text_dc(const std::function<bool(HDC)>& callback) {
+    HDC dc = CreateCompatibleDC(nullptr);
+    if (dc == nullptr) {
+        return false;
+    }
+    const bool ok = callback(dc);
+    DeleteDC(dc);
+    return ok;
+}
+
+DWORD surface_pixel_to_dib_pixel(u16 pixel, bool pixel_mode_555) {
+    const u32 red = pixel_mode_555 ?
+        ((pixel >> 10) & 0x1fu) << 3 : ((pixel >> 11) & 0x1fu) << 3;
+    const u32 green = pixel_mode_555 ?
+        ((pixel >> 5) & 0x1fu) << 3 : ((pixel >> 5) & 0x3fu) << 2;
+    const u32 blue = (pixel & 0x1fu) << 3;
+    return (red << 16) | (green << 8) | blue;
+}
+
+u16 dib_pixel_to_surface_pixel(DWORD pixel, bool pixel_mode_555) {
+    const u16 red = static_cast<u16>((pixel >> 16) & 0xffu);
+    const u16 green = static_cast<u16>((pixel >> 8) & 0xffu);
+    const u16 blue = static_cast<u16>(pixel & 0xffu);
+    if (pixel_mode_555) {
+        return static_cast<u16>(((red >> 3) << 10) |
+            ((green >> 3) << 5) | (blue >> 3));
+    }
+    return static_cast<u16>(((red >> 3) << 11) |
+        ((green >> 2) << 5) | (blue >> 3));
+}
+
+bool measure_win32_text_with_memory_dc(const char* text, std::size_t length,
+    HFONT font, SIZE& extent) {
+    return with_memory_text_dc([&](HDC dc) {
+        if (font == nullptr) {
+            ensure_win32_text_font(dc);
+            font = system_ui_state().fonts.selected;
+        }
+        const HGDIOBJ previous_font = SelectObject(dc, font);
+        const BOOL ok = GetTextExtentPoint32A(
+            dc, text, static_cast<int>(length), &extent);
+        if (previous_font != nullptr && previous_font != HGDI_ERROR) {
+            SelectObject(dc, previous_font);
+        }
+        return ok != FALSE;
+    });
+}
+
+// The gameplay software compositor keeps the DirectDraw back surface locked
+// while it draws terrain, units, HUD text and the bottom panel.  Font slot 4
+// is a Win32/GDI font, and IDirectDrawSurface7::GetDC is invalid during that
+// lock.  Render only the affected rectangle through a top-down memory DIB and
+// copy it back to the already-locked 16-bit sprite target.  Drawing happens at
+// the original point in the composite, so later panel sprites still cover the
+// queued message while it scrolls in from the full-screen baseline.
+bool with_locked_sprite_target_text_dc(i32 x, i32 y, i32 width, i32 height,
+    const std::function<bool(HDC)>& callback) {
+    const SpriteRenderTarget& target = sprite_render_state().target;
+    if (target.pixels == nullptr || target.width == 0 || target.height == 0 ||
+        target.stride_words < target.width) {
+        return false;
+    }
+
+    const i64 requested_right = static_cast<i64>(x) + std::max(width, 0);
+    const i64 requested_bottom = static_cast<i64>(y) + std::max(height, 0);
+    const i32 left = std::max<i32>(x, 0);
+    const i32 top = std::max<i32>(y, 0);
+    const i32 right = static_cast<i32>(std::min<i64>(
+        requested_right, static_cast<i64>(target.width)));
+    const i32 bottom = static_cast<i32>(std::min<i64>(
+        requested_bottom, static_cast<i64>(target.height)));
+    if (right <= left || bottom <= top) {
+        // TextOut succeeds even when the surface clips the entire run.
+        return true;
+    }
+
+    const i32 dib_width = right - left;
+    const i32 dib_height = bottom - top;
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(info.bmiHeader);
+    info.bmiHeader.biWidth = dib_width;
+    info.bmiHeader.biHeight = -dib_height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+
+    HDC dc = CreateCompatibleDC(nullptr);
+    if (dc == nullptr) {
+        return false;
+    }
+    void* raw_pixels = nullptr;
+    HBITMAP bitmap = CreateDIBSection(
+        dc, &info, DIB_RGB_COLORS, &raw_pixels, nullptr, 0);
+    if (bitmap == nullptr || raw_pixels == nullptr) {
+        if (bitmap != nullptr) {
+            DeleteObject(bitmap);
+        }
+        DeleteDC(dc);
+        return false;
+    }
+
+    const HGDIOBJ previous_bitmap = SelectObject(dc, bitmap);
+    auto* dib_pixels = static_cast<DWORD*>(raw_pixels);
+    const bool pixel_mode_555 = SurfacePixelMode555();
+    for (i32 row = 0; row < dib_height; ++row) {
+        const u16* source = target.pixels +
+            static_cast<std::size_t>(top + row) * target.stride_words + left;
+        DWORD* destination = dib_pixels +
+            static_cast<std::size_t>(row) * static_cast<std::size_t>(dib_width);
+        for (i32 column = 0; column < dib_width; ++column) {
+            destination[column] =
+                surface_pixel_to_dib_pixel(source[column], pixel_mode_555);
+        }
+    }
+
+    SetViewportOrgEx(dc, -left, -top, nullptr);
+    const bool ok = callback(dc);
+    if (ok) {
+        for (i32 row = 0; row < dib_height; ++row) {
+            u16* destination = target.pixels +
+                static_cast<std::size_t>(top + row) * target.stride_words + left;
+            const DWORD* source = dib_pixels +
+                static_cast<std::size_t>(row) * static_cast<std::size_t>(dib_width);
+            for (i32 column = 0; column < dib_width; ++column) {
+                destination[column] =
+                    dib_pixel_to_surface_pixel(source[column], pixel_mode_555);
+            }
+        }
+        ++g_text_renderer_state.win32_sprite_target_fallback_count;
+    }
+
+    if (previous_bitmap != nullptr && previous_bitmap != HGDI_ERROR) {
+        SelectObject(dc, previous_bitmap);
+    }
+    DeleteObject(bitmap);
+    DeleteDC(dc);
+    return ok;
+}
+
+void advance_win32_text_cursor(const SIZE& extent) {
+    g_text_renderer_state.cursor.x += extent.cx;
+    const auto& dd = direct_draw_state();
+    if (g_text_renderer_state.cursor.x >= static_cast<i32>(dd.width)) {
+        g_text_renderer_state.cursor.x = 0;
+        g_text_renderer_state.cursor.y += extent.cy;
+        if (g_text_renderer_state.cursor.y >= static_cast<i32>(dd.height)) {
+            g_text_renderer_state.cursor.y = 0;
+        }
+    }
+}
+
 bool measure_win32_text_run(const char* text, std::size_t length) {
     g_text_renderer_state.measured_width = 1;
     g_text_renderer_state.measured_height = 1;
@@ -469,7 +620,7 @@ bool measure_win32_text_run(const char* text, std::size_t length) {
         return true;
     }
 
-    return with_back_buffer_dc([&](HDC dc) {
+    const bool surface_ok = with_back_buffer_dc([&](HDC dc) {
         ensure_win32_text_font(dc);
         SelectObject(dc, system_ui_state().fonts.selected);
         SIZE extent{1, 1};
@@ -481,6 +632,18 @@ bool measure_win32_text_run(const char* text, std::size_t length) {
         g_text_renderer_state.measured_height = static_cast<u32>(extent.cy);
         return true;
     });
+    if (surface_ok) {
+        return true;
+    }
+
+    SIZE extent{1, 1};
+    if (!measure_win32_text_with_memory_dc(text, length, nullptr, extent)) {
+        return false;
+    }
+    g_text_renderer_state.measured_width = static_cast<u32>(extent.cx);
+    g_text_renderer_state.measured_height = static_cast<u32>(extent.cy);
+    ++g_text_renderer_state.win32_memory_measure_fallback_count;
+    return true;
 }
 
 bool render_win32_text_run(const char* text, std::size_t length) {
@@ -491,7 +654,8 @@ bool render_win32_text_run(const char* text, std::size_t length) {
         return true;
     }
 
-    return with_back_buffer_dc([&](HDC dc) {
+    SIZE extent{};
+    const auto render = [&](HDC dc) {
         ensure_win32_text_font(dc);
         if (g_text_renderer_state.cursor.background == 0) {
             SetBkMode(dc, TRANSPARENT);
@@ -506,23 +670,27 @@ bool render_win32_text_run(const char* text, std::size_t length) {
         const int count = static_cast<int>(length);
         const BOOL out_ok = TextOutA(dc, g_text_renderer_state.cursor.x,
             g_text_renderer_state.cursor.y, text, count);
-        SIZE extent{0, 0};
         const BOOL extent_ok = GetTextExtentPoint32A(dc, text, count, &extent);
         if (out_ok == FALSE || extent_ok == FALSE) {
             return false;
         }
-
-        g_text_renderer_state.cursor.x += extent.cx;
-        const auto& dd = direct_draw_state();
-        if (g_text_renderer_state.cursor.x >= static_cast<i32>(dd.width)) {
-            g_text_renderer_state.cursor.x = 0;
-            g_text_renderer_state.cursor.y += extent.cy;
-            if (g_text_renderer_state.cursor.y >= static_cast<i32>(dd.height)) {
-                g_text_renderer_state.cursor.y = 0;
-            }
-        }
         return true;
-    });
+    };
+    if (with_back_buffer_dc(render)) {
+        advance_win32_text_cursor(extent);
+        return true;
+    }
+
+    if (!measure_win32_text_with_memory_dc(text, length, nullptr, extent)) {
+        return false;
+    }
+    const TextRenderCursor cursor = g_text_renderer_state.cursor;
+    if (!with_locked_sprite_target_text_dc(cursor.x, cursor.y,
+            extent.cx, extent.cy, render)) {
+        return false;
+    }
+    advance_win32_text_cursor(extent);
+    return true;
 }
 
 bool draw_win32_text_at(i32 x, i32 y, HFONT font, u8 foreground, u8 background,
@@ -531,7 +699,9 @@ bool draw_win32_text_at(i32 x, i32 y, HFONT font, u8 foreground, u8 background,
         return false;
     }
 
-    return with_back_buffer_dc([&](HDC dc) {
+    const std::size_t length = std::strlen(text);
+    SIZE extent{};
+    const auto render = [&](HDC dc) {
         if (font == nullptr) {
             ensure_win32_text_font(dc);
             font = system_ui_state().fonts.selected;
@@ -547,16 +717,26 @@ bool draw_win32_text_at(i32 x, i32 y, HFONT font, u8 foreground, u8 background,
         }
         SetTextColor(dc, color_ref_from_text_pixel(foreground));
 
-        const int count = static_cast<int>(std::strlen(text));
+        const int count = static_cast<int>(length);
+        i32 draw_x = x;
         if (centered) {
-            SIZE extent{0, 0};
             if (GetTextExtentPoint32A(dc, text, count, &extent) != FALSE) {
-                x -= extent.cx / 2;
+                draw_x -= extent.cx / 2;
             }
         }
-        const BOOL ok = TextOutA(dc, x, y, text, count);
+        const BOOL ok = TextOutA(dc, draw_x, y, text, count);
         return ok != FALSE;
-    });
+    };
+    if (with_back_buffer_dc(render)) {
+        return true;
+    }
+
+    if (!measure_win32_text_with_memory_dc(text, length, font, extent)) {
+        return false;
+    }
+    const i32 draw_x = centered ? x - extent.cx / 2 : x;
+    return with_locked_sprite_target_text_dc(
+        draw_x, y, extent.cx, extent.cy, render);
 }
 
 bool render_win32_text_shadow_and_advance(const char* text) {
@@ -564,7 +744,8 @@ bool render_win32_text_shadow_and_advance(const char* text) {
         return false;
     }
 
-    return with_back_buffer_dc([&](HDC dc) {
+    SIZE extent{};
+    const auto render = [&](HDC dc) {
         ensure_win32_text_font(dc);
         SelectObject(dc, system_ui_state().fonts.selected);
         SetBkMode(dc, TRANSPARENT);
@@ -576,15 +757,29 @@ bool render_win32_text_shadow_and_advance(const char* text) {
         const BOOL shadow_ok = TextOutA(dc, cursor.x + 1, cursor.y + 1, text, count);
         SetTextColor(dc, color_ref_from_text_pixel(cursor.foreground));
         const BOOL text_ok = TextOutA(dc, cursor.x, cursor.y, text, count);
-        SIZE extent{0, 0};
         const BOOL extent_ok = GetTextExtentPoint32A(dc, text, count, &extent);
 
         if (shadow_ok == FALSE || text_ok == FALSE || extent_ok == FALSE) {
             return false;
         }
+        return true;
+    };
+    if (with_back_buffer_dc(render)) {
         g_text_renderer_state.cursor.x += extent.cx;
         return true;
-    });
+    }
+
+    if (!measure_win32_text_with_memory_dc(
+            text, std::strlen(text), nullptr, extent)) {
+        return false;
+    }
+    const TextRenderCursor cursor = g_text_renderer_state.cursor;
+    if (!with_locked_sprite_target_text_dc(cursor.x, cursor.y,
+            extent.cx + 1, extent.cy + 1, render)) {
+        return false;
+    }
+    g_text_renderer_state.cursor.x += extent.cx;
+    return true;
 }
 #endif
 

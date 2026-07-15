@@ -62,6 +62,31 @@ void set_key_state(u32 key, bool down) {
     if (key < g_input_state.key_down.size()) {
         g_input_state.key_down[key] = down ? 1 : 0;
     }
+
+    // WM_KEYDOWN/WM_KEYUP do not pass through refresh_modifier_state().
+    // Keep these booleans synchronized at message time so Ctrl+digit and
+    // Shift+function-key events see the modifier that accompanied them.  The
+    // virtual-key array remains separate and continues to drive held arrows.
+    const auto key_is_down = [](u32 virtual_key) {
+        return virtual_key < g_input_state.key_down.size() &&
+            g_input_state.key_down[virtual_key] != 0;
+    };
+    switch (key) {
+    case 0x10: case 0xa0: case 0xa1: // VK_SHIFT/L/RSHIFT
+        g_input_state.shift_down = key_is_down(0x10) ||
+            key_is_down(0xa0) || key_is_down(0xa1);
+        break;
+    case 0x11: case 0xa2: case 0xa3: // VK_CONTROL/L/RCONTROL
+        g_input_state.ctrl_down = key_is_down(0x11) ||
+            key_is_down(0xa2) || key_is_down(0xa3);
+        break;
+    case 0x12: case 0xa4: case 0xa5: // VK_MENU/L/RMENU
+        g_input_state.alt_down = key_is_down(0x12) ||
+            key_is_down(0xa4) || key_is_down(0xa5);
+        break;
+    default:
+        break;
+    }
 }
 
 bool handle_mouse_button(u32 message, u32 code, u32 wparam, u32 lparam, u32 button, bool down) {
@@ -269,21 +294,21 @@ bool HandleRightButtonDoubleClick(u32 wparam, u32 lparam) {
         kButtonRight, true);
 }
 
-bool HandleKeyDown(u32 key) {
+bool HandleKeyDown(u32 key, u32 legacy_scan_code) {
     set_key_state(key, true);
-    return PushKeyboardInputEvent(key);
+    return PushKeyboardInputEvent(legacy_scan_code & 0xffu);
 }
 
 void HandleKeyUp(u32 key) {
     set_key_state(key, false);
 }
 
-bool HandleAltKeyPress(u32 key) {
+bool HandleAltKeyPress(u32 key, u32 legacy_scan_code) {
     if (key == 0) {
         return false;
     }
     set_key_state(key, true);
-    return PushKeyboardInputEvent(key);
+    return PushKeyboardInputEvent(legacy_scan_code & 0xffu);
 }
 
 void HandleAltKeyRelease(u32 key) {
@@ -318,7 +343,8 @@ bool HandleWindowInputMessage(u32 message, u32 wparam, u32 lparam) {
         return HandleMiddleButtonUp(wparam, lparam);
     case 0x0100:
         if ((lparam & 0x40000000u) == 0) {
-            return HandleKeyDown(wparam);
+            return HandleKeyDown(
+                wparam, ResolveLegacyKeyboardScanCode(wparam, lparam));
         }
         return true;
     case 0x0101:
@@ -342,7 +368,8 @@ bool HandleWindowInputMessage(u32 message, u32 wparam, u32 lparam) {
     case 0x0102:
         return HandleCharacterInput(wparam);
     case 0x0104:
-        HandleAltKeyPress(wparam);
+        HandleAltKeyPress(
+            wparam, ResolveLegacyKeyboardScanCode(wparam, lparam));
         if (((lparam >> 16) & 0xffu) == 0x3e && g_input_state.alt_down) {
             g_input_state.alt_f4_seen = true;
         }

@@ -183,7 +183,7 @@ const char* current_message_text(const GameplayHudMessage& message) {
 
 i32 centered_x_for_text(GameplayHudTextState& state, const char* text) {
     const GameplayTextExtent extent = measure_text(state, text);
-    return static_cast<i32>((state.screen_width - std::min(state.screen_width, extent.width)) >> 1);
+    return ResolveGameplayHudCenteredTextX(state.screen_width, extent.width);
 }
 
 void recompute_message_center(GameplayHudTextState& state, GameplayHudMessage& message) {
@@ -206,7 +206,8 @@ void render_selected_status(GameplayHudTextState& state) {
         selected.category_colors[category] : 1;
     const char* label = selected.category_labels[category];
     i32 x = 0x14;
-    const i32 y = static_cast<i32>(state.screen_height) - 0x14;
+    const i32 y = ResolveGameplayHudBottomTextY(
+        state.screen_height, state.world_viewport_height);
 
     if (label != nullptr) {
         draw_shadow_text(state, label, x, y, color);
@@ -1597,7 +1598,8 @@ void RenderGameplayFrameComposite(GameplayFrameRenderContext& context) {
 }
 
 void ResetGameplayHudTextLayout(GameplayHudTextState& state) {
-    state.bottom_text_y = static_cast<i32>(state.screen_height) - 0x14;
+    state.bottom_text_y = ResolveGameplayHudBottomTextY(
+        state.screen_height, state.world_viewport_height);
     state.selected_status.active = false;
     state.selected_status.typed_text.clear();
     state.selected_status.extra_text.clear();
@@ -1652,9 +1654,9 @@ void QueueGameplayHudMessage(GameplayHudTextState& state, const char* text) {
     select_draw_font(state);
     const GameplayTextExtent extent = measure_text(state, text);
     state.queued_message.x =
-        static_cast<i32>((state.screen_width - std::min(state.screen_width, extent.width)) >> 1);
-    state.queued_message.y = static_cast<i32>(state.screen_height) -
-        static_cast<i32>(extent.height) * 2;
+        ResolveGameplayHudCenteredTextX(state.screen_width, extent.width);
+    state.queued_message.y = ResolveGameplayHudQueuedMessageStartY(
+        state.screen_height, extent.height);
     state.queued_message.tick_ms = state.current_tick_ms;
 }
 
@@ -1677,7 +1679,8 @@ void RenderGameplayHudText(GameplayHudTextState& state) {
             continue;
         }
         RenderTimedGameplayHudNotification(state, notification, 0x14,
-            static_cast<i32>(state.screen_height) + kOffsets[i]);
+            ResolveGameplayHudViewportOffsetY(state.screen_height,
+                state.world_viewport_height, kOffsets[i]));
     }
 
     select_draw_font(state);

@@ -50,6 +50,11 @@ struct TextRendererState {
     u8 metric_font_index = 0xff;
     u32 measured_width = 0;
     u32 measured_height = 0;
+    // DirectDraw refuses GetDC while its surface is locked for the software
+    // sprite pass.  These counters make the Win32-font memory-DC fallback
+    // observable in focused regressions without changing draw semantics.
+    u32 win32_memory_measure_fallback_count = 0;
+    u32 win32_sprite_target_fallback_count = 0;
     i32 clip_left = 0;
     i32 clip_top = 0;
     i32 clip_right = 0x7fffffff;

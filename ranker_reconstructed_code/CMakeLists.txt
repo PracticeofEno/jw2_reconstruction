@@ -111,6 +111,128 @@ if (BUILD_TESTING)
     add_test(NAME active_queue_icon_payload_regression
         COMMAND active_queue_icon_payload_regression
     )
+
+    add_executable(hud_shortage_message_layout_regression
+        tests/hud_shortage_message_layout_regression.cpp
+    )
+    target_include_directories(hud_shortage_message_layout_regression PRIVATE
+        include
+    )
+    add_test(NAME hud_shortage_message_layout_regression
+        COMMAND hud_shortage_message_layout_regression
+    )
+
+    if (WIN32)
+        add_executable(win32_text_locked_surface_regression
+            tests/win32_text_locked_surface_regression.cpp
+            src/ranker_text_renderer.cpp
+        )
+        target_include_directories(win32_text_locked_surface_regression PRIVATE
+            include
+        )
+        if (MSVC)
+            target_compile_options(win32_text_locked_surface_regression PRIVATE /Gy)
+            target_link_options(win32_text_locked_surface_regression PRIVATE /OPT:REF)
+        else()
+            target_compile_options(win32_text_locked_surface_regression PRIVATE
+                -ffunction-sections
+                -fdata-sections
+            )
+            target_link_options(win32_text_locked_surface_regression PRIVATE
+                -Wl,--gc-sections
+            )
+        endif()
+        target_link_libraries(win32_text_locked_surface_regression PRIVATE
+            gdi32
+            winmm
+        )
+        add_test(NAME win32_text_locked_surface_regression
+            COMMAND win32_text_locked_surface_regression
+        )
+    endif()
+
+    add_executable(berry_cursor_selector_regression
+        tests/berry_cursor_selector_regression.cpp
+        src/ranker_gameplay_context_cursor.cpp
+    )
+    target_include_directories(berry_cursor_selector_regression PRIVATE
+        include
+    )
+    add_test(NAME berry_cursor_selector_regression
+        COMMAND berry_cursor_selector_regression
+    )
+
+    add_executable(meat_pipeline_regression
+        tests/meat_pipeline_regression.cpp
+        src/ranker_map_effects.cpp
+    )
+    target_include_directories(meat_pipeline_regression PRIVATE
+        include
+    )
+    add_test(NAME meat_pipeline_regression
+        COMMAND meat_pipeline_regression
+    )
+
+    add_executable(gameplay_hotkey_regression
+        tests/gameplay_hotkey_regression.cpp
+        src/ranker_input.cpp
+    )
+    target_include_directories(gameplay_hotkey_regression PRIVATE
+        include
+    )
+    if (MSVC)
+        target_compile_options(gameplay_hotkey_regression PRIVATE /Gy)
+        target_link_options(gameplay_hotkey_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(gameplay_hotkey_regression PRIVATE
+            -ffunction-sections
+            -fdata-sections
+        )
+        target_link_options(gameplay_hotkey_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME gameplay_hotkey_regression
+        COMMAND gameplay_hotkey_regression
+    )
+
+    add_executable(gameplay_hotkey_dispatch_regression
+        tests/gameplay_hotkey_dispatch_regression.cpp
+        src/ranker_control_group_persistence.cpp
+        src/ranker_ui_overlay.cpp
+    )
+    target_include_directories(gameplay_hotkey_dispatch_regression PRIVATE
+        include
+    )
+    set_property(TARGET gameplay_hotkey_dispatch_regression PROPERTY
+        INTERPROCEDURAL_OPTIMIZATION TRUE
+    )
+    if (MSVC)
+        target_compile_options(gameplay_hotkey_dispatch_regression PRIVATE /Gy)
+        target_link_options(gameplay_hotkey_dispatch_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(gameplay_hotkey_dispatch_regression PRIVATE
+            -ffunction-sections
+            -fdata-sections
+        )
+        target_link_options(gameplay_hotkey_dispatch_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME gameplay_hotkey_dispatch_regression
+        COMMAND gameplay_hotkey_dispatch_regression
+    )
+
+    add_executable(control_group_persistence_regression
+        tests/control_group_persistence_regression.cpp
+        src/ranker_control_group_persistence.cpp
+    )
+    target_include_directories(control_group_persistence_regression PRIVATE
+        include
+    )
+    add_test(NAME control_group_persistence_regression
+        COMMAND control_group_persistence_regression
+    )
 endif()
 
 add_executable(ranker_rebuild WIN32
@@ -137,6 +259,7 @@ add_executable(ranker_rebuild WIN32
     src/ranker_owner_ai.cpp
     src/ranker_runtime_resources.cpp
     src/ranker_input.cpp
+    src/ranker_control_group_persistence.cpp
     src/ranker_legacy_file.cpp
     src/ranker_setup_data.cpp
     src/ranker_legacy_environment.cpp

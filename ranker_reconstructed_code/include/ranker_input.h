@@ -10,6 +10,17 @@ namespace ranker {
 constexpr u32 kInputEventQueueSize = 32;
 constexpr u32 kInputKeyCount = 0x100;
 
+// The original gameplay dispatcher consumes the low-byte IBM/PC set-1 scan
+// code carried by the window message, not the Win32 virtual-key value.  Keep
+// virtual keys for held-key state, but publish this value to the event queue.
+constexpr u32 ResolveLegacyKeyboardScanCode(u32 virtual_key, u32 lparam) {
+    (void)virtual_key;
+    // WndProc stores the scan byte from lParam verbatim.  In particular, a
+    // synthetic message with scan zero must remain zero; substituting VK_A
+    // (0x41) would accidentally route it as the F7 camera-bookmark scan.
+    return (lparam >> 16) & 0xffu;
+}
+
 enum class InputEventKind : u32 {
     keyboard = 1,
     mouse = 0,
@@ -78,9 +89,9 @@ bool HandleMiddleButtonDown(u32 wparam, u32 lparam);
 bool HandleMiddleButtonUp(u32 wparam, u32 lparam);
 bool HandleLeftButtonDoubleClick(u32 wparam, u32 lparam);
 bool HandleRightButtonDoubleClick(u32 wparam, u32 lparam);
-bool HandleKeyDown(u32 key);
+bool HandleKeyDown(u32 key, u32 legacy_scan_code);
 void HandleKeyUp(u32 key);
-bool HandleAltKeyPress(u32 key);
+bool HandleAltKeyPress(u32 key, u32 legacy_scan_code);
 void HandleAltKeyRelease(u32 key);
 bool HandleCharacterInput(u32 character);
 bool HandleWindowInputMessage(u32 message, u32 wparam, u32 lparam);
