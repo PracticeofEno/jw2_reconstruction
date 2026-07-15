@@ -1,3 +1,4 @@
+#include "ranker_gameplay_session_runtime.h"
 #include "ranker_ui_overlay.h"
 
 #include <array>
@@ -197,10 +198,27 @@ void test_all_layouts_and_themes() {
     }
 }
 
+void test_logical_surface_resolution_priority() {
+    GameplayLogicalSurfaceSize surface = ResolveGameplayLogicalSurfaceSize(
+        true, 640, 480, 800, 600);
+    require(surface.width == 640 && surface.height == 480,
+        "active DirectDraw surface must override the requested display state");
+
+    surface = ResolveGameplayLogicalSurfaceSize(false, 640, 480, 1024, 768);
+    require(surface.width == 1024 && surface.height == 768,
+        "inactive DirectDraw dimensions must not leak after surface teardown");
+
+    surface = ResolveGameplayLogicalSurfaceSize(false, 640, 480, 0, 768);
+    require(surface.width == kGameplayDefaultScreenWidth &&
+            surface.height == kGameplayDefaultScreenHeight,
+        "incomplete display state must fall back to the original dimensions");
+}
+
 }  // namespace
 
 int main() {
     test_all_layouts_and_themes();
+    test_logical_surface_resolution_priority();
     std::cout << "UI_LAYOUT_BUCKET_COMPLETION_PASS buckets=3 themes=4\n";
     return EXIT_SUCCESS;
 }

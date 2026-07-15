@@ -1231,6 +1231,13 @@ struct RuntimeGlobals {
 RuntimeGlobals g_runtime;
 bool g_default_owner_ai_bss_bootstrapped = false;
 
+GameplayLogicalSurfaceSize resolve_active_gameplay_logical_surface_size() {
+    const DirectDrawRuntimeState& draw = direct_draw_state();
+    const GameplayDisplayState& requested = g_runtime.gameplay_display_state;
+    return ResolveGameplayLogicalSurfaceSize(draw.active, draw.width, draw.height,
+        requested.width, requested.height);
+}
+
 void sync_default_ui_overlay_runtime_from_gameplay_state();
 void apply_default_ui_overlay_runtime_mutations();
 void process_default_ui_overlay_command_actions();
@@ -3227,10 +3234,35 @@ void default_gameplay_display_frame_boundary() {
 }
 
 void default_gameplay_display_configure_surfaces(u32 width, u32 height, u32 color_depth) {
+    const HRESULT result = ConfigureDirectDrawSurfaces(g_runtime.main_window,
+        static_cast<int>(width), static_cast<int>(height),
+        static_cast<int>(color_depth));
+    if (FAILED(result)) {
+        UpdateDirectDrawErrorString(result);
+        g_runtime.directx_initialized = false;
+        const DirectDrawRuntimeState& draw = direct_draw_state();
+        append_startup_log(
+            "gameplay display surface configure failed hr=0x%08lx name=%s requested=%ux%ux%u",
+            static_cast<unsigned long>(result),
+            draw.last_error_name.empty() ? "unknown" : draw.last_error_name.c_str(),
+            width, height, color_depth);
+        char failure[224]{};
+        std::snprintf(failure, sizeof(failure),
+            "Gameplay display surface configure failed: 0x%08lx (%s), requested %ux%ux%u.\n",
+            static_cast<unsigned long>(result),
+            draw.last_error_name.empty() ? "unknown" : draw.last_error_name.c_str(),
+            width, height, color_depth);
+        OutputDebugStringA(failure);
+        return;
+    }
+
+    const DirectDrawRuntimeState& draw = direct_draw_state();
+    append_startup_log("gameplay display surface configured %ux%ux%u requested=%ux%ux%u",
+        draw.width, draw.height, draw.color_depth, width, height, color_depth);
     char text[160]{};
     std::snprintf(text, sizeof(text),
-        "Gameplay display configured through reconstructed state: %ux%ux%u.\n",
-        width, height, color_depth);
+        "Gameplay display surface configured: %ux%ux%u (requested %ux%ux%u).\n",
+        draw.width, draw.height, draw.color_depth, width, height, color_depth);
     OutputDebugStringA(text);
 }
 
@@ -7362,6 +7394,14 @@ bool default_gameplay_flow_import_session_bundle(GameplaySessionFlowState& state
     g_runtime.gameplay_session_bundle_loaded = false;
     g_runtime.gameplay_terrain_tile_sheet_loaded = false;
     g_runtime.gameplay_session_archive_path.clear();
+
+    if (!g_runtime.directx_initialized || !direct_draw_state().active) {
+        append_startup_log(
+            "gameplay import blocked because the display surface is inactive");
+        OutputDebugStringA(
+            "Gameplay session import blocked because the display surface is inactive.\n");
+        return false;
+    }
 
     const char* archive_path = resolve_gameplay_session_archive_path();
     if (archive_path == nullptr || archive_path[0] == '\0') {
@@ -12342,7 +12382,6 @@ void sync_default_gameplay_tooltip_context(
 }
 
 void default_gameplay_frame_draw_selection_overlay(GameplayFrameRenderContext&) {
-    sync_default_ui_overlay_runtime_from_gameplay_state();
     UiOverlayState& overlay = ui_overlay_state();
     DrawGameplaySelectionRectangleOverlay(overlay);
 }
@@ -12562,7 +12601,10 @@ void default_gameplay_loop_enter_session_mode(GameplayLoopState& state) {
     state.modal_subloop_active = false;
     state.special_exit_mode = false;
     set_default_primary_miles_music_policy_mode(3);
-    SetTextClipRect(0, 0, kOriginalClientWidth, kOriginalClientHeight);
+    const GameplayLogicalSurfaceSize surface =
+        resolve_active_gameplay_logical_surface_size();
+    SetTextClipRect(0, 0, static_cast<i32>(surface.width),
+        static_cast<i32>(surface.height));
 }
 
 void default_gameplay_loop_handle_replay_session_leave(GameplayLoopState&) {
@@ -12984,6 +13026,8 @@ void initialize_default_gameplay_sound_state() {
 }
 
 void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
+    const GameplayLogicalSurfaceSize surface =
+        resolve_active_gameplay_logical_surface_size();
     g_runtime.gameplay_frame_render_context = GameplayFrameRenderContext{};
     g_runtime.gameplay_render_command_queue = GameplayRenderCommandQueue{};
     g_runtime.gameplay_hud_text = GameplayHudTextState{};
@@ -13049,8 +13093,8 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
     sync_default_gameplay_tooltip_unit_definitions();
     g_runtime.gameplay_unit_render_queue.viewport.left = 0;
     g_runtime.gameplay_unit_render_queue.viewport.top = 0;
-    g_runtime.gameplay_unit_render_queue.viewport.right = kOriginalClientWidth;
-    g_runtime.gameplay_unit_render_queue.viewport.bottom = kOriginalClientHeight;
+    g_runtime.gameplay_unit_render_queue.viewport.right = surface.width;
+    g_runtime.gameplay_unit_render_queue.viewport.bottom = surface.height;
     g_runtime.gameplay_unit_render_queue.local_owner_id =
         g_runtime.gameplay_player_slots.local_player_slot;
     {
@@ -13081,25 +13125,27 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
     configure_default_ui_overlay_callbacks();
     {
         UiOverlayState& overlay = ui_overlay_state();
-        constexpr std::array<i32, 4> kCameraEffectiveHeight{{496, 487, 487, 480}};
-        constexpr std::array<i32, 4> kMinimapBaseY{{470, 474, 474, 474}};
         const u32 theme = std::min<u32>(interface_resource_state().theme_index, 3);
+        overlay.screen_width = surface.width;
+        overlay.screen_height = surface.height;
         overlay.interface_theme_index = theme;
+        overlay.map_width_tiles = g_runtime.gameplay_movement_context.map.width;
+        overlay.map_height_tiles = g_runtime.gameplay_movement_context.map.height;
         ConfigureGameplayUiOverlayLayout(overlay);
+        // FUN_004e2bb7 caps the live map extent at the selected panel's
+        // inclusive endpoint.  Keep this explicit runtime mirror alongside
+        // the table-driven origin so session initialization and later layout
+        // refreshes publish the same 640/800 capacities.
         const u32 minimap_capacity =
             overlay.screen_width == 0x280 ? 0x5fu : 0x73u;
-        const u32 minimap_width = std::min<u32>(
-            minimap_capacity, g_runtime.gameplay_movement_context.map.width);
-        const u32 minimap_height = std::min<u32>(
-            minimap_capacity, g_runtime.gameplay_movement_context.map.height);
-        overlay.minimap.output_x = 329 +
-            static_cast<i32>((116u - minimap_width) >> 1);
-        overlay.minimap.output_y = kMinimapBaseY[theme] +
-            static_cast<i32>((116u - minimap_height) >> 1);
-        overlay.minimap.minimap_width_pixels = minimap_width;
-        overlay.minimap.minimap_height_pixels = minimap_height;
-        overlay.minimap.output_pitch_pixels = kOriginalClientWidth;
-        overlay.minimap.output_height_pixels = kOriginalClientHeight;
+        overlay.minimap.minimap_width_pixels = std::min<u32>(
+            minimap_capacity, overlay.map_width_tiles);
+        overlay.minimap.minimap_height_pixels = std::min<u32>(
+            minimap_capacity, overlay.map_height_tiles);
+        overlay.minimap.output_pitch_pixels = surface.width;
+        overlay.minimap.output_width_pixels = surface.width;
+        overlay.minimap.output_height_pixels = surface.height;
+        overlay.minimap.output_pixels.clear();
         const u32 local_owner = g_runtime.gameplay_player_slots.local_player_slot;
         if (local_owner < g_runtime.gameplay_startup_state.owner_slots.size()) {
             const GameplayScenarioOwnerSlot& local_slot =
@@ -13115,14 +13161,6 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
                     break;
                 }
             }
-            const i32 map_width_pixels = static_cast<i32>(
-                g_runtime.gameplay_movement_context.map.width << 5);
-            const i32 map_height_pixels = static_cast<i32>(
-                g_runtime.gameplay_movement_context.map.height << 5);
-            overlay.camera_max_x = std::max<i32>(
-                0, map_width_pixels - static_cast<i32>(kOriginalClientWidth));
-            overlay.camera_max_y = std::max<i32>(
-                0, map_height_pixels - kCameraEffectiveHeight[theme]);
             overlay.camera_x = std::clamp(
                 camera_anchor_x - overlay.minimap_camera_anchor_x,
                 0, overlay.camera_max_x);
@@ -13153,8 +13191,8 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
         &g_runtime.gameplay_render_command_queue;
     g_runtime.gameplay_frame_render_context.unit_render_queue =
         &g_runtime.gameplay_unit_render_queue;
-    g_runtime.gameplay_hud_text.screen_width = kOriginalClientWidth;
-    g_runtime.gameplay_hud_text.screen_height = kOriginalClientHeight;
+    g_runtime.gameplay_hud_text.screen_width = surface.width;
+    g_runtime.gameplay_hud_text.screen_height = surface.height;
     g_runtime.gameplay_hud_text.world_viewport_height =
         ui_overlay_state().world_viewport_height;
     configure_default_gameplay_hud_text_callbacks(g_runtime.gameplay_hud_text);
@@ -13165,8 +13203,8 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
         &g_runtime.gameplay_hud_alert_markers;
     g_runtime.gameplay_frame_render_context.hud = &g_runtime.gameplay_hud_text;
     g_runtime.gameplay_frame_render_context.fog = &g_runtime.gameplay_fog_context;
-    g_runtime.gameplay_frame_render_context.viewport_width = kOriginalClientWidth;
-    g_runtime.gameplay_frame_render_context.viewport_height = kOriginalClientHeight;
+    g_runtime.gameplay_frame_render_context.viewport_width = surface.width;
+    g_runtime.gameplay_frame_render_context.viewport_height = surface.height;
     g_runtime.gameplay_frame_render_context.callbacks.prepare_visible_runtime_resources =
         default_gameplay_frame_prepare_visible_runtime_resources;
     g_runtime.gameplay_frame_render_context.callbacks.draw_terrain =
@@ -16967,8 +17005,8 @@ void default_unit_effect_camera_shake(
 
     effects.viewport_left = overlay.camera_x;
     effects.viewport_top = overlay.camera_y;
-    effects.viewport_right = overlay.camera_x + kOriginalClientWidth;
-    effects.viewport_bottom = overlay.camera_y + kOriginalClientHeight;
+    effects.viewport_right = overlay.camera_x + static_cast<i32>(overlay.screen_width);
+    effects.viewport_bottom = overlay.camera_y + static_cast<i32>(overlay.screen_height);
 }
 
 u32 default_unit_effect_impact_damage(UnitEffectRuntimeState&,
@@ -18553,6 +18591,11 @@ void sync_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
 
 void sync_default_ui_overlay_runtime_from_gameplay_state() {
     UiOverlayState& overlay = ui_overlay_state();
+    const u32 previous_screen_width = overlay.screen_width;
+    const u32 previous_screen_height = overlay.screen_height;
+    const u32 previous_theme = overlay.interface_theme_index;
+    const u32 previous_map_width = overlay.map_width_tiles;
+    const u32 previous_map_height = overlay.map_height_tiles;
     if (overlay.callbacks.check_selected_production_action_gate == nullptr) {
         overlay.callbacks.check_selected_production_action_gate =
             default_ui_overlay_check_selected_production_action_gate;
@@ -18560,8 +18603,10 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
     UnitMovementContext* movement = default_gameplay_movement_context();
     const GameplayVisibilityGrid& grid = g_runtime.gameplay_visibility_grid;
 
-    overlay.screen_width = kOriginalClientWidth;
-    overlay.screen_height = kOriginalClientHeight;
+    const GameplayLogicalSurfaceSize surface =
+        resolve_active_gameplay_logical_surface_size();
+    overlay.screen_width = surface.width;
+    overlay.screen_height = surface.height;
     overlay.reveal_minimap_fog =
         g_runtime.gameplay_startup_state.fog_reveal_disabled;
     // Scan 0x57 toggles DAT_0083f498, which gates both the simulation-tick
@@ -18731,16 +18776,35 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
         overlay.map_height_tiles = kGameplayVisibilityTileWidth;
     }
 
-    overlay.camera_max_x = std::max<i32>(0,
-        static_cast<i32>(overlay.map_width_tiles << 5) - kOriginalClientWidth);
-    constexpr std::array<i32, 4> kCameraEffectiveHeight{{496, 487, 487, 480}};
-    overlay.camera_max_y = std::max<i32>(0,
-        static_cast<i32>(overlay.map_height_tiles << 5) -
-            kCameraEffectiveHeight[overlay.interface_theme_index]);
+    const bool layout_changed = previous_screen_width != overlay.screen_width ||
+        previous_screen_height != overlay.screen_height ||
+        previous_theme != overlay.interface_theme_index ||
+        previous_map_width != overlay.map_width_tiles ||
+        previous_map_height != overlay.map_height_tiles ||
+        overlay.world_viewport_height == 0;
+    if (layout_changed) {
+        ConfigureGameplayUiOverlayLayout(overlay);
+    }
+    const bool minimap_surface_changed =
+        overlay.minimap.output_pitch_pixels != surface.width ||
+        overlay.minimap.output_width_pixels != surface.width ||
+        overlay.minimap.output_height_pixels != surface.height;
+    if (minimap_surface_changed) {
+        overlay.minimap.output_pitch_pixels = surface.width;
+        overlay.minimap.output_width_pixels = surface.width;
+        overlay.minimap.output_height_pixels = surface.height;
+    }
+    if (layout_changed || minimap_surface_changed) {
+        overlay.minimap.output_pixels.clear();
+    }
     overlay.camera_x = std::clamp(overlay.camera_x, 0, overlay.camera_max_x);
     overlay.camera_y = std::clamp(overlay.camera_y, 0, overlay.camera_max_y);
     g_runtime.gameplay_frame_render_context.camera_x = overlay.camera_x;
     g_runtime.gameplay_frame_render_context.camera_y = overlay.camera_y;
+    g_runtime.gameplay_frame_render_context.viewport_width = surface.width;
+    g_runtime.gameplay_frame_render_context.viewport_height = surface.height;
+    g_runtime.gameplay_unit_render_queue.viewport.right = surface.width;
+    g_runtime.gameplay_unit_render_queue.viewport.bottom = surface.height;
 
     const std::size_t tile_count =
         static_cast<std::size_t>(overlay.map_width_tiles) *
@@ -28307,6 +28371,12 @@ void default_gameplay_loop_simulation_phase(GameplayLoopState& state) {
 }
 
 void default_gameplay_loop_present_phase(GameplayLoopState& state) {
+    // Publish the active logical surface before capturing HUD and viewport
+    // metrics.  The original layout pass precedes the frame composite; doing
+    // this from the first overlay callback left one frame of stale dimensions.
+    sync_default_ui_overlay_runtime_from_gameplay_state();
+    const GameplayLogicalSurfaceSize surface =
+        resolve_active_gameplay_logical_surface_size();
     GameplayFrameRenderContext& context = g_runtime.gameplay_frame_render_context;
     context.current_tick_ms = state.current_tick_ms;
     // Every gameplay renderer reached from FUN_004d7790 observes
@@ -28314,8 +28384,8 @@ void default_gameplay_loop_present_phase(GameplayLoopState& state) {
     // advance thousands of times while waiting for the next simulation tick,
     // which made animated terrain and frame-driven overlays race or flicker.
     context.frame_counter = state.simulation_frame_counter;
-    context.viewport_width = kOriginalClientWidth;
-    context.viewport_height = kOriginalClientHeight;
+    context.viewport_width = surface.width;
+    context.viewport_height = surface.height;
     context.render_command_queue = &g_runtime.gameplay_render_command_queue;
     context.unit_render_queue = &g_runtime.gameplay_unit_render_queue;
     GameplayHudTextState& hud = g_runtime.gameplay_hud_text;
@@ -29124,10 +29194,12 @@ LPARAM logical_main_client_mouse_lparam(
         tracking.hwndTrack = window;
         TrackMouseEvent(&tracking);
     }
+    const GameplayLogicalSurfaceSize surface =
+        resolve_active_gameplay_logical_surface_size();
     const i32 logical_x = ScalePresentationCoordinateToLogical(
-        presentation_x, presentation_width, kOriginalClientWidth);
+        presentation_x, presentation_width, static_cast<i32>(surface.width));
     const i32 logical_y = ScalePresentationCoordinateToLogical(
-        presentation_y, presentation_height, kOriginalClientHeight);
+        presentation_y, presentation_height, static_cast<i32>(surface.height));
     return static_cast<LPARAM>(MAKELPARAM(
         static_cast<WORD>(logical_x), static_cast<WORD>(logical_y)));
 }

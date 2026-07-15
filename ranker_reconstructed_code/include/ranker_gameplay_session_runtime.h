@@ -24,6 +24,23 @@ constexpr u32 kGameplaySessionSnapshotBytes = 0x374;
 constexpr u32 kGameplayStartupUnitsPerSlot = 6;
 constexpr u32 kGameplayOnlineAutoTransitionFrame = 0x708;
 
+struct GameplayLogicalSurfaceSize {
+    u32 width = kGameplayDefaultScreenWidth;
+    u32 height = kGameplayDefaultScreenHeight;
+};
+
+constexpr GameplayLogicalSurfaceSize ResolveGameplayLogicalSurfaceSize(
+    bool direct_draw_active, u32 direct_draw_width, u32 direct_draw_height,
+    u32 requested_width, u32 requested_height) {
+    if (direct_draw_active && direct_draw_width != 0 && direct_draw_height != 0) {
+        return {direct_draw_width, direct_draw_height};
+    }
+    if (requested_width != 0 && requested_height != 0) {
+        return {requested_width, requested_height};
+    }
+    return {kGameplayDefaultScreenWidth, kGameplayDefaultScreenHeight};
+}
+
 struct GameplayDisplayCallbacks {
     void (*reset_runtime_overlay)() = nullptr;
     void (*frame_boundary)() = nullptr;
