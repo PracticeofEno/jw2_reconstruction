@@ -4262,6 +4262,18 @@ bool DispatchSelectedUnitActionEffect(UnitEffectRuntimeState& state,
             initialized = true;
         }
         break;
+    case 0x27:
+        // The construction-link initializer at 0x004efce8 temporarily swaps
+        // ESI/EDI, asks FUN_004c36de for the target unit's action center, then
+        // enters the generic non-projectile initializer with the original
+        // source/target links restored.  Consequently the effect is anchored
+        // at the new structure's center, not at the builder's muzzle.
+        if (target != nullptr) {
+            initialize_immediate_at_point(
+                target, action_center_x(*target), action_center_y(*target));
+            initialized = true;
+        }
+        break;
     case 0x2c: {
         // Bline's initializer (0x004efc8a) stores source/target centers while
         // leaving flags at mode zero; its tick handler interprets flags as
