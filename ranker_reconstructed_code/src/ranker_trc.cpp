@@ -66,8 +66,10 @@ struct CachedArchiveBytes {
     std::shared_ptr<const std::vector<u8>> data;
 };
 
+using ArchiveCacheKey = std::filesystem::path::string_type;
+
 std::mutex g_archive_cache_mutex;
-std::unordered_map<std::string, CachedArchiveBytes> g_archive_cache;
+std::unordered_map<ArchiveCacheKey, CachedArchiveBytes> g_archive_cache;
 
 u16 read_le_u16(const u8* p) {
     return static_cast<u16>(p[0]) | static_cast<u16>(p[1] << 8);
@@ -126,10 +128,55 @@ bool equals_ignore_case(std::string_view a, std::string_view b) {
     return true;
 }
 
+std::filesystem::path filesystem_path_from_legacy_bytes(const char* value) {
+    if (value == nullptr || value[0] == '\0') {
+        return {};
+    }
+#ifdef _WIN32
+    // Original lobby/session paths are ANSI bytes (CP_ACP), not UTF-8.  The
+    // narrow std::filesystem constructor uses the C++ locale under MinGW and
+    // throws for names such as "Prison II" whose suffix is U+2161 in CP949.
+    // Convert through Win32 explicitly so every legacy map filename reaches
+    // the wide Windows filesystem API without a locale-dependent round trip.
+    const int required = MultiByteToWideChar(CP_ACP, 0, value, -1, nullptr, 0);
+    if (required <= 0) {
+        return {};
+    }
+    std::wstring wide(static_cast<std::size_t>(required), L'\0');
+    if (MultiByteToWideChar(CP_ACP, 0, value, -1,
+            wide.data(), required) <= 0) {
+        return {};
+    }
+    wide.resize(static_cast<std::size_t>(required - 1));
+    return std::filesystem::path(std::move(wide));
+#else
+    return std::filesystem::path(value);
+#endif
+}
+
+bool path_filename_equals_ignore_case(const std::filesystem::path& left,
+    const std::filesystem::path& right) {
+#ifdef _WIN32
+    const std::wstring left_name = left.filename().native();
+    const std::wstring right_name = right.filename().native();
+    if (left_name.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+        right_name.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        return false;
+    }
+    return CompareStringOrdinal(left_name.data(), static_cast<int>(left_name.size()),
+        right_name.data(), static_cast<int>(right_name.size()), TRUE) == CSTR_EQUAL;
+#else
+    return equals_ignore_case(left.filename().string(), right.filename().string());
+#endif
+}
+
 std::optional<std::filesystem::path> find_archive_path(const char* archive_name) {
     namespace fs = std::filesystem;
 
-    const fs::path direct{archive_name};
+    const fs::path direct = filesystem_path_from_legacy_bytes(archive_name);
+    if (direct.empty()) {
+        return std::nullopt;
+    }
     const std::array<fs::path, 5> roots{
         fs::current_path(),
         fs::current_path().parent_path(),
@@ -144,17 +191,18 @@ std::optional<std::filesystem::path> find_archive_path(const char* archive_name)
         }
 
         const auto candidate = root / direct;
-        if (fs::is_regular_file(candidate)) {
+        std::error_code ec;
+        if (fs::is_regular_file(candidate, ec)) {
             return candidate;
         }
 
-        std::error_code ec;
+        ec.clear();
         for (const auto& item : fs::directory_iterator(root, ec)) {
             if (ec) {
                 break;
             }
             if (item.is_regular_file() &&
-                equals_ignore_case(item.path().filename().string(), direct.filename().string())) {
+                path_filename_equals_ignore_case(item.path(), direct)) {
                 return item.path();
             }
         }
@@ -198,13 +246,14 @@ bool read_all_bytes(const std::filesystem::path& path, std::vector<u8>& data) {
     return true;
 }
 
-std::string archive_cache_key(const std::filesystem::path& path) {
+ArchiveCacheKey archive_cache_key(const std::filesystem::path& path) {
     std::error_code ec;
     const auto absolute = std::filesystem::weakly_canonical(path, ec);
     if (!ec) {
-        return absolute.string();
+        return absolute.native();
     }
-    return std::filesystem::absolute(path, ec).string();
+    const auto fallback = std::filesystem::absolute(path, ec);
+    return ec ? path.native() : fallback.native();
 }
 
 bool read_all_bytes_cached(const std::filesystem::path& path,
@@ -220,7 +269,7 @@ bool read_all_bytes_cached(const std::filesystem::path& path,
     if (ec) {
         return false;
     }
-    const std::string key = archive_cache_key(path);
+    const ArchiveCacheKey key = archive_cache_key(path);
 
     {
         std::lock_guard<std::mutex> lock(g_archive_cache_mutex);

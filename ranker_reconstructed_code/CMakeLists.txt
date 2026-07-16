@@ -319,6 +319,22 @@ if (BUILD_TESTING)
         COMMAND map_effect_session_reset_regression
     )
 
+    if (WIN32)
+        add_executable(trc_legacy_ansi_path_regression
+            tests/trc_legacy_ansi_path_regression.cpp
+            src/ranker_trc.cpp
+        )
+        target_include_directories(trc_legacy_ansi_path_regression PRIVATE
+            include
+        )
+        target_link_libraries(trc_legacy_ansi_path_regression PRIVATE
+            zlib113
+        )
+        add_test(NAME trc_legacy_ansi_path_regression
+            COMMAND trc_legacy_ansi_path_regression
+        )
+    endif()
+
     add_executable(production_order_packet_owner_regression
         tests/production_order_packet_owner_regression.cpp
     )
