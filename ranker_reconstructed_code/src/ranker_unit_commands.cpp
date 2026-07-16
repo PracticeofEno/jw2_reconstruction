@@ -10863,10 +10863,34 @@ OwnerProductionDependencyRequest build_owner_production_dependency_request(
     for (u32 index = 0; index < request.prerequisite_count; ++index) {
         request.prerequisite_unit_types[index] =
             definition->prerequisite_type_ids[index];
-        request.special_dependency_unit_types[index] =
-            definition->prerequisite_type_ids[index];
     }
-    request.special_dependency_count = request.prerequisite_count;
+
+    // SelectOwnerProductionDependencyBuildAction (0x00445a70) does not use
+    // the demanded twin unit's prerequisite row for these two pairing cases.
+    // Its fixed globals point at the prerequisite rows of the corresponding
+    // single unit instead: 0x26 -> 0x25 and 0x2d -> 0x27.  In particular,
+    // TwinPteras (0x2d) therefore asks for Pteras' Nest requirements rather
+    // than its own type-138 requirement.
+    u32 special_dependency_source_type = unit_type;
+    if (unit_type == 0x26) {
+        special_dependency_source_type = 0x25;
+    }
+    else if (unit_type == 0x2d) {
+        special_dependency_source_type = 0x27;
+    }
+    const UnitMovementDefinition* special_dependency_definition =
+        special_dependency_source_type == unit_type ? definition :
+        lookup_owner_production_definition(input,
+            special_dependency_source_type);
+    if (special_dependency_definition != nullptr) {
+        request.special_dependency_count = std::min<u32>(
+            special_dependency_definition->prerequisite_count,
+            static_cast<u32>(request.special_dependency_unit_types.size()));
+        for (u32 index = 0; index < request.special_dependency_count; ++index) {
+            request.special_dependency_unit_types[index] =
+                special_dependency_definition->prerequisite_type_ids[index];
+        }
+    }
     if (unit_type == 0x2b &&
         definition->first_completion_order_id < kProductionOrderCount) {
         request.unlock_dependency_unit_type =
