@@ -407,6 +407,29 @@ if (BUILD_TESTING)
         COMMAND world_unit_name_slot_regression
     )
 
+    add_executable(world_unit_bar_layout_regression
+        tests/world_unit_bar_layout_regression.cpp
+        src/ranker_unit_animation.cpp
+    )
+    target_include_directories(world_unit_bar_layout_regression PRIVATE
+        include
+    )
+    if (MSVC)
+        target_compile_options(world_unit_bar_layout_regression PRIVATE /Gy)
+        target_link_options(world_unit_bar_layout_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(world_unit_bar_layout_regression PRIVATE
+            -ffunction-sections
+            -fdata-sections
+        )
+        target_link_options(world_unit_bar_layout_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME world_unit_bar_layout_regression
+        COMMAND world_unit_bar_layout_regression
+    )
+
     add_executable(selected_info_draw_order_regression
         tests/selected_info_draw_order_regression.cpp
     )
