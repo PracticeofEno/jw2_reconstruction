@@ -5966,14 +5966,18 @@ void HandleUnitPassiveRecoveryAndTimedRemoval(UnitCommandContext& context,
     if ((context.frame_counter & 0xf) != 0 || (unit.command_flags & 0x800) != 0) {
         return;
     }
-    if ((unit.draw_flags & 0x80) != 0) {
+    // Original 0x004cc708 tests raw unit +0x5c, the mutable command-bit
+    // DWORD. Draw feedback lives independently at raw +0xa4; testing its
+    // 0x80 red-render bit here truncated the 0x88..0x80 click flash at the
+    // next sixteen-frame secondary-recovery boundary.
+    if ((unit.command_bits[0] & 0x80u) != 0) {
         if (unit.secondary_value != 0) {
             --unit.secondary_value;
             if (unit.secondary_value != 0) {
                 return;
             }
         }
-        unit.draw_flags &= ~0x80u;
+        unit.command_bits[0] &= static_cast<u8>(~0x80u);
         unit.command_flags &= ~0x40u;
         return;
     }

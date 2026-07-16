@@ -153,6 +153,65 @@ struct CursorOnlyProbe {
 
 CursorOnlyProbe g_cursor_only_probe;
 
+u32 g_feedback_unit = 0;
+u32 g_feedback_draw_flags = 0;
+
+void capture_unit_draw_feedback(
+    GameplayInputActionState&, u32 unit_offset, u32 draw_flags) {
+    g_feedback_unit = unit_offset;
+    g_feedback_draw_flags = draw_flags;
+}
+
+void test_attack_action_publishes_original_red_flash_timer() {
+    GameplayInputActionState state{};
+    InitializeOriginalGameplayInputActionTables(state);
+    state.callbacks.apply_unit_draw_flags = capture_unit_draw_feedback;
+    state.selected_unit_offset = 0x1234u;
+    state.multi_select_count = 1;
+
+    GameplayActionUnitState unit{};
+    unit.offset = state.selected_unit_offset;
+    unit.command_state = 0x1eu;
+    state.units.push_back(unit);
+    GameplayActionUnitState target{};
+    target.offset = 0x5678u;
+    target.command_state = 0x17u;
+    state.units.push_back(target);
+
+    g_feedback_unit = 0;
+    g_feedback_draw_flags = 0;
+    REQUIRE(ApplyGameplayInputActionDrawFeedback(
+        state, 0x05u, target.offset));
+    REQUIRE(state.units[0].command_state == 0x1eu);
+    REQUIRE(state.units[0].draw_flags == 0u);
+    REQUIRE(state.units[1].command_state == 0x17u);
+    REQUIRE(state.units[1].draw_flags == 0x88u);
+    REQUIRE(g_feedback_unit == target.offset);
+    REQUIRE(g_feedback_draw_flags == 0x88u);
+
+    g_feedback_unit = 0;
+    g_feedback_draw_flags = 0;
+    REQUIRE(!ApplyGameplayInputActionDrawFeedback(
+        state, 0x04u, state.selected_unit_offset));
+    REQUIRE(state.units[0].draw_flags == 0u);
+    REQUIRE(g_feedback_unit == 0u);
+    REQUIRE(g_feedback_draw_flags == 0u);
+
+    // The low seven bits are the original eight-tick lifetime; 0x80 remains
+    // set while bit 0x02 alternates through the red blitter phases.
+    u32 flags = state.units[1].draw_flags;
+    u32 red_phase_count = 0;
+    for (u32 tick = 0; tick < 8; ++tick) {
+        REQUIRE((flags & 0x7fu) != 0);
+        --flags;
+        if ((flags & 0x82u) == 0x82u) {
+            ++red_phase_count;
+        }
+    }
+    REQUIRE(flags == 0x80u);
+    REQUIRE(red_phase_count == 4u);
+}
+
 void cursor_only_pre(GameplayInputActionState&) {
     ++g_cursor_only_probe.pre;
 }
@@ -411,6 +470,7 @@ int main() {
     static_assert(alignof(GameplayInputSnapshotCursor) == alignof(u32));
 
     test_threaded_spsc_publication_preserves_every_snapshot();
+    test_attack_action_publishes_original_red_flash_timer();
     test_reset_flushes_only_the_consumer_cursor();
     test_cursor_only_pump_preserves_deterministic_input_batch();
     test_full_main_ring_does_not_publish_an_orphan_snapshot();

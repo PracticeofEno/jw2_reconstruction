@@ -88,6 +88,29 @@ void check_transport_dock(UnitMovementContext& movement,
     require_position(unit, expected_x, expected_y, message);
 }
 
+void check_draw_feedback_is_independent_from_raw_command_bits() {
+    UnitCommandContext context{};
+    context.frame_counter = 0x10;
+
+    UnitMovementUnit feedback{};
+    feedback.draw_flags = 0x85u;
+    feedback.command_flags = 0x40u;
+    HandleUnitPassiveRecoveryAndTimedRemoval(context, feedback);
+    require(feedback.draw_flags == 0x85u &&
+            (feedback.command_flags & 0x40u) != 0,
+        "raw +0xa4 red feedback was consumed as raw +0x5c command bit 0x80");
+
+    UnitMovementUnit timed{};
+    timed.draw_flags = 0x85u;
+    timed.command_bits[0] = 0x80u;
+    timed.command_flags = 0x40u;
+    HandleUnitPassiveRecoveryAndTimedRemoval(context, timed);
+    require(timed.draw_flags == 0x85u &&
+            (timed.command_bits[0] & 0x80u) == 0 &&
+            (timed.command_flags & 0x40u) == 0,
+        "raw +0x5c timed bit did not clear independently from draw feedback");
+}
+
 } // namespace
 
 int main() {
@@ -122,9 +145,11 @@ int main() {
     check_transport_dock(movement, production_state, 8, 0, 0x10000u,
         base_x, base_y,
         "owner>=8 transport dock must ignore the runtime flag");
+    check_draw_feedback_is_independent_from_raw_command_bits();
 
     std::cout << "MOVEMENT_MODIFIER_COMMAND_FLAG_PASS "
                  "owner0-command={6,-7} owner0-runtime={2,-3} "
-                 "owner8-command/runtime={2,-3} paths=common+dock\n";
+                 "owner8-command/runtime={2,-3} paths=common+dock "
+                 "draw-feedback=raw-a4 command-bit=raw-5c\n";
     return EXIT_SUCCESS;
 }

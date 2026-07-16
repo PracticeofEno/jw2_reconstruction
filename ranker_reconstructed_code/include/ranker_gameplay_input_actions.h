@@ -47,6 +47,10 @@ struct GameplayActionUnitState {
     u32 owner = 0;
     u32 runtime_state = 0;
     u32 command_state = 0;
+    // Original raw unit +0xa4.  Successful pointer actions copy their
+    // selector feedback byte here; the low seven bits count down while bit
+    // 0x80 selects the red command-acknowledgement draw path.
+    u32 draw_flags = 0;
     // Original unit raw +0x0c (DAT_00a03fc4). Subtype 0x0b reads and
     // replaces its high bit; this is distinct from raw +0x9c command flags.
     u32 area_marker_flags = 0;
@@ -122,6 +126,8 @@ using GameplayInputActionDispatchCallback =
     bool (*)(GameplayInputActionState& state, u32 action_index);
 using GameplayInputActionUnitCallback =
     void (*)(GameplayInputActionState& state, u32 unit_offset);
+using GameplayInputActionDrawFlagsCallback = void (*)(
+    GameplayInputActionState& state, u32 unit_offset, u32 draw_flags);
 using GameplayInputActionPointCallback =
     void (*)(GameplayInputActionState& state, i32 world_x, i32 world_y);
 using GameplayInputActionProductionAvailabilityCallback =
@@ -155,6 +161,7 @@ struct GameplayInputActionCallbacks {
     GameplayInputActionIndexedPayloadGateCallback indexed_payload_blocked = nullptr;
     GameplayInputActionSimpleCallback rejected_action_feedback = nullptr;
     GameplayInputActionUnitCallback accepted_action_feedback = nullptr;
+    GameplayInputActionDrawFlagsCallback apply_unit_draw_flags = nullptr;
 };
 
 struct GameplayInputActionState {
@@ -229,6 +236,8 @@ bool DefaultValidateHighGameplayInputAction(
 u32 DefaultSelectGameplayInputActionIndex(
     GameplayInputActionState& state, u32 selector, i32 world_x, i32 world_y);
 void InitializeOriginalGameplayInputActionTables(GameplayInputActionState& state);
+bool ApplyGameplayInputActionDrawFeedback(
+    GameplayInputActionState& state, u32 action_index, u32 target_unit_offset);
 
 void PumpGameplayInputAndCursorFrame(GameplayInputActionState& state);
 void PumpGameplayCursorFrameOnly(GameplayInputActionState& state);

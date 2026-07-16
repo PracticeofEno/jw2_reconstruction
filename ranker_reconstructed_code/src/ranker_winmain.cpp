@@ -5242,6 +5242,14 @@ void default_gameplay_input_accepted_action_feedback(
     play_default_gameplay_command_acknowledgement(unit_offset);
 }
 
+void default_gameplay_input_apply_unit_draw_flags(
+    GameplayInputActionState&, u32 unit_offset, u32 draw_flags) {
+    UnitMovementUnit* unit = find_default_movement_unit_by_id(unit_offset);
+    if (unit != nullptr) {
+        unit->draw_flags = draw_flags;
+    }
+}
+
 void default_gameplay_production_accepted_action_feedback(
     GameplayProductionActionState&, u32 unit_offset) {
     play_default_gameplay_command_acknowledgement(unit_offset);
@@ -6724,6 +6732,10 @@ void configure_default_gameplay_input_action_context(
     if (state.callbacks.accepted_action_feedback == nullptr) {
         state.callbacks.accepted_action_feedback =
             default_gameplay_input_accepted_action_feedback;
+    }
+    if (state.callbacks.apply_unit_draw_flags == nullptr) {
+        state.callbacks.apply_unit_draw_flags =
+            default_gameplay_input_apply_unit_draw_flags;
     }
 }
 
@@ -19136,6 +19148,7 @@ void sync_default_gameplay_input_action_units(
         action_unit.runtime_state =
             (unit->command_state & kUnitCommandDead) != 0 ? 4 : 0;
         action_unit.command_state = unit->command_state;
+        action_unit.draw_flags = unit->draw_flags;
         action_unit.area_marker_flags = unit->area_marker_flags;
         action_unit.runtime_flags = unit->runtime_flags;
         action_unit.action_mode_gate = unit->action_mode_gate;
@@ -19194,6 +19207,7 @@ void sync_default_gameplay_input_action_units(
         action_unit.owner = unit->owner_id;
         action_unit.runtime_state = 4;
         action_unit.command_state = unit->command_state;
+        action_unit.draw_flags = unit->draw_flags;
         action_unit.area_marker_flags = unit->area_marker_flags;
         action_unit.runtime_flags = unit->runtime_flags;
         action_unit.action_mode_gate = unit->action_mode_gate;

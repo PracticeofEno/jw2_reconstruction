@@ -305,23 +305,6 @@ bool dispatch_action_handler(GameplayInputActionState& state, u32 action_index) 
     return true;
 }
 
-void update_dispatched_unit_command_state(GameplayInputActionState& state,
-    u32 action_index, u32 unit_offset) {
-    if (state.last_dispatch_failed) {
-        return;
-    }
-
-    const bool skip_state_update = action_index == 4 &&
-        state.multi_select_count <= 1 && unit_offset == state.selected_unit_offset;
-    if (skip_state_update || action_index >= state.selector_result_states.size()) {
-        return;
-    }
-
-    if (GameplayActionUnitState* unit = find_unit(state, unit_offset)) {
-        unit->command_state = state.selector_result_states[action_index];
-    }
-}
-
 void publish_selected_unit_command(GameplayInputActionState& state, u32 subtype,
     u32 unit_offset, u32 arg0 = 0, u32 arg1 = 0, u32 arg2 = 0) {
     publish(state, make_action(state, subtype, unit_offset, arg0, arg1, arg2));
@@ -331,6 +314,36 @@ void publish_selected_unit_command(GameplayInputActionState& state, u32 subtype,
 
 GameplayInputActionState& gameplay_input_action_state() {
     return g_gameplay_input_action_state;
+}
+
+bool ApplyGameplayInputActionDrawFeedback(
+    GameplayInputActionState& state, u32 action_index, u32 target_unit_offset) {
+    if (state.last_dispatch_failed) {
+        return false;
+    }
+
+    // FUN_004e96ae leaves the object hit by the pointer in ESI. FUN_004da02c
+    // preserves that target in EDI and writes DAT_008629de[action] to the
+    // target's raw +0xa4. Its action-four exception avoids restarting the
+    // feedback timer when the sole selected unit itself was clicked.
+    const bool skip_feedback = action_index == 4 &&
+        state.multi_select_count <= 1 &&
+        target_unit_offset == state.selected_unit_offset;
+    if (skip_feedback || action_index >= state.selector_result_states.size()) {
+        return false;
+    }
+
+    GameplayActionUnitState* unit = find_unit(state, target_unit_offset);
+    if (unit == nullptr) {
+        return false;
+    }
+    const u32 draw_flags = state.selector_result_states[action_index];
+    unit->draw_flags = draw_flags;
+    if (state.callbacks.apply_unit_draw_flags != nullptr) {
+        state.callbacks.apply_unit_draw_flags(
+            state, target_unit_offset, draw_flags);
+    }
+    return true;
 }
 
 bool DefaultHasPendingGameplayInputEvent(GameplayInputActionState& state) {
@@ -767,8 +780,8 @@ u32 DispatchSelectedUnitActionCommand(GameplayInputActionState& state, u32 selec
                 const u32 action_index =
                     select_action_index(state, selector, world_x, world_y);
                 dispatch_action_handler(state, action_index);
-                update_dispatched_unit_command_state(
-                    state, action_index, unit_offset);
+                ApplyGameplayInputActionDrawFeedback(
+                    state, action_index, state.last_validation_unit_offset);
                 return action_index;
             }
 
