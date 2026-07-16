@@ -1913,6 +1913,34 @@ void SetUnitPathTarget(UnitMovementUnit& unit, i32 x, i32 y) {
     unit.path_target_y = y;
 }
 
+UnitDamageReactionRetargetPolicy ResolveUnitDamageReactionRetargetPolicy(
+    u32 command_state) {
+    // HandleUnitDamageReaction dispatches through the raw table at 0x004c2b78.
+    // The four adjacent guard entries are easy to shift by one when reading
+    // the table: 0x1f/0x21 point at the unconditional 0x004c2914 handler,
+    // while 0x20/0x22 point at the priority-and-distance 0x004c2982 handler.
+    switch (command_state & kUnitCommandStateMask) {
+    case kUnitStateRuntimeIdleAcquire:
+    case kUnitStateTravel:
+    case kUnitStateAssistTarget:
+    case kUnitStateEquipmentPointTravel:
+        return UnitDamageReactionRetargetPolicy::acquire;
+    case kUnitStateAttackTravel:
+    case kUnitStateAttackTarget:
+    case kUnitStateGuardCombatCycle:
+    case kUnitStateGuardPursueTarget:
+        return UnitDamageReactionRetargetPolicy::priority_distance;
+    case kUnitStateGuardReturnCommand:
+    case kUnitStateGuardReturnTravel:
+        return UnitDamageReactionRetargetPolicy::force_guard;
+    case kUnitStatePatrolReturnCombat:
+    case kUnitStatePatrolOutboundCombat:
+        return UnitDamageReactionRetargetPolicy::priority_current_not_ready;
+    default:
+        return UnitDamageReactionRetargetPolicy::none;
+    }
+}
+
 UnitMovementUnit* SelectGuardCombatCycleCarryTarget(
     UnitMovementUnit* saved_target, UnitMovementUnit* scanned_candidate) {
     // GuardCombatCycle 0x004c9be3 saves raw target +0x20 before the action
@@ -1925,11 +1953,20 @@ UnitMovementUnit* SelectGuardCombatCycleCarryTarget(
 
 UnitMovementUnit* SelectGuardCombatCycleCompletedTarget(
     UnitMovementUnit* current_target, UnitMovementUnit* scanned_candidate) {
-    // GuardCombatCycle result 1 leaves bVar4 false at 0x004c9c0b, so the
-    // target written by FindBestUnitTargetUsingSpatialIndex is retained
-    // without the result-0 priority comparison.  This matters when the just
-    // completed impact killed the saved target during the same action tick.
-    return scanned_candidate != nullptr ? scanned_candidate : current_target;
+    // GuardCombatCycle 0x004c9bea accepts action results 0 and 1 through the
+    // same JBE branch.  After the spatial scan, 0x004c9bff..0x004c9c2d keeps
+    // the saved target unless the scanned candidate's raw definition +0x1c0
+    // priority is strictly lower.  The decompiler invents a result-zero
+    // predicate here from stale flags, but the assembly has no such test.
+    if (scanned_candidate == nullptr) {
+        return current_target;
+    }
+    if (current_target == nullptr || scanned_candidate == current_target) {
+        return scanned_candidate;
+    }
+    return target_priority(*scanned_candidate) < target_priority(*current_target)
+        ? scanned_candidate
+        : current_target;
 }
 
 bool CheckPathTargetWithinAxisTile(const UnitMovementUnit& unit) {

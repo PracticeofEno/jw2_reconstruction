@@ -20803,12 +20803,11 @@ bool default_unit_damage_reaction_replace_target_by_priority(
     return true;
 }
 
-bool default_unit_damage_reaction_guard_combat_acquire_attacker(
+bool default_unit_damage_reaction_force_guard_attacker(
     UnitMovementUnit& target, UnitMovementUnit& threat) {
-    // Damage-reaction jump-table entries 0x20/0x22 both land at 0x004c2914.
-    // That handler first compares raw +0x68 with the incoming attacker, then
-    // accepts every different valid attacker without a priority comparison.
-    // It selects 0x20 when in range and 0x22 plus a path rebuild otherwise.
+    // Damage-reaction jump-table entries 0x1f/0x21 land at 0x004c2914. That
+    // handler accepts every different valid attacker, selecting 0x20 when in
+    // range and 0x22 plus a path rebuild otherwise.
     if (target.target == &threat) {
         return false;
     }
@@ -20838,43 +20837,24 @@ bool default_unit_damage_reaction_guard_combat_acquire_attacker(
 
 bool default_unit_damage_reaction_dispatch_attacker(UnitMovementUnit& target,
     UnitMovementUnit& threat) {
-    switch (target.command_state & 0x00ffffffu) {
-    case kUnitStateRuntimeIdleAcquire:
-    case kUnitStateTravel:
-    case kUnitStateAssistTarget:
-    case kUnitStateEquipmentPointTravel:
+    switch (ResolveUnitDamageReactionRetargetPolicy(target.command_state)) {
+    case UnitDamageReactionRetargetPolicy::acquire:
         return default_unit_damage_reaction_acquire_attacker(target, threat);
-    case kUnitStateAttackTravel:
-    case kUnitStateAttackTarget:
-        return default_unit_damage_reaction_replace_target_by_priority(
-            target, threat, true, false, false);
-    case kUnitStateGuardCombatCycle:
-    case kUnitStateGuardPursueTarget:
-        return default_unit_damage_reaction_guard_combat_acquire_attacker(
-            target, threat);
-    case kUnitStateGuardReturnTravel:
-    case 0x23:
-        // Original entries 0x21/0x23 land at 0x004c2982 and replace only a
+    case UnitDamageReactionRetargetPolicy::priority_distance:
+        // Original entries 0x03/0x04 and 0x20/0x22 replace only a
         // lower-priority target, or an equal-priority target that is closer.
         return default_unit_damage_reaction_replace_target_by_priority(
             target, threat, true, false, false);
-    case kUnitStatePatrolReturnLeg:
-    case kUnitStatePatrolOutboundLeg:
-        // Original jump-table entries 0x37/0x38 land at 0x004c2a1d and
-        // 0x004c2a61.  Both handlers immediately return when raw definition
-        // flags +0x58 bit 0x20 is set.  The outer self/ally dispatch gates at
-        // 0x004c2568 and 0x004c266f already require that same bit, so these
-        // patrol-leg reactions are intentionally unreachable no-ops.  Do not
-        // retarget the patrol or advance it to combat merely because it was
-        // damaged.
-        return false;
-    case kUnitStatePatrolReturnCombat:
-    case kUnitStatePatrolOutboundCombat:
+    case UnitDamageReactionRetargetPolicy::force_guard:
+        return default_unit_damage_reaction_force_guard_attacker(
+            target, threat);
+    case UnitDamageReactionRetargetPolicy::priority_current_not_ready:
         return default_unit_damage_reaction_replace_target_by_priority(
             target, threat, false, true, true);
-    default:
+    case UnitDamageReactionRetargetPolicy::none:
         return false;
     }
+    return false;
 }
 
 void mirror_default_damage_reaction_unit_state(UnitRecord& record,

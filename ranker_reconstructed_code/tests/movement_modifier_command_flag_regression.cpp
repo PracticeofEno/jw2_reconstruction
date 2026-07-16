@@ -390,18 +390,51 @@ void check_guard_combat_carry_restores_saved_target() {
         "guard combat carry retained the saved target without a scanned gate");
 }
 
-void check_guard_combat_completion_accepts_scanned_target() {
+void check_guard_combat_completion_uses_strict_priority() {
     UnitMovementUnit completed{};
     completed.id = 0x2f00u;
+    completed.definition.target_selection_priority = 7;
     UnitMovementUnit scanned{};
     scanned.id = 0x30d0u;
+    scanned.definition.target_selection_priority = 7;
 
     require(SelectGuardCombatCycleCompletedTarget(&completed, &scanned) ==
+            &completed,
+        "guard combat completion replaced its target at equal priority");
+    scanned.definition.target_selection_priority = 8;
+    require(SelectGuardCombatCycleCompletedTarget(&completed, &scanned) ==
+            &completed,
+        "guard combat completion replaced its target at lower priority");
+    scanned.definition.target_selection_priority = 6;
+    require(SelectGuardCombatCycleCompletedTarget(&completed, &scanned) ==
             &scanned,
-        "guard combat completion retained the target killed by its impact");
+        "guard combat completion rejected a strictly higher-priority target");
     require(SelectGuardCombatCycleCompletedTarget(&completed, nullptr) ==
             &completed,
         "guard combat completion discarded its target without a scan result");
+}
+
+void check_damage_reaction_guard_jump_table_mapping() {
+    require(ResolveUnitDamageReactionRetargetPolicy(
+                kUnitStateGuardReturnCommand) ==
+            UnitDamageReactionRetargetPolicy::force_guard,
+        "damage reaction state 0x1f missed the unconditional guard handler");
+    require(ResolveUnitDamageReactionRetargetPolicy(
+                kUnitStateGuardCombatCycle) ==
+            UnitDamageReactionRetargetPolicy::priority_distance,
+        "damage reaction state 0x20 bypassed priority and distance");
+    require(ResolveUnitDamageReactionRetargetPolicy(
+                kUnitStateGuardReturnTravel) ==
+            UnitDamageReactionRetargetPolicy::force_guard,
+        "damage reaction state 0x21 missed the unconditional guard handler");
+    require(ResolveUnitDamageReactionRetargetPolicy(
+                kUnitStateGuardPursueTarget) ==
+            UnitDamageReactionRetargetPolicy::priority_distance,
+        "damage reaction state 0x22 bypassed priority and distance");
+    require(ResolveUnitDamageReactionRetargetPolicy(
+                kUnitStateCommand23) ==
+            UnitDamageReactionRetargetPolicy::none,
+        "damage reaction state 0x23 did not use the default no-op entry");
 }
 
 void check_attack_travel_accepts_equal_priority_replacement() {
@@ -669,7 +702,8 @@ int main() {
     check_guard_pursue_range_transition_refreshes_target_path();
     check_guard_pursue_accepts_equal_priority_replacement();
     check_guard_combat_carry_restores_saved_target();
-    check_guard_combat_completion_accepts_scanned_target();
+    check_guard_combat_completion_uses_strict_priority();
+    check_damage_reaction_guard_jump_table_mapping();
     check_attack_travel_accepts_equal_priority_replacement();
     check_reserved_tile_wait_uses_raw_13d4_frame_period();
     check_low_id_effect_damage_is_calculated_at_impact();
@@ -687,7 +721,8 @@ int main() {
                  "reach-gate=raw-14c guard-combat-path=target "
                  "guard-pursue=equal-priority-repath "
                  "guard-combat-carry=saved-target "
-                 "guard-combat-complete=scanned-target "
+                 "guard-combat-complete=strict-priority "
+                 "damage-reaction-guard-table=1f/20/21/22/23 "
                  "attack-travel=equal-priority-repath "
                  "reserved-wait-frame=raw-13d4 "
                  "low-id-impact=live-damage zero-steps=wrapped-do-while "

@@ -107,6 +107,15 @@ constexpr u32 kUnitStateCompletionEffectTimer = 0x83;
 constexpr u32 kUnitStateItemSlotUseStart = 0x87;
 constexpr u32 kUnitStateItemSlotUseAction = 0x88;
 constexpr u32 kUnitStateItemSlotUseApproach = 0x89;
+
+enum class UnitDamageReactionRetargetPolicy : u8 {
+    none,
+    acquire,
+    priority_distance,
+    force_guard,
+    priority_current_not_ready,
+};
+
 constexpr u32 kUnitCommandStateMask = 0x00ffffff;
 constexpr u32 kUnitCommandMirrorClearFlag = 0x01000000;
 constexpr u32 kUnitCommandNoInterruptFlag = 0x10000000;
@@ -861,6 +870,8 @@ u32 GetUnitCommandMetadataFlags(const UnitMovementUnit& unit,
     const std::vector<u32>* command_metadata_table = nullptr);
 void SetUnitCommandTarget(UnitMovementUnit& unit, UnitMovementUnit* target);
 void SetUnitPathTarget(UnitMovementUnit& unit, i32 x, i32 y);
+UnitDamageReactionRetargetPolicy ResolveUnitDamageReactionRetargetPolicy(
+    u32 command_state);
 UnitMovementUnit* SelectGuardCombatCycleCarryTarget(
     UnitMovementUnit* saved_target, UnitMovementUnit* scanned_candidate);
 UnitMovementUnit* SelectGuardCombatCycleCompletedTarget(
