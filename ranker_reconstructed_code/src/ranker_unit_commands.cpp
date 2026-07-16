@@ -9414,10 +9414,15 @@ bool HasOwnerProductionUnitCount(const OwnerUnitTypeCounts& counts, u32 unit_typ
 bool IsReadyOwnerProductionProducer(UnitCommandContext& context,
     const UnitMovementUnit& unit, u32 owner_id, u32 producer_unit_type) {
     if (unit.owner_id != owner_id || unit.type_id != producer_unit_type ||
-        unit.target != nullptr) {
+        unit.action_mode_gate != 0) {
         return false;
     }
 
+    // SelectOwnerProductionDependencyBuildAction 0x00445bc9 checks raw unit
+    // +0x30.  That word is the construction/action gate, not the independent
+    // target link.  Completed structures may retain their builder link while
+    // already being valid producers (the Demon type-148 -> type-49 path does
+    // exactly this), so filtering on unit.target suppresses a legal order.
     return command_metadata_flags(context, unit) == 1;
 }
 

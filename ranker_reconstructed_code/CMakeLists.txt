@@ -127,6 +127,33 @@ if (BUILD_TESTING)
         COMMAND gameplay_resource_sound_branch_regression
     )
 
+    add_executable(owner_production_action_gate_regression
+        tests/owner_production_action_gate_regression.cpp
+        src/ranker_unit_commands.cpp
+    )
+    target_include_directories(owner_production_action_gate_regression PRIVATE
+        include
+    )
+    set_property(TARGET owner_production_action_gate_regression PROPERTY
+        INTERPROCEDURAL_OPTIMIZATION TRUE
+    )
+    if (MSVC)
+        target_compile_options(owner_production_action_gate_regression PRIVATE /Gy)
+        target_link_options(owner_production_action_gate_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(owner_production_action_gate_regression PRIVATE
+            -O1
+            -ffunction-sections
+            -fdata-sections
+        )
+        target_link_options(owner_production_action_gate_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME owner_production_action_gate_regression
+        COMMAND owner_production_action_gate_regression
+    )
+
     add_executable(meat_tooltip_amount_regression
         tests/meat_tooltip_amount_regression.cpp
     )
