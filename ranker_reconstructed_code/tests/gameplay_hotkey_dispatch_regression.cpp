@@ -225,6 +225,31 @@ void test_catalog_markers_route_physical_keys_to_publisher_actions() {
     REQUIRE(click_sound_call_count == 4u);
 }
 
+void test_physical_a_routes_the_exact_attack_button() {
+    UiOverlayState state{};
+    state.object_icon_markers.resize(6u);
+    state.object_icon_markers[5] = 'A';
+    QueueUiOverlayCommandRecordByItemId(state, 0xafu, 0u, 0u);
+
+    const auto attack_region = std::find_if(state.hot_regions.begin(),
+        state.hot_regions.end(), [](const UiOverlayHotRegion& region) {
+            return region.record.item_id == 0xafu;
+        });
+    REQUIRE(attack_region != state.hot_regions.end());
+    REQUIRE(attack_region->hotkey == 'A');
+    REQUIRE(attack_region->enabled);
+
+    // Physical set-1 scan 0x1e is the original A-key path.  The HUD item is
+    // 0xaa + selector 5, whose successful target feedback is the original
+    // 0x88 red-flash timer verified by gameplay_input_snapshot_ring_regression.
+    DispatchGameplayUiKeyboardInput(state, 0x1eu, 0u);
+    REQUIRE(state.command_actions.size() == 1u);
+    REQUIRE(state.command_actions.front().item_id == 0xafu);
+    REQUIRE(state.command_actions.front().action ==
+        kUiOverlayCommandActionClick);
+    REQUIRE(state.command_actions.front().item_id - 0xaau == 5u);
+}
+
 void test_chat_scan_escape_is_ignored_and_wm_char_escape_closes() {
     UiOverlayState state{};
     state.chat_active = true;
@@ -953,6 +978,7 @@ int main() {
     test_flag_one_offscreen_record_is_not_keyboard_active();
     test_duplicate_hotkey_skips_disabled_records_but_stops_at_first_blocker();
     test_catalog_markers_route_physical_keys_to_publisher_actions();
+    test_physical_a_routes_the_exact_attack_button();
     test_chat_scan_escape_is_ignored_and_wm_char_escape_closes();
     test_f10_opens_pause_menu_once_without_mutating_selected_stats();
     test_tab_toggles_minimap_mode_rebuilds_layout_and_requests_setup_write();
