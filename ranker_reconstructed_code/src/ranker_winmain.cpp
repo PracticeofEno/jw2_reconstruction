@@ -25721,15 +25721,19 @@ void default_owner_ai_assign_transport_queue_slot(UnitCommandContext& context,
         input.script_trigger_gate_open &&
         FindGameplayScriptTriggerGroupForObject(
             gameplay_script_trigger_state(), &unit) != -1;
-    input.strategic_queue_target_enabled =
-        input.strategic_target != nullptr &&
-        input.strategic_target->has_strategic_point;
+    const OwnerAiSlotRuntime& ai_owner = owner_ai.owners[owner];
+    // HandleOwnerTransportQueueSlotAssignment (0x0044cd60) gates state 8 on
+    // DAT_01238f48 (the per-owner primary-target flag) and copies the point
+    // from DAT_01238f68/6c.  That latter table is the neutral-route target,
+    // not DAT_01238ee8/eec's strategic path-window point.
+    input.strategic_queue_target_enabled = ai_owner.primary_target_flags != 0;
     if (input.strategic_queue_target_enabled) {
-        input.strategic_queue_target_point =
-            input.strategic_target->strategic_point;
+        input.strategic_queue_target_point = {
+            ai_owner.neutral_route_target_point.x,
+            ai_owner.neutral_route_target_point.y};
     }
     input.strategic_queue_load_percent =
-        owner_ai.owners[owner].route_target_score;
+        ai_owner.route_target_score;
     input.owner_faction = faction;
     if (faction < kDefaultOwnerAiCarrierUnitTypes.size()) {
         input.carrier_capacity = default_owner_ai_carrier_capacity(owner,

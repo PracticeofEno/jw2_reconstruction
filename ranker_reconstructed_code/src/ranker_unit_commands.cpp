@@ -7401,7 +7401,11 @@ void SetOwnerStrategicPointFromUnit(OwnerStrategicTargetState& state,
 }
 
 bool CheckOwnerStrategicPathWindowTileOpen(const UnitMovementCell& cell) {
-    return (cell.flags & 0x20000000u) != 0;
+    // CalculateOwnerStrategicPathWindowOpenScore (0x00441ab0) reads
+    // DAT_00e99e74.  That grid is the source/decoration layer mirrored by
+    // UnitMovementCell::alternate_flags; terrain flags live in
+    // DAT_00f19e74 and must not be substituted here.
+    return (cell.alternate_flags & 0x20000000u) != 0;
 }
 
 u32 CalculateOwnerStrategicPathWindowOpenScore(const UnitMovementMap& map,
