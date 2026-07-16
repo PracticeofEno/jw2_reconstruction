@@ -308,6 +308,17 @@ if (BUILD_TESTING)
         COMMAND meat_pipeline_regression
     )
 
+    add_executable(map_effect_session_reset_regression
+        tests/map_effect_session_reset_regression.cpp
+        src/ranker_map_effects.cpp
+    )
+    target_include_directories(map_effect_session_reset_regression PRIVATE
+        include
+    )
+    add_test(NAME map_effect_session_reset_regression
+        COMMAND map_effect_session_reset_regression
+    )
+
     add_executable(production_order_packet_owner_regression
         tests/production_order_packet_owner_regression.cpp
     )

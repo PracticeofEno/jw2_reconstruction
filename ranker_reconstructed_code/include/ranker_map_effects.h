@@ -102,6 +102,8 @@ void MarkMapEffectTileOccupied(MapEffectContext& context, const MapEffectInstanc
 void ClearMapEffectTileOccupied(MapEffectContext& context, const MapEffectInstance& effect);
 MapEffectInstance* AllocateMapEffect(MapEffectContext& context);
 void ReleaseMapEffect(MapEffectContext& context, MapEffectInstance& effect);
+void ResetImportedMapEffectsForSessionMode(MapEffectContext& context,
+    u32 session_mode);
 MapEffectInstance* HandleMapEffectNearestTileSpawn(MapEffectContext& context,
     u32 effect_id, i32 x, i32 y, UnitMovementUnit* linked_unit = nullptr);
 MapEffectInstance* HandleMapEffectMatchingTerrainSpawn(MapEffectContext& context,

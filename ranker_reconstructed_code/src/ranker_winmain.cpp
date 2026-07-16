@@ -10535,6 +10535,8 @@ void initialize_default_map_effect_context_from_session_records() {
         }
     }
     configure_default_map_effect_context();
+    ResetImportedMapEffectsForSessionMode(context,
+        g_runtime.gameplay_startup_state.session_mode);
 }
 
 void initialize_default_unit_effect_runtime_from_session_records() {

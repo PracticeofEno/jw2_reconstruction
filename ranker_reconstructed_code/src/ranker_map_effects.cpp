@@ -317,6 +317,27 @@ void ReleaseMapEffect(MapEffectContext& context, MapEffectInstance& effect) {
     }
 }
 
+void ResetImportedMapEffectsForSessionMode(MapEffectContext& context,
+    u32 session_mode) {
+    if (session_mode == 5) {
+        return;
+    }
+
+    // FUN_00426770 (0x004268bc..0x004268d4) walks the imported active
+    // intrusive list for every fresh-session mode and calls ReleaseMapEffect
+    // on each node.  Release inserts at the free-list head, so preserving the
+    // active head-to-tail traversal also preserves the next-allocation order.
+    // Mode 5 is the saved-game resume path and retains both imported lists.
+    const std::vector<u32> imported_active = context.active_effect_indices;
+    for (const u32 index : imported_active) {
+        if (index == 0 || index >= context.effects.size() ||
+            !context.effects[index].active) {
+            continue;
+        }
+        ReleaseMapEffect(context, context.effects[index]);
+    }
+}
+
 MapEffectInstance* HandleMapEffectNearestTileSpawn(MapEffectContext& context,
     u32 effect_id, i32 x, i32 y, UnitMovementUnit* linked_unit) {
     MapEffectInstance* effect = AllocateMapEffect(context);
