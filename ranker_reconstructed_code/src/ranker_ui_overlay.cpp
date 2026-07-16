@@ -5289,6 +5289,23 @@ bool CheckMouseInsideMinimap(UiOverlayState& state) {
     return point_inside_minimap_rect(state, false);
 }
 
+bool TryBeginUiOverlayBuildingPlacement(UiOverlayState& state,
+    u32 building_type_id, bool requirements_met) {
+    // PTR_LAB_008686e0 entries 0x60..0xa9 all target 0x004ea8b3.
+    // That branch calls CheckUnitProductionRequirements before it writes
+    // DAT_00869dfc=6 and DAT_00862fd4=type-0x60.  A failed requirement must
+    // therefore leave both the placement state and the open build category
+    // untouched so the player can select another structure immediately.
+    if (!requirements_met || building_type_id < 0x60u ||
+        building_type_id >= 0xaau) {
+        return false;
+    }
+    state.placement_mode = 6;
+    state.placement_definition_id = building_type_id - 0x60u;
+    state.pending_local_command = true;
+    return true;
+}
+
 void DispatchUiOverlayCommandAction(UiOverlayState& state, u32 item_id) {
     if (handle_local_command_panel_selector(state, item_id)) {
         return;

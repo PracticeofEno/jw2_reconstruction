@@ -920,6 +920,32 @@ void test_transport_passenger_generic_dispatch_uses_markerless_dynamic_record() 
     REQUIRE(state.command_actions.empty());
 }
 
+void test_tyrano_nest_hotkey_checks_requirements_before_placement() {
+    UiOverlayState state{};
+    state.selected_production_category = 1u;
+    AppendUiOverlayCommandSlot(state, 0x80u, 0u, 0u, 'T');
+
+    DispatchGameplayUiKeyboardInput(state, 0x14u, 0u); // physical T
+    REQUIRE(state.command_actions.size() == 1u);
+    REQUIRE(state.command_actions.front().item_id == 0x80u);
+
+    // The original 0x004ea8b3 failure edge reports the requirement error
+    // without writing DAT_00869dfc/DAT_00862fd4.  Keep the B-page open.
+    state.pending_local_command = false;
+    REQUIRE(!TryBeginUiOverlayBuildingPlacement(state, 0x80u, false));
+    REQUIRE(state.placement_mode == 0u);
+    REQUIRE(state.placement_definition_id == 0u);
+    REQUIRE(state.selected_production_category == 1u);
+    REQUIRE(!state.pending_local_command);
+
+    // Only the JNC edge enters mode 6 and stores type 0x80 - 0x60.
+    REQUIRE(TryBeginUiOverlayBuildingPlacement(state, 0x80u, true));
+    REQUIRE(state.placement_mode == 6u);
+    REQUIRE(state.placement_definition_id == 0x20u);
+    REQUIRE(state.selected_production_category == 1u);
+    REQUIRE(state.pending_local_command);
+}
+
 } // namespace
 
 int main() {
@@ -951,5 +977,6 @@ int main() {
     test_control_group_cycle_scans_past_unselected_member_in_same_group();
     test_control_group_assignment_publishes_raw_nibble_before_next_event();
     test_transport_passenger_generic_dispatch_uses_markerless_dynamic_record();
+    test_tyrano_nest_hotkey_checks_requirements_before_placement();
     return EXIT_SUCCESS;
 }

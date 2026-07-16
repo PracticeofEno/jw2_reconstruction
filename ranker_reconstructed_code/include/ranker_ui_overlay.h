@@ -1176,6 +1176,8 @@ void ReleaseUiCommandButtonHold(UiOverlayState& state);
 bool CheckPointerInsideMinimapAndPlacementMode(UiOverlayState& state);
 bool CheckPointerInsideMinimapForAction(UiOverlayState& state);
 bool CheckMouseInsideMinimap(UiOverlayState& state);
+bool TryBeginUiOverlayBuildingPlacement(UiOverlayState& state,
+    u32 building_type_id, bool requirements_met);
 void DispatchUiOverlayCommandAction(UiOverlayState& state, u32 item_id);
 void DispatchUiOverlayHeldCommandAction(UiOverlayState& state, u32 item_id);
 void ResetGameplaySelectionState(UiOverlayState& state);

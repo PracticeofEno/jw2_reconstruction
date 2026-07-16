@@ -19656,9 +19656,21 @@ bool apply_default_ui_overlay_local_command(
     }
     if (action.item_id >= 0x60u && action.item_id < 0xaau) {
         if (click) {
-            overlay.placement_mode = 6;
-            overlay.placement_definition_id = action.item_id - 0x60u;
-            overlay.pending_local_command = true;
+            UnitLifecycleContext* lifecycle =
+                g_runtime.gameplay_startup_state.lifecycle;
+            UnitLifecycleContext& requirements = lifecycle != nullptr ?
+                *lifecycle : g_runtime.gameplay_lifecycle_context;
+            const UnitProductionRequirementCode requirement =
+                CheckUnitProductionRequirements(requirements,
+                    overlay.local_player_slot, action.item_id);
+            if (requirement != UnitProductionRequirementCode::ok) {
+                queue_default_production_failure_feedback(
+                    default_unit_production_requirement_message_code(
+                        requirement));
+                return true;
+            }
+            TryBeginUiOverlayBuildingPlacement(
+                overlay, action.item_id, true);
         }
         return true;
     }
