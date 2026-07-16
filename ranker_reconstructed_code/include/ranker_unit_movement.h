@@ -711,6 +711,9 @@ UnitMovementCoreUpdateResult UpdateUnitMovementTowardPathTarget(
 u32 CalculateUnitInteractionRangeWithProductionAndEquipmentEffects(
     const ProductionOrderRuntimeState& production_state, const UnitMovementUnit& unit,
     u32 base_range, const UnitEquipmentCatalog* equipment_catalog = nullptr);
+u32 CalculateUnitDamageReactionAllyRange(
+    const ProductionOrderRuntimeState& production_state, const UnitMovementUnit& unit,
+    const UnitEquipmentCatalog* equipment_catalog = nullptr);
 u32 CalculateUnitTransportCapacityWithProductionEffect09(
     const ProductionOrderRuntimeState& production_state, const UnitMovementUnit& unit,
     u32 base_capacity);

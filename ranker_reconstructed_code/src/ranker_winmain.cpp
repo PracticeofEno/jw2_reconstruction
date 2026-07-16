@@ -20887,11 +20887,9 @@ void mirror_default_damage_reaction_unit_state(UnitRecord& record,
 u32 default_unit_damage_reaction_ally_range(const UnitMovementUnit& target) {
     const UnitEquipmentCatalog& equipment_catalog =
         frontend_bootstrap_state().equipment_catalog;
-    return CalculateUnitInteractionRangeWithProductionAndEquipmentEffects(
+    return CalculateUnitDamageReactionAllyRange(
         g_runtime.gameplay_production_runtime, target,
-        std::max<u32>(target.definition.support_range,
-            target.definition.range_threshold),
-        equipment_catalog.effects.empty() ? nullptr : &equipment_catalog) >> 1;
+        equipment_catalog.effects.empty() ? nullptr : &equipment_catalog);
 }
 
 void default_unit_damage_reaction_scan_allies(UnitMovementUnit& damaged,

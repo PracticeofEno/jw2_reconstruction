@@ -2146,6 +2146,19 @@ u32 CalculateUnitInteractionRangeWithProductionAndEquipmentEffects(
     return AddSignedUnitStatDelta(base_range, modifier);
 }
 
+u32 CalculateUnitDamageReactionAllyRange(
+    const ProductionOrderRuntimeState& production_state, const UnitMovementUnit& unit,
+    const UnitEquipmentCatalog* equipment_catalog) {
+    // HandleUnitDamageReaction 0x004c2587 calls the shared interaction-range
+    // helper and halves its ECX result at 0x004c25a0.  That helper reads raw
+    // definition +0x440, which is archive +0x198; support/acquisition +0x19c
+    // and action range +0x1b0 are unrelated fields.
+    return CalculateUnitInteractionRangeWithProductionAndEquipmentEffects(
+        production_state, unit,
+        unit.definition.effect_adjusted_interaction_range_base,
+        equipment_catalog) >> 1;
+}
+
 u32 CalculateUnitTransportCapacityWithProductionEffect09(
     const ProductionOrderRuntimeState& production_state, const UnitMovementUnit& unit,
     u32 base_capacity) {

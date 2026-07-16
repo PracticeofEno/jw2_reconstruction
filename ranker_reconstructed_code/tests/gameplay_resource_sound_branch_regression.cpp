@@ -2,6 +2,7 @@
 #include "ranker_gameplay_frame_render.h"
 #include "ranker_gameplay_sound.h"
 #include "ranker_map_effects.h"
+#include "ranker_production_orders.h"
 #include "ranker_unit_commands.h"
 #include "ranker_unit_damage.h"
 #include "ranker_unit_equipment.h"
@@ -580,6 +581,25 @@ void test_neutral_hit_rng_order() {
         "rejected neutral hit consumed group-zero sound RNG");
 }
 
+void test_damage_reaction_ally_range_uses_raw_198_base() {
+    ProductionOrderRuntimeState production{};
+    UnitMovementUnit damaged{};
+    damaged.owner_id = 1;
+    damaged.type_id = 32;
+    // JW2_09.TRC type 32: archive +0x198 is 300, while +0x19c is 150 and
+    // action range +0x1b0 is 50.  Only +0x198 feeds 0x004c369a.
+    damaged.definition.effect_adjusted_interaction_range_base = 300;
+    damaged.definition.support_range = 150;
+    damaged.definition.range_threshold = 50;
+    production.completion_effect_totals
+        [kProductionEffectSlotUnitInteractionRange][damaged.owner_id]
+        [damaged.type_id] = 20;
+
+    require(CalculateUnitDamageReactionAllyRange(
+                production, damaged, nullptr) == 160,
+        "damage-reaction ally radius did not use (raw +0x198 + effect 8) / 2");
+}
+
 UnitMovementUnit* g_patrol_candidate = nullptr;
 
 UnitMovementUnit* find_patrol_candidate(UnitCommandContext&,
@@ -709,6 +729,7 @@ int main() {
     test_reserved_tile_raw_dropoff_contract();
     test_spawn_cancel_clears_structure_reverse_link();
     test_neutral_hit_rng_order();
+    test_damage_reaction_ally_range_uses_raw_198_base();
     test_patrol_route_payload_and_saved_origin();
     test_patrol_distance_mode_preserves_raw_candidate();
     std::cout <<
@@ -717,7 +738,7 @@ int main() {
         "harvest=normal-post/reserved-pre "
         "reserved=raw74/raw80/dropoff68 "
         "spawn-cancel=reverse-link-clear "
-        "neutral-hit=sim-Y/X/1-in-4-then-group0 "
+        "neutral-hit=sim-Y/X/1-in-4-then-group0/ally-range-raw198 "
         "patrol=active-payload/origin/raw-candidate\n";
     return EXIT_SUCCESS;
 }
