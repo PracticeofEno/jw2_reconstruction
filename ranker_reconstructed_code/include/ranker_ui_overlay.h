@@ -600,6 +600,8 @@ using UiOverlayUnitSelectionCallback =
     void (*)(UiOverlayState& state, const UiOverlayMinimapUnit& unit);
 using UiOverlayProductionGateCallback =
     bool (*)(UiOverlayState& state, u32 selector, u32& failure_code);
+using UiOverlayChatSubmitCallback = bool (*)(UiOverlayState& state,
+    const std::string& text, u32 channel);
 
 struct UiOverlayCallbacks {
     UiOverlayFrameCallback draw_placement_preview = nullptr;
@@ -955,6 +957,7 @@ void DrawUiOverlayRecordAndFlushSuffixCore(UiOverlayState& state,
 }
 
 UiOverlayState& ui_overlay_state();
+void SetUiOverlayChatSubmitCallback(UiOverlayChatSubmitCallback callback);
 void ResetUiOverlayState();
 void ResetUiOverlayStatePreservingSessionCamera();
 void ResetUiOverlayDrawQueue(UiOverlayState& state);

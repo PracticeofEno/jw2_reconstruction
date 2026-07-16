@@ -562,6 +562,16 @@ if (BUILD_TESTING)
         COMMAND gameplay_hotkey_dispatch_regression
     )
 
+    add_executable(gameplay_chat_regression
+        tests/gameplay_chat_regression.cpp
+    )
+    target_include_directories(gameplay_chat_regression PRIVATE
+        include
+    )
+    add_test(NAME gameplay_chat_regression
+        COMMAND gameplay_chat_regression
+    )
+
     add_executable(edge_scroll_parity_regression
         tests/edge_scroll_parity_regression.cpp
         src/ranker_control_group_persistence.cpp

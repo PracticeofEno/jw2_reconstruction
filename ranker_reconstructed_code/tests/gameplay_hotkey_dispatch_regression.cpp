@@ -38,8 +38,13 @@ using namespace ranker;
 u32 pause_menu_call_count = 0;
 u32 save_menu_call_count = 0;
 u32 load_menu_call_count = 0;
+u32 options_menu_call_count = 0;
+u32 catchup_update_call_count = 0;
 u32 click_sound_call_count = 0;
 u32 script_wait_break_call_count = 0;
+u32 chat_submit_call_count = 0;
+u32 submitted_chat_channel = 0;
+std::string submitted_chat_text;
 
 void count_pause_menu_open(UiOverlayState&) {
     ++pause_menu_call_count;
@@ -53,12 +58,28 @@ void count_load_menu_open(UiOverlayState&) {
     ++load_menu_call_count;
 }
 
+void count_options_menu_open(UiOverlayState&) {
+    ++options_menu_call_count;
+}
+
+void count_catchup_update(UiOverlayState&) {
+    ++catchup_update_call_count;
+}
+
 void count_click_sound(UiOverlayState&) {
     ++click_sound_call_count;
 }
 
 void count_script_wait_break(UiOverlayState&) {
     ++script_wait_break_call_count;
+}
+
+bool capture_chat_submit(
+    UiOverlayState&, const std::string& text, u32 channel) {
+    ++chat_submit_call_count;
+    submitted_chat_text = text;
+    submitted_chat_channel = channel;
+    return true;
 }
 
 void test_w_keydown_activates_exactly_once_and_wm_char_does_not_repeat() {
@@ -97,6 +118,113 @@ void test_flag_one_offscreen_record_is_not_keyboard_active() {
     REQUIRE(state.last_hotkey_command == 0u);
 }
 
+void test_duplicate_hotkey_skips_disabled_records_but_stops_at_first_blocker() {
+    UiOverlayState disabled{};
+    disabled.callbacks.play_click_sound = count_click_sound;
+    click_sound_call_count = 0;
+    AppendUiOverlayCommandSlot(disabled, 0xd4u, 11u, 0x02u, 'W');
+    AppendUiOverlayCommandSlot(disabled, 0xd5u, 22u, 0u, 'W');
+
+    DispatchGameplayUiKeyboardInput(disabled, 0x11u, 0u);
+    REQUIRE(disabled.command_actions.size() == 1u);
+    REQUIRE(disabled.command_actions.front().item_id == 0xd5u);
+    REQUIRE(disabled.command_actions.front().aux == 22u);
+    REQUIRE(disabled.command_actions.front().action ==
+        kUiOverlayCommandActionClick);
+    REQUIRE(click_sound_call_count == 1u);
+
+    constexpr std::array<u32, 3> kBlockingFlags{{0x04u, 0x10u, 0x20u}};
+    for (const u32 blocking_flag : kBlockingFlags) {
+        UiOverlayState blocked{};
+        blocked.callbacks.play_click_sound = count_click_sound;
+        AppendUiOverlayCommandSlot(
+            blocked, 0xd4u, 31u, blocking_flag, 'W');
+        AppendUiOverlayCommandSlot(blocked, 0xd5u, 42u, 0u, 'W');
+
+        DispatchGameplayUiKeyboardInput(blocked, 0x11u, 0u);
+        REQUIRE(blocked.command_actions.empty());
+        REQUIRE(blocked.last_hotkey_command == 0xd4u);
+        REQUIRE(blocked.last_hotkey_aux == 31u);
+        REQUIRE(blocked.last_hotkey_flags == blocking_flag);
+    }
+    REQUIRE(click_sound_call_count == 1u);
+}
+
+void test_catalog_markers_route_physical_keys_to_publisher_actions() {
+    click_sound_call_count = 0;
+
+    {
+        UiOverlayState state{};
+        constexpr u32 kDefinitionId = 9u;
+        state.unit_definition_icon_markers.resize(kDefinitionId + 1u);
+        state.unit_definition_icon_markers[kDefinitionId] = 'A';
+        state.callbacks.play_click_sound = count_click_sound;
+        QueueUiOverlayCommandRecordByItemId(state, kDefinitionId, 101u, 0u);
+
+        REQUIRE(state.hot_regions.front().hotkey == 'A');
+        DispatchGameplayUiKeyboardInput(state, 0x1eu, 0u);
+        REQUIRE(state.command_actions.size() == 1u);
+        REQUIRE(state.command_actions.front().item_id == kDefinitionId);
+        REQUIRE(state.command_actions.front().aux == 101u);
+        REQUIRE(state.command_actions.front().action ==
+            kUiOverlayCommandActionClick);
+        REQUIRE(state.pending_local_command);
+    }
+
+    {
+        UiOverlayState state{};
+        constexpr u32 kActionIndex = 3u;
+        constexpr u32 kActionId = 0xd4u + kActionIndex;
+        state.production_action_icon_markers.resize(kActionIndex + 1u);
+        state.production_action_icon_markers[kActionIndex] = 'N';
+        state.callbacks.play_click_sound = count_click_sound;
+        QueueUiOverlayCommandRecordByItemId(state, kActionId, 202u, 0u);
+
+        REQUIRE(state.hot_regions.front().hotkey == 'N');
+        DispatchGameplayUiKeyboardInput(state, 0x31u, 0u);
+        REQUIRE(state.command_actions.size() == 1u);
+        REQUIRE(state.command_actions.front().item_id == kActionId);
+        REQUIRE(state.command_actions.front().aux == 202u);
+        REQUIRE(state.pending_local_command);
+    }
+
+    {
+        UiOverlayState state{};
+        constexpr u32 kOrderIndex = 5u;
+        constexpr u32 kOrderId = 0xf4u + kOrderIndex;
+        state.production_order_icon_markers.resize(kOrderIndex + 1u);
+        state.production_order_icon_markers[kOrderIndex] = 'T';
+        state.callbacks.play_click_sound = count_click_sound;
+        QueueUiOverlayCommandRecordByItemId(state, kOrderId, 303u, 0u);
+
+        REQUIRE(state.hot_regions.front().hotkey == 'T');
+        DispatchGameplayUiKeyboardInput(state, 0x14u, 0u);
+        REQUIRE(state.command_actions.size() == 1u);
+        REQUIRE(state.command_actions.front().item_id == kOrderId);
+        REQUIRE(state.command_actions.front().aux == 303u);
+        REQUIRE(state.pending_local_command);
+    }
+
+    {
+        UiOverlayState state{};
+        constexpr u32 kEquipmentIndex = 4u;
+        constexpr u32 kEquipmentId = 0x24au + kEquipmentIndex;
+        state.equipment_icon_markers.resize(kEquipmentIndex + 1u);
+        state.equipment_icon_markers[kEquipmentIndex] = 'R';
+        state.callbacks.play_click_sound = count_click_sound;
+        QueueUiOverlayCommandRecordByItemId(state, kEquipmentId, 404u, 0u);
+
+        REQUIRE(state.hot_regions.front().hotkey == 'R');
+        DispatchGameplayUiKeyboardInput(state, 0x13u, 0u);
+        REQUIRE(state.command_actions.size() == 1u);
+        REQUIRE(state.command_actions.front().item_id == kEquipmentId);
+        REQUIRE(state.command_actions.front().aux == 404u);
+        REQUIRE(state.pending_local_command);
+    }
+
+    REQUIRE(click_sound_call_count == 4u);
+}
+
 void test_chat_scan_escape_is_ignored_and_wm_char_escape_closes() {
     UiOverlayState state{};
     state.chat_active = true;
@@ -127,6 +255,99 @@ void test_f10_opens_pause_menu_once_without_mutating_selected_stats() {
     REQUIRE(state.selected_unit_health == 23u);
     REQUIRE(state.selected_unit_secondary == 41u);
     REQUIRE(state.command_actions.empty());
+}
+
+void test_tab_toggles_minimap_mode_rebuilds_layout_and_requests_setup_write() {
+    UiOverlayState state{};
+    state.screen_width = 800u;
+    state.screen_height = 600u;
+    state.map_width_tiles = 96u;
+    state.map_height_tiles = 96u;
+    state.resource_counter_x = -1;
+
+    DispatchGameplayUiKeyboardInput(state, 0x0fu, 0u); // Tab
+    REQUIRE(state.minimap_mode);
+    REQUIRE(state.setup_write_requested);
+    REQUIRE(state.screen_layout_bucket == 1u);
+    REQUIRE(state.resource_counter_x == 660);
+    REQUIRE(state.dynamic_icon_bounds.front().x == 464);
+    REQUIRE(state.dynamic_icon_bounds.front().y == 513);
+
+    state.setup_write_requested = false;
+    DispatchGameplayUiKeyboardInput(state, 0x0fu, 0u);
+    REQUIRE(!state.minimap_mode);
+    REQUIRE(state.setup_write_requested);
+}
+
+void test_space_recalls_only_a_valid_stored_minimap_point_with_clamping() {
+    UiOverlayState state{};
+    state.screen_width = 800u;
+    state.screen_height = 600u;
+    state.minimap_camera_anchor_x = 400;
+    state.minimap_camera_anchor_y = 218;
+    state.camera_max_x = 1200;
+    state.camera_max_y = 900;
+    state.stored_minimap_world_x = 1700;
+    state.stored_minimap_world_y = 1300;
+    state.stored_minimap_point_valid = true;
+
+    DispatchGameplayUiKeyboardInput(state, 0x39u, 0u); // Space
+    REQUIRE(state.camera_x == 1200);
+    REQUIRE(state.camera_y == 900);
+
+    state.camera_x = 17;
+    state.camera_y = 29;
+    state.stored_minimap_point_valid = false;
+    DispatchGameplayUiKeyboardInput(state, 0x39u, 0u);
+    REQUIRE(state.camera_x == 17);
+    REQUIRE(state.camera_y == 29);
+}
+
+void test_f4_opens_options_then_updates_active_catchup_target() {
+    UiOverlayState state{};
+    state.shift_modifier_down = true;
+    state.camera_x = 123;
+    state.camera_y = 456;
+    state.callbacks.open_options_menu = count_options_menu_open;
+    state.callbacks.update_catchup_target_if_active = count_catchup_update;
+    options_menu_call_count = 0;
+    catchup_update_call_count = 0;
+
+    DispatchGameplayUiKeyboardInput(state, 0x3eu, 0u); // F4
+    REQUIRE(options_menu_call_count == 1u);
+    REQUIRE(catchup_update_call_count == 1u);
+    REQUIRE(!state.camera_bookmarks[3].valid);
+    REQUIRE(state.command_actions.empty());
+}
+
+void test_f5_through_f9_store_and_recall_raw_camera_bookmarks() {
+    UiOverlayState state{};
+    constexpr std::array<u32, 5> kScanCodes{
+        {0x3fu, 0x40u, 0x41u, 0x42u, 0x43u}};
+    state.shift_modifier_down = true;
+
+    for (std::size_t index = 0; index < kScanCodes.size(); ++index) {
+        state.camera_x = 500 + static_cast<i32>(index * 37u);
+        state.camera_y = 700 + static_cast<i32>(index * 41u);
+        DispatchGameplayUiKeyboardInput(state, kScanCodes[index], 0u);
+
+        const UiOverlayCameraBookmark& bookmark =
+            state.camera_bookmarks[index + 4u];
+        REQUIRE(bookmark.valid);
+        REQUIRE(bookmark.camera_x == 500 + static_cast<i32>(index * 37u));
+        REQUIRE(bookmark.camera_y == 700 + static_cast<i32>(index * 41u));
+    }
+
+    state.shift_modifier_down = false;
+    state.camera_max_x = 1;
+    state.camera_max_y = 1;
+    for (std::size_t index = 0; index < kScanCodes.size(); ++index) {
+        state.camera_x = 0;
+        state.camera_y = 0;
+        DispatchGameplayUiKeyboardInput(state, kScanCodes[index], 0u);
+        REQUIRE(state.camera_x == 500 + static_cast<i32>(index * 37u));
+        REQUIRE(state.camera_y == 700 + static_cast<i32>(index * 41u));
+    }
 }
 
 void test_f2_f3_bookmarks_only_in_generic_ai_profile_mode() {
@@ -357,6 +578,52 @@ void test_chat_channel_hotkeys_follow_generic_p2p_profile() {
     REQUIRE(begin_chat(true, false, 0u, true, true, true) == 3u);
     REQUIRE(begin_chat(true, false, 2u, true, true, true) == 7u);
     REQUIRE(begin_chat(false, true, 0u, true, true, true) == 4u);
+}
+
+void test_enter_submits_chat_once_and_closes_the_input_line() {
+    UiOverlayState state{};
+    state.chat_active = true;
+    state.chat_cursor_visible = true;
+    state.chat_channel = 3u;
+    state.chat_input_text = "hello";
+    SetUiOverlayChatSubmitCallback(capture_chat_submit);
+    chat_submit_call_count = 0;
+    submitted_chat_channel = 0;
+    submitted_chat_text.clear();
+
+    HandleGameplayChatKey(state, '\r');
+
+    REQUIRE(chat_submit_call_count == 1u);
+    REQUIRE(submitted_chat_text == "hello");
+    REQUIRE(submitted_chat_channel == 3u);
+    REQUIRE(!state.chat_active);
+    REQUIRE(!state.chat_cursor_visible);
+    REQUIRE(state.chat_input_text.empty());
+    REQUIRE(state.chat_messages.empty());
+    SetUiOverlayChatSubmitCallback(nullptr);
+}
+
+void test_slash_chat_uses_p2p_submit_but_remains_local_outside_p2p() {
+    UiOverlayState p2p{};
+    p2p.generic_ai_profile_mode = true;
+    p2p.chat_active = true;
+    p2p.chat_input_text = "/server";
+    SetUiOverlayChatSubmitCallback(capture_chat_submit);
+    chat_submit_call_count = 0;
+    submitted_chat_text.clear();
+    HandleGameplayChatKey(p2p, '\r');
+    REQUIRE(chat_submit_call_count == 1u);
+    REQUIRE(submitted_chat_text == "/server");
+    REQUIRE(p2p.chat_messages.empty());
+    SetUiOverlayChatSubmitCallback(nullptr);
+
+    UiOverlayState local{};
+    local.chat_active = true;
+    local.chat_input_text = "/local";
+    HandleGameplayChatKey(local, '\r');
+    REQUIRE(local.chat_messages.size() == 1u);
+    REQUIRE(local.chat_messages.front().text == "/local");
+    REQUIRE(!local.pending_local_command);
 }
 
 void test_f11_toggles_gameplay_debug_overlay_flag() {
@@ -658,14 +925,22 @@ void test_transport_passenger_generic_dispatch_uses_markerless_dynamic_record() 
 int main() {
     test_w_keydown_activates_exactly_once_and_wm_char_does_not_repeat();
     test_flag_one_offscreen_record_is_not_keyboard_active();
+    test_duplicate_hotkey_skips_disabled_records_but_stops_at_first_blocker();
+    test_catalog_markers_route_physical_keys_to_publisher_actions();
     test_chat_scan_escape_is_ignored_and_wm_char_escape_closes();
     test_f10_opens_pause_menu_once_without_mutating_selected_stats();
+    test_tab_toggles_minimap_mode_rebuilds_layout_and_requests_setup_write();
+    test_space_recalls_only_a_valid_stored_minimap_point_with_clamping();
+    test_f4_opens_options_then_updates_active_catchup_target();
+    test_f5_through_f9_store_and_recall_raw_camera_bookmarks();
     test_f2_f3_bookmarks_only_in_generic_ai_profile_mode();
     test_f1_recalls_seeded_local_start_camera();
     test_session_render_reset_preserves_camera_and_bookmarks();
     test_new_session_and_mode5_camera_bookmark_lifecycle();
     test_escape_cancels_placement_or_activates_first_back_record();
     test_chat_channel_hotkeys_follow_generic_p2p_profile();
+    test_enter_submits_chat_once_and_closes_the_input_line();
+    test_slash_chat_uses_p2p_submit_but_remains_local_outside_p2p();
     test_f11_toggles_gameplay_debug_overlay_flag();
     test_speed_keys_follow_generic_profile_gate_and_boundaries();
     test_loaded_control_groups_recall_and_cycle_through_dispatcher();

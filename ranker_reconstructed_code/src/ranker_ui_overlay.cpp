@@ -16,6 +16,7 @@ namespace ranker {
 namespace {
 
 UiOverlayState g_ui_overlay_state;
+UiOverlayChatSubmitCallback g_ui_overlay_chat_submit_callback = nullptr;
 
 constexpr u32 kUiOverlayFlagHidden = 0x01;
 constexpr u32 kUiOverlayFlagDisabled = 0x02;
@@ -1856,6 +1857,10 @@ u32 ResolveUiOverlayConstructionProgressTotal(u32 production_spawn_time) {
 
 UiOverlayState& ui_overlay_state() {
     return g_ui_overlay_state;
+}
+
+void SetUiOverlayChatSubmitCallback(UiOverlayChatSubmitCallback callback) {
+    g_ui_overlay_chat_submit_callback = callback;
 }
 
 void ResetUiOverlayState() {
@@ -4562,10 +4567,15 @@ void HandleGameplayChatKey(UiOverlayState& state, u8 key) {
     }
     if (key == '\r' || key == '\n') {
         HandleGameplayChatBangCommand(state);
-        if (!state.chat_input_text.empty() &&
-            !DispatchGameplayChatSlashCommand(state, state.chat_input_text)) {
-            QueueGameplayChatMessageDisplay(state, state.chat_input_text,
-                state.chat_channel, true);
+        if (!state.chat_input_text.empty()) {
+            const bool submitted = g_ui_overlay_chat_submit_callback != nullptr &&
+                g_ui_overlay_chat_submit_callback(
+                    state, state.chat_input_text, state.chat_channel);
+            if (!submitted &&
+                !DispatchGameplayChatSlashCommand(state, state.chat_input_text)) {
+                QueueGameplayChatMessageDisplay(state, state.chat_input_text,
+                    state.chat_channel, true);
+            }
         }
         state.chat_input_text.clear();
         state.chat_active = false;
@@ -4622,7 +4632,7 @@ void HandleGameplayChatBangCommand(UiOverlayState& state) {
 }
 
 bool DispatchGameplayChatSlashCommand(UiOverlayState& state, const std::string& text) {
-    if (text.empty() || text.front() != '/') {
+    if (!state.generic_ai_profile_mode || text.empty() || text.front() != '/') {
         return false;
     }
     u32 checksum = static_cast<u32>(text.size());

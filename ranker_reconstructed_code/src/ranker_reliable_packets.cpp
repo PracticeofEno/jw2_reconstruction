@@ -12,9 +12,6 @@ namespace {
 
 Mode1ReliableRuntimeState g_mode1_reliable_state;
 std::recursive_mutex g_mode1_reliable_mutex;
-constexpr u32 kMode1WrappedCommandHeaderBytes = 0x0d;
-constexpr u32 kMode1WrappedCommandSubtype = 0x2a;
-constexpr u8 kMode1WrappedCommandDebugPad = 0xcc;
 constexpr u32 kMode1SyncRoundActive = 0x80000000u;
 constexpr u32 kMode1SyncChannelMask =
     (1u << kMode1ReliableChannelCount) - 1u;
@@ -38,13 +35,6 @@ u8 read_u8(const void* data, u32 size, u32 offset) {
 
 void write_u32(void* data, u32 offset, u32 value) {
     std::memcpy(static_cast<u8*>(data) + offset, &value, sizeof(value));
-}
-
-void write_vector_u32(std::vector<u8>& data, u32 offset, u32 value) {
-    if (offset > data.size() || data.size() - offset < sizeof(value)) {
-        return;
-    }
-    std::memcpy(data.data() + offset, &value, sizeof(value));
 }
 
 void invoke_packet_hook(Mode1ReliablePacketHook hook, const Mode1ReliablePacket& packet) {
@@ -1101,37 +1091,27 @@ i32 BroadcastMode1ReliablePayloadToAll(const void* packet, u32 packet_size) {
     return BroadcastMode1ReliablePayload(packet, packet_size);
 }
 
-std::vector<u8> BuildMode1WrappedCommandPacket(const void* payload, u32 payload_size) {
-    if (payload == nullptr || payload_size < sizeof(u32)) {
-        return {};
-    }
-
-    const u32 copied_payload_size = payload_size - sizeof(u32);
-    const u32 wrapped_size = copied_payload_size + kMode1WrappedCommandHeaderBytes;
-    std::vector<u8> wrapped(wrapped_size, 0);
-    write_vector_u32(wrapped, 0, 0);
-    write_vector_u32(wrapped, 4, kMode1WrappedCommandSubtype);
-    write_vector_u32(wrapped, 8, wrapped_size);
-    wrapped[12] = kMode1WrappedCommandDebugPad;
-
-    const auto* bytes = static_cast<const u8*>(payload);
-    std::copy_n(bytes + sizeof(u32), copied_payload_size,
-        wrapped.begin() + kMode1WrappedCommandHeaderBytes);
-    return wrapped;
-}
-
 bool WrapAndPublishMode1SlashCommandPacket(const void* payload, u32 payload_size) {
     std::vector<u8> wrapped = BuildMode1WrappedCommandPacket(payload, payload_size);
     if (wrapped.empty()) {
         return false;
     }
 
-    g_mode1_reliable_state.last_wrapped_command_packet = std::move(wrapped);
-    if (g_mode1_reliable_state.callbacks.wrapped_packet_published != nullptr) {
-        g_mode1_reliable_state.callbacks.wrapped_packet_published(
-            g_mode1_reliable_state.last_wrapped_command_packet.data(),
-            static_cast<u32>(g_mode1_reliable_state.last_wrapped_command_packet.size()),
-            g_mode1_reliable_state.callback_user_data);
+    Mode1ReliablePayloadHook publish = nullptr;
+    void* user_data = nullptr;
+    std::vector<u8> callback_packet;
+    {
+        const std::lock_guard<std::recursive_mutex> lock(g_mode1_reliable_mutex);
+        g_mode1_reliable_state.last_wrapped_command_packet = std::move(wrapped);
+        publish = g_mode1_reliable_state.callbacks.wrapped_packet_published;
+        user_data = g_mode1_reliable_state.callback_user_data;
+        if (publish != nullptr) {
+            callback_packet = g_mode1_reliable_state.last_wrapped_command_packet;
+        }
+    }
+    if (publish != nullptr) {
+        publish(callback_packet.data(),
+            static_cast<u32>(callback_packet.size()), user_data);
     }
     return true;
 }

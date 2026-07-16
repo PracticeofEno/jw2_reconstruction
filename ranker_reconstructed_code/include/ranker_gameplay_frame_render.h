@@ -8,6 +8,7 @@
 #include <array>
 #include <cstddef>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace ranker {
@@ -277,6 +278,23 @@ struct GameplayHudTextState {
     GameplayDebugCounterState debug_counter;
     GameplayHudAlertMarkerState* alert_markers = nullptr;
 };
+
+inline void QueueGameplayTimedChatNotification(GameplayHudTextState& state,
+    std::string primary_text, std::string secondary_text,
+    u8 primary_color, u8 secondary_color, u32 lifetime_ms = 8000u) {
+    for (std::size_t index = 1; index < state.timed_notifications.size(); ++index) {
+        state.timed_notifications[index - 1] =
+            std::move(state.timed_notifications[index]);
+    }
+    GameplayTimedHudNotification& newest = state.timed_notifications.back();
+    newest = GameplayTimedHudNotification{};
+    newest.active = true;
+    newest.expires_tick_ms = state.current_tick_ms + lifetime_ms;
+    newest.primary_color = primary_color;
+    newest.secondary_color = secondary_color;
+    newest.primary_text = std::move(primary_text);
+    newest.secondary_text = std::move(secondary_text);
+}
 
 constexpr bool GameplayHudSurfaceLayoutChanged(u32 current_screen_width,
     u32 current_screen_height, u32 current_world_viewport_height,

@@ -78,6 +78,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cstdarg>
 #include <cstdio>
@@ -87,6 +88,7 @@
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <numeric>
 #include <string>
 #include <string_view>
@@ -1230,6 +1232,55 @@ struct RuntimeGlobals {
 
 RuntimeGlobals g_runtime;
 bool g_default_owner_ai_bss_bootstrapped = false;
+std::mutex g_gameplay_chat_mutex;
+std::vector<Mode1ChatPayload> g_pending_gameplay_chat_messages;
+std::atomic<bool> g_gameplay_chat_hud_active{false};
+u32 g_gameplay_chat_target_mask = 0;
+
+void queue_default_gameplay_chat_payload(Mode1ChatPayload payload) {
+    const std::lock_guard<std::mutex> lock(g_gameplay_chat_mutex);
+    g_pending_gameplay_chat_messages.push_back(std::move(payload));
+}
+
+void clear_default_gameplay_chat_payloads() {
+    const std::lock_guard<std::mutex> lock(g_gameplay_chat_mutex);
+    g_pending_gameplay_chat_messages.clear();
+}
+
+void sync_default_gameplay_chat_input_hud() {
+    const UiOverlayState& overlay = ui_overlay_state();
+    GameplayHudSelectedStatus& selected =
+        g_runtime.gameplay_hud_text.selected_status;
+    selected.active = overlay.chat_active;
+    selected.category = static_cast<u8>(std::min<u32>(
+        overlay.chat_channel, selected.category_labels.size() - 1u));
+    selected.typed_text = overlay.chat_input_text;
+    selected.extra_text.clear();
+    selected.extra_text_active = false;
+}
+
+void drain_default_gameplay_chat_payloads(u32 current_tick_ms) {
+    std::vector<Mode1ChatPayload> pending;
+    {
+        const std::lock_guard<std::mutex> lock(g_gameplay_chat_mutex);
+        pending.swap(g_pending_gameplay_chat_messages);
+    }
+    if (pending.empty()) {
+        return;
+    }
+
+    constexpr u8 kDynamicChatColorIndex = 0xfeu;
+    SetTextColorRef(kDynamicChatColorIndex, kMode1ChatColorWhite);
+    SetTextColorPixel(kDynamicChatColorIndex,
+        SurfacePixelMode555() ? 0x7fffu : 0xffffu);
+    GameplayHudTextState& hud = g_runtime.gameplay_hud_text;
+    hud.current_tick_ms = current_tick_ms;
+    for (Mode1ChatPayload& payload : pending) {
+        QueueGameplayTimedChatNotification(hud,
+            std::move(payload.primary_text), std::move(payload.secondary_text),
+            kDynamicChatColorIndex, kDynamicChatColorIndex);
+    }
+}
 
 GameplayLogicalSurfaceSize resolve_active_gameplay_logical_surface_size() {
     const DirectDrawRuntimeState& draw = direct_draw_state();
@@ -12584,6 +12635,8 @@ void default_gameplay_loop_initialize_worker_runtime(GameplayLoopState&) {
 }
 
 void default_gameplay_loop_shutdown_runtime_phase(GameplayLoopState&) {
+    g_gameplay_chat_hud_active.store(false, std::memory_order_release);
+    clear_default_gameplay_chat_payloads();
     ShutdownPrimaryMilesMusicPolicy();
 }
 
@@ -12619,6 +12672,8 @@ void default_gameplay_loop_handle_session_abort(GameplayLoopState&) {
 }
 
 void default_gameplay_loop_leave_session_cleanup(GameplayLoopState& state) {
+    g_gameplay_chat_hud_active.store(false, std::memory_order_release);
+    clear_default_gameplay_chat_payloads();
     mode1_reliable_state().corrective_packet_pending = false;
     state.pause_loop_requested = false;
     state.leave_requested = false;
@@ -12785,6 +12840,64 @@ void default_ui_overlay_chat_input_end(UiOverlayState&) {
     if (g_runtime.main_window != nullptr && IsWindow(g_runtime.main_window)) {
         RestoreImeConversionOpenStatus(g_runtime.main_window);
     }
+}
+
+std::string default_gameplay_chat_sender_name(const UiOverlayState& state) {
+    if (state.local_player_slot <
+            g_runtime.gameplay_startup_state.owner_display_names.size()) {
+        const std::string& name =
+            g_runtime.gameplay_startup_state.owner_display_names[
+                state.local_player_slot];
+        if (!name.empty()) {
+            return name;
+        }
+    }
+    return "Player " + std::to_string(state.local_player_slot + 1u);
+}
+
+bool default_ui_overlay_submit_chat(
+    UiOverlayState& state, const std::string& text, u32 channel) {
+    // FUN_004e7090 only enters the Mode-1 chat transport in generic/P2P
+    // sessions.  Local/scenario sessions retain the overlay's local fallback.
+    if (!state.generic_ai_profile_mode || text.empty()) {
+        return false;
+    }
+
+    const std::string sender = default_gameplay_chat_sender_name(state);
+    const std::vector<u8> packet = BuildMode1ChatPayload(sender, text);
+    if (packet.empty()) {
+        return false;
+    }
+    if (text.front() == '/') {
+        // 0x004e7931 bypasses local echo and every DirectPlay recipient
+        // branch.  FUN_004290b0 wraps the colored type-zero payload for the
+        // singleton frontend TCP connection instead.
+        return WrapAndPublishMode1SlashCommandPacket(
+            packet.data(), static_cast<u32>(packet.size()));
+    }
+
+    Mode1ChatPayload local_echo{};
+    local_echo.primary_text = sender + "> ";
+    local_echo.secondary_text = text;
+    queue_default_gameplay_chat_payload(std::move(local_echo));
+
+    if (channel == 3u) {
+        BroadcastMode1ReliablePayloadToAll(
+            packet.data(), static_cast<u32>(packet.size()));
+        return true;
+    }
+
+    const u32 recipients = ResolveMode1ChatRecipientMask(channel,
+        g_gameplay_chat_target_mask, state.local_owner_relation_mask);
+    for (u32 player = 0; player < kPlayerSlotCount; ++player) {
+        if ((recipients & (1u << player)) == 0 ||
+            player == state.local_player_slot) {
+            continue;
+        }
+        SendMode1ReliablePayloadToPlayer(
+            packet.data(), static_cast<u32>(packet.size()), player);
+    }
+    return true;
 }
 
 void default_ui_overlay_request_script_wait_break(UiOverlayState&) {
@@ -12974,6 +13087,7 @@ void configure_default_ui_overlay_callbacks() {
     if (overlay.callbacks.on_chat_input_end == nullptr) {
         overlay.callbacks.on_chat_input_end = default_ui_overlay_chat_input_end;
     }
+    SetUiOverlayChatSubmitCallback(default_ui_overlay_submit_chat);
     if (overlay.callbacks.request_script_wait_break == nullptr) {
         overlay.callbacks.request_script_wait_break =
             default_ui_overlay_request_script_wait_break;
@@ -13031,6 +13145,7 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
     g_runtime.gameplay_frame_render_context = GameplayFrameRenderContext{};
     g_runtime.gameplay_render_command_queue = GameplayRenderCommandQueue{};
     g_runtime.gameplay_hud_text = GameplayHudTextState{};
+    clear_default_gameplay_chat_payloads();
     g_runtime.gameplay_player_resource_hud = GameplayPlayerResourceHudState{};
     g_runtime.gameplay_hud_alert_markers = GameplayHudAlertMarkerState{};
     g_runtime.gameplay_script_hud_text.clear();
@@ -13051,6 +13166,20 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
     g_runtime.gameplay_action_damage_profiles = UnitActionDamageProfileTable{};
     g_runtime.gameplay_action_damage_profiles_initialized = false;
     ResetUiOverlayStatePreservingSessionCamera();
+    {
+        UiOverlayState& overlay = ui_overlay_state();
+        const u32 local_player =
+            g_runtime.gameplay_player_slots.local_player_slot;
+        const bool local_observer =
+            local_player < g_runtime.gameplay_player_slots.slot_states.size() &&
+            g_runtime.gameplay_player_slots.slot_states[local_player] ==
+                static_cast<u8>(PlayerSlotState::observer);
+        overlay.default_chat_channel =
+            ResolveMode1DefaultChatChannel(local_observer);
+        overlay.chat_channel = overlay.default_chat_channel;
+        g_gameplay_chat_target_mask = local_observer ?
+            g_runtime.gameplay_player_slots.local_observer_slot_mask : 0u;
+    }
     if (UnitMovementContext* movement = default_gameplay_movement_context()) {
         // Record-7 load/rejoin units are fully materialized before this
         // callback.  Capture their persistent raw +0x08 group nibble before
@@ -13237,6 +13366,7 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
     sync_default_gameplay_visibility_and_render_inputs(0);
     append_startup_log("session-loop: init resources ok active_units=%zu",
         g_runtime.gameplay_movement_context.active_units.size());
+    g_gameplay_chat_hud_active.store(true, std::memory_order_release);
 }
 
 bool default_gameplay_loop_frame_gate(GameplayLoopState& state) {
@@ -15407,6 +15537,22 @@ void default_mode1_reliable_sync_timeout(void*) {
     OpenGameplayWaitDialog(gameplay_modal_ui_state());
 }
 
+void default_mode1_wrapped_packet_published(
+    const void* data, u32 byte_count, void*) {
+    if (data == nullptr || byte_count < 0x0du ||
+        byte_count > static_cast<u32>(std::numeric_limits<i32>::max())) {
+        return;
+    }
+    // PrepareAndQueueLegacyAsyncTcpSend writes the byte-12 weighted checksum,
+    // so retain the reliable runtime's diagnostic packet and mutate a private
+    // transport copy just like FUN_00452300.
+    std::vector<u8> transport_packet(
+        static_cast<const u8*>(data),
+        static_cast<const u8*>(data) + byte_count);
+    PrepareAndQueueLegacyAsyncTcpSend(FrontendAsyncTcpSocket0(),
+        transport_packet.data(), static_cast<i32>(transport_packet.size()));
+}
+
 void configure_default_mode1_gameplay_runtime_callbacks() {
     // Gameplay packet/direct-play handlers and the renderer/simulation must
     // mutate the same DAT_007251F4-style runtime slot table.  The standalone
@@ -15452,6 +15598,8 @@ void configure_default_mode1_gameplay_runtime_callbacks() {
         default_mode1_reliable_snapshot_local_checksum;
     reliable_callbacks.sync_ready = default_mode1_reliable_sync_ready;
     reliable_callbacks.sync_timeout = default_mode1_reliable_sync_timeout;
+    reliable_callbacks.wrapped_packet_published =
+        default_mode1_wrapped_packet_published;
     SetMode1ReliableCallbacks(reliable_callbacks, reliable.callback_user_data);
 
     g_runtime.gameplay_player_slots.broadcast_player_inactive =
@@ -18759,6 +18907,7 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
         overlay.local_player_type =
             g_runtime.gameplay_player_slots.slot_states[overlay.local_player_slot];
     }
+    sync_default_gameplay_chat_input_hud();
     sync_default_ui_overlay_grouped_command_gates(overlay);
 
     const InputState& input = input_state();
@@ -28448,6 +28597,8 @@ void default_gameplay_loop_present_phase(GameplayLoopState& state) {
     context.callbacks.draw_ui_overlay = default_gameplay_frame_draw_active_modal;
     context.callbacks.show_pause_overlay = default_gameplay_frame_show_pause_overlay;
     context.callbacks.present_cursor = default_gameplay_frame_present_cursor;
+    hud.current_tick_ms = state.current_tick_ms;
+    drain_default_gameplay_chat_payloads(state.current_tick_ms);
 
 #ifdef _WIN32
     if (g_runtime.directx_initialized) {
@@ -28472,6 +28623,7 @@ void default_gameplay_loop_present_phase(GameplayLoopState& state) {
                 // Lock made a 640 frame briefly retain the wrong anchors.
                 ResetGameplayHudTextLayout(hud);
             }
+            sync_default_gameplay_chat_input_hud();
 
             context.callbacks.present_cursor = nullptr;
             RenderGameplayFrameComposite(context);
@@ -28498,6 +28650,7 @@ void default_gameplay_loop_present_phase(GameplayLoopState& state) {
             context.viewport_height, hud_viewport_height)) {
         ResetGameplayHudTextLayout(hud);
     }
+    sync_default_gameplay_chat_input_hud();
     RenderGameplayFrameComposite(context);
 }
 
@@ -30461,23 +30614,19 @@ void NoOpFrontendNetworkPayloadHandler(const void* packet, u32 byte_count) {
 }
 
 void QueueFrontendNetworkChatPacketDisplay(const void* packet, u32 byte_count) {
-    if (packet == nullptr || byte_count <= 4) {
+    Mode1ChatPayload payload{};
+    if (!ParseMode1ChatPayload(packet, byte_count, payload)) {
         return;
     }
 
-    const auto* bytes = static_cast<const u8*>(packet) + 4;
-    byte_count -= 4;
-    if (byte_count <= 8) {
-        return;
+    {
+        const std::lock_guard<std::mutex> lock(g_gameplay_chat_mutex);
+        g_runtime.frontend_network_chat_messages.push_back(
+            payload.primary_text + payload.secondary_text);
     }
-
-    const u32 text_length = bytes[7];
-    if (text_length == 0 || 8u + text_length > byte_count) {
-        return;
+    if (g_gameplay_chat_hud_active.load(std::memory_order_acquire)) {
+        queue_default_gameplay_chat_payload(std::move(payload));
     }
-
-    g_runtime.frontend_network_chat_messages.emplace_back(
-        reinterpret_cast<const char*>(bytes + 8), text_length);
 }
 
 int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_command) {

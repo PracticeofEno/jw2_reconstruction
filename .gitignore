@@ -34,6 +34,7 @@ ranker_reconstructed_code/tests/*
 !ranker_reconstructed_code/tests/meat_pipeline_regression.cpp
 !ranker_reconstructed_code/tests/gameplay_hotkey_regression.cpp
 !ranker_reconstructed_code/tests/gameplay_hotkey_dispatch_regression.cpp
+!ranker_reconstructed_code/tests/gameplay_chat_regression.cpp
 !ranker_reconstructed_code/tests/control_group_persistence_regression.cpp
 !ranker_reconstructed_code/tests/movement_modifier_command_flag_regression.cpp
 !ranker_reconstructed_code/third_party/

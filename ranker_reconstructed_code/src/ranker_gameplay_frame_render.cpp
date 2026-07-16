@@ -1699,6 +1699,7 @@ void RenderTimedGameplayHudNotification(
     i32 x, i32 y) {
     if (notification.expires_tick_ms <= state.current_tick_ms) {
         notification.active = false;
+        return;
     }
     if (!notification.primary_text.empty()) {
         draw_shadow_text(state, notification.primary_text.c_str(), x, y,
