@@ -28,6 +28,7 @@ $required = @(
     (Join-Path $root '.tmp_held_click_window.ps1'),
     (Join-Path $root '.tmp_meat_live_probe.py'),
     (Join-Path $root '.tmp_meat_live_probe_history_regression.py'),
+    (Join-Path $root '.tmp_attack_flash_live_probe.py'),
     (Join-Path $root '.tmp_meat_targeted_pair_probe.py'),
     (Join-Path $root '.tmp_meat_targeted_pair_probe_fixture.py')
 )
@@ -73,6 +74,7 @@ $phases = @(
     'launch a fresh original host and reconstructed client; enter P2P gameplay',
     'select at least two local type-32 attackers and a visible neutral type-75',
     'start a 120-150 second finalized exact-frame meat probe before combat',
+    'press physical A (scan 0x1e), target the neutral, and verify 0x88..0x80 red flash',
     'issue explicit attack orders until type-75 death creates effect id 2 on both peers',
     'select collector; click hot item 183/action 0x0d; prove raw +0x0c bit 31 on both peers',
     'move collector onto food; prove effect removal and action-mode pickup without cargo',
@@ -154,6 +156,7 @@ $script:rebuildPid = 0
 $script:rebuildBase = 0L
 $script:rebuildWindow = [IntPtr]::Zero
 $script:meatProbeProcess = $null
+$script:attackFlashProbeProcess = $null
 $script:launchStartedUtc = $null
 $script:freshPids = @()
 
@@ -168,6 +171,9 @@ public static class MeatTargetedWindowInput {
     }
     [DllImport("user32.dll")]
     public static extern bool GetClientRect(IntPtr handle, out Rect rect);
+    [DllImport("user32.dll")]
+    public static extern IntPtr SendMessage(
+        IntPtr handle, uint message, IntPtr wparam, IntPtr lparam);
 }
 '@
 }
@@ -262,6 +268,18 @@ function Invoke-WindowClick(
     }
     if ($Right) { $arguments.Right = $true }
     & (Join-Path $root '.tmp_held_click_window.ps1') @arguments
+}
+
+function Invoke-PhysicalAttackHotkey {
+    # WM_KEYDOWN/UP with set-1 scan 0x1e.  The game consumes this scan from
+    # lParam, which is the exact physical-A route used by the original.
+    [MeatTargetedWindowInput]::SendMessage(
+        $script:rebuildWindow, 0x0100, [IntPtr]0x41,
+        [IntPtr][int64]0x001e0001) | Out-Null
+    Start-Sleep -Milliseconds 35
+    [MeatTargetedWindowInput]::SendMessage(
+        $script:rebuildWindow, 0x0101, [IntPtr]0x41,
+        [IntPtr][int64]0xc01e0001) | Out-Null
 }
 
 function Get-HotRegion([object]$Snapshot, [int]$Item) {
@@ -413,8 +431,8 @@ function Issue-AttackOrder(
             }
             continue
         }
-        Invoke-WindowClick -X ([int]$attackRegion.center[0]) `
-            -Y ([int]$attackRegion.center[1])
+        # Exercise the user's exact path: physical A selects HUD object 0xaf.
+        Invoke-PhysicalAttackHotkey
         Start-Sleep -Milliseconds 40
         $probe = Get-CombatCommandProbe $AttackerSlot $TargetSlot
         $probeTarget = $probe.units.PSObject.Properties[
@@ -564,6 +582,15 @@ function Wait-MeatTraceEvent(
 
 function Stop-FreshProcesses {
     $stopped = @()
+    if ($null -ne $script:attackFlashProbeProcess) {
+        $flashProbe = Get-Process -Id $script:attackFlashProbeProcess.Id `
+            -ErrorAction SilentlyContinue
+        if ($null -ne $flashProbe) {
+            Stop-Process -InputObject $flashProbe -Force `
+                -ErrorAction SilentlyContinue
+            $stopped += $flashProbe.Id
+        }
+    }
     if ($null -ne $script:meatProbeProcess) {
         $probe = Get-Process -Id $script:meatProbeProcess.Id `
             -ErrorAction SilentlyContinue
@@ -600,6 +627,7 @@ $results = [ordered]@{
     target = $null
     attackers = @()
     attack_orders = @()
+    attack_flash = $null
     generation = [ordered]@{ pass = $false }
     marker = [ordered]@{ pass = $false; hot_item = 183; action = 0x0d }
     pickup = [ordered]@{ pass = $false }
@@ -704,6 +732,24 @@ try {
         $meatStdout $meatStderr
     Start-Sleep -Milliseconds 250
 
+    $attackFlashSummaryPath = Join-Path $output 'attack-flash-summary.json'
+    $attackFlashStdout = Join-Path $output 'attack-flash-probe.out'
+    $attackFlashStderr = Join-Path $output 'attack-flash-probe.err'
+    $script:attackFlashProbeProcess = Start-Process -FilePath $python `
+        -ArgumentList @(
+            (Join-Path $root '.tmp_attack_flash_live_probe.py'),
+            [string]$script:rebuildPid,
+            ('0x{0:X}' -f $script:rebuildBase),
+            $resolvedLayoutPath,
+            [string]$neutral.slot,
+            '--timeout', '20',
+            '--interval', '0.001',
+            '--summary', $attackFlashSummaryPath) `
+        -WorkingDirectory $root -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput $attackFlashStdout `
+        -RedirectStandardError $attackFlashStderr
+    Start-Sleep -Milliseconds 100
+
     foreach ($attacker in $attackers) {
         $order = Issue-AttackOrder ([int]$attacker.slot) ([int]$neutral.slot)
         $results.attack_orders += [ordered]@{
@@ -716,6 +762,18 @@ try {
     }).Count
     if ($issuedCount -lt 2) {
         throw "Only $issuedCount explicit type-75 attack orders were confirmed."
+    }
+
+    if (-not $script:attackFlashProbeProcess.WaitForExit(20000)) {
+        throw 'Physical A-attack red-flash probe timed out.'
+    }
+    if (-not (Test-Path -LiteralPath $attackFlashSummaryPath)) {
+        throw 'Physical A-attack red-flash summary was not produced.'
+    }
+    $results.attack_flash = Get-Content $attackFlashSummaryPath -Raw |
+        ConvertFrom-Json
+    if (-not [bool]$results.attack_flash.pass) {
+        throw 'Physical A-attack target did not complete the original red-flash timer.'
     }
 
     $spawn = Wait-MeatTraceEvent $meatTracePath 'spawn' `

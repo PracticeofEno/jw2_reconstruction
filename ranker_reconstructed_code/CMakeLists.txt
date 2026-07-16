@@ -638,6 +638,32 @@ if (BUILD_TESTING)
         COMMAND gameplay_input_snapshot_ring_regression
     )
 
+    add_executable(attack_target_red_flash_regression
+        tests/attack_target_red_flash_regression.cpp
+        src/ranker_gameplay_input_actions.cpp
+        src/ranker_input.cpp
+        src/ranker_unit_animation.cpp
+    )
+    target_include_directories(attack_target_red_flash_regression PRIVATE
+        include
+    )
+    if (MSVC)
+        target_compile_options(attack_target_red_flash_regression PRIVATE /Gy)
+        target_link_options(attack_target_red_flash_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(attack_target_red_flash_regression PRIVATE
+            -O1
+            -ffunction-sections
+            -fdata-sections
+        )
+        target_link_options(attack_target_red_flash_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME attack_target_red_flash_regression
+        COMMAND attack_target_red_flash_regression
+    )
+
     add_executable(gameplay_hotkey_dispatch_regression
         tests/gameplay_hotkey_dispatch_regression.cpp
         src/ranker_control_group_persistence.cpp
