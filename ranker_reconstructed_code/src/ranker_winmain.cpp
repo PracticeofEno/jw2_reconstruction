@@ -16967,9 +16967,12 @@ void append_default_unit_effect_definition_from_catalog_record(
     definition.start_sound_slot = auxiliary_effect_sound_slot_for_raw_ref(
         record, read_runtime_catalog_i32(record.definition_bytes,
             kAuxiliaryEffectStartSoundOffset, -1));
+    // Both JW2_12 low-id effects and JW2_11 action effects use raw +0x1fc.
+    // The low-id active dispatcher divides +0x224 by eight when this is one,
+    // and the renderer selects an eight-direction image row from the same bit.
+    definition.directional_active_frames = read_runtime_catalog_u32(
+        record.definition_bytes, kJw211EffectPathKindOffset, 1) == 1;
     if (projectile) {
-        definition.directional_active_frames = read_runtime_catalog_u32(
-            record.definition_bytes, kJw211EffectPathKindOffset, 1) == 1;
         definition.damage_amount = unsigned_magnitude(read_runtime_catalog_i32(
             record.definition_bytes, kJw211EffectDamageAmountOffset, 0));
         append_jw211_effect_frame_sound_slots(definition, record);
@@ -16980,9 +16983,7 @@ void append_default_unit_effect_definition_from_catalog_record(
             ? 0u
             : definition.impact_frames.front();
     }
-    definition.projectile = projectile &&
-        read_runtime_catalog_u32(record.definition_bytes,
-            kJw211EffectPathKindOffset, 1) == 1;
+    definition.projectile = projectile && definition.directional_active_frames;
     state.definitions.push_back(std::move(definition));
 }
 
@@ -20447,6 +20448,18 @@ void default_unit_damage_attacker_experience_changed(UnitDamageContext&,
     bool attachment_effect_started = false;
     ApplyUnitVariantProgressFromStoredValue(g_runtime.gameplay_production_runtime,
         *unit, stats, &attachment_effect_started, default_gameplay_frame_random_limit);
+    if (attachment_effect_started) {
+        UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
+        configure_default_unit_effect_runtime_state(effects);
+        UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+        if (lifecycle != nullptr) {
+            sync_default_unit_effect_runtime_units(effects, *lifecycle);
+        }
+        // FUN_004099e0 publishes attachment action 0x2d after a kill-award
+        // rank-up; FUN_004ef6cd translates that action to effect id 0x6a.
+        StartSelectedUnitAttachmentEffect(
+            effects, 0x3du + 0x2du, *unit, unit);
+    }
     mirror_default_unit_damage_record_stats(attacker, *unit);
 }
 
@@ -20790,12 +20803,12 @@ bool default_unit_damage_reaction_replace_target_by_priority(
     return true;
 }
 
-bool default_unit_damage_reaction_guard_return_acquire_attacker(
+bool default_unit_damage_reaction_guard_combat_acquire_attacker(
     UnitMovementUnit& target, UnitMovementUnit& threat) {
-    // 0x004c2914/0x004c2982 first compare raw +0x68 with the incoming
-    // attacker and return when it is already the stored target.  Re-running
-    // the range branch here would advance guard state 0x1f/0x21 one tick
-    // early on repeated hits from that target.
+    // Damage-reaction jump-table entries 0x20/0x22 both land at 0x004c2914.
+    // That handler first compares raw +0x68 with the incoming attacker, then
+    // accepts every different valid attacker without a priority comparison.
+    // It selects 0x20 when in range and 0x22 plus a path rebuild otherwise.
     if (target.target == &threat) {
         return false;
     }
@@ -20835,12 +20848,14 @@ bool default_unit_damage_reaction_dispatch_attacker(UnitMovementUnit& target,
     case kUnitStateAttackTarget:
         return default_unit_damage_reaction_replace_target_by_priority(
             target, threat, true, false, false);
-    case 0x1f:
-    case kUnitStateGuardReturnTravel:
-        return default_unit_damage_reaction_guard_return_acquire_attacker(
-            target, threat);
     case kUnitStateGuardCombatCycle:
     case kUnitStateGuardPursueTarget:
+        return default_unit_damage_reaction_guard_combat_acquire_attacker(
+            target, threat);
+    case kUnitStateGuardReturnTravel:
+    case 0x23:
+        // Original entries 0x21/0x23 land at 0x004c2982 and replace only a
+        // lower-priority target, or an equal-priority target that is closer.
         return default_unit_damage_reaction_replace_target_by_priority(
             target, threat, true, false, false);
     case kUnitStatePatrolReturnLeg:
@@ -22594,8 +22609,9 @@ void default_unit_command_dispatch_attack(UnitCommandContext& context,
     if (!extended_runtime_table_unit &&
         command_state == kUnitStateGuardCombatCycle) {
         // State 0x20 (0x004c9bdd) scans on carry/loss and results 0/1.
-        // Result 0 keeps the old target unless the candidate has a strictly
-        // better priority; result 1 accepts any candidate returned by the scan.
+        // At 0x004c9bff..0x004c9c2d both ordinary result values preserve the
+        // saved target unless the newly scanned candidate has strictly lower
+        // priority. Cycle completion does not make every candidate eligible.
         const bool lost_or_out_of_range =
             result.code == UnitActionTickCode::lost_target;
         const bool completed = result.code == UnitActionTickCode::cycle_complete;
@@ -22616,7 +22632,7 @@ void default_unit_command_dispatch_attack(UnitCommandContext& context,
             current = replacement;
         }
         else if (replacement != nullptr &&
-            (completed || current == nullptr ||
+            (current == nullptr ||
                 command_target_priority(*replacement) <
                     command_target_priority(*current))) {
             current = replacement;
@@ -22792,12 +22808,10 @@ UnitMovementUnit* default_unit_command_create_unit(UnitCommandContext&,
     const i32 residual_next_path_x = unit->next_path_x;
     const i32 residual_next_path_y = unit->next_path_y;
 
-    UnitMovementUnit initialized{};
-    // HandleFreeUnitActivation preserves the fixed node's entire payload;
-    // InitializePlacedUnitFromMapSlot never writes original raw +0xc8/+0xcc
-    // or +0xf0.
-    initialized.linked_effect_slot_offset =
-        unit->linked_effect_slot_offset;
+    // HandleFreeUnitActivation changes only the intrusive list links.  Seed
+    // the typed initializer from the previous fixed-pool generation so every
+    // raw field that 0x004cf229 does not write remains intact.
+    UnitMovementUnit initialized = *unit;
     const u32 saved_terrain_class = lifecycle->placement_terrain_class_override;
     const bool saved_terrain_override =
         lifecycle->placement_terrain_class_override_enabled;
@@ -24759,9 +24773,7 @@ bool default_owner_ai_acquire_temporary_path_probe(
             unit->runtime_slot_index : unit_id;
     const i32 residual_next_path_x = unit->next_path_x;
     const i32 residual_next_path_y = unit->next_path_y;
-    UnitMovementUnit initialized{};
-    initialized.linked_effect_slot_offset =
-        unit->linked_effect_slot_offset;
+    UnitMovementUnit initialized = *unit;
     // Both original scratch probes create type 7 for owner 0.  Their spawn
     // point is independent of the subsequent path start: the anchor probe
     // uses the map center, while the route-helper probe uses world (10,10).
@@ -25919,7 +25931,10 @@ void default_owner_ai_retarget_strategic_queue(
     OwnerAiStrategicRetargetGateInput input{};
     input.movement = lifecycle != nullptr ? lifecycle->movement : nullptr;
     input.counter_rules = &DefaultOwnerAiCounterRuleTable();
-    input.owner_phase_state = 1;
+    // FUN_004408b0 gates the strategic retarget call on DAT_01233568 == 1.
+    // The following transport-queue pass republishes this field for the next
+    // owner tick, so consume the retained phase instead of forcing the gate.
+    input.owner_phase_state = owner_ai.owners[owner].transport_phase_state;
     input.retarget_queue = default_owner_ai_reassign_strategic_transport_queue;
     if (lifecycle != nullptr) {
         for (u32 slot = 0; slot < kOwnerAiOwnerCount; ++slot) {
@@ -26164,7 +26179,7 @@ void default_owner_ai_tick_transport_queue_unit(UnitCommandContext& context,
 }
 
 void default_owner_ai_maintain_transport_queue(
-    OwnerAiRuntimeState&, u32 owner, void*) {
+    OwnerAiRuntimeState& owner_ai, u32 owner, void*) {
     if (owner >= kOwnerAiOwnerCount) {
         return;
     }
@@ -26193,8 +26208,13 @@ void default_owner_ai_maintain_transport_queue(
         command_context.owner_population_limit[owner] : 0;
     input.carrier_population_gate_open =
         population_limit <= 5 || population_reserved >= population_limit - 5;
-    TickOwnerTransportQueueMaintenance(g_runtime.gameplay_unit_commands,
-        g_runtime.gameplay_owner_transport_queues[owner], owner, input);
+    const OwnerTransportQueueMaintenanceScratch scratch =
+        TickOwnerTransportQueueMaintenance(g_runtime.gameplay_unit_commands,
+            g_runtime.gameplay_owner_transport_queues[owner], owner, input);
+    // FUN_00449ac0 resets DAT_01233568 to 1 before scanning queue slots and
+    // replaces it with 0x16 for live states 0x16/0x17/0x1b.  The queue
+    // helper already computes that exact scan result.
+    owner_ai.owners[owner].transport_phase_state = scratch.owner_phase_state;
 }
 
 void run_default_owner_ai_maintenance(GameplayLoopState& state) {
@@ -28002,10 +28022,6 @@ UnitMovementUnit* spawn_default_gameplay_script_unit(
             unit->runtime_slot_index : unit_id;
     const i32 residual_next_path_x = unit->next_path_x;
     const i32 residual_next_path_y = unit->next_path_y;
-    const u32 residual_linked_effect_slot_offset =
-        unit->linked_effect_slot_offset;
-    *unit = UnitMovementUnit{};
-    unit->linked_effect_slot_offset = residual_linked_effect_slot_offset;
     unit->id = unit_id;
     unit->runtime_slot_index = runtime_slot_index;
     // HandleFreeUnitActivation (0x004d04b0) links the fixed-pool node at the

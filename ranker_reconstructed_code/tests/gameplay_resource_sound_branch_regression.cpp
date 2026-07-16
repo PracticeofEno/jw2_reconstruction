@@ -219,10 +219,13 @@ void test_idle_map_effect_claim_raw_offset_contract() {
     success.type_flags = 0x22u;
     success.command_value = 0xfeedu;
     success.active_command_payload.x = kActivePayloadSentinel;
+    UnitMovementUnit previous_success_target{};
+    success.target = &previous_success_target;
     ProcessUnitIdleAcquireCommand(success_fixture.commands, success);
 
     require(success.command_value ==
                 success_effect->id * kMapEffectRawRecordSize &&
+            success.target == nullptr &&
             success.active_command_payload.x == kActivePayloadSentinel &&
             success.path_target_x == success_effect->x &&
             success.path_target_y == success_effect->y &&
@@ -247,10 +250,13 @@ void test_idle_map_effect_claim_raw_offset_contract() {
     rejected.runtime_flags = 8u;
     rejected.command_value = 0xbeefu;
     rejected.active_command_payload.x = kActivePayloadSentinel;
+    UnitMovementUnit previous_rejected_target{};
+    rejected.target = &previous_rejected_target;
     ProcessUnitIdleAcquireCommand(rejected_fixture.commands, rejected);
 
     require(rejected.command_value ==
                 rejected_effect->id * kMapEffectRawRecordSize &&
+            rejected.target == nullptr &&
             rejected.active_command_payload.x == kActivePayloadSentinel &&
             rejected.path_target_x == rejected_effect->x &&
             rejected.path_target_y == rejected_effect->y &&

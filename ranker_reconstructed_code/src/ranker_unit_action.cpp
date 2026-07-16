@@ -2010,7 +2010,12 @@ void TickUnitEffectPathActive(UnitEffectRuntimeState& state, UnitEffectRuntime& 
         --remaining_iterations;
     } while (remaining_iterations != 0);
 
-    const u32 frames = active_frame_count(definition);
+    // Original 0x004ec7e2..0x004ec7fa divides JW2_12 +0x224 by eight when
+    // raw +0x1fc is one. This is the number of frames per direction, not the
+    // total number of image entries across all eight direction rows.
+    const u32 frames = definition->directional_active_frames
+        ? definition->active_frames / 8u
+        : definition->active_frames;
     effect.tick = frames == 0 ? 0 : (effect.tick + 1) % frames;
 }
 

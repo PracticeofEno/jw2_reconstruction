@@ -105,7 +105,10 @@ struct OwnerAiSlotRuntime {
     u32 route_refresh_counter = 0;
     u32 script_cycle_counter = 0;
     i32 previous_script_cycle_counter = -1;
-    u32 script_enabled = 1;
+    // Original DAT_01233568: owner transport phase published after the queue
+    // maintenance pass.  Strategic retargeting is enabled only while this is
+    // 1; active queue states 0x16/0x17/0x1b publish 0x16 instead.
+    u32 transport_phase_state = 1;
     u32 last_timing_frame = 0;
     u32 build_budget = 0;
     u32 production_budget = 0;

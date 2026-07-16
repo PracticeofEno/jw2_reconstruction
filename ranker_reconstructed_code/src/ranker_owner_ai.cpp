@@ -209,7 +209,7 @@ void hydrate_owner_ai_runtime_from_snapshot(OwnerAiRuntimeState& state) {
             bytes, owner_dword(kScriptCycleCounter, owner_index));
         owner.previous_script_cycle_counter = read_owner_ai_snapshot_i32(
             bytes, owner_dword(kPreviousScriptCycleCounter, owner_index));
-        owner.script_enabled = read_owner_ai_snapshot_u32(
+        owner.transport_phase_state = read_owner_ai_snapshot_u32(
             bytes, owner_dword(kScriptEnabled, owner_index));
         owner.last_timing_frame = read_owner_ai_snapshot_u32(
             bytes, owner_dword(kLastTimingFrame, owner_index));
@@ -371,7 +371,8 @@ void overlay_owner_ai_runtime_on_snapshot(const OwnerAiRuntimeState& state,
             owner_dword(kPreviousScriptCycleCounter, owner_index),
             owner.previous_script_cycle_counter);
         write_owner_ai_snapshot_u32(bytes,
-            owner_dword(kScriptEnabled, owner_index), owner.script_enabled);
+            owner_dword(kScriptEnabled, owner_index),
+            owner.transport_phase_state);
         write_owner_ai_snapshot_u32(bytes,
             owner_dword(kLastTimingFrame, owner_index), owner.last_timing_frame);
         write_owner_ai_snapshot_u32(
@@ -1696,7 +1697,7 @@ void ResetOwnerAiSlotRuntime(OwnerAiRuntimeState& state,
     // reload must preserve the in-progress reserved-resource value.
     owner.script_cycle_counter = 0;
     owner.previous_script_cycle_counter = -1;
-    owner.script_enabled = 1;
+    owner.transport_phase_state = 1;
     owner.last_timing_frame = 0;
     owner.build_budget = 0;
     owner.production_budget = 0;

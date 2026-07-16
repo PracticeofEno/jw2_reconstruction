@@ -306,6 +306,14 @@ void RebuildUnitSpatialIndex(UnitSpatialIndex& index,
         index.sorted_units.push_back(UnitSpatialIndexEntry{unit->x, unit});
     }
 
+    // Original RebuildUnitSpatialIndex 0x0040e320 sorts build mode 0 once
+    // inside its switch arm and then falls through to the common sort below.
+    // The legacy quicksort swaps equal keys, so the apparently redundant pass
+    // is observable in radius-query tie ordering and target selection.
+    if (mode == UnitSpatialIndexBuildMode::all_active_units &&
+        index.sorted_units.size() > 1) {
+        SortUnitSpatialIndexEntriesByX(index.sorted_units);
+    }
     if (index.sorted_units.size() > 1) {
         SortUnitSpatialIndexEntriesByX(index.sorted_units);
     }

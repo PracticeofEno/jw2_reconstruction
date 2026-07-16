@@ -1,9 +1,13 @@
 #include "ranker_production_orders.h"
 #include "ranker_unit_action.h"
 #include "ranker_unit_commands.h"
+#include "ranker_unit_lifecycle.h"
+#include "ranker_unit_spatial_index.h"
 
+#include <array>
 #include <cstdlib>
 #include <iostream>
+#include <vector>
 
 namespace {
 
@@ -16,6 +20,7 @@ constexpr i32 kBaseDeltaY = -3;
 constexpr i32 kAdditionalModifier = 4;
 
 UnitMovementUnit* g_guard_target = nullptr;
+UnitMovementDefinition g_placed_definition{};
 
 void require(bool condition, const char* message) {
     if (!condition) {
@@ -46,6 +51,20 @@ bool reject_guard_range(UnitCommandContext&, UnitMovementUnit&,
 bool accept_guard_range(UnitCommandContext&, UnitMovementUnit&,
     UnitMovementUnit&) {
     return true;
+}
+
+const UnitMovementDefinition* find_placed_definition(
+    UnitLifecycleContext&, u32) {
+    return &g_placed_definition;
+}
+
+bool accept_placed_position(UnitLifecycleContext&, UnitMovementUnit&,
+    i32&, i32&) {
+    return true;
+}
+
+u32 zero_placed_random(UnitLifecycleContext&, u32) {
+    return 0;
 }
 
 u32 fixed_impact_damage(UnitEffectRuntimeState&, const UnitEffectRuntime&,
@@ -95,6 +114,90 @@ UnitMovementContext make_movement_context(
 void require_position(const UnitMovementUnit& unit, i32 expected_x, i32 expected_y,
     const char* message) {
     require(unit.x == expected_x && unit.y == expected_y, message);
+}
+
+void check_all_unit_spatial_index_double_sort() {
+    std::array<UnitMovementUnit, 8> units{};
+    std::vector<UnitMovementUnit*> active_units;
+    active_units.reserve(units.size());
+    for (u32 i = 0; i < units.size(); ++i) {
+        units[i].id = i;
+        units[i].active = true;
+        units[i].x = 77;
+        units[i].command_state = 2;
+        units[i].definition.movement_class = 0;
+        active_units.push_back(&units[i]);
+    }
+
+    UnitSpatialIndex index{};
+    InitializeUnitSpatialIndex(index, 16);
+    RebuildUnitSpatialIndex(index, active_units,
+        UnitSpatialIndexBuildMode::all_active_units, nullptr);
+    require(index.sorted_units.size() == units.size(),
+        "all-unit spatial index lost active units");
+    for (u32 i = 0; i < units.size(); ++i) {
+        require(index.sorted_units[i].unit == &units[i],
+            "all-unit spatial index did not apply the original double sort");
+    }
+
+    const std::vector<u32> command_categories(3, 0);
+    RebuildUnitSpatialIndex(index, active_units,
+        UnitSpatialIndexBuildMode::non_structure_non_terminal_command_units,
+        &command_categories);
+    constexpr std::array<u32, 8> kSingleSortOrder{5, 4, 7, 6, 1, 0, 3, 2};
+    for (u32 i = 0; i < kSingleSortOrder.size(); ++i) {
+        require(index.sorted_units[i].unit == &units[kSingleSortOrder[i]],
+            "non-all spatial index unexpectedly used the mode-0 double sort");
+    }
+}
+
+void check_queued_primary_count_uses_raw_command_value() {
+    UnitMovementUnit producer{};
+    producer.active = true;
+    producer.owner_id = 2;
+    producer.type_id = 77;
+    producer.command_state = kUnitStateCommand10;
+    producer.command_value = 45;
+    producer.queued_production_type_id = 37;
+
+    UnitMovementContext movement{};
+    movement.active_units = {&producer};
+    UnitCommandContext commands{};
+    commands.movement = &movement;
+    std::array<u32, kOwnerUnitTypeCountSlots> producer_types{};
+    producer_types.fill(kInvalidOwnerTransportQueueSlot);
+    producer_types[37] = producer.type_id;
+    producer_types[45] = producer.type_id;
+
+    require(CountOwnerQueuedPrimaryProductionUnits(
+                commands, producer.owner_id, 45, producer_types) == 1,
+        "queued primary count ignored raw +0x68 command value");
+    require(CountOwnerQueuedPrimaryProductionUnits(
+                commands, producer.owner_id, 37, producer_types) == 0,
+        "queued primary count used detached stale type cache");
+}
+
+void check_placed_unit_clears_raw_identity_flags() {
+    g_placed_definition = UnitMovementDefinition{};
+    g_placed_definition.lifecycle_class = 0;
+    g_placed_definition.movement_class = 2;
+    g_placed_definition.initial_max_health = 210;
+
+    UnitLifecycleContext lifecycle{};
+    lifecycle.callbacks.find_definition = find_placed_definition;
+    lifecycle.callbacks.find_placement = accept_placed_position;
+    lifecycle.callbacks.random_limit = zero_placed_random;
+
+    UnitMovementUnit unit{};
+    unit.scenario_string_slot = 91;
+    unit.area_marker_flags = 0x8000001fu;
+    require(InitializePlacedUnitFromMapSlot(
+                lifecycle, unit, 17, 2, 1425, 3117),
+        "placed-unit fixed-pool activation failed");
+    require(unit.scenario_string_slot == 0,
+        "placed unit retained raw +0x08 scenario string slot");
+    require(unit.area_marker_flags == 0,
+        "placed unit retained raw +0x0c lifecycle target-class bit");
 }
 
 void check_common_movement(UnitMovementContext& movement, u32 owner_id,
@@ -390,6 +493,56 @@ void check_low_id_effect_damage_is_calculated_at_impact() {
     require(wrapped_steps.active && wrapped_steps.tick == 2 &&
             wrapped_steps.frame == 0,
         "low-id impact advanced raw +0x10 instead of the original +0x0c frame");
+
+    state.events.clear();
+    state.definitions.clear();
+    UnitEffectDefinition directional_definition{};
+    directional_definition.id = 0x1cu;
+    directional_definition.active_frames = 8;
+    directional_definition.active_step_iterations = 1;
+    directional_definition.directional_active_frames = true;
+    state.definitions.push_back(directional_definition);
+
+    source.x = 100;
+    source.y = 100;
+    target.x = 1000;
+    target.y = 100;
+    UnitEffectRuntime directional{};
+    directional.active = true;
+    directional.effect_id = 0x1cu;
+    InitializeUnitEffectPathToTarget(state, directional, source, target);
+    TickUnitEffectPathActive(state, directional);
+    require(directional.active &&
+            (directional.flags & kUnitEffectFlagImpact) == 0 &&
+            directional.tick == 0,
+        "directional low-id path skipped the original +0x224 divide-by-eight");
+}
+
+void check_transport_queue_publishes_strategic_phase_gate() {
+    ProductionOrderRuntimeState production_state{};
+    UnitMovementContext movement = make_movement_context(production_state);
+    UnitCommandContext commands{};
+    commands.movement = &movement;
+
+    UnitMovementUnit unit{};
+    unit.owner_id = 2;
+    unit.type_id = 0x20;
+    unit.area_marker_flags = 1;
+    movement.active_units.push_back(&unit);
+
+    OwnerTransportQueueState queue{};
+    queue.slots[1].state = kOwnerTransportQueueStateStrategicTargetAlt;
+    const OwnerTransportQueueMaintenanceScratch strategic =
+        TickOwnerTransportQueueMaintenance(commands, queue, 2, {});
+    require(strategic.owner_phase_state ==
+            kOwnerTransportQueueStateStrategicTarget,
+        "strategic transport slot did not publish raw DAT_01233568 value 0x16");
+
+    queue.slots[1].state = kOwnerTransportQueueStateWorkTarget;
+    const OwnerTransportQueueMaintenanceScratch ordinary =
+        TickOwnerTransportQueueMaintenance(commands, queue, 2, {});
+    require(ordinary.owner_phase_state == 1,
+        "ordinary transport slot did not restore raw DAT_01233568 value 1");
 }
 
 } // namespace
@@ -433,6 +586,10 @@ int main() {
     check_attack_travel_accepts_equal_priority_replacement();
     check_reserved_tile_wait_uses_raw_13d4_frame_period();
     check_low_id_effect_damage_is_calculated_at_impact();
+    check_transport_queue_publishes_strategic_phase_gate();
+    check_all_unit_spatial_index_double_sort();
+    check_queued_primary_count_uses_raw_command_value();
+    check_placed_unit_clears_raw_identity_flags();
 
     std::cout << "MOVEMENT_MODIFIER_COMMAND_FLAG_PASS "
                  "owner0-command={6,-7} owner0-runtime={2,-3} "
@@ -442,6 +599,8 @@ int main() {
                  "reach-gate=raw-14c guard-combat-path=target "
                  "attack-travel=equal-priority-repath "
                  "reserved-wait-frame=raw-13d4 "
-                 "low-id-impact=live-damage zero-steps=wrapped-do-while\n";
+                 "low-id-impact=live-damage zero-steps=wrapped-do-while "
+                 "transport-phase=raw-33568 spatial-mode0=double-sort "
+                 "queued-primary=raw-68 placed-identity=raw-08+0c\n";
     return EXIT_SUCCESS;
 }

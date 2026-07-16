@@ -804,6 +804,11 @@ bool try_start_idle_map_effect_interaction(UnitCommandContext& context,
     // matching the original residual state on that failed claim path.
     unit.command_value =
         effect->id * static_cast<u32>(kMapEffectRawRecordSize);
+    // Raw +0x68 is the sole target/value word in the original.  Replacing a
+    // prior combat target with an OBD map-effect offset also invalidates the
+    // reconstruction's detached target pointer; otherwise state 0x06 keeps
+    // attacking or rendering a target that no longer exists in raw state.
+    unit.target = nullptr;
     unit.path_target_x = effect->x;
     unit.path_target_y = effect->y;
 
@@ -9786,7 +9791,11 @@ u32 CountOwnerQueuedPrimaryProductionUnits(
                 kUnitStateCommand10)) {
             continue;
         }
-        if (unit->queued_production_type_id == unit_type) {
+        // CountOwnerQueuedPrimaryProductionUnits 0x00445d7c compares raw
+        // unit +0x68 (the state-dependent command value) directly.  The
+        // detached queued-production cache can retain an older fixed-pool
+        // slot value and must not decide AI demand accounting.
+        if (unit->command_value == unit_type) {
             ++count;
         }
     }

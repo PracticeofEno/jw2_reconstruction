@@ -213,6 +213,12 @@ bool advance_lifecycle_command_lockout(UnitMovementUnit& unit) {
 }
 
 void reset_runtime_fields(UnitMovementUnit& unit) {
+    // InitializePlacedUnitFromMapSlot 0x004cf2b5/0x004cf2c1 writes raw +0x08
+    // and +0x0c to zero for every fixed-pool activation.  In particular,
+    // retaining +0x0c bit 31 makes a recycled unit acquire the opposite
+    // lifecycle target class.
+    unit.scenario_string_slot = 0;
+    unit.area_marker_flags = 0;
     unit.command_state = kUnitStateRuntimeIdleAcquire;
     unit.command_flags = 0;
     // InitializePlacedUnitFromMapSlot (0x004cf454) writes raw +0x5c to zero.
@@ -222,14 +228,15 @@ void reset_runtime_fields(UnitMovementUnit& unit) {
     unit.script_bit_flags = 0;
     unit.runtime_flags = 1;
     unit.draw_flags = 0;
-    unit.previous_command_state = 0;
-    unit.cell_channel_additive_frame = 0;
-    unit.cell_flag40_animation_frame = 0;
-    unit.command_entry_lockout_ticks = 0;
+    // Original 0x004cf229 does not write raw +0x74, +0x78/+0x7c, +0x98,
+    // +0xec or +0xf4.  Those words retain the prior fixed-pool generation's
+    // previous state, destination/cell-render scratch, and timer residues.
     unit.action_mode = 0;
     unit.action_mode_gate = 0;
+    unit.command_value = 0;
     unit.target = nullptr;
     unit.linked_unit = nullptr;
+    unit.destination_aux_state = 0;
     unit.movement_step_accumulator = 0;
     unit.work_timer = 0;
     // InitializePlacedUnitFromMapSlot clears raw +0x4c.  State 0x58's typed
@@ -242,7 +249,8 @@ void reset_runtime_fields(UnitMovementUnit& unit) {
     unit.distance_check_mode = 0;
     unit.placement_reset_scratch = 0;
     unit.animation_frame = 0;
-    unit.animation_timer = 0;
+    // Raw +0x48 is the dynamic string slot and is explicitly zeroed.
+    unit.string_slot = 0;
     unit.item_slots = {};
     for (std::size_t slot = 0;
          slot < unit.item_slots.size() && slot < unit.equipment_slots.size();
@@ -251,6 +259,23 @@ void reset_runtime_fields(UnitMovementUnit& unit) {
     }
     unit.status_timer = 0;
     unit.production_variant = 0;
+    // Only the state word of the pending tuple and the deferred count are
+    // cleared.  The remaining pending words, the active tuple, and all
+    // deferred tuple storage deliberately remain fixed-pool residue.
+    unit.pending_command.state = 0;
+    unit.deferred_command_count = 0;
+    unit.deferred_command_state = 0;
+    unit.ability_id = 0;
+    unit.spawn_type_id = 0;
+    unit.queued_production_type_id = 0;
+    unit.extended_production_type_index = 0;
+    unit.transfer_limit = 0;
+    unit.cargo_capacity = 0;
+    unit.harvest_tile_index = 0;
+    unit.active = true;
+    unit.attached_to_parent = false;
+    unit.under_construction = false;
+    unit.footprint_registered = false;
     unit.production_reserved = false;
 }
 
@@ -949,12 +974,9 @@ bool InitializePlacedUnitFromMapSlot(UnitLifecycleContext& context,
     unit.y = y;
     // InitializePlacedUnitFromMapSlot (original 0x004cf229) copies the
     // resolved point to raw world +0xb8/+0xbc, current-cell +0xc0/+0xc4 and
-    // anchor +0xd0/+0xd4.  It never seeds destination +0x78/+0x7c; the
-    // freshly activated record keeps those fields clear until a command
-    // supplies a destination.  Seeding them with x/y is observable during
-    // the idle frames immediately before the first berry command.
-    unit.destination_x = 0;
-    unit.destination_y = 0;
+    // anchor +0xd0/+0xd4.  It never writes destination +0x78/+0x7c, so a
+    // reused fixed-pool node retains those words.  Fresh detached records
+    // still start at their default zero values.
     unit.current_cell_x = x & ~0x1f;
     unit.current_cell_y = y & ~0x1f;
     // InitializePlacedUnitFromMapSlot (original 0x004cf229) clears the path
