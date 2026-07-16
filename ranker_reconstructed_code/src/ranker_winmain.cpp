@@ -22541,6 +22541,7 @@ void default_unit_command_dispatch_attack(UnitCommandContext& context,
         }
     };
 
+    UnitMovementUnit* const saved_action_target = unit.target;
     const UnitActionTickResult result =
         ProcessUnitActionCycle(action_context, unit);
 
@@ -22609,9 +22610,9 @@ void default_unit_command_dispatch_attack(UnitCommandContext& context,
     if (!extended_runtime_table_unit &&
         command_state == kUnitStateGuardCombatCycle) {
         // State 0x20 (0x004c9bdd) scans on carry/loss and results 0/1.
-        // At 0x004c9bff..0x004c9c2d both ordinary result values preserve the
-        // saved target unless the newly scanned candidate has strictly lower
-        // priority. Cycle completion does not make every candidate eligible.
+        // Result 0 applies the saved-target priority comparison.  Result 1
+        // keeps the scanned target directly; the completed impact may have
+        // killed the saved target during this same action tick.
         const bool lost_or_out_of_range =
             result.code == UnitActionTickCode::lost_target;
         const bool completed = result.code == UnitActionTickCode::cycle_complete;
@@ -22623,13 +22624,18 @@ void default_unit_command_dispatch_attack(UnitCommandContext& context,
             ? result.target
             : unit.target;
         UnitMovementUnit* replacement = find_valid_replacement();
-        if (lost_or_out_of_range && !result.valid_target) {
-            if (replacement == nullptr) {
+        if (completed) {
+            current = SelectGuardCombatCycleCompletedTarget(
+                current, replacement);
+        }
+        else if (lost_or_out_of_range && !result.valid_target) {
+            current = SelectGuardCombatCycleCarryTarget(
+                saved_action_target, replacement);
+            if (current == nullptr) {
                 path_point_to_state(unit.saved_path_target_x,
                     unit.saved_path_target_y, kUnitStateGuardReturnTravel, true);
                 return;
             }
-            current = replacement;
         }
         else if (replacement != nullptr &&
             (current == nullptr ||
@@ -25745,7 +25751,7 @@ void default_owner_ai_assign_transport_queue_slot(UnitCommandContext& context,
             ai_owner.neutral_route_target_point.y};
     }
     input.strategic_queue_load_percent =
-        ai_owner.route_target_score;
+        ResolveOwnerTransportStrategicQueueLoadPercent(ai_owner);
     input.owner_faction = faction;
     if (faction < kDefaultOwnerAiCarrierUnitTypes.size()) {
         input.carrier_capacity = default_owner_ai_carrier_capacity(owner,

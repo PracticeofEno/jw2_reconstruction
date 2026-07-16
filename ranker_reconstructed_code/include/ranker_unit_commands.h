@@ -861,6 +861,10 @@ u32 GetUnitCommandMetadataFlags(const UnitMovementUnit& unit,
     const std::vector<u32>* command_metadata_table = nullptr);
 void SetUnitCommandTarget(UnitMovementUnit& unit, UnitMovementUnit* target);
 void SetUnitPathTarget(UnitMovementUnit& unit, i32 x, i32 y);
+UnitMovementUnit* SelectGuardCombatCycleCarryTarget(
+    UnitMovementUnit* saved_target, UnitMovementUnit* scanned_candidate);
+UnitMovementUnit* SelectGuardCombatCycleCompletedTarget(
+    UnitMovementUnit* current_target, UnitMovementUnit* scanned_candidate);
 bool CheckPathTargetWithinAxisTile(const UnitMovementUnit& unit);
 bool CheckCurrentTargetFootprintSeparated(const UnitMovementUnit& unit);
 bool CheckCurrentTargetFootprintSeparated(UnitCommandContext& context,

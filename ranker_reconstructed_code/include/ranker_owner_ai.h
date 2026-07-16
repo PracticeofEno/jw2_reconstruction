@@ -138,6 +138,14 @@ struct OwnerAiSlotRuntime {
     u32 profile_age = 0;
 };
 
+inline u32 ResolveOwnerTransportStrategicQueueLoadPercent(
+    const OwnerAiSlotRuntime& owner) {
+    // AssignOwnerTransportQueueSlotForUnit reads DAT_01238f28.  That table is
+    // the command-71 primary-target radius (default 0x14), not
+    // DAT_01233668's command-52 route target score (default 100).
+    return owner.primary_target_radius;
+}
+
 struct OwnerAiRuntimeState;
 
 using OwnerAiMaintenanceCallback = void (*)(

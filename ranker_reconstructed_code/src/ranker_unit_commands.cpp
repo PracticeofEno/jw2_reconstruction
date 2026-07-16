@@ -916,6 +916,21 @@ bool prefer_guard_target(const UnitMovementUnit* candidate,
     return target_priority(*candidate) < target_priority(*current);
 }
 
+bool prefer_guard_pursue_target(const UnitMovementUnit* candidate,
+    const UnitMovementUnit* current) {
+    if (candidate == nullptr) {
+        return false;
+    }
+    if (current == nullptr || candidate == current) {
+        return true;
+    }
+    // GuardPursueTarget 0x004c9da0 compares the current target priority with
+    // the scanned candidate and keeps the current target only on JC.  Thus an
+    // equal-priority candidate replaces it here, unlike GuardCombatCycle
+    // state 0x20 whose comparison at 0x004c9c25 is strict.
+    return target_priority(*candidate) <= target_priority(*current);
+}
+
 bool prefer_attack_travel_target(const UnitMovementUnit* candidate,
     const UnitMovementUnit* current) {
     if (candidate == nullptr) {
@@ -1896,6 +1911,25 @@ void SetUnitPathTarget(UnitMovementUnit& unit, i32 x, i32 y) {
     unit.target = nullptr;
     unit.path_target_x = x;
     unit.path_target_y = y;
+}
+
+UnitMovementUnit* SelectGuardCombatCycleCarryTarget(
+    UnitMovementUnit* saved_target, UnitMovementUnit* scanned_candidate) {
+    // GuardCombatCycle 0x004c9be3 saves raw target +0x20 before the action
+    // helper.  On the helper's carry branch, 0x004c9bf2 scans only to decide
+    // whether a target exists; 0x004c9c55 then restores the saved target.
+    // Replacing it with the scanned unit changes the pursue path whenever an
+    // equal-priority unit is beside an temporarily invalid current target.
+    return scanned_candidate != nullptr ? saved_target : nullptr;
+}
+
+UnitMovementUnit* SelectGuardCombatCycleCompletedTarget(
+    UnitMovementUnit* current_target, UnitMovementUnit* scanned_candidate) {
+    // GuardCombatCycle result 1 leaves bVar4 false at 0x004c9c0b, so the
+    // target written by FindBestUnitTargetUsingSpatialIndex is retained
+    // without the result-0 priority comparison.  This matters when the just
+    // completed impact killed the saved target during the same action tick.
+    return scanned_candidate != nullptr ? scanned_candidate : current_target;
 }
 
 bool CheckPathTargetWithinAxisTile(const UnitMovementUnit& unit) {
@@ -4119,7 +4153,7 @@ void HandleUnitGuardPursueTarget(UnitCommandContext& context,
     // skips this tick's movement/animation advance.
     if (candidate != nullptr && candidate != current &&
         can_attack(context, unit, *candidate) &&
-        prefer_guard_target(candidate, current)) {
+        prefer_guard_pursue_target(candidate, current)) {
         SetUnitCommandTarget(unit, candidate);
         if (target_in_attack_range(context, unit, *candidate)) {
             unit.command_state = kUnitStateGuardCombatCycle;

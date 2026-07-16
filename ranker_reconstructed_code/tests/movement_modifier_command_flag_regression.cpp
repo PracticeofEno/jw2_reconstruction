@@ -1,4 +1,5 @@
 #include "ranker_production_orders.h"
+#include "ranker_owner_ai.h"
 #include "ranker_unit_action.h"
 #include "ranker_unit_commands.h"
 #include "ranker_unit_lifecycle.h"
@@ -329,6 +330,80 @@ void check_guard_pursue_range_transition_refreshes_target_path() {
     g_guard_target = nullptr;
 }
 
+void check_guard_pursue_accepts_equal_priority_replacement() {
+    const ProductionOrderRuntimeState production_state{};
+    UnitCommandContext commands{};
+    // The replacement branch commits the scanned target position before any
+    // movement step.  A null movement context keeps this regression focused
+    // on the state-0x22 equal-priority comparison proven at 0x004c9da0.
+    commands.movement = nullptr;
+    commands.production_state = &production_state;
+    commands.callbacks.find_target = find_same_guard_target;
+    commands.callbacks.can_attack_target = allow_guard_attack;
+    commands.callbacks.target_in_action_range = reject_guard_range;
+
+    UnitMovementUnit current{};
+    current.id = 0x2f00u;
+    current.x = 1000;
+    current.y = 650;
+    current.active = true;
+    current.definition.target_selection_priority = 7;
+
+    UnitMovementUnit replacement{};
+    replacement.id = 0x30d0u;
+    replacement.x = 1200;
+    replacement.y = 650;
+    replacement.active = true;
+    replacement.definition.target_selection_priority = 7;
+
+    UnitMovementUnit unit = make_unit(2, 0x20u, 0x1u);
+    unit.command_state = kUnitStateGuardPursueTarget;
+    unit.target = &current;
+    unit.command_value = current.id;
+    unit.path_target_x = current.x;
+    unit.path_target_y = current.y;
+    g_guard_target = &replacement;
+
+    HandleUnitGuardPursueTarget(commands, unit);
+
+    require(unit.target == &replacement && unit.command_value == replacement.id,
+        "guard pursue rejected an equal-priority replacement target");
+    require(unit.command_state == kUnitStateGuardPursueTarget,
+        "guard pursue replacement changed the command state");
+    require(unit.path_target_x == replacement.x &&
+            unit.path_target_y == replacement.y,
+        "guard pursue replacement retained the previous target path");
+    require_position(unit, kStartX, kStartY,
+        "guard pursue moved the old path after replacement replanning");
+    g_guard_target = nullptr;
+}
+
+void check_guard_combat_carry_restores_saved_target() {
+    UnitMovementUnit saved{};
+    saved.id = 0x2f00u;
+    UnitMovementUnit scanned{};
+    scanned.id = 0x30d0u;
+
+    require(SelectGuardCombatCycleCarryTarget(&saved, &scanned) == &saved,
+        "guard combat carry replaced the saved target with the scanned gate");
+    require(SelectGuardCombatCycleCarryTarget(&saved, nullptr) == nullptr,
+        "guard combat carry retained the saved target without a scanned gate");
+}
+
+void check_guard_combat_completion_accepts_scanned_target() {
+    UnitMovementUnit completed{};
+    completed.id = 0x2f00u;
+    UnitMovementUnit scanned{};
+    scanned.id = 0x30d0u;
+
+    require(SelectGuardCombatCycleCompletedTarget(&completed, &scanned) ==
+            &scanned,
+        "guard combat completion retained the target killed by its impact");
+    require(SelectGuardCombatCycleCompletedTarget(&completed, nullptr) ==
+            &completed,
+        "guard combat completion discarded its target without a scan result");
+}
+
 void check_attack_travel_accepts_equal_priority_replacement() {
     const ProductionOrderRuntimeState production_state{};
     UnitMovementContext movement = make_movement_context(production_state);
@@ -545,6 +620,15 @@ void check_transport_queue_publishes_strategic_phase_gate() {
         "ordinary transport slot did not restore raw DAT_01233568 value 1");
 }
 
+void check_transport_queue_uses_primary_target_radius_threshold() {
+    OwnerAiSlotRuntime owner{};
+    owner.route_target_score = 100;
+    owner.primary_target_radius = 70;
+    require(ResolveOwnerTransportStrategicQueueLoadPercent(owner) == 70,
+        "transport queue used command-52 route score instead of raw "
+        "DAT_01238f28 command-71 radius");
+}
+
 } // namespace
 
 int main() {
@@ -583,10 +667,14 @@ int main() {
     check_guard_pursue_same_target_advances_movement();
     check_action_reach_gate_uses_raw_14c_field();
     check_guard_pursue_range_transition_refreshes_target_path();
+    check_guard_pursue_accepts_equal_priority_replacement();
+    check_guard_combat_carry_restores_saved_target();
+    check_guard_combat_completion_accepts_scanned_target();
     check_attack_travel_accepts_equal_priority_replacement();
     check_reserved_tile_wait_uses_raw_13d4_frame_period();
     check_low_id_effect_damage_is_calculated_at_impact();
     check_transport_queue_publishes_strategic_phase_gate();
+    check_transport_queue_uses_primary_target_radius_threshold();
     check_all_unit_spatial_index_double_sort();
     check_queued_primary_count_uses_raw_command_value();
     check_placed_unit_clears_raw_identity_flags();
@@ -597,6 +685,9 @@ int main() {
                  "draw-feedback=raw-a4 command-bit=raw-5c "
                  "guard-same-target=movement+animation "
                  "reach-gate=raw-14c guard-combat-path=target "
+                 "guard-pursue=equal-priority-repath "
+                 "guard-combat-carry=saved-target "
+                 "guard-combat-complete=scanned-target "
                  "attack-travel=equal-priority-repath "
                  "reserved-wait-frame=raw-13d4 "
                  "low-id-impact=live-damage zero-steps=wrapped-do-while "
