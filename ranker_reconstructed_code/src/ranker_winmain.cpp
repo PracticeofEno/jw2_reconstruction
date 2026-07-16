@@ -13679,7 +13679,8 @@ UnitActionTargetValidation default_unit_action_validate_target_reach(
 
     const UnitActionDamageProfile* profile =
         default_unit_action_damage_profile(source.definition.action_profile_index);
-    if (profile != nullptr && profile->target_distance_gate == 0) {
+    if (profile != nullptr &&
+        !UnitActionProfileUsesCenterDistanceReach(*profile)) {
         const DefaultUnitActionFootprintReach reach =
             default_unit_action_footprint_reach(source, target);
         result.in_range = reach.in_range;
@@ -13732,10 +13733,9 @@ UnitEffectRuntime* start_default_unit_action_effect(UnitMovementUnit& source,
         ReleaseUnitEffectSlot(effects, *effect);
         return nullptr;
     }
-    if (target != nullptr &&
-        !default_unit_action_effect_is_direct_damage_only(effect_id)) {
-        effect->amount = default_unit_action_direct_damage(source, *target);
-    }
+    // Every low-id action initializer in 0x004ecf3f..0x004ed1cf preserves raw
+    // effect +0x14.  Damage is calculated from the live source/target pair by
+    // the active/impact handler at the moment it is applied.
     return effect;
 }
 

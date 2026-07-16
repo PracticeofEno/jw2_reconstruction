@@ -373,6 +373,13 @@ struct UnitActionDamageProfile {
     std::array<i32, 3> projectile_impact_class_percent{{100, 100, 100}};
 };
 
+inline bool UnitActionProfileUsesCenterDistanceReach(
+    const UnitActionDamageProfile& profile) {
+    // FUN_004c1f05 tests JW2_12 raw +0x14c before selecting the center-distance
+    // branch.  Raw +0x240 is the separate transient-target replacement gate.
+    return profile.render_class2_terrain_gate != 0;
+}
+
 struct UnitActionDamageProfileTable {
     std::vector<UnitActionDamageProfile> profiles;
 };

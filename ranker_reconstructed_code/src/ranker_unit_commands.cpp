@@ -390,9 +390,15 @@ void anchor_transport_xx_and_pop(UnitCommandContext& context,
 }
 
 void advance_wrapping_command_frame(UnitMovementUnit& unit) {
+    // Reserved-tile wait states read original definition +0x13d4
+    // (DAT_0087d6cc), not +0x13d8. A zero period leaves the frame untouched;
+    // otherwise the increment wraps at that exact period.
+    const u32 period = unit.definition.animation_timer_period;
+    if (period == 0) {
+        return;
+    }
     ++unit.animation_frame;
-    if (unit.definition.animation_frame_count != 0 &&
-        unit.animation_frame >= unit.definition.animation_frame_count) {
+    if (unit.animation_frame >= period) {
         unit.animation_frame = 0;
     }
 }
@@ -903,6 +909,22 @@ bool prefer_guard_target(const UnitMovementUnit* candidate,
         return true;
     }
     return target_priority(*candidate) < target_priority(*current);
+}
+
+bool prefer_attack_travel_target(const UnitMovementUnit* candidate,
+    const UnitMovementUnit* current) {
+    if (candidate == nullptr) {
+        return false;
+    }
+    if (current == nullptr || candidate == current) {
+        return true;
+    }
+    // ProcessUnitAttackTravelCommand 0x004c9309 keeps the current target only
+    // when its priority is strictly below the scanned candidate (JC).  Equal
+    // priority therefore replaces the target; using the guard-cycle's strict
+    // comparison made neutral monsters ignore a same-class unit crossing
+    // directly in front of them.
+    return target_priority(*candidate) <= target_priority(*current);
 }
 
 bool has_reserved_tile_linked_object(const UnitMovementUnit& unit) {
@@ -3618,7 +3640,12 @@ void ProcessUnitAttackTravelCommand(UnitCommandContext& context, UnitMovementUni
     UnitMovementUnit* candidate = find_target(context, unit);
     if (candidate != nullptr && candidate != original_target &&
         can_attack(context, unit, *candidate) &&
-        prefer_guard_target(candidate, original_target)) {
+        prefer_attack_travel_target(candidate, original_target)) {
+        // Save the old path before SetUnitCommandTarget: the original raw
+        // target write at 0x004c9330 changes +0x20 only, whereas the typed
+        // reconstruction also keeps +0x24/+0x28 synchronized here.
+        const i32 previous_x = unit.path_target_x;
+        const i32 previous_y = unit.path_target_y;
         SetUnitCommandTarget(unit, candidate);
         if (target_in_attack_range(context, unit, *candidate)) {
             copy_target_position_to_path(unit, *candidate);
@@ -3626,6 +3653,16 @@ void ProcessUnitAttackTravelCommand(UnitCommandContext& context, UnitMovementUni
             ProcessUnitAttackTargetCommand(context, unit);
             return;
         }
+        // Original 0x004c9330..0x004c937c copies the replacement point and
+        // replans immediately.  It advances the old path only when the scan
+        // retained the same target; falling through here left the new target
+        // paired with the previous target's path for one or more ticks.
+        path_to_target(context, unit, *candidate);
+        if (unit.path_target_x == previous_x &&
+            unit.path_target_y == previous_y) {
+            PopDeferredUnitCommandOrReturnIdle(context, unit);
+        }
+        return;
     }
 
     if (!movement_step(context, unit)) {
@@ -4071,7 +4108,12 @@ void HandleUnitGuardPursueTarget(UnitCommandContext& context,
     UnitMovementUnit& unit) {
     UnitMovementUnit* current = resolve_command_target(context, unit);
     UnitMovementUnit* candidate = find_target(context, unit);
-    if (candidate != nullptr && can_attack(context, unit, *candidate) &&
+    // Original 0x004c9d72 compares the newly scanned EDI with raw target
+    // +0x20 and jumps to the existing-target movement branch when they are
+    // equal. Treating that same unit as a replacement rebuilds the path and
+    // skips this tick's movement/animation advance.
+    if (candidate != nullptr && candidate != current &&
+        can_attack(context, unit, *candidate) &&
         prefer_guard_target(candidate, current)) {
         SetUnitCommandTarget(unit, candidate);
         if (target_in_attack_range(context, unit, *candidate)) {
@@ -4092,6 +4134,11 @@ void HandleUnitGuardPursueTarget(UnitCommandContext& context,
         return;
     }
     if (target_in_attack_range(context, unit, *current)) {
+        // Original 0x004c9e50..0x004c9e68 refreshes raw target +0x20 and
+        // path coordinates +0x24/+0x28 even when the stored target did not
+        // change. Leaving the prior path cell here desynchronizes the first
+        // guard-combat frame at an exact range boundary.
+        copy_target_position_to_path(unit, *current);
         unit.command_state = kUnitStateGuardCombatCycle;
         unit.animation_frame = 0;
         unit.command_flags &= ~8u;

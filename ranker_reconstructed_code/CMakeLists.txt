@@ -745,7 +745,9 @@ if (BUILD_TESTING)
         src/ranker_unit_commands.cpp
         src/ranker_unit_damage.cpp
         src/ranker_unit_equipment.cpp
+        src/ranker_unit_action.cpp
         src/ranker_unit_movement.cpp
+        src/ranker_gameplay_visibility.cpp
     )
     target_include_directories(movement_modifier_command_flag_regression PRIVATE
         include

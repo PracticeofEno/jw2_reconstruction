@@ -463,11 +463,28 @@ bool selected_action_effect_uses_projectile_path(
         definition.action_projectile_loop_ticks != 0;
 }
 
+bool effect_uses_tick_animation_frame(const UnitEffectRuntime& effect) {
+    if (effect.effect_id >= 0x3du) {
+        return false;
+    }
+    // The ordinary low-id projectile dispatcher uses raw +0x0c as its
+    // animation counter. Raw +0x10 is the remaining path budget while the
+    // projectile is active. The target marker and the 0x20 afterimage clone
+    // are specialized low-id paths that animate through `frame` instead.
+    return effect.effect_id != 0x27u &&
+        !(effect.effect_id == 0x20u &&
+            (effect.flags & kUnitEffectFlagAfterimageClone) != 0);
+}
+
+u32 effect_animation_frame(const UnitEffectRuntime& effect) {
+    return effect_uses_tick_animation_frame(effect) ? effect.tick : effect.frame;
+}
+
 u32 effect_frame_index(const UnitEffectRuntime& effect, std::size_t size) {
     if (size == 0) {
         return 0;
     }
-    u32 frame = effect.frame;
+    u32 frame = effect_animation_frame(effect);
     if (frame == 0xffffffffu) {
         frame = 0;
     }
@@ -476,11 +493,11 @@ u32 effect_frame_index(const UnitEffectRuntime& effect, std::size_t size) {
 
 bool effect_frame_in_range(const UnitEffectRuntime& effect, std::size_t size,
     std::size_t& index) {
-    if (effect.frame == 0xffffffffu ||
-        static_cast<std::size_t>(effect.frame) >= size) {
+    const u32 frame = effect_animation_frame(effect);
+    if (frame == 0xffffffffu || static_cast<std::size_t>(frame) >= size) {
         return false;
     }
-    index = static_cast<std::size_t>(effect.frame);
+    index = static_cast<std::size_t>(frame);
     return true;
 }
 
@@ -521,13 +538,14 @@ u32 effect_sprite_entry_for_frame(const UnitEffectRuntimeState& state,
                 effect.direction > 8) {
                 return 0;
             }
-            if (effect.frame == 0xffffffffu ||
-                static_cast<std::size_t>(effect.frame) >= frame_stride) {
+            const u32 frame = effect_animation_frame(effect);
+            if (frame == 0xffffffffu ||
+                static_cast<std::size_t>(frame) >= frame_stride) {
                 return 0;
             }
             const std::size_t index =
                 static_cast<std::size_t>(effect.direction - 1) * frame_stride +
-                static_cast<std::size_t>(effect.frame);
+                static_cast<std::size_t>(frame);
             return index < definition.active_sprite_entries.size()
                 ? definition.active_sprite_entries[index]
                 : 0;
@@ -910,13 +928,14 @@ u32 projectile_impact_entry_for_raw_image_index(
 bool draw_projectile_parity_impact_sprite(
     const UnitEffectDefinition& definition, const UnitEffectRuntime& effect,
     i32 screen_x, i32 screen_y) {
-    if (effect.frame >= definition.impact_image_indices.size()) {
+    const u32 frame = effect_animation_frame(effect);
+    if (frame >= definition.impact_image_indices.size()) {
         return true;
     }
 
     const u32 parity_class =
         static_cast<u32>(screen_x & 1) + static_cast<u32>(screen_y & 1);
-    const u32 raw_image_index = definition.impact_image_indices[effect.frame] +
+    const u32 raw_image_index = definition.impact_image_indices[frame] +
         definition.impact_class_stride_factor *
             definition.impact_class_frame_count * parity_class;
     const u32 sprite_entry =
@@ -937,7 +956,7 @@ bool draw_projectile_unit_group_impact_sprite(UnitEffectRuntimeState& state,
     }
 
     const u32 sprite_entry = GetUnitDefinitionAnimationRowFrameResourceEntry(
-        unit_type, kProjectileUnitImpactImageGroup, effect.frame,
+        unit_type, kProjectileUnitImpactImageGroup, effect_animation_frame(effect),
         kProjectileUnitImpactImageGroup, kProjectileUnitImpactImageGroup,
         kProjectileUnitImpactRowIndex);
     if (sprite_entry == kInvalidResourceEntry) {
@@ -952,10 +971,11 @@ bool draw_projectile_unit_group_impact_sprite(UnitEffectRuntimeState& state,
 bool draw_projectile_direct_active_sprite(
     const UnitEffectDefinition& definition, const UnitEffectRuntime& effect,
     i32 screen_x, i32 screen_y) {
-    if (effect.frame >= definition.active_sprite_entries.size()) {
+    const u32 frame = effect_animation_frame(effect);
+    if (frame >= definition.active_sprite_entries.size()) {
         return true;
     }
-    const u32 sprite_entry = definition.active_sprite_entries[effect.frame];
+    const u32 sprite_entry = definition.active_sprite_entries[frame];
     if (sprite_entry == 0) {
         return true;
     }
@@ -1344,8 +1364,7 @@ void append_chain_target_id(UnitEffectRuntime& effect, u32 unit_id) {
     effect.chained_target_ids.back() = unit_id;
 }
 
-u32 chain_effect_damage_amount(const UnitEffectRuntime& effect) {
-    u32 amount = effect.amount;
+u32 chain_effect_damage_amount(const UnitEffectRuntime& effect, u32 amount) {
     if (effect.effect_id != 0x17 || effect.chained_target_ids[0] == 0) {
         return amount;
     }
@@ -1785,7 +1804,9 @@ void TickUnitEffectChainImpact(UnitEffectRuntimeState& state, UnitEffectRuntime&
     append_chain_target_id(*child, current_target->id);
     child->x = effect.x;
     child->y = effect.y;
-    child->frame = effect.frame;
+    // Original 0x004ecadc copies raw +0x0c to the chained child after its
+    // path has been initialized. In the typed runtime that word is `tick`.
+    child->tick = effect.tick;
 
     effect.chain_remaining = 0;
     TickUnitEffectFrameAndApplyImpacts(state, effect);
@@ -1803,8 +1824,10 @@ void TickUnitEffectSourceMuzzleLineImpact(UnitEffectRuntimeState& state,
     const UnitEffectDefinition* definition =
         find_effect_definition(state, effect.effect_id);
     if (effect.tick == 0 && target != nullptr) {
+        const u32 amount = unit_effect_point_impact_damage(
+            state, effect, source, *target);
         append_effect_event(state, UnitEffectEventKind::impact, effect,
-            target->id, effect.amount);
+            target->id, amount);
     }
 
     ++effect.tick;
@@ -1832,8 +1855,10 @@ void TickUnitEffectInitialDamageImpact(UnitEffectRuntimeState& state,
     if (!effect.initial_impact_applied) {
         effect.initial_impact_applied = true;
         if (UnitMovementUnit* target = find_effect_unit(state, effect.target_unit_id)) {
+            const u32 amount = unit_effect_point_impact_damage(
+                state, effect, source, *target);
             append_effect_event(state, UnitEffectEventKind::impact, effect,
-                target->id, effect.amount);
+                target->id, amount);
         }
     }
     TickUnitEffectFrameAndApplyImpacts(state, effect);
@@ -1909,7 +1934,13 @@ void TickUnitEffectPathActive(UnitEffectRuntimeState& state, UnitEffectRuntime& 
         }
     }
 
-    for (u32 index = 0; index < definition->active_step_iterations; ++index) {
+    // 0x004ec798/0x004ec7cd decrements the raw +0x194 iteration counter after
+    // each unsuccessful step and loops while it is nonzero.  This is a
+    // do-while counter: a catalog value of zero wraps to 0xffffffff instead of
+    // skipping movement.  The path budget below still bounds that case and is
+    // what makes effects such as 0x2a reach a nearby target in the same tick.
+    u32 remaining_iterations = definition->active_step_iterations;
+    do {
         if (!chain_path_active && effect.range != 0) {
             --effect.range;
             if (effect.range == 0) {
@@ -1929,22 +1960,25 @@ void TickUnitEffectPathActive(UnitEffectRuntimeState& state, UnitEffectRuntime& 
         }
         AdvanceUnitEffectProjectileTowardTarget(state, effect);
         if ((effect.flags & kUnitEffectFlagImpact) != 0) {
-            // Original 0x004ec813 seeds the generic impact animation at frame
-            // one; the handful of specialized path handlers seed frame zero.
-            // This is the +0x0c animation-frame field, not the path budget.
-            effect.frame = effect_uses_zero_reach_frame(effect.effect_id) ? 0 : 1;
-            effect.tick = 0;
+            // Original 0x004ec813 seeds raw +0x0c at one. That word is `tick`
+            // in the typed runtime; raw +0x10/`frame` is not the impact
+            // animation counter and has already been cleared by reach.
+            effect.tick = effect_uses_zero_reach_frame(effect.effect_id) ? 0 : 1;
             UnitMovementUnit* target = find_effect_unit(state, effect.target_unit_id);
             if (target == nullptr ||
                 (target->runtime_flags & kUnitActionTargetTransient) != 0) {
                 finish_effect(state, effect);
                 return;
             }
+            UnitMovementUnit* source =
+                find_effect_unit(state, effect.source_unit_id);
+            const u32 base_amount = unit_effect_point_impact_damage(
+                state, effect, source, *target);
             bool finish_after_reach = false;
             if (effect.effect_id == 0x14 || effect.effect_id == 0x28 ||
                 effect.effect_id == 0x2c) {
                 const u32 lockout_ticks =
-                    std::min<u32>((effect.amount >> 2) + 1, 0x0b);
+                    std::min<u32>((base_amount >> 2) + 1, 0x0b);
                 apply_action_effect_target_lockout_if_flagged(*target, lockout_ticks);
             }
             if (effect.effect_id == 0x27) {
@@ -1954,22 +1988,30 @@ void TickUnitEffectPathActive(UnitEffectRuntimeState& state, UnitEffectRuntime& 
                     (target->runtime_flags & 0x20000u) != 0;
                 target->runtime_flags |= 0x20000u;
                 const u32 lockout_ticks =
-                    std::min<u32>(effect.amount * 2 + 1, 0xffffu);
+                    std::min<u32>(base_amount * 2 + 1, 0xffffu);
                 target->command_lockout_ticks =
                     std::max(target->command_lockout_ticks, lockout_ticks);
                 finish_after_reach = marker_already_active;
             }
-            append_effect_event(state, UnitEffectEventKind::impact, effect,
-                target->id, chain_effect_damage_amount(effect));
+            // 0x004ec3be uses the calculated action damage only to seed the
+            // target marker duration for effect 0x27.  Every other low-id
+            // reach handler applies that freshly calculated value; raw effect
+            // +0x14 is deliberately left untouched by the action initializer.
+            if (effect.effect_id != 0x27) {
+                append_effect_event(state, UnitEffectEventKind::impact, effect,
+                    target->id,
+                    chain_effect_damage_amount(effect, base_amount));
+            }
             if (finish_after_reach) {
                 finish_effect(state, effect);
             }
             return;
         }
-    }
+        --remaining_iterations;
+    } while (remaining_iterations != 0);
 
     const u32 frames = active_frame_count(definition);
-    effect.frame = frames == 0 ? 0 : (effect.frame + 1) % frames;
+    effect.tick = frames == 0 ? 0 : (effect.tick + 1) % frames;
 }
 
 bool BeginUnitEffectStartup(UnitEffectRuntimeState& state, UnitEffectRuntime& effect,
@@ -3581,15 +3623,39 @@ void TickUnitEffectFrameAndApplyImpacts(UnitEffectRuntimeState& state,
             effect.y = linked->y;
         }
     }
-    if (frame_in_list(definition->impact_frames, effect.frame)) {
-        ApplyUnitEffectAreaDamageByRenderClassMask(state, effect, effect.amount,
-            definition->action_area_damage_radius,
-            definition->action_area_target_render_class_mask);
+    const bool low_id_tick_frame = effect_uses_tick_animation_frame(effect);
+    const u32 animation_frame = effect_animation_frame(effect);
+    if (frame_in_list(definition->impact_frames, animation_frame)) {
+        if (effect.effect_id < 0x3du) {
+            UnitMovementUnit* source =
+                find_effect_unit(state, effect.source_unit_id);
+            if (UnitMovementUnit* target =
+                    find_effect_unit(state, effect.target_unit_id)) {
+                const u32 amount = unit_effect_point_impact_damage(
+                    state, effect, source, *target);
+                append_effect_event(state, UnitEffectEventKind::impact, effect,
+                    target->id, amount);
+            }
+        } else {
+            ApplyUnitEffectAreaDamageByRenderClassMask(state, effect, effect.amount,
+                definition->action_area_damage_radius,
+                definition->action_area_target_render_class_mask);
+        }
     }
     PlayUnitEffectFrameSound(state, effect);
-    ++effect.tick;
-    ++effect.frame;
-    if (effect.frame >= active_frame_count(definition)) {
+    if (low_id_tick_frame) {
+        ++effect.tick;
+    } else {
+        ++effect.tick;
+        ++effect.frame;
+    }
+    // Generic low-id impact state 0x004ecca2 compares raw +0x0c against
+    // JW2_12 +0x228. `impact_render_ticks` mirrors that field; +0x224 is the
+    // separate active-path animation period and must not extend the impact.
+    const u32 frame_limit = low_id_tick_frame
+        ? impact_render_ticks(definition)
+        : active_frame_count(definition);
+    if (effect_animation_frame(effect) >= frame_limit) {
         finish_effect(state, effect);
     }
 }
@@ -3633,8 +3699,9 @@ void PlayUnitEffectFrameSound(UnitEffectRuntimeState& state, UnitEffectRuntime& 
     if (definition == nullptr) {
         return;
     }
+    const u32 animation_frame = effect_animation_frame(effect);
     for (const auto& frame_sound : definition->frame_sound_slots) {
-        if (frame_sound.first == effect.frame) {
+        if (frame_sound.first == animation_frame) {
             // FUN_004ef2c6 reads raw +0x1c (the target/later-linked alias) for
             // every effect except 0x62.  Only 0x62 spatializes from raw
             // +0x20/+0x24, so retain both the alias identity and point.
@@ -3649,9 +3716,9 @@ void PlayUnitEffectFrameSound(UnitEffectRuntimeState& state, UnitEffectRuntime& 
             return;
         }
     }
-    if (frame_in_list(definition->sound_frames, effect.frame)) {
+    if (frame_in_list(definition->sound_frames, animation_frame)) {
         append_effect_event(state, UnitEffectEventKind::frame_sound, effect,
-            effect.linked_unit_id, effect.frame,
+            effect.linked_unit_id, animation_frame,
             effect.effect_id == 0x62
                 ? UnitEffectSoundSpatialKind::world_point
                 : UnitEffectSoundSpatialKind::linked_unit_current_tile,
