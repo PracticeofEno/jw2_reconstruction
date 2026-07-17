@@ -24479,29 +24479,6 @@ UnitMovementUnit* default_owner_ai_primary_route_target_unit(
     return route_state.targets[0].unit;
 }
 
-UnitMovementUnit* default_owner_ai_strategic_path_probe_unit(
-    UnitMovementContext& movement) {
-    auto find_by_lifecycle_class = [&movement](u32 first_class,
-        u32 second_class = 0xffffffffu) -> UnitMovementUnit* {
-        for (UnitMovementUnit* unit : movement.active_units) {
-            if (unit == nullptr) {
-                continue;
-            }
-            const u32 lifecycle_class = unit->definition.lifecycle_class;
-            if (lifecycle_class == first_class ||
-                lifecycle_class == second_class) {
-                return unit;
-            }
-        }
-        return nullptr;
-    };
-
-    if (UnitMovementUnit* unit = find_by_lifecycle_class(0)) {
-        return unit;
-    }
-    return find_by_lifecycle_class(2, 3);
-}
-
 void sync_default_owner_strategic_target_to_ai(
     u32 owner, const OwnerStrategicTargetState& target) {
     if (owner >= kOwnerAiOwnerCount) {
@@ -24540,7 +24517,13 @@ void refine_default_owner_strategic_target_path_window(
     const UnitMovementPoint preferred_raw_world{
         target.preferred_target->x, target.preferred_target->y};
     UnitMovementUnit* probe_unit =
-        default_owner_ai_strategic_path_probe_unit(*movement);
+        SelectOwnerStrategicPathProbeUnit(*movement);
+    // UpdateOwnerStrategicTargetPoint 0x00441681..0x0044170c publishes the
+    // route anchor through DAT_0162fc88/8c and the preferred hostile target
+    // through DAT_016524e8/ec.  Despite those names, RunLegacyUnitPathfinder
+    // seeds its search at DAT_016524e8/ec and treats DAT_0162fc88/8c as the
+    // goal (0x0050903e..0x0050910d), so the typed start/goal order is target
+    // -> route anchor.  DAT_0162ec78 then stores goal-predecessor -> start.
     const OwnerAiRoutePathProbeResult path_probe =
         ProbeOwnerAiRoutePath(*movement, probe_unit, preferred_raw_world,
             route_center_world);

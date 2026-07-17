@@ -1195,6 +1195,8 @@ bool SelectNearestAttackableOwnerForStrategicTarget(
     UnitMovementPoint reference_point, u32& selected_owner);
 void SetOwnerStrategicPointFromUnit(OwnerStrategicTargetState& state,
     const UnitMovementUnit& target);
+UnitMovementUnit* SelectOwnerStrategicPathProbeUnit(
+    UnitMovementContext& movement);
 bool CheckOwnerStrategicPathWindowTileOpen(const UnitMovementCell& cell);
 u32 CalculateOwnerStrategicPathWindowOpenScore(const UnitMovementMap& map,
     UnitMovementPoint start_tile, u32 max_score = 0x50,

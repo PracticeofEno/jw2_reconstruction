@@ -7506,6 +7506,33 @@ void SetOwnerStrategicPointFromUnit(OwnerStrategicTargetState& state,
     state.has_strategic_point = state.strategic_point.x != -1;
 }
 
+UnitMovementUnit* SelectOwnerStrategicPathProbeUnit(
+    UnitMovementContext& movement) {
+    auto find_by_movement_class = [&movement](u32 first_class,
+        u32 second_class = 0xffffffffu) -> UnitMovementUnit* {
+        for (UnitMovementUnit* unit : movement.active_units) {
+            if (unit == nullptr) {
+                continue;
+            }
+            const u32 movement_class = unit->definition.movement_class;
+            if (movement_class == first_class ||
+                movement_class == second_class) {
+                return unit;
+            }
+        }
+        return nullptr;
+    };
+
+    // UpdateOwnerStrategicTargetPoint 0x004415f2..0x00441681 walks the
+    // intrusive active-unit list twice.  Its definition field at
+    // DAT_0087c474 is resource offset +0x17c (movement_class): prefer class
+    // zero, then restart at the head and accept the first class two or three.
+    if (UnitMovementUnit* unit = find_by_movement_class(0)) {
+        return unit;
+    }
+    return find_by_movement_class(2, 3);
+}
+
 bool CheckOwnerStrategicPathWindowTileOpen(const UnitMovementCell& cell) {
     // CalculateOwnerStrategicPathWindowOpenScore (0x00441ab0) reads
     // DAT_00e99e74.  That grid is the source/decoration layer mirrored by
