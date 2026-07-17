@@ -799,6 +799,16 @@ if (BUILD_TESTING)
     add_test(NAME movement_modifier_command_flag_regression
         COMMAND movement_modifier_command_flag_regression
     )
+
+    add_executable(scenario_serialized_duplicate_regression
+        tests/scenario_serialized_duplicate_regression.cpp
+    )
+    target_include_directories(scenario_serialized_duplicate_regression PRIVATE
+        include
+    )
+    add_test(NAME scenario_serialized_duplicate_regression
+        COMMAND scenario_serialized_duplicate_regression
+    )
 endif()
 
 add_executable(ranker_rebuild WIN32

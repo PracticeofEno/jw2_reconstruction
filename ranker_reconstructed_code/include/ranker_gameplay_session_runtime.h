@@ -24,6 +24,14 @@ constexpr u32 kGameplaySessionSnapshotBytes = 0x374;
 constexpr u32 kGameplayStartupUnitsPerSlot = 6;
 constexpr u32 kGameplayOnlineAutoTransitionFrame = 0x708;
 
+// Record 0's serialized unit-list roots are authoritative. Spatial duplicate
+// suppression exists only for the headerless recovery scan, where membership
+// was inferred rather than read from the archive.
+constexpr bool ShouldRejectRecoveredScenarioDuplicate(
+    bool serialized_unit_roots_available, bool duplicate_map_object) {
+    return !serialized_unit_roots_available && duplicate_map_object;
+}
+
 struct GameplayLogicalSurfaceSize {
     u32 width = kGameplayDefaultScreenWidth;
     u32 height = kGameplayDefaultScreenHeight;

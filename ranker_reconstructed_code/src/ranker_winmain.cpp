@@ -26521,7 +26521,8 @@ void instantiate_default_gameplay_script_scenario_units(
                     std::abs(candidate->x - unit->x) <= 16 &&
                     std::abs(candidate->y - unit->y) <= 16;
             });
-        if (duplicate_map_object) {
+        if (ShouldRejectRecoveredScenarioDuplicate(
+                serialized_unit_roots_available, duplicate_map_object)) {
             object.unit = nullptr;
             object.object_pointer = nullptr;
             object.remove_from_triggers = true;
