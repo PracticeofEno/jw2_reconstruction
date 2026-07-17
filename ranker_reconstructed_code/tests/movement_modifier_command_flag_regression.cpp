@@ -22,6 +22,7 @@ constexpr i32 kAdditionalModifier = 4;
 
 UnitMovementUnit* g_guard_target = nullptr;
 UnitMovementDefinition g_placed_definition{};
+UnitMovementDefinition g_legacy_spawn_definition{};
 
 void require(bool condition, const char* message) {
     if (!condition) {
@@ -62,6 +63,11 @@ bool accept_guard_range(UnitCommandContext&, UnitMovementUnit&,
 const UnitMovementDefinition* find_placed_definition(
     UnitLifecycleContext&, u32) {
     return &g_placed_definition;
+}
+
+const UnitMovementDefinition* find_legacy_spawn_definition(
+    UnitCommandContext&, u32) {
+    return &g_legacy_spawn_definition;
 }
 
 bool accept_placed_position(UnitLifecycleContext&, UnitMovementUnit&,
@@ -204,6 +210,50 @@ void check_placed_unit_clears_raw_identity_flags() {
         "placed unit retained raw +0x08 scenario string slot");
     require(unit.area_marker_flags == 0,
         "placed unit retained raw +0x0c lifecycle target-class bit");
+}
+
+void check_legacy_spawn_approach_uses_live_path_target() {
+    const ProductionOrderRuntimeState production_state{};
+    UnitMovementContext movement = make_movement_context(production_state);
+    UnitCommandContext commands{};
+    commands.movement = &movement;
+    commands.callbacks.find_definition = find_legacy_spawn_definition;
+
+    g_legacy_spawn_definition = UnitMovementDefinition{};
+    g_legacy_spawn_definition.production_resource_cost = 1;
+    g_legacy_spawn_definition.interaction_bounds_width = 512;
+    g_legacy_spawn_definition.interaction_bounds_height = 512;
+
+    UnitMovementUnit worker{};
+    worker.owner_id = 2;
+    worker.command_state = kUnitStateLegacySpawnPlacementApproach;
+    worker.command_value = 0x96;
+    worker.spawn_type_id = 0x96;
+    worker.x = 100;
+    worker.y = 100;
+    worker.current_cell_x = 96;
+    worker.current_cell_y = 96;
+    worker.path_target_x = 128;
+    worker.path_target_y = 100;
+    worker.next_path_x = worker.path_target_x;
+    worker.next_path_y = worker.path_target_y;
+    worker.direction = 1;
+    worker.animation_frame = 0;
+    worker.definition.movement_class = 2;
+    worker.definition.animation_frame_count = 2;
+    worker.definition.frame_delta_by_direction[1][1] = {5, 0};
+    // Deliberately unrelated to the centered path target retained by raw
+    // +0x6c/+0x70. Recomputing from this tuple leaves state 0x25 active.
+    worker.active_command_payload = {6, 54, 1000, 1000};
+
+    HandleUnitLegacySpawnPlacementApproach(commands, worker);
+    require(worker.x == 105 && worker.y == 100,
+        "legacy placement approach did not move before its distance test");
+    require(worker.command_state == kUnitStateRuntimeIdleAcquire &&
+            worker.active_command_payload.state == 0,
+        "legacy placement approach ignored live raw +0x6c/+0x70 path target");
+    require(commands.owner_resources[worker.owner_id] == 0,
+        "failed legacy placement unexpectedly changed owner resources");
 }
 
 void check_common_movement(UnitMovementContext& movement, u32 owner_id,
@@ -815,6 +865,7 @@ int main() {
     check_all_unit_spatial_index_double_sort();
     check_queued_primary_count_uses_raw_command_value();
     check_placed_unit_clears_raw_identity_flags();
+    check_legacy_spawn_approach_uses_live_path_target();
 
     std::cout << "MOVEMENT_MODIFIER_COMMAND_FLAG_PASS "
                  "owner0-command={6,-7} owner0-runtime={2,-3} "
@@ -833,6 +884,7 @@ int main() {
                  "transport-phase=raw-33568 spatial-mode0=double-sort "
                  "conditional-target=raw-58-type-flags "
                  "area-stun-init=clear-raw-30 "
-                 "queued-primary=raw-68 placed-identity=raw-08+0c\n";
+                 "queued-primary=raw-68 placed-identity=raw-08+0c "
+                 "legacy-placement=live-raw-6c+70\n";
     return EXIT_SUCCESS;
 }

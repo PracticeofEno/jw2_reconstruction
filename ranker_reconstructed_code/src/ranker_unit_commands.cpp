@@ -4341,46 +4341,25 @@ void HandleLegacySpawnedConstructionRelease(UnitCommandContext& context,
 
 void HandleUnitLegacySpawnPlacementApproach(UnitCommandContext& context,
     UnitMovementUnit& unit) {
-    const UnitMovementDefinition& spawn_definition =
-        definition_for_type_or(context, unit.spawn_type_id, unit.definition);
-    // Original state 0x25 (FUN_004ca105) retains the same definition
-    // +0x378/+0x37c half-bounds center calculated by state 0x23.
-    const i32 placement_center_x = unit.active_command_payload.y +
-        (spawn_definition.interaction_bounds_width >> 1);
-    const i32 placement_center_y =
-        static_cast<i32>(unit.active_command_payload.value) +
-        (spawn_definition.interaction_bounds_height >> 1);
-    const auto try_complete_placement = [&]() {
-        if (CheckUnitDistanceAtLeastOneTile(
-                unit, placement_center_x, placement_center_y)) {
-            return false;
-        }
-        // Original state 0x25 (FUN_004ca105) does not re-enter state 0x23.
-        // It spends and creates directly once the worker is within one tile.
-        // The original keeps the centered command coordinates in +0x6c/+0x70,
-        // while the reconstructed path engine can repurpose path_target during
-        // travel. Rebuild the center from the stable raw command payload so the
-        // endpoint tick cannot return the worker to idle without creating.
-        const u32 type_id = unit.spawn_type_id != 0 ?
-            unit.spawn_type_id : unit.command_value;
-        if (!complete_legacy_spawn_placement(context, unit, type_id)) {
-            PopDeferredUnitCommandOrReturnIdle(context, unit);
-        }
-        return true;
-    };
-
-    // Original state 0x25 moves first and tests the placement radius on the
-    // same successful movement tick (0x004ca105..0x004ca11f).  The rebuilt
-    // movement helper can also report false on the endpoint tick, so retain
-    // the endpoint compensation by testing once after either return value.
-    const bool moved = movement_step(context, unit);
-    if (try_complete_placement()) {
+    // Original state 0x25 (FUN_004ca105) moves first. A zero movement result
+    // goes directly to the shared construction-failure tail; only a successful
+    // movement tick tests raw +0x6c/+0x70 with FUN_004cc7ed.
+    if (!movement_step(context, unit)) {
+        notify_spawn_failure(context, unit);
+        PopDeferredUnitCommandOrReturnIdle(context, unit);
         return;
     }
-    if (!moved) {
-        // FUN_004ca105's zero movement result reaches the same local row-98
-        // plus queued-slot-two failure tail before removing state 0x25.
-        notify_spawn_failure(context, unit);
+
+    if (CheckUnitDistanceAtLeastOneTile(
+            unit, unit.path_target_x, unit.path_target_y)) {
+        return;
+    }
+
+    // State 0x25 spends and creates directly once the worker is within one
+    // tile; it does not re-enter the state-0x23 centering/path setup.
+    const u32 type_id = unit.spawn_type_id != 0 ?
+        unit.spawn_type_id : unit.command_value;
+    if (!complete_legacy_spawn_placement(context, unit, type_id)) {
         PopDeferredUnitCommandOrReturnIdle(context, unit);
     }
 }
