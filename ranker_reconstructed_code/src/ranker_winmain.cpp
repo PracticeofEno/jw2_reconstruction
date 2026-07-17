@@ -25747,8 +25747,12 @@ void default_owner_ai_assign_transport_queue_slot(UnitCommandContext& context,
 void default_owner_ai_process_production_demand(
     OwnerAiRuntimeState& owner_ai, u32 owner, void*) {
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    // HandleOwnerProductionDemandAndBuildPlan (0x00443d10) gates this pass
+    // only on the reserved production cost at DAT_012393e8.  In particular,
+    // DAT_01239c08 (profile_state_flag) may be one while the plan still has
+    // to derive high-type building demand; suppressing that case leaves the
+    // faction-zero AI without its type-0x62/0x65 build requests.
     if (owner >= kOwnerAiOwnerCount || lifecycle == nullptr ||
-        owner_ai.owners[owner].profile_state_flag != 0 ||
         owner_ai.owners[owner].production_pause_flag != 0) {
         return;
     }
