@@ -1331,6 +1331,16 @@ void draw_unit_marker(UnitAnimationDrawContext& context,
 
 void draw_unit_display_name(UnitAnimationDrawContext&,
     const UnitAnimationUnit& unit, i32 center_x, i32 baseline_y) {
+    // FUN_004c50ed still enters the name tail for a nonzero empty string
+    // slot, but the original zero-length text primitive has no renderer-state
+    // side effects.  Our Win32-font bridge shares font/cursor state with the
+    // later software-composited HUD; selecting font 4 for an empty run leaves
+    // that bridge in a state that suppresses the selected/command panels.
+    // Keep the raw-slot callback gate in DrawUnitDisplayNameIfPresent while
+    // making the actual zero-length draw visually and state-wise inert.
+    if (unit.display_name.empty()) {
+        return;
+    }
     // Original unit-name tail selects font 4 for both drawing and metrics at
     // 0x004c50fc/0x004c5103 before centering the dynamic name.
     SelectTextDrawFont(4);
