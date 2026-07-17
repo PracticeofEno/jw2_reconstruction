@@ -1242,6 +1242,30 @@ bool CheckSelectedUnitProductionActionGate(GameplayProductionActionState& state,
     return true;
 }
 
+bool CheckLiveUnitProductionActionGate(GameplayProductionActionState& state,
+    const UnitMovementUnit& source, u32 selector) {
+    GameplayProductionUnitState* unit = find_unit(state, source.id);
+    if (unit == nullptr) {
+        state.last_gate_failure = GameplayProductionGateFailure::none;
+        return false;
+    }
+
+    // FUN_004db92c reads these values directly from the raw source unit when
+    // a deferred state-0x64 ability reaches its simulation-time gate.  The
+    // UI/production mirror can be older than that command tick in P2P play.
+    unit->owner = source.owner_id;
+    unit->production_bits = source.script_bit_flags;
+    unit->active_count_metric = source.status_timer;
+    unit->queued_count_metric = source.secondary_value;
+    unit->resource_metric = source.health;
+
+    const u32 saved_current = state.current_unit_offset;
+    state.current_unit_offset = source.id;
+    const bool allowed = CheckSelectedUnitProductionActionGate(state, selector);
+    state.current_unit_offset = saved_current;
+    return allowed;
+}
+
 bool CheckProductionOwnerRequirementGate(GameplayProductionActionState& state,
     u32 selector) {
     GameplayProductionUnitState* unit = selected_unit(state);

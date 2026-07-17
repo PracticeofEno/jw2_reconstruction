@@ -11,6 +11,7 @@ namespace ranker {
 
 struct UnitMovementContext;
 struct UnitMovementMap;
+struct UnitMovementUnit;
 
 // FUN_004db0f7 indexes the 32-entry handler table at 0x004db238.  These are
 // the command-panel items 0xd4..0xf3; they are not the 42-entry world-action
@@ -286,6 +287,8 @@ bool FindSelectedUnitMatchingAttachmentSlot(GameplayProductionActionState& state
 bool CheckSelectedUnitCommandBit(GameplayProductionActionState& state, u32 bit_index);
 bool CheckSelectedUnitProductionActionGate(GameplayProductionActionState& state,
     u32 selector);
+bool CheckLiveUnitProductionActionGate(GameplayProductionActionState& state,
+    const UnitMovementUnit& source, u32 selector);
 bool CheckProductionOwnerRequirementGate(GameplayProductionActionState& state,
     u32 selector);
 bool CheckPreviewProductionPlacementFootprintGateCells(

@@ -13783,11 +13783,16 @@ bool default_unit_effect_selected_production_gate(UnitEffectRuntimeState&,
     }
 
     GameplayProductionActionState& production = gameplay_production_action_state();
-    const u32 saved_current = production.current_unit_offset;
-    production.current_unit_offset = source.id;
-    const bool allowed = CheckSelectedUnitProductionActionGate(production, selector);
-    production.current_unit_offset = saved_current;
-    return allowed;
+    // FUN_004db92c evaluates the source's live raw unit fields when the
+    // deferred special-ability command reaches state 0x64.  The production
+    // mirror may still contain the values captured by the earlier UI click
+    // (or by a different present pass), which can make the sending P2P client
+    // reject a command that its peer accepts.  Refresh it at the simulation
+    // gate so script bits, level and both action resources come from this
+    // exact command tick.
+    sync_default_gameplay_production_action_units(
+        production, ui_overlay_state());
+    return CheckLiveUnitProductionActionGate(production, source, selector);
 }
 
 UnitMovementUnit* default_unit_effect_create_unit(UnitEffectRuntimeState&,
