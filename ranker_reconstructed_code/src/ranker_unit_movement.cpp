@@ -2284,14 +2284,17 @@ bool FindNearestPathableGoalTile(UnitMovementContext& context, const UnitMovemen
     i32 min_y = desired_goal_tile.y - 1;
     i32 max_x = desired_goal_tile.x + 1;
     i32 max_y = desired_goal_tile.y + 1;
-    u32 best_distance = std::numeric_limits<u32>::max();
+    // FindNearestPathableGoalTile stores its Manhattan score in a 16-bit
+    // stack slot (0x00508aa0/0x00508b60/0x00508c46/0x00508d05).  Keep the
+    // truncation and strict tie rule observable on large maps.
+    u16 best_distance = std::numeric_limits<u16>::max();
     bool found = false;
 
     auto consider_candidate = [&](i32 x, i32 y) {
         if (!check_pathfinder_tile_can_enter(context, unit, UnitMovementPoint{x, y})) {
             return;
         }
-        const u32 distance = static_cast<u32>(
+        const u16 distance = static_cast<u16>(
             std::abs(x - start_tile.x) + std::abs(y - start_tile.y));
         if (!found || distance < best_distance) {
             resolved_goal_tile = UnitMovementPoint{x, y};
@@ -2319,8 +2322,17 @@ bool FindNearestPathableGoalTile(UnitMovementContext& context, const UnitMovemen
             return true;
         }
 
-        if (min_x <= start_tile.x && start_tile.x <= max_x &&
-            min_y <= start_tile.y && start_tile.y <= max_y) {
+        // Original 0x00508d94..0x00508dbd uses JC/JA for all four bounds.
+        // This unsigned comparison is significant at the top/left map edge:
+        // desired y == 0 produces min_y == -1, which must not make a nearby
+        // start tile look enclosed.  A signed comparison stopped one ring
+        // early and selected the start tile instead of the original fallback.
+        const u32 start_x = static_cast<u32>(start_tile.x);
+        const u32 start_y = static_cast<u32>(start_tile.y);
+        if (static_cast<u32>(min_x) <= start_x &&
+            start_x <= static_cast<u32>(max_x) &&
+            static_cast<u32>(min_y) <= start_y &&
+            start_y <= static_cast<u32>(max_y)) {
             break;
         }
 
@@ -2334,10 +2346,10 @@ bool FindNearestPathableGoalTile(UnitMovementContext& context, const UnitMovemen
         if (min_y != 0) {
             --min_y;
         }
-        if (max_x < static_cast<i32>(context.map.width)) {
+        if (static_cast<u32>(max_x) < context.map.width) {
             ++max_x;
         }
-        if (max_y < static_cast<i32>(context.map.height)) {
+        if (static_cast<u32>(max_y) < context.map.height) {
             ++max_y;
         }
         if (old_min_x == min_x && old_min_y == min_y &&

@@ -34,6 +34,11 @@ bool allow_enter(UnitMovementContext&, const UnitMovementUnit&, i32, i32) {
     return true;
 }
 
+bool allow_only_top_edge_fallback(UnitMovementContext&,
+    const UnitMovementUnit&, i32 x, i32 y) {
+    return (x >> 5) == 125 && (y >> 5) == 0;
+}
+
 UnitMovementUnit* find_same_guard_target(UnitCommandContext&,
     UnitMovementUnit&) {
     return g_guard_target;
@@ -243,6 +248,23 @@ void check_draw_feedback_is_independent_from_raw_command_bits() {
             (timed.command_bits[0] & 0x80u) == 0 &&
             (timed.command_flags & 0x40u) == 0,
         "raw +0x5c timed bit did not clear independently from draw feedback");
+}
+
+void check_nearest_pathable_goal_uses_unsigned_edge_containment() {
+    UnitMovementContext movement{};
+    movement.map.width = 128;
+    movement.map.height = 128;
+    movement.map.stride_tiles = 128;
+    movement.callbacks.can_enter_cell = allow_only_top_edge_fallback;
+
+    UnitMovementUnit unit{};
+    unit.definition.movement_class = 0;
+    UnitMovementPoint resolved{};
+    require(FindNearestPathableGoalTile(movement, unit,
+                UnitMovementPoint{124, 1}, UnitMovementPoint{123, 0}, resolved),
+        "top-edge nearest-goal search stopped at signed min_y containment");
+    require(resolved.x == 125 && resolved.y == 0,
+        "top-edge nearest-goal search did not select the original expanded-ring fallback");
 }
 
 void check_action_recovery_uses_growth_variant_not_cargo() {
@@ -774,6 +796,7 @@ int main() {
         base_x, base_y,
         "owner>=8 transport dock must ignore the runtime flag");
     check_draw_feedback_is_independent_from_raw_command_bits();
+    check_nearest_pathable_goal_uses_unsigned_edge_containment();
     check_action_recovery_uses_growth_variant_not_cargo();
     check_guard_pursue_same_target_advances_movement();
     check_action_reach_gate_uses_raw_14c_field();
@@ -797,6 +820,7 @@ int main() {
                  "owner0-command={6,-7} owner0-runtime={2,-3} "
                  "owner8-command/runtime={2,-3} paths=common+dock "
                  "draw-feedback=raw-a4 command-bit=raw-5c "
+                 "nearest-goal-edge=unsigned-containment "
                  "guard-same-target=movement+animation "
                  "reach-gate=raw-14c guard-combat-path=target "
                  "guard-pursue=equal-priority-repath "
