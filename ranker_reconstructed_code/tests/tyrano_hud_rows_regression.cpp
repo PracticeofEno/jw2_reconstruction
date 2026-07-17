@@ -190,6 +190,83 @@ void verify_tyrano_rows_and_hit_bounds(
     }
 }
 
+void verify_structure_padding_exceptions(
+    u32 width, u32 height, u32 theme, u32 bucket) {
+    const std::array<i32, 8> x_640_or_other{
+        370, 403, 436, 469, 502, 535, 568, 601};
+    const std::array<i32, 8> x_800{
+        464, 505, 546, 587, 628, 669, 710, 751};
+    const auto& x = bucket == 1 ? x_800 : x_640_or_other;
+    const i32 first_y = bucket == 1 ? 513 : 407;
+    const i32 second_y = bucket == 1 ? 554 : 440;
+
+    UiOverlayState ordinary{};
+    ordinary.screen_width = width;
+    ordinary.screen_height = height;
+    ordinary.interface_theme_index = theme;
+    ordinary.selected_unit_count = 1;
+    ordinary.selected_unit_type = 0x68;
+    ordinary.selected_unit_owner = 0;
+    ordinary.local_player_slot = 0;
+    ordinary.command_options.push_back({0xf7, 0, 0, 0, 0, true});
+    ConfigureGameplayUiOverlayLayout(ordinary);
+    ResetUiOverlayCommandPanelState(ordinary);
+    BuildSingleSelectedUnitCommandPanel(ordinary);
+    require(ordinary.queued_records.size() == 9,
+        "ordinary structure must pad eight slots before its first order");
+    for (std::size_t index = 0; index < 8; ++index) {
+        const UiOverlayDrawRecord& record = ordinary.queued_records[index];
+        require(record.item_id == 0xc8 && record.flags == 2u &&
+                record.x == x[index] && record.y == first_y,
+            "ordinary structure padding differs from FUN_004e5269");
+    }
+    const UiOverlayDrawRecord& ordinary_order = record_for(ordinary, 0xf7);
+    require(ordinary_order.x == x[0] && ordinary_order.y == second_y,
+        "ordinary empty-production structure order did not begin on row two");
+
+    UiOverlayState blacksmith{};
+    blacksmith.screen_width = width;
+    blacksmith.screen_height = height;
+    blacksmith.interface_theme_index = theme;
+    blacksmith.selected_unit_count = 1;
+    blacksmith.selected_unit_type = 0x67;
+    blacksmith.selected_unit_owner = 0;
+    blacksmith.local_player_slot = 0;
+    blacksmith.command_options.push_back({0x252, 0, 0, 0, 0, true});
+    ConfigureGameplayUiOverlayLayout(blacksmith);
+    ResetUiOverlayCommandPanelState(blacksmith);
+    BuildSingleSelectedUnitCommandPanel(blacksmith);
+    require(blacksmith.queued_records.size() == 1,
+        "type-0x67 special case must not synthesize first-row padding");
+    const UiOverlayDrawRecord& equipment = record_for(blacksmith, 0x252);
+    require(equipment.x == x[0] && equipment.y == first_y,
+        "Blacksmith equipment did not retain the original first-row slot");
+
+    UiOverlayState avatar{};
+    avatar.screen_width = width;
+    avatar.screen_height = height;
+    avatar.interface_theme_index = theme;
+    avatar.selected_unit_count = 1;
+    avatar.selected_unit_type = 0x6f;
+    avatar.selected_unit_owner = 0;
+    avatar.local_player_slot = 0;
+    avatar.selected_unit_uses_avatar_production_slots = true;
+    avatar.primary_production_options.push_back({5, 1, 0, 0, 0, true});
+    avatar.command_options.push_back({0x24a, 0, 0, 0, 0, true});
+    ConfigureGameplayUiOverlayLayout(avatar);
+    ResetUiOverlayCommandPanelState(avatar);
+    BuildSingleSelectedUnitCommandPanel(avatar);
+    require(avatar.queued_records.size() == 9,
+        "avatar producer must publish its slot, c9, padding, and equipment");
+    const UiOverlayDrawRecord& avatar_slot = record_for(avatar, 5);
+    const UiOverlayDrawRecord& avatar_queue = record_for(avatar, 0xc9);
+    const UiOverlayDrawRecord& avatar_equipment = record_for(avatar, 0x24a);
+    require(avatar_slot.x == x[0] && avatar_slot.y == first_y &&
+            avatar_queue.x == x[1] && avatar_queue.y == first_y &&
+            avatar_equipment.x == x[0] && avatar_equipment.y == second_y,
+        "avatar producer row transition differs from FUN_004e3f6e");
+}
+
 void verify_top_right_hud(u32 width, u32 height, u32 theme, u32 bucket) {
     UiOverlayState state{};
     state.screen_width = width;
@@ -382,6 +459,8 @@ int main() {
         for (u32 theme = 0; theme < 4; ++theme) {
             verify_tyrano_rows_and_hit_bounds(
                 widths[bucket], heights[bucket], theme, bucket);
+            verify_structure_padding_exceptions(
+                widths[bucket], heights[bucket], theme, bucket);
             verify_top_right_hud(
                 widths[bucket], heights[bucket], theme, bucket);
             verify_selected_construction_info(
@@ -391,6 +470,7 @@ int main() {
         }
     }
     std::cout << "TYRANO_HUD_ROWS_PASS buckets=3 themes=4 draw_hit=exact "
-                 "font=1 construction_info=exact production_hidden\n";
+                 "padding_exceptions=exact font=1 construction_info=exact "
+                 "production_hidden\n";
     return EXIT_SUCCESS;
 }
