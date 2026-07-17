@@ -4115,6 +4115,13 @@ bool DispatchSelectedUnitActionEffect(UnitEffectRuntimeState& state,
     // important: their tick handlers assume that the linked unit has already
     // been created or moved back from the lifecycle list.
     switch (action_id) {
+    case 5:
+        // Initializer-table entry 0x004efd25 clears raw effect +0x30 before
+        // tail-jumping to the common initializer.  This is the lifetime
+        // counter consumed by TickUnitEffectAreaStunFrames; retaining a
+        // recycled slot's value can make the action expire immediately.
+        effect.abs_delta_x = 0;
+        break;
     case 8: {
         // Fake (0x004efd35) creates a temporary clone of the selected target,
         // but gives it the caster's owner and a deliberately reduced runtime

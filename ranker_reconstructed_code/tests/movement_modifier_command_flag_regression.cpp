@@ -681,6 +681,35 @@ void check_transport_queue_uses_primary_target_radius_threshold() {
         "DAT_01238f28 command-71 radius");
 }
 
+void check_area_stun_initializer_clears_recycled_lifetime() {
+    UnitEffectRuntimeState state{};
+    UnitEffectDefinition definition{};
+    definition.id = 0x3du + 5u;
+    definition.damage_amount = 12;
+    state.definitions.push_back(definition);
+
+    UnitMovementUnit source{};
+    source.id = 0x1d0u;
+    source.owner_id = 1;
+    source.health = 100;
+    source.max_health = 100;
+
+    UnitEffectRuntime recycled{};
+    recycled.abs_delta_x = 0xdeadbeefu;
+    recycled.abs_delta_y = 0x12345678u;
+
+    require(DispatchSelectedUnitActionEffect(
+                state, recycled, 5, source, nullptr, 640, 704),
+        "area-stun selected action did not initialize");
+    require(recycled.effect_id == 0x42u &&
+            recycled.flags == kUnitEffectFlagImpact &&
+            recycled.x == 640 && recycled.y == 704,
+        "area-stun selected action did not use the common point initializer");
+    require(recycled.abs_delta_x == 0 &&
+            recycled.abs_delta_y == 0x12345678u,
+        "area-stun initializer did not clear only raw effect +0x30");
+}
+
 } // namespace
 
 int main() {
@@ -729,6 +758,7 @@ int main() {
     check_low_id_effect_damage_is_calculated_at_impact();
     check_transport_queue_publishes_strategic_phase_gate();
     check_transport_queue_uses_primary_target_radius_threshold();
+    check_area_stun_initializer_clears_recycled_lifetime();
     check_all_unit_spatial_index_double_sort();
     check_queued_primary_count_uses_raw_command_value();
     check_placed_unit_clears_raw_identity_flags();
@@ -747,6 +777,7 @@ int main() {
                  "reserved-wait-frame=raw-13d4 "
                  "low-id-impact=live-damage zero-steps=wrapped-do-while "
                  "transport-phase=raw-33568 spatial-mode0=double-sort "
+                 "area-stun-init=clear-raw-30 "
                  "queued-primary=raw-68 placed-identity=raw-08+0c\n";
     return EXIT_SUCCESS;
 }
