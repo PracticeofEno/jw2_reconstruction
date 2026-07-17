@@ -681,6 +681,35 @@ void check_transport_queue_uses_primary_target_radius_threshold() {
         "DAT_01238f28 command-71 radius");
 }
 
+void check_conditional_target_point_uses_raw_type_flags() {
+    UnitMovementUnit target{};
+    target.id = 0x1d0u;
+
+    UnitMovementUnit type_enabled{};
+    type_enabled.type_flags = 0x20u;
+    type_enabled.command_flags = 0;
+    require(SetOrQueueUnitConditionalTargetPointCommand05(
+                &type_enabled, &target, 3449, 2335, false),
+        "raw +0x58 type flag did not accept conditional target command");
+    require(type_enabled.pending_command.state == 5u &&
+            static_cast<u32>(type_enabled.pending_command.x) == target.id &&
+            type_enabled.pending_command.y == 3449 &&
+            type_enabled.pending_command.value == 2335u,
+        "raw +0x58 type flag did not publish the original state-5 tuple");
+
+    UnitMovementUnit command_only{};
+    command_only.type_flags = 0;
+    command_only.command_flags = 0x20u;
+    require(SetOrQueueUnitConditionalTargetPointCommand05(
+                &command_only, &target, 3449, 2335, false),
+        "state-4 fallback rejected a command-flags-only unit");
+    require(command_only.pending_command.state == 4u &&
+            command_only.pending_command.x == 0 &&
+            command_only.pending_command.y == 3449 &&
+            command_only.pending_command.value == 2335u,
+        "raw +0x9c command flag incorrectly selected state 5");
+}
+
 void check_area_stun_initializer_clears_recycled_lifetime() {
     UnitEffectRuntimeState state{};
     UnitEffectDefinition definition{};
@@ -758,6 +787,7 @@ int main() {
     check_low_id_effect_damage_is_calculated_at_impact();
     check_transport_queue_publishes_strategic_phase_gate();
     check_transport_queue_uses_primary_target_radius_threshold();
+    check_conditional_target_point_uses_raw_type_flags();
     check_area_stun_initializer_clears_recycled_lifetime();
     check_all_unit_spatial_index_double_sort();
     check_queued_primary_count_uses_raw_command_value();
@@ -777,6 +807,7 @@ int main() {
                  "reserved-wait-frame=raw-13d4 "
                  "low-id-impact=live-damage zero-steps=wrapped-do-while "
                  "transport-phase=raw-33568 spatial-mode0=double-sort "
+                 "conditional-target=raw-58-type-flags "
                  "area-stun-init=clear-raw-30 "
                  "queued-primary=raw-68 placed-identity=raw-08+0c\n";
     return EXIT_SUCCESS;

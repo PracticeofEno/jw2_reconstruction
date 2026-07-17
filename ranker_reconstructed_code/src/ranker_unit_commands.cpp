@@ -2376,12 +2376,14 @@ bool SetOrQueueUnitTargetPointCommand04(UnitMovementUnit* unit,
 
 bool SetOrQueueUnitConditionalTargetPointCommand05(UnitMovementUnit* unit,
     UnitMovementUnit* target_unit, i32 x, i32 y, bool enqueue_deferred) {
-    constexpr u32 kRequiresState05CommandFlag = 0x20;
+    constexpr u32 kRequiresState05TypeFlag = 0x20;
 
     if (unit == nullptr) {
         return false;
     }
-    if ((unit->command_flags & kRequiresState05CommandFlag) == 0) {
+    // Original 0x0040c35b reads raw unit +0x58.  That is the immutable
+    // type/capability word, not the mutable command flags at raw +0x9c.
+    if ((unit->type_flags & kRequiresState05TypeFlag) == 0) {
         return SetOrQueueUnitTargetPointCommand04(
             unit, nullptr, x, y, enqueue_deferred);
     }
