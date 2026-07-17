@@ -816,7 +816,17 @@ try {
     $collectorSelectionErrors = @()
     foreach ($candidate in $collectors) {
         try {
-            $selected = Select-Unit (Get-RebuildSnapshot) $candidate
+            $candidateSelected = Select-Unit (Get-RebuildSnapshot) $candidate
+            $candidateSelected = Wait-HotItemSnapshot $candidateSelected 183
+            if ($null -eq (Get-HotRegion $candidateSelected 183)) {
+                $collectorSelectionErrors += [ordered]@{
+                    slot = [int]$candidate.slot
+                    id = [int]$candidate.id
+                    error = 'enabled HUD item 183 was not published for this survivor'
+                }
+                continue
+            }
+            $selected = $candidateSelected
             $collector = $candidate
             break
         }
