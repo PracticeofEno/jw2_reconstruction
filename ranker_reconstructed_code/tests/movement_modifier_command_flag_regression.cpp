@@ -373,17 +373,19 @@ void check_guard_pursue_same_target_advances_movement() {
     g_guard_target = nullptr;
 }
 
-void check_action_reach_gate_uses_raw_14c_field() {
+void check_action_geometry_gate_uses_raw_14c_for_reach_and_retarget() {
     UnitActionDamageProfile profile{};
     profile.render_class2_terrain_gate = 1;
-    profile.target_distance_gate = 0;
     require(UnitActionProfileUsesCenterDistanceReach(profile),
-        "raw +0x14c distance-reach gate was confused with raw +0x240");
+        "raw +0x14c did not select center-distance reach");
+    require(UnitActionProfileAllowsTransientTargetReplacement(profile),
+        "raw +0x14c did not allow immediate transient-target replacement");
 
     profile.render_class2_terrain_gate = 0;
-    profile.target_distance_gate = 1;
     require(!UnitActionProfileUsesCenterDistanceReach(profile),
-        "raw +0x240 replacement gate incorrectly selected center distance");
+        "zero raw +0x14c did not select footprint reach");
+    require(!UnitActionProfileAllowsTransientTargetReplacement(profile),
+        "zero raw +0x14c incorrectly allowed transient-target replacement");
 }
 
 void check_guard_pursue_range_transition_refreshes_target_path() {
@@ -849,7 +851,7 @@ int main() {
     check_nearest_pathable_goal_uses_unsigned_edge_containment();
     check_action_recovery_uses_growth_variant_not_cargo();
     check_guard_pursue_same_target_advances_movement();
-    check_action_reach_gate_uses_raw_14c_field();
+    check_action_geometry_gate_uses_raw_14c_for_reach_and_retarget();
     check_guard_pursue_range_transition_refreshes_target_path();
     check_guard_pursue_accepts_equal_priority_replacement();
     check_guard_combat_carry_restores_saved_target();
@@ -873,7 +875,7 @@ int main() {
                  "draw-feedback=raw-a4 command-bit=raw-5c "
                  "nearest-goal-edge=unsigned-containment "
                  "guard-same-target=movement+animation "
-                 "reach-gate=raw-14c guard-combat-path=target "
+                 "reach+retarget-gate=raw-14c guard-combat-path=target "
                  "guard-pursue=equal-priority-repath "
                  "guard-combat-carry=saved-target "
                  "guard-combat-complete=equal-priority-replace "

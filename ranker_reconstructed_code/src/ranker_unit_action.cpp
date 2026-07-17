@@ -1624,7 +1624,7 @@ UnitActionTickResult ProcessUnitActionCycle(UnitActionContext& context,
     if ((source.command_flags & kUnitActionImpactApplied) == 0 &&
         CheckStoredActionTargetTransientFlag(source)) {
         // At 0x004c1d22 the original skips straight to the frame advance when
-        // the target profile's +0x240 replacement gate is zero.  Facing,
+        // the target profile's raw +0x14c gate is zero.  Facing,
         // sound, and impact are intentionally omitted for that frame.
         if (!can_replace_transient_target(context, source, *target)) {
             skip_active_frame_body = true;

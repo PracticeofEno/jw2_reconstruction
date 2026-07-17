@@ -367,7 +367,6 @@ using UnitVariantRandomLimitCallback = u32 (*)(u32 limit);
 struct UnitActionDamageProfile {
     u32 allowed_target_render_class_mask = 0xffffffffu;
     u32 render_class2_terrain_gate = 1;
-    u32 target_distance_gate = 0;
     bool area_damage_allows_related_targets = false;
     std::array<i32, 5> render_class_percent{{100, 100, 100, 100, 100}};
     std::array<i32, 3> projectile_impact_class_percent{{100, 100, 100}};
@@ -376,7 +375,15 @@ struct UnitActionDamageProfile {
 inline bool UnitActionProfileUsesCenterDistanceReach(
     const UnitActionDamageProfile& profile) {
     // FUN_004c1f05 tests JW2_12 raw +0x14c before selecting the center-distance
-    // branch.  Raw +0x240 is the separate transient-target replacement gate.
+    // branch.
+    return profile.render_class2_terrain_gate != 0;
+}
+
+inline bool UnitActionProfileAllowsTransientTargetReplacement(
+    const UnitActionDamageProfile& profile) {
+    // FUN_004c1d47 addresses DAT_011d89f4 through the JW2_12 row-offset table.
+    // The row storage starts at DAT_011d88a8, so this is the same raw +0x14c
+    // field used by FUN_004c1f05, not raw +0x240 relative to the row.
     return profile.render_class2_terrain_gate != 0;
 }
 

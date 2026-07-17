@@ -766,7 +766,6 @@ constexpr u32 kJw211EffectMaxImpactFrameEntries = 64;
 constexpr u32 kAuxiliaryEffectMaxImageIndexEntries = 128;
 constexpr std::size_t kJw212ActionClass2TerrainGateOffset = 0x14c;
 constexpr std::size_t kJw212ActionTargetRenderClassMaskOffset = 0x154;
-constexpr std::size_t kJw212ActionTargetDistanceGateOffset = 0x240;
 constexpr std::size_t kJw212AreaDamageOwnerRelationModeOffset = 0xac0;
 constexpr std::array<std::size_t, 5> kJw212ActionDamageRenderClassOffsets{{
     0x170, 0x174, 0x178, 0x17c, 0x180,
@@ -13580,7 +13579,8 @@ bool default_unit_action_can_replace_transient_target(UnitActionContext&,
     const UnitMovementUnit& source, const UnitMovementUnit& target) {
     const UnitActionDamageProfile* profile =
         default_unit_action_damage_profile(default_unit_action_effect_id(source, &target));
-    return profile != nullptr && profile->target_distance_gate != 0;
+    return profile != nullptr &&
+        UnitActionProfileAllowsTransientTargetReplacement(*profile);
 }
 
 bool default_unit_action_effect_is_direct_damage_only(u32 effect_id) {
@@ -17005,9 +17005,6 @@ UnitActionDamageProfile default_unit_action_damage_profile_from_catalog_record(
     profile.allowed_target_render_class_mask = read_runtime_catalog_u32(
         record.definition_bytes, kJw212ActionTargetRenderClassMaskOffset,
         profile.allowed_target_render_class_mask);
-    profile.target_distance_gate = read_runtime_catalog_u32(
-        record.definition_bytes, kJw212ActionTargetDistanceGateOffset,
-        profile.target_distance_gate);
     profile.area_damage_allows_related_targets = read_runtime_catalog_u32(
         record.definition_bytes, kJw212AreaDamageOwnerRelationModeOffset, 0) == 1;
     for (std::size_t index = 0;
