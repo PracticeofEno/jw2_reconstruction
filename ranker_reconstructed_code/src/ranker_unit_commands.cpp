@@ -9982,11 +9982,12 @@ OwnerProductionBuildActionResult SelectOwnerProductionDependencyBuildAction(
 
 void QueueOwnerProductionLinkCommand(UnitMovementUnit& unit,
     UnitMovementUnit& target) {
-    SetUnitCommandTarget(unit, &target);
-    unit.active_command_payload.state = 0x0b;
-    unit.active_command_payload.x = static_cast<i32>(target.id);
-    unit.active_command_payload.y = target.x;
-    unit.active_command_payload.value = static_cast<u32>(target.y);
+    // HandleOwnerProductionDemandAndBuildPlan 0x0044488f/0x004448b0 calls
+    // SetOrQueueUnitTargetCommand0b with enqueue=false.  That wrapper writes
+    // the pending command tuple at raw +0x84; the next unit-runtime pass then
+    // promotes it and enters the linked-release states.  Writing the active
+    // tuple directly leaves an idle unit with no pending command to dispatch.
+    SetOrQueueUnitTargetCommand0b(&unit, &target, false);
 }
 
 bool LinkOwnerProductionPairUnits(

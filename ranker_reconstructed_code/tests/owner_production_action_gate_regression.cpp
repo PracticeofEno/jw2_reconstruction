@@ -103,6 +103,44 @@ void require_original_special_pair_dependency_source(u32 demanded_unit_type,
         "special twin pairing used the demanded twin's prerequisite row");
 }
 
+void require_special_pair_uses_pending_command_slot() {
+    UnitMovementUnit first{};
+    first.id = 109;
+    first.owner_id = 2;
+    first.type_id = 0x22;
+    first.command_state = kUnitStateRuntimeIdleAcquire;
+    first.type_flags = 0x800u;
+
+    UnitMovementUnit second{};
+    second.id = 115;
+    second.owner_id = 2;
+    second.type_id = 0x22;
+    second.command_state = kUnitStateRuntimeIdleAcquire;
+    second.type_flags = 0x800u;
+
+    UnitMovementContext movement{};
+    movement.active_units = {&first, &second};
+    UnitCommandContext context{};
+    context.movement = &movement;
+
+    require(RunOwnerProductionSpecialPairing(context, 2, 0x23),
+        "ready pair was not linked");
+    require(first.pending_command.state == 0x0b &&
+            second.pending_command.state == 0x0b,
+        "special pair command bypassed the pending command slot");
+    require(first.active_command_payload.state == 0 &&
+            second.active_command_payload.state == 0,
+        "special pair command was written directly to the active payload");
+
+    HandlePendingUnitCommandDispatch(context, first);
+    HandlePendingUnitCommandDispatch(context, second);
+    require(first.command_state == kUnitStateLinkedUnitReleaseStart &&
+            second.command_state == kUnitStateLinkedUnitReleaseStart,
+        "pending pair command did not enter the linked-release runtime state");
+    require(first.target == &second && second.target == &first,
+        "pending pair command did not resolve reciprocal targets");
+}
+
 } // namespace
 
 int main() {
@@ -130,9 +168,11 @@ int main() {
     // prerequisite rows for types 0x25 and 0x27, respectively.
     require_original_special_pair_dependency_source(0x26, 0x25, 0x25);
     require_original_special_pair_dependency_source(0x2d, 0x27, 0x27);
+    require_special_pair_uses_pending_command_slot();
 
     std::cout << "OWNER_PRODUCTION_ACTION_GATE_PASS "
                  "linked_target=allowed raw30_nonzero=blocked "
-                 "special_pair_prerequisites=paired_unit_rows\n";
+                 "special_pair_prerequisites=paired_unit_rows "
+                 "special_pair_command=pending_dispatch\n";
     return EXIT_SUCCESS;
 }
