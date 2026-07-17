@@ -1796,8 +1796,13 @@ u32 CalculateOrder2bAdjustedUnitValue(const ProductionOrderRuntimeState& product
 
 u32 CalculateUnitActionRecoveryReductionWithProductionEffect05(
     const ProductionOrderRuntimeState& production_state, const UnitMovementUnit& unit) {
+    // CalculateUnitActionRecoveryReductionWithProductionEffect05
+    // (0x0040a830) multiplies the base by original raw unit +0x54.  That
+    // field is the unit's production/growth variant; cargo lives at +0x4c.
+    // Using cargo made a ranked combat unit's recovery one tick too long and
+    // incorrectly tied attack speed to carried resources.
     const u64 scaled = static_cast<u64>(unit.definition.action_recovery_base_ticks) *
-        unit.cargo_amount * unit.definition.action_recovery_scale_percent / 100;
+        unit.production_variant * unit.definition.action_recovery_scale_percent / 100;
     const u32 base = scaled > 0xffffffffu ? 0xffffffffu : static_cast<u32>(scaled);
     return AddSignedUnitStatDelta(base,
         GetUnitProductionCompletionEffect(production_state, unit,

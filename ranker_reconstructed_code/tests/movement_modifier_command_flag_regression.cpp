@@ -245,6 +245,25 @@ void check_draw_feedback_is_independent_from_raw_command_bits() {
         "raw +0x5c timed bit did not clear independently from draw feedback");
 }
 
+void check_action_recovery_uses_growth_variant_not_cargo() {
+    ProductionOrderRuntimeState production{};
+    UnitMovementUnit unit{};
+    unit.type_id = 33;
+    unit.owner_id = 2;
+    unit.production_variant = 2;
+    unit.cargo_amount = 9;
+    unit.definition.action_recovery_base_ticks = 14;
+    unit.definition.action_recovery_scale_percent = 5;
+    production.completion_effect_totals[kProductionEffectSlotUnitScaledValue]
+        [unit.owner_id][unit.type_id] = 1;
+
+    // Original 0x0040a830: floor(14 * raw[+0x54](2) * 5 / 100) + 1 = 2.
+    // Recovery is therefore 14 - 2 = 12; raw +0x4c cargo is irrelevant.
+    require(CalculateUnitActionRecoveryTicksWithProductionAndEquipmentEffects(
+                production, unit, nullptr) == 12,
+        "action recovery used raw +0x4c cargo instead of +0x54 growth variant");
+}
+
 void check_guard_pursue_same_target_advances_movement() {
     const ProductionOrderRuntimeState production_state{};
     UnitMovementContext movement = make_movement_context(production_state);
@@ -390,7 +409,7 @@ void check_guard_combat_carry_restores_saved_target() {
         "guard combat carry retained the saved target without a scanned gate");
 }
 
-void check_guard_combat_completion_uses_strict_priority() {
+void check_guard_combat_completion_replaces_equal_priority() {
     UnitMovementUnit completed{};
     completed.id = 0x2f00u;
     completed.definition.target_selection_priority = 7;
@@ -399,8 +418,8 @@ void check_guard_combat_completion_uses_strict_priority() {
     scanned.definition.target_selection_priority = 7;
 
     require(SelectGuardCombatCycleCompletedTarget(&completed, &scanned) ==
-            &completed,
-        "guard combat completion replaced its target at equal priority");
+            &scanned,
+        "guard combat completion retained its target at equal priority");
     scanned.definition.target_selection_priority = 8;
     require(SelectGuardCombatCycleCompletedTarget(&completed, &scanned) ==
             &completed,
@@ -697,12 +716,13 @@ int main() {
         base_x, base_y,
         "owner>=8 transport dock must ignore the runtime flag");
     check_draw_feedback_is_independent_from_raw_command_bits();
+    check_action_recovery_uses_growth_variant_not_cargo();
     check_guard_pursue_same_target_advances_movement();
     check_action_reach_gate_uses_raw_14c_field();
     check_guard_pursue_range_transition_refreshes_target_path();
     check_guard_pursue_accepts_equal_priority_replacement();
     check_guard_combat_carry_restores_saved_target();
-    check_guard_combat_completion_uses_strict_priority();
+    check_guard_combat_completion_replaces_equal_priority();
     check_damage_reaction_guard_jump_table_mapping();
     check_attack_travel_accepts_equal_priority_replacement();
     check_reserved_tile_wait_uses_raw_13d4_frame_period();
@@ -721,7 +741,7 @@ int main() {
                  "reach-gate=raw-14c guard-combat-path=target "
                  "guard-pursue=equal-priority-repath "
                  "guard-combat-carry=saved-target "
-                 "guard-combat-complete=strict-priority "
+                 "guard-combat-complete=equal-priority-replace "
                  "damage-reaction-guard-table=1f/20/21/22/23 "
                  "attack-travel=equal-priority-repath "
                  "reserved-wait-frame=raw-13d4 "

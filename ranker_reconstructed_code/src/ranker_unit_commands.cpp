@@ -1955,16 +1955,18 @@ UnitMovementUnit* SelectGuardCombatCycleCompletedTarget(
     UnitMovementUnit* current_target, UnitMovementUnit* scanned_candidate) {
     // GuardCombatCycle 0x004c9bea accepts action results 0 and 1 through the
     // same JBE branch.  After the spatial scan, 0x004c9bff..0x004c9c2d keeps
-    // the saved target unless the scanned candidate's raw definition +0x1c0
-    // priority is strictly lower.  The decompiler invents a result-zero
-    // predicate here from stale flags, but the assembly has no such test.
+    // the saved target only when its raw definition +0x1c0 priority is
+    // strictly lower than the scanned candidate (CMP current,candidate; JC).
+    // Equal priority therefore replaces the saved target.  The decompiler
+    // invents a result-zero predicate here from stale flags, but the assembly
+    // has no such test.
     if (scanned_candidate == nullptr) {
         return current_target;
     }
     if (current_target == nullptr || scanned_candidate == current_target) {
         return scanned_candidate;
     }
-    return target_priority(*scanned_candidate) < target_priority(*current_target)
+    return target_priority(*scanned_candidate) <= target_priority(*current_target)
         ? scanned_candidate
         : current_target;
 }
