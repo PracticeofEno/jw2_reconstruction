@@ -1,5 +1,6 @@
 #include "ranker_ui_overlay.h"
 
+#include <array>
 #include <cstdlib>
 #include <iostream>
 
@@ -12,26 +13,34 @@ void expect(bool condition, const char* message) {
     }
 }
 
-void test_active_production_uses_raw_command_value() {
-    // Captured Tyrano Nest worker production state: raw +0x68 is 0x20 while
-    // its separately reconstructed target pointer is null.
-    constexpr u32 requested_unit_type = 0x20u;
+void test_all_tribe_worker_production_uses_raw_command_value() {
+    // Live original/reconstruction captures publish one 0x1aa record per
+    // tribe with aux 0x00/0x10/0x20/0x30.  The separately reconstructed
+    // target pointer is not the icon payload; raw unit +0x68 is.
+    constexpr std::array<u32, 4> requested_unit_types{
+        0x00u, 0x10u, 0x20u, 0x30u};
+    for (const u32 requested_unit_type : requested_unit_types) {
+        const u32 payload = ranker::ResolveUiOverlayActiveQueueRecordPayload(
+            requested_unit_type, 0u);
+        expect(payload == requested_unit_type,
+            "null typed target replaced a tribe worker queue payload");
+        expect(ranker::ResolveUiOverlayActiveQueueRecordPayload(
+                   requested_unit_type, 0x13579u) == requested_unit_type,
+            "typed target id replaced the original raw +0x68 icon payload");
 
-    constexpr u32 payload = ranker::ResolveUiOverlayActiveQueueRecordPayload(
-        requested_unit_type, 0u);
-    expect(payload == requested_unit_type,
-        "null typed target selected Buildman frame zero instead of requested unit");
-    expect(ranker::ResolveUiOverlayActiveQueueRecordPayload(
-               requested_unit_type, 0x13579u) == requested_unit_type,
-        "typed target id replaced the original raw +0x68 icon payload");
+        const ranker::UiOverlayIconBlitRequest request =
+            ranker::ResolveUiOverlayIndexedQueueIconRequest(0x1aau, payload);
+        expect(request.kind == ranker::UiOverlayIconBlitKind::base,
+            "0x1aa active production did not select the base unit icon table");
+        expect(request.item_id == requested_unit_type,
+            "tribe worker production changed the queue icon payload");
+    }
 
-    constexpr ranker::UiOverlayIconBlitRequest request =
-        ranker::ResolveUiOverlayIndexedQueueIconRequest(0x1aau, payload);
-    expect(request.kind == ranker::UiOverlayIconBlitKind::base,
-        "0x1aa active production did not select the base unit icon table");
-    expect(request.item_id == requested_unit_type,
-        "Tyrano worker production did not dispatch icon request item_id 0x20");
-    expect(request.item_id != 0u,
+    constexpr u32 tyrano_worker_type = 0x20u;
+    constexpr ranker::UiOverlayIconBlitRequest tyrano_request =
+        ranker::ResolveUiOverlayIndexedQueueIconRequest(
+            0x1aau, tyrano_worker_type);
+    expect(tyrano_request.item_id != 0u,
         "Tyrano worker production regressed to Buildman frame zero");
 }
 
@@ -112,11 +121,11 @@ void test_original_queue_publication_gate() {
 } // namespace
 
 int main() {
-    test_active_production_uses_raw_command_value();
+    test_all_tribe_worker_production_uses_raw_command_value();
     test_other_active_queue_kinds_share_the_raw_union();
     test_exact_active_and_deferred_state_dispatch();
     test_original_queue_publication_gate();
-    std::cout << "ACTIVE_QUEUE_ICON_PAYLOAD_PASS tyrano-worker=0x20 "
+    std::cout << "ACTIVE_QUEUE_ICON_PAYLOAD_PASS tribe-workers=0/16/32/48 "
                  "source=raw+0x68 tables=base+production+equipment "
                  "state-map=exact gate=single-owned-or-observer\n";
     return 0;
