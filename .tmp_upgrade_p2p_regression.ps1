@@ -1,6 +1,7 @@
 param(
     [string]$WorkingDirectory = 'RankerOCPV_Win',
     [string]$OutputDirectory = '.tmp_upgrade_p2p_run_current',
+    [ValidateRange(0, 3)]
     [int]$TribeIndex = 2,
     [int]$TimeoutSeconds = 180,
     [switch]$KeepProcesses
@@ -45,6 +46,15 @@ $loopRva = Hex-ToInt64 $layout.loop_rva
 $movementOffset = Hex-ToInt64 $layout.movement_offset
 $lifecycleOffset = Hex-ToInt64 $layout.lifecycle_offset
 $visibilityOffset = Hex-ToInt64 $layout.visibility_offset
+$producerTypes = @(96, 112, 128, 144)
+# Pick one starting-base order per tribe whose original variant-0 cost is 300,
+# so the default 400-resource session can exercise start through completion.
+# The UI item is always 0xf4 + the raw production order id.
+$upgradeItems = @(299, 256, 286, 302)
+$upgradeOrders = @(55, 12, 42, 58)
+$producerType = [int]$producerTypes[$TribeIndex]
+$upgradeItem = [int]$upgradeItems[$TribeIndex]
+$upgradeOrder = [int]$upgradeOrders[$TribeIndex]
 
 function Invoke-PythonJson([string]$Script, [object[]]$Arguments) {
     $token = [Guid]::NewGuid().ToString('N')
@@ -209,11 +219,14 @@ try {
 
     $owner = [int]$initial.local_owner
     $producer = @($initial.active_units | Where-Object {
-        [int]$_.owner -eq $owner -and [int]$_.type -eq 128 -and [bool]$_.active
+        [int]$_.owner -eq $owner -and [int]$_.type -eq $producerType -and
+        [bool]$_.active
     } | Select-Object -First 1)[0]
-    if ($null -eq $producer) { throw "Owner $owner type-128 producer not found." }
+    if ($null -eq $producer) {
+        throw "Owner $owner type-$producerType producer not found."
+    }
     $selected = Select-Unit $initial $producer
-    $hot = Wait-HotRegion $selected 286
+    $hot = Wait-HotRegion $selected $upgradeItem
     $selected = $hot[0]
     $region = $hot[1]
 
@@ -230,7 +243,8 @@ try {
         (Join-Path $root '.tmp_upgrade_completion_pair_monitor.py'),
         [string]$script:originalPid, [string]$script:rebuildPid,
         ('0x{0:X}' -f $script:rebuildBase), [string]$producer.slot,
-        [string]$owner, '42', [string]$TimeoutSeconds, $layoutPath) `
+        [string]$owner, [string]$upgradeOrder,
+        [string]$TimeoutSeconds, $layoutPath) `
         -WorkingDirectory $root -RedirectStandardOutput $trace `
         -RedirectStandardError $traceErr -WindowStyle Hidden -PassThru
     Start-Sleep -Milliseconds 250
@@ -273,7 +287,11 @@ try {
         pass = [bool]$result.pass
         sha256 = $layout.sha256
         owner = $owner
+        tribe = $TribeIndex
+        producer_type = $producerType
         producer_slot = [int]$producer.slot
+        upgrade_item = $upgradeItem
+        upgrade_order = $upgradeOrder
         aligned_frame_count = [int]$result.aligned_frame_count
         first_divergence = $result.first_divergence
         baseline = $result.baseline
