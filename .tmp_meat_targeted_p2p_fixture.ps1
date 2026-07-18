@@ -84,6 +84,14 @@ Assert-Contains $mainSource '$attackerType = @(0,16,32,48)[$TribeIndex]' `
     'all four faction worker types are selected from the lobby tribe'
 Assert-Contains $mainSource '$issuedCount -lt 1' `
     'one confirmed attack order is sufficient when the neutral dies early'
+Assert-Contains $mainSource '$attackFlashTimeoutSeconds = [Math]::Min(' `
+    'red-flash probe covers faction-specific attack targeting retries'
+Assert-Contains $mainSource "'--timeout', [string]`$attackFlashTimeoutSeconds" `
+    'red-flash probe receives the complete combat-order allowance'
+Assert-Contains $mainSource '($attackFlashTimeoutSeconds + 5) * 1000' `
+    'red-flash process wait follows its dynamic probe timeout'
+Assert-NotContains $mainSource "'--timeout', '20'" `
+    'fixed 20-second red-flash window'
 Assert-Contains $mainSource '[int]$_.type -eq 75' `
     'neutral type-75 selection'
 Assert-Contains $mainSource "[int]`$_.owner -eq 8" `

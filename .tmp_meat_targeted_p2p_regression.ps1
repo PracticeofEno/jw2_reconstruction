@@ -764,6 +764,11 @@ try {
     $attackFlashSummaryPath = Join-Path $output 'attack-flash-summary.json'
     $attackFlashStdout = Join-Path $output 'attack-flash-probe.out'
     $attackFlashStderr = Join-Path $output 'attack-flash-probe.err'
+    # Some faction workers need several camera/target-point retries before the
+    # physical A click lands.  Keep the local feedback probe alive for the
+    # complete combat-order allowance instead of silently ending at 20 s.
+    $attackFlashTimeoutSeconds = [Math]::Min(
+        [Math]::Max(20, $CombatTimeoutSeconds), $ProbeTimeoutSeconds)
     $script:attackFlashProbeProcess = Start-Process -FilePath $python `
         -ArgumentList @(
             (Join-Path $root '.tmp_attack_flash_live_probe.py'),
@@ -771,7 +776,7 @@ try {
             ('0x{0:X}' -f $script:rebuildBase),
             $resolvedLayoutPath,
             [string]$neutral.slot,
-            '--timeout', '20',
+            '--timeout', [string]$attackFlashTimeoutSeconds,
             '--interval', '0.001',
             '--summary', $attackFlashSummaryPath) `
         -WorkingDirectory $root -WindowStyle Hidden -PassThru `
@@ -796,7 +801,8 @@ try {
         throw "Only $issuedCount explicit type-75 attack orders were confirmed."
     }
 
-    if (-not $script:attackFlashProbeProcess.WaitForExit(20000)) {
+    if (-not $script:attackFlashProbeProcess.WaitForExit(
+            ($attackFlashTimeoutSeconds + 5) * 1000)) {
         throw 'Physical A-attack red-flash probe timed out.'
     }
     if (-not (Test-Path -LiteralPath $attackFlashSummaryPath)) {

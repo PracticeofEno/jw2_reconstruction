@@ -59,6 +59,7 @@ $sourceShapeTests = @(
     '.tmp_combat_sampling_artifact_resolution_regression.ps1',
     '.tmp_combat_unstable_pretick_regression.ps1',
     '.tmp_nextdiv_local_feedback_source_regression.ps1',
+    '.tmp_meat_targeted_p2p_fixture.ps1',
     '.tmp_production_completion_torn_sample_replay_regression.ps1',
     '.tmp_production_cancel_frame_alignment_regression.ps1',
     '.tmp_effect63_blend_factor_regression.ps1',
