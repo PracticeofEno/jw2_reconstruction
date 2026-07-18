@@ -1428,9 +1428,18 @@ void apply_action_effect_target_lockout_if_flagged(UnitMovementUnit& target,
     if ((target.definition.action_effect_flags & 0x8u) == 0) {
         return;
     }
+
+    // Original 0x004ec576..0x004ec597 sets raw runtime +0xa0 bit 0x40 and
+    // then calls StartUnitCommandLockoutTimer.  That helper owns command
+    // state bit 0x40000000, raw animation timer +0xec, and raw entry-lockout
+    // +0x98.  Raw +0xf4 is the independent attack-recovery counter and must
+    // keep counting down while this impact lockout is installed.
     target.runtime_flags |= 0x40u;
-    target.command_lockout_ticks =
-        std::max(target.command_lockout_ticks, lockout_ticks);
+    if (lockout_ticks != 0) {
+        target.command_state |= 0x40000000u;
+        target.animation_timer = 0;
+        target.command_entry_lockout_ticks = lockout_ticks;
+    }
 }
 
 UnitMovementUnit* find_chain_effect_next_target(UnitEffectRuntimeState& state,

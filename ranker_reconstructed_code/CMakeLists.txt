@@ -796,6 +796,7 @@ if (BUILD_TESTING)
         src/ranker_unit_spatial_index.cpp
         src/ranker_unit_lifecycle.cpp
         src/ranker_gameplay_visibility.cpp
+        src/ranker_map_effects.cpp
     )
     target_include_directories(movement_modifier_command_flag_regression PRIVATE
         include

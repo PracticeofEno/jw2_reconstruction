@@ -3692,7 +3692,13 @@ void ProcessUnitIdleAcquireCommand(UnitCommandContext& context, UnitMovementUnit
                 return;
             }
             UnitMovementUnit* target = find_target(context, unit);
-            if (target != nullptr) {
+            // ProcessUnitIdleAcquireCommand 0x004c9095..0x004c90b9 keeps the
+            // scanned candidate only in EDI until FUN_004c1e85 has accepted
+            // it.  Carry with a non-zero result is an invalid action target;
+            // only carry with result zero means a valid target that needs an
+            // approach.  Do not publish an invalid candidate as the unit's
+            // raw target/path tuple.
+            if (target != nullptr && can_attack(context, unit, *target)) {
                 SetUnitCommandTarget(unit, target);
                 // ProcessUnitIdleAcquireCommand calls FUN_004c1e85 before
                 // choosing state 0x04 or 0x03.  Only an action-ready target
@@ -3703,8 +3709,7 @@ void ProcessUnitIdleAcquireCommand(UnitCommandContext& context, UnitMovementUnit
                 // for slot 108 at frame 7972 enters ProcessUnitMovementStep
                 // with frame 32 in the original; routing it through state
                 // 0x04 first reset the reconstructed frame to zero.
-                if (can_attack(context, unit, *target) &&
-                    target_in_attack_range(context, unit, *target)) {
+                if (target_in_attack_range(context, unit, *target)) {
                     unit.command_state = kUnitStateAttackTarget;
                     unit.animation_frame = 0;
                     unit.command_flags &= ~8u;

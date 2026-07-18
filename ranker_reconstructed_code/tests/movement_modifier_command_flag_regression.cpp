@@ -54,6 +54,11 @@ bool allow_guard_attack(UnitCommandContext&, UnitMovementUnit&,
     return true;
 }
 
+bool reject_guard_attack(UnitCommandContext&, UnitMovementUnit&,
+    UnitMovementUnit&) {
+    return false;
+}
+
 bool reject_guard_range(UnitCommandContext&, UnitMovementUnit&,
     UnitMovementUnit&) {
     return false;
@@ -721,6 +726,43 @@ void check_idle_out_of_range_attack_preserves_animation_frame() {
     g_guard_target = nullptr;
 }
 
+void check_idle_invalid_scan_does_not_publish_target_or_path() {
+    const ProductionOrderRuntimeState production_state{};
+    UnitCommandContext commands{};
+    commands.production_state = &production_state;
+    commands.callbacks.find_target = find_same_guard_target;
+    commands.callbacks.can_attack_target = reject_guard_attack;
+    commands.callbacks.target_in_action_range = reject_guard_range;
+
+    UnitMovementUnit target{};
+    target.id = 0x1d0u * 153u;
+    target.owner_id = 2;
+    target.active = true;
+    target.x = 1459;
+    target.y = 1826;
+
+    UnitMovementUnit unit = make_unit(8, 0x20u, 1u);
+    unit.type_flags = 0x20u;
+    unit.command_state = kUnitStateRuntimeIdleAcquire;
+    unit.animation_frame = 0;
+    unit.definition.animation_timer_period = 32;
+    unit.path_target_x = 1664;
+    unit.path_target_y = 1792;
+    g_guard_target = &target;
+
+    ProcessUnitIdleAcquireCommand(commands, unit);
+
+    require(unit.command_state == kUnitStateRuntimeIdleAcquire,
+        "idle invalid scan entered attack travel");
+    require(unit.target == nullptr && unit.command_value == 0,
+        "idle invalid scan published the rejected candidate");
+    require(unit.path_target_x == 1664 && unit.path_target_y == 1792,
+        "idle invalid scan overwrote the existing path tuple");
+    require(unit.animation_frame == 1,
+        "idle invalid scan did not continue the idle animation");
+    g_guard_target = nullptr;
+}
+
 void check_reserved_tile_wait_uses_raw_13d4_frame_period() {
     const ProductionOrderRuntimeState production_state{};
     UnitMovementContext movement = make_movement_context(production_state);
@@ -962,6 +1004,52 @@ void check_low_id_reach_transient_target_preserves_impact_state() {
         "transient low-id reach unlinked the impact instead of skipping damage");
 }
 
+void check_flagged_low_id_impact_uses_command_entry_lockout() {
+    UnitMovementUnit source{};
+    source.id = 0x1d0u;
+    source.active = true;
+    source.x = 100;
+    source.y = 100;
+
+    UnitMovementUnit target{};
+    target.id = 0x3a0u;
+    target.active = true;
+    target.x = 100;
+    target.y = 100;
+    target.command_state = kUnitStateAttackTarget;
+    target.runtime_flags = 1;
+    target.command_lockout_ticks = 6;
+    target.animation_timer = 7;
+    target.definition.action_effect_flags = 0x8u;
+
+    UnitEffectDefinition definition{};
+    definition.id = 0x14u;
+    definition.active_frames = 4;
+    definition.active_step_iterations = 1;
+
+    UnitEffectRuntimeState state{};
+    state.definitions.push_back(definition);
+    state.unit_refs = {&source, &target};
+    state.callbacks.calculate_impact_damage = fixed_impact_damage;
+
+    UnitEffectRuntime effect{};
+    effect.active = true;
+    effect.effect_id = definition.id;
+    InitializeUnitEffectPathToTarget(state, effect, source, target);
+    // The first coincident step records closest_distance=0; the second takes
+    // the original non-improving-distance reach branch.
+    TickUnitEffectPathActive(state, effect);
+    TickUnitEffectPathActive(state, effect);
+
+    require((target.runtime_flags & 0x40u) != 0 &&
+            (target.command_state & 0x40000000u) != 0 &&
+            target.command_entry_lockout_ticks == 10 &&
+            target.animation_timer == 0 &&
+            target.command_lockout_ticks == 6,
+        "flagged low-id impact replaced raw +0xf4 recovery instead of "
+        "calling the raw +0x98 command-entry lockout helper");
+}
+
 void check_high_id_area_damage_uses_definition_bounds_probe() {
     UnitMovementUnit source{};
     source.id = 0x1d0u;
@@ -1170,10 +1258,12 @@ int main() {
     check_attack_travel_accepts_equal_priority_replacement();
     check_attack_travel_completed_step_checks_range_before_repath();
     check_idle_out_of_range_attack_preserves_animation_frame();
+    check_idle_invalid_scan_does_not_publish_target_or_path();
     check_reserved_tile_wait_uses_raw_13d4_frame_period();
     check_low_id_effect_damage_is_calculated_at_impact();
     check_low_id_reach_uses_live_area_damage_and_preserves_impact_position();
     check_low_id_reach_transient_target_preserves_impact_state();
+    check_flagged_low_id_impact_uses_command_entry_lockout();
     check_high_id_area_damage_uses_definition_bounds_probe();
     check_owner_ai_retarget_timer_precedes_transport_phase_gate();
     check_transport_queue_publishes_strategic_phase_gate();
@@ -1201,7 +1291,7 @@ int main() {
                  "attack-travel-complete=in-range-before-repath "
                  "idle-attack-travel=preserve-animation "
                  "reserved-wait-frame=raw-13d4 "
-                 "low-id-impact=live-area-damage+transient-preserve "
+                 "low-id-impact=live-area-damage+transient-preserve+entry-lockout "
                  "high-id-area=bounds-probe "
                  "retarget-timer=pre-phase-gate "
                  "zero-steps=wrapped-do-while "

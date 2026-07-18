@@ -20589,6 +20589,24 @@ bool default_unit_damage_reaction_command_allows_dispatch(
         (unit.command_flags & 0x400u) != 0;
 }
 
+bool default_unit_damage_reaction_threat_is_visible(
+    const UnitMovementUnit& damaged, const UnitMovementUnit& threat) {
+    // HandleUnitDamageReaction 0x004c2587 calls FUN_004d6cb0 with ESI still
+    // pointing at the attacker and EAX holding the damaged owner.  Ordinary
+    // attackers return carry immediately.  Only raw +0xb4 bit 0x40 / raw
+    // +0x74 bit 0x80 attackers enter FUN_004d6cca's owner-mask-or-current-
+    // visibility test.  The full owner layer gate used by automatic target
+    // acquisition does not belong to this reaction path.
+    const GameplayVisibilityUnit visibility =
+        make_default_gameplay_visibility_unit(threat);
+    if (!CheckUnitVisibilityGateFlags(visibility)) {
+        return true;
+    }
+    return CheckUnitOwnerMaskOrCurrentVisibilityBit(
+        g_runtime.gameplay_player_slots, g_runtime.gameplay_visibility_grid,
+        visibility, damaged.owner_id);
+}
+
 DefaultDamageReactionCombatGate default_unit_damage_reaction_combat_gate(
     UnitMovementUnit& damaged, UnitMovementUnit& threat) {
     if ((damaged.runtime_flags & 0x40000u) != 0) {
@@ -20613,12 +20631,17 @@ DefaultDamageReactionCombatGate default_unit_damage_reaction_combat_gate(
     UnitActionContext& action_context = g_runtime.gameplay_unit_actions;
     configure_default_unit_action_context(action_context,
         g_runtime.gameplay_unit_commands);
-    if (!default_unit_action_can_target(action_context, damaged, threat)) {
+    // 0x004c2578..0x004c2592 runs only the common class/profile gate and the
+    // special visibility gate here.  FUN_004c1e85's reach result belongs to
+    // the selected jump-table handler below; using ValidateUnitActionTarget
+    // in this outer gate incorrectly turns an out-of-range result into the
+    // random-move fallback before state 0x21 can enter guard pursuit.
+    if ((threat.runtime_flags & kUnitActionTargetClassBlocked) != 0 ||
+        !default_unit_action_profile_allows_target_render_class(
+            action_context, damaged, threat)) {
         return DefaultDamageReactionCombatGate::random_move_fallback;
     }
-    const UnitActionTargetValidation validation =
-        ValidateUnitActionTarget(action_context, damaged, threat);
-    if (!validation.valid) {
+    if (!default_unit_damage_reaction_threat_is_visible(damaged, threat)) {
         return DefaultDamageReactionCombatGate::random_move_fallback;
     }
     return DefaultDamageReactionCombatGate::dispatch_combat;
@@ -20717,11 +20740,11 @@ bool default_unit_damage_reaction_acquire_attacker(UnitMovementUnit& target,
 
     const UnitActionTargetValidation validation =
         ValidateUnitActionTarget(action_context, target, threat);
-    if (!validation.valid) {
-        return false;
-    }
-
-    if (validation.in_range) {
+    // Entry 1 at 0x004c27b6 branches on FUN_004c1e85's carry flag.  Every
+    // carry result, including its raw distance-check-mode shortcut, is the
+    // out-of-range travel branch because the outer reaction gate has already
+    // established target class and visibility validity.
+    if (validation.valid && validation.in_range) {
         ApplyUnitDamageReactionAcquireAttackerInRange(target, threat);
         return true;
     }
@@ -20764,12 +20787,6 @@ bool default_unit_damage_reaction_replace_target_by_priority(
     bool clear_path_flag) {
     UnitMovementUnit* current = source.target;
     if (current == &threat) {
-        return false;
-    }
-
-    const UnitActionTargetValidation threat_validation =
-        default_unit_damage_reaction_validate_target(source, threat);
-    if (!threat_validation.valid) {
         return false;
     }
 
@@ -20822,12 +20839,11 @@ bool default_unit_damage_reaction_force_guard_attacker(
 
     const UnitActionTargetValidation validation =
         default_unit_damage_reaction_validate_target(target, threat);
-    if (!validation.valid) {
-        return false;
-    }
-
     SetUnitCommandTarget(target, &threat);
-    if (validation.in_range) {
+    // The shared 0x004c2914 entry treats every FUN_004c1e85 carry result as
+    // out of range.  It never rejects the attacker here: the outer class and
+    // visibility checks have already done that work.
+    if (validation.valid && validation.in_range) {
         target.command_state = kUnitStateGuardCombatCycle;
         return true;
     }
