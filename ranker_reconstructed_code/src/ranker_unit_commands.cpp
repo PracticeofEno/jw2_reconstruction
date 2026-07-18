@@ -3679,7 +3679,17 @@ void ProcessUnitIdleAcquireCommand(UnitCommandContext& context, UnitMovementUnit
             UnitMovementUnit* target = find_target(context, unit);
             if (target != nullptr) {
                 SetUnitCommandTarget(unit, target);
-                if (can_attack(context, unit, *target)) {
+                // ProcessUnitIdleAcquireCommand calls FUN_004c1e85 before
+                // choosing state 0x04 or 0x03.  Only an action-ready target
+                // takes the state-0x04 branch that clears raw +0x64.  A valid
+                // but out-of-range target goes directly to state 0x03 and
+                // ProcessUnitPathToDestination, preserving the idle frame
+                // through command-metadata bit 0x02.  The paired live trace
+                // for slot 108 at frame 7972 enters ProcessUnitMovementStep
+                // with frame 32 in the original; routing it through state
+                // 0x04 first reset the reconstructed frame to zero.
+                if (can_attack(context, unit, *target) &&
+                    target_in_attack_range(context, unit, *target)) {
                     unit.command_state = kUnitStateAttackTarget;
                     unit.animation_frame = 0;
                     unit.command_flags &= ~8u;

@@ -599,6 +599,41 @@ void check_attack_travel_accepts_equal_priority_replacement() {
     g_guard_target = nullptr;
 }
 
+void check_idle_out_of_range_attack_preserves_animation_frame() {
+    const ProductionOrderRuntimeState production_state{};
+    UnitCommandContext commands{};
+    commands.production_state = &production_state;
+    commands.callbacks.find_target = find_same_guard_target;
+    commands.callbacks.can_attack_target = allow_guard_attack;
+    commands.callbacks.target_in_action_range = reject_guard_range;
+
+    UnitMovementUnit target{};
+    target.id = 0x1d0u * 17u;
+    target.owner_id = 1;
+    target.active = true;
+    target.x = 3359;
+    target.y = 1846;
+
+    UnitMovementUnit unit = make_unit(2, 0x20u, 1u);
+    unit.type_flags = 0x20u;
+    unit.command_state = kUnitStateRuntimeIdleAcquire;
+    unit.animation_frame = 32;
+    unit.x = 3520;
+    unit.y = 2048;
+    g_guard_target = &target;
+
+    ProcessUnitIdleAcquireCommand(commands, unit);
+
+    require(unit.command_state == kUnitStateAttackTravel,
+        "idle out-of-range target did not enter attack travel directly");
+    require(unit.animation_frame == 32,
+        "idle out-of-range target cleared the metadata-preserved animation frame");
+    require(unit.target == &target &&
+            unit.path_target_x == target.x && unit.path_target_y == target.y,
+        "idle out-of-range target did not publish the attack-travel path");
+    g_guard_target = nullptr;
+}
+
 void check_reserved_tile_wait_uses_raw_13d4_frame_period() {
     const ProductionOrderRuntimeState production_state{};
     UnitMovementContext movement = make_movement_context(production_state);
@@ -1005,6 +1040,7 @@ int main() {
     check_guard_combat_completion_replaces_equal_priority();
     check_damage_reaction_guard_jump_table_mapping();
     check_attack_travel_accepts_equal_priority_replacement();
+    check_idle_out_of_range_attack_preserves_animation_frame();
     check_reserved_tile_wait_uses_raw_13d4_frame_period();
     check_low_id_effect_damage_is_calculated_at_impact();
     check_low_id_reach_uses_live_area_damage_and_preserves_impact_position();
@@ -1031,6 +1067,7 @@ int main() {
                  "guard-combat-complete=equal-priority-replace "
                  "damage-reaction-guard-table=1f/20/21/22/23 "
                  "attack-travel=equal-priority-repath "
+                 "idle-attack-travel=preserve-animation "
                  "reserved-wait-frame=raw-13d4 "
                  "low-id-impact=live-area-damage high-id-area=bounds-probe "
                  "retarget-timer=pre-phase-gate "
