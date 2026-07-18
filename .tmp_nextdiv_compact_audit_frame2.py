@@ -1094,16 +1094,15 @@ def capture_frozen_body(name, side):
             7 * 0x1540 + 2 * 0x2A8 + 48 * 4)
         focus_residue = rebuild_focus_residue(memory, rebuild_focus_pointer)
     add_owner_visibility_words(name, memory, rows)
-    # Raw draw_flags 0x80..0x88 is the local A-command red-flash countdown.
-    # It is set by the peer that received the physical mouse/key input and is
-    # intentionally not carried by the synchronized gameplay command.  The
-    # integrated driver issues A only on the rebuilt peer, so compare this
-    # feedback in its dedicated local-input probe and exclude only that timer
-    # from the cross-peer simulation audit.
+    # Raw draw_flags is local pointer-command feedback.  FUN_004da02c writes
+    # DAT_008629de[action] directly to the object hit by the peer that received
+    # the physical input; the synchronized gameplay packet does not carry it.
+    # Values 0x80..0x88 are the A-command red-flash countdown, while the low
+    # values are the other selector feedback countdowns.  Compare all of them
+    # in dedicated same-input rendering probes, never between different local
+    # players in this cross-peer simulation audit.
     for row in rows.values():
-        draw_flags = row.get("draw_flags", 0)
-        if 0x80 <= draw_flags <= 0x88:
-            row["draw_flags"] = 0
+        row["draw_flags"] = 0
     # Owner-AI planner storage is live only for PlayerSlotState::
     # player_controlled (raw value 1, the computer slot in this fixture).
     # Human-active slots retain implementation-specific reset sentinels.
