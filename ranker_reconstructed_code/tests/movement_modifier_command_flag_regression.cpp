@@ -555,6 +555,36 @@ void check_damage_reaction_guard_jump_table_mapping() {
         "damage reaction state 0x23 did not use the default no-op entry");
 }
 
+void check_damage_reaction_acquire_preserves_action_mode() {
+    UnitMovementUnit attacker{};
+    attacker.id = 0x2f00u;
+    attacker.x = 1456;
+    attacker.y = 1092;
+
+    UnitMovementUnit neutral{};
+    neutral.command_state = kUnitStateRuntimeIdleAcquire;
+    neutral.command_flags = 0x28u;
+    neutral.action_mode = 75;
+    neutral.animation_frame = 14;
+    ApplyUnitDamageReactionAcquireAttackerInRange(neutral, attacker);
+
+    require(neutral.target == &attacker &&
+            neutral.command_value == attacker.id &&
+            neutral.path_target_x == attacker.x &&
+            neutral.path_target_y == attacker.y &&
+            neutral.command_state == kUnitStateAttackTarget &&
+            neutral.command_flags == 0x20u &&
+            neutral.animation_frame == 0 && neutral.action_mode == 75,
+        "damage reaction confused raw +0x64 animation with raw +0x2c meat");
+
+    neutral.animation_frame = 9;
+    neutral.command_flags = 0x8u;
+    ApplyUnitDamageReactionAcquireAttackerInRange(neutral, attacker);
+    require(neutral.animation_frame == 9 && neutral.action_mode == 75 &&
+            neutral.command_flags == 0,
+        "same-state damage reaction did not preserve original state-four fields");
+}
+
 void check_attack_travel_accepts_equal_priority_replacement() {
     const ProductionOrderRuntimeState production_state{};
     UnitMovementContext movement = make_movement_context(production_state);
@@ -1136,6 +1166,7 @@ int main() {
     check_guard_combat_carry_uses_scanned_target();
     check_guard_combat_completion_replaces_equal_priority();
     check_damage_reaction_guard_jump_table_mapping();
+    check_damage_reaction_acquire_preserves_action_mode();
     check_attack_travel_accepts_equal_priority_replacement();
     check_attack_travel_completed_step_checks_range_before_repath();
     check_idle_out_of_range_attack_preserves_animation_frame();
@@ -1165,6 +1196,7 @@ int main() {
                  "guard-combat-carry=scanned-target "
                  "guard-combat-complete=equal-priority-replace "
                  "damage-reaction-guard-table=1f/20/21/22/23 "
+                 "damage-reaction-acquire=preserve-raw-2c+clear-raw-64 "
                  "attack-travel=equal-priority-repath "
                  "attack-travel-complete=in-range-before-repath "
                  "idle-attack-travel=preserve-animation "

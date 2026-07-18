@@ -870,6 +870,8 @@ u32 GetUnitCommandMetadataFlags(const UnitMovementUnit& unit,
     const std::vector<u32>* command_metadata_table = nullptr);
 void SetUnitCommandTarget(UnitMovementUnit& unit, UnitMovementUnit* target);
 void SetUnitPathTarget(UnitMovementUnit& unit, i32 x, i32 y);
+void ApplyUnitDamageReactionAcquireAttackerInRange(
+    UnitMovementUnit& unit, UnitMovementUnit& attacker);
 UnitDamageReactionRetargetPolicy ResolveUnitDamageReactionRetargetPolicy(
     u32 command_state);
 UnitMovementUnit* SelectGuardCombatCycleCarryTarget(

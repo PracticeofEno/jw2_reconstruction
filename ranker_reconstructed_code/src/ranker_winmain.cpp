@@ -20717,13 +20717,7 @@ bool default_unit_damage_reaction_acquire_attacker(UnitMovementUnit& target,
     }
 
     if (validation.in_range) {
-        SetUnitCommandTarget(target, &threat);
-        target.command_flags &= ~0x8u;
-        if ((target.command_state & kUnitCommandStateMask) !=
-            kUnitStateAttackTarget) {
-            target.action_mode = 0;
-        }
-        target.command_state = kUnitStateAttackTarget;
+        ApplyUnitDamageReactionAcquireAttackerInRange(target, threat);
         return true;
     }
 

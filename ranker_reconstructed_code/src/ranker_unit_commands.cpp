@@ -1913,6 +1913,21 @@ void SetUnitPathTarget(UnitMovementUnit& unit, i32 x, i32 y) {
     unit.path_target_y = y;
 }
 
+void ApplyUnitDamageReactionAcquireAttackerInRange(
+    UnitMovementUnit& unit, UnitMovementUnit& attacker) {
+    // Damage-reaction jump-table entry 1 (0x004c27b6..0x004c2857) stores the
+    // attacker and its live point first.  Entering state four clears raw
+    // +0x64 (the animation frame), not raw +0x2c.  The latter is action_mode
+    // and, for neutral creatures, retains the meat amount through combat.
+    SetUnitCommandTarget(unit, &attacker);
+    if ((unit.command_state & kUnitCommandStateMask) !=
+        kUnitStateAttackTarget) {
+        unit.command_state = kUnitStateAttackTarget;
+        unit.animation_frame = 0;
+    }
+    unit.command_flags &= ~0x8u;
+}
+
 UnitDamageReactionRetargetPolicy ResolveUnitDamageReactionRetargetPolicy(
     u32 command_state) {
     // HandleUnitDamageReaction dispatches through the raw table at 0x004c2b78.
