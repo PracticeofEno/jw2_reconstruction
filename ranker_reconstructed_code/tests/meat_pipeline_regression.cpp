@@ -1,5 +1,6 @@
 #include "ranker_map_effects.h"
 #include "ranker_meat_pipeline.h"
+#include "ranker_unit_equipment.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -279,6 +280,16 @@ void test_recovery_rejection_gates() {
         "zero runtime max reported meat recovery");
 }
 
+void test_transfer_capability_uses_raw_mask_two() {
+    // The ordinary worker's original raw +0x58 value has mask 0x02 set and
+    // mask 0x04 clear.  Action selector two must not be interpreted as 1<<2.
+    constexpr u32 kWorkerTypeFlags = 0x22fbu;
+    require(UnitEquipmentTransferCapabilityEnabled(kWorkerTypeFlags),
+        "raw transfer capability mask 0x02 was not accepted");
+    require(!UnitEquipmentTransferCapabilityEnabled(0x04u),
+        "action-index mask 0x04 was confused with raw transfer mask 0x02");
+}
+
 void test_spawn_pickup_and_low_health_consumption() {
     Fixture fixture;
 
@@ -374,11 +385,12 @@ int main() {
     test_right_click_split_boundaries();
     test_right_click_drop_link_lifetime();
     test_recovery_rejection_gates();
+    test_transfer_capability_uses_raw_mask_two();
     test_spawn_pickup_and_low_health_consumption();
     std::cout <<
         "MEAT_PIPELINE_REGRESSION_PASS "
         "spawn=118/tier2 pickup=action_mode cargo=unchanged "
         "consume=117/health+1 full-health=retained right-click=67+50 "
-        "drop-link=source/unlock32\n";
+        "drop-link=source/unlock32 transfer-gate=raw-mask2\n";
     return EXIT_SUCCESS;
 }

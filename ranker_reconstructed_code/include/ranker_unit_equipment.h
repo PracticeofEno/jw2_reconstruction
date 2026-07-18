@@ -31,6 +31,14 @@ constexpr u32 kUnitEquipmentGenericModifierReserved240 = 4;
 constexpr u32 kUnitEquipmentGenericModifierCommandGate = 5;
 constexpr u32 kUnitEquipmentGenericModifierCommandFlag = 6;
 
+// Original FUN_00411b70 and the action-two publisher both test raw unit
+// +0x58 with mask 0x02.  This is a raw capability bit, not action index two
+// (1 << 2).  Keeping the predicate named and shared prevents those two gates
+// from drifting apart again.
+constexpr bool UnitEquipmentTransferCapabilityEnabled(u32 type_flags) {
+    return (type_flags & kUnitEquipmentPickupEnabledFlag) != 0;
+}
+
 enum class UnitEquipmentCategory : u32 {
     Generic = 0,
     Primary = 1,

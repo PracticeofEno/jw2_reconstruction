@@ -610,7 +610,7 @@ bool ClearUnitEquipmentSlot(UnitCommandContext& context, UnitMovementUnit& unit,
 bool TransferUnitEquipmentSlot(UnitCommandContext& context, UnitMovementUnit& source,
     UnitMovementUnit& target, u32 original_slot_code,
     const UnitEquipmentCatalog& catalog) {
-    if ((target.type_flags & kUnitEquipmentPickupEnabledFlag) == 0) {
+    if (!UnitEquipmentTransferCapabilityEnabled(target.type_flags)) {
         return false;
     }
 

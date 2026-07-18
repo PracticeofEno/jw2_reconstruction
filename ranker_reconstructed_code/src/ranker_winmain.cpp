@@ -5756,7 +5756,12 @@ bool default_gameplay_input_dispatch_action(
         }
         UnitMovementUnit* primary_movement =
             find_default_movement_unit_by_id(primary->offset);
-        if (!default_gameplay_unit_supports_action(primary_movement, 0x02u)) {
+        // 0x004da1e9 tests raw +0x58 with literal mask 0x02.  Treating the
+        // selector as an action-bit index tested 0x04 instead and rejected
+        // ordinary workers (0x22fb) before their held meat could be used.
+        if (primary_movement == nullptr ||
+            !UnitEquipmentTransferCapabilityEnabled(
+                primary_movement->type_flags)) {
             return reject_with_common_feedback();
         }
 
@@ -5773,7 +5778,8 @@ bool default_gameplay_input_dispatch_action(
             }
             UnitMovementUnit* target =
                 find_default_movement_unit_by_id(packet_target);
-            if (!default_gameplay_unit_supports_action(target, 0x02u)) {
+            if (target == nullptr ||
+                !UnitEquipmentTransferCapabilityEnabled(target->type_flags)) {
                 return reject_with_common_feedback();
             }
             packet_x = logical_index;
