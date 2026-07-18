@@ -3757,14 +3757,22 @@ void ProcessUnitAttackTravelCommand(UnitCommandContext& context, UnitMovementUni
 
     if (!movement_step(context, unit)) {
         if (unit.target != nullptr && can_attack(context, unit, *unit.target)) {
+            // Original 0x004c93ad calls FUN_004c1e85 before taking the
+            // 0x004c9336 path-replan branch.  A target that became reachable
+            // on the movement-completion tick therefore jumps straight to
+            // 0x004c9383 and preserves raw +0xac/+0xc8..+0xcc/+0x11c..+0x120.
+            // Replanning first reset that completed movement scratch before
+            // entering state 4, producing a persistent P2P state difference.
+            if (target_in_attack_range(context, unit, *unit.target)) {
+                copy_target_position_to_path(unit, *unit.target);
+                unit.command_state = kUnitStateAttackTarget;
+                ProcessUnitAttackTargetCommand(context, unit);
+                return;
+            }
             const i32 previous_x = unit.path_target_x;
             const i32 previous_y = unit.path_target_y;
             path_to_target(context, unit, *unit.target);
-            if (target_in_attack_range(context, unit, *unit.target)) {
-                unit.command_state = kUnitStateAttackTarget;
-                ProcessUnitAttackTargetCommand(context, unit);
-            }
-            else if (unit.path_target_x == previous_x &&
+            if (unit.path_target_x == previous_x &&
                 unit.path_target_y == previous_y) {
                 PopDeferredUnitCommandOrReturnIdle(context, unit);
             }

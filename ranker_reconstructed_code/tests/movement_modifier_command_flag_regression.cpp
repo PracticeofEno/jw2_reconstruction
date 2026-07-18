@@ -26,6 +26,7 @@ UnitMovementDefinition g_placed_definition{};
 UnitMovementDefinition g_legacy_spawn_definition{};
 u32 g_area_direct_damage_calls = 0;
 u32 g_area_nearby_damage_calls = 0;
+u32 g_attack_travel_range_calls = 0;
 
 void require(bool condition, const char* message) {
     if (!condition) {
@@ -62,6 +63,13 @@ bool accept_guard_range(UnitCommandContext&, UnitMovementUnit&,
     UnitMovementUnit&) {
     return true;
 }
+
+bool accept_attack_travel_range_after_completed_step(UnitCommandContext&,
+    UnitMovementUnit&, UnitMovementUnit&) {
+    return ++g_attack_travel_range_calls >= 2;
+}
+
+void ignore_attack_dispatch(UnitCommandContext&, UnitMovementUnit&) {}
 
 const UnitMovementDefinition* find_placed_definition(
     UnitLifecycleContext&, u32) {
@@ -599,6 +607,55 @@ void check_attack_travel_accepts_equal_priority_replacement() {
     g_guard_target = nullptr;
 }
 
+void check_attack_travel_completed_step_checks_range_before_repath() {
+    const ProductionOrderRuntimeState production_state{};
+    UnitMovementContext movement = make_movement_context(production_state);
+    UnitCommandContext commands{};
+    commands.movement = &movement;
+    commands.production_state = &production_state;
+    commands.callbacks.find_target = find_same_guard_target;
+    commands.callbacks.can_attack_target = allow_guard_attack;
+    commands.callbacks.target_in_action_range =
+        accept_attack_travel_range_after_completed_step;
+    commands.callbacks.dispatch_attack = ignore_attack_dispatch;
+
+    UnitMovementUnit target{};
+    target.id = 0x1d0u * 159u;
+    target.x = 983;
+    target.y = 1140;
+    target.active = true;
+
+    UnitMovementUnit unit = make_unit(8, 0x1020u, 1u);
+    unit.command_state = kUnitStateAttackTravel;
+    unit.definition.movement_class = 3;
+    unit.x = 988;
+    unit.y = 1135;
+    unit.path_target_x = 989;
+    unit.path_target_y = 1133;
+    unit.next_path_x = unit.x;
+    unit.next_path_y = unit.y;
+    unit.movement_flags = kUnitMovementFlagInterpolatingTowardTarget;
+    unit.movement_interpolation_x = 988.25f;
+    unit.movement_interpolation_y = 1135.5f;
+    unit.target = &target;
+    unit.command_value = target.id;
+    g_guard_target = nullptr;
+    g_attack_travel_range_calls = 0;
+
+    ProcessUnitAttackTravelCommand(commands, unit);
+
+    require(g_attack_travel_range_calls == 2,
+        "attack travel did not revalidate after the completed movement step");
+    require(unit.command_state == kUnitStateAttackTarget,
+        "completed attack travel did not enter the in-range action state");
+    require(unit.next_path_x == 988 && unit.next_path_y == 1135,
+        "in-range attack travel replanned before entering the action state");
+    require(unit.movement_flags == kUnitMovementFlagInterpolatingTowardTarget &&
+            unit.movement_interpolation_x == 988.25f &&
+            unit.movement_interpolation_y == 1135.5f,
+        "in-range attack travel cleared completed movement interpolation scratch");
+}
+
 void check_idle_out_of_range_attack_preserves_animation_frame() {
     const ProductionOrderRuntimeState production_state{};
     UnitCommandContext commands{};
@@ -1080,6 +1137,7 @@ int main() {
     check_guard_combat_completion_replaces_equal_priority();
     check_damage_reaction_guard_jump_table_mapping();
     check_attack_travel_accepts_equal_priority_replacement();
+    check_attack_travel_completed_step_checks_range_before_repath();
     check_idle_out_of_range_attack_preserves_animation_frame();
     check_reserved_tile_wait_uses_raw_13d4_frame_period();
     check_low_id_effect_damage_is_calculated_at_impact();
@@ -1108,6 +1166,7 @@ int main() {
                  "guard-combat-complete=equal-priority-replace "
                  "damage-reaction-guard-table=1f/20/21/22/23 "
                  "attack-travel=equal-priority-repath "
+                 "attack-travel-complete=in-range-before-repath "
                  "idle-attack-travel=preserve-animation "
                  "reserved-wait-frame=raw-13d4 "
                  "low-id-impact=live-area-damage+transient-preserve "
