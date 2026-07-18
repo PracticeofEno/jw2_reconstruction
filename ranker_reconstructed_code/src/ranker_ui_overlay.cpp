@@ -120,17 +120,22 @@ void append_record(UiOverlayState& state, const UiOverlayDrawRecord& record) {
     state.queued_records.push_back(record);
 }
 
-UiOverlayRect full_screen_rect(const UiOverlayState& state) {
-    return {0, 0, state.screen_width, state.screen_height};
+UiOverlayRect offscreen_rect(const UiOverlayState& state) {
+    return {static_cast<i32>(state.screen_width),
+        static_cast<i32>(state.screen_height), 0, 0};
 }
 
-UiOverlayRect rect_or_full_screen(
+UiOverlayRect rect_or_offscreen(
     const UiOverlayState& state, const std::array<UiOverlayRect,
     kUiOverlayDynamicIconRectCount>& rects, u32 index) {
     if (index < rects.size() && (rects[index].width != 0 || rects[index].height != 0)) {
         return rects[index];
     }
-    return full_screen_rect(state);
+    // FUN_004e5919 initializes its fallback X/Y from DAT_0143fff0 and
+    // DAT_01440004 before checking the 16-entry coordinate table.  Those
+    // globals are the configured render width and height, so overflowing
+    // dynamic commands remain queued but draw and hit-test offscreen.
+    return offscreen_rect(state);
 }
 
 UiOverlayRect rect_or_default(const UiOverlayRect& rect, u32 width, u32 height) {
@@ -2149,7 +2154,7 @@ void QueueUiOverlayManual13Record(UiOverlayState& state, u32 item_id, u32 aux,
 
 void QueueUiOverlayDynamicIconRecord(UiOverlayState& state, u32 item_id, u32 aux,
     u32 flags) {
-    UiOverlayRect rect = rect_or_full_screen(
+    UiOverlayRect rect = rect_or_offscreen(
         state, state.dynamic_icon_bounds, state.dynamic_icon_index);
     rect.width = state.current_record_size;
     rect.height = state.current_record_size;

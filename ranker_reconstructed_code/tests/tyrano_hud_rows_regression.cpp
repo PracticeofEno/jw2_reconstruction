@@ -267,6 +267,60 @@ void verify_structure_padding_exceptions(
         "avatar producer row transition differs from FUN_004e3f6e");
 }
 
+void verify_dynamic_overflow_is_offscreen(
+    u32 width, u32 height, u32 theme) {
+    UiOverlayState state{};
+    state.screen_width = width;
+    state.screen_height = height;
+    state.interface_theme_index = theme;
+    state.selected_unit_count = 1;
+    state.selected_unit_type = 0x8f;  // Tyrano SummonNest.
+    state.selected_unit_owner = 2;
+    state.local_player_slot = 2;
+
+    // JW2_09 type 143 contains nine equipment bytes.  FUN_004e5269 first
+    // consumes dynamic slots 0..7, so its last equipment command is the
+    // seventeenth record.  FUN_004e5919 uses DAT_0143fff0/01440004 (the
+    // configured screen width/height) when DAT_008663b4 is at least 16.
+    constexpr std::array<u32, 9> kSummonNestEquipmentItems{
+        0x251, 0x289, 0x24a, 0x24a, 0x24a, 0x2d1, 0x24a, 0x24a, 0x24a};
+    for (u32 item_id : kSummonNestEquipmentItems) {
+        state.command_options.push_back({item_id, 0, 0, 0, 0, true});
+    }
+
+    ConfigureGameplayUiOverlayLayout(state);
+    ResetUiOverlayCommandPanelState(state);
+    BuildSingleSelectedUnitCommandPanel(state);
+
+    require(state.queued_records.size() == 17 &&
+            state.hot_regions.size() == 17 &&
+            state.dynamic_icon_index == 17,
+        "SummonNest must preserve all nine raw equipment commands");
+    for (std::size_t index = 0; index < 8; ++index) {
+        require(state.queued_records[index].item_id == 0xc8 &&
+                state.queued_records[index].flags == 2u,
+            "SummonNest must consume the original eight padding slots");
+    }
+    for (std::size_t index = 0;
+         index < kSummonNestEquipmentItems.size(); ++index) {
+        require(state.queued_records[8 + index].item_id ==
+                kSummonNestEquipmentItems[index],
+            "SummonNest equipment byte order differs from JW2_09");
+    }
+
+    const UiOverlayDrawRecord& overflow = state.queued_records.back();
+    const UiOverlayHotRegion& overflow_hit = state.hot_regions.back();
+    require(overflow.x == static_cast<i32>(width) &&
+            overflow.y == static_cast<i32>(height) &&
+            overflow.width == 0x26 && overflow.height == 0x26,
+        "dynamic slot 16 must use the original offscreen width/height anchor");
+    require(overflow_hit.record.x == overflow.x &&
+            overflow_hit.record.y == overflow.y &&
+            overflow_hit.record.width == overflow.width &&
+            overflow_hit.record.height == overflow.height,
+        "overflow command draw and hit bounds diverged");
+}
+
 void verify_top_right_hud(u32 width, u32 height, u32 theme, u32 bucket) {
     UiOverlayState state{};
     state.screen_width = width;
@@ -461,6 +515,8 @@ int main() {
                 widths[bucket], heights[bucket], theme, bucket);
             verify_structure_padding_exceptions(
                 widths[bucket], heights[bucket], theme, bucket);
+            verify_dynamic_overflow_is_offscreen(
+                widths[bucket], heights[bucket], theme);
             verify_top_right_hud(
                 widths[bucket], heights[bucket], theme, bucket);
             verify_selected_construction_info(
@@ -471,6 +527,6 @@ int main() {
     }
     std::cout << "TYRANO_HUD_ROWS_PASS buckets=3 themes=4 draw_hit=exact "
                  "padding_exceptions=exact font=1 construction_info=exact "
-                 "production_hidden\n";
+                 "production_hidden dynamic_overflow=offscreen\n";
     return EXIT_SUCCESS;
 }
