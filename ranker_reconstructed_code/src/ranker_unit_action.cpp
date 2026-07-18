@@ -1091,13 +1091,25 @@ bool unit_effect_related_owner_rejected(const UnitEffectRuntimeState& state,
 }
 
 bool point_inside_unit_bounds(const UnitMovementUnit& unit, i32 x, i32 y) {
-    const i32 left = action_center_x(unit) -
-        std::max<i32>(unit.definition.bounds_width, 1) / 2;
-    const i32 top = action_center_y(unit) -
-        std::max<i32>(unit.definition.bounds_height, 1) / 2;
-    const i32 right = left + std::max<i32>(unit.definition.bounds_width, 1);
-    const i32 bottom = top + std::max<i32>(unit.definition.bounds_height, 1);
+    // Original area/projectile gates use definition raw +0x360..+0x36c
+    // directly.  Deriving the rectangle back from a center point changes
+    // zero/odd-width edge behavior and obscures the coordinate used by the
+    // non-point distance branch below.
+    const i32 left = unit.x + unit.definition.center_bounds_left;
+    const i32 top = unit.y + unit.definition.center_bounds_top;
+    const i32 right = left + unit.definition.center_bounds_width;
+    const i32 bottom = top + unit.definition.center_bounds_height;
     return x >= left && x <= right && y >= top && y <= bottom;
+}
+
+i32 effect_unit_area_probe_x(const UnitMovementUnit& unit) {
+    return unit.x + unit.definition.center_bounds_left +
+        (unit.definition.center_bounds_width >> 1);
+}
+
+i32 effect_unit_area_probe_y(const UnitMovementUnit& unit) {
+    return unit.y + unit.definition.center_bounds_top +
+        (unit.definition.center_bounds_height >> 1);
 }
 
 bool effect_unit_inside_impact_area(const UnitEffectRuntime& effect,
@@ -1105,7 +1117,8 @@ bool effect_unit_inside_impact_area(const UnitEffectRuntime& effect,
     if (radius == 0 || unit.definition.render_class == 1) {
         return point_inside_unit_bounds(unit, effect.x, effect.y);
     }
-    return CalculateApproxUnitDistance(effect.x, effect.y, unit.x, unit.y) < radius;
+    return CalculateApproxUnitDistance(effect.x, effect.y,
+        effect_unit_area_probe_x(unit), effect_unit_area_probe_y(unit)) < radius;
 }
 
 u32 effect_unit_area_damage_amount(const UnitEffectRuntime& effect,
@@ -1114,7 +1127,7 @@ u32 effect_unit_area_damage_amount(const UnitEffectRuntime& effect,
         return amount;
     }
     const u32 distance = CalculateApproxUnitDistance(effect.x, effect.y,
-        unit.x, unit.y);
+        effect_unit_area_probe_x(unit), effect_unit_area_probe_y(unit));
     if (distance >= radius) {
         return 0;
     }
@@ -1383,6 +1396,31 @@ u32 chain_effect_damage_amount(const UnitEffectRuntime& effect, u32 amount) {
     amount /= divisor;
     amount *= effect.chain_remaining + 1;
     return amount;
+}
+
+void append_low_id_live_action_area_impacts(UnitEffectRuntimeState& state,
+    UnitEffectRuntime& effect, UnitMovementUnit* source,
+    const UnitEffectDefinition& definition, u32 radius) {
+    // ApplyAreaDamageFromUnit (0x004c21f9) walks the active list and invokes
+    // the live action-damage calculator separately for every candidate.  The
+    // EAX value calculated by JW2_12 before entering 0x004c212c is ignored
+    // when raw +0x1f8 supplies a non-zero radius.
+    for_each_effect_unit_in_active_order(state, [&](UnitMovementUnit& unit) {
+        if (!unit_effect_area_candidate_passes_common_gates(
+                state, effect, source, unit, definition,
+                kUnitEffectAreaRuntimeSkipMask, true) ||
+            !effect_unit_inside_impact_area(effect, unit, radius)) {
+            return;
+        }
+        const u32 base_amount = chain_effect_damage_amount(effect,
+            unit_effect_point_impact_damage(state, effect, source, unit));
+        const u32 scaled_amount =
+            effect_unit_area_damage_amount(effect, unit, base_amount, radius);
+        if (scaled_amount != 0) {
+            append_effect_event(state, UnitEffectEventKind::impact, effect,
+                unit.id, scaled_amount);
+        }
+    });
 }
 
 void apply_action_effect_target_lockout_if_flagged(UnitMovementUnit& target,
@@ -1998,9 +2036,20 @@ void TickUnitEffectPathActive(UnitEffectRuntimeState& state, UnitEffectRuntime& 
             // reach handler applies that freshly calculated value; raw effect
             // +0x14 is deliberately left untouched by the action initializer.
             if (effect.effect_id != 0x27) {
-                append_effect_event(state, UnitEffectEventKind::impact, effect,
-                    target->id,
-                    chain_effect_damage_amount(effect, base_amount));
+                // JW2_12 reach 0x004ec82f passes raw +0x1f8 in ECX to the
+                // shared damage helper.  Zero remains a direct point hit;
+                // non-zero enters 0x004c21f9 and scans around the preserved
+                // projectile +0x20/+0x24 coordinate with per-target live
+                // damage and distance falloff.
+                const u32 radius = definition->action_area_damage_radius;
+                if (radius == 0) {
+                    append_effect_event(state, UnitEffectEventKind::impact, effect,
+                        target->id,
+                        chain_effect_damage_amount(effect, base_amount));
+                } else {
+                    append_low_id_live_action_area_impacts(
+                        state, effect, source, *definition, radius);
+                }
             }
             if (finish_after_reach) {
                 finish_effect(state, effect);

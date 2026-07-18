@@ -2418,21 +2418,20 @@ OwnerAiStrategicPressureSummary CalculateOwnerAiStrategicTargetPressureSummary(
 
 bool ShouldOwnerAiRunStrategicQueueRetarget(OwnerAiRuntimeState& state,
     u32 owner_slot, const OwnerAiStrategicRetargetGateInput& input) {
-    if (!owner_slot_valid(owner_slot) ||
-        input.owner_phase_state != 1) {
+    if (!owner_slot_valid(owner_slot)) {
         return false;
     }
 
     OwnerAiSlotRuntime& owner = state.owners[owner_slot];
+    const bool phase_allows_retarget = input.owner_phase_state == 1;
     const bool population_gap_open =
         owner_ai_population_gap_open(input, owner_slot);
 
-    if (owner.build_budget != 0) {
-        const u32 elapsed_frames = state.frame_counter - owner.last_timing_frame;
-        if (elapsed_frames / 0x16u > owner.build_budget) {
-            owner.last_timing_frame = state.frame_counter;
-            return true;
-        }
+    if (AdvanceOwnerAiStrategicRetargetTimer(owner, state.frame_counter)) {
+        // FUN_004408b0 updates DAT_01233588 before it reaches the final
+        // DAT_01233568 phase check.  Queue phases 0x16/0x17/0x1b block the
+        // retarget callback, but must not suppress this timer write.
+        return phase_allows_retarget;
     }
 
     OwnerAiEligibleUnitSummary own_summary;
@@ -2449,7 +2448,7 @@ bool ShouldOwnerAiRunStrategicQueueRetarget(OwnerAiRuntimeState& state,
     if (owner.production_budget != 0) {
         const OwnerAiEligibleUnitSummary& summary = load_own_summary();
         if (summary.count >= owner.production_budget || !population_gap_open) {
-            return true;
+            return phase_allows_retarget;
         }
     }
 
@@ -2466,13 +2465,13 @@ bool ShouldOwnerAiRunStrategicQueueRetarget(OwnerAiRuntimeState& state,
             (static_cast<u64>(std::max<i32>(summary.weight, 0)) * 100u) /
             (target_summary.weight + 1u));
         if (ratio >= owner.rally_delay || !population_gap_open) {
-            return true;
+            return phase_allows_retarget;
         }
     }
 
     if (owner.profile_counter != 0 &&
         owner_ai_counter_rule_gate_satisfied(state, owner_slot, input)) {
-        return true;
+        return phase_allows_retarget;
     }
 
     if (owner.reserve_delay == 0) {
@@ -2488,7 +2487,7 @@ bool ShouldOwnerAiRunStrategicQueueRetarget(OwnerAiRuntimeState& state,
     const u32 pressure_ratio = static_cast<u32>(
         (static_cast<u64>(std::max<i32>(summary.weight, 0)) * 100u) /
         (pressure.weight + 1u));
-    return pressure_ratio >= owner.reserve_delay;
+    return phase_allows_retarget && pressure_ratio >= owner.reserve_delay;
 }
 
 bool TickOwnerAiStrategicQueueRetargetGate(OwnerAiRuntimeState& state,

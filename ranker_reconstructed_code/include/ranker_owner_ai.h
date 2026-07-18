@@ -138,6 +138,19 @@ struct OwnerAiSlotRuntime {
     u32 profile_age = 0;
 };
 
+inline bool AdvanceOwnerAiStrategicRetargetTimer(
+    OwnerAiSlotRuntime& owner, u32 frame_counter) {
+    if (owner.build_budget == 0) {
+        return false;
+    }
+    const u32 elapsed_frames = frame_counter - owner.last_timing_frame;
+    if (elapsed_frames / 0x16u <= owner.build_budget) {
+        return false;
+    }
+    owner.last_timing_frame = frame_counter;
+    return true;
+}
+
 inline u32 ResolveOwnerTransportStrategicQueueLoadPercent(
     const OwnerAiSlotRuntime& owner) {
     // AssignOwnerTransportQueueSlotForUnit reads DAT_01238f28.  That table is

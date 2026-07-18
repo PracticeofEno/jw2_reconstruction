@@ -2,6 +2,7 @@
 #include "ranker_owner_ai.h"
 #include "ranker_unit_action.h"
 #include "ranker_unit_commands.h"
+#include "ranker_unit_damage.h"
 #include "ranker_unit_lifecycle.h"
 #include "ranker_unit_spatial_index.h"
 
@@ -23,6 +24,8 @@ constexpr i32 kAdditionalModifier = 4;
 UnitMovementUnit* g_guard_target = nullptr;
 UnitMovementDefinition g_placed_definition{};
 UnitMovementDefinition g_legacy_spawn_definition{};
+u32 g_area_direct_damage_calls = 0;
+u32 g_area_nearby_damage_calls = 0;
 
 void require(bool condition, const char* message) {
     if (!condition) {
@@ -84,6 +87,20 @@ u32 fixed_impact_damage(UnitEffectRuntimeState&, const UnitEffectRuntime&,
     require(source != nullptr && source->id == 0x1d0u && target.id == 0x3a0u,
         "low-id impact damage did not use the live source/target pair");
     return 37;
+}
+
+u32 live_area_impact_damage(UnitEffectRuntimeState&, const UnitEffectRuntime&,
+    UnitMovementUnit* source, UnitMovementUnit& target) {
+    require(source != nullptr && source->id == 0x1d0u,
+        "low-id area impact lost the live source unit");
+    if (target.id == 0x3a0u) {
+        ++g_area_direct_damage_calls;
+        return 37;
+    }
+    require(target.id == 0x570u,
+        "low-id area impact evaluated an ineligible candidate");
+    ++g_area_nearby_damage_calls;
+    return 40;
 }
 
 UnitMovementUnit make_unit(u32 owner_id, u32 command_flags, u32 runtime_flags) {
@@ -471,14 +488,14 @@ void check_guard_pursue_accepts_equal_priority_replacement() {
     g_guard_target = nullptr;
 }
 
-void check_guard_combat_carry_restores_saved_target() {
+void check_guard_combat_carry_uses_scanned_target() {
     UnitMovementUnit saved{};
     saved.id = 0x2f00u;
     UnitMovementUnit scanned{};
     scanned.id = 0x30d0u;
 
-    require(SelectGuardCombatCycleCarryTarget(&saved, &scanned) == &saved,
-        "guard combat carry replaced the saved target with the scanned gate");
+    require(SelectGuardCombatCycleCarryTarget(&saved, &scanned) == &scanned,
+        "guard combat carry retained the invalid saved target");
     require(SelectGuardCombatCycleCarryTarget(&saved, nullptr) == nullptr,
         "guard combat carry retained the saved target without a scanned gate");
 }
@@ -719,6 +736,136 @@ void check_low_id_effect_damage_is_calculated_at_impact() {
         "directional low-id path skipped the original +0x224 divide-by-eight");
 }
 
+void check_low_id_reach_uses_live_area_damage_and_preserves_impact_position() {
+    UnitMovementUnit source{};
+    source.id = 0x1d0u;
+    source.owner_id = 2;
+    source.active = true;
+    source.x = 105;
+    source.y = 94;
+
+    UnitMovementUnit direct{};
+    direct.id = 0x3a0u;
+    direct.owner_id = 8;
+    direct.active = true;
+    direct.x = 100;
+    direct.y = 100;
+    direct.definition.render_class = 1;
+    direct.definition.center_bounds_left = -100;
+    direct.definition.center_bounds_top = -100;
+    direct.definition.center_bounds_width = 200;
+    direct.definition.center_bounds_height = 200;
+
+    UnitMovementUnit nearby{};
+    nearby.id = 0x570u;
+    nearby.owner_id = 8;
+    nearby.active = true;
+    nearby.x = 120;
+    nearby.y = 94;
+    nearby.definition.render_class = 0;
+
+    UnitEffectDefinition definition{};
+    definition.id = 0x1fu;
+    definition.active_frames = 4;
+    definition.active_step_iterations = 4;
+    definition.action_area_damage_radius = 100;
+    definition.allowed_target_render_class_mask = 0xffffffffu;
+
+    UnitEffectRuntimeState state{};
+    state.definitions.push_back(definition);
+    state.unit_refs = {&source, &direct, &nearby};
+    state.callbacks.calculate_impact_damage = live_area_impact_damage;
+
+    UnitEffectRuntime effect{};
+    effect.active = true;
+    effect.effect_id = definition.id;
+    InitializeUnitEffectPathToTarget(state, effect, source, direct);
+    g_area_direct_damage_calls = 0;
+    g_area_nearby_damage_calls = 0;
+    TickUnitEffectPathActive(state, effect);
+
+    const u32 nearby_distance = CalculateApproxUnitDistance(
+        effect.x, effect.y, nearby.x, nearby.y);
+    const u32 nearby_amount = 40u - static_cast<u32>(
+        (static_cast<u64>(nearby_distance) * 40u) / 100u);
+    require(state.events.size() == 2 &&
+            state.events[0].target_id == direct.id &&
+            state.events[0].value == 37 &&
+            state.events[1].target_id == nearby.id &&
+            state.events[1].value == nearby_amount &&
+            g_area_direct_damage_calls == 2 &&
+            g_area_nearby_damage_calls == 1 &&
+            (effect.x != direct.x || effect.y != direct.y),
+        "JW2_12 reach skipped raw +0x1f8 live area damage or snapped the "
+        "preserved projectile impact position to target raw x/y");
+}
+
+void check_high_id_area_damage_uses_definition_bounds_probe() {
+    UnitMovementUnit source{};
+    source.id = 0x1d0u;
+    source.owner_id = 2;
+    source.active = true;
+
+    UnitMovementUnit direct{};
+    direct.id = 0x3a0u;
+    direct.owner_id = 8;
+    direct.active = true;
+    direct.x = 100;
+    direct.y = 100;
+    direct.definition.render_class = 0;
+
+    UnitMovementUnit nearby{};
+    nearby.id = 0x570u;
+    nearby.owner_id = 8;
+    nearby.active = true;
+    nearby.x = 130;
+    nearby.y = 123;
+    nearby.definition.render_class = 0;
+    nearby.definition.center_bounds_left = -20;
+    nearby.definition.center_bounds_top = -28;
+    nearby.definition.center_bounds_width = 10;
+    nearby.definition.center_bounds_height = 10;
+
+    UnitEffectDefinition definition{};
+    definition.id = 0x3du;
+    definition.allowed_target_render_class_mask = 0xffffffffu;
+
+    UnitEffectRuntimeState state{};
+    state.definitions.push_back(definition);
+    state.unit_refs = {&source, &direct, &nearby};
+
+    UnitEffectRuntime effect{};
+    effect.active = true;
+    effect.effect_id = definition.id;
+    effect.source_unit_id = source.id;
+    effect.target_unit_id = direct.id;
+    effect.x = 100;
+    effect.y = 100;
+    ApplyUnitEffectAreaDamageByRenderClassMask(
+        state, effect, 37, 20, 0xffffffffu);
+
+    require(state.events.size() == 2 &&
+            state.events[0].target_id == direct.id &&
+            state.events[0].value == 37 &&
+            state.events[1].target_id == nearby.id &&
+            state.events[1].value == 10,
+        "JW2_11 area damage measured candidates from raw x/y instead of "
+        "definition +0x360/+0x364 bounds center");
+}
+
+void check_owner_ai_retarget_timer_precedes_transport_phase_gate() {
+    OwnerAiSlotRuntime owner{};
+    owner.build_budget = 303;
+    owner.last_timing_frame = 0;
+
+    require(AdvanceOwnerAiStrategicRetargetTimer(owner, 6688) &&
+            owner.last_timing_frame == 6688,
+        "strategic retarget timer did not publish the pre-phase-gate frame");
+    require(!AdvanceOwnerAiStrategicRetargetTimer(owner, 6704) &&
+            owner.last_timing_frame == 6688,
+        "strategic retarget timer ignored its original 22-frame quotient");
+}
+
 void check_transport_queue_publishes_strategic_phase_gate() {
     ProductionOrderRuntimeState production_state{};
     UnitMovementContext movement = make_movement_context(production_state);
@@ -854,12 +1001,15 @@ int main() {
     check_action_geometry_gate_uses_raw_14c_for_reach_and_retarget();
     check_guard_pursue_range_transition_refreshes_target_path();
     check_guard_pursue_accepts_equal_priority_replacement();
-    check_guard_combat_carry_restores_saved_target();
+    check_guard_combat_carry_uses_scanned_target();
     check_guard_combat_completion_replaces_equal_priority();
     check_damage_reaction_guard_jump_table_mapping();
     check_attack_travel_accepts_equal_priority_replacement();
     check_reserved_tile_wait_uses_raw_13d4_frame_period();
     check_low_id_effect_damage_is_calculated_at_impact();
+    check_low_id_reach_uses_live_area_damage_and_preserves_impact_position();
+    check_high_id_area_damage_uses_definition_bounds_probe();
+    check_owner_ai_retarget_timer_precedes_transport_phase_gate();
     check_transport_queue_publishes_strategic_phase_gate();
     check_transport_queue_uses_primary_target_radius_threshold();
     check_conditional_target_point_uses_raw_type_flags();
@@ -877,12 +1027,14 @@ int main() {
                  "guard-same-target=movement+animation "
                  "reach+retarget-gate=raw-14c guard-combat-path=target "
                  "guard-pursue=equal-priority-repath "
-                 "guard-combat-carry=saved-target "
+                 "guard-combat-carry=scanned-target "
                  "guard-combat-complete=equal-priority-replace "
                  "damage-reaction-guard-table=1f/20/21/22/23 "
                  "attack-travel=equal-priority-repath "
                  "reserved-wait-frame=raw-13d4 "
-                 "low-id-impact=live-damage zero-steps=wrapped-do-while "
+                 "low-id-impact=live-area-damage high-id-area=bounds-probe "
+                 "retarget-timer=pre-phase-gate "
+                 "zero-steps=wrapped-do-while "
                  "transport-phase=raw-33568 spatial-mode0=double-sort "
                  "conditional-target=raw-58-type-flags "
                  "area-stun-init=clear-raw-30 "

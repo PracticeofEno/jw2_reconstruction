@@ -1943,23 +1943,23 @@ UnitDamageReactionRetargetPolicy ResolveUnitDamageReactionRetargetPolicy(
 
 UnitMovementUnit* SelectGuardCombatCycleCarryTarget(
     UnitMovementUnit* saved_target, UnitMovementUnit* scanned_candidate) {
-    // GuardCombatCycle 0x004c9be3 saves raw target +0x20 before the action
-    // helper.  On the helper's carry branch, 0x004c9bf2 scans only to decide
-    // whether a target exists; 0x004c9c55 then restores the saved target.
-    // Replacing it with the scanned unit changes the pursue path whenever an
-    // equal-priority unit is beside an temporarily invalid current target.
-    return scanned_candidate != nullptr ? saved_target : nullptr;
+    // GuardCombatCycle's action-helper carry branch enters 0x004c9c68 and
+    // scans for a replacement.  The live original trace at frame 6761 proves
+    // that slots 141/143 replace their invalid saved slot 112 with scanned
+    // slot 109 before the range check.  Retaining the saved unit makes both
+    // guards replan toward (1097,386), consuming two extra rand(80) calls;
+    // the scanned unit at (1095,406) is already in range in the original.
+    (void)saved_target;
+    return scanned_candidate;
 }
 
 UnitMovementUnit* SelectGuardCombatCycleCompletedTarget(
     UnitMovementUnit* current_target, UnitMovementUnit* scanned_candidate) {
     // GuardCombatCycle 0x004c9bea accepts action results 0 and 1 through the
-    // same JBE branch.  After the spatial scan, 0x004c9bff..0x004c9c2d keeps
-    // the saved target only when its raw definition +0x1c0 priority is
-    // strictly lower than the scanned candidate (CMP current,candidate; JC).
-    // Equal priority therefore replaces the saved target.  The decompiler
-    // invents a result-zero predicate here from stale flags, but the assembly
-    // has no such test.
+    // same JBE branch.  The result-1 completion path replaces the saved target
+    // at equal priority.  This inclusive comparison is also required by the
+    // original/rebuild ordered RNG trace: making it strict introduces the
+    // first sequence mismatch at frame 6666 (count 36198, limit 192).
     if (scanned_candidate == nullptr) {
         return current_target;
     }

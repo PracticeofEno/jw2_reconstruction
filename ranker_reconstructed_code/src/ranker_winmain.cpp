@@ -16853,6 +16853,12 @@ void append_default_unit_effect_definition_from_catalog_record(
     definition.impact_render_ticks = frame_count;
     definition.impact_radius = read_runtime_catalog_u32(
         record.definition_bytes, kAuxiliaryEffectImpactRadiusOffset, 0);
+    // Both JW2_12's ordinary reach tail and JW2_11's action dispatcher pass
+    // raw +0x1f8 as the shared damage helper's ECX area radius.  Keeping this
+    // field high-id-only silently converted low-id splash projectiles (for
+    // example Kelpa's effect 0x1f) into direct point hits.
+    definition.action_area_damage_radius = read_runtime_catalog_u32(
+        record.definition_bytes, kJw211ActionAreaDamageRadiusOffset, 0);
     definition.sprite_entry = record.image_resource_entries.empty()
         ? 0
         : record.image_resource_entries.front();
@@ -16910,8 +16916,6 @@ void append_default_unit_effect_definition_from_catalog_record(
             record.definition_bytes, kJw211ActionAuraTickResetThresholdOffset, 0);
         definition.action_aura_radius = read_runtime_catalog_u32(
             record.definition_bytes, kJw211ActionAuraRadiusOffset, 0);
-        definition.action_area_damage_radius = read_runtime_catalog_u32(
-            record.definition_bytes, kJw211ActionAreaDamageRadiusOffset, 0);
         definition.action_target_health_delta = -read_runtime_catalog_i32(
             record.definition_bytes, kJw211ActionTargetHealthDeltaOffset, -1);
         definition.action_startup_ticks = read_runtime_catalog_u32(
@@ -22589,10 +22593,10 @@ void default_unit_command_dispatch_attack(UnitCommandContext& context,
 
     if (!extended_runtime_table_unit &&
         command_state == kUnitStateGuardCombatCycle) {
-        // State 0x20 (0x004c9bdd) scans on carry/loss and results 0/1.
-        // Result 0 applies the saved-target priority comparison.  Result 1
-        // keeps the scanned target directly; the completed impact may have
-        // killed the saved target during this same action tick.
+        // State 0x20 (0x004c9bdd) scans on carry/loss and results 0/1.  The
+        // action-helper carry path uses the scanned replacement directly.
+        // Result 0 applies the saved-target priority comparison; result 1
+        // keeps the scanned target at equal priority as well.
         const bool lost_or_out_of_range =
             result.code == UnitActionTickCode::lost_target;
         const bool completed = result.code == UnitActionTickCode::cycle_complete;
