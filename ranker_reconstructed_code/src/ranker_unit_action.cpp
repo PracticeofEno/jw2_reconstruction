@@ -2003,9 +2003,19 @@ void TickUnitEffectPathActive(UnitEffectRuntimeState& state, UnitEffectRuntime& 
             // animation counter and has already been cleared by reach.
             effect.tick = effect_uses_zero_reach_frame(effect.effect_id) ? 0 : 1;
             UnitMovementUnit* target = find_effect_unit(state, effect.target_unit_id);
-            if (target == nullptr ||
-                (target->runtime_flags & kUnitActionTargetTransient) != 0) {
+            if (target == nullptr) {
                 finish_effect(state, effect);
+                return;
+            }
+            // Original 0x004ec81d..0x004ec82d has already changed the raw
+            // effect flags to 0x80 when it tests target raw +0xa0 (unit
+            // runtime flags) for bit 0x04.  A transient target skips only the
+            // damage tail and returns with the effect still linked.  The next
+            // effect-list tick dispatches that impact state and releases it.
+            // Finishing here shortened the projectile lifetime by one frame,
+            // reversing the free-list order of slots 3/8 in the paired frame
+            // 8296 trace and later swapping the frame-8308 effects.
+            if ((target->runtime_flags & kUnitActionTargetTransient) != 0) {
                 return;
             }
             UnitMovementUnit* source =

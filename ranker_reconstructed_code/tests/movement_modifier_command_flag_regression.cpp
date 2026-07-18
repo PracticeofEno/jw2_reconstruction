@@ -835,6 +835,46 @@ void check_low_id_reach_uses_live_area_damage_and_preserves_impact_position() {
         "preserved projectile impact position to target raw x/y");
 }
 
+void check_low_id_reach_transient_target_preserves_impact_state() {
+    UnitMovementUnit source{};
+    source.id = 0x1d0u;
+    source.active = true;
+    source.x = 100;
+    source.y = 100;
+
+    UnitMovementUnit target{};
+    target.id = 0x3a0u;
+    target.active = true;
+    target.runtime_flags = kUnitActionTargetTransient;
+    target.x = 100;
+    target.y = 100;
+
+    UnitEffectDefinition definition{};
+    definition.id = 0x1fu;
+    definition.active_frames = 4;
+    definition.active_step_iterations = 1;
+
+    UnitEffectRuntimeState state{};
+    state.definitions.push_back(definition);
+    state.unit_refs = {&source, &target};
+
+    UnitEffectRuntime effect{};
+    effect.active = true;
+    effect.effect_id = definition.id;
+    InitializeUnitEffectPathToTarget(state, effect, source, target);
+
+    // The first coincident step establishes closest_distance=0.  The second
+    // enters original 0x004ec813 and then takes the transient-target branch at
+    // 0x004ec823 without unlinking the effect.
+    TickUnitEffectPathActive(state, effect);
+    TickUnitEffectPathActive(state, effect);
+
+    require(effect.active &&
+            (effect.flags & kUnitEffectFlagImpact) != 0 &&
+            state.events.empty(),
+        "transient low-id reach unlinked the impact instead of skipping damage");
+}
+
 void check_high_id_area_damage_uses_definition_bounds_probe() {
     UnitMovementUnit source{};
     source.id = 0x1d0u;
@@ -1044,6 +1084,7 @@ int main() {
     check_reserved_tile_wait_uses_raw_13d4_frame_period();
     check_low_id_effect_damage_is_calculated_at_impact();
     check_low_id_reach_uses_live_area_damage_and_preserves_impact_position();
+    check_low_id_reach_transient_target_preserves_impact_state();
     check_high_id_area_damage_uses_definition_bounds_probe();
     check_owner_ai_retarget_timer_precedes_transport_phase_gate();
     check_transport_queue_publishes_strategic_phase_gate();
@@ -1069,7 +1110,8 @@ int main() {
                  "attack-travel=equal-priority-repath "
                  "idle-attack-travel=preserve-animation "
                  "reserved-wait-frame=raw-13d4 "
-                 "low-id-impact=live-area-damage high-id-area=bounds-probe "
+                 "low-id-impact=live-area-damage+transient-preserve "
+                 "high-id-area=bounds-probe "
                  "retarget-timer=pre-phase-gate "
                  "zero-steps=wrapped-do-while "
                  "transport-phase=raw-33568 spatial-mode0=double-sort "
