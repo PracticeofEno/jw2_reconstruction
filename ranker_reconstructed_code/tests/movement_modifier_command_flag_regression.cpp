@@ -1,4 +1,5 @@
 #include "ranker_production_orders.h"
+#include "ranker_gameplay_visibility.h"
 #include "ranker_owner_ai.h"
 #include "ranker_unit_action.h"
 #include "ranker_unit_commands.h"
@@ -191,6 +192,40 @@ void check_all_unit_spatial_index_double_sort() {
         require(index.sorted_units[i].unit == &units[kSingleSortOrder[i]],
             "non-all spatial index unexpectedly used the mode-0 double sort");
     }
+}
+
+void check_full_action_visibility_requires_owner_layer() {
+    PlayerSlotRuntimeState players{};
+    GameplayVisibilityGrid grid{};
+    grid.width = 1;
+    grid.height = 1;
+    grid.current.assign(1, 0);
+    grid.owner.assign(1, 1u << 2);
+
+    GameplayVisibilityUnit target{};
+    target.owner_id = 8;
+    target.visibility_probe_x = 0;
+    target.visibility_probe_y = 0;
+    target.owner_layer_probe_x = 0;
+    target.owner_layer_probe_y = 0;
+
+    require(CheckUnitFullActionTargetVisibility(players, grid, target, 2),
+        "ordinary action target lost a present owner-layer bit");
+
+    // The paired map-23 divergence exposed raw owner cell 0x01000100: it has
+    // no owner-2 bit and must invalidate the recovery target even though the
+    // target remains active and class-compatible.
+    grid.owner[0] = 0x01000100u;
+    require(!CheckUnitFullActionTargetVisibility(players, grid, target, 2),
+        "action target without the source owner-layer bit remained valid");
+
+    grid.owner[0] = 1u << 2;
+    target.command_flags = 0x40u;
+    require(!CheckUnitFullActionTargetVisibility(players, grid, target, 2),
+        "special action target bypassed its current-visibility gate");
+    grid.current[0] = 1u << (2 + kGameplayVisibilityCurrentOwnerShift);
+    require(CheckUnitFullActionTargetVisibility(players, grid, target, 2),
+        "special action target rejected a present current-visibility bit");
 }
 
 void check_queued_primary_count_uses_raw_command_value() {
@@ -1271,6 +1306,7 @@ int main() {
     check_conditional_target_point_uses_raw_type_flags();
     check_area_stun_initializer_clears_recycled_lifetime();
     check_all_unit_spatial_index_double_sort();
+    check_full_action_visibility_requires_owner_layer();
     check_queued_primary_count_uses_raw_command_value();
     check_placed_unit_clears_raw_identity_flags();
     check_legacy_spawn_approach_uses_live_path_target();

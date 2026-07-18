@@ -878,6 +878,23 @@ bool CheckUnitOwnerLayerBitAtTarget(const GameplayVisibilityGrid& grid,
         unit.owner_layer_probe_y, bit_index) != 0;
 }
 
+bool CheckUnitFullActionTargetVisibility(const PlayerSlotRuntimeState& players,
+    const GameplayVisibilityGrid& grid, const GameplayVisibilityUnit& unit,
+    u32 source_owner_id) {
+    if (source_owner_id >= 32) {
+        return false;
+    }
+    // FUN_004c1e85 0x004c1ec5..0x004c1ee5 requires the owner layer for
+    // every action target.  Only units carrying the special visibility bits
+    // additionally require the owner-relation/current-cell gate.
+    if (CheckUnitVisibilityGateFlags(unit) &&
+        !CheckUnitOwnerMaskOrCurrentVisibilityBit(
+            players, grid, unit, source_owner_id)) {
+        return false;
+    }
+    return CheckUnitOwnerLayerBitAtTarget(grid, unit, source_owner_id);
+}
+
 u32 BuildUnitOwnerVisibilityMaskPair(const PlayerSlotRuntimeState& players,
     const GameplayVisibilityUnit& unit) {
     if (unit.owner_id >= kPlayerSlotCount) {

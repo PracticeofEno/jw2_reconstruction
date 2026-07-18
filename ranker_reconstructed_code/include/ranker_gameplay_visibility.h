@@ -157,6 +157,9 @@ bool CheckUnitOwnerMaskOrCurrentVisibilityBit(const PlayerSlotRuntimeState& play
     u32 bit_index);
 bool CheckUnitOwnerLayerBitAtTarget(const GameplayVisibilityGrid& grid,
     const GameplayVisibilityUnit& unit, u32 bit_index);
+bool CheckUnitFullActionTargetVisibility(const PlayerSlotRuntimeState& players,
+    const GameplayVisibilityGrid& grid, const GameplayVisibilityUnit& unit,
+    u32 source_owner_id);
 u32 BuildUnitOwnerVisibilityMaskPair(const PlayerSlotRuntimeState& players,
     const GameplayVisibilityUnit& unit);
 

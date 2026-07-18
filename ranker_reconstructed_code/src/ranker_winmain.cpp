@@ -13575,14 +13575,21 @@ const UnitActionDamageProfile* default_unit_action_damage_profile(u32 profile_in
 
 bool default_unit_action_can_target(UnitActionContext& context,
     const UnitMovementUnit& source, const UnitMovementUnit& target) {
-    // FUN_004c209c is the common explicit-action class gate.  Owner relation
-    // filtering belongs to automatic spatial target selection, not here:
-    // explicit guard/follow commands are allowed to target a related unit.
-    return target.active &&
+    // FUN_004c1e85 first applies the common class/profile gate at 0x004c1eba,
+    // then the source-owner layer and special visibility gates at
+    // 0x004c1ec5..0x004c1ee5.  A target can move out of the owner's visible
+    // layer during action recovery; keeping only FUN_004c209c here made the
+    // reconstructed unit start another cycle while the original returned to
+    // idle.  Owner relation filtering still belongs only to automatic spatial
+    // selection, so explicit guard/follow targets remain legal when visible.
+    if (!target.active ||
         (target.runtime_flags & (kUnitActionTargetTransient |
-            kUnitActionTargetInactive | kUnitActionTargetClassBlocked)) == 0 &&
-        default_unit_action_profile_allows_target_render_class(
-            context, source, target);
+            kUnitActionTargetInactive | kUnitActionTargetClassBlocked)) != 0 ||
+        !default_unit_action_profile_allows_target_render_class(
+            context, source, target)) {
+        return false;
+    }
+    return default_unit_visibility_allows_target(source, target);
 }
 
 u32 default_unit_action_effect_id(const UnitMovementUnit& source,
@@ -22210,19 +22217,11 @@ bool default_unit_visibility_allows_target(const UnitMovementUnit& source,
     if (!default_visibility_grid_ready_for_targeting()) {
         return true;
     }
-    if (source.owner_id >= 32) {
-        return false;
-    }
-
     const GameplayVisibilityGrid& grid = g_runtime.gameplay_visibility_grid;
     const GameplayVisibilityUnit visibility =
         make_default_gameplay_visibility_unit(candidate);
-    if (CheckUnitVisibilityGateFlags(visibility) &&
-        !CheckUnitOwnerMaskOrCurrentVisibilityBit(g_runtime.gameplay_player_slots,
-            grid, visibility, source.owner_id)) {
-        return false;
-    }
-    return CheckUnitOwnerLayerBitAtTarget(grid, visibility, source.owner_id);
+    return CheckUnitFullActionTargetVisibility(g_runtime.gameplay_player_slots,
+        grid, visibility, source.owner_id);
 }
 
 constexpr bool default_idle_target_lifecycle_class_allows(
