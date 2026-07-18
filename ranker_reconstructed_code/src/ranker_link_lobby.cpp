@@ -816,6 +816,19 @@ bool player_index_valid(int player_index) {
     return player_index >= 0 && player_index < kLinkLobbyAvatarCount;
 }
 
+void set_local_player_transport_handle(LinkLobbyState& state, SOCKET socket) {
+    if (!player_index_valid(state.local_player_index)) {
+        return;
+    }
+
+    const int slot = state.local_player_index;
+    const u32 handle = socket == INVALID_SOCKET || socket == 0 ? 0u :
+        static_cast<u32>(socket);
+    write_le32(state.players[slot].raw_payload,
+        kLinkLobbyPlayerRecordSocketOffset, handle);
+    state.player_payloads[slot] = state.players[slot].raw_payload;
+}
+
 bool udp_endpoint_ready(const sockaddr_in& address) {
     return address.sin_family == AF_INET && address.sin_addr.s_addr != 0 &&
         address.sin_port != 0;
@@ -1010,6 +1023,11 @@ void accept_link_lobby_join_request_slot(LinkLobbyState& state, int slot,
     if (byte_count >= 0x10 + 0x19e) {
         std::memcpy(state.players[slot].raw_payload.data(), bytes + 0x10,
             std::min<std::size_t>(0x19e, state.players[slot].raw_payload.size()));
+        const std::string incoming_name = bounded_c_string(
+            state.players[slot].raw_payload.data() +
+                kLinkLobbyPlayerRecordNameOffset,
+            kLinkLobbyPlayerRecordNameBytes);
+        copy_c_string(state.players[slot].name, incoming_name.c_str());
     }
     write_le32(state.players[slot].raw_payload, kLinkLobbyPlayerRecordSocketOffset,
         static_cast<u32>(sender_socket));
@@ -3276,6 +3294,7 @@ void HandleLinkLobbyStartResult(LinkLobbyState& state, u32 player_index,
     if (state.mode >= 0 && state.mode < 3) {
         state.player_sockets[state.local_player_index] = assigned_peer_socket;
         state.shared_peer_socket = assigned_peer_socket;
+        set_local_player_transport_handle(state, assigned_peer_socket);
         register_local_udp_route(state);
         if (state.mode == 1 && p2p_lobby_state().player_name[0] != '\0') {
             SetLinkLobbyLocalPlayerIdentity(state,
@@ -5535,6 +5554,13 @@ bool InitializeLinkLobbyNetworkRoute(LinkLobbyState& state) {
                 RGB(255, 10, 10));
             return false;
         }
+        // Original FUN_0046e030 stores DAT_014b9a58 (the TCP listen socket)
+        // in the local 0x19e-byte player record at +0x18a before that record
+        // is published.  Peers use nonzero +0x18a as the active-player gate
+        // for the reciprocal UDP probe loop, even though the handle value is
+        // meaningful only in the process that created it.
+        set_local_player_transport_handle(state,
+            legacy_network_state().listen_socket);
     }
     return true;
 }

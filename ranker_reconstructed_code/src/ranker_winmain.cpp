@@ -2745,6 +2745,17 @@ void default_create_game_open_link_lobby(CreateGameState& state) {
             reinterpret_cast<LPARAM>(map_descriptor.data()),
             reinterpret_cast<LPARAM>(session_seed.data()), mode, return_context,
             state.game_type, state.screen_size)) {
+        // The relay-join handler only admits a peer after the selected map has
+        // been resolved locally.  Joined clients already perform this step in
+        // open_joined_link_lobby_from_staged_payloads; the host must do the
+        // same before its listen socket can receive an original client's
+        // opcode-0x09 relay request.  Otherwise map_download_received_bytes
+        // remains zero and the host reports result 5 (game already started)
+        // even though it is still in the lobby.
+        if (!PrepareLinkLobbyMapDownload(lobby)) {
+            ReturnFromLinkLobby(lobby);
+            return;
+        }
         activate_frontend_state(lobby);
     }
 }

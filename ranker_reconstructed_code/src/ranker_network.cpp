@@ -307,12 +307,25 @@ bool IsPrivateIpv4Address(const in_addr& address) {
 
 bool ResolveLocalHostDisplayAddress(char* host_name_out, u32 host_name_size,
     char* address_out, u32 address_size) {
-    (void)host_name_size;
-    (void)address_size;
-
     if (!EnsureLegacyWinSockStartup(2, 0)) {
         return false;
     }
+
+    // Keep the original host-name selection in normal runs.  The companion
+    // port-offset hook is used by the P2P regressions to run both peers on one
+    // machine; allow those tests to bind the reconstructed peer to a distinct
+    // loopback endpoint so its UDP socket and advertised route stay in the
+    // same address family as the original process.
+    if (const char* override_address =
+            std::getenv("RANKER_RECONSTRUCTED_BIND_ADDRESS")) {
+        const unsigned long parsed = inet_addr(override_address);
+        if (override_address[0] != '\0' && parsed != INADDR_NONE) {
+            std::snprintf(host_name_out, host_name_size, "%s", override_address);
+            std::snprintf(address_out, address_size, "%s", override_address);
+            return true;
+        }
+    }
+
     if (gethostname(host_name_out, 0x7f) == SOCKET_ERROR) {
         return false;
     }
