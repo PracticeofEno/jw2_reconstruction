@@ -311,6 +311,26 @@ if (BUILD_TESTING)
         COMMAND tyrano_hud_rows_regression
     )
 
+    add_executable(live_session_definition_precedence_regression
+        tests/live_session_definition_precedence_regression.cpp
+    )
+    target_include_directories(live_session_definition_precedence_regression PRIVATE
+        include
+    )
+    add_test(NAME live_session_definition_precedence_regression
+        COMMAND live_session_definition_precedence_regression
+    )
+
+    add_executable(post_init_unit_requirement_runtime_definition_regression
+        tests/post_init_unit_requirement_runtime_definition_regression.cpp
+    )
+    target_include_directories(post_init_unit_requirement_runtime_definition_regression PRIVATE
+        include
+    )
+    add_test(NAME post_init_unit_requirement_runtime_definition_regression
+        COMMAND post_init_unit_requirement_runtime_definition_regression
+    )
+
     if (WIN32)
         add_executable(win32_text_locked_surface_regression
             tests/win32_text_locked_surface_regression.cpp

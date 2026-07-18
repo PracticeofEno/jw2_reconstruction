@@ -3,6 +3,7 @@
 #include "ranker_types.h"
 
 #include <array>
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -19,6 +20,13 @@ constexpr u32 kGameSessionCompletionReverseCount = 0x40;
 constexpr u32 kGameSessionUnitReferenceCapacity = 16;
 constexpr u32 kGameSessionSmallReferenceCapacity = 16;
 constexpr u32 kPostInitUnitRequirementCount = 4;
+// ranker.exe: DAT_00705030 and DAT_00705020, consumed by FUN_004abbe0.
+// The fourth pair is intentionally retained even though type 48 does not
+// contain type 159 in the pristine JW2_09 table: transition modes append it.
+inline constexpr std::array<u32, kPostInitUnitRequirementCount>
+    kPostInitUnitTypes{{0, 16, 32, 48}};
+inline constexpr std::array<u32, kPostInitUnitRequirementCount>
+    kPostInitRequiredTypes{{111, 127, 143, 159}};
 constexpr u32 kPostInitTransitionSnapshotBytes = 0x4f10;
 constexpr u32 kGameSessionAvatarPlayerCount = 0x14;
 constexpr u32 kGameSessionAvatarSlotCount = 8;
@@ -73,8 +81,10 @@ struct GameSessionUnitReferenceTables {
     std::array<u32, kGameSessionUnitTypeCount> primary_or_alternate_reverse{};
     std::array<u32, kGameSessionCompletionReverseCount> completion_reverse{};
     std::array<u32, 0x100> small_reverse{};
-    std::array<u32, kPostInitUnitRequirementCount> post_init_unit_types{};
-    std::array<u32, kPostInitUnitRequirementCount> post_init_required_types{};
+    std::array<u32, kPostInitUnitRequirementCount> post_init_unit_types =
+        kPostInitUnitTypes;
+    std::array<u32, kPostInitUnitRequirementCount> post_init_required_types =
+        kPostInitRequiredTypes;
     bool post_init_transition_pending = false;
 };
 
@@ -110,6 +120,82 @@ struct GameSessionAvatarProductionDefinition {
 struct RuntimeDefinitionRecord {
     std::vector<u8> bytes;
 };
+
+inline bool ApplyPostInitUnitRequirementToggleToRuntimeDefinitions(
+    std::vector<RuntimeDefinitionRecord>& records, bool transition_pending) {
+    constexpr std::size_t kPrimaryReferenceCountOffset = 0x240;
+    constexpr std::size_t kPrimaryReferenceBaseOffset = 0x244;
+    constexpr std::size_t kRequiredDefinitionBytes =
+        kPrimaryReferenceBaseOffset +
+        kGameSessionUnitReferenceCapacity * sizeof(u32);
+
+    const auto read_u32 = [](const std::vector<u8>& bytes,
+                              std::size_t offset) -> u32 {
+        return static_cast<u32>(bytes[offset + 0]) |
+            (static_cast<u32>(bytes[offset + 1]) << 8) |
+            (static_cast<u32>(bytes[offset + 2]) << 16) |
+            (static_cast<u32>(bytes[offset + 3]) << 24);
+    };
+    const auto write_u32 = [](std::vector<u8>& bytes,
+                               std::size_t offset, u32 value) {
+        bytes[offset + 0] = static_cast<u8>(value & 0xffu);
+        bytes[offset + 1] = static_cast<u8>((value >> 8) & 0xffu);
+        bytes[offset + 2] = static_cast<u8>((value >> 16) & 0xffu);
+        bytes[offset + 3] = static_cast<u8>((value >> 24) & 0xffu);
+    };
+
+    bool changed = false;
+    for (u32 pair = 0; pair < kPostInitUnitRequirementCount; ++pair) {
+        const u32 unit_type = kPostInitUnitTypes[pair];
+        const u32 required_type = kPostInitRequiredTypes[pair];
+        if (unit_type >= records.size() ||
+            records[unit_type].bytes.size() < kRequiredDefinitionBytes) {
+            continue;
+        }
+
+        std::vector<u8>& bytes = records[unit_type].bytes;
+        const u32 raw_count = read_u32(bytes, kPrimaryReferenceCountOffset);
+        const u32 count = raw_count < kGameSessionUnitReferenceCapacity ?
+            raw_count : kGameSessionUnitReferenceCapacity;
+        u32 index = 0;
+        while (index < count &&
+               read_u32(bytes, kPrimaryReferenceBaseOffset +
+                       index * sizeof(u32)) != required_type) {
+            ++index;
+        }
+
+        if (transition_pending) {
+            if (index >= count && raw_count < kGameSessionUnitReferenceCapacity) {
+                write_u32(bytes, kPrimaryReferenceBaseOffset +
+                        raw_count * sizeof(u32), required_type);
+                write_u32(bytes, kPrimaryReferenceCountOffset, raw_count + 1);
+                changed = true;
+            }
+        }
+        else if (index < count) {
+            // FUN_004abbe0 clears the matched cell and decrements the count;
+            // it does not compact the remaining array.
+            write_u32(bytes, kPrimaryReferenceBaseOffset +
+                    index * sizeof(u32), 0);
+            write_u32(bytes, kPrimaryReferenceCountOffset, raw_count - 1);
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+inline const std::vector<u8>* SelectLiveSessionUnitDefinitionBytes(
+    const std::vector<RuntimeDefinitionRecord>& active_records, u32 unit_type,
+    const std::vector<u8>* catalog_fallback,
+    std::size_t minimum_complete_bytes) {
+    if (unit_type < active_records.size()) {
+        const std::vector<u8>& active = active_records[unit_type].bytes;
+        if (active.size() >= minimum_complete_bytes) {
+            return &active;
+        }
+    }
+    return catalog_fallback;
+}
 
 constexpr std::size_t kSessionUnitDefinitionNameOffset = 0x10c;
 constexpr std::size_t kSessionUnitDefinitionNameBytes = 0x40;

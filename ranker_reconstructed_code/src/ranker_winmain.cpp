@@ -16051,64 +16051,55 @@ u32 bounded_runtime_catalog_u32(const std::vector<u8>& bytes, std::size_t offset
     return value;
 }
 
-void fill_default_unit_reverse_reference_table(
-    std::array<u32, kGameSessionUnitTypeCount>& reverse,
-    const std::vector<u8>& definition_bytes, std::size_t count_offset,
-    std::size_t list_offset, u32 owner_unit_type) {
-    const u32 count = std::min<u32>(
-        read_runtime_catalog_u32(definition_bytes, count_offset, 0),
-        kGameSessionUnitReferenceCapacity);
-    for (u32 index = 0; index < count; ++index) {
-        const u32 referenced_type = read_runtime_catalog_u32(
-            definition_bytes, list_offset + index * sizeof(u32),
-            kInvalidGameSessionUnitType);
-        if (referenced_type < reverse.size()) {
-            reverse[referenced_type] = owner_unit_type;
-        }
+void load_default_unit_reference_definition(UnitTypeSessionDefinition& target,
+    const std::vector<u8>& definition_bytes) {
+    target = UnitTypeSessionDefinition{};
+    if (read_runtime_catalog_u32(definition_bytes, 0, 0) == 0) {
+        return;
     }
-}
 
-void fill_default_completion_reverse_reference_table(
-    std::array<u32, kGameSessionCompletionReverseCount>& reverse,
-    const std::vector<u8>& definition_bytes, std::size_t count_offset,
-    std::size_t list_offset, u32 owner_unit_type) {
-    const u32 count = std::min<u32>(
-        read_runtime_catalog_u32(definition_bytes, count_offset, 0),
-        kGameSessionUnitReferenceCapacity);
-    for (u32 index = 0; index < count; ++index) {
-        const u32 referenced_type = read_runtime_catalog_u32(
-            definition_bytes, list_offset + index * sizeof(u32),
-            kInvalidGameSessionUnitType);
-        if (referenced_type < reverse.size()) {
-            reverse[referenced_type] = owner_unit_type;
+    target.present = true;
+    const auto load_u32_references = [&definition_bytes](
+        u32& target_count,
+        std::array<u32, kGameSessionUnitReferenceCapacity>& target_values,
+        std::size_t count_offset, std::size_t base_offset) {
+        target_count = std::min<u32>(
+            read_runtime_catalog_u32(definition_bytes, count_offset, 0),
+            kGameSessionUnitReferenceCapacity);
+        for (u32 index = 0; index < target_count; ++index) {
+            target_values[index] = read_runtime_catalog_u32(definition_bytes,
+                base_offset + index * sizeof(u32), kInvalidGameSessionUnitType);
         }
-    }
-}
+    };
+    load_u32_references(target.primary_reference_count,
+        target.primary_references, kUnitDefinitionPrimaryReferenceCountOffset,
+        kUnitDefinitionPrimaryReferenceBaseOffset);
+    load_u32_references(target.alternate_reference_count,
+        target.alternate_references, kUnitDefinitionAlternateReferenceCountOffset,
+        kUnitDefinitionAlternateReferenceBaseOffset);
+    load_u32_references(target.completion_reference_count,
+        target.completion_references, kUnitDefinitionCompletionReferenceCountOffset,
+        kUnitDefinitionCompletionReferenceBaseOffset);
 
-void fill_default_small_reverse_reference_table(std::array<u32, 0x100>& reverse,
-    const std::vector<u8>& definition_bytes, u32 owner_unit_type) {
-    const u32 count = std::min<u32>(
+    target.small_reference_count = static_cast<u8>(std::min<u32>(
         read_runtime_catalog_u8(definition_bytes,
             kUnitDefinitionSmallReferenceCountOffset, 0),
-        kGameSessionSmallReferenceCapacity);
-    for (u32 index = 0; index < count; ++index) {
-        const u8 referenced_type = read_runtime_catalog_u8(
-            definition_bytes, kUnitDefinitionSmallReferenceBaseOffset + index, 0xff);
-        reverse[referenced_type] = owner_unit_type;
+        kGameSessionSmallReferenceCapacity));
+    for (u32 index = 0; index < target.small_reference_count; ++index) {
+        target.small_references[index] = read_runtime_catalog_u8(definition_bytes,
+            kUnitDefinitionSmallReferenceBaseOffset + index, 0xff);
     }
 }
 
 const std::vector<u8>* default_live_unit_definition_bytes(u32 unit_type) {
-    if (unit_type < g_runtime.active_session_definitions.unit_records.size()) {
-        const std::vector<u8>& active =
-            g_runtime.active_session_definitions.unit_records[unit_type].bytes;
-        // A compact US_UB row is only 0xd0 bytes.  It is not a standalone
-        // definition: FUN_00450ba0 overlays it on the already loaded JW2_09
-        // row.  Prefer the live table only after that base-seeding step has
-        // produced the complete 0x24bc-byte definition.
-        if (active.size() >= kUnitDefinitionRecordBytes) {
-            return &active;
-        }
+    // A compact US_UB row is only 0xd0 bytes.  It is not a standalone
+    // definition: FUN_00450ba0 overlays it on the already loaded JW2_09 row.
+    // Prefer the live table only after that base-seeding step has produced the
+    // complete 0x24bc-byte definition.
+    if (const std::vector<u8>* active = SelectLiveSessionUnitDefinitionBytes(
+            g_runtime.active_session_definitions.unit_records, unit_type,
+            nullptr, kUnitDefinitionRecordBytes)) {
+        return active;
     }
     if (!unit_definition_resource_catalog_state().loaded &&
         !LoadUnitDefinitionResourceCatalog()) {
@@ -16120,8 +16111,12 @@ const std::vector<u8>* default_live_unit_definition_bytes(u32 unit_type) {
         return nullptr;
     }
     const UnitDefinitionResourceRecord& record = catalog.records[unit_type];
-    return record.loaded && !record.definition_bytes.empty() ?
-        &record.definition_bytes : nullptr;
+    const std::vector<u8>* fallback =
+        record.loaded && !record.definition_bytes.empty() ?
+            &record.definition_bytes : nullptr;
+    return SelectLiveSessionUnitDefinitionBytes(
+        g_runtime.active_session_definitions.unit_records, unit_type,
+        fallback, kUnitDefinitionRecordBytes);
 }
 
 void rebuild_default_unit_reference_tables_from_catalog() {
@@ -16132,32 +16127,28 @@ void rebuild_default_unit_reference_tables_from_catalog() {
     const UnitDefinitionResourceCatalogState& catalog =
         unit_definition_resource_catalog_state();
     GameSessionUnitReferenceTables& tables = g_runtime.unit_reference_tables;
-    tables.primary_or_alternate_reverse.fill(kInvalidGameSessionUnitType);
-    tables.completion_reverse.fill(kInvalidGameSessionUnitType);
-    tables.small_reverse.fill(kInvalidGameSessionUnitType);
+    // FUN_00426770 calls FUN_004abbe0 after the live definition import and
+    // before rebuilding its reverse tables.  Apply the exact four static pairs
+    // to the complete active records; reading the immutable TRC catalog here
+    // left 0->111, 16->127 and 32->143 visible in normal P2P sessions.
+    ApplyPostInitUnitRequirementToggleToRuntimeDefinitions(
+        g_runtime.active_session_definitions.unit_records,
+        tables.post_init_transition_pending);
+    tables.definitions = {};
 
-    for (u32 unit_type = 0; unit_type < catalog.records.size(); ++unit_type) {
+    for (u32 unit_type = 0;
+         unit_type < catalog.records.size() &&
+         unit_type < tables.definitions.size(); ++unit_type) {
         const std::vector<u8>* definition_bytes =
             default_live_unit_definition_bytes(unit_type);
         if (definition_bytes == nullptr ||
             read_runtime_catalog_u32(*definition_bytes, 0, 0) == 0) {
             continue;
         }
-
-        fill_default_unit_reverse_reference_table(
-            tables.primary_or_alternate_reverse, *definition_bytes,
-            kUnitDefinitionPrimaryReferenceCountOffset,
-            kUnitDefinitionPrimaryReferenceBaseOffset, unit_type);
-        fill_default_unit_reverse_reference_table(
-            tables.primary_or_alternate_reverse, *definition_bytes,
-            kUnitDefinitionAlternateReferenceCountOffset,
-            kUnitDefinitionAlternateReferenceBaseOffset, unit_type);
-        fill_default_completion_reverse_reference_table(tables.completion_reverse,
-            *definition_bytes, kUnitDefinitionCompletionReferenceCountOffset,
-            kUnitDefinitionCompletionReferenceBaseOffset, unit_type);
-        fill_default_small_reverse_reference_table(tables.small_reverse,
-            *definition_bytes, unit_type);
+        load_default_unit_reference_definition(
+            tables.definitions[unit_type], *definition_bytes);
     }
+    RebuildUnitTypeReverseReferenceTables(tables);
 }
 
 void refresh_default_unit_definition_runtime_fields(UnitMovementUnit& unit) {
@@ -18103,15 +18094,12 @@ void sync_default_ui_overlay_selected_unit_command_options(
     if (avatar_producer) {
         append_default_ui_overlay_avatar_production_options(overlay, unit);
     }
-    const UnitDefinitionResourceCatalogState& catalog =
-        unit_definition_resource_catalog_state();
-    if (!catalog.loaded || unit.type_id >= catalog.records.size()) {
+    const std::vector<u8>* source_bytes =
+        default_live_unit_definition_bytes(unit.type_id);
+    if (source_bytes == nullptr) {
         return;
     }
-    const UnitDefinitionResourceRecord& source = catalog.records[unit.type_id];
-    if (!source.loaded || source.definition_bytes.empty()) {
-        return;
-    }
+    const std::vector<u8>& source = *source_bytes;
 
     const bool structure = unit.type_id >= 0x60u;
     if (!avatar_producer) {
@@ -18122,17 +18110,17 @@ void sync_default_ui_overlay_selected_unit_command_options(
             kUnitDefinitionAlternateReferenceBaseOffset :
             kUnitDefinitionPrimaryReferenceBaseOffset;
         const u32 raw_count = read_runtime_catalog_u32(
-            source.definition_bytes, reference_count_offset, 0);
+            source, reference_count_offset, 0);
         if (structure) {
             overlay.selected_unit_raw_production_reference_count = raw_count;
         }
         const u32 count = std::min<u32>(raw_count, 16);
         for (u32 index = 0; index < count; ++index) {
             const u32 referenced_type = read_runtime_catalog_u32(
-                source.definition_bytes,
+                source,
                 reference_base_offset + index * sizeof(u32),
                 kUnitDefinitionResourceCount);
-            if (referenced_type >= catalog.records.size()) {
+            if (referenced_type >= kUnitDefinitionResourceCount) {
                 continue;
             }
             if (unit.owner_id < g_runtime.session_runtime_import_state
@@ -18144,14 +18132,14 @@ void sync_default_ui_overlay_selected_unit_command_options(
                 continue;
             }
 
-            const UnitDefinitionResourceRecord& candidate =
-                catalog.records[referenced_type];
-            if (!candidate.loaded || candidate.definition_bytes.empty()) {
+            const std::vector<u8>* candidate_bytes =
+                default_live_unit_definition_bytes(referenced_type);
+            if (candidate_bytes == nullptr) {
                 continue;
             }
             u32 category = 0;
             if (!structure) {
-                category = read_runtime_catalog_u32(candidate.definition_bytes,
+                category = read_runtime_catalog_u32(*candidate_bytes,
                     kUnitDefinitionPlacementClassOffset, 3);
                 if (category >= 3) {
                     continue;
@@ -18162,7 +18150,7 @@ void sync_default_ui_overlay_selected_unit_command_options(
             option.item_id = referenced_type;
             option.aux = category;
             option.icon_marker = read_runtime_catalog_u8(
-                candidate.definition_bytes, kUnitDefinitionUiIconMarkerOffset, 0);
+                *candidate_bytes, kUnitDefinitionUiIconMarkerOffset, 0);
             UnitLifecycleContext* lifecycle =
                 g_runtime.gameplay_startup_state.lifecycle;
             if (lifecycle != nullptr &&
@@ -18191,10 +18179,10 @@ void sync_default_ui_overlay_selected_unit_command_options(
     // +0x2c8 become production-order ids (+0xf4 at 0x004e506d), followed by
     // byte equipment ids at +0x30f/+0x310 (+0x24a at 0x004e50cc).
     const u32 raw_order_count = read_runtime_catalog_u32(
-        source.definition_bytes, kUnitDefinitionCompletionReferenceCountOffset, 0);
+        source, kUnitDefinitionCompletionReferenceCountOffset, 0);
     const u32 order_count = std::min<u32>(raw_order_count, 0x40u);
     for (u32 index = 0; index < order_count; ++index) {
-        const u32 order_id = read_runtime_catalog_u32(source.definition_bytes,
+        const u32 order_id = read_runtime_catalog_u32(source,
             kUnitDefinitionCompletionReferenceBaseOffset + index * sizeof(u32),
             0x40u);
         if (order_id >= 0x40u) {
@@ -18233,12 +18221,12 @@ void sync_default_ui_overlay_selected_unit_command_options(
     }
 
     const u32 equipment_count = std::min<u32>(
-        read_runtime_catalog_u8(source.definition_bytes,
+        read_runtime_catalog_u8(source,
             kUnitDefinitionSmallReferenceCountOffset, 0),
         0x96u);
     for (u32 index = 0; index < equipment_count; ++index) {
         const u32 equipment_id = read_runtime_catalog_u8(
-            source.definition_bytes,
+            source,
             kUnitDefinitionSmallReferenceBaseOffset + index, 0xffu);
         if (equipment_id >= 0x96u) {
             continue;
