@@ -6,6 +6,7 @@ param(
     [int]$CombatTimeoutSeconds = 120,
     [int]$PickupTimeoutSeconds = 30,
     [int]$DamageConsumeTimeoutSeconds = 55,
+    [switch]$NextDivergenceAudit,
     [switch]$Execute
 )
 
@@ -32,6 +33,9 @@ $required = @(
     (Join-Path $root '.tmp_meat_targeted_pair_probe.py'),
     (Join-Path $root '.tmp_meat_targeted_pair_probe_fixture.py')
 )
+if ($NextDivergenceAudit) {
+    $required += (Join-Path $root '.tmp_nextdiv_compact_audit_frame2.py')
+}
 $missing = @($required | Where-Object { -not (Test-Path -LiteralPath $_) })
 $timeoutContract =
     $ProbeTimeoutSeconds -ge 120 -and $ProbeTimeoutSeconds -le 150 -and
@@ -72,7 +76,7 @@ if (Test-Path -LiteralPath (Join-Path $root '.tmp_meat_live_probe.py')) {
 
 $phases = @(
     'launch a fresh original host and reconstructed client; enter P2P gameplay',
-    'select at least two local type-32 attackers and a visible neutral type-75',
+    'select at least two local faction workers and a visible neutral type-75',
     'start a 120-150 second finalized exact-frame meat probe before combat',
     'press physical A (scan 0x1e), target the neutral, and verify 0x88..0x80 red flash',
     'issue explicit attack orders until type-75 death creates effect id 2 on both peers',
@@ -157,6 +161,8 @@ $script:rebuildBase = 0L
 $script:rebuildWindow = [IntPtr]::Zero
 $script:meatProbeProcess = $null
 $script:attackFlashProbeProcess = $null
+$script:nextDivergenceAuditProcess = $null
+$script:nextDivergenceStopPath = $null
 $script:launchStartedUtc = $null
 $script:freshPids = @()
 
@@ -634,6 +640,7 @@ $results = [ordered]@{
     consume = [ordered]@{ pass = $false }
     cargo_clean = $false
     meat_probe = $null
+    effect_audit = $null
     integrated_full_coverage_pass = $false
     failure = $null
     cleanup = $null
@@ -668,12 +675,14 @@ try {
     Save-Json $initial (Join-Path $output 'initial-rebuild.json')
 
     $owner = [int]$initial.local_owner
+    $attackerType = @(0,16,32,48)[$TribeIndex]
     $workers = @($initial.active_units | Where-Object {
-        [int]$_.owner -eq $owner -and [int]$_.type -eq 32 -and
+        [int]$_.owner -eq $owner -and [int]$_.type -eq $attackerType -and
         [bool]$_.active -and [int]$_.health[0] -gt 0
     })
     if ($workers.Count -lt 2) {
-        throw "At least two live type-32 attackers are required; found $($workers.Count)."
+        throw ("At least two live type-{0} attackers are required; found {1}." -f
+            $attackerType,$workers.Count)
     }
     $visibleIds = @($initial.minimap_units | Where-Object {
         [int]$_.owner -eq 8 -and [bool]$_.visible -and -not [bool]$_.hidden
@@ -710,8 +719,28 @@ try {
         world = @($neutral.world)
     }
     $results.attackers = @($attackers | ForEach-Object {
-        [ordered]@{ slot=[int]$_.slot; id=[int]$_.id; world=@($_.world) }
+        [ordered]@{
+            slot=[int]$_.slot; id=[int]$_.id; type=$attackerType; world=@($_.world)
+        }
     })
+
+    if ($NextDivergenceAudit) {
+        $nextDivergenceResultPath = Join-Path $output `
+            'next-divergence-result.json'
+        $nextDivergenceJournalPath = Join-Path $output `
+            'next-divergence-journal.jsonl'
+        $script:nextDivergenceStopPath = Join-Path $output `
+            'next-divergence-stop.flag'
+        $script:nextDivergenceAuditProcess = Start-PythonTrace `
+            (Join-Path $root '.tmp_nextdiv_compact_audit_frame2.py') @(
+                [string]$script:originalPid, [string]$script:rebuildPid,
+                ('0x{0:X}' -f $script:rebuildBase), $resolvedLayoutPath,
+                $nextDivergenceResultPath, $nextDivergenceJournalPath,
+                $script:nextDivergenceStopPath, '240') `
+            (Join-Path $output 'next-divergence-audit.out') `
+            (Join-Path $output 'next-divergence-audit.err')
+        Start-Sleep -Milliseconds 200
+    }
 
     $meatTracePath = Join-Path $output 'meat-trace.jsonl'
     $meatSummaryPath = Join-Path $output 'meat-summary.json'
@@ -760,7 +789,7 @@ try {
     $issuedCount = @($results.attack_orders | Where-Object {
         [bool]$_.result.pass
     }).Count
-    # A single type-32 attacker can finish this neutral before the remaining
+    # A single faction worker can finish this neutral before the remaining
     # explicit orders are issued.  The paired meat trace is authoritative for
     # the death/spawn transition, so require at least one confirmed UI order.
     if ($issuedCount -lt 1) {
@@ -799,6 +828,11 @@ try {
         [int]$_.slot -in @($attackers | ForEach-Object { [int]$_.slot }) -and
         [bool]$_.active -and [int]$_.health[0] -gt 0
     } | Sort-Object @{ Expression = {
+        # Prefer a collector that did not tank the neutral fight.  Distance
+        # alone can select a one-HP front-line unit which dies after pickup,
+        # leaving no live carrier for the consumption phase.
+        -[int]$_.health[0]
+    }}, @{ Expression = {
         $dx = [Int64]([int]$_.world[0] - [int]$spawn.rebuild.x)
         $dy = [Int64]([int]$_.world[1] - [int]$spawn.rebuild.y)
         $dx * $dx + $dy * $dy
@@ -903,9 +937,12 @@ try {
     $liveCollector = @($postPickup.active_units | Where-Object {
         [int]$_.slot -eq $collectorSlot -and [bool]$_.active
     } | Select-Object -First 1)[0]
+    if ($null -eq $liveCollector) {
+        throw 'The meat collector died before the consumption phase.'
+    }
     $hostiles = @($postPickup.active_units | Where-Object {
         [int]$_.owner -ge 0 -and [int]$_.owner -lt 8 -and
-        [int]$_.owner -ne $owner -and [int]$_.type -eq 32 -and
+        [int]$_.owner -ne $owner -and [int]$_.type -eq $attackerType -and
         [bool]$_.active -and [int]$_.health[0] -gt 0
     } | Sort-Object @{ Expression = {
         $dx = [Int64]([int]$_.world[0] - [int]$liveCollector.world[0])
@@ -914,7 +951,8 @@ try {
     }})
     $hostile = @($hostiles | Select-Object -First 1)[0]
     if ($null -eq $hostile) {
-        throw 'No hostile owner-0 type-32 unit was available for real damage.'
+        throw ("No hostile owner worker type-{0} was available for real damage." -f
+            $attackerType)
     }
 
     $selectedForDamage = Select-Unit $postPickup $liveCollector
@@ -934,7 +972,7 @@ try {
         } | ForEach-Object { [int]$_.id })
         $visibleHostile = @($damageSnapshot.active_units | Where-Object {
             [int]$_.owner -ne $owner -and [int]$_.owner -lt 8 -and
-            [int]$_.type -eq 32 -and [bool]$_.active -and
+            [int]$_.type -eq $attackerType -and [bool]$_.active -and
             [int]$_.id -in $visibleHostileIds
         } | Select-Object -First 1)[0]
         if ($null -ne $visibleHostile) {
@@ -1088,6 +1126,21 @@ catch {
     $exitCode = 1
 }
 finally {
+    if ($null -ne $script:nextDivergenceAuditProcess) {
+        [IO.File]::WriteAllText(
+            $script:nextDivergenceStopPath, 'driver-finished',
+            [Text.UTF8Encoding]::new($false))
+        if (-not $script:nextDivergenceAuditProcess.WaitForExit(20000)) {
+            Stop-Process -Id $script:nextDivergenceAuditProcess.Id -Force `
+                -ErrorAction SilentlyContinue
+        }
+        $nextDivergenceResultPath = Join-Path $output `
+            'next-divergence-result.json'
+        if (Test-Path -LiteralPath $nextDivergenceResultPath) {
+            $results.effect_audit = Get-Content -LiteralPath `
+                $nextDivergenceResultPath -Raw | ConvertFrom-Json
+        }
+    }
     $results.cleanup = Stop-FreshProcesses
     $results.finished_utc = [DateTime]::UtcNow.ToString('o')
     Save-Json $results (Join-Path $output 'result.json')

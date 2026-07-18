@@ -80,20 +80,30 @@ Assert-Contains $mainSource '[int]$CombatTimeoutSeconds = 120' `
     '120 second neutral combat allowance'
 Assert-Contains $mainSource '$workers.Count -lt 2' `
     'two confirmed local attackers are sufficient'
-Assert-Contains $mainSource '$issuedCount -lt 2' `
-    'two issued attack orders are the coverage gate'
+Assert-Contains $mainSource '$attackerType = @(0,16,32,48)[$TribeIndex]' `
+    'all four faction worker types are selected from the lobby tribe'
+Assert-Contains $mainSource '$issuedCount -lt 1' `
+    'one confirmed attack order is sufficient when the neutral dies early'
 Assert-Contains $mainSource '[int]$_.type -eq 75' `
     'neutral type-75 selection'
 Assert-Contains $mainSource "[int]`$_.owner -eq 8" `
     'neutral owner selection'
 Assert-Contains $mainSource "'.tmp_meat_live_probe.py'" `
     'shared exact-frame meat probe'
+Assert-Contains $mainSource '[switch]$NextDivergenceAudit' `
+    'optional whole-simulation effect audit switch'
+Assert-Contains $mainSource "'.tmp_nextdiv_compact_audit_frame2.py'" `
+    'whole-simulation effect auditor dependency'
+Assert-Contains $mainSource '$results.effect_audit =' `
+    'whole-simulation effect verdict is retained in the result'
 Assert-Contains $mainSource "'--timeout', [string]`$ProbeTimeoutSeconds" `
     'probe receives the 120-150 second timeout'
 Assert-Contains $mainSource 'Get-HotRegion $view 175' `
     'explicit attack hot action'
 Assert-Contains $mainSource '[int]$_.effect_id -eq 2' `
     'meat effect id-2 generation'
+Assert-Contains $mainSource '-[int]$_.health[0]' `
+    'healthiest surviving collector is preferred before pickup'
 Assert-Contains $mainSource 'Click-HotItem $selected 183' `
     'collector hot item 183/action 0x0d'
 Assert-Contains $mainSource "`$collectorSlot 'marker'" `
@@ -111,12 +121,15 @@ Assert-Contains $mainSource '[int]$pickupEvent.original.action_delta -gt 0' `
     'pickup increments action mode'
 Assert-Contains $mainSource '[int]$pickupEvent.original.cargo_delta -eq 0' `
     'pickup does not contaminate cargo'
-Assert-Contains $mainSource '[int]$_.type -eq 32' `
-    'hostile type-32 damage source'
+Assert-Contains $mainSource '[int]$_.type -eq $attackerType' `
+    'same-faction hostile worker damage source'
 Assert-Contains $mainSource "`$collectorSlot 'damage-consume'" `
     'diagnostic damage followed by consume probe'
 Assert-Contains $mainSource '$consumeEventDamageObserved' `
     'exact trace proves real pre-consume damage'
+Assert-Contains $mainSource `
+    'The meat collector died before the consumption phase.' `
+    'collector death is diagnosed before hostile distance sorting'
 Assert-Contains $mainSource '$pairedConsumePass =' `
     'targeted paired condition is independent consume evidence'
 Assert-Contains $mainSource `
