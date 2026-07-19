@@ -1015,6 +1015,30 @@ def add_owner_visibility_words(name, memory, rows):
         else:
             row["owner_visibility_cell"] = None
 
+
+def owner_visibility_plane(name, memory):
+    width = rebuild.u32(visibility_grid)
+    height = rebuild.u32(visibility_grid + 4)
+    if width <= 0 or height <= 0 or width > 1024 or height > 1024:
+        return None
+    if name == "original":
+        owner_pointer = 0x007D8D40
+        data = b"".join(
+            memory.read(owner_pointer + row * 256 * 4, width * 4)
+            for row in range(height)
+        )
+    else:
+        owner_pointer = struct.unpack(
+            "<Q", memory.read(visibility_grid + 0x38, 8))[0]
+        data = (memory.read(owner_pointer, width * height * 4)
+                if owner_pointer else b"")
+    if not owner_pointer:
+        return None
+    return {
+        "size": [width, height],
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }
+
 sides = {
     "original": {
         "memory": original,
@@ -1065,8 +1089,12 @@ def capture_frozen_body(name, side):
         # owner 2 is the first post-target-selection recovery divergence.
         recovery_effect_2_33 = memory.i32(
             0x00710EC4 + 2 * 0x2A8 + 33 * 4)
+        recovery_effect_1_33 = memory.i32(
+            0x00710EC4 + 1 * 0x2A8 + 33 * 4)
         movement_effect_2_48 = memory.i32(
             0x00713944 + 2 * 0x2A8 + 48 * 4)
+        interaction_effect_1_51 = memory.i32(
+            0x00714E84 + 1 * 0x2A8 + 51 * 4)
         focus_residue = original_focus_residue(memory)
     else:
         rng = [memory.u32(random_state), memory.u32(random_state + 4),
@@ -1089,11 +1117,18 @@ def capture_frozen_body(name, side):
         recovery_effect_2_33 = memory.i32(
             runtime + production_runtime_offset + 0x1D40 +
             5 * 0x1540 + 2 * 0x2A8 + 33 * 4)
+        recovery_effect_1_33 = memory.i32(
+            runtime + production_runtime_offset + 0x1D40 +
+            5 * 0x1540 + 1 * 0x2A8 + 33 * 4)
         movement_effect_2_48 = memory.i32(
             runtime + production_runtime_offset + 0x1D40 +
             7 * 0x1540 + 2 * 0x2A8 + 48 * 4)
+        interaction_effect_1_51 = memory.i32(
+            runtime + production_runtime_offset + 0x1D40 +
+            8 * 0x1540 + 1 * 0x2A8 + 51 * 4)
         focus_residue = rebuild_focus_residue(memory, rebuild_focus_pointer)
     add_owner_visibility_words(name, memory, rows)
+    owner_visibility = owner_visibility_plane(name, memory)
     # Raw draw_flags is local pointer-command feedback.  FUN_004da02c writes
     # DAT_008629de[action] directly to the object hit by the peer that received
     # the physical input; the synchronized gameplay packet does not carry it.
@@ -1132,7 +1167,10 @@ def capture_frozen_body(name, side):
         "unit_effects": unit_effects,
         "map_effects": map_effects,
         "recovery_effect_2_33": recovery_effect_2_33,
+        "recovery_effect_1_33": recovery_effect_1_33,
         "movement_effect_2_48": movement_effect_2_48,
+        "interaction_effect_1_51": interaction_effect_1_51,
+        "owner_visibility": owner_visibility,
         "focus_residue_144": focus_residue,
     }
     return {
@@ -1251,6 +1289,11 @@ def terminal_summary():
         "lifecycle_unit_count": len(state["lifecycle_order"]),
         "unit_effect_count": len(state["unit_effects"]),
         "map_effect_count": len(state["map_effects"]),
+        "recovery_effect_2_33": state["recovery_effect_2_33"],
+        "recovery_effect_1_33": state["recovery_effect_1_33"],
+        "movement_effect_2_48": state["movement_effect_2_48"],
+        "interaction_effect_1_51": state["interaction_effect_1_51"],
+        "owner_visibility": state["owner_visibility"],
         "economy": state["economy"],
         "owner_ai": state["owner_ai"],
         "owner_ai_sha256": digest(state["owner_ai"]),
@@ -1588,14 +1631,15 @@ try:
                 previous_exact = {"original": left, "rebuild": right}
                 update_coverage(left["state"])
 
-            # Keep unmatched peer snapshots briefly for wall-time skew, then
-            # discard them before they can grow into a large in-memory trace.
-            leading = max(side["last_seen"] or 0 for side in sides.values())
-            for side in sides.values():
+            # Keep a leading peer's completed snapshots until the lagging
+            # peer has actually passed those frames.
+            for name, side in sides.items():
+                other_name = "rebuild" if name == "original" else "original"
+                other_seen = sides[other_name]["last_seen"] or 0
                 side["snapshots"] = {
                     frame: snapshot
                     for frame, snapshot in side["snapshots"].items()
-                    if frame >= leading - 32
+                    if frame >= other_seen - 32
                 }
             time.sleep(POLL_SECONDS)
         else:
