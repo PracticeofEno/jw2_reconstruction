@@ -256,6 +256,20 @@ if (BUILD_TESTING)
         COMMAND owner_palette_output_regression
     )
 
+    add_executable(interface_background_resource_regression
+        tests/interface_background_resource_regression.cpp
+        src/ranker_trc.cpp
+    )
+    target_include_directories(interface_background_resource_regression PRIVATE
+        include
+    )
+    target_link_libraries(interface_background_resource_regression PRIVATE
+        zlib113
+    )
+    add_test(NAME interface_background_resource_regression
+        COMMAND interface_background_resource_regression
+    )
+
     add_executable(ui_layout_bucket_completion_regression
         tests/ui_layout_bucket_completion_regression.cpp
         src/ranker_ui_overlay.cpp
