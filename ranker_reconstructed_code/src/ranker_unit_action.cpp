@@ -1547,6 +1547,11 @@ u32 chain_count_from_source_status(const UnitMovementUnit& source) {
 
 } // namespace
 
+void ApplyUnitActionEffectTargetLockoutIfFlagged(UnitMovementUnit& target,
+    u32 lockout_ticks) {
+    apply_action_effect_target_lockout_if_flagged(target, lockout_ticks);
+}
+
 bool CheckIncomingActionTargetTransientFlag(const UnitMovementUnit& target) {
     return (target.runtime_flags & kUnitActionTargetTransient) != 0;
 }
@@ -1647,8 +1652,13 @@ UnitActionTickResult ProcessUnitActionCycle(UnitActionContext& context,
             return result;
         }
         if (!validation.in_range) {
-            source.path_target_x = target->x;
-            source.path_target_y = target->y;
+            // FUN_004c1e85 reports the valid-but-out-of-range target through
+            // its result/carry pair; it does not publish the target point to
+            // raw +0x6c/+0x70 itself.  Low-unit state 0x04 copies that point
+            // in its caller before entering state 0x03, while extended-table
+            // units pop their action and preserve the original acquisition
+            // point.  Writing it here made a type-160 unit replace (940,345)
+            // with the moving target's (962,113) at parity frame 3520.
             return result;
         }
 
@@ -2032,11 +2042,11 @@ void TickUnitEffectPathActive(UnitEffectRuntimeState& state, UnitEffectRuntime& 
             const u32 base_amount = unit_effect_point_impact_damage(
                 state, effect, source, *target);
             bool finish_after_reach = false;
+            u32 target_lockout_ticks = 0;
             if (effect.effect_id == 0x14 || effect.effect_id == 0x28 ||
                 effect.effect_id == 0x2c) {
-                const u32 lockout_ticks =
+                target_lockout_ticks =
                     std::min<u32>((base_amount >> 2) + 1, 0x0b);
-                apply_action_effect_target_lockout_if_flagged(*target, lockout_ticks);
             }
             if (effect.effect_id == 0x27) {
                 effect.x = target->x;
@@ -2069,6 +2079,19 @@ void TickUnitEffectPathActive(UnitEffectRuntimeState& state, UnitEffectRuntime& 
                     append_low_id_live_action_area_impacts(
                         state, effect, source, *definition, radius);
                 }
+            }
+            if (target_lockout_ticks != 0 &&
+                (target->definition.action_effect_flags & 0x8u) != 0) {
+                // The original reach branch calls the shared damage helper at
+                // 0x004ec561 before testing the target definition and
+                // installing runtime bit 0x40 / the command-entry lockout at
+                // 0x004ec576..0x004ec597.  Impact damage is drained from the
+                // typed event queue, so represent the following lockout in
+                // that same ordered queue.  Applying it here suppressed the
+                // target's damage reaction and produced state 1 instead of
+                // attack-travel state 3 at parity frame 3668.
+                append_effect_event(state, UnitEffectEventKind::target_lockout,
+                    effect, target->id, target_lockout_ticks);
             }
             if (finish_after_reach) {
                 finish_effect(state, effect);

@@ -75,6 +75,15 @@ bool accept_attack_travel_range_after_completed_step(UnitCommandContext&,
     return ++g_attack_travel_range_calls >= 2;
 }
 
+UnitActionTargetValidation valid_out_of_range_action_target(UnitActionContext&,
+    const UnitMovementUnit&, const UnitMovementUnit&) {
+    UnitActionTargetValidation validation{};
+    validation.valid = true;
+    validation.in_range = false;
+    validation.distance = 0x1234;
+    return validation;
+}
+
 void ignore_attack_dispatch(UnitCommandContext&, UnitMovementUnit&) {}
 
 const UnitMovementDefinition* find_placed_definition(
@@ -798,6 +807,116 @@ void check_idle_invalid_scan_does_not_publish_target_or_path() {
     g_guard_target = nullptr;
 }
 
+void check_high_runtime_idle_does_not_pursue_out_of_range_target() {
+    const ProductionOrderRuntimeState production_state{};
+    UnitCommandContext commands{};
+    commands.production_state = &production_state;
+    commands.callbacks.find_target = find_same_guard_target;
+    commands.callbacks.can_attack_target = allow_guard_attack;
+    commands.callbacks.target_in_action_range = reject_guard_range;
+    commands.callbacks.dispatch_attack = ignore_attack_dispatch;
+
+    UnitMovementUnit target{};
+    target.id = 0x1d0u * 153u;
+    target.owner_id = 2;
+    target.active = true;
+    target.x = 940;
+    target.y = 441;
+
+    UnitMovementUnit unit = make_unit(8, 0x20u, 1u);
+    unit.type_id = 160;
+    unit.type_flags = 0x20u;
+    unit.command_state = kUnitStateRuntimeIdleAcquire;
+    unit.animation_frame = 0;
+    unit.path_target_x = 0;
+    unit.path_target_y = 0;
+    unit.definition.movement_animation_frame_count = 0;
+    g_guard_target = &target;
+
+    HandleUnitRuntimeIdleAcquireState(commands, unit);
+
+    require(unit.command_state == kUnitStateRuntimeIdleAcquire,
+        "high runtime idle pursued an out-of-range scanned target");
+    require(unit.target == nullptr && unit.command_value == 0 &&
+            unit.path_target_x == 0 && unit.path_target_y == 0,
+        "high runtime idle published the out-of-range candidate");
+    require(unit.animation_frame == 1,
+        "high runtime idle did not continue its eight-frame idle cycle");
+
+    commands.callbacks.target_in_action_range = accept_guard_range;
+    unit.animation_frame = 0;
+    HandleUnitRuntimeIdleAcquireState(commands, unit);
+    require(unit.command_state == kUnitStateRuntimeAttackTarget &&
+            unit.target == &target && unit.command_value == target.id &&
+            unit.path_target_x == target.x && unit.path_target_y == target.y,
+        "high runtime idle rejected an in-range target");
+    g_guard_target = nullptr;
+}
+
+void check_completed_attack_target_selection_preserves_high_runtime_path() {
+    UnitCommandContext commands{};
+    commands.callbacks.find_target = find_same_guard_target;
+    commands.callbacks.can_attack_target = allow_guard_attack;
+
+    UnitMovementUnit target{};
+    target.id = 0x1d0u * 153u;
+    target.type_id = 33;
+    target.active = true;
+    target.x = 940;
+    target.y = 339;
+    g_guard_target = &target;
+
+    UnitMovementUnit high = make_unit(8, 0, 1);
+    high.type_id = 160;
+    high.command_state = kUnitStateRuntimeAttackTarget;
+    high.target = &target;
+    high.command_value = target.id;
+    high.path_target_x = 940;
+    high.path_target_y = 345;
+    HandleUnitAttackCycleCompleteTargetSelection(commands, high);
+    require(high.target == &target && high.command_value == target.id &&
+            high.path_target_x == 940 && high.path_target_y == 345,
+        "extended attack cycle refreshed its moving target acquisition point");
+
+    UnitMovementUnit low = make_unit(2, 0, 1);
+    low.type_id = 33;
+    low.command_state = kUnitStateAttackTarget;
+    low.path_target_x = 940;
+    low.path_target_y = 345;
+    HandleUnitAttackCycleCompleteTargetSelection(commands, low);
+    require(low.target == &target && low.command_value == target.id &&
+            low.path_target_x == 940 && low.path_target_y == 339,
+        "low attack cycle lost its original replacement-target refresh");
+    g_guard_target = nullptr;
+}
+
+void check_action_validation_does_not_publish_out_of_range_target_path() {
+    UnitMovementUnit target{};
+    target.id = 0x1d0u * 153u;
+    target.type_id = 33;
+    target.active = true;
+    target.x = 962;
+    target.y = 113;
+
+    UnitMovementUnit source = make_unit(8, 0, 1);
+    source.type_id = 160;
+    source.command_state = kUnitStateRuntimeAttackTarget;
+    source.target = &target;
+    source.command_value = target.id;
+    source.path_target_x = 940;
+    source.path_target_y = 345;
+
+    UnitActionContext actions{};
+    actions.callbacks.validate_target_reach =
+        valid_out_of_range_action_target;
+    const UnitActionTickResult result = ProcessUnitActionCycle(actions, source);
+    require(result.code == UnitActionTickCode::lost_target &&
+            result.valid_target && result.target == &target,
+        "valid out-of-range action result was not returned to its caller");
+    require(source.path_target_x == 940 && source.path_target_y == 345,
+        "shared action validation published the moving target path");
+}
+
 void check_reserved_tile_wait_uses_raw_13d4_frame_period() {
     const ProductionOrderRuntimeState production_state{};
     UnitMovementContext movement = make_movement_context(production_state);
@@ -1076,6 +1195,21 @@ void check_flagged_low_id_impact_uses_command_entry_lockout() {
     TickUnitEffectPathActive(state, effect);
     TickUnitEffectPathActive(state, effect);
 
+    require(state.events.size() == 2 &&
+            state.events[0].kind == UnitEffectEventKind::impact &&
+            state.events[0].target_id == target.id &&
+            state.events[0].value == 37 &&
+            state.events[1].kind == UnitEffectEventKind::target_lockout &&
+            state.events[1].target_id == target.id &&
+            state.events[1].value == 10,
+        "flagged low-id reach did not queue damage before target lockout");
+    require((target.runtime_flags & 0x40u) == 0 &&
+            (target.command_state & 0x40000000u) == 0 &&
+            target.command_entry_lockout_ticks == 0,
+        "flagged low-id reach installed target lockout before queued damage");
+
+    ApplyUnitActionEffectTargetLockoutIfFlagged(
+        target, state.events[1].value);
     require((target.runtime_flags & 0x40u) != 0 &&
             (target.command_state & 0x40000000u) != 0 &&
             target.command_entry_lockout_ticks == 10 &&
@@ -1294,6 +1428,9 @@ int main() {
     check_attack_travel_completed_step_checks_range_before_repath();
     check_idle_out_of_range_attack_preserves_animation_frame();
     check_idle_invalid_scan_does_not_publish_target_or_path();
+    check_high_runtime_idle_does_not_pursue_out_of_range_target();
+    check_completed_attack_target_selection_preserves_high_runtime_path();
+    check_action_validation_does_not_publish_out_of_range_target_path();
     check_reserved_tile_wait_uses_raw_13d4_frame_period();
     check_low_id_effect_damage_is_calculated_at_impact();
     check_low_id_reach_uses_live_area_damage_and_preserves_impact_position();
@@ -1326,6 +1463,9 @@ int main() {
                  "attack-travel=equal-priority-repath "
                  "attack-travel-complete=in-range-before-repath "
                  "idle-attack-travel=preserve-animation "
+                 "high-idle=reject-out-of-range-pursuit "
+                 "high-cycle=preserve-acquisition-path "
+                 "action-range=caller-publishes-path "
                  "reserved-wait-frame=raw-13d4 "
                  "low-id-impact=live-area-damage+transient-preserve+entry-lockout "
                  "high-id-area=bounds-probe "

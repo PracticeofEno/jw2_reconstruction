@@ -21156,6 +21156,14 @@ void drain_default_unit_effect_impact_events(
     }
 
     for (const UnitEffectEvent& event : effects.events) {
+        if (event.kind == UnitEffectEventKind::target_lockout) {
+            if (UnitMovementUnit* target =
+                    find_default_movement_unit_by_id(event.target_id)) {
+                ApplyUnitActionEffectTargetLockoutIfFlagged(
+                    *target, event.value);
+            }
+            continue;
+        }
         if (event.kind != UnitEffectEventKind::impact || event.target_id == 0) {
             continue;
         }
@@ -22553,10 +22561,7 @@ void default_unit_command_dispatch_attack(UnitCommandContext& context,
             return;
         }
         if (result.code == UnitActionTickCode::cycle_complete) {
-            if (UnitMovementUnit* replacement = find_valid_replacement()) {
-                SetUnitCommandTarget(unit, replacement);
-                copy_attack_path_target(*replacement);
-            }
+            HandleUnitAttackCycleCompleteTargetSelection(context, unit);
             return;
         }
         if (result.code == UnitActionTickCode::turning_to_target) {
@@ -22694,16 +22699,6 @@ void default_unit_command_dispatch_attack(UnitCommandContext& context,
                 result.code != UnitActionTickCode::cycle_in_progress) &&
             (result.target->runtime_flags & 0x20000u) != 0) {
             pop_extended_runtime_action();
-        }
-        if (command_state == kUnitStateAttackTarget &&
-            result.code == UnitActionTickCode::cycle_complete &&
-            context.callbacks.find_target != nullptr) {
-            UnitMovementUnit* replacement =
-                context.callbacks.find_target(context, unit);
-            if (replacement != nullptr && can_attack_replacement(*replacement)) {
-                SetUnitCommandTarget(unit, replacement);
-                copy_attack_path_target(*replacement);
-            }
         }
         if (command_state == kUnitStateGuardCombatCycle &&
             result.code == UnitActionTickCode::cycle_complete) {

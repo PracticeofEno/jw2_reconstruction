@@ -948,6 +948,8 @@ void HandleUnitRuntimeIdleAcquireState(UnitCommandContext& context,
     UnitMovementUnit& unit);
 void HandleUnitRuntimeAttackTargetState(UnitCommandContext& context,
     UnitMovementUnit& unit);
+void HandleUnitAttackCycleCompleteTargetSelection(UnitCommandContext& context,
+    UnitMovementUnit& unit);
 void TickUnitRuntimeAuxTimerReset(UnitMovementUnit& unit);
 void StartUnitRuntimeTargetValidationState(UnitCommandContext& context,
     UnitMovementUnit& unit);

@@ -3244,7 +3244,13 @@ void HandleUnitRuntimeIdleAcquireState(UnitCommandContext& context,
                 context.callbacks.find_source_bounds_target != nullptr
             ? context.callbacks.find_source_bounds_target(context, unit)
             : find_target(context, unit);
-        if (target != nullptr && can_attack(context, unit, *target)) {
+        // HandleUnitRuntimeIdleAcquireState (0x004cda5d..0x004cda62)
+        // accepts only FUN_004c1e85's carry-clear result.  Carry with EAX=0
+        // means the candidate is valid but out of action range; unlike the
+        // mobile ProcessUnitIdleAcquireCommand path, this high-type runtime
+        // table does not create state 3 or pursue that candidate.
+        if (target != nullptr && can_attack(context, unit, *target) &&
+            target_in_attack_range(context, unit, *target)) {
             SetUnitCommandTarget(unit, target);
             unit.command_state = kUnitStateRuntimeAttackTarget;
             unit.command_flags &= ~8u;
@@ -3290,6 +3296,25 @@ void HandleUnitRuntimeAttackTargetState(UnitCommandContext& context,
 
     unit.command_flags &= ~0x10u;
     pop_completed_runtime_state(context, unit);
+}
+
+void HandleUnitAttackCycleCompleteTargetSelection(UnitCommandContext& context,
+    UnitMovementUnit& unit) {
+    // Low-unit state 0x04 selects a new target after its action cycle.  The
+    // extended table's state 0x04 at 0x004cdad9 returns directly for the same
+    // non-loss result (including ordinary type 0xa0), preserving the point
+    // copied when state 0x01 first acquired the target.  Refreshing it every
+    // cycle changed raw +0x6c/+0x70 as a moving target advanced underneath a
+    // stationary high-type attacker.
+    if (unit.type_id >= 0x60) {
+        return;
+    }
+    UnitMovementUnit* replacement = find_target(context, unit);
+    if (replacement == nullptr || !can_attack(context, unit, *replacement)) {
+        return;
+    }
+    SetUnitCommandTarget(unit, replacement);
+    copy_target_position_to_path(unit, *replacement);
 }
 
 void TickUnitRuntimeAuxTimerReset(UnitMovementUnit& unit) {

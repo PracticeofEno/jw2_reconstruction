@@ -129,6 +129,7 @@ enum class UnitEffectEventKind : u32 {
     render = 3,
     refunded = 4,
     finished = 5,
+    target_lockout = 6,
 };
 
 enum class UnitEffectSoundSpatialKind : u32 {
@@ -308,6 +309,8 @@ void ApplyUnitActionImpact(UnitActionContext& context, UnitMovementUnit& source,
     UnitMovementUnit& target);
 UnitActionTickResult ProcessUnitActionCycle(UnitActionContext& context,
     UnitMovementUnit& source);
+void ApplyUnitActionEffectTargetLockoutIfFlagged(UnitMovementUnit& target,
+    u32 lockout_ticks);
 
 void TickUnitEffectRuntime(UnitEffectRuntimeState& state, UnitEffectRuntime& effect);
 void TickUnitEffectStartupDelay(UnitEffectRuntimeState& state, UnitEffectRuntime& effect);
