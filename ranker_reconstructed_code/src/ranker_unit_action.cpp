@@ -480,11 +480,12 @@ bool effect_uses_tick_animation_frame(const UnitEffectRuntime& effect) {
     }
     // The ordinary low-id projectile dispatcher uses raw +0x0c as its
     // animation counter. Raw +0x10 is the remaining path budget while the
-    // projectile is active. The target marker and the 0x20 afterimage clone
-    // are specialized low-id paths that animate through `frame` instead.
-    return effect.effect_id != 0x27u &&
-        !(effect.effect_id == 0x20u &&
-            (effect.flags & kUnitEffectFlagAfterimageClone) != 0);
+    // projectile is active.  The 0x20 afterimage clone is the specialized
+    // low-id path that animates through `frame` instead.  Construction marker
+    // 0x27 is not an exception: original FUN_004ed940 selects its sprite with
+    // raw +0x0c, and the linked-construction branch increments that same word.
+    return !(effect.effect_id == 0x20u &&
+        (effect.flags & kUnitEffectFlagAfterimageClone) != 0);
 }
 
 u32 effect_animation_frame(const UnitEffectRuntime& effect) {

@@ -1054,6 +1054,45 @@ void check_low_id_effect_damage_is_calculated_at_impact() {
         "directional low-id path skipped the original +0x224 divide-by-eight");
 }
 
+void check_construction_marker_render_uses_raw_tick_frame() {
+    UnitMovementUnit building{};
+    building.id = 0x3a0u;
+    building.active = true;
+    building.type_id = 115;
+    building.action_mode_gate = 1;
+
+    UnitEffectDefinition definition{};
+    definition.id = 0x27u;
+    definition.active_frames = 3;
+    definition.impact_render_ticks = 3;
+    definition.sprite_entry = 0x5100u;
+    definition.impact_sprite_entries = {0x5100u, 0x5101u, 0x5102u};
+
+    UnitEffectRuntimeState state{};
+    state.definitions.push_back(definition);
+    state.unit_refs.push_back(&building);
+
+    UnitEffectRuntime marker{};
+    marker.active = true;
+    marker.effect_id = 0x27u;
+    marker.flags = kUnitEffectFlagImpact;
+    marker.tick = 1;
+    marker.frame = 0;
+    marker.linked_unit_id = building.id;
+    marker.target_unit_id = building.id;
+
+    DispatchUnitActionEffectCommand(state, marker, 0x27u);
+    require(marker.tick == 2 && marker.frame == 0,
+        "construction marker did not advance raw +0x0c independently");
+
+    u32 sprite_entry = 0;
+    u32 draw_mode = 0;
+    require(ResolveUnitEffectGenericSpriteRender(
+                state, marker, sprite_entry, draw_mode) &&
+            sprite_entry == 0x5102u,
+        "construction marker rendered raw +0x10 instead of raw +0x0c");
+}
+
 void check_projectile_first_bounds_entry_uses_inclusive_far_edge_center() {
     UnitMovementUnit target{};
     target.id = 0x3a0u;
@@ -1512,6 +1551,7 @@ int main() {
     check_action_validation_does_not_publish_out_of_range_target_path();
     check_reserved_tile_wait_uses_raw_13d4_frame_period();
     check_low_id_effect_damage_is_calculated_at_impact();
+    check_construction_marker_render_uses_raw_tick_frame();
     check_projectile_first_bounds_entry_uses_inclusive_far_edge_center();
     check_low_id_reach_uses_live_area_damage_and_preserves_impact_position();
     check_low_id_reach_transient_target_preserves_impact_state();
@@ -1550,6 +1590,7 @@ int main() {
                  "reserved-wait-frame=raw-13d4 "
                  "projectile-bounds-entry=inclusive-far-edge-center "
                  "low-id-impact=live-area-damage+transient-preserve+entry-lockout "
+                 "construction-marker-frame=raw-0c "
                  "high-id-area=bounds-probe "
                  "retarget-timer=pre-phase-gate "
                  "zero-steps=wrapped-do-while "
