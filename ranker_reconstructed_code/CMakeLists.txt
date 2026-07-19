@@ -803,6 +803,7 @@ if (BUILD_TESTING)
         tests/movement_modifier_command_flag_regression.cpp
         src/ranker_production_orders.cpp
         src/ranker_unit_commands.cpp
+        src/ranker_unit_target_helpers.cpp
         src/ranker_unit_damage.cpp
         src/ranker_unit_equipment.cpp
         src/ranker_unit_action.cpp

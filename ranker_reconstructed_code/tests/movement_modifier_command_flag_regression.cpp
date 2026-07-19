@@ -1379,6 +1379,48 @@ void check_area_stun_initializer_clears_recycled_lifetime() {
         "area-stun initializer did not clear only raw effect +0x30");
 }
 
+void check_follow_hold_advances_raw_animation_frame() {
+    const ProductionOrderRuntimeState production_state{};
+    UnitMovementContext movement = make_movement_context(production_state);
+    UnitCommandContext commands{};
+    commands.movement = &movement;
+    commands.production_state = &production_state;
+
+    UnitMovementUnit target = make_unit(1, 0, 1);
+    target.id = 65u * 0x1d0u;
+    target.active = true;
+    target.health = 110;
+    target.max_health = 110;
+    target.x = 511;
+    target.y = 2207;
+
+    UnitMovementUnit follower = make_unit(1, 9, 1);
+    follower.type_id = 48;
+    follower.command_state = kUnitStateFollowHoldRange;
+    follower.target = &target;
+    follower.x = 511;
+    follower.y = 2207;
+    follower.animation_frame = 10;
+    follower.animation_timer = 3;
+    follower.definition.animation_frame_count = 32;
+    follower.definition.animation_timer_period = 16;
+
+    ProcessUnitFollowHoldRange(commands, follower);
+    require(follower.animation_frame == 11 && follower.animation_timer == 3,
+        "follow-hold advanced raw +0xec instead of raw +0x64");
+
+    follower.animation_frame = 15;
+    ProcessUnitFollowHoldRange(commands, follower);
+    require(follower.animation_frame == 0 && follower.animation_timer == 3,
+        "follow-hold did not wrap at raw definition +0x13d4");
+
+    follower.animation_frame = 7;
+    follower.definition.animation_timer_period = 0;
+    ProcessUnitFollowHoldRange(commands, follower);
+    require(follower.animation_frame == 7 && follower.animation_timer == 3,
+        "zero raw definition +0x13d4 advanced the follow-hold frame");
+}
+
 } // namespace
 
 int main() {
@@ -1442,6 +1484,7 @@ int main() {
     check_transport_queue_uses_primary_target_radius_threshold();
     check_conditional_target_point_uses_raw_type_flags();
     check_area_stun_initializer_clears_recycled_lifetime();
+    check_follow_hold_advances_raw_animation_frame();
     check_all_unit_spatial_index_double_sort();
     check_full_action_visibility_requires_owner_layer();
     check_queued_primary_count_uses_raw_command_value();
@@ -1474,6 +1517,7 @@ int main() {
                  "transport-phase=raw-33568 spatial-mode0=double-sort "
                  "conditional-target=raw-58-type-flags "
                  "area-stun-init=clear-raw-30 "
+                 "follow-hold-frame=raw-64/raw-def-13d4 "
                  "queued-primary=raw-68 placed-identity=raw-08+0c "
                  "legacy-placement=live-raw-6c+70\n";
     return EXIT_SUCCESS;

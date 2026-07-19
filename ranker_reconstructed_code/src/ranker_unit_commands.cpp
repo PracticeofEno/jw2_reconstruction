@@ -4492,7 +4492,18 @@ void ProcessUnitFollowHoldRange(UnitCommandContext& context, UnitMovementUnit& u
             return;
         }
     }
-    ProcessUnitAnimationTimer(unit);
+    // Original state 0x17 at 0x004c9970..0x004c9988 advances raw unit +0x64
+    // and wraps it against definition +0x13d4.  ProcessUnitAnimationTimer
+    // owns the unrelated raw unit +0xec field; using it here left a nearby
+    // follower permanently on frame zero (most visibly the tribe-3 worker
+    // after a right-click landed on a unit occluding a meat drop).
+    const u32 period = unit.definition.animation_timer_period;
+    if (period != 0) {
+        ++unit.animation_frame;
+        if (unit.animation_frame >= period) {
+            unit.animation_frame = 0;
+        }
+    }
 }
 
 namespace {
