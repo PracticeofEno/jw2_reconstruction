@@ -94,6 +94,58 @@ void test_draw_mode_precedes_single_frame_hp_fade() {
         "draw mode 2/80 must precede the single-frame HP fade");
 }
 
+void test_elf_completion_channel_additive_ramp() {
+    UnitAnimationDefinition definition{};
+    UnitAnimationDrawContext context = make_context();
+    context.definition = &definition;
+    context.use_555_color = true;
+    context.ramp_x_step = 0x400;
+    context.ramp_y_step = 0x20;
+    context.ramp_secondary_step = 1;
+    InitializeUnitRenderColorRamps(context);
+
+    // InitializeUnitRenderColorRamps (0x004c5ef0) builds the triangular
+    // 32-entry ramp consumed by the structure-completion branch at
+    // 0x004c523d.  Every buildable Elf structure has one group-0 frame and
+    // takes this branch for the 31 ticks following construction.
+    require(context.color_ramps.x_offsets[0] == 0x800 &&
+            context.color_ramps.y_offsets[0] == 0x40 &&
+            context.color_ramps.secondary_offsets[0] == 2,
+        "555 completion ramp did not start with the original packed steps");
+    require(context.color_ramps.x_offsets[15] == 0x8000 &&
+            context.color_ramps.y_offsets[15] == 0x400 &&
+            context.color_ramps.secondary_offsets[15] == 32,
+        "555 completion ramp peak differs from the original");
+    require(context.color_ramps.x_offsets[16] == 0x7800 &&
+            context.color_ramps.y_offsets[16] == 0x3c0 &&
+            context.color_ramps.secondary_offsets[16] == 30 &&
+            context.color_ramps.x_offsets[31] == 0 &&
+            context.color_ramps.y_offsets[31] == 0 &&
+            context.color_ramps.secondary_offsets[31] == 0,
+        "555 completion ramp did not descend to the original terminal zero");
+
+    UnitAnimationUnit unit{};
+    unit.type_id = 117;
+    unit.construction_stage_count = 1;
+    unit.cell_channel_additive_active = true;
+    unit.cell_channel_additive_frame = 16;
+    unit.animation_flags = kUnitAnimFlagShowBars;
+    unit.max_hit_points = 1800;
+    unit.hit_points = 1800;
+
+    g_draws.clear();
+    DispatchUnitCellResourceDraw(context, unit);
+    require(g_draws.size() == 1,
+        "Elf completion glow must return before markers and status bars");
+    require(g_draws.front().sequence ==
+                UnitAnimationSequence::cell_channel_additive &&
+            g_draws.front().animation_frame == 0 &&
+            g_draws.front().kind ==
+                UnitAnimationDrawKind::channel_additive_tint &&
+            context.highlight_level == 16,
+        "Elf completion glow did not use group-0 frame and raw +0x78 ramp index");
+}
+
 UnitAnimationSequence dispatch_sequence(UnitAnimationDrawContext& context,
     u32 state, u32 flags = 0, u32 command_value = 0) {
     UnitAnimationUnit unit{};
@@ -241,6 +293,7 @@ int main() {
     test_single_frame_uses_hp_fade();
     test_single_frame_full_hp_and_zero_duration_are_opaque();
     test_draw_mode_precedes_single_frame_hp_fade();
+    test_elf_completion_channel_additive_ramp();
     test_original_mobile_animation_group_matrix();
     test_structure_damage_overlay_frame();
     std::cout << "CONSTRUCTION_PROGRESS_FRAME_PARITY_PASS "

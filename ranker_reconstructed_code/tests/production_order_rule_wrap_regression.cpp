@@ -63,10 +63,97 @@ ProductionOrderCostRule rule(i32 base, u32 mode, i32 linear, i32 extra) {
     return result;
 }
 
+void test_owner_slot_production_state_swap() {
+    ProductionOrderRuntimeState state{};
+    constexpr u32 kFirstOwner = 1;
+    constexpr u32 kSecondOwner = 6;
+
+    for (u32 order = 0; order < kProductionOrderCount; ++order) {
+        state.variant_counts[kFirstOwner][order] =
+            static_cast<u8>(order + 1);
+        state.lock_flags[kFirstOwner][order] =
+            static_cast<u8>(0x40u + order);
+        state.order_cell_opaque_bytes[kFirstOwner][order] = {
+            static_cast<u8>(0x80u + order),
+            static_cast<u8>(0xc0u + order)};
+
+        state.variant_counts[kSecondOwner][order] =
+            static_cast<u8>(0xf0u - order);
+        state.lock_flags[kSecondOwner][order] =
+            static_cast<u8>(0xb0u - order);
+        state.order_cell_opaque_bytes[kSecondOwner][order] = {
+            static_cast<u8>(0x70u - order),
+            static_cast<u8>(0x30u - order)};
+    }
+    state.order_2b_bonus_totals[kFirstOwner] = 111;
+    state.order_2b_bonus_totals[kSecondOwner] = -222;
+    for (u32 effect = 0;
+         effect < kProductionOrderCompletionEffectCount; ++effect) {
+        for (u32 type = 0; type < kProductionOrderTypeCount; ++type) {
+            state.completion_effect_totals[effect][kFirstOwner][type] =
+                static_cast<i32>(effect * 1000u + type);
+            state.completion_effect_totals[effect][kSecondOwner][type] =
+                -static_cast<i32>(effect * 1000u + type + 1u);
+        }
+    }
+
+    // HandleOwnerSlotTransferAndStateSwap (0x00427600) exchanges the complete
+    // four-byte owner/order cell, the order-0x2b owner bonus, and all eighteen
+    // 0xaa-entry effect tables.  Unit counts and resources are handled by the
+    // surrounding ownership-transfer path and are deliberately not part of
+    // this focused helper.
+    require(SwapProductionOrderOwnerState(
+                state, kFirstOwner, kSecondOwner),
+        "valid owner-slot production state swap was rejected");
+    for (u32 order = 0; order < kProductionOrderCount; ++order) {
+        require(state.variant_counts[kFirstOwner][order] ==
+                    static_cast<u8>(0xf0u - order) &&
+                state.lock_flags[kFirstOwner][order] ==
+                    static_cast<u8>(0xb0u - order) &&
+                state.order_cell_opaque_bytes[kFirstOwner][order][0] ==
+                    static_cast<u8>(0x70u - order) &&
+                state.order_cell_opaque_bytes[kFirstOwner][order][1] ==
+                    static_cast<u8>(0x30u - order) &&
+                state.variant_counts[kSecondOwner][order] ==
+                    static_cast<u8>(order + 1) &&
+                state.lock_flags[kSecondOwner][order] ==
+                    static_cast<u8>(0x40u + order) &&
+                state.order_cell_opaque_bytes[kSecondOwner][order][0] ==
+                    static_cast<u8>(0x80u + order) &&
+                state.order_cell_opaque_bytes[kSecondOwner][order][1] ==
+                    static_cast<u8>(0xc0u + order),
+            "owner-slot swap did not preserve the original four-byte order cell");
+    }
+    require(state.order_2b_bonus_totals[kFirstOwner] == -222 &&
+            state.order_2b_bonus_totals[kSecondOwner] == 111,
+        "owner-slot swap omitted the order-0x2b bonus");
+    for (u32 effect = 0;
+         effect < kProductionOrderCompletionEffectCount; ++effect) {
+        for (u32 type = 0; type < kProductionOrderTypeCount; ++type) {
+            require(state.completion_effect_totals[effect]
+                        [kFirstOwner][type] ==
+                        -static_cast<i32>(effect * 1000u + type + 1u) &&
+                    state.completion_effect_totals[effect]
+                        [kSecondOwner][type] ==
+                        static_cast<i32>(effect * 1000u + type),
+                "owner-slot swap omitted an upgrade effect table entry");
+        }
+    }
+
+    const ProductionOrderRuntimeState swapped = state;
+    require(SwapProductionOrderOwnerState(state, kFirstOwner, kFirstOwner) &&
+            state.variant_counts == swapped.variant_counts &&
+            !SwapProductionOrderOwnerState(
+                state, kProductionOrderOwnerCount, kSecondOwner),
+        "owner-slot swap bounds/no-op behavior differs from the original domain");
+}
+
 } // namespace
 
 int main() {
     using namespace ranker;
+
+    test_owner_slot_production_state_swap();
 
     constexpr i32 kMinI32 = std::numeric_limits<i32>::min();
     constexpr i32 kMaxI32 = std::numeric_limits<i32>::max();
@@ -245,6 +332,7 @@ int main() {
     std::cout <<
         "PRODUCTION_ORDER_RULE_WRAP_PASS modes=0/1/2/3/4 "
         "cost=raw-u32 duration=raw-u32 availability=0/1 "
-        "lifecycle=reserve/start/complete/cancel order2b=refresh\n";
+        "lifecycle=reserve/start/complete/cancel order2b=refresh "
+        "owner-swap=64x4+18x170\n";
     return EXIT_SUCCESS;
 }
