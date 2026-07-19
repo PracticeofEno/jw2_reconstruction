@@ -62,6 +62,16 @@ constexpr i32 action_center_coordinate(i32 origin, i32 bounds_start,
     return origin + bounds_start + (bounds_extent >> 1);
 }
 
+constexpr i32 bounds_entry_center_coordinate(i32 origin, i32 bounds_start,
+    i32 bounds_extent) {
+    // FUN_004f2dd3's first bounds-entry branch forms the inclusive far edge
+    // first and then subtracts half the extent.  For odd extents this is one
+    // pixel to the right/bottom of FUN_004c36de's ordinary action center.
+    // The later already-entered branch deliberately returns to the ordinary
+    // floor-half center, so this cannot be folded into action_center_coordinate.
+    return origin + bounds_start + bounds_extent - (bounds_extent >> 1);
+}
+
 i32 action_center_x(const UnitMovementUnit& unit) {
     return action_center_coordinate(unit.x, unit.definition.center_bounds_left,
         unit.definition.center_bounds_width);
@@ -91,6 +101,7 @@ constexpr u32 action_direction_or_previous(u32 previous_direction,
 
 static_assert(action_center_coordinate(100, -4, 32) == 112);
 static_assert(action_center_coordinate(200, 6, 18) == 215);
+static_assert(bounds_entry_center_coordinate(100, -4, 31) == 112);
 static_assert(action_direction_or_previous(7, 0) == 7);
 static_assert(action_direction_or_previous(7, 3) == 3);
 
@@ -4729,8 +4740,19 @@ void AdvanceUnitEffectProjectileTowardTarget(UnitEffectRuntimeState& state,
         if (target == nullptr || !point_inside_unit_bounds(*target, effect.x, effect.y)) {
             return;
         }
+        // 0x004f2ed4..0x004f2f10 derives this first distance from the
+        // inclusive right/bottom edges, not from FUN_004c36de's usual
+        // floor-half action center.  The one-pixel odd-extent asymmetry is
+        // gameplay-significant for moving targets: it decides whether the
+        // next two-pixel projectile step is still closer or impacts now.
         effect.closest_distance = CalculateApproxUnitDistance(
-            effect.x, effect.y, action_center_x(*target), action_center_y(*target));
+            effect.x, effect.y,
+            bounds_entry_center_coordinate(target->x,
+                target->definition.center_bounds_left,
+                target->definition.center_bounds_width),
+            bounds_entry_center_coordinate(target->y,
+                target->definition.center_bounds_top,
+                target->definition.center_bounds_height));
         effect.flags |= kUnitEffectFlagProjectileBoundsEntered;
         return;
     } else {

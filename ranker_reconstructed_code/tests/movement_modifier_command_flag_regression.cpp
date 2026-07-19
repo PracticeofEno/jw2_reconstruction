@@ -1054,6 +1054,43 @@ void check_low_id_effect_damage_is_calculated_at_impact() {
         "directional low-id path skipped the original +0x224 divide-by-eight");
 }
 
+void check_projectile_first_bounds_entry_uses_inclusive_far_edge_center() {
+    UnitMovementUnit target{};
+    target.id = 0x3a0u;
+    target.active = true;
+    target.x = 959;
+    target.y = 734;
+    target.definition.center_bounds_left = -54;
+    target.definition.center_bounds_top = -87;
+    target.definition.center_bounds_width = 107;
+    target.definition.center_bounds_height = 127;
+
+    UnitEffectDefinition definition{};
+    definition.id = 10;
+    definition.behavior_flags = 2;
+
+    UnitEffectRuntimeState state{};
+    state.definitions.push_back(definition);
+    state.unit_refs = {&target};
+
+    UnitEffectRuntime effect{};
+    effect.active = true;
+    effect.effect_id = definition.id;
+    effect.flags = kUnitEffectFlagProjectileYMajor;
+    effect.target_unit_id = target.id;
+    effect.x = 971;
+    effect.y = 776;
+    effect.step_y = -2;
+
+    AdvanceUnitEffectProjectileTowardTarget(state, effect);
+
+    require(effect.x == 971 && effect.y == 774 &&
+            (effect.flags & kUnitEffectFlagProjectileBoundsEntered) != 0 &&
+            effect.closest_distance == 66,
+        "first odd-sized bounds entry used the ordinary floor-half center "
+        "instead of original inclusive-far-edge rounding");
+}
+
 void check_low_id_reach_uses_live_area_damage_and_preserves_impact_position() {
     UnitMovementUnit source{};
     source.id = 0x1d0u;
@@ -1475,6 +1512,7 @@ int main() {
     check_action_validation_does_not_publish_out_of_range_target_path();
     check_reserved_tile_wait_uses_raw_13d4_frame_period();
     check_low_id_effect_damage_is_calculated_at_impact();
+    check_projectile_first_bounds_entry_uses_inclusive_far_edge_center();
     check_low_id_reach_uses_live_area_damage_and_preserves_impact_position();
     check_low_id_reach_transient_target_preserves_impact_state();
     check_flagged_low_id_impact_uses_command_entry_lockout();
@@ -1510,6 +1548,7 @@ int main() {
                  "high-cycle=preserve-acquisition-path "
                  "action-range=caller-publishes-path "
                  "reserved-wait-frame=raw-13d4 "
+                 "projectile-bounds-entry=inclusive-far-edge-center "
                  "low-id-impact=live-area-damage+transient-preserve+entry-lockout "
                  "high-id-area=bounds-probe "
                  "retarget-timer=pre-phase-gate "
