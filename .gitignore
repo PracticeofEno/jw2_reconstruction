@@ -1,0 +1,23 @@
+# Keep this repository focused on the inputs required to rebuild ranker.
+# Already tracked files remain tracked; these rules control new files only.
+*
+!.gitignore
+
+!ranker_reconstructed_code/
+!ranker_reconstructed_code/CMakeLists.txt
+
+!ranker_reconstructed_code/include/
+!ranker_reconstructed_code/include/**
+
+!ranker_reconstructed_code/src/
+!ranker_reconstructed_code/src/**
+
+!ranker_reconstructed_code/resources/
+!ranker_reconstructed_code/resources/main_menu_bink_fallback_565.bin
+!ranker_reconstructed_code/resources/ranker_resources.rc
+!ranker_reconstructed_code/resources/original/
+!ranker_reconstructed_code/resources/original/**
+
+!ranker_reconstructed_code/third_party/
+!ranker_reconstructed_code/third_party/zlib113/
+!ranker_reconstructed_code/third_party/zlib113/**
