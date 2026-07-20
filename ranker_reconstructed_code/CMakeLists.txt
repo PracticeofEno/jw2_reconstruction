@@ -28,7 +28,10 @@ if (MSVC)
     target_compile_definitions(zlib113 PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 
-if (BUILD_TESTING)
+# Regression sources are intentionally excluded from the minimal rebuild tree.
+option(RANKER_BUILD_REGRESSION_TESTS
+    "Build the optional out-of-tree regression targets" OFF)
+if (RANKER_BUILD_REGRESSION_TESTS)
     add_executable(directdraw_presentation_mode_regression
         tests/directdraw_presentation_mode_regression.cpp
     )

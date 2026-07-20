@@ -1346,8 +1346,9 @@ void append_message_segment(LinkLobbyMessageLine& line, COLORREF color,
     line.plain_text += segment.text;
 }
 
-bool parse_colored_text_payload(const void* payload, LinkLobbyMessageLine& line) {
-    if (payload == nullptr) {
+bool parse_colored_text_payload(const void* payload, std::size_t byte_count,
+    LinkLobbyMessageLine& line) {
+    if (payload == nullptr || byte_count < 8) {
         return false;
     }
     const auto* bytes = static_cast<const u8*>(payload);
@@ -1358,7 +1359,14 @@ bool parse_colored_text_payload(const void* payload, LinkLobbyMessageLine& line)
     const std::size_t first_length = bytes[7];
     const char* first_text = reinterpret_cast<const char*>(bytes + 8);
     const std::size_t second_length_offset = first_length + 0x0b;
+    if (second_length_offset >= byte_count) {
+        return false;
+    }
     const std::size_t second_length = bytes[second_length_offset];
+    const std::size_t packet_size = first_length + 0x0c + second_length;
+    if (packet_size > byte_count) {
+        return false;
+    }
     const char* second_text =
         reinterpret_cast<const char*>(bytes + second_length_offset + 1);
     const std::size_t second_color_offset = first_length + 8;
@@ -1662,6 +1670,17 @@ void free_locked_window_payload(LPARAM payload) {
     }
     GlobalUnlock(global);
     GlobalFree(global);
+}
+
+std::size_t locked_window_payload_size(LPARAM payload) {
+    if (payload == 0) {
+        return 0;
+    }
+    HGLOBAL global = GlobalHandle(reinterpret_cast<LPCVOID>(payload));
+    if (global == nullptr) {
+        return 0;
+    }
+    return static_cast<std::size_t>(GlobalSize(global));
 }
 
 void clear_control(LinkLobbyWindowControl& control) {
@@ -6779,13 +6798,19 @@ LRESULT HandleLinkLobbyWindowMessage(LinkLobbyState& state, HWND hwnd, UINT mess
     }
     case kLinkLobbyDirectPlayStartMessage:
         if (lparam != 0) {
+            const std::size_t payload_size = locked_window_payload_size(lparam);
             LinkLobbyMessageLine line{};
             if (parse_colored_text_payload(reinterpret_cast<const void*>(lparam),
-                    line) && !line.plain_text.empty()) {
+                    payload_size, line) && !line.plain_text.empty()) {
                 show_message_line(state, line);
-            } else {
-                show_message(state, reinterpret_cast<const char*>(lparam),
-                    kLinkErrorBlue);
+            } else if (payload_size != 0) {
+                const char* text = reinterpret_cast<const char*>(lparam);
+                const void* terminator = std::memchr(text, '\0', payload_size);
+                if (terminator != nullptr && terminator != text) {
+                    const std::string bounded_text(text,
+                        static_cast<const char*>(terminator) - text);
+                    show_message(state, bounded_text.c_str(), kLinkErrorBlue);
+                }
             }
             free_locked_window_payload(lparam);
         }
