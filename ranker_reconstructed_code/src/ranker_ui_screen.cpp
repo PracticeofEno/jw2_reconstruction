@@ -3295,74 +3295,47 @@ bool HandleUiScreenInputTick(UiScreenDefinition& screen, u32& activated_entry_in
 bool RunUiScreenModalPump(UiScreenDefinition& screen, u32& activated_entry_index,
     int& entry_state) {
     while (!HandleUiScreenInputTick(screen, activated_entry_index, entry_state)) {
-        HandleUiScreenDefinitionDraw(screen);
 #ifdef _WIN32
+        // Synchronous gameplay/result modals run after the ordinary frame
+        // renderer has unlocked its surface.  sprite_render_state can still
+        // contain that previous (now invalid) pointer, so treating a non-null
+        // target as writable silently draws the dialog into stale memory.
+        // The original modal pump locks the back surface for every draw.
+        SpriteRenderTarget target{};
+        if (SUCCEEDED(LockBackBufferSpriteRenderTarget(target))) {
+            const SpriteRenderTarget previous_target = sprite_render_state().target;
+            const bool previous_active = sprite_render_state().active;
+            SetSpriteRenderTarget(
+                target.pixels, target.width, target.height, target.stride_words);
+            HandleUiScreenDefinitionDraw(screen);
+            if (previous_active) {
+                SetSpriteRenderTarget(previous_target.pixels,
+                    previous_target.width, previous_target.height,
+                    previous_target.stride_words);
+            }
+            else {
+                ClearSpriteRenderTarget();
+            }
+            UnlockBackBufferSpriteRenderTarget();
+        }
+        else {
+            HandleUiScreenDefinitionDraw(screen);
+        }
         HandleGameCursorPresentation();
+#else
+        HandleUiScreenDefinitionDraw(screen);
 #endif
     }
     return true;
 }
 
 bool DrawUiScreenResourceSprite(u32 resource_index, i32 x, i32 y) {
-    if (resource_index == kInvalidResourceEntry) {
-        return false;
-    }
-
-    const SpriteRenderTarget& target = sprite_render_state().target;
-    if (!ui_render_target_valid(target)) {
-        return false;
-    }
-
-    const ResourceStoreEntry* resource = GetResourceEntry(resource_index);
-    if (resource == nullptr || resource->palette_slot >= kPaletteCacheSlotCount) {
-        return false;
-    }
-
-    const u32 width = resource->metadata[0];
-    const u32 height = resource->metadata[1];
-    if (width == 0 || height == 0) {
-        return true;
-    }
-
-    const i32 draw_x = x + static_cast<i32>(resource->metadata[2]);
-    const i32 draw_y = y + static_cast<i32>(resource->metadata[3]);
-    const auto& palette = palette_cache_state().pixel_slots[resource->palette_slot];
-    const auto& payload = resource->payload;
-    std::size_t cursor = 0;
-
-    for (u32 row = 0; row < height; ++row) {
-        if (cursor + sizeof(u16) > payload.size()) {
-            return false;
-        }
-
-        const u32 row_bytes = read_le_u16(payload.data() + cursor);
-        cursor += sizeof(u16);
-        const std::size_t row_end = cursor + row_bytes;
-        if (row_end < cursor || row_end > payload.size()) {
-            return false;
-        }
-
-        const i32 target_y = draw_y + static_cast<i32>(row);
-        const u32 copy_width = std::min(width, row_bytes);
-        if (target_y >= 0 && target_y < static_cast<i32>(target.height)) {
-            for (u32 col = 0; col < copy_width; ++col) {
-                const u8 index = payload[cursor + col];
-                if (index == 0) {
-                    continue;
-                }
-
-                const i32 target_x = draw_x + static_cast<i32>(col);
-                if (target_x >= 0 && target_x < static_cast<i32>(target.width)) {
-                    target.pixels[static_cast<std::size_t>(target_y) *
-                        target.stride_words + static_cast<std::size_t>(target_x)] =
-                        palette[index];
-                }
-            }
-        }
-        cursor = row_end;
-    }
-
-    return true;
+    // UI screen resources use the same zero-token skip RLE stream as gameplay
+    // sprites.  Treating the encoded bytes as a flat indexed scanline makes
+    // sparse glyphs (notably the victory/defeat outcome sprites) repeat and
+    // smear horizontally.  Route them through the canonical sprite decoder so
+    // clipping, signed resource offsets, transparency, and RLE skips all match.
+    return DrawResourceSpriteNormal(resource_index, x, y);
 }
 
 bool DrawUiScreenResourceSprite(

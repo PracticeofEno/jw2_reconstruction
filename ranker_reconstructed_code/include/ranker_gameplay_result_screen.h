@@ -11,7 +11,9 @@ namespace ranker {
 constexpr std::size_t kGameplayResultPlayerSlots = 8;
 constexpr std::size_t kGameplayResultMetricCount = 8;
 constexpr const char* kGameplayResultArchiveName = "JW2_02.TRC";
-constexpr u32 kGameplayResultResourcePaletteRecord = 0x1a;
+// FUN_00430e20 passes JW2_02.TRC record 0x34 as the palette/start record and
+// 0x1a as the total record count to FUN_004326c0.
+constexpr u32 kGameplayResultResourcePaletteRecord = 0x34;
 constexpr u32 kGameplayResultResourceRecordCount = 0x1a;
 constexpr u32 kGameplayResultLayoutRecordBase = 0x4e;
 constexpr u32 kGameplayResultLayoutTribeStride = 4;

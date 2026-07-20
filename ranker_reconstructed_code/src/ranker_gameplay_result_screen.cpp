@@ -134,34 +134,17 @@ void release_default_result_allocations(GameplayResultScreenState& state) {
 
 bool load_default_result_layout(
     GameplayResultScreenState& state, u32 result_mode, u32 tribe_index) {
-    if (state.resource_mark == 0xffffffffu) {
-        state.resource_mark = resource_store_state().next_entry;
-    }
-    if (state.palette_mark == 0xffffffffu) {
-        state.palette_mark = palette_cache_state().next_slot;
-    }
-
     const u32 record_index = kGameplayResultLayoutRecordBase +
         tribe_index * kGameplayResultLayoutTribeStride +
         result_layout_bucket(result_mode) * kGameplayResultLayoutModeStride;
-    const u32 palette_slot =
-        LoadPaletteCacheTrcRecord(kGameplayResultArchiveName, record_index);
-    if (palette_slot == kInvalidPaletteCacheSlot) {
-        release_default_result_allocations(state);
-        return false;
-    }
-
-    const u32 image_entry =
-        LoadImageResourceTrcRecord(kGameplayResultArchiveName, record_index + 1);
-    if (image_entry == kInvalidResourceEntry ||
-        !SetResourceEntryPaletteSlot(image_entry, palette_slot)) {
-        release_default_result_allocations(state);
-        return false;
-    }
-
-    state.layout_resource_entry = image_entry;
-    DrawImageResourceNormal(image_entry, 0, 0);
-    return true;
+    // FUN_00502d30 does not parse record+1 as an image resource.  It is a
+    // full-screen byte-per-pixel buffer whose indices are expanded through
+    // the palette in record_index directly into the DirectDraw backbuffer.
+    // Treating it as an image-resource record made every result layout fail
+    // and left the reconstructed result screen black.
+    state.layout_resource_entry = 0xffffffffu;
+    return LoadPaletteMappedBackBufferTrcPair(
+        kGameplayResultArchiveName, record_index);
 }
 
 bool load_default_result_resources(GameplayResultScreenState& state) {
@@ -427,7 +410,35 @@ void RenderGameplayResultRankingScreen(GameplayResultScreenState& state, u32 res
     if (!LoadGameplayResultLayoutTemplate(state, result_mode, state.selected_tribe_index)) {
         return;
     }
+
+#ifdef _WIN32
+    // The background loader mirrors FUN_00502d30 and owns its lock/present.
+    // Acquire a fresh target only after it returns so the score sprites and
+    // text are drawn onto the same live backbuffer instead of stale gameplay
+    // surface memory.
+    SpriteRenderTarget result_target{};
+    const bool result_target_locked =
+        SUCCEEDED(LockBackBufferSpriteRenderTarget(result_target));
+    const SpriteRenderTarget previous_target = sprite_render_state().target;
+    const bool previous_target_active = sprite_render_state().active;
+    if (result_target_locked) {
+        SetSpriteRenderTarget(result_target.pixels, result_target.width,
+            result_target.height, result_target.stride_words);
+    }
+#endif
     if (!LoadGameplayResultScreenResources(state, result_mode)) {
+#ifdef _WIN32
+        if (result_target_locked) {
+            if (previous_target_active) {
+                SetSpriteRenderTarget(previous_target.pixels, previous_target.width,
+                    previous_target.height, previous_target.stride_words);
+            }
+            else {
+                ClearSpriteRenderTarget();
+            }
+            UnlockBackBufferSpriteRenderTarget();
+        }
+#endif
         return;
     }
 
@@ -438,6 +449,19 @@ void RenderGameplayResultRankingScreen(GameplayResultScreenState& state, u32 res
     DrawGameplayResultScoreDecorations(state);
     DrawGameplayResultScoreGraphs(state);
     DrawGameplayResultScoreTable(state);
+
+#ifdef _WIN32
+    if (result_target_locked) {
+        if (previous_target_active) {
+            SetSpriteRenderTarget(previous_target.pixels, previous_target.width,
+                previous_target.height, previous_target.stride_words);
+        }
+        else {
+            ClearSpriteRenderTarget();
+        }
+        UnlockBackBufferSpriteRenderTarget();
+    }
+#endif
 
     if (state.callbacks.present_cursor != nullptr) {
         state.callbacks.present_cursor(state);

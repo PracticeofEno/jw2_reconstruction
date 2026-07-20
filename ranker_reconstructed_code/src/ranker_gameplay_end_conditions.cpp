@@ -232,6 +232,14 @@ void TickGameplayEndConditionMonitor(GameplayEndConditionState& state) {
 
     if (state.generic_ai_profile_mode == 1) {
         CheckLocalDefeatCondition(state);
+        // FUN_004d55c0 branches directly to the defeat handler when
+        // FUN_004d55f8 raises DAT_00725c0b; it does not run the victory pass
+        // in that tick.  Without this gate a disconnected final opponent can
+        // make both predicates true and overwrite a local defeat with result
+        // code 2 immediately before the result screen.
+        if (state.end_requested) {
+            return;
+        }
         CheckLocalVictoryCondition(state);
         return;
     }

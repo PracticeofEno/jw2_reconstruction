@@ -1217,6 +1217,11 @@ struct RuntimeGlobals {
     std::vector<GameplayScriptUnitNameAppendRequest>
         gameplay_script_last_unit_name_append_requests;
     GameplayEndConditionState gameplay_end_condition_state;
+    // Participant identity is immutable for the lifetime of a match.  The
+    // live relation/slot mask is allowed to shrink when subtype-0x13 and
+    // disconnect packets arrive, but result rows and replay metadata must
+    // still include every player who actually started.
+    u32 gameplay_started_player_mask = 0;
     bool gameplay_result_screen_rendered = false;
     bool gameplay_leave_reset_processed = false;
     bool gameplay_script_triggers_loaded = false;
@@ -4680,6 +4685,16 @@ void configure_default_gameplay_modal_ui_callbacks(GameplayModalUiState& state) 
         kStartupDefaultObjectiveTextRow, "Destroy all enemy buildings.");
     state.wait_remaining_format = startup_platform_row(
         kStartupWaitRemainingFormatRow, "%s - %d Sec remain.");
+    // FUN_0042d440 centers gameplay outcome/modals against DAT_0086358c,
+    // the top of the fixed bottom interface, not the full 600-pixel surface.
+    // Keep the full surface as the pre-game/fallback extent, while a running
+    // match uses the live world viewport (421 at the original 800x600 layout).
+    const UiOverlayState& overlay = ui_overlay_state();
+    state.center_width = overlay.screen_width != 0 ? overlay.screen_width : 800u;
+    state.fallback_center_height =
+        overlay.screen_height != 0 ? overlay.screen_height : 600u;
+    state.center_height = overlay.world_viewport_height != 0 ?
+        overlay.world_viewport_height : state.fallback_center_height;
     state.catchup_enabled = gameplay_loop_state().catchup_enabled;
     state.local_player_index = mode1_reliable_state().local_player_index;
     state.transport_mode = static_cast<u32>(
@@ -6832,6 +6847,16 @@ void default_gameplay_flow_configure_display(GameplaySessionFlowState&) {
 }
 
 const char* resolve_gameplay_session_archive_path() {
+    const ReplayRecordingState& replay = replay_recording_state();
+    if (replay.playback_mode && !replay.playback_archive_path.empty()) {
+        const DWORD attributes =
+            GetFileAttributesA(replay.playback_archive_path.c_str());
+        if (attributes != INVALID_FILE_ATTRIBUTES &&
+            (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+            return replay.playback_archive_path.c_str();
+        }
+    }
+
     P2PNetworkLaunchParameters& launch = p2p_network_launch_parameters();
     if (launch.uses_map_file && launch.map_path[0] != '\0') {
         return launch.map_path.data();
@@ -7646,6 +7671,7 @@ void default_gameplay_startup_reset_runtime_objects() {
     loop.present_frame_counter = 0;
 
     g_runtime.gameplay_end_condition_state = GameplayEndConditionState{};
+    g_runtime.gameplay_started_player_mask = 0;
     g_runtime.gameplay_end_condition_units.clear();
     g_runtime.gameplay_online_transition_state = GameplayOnlineTransitionState{};
     g_runtime.gameplay_result_screen_rendered = false;
@@ -11107,6 +11133,7 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     g_runtime.gameplay_script_trigger_record_index = 0xffffffffu;
     g_runtime.gameplay_script_next_unit_id = 0x80000000u;
     g_runtime.gameplay_end_condition_state = GameplayEndConditionState{};
+    g_runtime.gameplay_started_player_mask = 0;
     g_runtime.gameplay_online_transition_state = GameplayOnlineTransitionState{};
     g_runtime.gameplay_result_screen_rendered = false;
     g_runtime.gameplay_leave_reset_processed = false;
@@ -11348,6 +11375,8 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     append_startup_log("start-slots: map effect init ok");
     append_startup_log("start-slots: fixed slot masks begin");
     apply_default_session_fixed44_player_slot_masks();
+    g_runtime.gameplay_started_player_mask =
+        g_runtime.gameplay_player_slots.global_active_slot_mask;
     append_startup_log("start-slots: fixed slot masks ok");
     append_startup_log("start-slots: packet reset begin");
     reset_default_mode1_packet_state_from_player_slots();
@@ -11480,6 +11509,55 @@ void import_default_gameplay_result_metrics(
     row.metrics[kGameplayResultMetricCount - 1] = total_without_adjustment;
     row.total_score =
         static_cast<i32>(total_without_adjustment) + row.adjustment_score;
+    row.total_score_valid = true;
+}
+
+void overlay_default_gameplay_result_metrics_from_runtime(
+    GameplayResultPlayer& row, u32 player) {
+    UnitLifecycleContext* lifecycle =
+        g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr || player >= lifecycle->owner_unit_active_count.size() ||
+        player >= g_runtime.gameplay_owner_counters.tables[6].size()) {
+        return;
+    }
+
+    const auto cumulative_count = [](u32 active, u32 lost) {
+        const std::uint64_t total =
+            static_cast<std::uint64_t>(active) + lost;
+        return static_cast<u32>(std::min<std::uint64_t>(
+            total, std::numeric_limits<u32>::max()));
+    };
+
+    // FUN_00431520 displays the match record in this order:
+    // units produced/killed/lost, buildings built/destroyed/lost, resources.
+    // The loaded map record is an initial snapshot and therefore normally has
+    // zeroes here.  Merge in the cumulative live counters before the original
+    // visibility/sort pass so a real P2P result keeps every participant row.
+    const std::array<u32, kGameplayResultMetricCount - 1> live_metrics{{
+        cumulative_count(lifecycle->owner_unit_active_count[player],
+            lifecycle->owner_unit_lost_count[player]),
+        lifecycle->owner_unit_kill_count[player],
+        lifecycle->owner_unit_lost_count[player],
+        cumulative_count(lifecycle->owner_building_active_count[player],
+            lifecycle->owner_building_lost_count[player]),
+        lifecycle->owner_building_kill_count[player],
+        lifecycle->owner_building_lost_count[player],
+        g_runtime.gameplay_owner_counters.tables[6][player],
+    }};
+    for (std::size_t metric = 0; metric < live_metrics.size(); ++metric) {
+        row.metrics[metric] = std::max(row.metrics[metric], live_metrics[metric]);
+    }
+
+    g_runtime.gameplay_owner_counters.tables[0][player] =
+        lifecycle->owner_unit_score[player];
+    g_runtime.gameplay_owner_counters.tables[1][player] =
+        lifecycle->owner_building_score[player];
+    const u32 live_total =
+        GetOwnerSessionCounterTotal(g_runtime.gameplay_owner_counters, player);
+    row.metrics[kGameplayResultMetricCount - 1] = std::max(
+        row.metrics[kGameplayResultMetricCount - 1], live_total);
+    row.total_score = static_cast<i32>(
+        row.metrics[kGameplayResultMetricCount - 1]) + row.adjustment_score;
     row.total_score_valid = true;
 }
 
@@ -11673,8 +11751,7 @@ u32 seed_default_gameplay_result_screen(u32 result_mode) {
         g_runtime.generic_ai_scenario_active ||
         gameplay_modal_ui_state().scenario_ai_profile_override;
     result.replay_controls_available =
-        replay_state.packet_temp_open && replay_state.viewport_temp_open &&
-        replay_state.packet_count != 0;
+        replay_state.packet_temp_open && replay_state.viewport_temp_open;
     result.replay_record_index_is_zero =
         session_load.loaded && session_load.base_record_index == 0;
     const u32 elapsed_ticks =
@@ -11682,8 +11759,11 @@ u32 seed_default_gameplay_result_screen(u32 result_mode) {
     result.elapsed_seconds = (elapsed_ticks >> 10) % 60;
     result.elapsed_minutes = ((elapsed_ticks >> 10) / 60) % 60;
     result.elapsed_hours = elapsed_ticks / 0x384000u;
+    // The live slot count shrinks when the terminal subtype-0x13/disconnect
+    // exchange completes.  The original result table still iterates the
+    // players who started the match, so use the immutable startup count here.
     const u32 player_count = std::min<u32>(
-        std::max<u32>(g_runtime.gameplay_player_slots.active_slot_count, 1),
+        std::max<u32>(g_runtime.gameplay_startup_state.active_slot_count, 1),
         kPlayerSlotCount);
     const u32 local_owner = read_default_gameplay_result_local_owner(
         player_record, g_runtime.gameplay_player_slots.local_player_slot);
@@ -11698,10 +11778,14 @@ u32 seed_default_gameplay_result_screen(u32 result_mode) {
         GameplayResultPlayer& row = result.players[player];
         row = GameplayResultPlayer{};
         row.owner_id = player;
-        row.slot_state = player < g_runtime.gameplay_player_slots.slot_states.size() ?
-            g_runtime.gameplay_player_slots.slot_states[player] :
+        const bool started_match =
+            (g_runtime.gameplay_started_player_mask & (1u << player)) != 0;
+        row.slot_state = started_match ?
+            static_cast<u8>(PlayerSlotState::active) :
             static_cast<u8>(PlayerSlotState::disabled);
-        row.connected = row.slot_state != static_cast<u8>(PlayerSlotState::disabled);
+        row.connected = player < g_runtime.gameplay_player_slots.slot_states.size() &&
+            g_runtime.gameplay_player_slots.slot_states[player] !=
+                static_cast<u8>(PlayerSlotState::disabled);
         const u32 faction_fallback =
             player < g_runtime.gameplay_startup_state.owner_faction_ids.size() ?
             g_runtime.gameplay_startup_state.owner_faction_ids[player] : 0;
@@ -11717,6 +11801,9 @@ u32 seed_default_gameplay_result_screen(u32 result_mode) {
         }
         if (metric_record != nullptr && player < player_count) {
             import_default_gameplay_result_metrics(row, *metric_record, player);
+        }
+        if (started_match && player < player_count) {
+            overlay_default_gameplay_result_metrics_from_runtime(row, player);
         }
         if (row.name.empty()) {
             char name[32]{};
@@ -11740,6 +11827,22 @@ void render_default_gameplay_result_screen_once() {
     prepare_default_gameplay_result_leave_render();
     RenderGameplayResultRankingScreen(gameplay_result_screen_state(),
         g_runtime.gameplay_end_condition_state.result_code, player_count);
+    const GameplayResultScreenState& rendered_result = gameplay_result_screen_state();
+    append_startup_log(
+        "gameplay-result: mode=%lu tribe=%lu players=%lu rows=%zu replay=%s base0=%s actions=%zu",
+        static_cast<unsigned long>(rendered_result.result_mode),
+        static_cast<unsigned long>(rendered_result.selected_tribe_index),
+        static_cast<unsigned long>(rendered_result.player_count),
+        rendered_result.rows.size(),
+        rendered_result.replay_controls_available ? "yes" : "no",
+        rendered_result.replay_record_index_is_zero ? "yes" : "no",
+        rendered_result.action_log.size());
+    for (const GameplayResultAction& action : rendered_result.action_log) {
+        append_startup_log("gameplay-result: action=%lu value0=%lu value1=%lu",
+            static_cast<unsigned long>(action.kind),
+            static_cast<unsigned long>(action.value0),
+            static_cast<unsigned long>(action.value1));
+    }
     run_default_gameplay_leave_reset_once();
     g_runtime.gameplay_result_screen_rendered = true;
 }
@@ -28367,15 +28470,54 @@ void run_default_gameplay_end_condition_monitor(GameplayLoopState& state) {
     sync_default_gameplay_end_condition_state();
     TickGameplayEndConditionMonitor(g_runtime.gameplay_end_condition_state);
     Mode1GameplayPacketDispatchState& packets = mode1_gameplay_packet_dispatch_state();
+    if (g_runtime.generic_ai_profile_mode &&
+        gameplay_input_action_state().player_reset_gate &&
+        !packets.session_complete_requested) {
+        // DirectPlay's DPSYS_DESTROYPLAYER path clears the departed runtime
+        // slot before the legacy loop raises DAT_00725c09.  The reconstruction
+        // already mirrors that slot transition, but its socket-backed bridge
+        // has no separate DAT_00725c09 byte.  Synthesize the consensus edge
+        // once the local terminal vote is published and every originally
+        // active remote slot has become inactive.
+        const u32 local_slot = std::min<u32>(
+            g_runtime.gameplay_player_slots.local_player_slot,
+            kPlayerSlotCount - 1);
+        bool remote_slot_seen = false;
+        bool all_remote_slots_inactive = true;
+        for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+            if (owner == local_slot ||
+                (g_runtime.gameplay_started_player_mask & (1u << owner)) == 0) {
+                continue;
+            }
+            remote_slot_seen = true;
+            if (g_runtime.gameplay_player_slots.slot_states[owner] !=
+                static_cast<u8>(PlayerSlotState::disabled)) {
+                all_remote_slots_inactive = false;
+                break;
+            }
+        }
+        packets.session_complete_requested =
+            remote_slot_seen && all_remote_slots_inactive;
+    }
     if (packets.session_complete_requested) {
+        // DAT_00725c09 is the P2P consensus/leave flag in the original
+        // ProcessGameplaySessionLoop.  It is distinct from DAT_00725c0b, the
+        // per-player win/loss detection flag: the latter publishes subtype
+        // 0x13 and keeps simulating, while the former enters the common
+        // post-result path after every peer has acknowledged the outcome.
         CloseAllMilesEffectPlaylistStreams();
         packets.session_complete_requested = false;
-        g_runtime.gameplay_end_condition_state.end_requested = true;
+        state.modal_subloop_active = g_runtime.generic_ai_profile_mode;
+        state.pause_loop_requested = true;
     }
     if (g_runtime.gameplay_end_condition_state.end_requested) {
         if (g_runtime.generic_ai_profile_mode) {
             handle_default_generic_ai_end_request();
             g_runtime.gameplay_end_condition_state.end_requested = false;
+            // Original 0x004c1254 clears DAT_00725c0b, publishes the local
+            // inactive/vote packet, and remains in the live session until
+            // DAT_00725c09 reports P2P consensus.  Leaving here races the peer
+            // and bypasses both its wait/outcome dialog and our result screen.
         }
         else if (g_runtime.network_ai_profile_override) {
             render_default_network_ai_override_result_once();
@@ -29176,8 +29318,32 @@ void default_open_replay_save(HWND window, HINSTANCE instance, void*) {
     }
 }
 
+bool default_start_replay_playback(ReplayDialogState& state,
+    const ReplayArchiveDescriptor& descriptor) {
+    if (!StartReplayPlaybackFromSelection(state, descriptor)) {
+        return false;
+    }
+
+    // Selecting a replay closes the title menu before opening this dialog.
+    // Queue the same worker-side gameplay transition used by a hosted/joined
+    // session, but let SubmitReplayLoadSelection's WM_USER+9 reason 3 perform
+    // the single matching ResumeThread after the dialog is destroyed.
+    g_runtime.gameplay_transition_owner = state.main_window;
+    g_runtime.gameplay_transition_mode = 0;
+    g_runtime.gameplay_transition_pending = true;
+    g_runtime.gameplay_session_flow.modal_result =
+        GameplayModalResult::ContinueNetwork;
+    g_runtime.gameplay_session_flow.worker_modal_pending = 0;
+    SetRankerMainWindowFrontendMode(0);
+    append_startup_log("replay load queued gameplay transition archive=%s packets=%lu",
+        descriptor.source_path.c_str(),
+        static_cast<unsigned long>(descriptor.packet_count));
+    return true;
+}
+
 void default_open_replay_load(HWND window, HINSTANCE instance, void*) {
     ReplayDialogState& state = replay_load_dialog_state();
+    state.callbacks.start_replay_playback = default_start_replay_playback;
     if (OpenReplayLoadDialog(state, window, instance)) {
         activate_frontend_state(state);
     }
@@ -30289,6 +30455,10 @@ std::array<std::string, kRankerReplayPlayerNameCount> RankerMainWindowReplayPlay
     const P2PGameSessionStartState& p2p = g_runtime.p2p_session_start_state;
 
     for (u32 owner = 0; owner < names.size(); ++owner) {
+        const u32 owner_bit = 1u << owner;
+        if ((g_runtime.gameplay_started_player_mask & owner_bit) == 0) {
+            continue;
+        }
         if (owner < startup.owner_display_names.size() &&
             !startup.owner_display_names[owner].empty()) {
             names[owner] = startup.owner_display_names[owner];

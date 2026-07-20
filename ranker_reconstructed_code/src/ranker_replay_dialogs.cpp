@@ -4,6 +4,7 @@
 
 #include "ranker_frontend_layout.h"
 #include "ranker_reliable_packets.h"
+#include "ranker_replay_archive.h"
 #include "ranker_gameplay_sound.h"
 #include "ranker_online_dialogs.h"
 #include "ranker_text_tables.h"
@@ -54,7 +55,6 @@ constexpr const char* kReplayFileExtension = ".ply";
 constexpr const char* kReplayMusicExtension = ".mp3";
 constexpr const char* kReplayVposExtension = ".vpo";
 constexpr const char* kReplayHeaderText = "Jwar2 Replay File.";
-constexpr const char* kReplayVposHeaderText = "Jwar2 Replay Vpos File.";
 
 ReplayDialogState g_replay_load_dialog_state;
 ReplayDialogState g_replay_save_dialog_state;
@@ -219,24 +219,6 @@ u32 read_le_u32(const u8* bytes) {
         (static_cast<u32>(bytes[1]) << 8) |
         (static_cast<u32>(bytes[2]) << 16) |
         (static_cast<u32>(bytes[3]) << 24);
-}
-
-void write_le_u32(std::vector<u8>& bytes, std::size_t offset, u32 value) {
-    if (offset > bytes.size() || bytes.size() - offset < sizeof(value)) {
-        return;
-    }
-    bytes[offset + 0] = static_cast<u8>(value & 0xff);
-    bytes[offset + 1] = static_cast<u8>((value >> 8) & 0xff);
-    bytes[offset + 2] = static_cast<u8>((value >> 16) & 0xff);
-    bytes[offset + 3] = static_cast<u8>((value >> 24) & 0xff);
-}
-
-void write_le_u16(std::vector<u8>& bytes, std::size_t offset, u16 value) {
-    if (offset > bytes.size() || bytes.size() - offset < sizeof(value)) {
-        return;
-    }
-    bytes[offset + 0] = static_cast<u8>(value & 0xff);
-    bytes[offset + 1] = static_cast<u8>((value >> 8) & 0xff);
 }
 
 void write_packet_u32(std::array<u8, kReplayPacketBytes>& bytes,
@@ -876,16 +858,6 @@ bool read_binary_file(const std::string& path, std::vector<u8>& bytes) {
     return true;
 }
 
-bool write_binary_file(const std::string& path, const std::vector<u8>& bytes) {
-    std::ofstream file(path, std::ios::binary | std::ios::trunc);
-    if (!file) {
-        return false;
-    }
-    file.write(reinterpret_cast<const char*>(bytes.data()),
-        static_cast<std::streamsize>(bytes.size()));
-    return file.good();
-}
-
 std::vector<u8> build_replay_payload_from_recording(const ReplayRecordingState& recording) {
     std::vector<u8> payload;
     const bool header_valid =
@@ -962,48 +934,6 @@ void append_replay_session_end_packet(ReplayRecordingState& recording) {
     packet[0x0f] = 0x13;
     AppendReplayPacketRecord(recording, packet.data(), kReplayPacketBytes,
         reliable.replay_frame_tick);
-}
-
-bool write_vpos_file_from_recording(const std::string& replay_path,
-    const ReplayRecordingState& recording) {
-    const std::string output_path = replace_extension(replay_path, kReplayVposExtension);
-    if (file_exists(recording.viewport_temp_path)) {
-        return CopyFileA(recording.viewport_temp_path.c_str(), output_path.c_str(),
-            FALSE) != FALSE;
-    }
-
-    std::vector<u8> payload(0x40, 0);
-    std::memcpy(payload.data(), kReplayVposHeaderText,
-        std::strlen(kReplayVposHeaderText));
-    write_le_u32(payload, 0x18, 1);
-
-    const std::size_t count = !recording.viewport_records.empty() ?
-        recording.viewport_records.size() :
-        static_cast<std::size_t>(std::min<u32>(recording.viewport_count,
-            kReplayViewportRecordCount));
-    payload.resize(0x40 + count * kReplayViewportRecordBytes);
-    for (std::size_t i = 0; i < count; ++i) {
-        const ReplayViewportRecord& record = !recording.viewport_records.empty() ?
-            recording.viewport_records[i] :
-            recording.viewport_scratch[i];
-        const std::size_t offset = 0x40 + static_cast<std::size_t>(i) *
-            kReplayViewportRecordBytes;
-        write_le_u32(payload, offset, record.frame_tick);
-        write_le_u16(payload, offset + 4, static_cast<u16>(record.camera_x));
-        write_le_u16(payload, offset + 6, static_cast<u16>(record.camera_y));
-    }
-    return write_binary_file(output_path, payload);
-}
-
-bool copy_source_archive_for_save(const ReplayRecordingState& recording,
-    const char* output_path) {
-    if (recording.source_archive_path.empty()) {
-        return false;
-    }
-    if (!file_exists(recording.source_archive_path)) {
-        return false;
-    }
-    return CopyFileA(recording.source_archive_path.c_str(), output_path, FALSE) != FALSE;
 }
 
 void notify_main_window_resume(ReplayDialogState& state, LPARAM reason) {
@@ -1449,25 +1379,8 @@ bool SaveReplayRecordingArchive(const char* output_path,
     }
     patch_replay_payload_player_names(payload);
 
-    const u16 method = IsZlibRuntimeAvailable() ? 2 : 0;
-    bool archive_ready = copy_source_archive_for_save(recording, output_path);
-    if (archive_ready) {
-        archive_ready = HandleTrcMemoryRecordAppend(output_path, "Replay", payload.data(),
-            payload.size(), 0x14, method);
-    } else {
-        TrcWriteRecord record;
-        record.name = "Replay";
-        record.payload = std::move(payload);
-        record.method = method;
-        archive_ready = WriteTrcRecords(output_path, {record}, 0x32);
-    }
-
-    if (!archive_ready) {
+    if (!PersistReplayRecordingArchive(output_path, recording, payload)) {
         return false;
-    }
-
-    if (recording.viewport_temp_open) {
-        write_vpos_file_from_recording(output_path, recording);
     }
     recording.packet_temp_open = false;
     recording.viewport_temp_open = false;
