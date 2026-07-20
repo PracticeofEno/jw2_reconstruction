@@ -479,11 +479,9 @@ bool effect_uses_tick_animation_frame(const UnitEffectRuntime& effect) {
         return false;
     }
     // The ordinary low-id projectile dispatcher uses raw +0x0c as its
-    // animation counter. Raw +0x10 is the remaining path budget while the
-    // projectile is active.  The 0x20 afterimage clone is the specialized
-    // low-id path that animates through `frame` instead.  Construction marker
-    // 0x27 is not an exception: original FUN_004ed940 selects its sprite with
-    // raw +0x0c, and the linked-construction branch increments that same word.
+    // simulation animation counter. Raw +0x10 is the remaining path budget
+    // while the projectile is active. The 0x20 afterimage clone is the
+    // specialized low-id path that advances its simulation through `frame`.
     return !(effect.effect_id == 0x20u &&
         (effect.flags & kUnitEffectFlagAfterimageClone) != 0);
 }
@@ -492,20 +490,33 @@ u32 effect_animation_frame(const UnitEffectRuntime& effect) {
     return effect_uses_tick_animation_frame(effect) ? effect.tick : effect.frame;
 }
 
-u32 effect_frame_index(const UnitEffectRuntime& effect, std::size_t size) {
+u32 effect_sprite_animation_frame(const UnitEffectRuntime& effect) {
+    // Original FUN_004ed940 selects the generic effect sprite through raw
+    // +0x0c for both low and high effect ids.  High-id simulation still uses
+    // raw +0x10 for its separate impact lifetime, so keep this rule confined
+    // to sprite selection instead of changing effect_animation_frame().
+    // The 0x20 afterimage clone is rendered by its specialized half-rate path.
+    if (effect.effect_id == 0x20u &&
+        (effect.flags & kUnitEffectFlagAfterimageClone) != 0) {
+        return effect.frame;
+    }
+    return effect.tick;
+}
+
+u32 effect_sprite_frame_index(const UnitEffectRuntime& effect, std::size_t size) {
     if (size == 0) {
         return 0;
     }
-    u32 frame = effect_animation_frame(effect);
+    u32 frame = effect_sprite_animation_frame(effect);
     if (frame == 0xffffffffu) {
         frame = 0;
     }
     return frame % static_cast<u32>(size);
 }
 
-bool effect_frame_in_range(const UnitEffectRuntime& effect, std::size_t size,
+bool effect_sprite_frame_in_range(const UnitEffectRuntime& effect, std::size_t size,
     std::size_t& index) {
-    const u32 frame = effect_animation_frame(effect);
+    const u32 frame = effect_sprite_animation_frame(effect);
     if (frame == 0xffffffffu || static_cast<std::size_t>(frame) >= size) {
         return false;
     }
@@ -519,7 +530,7 @@ u32 effect_sprite_entry_for_frame(const UnitEffectRuntimeState& state,
         !definition.impact_image_indices.empty() &&
         !definition.image_resource_entries.empty()) {
         std::size_t frame_index = 0;
-        if (!effect_frame_in_range(
+        if (!effect_sprite_frame_in_range(
                 effect, definition.impact_image_indices.size(), frame_index)) {
             return 0;
         }
@@ -550,7 +561,7 @@ u32 effect_sprite_entry_for_frame(const UnitEffectRuntimeState& state,
                 effect.direction > 8) {
                 return 0;
             }
-            const u32 frame = effect_animation_frame(effect);
+            const u32 frame = effect_sprite_animation_frame(effect);
             if (frame == 0xffffffffu ||
                 static_cast<std::size_t>(frame) >= frame_stride) {
                 return 0;
@@ -572,11 +583,11 @@ u32 effect_sprite_entry_for_frame(const UnitEffectRuntimeState& state,
 
     std::size_t index = 0;
     if (sequence != &definition.image_resource_entries &&
-        !effect_frame_in_range(effect, sequence->size(), index)) {
+        !effect_sprite_frame_in_range(effect, sequence->size(), index)) {
         return 0;
     }
     if (sequence == &definition.image_resource_entries) {
-        index = effect_frame_index(effect, sequence->size());
+        index = effect_sprite_frame_index(effect, sequence->size());
     }
     return (*sequence)[index];
 }
