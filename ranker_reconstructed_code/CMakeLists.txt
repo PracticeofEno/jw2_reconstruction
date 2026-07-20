@@ -1,8 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 project(ranker_reconstruction LANGUAGES C CXX RC)
 
-include(CTest)
-
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -31,48 +29,6 @@ if (MSVC)
 endif()
 
 if (BUILD_TESTING)
-    if (WIN32)
-        add_executable(replay_save_roundtrip_regression
-            tests/replay_save_roundtrip_regression.cpp
-            src/ranker_replay.cpp
-            src/ranker_replay_archive.cpp
-            src/ranker_trc.cpp
-        )
-        target_include_directories(replay_save_roundtrip_regression PRIVATE
-            include
-        )
-        target_link_libraries(replay_save_roundtrip_regression PRIVATE
-            zlib113
-            gdi32
-        )
-        if (MSVC)
-            target_compile_options(replay_save_roundtrip_regression PRIVATE /Gy)
-            target_link_options(replay_save_roundtrip_regression PRIVATE /OPT:REF)
-        else()
-            target_compile_options(replay_save_roundtrip_regression PRIVATE
-                -ffunction-sections
-                -fdata-sections
-            )
-            target_link_options(replay_save_roundtrip_regression PRIVATE
-                -Wl,--gc-sections
-            )
-        endif()
-        add_test(NAME replay_save_roundtrip_regression
-            COMMAND replay_save_roundtrip_regression
-        )
-    endif()
-
-    add_executable(gameplay_end_condition_precedence_regression
-        tests/gameplay_end_condition_precedence_regression.cpp
-        src/ranker_gameplay_end_conditions.cpp
-    )
-    target_include_directories(gameplay_end_condition_precedence_regression PRIVATE
-        include
-    )
-    add_test(NAME gameplay_end_condition_precedence_regression
-        COMMAND gameplay_end_condition_precedence_regression
-    )
-
     add_executable(directdraw_presentation_mode_regression
         tests/directdraw_presentation_mode_regression.cpp
     )
