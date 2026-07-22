@@ -1439,10 +1439,13 @@ void append_low_id_live_action_area_impacts(UnitEffectRuntimeState& state,
             unit_effect_point_impact_damage(state, effect, source, unit));
         const u32 scaled_amount =
             effect_unit_area_damage_amount(effect, unit, base_amount, radius);
-        if (scaled_amount != 0) {
-            append_effect_event(state, UnitEffectEventKind::impact, effect,
-                unit.id, scaled_amount);
-        }
+        // ApplyAreaDamageFromUnit still calls ApplyUnitDamage for candidates
+        // whose computed/falloff damage is zero.  That call is observable:
+        // ordinary workers run the damage-reaction random relocation branch
+        // even though their hit points do not change.  Dropping zero-valued
+        // events therefore removed both the reaction and its two RNG calls.
+        append_effect_event(state, UnitEffectEventKind::impact, effect,
+            unit.id, scaled_amount);
     });
 }
 
@@ -1645,6 +1648,7 @@ UnitActionTickResult ProcessUnitActionCycle(UnitActionContext& context,
     result.target = target;
     if (target == nullptr ||
         (target->runtime_flags & kUnitActionTargetInactive) != 0) {
+        result.carry = true;
         source.command_flags &= ~kUnitActionCommandStarted;
         if (context.callbacks.on_target_lost != nullptr) {
             context.callbacks.on_target_lost(context, source);
@@ -1657,6 +1661,7 @@ UnitActionTickResult ProcessUnitActionCycle(UnitActionContext& context,
         // but the class/owner/range validation in FUN_004c1e85 happens only
         // after the raw +0xf4 recovery branch.
         if (CheckStoredActionTargetTransientFlag(source)) {
+            result.carry = true;
             source.command_flags &= ~kUnitActionCommandStarted;
             return result;
         }
@@ -1671,17 +1676,17 @@ UnitActionTickResult ProcessUnitActionCycle(UnitActionContext& context,
         result.valid_target = validation.valid;
         result.distance = validation.distance;
         if (!validation.valid) {
+            result.carry = true;
             source.command_flags &= ~kUnitActionCommandStarted;
             return result;
         }
         if (!validation.in_range) {
-            // FUN_004c1e85 reports the valid-but-out-of-range target through
-            // its result/carry pair; it does not publish the target point to
-            // raw +0x6c/+0x70 itself.  Low-unit state 0x04 copies that point
-            // in its caller before entering state 0x03, while extended-table
-            // units pop their action and preserve the original acquisition
-            // point.  Writing it here made a type-160 unit replace (940,345)
-            // with the moving target's (962,113) at parity frame 3520.
+            // FUN_004c1e85 initially reports valid/out-of-range as CF/EAX=0,
+            // but FUN_004c1c87 immediately executes OR EAX,EAX at 0x004c1cb6.
+            // That preserves zero while clearing CF, so the caller receives
+            // no-carry/EAX=0 and revalidates/approaches the current target.
+            // The helper still does not publish the target point to raw
+            // +0x6c/+0x70 itself; the command-state handler owns that write.
             return result;
         }
 
@@ -1715,6 +1720,7 @@ UnitActionTickResult ProcessUnitActionCycle(UnitActionContext& context,
                     ? context.callbacks.find_replacement_target(context, source)
                     : nullptr;
             if (replacement == nullptr) {
+                result.carry = true;
                 source.command_flags &= ~kUnitActionCommandStarted;
                 if (context.callbacks.on_target_lost != nullptr) {
                     context.callbacks.on_target_lost(context, source);
@@ -1889,7 +1895,13 @@ void TickUnitEffectChainImpact(UnitEffectRuntimeState& state, UnitEffectRuntime&
     child->tick = effect.tick;
 
     effect.chain_remaining = 0;
-    TickUnitEffectFrameAndApplyImpacts(state, effect);
+    // The successful chain-spawn exits directly from 0x004ecafd,
+    // 0x004ecb0d, or 0x004ecb14 after recording the prior target in the
+    // child's raw +0x54..+0x5c slots.  It does not fall through to the
+    // 0x004ecca2 impact-frame handler used by the no-target/allocation-failure
+    // path.  Advancing the parent here made it expire one frame early and
+    // suppressed the final zero-damage reaction in Batch H.
+    return;
 }
 
 void TickUnitEffectSourceMuzzleLineImpact(UnitEffectRuntimeState& state,
@@ -1918,9 +1930,23 @@ void TickUnitEffectSourceMuzzleLineImpact(UnitEffectRuntimeState& state,
     }
 
     if (target != nullptr) {
+        const u32 retained_direction = effect.direction;
+        const i32 retained_target_x = effect.target_x;
+        const i32 retained_target_y = effect.target_y;
         CalculateUnitEffectSourceAndTargetCenters(state, effect, *source, target);
-        effect.previous_x = effect.target_x;
-        effect.previous_y = effect.target_y;
+        const i32 target_center_x = effect.target_x;
+        const i32 target_center_y = effect.target_y;
+        // The effect-0x1e refresh uses the same direction-free center helper
+        // as its 0x004ed01c initializer.  It updates raw +0x20/+0x24 and
+        // +0x30/+0x34, but leaves recycled direction +0x04 and target scratch
+        // +0x28/+0x2c untouched.  Calling the generic typed helper without
+        // restoring those aliases changed the first fresh slot from direction
+        // zero to eight in Batch I.
+        effect.direction = retained_direction;
+        effect.target_x = retained_target_x;
+        effect.target_y = retained_target_y;
+        effect.previous_x = target_center_x;
+        effect.previous_y = target_center_y;
     }
 }
 
@@ -1934,6 +1960,12 @@ void TickUnitEffectInitialDamageImpact(UnitEffectRuntimeState& state,
 
     if (!effect.initial_impact_applied) {
         effect.initial_impact_applied = true;
+        // The specialized 0x22/0x26 impact handler uses raw +0x10 as its
+        // one-shot damage latch.  It changes that word from zero to one on
+        // the first impact tick, while raw +0x0c continues as the render
+        // counter.  Keeping the latch only in the reconstruction-only bool
+        // left the serialized/runtime frame at zero throughout Batch J.
+        effect.frame = 1;
         if (UnitMovementUnit* target = find_effect_unit(state, effect.target_unit_id)) {
             const u32 amount = unit_effect_point_impact_damage(
                 state, effect, source, *target);
@@ -2074,13 +2106,23 @@ void TickUnitEffectPathActive(UnitEffectRuntimeState& state, UnitEffectRuntime& 
             if (effect.effect_id == 0x27) {
                 effect.x = target->x;
                 effect.y = target->y;
+                // The dedicated reach handler at 0x004ec463 passes
+                // `live_amount * 2 + 1` to StartUnitCommandLockoutTimer
+                // (0x004d032e).  That helper writes raw command-state +0x60,
+                // animation timer +0xec and command-entry lockout +0x98.
+                // Raw +0xf4 (`command_lockout_ticks`) is an independent
+                // attack-recovery counter and is not touched by Bubble.
+                const u32 lockout_ticks = base_amount * 2u + 1u;
+                target->command_state |= 0x40000000u;
+                target->animation_timer = 0;
+                target->command_entry_lockout_ticks = lockout_ticks;
+
+                // The timer is restarted before the original tests the
+                // marker bit, including when an existing marker makes this
+                // newly arrived effect release immediately.
                 const bool marker_already_active =
                     (target->runtime_flags & 0x20000u) != 0;
                 target->runtime_flags |= 0x20000u;
-                const u32 lockout_ticks =
-                    std::min<u32>(base_amount * 2 + 1, 0xffffu);
-                target->command_lockout_ticks =
-                    std::max(target->command_lockout_ticks, lockout_ticks);
                 finish_after_reach = marker_already_active;
             }
             // 0x004ec3be uses the calculated action damage only to seed the
@@ -4502,8 +4544,20 @@ bool DispatchSelectedUnitActionEffect(UnitEffectRuntimeState& state,
 
     if (!initialized) {
         if (target != nullptr) {
-            InitializeUnitEffectProjectileOrMeleePath(
-                state, effect, source, target);
+            if (selected_action_effect_uses_projectile_path(*definition)) {
+                InitializeUnitEffectProjectileOrMeleePath(
+                    state, effect, source, target);
+            }
+            else {
+                // Generic initializer 0x004f02b2 writes the incoming EDX/EBX
+                // command point directly to raw effect +0x20/+0x24.  It does
+                // not move a non-projectile target effect to the caster's
+                // muzzle first.  That transient source anchor is observable
+                // by the mode-1 checksum pass before the next effect tick and
+                // can make an original/reconstructed P2P pair disagree as soon
+                // as an immediate spell such as Thunder bolt is published.
+                initialize_immediate_at_point(target, world_x, world_y);
+            }
         }
         else if (selected_action_effect_uses_projectile_path(*definition)) {
             effect.target_x = world_x;

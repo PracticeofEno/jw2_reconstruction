@@ -1666,6 +1666,12 @@ const char* ranker_single_instance_mutex_name() {
     mutex_name = startup_platform_row(
         kSingleInstanceMutexTextRow, kSingleInstanceMutexFallback);
     mutex_name += "_Reconstructed";
+    const char* background_test = std::getenv("RANKER_REBUILD_BACKGROUND_TEST");
+    if (background_test != nullptr && background_test[0] != '\0' &&
+        background_test[0] != '0') {
+        mutex_name += "_BackgroundTest_";
+        mutex_name += std::to_string(GetCurrentProcessId());
+    }
     return mutex_name.c_str();
 }
 
@@ -1842,8 +1848,11 @@ void default_setup_data_write_failed(const char* path, void*) {
     }
 }
 
-void default_connect_resume_worker(ConnectFrontendState&) {
+void default_connect_resume_worker(ConnectFrontendState& state) {
     resume_worker_after_modal_action();
+    if (state.main_window != nullptr && IsWindow(state.main_window)) {
+        PostMessageA(state.main_window, WM_USER + 4, 0, 0);
+    }
 }
 
 void default_connect_open_wizard(ConnectFrontendState& state) {
@@ -2479,8 +2488,14 @@ bool default_p2p_start_join(P2PLobbyState& state, const char* remote_address,
         CloseLegacySocketRecord(state.join_socket);
         state.join_socket = INVALID_SOCKET;
     }
-    return StartLegacySocketConnect(state.join_socket, remote_address, port,
-        notify_window, notify_message);
+    const bool started = StartLegacySocketConnect(state.join_socket, remote_address,
+        port, notify_window, notify_message);
+    append_startup_log(
+        "p2p connect start address=%s port=%u started=%s socket=%llu error=%d",
+        remote_address, static_cast<unsigned>(port), started ? "yes" : "no",
+        static_cast<unsigned long long>(state.join_socket),
+        legacy_network_state().last_error);
+    return started;
 }
 
 bool default_p2p_continue_join(P2PLobbyState& state) {
@@ -2650,6 +2665,25 @@ void default_link_shutdown_network(LinkLobbyState& state) {
         DeleteFileA(state.prepared_map_path.c_str());
         state.map_download_state = 0;
     }
+}
+
+void reset_default_p2p_room_transport_after_game() {
+    // The original direct-P2P outer loop either keeps the current room alive
+    // or tears its transport down before returning to the room browser.  The
+    // reconstructed flow returns to the browser, so retaining the previous
+    // listen socket makes the next hosted room fail its bind on the same port.
+    ShutdownLegacyTcpNetworking();
+    ShutdownLegacyUdpNetworking();
+
+    LinkLobbyState& link = link_lobby_state();
+    link.shared_peer_socket = INVALID_SOCKET;
+    link.pending_join_socket = INVALID_SOCKET;
+    link.player_sockets.fill(INVALID_SOCKET);
+
+    P2PLobbyState& p2p = p2p_lobby_state();
+    p2p.join_pending = false;
+    p2p.join_socket = INVALID_SOCKET;
+    append_startup_log("post-game direct-p2p room transport reset");
 }
 
 void configure_link_lobby_callbacks(LinkLobbyState& state) {
@@ -4880,6 +4914,15 @@ void default_gameplay_input_handle_pointer_event(GameplayInputActionState& state
     case 0x0202:
         pointer_state = kUiOverlayPointerRelease;
         resolve_selection = overlay.selection_rectangle_active;
+        if (resolve_selection) {
+            // FUN_004e9ed0 snapshots the current cursor into the rectangle's
+            // second corner before it decides between click and box select.
+            // WM_MOUSEMOVE is not queued in the reconstructed input ring, so
+            // relying on a prior drag event leaves both corners at LBUTTONDOWN
+            // and turns every physical drag into a single click.
+            overlay.selection_right = overlay.mouse_x;
+            overlay.selection_bottom = overlay.mouse_y;
+        }
         break;
     case 0x0204:
     case 0x0206:
@@ -4956,6 +4999,13 @@ void default_gameplay_input_pre_cursor_update(GameplayInputActionState& state) {
     overlay.mouse_y = static_cast<i32>(input.mouse_y);
     if ((input.mouse_button_mask & 1u) != 0) {
         overlay.pointer_state |= kUiOverlayPointerDrag;
+        if (overlay.selection_rectangle_active) {
+            // Pointer motion is sampled directly from InputState, matching
+            // the original frame-driven rectangle update even though
+            // WM_MOUSEMOVE itself is deliberately not queued.
+            overlay.selection_right = overlay.mouse_x;
+            overlay.selection_bottom = overlay.mouse_y;
+        }
     } else {
         overlay.pointer_state &= ~kUiOverlayPointerDrag;
     }
@@ -8887,7 +8937,13 @@ void populate_p2p_session_start_input_from_link_lobby(
          input.network_player_count < input.players.size(); ++owner) {
         const u8 slot_state = normalized_link_lobby_startup_slot_state(
             lobby.start_states[owner]);
-        if (slot_state == static_cast<u8>(PlayerSlotState::disabled)) {
+        // DAT_007251F4 state 1 is a Computer owner.  The original P2P owner
+        // lookup is built from the DirectPlay participant array, so Computer
+        // slots never consume an entry in that array.  Keeping them here made
+        // a local-host-versus-Computer match wait for a nonexistent network
+        // peer during the surrender/exit vote.
+        if (slot_state == static_cast<u8>(PlayerSlotState::player_controlled) ||
+            slot_state == static_cast<u8>(PlayerSlotState::disabled)) {
             continue;
         }
 
@@ -11081,8 +11137,20 @@ void run_default_gameplay_session_runtime_reset(
     sync_default_gameplay_session_runtime_views_after_reset();
     rebuild_default_unit_reference_tables_from_catalog();
     load_default_game_session_avatar_runtime();
-    load_default_gameplay_script_triggers_from_session_archive(
-        gameplay_script_trigger_state());
+    // The original record-5 import at 0x004d1e82 belongs to the mode-5
+    // saved-session bundle loader.  Fresh/link sessions still execute the
+    // trigger processor every frame, but FUN_00416440 sees the trigger table
+    // left empty by the normal-session reset.  Importing a multiplayer map's
+    // dormant editor TRIGGERS record here made reconstructed peers execute
+    // commands that the original peer never loaded.
+    if (startup.session_mode == 5) {
+        load_default_gameplay_script_triggers_from_session_archive(
+            gameplay_script_trigger_state());
+    }
+    else {
+        g_runtime.gameplay_script_triggers_loaded = false;
+        g_runtime.gameplay_script_trigger_record_index = 0xffffffffu;
+    }
     load_default_gameplay_script_scenario_objects(gameplay_script_trigger_state());
 }
 
@@ -11375,8 +11443,21 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     append_startup_log("start-slots: map effect init ok");
     append_startup_log("start-slots: fixed slot masks begin");
     apply_default_session_fixed44_player_slot_masks();
-    g_runtime.gameplay_started_player_mask =
-        g_runtime.gameplay_player_slots.global_active_slot_mask;
+    // global_active_slot_mask is the original relation/observer work mask,
+    // not a roster of everyone who entered the match.  In direct P2P mode 1
+    // both human slots normally carry raw state active(0), so that work mask
+    // can legitimately be zero.  Remember the immutable starting roster from
+    // the raw slot states instead; the terminal subtype-0x13 exchange needs
+    // it after those live states have been changed to disabled(0x14).
+    g_runtime.gameplay_started_player_mask = 0;
+    for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+        const u8 slot_state =
+            g_runtime.gameplay_player_slots.slot_states[owner];
+        if (slot_state != static_cast<u8>(PlayerSlotState::observer) &&
+            slot_state != static_cast<u8>(PlayerSlotState::disabled)) {
+            g_runtime.gameplay_started_player_mask |= 1u << owner;
+        }
+    }
     append_startup_log("start-slots: fixed slot masks ok");
     append_startup_log("start-slots: packet reset begin");
     reset_default_mode1_packet_state_from_player_slots();
@@ -12121,6 +12202,16 @@ void default_gameplay_flow_process_session_loop(GameplaySessionFlowState& state)
     ProcessGameplaySessionLoop(loop_state, state.session_loop_iteration_budget);
     state.process_shutdown_requested = loop_state.process_shutdown_requested;
     state.close_requested = loop_state.process_shutdown_requested;
+    GameplayModalUiState& modal = gameplay_modal_ui_state();
+    if (!loop_state.session_active && modal.surrender_requested) {
+        // FUN_0042e510 sets DAT_00725c0a after publishing the local inactive
+        // vote.  The original outer network loop exits the program only after
+        // ProcessGameplaySessionLoop has shown the result and returned.
+        modal.surrender_requested = false;
+        g_runtime.worker_thread_running = false;
+        state.process_shutdown_requested = true;
+        state.close_requested = true;
+    }
     state.p2p_win_result = g_runtime.gameplay_end_condition_state.result_code;
     append_startup_log("session-flow: process loop returned shutdown=%s result=%lu",
         state.process_shutdown_requested ? "yes" : "no",
@@ -12873,7 +12964,8 @@ void configure_default_gameplay_sound_visibility(GameplaySoundState& sound) {
 
 bool resolve_default_unit_sound_profile(const UnitMovementUnit& unit,
     GameplayUnitSoundDefinition& definition, GameplayUnitSoundBaseSlots& base_slots);
-void sync_default_gameplay_visibility_and_render_inputs(u32 frame_counter);
+void sync_default_gameplay_visibility_and_render_inputs(
+    u32 frame_counter, bool refresh_visibility = true);
 void mirror_default_gameplay_visibility_to_consumers(GameplayVisibilityGrid& grid);
 void sync_default_gameplay_hud_alert_markers();
 
@@ -13496,7 +13588,13 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
     g_runtime.gameplay_frame_render_context.callbacks.present_cursor =
         default_gameplay_frame_present_cursor;
     append_startup_log("session-loop: init resources visibility sync begin");
-    sync_default_gameplay_visibility_and_render_inputs(0);
+    // Session import has already restored the three raw visibility layers,
+    // but the original does not run FUN_004d5bc0 until the end of the first
+    // unit-runtime pass.  Initializing the typed consumers is still required;
+    // refreshing here would expose starting units to automatic acquisition a
+    // frame early (the OBC type-6/type-8 probes then retain their map targets
+    // instead of taking the original one-frame idle transition).
+    sync_default_gameplay_visibility_and_render_inputs(0, false);
     append_startup_log("session-loop: init resources ok active_units=%zu",
         g_runtime.gameplay_movement_context.active_units.size());
     g_gameplay_chat_hud_active.store(true, std::memory_order_release);
@@ -13555,7 +13653,13 @@ bool default_gameplay_loop_frame_gate(GameplayLoopState& state) {
 }
 
 u32 default_gameplay_loop_read_tick_ms(GameplayLoopState& state) {
-    state.external_single_step = gameplay_modal_ui_is_active(gameplay_modal_ui_state());
+    // FUN_0042d5f0/FUN_0042e510 run a blocking modal pump only when the P2P
+    // flag DAT_00725bf8 is zero.  In P2P they poll the menu once and return to
+    // ProcessGameplayFrameTick, allowing the simulation to continue behind
+    // the menu until a synchronized Pause action is explicitly published.
+    state.external_single_step =
+        gameplay_modal_ui_is_active(gameplay_modal_ui_state()) &&
+        !g_runtime.generic_ai_profile_mode;
     state.generic_ai_profile_mode = g_runtime.generic_ai_profile_mode;
     const P2PGameSessionStartState& p2p = g_runtime.p2p_session_start_state;
     state.replay_timing_enabled = p2p.replay_target_frame_count != 0;
@@ -13625,8 +13729,20 @@ void default_gameplay_loop_pre_update_phase(GameplayLoopState& state) {
     }
     PumpGameplayInputAndCursorFrame(input);
     apply_default_ui_overlay_runtime_mutations();
-    PumpActiveGameplayModalUiFlow(gameplay_modal_ui_state());
-    if (!gameplay_modal_ui_is_active(gameplay_modal_ui_state())) {
+    GameplayModalUiState& modal = gameplay_modal_ui_state();
+    PumpActiveGameplayModalUiFlow(modal);
+
+    // The original pause/exit screens write DAT_00725c0c and DAT_00725c09,
+    // which ProcessGameplaySessionLoop consumes immediately after the frame.
+    // The typed modal state previously recorded those writes but left them
+    // unread, so End Game and Quit to Frontend merely closed the dialog.
+    if (modal.end_session_requested || modal.quit_to_frontend_requested) {
+        modal.end_session_requested = false;
+        modal.quit_to_frontend_requested = false;
+        state.leave_requested = true;
+    }
+
+    if (!gameplay_modal_ui_is_active(modal)) {
         process_default_ui_overlay_command_actions();
     }
     (void)request_deferred_load_restart();
@@ -17521,6 +17637,9 @@ GameplayVisibilityUnit make_default_gameplay_visibility_unit(
         (unit.definition.center_bounds_height >> 1);
     visibility.visibility_probe_x = unit.x;
     visibility.visibility_probe_y = unit.y;
+    // FUN_004d6d98 receives the original's biased unit base (raw address
+    // minus 0xa03fb8), so its +0xa04078/+0xa0407c reads are raw +0xc0/+0xc4:
+    // the aligned current-cell tuple used by the owner visibility layer.
     visibility.owner_layer_probe_x = unit.current_cell_x;
     visibility.owner_layer_probe_y = unit.current_cell_y;
     visibility.terrain_probe_x = unit.current_cell_x;
@@ -17727,7 +17846,8 @@ void configure_default_gameplay_fog_context() {
     fog.camera_y = g_runtime.gameplay_frame_render_context.camera_y;
 }
 
-void sync_default_gameplay_visibility_and_render_inputs(u32 frame_counter) {
+void sync_default_gameplay_visibility_and_render_inputs(
+    u32 frame_counter, bool refresh_visibility) {
     UnitMovementContext* movement = default_gameplay_movement_context();
     g_runtime.gameplay_unit_render_queue.units.clear();
     g_runtime.gameplay_unit_render_queue.effects.clear();
@@ -17809,7 +17929,9 @@ void sync_default_gameplay_visibility_and_render_inputs(u32 frame_counter) {
         }
     }
 
-    UpdateGameplayVisibilityMap(context);
+    if (refresh_visibility) {
+        UpdateGameplayVisibilityMap(context);
+    }
     for (u32 y = 0; y < context.grid->height; ++y) {
         for (u32 x = 0; x < context.grid->width; ++x) {
             const std::size_t source_index =
@@ -22667,32 +22789,19 @@ void default_unit_command_dispatch_attack(UnitCommandContext& context,
             HandleUnitAttackCycleCompleteTargetSelection(context, unit);
             return;
         }
-        if (result.code == UnitActionTickCode::turning_to_target) {
-            UnitMovementUnit* current = result.target != nullptr
-                ? result.target
-                : unit.target;
-            if (current == nullptr || !can_attack_replacement(*current)) {
-                pop_extended_runtime_action();
-                return;
-            }
-            if (target_in_command_action_range(*current)) {
-                return;
-            }
-            if ((unit.runtime_flags & 0x8u) != 0) {
-                pop_extended_runtime_action();
-                return;
-            }
-            SetUnitCommandTarget(unit, current);
-            copy_attack_path_target(*current);
-            unit.command_state = kUnitStateAttackTravel;
-            if (context.movement != nullptr) {
-                ProcessUnitPathToDestination(*context.movement, unit);
-            }
-            return;
-        }
-
-        if (!result.valid_target || result.target == nullptr) {
-            if (UnitMovementUnit* replacement = find_valid_replacement()) {
+        if (result.carry) {
+            // The action-helper carry path at 0x004c93e5 calls
+            // FindBestUnitTargetUsingSpatialIndex and publishes its returned
+            // candidate directly at 0x004c93f0.  It does not run the common
+            // action gate a second time.  Automatic acquisition has already
+            // applied the relation, class/profile and visibility filters;
+            // revalidating the returned pointer here is an extra operation
+            // absent from the original carry path.
+            UnitMovementUnit* replacement =
+                context.callbacks.find_target != nullptr
+                    ? context.callbacks.find_target(context, unit)
+                    : nullptr;
+            if (replacement != nullptr) {
                 SetUnitCommandTarget(unit, replacement);
                 copy_attack_path_target(*replacement);
                 return;
@@ -22700,12 +22809,26 @@ void default_unit_command_dispatch_attack(UnitCommandContext& context,
             pop_extended_runtime_action();
             return;
         }
+
+        // The remaining EAX=0 and EAX=4 entries both revalidate the current
+        // target at 0x004c9444/0x004c9435.  EAX=0 is the no-carry transient-
+        // replacement reach failure; EAX=4 is recovery/turning.
+        UnitMovementUnit* current = result.target != nullptr
+            ? result.target
+            : unit.target;
+        if (current == nullptr || !can_attack_replacement(*current)) {
+            pop_extended_runtime_action();
+            return;
+        }
+        if (target_in_command_action_range(*current)) {
+            return;
+        }
         if ((unit.runtime_flags & 0x8u) != 0) {
             pop_extended_runtime_action();
             return;
         }
-        SetUnitCommandTarget(unit, result.target);
-        copy_attack_path_target(*result.target);
+        SetUnitCommandTarget(unit, current);
+        copy_attack_path_target(*current);
         unit.command_state = kUnitStateAttackTravel;
         if (context.movement != nullptr) {
             ProcessUnitPathToDestination(*context.movement, unit);
@@ -22745,8 +22868,14 @@ void default_unit_command_dispatch_attack(UnitCommandContext& context,
         }
         else if (replacement != nullptr &&
             (current == nullptr ||
-                command_target_priority(*replacement) <
+                command_target_priority(*replacement) <=
                     command_target_priority(*current))) {
+            // In the exact original/rebuild five-worker attack trace, state
+            // 0x20 result 0 at frame 1617 replaces worker slot 60 with the
+            // equal-priority scanned slot 61.  Keeping slot 60 starts an
+            // unnecessary pursue path, consumes three extra RNG calls, and
+            // causes the P2P peer drop.  The live behavior is inclusive here,
+            // matching the completed-cycle target selection above.
             current = replacement;
         }
 
@@ -24432,6 +24561,17 @@ void sync_default_gameplay_end_condition_state() {
         end_state.scenario_victory_condition_mask == 0) {
         end_state.scenario_defeat_condition_mask = default_mask;
         end_state.scenario_victory_condition_mask = default_mask;
+    }
+    else if (g_runtime.generic_ai_profile_mode && end_state.session_mode == 5 &&
+        end_state.scenario_defeat_condition_mask == 0 &&
+        end_state.scenario_victory_condition_mask == 0) {
+        // Mode 5 normally obtains these masks from saved scenario globals.
+        // Until those optional fields are present, leaving both at zero makes
+        // a loaded P2P match impossible to finish.  The normal direct-match
+        // objective is building elimination, so retain that original default
+        // instead of silently disabling all end conditions.
+        end_state.scenario_defeat_condition_mask = kGameplayEndConditionEliteUnit;
+        end_state.scenario_victory_condition_mask = kGameplayEndConditionEliteUnit;
     }
 
     g_runtime.gameplay_end_condition_units.clear();
@@ -26833,6 +26973,7 @@ void initialize_default_gameplay_original_unit_pool_slots() {
             });
         const bool creation_footprint_registered =
             unit.id != 0 && unit.linked_object_id == unit.id;
+        UnitMovementUnit* live_unit = &unit;
         if (existing_free != movement.free_units.end()) {
             UnitMovementUnit* replaced = *existing_free;
             movement.free_units.erase(existing_free);
@@ -26847,27 +26988,40 @@ void initialize_default_gameplay_original_unit_pool_slots() {
             // HandleUnitCreationRegisterFootprint afterwards, which replaces
             // them with +0xc0/+0xc4; linked_object_id == id records that path
             // before the temporary startup id is replaced below.
-            replaced->runtime_slot_index = kInvalidUnitRuntimeSlotIndex;
-            replaced->id = 0;
-            replaced->linked_object_id = 0;
-            replaced->linked_unit = nullptr;
+            // The original fixed pool constructs the starting unit directly
+            // over this released 0x1d0-byte slot.  Preserve that storage
+            // identity as well as its numeric slot: neutral survivors can
+            // still hold a raw pointer to the released map unit, and that
+            // pointer must observe the new starting unit after reuse.  Merely
+            // assigning the slot id to the temporary placed-unit object left
+            // such incoming pointers attached to an orphaned C++ object.
+            *replaced = unit;
+            replaced->linked_unit = replaced;
+            for (UnitMovementUnit*& active : movement.active_units) {
+                if (active == &unit) {
+                    active = replaced;
+                }
+            }
+            unit.active = false;
+            unit.linked_unit = nullptr;
+            live_unit = replaced;
         }
         if (!creation_footprint_registered) {
-            unit.next_path_x = residual_next_path_x;
-            unit.next_path_y = residual_next_path_y;
-            unit.saved_path_target_x = residual_next_path_x;
-            unit.saved_path_target_y = residual_next_path_y;
+            live_unit->next_path_x = residual_next_path_x;
+            live_unit->next_path_y = residual_next_path_y;
+            live_unit->saved_path_target_x = residual_next_path_x;
+            live_unit->saved_path_target_y = residual_next_path_y;
         }
-        unit.linked_effect_slot_offset = residual_linked_effect_slot_offset;
+        live_unit->linked_effect_slot_offset = residual_linked_effect_slot_offset;
         used[slot] = 1;
-        unit.runtime_slot_index = slot;
-        unit.id = slot * kGameplayScenarioObjectStride;
-        unit.linked_object_id = unit.id;
-        unit.linked_unit = &unit;
+        live_unit->runtime_slot_index = slot;
+        live_unit->id = slot * kGameplayScenarioObjectStride;
+        live_unit->linked_object_id = live_unit->id;
+        live_unit->linked_unit = live_unit;
         if (slot < script.objects.size()) {
             GameplayScriptTriggerObjectState& object = script.objects[slot];
-            object.unit = &unit;
-            object.object_pointer = &unit;
+            object.unit = live_unit;
+            object.object_pointer = live_unit;
             object.scenario_object_index = slot;
             object.remove_from_triggers = false;
             object.script_removal_requested = false;
@@ -26875,9 +27029,9 @@ void initialize_default_gameplay_original_unit_pool_slots() {
         append_startup_log(
             "start-slots: original pool slot=%lu offset=%lu type=%lu owner=%lu",
             static_cast<unsigned long>(slot),
-            static_cast<unsigned long>(unit.id),
-            static_cast<unsigned long>(unit.type_id),
-            static_cast<unsigned long>(unit.owner_id));
+            static_cast<unsigned long>(live_unit->id),
+            static_cast<unsigned long>(live_unit->type_id),
+            static_cast<unsigned long>(live_unit->owner_id));
     }
 
     // Materialize the rest of the original fixed pool as inactive nodes.  All
@@ -28478,26 +28632,37 @@ void run_default_gameplay_end_condition_monitor(GameplayLoopState& state) {
         // already mirrors that slot transition, but its socket-backed bridge
         // has no separate DAT_00725c09 byte.  Synthesize the consensus edge
         // once the local terminal vote is published and every originally
-        // active remote slot has become inactive.
+        // active remote network participant has become inactive.
         const u32 local_slot = std::min<u32>(
             g_runtime.gameplay_player_slots.local_player_slot,
             kPlayerSlotCount - 1);
-        bool remote_slot_seen = false;
-        bool all_remote_slots_inactive = true;
+        bool remote_network_player_seen = false;
+        bool all_remote_network_players_inactive = true;
         for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
             if (owner == local_slot ||
                 (g_runtime.gameplay_started_player_mask & (1u << owner)) == 0) {
                 continue;
             }
-            remote_slot_seen = true;
+
+            // Original reliable-vote completion ignores status 1 owners:
+            // those are locally simulated Computer players, not DirectPlay
+            // participants.  Only human/observer network owners can hold the
+            // local surrender or program-exit request open.
+            if (g_runtime.gameplay_startup_state.owner_slots[owner].slot_state ==
+                static_cast<u8>(PlayerSlotState::player_controlled)) {
+                continue;
+            }
+
+            remote_network_player_seen = true;
             if (g_runtime.gameplay_player_slots.slot_states[owner] !=
                 static_cast<u8>(PlayerSlotState::disabled)) {
-                all_remote_slots_inactive = false;
+                all_remote_network_players_inactive = false;
                 break;
             }
         }
         packets.session_complete_requested =
-            remote_slot_seen && all_remote_slots_inactive;
+            !remote_network_player_seen ||
+            all_remote_network_players_inactive;
     }
     if (packets.session_complete_requested) {
         // DAT_00725c09 is the P2P consensus/leave flag in the original
@@ -29069,6 +29234,10 @@ void run_default_gameplay_session_transition(HWND owner, u32 mode) {
     RunP2PGameplaySessionAfterModal(state);
     SetDirectPlayMessageDispatchMode(0);
 
+    if (state.close_requested || state.process_shutdown_requested) {
+        default_gameplay_flow_send_main_close(state);
+    }
+
     char status_text[384]{};
     std::snprintf(status_text, sizeof(status_text),
         "%s gameplay transition returned from the reconstructed session flow.\n",
@@ -29079,6 +29248,18 @@ void run_default_gameplay_session_transition(HWND owner, u32 mode) {
         g_runtime.gameplay_session_loop_reached ? "yes" : "no");
     g_runtime.gameplay_transition_active = false;
     resume_worker_after_modal_action();
+
+    if (!state.close_requested && !state.process_shutdown_requested &&
+        mode == 1 && g_runtime.main_window != nullptr &&
+        IsWindow(g_runtime.main_window)) {
+        // A completed direct-P2P match returns to JW2_09's
+        // "player-to-player direct connection" frontend.  Posting this to
+        // the window thread mirrors the original outer P2P loop; merely
+        // returning from the worker transition leaves the result frame on
+        // screen with no active frontend.
+        PostMessageA(g_runtime.main_window, WM_USER + 4, 0, 1);
+        append_startup_log("gameplay transition queued direct-p2p frontend return");
+    }
 }
 
 void queue_default_gameplay_session_transition(HWND owner, u32 mode) {
@@ -29409,6 +29590,8 @@ constexpr u32 kTitleMenuQuitEntry = 5;
 constexpr u32 kTitleMenuFirstButtonEntry = kTitleMenuSingleEntry;
 constexpr u32 kTitleMenuLastButtonEntry = kTitleMenuQuitEntry;
 constexpr u32 kInvalidTitleMenuEntry = 0xffffffffu;
+constexpr UINT_PTR kTitleMenuAnimationTimerId = 0x524b;
+constexpr UINT kTitleMenuAnimationTimerIntervalMs = 33;
 
 UiScreenDefinition& title_main_menu_screen() {
     return GlobalUiScreenSlot(kTitleMenuScreenSlot);
@@ -29416,8 +29599,21 @@ UiScreenDefinition& title_main_menu_screen() {
 
 void close_title_main_menu_frontend() {
     g_runtime.title_menu_active = false;
+    if (g_runtime.main_window != nullptr && IsWindow(g_runtime.main_window)) {
+        KillTimer(g_runtime.main_window, kTitleMenuAnimationTimerId);
+    }
     UiScreenDefinition& screen = title_main_menu_screen();
     HandleUiScreenDefinitionResourceRelease(screen);
+
+    // Legacy frontend dialogs are fixed at the logical 800x600 size.  When the
+    // resizable parent window is larger, part of the parent remains exposed
+    // around the dialog.  Clear that exposed area before opening the next
+    // frontend so the released title frame is not left behind.
+    g_runtime.suppress_paint = true;
+    if (g_runtime.main_window != nullptr && IsWindow(g_runtime.main_window)) {
+        InvalidateRect(g_runtime.main_window, nullptr, TRUE);
+        UpdateWindow(g_runtime.main_window);
+    }
 }
 
 bool draw_title_main_menu_to_backbuffer(UiScreenDefinition& screen, bool* draw_result) {
@@ -29493,6 +29689,10 @@ bool open_title_main_menu_frontend(HWND window) {
         presented ? "yes" : "no",
         static_cast<unsigned long>(screen.resource_mark));
     g_runtime.title_menu_active = presented;
+    if (presented) {
+        SetTimer(window, kTitleMenuAnimationTimerId,
+            kTitleMenuAnimationTimerIntervalMs, nullptr);
+    }
     return presented;
 }
 
@@ -30125,6 +30325,14 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
             return 0;
         }
         break;
+    case WM_TIMER:
+        if (wparam == kTitleMenuAnimationTimerId) {
+            if (g_runtime.title_menu_active && g_runtime.directx_initialized) {
+                (void)redraw_active_title_main_menu();
+            }
+            return 0;
+        }
+        break;
     case WM_CLOSE:
         if (g_runtime.generic_ai_scenario_active &&
             g_runtime.generic_ai_profile_mode && !g_runtime.app_active) {
@@ -30140,6 +30348,7 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
         return 0;
     case WM_DESTROY:
         if (window == g_runtime.main_window) {
+            KillTimer(window, kTitleMenuAnimationTimerId);
             PostQuitMessage(0);
         }
         break;
@@ -30176,6 +30385,25 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
         return 0;
     }
     case WM_USER + 4:
+        if (lparam == 1) {
+            // The original result flow clears the game/result surfaces before
+            // it creates the owned 800x600 P2P window.  Our frontend is hosted
+            // inside the scaled main client, so leaving those surfaces intact
+            // exposes the old score table around it.
+            pause_worker_for_modal_action();
+            g_runtime.suppress_paint = true;
+            HandleDirectDrawFrameBoundary();
+            // Clearing DirectDraw alone does not repaint the parts of the
+            // resized parent client that lie outside the hosted P2P frontend.
+            // Force WM_PAINT through the black-background path before opening
+            // the child so no result-screen pixels survive the transition.
+            InvalidateRect(window, nullptr, TRUE);
+            UpdateWindow(window);
+            reset_default_p2p_room_transport_after_game();
+            OpenMultiplayerFrontendForActiveMode(window);
+            append_startup_log("main opened post-game direct-p2p frontend");
+            return 0;
+        }
         if (!open_title_main_menu_frontend(window)) {
             pause_worker_for_modal_action();
             OpenMultiplayerFrontendForActiveMode(window);

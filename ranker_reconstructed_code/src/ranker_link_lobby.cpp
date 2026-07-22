@@ -8,6 +8,7 @@
 #include "ranker_network.h"
 #include "ranker_online_dialogs.h"
 #include "ranker_p2p_lobby.h"
+#include "ranker_system_ui.h"
 #include "ranker_text_tables.h"
 #include "ranker_trc.h"
 #include "ranker_winmain.h"
@@ -25,8 +26,6 @@ namespace ranker {
 namespace {
 
 constexpr DWORD kWindowStyleFullscreen = 0x90000000;
-constexpr DWORD kWindowStyleWindowed = WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN |
-    WS_CLIPSIBLINGS;
 constexpr DWORD kListBoxStyle =
     WS_CHILD | WS_VISIBLE | WS_DISABLED | LBS_NOTIFY | LBS_OWNERDRAWFIXED;
 constexpr DWORD kChatEditStyle = WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | ES_NOHIDESEL;
@@ -52,6 +51,15 @@ constexpr COLORREF kLinkMapWaiterYellow = RGB(250, 250, 10);
 constexpr COLORREF kLinkBlack = RGB(0, 0, 0);
 constexpr UINT kLinkLobbyTabTextFlags =
     DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS | DT_MODIFYSTRING;
+
+HFONT link_lobby_ui_font() {
+    // The original lobby uses DAT_0162ec38, the second font created by
+    // InitializeUiFontHandles (LOGFONT height -12), for its Win32 controls.
+    HFONT font = GetUiFontHandle(1);
+    return font != nullptr ? font :
+        reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+}
+
 constexpr long kLinkLobbyJoinSocketEvents = FD_READ | FD_WRITE | FD_CLOSE;
 constexpr std::size_t kLinkLobbySessionSeedMapScrollOffset = 0x36;
 constexpr std::size_t kLinkLobbySessionSeedGroupCountOffset = 0x3a;
@@ -1554,9 +1562,6 @@ void show_message_line(LinkLobbyState& state, const LinkLobbyMessageLine& line) 
         state.callbacks.show_message(state.window, state.last_message.c_str(),
             callback_color);
     }
-    if (state.chat_edit.window != nullptr && !state.last_message.empty()) {
-        SetWindowTextA(state.chat_edit.window, state.last_message.c_str());
-    }
 }
 
 void show_message(LinkLobbyState& state, const char* text,
@@ -2094,8 +2099,11 @@ void draw_info_panel(LinkLobbyState& state, const DRAWITEMSTRUCT& draw) {
     SetBkColor(draw.hDC, kLinkBlack);
     SetBkMode(draw.hDC, TRANSPARENT);
     SetTextColor(draw.hDC, kLinkSoftWhite);
-    std::string text = state.last_message.empty() ?
-        link_lobby_map_info_text(state) : state.last_message;
+    // Link messages belong to the owner-drawn message list.  The original
+    // info panel remains the title/game-type/map summary after peers join or
+    // chat; using `last_message` here replaced that panel with the most recent
+    // notification.
+    const std::string text = link_lobby_map_info_text(state);
     DrawTextA(draw.hDC, text.c_str(), -1, &rect, DT_LEFT | DT_WORDBREAK);
 }
 
@@ -2748,7 +2756,7 @@ bool CreateLinkLobbyPlayerRoleComboBox(LinkLobbyState& state, int player_index,
     LoadLegacyImageComboBoxBitmaps(combo, kLinkLobbyPlayerRoleEnabledBitmapRecord, 0);
     SetLegacyImageComboBoxColors(combo, RGB(176, 178, 171), 0);
     SendMessageA(combo.window, WM_SETFONT,
-        reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+        reinterpret_cast<WPARAM>(link_lobby_ui_font()), TRUE);
     return true;
 }
 
@@ -3092,7 +3100,7 @@ bool CreateLinkLobbyTribeComboBox(LinkLobbyState& state, int player_index) {
     subclass_combo(combo);
     LoadLegacyImageComboBoxBitmaps(combo, kLinkLobbyTribeDisabledBitmapRecord, 0);
     SendMessageA(combo.window, WM_SETFONT,
-        reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+        reinterpret_cast<WPARAM>(link_lobby_ui_font()), TRUE);
     return true;
 }
 
@@ -3666,6 +3674,12 @@ void HandleLinkLobbyPlayerRemovalPacket(LinkLobbyState& state, const void* packe
 
 void HandleLinkLobbyHostClosedPacket(LinkLobbyState& state) {
     if (state.join_accepted) {
+        if (state.countdown_value >= 0) {
+            append_link_lobby_log(
+                "link host-close packet accepted during udp start countdown value=%ld",
+                static_cast<long>(state.countdown_value));
+            return;
+        }
         ReturnFromLinkLobby(state);
     }
 }
@@ -4877,7 +4891,7 @@ bool CreateLinkLobbyTabButton(LinkLobbyState& state, int tab_index, int position
     subclass_button(button);
     LoadLegacyImageButtonBitmaps(button, kLinkLobbyPanelBitmapRecord, 0);
     SendMessageA(button.window, WM_SETFONT,
-        reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+        reinterpret_cast<WPARAM>(link_lobby_ui_font()), TRUE);
     SetWindowTextA(button.window, state.tab_button_labels[tab_index].data());
     return true;
 }
@@ -5305,7 +5319,7 @@ bool CreateLinkLobbyMapDownloadButton(LinkLobbyState& state, int player_index) {
         GetWindowLongPtrA(button.window, GWLP_WNDPROC));
     subclass_button(button);
     SendMessageA(button.window, WM_SETFONT,
-        reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+        reinterpret_cast<WPARAM>(link_lobby_ui_font()), TRUE);
     ShowWindow(button.window, SW_HIDE);
     return true;
 }
@@ -5681,6 +5695,20 @@ void HandleLinkLobbyPeerSocketEvent(LinkLobbyState& state, WPARAM socket,
                 context != nullptr && context->system_message_101_seen;
             if (!directplay_ready) {
                 if (state.join_accepted) {
+                    // The original client switches from the lobby TCP route to
+                    // DirectPlay while the synchronized start countdown is in
+                    // progress.  The reconstructed client uses its raw UDP
+                    // fallback when the legacy DirectPlay COM runtime is not
+                    // available.  A host therefore closes this TCP
+                    // socket as part of a successful start, not as a lobby
+                    // cancellation.  Keep the countdown alive once the start
+                    // parameters have already been accepted.
+                    if (state.countdown_value >= 0) {
+                        append_link_lobby_log(
+                            "link peer tcp close accepted during udp start countdown value=%ld",
+                            static_cast<long>(state.countdown_value));
+                        break;
+                    }
                     if (state.start_sync_timer != 0 && state.window != nullptr) {
                         KillTimer(state.window, state.start_sync_timer);
                     }
@@ -6412,10 +6440,12 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
     state.layout = copy_layout_record(layout.table);
 
     const LinkLobbyLayoutRect window_rect = layout_at(state, 0);
-    const POINT origin = IsWindow(parent) ? POINT{0, 0} : RankerFrontendWindowOrigin();
-    const DWORD style = IsWindow(parent) ? kWindowStyleWindowed : kWindowStyleFullscreen;
-    state.window = CreateWindowExA(WS_EX_CONTROLPARENT, "Link", "Link", style,
-        origin.x, origin.y, window_rect.width, window_rect.height,
+    // The original fullscreen frontend path creates this lobby as an owned
+    // top-level popup. Parent validity is not the legacy windowed-mode flag;
+    // using it here incorrectly turned every reconstructed lobby into a child
+    // window. Keep the observed popup style and legacy coordinates.
+    state.window = CreateWindowExA(WS_EX_CONTROLPARENT, "Link", "Link",
+        kWindowStyleFullscreen, 0, 0, window_rect.width, window_rect.height,
         parent, nullptr, instance, nullptr);
     if (state.window == nullptr) {
         release_resources(state);
@@ -6532,9 +6562,9 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
     }
 
     SendMessageA(state.window, WM_SETFONT,
-        reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+        reinterpret_cast<WPARAM>(link_lobby_ui_font()), TRUE);
     SendMessageA(state.game_list.window, WM_SETFONT,
-        reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+        reinterpret_cast<WPARAM>(link_lobby_ui_font()), TRUE);
     RedrawWindow(state.game_list.window, nullptr, nullptr,
         RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
     SendMessageA(state.chat_edit.window, EM_LIMITTEXT, 200, 0);

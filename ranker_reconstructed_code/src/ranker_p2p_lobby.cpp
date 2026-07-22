@@ -139,6 +139,14 @@ void copy_limited(char* target, std::size_t target_size, const char* source) {
     if (target == nullptr || target_size == 0) {
         return;
     }
+    if (source == target) {
+        // StartP2PLobbyJoinAttempt receives the state's own player-name and
+        // remote-address buffers on the interactive Join path.  Clearing the
+        // destination first would erase the source before the TCP callback can
+        // use it.
+        target[target_size - 1] = '\0';
+        return;
+    }
     target[0] = '\0';
     if (source != nullptr) {
         std::strncpy(target, source, target_size - 1);

@@ -209,12 +209,19 @@ void DrawLegacyImageComboBoxItem(LegacyImageComboBoxControl& control,
     mutable_item.rcItem.top += 2;
     mutable_item.rcItem.right -= 2;
     SetTextColor(item.hDC, RGB(255, 255, 255));
-    SetBkMode(item.hDC, OPAQUE);
-    if ((item.itemState & ODS_SELECTED) == 0) {
-        SetBkColor(item.hDC, RGB(0, 0, 0));
-    } else {
-        SetBkColor(item.hDC, GetSysColor(COLOR_HIGHLIGHT));
-    }
+    const COLORREF background_color = (item.itemState & ODS_SELECTED) == 0 ?
+        RGB(0, 0, 0) : GetSysColor(COLOR_HIGHLIGHT);
+
+    // On the reconstructed 64-bit presentation path, DrawTextA with an OPAQUE
+    // background maps nominal black to RGB(2,2,2).  The original 32-bit game
+    // writes RGB(0,0,0) across this complete owner-draw rectangle.  Fill it
+    // explicitly and render the glyphs transparently so the selected field and
+    // drop-down rows retain the original pixels, including the area after the
+    // final character in strings such as "Random".
+    HBRUSH background = CreateSolidBrush(background_color);
+    FillRect(item.hDC, &mutable_item.rcItem, background);
+    DeleteObject(background);
+    SetBkMode(item.hDC, TRANSPARENT);
     DrawTextA(item.hDC, text.data(), -1, &mutable_item.rcItem, DT_NOPREFIX);
 }
 

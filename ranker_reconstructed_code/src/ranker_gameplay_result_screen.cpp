@@ -8,6 +8,7 @@
 #include "ranker_runtime_resources.h"
 #include "ranker_sprite_renderer.h"
 #include "ranker_text_renderer.h"
+#include "ranker_text_tables.h"
 #include "ranker_ui_screen.h"
 
 #include <algorithm>
@@ -45,7 +46,10 @@ std::array<u32, kGameplayResultMetricCount> metric_maxima_from_rows(
 void draw_metric_text(GameplayResultScreenState& state, i32 x, i32 y, u32 value,
     bool total = false) {
     char text[32]{};
-    std::snprintf(text, sizeof(text), "%u", value);
+    // FUN_00432260 formats every metric through the literal at 0x006e7fe8,
+    // " %d".  The leading space is intentional: it moves the visible glyph
+    // one font-space to the right while the column anchor itself stays fixed.
+    std::snprintf(text, sizeof(text), " %d", static_cast<int>(value));
     if (total) {
         DrawGameplayResultTotalTextLine(state, x, y, 1, text);
     }
@@ -59,18 +63,61 @@ void draw_result_elapsed_time(GameplayResultScreenState& state) {
         return;
     }
 
-    char text[32]{};
-    std::snprintf(text, sizeof(text), "%d : %d : %d",
+    // DAT_011c3338 is JW2_17.TRC platform row 232.  The Korean resource is
+    // " 플레이 시간 %02d : %02d : %02d"; retain the leading space and
+    // two-digit fields exactly as FUN_00430e20 does.
+    constexpr std::size_t kElapsedTimeFormatRow = 232;
+    const auto& platform_rows = startup_text_tables().platform_rows.rows;
+    const char* format = " Play Time %02d : %02d : %02d";
+    if (kElapsedTimeFormatRow < platform_rows.size() &&
+        !platform_rows[kElapsedTimeFormatRow].empty()) {
+        format = platform_rows[kElapsedTimeFormatRow].data();
+    }
+
+    char text[96]{};
+    std::snprintf(text, sizeof(text), format,
         static_cast<int>(state.elapsed_hours),
         static_cast<int>(state.elapsed_minutes),
         static_cast<int>(state.elapsed_seconds));
-    DrawGameplayResultTextLine(state, 0x1cc, 10, 0, text);
+    if (state.callbacks.draw_text != nullptr) {
+        state.callbacks.draw_text(state, 0x1cc, 10, 1, text);
+    }
+    else {
+        // FUN_00430e20 sends the elapsed-time string straight through the
+        // 12-pixel Win32 font path (0x00507a70).  It does not use either of
+        // the bitmap-font helpers used for the metric columns.
+        SetTextCursor(0x1cc, 10, 1);
+        RenderWin32FontCStringAndAdvance(text);
+    }
 }
 
-void draw_result_text_fallback(i32 x, i32 y, u8 color, const char* text) {
-    SelectTextDrawFont(0);
+void draw_result_bitmap_text_fallback(
+    u8 font_index, i32 x, i32 y, u8 color, const char* text) {
+    SelectTextDrawFont(font_index);
     SetTextCursor(x, y, color);
     RenderAsciiOnlyTextLine(text != nullptr ? text : "");
+}
+
+void draw_result_player_name(GameplayResultScreenState& state, i32 x, i32 y,
+    u8 color, const char* text) {
+    if (state.callbacks.draw_text != nullptr) {
+        state.callbacks.draw_text(state, x, y, color, text != nullptr ? text : "");
+    }
+    else {
+        // Player names use the same 12-pixel Win32 font path as elapsed time
+        // in FUN_00432260, preserving the original narrow anti-aliased text.
+        SetTextCursor(x, y, color);
+        RenderWin32FontCStringAndAdvance(text != nullptr ? text : "");
+    }
+}
+
+void draw_result_player_names_win32(GameplayResultScreenState& state) {
+    i32 y = 0x41;
+    for (const GameplayResultRow& row : state.rows) {
+        y += 3;
+        draw_result_player_name(state, 0, y, 1, row.name.c_str());
+        y += 0x2a;
+    }
 }
 
 void present_result_cursor_default() {
@@ -330,7 +377,8 @@ void DrawGameplayResultTextLine(GameplayResultScreenState& state, i32 x, i32 y, 
         state.callbacks.draw_text(state, x, y, color, text != nullptr ? text : "");
     }
     else {
-        draw_result_text_fallback(x, y, color, text);
+        // FUN_00432160 selects frontend bitmap font 1 (10x11).
+        draw_result_bitmap_text_fallback(1, x, y, color, text);
     }
 }
 
@@ -340,7 +388,8 @@ void DrawGameplayResultTotalTextLine(GameplayResultScreenState& state, i32 x, i3
         state.callbacks.draw_text(state, x, y, color, text != nullptr ? text : "");
     }
     else {
-        draw_result_text_fallback(x, y, color, text);
+        // FUN_004321e0 selects frontend bitmap font 2 (12x15) for totals.
+        draw_result_bitmap_text_fallback(2, x, y, color, text);
     }
 }
 
@@ -351,7 +400,13 @@ void DrawGameplayResultScoreTable(GameplayResultScreenState& state) {
     i32 y = 0x41;
     for (const GameplayResultRow& row : state.rows) {
         y += 3;
-        DrawGameplayResultTextLine(state, 0, y, 1, row.name.c_str());
+        // Callback-driven tests keep the original draw ordering.  The live
+        // Win32 path is emitted after the sprite target has been unlocked so
+        // TextOutA can draw straight to the DirectDraw back surface, exactly
+        // as FUN_00432260 does.
+        if (state.callbacks.draw_text != nullptr) {
+            draw_result_player_name(state, 0, y, 1, row.name.c_str());
+        }
         y += 0x14;
         for (std::size_t metric = 0; metric < row.metrics.size(); ++metric) {
             draw_metric_text(state, kMetricX[metric], y, row.metrics[metric],
@@ -445,7 +500,9 @@ void RenderGameplayResultRankingScreen(GameplayResultScreenState& state, u32 res
     DrawGameplayResultSpriteTokenShadow(
         state, result_outcome_sprite_token(result_mode), 0, 0);
     BuildGameplayResultScoreRows(state, player_count);
-    draw_result_elapsed_time(state);
+    if (state.callbacks.draw_text != nullptr) {
+        draw_result_elapsed_time(state);
+    }
     DrawGameplayResultScoreDecorations(state);
     DrawGameplayResultScoreGraphs(state);
     DrawGameplayResultScoreTable(state);
@@ -462,6 +519,15 @@ void RenderGameplayResultRankingScreen(GameplayResultScreenState& state, u32 res
         UnlockBackBufferSpriteRenderTarget();
     }
 #endif
+
+    if (state.callbacks.draw_text == nullptr) {
+        // The original GDI strings are rendered through IDirectDrawSurface::GetDC
+        // after individual sprite operations have released the surface.  Do
+        // not use the locked-target DIB fallback here: its 32-bit round trip
+        // changes glyph antialiasing and makes the result font visibly differ.
+        draw_result_elapsed_time(state);
+        draw_result_player_names_win32(state);
+    }
 
     if (state.callbacks.present_cursor != nullptr) {
         state.callbacks.present_cursor(state);

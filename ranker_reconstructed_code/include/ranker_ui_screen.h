@@ -25,6 +25,7 @@ struct UiScreenEntry {
 struct UiScreenBinkEntryState {
     void* handle = nullptr;
     const void* source = nullptr;
+    u64 fallback_started_tick_ms = 0;
     bool paused = false;
 };
 

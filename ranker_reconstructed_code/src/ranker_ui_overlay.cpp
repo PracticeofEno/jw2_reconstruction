@@ -5520,43 +5520,32 @@ bool select_clicked_unit_by_original_priority(UiOverlayState& state) {
     return false;
 }
 
-void SelectLocalSameTypeUnitsFromDragRectangle(UiOverlayState& state) {
+void SelectLocalUnitsFromDragRectangle(UiOverlayState& state) {
     const UiOverlayRect selection = normalized_selection_rect(state);
     const UiOverlayMinimapUnit* primary = nullptr;
+    bool selection_changed = false;
+    // FUN_004eb063 marks only local mobile units whose actual world bounds
+    // intersect the normalized drag rectangle (0x004eb12e..0x004eb252).
+    // The subsequent selection pass consumes those marked units directly;
+    // it neither expands to the viewport nor filters by the primary's type.
     for (const UiOverlayMinimapUnit& unit : state.minimap_units) {
-        if (unit_is_local_small_selection_candidate(state, unit) &&
-            rects_intersect(selection, unit_world_rect(unit))) {
+        if (!unit_is_local_small_selection_candidate(state, unit) ||
+            !rects_intersect(selection, unit_world_rect(unit)) ||
+            !select_unit(state, unit, false)) {
+            continue;
+        }
+        selection_changed = true;
+        if (primary == nullptr || unit.selection_score > primary->selection_score) {
             primary = &unit;
+        }
+        if (state.selected_unit_ids.size() >= state.max_selected_unit_count) {
             break;
         }
     }
-    if (primary == nullptr) {
-        return;
-    }
-
-    const u32 reference_type = primary->type_id;
-    const u32 reference_flags = primary->runtime_flags & 0x31u;
-    bool selection_changed = select_unit(state, *primary, true);
-
-    if (state.selected_unit_ids.size() < state.max_selected_unit_count) {
-        UiOverlayRect viewport{};
-        viewport.x = state.camera_x;
-        viewport.y = state.camera_y;
-        viewport.width = std::max<u32>(1, state.screen_width);
-        viewport.height = std::max<u32>(1, state.screen_height);
-        for (const UiOverlayMinimapUnit& unit : state.minimap_units) {
-            if (unit.unit_id == primary->unit_id ||
-                !unit_is_local_small_selection_candidate(state, unit) ||
-                unit.type_id != reference_type ||
-                (unit.runtime_flags & 0x31u) != reference_flags ||
-                !rects_intersect(viewport, unit_world_rect(unit))) {
-                continue;
-            }
-            selection_changed = select_unit(state, unit, false) || selection_changed;
-            if (state.selected_unit_ids.size() >= state.max_selected_unit_count) {
-                break;
-            }
-        }
+    if (primary != nullptr) {
+        state.selected_unit_id = primary->unit_id;
+        state.selected_unit_type = primary->type_id;
+        state.selected_unit_owner = primary->owner_id;
     }
     if (selection_changed) {
         NotifyPrimaryGameplayUnitSelected(state);
@@ -5566,7 +5555,7 @@ void SelectLocalSameTypeUnitsFromDragRectangle(UiOverlayState& state) {
 void SelectUnitsInDragRectangle(UiOverlayState& state) {
     if (!state.additive_selection_mode) {
         ResetGameplaySelectionState(state);
-        SelectLocalSameTypeUnitsFromDragRectangle(state);
+        SelectLocalUnitsFromDragRectangle(state);
         BuildSelectedUnitCommandPanel(state);
         return;
     }

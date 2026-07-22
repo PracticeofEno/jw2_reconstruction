@@ -22,3 +22,8 @@ LANGUAGE 0x12, 0x01
 800 9 "resources/original/rt_accelerator_800_lang1042.bin"
 850 9 "resources/original/rt_accelerator_850_lang1042.bin"
 1000 9 "resources/original/rt_accelerator_1000_lang1042.bin"
+
+// x64 builds cannot load the original 32-bit Bink decoder.  Keep an exact
+// decoded title cycle plus a single-frame emergency fallback in RCDATA.
+2000 10 "resources/main_menu_bink_fallback_565.bin"
+2001 10 "resources/main_menu_bink_fallback_anim.z"

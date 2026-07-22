@@ -105,6 +105,11 @@ struct UnitActionTickResult {
     u32 distance = 0xffffffffu;
     bool valid_target = false;
     bool impact_frame = false;
+    // FUN_004c1c87 returns a carry flag independently of EAX.  A missing or
+    // invalid initial target is carry, while both initial and replacement
+    // valid-but-out-of-range targets are no-carry/EAX=0: the OR EAX,EAX at
+    // 0x004c1cb6 clears CF before the zero return.
+    bool carry = false;
 };
 
 struct UnitEffectActionTargetGateResult {

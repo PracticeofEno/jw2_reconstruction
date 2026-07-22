@@ -701,12 +701,15 @@ bool ResolveLocalHostIpv4Address(sockaddr_in& address) {
 
 bool StartLegacySocketConnect(SOCKET& out_socket, const char* remote_address,
     u16 port, HWND notify_window, UINT notify_message) {
+    g_network_state.last_error = 0;
     if (!InitializeLegacyTcpNetworking()) {
+        g_network_state.last_error = WSAGetLastError();
         return false;
     }
 
     const SOCKET connected = socket(AF_INET, SOCK_STREAM, 0);
     if (connected == INVALID_SOCKET) {
+        g_network_state.last_error = WSAGetLastError();
         return false;
     }
     out_socket = connected;
@@ -715,7 +718,9 @@ bool StartLegacySocketConnect(SOCKET& out_socket, const char* remote_address,
     write_debug_stack_ipv4_sockaddr(target, remote_address, port);
     if (!select_async_socket_events(connected, notify_window, notify_message,
             FD_READ | FD_WRITE | FD_CONNECT | FD_CLOSE)) {
+        g_network_state.last_error = WSAGetLastError();
         shutdown_send_and_close_socket(connected);
+        out_socket = INVALID_SOCKET;
         return false;
     }
 
@@ -723,7 +728,9 @@ bool StartLegacySocketConnect(SOCKET& out_socket, const char* remote_address,
             sizeof(target)) == SOCKET_ERROR) {
         const int error = WSAGetLastError();
         if (error != WSAEWOULDBLOCK) {
+            g_network_state.last_error = error;
             shutdown_send_and_close_socket(connected);
+            out_socket = INVALID_SOCKET;
             return false;
         }
     }

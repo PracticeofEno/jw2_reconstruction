@@ -11,6 +11,7 @@
 #include "ranker_text_renderer.h"
 #include "ranker_trc.h"
 #include "ranker_winmain.h"
+#include "zlib.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -464,6 +465,28 @@ bool read_binary_file(const char* path, std::vector<u8>& out) {
     return ok;
 }
 
+#ifdef _WIN32
+bool read_embedded_binary_resource(WORD resource_id, std::vector<u8>& out) {
+    HMODULE module = GetModuleHandleA(nullptr);
+    HRSRC resource = FindResourceA(module,
+        MAKEINTRESOURCEA(resource_id), RT_RCDATA);
+    if (resource == nullptr) {
+        return false;
+    }
+
+    HGLOBAL loaded = LoadResource(module, resource);
+    const DWORD byte_count = SizeofResource(module, resource);
+    const void* data = loaded == nullptr ? nullptr : LockResource(loaded);
+    if (data == nullptr || byte_count == 0) {
+        return false;
+    }
+
+    const auto* first = static_cast<const u8*>(data);
+    out.assign(first, first + byte_count);
+    return true;
+}
+#endif
+
 const std::vector<u8>& main_menu_bink_fallback_565() {
     static std::vector<u8> bytes;
     static bool attempted = false;
@@ -472,6 +495,13 @@ const std::vector<u8>& main_menu_bink_fallback_565() {
     }
 
     attempted = true;
+#ifdef _WIN32
+    constexpr WORD kMainMenuBinkFallbackResourceId = 2000;
+    if (read_embedded_binary_resource(kMainMenuBinkFallbackResourceId, bytes)) {
+        return bytes;
+    }
+#endif
+
     const std::string module_dir = module_directory();
     std::array<std::string, 5> candidates{
         "main_menu_bink_fallback_565.bin",
@@ -492,6 +522,66 @@ const std::vector<u8>& main_menu_bink_fallback_565() {
     return bytes;
 }
 
+const std::vector<u8>& main_menu_bink_fallback_animation_565() {
+    constexpr std::size_t kFrameBytes = 750u * 269u * sizeof(u16);
+    constexpr std::size_t kFrameCount = 60u;
+    constexpr std::size_t kAnimationBytes = kFrameBytes * kFrameCount;
+
+    static std::vector<u8> frames;
+    static bool attempted = false;
+    if (attempted) {
+        return frames;
+    }
+    attempted = true;
+
+    std::vector<u8> packed;
+#ifdef _WIN32
+    constexpr WORD kMainMenuBinkAnimationResourceId = 2001;
+    (void)read_embedded_binary_resource(kMainMenuBinkAnimationResourceId, packed);
+#endif
+    if (packed.empty()) {
+        const std::string module_dir = module_directory();
+        std::array<std::string, 5> candidates{
+            "main_menu_bink_fallback_anim.z",
+            "resources\\main_menu_bink_fallback_anim.z",
+            module_dir.empty() ? std::string{} :
+                module_dir + "\\main_menu_bink_fallback_anim.z",
+            module_dir.empty() ? std::string{} :
+                module_dir + "\\..\\resources\\main_menu_bink_fallback_anim.z",
+            module_dir.empty() ? std::string{} :
+                module_dir + "\\resources\\main_menu_bink_fallback_anim.z",
+        };
+        for (const std::string& candidate : candidates) {
+            if (!candidate.empty() && read_binary_file(candidate.c_str(), packed)) {
+                break;
+            }
+        }
+    }
+    if (packed.empty()) {
+        return frames;
+    }
+
+    frames.resize(kAnimationBytes);
+    uLongf decoded_size = static_cast<uLongf>(frames.size());
+    if (uncompress(frames.data(), &decoded_size, packed.data(),
+            static_cast<uLong>(packed.size())) != Z_OK ||
+        decoded_size != frames.size()) {
+        frames.clear();
+        return frames;
+    }
+
+    // The resource stores frame zero followed by XOR deltas.  Rebuild all
+    // frames once at load time so title redraws remain a cheap indexed copy.
+    for (std::size_t frame = 1; frame < kFrameCount; ++frame) {
+        const std::size_t current = frame * kFrameBytes;
+        const std::size_t previous = current - kFrameBytes;
+        for (std::size_t byte = 0; byte < kFrameBytes; ++byte) {
+            frames[current + byte] ^= frames[previous + byte];
+        }
+    }
+    return frames;
+}
+
 u16 raw_565_to_target_pixel(u16 pixel) {
     if (!SurfacePixelMode555()) {
         return pixel;
@@ -508,15 +598,18 @@ bool bink_fallback_target_valid(const SpriteRenderTarget& target) {
 }
 
 bool draw_main_menu_bink_fallback_to_target(const SpriteRenderTarget& target,
-    const UiScreenEntry& entry, u32 width, u32 height, const std::vector<u8>& bytes) {
+    const UiScreenEntry& entry, u32 width, u32 height, const std::vector<u8>& bytes,
+    std::size_t source_offset = 0) {
+    const std::size_t frame_bytes =
+        static_cast<std::size_t>(width) * height * sizeof(u16);
     if (!bink_fallback_target_valid(target) ||
-        bytes.size() < static_cast<std::size_t>(width) * height * sizeof(u16)) {
+        source_offset > bytes.size() || frame_bytes > bytes.size() - source_offset) {
         return false;
     }
 
     const i32 draw_x = UiScreenEntryI32(entry, 0x20);
     const i32 draw_y = UiScreenEntryI32(entry, 0x24);
-    std::size_t source = 0;
+    std::size_t source = source_offset;
     for (u32 row = 0; row < height; ++row) {
         const i32 target_y = draw_y + static_cast<i32>(row);
         for (u32 col = 0; col < width; ++col) {
@@ -534,7 +627,8 @@ bool draw_main_menu_bink_fallback_to_target(const SpriteRenderTarget& target,
     return true;
 }
 
-bool draw_main_menu_bink_fallback(UiScreenDefinition& screen, const UiScreenEntry& entry) {
+bool draw_main_menu_bink_fallback(UiScreenDefinition& screen, const UiScreenEntry& entry,
+    UiScreenBinkEntryState& state) {
     const auto* source = static_cast<const u8*>(bink_blob_for_entry(screen, entry));
     if (source == nullptr || std::memcmp(source, "BIKi", 4) != 0) {
         return false;
@@ -546,17 +640,38 @@ bool draw_main_menu_bink_fallback(UiScreenDefinition& screen, const UiScreenEntr
         return false;
     }
 
-    const std::vector<u8>& bytes = main_menu_bink_fallback_565();
+    constexpr u64 kFrameRate = 15u;
+    constexpr std::size_t kFrameCount = 60u;
+    const std::size_t frame_bytes =
+        static_cast<std::size_t>(width) * height * sizeof(u16);
+    const std::vector<u8>& animation = main_menu_bink_fallback_animation_565();
+    const std::vector<u8>* bytes = &animation;
+    std::size_t source_offset = 0;
+    if (animation.size() >= frame_bytes * kFrameCount) {
+        const u64 now = GetTickCount64();
+        if (state.fallback_started_tick_ms == 0) {
+            state.fallback_started_tick_ms = now;
+        }
+        const std::size_t frame = static_cast<std::size_t>(
+            (((now - state.fallback_started_tick_ms) * kFrameRate) / 1000u) %
+            kFrameCount);
+        source_offset = frame * frame_bytes;
+    }
+    else {
+        bytes = &main_menu_bink_fallback_565();
+    }
     const SpriteRenderTarget& active_target = sprite_render_state().target;
     if (bink_fallback_target_valid(active_target)) {
-        return draw_main_menu_bink_fallback_to_target(active_target, entry, width, height, bytes);
+        return draw_main_menu_bink_fallback_to_target(
+            active_target, entry, width, height, *bytes, source_offset);
     }
 
     SpriteRenderTarget target{};
     if (FAILED(LockBackBufferSpriteRenderTarget(target))) {
         return false;
     }
-    const bool ok = draw_main_menu_bink_fallback_to_target(target, entry, width, height, bytes);
+    const bool ok = draw_main_menu_bink_fallback_to_target(
+        target, entry, width, height, *bytes, source_offset);
     UnlockBackBufferSpriteRenderTarget();
     return ok;
 }
@@ -3351,24 +3466,24 @@ bool HandleUiScreenBinkEntryRender(UiScreenDefinition& screen, u32 entry_index) 
     if (screen.bink_entries.size() < screen.entries.size()) {
         screen.bink_entries.resize(screen.entries.size());
     }
-    if (!initialize_bink_runtime(screen)) {
-        return draw_main_menu_bink_fallback(screen, screen.entries[entry_index]);
-    }
-
     UiScreenEntry& entry = screen.entries[entry_index];
     UiScreenBinkEntryState& state = screen.bink_entries[entry_index];
+    if (!initialize_bink_runtime(screen)) {
+        return draw_main_menu_bink_fallback(screen, entry, state);
+    }
+
     if (state.handle == nullptr && !open_bink_entry(screen, entry, state)) {
-        return draw_main_menu_bink_fallback(screen, entry);
+        return draw_main_menu_bink_fallback(screen, entry, state);
     }
 
     BinkApi& api = bink_api();
     if (!api.ready()) {
-        return draw_main_menu_bink_fallback(screen, entry);
+        return draw_main_menu_bink_fallback(screen, entry, state);
     }
 
     auto* handle = static_cast<BinkHeaderPrefix*>(state.handle);
     if (handle == nullptr) {
-        return draw_main_menu_bink_fallback(screen, entry);
+        return draw_main_menu_bink_fallback(screen, entry, state);
     }
 
     PaintMainWindowBlack(RankerMainWindowState().main_window);
@@ -3403,7 +3518,7 @@ bool HandleUiScreenBinkEntryRender(UiScreenDefinition& screen, u32 entry_index) 
 
     SpriteRenderTarget target{};
     if (FAILED(LockBackBufferSpriteRenderTarget(target))) {
-        return draw_main_menu_bink_fallback(screen, entry);
+        return draw_main_menu_bink_fallback(screen, entry, state);
     }
     api.copy_to_buffer(handle, target.pixels,
         static_cast<i32>(target.stride_words * sizeof(u16)), handle->height,
