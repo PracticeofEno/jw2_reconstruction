@@ -14,6 +14,8 @@
 
 namespace ranker {
 
+struct SpriteRenderTarget;
+
 constexpr u32 kUiScreenEntryBytes = 0x2a4;
 constexpr u32 kUiScreenBlobSlots = 10;
 constexpr u32 kInvalidUiScreenIndex = 0xffffffffu;
@@ -445,6 +447,8 @@ bool DrawBackBufferFilledRectangle16(i32 left, i32 top, i32 right, i32 bottom,
 bool DrawBackBufferStippledRectangle16(i32 left, i32 top, i32 right, i32 bottom,
     u16 color = 0xffffu);
 bool DarkenBackBufferRectangle16(i32 left, i32 top, i32 right, i32 bottom);
+bool DrawSpriteRenderTargetLine16(const SpriteRenderTarget& target,
+    i32 x0, i32 y0, i32 x1, i32 y1, u16 color = 0xffffu);
 bool DrawBackBufferLine16(i32 x0, i32 y0, i32 x1, i32 y1, u16 color = 0xffffu);
 bool OrBackBufferMask32x32(i32 left, i32 top, u16 mask);
 bool OrBackBufferHighRedMask32x32(i32 left, i32 top);

@@ -2,6 +2,7 @@
 
 #ifdef _WIN32
 
+#include "ranker_cursor.h"
 #include "ranker_directplay.h"
 #include "ranker_frontend_layout.h"
 #include "ranker_gameplay_sound.h"
@@ -49,6 +50,7 @@ constexpr COLORREF kLinkHostCancelRed = RGB(250, 20, 20);
 constexpr COLORREF kLinkDisconnectYellow = RGB(250, 250, 0);
 constexpr COLORREF kLinkMapWaiterYellow = RGB(250, 250, 10);
 constexpr COLORREF kLinkBlack = RGB(0, 0, 0);
+constexpr UINT_PTR kLinkLobbyComboRefreshTimerId = 3;
 constexpr UINT kLinkLobbyTabTextFlags =
     DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS | DT_MODIFYSTRING;
 
@@ -1943,6 +1945,16 @@ void add_child_rect_to_parent(HWND parent, HWND child, RECT& bounds, bool& has_b
     UnionRect(&bounds, &bounds, &child_rect);
 }
 
+void schedule_link_lobby_combo_refresh(LinkLobbyState& state) {
+    if (state.window != nullptr) {
+        const UINT_PTR timer = SetTimer(state.window,
+            kLinkLobbyComboRefreshTimerId, 100, nullptr);
+        if (timer != 0) {
+            state.combo_refresh_timer = timer;
+        }
+    }
+}
+
 void redraw_link_lobby_player_row(LinkLobbyState& state, int player_index) {
     if (!player_index_valid(player_index) || state.window == nullptr) {
         return;
@@ -1973,6 +1985,25 @@ void redraw_link_lobby_player_row(LinkLobbyState& state, int player_index) {
         IsWindowVisible(state.tribe_combos[player_index].window)) {
         RedrawWindow(state.tribe_combos[player_index].window, nullptr, nullptr,
             RDW_INVALIDATE | RDW_UPDATENOW);
+    }
+    schedule_link_lobby_combo_refresh(state);
+}
+
+void redraw_link_lobby_image_combos(LinkLobbyState& state) {
+    const auto redraw_combo = [](const LegacyImageComboBoxControl& combo) {
+        if (combo.window != nullptr && IsWindowVisible(combo.window)) {
+            RedrawWindow(combo.window, nullptr, nullptr,
+                RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+        }
+    };
+
+    redraw_combo(state.host_resource_combo);
+    redraw_combo(state.start_resource_combo);
+    redraw_combo(state.screen_size_combo);
+    for (int player_index = 0; player_index < kLinkLobbyAvatarCount;
+         ++player_index) {
+        redraw_combo(state.player_role_combos[player_index]);
+        redraw_combo(state.tribe_combos[player_index]);
     }
 }
 
@@ -2869,6 +2900,10 @@ bool CreateLinkLobbyPlayerRoleControls(LinkLobbyState& state) {
     const LinkLobbyLayoutRect tab_rect = layout_at(state, 11);
     const LinkLobbyLayoutRect role_rect = layout_at(state, 12);
     const int row_step = role_rect.height + 4;
+    // FUN_004714f0 places the first player row at group_y + tab_height + 3.
+    // Deriving it from the two independent TRC y values is one pixel shorter
+    // and shifts a host-created tribe combo from y=135 to y=134.
+    const int first_row_offset = tab_rect.height + 3;
     const int player_count = std::clamp(
         static_cast<int>(link_lobby_seed_max_players(state)), 0,
         kLinkLobbyAvatarCount);
@@ -2881,7 +2916,7 @@ bool CreateLinkLobbyPlayerRoleControls(LinkLobbyState& state) {
         if (!CreateLinkLobbyTabButtons(state)) {
             return false;
         }
-        int y = role_rect.y;
+        int y = state.tab_button_positions[0] + first_row_offset;
         for (int player = 0; player < player_count; ++player) {
             state.player_team_values[player] = 0;
             if (!CreateLinkLobbyPlayerRoleComboBox(state, player, y) ||
@@ -2916,7 +2951,7 @@ bool CreateLinkLobbyPlayerRoleControls(LinkLobbyState& state) {
     }
 
     for (int group = 0; group < state.tab_button_count; ++group) {
-        int y = state.tab_button_positions[group] + (role_rect.y - tab_rect.y);
+        int y = state.tab_button_positions[group] + first_row_offset;
         for (int player = 0; player < player_count; ++player) {
             if (state.player_team_values[player] != group) {
                 continue;
@@ -6588,10 +6623,16 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
     }
     ConfigureDirectPlayMode6WindowDispatch(state.window, state.host_mode);
     SetDirectPlayMessageDispatchMode(6);
+    // Link is a native GDI window layered over the DirectDraw presentation.
+    // Restore and retire the software cursor before its child controls paint;
+    // otherwise a later combo repaint can cover only the middle of the
+    // 32-by-32 cursor and leave its previous/current pixels across "Random".
+    SetGameCursorPresentationSuppressed(true);
     SetFocus(state.chat_edit.window);
     ShowWindow(state.window, SW_SHOW);
     RedrawWindow(state.window, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE |
         RDW_UPDATENOW | RDW_ALLCHILDREN);
+    schedule_link_lobby_combo_refresh(state);
     state.visible = true;
     return true;
 }
@@ -6599,7 +6640,16 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
 LRESULT HandleLinkLobbyWindowMessage(LinkLobbyState& state, HWND hwnd, UINT message,
     WPARAM wparam, LPARAM lparam) {
     switch (message) {
+    case WM_ACTIVATE:
+        if (LOWORD(wparam) != WA_INACTIVE) {
+            schedule_link_lobby_combo_refresh(state);
+        }
+        break;
     case WM_DESTROY:
+        if (state.combo_refresh_timer != 0) {
+            KillTimer(hwnd, state.combo_refresh_timer);
+            state.combo_refresh_timer = 0;
+        }
         if (state.countdown_timer != 0) {
             KillTimer(hwnd, state.countdown_timer);
             state.countdown_timer = 0;
@@ -6707,6 +6757,13 @@ LRESULT HandleLinkLobbyWindowMessage(LinkLobbyState& state, HWND hwnd, UINT mess
         SetBkMode(reinterpret_cast<HDC>(wparam), TRANSPARENT);
         return reinterpret_cast<LRESULT>(GetStockObject(NULL_BRUSH));
     case WM_TIMER:
+        if (state.combo_refresh_timer != 0 &&
+            wparam == static_cast<WPARAM>(state.combo_refresh_timer)) {
+            KillTimer(hwnd, state.combo_refresh_timer);
+            state.combo_refresh_timer = 0;
+            redraw_link_lobby_image_combos(state);
+            return 0;
+        }
         if (state.start_sync_timer != 0 &&
             wparam == static_cast<WPARAM>(state.start_sync_timer)) {
             PumpLinkLobbyUdpStartSync(state);

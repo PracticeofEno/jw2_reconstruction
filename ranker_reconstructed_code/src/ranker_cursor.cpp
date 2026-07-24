@@ -456,7 +456,7 @@ void RestoreSystemCursorPosition() {
 }
 
 void ShowGameCursor() {
-    if (g_cursor_state.visible) {
+    if (g_cursor_state.visible || g_cursor_state.pointer_updates_suppressed) {
         return;
     }
     update_cursor_draw_position();
@@ -473,6 +473,13 @@ void HideGameCursor() {
     g_cursor_state.previous_cursor_y = g_cursor_state.cursor_y;
     HandlePrimaryCursorBackgroundRestore();
     g_cursor_state.visible = false;
+}
+
+void SetGameCursorPresentationSuppressed(bool suppressed) {
+    if (suppressed) {
+        HideGameCursor();
+    }
+    g_cursor_state.pointer_updates_suppressed = suppressed;
 }
 
 void SetGameCursorIndex(u32 cursor_index) {

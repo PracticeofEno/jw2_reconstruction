@@ -211,6 +211,7 @@ struct LinkLobbyState {
     UINT_PTR countdown_timer = 0;
     UINT_PTR start_sync_timer = 0;
     UINT_PTR peer_route_timer = 0;
+    UINT_PTR combo_refresh_timer = 0;
     std::array<int, kLinkLobbyTabButtonCount> tab_button_positions{};
     std::array<std::array<char, 0x20>, kLinkLobbyTabButtonCount> tab_button_labels{};
     std::array<COLORREF, kLinkLobbyTabButtonCount> tab_text_colors{};

@@ -3641,9 +3641,14 @@ bool DarkenBackBufferRectangle16(i32 left, i32 top, i32 right, i32 bottom) {
     });
 }
 
+bool DrawSpriteRenderTargetLine16(const SpriteRenderTarget& target,
+    i32 x0, i32 y0, i32 x1, i32 y1, u16 color) {
+    return draw_line_to_target(target, x0, y0, x1, y1, color);
+}
+
 bool DrawBackBufferLine16(i32 x0, i32 y0, i32 x1, i32 y1, u16 color) {
     return draw_with_backbuffer_target([&](const SpriteRenderTarget& target) {
-        return draw_line_to_target(target, x0, y0, x1, y1, color);
+        return DrawSpriteRenderTargetLine16(target, x0, y0, x1, y1, color);
     });
 }
 

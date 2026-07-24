@@ -3330,6 +3330,7 @@ void default_gameplay_flow_write_p2p_result_file(
 
 void default_gameplay_flow_set_cursor(GameplaySessionFlowState&) {
     g_runtime.hide_cursor = false;
+    SetGameCursorPresentationSuppressed(false);
     SetGameCursorIndex(gameplay_loop_state().current_cursor_index);
     ShowGameCursor();
 }
@@ -3341,6 +3342,7 @@ void default_gameplay_flow_hide_cursor(GameplaySessionFlowState&) {
 
 void default_gameplay_flow_show_cursor(GameplaySessionFlowState&) {
     g_runtime.hide_cursor = false;
+    SetGameCursorPresentationSuppressed(false);
     ShowGameCursor();
 }
 
@@ -31089,15 +31091,6 @@ void ShutdownDirectXSubsystems() {
 }
 
 bool StartBackgroundWorkerThread() {
-    if (g_runtime.worker_thread != nullptr) {
-        return true;
-    }
-
-    GameplayLoopState& loop_state = gameplay_loop_state();
-    loop_state.current_cursor_index = 0;
-    loop_state.callbacks.enter_frontend_flow = winmain_worker_enter_frontend_flow;
-    install_default_gameplay_loop_callbacks(loop_state);
-
     // The original runtime keeps a 25 ms multimedia timer alive while its
     // background worker is running (FUN_00502b50 -> FUN_00502c80).  Besides
     // incrementing DAT_0162ea60, timeSetEvent requests the timer's 1 ms
@@ -31111,6 +31104,18 @@ bool StartBackgroundWorkerThread() {
     if (started_periodic_timer) {
         StartLegacyPeriodicTickCounter();
     }
+
+    // Frontend/game transitions can ask to start an already-live worker.
+    // Restore the timer before taking that fast path so a prior teardown does
+    // not leave Bline redraws at the coarse scheduler-quantum cadence.
+    if (g_runtime.worker_thread != nullptr) {
+        return true;
+    }
+
+    GameplayLoopState& loop_state = gameplay_loop_state();
+    loop_state.current_cursor_index = 0;
+    loop_state.callbacks.enter_frontend_flow = winmain_worker_enter_frontend_flow;
+    install_default_gameplay_loop_callbacks(loop_state);
 
     g_runtime.worker_thread_running = true;
     g_runtime.worker_thread = CreateThread(nullptr, 0, BackgroundWorkerThreadProc,

@@ -2294,10 +2294,22 @@ bool DrawQueuedTerrainTileRenderCommand(
 bool draw_unit_effect_trail_segments(
     const UnitEffectRuntimeState& state, std::size_t first_segment) {
     bool drew = false;
+    const SpriteRenderTarget& target = sprite_render_state().target;
+    const bool active_target =
+        target.pixels != nullptr && target.width != 0 &&
+        target.height != 0 && target.stride_words != 0;
     for (std::size_t i = first_segment; i < state.trail_segments.size(); ++i) {
         const UnitEffectTrailSegment& segment = state.trail_segments[i];
-        drew = DrawBackBufferLine16(segment.x0, segment.y0,
-            segment.x1, segment.y1, segment.color) || drew;
+        // Render-queue dispatch already owns one locked back-buffer target.
+        // FUN_0050853d writes the complete five-line Bline stroke through
+        // that same surface, so avoid re-reading the global target for every
+        // short segment.
+        const bool segment_drew = active_target ?
+            DrawSpriteRenderTargetLine16(target, segment.x0, segment.y0,
+                segment.x1, segment.y1, segment.color) :
+            DrawBackBufferLine16(segment.x0, segment.y0,
+                segment.x1, segment.y1, segment.color);
+        drew = segment_drew || drew;
     }
     return drew;
 }

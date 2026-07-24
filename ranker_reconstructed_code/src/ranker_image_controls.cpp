@@ -209,8 +209,14 @@ void DrawLegacyImageComboBoxItem(LegacyImageComboBoxControl& control,
     mutable_item.rcItem.top += 2;
     mutable_item.rcItem.right -= 2;
     SetTextColor(item.hDC, RGB(255, 255, 255));
-    const COLORREF background_color = (item.itemState & ODS_SELECTED) == 0 ?
-        RGB(0, 0, 0) : GetSysColor(COLOR_HIGHLIGHT);
+    // Modern USER32 can report ODS_SELECTED for the closed selection field
+    // while it owns focus. The original lobby only shows the highlight in the
+    // expanded list; its closed ODS_COMBOBOXEDIT field remains black.
+    const bool selected_list_item =
+        (item.itemState & ODS_SELECTED) != 0 &&
+        (item.itemState & ODS_COMBOBOXEDIT) == 0;
+    const COLORREF background_color = selected_list_item ?
+        GetSysColor(COLOR_HIGHLIGHT) : RGB(0, 0, 0);
 
     // On the reconstructed 64-bit presentation path, DrawTextA with an OPAQUE
     // background maps nominal black to RGB(2,2,2).  The original 32-bit game
