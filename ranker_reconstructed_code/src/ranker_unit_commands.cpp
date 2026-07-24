@@ -1859,6 +1859,9 @@ void enter_linked_release_child_cycle(UnitCommandContext& context,
     UnitMovementUnit& parent, UnitMovementUnit& child) {
     child.command_state = kUnitStateLinkedUnitReleaseCycle;
     child.animation_frame = 0;
+    // Original FUN_004cbd7e clears raw unit +0x4c for linked children.
+    // cargo_amount is the typed representation of that state-dependent union.
+    child.cargo_amount = 0;
     child.saved_type_id = 0;
     child.runtime_flags &= ~1u;
     child.runtime_flags |= 0x80;
@@ -4380,9 +4383,10 @@ void HandleLegacySpawnedConstructionRelease(UnitCommandContext& context,
             complete_spawned_construction(context, *spawned);
         }
 
-        UnitMovementPoint release_point{
+        const UnitMovementPoint requested_release_point{
             spawned->x + spawned->definition.transport_offset_x,
             spawned->y + spawned->definition.transport_offset_y};
+        UnitMovementPoint release_point = requested_release_point;
         bool release_point_found = false;
         if (context.callbacks.find_matching_terrain_placement_point != nullptr) {
             release_point_found =
@@ -4394,6 +4398,8 @@ void HandleLegacySpawnedConstructionRelease(UnitCommandContext& context,
             context.callbacks.find_strict_placement_point(
                 context, unit, release_point);
         }
+        RecoverLegacyEvilPortalReleasePoint(context, unit, *spawned,
+            requested_release_point, release_point);
         unit.x = release_point.x;
         unit.y = release_point.y;
         unit.current_cell_x = unit.x & ~0x1f;
@@ -5612,7 +5618,10 @@ void StartLinkedUnitReleaseCommand(UnitCommandContext& context, UnitMovementUnit
         PopDeferredUnitCommandOrReturnIdle(context, *reciprocal);
     }
 
-    set_unit_type_for_command(context, unit, unit.saved_type_id);
+    // Original FUN_004cbb7c restores the type from raw unit +0x4c.  Keep the
+    // union field authoritative so a serialized mid-cycle unit also resumes
+    // with the same state as the original executable.
+    set_unit_type_for_command(context, unit, unit.cargo_amount);
     unit.command_lockout_ticks = 0;
     PopDeferredUnitCommandOrReturnIdle(context, unit);
 }
@@ -5623,7 +5632,7 @@ void HandleLinkedUnitReleaseCycle(UnitCommandContext& context, UnitMovementUnit&
         unit.command_state |= kUnitCommandDead;
         return;
     }
-    if (unit.saved_type_id == 0) {
+    if (unit.cargo_amount == 0) {
         return;
     }
 
@@ -5650,8 +5659,9 @@ void HandleLinkedUnitReleaseCycle(UnitCommandContext& context, UnitMovementUnit&
     }
 
     // FUN_00408c80 commits the already-selected +0x1d4/0x2b type.  It does
-    // not restore saved_type_id: the linked children are consumed into the new
-    // unit and their health/secondary ratios, progress and level are merged.
+    // not restore the type saved in raw +0x4c: the linked children are consumed
+    // into the new unit and their health/secondary ratios, progress and level
+    // are merged.
     unit.type_flags = unit.definition.type_flags;
     unit.script_bit_flags = unit.definition.initial_script_bit_flags;
     unit.command_bits.fill(0);
@@ -5685,7 +5695,7 @@ void HandleLinkedUnitReleaseCycle(UnitCommandContext& context, UnitMovementUnit&
             context.callbacks.on_linked_unit_released(context, unit, *reciprocal);
         }
     }
-    const u32 old_type = unit.saved_type_id;
+    const u32 old_type = unit.cargo_amount;
     if (context.callbacks.on_unit_type_replaced != nullptr &&
         old_type != unit.type_id) {
         context.callbacks.on_unit_type_replaced(
@@ -5729,7 +5739,11 @@ void HandleLinkedUnitReleaseApproach(UnitCommandContext& context, UnitMovementUn
 
     unit.command_state = kUnitStateLinkedUnitReleaseCycle;
     unit.animation_frame = 0;
-    unit.saved_type_id = unit.type_id;
+    // Original 0x004cbdda..0x004cbde0 copies the pre-release type to raw
+    // unit +0x4c before replacing the live type.  This union word participates
+    // in the P2P checksum, so a detached typed-only copy is insufficient.
+    unit.cargo_amount = unit.type_id;
+    unit.saved_type_id = unit.cargo_amount;
     const bool direct_linked_release = linked->target == &unit;
     const u32 release_type = direct_linked_release ?
         unit.definition.linked_release_type_id : 0x2b;

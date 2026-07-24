@@ -17,7 +17,6 @@ constexpr u32 kSubtypeCatchupTarget = 0x0f;
 constexpr u32 kSubtypeOpcode11 = 0x11;
 constexpr u32 kSubtypePlayerInactive = 0x13;
 constexpr u32 kSubtypeOpcode14 = 0x14;
-constexpr u32 kSubtypeCorrectiveChecksum = 0x15;
 constexpr u32 kSubtypeOpcode16 = 0x16;
 constexpr u32 kSubtypePendingUnitAction = 0x19;
 
@@ -586,7 +585,11 @@ bool PublishMode1RelationMaskAction(GameplayInputActionState& state) {
 }
 
 void PublishMode1CorrectiveChecksum(GameplayInputActionState& state) {
-    publish(state, make_action(state, kSubtypeCorrectiveChecksum),
+    // The original helper preserves the caller-populated EAX/ESI/EDI/EDX/EBX
+    // payload registers.  The wait-dialog path uses command 1 and places its
+    // timed-out-player mask at packet +0x1c, while the checksum-mismatch path
+    // uses command 0 and places a single target slot there.
+    publish(state, BuildMode1CorrectiveChecksumAction(state),
         state.callbacks.publish_corrective_action);
 }
 

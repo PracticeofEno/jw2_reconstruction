@@ -503,17 +503,6 @@ u32 effect_sprite_animation_frame(const UnitEffectRuntime& effect) {
     return effect.tick;
 }
 
-u32 effect_sprite_frame_index(const UnitEffectRuntime& effect, std::size_t size) {
-    if (size == 0) {
-        return 0;
-    }
-    u32 frame = effect_sprite_animation_frame(effect);
-    if (frame == 0xffffffffu) {
-        frame = 0;
-    }
-    return frame % static_cast<u32>(size);
-}
-
 bool effect_sprite_frame_in_range(const UnitEffectRuntime& effect, std::size_t size,
     std::size_t& index) {
     const u32 frame = effect_sprite_animation_frame(effect);
@@ -574,20 +563,20 @@ u32 effect_sprite_entry_for_frame(const UnitEffectRuntimeState& state,
                 : 0;
         }
         sequence = &definition.active_sprite_entries;
-    } else if (!definition.image_resource_entries.empty()) {
-        sequence = &definition.image_resource_entries;
     }
     if (sequence == nullptr || sequence->empty()) {
-        return definition.sprite_entry;
+        // FUN_004f1dc5 selects only the image-index sequence belonging to the
+        // current startup/active/impact phase.  It never substitutes the raw
+        // resource table when that phase has zero frames.  In particular Elf
+        // Build (effect 0x64) remains alive with flags 0x200 for 62 cleanup
+        // ticks after completion, but its active-frame count is zero and the
+        // original therefore draws nothing during that interval.
+        return 0;
     }
 
     std::size_t index = 0;
-    if (sequence != &definition.image_resource_entries &&
-        !effect_sprite_frame_in_range(effect, sequence->size(), index)) {
+    if (!effect_sprite_frame_in_range(effect, sequence->size(), index)) {
         return 0;
-    }
-    if (sequence == &definition.image_resource_entries) {
-        index = effect_sprite_frame_index(effect, sequence->size());
     }
     return (*sequence)[index];
 }
@@ -994,7 +983,11 @@ bool draw_projectile_unit_group_impact_sprite(UnitEffectRuntimeState& state,
 bool draw_projectile_direct_active_sprite(
     const UnitEffectDefinition& definition, const UnitEffectRuntime& effect,
     i32 screen_x, i32 screen_y) {
-    const u32 frame = effect_animation_frame(effect);
+    // The selected-action renderer at 0x004f1a91 reads raw effect +0x0c.
+    // Berry-fly keeps its Bresenham lifetime sentinel in raw +0x10, so using
+    // the simulation-frame helper here selected 0xffffffff and suppressed
+    // every resource-carry sprite while the effect was moving.
+    const u32 frame = effect_sprite_animation_frame(effect);
     if (frame >= definition.active_sprite_entries.size()) {
         return true;
     }
@@ -2623,8 +2616,12 @@ void TickUnitEffectLinkedTargetSacrificeHeal(UnitEffectRuntimeState& state,
 
 void release_unit_effects_linked_to_target(UnitEffectRuntimeState& state,
     u32 target_unit_id) {
-    const std::vector<std::size_t> active_indices = state.active_effect_indices;
-    for (const std::size_t index : active_indices) {
+    // Blessing's first scan at 0x004ee5c2 removes only the first linked
+    // Shield (effect 0x3f) and immediately leaves that scan.  This matters
+    // when a stale/recycled duplicate is present: removing every Shield here
+    // changes the active-list topology observed by the P2P checksum.
+    const std::vector<std::size_t> shield_indices = state.active_effect_indices;
+    for (const std::size_t index : shield_indices) {
         if (index >= state.effect_slots.size()) {
             continue;
         }
@@ -2632,9 +2629,25 @@ void release_unit_effects_linked_to_target(UnitEffectRuntimeState& state,
         if (!other.active || other.linked_unit_id != target_unit_id) {
             continue;
         }
-        if (other.effect_id == 0x3f ||
-            ((other.effect_id == 0x3d || other.effect_id == 0x4d) &&
-                (other.flags & kUnitEffectFlagImpact) != 0)) {
+        if (other.effect_id == 0x3f) {
+            ReleaseUnitEffectSlot(state, other);
+            break;
+        }
+    }
+
+    // The original then restarts from the (possibly changed) active-list head
+    // and removes every linked impact-phase effect 0x3d/0x4d.
+    const std::vector<std::size_t> impact_indices = state.active_effect_indices;
+    for (const std::size_t index : impact_indices) {
+        if (index >= state.effect_slots.size()) {
+            continue;
+        }
+        UnitEffectRuntime& other = state.effect_slots[index];
+        if (!other.active || other.linked_unit_id != target_unit_id) {
+            continue;
+        }
+        if ((other.effect_id == 0x3d || other.effect_id == 0x4d) &&
+            (other.flags & kUnitEffectFlagImpact) != 0) {
             ReleaseUnitEffectSlot(state, other);
         }
     }
@@ -4690,8 +4703,10 @@ void RenderUnitEffectOrProjectileRuntime(UnitEffectRuntimeState& state,
     queue_effect_render_command(state, effect);
 }
 
-void ConfigureUnitEffectRenderPalette(UnitEffectRuntimeState& state, bool use_rgb565) {
-    if (!use_rgb565) {
+void ConfigureUnitEffectRenderPalette(UnitEffectRuntimeState& state, bool use_rgb555) {
+    // Original FUN_004f2aa4 takes DAT_01450834: zero is an RGB565 surface
+    // (green mask 0x07e0), while nonzero is RGB555.
+    if (!use_rgb555) {
         state.render_palette.highlight = 0xcf7f;
         state.render_palette.midtone = 0x76bf;
         state.render_palette.shadow = 0x057f;

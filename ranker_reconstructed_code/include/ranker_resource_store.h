@@ -20,11 +20,16 @@ struct ResourceStoreEntry {
     std::array<u32, 6> metadata{};
     u32 palette_slot = 0;
     std::vector<u8> payload;
+    // Resource indices are stack-reused after ReleaseResourceEntriesFrom.
+    // Preserve a monotonic identity so long-lived catalogs can distinguish a
+    // still-live image from an unrelated later allocation at the same index.
+    u64 allocation_serial = 0;
 };
 
 struct ResourceStoreState {
     std::array<ResourceStoreEntry, kResourceStoreCapacity> entries{};
     u32 next_entry = 0;
+    u64 next_allocation_serial = 1;
 };
 
 void ResetResourceStore();
@@ -45,6 +50,7 @@ u32 LoadImageResourceTrcRecord(const char* archive_name, u32 record_index);
 
 const ResourceStoreEntry* GetResourceEntry(u32 entry_index);
 const ResourceStoreState& resource_store_state();
+u64 GetResourceEntryAllocationSerial(u32 entry_index);
 bool SetResourceEntryPaletteSlot(u32 entry_index, u32 palette_slot);
 
 }

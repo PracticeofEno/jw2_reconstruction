@@ -1057,6 +1057,10 @@ void StartUnitLegacySpawnPlacementCommand(UnitCommandContext& context,
     UnitMovementUnit& unit);
 void HandleLegacySpawnedConstructionRelease(UnitCommandContext& context,
     UnitMovementUnit& unit);
+bool RecoverLegacyEvilPortalReleasePoint(
+    const UnitCommandContext& context, const UnitMovementUnit& builder,
+    const UnitMovementUnit& portal, UnitMovementPoint requested_point,
+    UnitMovementPoint& resolved_point);
 void HandleUnitLegacySpawnPlacementApproach(UnitCommandContext& context,
     UnitMovementUnit& unit);
 void ProcessUnitFollowTargetStart(UnitCommandContext& context, UnitMovementUnit& unit);

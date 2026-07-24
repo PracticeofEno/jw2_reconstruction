@@ -138,6 +138,35 @@ bool update_replay_frame_flags(GameplayLoopState& state) {
 
 void leave_session_cleanup(GameplayLoopState& state);
 
+void reset_session_transient_loop_state(GameplayLoopState& state) {
+    // ProcessGameplaySessionLoop is entered again after a completed direct-P2P
+    // match without recreating the process-global loop object.  The original
+    // outer loop clears these per-session BSS fields before the next map
+    // enters.  Keeping the previous result/modal and fixed-step bookkeeping
+    // can leave the replacement session in a present-only or modal subloop
+    // state even though its simulation was initialized successfully.
+    state.phase_flags = GameplayFramePhaseFlags{};
+    state.fixed_step_repeat_counter = 0;
+    state.catchup_repeat_counter = 0;
+    state.catchup_status_counter0 = 0;
+    state.catchup_status_counter1 = 0;
+    state.catchup_status_mode = 0;
+    state.fixed_step_initialized = false;
+    state.external_single_step = false;
+    state.replay_direct_music_started = false;
+    state.replay_direct_music_paused = false;
+    state.replay_direct_music_status_active = false;
+    state.modal_pause_suppressed = false;
+    state.replay_simulation_suppressed = false;
+    state.modal_subloop_active = false;
+    state.session_active = false;
+    state.pause_loop_requested = false;
+    state.restart_requested = false;
+    state.reenter_session_requested = false;
+    state.leave_requested = false;
+    state.special_exit_mode = false;
+}
+
 void process_restart_or_leave(GameplayLoopState& state) {
     state.external_single_step = false;
     state.pause_loop_requested = false;
@@ -318,11 +347,10 @@ void ProcessGameplayFrameTick(GameplayLoopState& state) {
 void ProcessGameplaySessionLoop(GameplayLoopState& state, std::size_t iteration_budget) {
     std::size_t iteration = 0;
     for (;;) {
-        state.reenter_session_requested = false;
+        reset_session_transient_loop_state(state);
         ResetInputState();
         state.session_active = true;
         state.exit_context = 3;
-        state.pause_loop_requested = false;
         enter_session_mode(state);
         if (state.callbacks.initialize_session_resources != nullptr) {
             state.callbacks.initialize_session_resources(state);

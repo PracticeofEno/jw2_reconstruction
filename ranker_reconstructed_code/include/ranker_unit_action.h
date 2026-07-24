@@ -373,7 +373,7 @@ void InitializeUnitEffectProjectilePath(UnitEffectRuntimeState& state,
 void QueueVisibleUnitEffectRenderCommands(UnitEffectRuntimeState& state);
 void RenderUnitEffectOrProjectileRuntime(UnitEffectRuntimeState& state,
     UnitEffectRuntime& effect);
-void ConfigureUnitEffectRenderPalette(UnitEffectRuntimeState& state, bool use_rgb565);
+void ConfigureUnitEffectRenderPalette(UnitEffectRuntimeState& state, bool use_rgb555);
 void TickUnitEffectRuntimeList(UnitEffectRuntimeState& state);
 void InitializeUnitEffectPathToTarget(UnitEffectRuntimeState& state,
     UnitEffectRuntime& effect, UnitMovementUnit& source, UnitMovementUnit& target);

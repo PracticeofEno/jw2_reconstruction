@@ -177,13 +177,39 @@ std::optional<std::filesystem::path> find_archive_path(const char* archive_name)
     if (direct.empty()) {
         return std::nullopt;
     }
-    const std::array<fs::path, 5> roots{
-        fs::current_path(),
-        fs::current_path().parent_path(),
-        fs::current_path().parent_path().parent_path(),
-        fs::current_path().parent_path().parent_path().parent_path(),
-        fs::path{__FILE__}.parent_path().parent_path().parent_path(),
-    };
+
+    // Native lobby/map dialogs are allowed to change the process current
+    // directory.  A second P2P session can therefore begin from an unrelated
+    // map folder even though the TRC archives still live beside the game
+    // executable.  Keep that executable directory as the stable first lookup
+    // root; current-directory candidates remain for development builds that
+    // run from a separate build tree.
+    std::vector<fs::path> roots;
+#ifdef _WIN32
+    std::array<wchar_t, 32768> module_path{};
+    const DWORD module_length = GetModuleFileNameW(nullptr, module_path.data(),
+        static_cast<DWORD>(module_path.size()));
+    if (module_length != 0 && module_length < module_path.size()) {
+        const fs::path module_directory =
+            fs::path(std::wstring(module_path.data(), module_length)).parent_path();
+        roots.push_back(module_directory);
+        roots.push_back(module_directory / "RankerOCPV_Win");
+        roots.push_back(module_directory.parent_path() / "RankerOCPV_Win");
+    }
+#endif
+
+    std::error_code current_ec;
+    const fs::path current = fs::current_path(current_ec);
+    if (!current_ec) {
+        roots.push_back(current);
+        roots.push_back(current.parent_path());
+        roots.push_back(current.parent_path().parent_path());
+        roots.push_back(current.parent_path().parent_path().parent_path());
+    }
+    const fs::path source_root =
+        fs::path{__FILE__}.parent_path().parent_path().parent_path();
+    roots.push_back(source_root);
+    roots.push_back(source_root / "RankerOCPV_Win");
 
     for (const auto& root : roots) {
         if (root.empty()) {

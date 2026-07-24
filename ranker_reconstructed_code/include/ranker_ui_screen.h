@@ -323,6 +323,17 @@ bool OpenGameplayObserverMaskDialog(GameplayModalUiState& state);
 bool OpenGameplayObserverMaskDialog();
 void RefreshGameplayWaitDialogControls(GameplayModalUiState& state);
 void RefreshGameplayWaitDialogControls();
+inline u32 BuildGameplayWaitConsensusMask(const GameplayModalUiState& state) {
+    u32 mask = 0;
+    for (u32 player = 0; player < kGameplayModalPlayerSlots; ++player) {
+        // FUN_0042c8b0 votes only for entries whose original
+        // DAT_011b5a3c wait budget reached zero.
+        if (state.wait_elapsed_ms[player] == 0) {
+            mask |= 1u << player;
+        }
+    }
+    return mask;
+}
 bool OpenGameplayWaitDialog(GameplayModalUiState& state);
 bool OpenGameplayWaitDialog();
 bool PollGameplayWaitDialog(GameplayModalUiState& state);

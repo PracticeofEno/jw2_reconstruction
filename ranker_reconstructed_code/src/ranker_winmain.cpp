@@ -1241,6 +1241,81 @@ std::vector<Mode1ChatPayload> g_pending_gameplay_chat_messages;
 std::atomic<bool> g_gameplay_chat_hud_active{false};
 u32 g_gameplay_chat_target_mask = 0;
 
+struct GameplayTerrainFrameCache {
+    std::vector<u16> pixels;
+    i32 camera_x = 0;
+    i32 camera_y = 0;
+    u32 animation_slot = 0;
+    u32 width = 0;
+    u32 height = 0;
+    bool pixel_mode_555 = false;
+    bool valid = false;
+};
+
+GameplayTerrainFrameCache g_gameplay_terrain_frame_cache;
+
+void reset_default_gameplay_terrain_frame_cache() {
+    // The process-global cache survives the DirectDraw surface lifetime.  Drop
+    // the backing pixels as well as the validity bit so a second P2P session
+    // cannot restore bytes captured from the previous match if its first
+    // terrain pass observes the same camera/animation tuple.
+    g_gameplay_terrain_frame_cache = GameplayTerrainFrameCache{};
+}
+
+bool restore_default_gameplay_terrain_frame_cache(
+    const SpriteRenderTarget& target, i32 camera_x, i32 camera_y,
+    u32 animation_slot) {
+    const GameplayTerrainFrameCache& cache =
+        g_gameplay_terrain_frame_cache;
+    if (!cache.valid || target.pixels == nullptr ||
+        target.stride_words < target.width ||
+        cache.camera_x != camera_x || cache.camera_y != camera_y ||
+        cache.animation_slot != animation_slot ||
+        cache.width != target.width || cache.height != target.height ||
+        cache.pixel_mode_555 != SurfacePixelMode555() ||
+        cache.pixels.size() !=
+            static_cast<std::size_t>(target.width) * target.height) {
+        return false;
+    }
+
+    for (u32 y = 0; y < target.height; ++y) {
+        std::memcpy(target.pixels +
+                static_cast<std::size_t>(y) * target.stride_words,
+            cache.pixels.data() +
+                static_cast<std::size_t>(y) * target.width,
+            static_cast<std::size_t>(target.width) * sizeof(u16));
+    }
+    return true;
+}
+
+void capture_default_gameplay_terrain_frame_cache(
+    const SpriteRenderTarget& target, i32 camera_x, i32 camera_y,
+    u32 animation_slot) {
+    if (target.pixels == nullptr || target.stride_words < target.width ||
+        target.width == 0 || target.height == 0) {
+        reset_default_gameplay_terrain_frame_cache();
+        return;
+    }
+
+    GameplayTerrainFrameCache& cache = g_gameplay_terrain_frame_cache;
+    cache.pixels.resize(
+        static_cast<std::size_t>(target.width) * target.height);
+    for (u32 y = 0; y < target.height; ++y) {
+        std::memcpy(cache.pixels.data() +
+                static_cast<std::size_t>(y) * target.width,
+            target.pixels +
+                static_cast<std::size_t>(y) * target.stride_words,
+            static_cast<std::size_t>(target.width) * sizeof(u16));
+    }
+    cache.camera_x = camera_x;
+    cache.camera_y = camera_y;
+    cache.animation_slot = animation_slot;
+    cache.width = target.width;
+    cache.height = target.height;
+    cache.pixel_mode_555 = SurfacePixelMode555();
+    cache.valid = true;
+}
+
 void queue_default_gameplay_chat_payload(Mode1ChatPayload payload) {
     const std::lock_guard<std::mutex> lock(g_gameplay_chat_mutex);
     g_pending_gameplay_chat_messages.push_back(std::move(payload));
@@ -4510,8 +4585,29 @@ void default_gameplay_modal_rebuild_unit_type_references(GameplayModalUiState&) 
     rebuild_default_unit_reference_tables_from_catalog();
 }
 
-void default_gameplay_modal_publish_corrective_checksum(GameplayModalUiState&) {
-    PublishMode1CorrectiveChecksum(prepare_default_modal_publish_input());
+void default_gameplay_modal_publish_corrective_checksum(GameplayModalUiState& modal) {
+    GameplayInputActionState& input = prepare_default_modal_publish_input();
+    const u32 local = input.local_player_index % kPlayerSlotCount;
+    const u32 wait_consensus_mask =
+        local < modal.players.size() ? modal.players[local].visibility_mask : 0;
+
+    // FUN_0042c8b0 publishes subtype 0x15 with EAX=1 and the timed-out-player
+    // bit mask in EDX (wire offset +0x1c).  The old zero-filled packet selected
+    // the command-0 single-target path and therefore voted against slot zero.
+    input.pending_action_arg0 = 1;
+    input.pending_action_arg1 = 0;
+    input.pending_action_arg2 = wait_consensus_mask;
+    input.pending_action_arg3 = 0;
+    PublishMode1CorrectiveChecksum(input);
+
+    // DirectPlay does not loop a broadcast back to its sender.  Immediately
+    // apply the same outbound buffer locally, matching 0x0042c90c..0x0042c911,
+    // so a two-player timeout can retire the missing peer and release the
+    // reliable sync gate on the following pump.
+    const Mode1ReliablePacket local_vote = BuildMode1GameplayPacket(
+        (0x15u << 24) | (local & 0xffu), 1, 0, 0,
+        wait_consensus_mask, 0);
+    HandleSubtype15PlayerConsensusPacket(local_vote);
 }
 
 void default_gameplay_modal_publish_modal_pause(GameplayModalUiState&) {
@@ -5075,8 +5171,9 @@ bool default_cursor_target_matches_selected_definition(
                 kCursorTargetTypeOffset, 0xffffffffu) == target.type_id;
         }
     }
-    if (!unit_definition_resource_catalog_state().loaded) {
-        LoadUnitDefinitionResourceCatalog();
+    if (!UnitDefinitionResourceCatalogImageResourcesValid() &&
+        !LoadUnitDefinitionResourceCatalog()) {
+        return false;
     }
     const UnitDefinitionResourceCatalogState& catalog =
         unit_definition_resource_catalog_state();
@@ -7719,6 +7816,7 @@ void default_gameplay_startup_reset_runtime_objects() {
     loop.frame_time_anchor = start_tick;
     loop.simulation_frame_counter = 0;
     loop.present_frame_counter = 0;
+    reset_default_gameplay_terrain_frame_cache();
 
     g_runtime.gameplay_end_condition_state = GameplayEndConditionState{};
     g_runtime.gameplay_started_player_mask = 0;
@@ -7762,6 +7860,7 @@ void reset_default_gameplay_startup_slots(GameplaySessionStartupState& startup) 
     g_runtime.gameplay_action_damage_profiles_initialized = false;
     g_runtime.gameplay_frame_random_state = GameplayFrameRandomState{};
     g_runtime.gameplay_terrain_layer = MinimapTerrainLayer{};
+    reset_default_gameplay_terrain_frame_cache();
     ResetTerrainTilePulseState(g_runtime.gameplay_terrain_pulse_state);
     startup.players = &g_runtime.gameplay_player_slots;
     startup.lifecycle = &g_runtime.gameplay_lifecycle_context;
@@ -8030,7 +8129,7 @@ bool publish_default_active_session_auxiliary_definitions() {
 
 void seed_default_session_runtime_base_unit_snapshot(
     SessionRuntimeBufferPairs& buffers) {
-    if (!unit_definition_resource_catalog_state().loaded &&
+    if (!UnitDefinitionResourceCatalogImageResourcesValid() &&
         !LoadUnitDefinitionResourceCatalog()) {
         return;
     }
@@ -8277,7 +8376,7 @@ bool stage_default_session_runtime_override_definitions() {
 }
 
 bool seed_default_active_session_unit_definitions_from_catalog() {
-    if (!unit_definition_resource_catalog_state().loaded &&
+    if (!UnitDefinitionResourceCatalogImageResourcesValid() &&
         !LoadUnitDefinitionResourceCatalog()) {
         return false;
     }
@@ -10870,6 +10969,7 @@ void initialize_default_gameplay_terrain_layer_from_session_records() {
     }
 
     g_runtime.gameplay_terrain_layer = std::move(layer);
+    reset_default_gameplay_terrain_frame_cache();
     ResetTerrainTilePulseState(g_runtime.gameplay_terrain_pulse_state);
 }
 
@@ -10898,6 +10998,11 @@ void default_gameplay_frame_draw_terrain(
 
     SpriteRenderTarget target = sprite_state.target;
     const u32 animation_slot = context.animation_frame_slot;
+    if (restore_default_gameplay_terrain_frame_cache(
+            target, camera_x, camera_y, animation_slot)) {
+        return;
+    }
+
     for (const TerrainTileDrawCommand& command : state.draw_commands) {
         switch (command.kind) {
         case TerrainTileDrawKind::uniform:
@@ -10919,6 +11024,15 @@ void default_gameplay_frame_draw_terrain(
             break;
         }
     }
+    // The terrain layer is static between camera or animation-slot changes.
+    // Replaying its roughly two-millisecond software tile composite on every
+    // present-only pass slowed the random wizard construction/harvest trail
+    // from the original executable's roughly 300 redraws/s to about 200.
+    // Cache only this base layer; units, effects, fog, and the HUD are still
+    // rebuilt every pass, so the visible trail and all dynamic state retain
+    // their original per-present behavior.
+    capture_default_gameplay_terrain_frame_cache(
+        target, camera_x, camera_y, animation_slot);
 }
 
 void default_gameplay_frame_draw_terrain_decorations(
@@ -13367,6 +13481,10 @@ void initialize_default_gameplay_sound_state() {
 void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
     const GameplayLogicalSurfaceSize surface =
         resolve_active_gameplay_logical_surface_size();
+    // This callback is the last boundary before the first composite of a
+    // newly materialized session.  Reset here in addition to the map/startup
+    // paths because direct-P2P re-entry reuses the worker and renderer globals.
+    reset_default_gameplay_terrain_frame_cache();
     g_runtime.gameplay_frame_render_context = GameplayFrameRenderContext{};
     g_runtime.gameplay_render_command_queue = GameplayRenderCommandQueue{};
     g_runtime.gameplay_hud_text = GameplayHudTextState{};
@@ -16215,8 +16333,9 @@ void configure_default_gameplay_render_unit_sprite_definitions() {
     // early resource under explored fog.
     queue.highbit_overlay_base = kInvalidResourceEntry;
 
-    if (!unit_definition_resource_catalog_state().loaded) {
-        LoadUnitDefinitionResourceCatalog();
+    if (!UnitDefinitionResourceCatalogImageResourcesValid() &&
+        !LoadUnitDefinitionResourceCatalog()) {
+        return;
     }
     const UnitDefinitionResourceCatalogState& catalog =
         unit_definition_resource_catalog_state();
@@ -17445,8 +17564,7 @@ void configure_default_unit_effect_runtime_state(UnitEffectRuntimeState& effects
         default_unit_effect_selected_production_gate;
     effects.callbacks.create_unit = default_unit_effect_create_unit;
     effects.callbacks.calculate_impact_damage = default_unit_effect_impact_damage;
-    // FUN_004f2aa4 selects its packed colors from DAT_01450834.  Despite the
-    // legacy parameter name, true selects the 555 constants in the typed API.
+    // FUN_004f2aa4 selects its packed colors from DAT_01450834.
     ConfigureUnitEffectRenderPalette(effects, SurfacePixelMode555());
 }
 
@@ -30980,10 +31098,27 @@ bool StartBackgroundWorkerThread() {
     loop_state.callbacks.enter_frontend_flow = winmain_worker_enter_frontend_flow;
     install_default_gameplay_loop_callbacks(loop_state);
 
+    // The original runtime keeps a 25 ms multimedia timer alive while its
+    // background worker is running (FUN_00502b50 -> FUN_00502c80).  Besides
+    // incrementing DAT_0162ea60, timeSetEvent requests the timer's 1 ms
+    // resolution.  Without that live timer, the Sleep(1) at 0x004c11e1 can
+    // last a full Windows scheduler quantum (about 14-16 ms), reducing
+    // present-only passes to roughly 60 Hz.  The wizard construction/harvest
+    // trail is regenerated on each of those passes, so it visibly animates
+    // much more slowly than the original even though its line math matches.
+    const bool started_periodic_timer =
+        !legacy_tick_timer_state().periodic_timer_active;
+    if (started_periodic_timer) {
+        StartLegacyPeriodicTickCounter();
+    }
+
     g_runtime.worker_thread_running = true;
     g_runtime.worker_thread = CreateThread(nullptr, 0, BackgroundWorkerThreadProc,
         &loop_state, 0, &g_runtime.worker_thread_id);
     if (g_runtime.worker_thread == nullptr) {
+        if (started_periodic_timer) {
+            StopLegacyPeriodicTickCounter();
+        }
         g_runtime.worker_thread_id = 0;
         g_runtime.worker_thread_running = false;
         g_runtime.worker_thread_started = false;
@@ -31002,6 +31137,10 @@ bool RaiseMainThreadPriority() {
 }
 
 void YieldBackgroundWorkerThreadSlice() {
+    // Original 0x004c11e1 -> 0x00405fa0 unconditionally calls Sleep(1).
+    // The original also keeps the multimedia timer period active during the
+    // session, so this preserves its scheduler-controlled Bline redraw cadence
+    // instead of imposing an independent high-resolution spin cadence.
     Sleep(1);
 }
 
@@ -31018,6 +31157,9 @@ void TerminateBackgroundWorkerThread() {
     g_runtime.worker_thread_started = false;
     g_runtime.worker_thread_running = false;
     g_runtime.message_wait_worker_suspend_enabled = false;
+    if (legacy_tick_timer_state().periodic_timer_active) {
+        StopLegacyPeriodicTickCounter();
+    }
 }
 
 void ExitBackgroundWorkerThread() {
@@ -31027,6 +31169,9 @@ void ExitBackgroundWorkerThread() {
         g_runtime.worker_thread_started = false;
         g_runtime.worker_thread_running = false;
         g_runtime.message_wait_worker_suspend_enabled = false;
+        if (legacy_tick_timer_state().periodic_timer_active) {
+            StopLegacyPeriodicTickCounter();
+        }
         ExitThread(0);
     }
 }

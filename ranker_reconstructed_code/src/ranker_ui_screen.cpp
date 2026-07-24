@@ -1642,16 +1642,6 @@ UiScreenDefinition* active_gameplay_modal_screen(GameplayModalUiState& state) {
     return nullptr;
 }
 
-u32 local_wait_consensus_mask(const GameplayModalUiState& state) {
-    u32 mask = 0;
-    for (u32 player = 0; player < kGameplayModalPlayerSlots; ++player) {
-        if (state.players[player].wait_ready || state.wait_elapsed_ms[player] == 0) {
-            mask |= 1u << player;
-        }
-    }
-    return mask;
-}
-
 bool player_slot_disabled_for_relation(const GameplayModalPlayerSlot& player) {
     return player.slot_state == 0x14 || player.slot_state == 2;
 }
@@ -1846,7 +1836,7 @@ void PumpActiveGameplayModalUiFlow(GameplayModalUiState& state) {
             complete = PollGameplayWaitDialog(state);
         }
         if (complete) {
-            const u32 mask = local_wait_consensus_mask(state);
+            const u32 mask = BuildGameplayWaitConsensusMask(state);
             if (state.local_player_index < kGameplayModalPlayerSlots) {
                 state.players[state.local_player_index].visibility_mask = mask;
             }
@@ -2841,7 +2831,13 @@ bool OpenGameplayWaitDialog(GameplayModalUiState& state) {
         return false;
     }
     UiScreenDefinition& screen = modal_screen(kGameplayModalWaitSlot);
-    set_entry_enabled(screen, 1, false);
+    // FUN_00430740 disables this button by changing only entry +0.  Clearing
+    // entry +4 as the generic helper does removes the imported button flags,
+    // so restoring +0 after the timer expires does not recreate the original
+    // clickable control.
+    if (screen.entries.size() > 1) {
+        SetUiScreenEntryI32(screen.entries[1], 0, -1);
+    }
     RefreshGameplayWaitDialogControls(state);
     return true;
 }

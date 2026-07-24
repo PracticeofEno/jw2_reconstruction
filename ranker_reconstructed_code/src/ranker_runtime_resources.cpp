@@ -284,12 +284,39 @@ void reset_jw207_loaded_state() {
     clear_failure(g_jw207_resources.last_failure);
 }
 
+void release_unit_definition_catalog_allocations() {
+    if (g_unit_definition_resources.resource_store_start_entry !=
+            kInvalidResourceEntry) {
+        ReleaseResourceEntriesFrom(
+            g_unit_definition_resources.resource_store_start_entry);
+    }
+    if (g_unit_definition_resources.palette_rewind_slot !=
+            kInvalidPaletteCacheSlot) {
+        ReleasePaletteCacheSlotsFrom(
+            g_unit_definition_resources.palette_rewind_slot);
+    }
+#ifdef _WIN32
+    if (g_unit_definition_resources.sound_rewind_slot != 0xffffffffu) {
+        ReleaseDirectSoundBufferSlotsFrom(
+            g_unit_definition_resources.sound_rewind_slot);
+    }
+#endif
+}
+
 void reset_unit_definition_catalog_state(bool keep_variant_mode) {
     const bool alternate_pack_active = keep_variant_mode &&
         g_unit_definition_resources.alternate_pack_active;
     g_unit_definition_resources.loaded = false;
     g_unit_definition_resources.alternate_pack_active = alternate_pack_active;
     g_unit_definition_resources.definition_record_size = kUnitDefinitionRecordBytes;
+    g_unit_definition_resources.resource_store_start_entry =
+        kInvalidResourceEntry;
+    g_unit_definition_resources.resource_store_end_entry =
+        kInvalidResourceEntry;
+    g_unit_definition_resources.resource_store_tail_allocation_serial = 0;
+    g_unit_definition_resources.palette_rewind_slot =
+        kInvalidPaletteCacheSlot;
+    g_unit_definition_resources.sound_rewind_slot = 0xffffffffu;
     g_unit_definition_resources.variant_metadata.clear();
     clear_failure(g_unit_definition_resources.last_failure);
     for (u32 i = 0; i < kUnitDefinitionResourceCount; ++i) {
@@ -1307,7 +1334,8 @@ u32 GetUnitDefinitionImageResourceEntry(u32 unit_type, u32 image_group) {
         image_group >= kUnitDefinitionImageGroupCount) {
         return kInvalidResourceEntry;
     }
-    if (!g_unit_definition_resources.loaded && !LoadUnitDefinitionResourceCatalog()) {
+    if (!UnitDefinitionResourceCatalogImageResourcesValid() &&
+        !LoadUnitDefinitionResourceCatalog()) {
         return kInvalidResourceEntry;
     }
     const UnitDefinitionResourceRecord& record =
@@ -1324,7 +1352,8 @@ u32 GetUnitDefinitionImageFrameResourceEntry(
         image_group >= kUnitDefinitionImageGroupCount) {
         return kInvalidResourceEntry;
     }
-    if (!g_unit_definition_resources.loaded && !LoadUnitDefinitionResourceCatalog()) {
+    if (!UnitDefinitionResourceCatalogImageResourcesValid() &&
+        !LoadUnitDefinitionResourceCatalog()) {
         return kInvalidResourceEntry;
     }
     const UnitDefinitionResourceRecord& record =
@@ -1348,8 +1377,9 @@ u32 GetUnitDefinitionAnimationFrameResourceEntry(
         return kInvalidResourceEntry;
     }
 
-    if (!g_unit_definition_resources.loaded) {
-        LoadUnitDefinitionResourceCatalog();
+    if (!UnitDefinitionResourceCatalogImageResourcesValid() &&
+        !LoadUnitDefinitionResourceCatalog()) {
+        return kInvalidResourceEntry;
     }
 
     const UnitDefinitionResourceRecord& record =
@@ -1386,8 +1416,9 @@ u32 GetUnitDefinitionAnimationRowFrameResourceEntry(
         return kInvalidResourceEntry;
     }
 
-    if (!g_unit_definition_resources.loaded) {
-        LoadUnitDefinitionResourceCatalog();
+    if (!UnitDefinitionResourceCatalogImageResourcesValid() &&
+        !LoadUnitDefinitionResourceCatalog()) {
+        return kInvalidResourceEntry;
     }
 
     const UnitDefinitionResourceRecord& record =
@@ -1447,7 +1478,21 @@ bool GetUnitDefinitionGameplaySoundProfile(u32 unit_type,
 }
 
 bool LoadUnitDefinitionResourceCatalog() {
+    // Session teardown rewinds image resources without rewinding the palette
+    // and DirectSound stacks that were allocated by the same catalog.  Rewind
+    // all three stacks to the catalog marks before a second-session reload.
+    // Keeping the marks during a failed attempt also makes retries idempotent
+    // instead of exhausting slots a little further on every render frame.
+    release_unit_definition_catalog_allocations();
     reset_unit_definition_catalog_state(true);
+    g_unit_definition_resources.resource_store_start_entry =
+        resource_store_state().next_entry;
+    g_unit_definition_resources.palette_rewind_slot =
+        palette_cache_state().next_slot;
+#ifdef _WIN32
+    g_unit_definition_resources.sound_rewind_slot =
+        direct_sound_state().next_allocated_slot;
+#endif
     append_runtime_resource_log("unit-def catalog begin count=%lu",
         static_cast<unsigned long>(kUnitDefinitionResourceCount));
     for (u32 unit_type = 0; unit_type < kUnitDefinitionResourceCount; ++unit_type) {
@@ -1474,8 +1519,35 @@ bool LoadUnitDefinitionResourceCatalog() {
         (void)reload_unit_resource_pack_variant(false);
     }
     g_unit_definition_resources.loaded = true;
+    g_unit_definition_resources.resource_store_end_entry =
+        resource_store_state().next_entry;
+    if (g_unit_definition_resources.resource_store_end_entry >
+        g_unit_definition_resources.resource_store_start_entry) {
+        g_unit_definition_resources.resource_store_tail_allocation_serial =
+            GetResourceEntryAllocationSerial(
+                g_unit_definition_resources.resource_store_end_entry - 1u);
+    }
     append_runtime_resource_log("unit-def catalog ok");
     return true;
+}
+
+bool UnitDefinitionResourceCatalogImageResourcesValid() {
+    if (!g_unit_definition_resources.loaded) {
+        return false;
+    }
+
+    const u32 start =
+        g_unit_definition_resources.resource_store_start_entry;
+    const u32 end = g_unit_definition_resources.resource_store_end_entry;
+    if (start == kInvalidResourceEntry || end == kInvalidResourceEntry ||
+        end <= start || resource_store_state().next_entry < end) {
+        return false;
+    }
+
+    const ResourceStoreEntry* tail = GetResourceEntry(end - 1u);
+    return tail != nullptr && !tail->payload.empty() &&
+        tail->allocation_serial ==
+            g_unit_definition_resources.resource_store_tail_allocation_serial;
 }
 
 bool AppendLoadedUnitDefinitionResourceName(u32 unit_type, const char* suffix,

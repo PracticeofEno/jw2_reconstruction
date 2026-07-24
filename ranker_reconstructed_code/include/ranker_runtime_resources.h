@@ -180,6 +180,11 @@ struct UnitDefinitionResourceCatalogState {
     bool loaded = false;
     bool alternate_pack_active = false;
     u32 definition_record_size = kUnitDefinitionRecordBytes;
+    u32 resource_store_start_entry = kInvalidResourceEntry;
+    u32 resource_store_end_entry = kInvalidResourceEntry;
+    u64 resource_store_tail_allocation_serial = 0;
+    u32 palette_rewind_slot = kInvalidPaletteCacheSlot;
+    u32 sound_rewind_slot = 0xffffffffu;
     std::array<u32, kUnitDefinitionResourceCount> definition_offsets{};
     std::array<UnitDefinitionResourceRecord, kUnitDefinitionResourceCount> records{};
     std::vector<u8> variant_metadata;
@@ -253,6 +258,7 @@ bool LoadJw207GameplayResourcePacks();
 bool LoadUnitDefinitionResourceRecord(const char* archive_name, u32 source_record_index,
     u32 definition_id);
 bool LoadUnitDefinitionResourceCatalog();
+bool UnitDefinitionResourceCatalogImageResourcesValid();
 bool AppendLoadedUnitDefinitionResourceName(u32 unit_type, const char* suffix,
     std::size_t suffix_length);
 bool SetLoadedUnitDefinitionResourceNameField(u32 unit_type, const u8* field,

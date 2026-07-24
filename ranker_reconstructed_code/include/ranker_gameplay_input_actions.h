@@ -257,6 +257,19 @@ void ResetGameplayInputPointerState(GameplayInputActionState& state);
 
 void SnapshotLocalGameplayChecksum(GameplayInputActionState& state);
 bool PublishMode1RelationMaskAction(GameplayInputActionState& state);
+inline GameplayPublishedAction BuildMode1CorrectiveChecksumAction(
+    const GameplayInputActionState& state) {
+    GameplayPublishedAction action{};
+    action.subtype = 0x15;
+    action.player = state.local_player_index;
+    action.packed_opcode =
+        (0x15u << 24) | (state.local_player_index & 0xffu);
+    action.arg0 = state.pending_action_arg0;
+    action.arg1 = state.pending_action_arg1;
+    action.arg2 = state.pending_action_arg2;
+    action.arg3 = state.pending_action_arg3;
+    return action;
+}
 void PublishMode1CorrectiveChecksum(GameplayInputActionState& state);
 bool PublishMode1ModalPauseAction(GameplayInputActionState& state);
 bool PublishGameplayCatchupTargetState(GameplayInputActionState& state);

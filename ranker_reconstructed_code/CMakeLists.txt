@@ -155,6 +155,28 @@ if (RANKER_BUILD_REGRESSION_TESTS)
         COMMAND owner_production_action_gate_regression
     )
 
+    add_executable(evil_portal_construction_release_regression
+        tests/evil_portal_construction_release_regression.cpp
+        src/ranker_evil_portal_release.cpp
+    )
+    target_include_directories(evil_portal_construction_release_regression PRIVATE
+        include
+    )
+    if (MSVC)
+        target_compile_options(evil_portal_construction_release_regression PRIVATE /Gy)
+        target_link_options(evil_portal_construction_release_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(evil_portal_construction_release_regression PRIVATE
+            -O1 -ffunction-sections -fdata-sections
+        )
+        target_link_options(evil_portal_construction_release_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME evil_portal_construction_release_regression
+        COMMAND evil_portal_construction_release_regression
+    )
+
     add_executable(owner_strategic_path_layer_regression
         tests/owner_strategic_path_layer_regression.cpp
         src/ranker_unit_commands.cpp
@@ -940,6 +962,7 @@ add_executable(ranker_rebuild WIN32
     src/ranker_map_brush.cpp
     src/ranker_map_effects.cpp
     src/ranker_unit_damage.cpp
+    src/ranker_evil_portal_release.cpp
     src/ranker_unit_action.cpp
     src/ranker_unit_support_effects.cpp
     src/ranker_unit_target_helpers.cpp

@@ -139,6 +139,10 @@ bool AllocateResourceEntry(std::size_t byte_count, u32* entry_index, void** payl
     if (byte_count != 0 && entry.payload.empty()) {
         return false;
     }
+    entry.allocation_serial = g_resource_store_state.next_allocation_serial++;
+    if (g_resource_store_state.next_allocation_serial == 0) {
+        ++g_resource_store_state.next_allocation_serial;
+    }
 
     if (entry_index != nullptr) {
         *entry_index = index;
@@ -279,6 +283,11 @@ const ResourceStoreEntry* GetResourceEntry(u32 entry_index) {
 
 const ResourceStoreState& resource_store_state() {
     return g_resource_store_state;
+}
+
+u64 GetResourceEntryAllocationSerial(u32 entry_index) {
+    const ResourceStoreEntry* entry = GetResourceEntry(entry_index);
+    return entry != nullptr ? entry->allocation_serial : 0;
 }
 
 bool SetResourceEntryPaletteSlot(u32 entry_index, u32 palette_slot) {
