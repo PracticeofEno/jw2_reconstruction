@@ -1267,6 +1267,13 @@ bool selected_production_category_active(const UiOverlayState& state) {
         state.all_selected_mobile_can_produce;
 }
 
+bool selected_unit_has_active_production_command(const UiOverlayState& state) {
+    const u32 command = state.selected_unit_command_state;
+    return command == 0x51u || command == 0x50u ||
+        command == 0x83u || command == 0x82u ||
+        command == 0x4eu || command == 0x4du;
+}
+
 bool should_probe_selected_production_action(const UiOverlayState& state, u32 bit) {
     if (bit >= 32) {
         return false;
@@ -3823,10 +3830,7 @@ void BuildSingleSelectedUnitCommandPanel(UiOverlayState& state) {
     // 0x004e50e8..0x004e5122 compares the complete raw DWORD against each
     // active production state.  High flag bits must not create a cancel slot
     // merely because the low byte resembles one of those states.
-    const u32 command = state.selected_unit_command_state;
-    if (command == 0x51u || command == 0x50u ||
-        command == 0x83u || command == 0x82u ||
-        command == 0x4eu || command == 0x4du) {
+    if (selected_unit_has_active_production_command(state)) {
         // 0x004e5124 appends the ordinary 0x26-size c6 record with aux=4
         // after every structure action while one of the six production states
         // is active.  This is distinct from placement aux 0..2 and the
@@ -4237,6 +4241,23 @@ void CancelCurrentUiModeOrActivateCommand(UiOverlayState& state, u32 command_id)
         DispatchUiOverlayCommandAction(state, target_command);
         return;
     }
+
+    // Input events can observe a newly synchronized production state before
+    // the ordinary frame-tail panel refresh.  Preserve the original c6/aux-4
+    // route for that live state without treating a merely queued production
+    // click as active: an Escape in the same input batch as the click is
+    // ignored by the original.
+    if (target_command == 0xc6u &&
+        selected_unit_has_active_production_command(state)) {
+        state.last_hotkey_command = target_command;
+        state.last_hotkey_aux = 4;
+        state.last_hotkey_flags = 0;
+        state.last_hotkey_hover_kind =
+            hover_kind_for_command_item(target_command);
+        DispatchUiOverlayCommandAction(state, target_command);
+        return;
+    }
+
     // 0x004e72c7..0x004e72d7: outside the generic/P2P profile, an Escape
     // which cannot find the 0xc6 back record raises DAT_00d11648.  The script
     // text/effect wait paths consume that flag and complete the current cue.

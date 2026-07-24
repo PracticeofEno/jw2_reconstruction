@@ -5071,6 +5071,16 @@ void default_gameplay_input_handle_keyboard_event(GameplayInputActionState& stat
     const u8 ascii = (raw_code & 0xff00u) != 0 ?
         static_cast<u8>((raw_code >> 8) & 0xffu) : 0;
     const u32 legacy_scan_code = ascii == 0 ? (raw_code & 0xffu) : 0;
+    if (legacy_scan_code == 1u && !overlay.chat_active &&
+        overlay.placement_mode == 0) {
+        // The original has already published the current command records
+        // before FUN_004e72a7 searches for item 0xc6.  Rebuild's simulation
+        // mirror is refreshed above, but its command panel normally follows
+        // later in finalize_cursor_frame.  Refresh it here so Escape sees a
+        // production state that became live during the intervening P2P frame,
+        // while an unprocessed production click remains idle and is ignored.
+        BuildSelectedUnitCommandPanel(overlay);
+    }
     const bool cancel_mode =
         legacy_scan_code == 1u && overlay.placement_mode != 0;
     DispatchGameplayUiKeyboardInput(overlay, legacy_scan_code, ascii);

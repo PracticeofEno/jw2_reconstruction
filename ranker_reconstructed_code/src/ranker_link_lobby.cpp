@@ -2636,6 +2636,12 @@ void BeginLinkLobbyStartCountdown(LinkLobbyState& state) {
         static_cast<unsigned long>(state.countdown_timer));
     const std::string message = format_countdown_message(state.countdown_value);
     show_message(state, message.c_str());
+    // Clicking Start moves focus away from the last edited owner-draw combo.
+    // USER32 then repaints only its former focus rectangle, leaving a white
+    // block after short values such as "Elf".  The original Link window
+    // restores the complete image-backed selection field before countdown
+    // messages remain on screen.
+    schedule_link_lobby_combo_refresh(state);
 }
 
 void ReportLinkLobbyPlayerStartTimeout(LinkLobbyState& state, int player_index) {
