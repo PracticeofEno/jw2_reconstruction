@@ -50,6 +50,10 @@ constexpr COLORREF kLinkHostCancelRed = RGB(250, 20, 20);
 constexpr COLORREF kLinkDisconnectYellow = RGB(250, 250, 0);
 constexpr COLORREF kLinkMapWaiterYellow = RGB(250, 250, 10);
 constexpr COLORREF kLinkBlack = RGB(0, 0, 0);
+constexpr int kLinkLobbyMapPreviewX = 629;
+constexpr int kLinkLobbyMapPreviewY = 40;
+constexpr u32 kLinkLobbyMapPreviewWidth = 111;
+constexpr u32 kLinkLobbyMapPreviewHeight = 120;
 constexpr UINT_PTR kLinkLobbyComboRefreshTimerId = 3;
 constexpr UINT kLinkLobbyTabTextFlags =
     DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS | DT_MODIFYSTRING;
@@ -648,6 +652,126 @@ u32 link_lobby_map_descriptor_u32(const LinkLobbyState& state, std::size_t offse
         return 0;
     }
     return read_le32(state.map_descriptor.data() + offset);
+}
+
+void invalidate_link_lobby_map_preview(LinkLobbyState& state) {
+    if (state.avatar_info_button.window != nullptr) {
+        RedrawWindow(state.avatar_info_button.window, nullptr, nullptr,
+            RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
+        return;
+    }
+    if (state.window == nullptr) {
+        return;
+    }
+    RECT rect{
+        kLinkLobbyMapPreviewX,
+        kLinkLobbyMapPreviewY,
+        kLinkLobbyMapPreviewX + static_cast<LONG>(kLinkLobbyMapPreviewWidth),
+        kLinkLobbyMapPreviewY + static_cast<LONG>(kLinkLobbyMapPreviewHeight),
+    };
+    RedrawWindow(state.window, &rect, nullptr,
+        RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
+}
+
+void clear_link_lobby_map_preview(LinkLobbyState& state, bool redraw) {
+    state.map_preview_pixels.clear();
+    state.map_preview_source_path.clear();
+    if (redraw) {
+        invalidate_link_lobby_map_preview(state);
+    }
+}
+
+bool refresh_link_lobby_map_preview(LinkLobbyState& state) {
+    if (state.prepared_map_path.empty()) {
+        clear_link_lobby_map_preview(state, true);
+        return false;
+    }
+    if (state.map_preview_source_path == state.prepared_map_path &&
+        state.map_preview_pixels.size() ==
+            static_cast<std::size_t>(kLinkLobbyMapPreviewWidth) *
+                kLinkLobbyMapPreviewHeight) {
+        return true;
+    }
+
+    std::vector<u16> pixels;
+    if (!RenderGameplaySessionMinimapPreview(state.prepared_map_path.c_str(),
+            kLinkLobbyMapPreviewWidth, kLinkLobbyMapPreviewHeight, pixels)) {
+        append_link_lobby_log("link map preview load failed path=%s",
+            state.prepared_map_path.c_str());
+        clear_link_lobby_map_preview(state, true);
+        return false;
+    }
+
+    state.map_preview_pixels = std::move(pixels);
+    state.map_preview_source_path = state.prepared_map_path;
+    const auto preview_range = std::minmax_element(
+        state.map_preview_pixels.begin(), state.map_preview_pixels.end());
+    append_link_lobby_log(
+        "link map preview loaded path=%s pixels=%lu range=%04x-%04x",
+        state.prepared_map_path.c_str(),
+        static_cast<unsigned long>(state.map_preview_pixels.size()),
+        preview_range.first != state.map_preview_pixels.end() ?
+            static_cast<unsigned>(*preview_range.first) : 0,
+        preview_range.second != state.map_preview_pixels.end() ?
+            static_cast<unsigned>(*preview_range.second) : 0);
+    invalidate_link_lobby_map_preview(state);
+    return true;
+}
+
+void draw_link_lobby_map_preview(
+    const LinkLobbyState& state, HDC dc, int target_x, int target_y) {
+    const std::size_t expected =
+        static_cast<std::size_t>(kLinkLobbyMapPreviewWidth) *
+        kLinkLobbyMapPreviewHeight;
+    if (dc == nullptr || state.map_preview_pixels.size() < expected) {
+        return;
+    }
+
+    // A 111-pixel 16-bit DIB scanline is not DWORD aligned.  Convert the
+    // generated 5:6:5 pixels to packed 32-bit RGB so GDI cannot interpret
+    // the next row's first pixel as scanline padding.
+    std::vector<u32> rgb_pixels(expected);
+    std::transform(state.map_preview_pixels.begin(),
+        state.map_preview_pixels.begin() + static_cast<std::ptrdiff_t>(expected),
+        rgb_pixels.begin(), [](u16 pixel) {
+            const u32 red5 = (pixel >> 11) & 0x1fu;
+            const u32 green6 = (pixel >> 5) & 0x3fu;
+            const u32 blue5 = pixel & 0x1fu;
+            const u32 red = (red5 << 3) | (red5 >> 2);
+            const u32 green = (green6 << 2) | (green6 >> 4);
+            const u32 blue = (blue5 << 3) | (blue5 >> 2);
+            return (red << 16) | (green << 8) | blue;
+        });
+
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = static_cast<LONG>(kLinkLobbyMapPreviewWidth);
+    info.bmiHeader.biHeight = -static_cast<LONG>(kLinkLobbyMapPreviewHeight);
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+
+    const int copied_lines = StretchDIBits(dc,
+        target_x, target_y,
+        static_cast<int>(kLinkLobbyMapPreviewWidth),
+        static_cast<int>(kLinkLobbyMapPreviewHeight),
+        0, 0,
+        static_cast<int>(kLinkLobbyMapPreviewWidth),
+        static_cast<int>(kLinkLobbyMapPreviewHeight),
+        rgb_pixels.data(), &info,
+        DIB_RGB_COLORS, SRCCOPY);
+    if (copied_lines == 0 || copied_lines == GDI_ERROR) {
+        append_link_lobby_log(
+            "link map preview StretchDIBits failed result=%d error=%lu",
+            copied_lines, static_cast<unsigned long>(GetLastError()));
+    }
+}
+
+void draw_link_lobby_map_preview_control(
+    const LinkLobbyState& state, const DRAWITEMSTRUCT& draw) {
+    FillRect(draw.hDC, &draw.rcItem,
+        reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+    draw_link_lobby_map_preview(state, draw.hDC, 0, 0);
 }
 
 int link_lobby_active_start_slot_count(const LinkLobbyState& state) {
@@ -1487,6 +1611,79 @@ std::string download_directory_path() {
 std::string basename_from_path(const std::string& path) {
     const std::size_t pos = path.find_last_of("\\/");
     return pos == std::string::npos ? path : path.substr(pos + 1);
+}
+
+std::string safe_relative_map_path(const std::string& advertised_path) {
+    std::string path = advertised_path;
+    std::replace(path.begin(), path.end(), '/', '\\');
+    while (!path.empty() && path.front() == '\\') {
+        path.erase(path.begin());
+    }
+    if (path.empty() || path.find(':') != std::string::npos) {
+        return {};
+    }
+
+    std::size_t begin = 0;
+    while (begin <= path.size()) {
+        const std::size_t end = path.find('\\', begin);
+        const std::string component = path.substr(begin,
+            end == std::string::npos ? std::string::npos : end - begin);
+        if (component.empty() || component == "." || component == "..") {
+            return {};
+        }
+        if (end == std::string::npos) {
+            break;
+        }
+        begin = end + 1;
+    }
+    return path;
+}
+
+bool find_matching_link_lobby_map_recursive(LinkLobbyState& state,
+    const std::string& directory, const std::string& map_name, u32 depth = 0) {
+    if (directory.empty() || map_name.empty() || depth > 16) {
+        return false;
+    }
+
+    WIN32_FIND_DATAA data{};
+    const std::string pattern = join_path(directory, "*");
+    HANDLE find = FindFirstFileA(pattern.c_str(), &data);
+    if (find == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    std::vector<std::string> child_directories;
+    bool matched = false;
+    do {
+        if (std::strcmp(data.cFileName, ".") == 0 ||
+            std::strcmp(data.cFileName, "..") == 0) {
+            continue;
+        }
+        const std::string path = join_path(directory, data.cFileName);
+        if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+            if ((data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
+                child_directories.push_back(path);
+            }
+            continue;
+        }
+        if (_stricmp(data.cFileName, map_name.c_str()) == 0 &&
+            CheckLinkLobbyMapFileMatchesExpected(state, path.c_str())) {
+            matched = true;
+            break;
+        }
+    } while (FindNextFileA(find, &data));
+    FindClose(find);
+
+    if (matched) {
+        return true;
+    }
+    for (const std::string& child : child_directories) {
+        if (find_matching_link_lobby_map_recursive(
+                state, child, map_name, depth + 1)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 int game_list_visible_rows(const LinkLobbyState& state) {
@@ -3846,6 +4043,8 @@ void ApplyLinkLobbyMapDescriptorPacket(LinkLobbyState& state, const void* packet
         std::min<std::size_t>(state.map_descriptor.size(), byte_count - 0x0c);
     state.map_descriptor = {};
     std::memcpy(state.map_descriptor.data(), bytes + 0x0c, copy_count);
+    state.prepared_map_path.clear();
+    clear_link_lobby_map_preview(state, true);
     apply_link_lobby_map_descriptor_fields(state, true);
     state.map_download_candidate_valid = true;
 }
@@ -3904,6 +4103,8 @@ void ApplyLinkLobbyMapDownloadChunkPacket(LinkLobbyState& state, const void* pac
                 CloseHandle(file);
             }
         }
+        state.prepared_map_path = target_path;
+        refresh_link_lobby_map_preview(state);
         UpdateLinkLobbyMapDownloadButtonVisibility(state, state.local_player_index);
         RedrawWindow(state.game_info_button.window, nullptr, nullptr,
             RDW_INVALIDATE | RDW_UPDATENOW);
@@ -5457,6 +5658,7 @@ bool CheckLinkLobbyMapFileMatchesExpected(LinkLobbyState& state, const char* pat
         return false;
     }
     state.prepared_map_path = path;
+    refresh_link_lobby_map_preview(state);
     return true;
 }
 
@@ -5473,8 +5675,27 @@ bool PrepareLinkLobbyMapDownload(LinkLobbyState& state) {
     const int local_player = player_index_valid(state.local_player_index) ?
         state.local_player_index : 0;
 
-    const std::string installed_path = join_path(maps_directory_path(), map_name.c_str());
-    if (CheckLinkLobbyMapFileMatchesExpected(state, installed_path.c_str())) {
+    const std::string maps_path = maps_directory_path();
+    const std::string advertised_relative_path =
+        safe_relative_map_path(state.map_file_name);
+    bool installed_map_found = false;
+    if (!advertised_relative_path.empty()) {
+        const std::string advertised_installed_path =
+            join_path(maps_path, advertised_relative_path.c_str());
+        installed_map_found = CheckLinkLobbyMapFileMatchesExpected(
+            state, advertised_installed_path.c_str());
+    }
+    if (!installed_map_found) {
+        const std::string installed_path =
+            join_path(maps_path, map_name.c_str());
+        installed_map_found = CheckLinkLobbyMapFileMatchesExpected(
+            state, installed_path.c_str());
+    }
+    if (!installed_map_found) {
+        installed_map_found = find_matching_link_lobby_map_recursive(
+            state, maps_path, map_name);
+    }
+    if (installed_map_found) {
         state.map_download_state = 1;
         state.map_download_received_bytes = 0xffffffffu;
         state.last_map_download_progress_value = -1;
@@ -6396,6 +6617,11 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
     state.player_role_option_masks.fill(0x0f);
     state.tribe_option_masks.fill(0x1f);
     state.map_descriptor = {};
+    state.map_download_candidate_valid = false;
+    state.map_download_state = 0;
+    state.last_map_download_progress_value = -1;
+    state.prepared_map_path.clear();
+    clear_link_lobby_map_preview(state, false);
     state.session_seed_payload = {};
     state.password.fill('\0');
     if (lobby_payload != 0) {
@@ -6566,7 +6792,11 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
         }
     }
     if (link_lobby_uses_single_group_room_layout(state)) {
-        ShowWindow(state.avatar_info_button.window, SW_HIDE);
+        // The normal P2P host path uses the single-group room layout.  The
+        // legacy control used to be avatar information, but its surviving
+        // top-right frame is now the map preview.  Keep that control visible
+        // while hiding only the unused avatar slots.
+        ShowWindow(state.avatar_info_button.window, SW_SHOW);
         for (LegacyImageButtonControl& button : state.avatar_buttons) {
             ShowWindow(button.window, SW_HIDE);
         }
@@ -6699,6 +6929,10 @@ LRESULT HandleLinkLobbyWindowMessage(LinkLobbyState& state, HWND hwnd, UINT mess
         }
         if (draw.CtlID == kLinkLobbyInfoPanelId) {
             draw_info_panel(state, draw);
+            return TRUE;
+        }
+        if (draw.CtlID == kLinkLobbyAvatarInfoId) {
+            draw_link_lobby_map_preview_control(state, draw);
             return TRUE;
         }
         if (draw.CtlID >= kLinkLobbyTabFirstId &&

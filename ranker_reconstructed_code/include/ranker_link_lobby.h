@@ -260,6 +260,8 @@ struct LinkLobbyState {
     std::vector<LinkLobbyMessageLine> message_lines;
     std::string map_file_name;
     std::string prepared_map_path;
+    std::vector<u16> map_preview_pixels;
+    std::string map_preview_source_path;
     std::string last_message;
     LinkLobbyCallbacks callbacks{};
 };

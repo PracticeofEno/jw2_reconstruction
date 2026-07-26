@@ -370,6 +370,9 @@ void ConvertTerrainTileSheetPixelsForSurface(
     TerrainTileSheetState& tile_sheet, const MinimapPixelFormat& pixel_format);
 bool BuildTerrainTileAverageColors(
     TerrainTileSheetState& tile_sheet, const MinimapPixelFormat& pixel_format);
+bool LoadTerrainTileAveragePalette(const char* archive_name, i32 bank_index,
+    const MinimapPixelFormat& pixel_format, u32 color_depth_bits,
+    std::vector<u16>& average_pixels);
 bool LoadTerrainDecorationResources(
     TerrainTileSheetState& tile_sheet, const char* archive_name, i32 bank_index);
 void ReleaseTerrainTileSheetBankResources(TerrainTileSheetState& tile_sheet);

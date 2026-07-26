@@ -153,6 +153,8 @@ bool StartRankerFrontendStageFromMenu(i32 column, i32 row);
 void CompleteRankerFrontendStage(u32 result, u32 next_mode);
 void SendMainWindowCloseMessage();
 void RebuildUnitSpatialIndexes();
+bool RenderGameplaySessionMinimapPreview(const char* archive_path,
+    u32 preview_width, u32 preview_height, std::vector<u16>& pixels);
 
 int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_command);
 #else

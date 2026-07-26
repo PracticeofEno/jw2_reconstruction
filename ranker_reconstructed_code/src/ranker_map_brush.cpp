@@ -1419,6 +1419,43 @@ bool BuildTerrainTileAverageColors(
     return true;
 }
 
+bool LoadTerrainTileAveragePalette(const char* archive_name, i32 bank_index,
+    const MinimapPixelFormat& pixel_format, u32 color_depth_bits,
+    std::vector<u16>& average_pixels) {
+    average_pixels.clear();
+    if (archive_name == nullptr || bank_index < 0) {
+        return false;
+    }
+
+    std::vector<u8> payload;
+    const u32 terrain_record =
+        static_cast<u32>(bank_index) * kTerrainTileBankRecordStride;
+    if (!load_trc_record_payload_streamed(archive_name, terrain_record, payload)) {
+        return false;
+    }
+
+    const u32 bytes_per_pixel = color_depth_bits >> 3;
+    const u32 bytes_per_tile = bytes_per_pixel * kTerrainTilePixelsPerTile;
+    if (bytes_per_pixel != sizeof(u16) || bytes_per_tile == 0 ||
+        payload.size() % bytes_per_tile != 0) {
+        return false;
+    }
+
+    TerrainTileSheetState tile_sheet{};
+    tile_sheet.tile_count = static_cast<u32>(payload.size() / bytes_per_tile);
+    tile_sheet.tile_pixels.resize(payload.size() / sizeof(u16));
+    for (std::size_t i = 0; i < tile_sheet.tile_pixels.size(); ++i) {
+        tile_sheet.tile_pixels[i] =
+            read_le_u16(payload.data() + i * sizeof(u16));
+    }
+    ConvertTerrainTileSheetPixelsForSurface(tile_sheet, pixel_format);
+    if (!BuildTerrainTileAverageColors(tile_sheet, pixel_format)) {
+        return false;
+    }
+    average_pixels = std::move(tile_sheet.average_pixels);
+    return true;
+}
+
 bool LoadTerrainDecorationResources(
     TerrainTileSheetState& tile_sheet, const char* archive_name, i32 bank_index) {
     if (archive_name == nullptr || bank_index < 0) {
