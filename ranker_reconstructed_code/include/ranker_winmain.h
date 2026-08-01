@@ -143,6 +143,8 @@ std::array<std::string, kRankerReplayPlayerNameCount> RankerMainWindowReplayPlay
 RankerMainWindowStateSnapshot RankerMainWindowState();
 POINT RankerFrontendWindowOrigin();
 POINT RankerCenteredFrontendWindowOrigin(int width, int height);
+POINT RankerCenteredChildFrontendWindowOrigin(
+    HWND parent, int width, int height);
 const std::vector<std::string>& FrontendNetworkChatMessages();
 LRESULT CALLBACK HandleRankerMainWindowMessage(
     HWND window, UINT message, WPARAM wparam, LPARAM lparam);

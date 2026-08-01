@@ -846,7 +846,10 @@ constexpr std::size_t kUnitDefinitionSpatialQueryTopOffset = 0x374;
 constexpr std::size_t kUnitDefinitionSpatialQueryRightOffset = 0x378;
 constexpr std::size_t kUnitDefinitionSpatialQueryBottomOffset = 0x37c;
 constexpr std::size_t kUnitDefinitionEffectAdjustedInteractionRangeBaseOffset = 0x198;
-constexpr std::size_t kUnitDefinitionEffectCommandDistanceGateOffset = 0x19c;
+// FUN_004f0304 reads original runtime definition +0x440, whose archive
+// offset is +0x198 after removing the 0x2a8-byte prefix.  +0x19c is the
+// adjacent target-acquisition range and must not drive special-action reach.
+constexpr std::size_t kUnitDefinitionEffectCommandDistanceGateOffset = 0x198;
 constexpr std::size_t kUnitDefinitionTargetAcquisitionRangeOffset = 0x19c;
 constexpr std::size_t kUnitDefinitionGroupedCommandCompletedTypeGateOffset = 0x1fc;
 constexpr std::size_t kUnitDefinitionGroupedCommandCompletedTypeIndexOffset = 0x200;
@@ -1058,6 +1061,11 @@ struct RuntimeGlobals {
     bool presentation_resizable = true;
     bool presentation_border = true;
     bool app_active = false;
+    bool cursor_confined = false;
+    bool cursor_handling_initialized = false;
+    UINT cursor_unlock_key1 = VK_TAB;
+    UINT cursor_unlock_key2 = VK_RCONTROL;
+    HHOOK cursor_keyboard_hook = nullptr;
     bool input_enabled = true;
     bool last_external_launch_succeeded = false;
     bool worker_paused = false;
@@ -1484,6 +1492,8 @@ const UnitEffectDefinition* find_default_unit_effect_definition(
 void configure_default_unit_effect_runtime_state(UnitEffectRuntimeState& effects);
 void sync_default_unit_effect_runtime_units(UnitEffectRuntimeState& effects,
     UnitLifecycleContext& lifecycle);
+bool default_unit_effect_simulation_event(UnitEffectRuntimeState& effects,
+    const UnitEffectEvent& event);
 void drain_default_unit_effect_impact_events(
     const UnitEffectRuntimeState& effects, UnitLifecycleContext& lifecycle);
 void sync_default_unit_action_damage_profiles_from_runtime_catalog();
@@ -1557,7 +1567,10 @@ bool read_ddraw_ini_integer(const char* key, int& value) {
         return false;
     }
     char* end = nullptr;
-    const long parsed = std::strtol(text, &end, 10);
+    // cnc-ddraw hotkeys are conventionally stored as hexadecimal virtual-key
+    // values (for example 0x09 and 0xA3), while sizes and positions are
+    // decimal.  Base zero accepts both forms exactly as its config loader does.
+    const long parsed = std::strtol(text, &end, 0);
     if (end == text || *end != '\0' ||
         parsed < std::numeric_limits<int>::min() ||
         parsed > std::numeric_limits<int>::max()) {
@@ -1573,6 +1586,8 @@ void load_main_window_presentation_settings() {
     g_runtime.presentation_position_set = false;
     g_runtime.presentation_resizable = true;
     g_runtime.presentation_border = true;
+    g_runtime.cursor_unlock_key1 = VK_TAB;
+    g_runtime.cursor_unlock_key2 = VK_RCONTROL;
 
     if (GetFileAttributesA(main_window_ddraw_ini_path()) == INVALID_FILE_ATTRIBUTES ||
         !read_ddraw_ini_boolean("windowed", false)) {
@@ -1591,6 +1606,16 @@ void load_main_window_presentation_settings() {
     g_runtime.presentation_client_height = height;
     g_runtime.presentation_resizable = read_ddraw_ini_boolean("resizing", true);
     g_runtime.presentation_border = read_ddraw_ini_boolean("border", true);
+
+    int unlock_key = 0;
+    if (read_ddraw_ini_integer("keyunlockcursor1", unlock_key) &&
+        unlock_key >= 0 && unlock_key <= 0xff) {
+        g_runtime.cursor_unlock_key1 = static_cast<UINT>(unlock_key);
+    }
+    if (read_ddraw_ini_integer("keyunlockcursor2", unlock_key) &&
+        unlock_key >= 0 && unlock_key <= 0xff) {
+        g_runtime.cursor_unlock_key2 = static_cast<UINT>(unlock_key);
+    }
 
     int x = 0;
     int y = 0;
@@ -1698,6 +1723,280 @@ void refresh_window_rects(HWND window) {
     g_runtime.client_screen_rect.top = top_left.y;
     g_runtime.client_screen_rect.right = bottom_right.x;
     g_runtime.client_screen_rect.bottom = bottom_right.y;
+}
+
+bool main_window_cursor_window_ready(HWND window) {
+    return g_runtime.app_active && window != nullptr && IsWindow(window) &&
+        IsWindowVisible(window) && !IsIconic(window);
+}
+
+bool main_window_client_screen_rect(HWND window, RECT& client,
+    RECT& screen_client) {
+    if (window == nullptr || !IsWindow(window) ||
+        !GetClientRect(window, &client) || !rect_has_extent(client)) {
+        return false;
+    }
+
+    POINT top_left{client.left, client.top};
+    POINT bottom_right{client.right, client.bottom};
+    if (!ClientToScreen(window, &top_left) ||
+        !ClientToScreen(window, &bottom_right)) {
+        return false;
+    }
+
+    screen_client = RECT{
+        top_left.x, top_left.y, bottom_right.x, bottom_right.y};
+    return rect_has_extent(screen_client);
+}
+
+i32 scale_logical_cursor_to_presentation(
+    i32 coordinate, i32 logical_extent, i32 presentation_extent) {
+    if (logical_extent <= 1 || presentation_extent <= 1) {
+        return 0;
+    }
+    const i32 clamped = std::clamp(coordinate, 0, logical_extent - 1);
+    // cnc-ddraw mouse_lock/mouse_unlock multiply by the endpoint-preserving
+    // float scale and truncate when they place the real OS cursor.
+    volatile float scale = static_cast<float>(presentation_extent - 1) /
+        static_cast<float>(logical_extent - 1);
+    volatile float scaled = static_cast<float>(clamped) * scale;
+    return std::clamp(static_cast<i32>(scaled), 0, presentation_extent - 1);
+}
+
+i32 scale_unlocked_cursor_to_logical(
+    i32 coordinate, i32 presentation_extent, i32 logical_extent) {
+    if (presentation_extent <= 1 || logical_extent <= 1) {
+        return 0;
+    }
+    const i32 nonnegative = std::max(coordinate, 0);
+    volatile float unscale = static_cast<float>(logical_extent - 1) /
+        static_cast<float>(presentation_extent - 1);
+    volatile float scaled = static_cast<float>(nonnegative) * unscale;
+    // cnc-ddraw's unlocked button-up reacquisition path truncates rather than
+    // using the roundf applied to ordinary locked mouse messages.
+    return std::clamp(static_cast<i32>(scaled), 0, logical_extent - 1);
+}
+
+bool set_main_window_system_cursor_logical_position(
+    HWND window, i32 logical_x, i32 logical_y) {
+    RECT client{};
+    RECT screen_client{};
+    if (!main_window_client_screen_rect(window, client, screen_client)) {
+        return false;
+    }
+
+    const GameplayLogicalSurfaceSize logical =
+        resolve_active_gameplay_logical_surface_size();
+    POINT position{
+        scale_logical_cursor_to_presentation(logical_x,
+            static_cast<i32>(logical.width), client.right - client.left),
+        scale_logical_cursor_to_presentation(logical_y,
+            static_cast<i32>(logical.height), client.bottom - client.top)};
+    if (!ClientToScreen(window, &position)) {
+        return false;
+    }
+    return SetCursorPos(position.x, position.y) != FALSE;
+}
+
+void set_main_window_system_cursor_for_lock_state() {
+    SetCursor(g_runtime.cursor_confined
+        ? nullptr : LoadCursorA(nullptr, IDC_ARROW));
+}
+
+void release_main_window_cursor_confinement(bool restore_logical_position = true) {
+    if (!g_runtime.cursor_confined) {
+        return;
+    }
+
+    // mouse_unlock clears the state before placing the real cursor so the
+    // WM_MOUSEMOVE generated by SetCursorPos is ignored while unlocked.
+    g_runtime.cursor_confined = false;
+    ClipCursor(nullptr);
+    ReleaseCapture();
+    if (restore_logical_position && g_runtime.main_window != nullptr &&
+        IsWindow(g_runtime.main_window) && !IsIconic(g_runtime.main_window)) {
+        const InputState& input = input_state();
+        set_main_window_system_cursor_logical_position(g_runtime.main_window,
+            static_cast<i32>(input.mouse_x), static_cast<i32>(input.mouse_y));
+    }
+    input_state().pointer_inside_client = false;
+    set_main_window_system_cursor_for_lock_state();
+}
+
+bool lock_main_window_cursor_confinement(
+    HWND window, i32 logical_x, i32 logical_y) {
+    if (!g_runtime.cursor_handling_initialized ||
+        !main_window_cursor_window_ready(window)) {
+        return false;
+    }
+
+    RECT client{};
+    RECT screen_client{};
+    if (!main_window_client_screen_rect(window, client, screen_client)) {
+        return false;
+    }
+
+    // mouse_lock restores the wrapper's logical pointer before clipping and
+    // then hides the OS cursor.  The generated move is processed after the
+    // lock bit is published, just as it is in the original message queue.
+    set_main_window_system_cursor_logical_position(window, logical_x, logical_y);
+    if (!ClipCursor(&screen_client)) {
+        return false;
+    }
+    g_runtime.cursor_confined = true;
+    set_main_window_system_cursor_for_lock_state();
+    return true;
+}
+
+void refresh_main_window_cursor_confinement(HWND window) {
+    if (!g_runtime.cursor_confined) {
+        return;
+    }
+    if (!main_window_cursor_window_ready(window)) {
+        release_main_window_cursor_confinement(false);
+        return;
+    }
+
+    RECT client{};
+    RECT screen_client{};
+    if (!main_window_client_screen_rect(window, client, screen_client)) {
+        release_main_window_cursor_confinement(false);
+        return;
+    }
+
+    const InputState& input = input_state();
+    set_main_window_system_cursor_logical_position(window,
+        static_cast<i32>(input.mouse_x), static_cast<i32>(input.mouse_y));
+    if (!ClipCursor(&screen_client)) {
+        release_main_window_cursor_confinement(false);
+        return;
+    }
+    set_main_window_system_cursor_for_lock_state();
+}
+
+bool is_cnc_locked_mouse_message(UINT message) {
+    switch (message) {
+    case WM_MOUSEMOVE:
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONUP:
+    case WM_LBUTTONDBLCLK:
+    case WM_RBUTTONDOWN:
+    case WM_RBUTTONUP:
+    case WM_RBUTTONDBLCLK:
+    case WM_MBUTTONDOWN:
+    case WM_MBUTTONUP:
+    case WM_MBUTTONDBLCLK:
+    case WM_XBUTTONDOWN:
+    case WM_XBUTTONUP:
+    case WM_XBUTTONDBLCLK:
+    case WM_MOUSEWHEEL:
+    case WM_MOUSEHOVER:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool reacquire_main_window_cursor_from_button_up(
+    HWND window, LPARAM presentation_lparam) {
+    RECT client{};
+    RECT screen_client{};
+    if (!main_window_client_screen_rect(window, client, screen_client)) {
+        return false;
+    }
+
+    const i32 presentation_width = client.right - client.left;
+    const i32 presentation_height = client.bottom - client.top;
+    const i32 presentation_x = static_cast<i16>(
+        static_cast<u32>(presentation_lparam) & 0xffffu);
+    const i32 presentation_y = static_cast<i16>(
+        (static_cast<u32>(presentation_lparam) >> 16) & 0xffffu);
+    const GameplayLogicalSurfaceSize logical =
+        resolve_active_gameplay_logical_surface_size();
+
+    i32 logical_x = static_cast<i32>(logical.width / 2);
+    i32 logical_y = static_cast<i32>(logical.height / 2);
+    // cnc-ddraw treats the inclusive far boundary as an edge sample and only
+    // recenters an unlocked release strictly outside its viewport.
+    if (presentation_x >= 0 && presentation_x <= presentation_width &&
+        presentation_y >= 0 && presentation_y <= presentation_height) {
+        logical_x = scale_unlocked_cursor_to_logical(presentation_x,
+            presentation_width, static_cast<i32>(logical.width));
+        logical_y = scale_unlocked_cursor_to_logical(presentation_y,
+            presentation_height, static_cast<i32>(logical.height));
+    }
+    return lock_main_window_cursor_confinement(window, logical_x, logical_y);
+}
+
+bool handle_unlocked_main_window_mouse_message(
+    HWND window, UINT message, LPARAM presentation_lparam) {
+    if (!g_runtime.cursor_handling_initialized ||
+        g_runtime.cursor_confined || !is_cnc_locked_mouse_message(message)) {
+        return false;
+    }
+
+    input_state().pointer_inside_client = false;
+    if (message == WM_LBUTTONUP || message == WM_RBUTTONUP ||
+        message == WM_MBUTTONUP) {
+        reacquire_main_window_cursor_from_button_up(
+            window, presentation_lparam);
+    }
+    // cnc-ddraw consumes all movement/down/double/wheel input while unlocked,
+    // including the button-up used only to reacquire the cursor.
+    return true;
+}
+
+LRESULT CALLBACK main_window_cursor_keyboard_hook(
+    int code, WPARAM virtual_key, LPARAM flags) {
+    if (code < 0 || virtual_key == 0) {
+        return CallNextHookEx(
+            g_runtime.cursor_keyboard_hook, code, virtual_key, flags);
+    }
+
+    const bool key_down = (flags & (static_cast<LPARAM>(1) << 31)) == 0;
+    const bool first_unlock_candidate =
+        virtual_key == g_runtime.cursor_unlock_key1 ||
+        virtual_key == VK_CONTROL;
+    const bool second_unlock_candidate =
+        virtual_key == g_runtime.cursor_unlock_key2 ||
+        virtual_key == VK_MENU || virtual_key == VK_CONTROL;
+    const bool first_unlock = first_unlock_candidate &&
+        (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0 &&
+        (GetAsyncKeyState(g_runtime.cursor_unlock_key1) & 0x8000) != 0;
+    const bool second_unlock = second_unlock_candidate &&
+        (GetAsyncKeyState(VK_RMENU) & 0x8000) != 0 &&
+        (GetAsyncKeyState(g_runtime.cursor_unlock_key2) & 0x8000) != 0;
+    if (first_unlock || second_unlock) {
+        release_main_window_cursor_confinement();
+        if (key_down) {
+            return 1;
+        }
+    }
+
+    return CallNextHookEx(
+        g_runtime.cursor_keyboard_hook, code, virtual_key, flags);
+}
+
+void initialize_main_window_cursor_handling(HWND window) {
+    if (g_runtime.cursor_handling_initialized) {
+        return;
+    }
+    g_runtime.cursor_handling_initialized = true;
+    g_runtime.cursor_keyboard_hook = SetWindowsHookExA(
+        WH_KEYBOARD, main_window_cursor_keyboard_hook, nullptr,
+        GetCurrentThreadId());
+    const InputState& input = input_state();
+    lock_main_window_cursor_confinement(window,
+        static_cast<i32>(input.mouse_x), static_cast<i32>(input.mouse_y));
+}
+
+void shutdown_main_window_cursor_handling() {
+    release_main_window_cursor_confinement();
+    if (g_runtime.cursor_keyboard_hook != nullptr) {
+        UnhookWindowsHookEx(g_runtime.cursor_keyboard_hook);
+        g_runtime.cursor_keyboard_hook = nullptr;
+    }
+    g_runtime.cursor_handling_initialized = false;
 }
 
 void pause_worker_for_modal_action() {
@@ -3433,6 +3732,9 @@ void default_gameplay_display_configure_surfaces(u32 width, u32 height, u32 colo
         return;
     }
 
+    // cnc-ddraw recomputes scale/unscale and restores the same logical cursor
+    // whenever the DirectDraw mode changes (notably 800x600 <-> 640x480).
+    refresh_main_window_cursor_confinement(g_runtime.main_window);
     const DirectDrawRuntimeState& draw = direct_draw_state();
     append_startup_log("gameplay display surface configured %ux%ux%u requested=%ux%ux%u",
         draw.width, draw.height, draw.color_depth, width, height, color_depth);
@@ -14316,16 +14618,14 @@ void apply_default_unit_damage_record(UnitMovementUnit& unit,
     unit.command_state = record.command_state;
     unit.command_flags = record.command_flags;
     unit.runtime_flags = record.runtime_flags;
-    // Original ApplyUnitDamageOrAreaDamage (0x004c212c) writes zero directly
-    // to the defeated unit's raw +0x18 hit-point field before publishing its
-    // dead command state.  Keep those two writes atomic at the reconstruction's
-    // UnitRecord -> UnitMovementUnit damage boundary as well.  A lethal record
-    // must not retain a pre-impact mirrored health value and later expose that
-    // value through the script object/free-list lifecycle.
-    unit.health = (record.command_state & kUnitStateDead) != 0
-        ? 0
-        : std::min(record.hit_points,
-              unit.max_health != 0 ? unit.max_health : record.max_hit_points);
+    // Copy raw +0x18 from the damage record instead of deriving it from the
+    // command-dead bit.  Lethal damage already writes zero into hit_points
+    // before publishing that bit, while Mana Spread (ability 9) deliberately
+    // publishes the same death bit with its pre-cast health still intact.
+    // Treating every command-dead record as lethal therefore desynchronizes
+    // that original special-ability path.
+    unit.health = std::min(record.hit_points,
+        unit.max_health != 0 ? unit.max_health : record.max_hit_points);
     unit.secondary_value = std::min(record.secondary_value, unit.max_secondary_value);
     unit.elite_progress_value = record.experience;
 }
@@ -15350,7 +15650,6 @@ bool default_production_owner_requirement_allows_unit(
 
 bool default_mode1_packet_start_basic_special_attachment(UnitMovementUnit& unit,
     u32 action_id) {
-    constexpr u32 kSelectedActionEffectBase = 0x3d;
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
     if (lifecycle == nullptr || action_id >= 0x2e) {
         return true;
@@ -15360,14 +15659,14 @@ bool default_mode1_packet_start_basic_special_attachment(UnitMovementUnit& unit,
     configure_default_unit_effect_runtime_state(effects);
     sync_default_unit_effect_runtime_units(effects, *lifecycle);
 
-    const UnitEffectDefinition* definition =
-        find_default_unit_effect_definition(
-            effects, kSelectedActionEffectBase + action_id);
-    if (definition == nullptr) {
-        return false;
-    }
-    return StartSelectedUnitAttachmentEffect(effects,
-        kSelectedActionEffectBase + action_id, unit, &unit);
+    // Subtype-0x02 commands 0x12..0x15 translate to attachment actions
+    // 0x20..0x23. Original FUN_004ef6cd checks those actions' ordinary
+    // health/secondary requirements (or a matching equipped one-shot) before
+    // queuing the attachment. Skipping that gate let a reconstructed peer
+    // debit raw +0x2c and set +0x9c while an original peer rejected the same
+    // Exchange command, immediately splitting the P2P checksum.
+    return StartAvailableSelectedUnitActionAttachmentEffect(
+        effects, action_id, unit, &unit);
 }
 
 bool apply_default_mode1_basic_special_command_flag(UnitMovementUnit& unit,
@@ -15415,7 +15714,11 @@ bool apply_default_mode1_extended_special_command_flag(UnitMovementUnit& unit,
         default_jw211_production_action_definition(command);
     if (definition == nullptr ||
         !default_production_owner_requirement_allows_unit(*definition, unit) ||
-        (default_unit_action_capability_mask(unit) & (1u << command)) == 0 ||
+        // FUN_004db92c gates this selector with mutable raw +0xe8.  Kalma
+        // exposes action 0x13 there but not in the unrelated core-command
+        // mask at raw +0x58; using the latter made only the sending rebuild
+        // reject the same P2P command that the original peer accepted.
+        (unit.script_bit_flags & (1u << command)) == 0 ||
         definition->active_limit >= unit.status_timer + 1 ||
         definition->queued_limit >= unit.secondary_value + 1 ||
         definition->resource_limit >= unit.health) {
@@ -17576,6 +17879,8 @@ void configure_default_unit_effect_runtime_state(UnitEffectRuntimeState& effects
         default_unit_effect_selected_production_gate;
     effects.callbacks.create_unit = default_unit_effect_create_unit;
     effects.callbacks.calculate_impact_damage = default_unit_effect_impact_damage;
+    effects.callbacks.apply_simulation_event =
+        default_unit_effect_simulation_event;
     // FUN_004f2aa4 selects its packed colors from DAT_01450834.
     ConfigureUnitEffectRenderPalette(effects, SurfacePixelMode555());
 }
@@ -20288,12 +20593,21 @@ void sync_default_gameplay_production_action_units(
         production_unit.runtime_state =
             (unit->command_state & kUnitCommandDead) != 0 ? 4 : 0;
         production_unit.command_state = unit->command_state;
-        production_unit.result_state = unit->previous_command_state;
+        // FUN_004db0f7's result byte mirrors raw unit +0xa4, the transient
+        // draw-feedback timer.  Raw +0x74 is the independent special-ability
+        // id/previous-state union and must not be exposed through this UI
+        // production mirror.
+        production_unit.result_state = unit->draw_flags;
         production_unit.command_flags = unit->command_flags;
         production_unit.area_marker_flags = unit->area_marker_flags;
         production_unit.runtime_flags = unit->runtime_flags;
         production_unit.definition_action_flags = unit->definition.action_effect_flags;
-        production_unit.movement_class = unit->definition.movement_class;
+        // FUN_004db0f7 indexes JW2_11 +0x154 by DAT_0087c474, the unit
+        // definition's render/target class.  The production mirror's legacy
+        // field name says movement_class, but populating it from actual
+        // movement class made action 24's stock mask 0x2 reject every normal
+        // class-1 target before publishing the P2P command.
+        production_unit.movement_class = unit->definition.render_class;
         production_unit.x = unit->x;
         production_unit.y = unit->y;
         production_unit.bounds_left = unit->definition.bounds_left;
@@ -20369,12 +20683,12 @@ void sync_default_gameplay_production_action_units(
         target.owner = unit->owner_id;
         target.runtime_state = 4;
         target.command_state = unit->command_state;
-        target.result_state = unit->previous_command_state;
+        target.result_state = unit->draw_flags;
         target.command_flags = unit->command_flags;
         target.area_marker_flags = unit->area_marker_flags;
         target.runtime_flags = unit->runtime_flags;
         target.definition_action_flags = unit->definition.action_effect_flags;
-        target.movement_class = unit->definition.movement_class;
+        target.movement_class = unit->definition.render_class;
         target.production_bits = unit->script_bit_flags;
         target.x = unit->x;
         target.y = unit->y;
@@ -20521,12 +20835,14 @@ bool apply_default_ui_overlay_held_command(UiOverlayState& overlay,
 void mirror_default_gameplay_production_result_states(
     const GameplayProductionActionState& production) {
     // FUN_004db0f7 writes DAT_00862a14[selector] to raw target +0xa4 after
-    // the table handler returns CLC.  GameplayProductionActionState is a
-    // transient mirror, so carry that exact write back to the live unit.
+    // the table handler returns CLC.  Raw +0xa4 is draw feedback; raw +0x74
+    // is the special-ability id/previous-state union used by states 64..66.
+    // GameplayProductionActionState is a transient mirror, so carry the
+    // result back to the matching live draw-feedback field.
     for (const GameplayProductionUnitState& source : production.units) {
         UnitMovementUnit* target = find_default_movement_unit_by_id(source.offset);
         if (target != nullptr) {
-            target->previous_command_state = source.result_state;
+            target->draw_flags = source.result_state;
         }
     }
 }
@@ -20829,9 +21145,9 @@ void default_unit_damage_attacker_experience_changed(UnitDamageContext&,
             sync_default_unit_effect_runtime_units(effects, *lifecycle);
         }
         // FUN_004099e0 publishes attachment action 0x2d after a kill-award
-        // rank-up; FUN_004ef6cd translates that action to effect id 0x6a.
-        StartSelectedUnitAttachmentEffect(
-            effects, 0x3du + 0x2du, *unit, unit);
+        // rank-up through FUN_004ef6cd, including its item/resource gate.
+        StartAvailableSelectedUnitActionAttachmentEffect(
+            effects, 0x2du, *unit, unit);
     }
     mirror_default_unit_damage_record_stats(attacker, *unit);
 }
@@ -21504,63 +21820,91 @@ void apply_default_unit_action_damage(UnitCommandContext& command_context,
     damage_context.area_damage_allows_related_targets = false;
 }
 
+bool apply_default_unit_effect_simulation_event(
+    const UnitEffectRuntimeState& effects, const UnitEffectEvent& event,
+    UnitLifecycleContext& lifecycle) {
+    if (event.kind == UnitEffectEventKind::source_command_dead) {
+        if (UnitMovementUnit* source =
+                find_default_movement_unit_by_id(event.unit_id)) {
+            // Action 0x0c's 0x004ee321 call completes every synchronous
+            // impact first; 0x004ee32e then ORs raw command state +0x60
+            // with 0x10000000 without forcing the surviving HP to zero.
+            source->command_state |= kUnitCommandDead;
+        }
+        return true;
+    }
+    if (event.kind == UnitEffectEventKind::target_lockout) {
+        if (UnitMovementUnit* target =
+                find_default_movement_unit_by_id(event.target_id)) {
+            ApplyUnitActionEffectTargetLockoutIfFlagged(*target, event.value);
+        }
+        return true;
+    }
+    if (event.kind != UnitEffectEventKind::impact) {
+        return false;
+    }
+    if (event.target_id == 0) {
+        return true;
+    }
+    if (lifecycle.movement == nullptr) {
+        return false;
+    }
+
+    UnitMovementUnit* source = find_default_movement_unit_by_id(event.unit_id);
+    UnitMovementUnit* target = find_default_movement_unit_by_id(event.target_id);
+    if (target == nullptr) {
+        return true;
+    }
+
+    rebuild_default_damage_record_links(lifecycle.movement, source, target);
+    GameplayDamageRecordLink* source_link =
+        source != nullptr ? find_default_damage_record_link(source) : nullptr;
+    GameplayDamageRecordLink* target_link = find_default_damage_record_link(target);
+    if (target_link == nullptr) {
+        return true;
+    }
+
+    const UnitEffectDefinition* definition =
+        find_default_unit_effect_definition(effects, event.effect_id);
+    UnitDamageContext& damage_context = g_runtime.gameplay_damage_context;
+    damage_context.attacker =
+        source_link != nullptr ? &source_link->record : nullptr;
+    damage_context.direct_target = &target_link->record;
+    damage_context.center_x = event.x;
+    damage_context.center_y = event.y;
+    damage_context.direct_damage = event.value;
+    damage_context.splash_radius = 0;
+    damage_context.allowed_area_target_render_class_mask =
+        definition != nullptr ? definition->allowed_target_render_class_mask
+                              : 0xffffffffu;
+    damage_context.area_damage_allows_related_targets =
+        definition != nullptr && definition->area_damage_allows_related_targets;
+    ApplyUnitDamageOrAreaDamage(damage_context);
+    commit_default_damage_record_links();
+
+    damage_context.attacker = nullptr;
+    damage_context.direct_target = nullptr;
+    damage_context.direct_damage = 0;
+    damage_context.splash_radius = 0;
+    damage_context.allowed_area_target_render_class_mask = 0xffffffffu;
+    damage_context.area_damage_allows_related_targets = false;
+    return true;
+}
+
+bool default_unit_effect_simulation_event(UnitEffectRuntimeState& effects,
+    const UnitEffectEvent& event) {
+    UnitLifecycleContext* lifecycle = effects.lifecycle_context;
+    return lifecycle != nullptr &&
+        apply_default_unit_effect_simulation_event(effects, event, *lifecycle);
+}
+
 void drain_default_unit_effect_impact_events(
     const UnitEffectRuntimeState& effects, UnitLifecycleContext& lifecycle) {
     if (lifecycle.movement == nullptr) {
         return;
     }
-
     for (const UnitEffectEvent& event : effects.events) {
-        if (event.kind == UnitEffectEventKind::target_lockout) {
-            if (UnitMovementUnit* target =
-                    find_default_movement_unit_by_id(event.target_id)) {
-                ApplyUnitActionEffectTargetLockoutIfFlagged(
-                    *target, event.value);
-            }
-            continue;
-        }
-        if (event.kind != UnitEffectEventKind::impact || event.target_id == 0) {
-            continue;
-        }
-
-        UnitMovementUnit* source = find_default_movement_unit_by_id(event.unit_id);
-        UnitMovementUnit* target = find_default_movement_unit_by_id(event.target_id);
-        if (target == nullptr) {
-            continue;
-        }
-
-        rebuild_default_damage_record_links(lifecycle.movement, source, target);
-        GameplayDamageRecordLink* source_link =
-            source != nullptr ? find_default_damage_record_link(source) : nullptr;
-        GameplayDamageRecordLink* target_link = find_default_damage_record_link(target);
-        if (target_link == nullptr) {
-            continue;
-        }
-
-        const UnitEffectDefinition* definition =
-            find_default_unit_effect_definition(effects, event.effect_id);
-        UnitDamageContext& damage_context = g_runtime.gameplay_damage_context;
-        damage_context.attacker =
-            source_link != nullptr ? &source_link->record : nullptr;
-        damage_context.direct_target = &target_link->record;
-        damage_context.center_x = event.x;
-        damage_context.center_y = event.y;
-        damage_context.direct_damage = event.value;
-        damage_context.splash_radius = 0;
-        damage_context.allowed_area_target_render_class_mask =
-            definition != nullptr ? definition->allowed_target_render_class_mask
-                                  : 0xffffffffu;
-        damage_context.area_damage_allows_related_targets =
-            definition != nullptr && definition->area_damage_allows_related_targets;
-        ApplyUnitDamageOrAreaDamage(damage_context);
-        commit_default_damage_record_links();
-
-        damage_context.attacker = nullptr;
-        damage_context.direct_target = nullptr;
-        damage_context.direct_damage = 0;
-        damage_context.splash_radius = 0;
-        damage_context.allowed_area_target_render_class_mask = 0xffffffffu;
-        damage_context.area_damage_allows_related_targets = false;
+        apply_default_unit_effect_simulation_event(effects, event, lifecycle);
     }
 }
 
@@ -22144,15 +22488,14 @@ void refresh_default_order_2b_active_unit_progress() {
         }
 
         // FUN_004099e0 publishes attachment action 0x2d after at least one
-        // stored-progress rank-up.  Reuse the already reconstructed script
-        // path's original JW2_11 effect-id translation (0x3d + 0x2d).
+        // stored-progress rank-up through the common availability gate.
         if (!effect_runtime_synced) {
             configure_default_unit_effect_runtime_state(effects);
             sync_default_unit_effect_runtime_units(effects, *lifecycle);
             effect_runtime_synced = true;
         }
-        StartSelectedUnitAttachmentEffect(
-            effects, 0x3du + 0x2du, *candidate, candidate);
+        StartAvailableSelectedUnitActionAttachmentEffect(
+            effects, 0x2du, *candidate, candidate);
     }
 }
 
@@ -23221,7 +23564,11 @@ UnitMovementUnit* default_unit_command_create_unit(UnitCommandContext&,
 
 bool dispatch_default_unit_command_action_effect(UnitMovementUnit& source,
     UnitMovementUnit* target, u32 action_id, i32 world_x, i32 world_y,
-    u32 effect_mode_override = std::numeric_limits<u32>::max()) {
+    u32 effect_mode_override = std::numeric_limits<u32>::max(),
+    UnitEffectRuntime** created_effect = nullptr) {
+    if (created_effect != nullptr) {
+        *created_effect = nullptr;
+    }
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
     if (lifecycle == nullptr || action_id >= 0x2e) {
         return false;
@@ -23247,21 +23594,22 @@ bool dispatch_default_unit_command_action_effect(UnitMovementUnit& source,
         world_x &= ~0x1f;
         world_y &= ~0x1f;
         constexpr u32 kHurdleUnitType = 0x7d;
-        const UnitMovementDefinition* hurdle_definition =
-            lifecycle->callbacks.find_definition != nullptr
-            ? lifecycle->callbacks.find_definition(*lifecycle, kHurdleUnitType)
-            : nullptr;
-        if (hurdle_definition == nullptr) {
-            return false;
-        }
-        UnitMovementUnit placement_probe{};
-        placement_probe.type_id = kHurdleUnitType;
-        placement_probe.owner_id = source.owner_id;
-        placement_probe.definition = *hurdle_definition;
-        placement_probe.x = world_x;
-        placement_probe.y = world_y;
-        if (!CheckUnitPlacementFootprintArea(*lifecycle, placement_probe,
-                world_x, world_y, true)) {
+        // FUN_004ef7b8 calls the UI footprint predicate
+        // FUN_004dba30/FUN_004dbae2 here, not the authoritative lifecycle
+        // placement helper.  The UI predicate reads five distinct map
+        // layers: last-visible terrain (E59E74), authoritative terrain
+        // (F19E74), terrain class (E99E74), remembered route state (798D40)
+        // and current visibility (758D40).  Combining the lifecycle check
+        // with only bit 0x10000000 accepted cells that the original rejects
+        // when the last-visible terrain layer is blocked, so one P2P peer
+        // created the hurdle and consumed two RNG calls while the other did
+        // not.  Refresh and use the existing exact UI-layer mirror.
+        GameplayProductionActionState& placement_gate =
+            gameplay_production_action_state();
+        sync_default_gameplay_production_action_units(
+            placement_gate, ui_overlay_state());
+        if (!CheckPreviewProductionPlacementFootprintGateCells(
+                placement_gate, kHurdleUnitType, world_x, world_y, source.id)) {
             return false;
         }
     }
@@ -23351,6 +23699,9 @@ bool dispatch_default_unit_command_action_effect(UnitMovementUnit& source,
     if (effect_mode_override != std::numeric_limits<u32>::max()) {
         effect->flags = effect_mode_override;
     }
+    if (created_effect != nullptr) {
+        *created_effect = effect;
+    }
     return true;
 }
 
@@ -23363,7 +23714,6 @@ void default_unit_command_execute_ability(UnitCommandContext&,
 bool start_default_unit_command_ability_attachment_effect(
     UnitMovementUnit& source, UnitMovementUnit* attachment, u32 ability_id,
     UnitEffectRuntime** created_effect = nullptr) {
-    constexpr u32 kSelectedActionEffectBase = 0x3d;
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
     if (lifecycle == nullptr || ability_id >= 0x2e) {
         return false;
@@ -23373,39 +23723,8 @@ bool start_default_unit_command_ability_attachment_effect(
     configure_default_unit_effect_runtime_state(effects);
     sync_default_unit_effect_runtime_units(effects, *lifecycle);
 
-    const UnitEffectDefinition* definition =
-        find_default_unit_effect_definition(
-            effects, kSelectedActionEffectBase + ability_id);
-    if (definition == nullptr) {
-        return false;
-    }
-
-    bool attached_item = false;
-    if (effects.equipment_catalog != nullptr) {
-        for (u32 item_id : source.item_slots) {
-            if (item_id == 0) {
-                continue;
-            }
-            const UnitEquipmentEffectDefinition* item =
-                FindUnitEquipmentEffect(*effects.equipment_catalog, item_id);
-            if (item != nullptr &&
-                item->attachment_definition_id == ability_id) {
-                attached_item = true;
-                break;
-            }
-        }
-    }
-    // Availability helper 0x004ef6cd accepts equality for both resources;
-    // the strict health > cost check belongs to the later executing init.
-    if (!attached_item &&
-        (source.secondary_value < definition->action_secondary_cost ||
-            source.health < definition->action_source_health_cost)) {
-        return false;
-    }
-
-    return StartSelectedUnitAttachmentEffect(effects,
-        kSelectedActionEffectBase + ability_id, source, attachment,
-        created_effect);
+    return StartAvailableSelectedUnitActionAttachmentEffect(
+        effects, ability_id, source, attachment, created_effect);
 }
 
 bool default_unit_command_start_ability_attachment(UnitCommandContext&,
@@ -23676,21 +23995,13 @@ bool default_unit_command_reserved_tile_work_complete(UnitCommandContext&,
         return false;
     }
 
-    UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
-    configure_default_unit_effect_runtime_state(effects);
-    sync_default_unit_effect_runtime_units(effects, *lifecycle);
-
-    UnitEffectRuntime* effect = AllocateUnitEffectSlot(effects);
-    if (effect == nullptr) {
-        unit.reserved_tile_effect = nullptr;
-        unit.reserved_tile_effect_slot_offset = 0;
-        return false;
-    }
-
-    if (!DispatchSelectedUnitActionEffect(effects, *effect,
-            kReservedTileCompletionActionId, unit, target,
-            unit.path_target_x, unit.path_target_y)) {
-        ReleaseUnitEffectSlot(effects, *effect);
+    // FUN_004cb255 reaches action 0x26 through FUN_004ef7b8.  Keep its
+    // equipped one-shot/resource gate even though the stock action costs zero.
+    UnitEffectRuntime* effect = nullptr;
+    if (!dispatch_default_unit_command_action_effect(unit, target,
+            kReservedTileCompletionActionId, unit.path_target_x,
+            unit.path_target_y, std::numeric_limits<u32>::max(), &effect) ||
+        effect == nullptr) {
         unit.reserved_tile_effect = nullptr;
         unit.reserved_tile_effect_slot_offset = 0;
         return false;
@@ -23701,7 +24012,8 @@ bool default_unit_command_reserved_tile_work_complete(UnitCommandContext&,
     effect->amount = unit.cargo_amount;
     unit.reserved_tile_effect = effect;
     unit.reserved_tile_effect_slot_offset =
-        default_unit_effect_original_slot_offset(effects, effect);
+        default_unit_effect_original_slot_offset(
+            g_runtime.gameplay_unit_effect_runtime, effect);
     return true;
 }
 
@@ -24112,29 +24424,14 @@ void configure_default_unit_command_context(UnitCommandContext& command_context,
 
 UnitEffectRuntime* start_default_support_action_effect(UnitMovementUnit& source,
     UnitMovementUnit* target, u32 action_id) {
-    if (action_id >= 0x2e) {
-        return nullptr;
-    }
-
-    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
-    if (lifecycle == nullptr) {
-        return nullptr;
-    }
-
-    UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
-    configure_default_unit_effect_runtime_state(effects);
-    sync_default_unit_effect_runtime_units(effects, *lifecycle);
-
-    UnitEffectRuntime* effect = AllocateUnitEffectSlot(effects);
-    if (effect == nullptr) {
-        return nullptr;
-    }
-
     const i32 world_x = target != nullptr ? target->x : source.x;
     const i32 world_y = target != nullptr ? target->y : source.y;
-    if (!DispatchSelectedUnitActionEffect(effects, *effect, action_id, source,
-            target, world_x, world_y)) {
-        ReleaseUnitEffectSlot(effects, *effect);
+    UnitEffectRuntime* effect = nullptr;
+    // FUN_004c16db/FUN_004c1713 (0x2a) and FUN_004c19dd (0x28) call
+    // FUN_004ef7b8.  That common wrapper consumes an equipped one-shot or
+    // debits the action's health/secondary cost before dispatch.
+    if (!dispatch_default_unit_command_action_effect(source, target, action_id,
+            world_x, world_y, std::numeric_limits<u32>::max(), &effect)) {
         return nullptr;
     }
     return effect;
@@ -24163,8 +24460,6 @@ void default_unit_support_health_restore_target_selected(
 void default_unit_support_health_restore_effect(UnitSupportEffectContext&,
     UnitMovementUnit& source, UnitMovementUnit&) {
     constexpr u32 kHealthRestoreAttachmentActionId = 0x28;
-    constexpr u32 kSelectedActionEffectBase = 0x3d;
-
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
     if (lifecycle == nullptr) {
         return;
@@ -24174,9 +24469,9 @@ void default_unit_support_health_restore_effect(UnitSupportEffectContext&,
     configure_default_unit_effect_runtime_state(effects);
     sync_default_unit_effect_runtime_units(effects, *lifecycle);
 
-    StartSelectedUnitAttachmentEffect(effects,
-        kSelectedActionEffectBase + kHealthRestoreAttachmentActionId,
-        source, &source);
+    // FUN_004c19f5 calls FUN_004ef6cd for this follow-up attachment.
+    StartAvailableSelectedUnitActionAttachmentEffect(effects,
+        kHealthRestoreAttachmentActionId, source, &source);
 }
 
 void default_unit_support_marker_aura_sound(UnitSupportEffectContext& context) {
@@ -27432,8 +27727,8 @@ void apply_default_gameplay_script_variant_progress_immediate(
             sync_default_unit_effect_runtime_units(
                 g_runtime.gameplay_unit_effect_runtime, *lifecycle);
         }
-        StartSelectedUnitAttachmentEffect(
-            g_runtime.gameplay_unit_effect_runtime, 0x3d + 0x2d,
+        StartAvailableSelectedUnitActionAttachmentEffect(
+            g_runtime.gameplay_unit_effect_runtime, 0x2d,
             *unit, unit);
     }
 
@@ -30369,6 +30664,9 @@ void paint_main_window_black(HWND window) {
 }
 
 LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+    if (handle_unlocked_main_window_mouse_message(window, message, lparam)) {
+        return 0;
+    }
     const LPARAM input_lparam = logical_main_client_mouse_lparam(
         window, message, lparam);
     if (HandleWindowInputMessage(message, static_cast<u32>(wparam),
@@ -30388,10 +30686,11 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
         return 0;
     case WM_MOVE:
     case WM_SIZE:
+        refresh_window_rects(window);
         if (g_runtime.directx_initialized && g_runtime.windowed_mode) {
-            refresh_window_rects(window);
             RefreshDirectDrawPresentationRect(window);
         }
+        refresh_main_window_cursor_confinement(window);
         break;
     case WM_MOUSELEAVE:
     case WM_NCMOUSEMOVE:
@@ -30411,15 +30710,71 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
             InputState& input = input_state();
             ClearInputHeldKeysForFocusLoss();
             input.pointer_inside_client = false;
+            release_main_window_cursor_confinement();
         }
         if (g_runtime.app_active && g_runtime.directx_initialized &&
             g_runtime.input_enabled) {
             SetFocus(window);
             HandlePrimarySurfaceLostRefresh();
         }
+        if (g_runtime.app_active) {
+            refresh_window_rects(window);
+            refresh_main_window_cursor_confinement(window);
+        }
+        break;
+    case WM_ACTIVATE:
+        if (LOWORD(wparam) == WA_INACTIVE && lparam != 0 &&
+            GetParent(reinterpret_cast<HWND>(lparam)) == window) {
+            char class_name[32]{};
+            GetClassNameA(reinterpret_cast<HWND>(lparam), class_name,
+                static_cast<int>(sizeof(class_name)));
+            if (std::strcmp(class_name, "#32770") == 0) {
+                // cnc-ddraw releases its mouse lock while a native modal
+                // dialog owned by the game is active.
+                release_main_window_cursor_confinement();
+            }
+        }
+        break;
+    case WM_SETFOCUS:
+        refresh_window_rects(window);
+        refresh_main_window_cursor_confinement(window);
+        break;
+    case WM_DISPLAYCHANGE:
+        refresh_window_rects(window);
+        refresh_main_window_cursor_confinement(window);
         break;
     case WM_SETCURSOR:
-        SetCursor(LoadCursorA(nullptr, IDC_ARROW));
+        if (reinterpret_cast<HWND>(wparam) == window &&
+            (HIWORD(lparam) == WM_MOUSEMOVE ||
+             HIWORD(lparam) == WM_LBUTTONDOWN)) {
+            switch (LOWORD(lparam)) {
+            case HTCAPTION:
+            case HTMINBUTTON:
+            case HTMAXBUTTON:
+            case HTCLOSE:
+            case HTBOTTOM:
+            case HTBOTTOMLEFT:
+            case HTBOTTOMRIGHT:
+            case HTLEFT:
+            case HTRIGHT:
+            case HTTOP:
+            case HTTOPLEFT:
+            case HTTOPRIGHT:
+                // cnc-ddraw delegates non-client cursor shapes to Windows.
+                return DefWindowProcA(window, message, wparam, lparam);
+            case HTCLIENT:
+                if (!g_runtime.cursor_confined) {
+                    SetCursor(LoadCursorA(nullptr, IDC_ARROW));
+                    return TRUE;
+                }
+                break;
+            default:
+                break;
+            }
+        }
+        // The wrapped original WndProc calls SetCursor(NULL).  cnc-ddraw only
+        // substitutes the arrow in the unlocked HTCLIENT case above.
+        SetCursor(nullptr);
         return TRUE;
     case WM_GETMINMAXINFO:
         if (lparam != 0 && !g_runtime.presentation_resizable) {
@@ -30478,8 +30833,19 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
         return 0;
     case WM_DESTROY:
         if (window == g_runtime.main_window) {
+            shutdown_main_window_cursor_handling();
             KillTimer(window, kTitleMenuAnimationTimerId);
             PostQuitMessage(0);
+        }
+        break;
+    case WM_PARENTNOTIFY:
+        if (g_runtime.cursor_handling_initialized &&
+            !g_runtime.cursor_confined &&
+            (LOWORD(wparam) == WM_LBUTTONDOWN ||
+             LOWORD(wparam) == WM_RBUTTONDOWN ||
+             LOWORD(wparam) == WM_MBUTTONDOWN ||
+             LOWORD(wparam) == WM_XBUTTONDOWN)) {
+            reacquire_main_window_cursor_from_button_up(window, lparam);
         }
         break;
     case WM_USER + 1:
@@ -31000,6 +31366,21 @@ POINT RankerCenteredFrontendWindowOrigin(int width, int height) {
         rect.top + (rect_height - height) / 2};
 }
 
+POINT RankerCenteredChildFrontendWindowOrigin(
+    HWND parent, int width, int height) {
+    RECT client{};
+    if (parent == nullptr || !IsWindow(parent) ||
+        !GetClientRect(parent, &client)) {
+        return POINT{0, 0};
+    }
+
+    const int client_width = client.right - client.left;
+    const int client_height = client.bottom - client.top;
+    return POINT{
+        client.left + std::max(0, (client_width - width) / 2),
+        client.top + std::max(0, (client_height - height) / 2)};
+}
+
 const std::vector<std::string>& FrontendNetworkChatMessages() {
     return g_runtime.frontend_network_chat_messages;
 }
@@ -31191,11 +31572,13 @@ bool InitDirectXSubsystems() {
     }
 
     g_runtime.directx_initialized = true;
+    initialize_main_window_cursor_handling(g_runtime.main_window);
     append_startup_log("directx init ok");
     return true;
 }
 
 void ShutdownDirectXSubsystems() {
+    shutdown_main_window_cursor_handling();
     gameplay_script_dialog_state().effect_playback_enabled = false;
     ShutdownPrimaryMilesMusicPolicy();
     ShutdownAsyncComSubsystem(&g_runtime.async_com);
@@ -31444,6 +31827,7 @@ int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_c
         SetFocus(g_runtime.main_window);
     }
     refresh_window_rects(g_runtime.main_window);
+    refresh_main_window_cursor_confinement(g_runtime.main_window);
 
     const bool mouse_present = GetSystemMetrics(SM_MOUSEPRESENT) != 0;
     if (!mouse_present) {
@@ -31487,6 +31871,17 @@ int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_c
     if (!priority_raised) {
         ShutdownDirectXSubsystems();
         return 0;
+    }
+
+    // Ranker_WinMain 0x00407788..0x004077bc calls SetCursorPos with the
+    // logical DirectDraw surface center after worker/priority startup.  The
+    // 32-bit wrapper scales that call into the presentation client.
+    if (g_runtime.cursor_confined) {
+        const GameplayLogicalSurfaceSize logical =
+            resolve_active_gameplay_logical_surface_size();
+        set_main_window_system_cursor_logical_position(g_runtime.main_window,
+            static_cast<i32>(logical.width / 2),
+            static_cast<i32>(logical.height / 2));
     }
 
     char startup_text[768]{};

@@ -730,7 +730,11 @@ bool CreateIpxLobbyWindow(IpxLobbyState& state, HWND parent, HINSTANCE instance,
     }
 
     const IpxLobbyLayoutRect window_rect = layout_at(layout.table, 0);
-    const POINT origin = IsWindow(parent) ? POINT{0, 0} : RankerFrontendWindowOrigin();
+    const POINT origin = IsWindow(parent)
+        ? RankerCenteredChildFrontendWindowOrigin(parent,
+              window_rect.width, window_rect.height)
+        : RankerCenteredFrontendWindowOrigin(
+              window_rect.width, window_rect.height);
     const DWORD style = IsWindow(parent) ? kWindowStyleWindowed : kWindowStyleFullscreen;
     state.window = CreateWindowExA(WS_EX_CONTROLPARENT, "IPX Game", "IPX Game",
         style, origin.x, origin.y, window_rect.width, window_rect.height,

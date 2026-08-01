@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <iterator>
 #include <limits>
 
 namespace ranker {
@@ -291,6 +292,12 @@ const UnitMovementDefinition* find_effect_unit_definition(
 }
 
 void return_effect_target_to_idle(UnitMovementUnit& target) {
+    // Lifecycle-list raw +0x64 is the decay/growth work counter, while the
+    // same physical word becomes the animation frame again as soon as a
+    // Resurrect/Rebirth/Bonefighter initializer reactivates the corpse.
+    // The typed runtime splits those views, so restore the active-list alias
+    // before HandleUnitReturnToIdleState applies its frame-period clamp.
+    target.animation_frame = target.work_timer;
     if (target.command_state == kUnitStateRuntimeIdleAcquire) {
         return;
     }
@@ -376,6 +383,17 @@ void append_effect_event(UnitEffectRuntimeState& state, UnitEffectEventKind kind
             event.x = sound_spatial_anchor->x;
             event.y = sound_spatial_anchor->y;
         }
+    }
+    const bool simulation_event =
+        kind == UnitEffectEventKind::impact ||
+        kind == UnitEffectEventKind::target_lockout ||
+        kind == UnitEffectEventKind::source_command_dead;
+    if (simulation_event && state.callbacks.apply_simulation_event != nullptr &&
+        state.callbacks.apply_simulation_event(state, event)) {
+        // The stock handlers call damage/state mutation inline while walking
+        // the effect list.  Let the gameplay runtime consume those events at
+        // the exact call site; queueing remains the lifecycle-less fallback.
+        return;
     }
     state.events.push_back(event);
 }
@@ -718,6 +736,25 @@ void remove_effect_slot_index(std::vector<std::size_t>& indices,
     indices.erase(std::remove(indices.begin(), indices.end(), index), indices.end());
 }
 
+std::size_t next_effect_list_index(
+    const UnitEffectRuntimeState& state, std::size_t index) {
+    const auto next_in = [index](const std::vector<std::size_t>& indices) {
+        const auto current = std::find(indices.begin(), indices.end(), index);
+        if (current == indices.end()) {
+            return invalid_effect_slot_index();
+        }
+        const auto next = std::next(current);
+        return next != indices.end() ? *next : invalid_effect_slot_index();
+    };
+
+    const std::size_t active_next = next_in(state.active_effect_indices);
+    if (active_next != invalid_effect_slot_index() ||
+        has_effect_slot_index(state.active_effect_indices, index)) {
+        return active_next;
+    }
+    return next_in(state.free_effect_indices);
+}
+
 void ensure_effect_slot_pool_initialized(UnitEffectRuntimeState& state) {
     if (!state.effect_slots.empty() || !state.free_effect_indices.empty() ||
         state.effect_slot_capacity == 0) {
@@ -732,9 +769,10 @@ void ensure_effect_slot_pool_initialized(UnitEffectRuntimeState& state) {
 
 void finish_effect(UnitEffectRuntimeState& state, UnitEffectRuntime& effect) {
     append_effect_event(state, UnitEffectEventKind::finished, effect);
+    // FUN_004f34db only relinks the raw 0xa8-byte node.  In particular, the
+    // final +0x0c tick and +0x10 frame remain observable in the free list and
+    // are overwritten only by an initializer that explicitly writes them.
     effect.active = false;
-    effect.tick = 0;
-    effect.frame = 0;
 }
 
 bool effect_inside_viewport(const UnitEffectRuntimeState& state,
@@ -1167,6 +1205,10 @@ void apply_unit_effect_area_stun_side_effect(UnitMovementUnit& unit) {
     unit.command_value = 0;
     unit.distance_check_mode = 0;
     unit.work_timer = 0;
+    // FUN_004ef3cb writes zero to raw unit +0x64 after forcing state 0x6c.
+    // Active units expose that word as animation_frame; work_timer is the
+    // typed lifecycle-list view of the same original storage.
+    unit.animation_frame = 0;
     unit.command_lockout_ticks = 0;
     unit.command_entry_lockout_ticks = 0;
     unit.animation_timer = 0;
@@ -2511,17 +2553,19 @@ void TickUnitEffectRenderClass1TargetCenterImpact(UnitEffectRuntimeState& state,
         return;
     }
     UnitMovementUnit* target = find_effect_unit(state, effect.linked_unit_id);
-    if (target == nullptr) {
-        ReleaseUnitEffectSlot(state, effect);
-        return;
+    if (target != nullptr) {
+        if (target->definition.render_class == 1) {
+            effect.x = action_center_x(*target);
+            effect.y = action_center_y(*target);
+        } else {
+            effect.x = target->x;
+            effect.y = target->y;
+        }
     }
-    if (target->definition.render_class == 1) {
-        effect.x = action_center_x(*target);
-        effect.y = action_center_y(*target);
-    } else {
-        effect.x = target->x;
-        effect.y = target->y;
-    }
+    // The original action-1 handler keeps the raw linked-slot payload and
+    // reaches the ordinary frame/tick tail even when that unit has just left
+    // the active lifecycle list.  A missing typed reference therefore keeps
+    // the last point and natural lifetime instead of changing free-list order.
     TickUnitEffectGenericCommandImpactTail(state, effect);
 }
 
@@ -2834,10 +2878,13 @@ void TickUnitEffectFirstImpactFrameMarksSourceDead(UnitEffectRuntimeState& state
         effect.frame == definition->impact_frames.front();
     DispatchUnitEffectGenericCommandState(state, effect);
     if (mark_source_dead) {
-        if (UnitMovementUnit* source =
-                find_effect_unit(state, effect.source_unit_id)) {
-            source->command_state |= kUnitCommandDead;
-        }
+        // Action 0x0c's original handler at 0x004ee2f0 calls the complete
+        // generic impact path (0x004ef14a) before MarkUnitCommandDeadEntry
+        // (0x00402603).  Publish the raw +0x60 dead-bit write after every
+        // impact emitted above.  The gameplay callback consumes both event
+        // kinds inline; lifecycle-less tests retain their order in the queue.
+        append_effect_event(
+            state, UnitEffectEventKind::source_command_dead, effect);
     }
 }
 
@@ -2875,8 +2922,15 @@ void TickUnitEffectRelocateSourceOnFirstImpact(UnitEffectRuntimeState& state,
         ClearUnitFootprintOccupancyBits(lifecycle, *source);
         source->x = target_x;
         source->y = target_y;
-        source->destination_x = target_x;
-        source->destination_y = target_y;
+        // Teleport's original impact writes the exact relocated point to raw
+        // +0xc0/+0xc4 and records action four at raw +0x74.  These are the
+        // current-cell and previous-command mirrors, not +0x78/+0x7c's
+        // destination pair.  Leaving the old cell while filling destination
+        // makes the P2P checksum diverge on the impact frame even though the
+        // rendered unit appears at the right point.
+        source->current_cell_x = target_x;
+        source->current_cell_y = target_y;
+        source->previous_command_state = 4;
         source->command_flags &= ~0x1000u;
         effect.x = target_x;
         effect.y = target_y;
@@ -3081,6 +3135,18 @@ void TickUnitEffectImpactCreatePlacedUnit(UnitEffectRuntimeState& state,
                         ? source->max_secondary_value
                         : static_cast<u32>(restored);
             } else {
+                // Action 0x17's original impact handler calls
+                // HandleUnitCreationRegisterFootprint (0x004ce42d)
+                // immediately after InitializePlacedUnitFromMapSlot succeeds.
+                // Besides relinking/registering the new hurdle, that helper
+                // copies current-cell +0xc0/+0xc4 to next-path +0xc8/+0xcc.
+                // Leaving the callback's recycled-slot residue there makes
+                // the first same-frame P2P checksum differ even though both
+                // peers created the same type-125 unit at the same point.
+                if (state.lifecycle_context != nullptr) {
+                    HandleUnitCreationRegisterFootprint(
+                        *state.lifecycle_context, *created);
+                }
                 created->max_secondary_value =
                     definition->action_create_unit_secondary_value;
                 created->secondary_value =
@@ -3245,6 +3311,15 @@ void TickUnitEffectPeriodicType31HealAura(UnitEffectRuntimeState& state,
                         production_state_or_empty(state), unit, 1);
                 }
             });
+        }
+        // Live original/rebuild P2P state shows Recharge's slot disappearing
+        // when raw +0x10 reaches JW2_11 +0x1ec.  The typed runtime has no
+        // separate external pool-lifetime pass, while the animation tick below
+        // loops between +0x1f0 and +0x1f4.  Enforce the observed lifetime here
+        // or the reconstructed slot remains active forever after frame 170.
+        if (effect.frame >= definition->action_aura_frame_limit) {
+            ReleaseUnitEffectSlot(state, effect);
+            return;
         }
     }
 
@@ -3943,7 +4018,12 @@ void TickUnitEffectAreaStunFrames(UnitEffectRuntimeState& state, UnitEffectRunti
         ReleaseUnitEffectSlot(state, effect);
         return;
     }
-    const u32 radius = definition->impact_radius;
+    // Jump Portal / Ranger action 5 reads the action row's raw +0x1f8
+    // (DAT_0120df84 in the stock catalog) as its repeated stun radius.
+    // Raw +0x234 is the unrelated one-pixel projectile impact radius; using
+    // it advanced the visual effect normally but skipped the target state
+    // mutation, splitting the P2P checksum on the first four-frame pulse.
+    const u32 radius = definition->action_area_damage_radius;
     if ((effect.frame & 3u) == 0) {
         for_each_effect_unit_in_active_order(state, [&](UnitMovementUnit& unit) {
             if (!unit_effect_area_stun_candidate_allowed(effect, unit, radius)) {
@@ -4105,6 +4185,50 @@ bool StartSelectedUnitAttachmentEffect(UnitEffectRuntimeState& state,
         *created_effect = effect;
     }
     return true;
+}
+
+bool StartAvailableSelectedUnitActionAttachmentEffect(
+    UnitEffectRuntimeState& state, u32 action_id, UnitMovementUnit& source,
+    UnitMovementUnit* attachment, UnitEffectRuntime** created_effect) {
+    constexpr u32 kSelectedActionEffectBase = 0x3d;
+    if (action_id >= 0x2e) {
+        return false;
+    }
+
+    const UnitEffectDefinition* definition =
+        find_effect_definition(state, kSelectedActionEffectBase + action_id);
+    if (definition == nullptr) {
+        return false;
+    }
+
+    // FUN_004ef6cd first lets an equipped one-shot whose JW2_10 +0x260
+    // attachment id matches the action bypass the ordinary resource gate.
+    // Otherwise equality is accepted for both raw unit +0x24/+0x18.  This
+    // helper checks availability only; its caller owns any later debit.
+    bool attached_item = false;
+    if (state.equipment_catalog != nullptr) {
+        for (u32 item_id : source.item_slots) {
+            if (item_id == 0) {
+                continue;
+            }
+            const UnitEquipmentEffectDefinition* item =
+                FindUnitEquipmentEffect(*state.equipment_catalog, item_id);
+            if (item != nullptr &&
+                item->attachment_definition_id == action_id) {
+                attached_item = true;
+                break;
+            }
+        }
+    }
+    if (!attached_item &&
+        (source.secondary_value < definition->action_secondary_cost ||
+            source.health < definition->action_source_health_cost)) {
+        return false;
+    }
+
+    return StartSelectedUnitAttachmentEffect(state,
+        kSelectedActionEffectBase + action_id, source, attachment,
+        created_effect);
 }
 
 bool DispatchSelectedUnitScatterActionEffect(UnitEffectRuntimeState& state,
@@ -4721,17 +4845,24 @@ void ConfigureUnitEffectRenderPalette(UnitEffectRuntimeState& state, bool use_rg
 }
 
 void TickUnitEffectRuntimeList(UnitEffectRuntimeState& state) {
-    const std::vector<std::size_t> active_indices = state.active_effect_indices;
-
-    for (std::size_t index : active_indices) {
+    // FUN_004f2bd0 captures only the current raw node's +0xa4 next link before
+    // dispatch.  It does not snapshot the complete active list.  A handler can
+    // move that cached-next node to the free list; when the loop reaches the
+    // cached pointer, its now-updated +0xa4 link continues through the free
+    // chain.  Following the entry-time active vector instead skipped that tail
+    // and also visited nodes which the original had already unlinked from the
+    // remaining chain, eventually changing the physical 0xa8-byte slot chosen
+    // by later effects and breaking the P2P effect checksum.
+    std::size_t index = state.active_effect_indices.empty()
+        ? invalid_effect_slot_index()
+        : state.active_effect_indices.front();
+    while (index != invalid_effect_slot_index()) {
         if (index >= state.effect_slots.size()) {
-            continue;
+            return;
         }
+        const std::size_t next_index = next_effect_list_index(state, index);
         UnitEffectRuntime& effect = state.effect_slots[index];
-        if (!effect.active) {
-            ReleaseUnitEffectSlot(state, effect);
-            continue;
-        }
+        const bool owned_active_node_at_dispatch = effect.active;
 
         if (effect.effect_id < 0x3d) {
             TickUnitEffectRuntime(state, effect);
@@ -4739,9 +4870,14 @@ void TickUnitEffectRuntimeList(UnitEffectRuntimeState& state) {
             DispatchUnitActionEffectCommand(state, effect, effect.effect_id - 0x3d);
         }
 
-        if (!effect.active) {
+        // `finish_effect` uses the typed active flag and relies on this drain
+        // to perform FUN_004f34db's list move.  Do not drain an entry that an
+        // earlier handler already moved to the free list: the original outer
+        // loop only dispatches its cached pointer and performs no second unlink.
+        if (owned_active_node_at_dispatch && !effect.active) {
             ReleaseUnitEffectSlot(state, effect);
         }
+        index = next_index;
     }
 }
 

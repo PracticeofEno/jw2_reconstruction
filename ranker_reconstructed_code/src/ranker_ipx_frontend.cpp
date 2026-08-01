@@ -476,7 +476,11 @@ bool CreateIpxFrontendWindow(IpxFrontendState& state, HWND parent,
     }
 
     const IpxFrontendLayoutRect window_rect = layout_at(layout.table, 0);
-    const POINT origin = RankerFrontendWindowOrigin();
+    const POINT origin = IsWindow(parent)
+        ? RankerCenteredChildFrontendWindowOrigin(parent,
+              window_rect.width, window_rect.height)
+        : RankerCenteredFrontendWindowOrigin(
+              window_rect.width, window_rect.height);
     const DWORD style = IsWindow(parent) ? kWindowStyleWindowed : kWindowStyleFullscreen;
     state.window = CreateWindowExA(WS_EX_CONTROLPARENT, "IPX", "IPX", style,
         origin.x, origin.y, window_rect.width, window_rect.height,

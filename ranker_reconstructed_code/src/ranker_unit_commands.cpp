@@ -2667,7 +2667,13 @@ void DispatchUnitCommandStateEntry(UnitCommandContext& context,
     unit.command_flags &= ~0x20u;
     const u32 state = command_state & kUnitCommandStateMask;
     if ((command_state & kUnitCommandDeferredEntryFlag) != 0) {
+        // Original DispatchUnitCommandStateEntry stores the selector in raw
+        // +0x74 before entering state 0x64.  That union word remains the
+        // ability id throughout 0x64..0x66 and participates in the P2P
+        // checksum; keeping it only in the typed ability_id split every
+        // special action from the original peer.
         unit.ability_id = state;
+        unit.previous_command_state = state;
         unit.command_state = kUnitStateSpecialAbilityStart;
         return;
     }

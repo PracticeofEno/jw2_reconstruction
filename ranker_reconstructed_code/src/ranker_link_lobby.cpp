@@ -630,9 +630,14 @@ std::string link_lobby_map_info_text(const LinkLobbyState& state) {
 }
 
 int link_lobby_seed_map_scroll_value(const LinkLobbyState& state) {
-    const u32 value =
+    const u32 speed_index =
         read_le32(state.session_seed_payload.data() + kLinkLobbySessionSeedMapScrollOffset);
-    return static_cast<int>(std::min<u32>(value, 0x0f));
+    // This horizontal control is labelled "Game speed" in the lobby even
+    // though its reconstructed names still call it map selection.  The
+    // serialized value is a frame-interval index (0 is the fastest), whereas
+    // the legacy scroll runs in the opposite direction (15 is the rightmost,
+    // fastest position).  A newly created P2P room seeds speed index zero.
+    return 0x0f - static_cast<int>(std::min<u32>(speed_index, 0x0f));
 }
 
 bool link_lobby_session_seed_present(const LinkLobbyState& state) {
@@ -6710,9 +6715,13 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
     // The original fullscreen frontend path creates this lobby as an owned
     // top-level popup. Parent validity is not the legacy windowed-mode flag;
     // using it here incorrectly turned every reconstructed lobby into a child
-    // window. Keep the observed popup style and legacy coordinates.
+    // window. Keep the observed popup style, but center it over the
+    // reconstructed main-window client instead of placing it at desktop 0,0.
+    const POINT origin = RankerCenteredFrontendWindowOrigin(
+        window_rect.width, window_rect.height);
     state.window = CreateWindowExA(WS_EX_CONTROLPARENT, "Link", "Link",
-        kWindowStyleFullscreen, 0, 0, window_rect.width, window_rect.height,
+        kWindowStyleFullscreen, origin.x, origin.y,
+        window_rect.width, window_rect.height,
         parent, nullptr, instance, nullptr);
     if (state.window == nullptr) {
         release_resources(state);

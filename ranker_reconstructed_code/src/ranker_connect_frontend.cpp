@@ -645,7 +645,11 @@ bool CreateConnectFrontendWindow(ConnectFrontendState& state, HWND parent,
     }
 
     state.window_rect = layout_at(layout.table, 0);
-    const POINT origin = IsWindow(parent) ? POINT{0, 0} : RankerFrontendWindowOrigin();
+    const POINT origin = IsWindow(parent)
+        ? RankerCenteredChildFrontendWindowOrigin(parent,
+              state.window_rect.width, state.window_rect.height)
+        : RankerCenteredFrontendWindowOrigin(
+              state.window_rect.width, state.window_rect.height);
     const DWORD style = IsWindow(parent) ? kWindowStyleWindowed : kWindowStyleFullscreen;
     state.window = CreateWindowExA(WS_EX_CONTROLPARENT, "Connect", "Connect", style,
         origin.x, origin.y, state.window_rect.width, state.window_rect.height, parent,

@@ -15,6 +15,13 @@ namespace ranker {
 constexpr u32 kLegacySocketRecordCount = 10;
 constexpr u32 kLegacySocketQueueBytes = 0x4000;
 constexpr u32 kLegacyUdpReceiveQueueBytes = 0x10000;
+// Keep mode-1 batches below the path-MTU range while retaining the original
+// 0x24-byte reliable-packet boundary.  The socket's SO_MAX_MSG_SIZE is usually
+// about 64 KiB, which otherwise turns a catch-up resend into many IP fragments.
+constexpr u32 kLegacyUdpSafePayloadBytes = 0x558; // 38 * 0x24 = 1368
+static_assert(kLegacyUdpSafePayloadBytes % 0x24 == 0);
+constexpr u32 kLegacyUdpSendAttemptCount = 8;
+constexpr u32 kLegacyUdpSendRetryDelayMs = 1;
 constexpr u32 kLegacyAsyncTcpQueueBytes = 0x4000;
 constexpr u32 kLegacyAsyncTcpLocaleRequestBytes = 0x91;
 

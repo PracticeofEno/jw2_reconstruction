@@ -65,10 +65,14 @@ void reset_units_for_session_runtime(GameplaySessionRuntimeResetState& state) {
     UnitMovementContext& movement = *state.lifecycle->movement;
     const std::vector<UnitMovementUnit*> active_units = movement.active_units;
     for (UnitMovementUnit* unit : active_units) {
-        if (unit == nullptr || !unit->active) {
+        if (unit == nullptr) {
             continue;
         }
 
+        // FUN_00426770 reads raw active-next before removal/reset work.  The
+        // copied vector is that cached chain: a prior removal may change the
+        // node's current membership, but the original still visits its saved
+        // storage slot during this pass.
         const bool owner_scoped = unit->owner_id < kPlayerSlotCount;
         bool remove_unit = false;
         if (state.session_mode == 5) {

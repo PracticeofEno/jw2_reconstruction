@@ -411,7 +411,17 @@ SOCKET StartLegacyUdpSocket(const char* bind_address, u16 port) {
     if (udp_payload_limit > 0x20u) {
         udp_payload_limit -= 0x20u;
     }
-    g_network_state.udp_payload_limit = udp_payload_limit;
+    // SO_MAX_MSG_SIZE reports the largest legal UDP message (normally close
+    // to 64 KiB), not a size that can cross the Internet without IP
+    // fragmentation.  Reliable mode-1 catch-up ranges can grow large after a
+    // short stall; sending the whole range at that limit makes one lost IP
+    // fragment discard dozens of otherwise recoverable 0x24-byte packets.
+    // Datagram boundaries are not semantic to the receiver, so split at a
+    // conservative packet-aligned size instead.
+    g_network_state.udp_payload_limit =
+        udp_payload_limit == 0 ?
+        kLegacyUdpSafePayloadBytes :
+        std::min(udp_payload_limit, kLegacyUdpSafePayloadBytes);
 
     u_long nonblocking = 1;
     if (ioctlsocket(g_network_state.udp_socket, FIONBIO, &nonblocking) ==
@@ -515,12 +525,29 @@ bool SendLegacyUdpChunks(u32 byte_count, const void* data,
             send_bytes = remaining;
         }
 
-        last_result = sendto(g_network_state.udp_socket,
-            reinterpret_cast<const char*>(cursor), static_cast<int>(send_bytes), 0,
-            reinterpret_cast<const sockaddr*>(&target_address), sizeof(target_address));
-        if (last_result == SOCKET_ERROR) {
+        u32 attempt = 0;
+        for (;;) {
+            last_result = sendto(g_network_state.udp_socket,
+                reinterpret_cast<const char*>(cursor), static_cast<int>(send_bytes), 0,
+                reinterpret_cast<const sockaddr*>(&target_address),
+                sizeof(target_address));
+            if (last_result != SOCKET_ERROR) {
+                break;
+            }
+
             const int error = WSAGetLastError();
-            return error == WSAEWOULDBLOCK;
+            const bool transient =
+                error == WSAEWOULDBLOCK || error == WSAENOBUFS;
+            ++attempt;
+            if (!transient || attempt >= kLegacyUdpSendAttemptCount) {
+                return false;
+            }
+
+            // A nonblocking UDP socket can briefly reject a burst while its
+            // kernel send queue drains.  Returning success here discarded this
+            // chunk (and every later chunk) even though the reliable layer
+            // advanced as if the range had been transmitted.
+            Sleep(kLegacyUdpSendRetryDelayMs);
         }
 
         remaining -= send_bytes;

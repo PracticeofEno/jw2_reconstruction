@@ -33,6 +33,7 @@ enum class UnitActionTickCode : u32 {
 
 struct UnitActionContext;
 struct UnitActionTargetValidation;
+struct UnitEffectEvent;
 struct UnitEffectRuntime;
 struct UnitEffectRuntimeState;
 
@@ -61,6 +62,8 @@ using UnitEffectCreateUnitCallback = UnitMovementUnit* (*)(
 using UnitEffectImpactDamageCallback = u32 (*)(
     UnitEffectRuntimeState& state, const UnitEffectRuntime& effect,
     UnitMovementUnit* source, UnitMovementUnit& target);
+using UnitEffectSimulationEventCallback = bool (*)(
+    UnitEffectRuntimeState& state, const UnitEffectEvent& event);
 
 struct UnitActionCallbacks {
     UnitActionCanTargetCallback can_target = nullptr;
@@ -88,6 +91,7 @@ struct UnitEffectRuntimeCallbacks {
     UnitEffectSelectedProductionGateCallback selected_production_gate = nullptr;
     UnitEffectCreateUnitCallback create_unit = nullptr;
     UnitEffectImpactDamageCallback calculate_impact_damage = nullptr;
+    UnitEffectSimulationEventCallback apply_simulation_event = nullptr;
 };
 
 struct UnitActionTargetValidation {
@@ -135,6 +139,7 @@ enum class UnitEffectEventKind : u32 {
     refunded = 4,
     finished = 5,
     target_lockout = 6,
+    source_command_dead = 7,
 };
 
 enum class UnitEffectSoundSpatialKind : u32 {
@@ -359,6 +364,10 @@ bool BeginSelectedUnitAttachmentEffect(UnitEffectRuntimeState& state,
     UnitMovementUnit* attachment);
 bool StartSelectedUnitAttachmentEffect(UnitEffectRuntimeState& state,
     u32 effect_id, UnitMovementUnit& source, UnitMovementUnit* attachment,
+    UnitEffectRuntime** created_effect = nullptr);
+bool StartAvailableSelectedUnitActionAttachmentEffect(
+    UnitEffectRuntimeState& state, u32 action_id, UnitMovementUnit& source,
+    UnitMovementUnit* attachment,
     UnitEffectRuntime** created_effect = nullptr);
 bool DispatchSelectedUnitActionEffect(UnitEffectRuntimeState& state,
     UnitEffectRuntime& effect, u32 action_id, UnitMovementUnit& source,

@@ -686,9 +686,16 @@ void HandleUnitSimulationListTick(UnitLifecycleContext& context) {
 
     const std::vector<UnitMovementUnit*> active_units = movement.active_units;
     for (UnitMovementUnit* unit : active_units) {
-        if (unit == nullptr || !unit->active) {
+        if (unit == nullptr) {
             continue;
         }
+        // Original 0x004cebb9 pushes raw active-next before dispatch and pops
+        // that saved pointer afterwards.  It does not re-check whether an
+        // earlier unit's handler moved the saved-next node to lifecycle/free.
+        // The frame-start snapshot models that cached pointer, so dispatch
+        // every snapshotted storage slot once even if its membership changed
+        // meanwhile.  Skipping !active here lost one original tick and could
+        // shift command/RNG state permanently.
         if (context.callbacks.on_active_unit_runtime_dispatch != nullptr) {
             context.callbacks.on_active_unit_runtime_dispatch(context, *unit);
             continue;

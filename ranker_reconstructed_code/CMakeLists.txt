@@ -859,6 +859,43 @@ if (RANKER_BUILD_REGRESSION_TESTS)
         COMMAND movement_modifier_command_flag_regression
     )
 
+    add_executable(unit_effect_intrusive_iteration_regression
+        tests/unit_effect_intrusive_iteration_regression.cpp
+        src/ranker_production_orders.cpp
+        src/ranker_unit_commands.cpp
+        src/ranker_unit_target_helpers.cpp
+        src/ranker_unit_damage.cpp
+        src/ranker_unit_equipment.cpp
+        src/ranker_unit_action.cpp
+        src/ranker_unit_movement.cpp
+        src/ranker_unit_spatial_index.cpp
+        src/ranker_unit_lifecycle.cpp
+        src/ranker_gameplay_visibility.cpp
+        src/ranker_map_effects.cpp
+    )
+    target_include_directories(unit_effect_intrusive_iteration_regression PRIVATE
+        include
+    )
+    set_property(TARGET unit_effect_intrusive_iteration_regression PROPERTY
+        INTERPROCEDURAL_OPTIMIZATION TRUE
+    )
+    if (MSVC)
+        target_compile_options(unit_effect_intrusive_iteration_regression PRIVATE /Gy)
+        target_link_options(unit_effect_intrusive_iteration_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(unit_effect_intrusive_iteration_regression PRIVATE
+            -O1
+            -ffunction-sections
+            -fdata-sections
+        )
+        target_link_options(unit_effect_intrusive_iteration_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME unit_effect_intrusive_iteration_regression
+        COMMAND unit_effect_intrusive_iteration_regression
+    )
+
     add_executable(scenario_serialized_duplicate_regression
         tests/scenario_serialized_duplicate_regression.cpp
     )

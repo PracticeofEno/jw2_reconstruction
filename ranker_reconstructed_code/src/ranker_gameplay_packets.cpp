@@ -820,26 +820,28 @@ void apply_special_order_flag(Mode1GameplayUnitPacketState& unit,
     }
 }
 
-void handle_basic_unit_order_with_command(const Mode1ReliablePacket& packet,
-    u32 command, u32 prefix) {
+void handle_unit_order_with_command(const Mode1ReliablePacket& packet,
+    u32 command, u32 prefix, bool apply_basic_special_flags) {
     const PacketFields fields = packet_fields(packet);
     auto& unit = unit_state_for(fields.unit_offset, fields.channel);
 
-    switch (command) {
-    case 0x12:
-        apply_special_order_flag(unit, fields, command, 0x00004000);
-        return;
-    case 0x13:
-        apply_special_order_flag(unit, fields, command, 0x00008000);
-        return;
-    case 0x14:
-        apply_special_order_flag(unit, fields, command, 0x00010000);
-        return;
-    case 0x15:
-        apply_special_order_flag(unit, fields, command, 0x00020000);
-        return;
-    default:
-        break;
+    if (apply_basic_special_flags) {
+        switch (command) {
+        case 0x12:
+            apply_special_order_flag(unit, fields, command, 0x00004000);
+            return;
+        case 0x13:
+            apply_special_order_flag(unit, fields, command, 0x00008000);
+            return;
+        case 0x14:
+            apply_special_order_flag(unit, fields, command, 0x00010000);
+            return;
+        case 0x15:
+            apply_special_order_flag(unit, fields, command, 0x00020000);
+            return;
+        default:
+            break;
+        }
     }
 
     const Mode1GameplayCommandRecord record =
@@ -855,6 +857,11 @@ void handle_basic_unit_order_with_command(const Mode1ReliablePacket& packet,
     if (push_deferred_command(unit, record)) {
         mirror_runtime_command_payload(fields.unit_offset, record, true, false);
     }
+}
+
+void handle_basic_unit_order_with_command(const Mode1ReliablePacket& packet,
+    u32 command, u32 prefix) {
+    handle_unit_order_with_command(packet, command, prefix, true);
 }
 
 void handle_basic_unit_order_packet(const Mode1ReliablePacket& packet, void*) {
@@ -973,7 +980,14 @@ void handle_extended_unit_order_packet(const Mode1ReliablePacket& packet, void*)
         return;
     }
 
-    handle_basic_unit_order_with_command(packet, fields.command, 0x21000000);
+    // Subtype 0x09 selectors 0x12/0x14/0x15 are ordinary deferred ability
+    // commands.  Only subtype 0x02 owns the similarly numbered 0x4000,
+    // 0x10000 and 0x20000 flag toggles.  Sharing its dispatcher silently
+    // converted Phantom action 0x12 and Dark-Elf actions 0x14/0x15 into the
+    // wrong packet family, so the original peer executed an effect while the
+    // reconstructed peer stayed idle.
+    handle_unit_order_with_command(
+        packet, fields.command, 0x21000000, false);
 }
 
 void handle_forced_order21_packet(const Mode1ReliablePacket& packet, void*) {

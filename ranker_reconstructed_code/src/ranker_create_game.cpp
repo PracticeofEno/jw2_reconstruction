@@ -1567,7 +1567,11 @@ bool CreateCreateGameWindow(CreateGameState& state, HWND parent, HINSTANCE insta
     state.server_use_map_counts = {};
 
     const CreateGameLayoutRect window_rect = layout_at(state, 0);
-    const POINT origin = parent != nullptr ? POINT{0, 0} : RankerFrontendWindowOrigin();
+    const POINT origin = IsWindow(parent)
+        ? RankerCenteredChildFrontendWindowOrigin(parent,
+              window_rect.width, window_rect.height)
+        : RankerCenteredFrontendWindowOrigin(
+              window_rect.width, window_rect.height);
     const DWORD style = parent != nullptr ? kWindowStyleWindowed : kWindowStyleFullscreen;
     state.window = CreateWindowExA(WS_EX_CONTROLPARENT, "Create Game",
         "Create Game", style, origin.x, origin.y, window_rect.width,

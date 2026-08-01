@@ -1246,7 +1246,11 @@ bool CreateP2PLobbyWindow(P2PLobbyState& state, HWND parent, HINSTANCE instance,
     }
 
     const P2PLobbyLayoutRect window_rect = layout_at(layout, 0);
-    const POINT origin = IsWindow(parent) ? POINT{0, 0} : RankerFrontendWindowOrigin();
+    const POINT origin = IsWindow(parent)
+        ? RankerCenteredChildFrontendWindowOrigin(parent,
+              window_rect.width, window_rect.height)
+        : RankerCenteredFrontendWindowOrigin(
+              window_rect.width, window_rect.height);
     const DWORD window_style =
         IsWindow(parent) ? kWindowStyleWindowed : kWindowStyleFullscreen;
     state.window = CreateWindowExA(WS_EX_CONTROLPARENT, "P2P", "P2P", window_style,
