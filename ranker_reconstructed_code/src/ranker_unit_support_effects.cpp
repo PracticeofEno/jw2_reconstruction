@@ -186,9 +186,16 @@ void ProcessUnitSecondaryTransferSupport(UnitSupportEffectContext& context,
     }
     PrepareUnitSecondaryTransferScan(context, source);
 
+    // Original 0x004c16b3 copies the source secondary value into the
+    // DAT_0072c390 scan budget and decrements only that scratch value while
+    // allocating action-0x2a attachments.  The live source/target resources
+    // are changed later by the attachment tick at 0x004ee184.  Debiting the
+    // source here as well makes dense groups pay twice and gives every target
+    // one extra point before the first effect tick.
+    u32 remaining_budget = source.secondary_value;
     bool transferred = false;
     UnitMovementUnit* current_target = nullptr;
-    while (source.secondary_value != 0) {
+    while (remaining_budget != 0) {
         UnitMovementUnit* target = FindNextSecondaryTransferTarget(
             context, source, current_target);
         if (target == nullptr) {
@@ -201,9 +208,10 @@ void ProcessUnitSecondaryTransferSupport(UnitSupportEffectContext& context,
         else {
             AddUnitSecondaryValueClampedToProductionEffect01(
                 production_state_or_empty(context), *target, 1);
+            --source.secondary_value;
         }
 
-        --source.secondary_value;
+        --remaining_budget;
         transferred = true;
         current_target = target;
     }

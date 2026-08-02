@@ -905,6 +905,7 @@ if (RANKER_BUILD_REGRESSION_TESTS)
     add_test(NAME scenario_serialized_duplicate_regression
         COMMAND scenario_serialized_duplicate_regression
     )
+
 endif()
 
 add_executable(ranker_rebuild WIN32
@@ -927,6 +928,7 @@ add_executable(ranker_rebuild WIN32
     src/ranker_resource_store.cpp
     src/ranker_replay.cpp
     src/ranker_replay_archive.cpp
+    src/ranker_p2p_flight_recorder.cpp
     src/ranker_player_slots.cpp
     src/ranker_dpg_archive.cpp
     src/ranker_owner_ai.cpp

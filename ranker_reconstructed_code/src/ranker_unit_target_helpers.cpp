@@ -67,6 +67,22 @@ UnitMovementPoint CalculateCurrentUnitCenterPoint(const UnitMovementUnit& unit) 
     return CalculateUnitCenterPoint(unit);
 }
 
+u32 CalculateUnitCenterToCenterDirection(const UnitMovementContext* movement,
+    const UnitMovementUnit& source, const UnitMovementUnit& target) {
+    const UnitMovementPoint source_center = CalculateUnitCenterPoint(source);
+    const UnitMovementPoint target_center = CalculateUnitCenterPoint(target);
+    if (movement != nullptr && movement->direction_lookup_8 != nullptr) {
+        return CalculatePointDirectionFromLookup(
+            source_center, target_center, *movement->direction_lookup_8);
+    }
+
+    UnitMovementUnit direction_source = source;
+    direction_source.x = source_center.x;
+    direction_source.y = source_center.y;
+    return CalculateUnitDirectionToPoint(
+        direction_source, target_center.x, target_center.y);
+}
+
 u32 CalculateUnitCenterDistance(const UnitMovementUnit& source,
     const UnitMovementUnit& target) {
     const UnitMovementPoint source_center = CalculateUnitCenterPoint(source);

@@ -1418,7 +1418,16 @@ void offset_spawn_target_by_interaction_bounds(UnitMovementUnit& unit,
 bool targeted_spawn_target_outside(UnitCommandContext& context,
     UnitMovementUnit& unit, UnitMovementUnit& target) {
     if (unit.type_id == kUnitTargetHelperSpecialSpawnType) {
-        const UnitMovementPoint center = CalculateUnitCenterPoint(target);
+        // FUN_004c33d2's type-0x10 branch (0x004c34c0..0x004c34ff) uses
+        // target x/y plus half of definition +0x378/+0x37c for the range
+        // decision.  Those are the interaction dimensions, not the visual
+        // centre bounds at +0x360..+0x36c.  Elf cooperative construction
+        // reaches this branch from states 0x7e/0x7f; using the visual centre
+        // can move one peer between approach and work one frame early.
+        const UnitMovementPoint center{
+            target.x + (target.definition.interaction_bounds_width >> 1),
+            target.y + (target.definition.interaction_bounds_height >> 1),
+        };
         unit.path_target_x = center.x;
         unit.path_target_y = center.y;
         return CheckUnitSpawnDistanceThreshold(
@@ -3983,8 +3992,13 @@ void StartUnitTargetProgressCommand(UnitCommandContext& context,
         path_to_current_target_center(context, unit);
         return;
     }
-    const UnitMovementPoint center = CalculateUnitCenterPoint(*target);
-    const u32 direction = CalculateUnitDirectionToPoint(unit, center.x, center.y);
+    // Original state 0x10 calls CalculateUnitCenterPathDistance at
+    // 0x004c9707.  That helper derives the direction from both objects'
+    // definition-adjusted centers.  Using the worker's raw x/y against only
+    // the target center changes a nearby builder's facing by one direction
+    // and immediately trips the P2P unit-identity checksum.
+    const u32 direction =
+        CalculateUnitCenterToCenterDirection(context.movement, unit, *target);
     if (direction != 0) {
         unit.direction = direction;
     }
@@ -4034,8 +4048,10 @@ void HandleUnitTargetProgressApproach(UnitCommandContext& context,
         return;
     }
     if (!CheckCurrentTargetOutsideExpandedFootprint(unit)) {
-        const UnitMovementPoint center = CalculateUnitCenterPoint(*target);
-        const u32 direction = CalculateUnitDirectionToPoint(unit, center.x, center.y);
+        // State 0x12 rejoins the same center-to-center facing path at
+        // 0x004c97e6..0x004c97f5 after the worker reaches the footprint.
+        const u32 direction =
+            CalculateUnitCenterToCenterDirection(context.movement, unit, *target);
         if (direction != 0) {
             unit.direction = direction;
         }

@@ -48,6 +48,7 @@
 #include "ranker_online_lobby.h"
 #include "ranker_owner_ai.h"
 #include "ranker_p2p_lobby.h"
+#include "ranker_p2p_flight_recorder.h"
 #include "ranker_player_profile.h"
 #include "ranker_production_orders.h"
 #include "ranker_reliable_packets.h"
@@ -13793,6 +13794,7 @@ void initialize_default_gameplay_sound_state() {
 }
 
 void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
+    ResetP2PFlightRecorder();
     const GameplayLogicalSurfaceSize surface =
         resolve_active_gameplay_logical_surface_size();
     // This callback is the last boundary before the first composite of a
@@ -14070,6 +14072,30 @@ bool default_gameplay_loop_frame_gate(GameplayLoopState& state) {
         PumpMode1ReliablePackets(
             g_runtime.generic_ai_profile_mode, scenario_ai_profile_override,
             state.current_tick_ms);
+    Mode1GameplayPacketDispatchState& packet_dispatch =
+        mode1_gameplay_packet_dispatch_state();
+    if (packet_dispatch.corrective_mismatch_detected &&
+        !p2p_flight_recorder_state().drop_capture_attempted) {
+        P2PSyncMismatchCaptureInfo mismatch{};
+        mismatch.detected_frame = packet_dispatch.last_corrective_frame;
+        mismatch.remote_channel = packet_dispatch.last_corrective_channel;
+        mismatch.sequence = packet_dispatch.last_corrective_sequence;
+        mismatch.local_checksum = packet_dispatch.last_corrective_local_value;
+        mismatch.remote_checksum = packet_dispatch.last_corrective_remote_value;
+        const bool saved = PersistP2PDropCapture(
+            mismatch, replay_recording_state());
+        const P2PFlightRecorderState& capture = p2p_flight_recorder_state();
+        append_startup_log(
+            "p2p-drop-capture: saved=%s replay=%s trace=%s frame=%lu channel=%lu sequence=%lu",
+            saved ? "yes" : "no",
+            capture.last_replay_path.empty() ? "(failed)" :
+                capture.last_replay_path.c_str(),
+            capture.last_trace_path.empty() ? "(failed)" :
+                capture.last_trace_path.c_str(),
+            static_cast<unsigned long>(mismatch.detected_frame),
+            static_cast<unsigned long>(mismatch.remote_channel),
+            static_cast<unsigned long>(mismatch.sequence));
+    }
     const bool gate_pass = gate_result != 0;
     if (gate_log_budget != 0) {
         --gate_log_budget;
@@ -14448,7 +14474,8 @@ void default_unit_action_target_lost(UnitActionContext&, UnitMovementUnit&) {}
 
 UnitMovementUnit* default_unit_action_find_replacement_target(
     UnitActionContext&, UnitMovementUnit& source) {
-    return default_unit_command_find_target(g_runtime.gameplay_unit_commands, source);
+    return default_unit_command_find_target(
+        g_runtime.gameplay_unit_commands, source);
 }
 
 bool default_unit_effect_selected_production_gate(UnitEffectRuntimeState&,
@@ -17228,13 +17255,28 @@ void refresh_default_unit_definition_runtime_fields(UnitMovementUnit& unit) {
     definition.action_effect_flags = read_runtime_catalog_u32(
         record.definition_bytes, kUnitDefinitionActionEffectFlagsOffset,
         definition.action_effect_flags);
+    // General target selection (for example 0x004c2f3c..0x004c2f43) reads
+    // DAT_0087c4b8 without scaling the resolved definition offset.
     definition.target_selection_priority = read_runtime_catalog_u32(
         record.definition_bytes, kUnitDefinitionTargetSelectionPriorityOffset,
         definition.target_selection_priority);
-    // FUN_004c1650 uses the same raw +0x1c0 value when choosing the lowest
-    // priority health-restore target.  The general targeter and support
-    // helper expose separate typed names, but the archive has one field.
-    definition.support_priority = definition.target_selection_priority;
+    // The Cure scan at 0x004c198e..0x004c199b is the exception: its final
+    // load applies a dword scale to the same 0x24bc-stride definition offset.
+    // It therefore selects raw +0x1c0 from record (unit_type * 4).  Type 18
+    // resolves to priority 40 while type 28 resolves to 60 in the original.
+    // Records beyond the 0xaa-entry table land in its zero-filled tail.
+    definition.support_priority = 0;
+    const u64 priority_definition_index = static_cast<u64>(unit.type_id) * 4u;
+    if (priority_definition_index < kUnitDefinitionResourceCount) {
+        const std::vector<u8>* priority_definition_bytes =
+            default_live_unit_definition_bytes(
+                static_cast<u32>(priority_definition_index));
+        if (priority_definition_bytes != nullptr) {
+            definition.support_priority = read_runtime_catalog_u32(
+                *priority_definition_bytes,
+                kUnitDefinitionTargetSelectionPriorityOffset, 0);
+        }
+    }
     definition.startup_secondary_step_x = read_runtime_catalog_i32(
         record.definition_bytes, kUnitDefinitionStartupSecondaryStepXOffset,
         definition.startup_secondary_step_x);
@@ -17644,6 +17686,14 @@ void append_default_unit_effect_definition_from_catalog_record(
     definition.start_sound_slot = auxiliary_effect_sound_slot_for_raw_ref(
         record, read_runtime_catalog_i32(record.definition_bytes,
             kAuxiliaryEffectStartSoundOffset, -1));
+    // JW2_12 low-id effects use the same raw +0x8b8 count/+0x8bc frame
+    // array as JW2_11 actions.  The original generic low-id impact dispatcher
+    // compares raw effect +0x0c against that array at
+    // 0x004eccbd..0x004ecd43 and applies damage again on every matching
+    // impact frame.  Loading the list only for JW2_11 dropped that second hit
+    // (for example type 8's effect 7 against type 24: 80 original damage
+    // versus 40 reconstructed damage).
+    append_jw211_effect_impact_frames(definition, record.definition_bytes);
     // Both JW2_12 low-id effects and JW2_11 action effects use raw +0x1fc.
     // The low-id active dispatcher divides +0x224 by eight when this is one,
     // and the renderer selects an eight-direction image row from the same bit.
@@ -17653,7 +17703,6 @@ void append_default_unit_effect_definition_from_catalog_record(
         definition.damage_amount = unsigned_magnitude(read_runtime_catalog_i32(
             record.definition_bytes, kJw211EffectDamageAmountOffset, 0));
         append_jw211_effect_frame_sound_slots(definition, record);
-        append_jw211_effect_impact_frames(definition, record.definition_bytes);
         // Action 0x0b compares against the first raw +0x8bc impact-frame
         // entry (0x004ef5c0), not an unrelated scalar at raw +0x900.
         definition.action_target_lock_frame = definition.impact_frames.empty()
@@ -21119,12 +21168,20 @@ void play_default_unit_hit_reaction_voice(UnitMovementUnit& unit) {
 void default_unit_damage_attacker_experience_changed(UnitDamageContext&,
     UnitRecord& attacker) {
     UnitMovementUnit* unit = find_default_damage_record_unit(attacker);
-    if (unit == nullptr ||
-        (unit->definition.support_target_flags & 0x2u) == 0) {
+    if (unit == nullptr) {
         return;
     }
 
+    // ProcessUnitKillExperienceAward (0x004c2dd8..0x004c2dfb) always adds
+    // the defeated definition's raw +0x184 value to attacker raw +0x50.
+    // Definition raw +0x1f4 bit 1 gates only the subsequent rank-up helper;
+    // it does not gate storage of the awarded experience itself.  Returning
+    // before this assignment left non-ranking attackers at zero after kills.
     unit->elite_progress_value = attacker.experience;
+    if ((unit->definition.support_target_flags & 0x2u) == 0) {
+        return;
+    }
+
     UnitRuntimeStatBlock stats{};
     stats.max_health = unit->max_health;
     stats.max_secondary_value = unit->max_secondary_value;
@@ -21412,10 +21469,12 @@ bool default_unit_damage_reaction_acquire_attacker(UnitMovementUnit& target,
     UnitActionContext& action_context = g_runtime.gameplay_unit_actions;
     configure_default_unit_action_context(action_context,
         g_runtime.gameplay_unit_commands);
-    if (!default_unit_action_can_target(action_context, target, threat)) {
-        return false;
-    }
-
+    // The outer 0x004c2578 class/profile and visibility gate has already
+    // accepted the threat.  Entry 1 at 0x004c27b6 must still pass a transient
+    // (just-defeated) attacker to FUN_004c1e85: its carry result deliberately
+    // enters attack-travel state 3 so an in-flight hit retains the original
+    // attacker reference.  Re-running the general can-target gate here rejects
+    // raw runtime bit 4 and incorrectly leaves the damaged unit idle.
     const UnitActionTargetValidation validation =
         ValidateUnitActionTarget(action_context, target, threat);
     // Entry 1 at 0x004c27b6 branches on FUN_004c1e85's carry flag.  Every
@@ -21579,6 +21638,9 @@ void default_unit_damage_reaction_scan_allies(UnitMovementUnit& damaged,
     }
 
     const u32 range = default_unit_damage_reaction_ally_range(damaged);
+    UnitActionContext& action_context = g_runtime.gameplay_unit_actions;
+    configure_default_unit_action_context(action_context,
+        g_runtime.gameplay_unit_commands);
     for (UnitMovementUnit* ally : movement->active_units) {
         if (ally == nullptr || ally == &damaged || ally == &threat) {
             continue;
@@ -21597,6 +21659,16 @@ void default_unit_damage_reaction_scan_allies(UnitMovementUnit& damaged,
                 ally->action_mode_gate == 1) ||
             (ally->type_flags & 0x20u) == 0 ||
             (ally->runtime_flags & kUnitDamageReactionSkipMask) != 0) {
+            continue;
+        }
+        // HandleUnitDamageReaction 0x004c2687 calls the common 0x004c209c
+        // class/profile gate for every candidate ally before dispatching its
+        // current command-state handler.  The damaged unit passing the outer
+        // gate does not imply that a nearby ally can attack the same render
+        // class (for example, Green Elf profile 50 rejects class-3 targets).
+        if ((threat.runtime_flags & kUnitActionTargetClassBlocked) != 0 ||
+            !default_unit_action_profile_allows_target_render_class(
+                action_context, *ally, threat)) {
             continue;
         }
         if (!default_unit_damage_reaction_command_allows_dispatch(*ally)) {
@@ -24439,11 +24511,9 @@ UnitEffectRuntime* start_default_support_action_effect(UnitMovementUnit& source,
 
 void default_unit_support_secondary_transfer(UnitSupportEffectContext& context,
     UnitMovementUnit& source, UnitMovementUnit& target) {
-    const ProductionOrderRuntimeState* production = context.production_state;
-    if (production == nullptr) {
-        production = &g_runtime.gameplay_production_runtime;
-    }
-    AddUnitSecondaryValueClampedToProductionEffect01(*production, target, 1);
+    // The original support scan only creates the action-0x2a attachment here.
+    // TickUnitEffectTransferSecondaryToLinkedTarget performs the live resource
+    // transfer on subsequent effect ticks.
     start_default_support_action_effect(source, &target, 0x2a);
 }
 
@@ -29283,6 +29353,17 @@ void default_gameplay_loop_simulation_phase(GameplayLoopState& state) {
             state.simulation_frame_counter,
             g_runtime.gameplay_frame_render_context.camera_x,
             g_runtime.gameplay_frame_render_context.camera_y);
+    }
+    if constexpr (Index == 16) {
+        if (!replay_recording_state().playback_mode &&
+            g_runtime.p2p_session_start_state.network_player_count > 1) {
+            UnitMovementContext* movement = default_gameplay_movement_context();
+            if (movement != nullptr) {
+                CaptureP2PFlightFrame(state.simulation_frame_counter,
+                    g_runtime.gameplay_frame_random_state.seed, *movement,
+                    g_runtime.gameplay_unit_effect_runtime);
+            }
+        }
     }
 }
 

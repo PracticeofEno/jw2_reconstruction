@@ -49,6 +49,8 @@ struct UnitTargetProgressResult {
 
 UnitMovementPoint CalculateUnitCenterPoint(const UnitMovementUnit& unit);
 UnitMovementPoint CalculateCurrentUnitCenterPoint(const UnitMovementUnit& unit);
+u32 CalculateUnitCenterToCenterDirection(const UnitMovementContext* movement,
+    const UnitMovementUnit& source, const UnitMovementUnit& target);
 u32 CalculateUnitCenterDistance(const UnitMovementUnit& source,
     const UnitMovementUnit& target);
 u32 CalculateCurrentTargetCenterDistance(const UnitMovementUnit& source,

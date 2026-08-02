@@ -1157,11 +1157,17 @@ bool point_inside_unit_bounds(const UnitMovementUnit& unit, i32 x, i32 y) {
 }
 
 i32 effect_unit_area_probe_x(const UnitMovementUnit& unit) {
+    // ApplyAreaDamageFromUnit adds raw JW2_09 +0x360 to the unit X, then
+    // 0x004c2331..0x004c2339 adds signed (+0x368 >> 1) before calling
+    // CalculateApproxUnitDistance.  This center probe controls both area
+    // membership and integer falloff.
     return unit.x + unit.definition.center_bounds_left +
         (unit.definition.center_bounds_width >> 1);
 }
 
 i32 effect_unit_area_probe_y(const UnitMovementUnit& unit) {
+    // The matching 0x004c233b..0x004c2343 sequence adds signed
+    // (+0x36c >> 1) to raw Y plus +0x364.
     return unit.y + unit.definition.center_bounds_top +
         (unit.definition.center_bounds_height >> 1);
 }
@@ -2046,12 +2052,18 @@ void TickUnitEffectPathActive(UnitEffectRuntimeState& state, UnitEffectRuntime& 
 
     if (effect.effect_id == 0x20 &&
         (effect.flags & kUnitEffectFlagAfterimageClone) != 0) {
-        ++effect.tick;
-        if (effect.tick >= definition->render_ticks * 2) {
+        // The specialized clone tail at 0x004ec74f..0x004ec778 advances raw
+        // +0x10 first, compares that word with active-render-ticks * 2, then
+        // stores (+0x10 >> 1) into raw +0x0c.  In the typed runtime those
+        // words are `frame` and `tick` respectively.  Advancing them in the
+        // opposite direction broke effect-0x20 slot parity as soon as Demon
+        // type 56 produced its first afterimage.
+        ++effect.frame;
+        if (effect.frame >= definition->render_ticks * 2) {
             finish_effect(state, effect);
             return;
         }
-        effect.frame = effect.tick >> 1;
+        effect.tick = effect.frame >> 1;
         return;
     }
 
@@ -2066,6 +2078,7 @@ void TickUnitEffectPathActive(UnitEffectRuntimeState& state, UnitEffectRuntime& 
         return;
     }
 
+    bool afterimage_clone_allocated = false;
     if (effect.effect_id == 0x20) {
         if (UnitEffectRuntime* child = AllocateUnitEffectSlot(state)) {
             // The 0x004ec69c afterimage initializer copies only the visual
@@ -2078,6 +2091,7 @@ void TickUnitEffectPathActive(UnitEffectRuntimeState& state, UnitEffectRuntime& 
             child->x = effect.x;
             child->y = effect.y;
             child->direction = effect.direction;
+            afterimage_clone_allocated = true;
         }
     }
 
@@ -2204,6 +2218,14 @@ void TickUnitEffectPathActive(UnitEffectRuntimeState& state, UnitEffectRuntime& 
     // Original 0x004ec7e2..0x004ec7fa divides JW2_12 +0x224 by eight when
     // raw +0x1fc is one. This is the number of frames per direction, not the
     // total number of image entries across all eight direction rows.
+    // On the successful afterimage-allocation branch the original movement
+    // loop exits at 0x004ec74e.  Only the allocation-failure branch falls
+    // through 0x004ec7d5..0x004ec808 and advances raw +0x0c.  Advancing the
+    // parent on both paths made Demon type 56's live effect tick drift while
+    // all of its cloned afterimages still matched.
+    if (afterimage_clone_allocated) {
+        return;
+    }
     const u32 frames = definition->directional_active_frames
         ? definition->active_frames / 8u
         : definition->active_frames;
@@ -3873,6 +3895,15 @@ void TickUnitEffectFrameAndApplyImpacts(UnitEffectRuntimeState& state,
         }
     }
     const bool low_id_tick_frame = effect_uses_tick_animation_frame(effect);
+    // Generic low-id impact state 0x004eccaf..0x004eccbd tests JW2_12
+    // raw +0x228 before consulting the impact-frame list.  Zero releases the
+    // slot immediately.  Coercing zero to one via impact_render_ticks() let
+    // effect 0x14 execute its frame-zero damage after its reach damage and
+    // doubled Dilophos' first hit from the original 25 to 50.
+    if (low_id_tick_frame && definition->impact_render_ticks == 0) {
+        finish_effect(state, effect);
+        return;
+    }
     const u32 animation_frame = effect_animation_frame(effect);
     if (frame_in_list(definition->impact_frames, animation_frame)) {
         if (effect.effect_id < 0x3du) {
@@ -3880,10 +3911,31 @@ void TickUnitEffectFrameAndApplyImpacts(UnitEffectRuntimeState& state,
                 find_effect_unit(state, effect.source_unit_id);
             if (UnitMovementUnit* target =
                     find_effect_unit(state, effect.target_unit_id)) {
-                const u32 amount = unit_effect_point_impact_damage(
+                // Generic JW2_12 impact frames at 0x004eccdc..0x004ecd43
+                // pass raw +0x1f8 to ApplyUnitDamageOrAreaDamage.  A zero
+                // radius is a direct hit, but a non-zero radius enters
+                // ApplyAreaDamageFromUnit and recalculates live action damage
+                // plus distance falloff for every candidate around the
+                // preserved effect +0x20/+0x24 position.  Applying the direct
+                // target's full amount here made the second effect-7 hit deal
+                // 4 extra HP to Demon type 56 and broke P2P parity.
+                const u32 radius = definition->action_area_damage_radius;
+                // The original still calculates the direct target's live
+                // action damage before entering the non-zero-radius helper
+                // (0x004eccdc..0x004ecd43).  The area helper then recalculates
+                // damage for every candidate, so this first value is unused
+                // for splash damage but its random roll is observable.  In
+                // particular, TwinPteras effect 0x34 consumes one such roll
+                // on each listed impact frame against high-defense targets.
+                const u32 direct_amount = unit_effect_point_impact_damage(
                     state, effect, source, *target);
-                append_effect_event(state, UnitEffectEventKind::impact, effect,
-                    target->id, amount);
+                if (radius == 0) {
+                    append_effect_event(state, UnitEffectEventKind::impact,
+                        effect, target->id, direct_amount);
+                } else {
+                    append_low_id_live_action_area_impacts(
+                        state, effect, source, *definition, radius);
+                }
             }
         } else {
             ApplyUnitEffectAreaDamageByRenderClassMask(state, effect, effect.amount,

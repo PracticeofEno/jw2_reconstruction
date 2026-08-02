@@ -12,10 +12,15 @@
 namespace ranker {
 namespace {
 
-constexpr DWORD kOnlineModelessPromptStyle = 0x90000001;
+constexpr DWORD kOnlineModelessPromptPopupStyle =
+    WS_POPUP | WS_VISIBLE | BS_DEFPUSHBUTTON;
+constexpr DWORD kOnlineModelessPromptChildStyle =
+    WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON;
 constexpr DWORD kOnlinePromptButtonStyle = WS_CHILD | WS_VISIBLE | BS_OWNERDRAW;
 constexpr int kOnlinePromptFallbackWidth = 320;
 constexpr int kOnlinePromptFallbackHeight = 160;
+constexpr UINT_PTR kOnlineModelessPromptInitialPaintTimerId = 0x5a1;
+constexpr UINT kOnlineModelessPromptInitialPaintDelayMs = 50;
 
 OnlineModelessPromptState g_modeless_prompt_state;
 OnlineModalPromptState g_modal_prompt_state;
@@ -187,7 +192,9 @@ bool paint_modeless_prompt_if_current(OnlineModelessPromptState& state, HWND hwn
     PAINTSTRUCT paint{};
     HDC dc = BeginPaint(hwnd, &paint);
     StretchBitmapMemoryResourceToDc(state.background, dc, 0, 0);
-    draw_centered_prompt_text(dc, paint.rcPaint, state.text, state.text_color);
+    RECT client{};
+    GetClientRect(hwnd, &client);
+    draw_centered_prompt_text(dc, client, state.text, state.text_color);
     EndPaint(hwnd, &paint);
     return true;
 }
@@ -449,15 +456,41 @@ bool CreateOnlineModelessPrompt(OnlineModelessPromptState& state, HWND owner,
         kOnlinePromptFallbackWidth);
     const int height = std::max(GetBitmapMemoryResourceHeight(state.background),
         kOnlinePromptFallbackHeight);
+    DWORD window_style = kOnlineModelessPromptPopupStyle;
+    int window_x = 400 - width / 2;
+    int window_y = 300 - height / 2;
+    if (owner != nullptr && IsWindow(owner)) {
+        // Reconstructed frontend screens are child windows of the main game
+        // window.  The original absolute 800x600 popup origin therefore put
+        // status prompts at the desktop's upper-left instead of in the game.
+        // Keep the prompt in the frontend hierarchy and center it using the
+        // owner's client coordinates.
+        RECT owner_client{};
+        GetClientRect(owner, &owner_client);
+        window_style = kOnlineModelessPromptChildStyle;
+        const int owner_width = static_cast<int>(
+            owner_client.right - owner_client.left);
+        const int owner_height = static_cast<int>(
+            owner_client.bottom - owner_client.top);
+        window_x = std::max(0, (owner_width - width) / 2);
+        window_y = std::max(0, (owner_height - height) / 2);
+    }
     state.window = CreateWindowExA(0, "button", "MyModeless",
-        kOnlineModelessPromptStyle, 400 - width / 2, 300 - height / 2,
-        width, height, owner, nullptr, state.instance, nullptr);
+        window_style, window_x, window_y, width, height,
+        owner, nullptr, state.instance, nullptr);
     if (state.window == nullptr) {
         return false;
     }
 
     SetWindowLongPtrA(state.window, GWLP_WNDPROC,
         reinterpret_cast<LONG_PTR>(online_modeless_prompt_proc));
+    if ((window_style & WS_CHILD) != 0) {
+        // CreateWindowEx places this reconstructed child behind the P2P
+        // screen's existing edit/button controls.  Put the prompt at the top
+        // of the sibling z-order so the full bitmap is visible as an overlay.
+        SetWindowPos(state.window, HWND_TOP, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    }
     if (two_buttons) {
         create_prompt_button(state.ok_button, state.window, kOnlinePromptOkButtonId,
             0x32, 0x60, kOnlinePromptOkNormalRecord, kOnlinePromptOkPressedRecord);
@@ -469,6 +502,13 @@ bool CreateOnlineModelessPrompt(OnlineModelessPromptState& state, HWND owner,
             0x69, 0x60, kOnlinePromptOkNormalRecord, kOnlinePromptOkPressedRecord);
     }
     InstallOnlineModelessPromptAcceleratorTarget(state);
+    RedrawWindow(state.window, nullptr, nullptr,
+        RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    // The caller completes one final frontend paint after this function
+    // returns.  Repaint after that stack unwinds so the overlay is not left
+    // showing the parent's pixels until an external invalidation.
+    SetTimer(state.window, kOnlineModelessPromptInitialPaintTimerId,
+        kOnlineModelessPromptInitialPaintDelayMs, nullptr);
     return true;
 }
 
@@ -488,11 +528,23 @@ LRESULT HandleOnlineModelessPromptMessage(OnlineModelessPromptState& state,
 
     switch (message) {
     case WM_DESTROY:
+        KillTimer(hwnd, kOnlineModelessPromptInitialPaintTimerId);
         DestroyOnlineModelessPromptButtons(state);
         DestroyOnlineModelessPromptBackground(state);
         RestoreOnlineModelessPromptAcceleratorTarget(state);
         state.window = nullptr;
         return 0;
+    case WM_TIMER:
+        if (wparam == kOnlineModelessPromptInitialPaintTimerId) {
+            KillTimer(hwnd, kOnlineModelessPromptInitialPaintTimerId);
+            SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            RedrawWindow(hwnd, nullptr, nullptr,
+                RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW |
+                    RDW_ALLCHILDREN);
+            return 0;
+        }
+        break;
     case WM_DRAWITEM: {
         auto* draw = reinterpret_cast<DRAWITEMSTRUCT*>(lparam);
         if (draw != nullptr &&
