@@ -20610,6 +20610,27 @@ void sync_default_gameplay_production_action_units(
             g_runtime.gameplay_terrain_layer.terrain_flags,
             g_runtime.gameplay_terrain_layer.stride_tiles);
     }
+    // Ordinary construction is a local-player UI/command path in the
+    // original.  Keep the authority projection disabled here; action 0x17's
+    // synchronized effect gate enables it only for the duration of that
+    // simulation-side check.
+    production.preview_placement_authority_player = 0xffffffffu;
+    const GameplayVisibilityGrid& visibility =
+        g_runtime.gameplay_visibility_grid;
+    if (visibility.width == production.placement_map.width &&
+        visibility.height == production.placement_map.height) {
+        for (u32 y = 0; y < visibility.height; ++y) {
+            for (u32 x = 0; x < visibility.width; ++x) {
+                const std::size_t index =
+                    static_cast<std::size_t>(y) * visibility.width + x;
+                if (index < visibility.owner.size() &&
+                    index < production.placement_map.cells.size()) {
+                    production.placement_map.cells[index]
+                        .visibility_owner_flags = visibility.owner[index];
+                }
+            }
+        }
+    }
     production.selected_unit_offset = overlay.selected_unit_id;
     production.current_unit_offset = overlay.selected_unit_id;
     production.selected_count = overlay.selected_unit_count;
@@ -20908,10 +20929,43 @@ bool publish_default_ui_overlay_production_command(
         if ((action.flags & 0x36u) != 0) {
             return true;
         }
+        const u32 selector = action.item_id - 0xd4u;
+        const bool placement =
+            action.action == kUiOverlayCommandActionPlacement;
         if (click) {
-            DispatchOwnerProductionActionCommand(production, action.item_id - 0xd4u,
+            const GameplayProductionActionDefinition* definition =
+                selector < production.definitions.size() ?
+                    &production.definitions[selector] : nullptr;
+            if (definition != nullptr && definition->mode != 0u) {
+                // Original button handler 0x004ea939 does not call
+                // FUN_004db0f7 for nonzero JW2_11 modes.  It stores
+                // selector+0x2a in DAT_00869dfc and waits for a second
+                // terrain/unit click.  Dispatching here used the HUD button's
+                // screen position as the spell target and made every targeted
+                // spell fire immediately.
+                overlay.placement_mode =
+                    UiOverlayProductionActionMode(selector);
+                overlay.placement_definition_id = 0;
+                overlay.staged_unit_action_id = 0xffffffffu;
+                overlay.selected_production_category = 0;
+                overlay.pending_local_command = true;
+                return true;
+            }
+        }
+        if (click || placement) {
+            DispatchOwnerProductionActionCommand(production, selector,
                 command_screen_x, command_screen_y, overlay.selected_unit_id);
             mirror_default_gameplay_production_result_states(production);
+            if (placement) {
+                // FUN_004e9ed0 clears all staged command globals after the
+                // second-click dispatcher returns, including rejection.
+                ResetGameplayInputPointerState(input);
+                overlay.placement_mode = 0;
+                overlay.placement_definition_id = 0;
+                overlay.staged_unit_action_id = 0xffffffffu;
+                overlay.selected_production_category = 0;
+                overlay.context_cursor.animation_mode = 0;
+            }
         }
         return true;
     }
@@ -23680,8 +23734,19 @@ bool dispatch_default_unit_command_action_effect(UnitMovementUnit& source,
             gameplay_production_action_state();
         sync_default_gameplay_production_action_units(
             placement_gate, ui_overlay_state());
-        if (!CheckPreviewProductionPlacementFootprintGateCells(
-                placement_gate, kHurdleUnitType, world_x, world_y, source.id)) {
+        const u32 previous_authority =
+            placement_gate.preview_placement_authority_player;
+        // The command source owns the view under which Hurdle was accepted.
+        // Project that owner's persistent explored bit on every peer.  Using
+        // the lowest checksum-authority player here made a player-1 Green Elf
+        // animate but fail to create the hurdle whenever player 0 had not
+        // explored the target cell.
+        placement_gate.preview_placement_authority_player = source.owner_id;
+        const bool hurdle_placement_allowed =
+            CheckPreviewProductionPlacementFootprintGateCells(
+                placement_gate, kHurdleUnitType, world_x, world_y, source.id);
+        placement_gate.preview_placement_authority_player = previous_authority;
+        if (!hurdle_placement_allowed) {
             return false;
         }
     }

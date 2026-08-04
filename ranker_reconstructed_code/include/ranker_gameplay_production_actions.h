@@ -124,6 +124,11 @@ struct GameplayProductionPlacementCell {
     u32 owner_flags = 0;
     u32 route_flags = 0;
     u32 current_visibility_flags = 0;
+    // DAT_007d8d40's per-owner explored bits.  The synchronized action 0x17
+    // effect gate uses this to reconstruct the command source owner's local
+    // 798D40 bit 28 on every peer.  Ordinary building previews and build
+    // clicks continue to use the current player's route_flags projection.
+    u32 visibility_owner_flags = 0;
 };
 
 struct GameplayProductionPlacementMap {
@@ -221,6 +226,7 @@ struct GameplayProductionActionState {
     u32 selected_attachment_slot = 0;
     u32 selected_action_selector = 0;
     u32 preview_placement_terrain_class = 3;
+    u32 preview_placement_authority_player = 0xffffffffu;
     u32 last_action_index = 0;
     u32 last_world_x = 0;
     u32 last_world_y = 0;

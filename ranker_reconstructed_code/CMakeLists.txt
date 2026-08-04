@@ -908,6 +908,41 @@ if (RANKER_BUILD_REGRESSION_TESTS)
 
 endif()
 
+# This parity harness is independent from the historical out-of-tree regression
+# set above, whose source bundle is optional.  It can therefore be configured
+# and run against a minimal reconstruction checkout by itself.
+option(RANKER_BUILD_MIXED_UNIT_SKILL_PARITY_TEST
+    "Build the ranker.exe mixed-unit skill parity regression" OFF)
+if (RANKER_BUILD_MIXED_UNIT_SKILL_PARITY_TEST)
+    enable_testing()
+    add_executable(mixed_unit_skill_original_parity_regression
+        tests/mixed_unit_skill_original_parity_regression.cpp
+        src/ranker_gameplay_production_actions.cpp
+    )
+    target_include_directories(mixed_unit_skill_original_parity_regression PRIVATE
+        include
+    )
+    set_property(TARGET mixed_unit_skill_original_parity_regression PROPERTY
+        INTERPROCEDURAL_OPTIMIZATION TRUE
+    )
+    if (MSVC)
+        target_compile_options(mixed_unit_skill_original_parity_regression PRIVATE /Gy)
+        target_link_options(mixed_unit_skill_original_parity_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(mixed_unit_skill_original_parity_regression PRIVATE
+            -O1
+            -ffunction-sections
+            -fdata-sections
+        )
+        target_link_options(mixed_unit_skill_original_parity_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME mixed_unit_skill_original_parity_regression
+        COMMAND mixed_unit_skill_original_parity_regression
+    )
+endif()
+
 add_executable(ranker_rebuild WIN32
     resources/ranker_resources.rc
     src/main.cpp

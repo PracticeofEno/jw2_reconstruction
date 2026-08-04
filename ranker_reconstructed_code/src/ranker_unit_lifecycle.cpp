@@ -1013,14 +1013,15 @@ bool InitializePlacedUnitFromMapSlot(UnitLifecycleContext& context,
     unit.runtime_stat_20 = definition->profile_defense_value;
     unit.runtime_stat_28 = definition->initial_secondary_value;
 
-    // InitializePlacedUnitFromMapSlot gates both the raw +0x1f8 bit and the
-    // reconstructed dimension fallback behind lifecycle class != 2.  Class-2
-    // construction receives command flag 0x40 only when completion registers
-    // its footprint, not at the initial one-HP placement frame.
+    // InitializePlacedUnitFromMapSlot (0x004cf4a4..0x004cf4d2) sets raw unit
+    // +0x9c bit 0x40 only for lifecycle classes other than two when definition
+    // raw +0x1f8 bit 1 requests it (the fresh unit's equipment slots were just
+    // cleared above).  Footprint dimensions are not part of this gate.  Treating
+    // any nonzero dimensions
+    // as the same flag made ordinary members of a mixed selection enter the
+    // cloaked render path when the actual Hide-capable member used action 0x13.
     if (definition->lifecycle_class != 2 &&
-        ((definition->footprint_flags & 2) != 0 ||
-            definition->footprint_width_tiles != 0 ||
-            definition->footprint_height_tiles != 0)) {
+        (definition->footprint_flags & 2) != 0) {
         unit.command_flags |= 0x40;
     }
 

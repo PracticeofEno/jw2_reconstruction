@@ -1333,8 +1333,26 @@ bool CheckPreviewProductionPlacementGateCell(GameplayProductionActionState& stat
         // F19E74 is consulted separately below and by the nearby probe.
         (cell->terrain_flags & kPreviewPlacementBlockedMask) != 0 ||
         (cell->owner_flags & kPreviewPlacementTerrainValidFlag) == 0 ||
-        (cell->route_flags & kPreviewPlacementTemporaryBlock) != 0 ||
-        (cell->route_flags & kPreviewPlacementRouteRequiredFlag) == 0) {
+        (cell->route_flags & kPreviewPlacementTemporaryBlock) != 0) {
+        return false;
+    }
+
+    // 798D40 bits 27/28 are the local process' explored-fog projection.  The
+    // original executable consequently sees different bit 28 values on two
+    // P2P peers when only one player's units have explored a cell.  Action
+    // 0x17 consults this presentation-local bit from simulation code, which
+    // is an original desync bug.  Project the command source owner's
+    // persistent explored bit from DAT_007d8d40 so both simulations make the
+    // same decision without rejecting a placement that the caster can see.
+    bool authority_route_visible =
+        (cell->route_flags & kPreviewPlacementRouteRequiredFlag) != 0;
+    if (state.preview_placement_authority_player < 32u &&
+        state.preview_placement_authority_player != state.local_player_index) {
+        authority_route_visible =
+            (cell->visibility_owner_flags &
+                (1u << state.preview_placement_authority_player)) != 0;
+    }
+    if (!authority_route_visible) {
         return false;
     }
 

@@ -23,6 +23,11 @@ struct P2PFlightUnitRecord {
     u32 command_state = 0;
     u32 previous_command_state = 0;
     u32 command_flags = 0;
+    u32 command_bit_mask = 0;
+    u32 script_bit_flags = 0;
+    u32 draw_flags = 0;
+    u32 animation_flags = 0;
+    u32 definition_footprint_flags = 0;
     u32 runtime_flags = 0;
     u32 movement_flags = 0;
     u32 direction = 0;

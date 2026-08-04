@@ -1099,15 +1099,15 @@ void handle_consumed_ack_packet(const Mode1ReliablePacket& packet, void*) {
 }
 
 void handle_player_inactive_packet(const Mode1ReliablePacket& packet, void*) {
-    // DispatchMode1GameplayPacket enters the original subtype-13 handler with
-    // EAX still holding the subtype index (0x13).  FUN_004db82d publishes its
-    // pre-removal subtype-1d flush packet without changing EAX, so packet
-    // +0x10 is 0x13 -- not the departing source channel.  Using the channel
-    // could accidentally satisfy HandleSubtype1dVoteCompletionPacket on a
-    // same-numbered local slot and turn a flush marker into a completion vote.
     const PacketFields fields = packet_fields(packet);
+    // FUN_004db82d publishes the pre-removal subtype-1d completion packet for
+    // the departing slot.  The captured original peer does the same: after a
+    // slot-1 subtype-13 surrender it sends subtype 0x1d with packet +0x10 == 1.
+    // The subtype-1d receiver compares this field with its local slot before
+    // recording the source channel's vote, so substituting the subtype value
+    // (0x13) leaves the surrendering reconstruction in the checksum loop.
     PublishVoteCompletionAndFlushReliableRange(gameplay_production_action_state(),
-        0x13u);
+        fields.channel);
 
     const u32 player = fields.channel;
     if (player >= g_packet_dispatch_state.players.size() ||

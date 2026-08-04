@@ -36,6 +36,22 @@ constexpr u32 kUiOverlayCommandActionMinimap = 3;
 constexpr u32 kUiOverlayCommandActionPlacement = 4;
 constexpr u32 kUiOverlayCommandActionSelection = 5;
 constexpr u32 kUiOverlayCommandActionContextual = 6;
+// Original 0x004ea939 stages a nonzero-mode JW2_11 production action by
+// storing selector + 0x2a in DAT_00869dfc.  The next map/unit click converts
+// that mode back to command item 0xd4 + selector.
+constexpr u32 kUiOverlayProductionActionModeBase = 0x2au;
+constexpr u32 kUiOverlayProductionActionSelectorCount = 0x20u;
+constexpr bool IsUiOverlayProductionActionMode(u32 mode) {
+    return mode >= kUiOverlayProductionActionModeBase &&
+        mode < kUiOverlayProductionActionModeBase +
+            kUiOverlayProductionActionSelectorCount;
+}
+constexpr u32 UiOverlayProductionActionMode(u32 selector) {
+    return kUiOverlayProductionActionModeBase + selector;
+}
+constexpr u32 UiOverlayProductionActionSelector(u32 mode) {
+    return mode - kUiOverlayProductionActionModeBase;
+}
 
 // DAT_0086a860, indexed by the low-byte scan code in FUN_004e77a5.  The
 // resulting byte is compared with the TRC marker stored at command record

@@ -1519,7 +1519,21 @@ void set_tooltip_payload_for_hover(UiOverlayState& state) {
             (order_id << 16) | std::max<u32>(1, state.last_hotkey_aux);
     }
     tooltip.hover_flags = 0;
-    if (const UiOverlayCommandOption* option =
+    const UiOverlayHotRegion* hovered_region = command_record_hover ?
+        hot_region_at(state, state.mouse_x, state.mouse_y) : nullptr;
+    if (hovered_region != nullptr &&
+        hovered_region->record.item_id == state.hover_context.item_id &&
+        hovered_region->record.aux == state.hover_context.unit_id) {
+        // FUN_004e9458 forwards the flags from the live 0x26-byte hot record.
+        // Production-action icons (0xd4..0xf3) are synthesized from the
+        // aggregate gate masks and have no UiOverlayCommandOption entry, so
+        // looking up only that optional mirror discarded bit 0x02.  The
+        // original tooltip uses that bit to print the action requirement,
+        // including Hurdle's level-two requirement.
+        tooltip.hover_flags = original_effective_hot_region_flags(
+            *hovered_region);
+    }
+    else if (const UiOverlayCommandOption* option =
             find_command_option(state, state.hover_context.item_id)) {
         tooltip.hover_flags = option->flags;
     }
@@ -4988,6 +5002,16 @@ void HandleGameplayPointerActionFrame(UiOverlayState& state) {
                     kCommandActionPlacement);
                 state.pending_local_command = true;
             }
+            else if (IsUiOverlayProductionActionMode(state.placement_mode) &&
+                !CheckMouseInsideMinimap(state) && !over_hud) {
+                // 0x004ea939 stores selector+0x2a on the spell-button click.
+                // Only this second terrain/unit click reaches FUN_004db0f7.
+                const u32 selector = UiOverlayProductionActionSelector(
+                    state.placement_mode);
+                append_command_action(state, 0xd4u + selector, 0,
+                    kCommandActionPlacement);
+                state.pending_local_command = true;
+            }
             else if (state.staged_unit_action_id != 0xffffffffu &&
                 !CheckMouseInsideMinimap(state) && !over_hud) {
                 const u32 action_id = state.staged_unit_action_id;
@@ -5276,6 +5300,13 @@ bool CheckPointerInsideMinimapAndPlacementMode(UiOverlayState& state) {
             world_x, world_y);
         return true;
     }
+    if (IsUiOverlayProductionActionMode(state.placement_mode)) {
+        const u32 selector = UiOverlayProductionActionSelector(
+            state.placement_mode);
+        append_command_action_at_world(state, 0xd4u + selector, 0,
+            kCommandActionPlacement, 0, world_x, world_y);
+        return true;
+    }
     if (state.staged_unit_action_id != 0xffffffffu) {
         append_command_action_at_world(state,
             0xaau + state.staged_unit_action_id, 0,
@@ -5545,7 +5576,7 @@ void SelectLocalUnitsFromDragRectangle(UiOverlayState& state) {
     const UiOverlayRect selection = normalized_selection_rect(state);
     const UiOverlayMinimapUnit* primary = nullptr;
     bool selection_changed = false;
-    // FUN_004eb063 marks only local mobile units whose actual world bounds
+    // FUN_004eb063 first prefers local mobile units whose actual world bounds
     // intersect the normalized drag rectangle (0x004eb12e..0x004eb252).
     // The subsequent selection pass consumes those marked units directly;
     // it neither expands to the viewport nor filters by the primary's type.
@@ -5567,6 +5598,16 @@ void SelectLocalUnitsFromDragRectangle(UiOverlayState& state) {
         state.selected_unit_id = primary->unit_id;
         state.selected_unit_type = primary->type_id;
         state.selected_unit_owner = primary->owner_id;
+    }
+    else if (const UiOverlayMinimapUnit* fallback =
+            first_visible_unit_in_selection_rect_by_priority(state)) {
+        // With no local mobile in the box, 0x004eb310..0x004eb3da clears all
+        // but the first marked non-local mobile.  If there are no mobiles it
+        // applies the same single-selection fallback to the first structure.
+        // This is why dragging over only neutral monsters behaves exactly
+        // like clicking one of them, rather than producing an empty selection.
+        selection_changed = select_unit(state, *fallback, true) ||
+            selection_changed;
     }
     if (selection_changed) {
         NotifyPrimaryGameplayUnitSelected(state);

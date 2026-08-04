@@ -290,6 +290,72 @@ void test_thunder_shield_break_double_release_is_idempotent() {
         "unlinked active successor was unexpectedly dispatched");
 }
 
+struct HurdleCreateProbe {
+    u32 count = 0;
+    u32 type_id = 0;
+    i32 x = 0;
+    i32 y = 0;
+    UnitMovementUnit created;
+};
+
+HurdleCreateProbe g_hurdle_create_probe;
+
+UnitMovementUnit* create_hurdle_probe(UnitEffectRuntimeState&,
+    UnitMovementUnit&, u32 type_id, i32 x, i32 y) {
+    ++g_hurdle_create_probe.count;
+    g_hurdle_create_probe.type_id = type_id;
+    g_hurdle_create_probe.x = x;
+    g_hurdle_create_probe.y = y;
+    g_hurdle_create_probe.created.max_health = 350;
+    return &g_hurdle_create_probe.created;
+}
+
+void test_hurdle_impact_creates_type_125_unit() {
+    UnitEffectRuntimeState state{};
+    state.effect_slot_capacity = 1;
+    state.effect_slots.resize(1);
+    state.active_effect_indices = {0};
+    state.callbacks.create_unit = create_hurdle_probe;
+
+    UnitEffectDefinition hurdle{};
+    hurdle.id = 0x54u;
+    hurdle.active_frames = 10;
+    hurdle.impact_frames = {7};
+    hurdle.action_create_unit_type_id = 125;
+    hurdle.action_create_unit_secondary_value = 25;
+    state.definitions = {hurdle};
+
+    UnitMovementUnit source{};
+    source.id = 0x111u;
+    source.owner_id = 1;
+    source.active = true;
+    state.unit_refs = {&source};
+
+    UnitEffectRuntime& effect = state.effect_slots.front();
+    effect.active = true;
+    effect.effect_id = 0x54u;
+    effect.flags = kUnitEffectFlagImpact;
+    effect.source_unit_id = source.id;
+    effect.frame = 7;
+    effect.tick = 7;
+    effect.x = 2368;
+    effect.y = 832;
+    g_hurdle_create_probe = {};
+
+    TickUnitEffectRuntimeList(state);
+
+    require(g_hurdle_create_probe.count == 1,
+        "Hurdle impact frame did not invoke placed-unit creation exactly once");
+    require(g_hurdle_create_probe.type_id == 125 &&
+            g_hurdle_create_probe.x == 2368 &&
+            g_hurdle_create_probe.y == 832,
+        "Hurdle impact did not create type 125 at the aligned target point");
+    require(g_hurdle_create_probe.created.health == 350 &&
+            g_hurdle_create_probe.created.max_secondary_value == 25 &&
+            g_hurdle_create_probe.created.secondary_value == 25,
+        "Hurdle impact did not initialize original health/resource values");
+}
+
 } // namespace
 
 int main() {
@@ -298,6 +364,7 @@ int main() {
     test_repeated_thunder_impacts_are_applied_during_list_walk();
     test_missing_thunder_target_keeps_natural_lifetime_and_payload();
     test_thunder_shield_break_double_release_is_idempotent();
+    test_hurdle_impact_creates_type_125_unit();
     std::cout << "UNIT_EFFECT_INTRUSIVE_ITERATION_PASS\n";
     return EXIT_SUCCESS;
 }

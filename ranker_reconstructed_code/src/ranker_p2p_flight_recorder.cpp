@@ -91,7 +91,9 @@ bool write_trace_csv(const std::filesystem::path& path,
 
     file << "# units\n";
     file << "simulation_frame,rng_seed,active_order,id,runtime_slot,type,owner,"
-            "command_state,previous_command_state,command_flags,runtime_flags,"
+            "command_state,previous_command_state,command_flags,command_bit_mask,"
+            "script_bit_flags,draw_flags,animation_flags,definition_footprint_flags,"
+            "runtime_flags,"
             "movement_flags,direction,animation_frame,movement_state,turn_ticks,"
             "step_accumulator,x,y,destination_x,destination_y,path_x,path_y,"
             "next_path_x,next_path_y,current_cell_x,current_cell_y,target_id,"
@@ -107,6 +109,9 @@ bool write_trace_csv(const std::filesystem::path& path,
                  << unit.runtime_slot_index << ',' << unit.type_id << ','
                  << unit.owner_id << ',' << unit.command_state << ','
                  << unit.previous_command_state << ',' << unit.command_flags << ','
+                 << unit.command_bit_mask << ',' << unit.script_bit_flags << ','
+                 << unit.draw_flags << ',' << unit.animation_flags << ','
+                 << unit.definition_footprint_flags << ','
                  << unit.runtime_flags << ',' << unit.movement_flags << ','
                  << unit.direction << ',' << unit.animation_frame << ','
                  << unit.movement_state << ',' << unit.movement_turn_ticks << ','
@@ -203,6 +208,16 @@ void CaptureP2PFlightFrame(u32 simulation_frame, u32 gameplay_rng_seed,
         record.command_state = unit->command_state;
         record.previous_command_state = unit->previous_command_state;
         record.command_flags = unit->command_flags;
+        const u32 command_bit_bytes = std::min<u32>(4,
+            static_cast<u32>(unit->command_bits.size()));
+        for (u32 byte = 0; byte < command_bit_bytes; ++byte) {
+            record.command_bit_mask |=
+                static_cast<u32>(unit->command_bits[byte]) << (byte * 8u);
+        }
+        record.script_bit_flags = unit->script_bit_flags;
+        record.draw_flags = unit->draw_flags;
+        record.animation_flags = unit->scenario_string_slot;
+        record.definition_footprint_flags = unit->definition.footprint_flags;
         record.runtime_flags = unit->runtime_flags;
         record.movement_flags = unit->movement_flags;
         record.direction = unit->direction;
