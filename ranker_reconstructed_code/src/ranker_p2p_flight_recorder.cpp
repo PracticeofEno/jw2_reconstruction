@@ -46,6 +46,16 @@ std::filesystem::path capture_directory() {
     return directory;
 }
 
+const char* capture_trigger_name(P2PDropCaptureTrigger trigger) {
+    switch (trigger) {
+    case P2PDropCaptureTrigger::remote_player_inactive:
+        return "remote_player_inactive";
+    case P2PDropCaptureTrigger::corrective_checksum:
+    default:
+        return "corrective_checksum";
+    }
+}
+
 std::vector<const P2PFlightFrameRecord*> ordered_frames(
     const P2PFlightRecorderState& state) {
     const u32 count = std::min<u32>(state.captured_frame_count,
@@ -69,7 +79,8 @@ bool write_trace_csv(const std::filesystem::path& path,
     }
 
     file << "# ranker_rebuild P2P synchronization flight trace\n";
-    file << "# detected_frame=" << mismatch.detected_frame
+    file << "# trigger=" << capture_trigger_name(mismatch.trigger)
+         << ",detected_frame=" << mismatch.detected_frame
          << ",remote_channel=" << mismatch.remote_channel
          << ",sequence=" << mismatch.sequence
          << ",local_checksum=" << mismatch.local_checksum
@@ -304,7 +315,8 @@ bool PersistP2PDropCapture(const P2PSyncMismatchCaptureInfo& mismatch,
     }
     state.drop_capture_attempted = true;
 
-    const std::string stem = "P2PDrop_" + capture_timestamp() + "_f" +
+    const std::string stem = "P2PDrop_" + capture_timestamp() + "_" +
+        capture_trigger_name(mismatch.trigger) + "_f" +
         std::to_string(mismatch.detected_frame) + "_s" +
         std::to_string(mismatch.sequence);
     const std::filesystem::path directory = capture_directory();

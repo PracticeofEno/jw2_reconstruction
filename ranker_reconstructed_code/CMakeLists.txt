@@ -943,6 +943,70 @@ if (RANKER_BUILD_MIXED_UNIT_SKILL_PARITY_TEST)
     )
 endif()
 
+option(RANKER_BUILD_UDP_BURST_REGRESSION_TEST
+    "Build the legacy UDP large-datagram queue regression" OFF)
+if (RANKER_BUILD_UDP_BURST_REGRESSION_TEST)
+    enable_testing()
+    add_executable(legacy_udp_burst_regression
+        tests/legacy_udp_burst_regression.cpp
+        src/ranker_network.cpp
+    )
+    target_include_directories(legacy_udp_burst_regression PRIVATE include)
+    if (MSVC)
+        target_compile_options(legacy_udp_burst_regression PRIVATE /Gy)
+        target_link_options(legacy_udp_burst_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(legacy_udp_burst_regression PRIVATE
+            -O1 -ffunction-sections -fdata-sections)
+        target_link_options(legacy_udp_burst_regression PRIVATE
+            -Wl,--gc-sections)
+    endif()
+    if (WIN32)
+        target_link_libraries(legacy_udp_burst_regression PRIVATE wsock32 winmm)
+    endif()
+    add_test(NAME legacy_udp_burst_regression
+        COMMAND legacy_udp_burst_regression)
+endif()
+
+option(RANKER_BUILD_EQUIPMENT_REPLACEMENT_PARITY_TEST
+    "Build the equipment type-replacement visibility parity regression" OFF)
+if (RANKER_BUILD_EQUIPMENT_REPLACEMENT_PARITY_TEST)
+    enable_testing()
+    add_executable(unit_equipment_type_replacement_visibility_regression
+        tests/unit_equipment_type_replacement_visibility_regression.cpp
+    )
+    target_include_directories(
+        unit_equipment_type_replacement_visibility_regression PRIVATE include)
+    if (MSVC)
+        target_compile_options(
+            unit_equipment_type_replacement_visibility_regression PRIVATE /Gy)
+        target_link_options(
+            unit_equipment_type_replacement_visibility_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(
+            unit_equipment_type_replacement_visibility_regression PRIVATE
+            -O1 -ffunction-sections -fdata-sections)
+        target_link_options(
+            unit_equipment_type_replacement_visibility_regression PRIVATE
+            -Wl,--gc-sections)
+    endif()
+    add_test(NAME unit_equipment_type_replacement_visibility_regression
+        COMMAND unit_equipment_type_replacement_visibility_regression)
+endif()
+
+option(RANKER_BUILD_SUBTYPE01_CANCEL_PARITY_TEST
+    "Build the subtype-01 latest-production cancel parity regression" OFF)
+if (RANKER_BUILD_SUBTYPE01_CANCEL_PARITY_TEST)
+    enable_testing()
+    add_executable(subtype01_latest_cancel_parity_regression
+        tests/subtype01_latest_cancel_parity_regression.cpp
+    )
+    target_include_directories(
+        subtype01_latest_cancel_parity_regression PRIVATE include)
+    add_test(NAME subtype01_latest_cancel_parity_regression
+        COMMAND subtype01_latest_cancel_parity_regression)
+endif()
+
 add_executable(ranker_rebuild WIN32
     resources/ranker_resources.rc
     src/main.cpp

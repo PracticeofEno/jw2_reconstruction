@@ -1593,59 +1593,82 @@ void InstallDefaultMode1ReliableTransportCallbacks() {
 }
 
 void PumpLegacyUdpMode1Messages(AsyncComContext* context) {
-    ReceiveLegacyUdpPacket();
     auto& network = legacy_network_state();
-    while (network.udp_receive_queue.size() > 7) {
-        const std::vector<u8>& queue = network.udp_receive_queue;
-        const u32 packet_type = read_queue_u32(queue, 0);
-        u32 message_size = 0;
-        bool dispatch_message = false;
-
-        if (packet_type == 0) {
-            const u32 header_bytes = read_queue_u32(queue, 4) >> 24;
-            if (queue.size() < header_bytes + 0x0b) {
-                break;
-            }
-            const u32 payload_bytes = read_queue_u8(queue, header_bytes + 0x0b);
-            message_size = header_bytes + 0x0c + payload_bytes;
-            if (queue.size() < message_size) {
-                break;
-            }
-            dispatch_message = true;
-        }
-        else if (packet_type == 1) {
-            message_size = read_queue_u32(queue, 4);
-            if (queue.size() < message_size) {
-                break;
-            }
-            dispatch_message = true;
-        }
-        else {
-            if (queue.size() < 0x0c) {
-                break;
-            }
-            message_size = read_queue_u32(queue, 8);
-            if (queue.size() < message_size) {
-                break;
-            }
-        }
-
-        if (dispatch_message) {
-            record_mode1_udp_receive_packet(message_size);
-            const DirectPlayDispatchSnapshot snapshot = snapshot_directplay_dispatch();
-            AsyncComContext* target_context = context;
-            if (target_context == nullptr) {
-                lock_async_state();
-                target_context = g_async_com_state.active_context;
-                unlock_async_state();
-            }
-            handle_mode1_player_directplay_message(target_context, queue.data(),
-                message_size, 0, 0, snapshot);
-            invoke_message_handler(snapshot, snapshot.callbacks.mode1_player_message,
-                target_context, queue.data(), message_size, 0, 0);
-        }
-        ConsumeLegacyUdpReceiveQueue(message_size);
+    for (;;) {
+        const std::size_t queued_before_receive =
+            network.udp_receive_queue.size();
         ReceiveLegacyUdpPacket();
+        const bool received_datagram =
+            network.udp_receive_queue.size() > queued_before_receive;
+        bool consumed_message = false;
+
+        // One mode-1 datagram normally contains many 0x24-byte packets.  Drain
+        // every complete message already in userspace before another recvfrom.
+        // The previous one-recv-per-one-message loop grew the queue by up to
+        // 38 packets while consuming only one, filled the 64 KiB queue, then
+        // left the 32 KiB kernel buffer to overflow during combat bursts.
+        while (network.udp_receive_queue.size() > 7) {
+            const std::vector<u8>& queue = network.udp_receive_queue;
+            const u32 packet_type = read_queue_u32(queue, 0);
+            u32 message_size = 0;
+            bool dispatch_message = false;
+
+            if (packet_type == 0) {
+                const u32 header_bytes = read_queue_u32(queue, 4) >> 24;
+                if (queue.size() < header_bytes + 0x0b) {
+                    break;
+                }
+                const u32 payload_bytes =
+                    read_queue_u8(queue, header_bytes + 0x0b);
+                message_size = header_bytes + 0x0c + payload_bytes;
+                if (queue.size() < message_size) {
+                    break;
+                }
+                dispatch_message = true;
+            }
+            else if (packet_type == 1) {
+                message_size = read_queue_u32(queue, 4);
+                if (queue.size() < message_size) {
+                    break;
+                }
+                dispatch_message = true;
+            }
+            else {
+                if (queue.size() < 0x0c) {
+                    break;
+                }
+                message_size = read_queue_u32(queue, 8);
+                if (queue.size() < message_size) {
+                    break;
+                }
+            }
+            if (message_size == 0) {
+                break;
+            }
+
+            if (dispatch_message) {
+                record_mode1_udp_receive_packet(message_size);
+                const DirectPlayDispatchSnapshot snapshot =
+                    snapshot_directplay_dispatch();
+                AsyncComContext* target_context = context;
+                if (target_context == nullptr) {
+                    lock_async_state();
+                    target_context = g_async_com_state.active_context;
+                    unlock_async_state();
+                }
+                handle_mode1_player_directplay_message(target_context,
+                    queue.data(), message_size, 0, 0, snapshot);
+                invoke_message_handler(snapshot,
+                    snapshot.callbacks.mode1_player_message, target_context,
+                    queue.data(), message_size, 0, 0);
+            }
+            ConsumeLegacyUdpReceiveQueue(message_size);
+            consumed_message = true;
+        }
+
+        if (!received_datagram && !consumed_message) {
+            break;
+        }
     }
 }
 

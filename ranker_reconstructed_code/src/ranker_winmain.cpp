@@ -9330,6 +9330,26 @@ bool link_lobby_startup_parameters_available() {
         !link_lobby_state().start_parameter_payload.empty();
 }
 
+bool hydrate_replay_link_lobby_startup_parameters() {
+    const ReplayRecordingState& replay = replay_recording_state();
+    const P2PGameSessionStartState& p2p = g_runtime.p2p_session_start_state;
+    if (!replay.playback_mode || !p2p.start_parameter_payload_present) {
+        return false;
+    }
+
+    LinkLobbyState& lobby = link_lobby_state();
+    if (!LoadLinkLobbyStartParametersPayload(lobby,
+            p2p.start_parameter_payload.data(),
+            p2p.start_parameter_payload.size())) {
+        return false;
+    }
+
+    lobby.local_player_index = static_cast<int>(std::min<u32>(
+        p2p.copied_runtime_local_player, kPlayerSlotCount - 1));
+    g_runtime.link_lobby_start_parameters_pending = true;
+    return true;
+}
+
 void populate_p2p_session_start_input_from_link_lobby(
     P2PGameSessionStartInput& input) {
     if (!link_lobby_startup_parameters_available()) {
@@ -11640,7 +11660,7 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     ResetPlayerSlotRuntime(g_runtime.gameplay_player_slots);
     configure_default_mode1_gameplay_runtime_callbacks();
     append_startup_log("start-slots: runtime globals reset ok");
-    const bool link_lobby_start_parameters_available_for_start =
+    bool link_lobby_start_parameters_available_for_start =
         link_lobby_startup_parameters_available();
     append_startup_log("start-slots: link params available=%s payload=%zu",
         link_lobby_start_parameters_available_for_start ? "yes" : "no",
@@ -11705,10 +11725,20 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
                 g_runtime.p2p_session_start_state.network_player_count),
             static_cast<unsigned long>(
                 g_runtime.p2p_session_start_state.local_player_slot));
+        if (!link_lobby_start_parameters_available_for_start &&
+            hydrate_replay_link_lobby_startup_parameters()) {
+            link_lobby_start_parameters_available_for_start = true;
+            append_startup_log(
+                "start-slots: hydrated replay link params local=%lu",
+                static_cast<unsigned long>(
+                    g_runtime.p2p_session_start_state.copied_runtime_local_player));
+        }
     }
     gameplay_loop_state().fixed_step_mode = 4;
     if (link_lobby_start_parameters_available_for_start) {
-        const u32 local_player = input.copied_runtime_local_player;
+        const u32 local_player = std::min<u32>(
+            g_runtime.p2p_session_start_state.copied_runtime_local_player,
+            kPlayerSlotCount - 1);
         SetMode1ReliableLocalPlayerIndex(local_player);
         // The original uses the same DAT_00725100 local slot both for the
         // reliable channel and for SnapshotLocalGameplayChecksum's packed
@@ -14074,24 +14104,40 @@ bool default_gameplay_loop_frame_gate(GameplayLoopState& state) {
             state.current_tick_ms);
     Mode1GameplayPacketDispatchState& packet_dispatch =
         mode1_gameplay_packet_dispatch_state();
-    if (packet_dispatch.corrective_mismatch_detected &&
+    const bool corrective_drop = packet_dispatch.corrective_mismatch_detected;
+    const bool remote_inactive_drop =
+        packet_dispatch.player_inactive_packets != 0 &&
+        packet_dispatch.last_inactive_notification_target < kPlayerSlotCount &&
+        packet_dispatch.last_inactive_notification_target !=
+            packet_dispatch.local_player_index;
+    if ((corrective_drop || remote_inactive_drop) &&
         !p2p_flight_recorder_state().drop_capture_attempted) {
         P2PSyncMismatchCaptureInfo mismatch{};
-        mismatch.detected_frame = packet_dispatch.last_corrective_frame;
-        mismatch.remote_channel = packet_dispatch.last_corrective_channel;
-        mismatch.sequence = packet_dispatch.last_corrective_sequence;
-        mismatch.local_checksum = packet_dispatch.last_corrective_local_value;
-        mismatch.remote_checksum = packet_dispatch.last_corrective_remote_value;
+        if (corrective_drop) {
+            mismatch.detected_frame = packet_dispatch.last_corrective_frame;
+            mismatch.remote_channel = packet_dispatch.last_corrective_channel;
+            mismatch.sequence = packet_dispatch.last_corrective_sequence;
+            mismatch.local_checksum = packet_dispatch.last_corrective_local_value;
+            mismatch.remote_checksum = packet_dispatch.last_corrective_remote_value;
+        }
+        else {
+            mismatch.trigger = P2PDropCaptureTrigger::remote_player_inactive;
+            mismatch.detected_frame = state.simulation_frame_counter;
+            mismatch.remote_channel =
+                packet_dispatch.last_inactive_notification_source;
+            mismatch.sequence = packet_dispatch.last_inactive_notification_code;
+        }
         const bool saved = PersistP2PDropCapture(
             mismatch, replay_recording_state());
         const P2PFlightRecorderState& capture = p2p_flight_recorder_state();
         append_startup_log(
-            "p2p-drop-capture: saved=%s replay=%s trace=%s frame=%lu channel=%lu sequence=%lu",
+            "p2p-drop-capture: saved=%s replay=%s trace=%s trigger=%lu frame=%lu channel=%lu sequence=%lu",
             saved ? "yes" : "no",
             capture.last_replay_path.empty() ? "(failed)" :
                 capture.last_replay_path.c_str(),
             capture.last_trace_path.empty() ? "(failed)" :
                 capture.last_trace_path.c_str(),
+            static_cast<unsigned long>(mismatch.trigger),
             static_cast<unsigned long>(mismatch.detected_frame),
             static_cast<unsigned long>(mismatch.remote_channel),
             static_cast<unsigned long>(mismatch.sequence));
@@ -14816,7 +14862,12 @@ bool remove_default_unit_deferred_resource_command(UnitMovementUnit& unit,
     if (logical_index == 0) {
         if (default_unit_resource_command_payload_matches(
                 unit.active_command_payload, expected_payload)) {
-            unit.active_command_payload = {};
+            // The original active-slot cancel writes command_value=-1 and
+            // lets PopDeferredUnitCommandOrReturnIdle clear only raw +0xe4,
+            // the tuple state.  Its x/y/value payload words deliberately
+            // remain as inactive residue.  Clearing the whole typed tuple
+            // made repeated ESC cancellation diverge after the final order.
+            unit.active_command_payload.state = 0;
             return true;
         }
         return false;
@@ -15240,28 +15291,25 @@ bool default_mode1_packet_resolve_latest_subtype01_resource_command(
     const u32 state = active_command
         ? (unit.command_state & kUnitCommandStateMask)
         : (command.state & kUnitCommandStateMask);
-    if (active_command && (state == kUnitStateProductionSpawnStart ||
-            state == kUnitStateProductionSpawnCycle)) {
-        payload = static_cast<u32>(command.x);
+    payload = static_cast<u32>(command.x);
+    switch (ResolveSubtype01LatestCancelRoute(!active_command, state)) {
+    case Subtype01LatestCancelRoute::ordinary_production:
+        // The queued branch at 0x004dcb64 only special-cases states 0x17 and
+        // 0x22.  Every other queued state, including the incident's ordinary
+        // production state 0x10, falls through to the subtype-01 remover.
         return true;
-    }
-    if ((!active_command && state == 0x17) ||
-        (active_command && (state == kUnitStateCompletionAnnouncementStart ||
-            state == kUnitStateCompletionAnnouncementTimer))) {
+    case Subtype01LatestCancelRoute::placement_resource:
         category_flag = 0x0c;
         internal_command = 0x17;
-        payload = static_cast<u32>(command.x);
         return true;
-    }
-    if ((!active_command && state == 0x22) ||
-        (active_command && (state == kUnitStateCompletionEffectStart ||
-            state == kUnitStateCompletionEffectTimer))) {
+    case Subtype01LatestCancelRoute::production_cost:
         category_flag = 0x1a;
         internal_command = 0x22;
-        payload = static_cast<u32>(command.x);
         return true;
+    case Subtype01LatestCancelRoute::reject:
+    default:
+        return false;
     }
-    return false;
 }
 
 bool default_mode1_packet_owner_transport_attachment_exists(u32 owner,

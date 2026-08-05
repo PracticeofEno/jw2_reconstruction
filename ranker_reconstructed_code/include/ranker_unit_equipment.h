@@ -31,6 +31,14 @@ constexpr u32 kUnitEquipmentGenericModifierReserved240 = 4;
 constexpr u32 kUnitEquipmentGenericModifierCommandGate = 5;
 constexpr u32 kUnitEquipmentGenericModifierCommandFlag = 6;
 
+// ApplyUnitEquipmentEffect 0x00410529 uses definition +0x1f8 bit 0x2, not
+// the unrelated mutable unit type-flags word at raw +0x58.
+constexpr bool ShouldSetUnitEquipmentReplacementCommandFlag(
+    u32 replacement_definition_flags, i32 equipment_command_flag_modifier) {
+    return (replacement_definition_flags & 0x2u) != 0 ||
+        equipment_command_flag_modifier != 0;
+}
+
 // Original FUN_00411b70 and the action-two publisher both test raw unit
 // +0x58 with mask 0x02.  This is a raw capability bit, not action index two
 // (1 << 2).  Keeping the predicate named and shared prevents those two gates

@@ -386,7 +386,7 @@ SOCKET StartLegacyUdpSocket(const char* bind_address, u16 port) {
         return INVALID_SOCKET;
     }
 
-    int buffer_bytes = 0x8000;
+    int buffer_bytes = kLegacyUdpSocketBufferBytes;
     if (setsockopt(g_network_state.udp_socket, SOL_SOCKET, SO_RCVBUF,
             reinterpret_cast<const char*>(&buffer_bytes), sizeof(buffer_bytes)) ==
         SOCKET_ERROR) {
@@ -482,21 +482,29 @@ i32 ReceiveLegacyUdpPacket() {
         return static_cast<i32>(g_network_state.udp_receive_queue.size());
     }
 
-    const auto old_size = g_network_state.udp_receive_queue.size();
-    const auto remaining = kLegacyUdpReceiveQueueBytes - old_size;
-    g_network_state.udp_receive_queue.resize(kLegacyUdpReceiveQueueBytes);
+    // recvfrom operates on one complete datagram.  Receiving directly into
+    // the unused tail of the accumulated stream made the available buffer
+    // smaller after every queued packet.  A large original-client catch-up
+    // datagram would then fail with WSAEMSGSIZE and be discarded.  Receive at
+    // the wire maximum first and append only after the datagram is complete.
+    std::array<u8, kLegacyUdpDatagramBytes> datagram;
     int sender_size = sizeof(g_network_state.udp_last_sender);
     const int received = recvfrom(g_network_state.udp_socket,
-        reinterpret_cast<char*>(g_network_state.udp_receive_queue.data() + old_size),
-        static_cast<int>(remaining), 0,
+        reinterpret_cast<char*>(datagram.data()),
+        static_cast<int>(datagram.size()), 0,
         reinterpret_cast<sockaddr*>(&g_network_state.udp_last_sender), &sender_size);
     if (received == SOCKET_ERROR) {
-        g_network_state.udp_receive_queue.resize(old_size);
         return static_cast<i32>(g_network_state.udp_receive_queue.size());
     }
 
-    g_network_state.udp_receive_queue.resize(
-        old_size + static_cast<std::size_t>(received));
+    const std::size_t received_bytes = static_cast<std::size_t>(received);
+    if (received_bytes > kLegacyUdpReceiveQueueBytes -
+            g_network_state.udp_receive_queue.size()) {
+        return static_cast<i32>(g_network_state.udp_receive_queue.size());
+    }
+    g_network_state.udp_receive_queue.insert(
+        g_network_state.udp_receive_queue.end(), datagram.begin(),
+        datagram.begin() + received_bytes);
     return static_cast<i32>(g_network_state.udp_receive_queue.size());
 }
 

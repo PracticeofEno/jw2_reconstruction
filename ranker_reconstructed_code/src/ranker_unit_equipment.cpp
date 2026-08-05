@@ -212,10 +212,20 @@ void apply_unit_type_replacement(UnitCommandContext& context, UnitMovementUnit& 
             context, unit, original_type, unit.type_id);
     }
 
-    if ((unit.type_flags & 0x2u) != 0 ||
-        (context.equipment_catalog != nullptr &&
-            CalculateUnitEquipmentCommandFlagModifier(
-                unit, *context.equipment_catalog) != 0)) {
+    // ApplyUnitEquipmentEffect 0x00410529 reads the replacement definition's
+    // raw +0x1f8 word (DAT_0087c4f0), not raw unit +0x58/type_flags.  Primitive
+    // upgrade types 0x0b and 0x5e have type_flags bit 0x2 but no +0x1f8
+    // cloaking bit; treating the former as the latter leaves command flag
+    // 0x40 set and makes neutral damage reactions take the visibility/flee
+    // branch instead of the original combat-reaction branch.
+    const i32 equipment_command_flag_modifier =
+        context.equipment_catalog != nullptr
+            ? CalculateUnitEquipmentCommandFlagModifier(
+                unit, *context.equipment_catalog)
+            : 0;
+    if (ShouldSetUnitEquipmentReplacementCommandFlag(
+            unit.definition.footprint_flags,
+            equipment_command_flag_modifier)) {
         unit.command_flags |= 0x40;
     }
 }

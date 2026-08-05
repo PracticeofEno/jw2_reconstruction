@@ -14,7 +14,13 @@ namespace ranker {
 
 constexpr u32 kLegacySocketRecordCount = 10;
 constexpr u32 kLegacySocketQueueBytes = 0x4000;
-constexpr u32 kLegacyUdpReceiveQueueBytes = 0x10000;
+// A single legacy sender can legally emit a near-64 KiB UDP datagram.  Keep
+// the datagram scratch at that wire limit, but give the userspace queue and
+// the socket enough headroom to absorb a resend burst without dropping the
+// following checksum heartbeat.
+constexpr u32 kLegacyUdpDatagramBytes = 0x10000;
+constexpr u32 kLegacyUdpReceiveQueueBytes = 0x100000;
+constexpr int kLegacyUdpSocketBufferBytes = 0x100000;
 // Keep mode-1 batches below the path-MTU range while retaining the original
 // 0x24-byte reliable-packet boundary.  The socket's SO_MAX_MSG_SIZE is usually
 // about 64 KiB, which otherwise turns a catch-up resend into many IP fragments.

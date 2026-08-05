@@ -10,6 +10,43 @@ namespace ranker {
 
 constexpr u32 kMode1GameplayPacketSubtypeCount = 0x40;
 
+enum class Subtype01LatestCancelRoute : u8 {
+    reject = 0,
+    ordinary_production,
+    placement_resource,
+    production_cost,
+};
+
+// HandleSubtype01ProductionCommandPacket 0x004dca58 treats every queued
+// command other than the two resource-special states as ordinary production.
+// The active slot is stricter and accepts only its six explicit states.
+constexpr Subtype01LatestCancelRoute ResolveSubtype01LatestCancelRoute(
+    bool queued_command, u32 command_state) {
+    command_state &= 0x00ffffffu;
+    if (queued_command) {
+        if (command_state == 0x17u) {
+            return Subtype01LatestCancelRoute::placement_resource;
+        }
+        if (command_state == 0x22u) {
+            return Subtype01LatestCancelRoute::production_cost;
+        }
+        return Subtype01LatestCancelRoute::ordinary_production;
+    }
+    switch (command_state) {
+    case 0x4du:
+    case 0x4eu:
+        return Subtype01LatestCancelRoute::placement_resource;
+    case 0x50u:
+    case 0x51u:
+        return Subtype01LatestCancelRoute::ordinary_production;
+    case 0x82u:
+    case 0x83u:
+        return Subtype01LatestCancelRoute::production_cost;
+    default:
+        return Subtype01LatestCancelRoute::reject;
+    }
+}
+
 struct PlayerSlotRuntimeState;
 
 using Mode1GameplayPacketHandler = void (*)(const Mode1ReliablePacket& packet,

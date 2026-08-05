@@ -88,12 +88,18 @@ struct P2PFlightFrameRecord {
     std::vector<P2PFlightEffectRecord> effects;
 };
 
+enum class P2PDropCaptureTrigger : u32 {
+    corrective_checksum = 0,
+    remote_player_inactive = 1,
+};
+
 struct P2PSyncMismatchCaptureInfo {
     u32 detected_frame = 0;
     u32 remote_channel = 0;
     u32 sequence = 0;
     u32 local_checksum = 0;
     u32 remote_checksum = 0;
+    P2PDropCaptureTrigger trigger = P2PDropCaptureTrigger::corrective_checksum;
 };
 
 struct P2PFlightRecorderState {

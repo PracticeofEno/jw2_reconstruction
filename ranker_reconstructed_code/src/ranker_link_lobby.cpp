@@ -4161,14 +4161,22 @@ void ApplyLinkLobbyMapDownloadRequestPacket(LinkLobbyState& state,
     }
 }
 
-void ApplyLinkLobbyStartParametersPacket(LinkLobbyState& state, const void* packet,
-    std::size_t byte_count) {
-    if (packet == nullptr || byte_count < 0x0c) {
-        return;
+bool LoadLinkLobbyStartParametersPayload(LinkLobbyState& state,
+    const void* packet, std::size_t byte_count) {
+    if (packet == nullptr || byte_count < kLinkLobbyStartParameterPacketBytes) {
+        return false;
     }
     const auto* bytes = static_cast<const u8*>(packet);
     state.start_parameter_payload.assign(bytes, bytes + byte_count);
     apply_link_lobby_start_parameter_payload_fields(state, bytes, byte_count);
+    return true;
+}
+
+void ApplyLinkLobbyStartParametersPacket(LinkLobbyState& state, const void* packet,
+    std::size_t byte_count) {
+    if (!LoadLinkLobbyStartParametersPayload(state, packet, byte_count)) {
+        return;
+    }
     state.start_locked = true;
     if (state.window != nullptr) {
         PostMessageA(state.window, kLinkLobbyStartDecisionMessage, 0, 0);

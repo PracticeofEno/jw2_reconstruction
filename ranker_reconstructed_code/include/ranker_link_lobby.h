@@ -411,6 +411,8 @@ void ApplyLinkLobbyMapDownloadProgressPacket(LinkLobbyState& state,
     const void* packet, std::size_t byte_count);
 void ApplyLinkLobbyMapDownloadRequestPacket(LinkLobbyState& state,
     const void* packet, std::size_t byte_count);
+bool LoadLinkLobbyStartParametersPayload(LinkLobbyState& state,
+    const void* packet, std::size_t byte_count);
 void ApplyLinkLobbyStartParametersPacket(LinkLobbyState& state, const void* packet,
     std::size_t byte_count);
 void HandleLinkLobbyStartTimeoutPacket(LinkLobbyState& state, const void* packet,
