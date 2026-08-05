@@ -239,7 +239,7 @@ void verify_original_selector_metadata() {
     }
 }
 
-void verify_source_owner_projected_hurdle_gate() {
+void verify_p2p_hurdle_authority_gate() {
     constexpr u32 kSelector = 0x17u;
     GameplayProductionActionState state = make_mixed_state(kSelector);
     state.local_player_index = 1;
@@ -256,20 +256,57 @@ void verify_source_owner_projected_hurdle_gate() {
             state, 0x61u, 0, 0, kOrdinaryUnit), kSelector,
         "ordinary local building placement used the remote authority view");
 
-    // The receiving peer has a different local route projection, but must
-    // reproduce the source owner's accepted placement from the shared
-    // per-owner explored layer.
+    // A locally issued Hurdle must not leave this peer when any active P2P
+    // participant would fail the original process-local explored-fog test.
+    const u32 all_active_players = (1u << 0) | (1u << 1);
+    require_selector(ResolvePreviewPlacementAuthorityMask(1, 1,
+            all_active_players) == all_active_players, kSelector,
+        "local Hurdle did not select the all-player explored intersection");
+    require_selector(!CheckPreviewProductionPlacementFootprintGateCellsForOwnerMask(
+            state, 0x7du, 0, 0, kOrdinaryUnit, all_active_players), kSelector,
+        "local Hurdle accepted a cell unexplored by another active player");
+    require_selector(state.preview_placement_authority_player == 0xffffffffu,
+        kSelector, "failed all-player Hurdle check leaked its authority owner");
+
+    cell.visibility_owner_flags = all_active_players;
+    require_selector(CheckPreviewProductionPlacementFootprintGateCellsForOwnerMask(
+            state, 0x7du, 0, 0, kOrdinaryUnit, all_active_players), kSelector,
+        "local Hurdle rejected the all-player explored intersection");
+    require_selector(state.preview_placement_authority_player == 0xffffffffu,
+        kSelector, "successful all-player Hurdle check leaked its authority owner");
+
+    // A receiving reconstructed peer must reproduce an original sender's
+    // accepted local decision from the sender-owner layer.  Applying the
+    // receiver's all-player mask here would reject a packet already accepted
+    // and emitted by the unmodified original.
     state.local_player_index = 0;
     cell.route_flags = 0;
-    state.preview_placement_authority_player = 1;
-    require_selector(CheckPreviewProductionPlacementFootprintGateCells(
-            state, 0x7du, 0, 0, kOrdinaryUnit), kSelector,
+    const u32 remote_authority = ResolvePreviewPlacementAuthorityMask(
+        state.local_player_index, 1, all_active_players);
+    require_selector(remote_authority == (1u << 1), kSelector,
+        "remote Hurdle did not retain the original sender's authority");
+    require_selector(CheckPreviewProductionPlacementFootprintGateCellsForOwnerMask(
+            state, 0x7du, 0, 0, kOrdinaryUnit, remote_authority), kSelector,
         "Hurdle rejected a cell explored by the command source owner");
 
     cell.visibility_owner_flags = 0;
-    require_selector(!CheckPreviewProductionPlacementFootprintGateCells(
-            state, 0x7du, 0, 0, kOrdinaryUnit), kSelector,
+    require_selector(!CheckPreviewProductionPlacementFootprintGateCellsForOwnerMask(
+            state, 0x7du, 0, 0, kOrdinaryUnit, remote_authority), kSelector,
         "Hurdle accepted a cell unexplored by the command source owner");
+
+    // Verify that the local all-player failure happens before the command is
+    // published, which also keeps effect allocation, cost debit and RNG out
+    // of the divergent simulation path.
+    state = make_mixed_state(kSelector);
+    state.preview_placement_required_owner_mask = all_active_players;
+    state.placement_map.cells[0].visibility_owner_flags = 1u << 0;
+    DispatchOwnerProductionActionCommand(state, kSelector, 0, 0,
+        kOrdinaryUnit);
+    require_selector(state.last_dispatch_failed, kSelector,
+        "unsafe local Hurdle command was not rejected before dispatch");
+    require_selector(state.published_actions.empty() &&
+            state.queued_commands.empty(), kSelector,
+        "unsafe local Hurdle command emitted a P2P action");
 }
 
 void verify_production_action_target_mode_encoding() {
@@ -348,7 +385,7 @@ void verify_mixed_selection_dispatch(u32 selector, bool capable_primary) {
 
 int main() {
     verify_original_selector_metadata();
-    verify_source_owner_projected_hurdle_gate();
+    verify_p2p_hurdle_authority_gate();
     verify_production_action_target_mode_encoding();
     for (u32 selector = 0; selector < kGameplayProductionSelectorCount;
          ++selector) {

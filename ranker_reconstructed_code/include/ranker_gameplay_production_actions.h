@@ -124,10 +124,11 @@ struct GameplayProductionPlacementCell {
     u32 owner_flags = 0;
     u32 route_flags = 0;
     u32 current_visibility_flags = 0;
-    // DAT_007d8d40's per-owner explored bits.  The synchronized action 0x17
-    // effect gate uses this to reconstruct the command source owner's local
-    // 798D40 bit 28 on every peer.  Ordinary building previews and build
-    // clicks continue to use the current player's route_flags projection.
+    // DAT_007d8d40's effective per-player explored bits.  Action 0x17 uses
+    // these to reproduce either every live P2P participant's local 798D40
+    // bit 28 or the original command sender's bit on a receiving peer.
+    // Ordinary building previews and build clicks continue to use the
+    // current player's route_flags projection.
     u32 visibility_owner_flags = 0;
 };
 
@@ -227,6 +228,7 @@ struct GameplayProductionActionState {
     u32 selected_action_selector = 0;
     u32 preview_placement_terrain_class = 3;
     u32 preview_placement_authority_player = 0xffffffffu;
+    u32 preview_placement_required_owner_mask = 0;
     u32 last_action_index = 0;
     u32 last_world_x = 0;
     u32 last_world_y = 0;
@@ -300,8 +302,19 @@ bool CheckProductionOwnerRequirementGate(GameplayProductionActionState& state,
 bool CheckPreviewProductionPlacementFootprintGateCells(
     GameplayProductionActionState& state, u32 unit_type, i32 world_x, i32 world_y,
     u32 source_unit_offset);
+bool CheckPreviewProductionPlacementFootprintGateCellsForOwnerMask(
+    GameplayProductionActionState& state, u32 unit_type, i32 world_x, i32 world_y,
+    u32 source_unit_offset, u32 required_owner_mask);
 bool CheckPreviewProductionPlacementGateCell(GameplayProductionActionState& state,
     i32 tile_x, i32 tile_y, u32 source_unit_offset, bool allow_nearby_probe);
+
+constexpr u32 ResolvePreviewPlacementAuthorityMask(u32 local_player_index,
+    u32 source_owner, u32 local_required_owner_mask) {
+    if (source_owner == local_player_index && local_required_owner_mask != 0) {
+        return local_required_owner_mask;
+    }
+    return source_owner < 32u ? (1u << source_owner) : 0;
+}
 void ResetQueuedProductionPlacementCommands(GameplayProductionActionState& state);
 void QueueProductionPlacementCommand(GameplayProductionActionState& state,
     const GameplayProductionQueuedCommand& command);

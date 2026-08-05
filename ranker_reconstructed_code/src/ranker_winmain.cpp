@@ -20637,6 +20637,32 @@ void sync_default_gameplay_production_action_definitions(
     }
 }
 
+u32 default_live_p2p_preview_required_owner_mask() {
+    if (replay_recording_state().playback_mode) {
+        return 0;
+    }
+
+    const P2PGameSessionStartState& p2p =
+        g_runtime.p2p_session_start_state;
+    if (p2p.network_player_count <= 1) {
+        return 0;
+    }
+
+    const PlayerSlotRuntimeState& players = g_runtime.gameplay_player_slots;
+    u32 required_owner_mask = 0;
+    for (u32 owner = 0; owner < p2p.network_index_by_owner.size() &&
+         owner < players.slot_states.size(); ++owner) {
+        const bool is_network_participant =
+            p2p.network_index_by_owner[owner] < p2p.network_player_count;
+        const bool is_active_player = players.slot_states[owner] ==
+            static_cast<u8>(PlayerSlotState::active);
+        if (is_network_participant && is_active_player) {
+            required_owner_mask |= 1u << owner;
+        }
+    }
+    return required_owner_mask;
+}
+
 void sync_default_gameplay_production_action_units(
     GameplayProductionActionState& production, const UiOverlayState& overlay) {
     configure_default_gameplay_production_action_context(production);
@@ -20659,10 +20685,14 @@ void sync_default_gameplay_production_action_units(
             g_runtime.gameplay_terrain_layer.stride_tiles);
     }
     // Ordinary construction is a local-player UI/command path in the
-    // original.  Keep the authority projection disabled here; action 0x17's
-    // synchronized effect gate enables it only for the duration of that
-    // simulation-side check.
+    // original, so its single-owner authority projection remains disabled.
+    // Hurdle's local pre-dispatch path separately requires the explored-area
+    // intersection of every active human P2P participant.  This avoids
+    // publishing a command that an unmodified original peer would reject
+    // from its process-local fog projection.
     production.preview_placement_authority_player = 0xffffffffu;
+    production.preview_placement_required_owner_mask =
+        default_live_p2p_preview_required_owner_mask();
     const GameplayVisibilityGrid& visibility =
         g_runtime.gameplay_visibility_grid;
     if (visibility.width == production.placement_map.width &&
@@ -23782,18 +23812,19 @@ bool dispatch_default_unit_command_action_effect(UnitMovementUnit& source,
             gameplay_production_action_state();
         sync_default_gameplay_production_action_units(
             placement_gate, ui_overlay_state());
-        const u32 previous_authority =
-            placement_gate.preview_placement_authority_player;
-        // The command source owns the view under which Hurdle was accepted.
-        // Project that owner's persistent explored bit on every peer.  Using
-        // the lowest checksum-authority player here made a player-1 Green Elf
-        // animate but fail to create the hurdle whenever player 0 had not
-        // explored the target cell.
-        placement_gate.preview_placement_authority_player = source.owner_id;
+        // A reconstructed local caster was pre-gated against every active
+        // participant before its command was published, so repeat that exact
+        // all-owner decision on its simulation path.  For a command received
+        // from an original peer, project only the source owner's explored
+        // layer: that reproduces the original caster's local decision while
+        // avoiding the receiver's unrelated local fog state.
+        const u32 authority_mask = ResolvePreviewPlacementAuthorityMask(
+            placement_gate.local_player_index, source.owner_id,
+            placement_gate.preview_placement_required_owner_mask);
         const bool hurdle_placement_allowed =
-            CheckPreviewProductionPlacementFootprintGateCells(
-                placement_gate, kHurdleUnitType, world_x, world_y, source.id);
-        placement_gate.preview_placement_authority_player = previous_authority;
+            CheckPreviewProductionPlacementFootprintGateCellsForOwnerMask(
+                placement_gate, kHurdleUnitType, world_x, world_y, source.id,
+                authority_mask);
         if (!hurdle_placement_allowed) {
             return false;
         }

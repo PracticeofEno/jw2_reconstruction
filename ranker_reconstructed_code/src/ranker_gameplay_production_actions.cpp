@@ -845,13 +845,23 @@ u32 DispatchOwnerProductionActionCommand(GameplayProductionActionState& state,
     }
 
     // FUN_004db0f7 has one explicit pre-dispatch footprint check: selector
-    // 0x17 validates unit type 0x7d at an aligned world point.
-    if (selector == kSpecialPreviewPlacementSelector &&
-        !CheckPreviewProductionPlacementFootprintGateCells(state,
-            kSpecialPreviewPlacementUnitType, world_x & ~0x1f,
-            world_y & ~0x1f, state.selected_unit_offset)) {
-        reject_action(state);
-        return selector;
+    // 0x17 validates unit type 0x7d at an aligned world point.  In live P2P,
+    // reject the local command before publishing it unless every participant
+    // would pass the original process-local explored-fog predicate.
+    if (selector == kSpecialPreviewPlacementSelector) {
+        const GameplayProductionUnitState* source = selected_unit(state);
+        const u32 source_owner = source != nullptr ?
+            source->owner : state.local_player_index;
+        const u32 authority_mask = ResolvePreviewPlacementAuthorityMask(
+            state.local_player_index, source_owner,
+            state.preview_placement_required_owner_mask);
+        if (!CheckPreviewProductionPlacementFootprintGateCellsForOwnerMask(
+                state, kSpecialPreviewPlacementUnitType, world_x & ~0x1f,
+                world_y & ~0x1f, state.selected_unit_offset,
+                authority_mask)) {
+            reject_action(state);
+            return selector;
+        }
     }
 
     // DAT_008629be is exactly 32 bytes.  A one starts the click marker before
@@ -1320,6 +1330,30 @@ bool CheckPreviewProductionPlacementFootprintGateCells(
     return true;
 }
 
+bool CheckPreviewProductionPlacementFootprintGateCellsForOwnerMask(
+    GameplayProductionActionState& state, u32 unit_type, i32 world_x, i32 world_y,
+    u32 source_unit_offset, u32 required_owner_mask) {
+    if (required_owner_mask == 0) {
+        return CheckPreviewProductionPlacementFootprintGateCells(state,
+            unit_type, world_x, world_y, source_unit_offset);
+    }
+
+    const u32 previous_authority = state.preview_placement_authority_player;
+    for (u32 owner = 0; owner < 32u; ++owner) {
+        if ((required_owner_mask & (1u << owner)) == 0) {
+            continue;
+        }
+        state.preview_placement_authority_player = owner;
+        if (!CheckPreviewProductionPlacementFootprintGateCells(state,
+                unit_type, world_x, world_y, source_unit_offset)) {
+            state.preview_placement_authority_player = previous_authority;
+            return false;
+        }
+    }
+    state.preview_placement_authority_player = previous_authority;
+    return true;
+}
+
 bool CheckPreviewProductionPlacementGateCell(GameplayProductionActionState& state,
     i32 tile_x, i32 tile_y, u32 source_unit_offset, bool allow_nearby_probe) {
     if (tile_x < 0 || tile_y < 0) {
@@ -1339,11 +1373,10 @@ bool CheckPreviewProductionPlacementGateCell(GameplayProductionActionState& stat
 
     // 798D40 bits 27/28 are the local process' explored-fog projection.  The
     // original executable consequently sees different bit 28 values on two
-    // P2P peers when only one player's units have explored a cell.  Action
-    // 0x17 consults this presentation-local bit from simulation code, which
-    // is an original desync bug.  Project the command source owner's
-    // persistent explored bit from DAT_007d8d40 so both simulations make the
-    // same decision without rejecting a placement that the caster can see.
+    // P2P peers when only one player's units have explored a cell.  Callers
+    // can project a particular owner's persistent explored bit from
+    // DAT_007d8d40; action 0x17 uses this to prevent the original's
+    // presentation-local simulation decision from desynchronizing peers.
     bool authority_route_visible =
         (cell->route_flags & kPreviewPlacementRouteRequiredFlag) != 0;
     if (state.preview_placement_authority_player < 32u &&
