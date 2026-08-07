@@ -733,14 +733,6 @@ void set_message(CreateGameState& state, const char* message, COLORREF color) {
     }
 }
 
-const char* startup_message_row(std::size_t index, const char* fallback) {
-    const auto& rows = startup_text_tables().message_rows.rows;
-    if (index < rows.size() && !rows[index].empty()) {
-        return rows[index].data();
-    }
-    return fallback;
-}
-
 const char* terrain_type_name(u32 terrain_type) {
     if (terrain_type < std::size(kTerrainTypeFallbacks)) {
         return startup_message_row(161 + terrain_type,

@@ -127,22 +127,6 @@ void sync_default_gameplay_script_object_from_unit(
 void sync_default_gameplay_script_scenario_record(
     const GameplayScriptTriggerState& script);
 
-const char* startup_message_row(std::size_t index, const char* fallback) {
-    const auto& rows = startup_text_tables().message_rows.rows;
-    if (index < rows.size() && !rows[index].empty()) {
-        return rows[index].data();
-    }
-    return fallback;
-}
-
-const char* startup_platform_row(std::size_t index, const char* fallback) {
-    const auto& rows = startup_text_tables().platform_rows.rows;
-    if (index < rows.size() && !rows[index].empty()) {
-        return rows[index].data();
-    }
-    return fallback;
-}
-
 const char* startup_production_resource_failure_row(u32 code) {
     constexpr std::size_t kResourceFailureRowBase = 94;
     const char* fallback = "Cannot produce unit";

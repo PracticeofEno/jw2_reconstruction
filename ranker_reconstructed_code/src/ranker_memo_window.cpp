@@ -231,14 +231,6 @@ void show_memo_message(MemoWindowState& state, const char* text,
         state.instance, text == nullptr ? "" : text, color, false, 0, 0);
 }
 
-const char* startup_message_row(std::size_t index, const char* fallback) {
-    const auto& rows = startup_text_tables().message_rows.rows;
-    if (index < rows.size() && !rows[index].empty()) {
-        return rows[index].data();
-    }
-    return fallback;
-}
-
 void forward_memo_network_message(MemoWindowState& state, WPARAM wparam,
     LPARAM lparam) {
     if (state.callbacks.forward_network_message != nullptr) {

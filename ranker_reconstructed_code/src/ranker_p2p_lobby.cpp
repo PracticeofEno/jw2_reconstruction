@@ -50,14 +50,6 @@ P2PNetworkLaunchParameters g_p2p_network_launch_parameters;
 bool g_background_shutdown_registered = false;
 std::array<bool, 4> g_image_button_shutdown_registered{};
 
-const char* startup_platform_row(std::size_t index, const char* fallback) {
-    const auto& rows = startup_text_tables().platform_rows.rows;
-    if (index < rows.size() && !rows[index].empty()) {
-        return rows[index].data();
-    }
-    return fallback;
-}
-
 const char* kP2PTribeNames[] = {
     "Primitive",
     "Elf",
@@ -429,14 +421,6 @@ void show_lobby_message(P2PLobbyState& state, const char* text, COLORREF color) 
     if (state.callbacks.show_message != nullptr && state.window != nullptr) {
         state.callbacks.show_message(state.window, state.last_status_text.c_str(), color);
     }
-}
-
-const char* startup_message_row(std::size_t index, const char* fallback) {
-    const auto& rows = startup_text_tables().message_rows.rows;
-    if (index < rows.size() && !rows[index].empty()) {
-        return rows[index].data();
-    }
-    return fallback;
 }
 
 void show_startup_lobby_message(P2PLobbyState& state, std::size_t index,

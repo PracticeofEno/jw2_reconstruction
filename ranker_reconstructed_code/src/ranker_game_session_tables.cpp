@@ -25,14 +25,6 @@ constexpr u32 kGameSessionAvatarArchiveDirectoryGrowth = 0x14;
 constexpr u16 kGameSessionAvatarArchiveStorageMethod = 2;
 constexpr std::size_t kStartupAvatarDisplayNameFormatRow = 250;
 
-const char* startup_platform_row(std::size_t index, const char* fallback) {
-    const auto& rows = startup_text_tables().platform_rows.rows;
-    if (index < rows.size() && !rows[index].empty()) {
-        return rows[index].data();
-    }
-    return fallback;
-}
-
 u32 bounded_count(u32 count) {
     return std::min<u32>(count, kGameSessionUnitReferenceCapacity);
 }

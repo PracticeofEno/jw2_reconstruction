@@ -216,14 +216,6 @@ void show_message(IpxFrontendState& state, HWND owner, const char* text,
     }
 }
 
-const char* startup_message_row(std::size_t index, const char* fallback) {
-    const auto& rows = startup_text_tables().message_rows.rows;
-    if (index < rows.size() && !rows[index].empty()) {
-        return rows[index].data();
-    }
-    return fallback;
-}
-
 void play_click_sound(IpxFrontendState& state) {
     if (state.callbacks.play_click_sound != nullptr) {
         state.callbacks.play_click_sound(state);

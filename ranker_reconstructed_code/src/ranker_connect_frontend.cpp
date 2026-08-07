@@ -253,14 +253,6 @@ void show_connect_message(ConnectFrontendState& state, const char* text,
     }
 }
 
-const char* startup_message_row(std::size_t index, const char* fallback) {
-    const auto& rows = startup_text_tables().message_rows.rows;
-    if (index < rows.size() && !rows[index].empty()) {
-        return rows[index].data();
-    }
-    return fallback;
-}
-
 std::string format_startup_message_u32(
     std::size_t index, const char* fallback, u32 value) {
     char buffer[512]{};

@@ -206,14 +206,6 @@ u32 read_packet_u32(const void* packet, std::size_t packet_size, std::size_t off
     return value;
 }
 
-const char* startup_message_row(std::size_t index, const char* fallback) {
-    const auto& rows = startup_text_tables().message_rows.rows;
-    if (index < rows.size() && !rows[index].empty()) {
-        return rows[index].data();
-    }
-    return fallback;
-}
-
 void show_startup_status(IpxLobbyState& state, std::size_t index,
     const char* fallback, COLORREF color) {
     ShowIpxLobbyStatusMessage(state, startup_message_row(index, fallback), color);

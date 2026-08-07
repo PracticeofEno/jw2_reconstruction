@@ -309,14 +309,6 @@ void show_avatar_message(AvatarWindowState& state, const char* text,
         "Avatar", MB_OK | MB_ICONINFORMATION);
 }
 
-const char* startup_message_row(std::size_t index, const char* fallback) {
-    const auto& rows = startup_text_tables().message_rows.rows;
-    if (index < rows.size() && !rows[index].empty()) {
-        return rows[index].data();
-    }
-    return fallback;
-}
-
 void forward_avatar_network_message(AvatarWindowState& state, WPARAM wparam,
     LPARAM lparam) {
     if (state.callbacks.forward_network_message != nullptr) {

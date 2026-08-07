@@ -266,8 +266,6 @@ const char* kFallbackTribeLabels[] = {
     "Random",
 };
 
-const char* startup_message_row(std::size_t index, const char* fallback);
-
 LRESULT CALLBACK link_lobby_window_proc(HWND hwnd, UINT message, WPARAM wparam,
     LPARAM lparam) {
     return HandleLinkLobbyWindowMessage(g_link_lobby_state, hwnd, message, wparam,
@@ -1769,14 +1767,6 @@ void show_message_line(LinkLobbyState& state, const LinkLobbyMessageLine& line) 
 void show_message(LinkLobbyState& state, const char* text,
     COLORREF color = kLinkSoftWhite) {
     show_message_line(state, make_single_segment_message(text, color));
-}
-
-const char* startup_message_row(std::size_t index, const char* fallback) {
-    const auto& rows = startup_text_tables().message_rows.rows;
-    if (index < rows.size() && !rows[index].empty()) {
-        return rows[index].data();
-    }
-    return fallback;
 }
 
 void show_startup_message(LinkLobbyState& state, std::size_t index,

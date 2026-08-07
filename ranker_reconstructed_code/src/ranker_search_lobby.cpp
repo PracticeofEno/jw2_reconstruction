@@ -412,14 +412,6 @@ void show_search_message(SearchLobbyState& state, const char* text, COLORREF col
     }
 }
 
-const char* startup_message_row(std::size_t index, const char* fallback) {
-    const auto& rows = startup_text_tables().message_rows.rows;
-    if (index < rows.size() && !rows[index].empty()) {
-        return rows[index].data();
-    }
-    return fallback;
-}
-
 void send_query(SearchLobbyState& state) {
     const SearchLobbyQuery query = BuildSearchLobbyQuery(state);
     if (state.callbacks.queue_packet != nullptr) {

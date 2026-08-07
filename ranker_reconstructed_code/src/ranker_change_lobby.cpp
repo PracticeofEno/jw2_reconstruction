@@ -201,14 +201,6 @@ void queue_change_packet(ChangeLobbyState& state, const void* packet,
     }
 }
 
-const char* startup_message_row(std::size_t index, const char* fallback) {
-    const auto& rows = startup_text_tables().message_rows.rows;
-    if (index < rows.size() && !rows[index].empty()) {
-        return rows[index].data();
-    }
-    return fallback;
-}
-
 int selected_list_index(HWND listbox) {
     if (listbox == nullptr) {
         return LB_ERR;

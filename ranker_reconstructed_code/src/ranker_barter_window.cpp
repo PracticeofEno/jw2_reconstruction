@@ -264,8 +264,6 @@ int item_for_local_offer_slot(const BarterWindowState& state, int slot) {
     return item_for_inventory_slot(state, inventory_slot);
 }
 
-const char* startup_message_row(std::size_t index, const char* fallback);
-
 void draw_slot_background(BarterWindowState& state, HDC dc, bool selected) {
     StretchBitmapMemoryResourceToDc(
         selected ? state.selected_slot_bitmap : state.normal_slot_bitmap, dc, 0, 0);
@@ -411,14 +409,6 @@ void show_barter_message(BarterWindowState& state, const char* text,
         CreateOnlineModelessPrompt(online_modeless_prompt_state(), state.window,
             state.instance, text == nullptr ? "" : text, color, false, 0, 0);
     }
-}
-
-const char* startup_message_row(std::size_t index, const char* fallback) {
-    const auto& rows = startup_text_tables().message_rows.rows;
-    if (index < rows.size() && !rows[index].empty()) {
-        return rows[index].data();
-    }
-    return fallback;
 }
 
 void forward_barter_network_message(BarterWindowState& state, WPARAM wparam,

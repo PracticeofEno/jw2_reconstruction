@@ -185,14 +185,6 @@ void read_window_text(HWND window, char* target, int target_size) {
     }
 }
 
-const char* startup_message_row(std::size_t index, const char* fallback) {
-    const auto& rows = startup_text_tables().message_rows.rows;
-    if (index < rows.size() && !rows[index].empty()) {
-        return rows[index].data();
-    }
-    return fallback;
-}
-
 const char* account_status_message(u32 status) {
     switch (status) {
     case 1:

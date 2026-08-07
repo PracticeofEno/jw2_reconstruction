@@ -260,14 +260,6 @@ std::string ipv4_string(u32 address) {
     return buffer;
 }
 
-const char* startup_message_row(std::size_t index, const char* fallback) {
-    const auto& rows = startup_text_tables().message_rows.rows;
-    if (index < rows.size() && !rows[index].empty()) {
-        return rows[index].data();
-    }
-    return fallback;
-}
-
 const char* free_server_game_type_label(int game_type) {
     if (game_type >= 0 &&
         game_type < static_cast<int>(std::size(kFreeServerGameTypeFallbacks))) {

@@ -28,6 +28,8 @@ void ReleaseStartupPlatformTextTables();
 void ReleaseStartupMessageTextTable();
 
 const StartupTextTables& startup_text_tables();
+const char* startup_platform_row(std::size_t index, const char* fallback);
+const char* startup_message_row(std::size_t index, const char* fallback);
 std::size_t startup_platform_text_count();
 std::size_t startup_message_text_count();
 

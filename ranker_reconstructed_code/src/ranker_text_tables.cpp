@@ -188,6 +188,22 @@ const StartupTextTables& startup_text_tables() {
     return g_startup_text_tables;
 }
 
+const char* startup_platform_row(std::size_t index, const char* fallback) {
+    const auto& rows = g_startup_text_tables.platform_rows.rows;
+    if (index < rows.size() && !rows[index].empty()) {
+        return rows[index].data();
+    }
+    return fallback;
+}
+
+const char* startup_message_row(std::size_t index, const char* fallback) {
+    const auto& rows = g_startup_text_tables.message_rows.rows;
+    if (index < rows.size() && !rows[index].empty()) {
+        return rows[index].data();
+    }
+    return fallback;
+}
+
 std::size_t startup_platform_text_count() {
     return g_startup_text_tables.platform_rows.rows.size();
 }

@@ -253,14 +253,6 @@ std::string packet_fixed_string(const u8* packet, std::size_t byte_count,
     return std::string(text, length);
 }
 
-const char* startup_message_row(std::size_t index, const char* fallback) {
-    const auto& rows = startup_text_tables().message_rows.rows;
-    if (index < rows.size() && !rows[index].empty()) {
-        return rows[index].data();
-    }
-    return fallback;
-}
-
 const char* online_lobby_status_message(u32 code) {
     switch (code) {
     case 1:
