@@ -1133,6 +1133,7 @@ add_executable(ranker_rebuild WIN32
     src/ranker_game_loop.cpp
     src/ranker_game_session_tables.cpp
     src/ranker_gameplay_script.cpp
+    src/ranker_gameplay_unit_names.cpp
     src/ranker_gameplay_script_dialog.cpp
     src/ranker_gameplay_packets.cpp
     src/ranker_gameplay_sound.cpp

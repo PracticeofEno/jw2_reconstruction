@@ -32,6 +32,7 @@
 #include "ranker_gameplay_session_flow.h"
 #include "ranker_gameplay_sound.h"
 #include "ranker_gameplay_tooltips.h"
+#include "ranker_gameplay_unit_names.h"
 #include "ranker_gameplay_visibility.h"
 #include "ranker_input.h"
 #include "ranker_indexed_text_table.h"
@@ -126,22 +127,6 @@ void sync_default_gameplay_script_object_from_unit(
     GameplayScriptTriggerObjectState& object, UnitMovementUnit& unit);
 void sync_default_gameplay_script_scenario_record(
     const GameplayScriptTriggerState& script);
-
-std::array<SessionUnitDefinitionNameField, kUnitDefinitionResourceCount>
-    g_gameplay_unit_name_overrides;
-
-std::string startup_unit_name_or_fallback(u32 type_id) {
-    if (type_id < g_gameplay_unit_name_overrides.size() &&
-        g_gameplay_unit_name_overrides[type_id].present) {
-        return g_gameplay_unit_name_overrides[type_id].text;
-    }
-    std::string_view name =
-        GetIndexedTextTableRow(StartupAuxiliaryIndexedTextTable(0), type_id);
-    if (!name.empty()) {
-        return std::string(name);
-    }
-    return "Unit " + std::to_string(type_id);
-}
 
 u32 default_selected_unit_next_experience_threshold(
     const ProductionOrderRuntimeState& production, const UnitMovementUnit& unit) {
@@ -3189,7 +3174,7 @@ bool default_avatar_lookup_definition(AvatarWindowState&, i32 avatar_id,
     }
 
     const std::string display_name =
-        startup_unit_name_or_fallback(static_cast<u32>(avatar_id));
+        GameplayUnitNameOrFallback(static_cast<u32>(avatar_id));
     std::snprintf(stats.display_name.data(), stats.display_name.size(),
         "%s", display_name.c_str());
     stats.hp = static_cast<i32>(definition->initial_max_health);
@@ -8802,14 +8787,14 @@ void default_gameplay_session_prepare_non_empty_runtime_definition_import(
 }
 
 void sync_default_active_session_unit_names() {
-    for (std::size_t type = 0; type < g_gameplay_unit_name_overrides.size(); ++type) {
-        g_gameplay_unit_name_overrides[type] = {};
+    ClearGameplayUnitNameOverrides();
+    for (std::size_t type = 0; type < kUnitDefinitionResourceCount; ++type) {
         if (type >= g_runtime.active_session_definitions.unit_records.size()) {
             continue;
         }
-        g_gameplay_unit_name_overrides[type] =
-            ReadSessionUnitDefinitionNameField(
-                g_runtime.active_session_definitions.unit_records[type]);
+        SetGameplayUnitNameOverride(
+            static_cast<u32>(type), ReadSessionUnitDefinitionNameField(
+                g_runtime.active_session_definitions.unit_records[type]));
     }
 }
 
@@ -11471,10 +11456,7 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     g_runtime.gameplay_script_spawned_units.clear();
     g_runtime.gameplay_script_unhandled_spawn_requests.clear();
     g_runtime.gameplay_script_last_unit_name_append_requests.clear();
-    for (SessionUnitDefinitionNameField& name :
-         g_gameplay_unit_name_overrides) {
-        name = {};
-    }
+    ClearGameplayUnitNameOverrides();
     g_runtime.gameplay_end_condition_units.clear();
     g_runtime.gameplay_script_triggers_loaded = false;
     g_runtime.gameplay_script_scenario_objects_loaded = false;
@@ -17274,7 +17256,7 @@ void sync_default_gameplay_tooltip_unit_definitions() {
 
         GameplayTooltipUnitDefinition definition{};
         definition.type = unit_type;
-        definition.name = startup_unit_name_or_fallback(unit_type);
+        definition.name = GameplayUnitNameOrFallback(unit_type);
         definition.costs.values[0] = source->production_resource_cost;
         definition.costs.values[1] = source->production_secondary_cost;
         definition.costs.values[2] = source->production_population_cost;
@@ -19372,7 +19354,7 @@ void sync_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
     }
     if (!has_dynamic_name_slot) {
         overlay.selected_unit_name_text =
-            startup_unit_name_or_fallback(unit->type_id);
+            GameplayUnitNameOrFallback(unit->type_id);
     }
     sync_default_ui_overlay_selected_unit_command_options(overlay, *unit);
 }
@@ -22828,7 +22810,7 @@ void default_unit_command_production_completed(UnitCommandContext& context,
     }
     std::string produced_name = default_unit_display_name(produced);
     if (produced_name.empty()) {
-        produced_name = startup_unit_name_or_fallback(produced.type_id);
+        produced_name = GameplayUnitNameOrFallback(produced.type_id);
     }
     static std::array<char, 0x40> production_complete_message{};
     std::snprintf(production_complete_message.data(),
@@ -29050,8 +29032,8 @@ bool apply_default_gameplay_script_definition_name_append(
             }
             SetLoadedUnitDefinitionResourceNameField(
                 request.type_id, name, kDefinitionNameBytes);
-            g_gameplay_unit_name_overrides[request.type_id] =
-                ReadSessionUnitDefinitionNameField(record);
+            SetGameplayUnitNameOverride(
+                request.type_id, ReadSessionUnitDefinitionNameField(record));
             return true;
         }
     }
@@ -29062,9 +29044,9 @@ bool apply_default_gameplay_script_definition_name_append(
     }
     const UnitDefinitionResourceCatalogState& catalog =
         unit_definition_resource_catalog_state();
-    g_gameplay_unit_name_overrides[request.type_id] =
-        ReadSessionUnitDefinitionNameField(
-            catalog.records[request.type_id].definition_bytes);
+    SetGameplayUnitNameOverride(
+        request.type_id, ReadSessionUnitDefinitionNameField(
+            catalog.records[request.type_id].definition_bytes));
     return true;
 }
 
