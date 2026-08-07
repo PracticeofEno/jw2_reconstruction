@@ -599,12 +599,6 @@ constexpr std::array<OwnerAiCommandDefinition, 0x66> kOwnerAiCommandDefinitions{
     {"END", 0},
 }};
 
-i32 signed_i32_from_wrapped_u32(u32 value) {
-    i32 signed_value = 0;
-    std::memcpy(&signed_value, &value, sizeof(signed_value));
-    return signed_value;
-}
-
 constexpr std::array<u32, 4> kOwnerAiPostInitRequirementUnitTypes{{
     0x00, 0x10, 0x20, 0x30,
 }};
@@ -1018,9 +1012,9 @@ bool owner_ai_population_gap_open(const OwnerAiStrategicRetargetGateInput& input
     // the hard-limit 0..5 and high-bit boundaries.
     const u32 wrapped_threshold = input.owner_population_limit[owner_slot] -
         kOwnerAiPopulationRetargetReserve;
-    return signed_i32_from_wrapped_u32(
+    return WrappedU32ToI32(
                input.owner_population_used[owner_slot]) <
-        signed_i32_from_wrapped_u32(wrapped_threshold);
+        WrappedU32ToI32(wrapped_threshold);
 }
 
 bool owner_ai_default_pressure_unit_eligible(const UnitMovementUnit& unit) {
@@ -2640,9 +2634,9 @@ OwnerAiProductionOrderSelection SelectOwnerAiProductionOrderAction(
 
     selection.primary_cost = CalculateProductionOrderCost(definition->primary_cost,
         selection.variant);
-    const i32 available_primary = signed_i32_from_wrapped_u32(
+    const i32 available_primary = WrappedU32ToI32(
         production.owner_primary_resources[owner_slot] - reserved_primary_cost);
-    if (signed_i32_from_wrapped_u32(selection.primary_cost) > available_primary) {
+    if (WrappedU32ToI32(selection.primary_cost) > available_primary) {
         selection.action = OwnerAiProductionOrderActionCode::reserve_primary_cost;
         return selection;
     }

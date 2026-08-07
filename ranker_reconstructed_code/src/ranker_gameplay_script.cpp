@@ -20,12 +20,6 @@ GameplayScriptTriggerState g_trigger_state;
 
 void encode_trigger(GameplayScriptTriggerState& state, u32 trigger_index);
 
-i32 signed_i32_from_wrapped_u32(u32 value) {
-    i32 signed_value = 0;
-    std::memcpy(&signed_value, &value, sizeof(signed_value));
-    return signed_value;
-}
-
 u32 read_le_u32(const std::vector<u8>& bytes, std::size_t offset) {
     if (offset > bytes.size() || bytes.size() - offset < sizeof(u32)) {
         return 0;
@@ -650,7 +644,7 @@ const GameplayScriptTriggerGroup* group_state(const GameplayScriptTriggerState& 
 
 u32 signed_group_prefix_limit(const GameplayScriptTriggerGroup& group) {
     const i32 signed_reference_count =
-        signed_i32_from_wrapped_u32(group.reference_count);
+        WrappedU32ToI32(group.reference_count);
     if (signed_reference_count <= 0) {
         return 0;
     }
@@ -1735,12 +1729,12 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
             }
         }
         const i64 wide_average =
-            static_cast<i64>(signed_i32_from_wrapped_u32(wrapped_total)) /
+            static_cast<i64>(WrappedU32ToI32(wrapped_total)) /
             static_cast<i64>(
-                signed_i32_from_wrapped_u32(group->reference_count));
-        const i32 average = signed_i32_from_wrapped_u32(
+                WrappedU32ToI32(group->reference_count));
+        const i32 average = WrappedU32ToI32(
             static_cast<u32>(wide_average));
-        return signed_i32_from_wrapped_u32(words[2]) <= average;
+        return WrappedU32ToI32(words[2]) <= average;
     }
     case 0x26: {
         if (!owner_active(context, words[2])) {
@@ -1789,14 +1783,14 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
     case 0x2c: {
         const GameplayScriptOwnerConditionState* owner = owner_state(context, words[1]);
         return owner != nullptr &&
-            signed_i32_from_wrapped_u32(owner->trigger_counter) >=
-                signed_i32_from_wrapped_u32(words[2]);
+            WrappedU32ToI32(owner->trigger_counter) >=
+                WrappedU32ToI32(words[2]);
     }
     case 0x2d: {
         const GameplayScriptOwnerConditionState* owner = owner_state(context, words[1]);
         return owner != nullptr &&
-            signed_i32_from_wrapped_u32(owner->trigger_counter) <=
-                signed_i32_from_wrapped_u32(words[2]);
+            WrappedU32ToI32(owner->trigger_counter) <=
+                WrappedU32ToI32(words[2]);
     }
     case 0x2e: {
         return context.production_orders != nullptr &&
@@ -1804,7 +1798,7 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
             words[2] < context.production_orders->variant_counts[words[1]].size() &&
             static_cast<i32>(context.production_orders
                 ->variant_counts[words[1]][words[2]]) >=
-                signed_i32_from_wrapped_u32(words[3]);
+                WrappedU32ToI32(words[3]);
     }
     case 0x2f: {
         return context.production_orders != nullptr &&
@@ -1812,7 +1806,7 @@ bool EvaluateGameplayScriptTriggerCondition(GameplayScriptTriggerState& state,
             words[2] < context.production_orders->variant_counts[words[1]].size() &&
             static_cast<i32>(context.production_orders
                 ->variant_counts[words[1]][words[2]]) <
-                signed_i32_from_wrapped_u32(words[3]);
+                WrappedU32ToI32(words[3]);
     }
     default:
         return false;
@@ -1948,7 +1942,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         const GameplayScriptArea* area = area_state(state, command[3]);
         GameplayScriptTriggerObjectState* object =
             group != nullptr &&
-                signed_i32_from_wrapped_u32(group->reference_count) > 0 ?
+                WrappedU32ToI32(group->reference_count) > 0 ?
                 first_group_slot_object(state, *group) : nullptr;
         if (object != nullptr && object->unit != nullptr && area != nullptr) {
             SetOrQueueUnitAlignedPointCommand06(object->unit, command[2],
@@ -2002,7 +1996,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         GameplayScriptTriggerObjectState* object =
             group != nullptr &&
-                signed_i32_from_wrapped_u32(group->reference_count) > 0 ?
+                WrappedU32ToI32(group->reference_count) > 0 ?
                 first_group_slot_object(state, *group) : nullptr;
         if (object != nullptr && object->unit != nullptr) {
             SetOrQueueUnitCommand10(object->unit, command[2], true);
@@ -2036,7 +2030,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         const GameplayScriptArea* area = area_state(state, command[2]);
         if (group == nullptr || area == nullptr ||
-            signed_i32_from_wrapped_u32(group->reference_count) <= 0) {
+            WrappedU32ToI32(group->reference_count) <= 0) {
             return true;
         }
         const i32 target_x = area_translation_center_x(*area);
@@ -2138,7 +2132,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         const GameplayScriptArea* area = area_state(state, command[2]);
         if (group == nullptr || area == nullptr ||
-            signed_i32_from_wrapped_u32(group->reference_count) <= 0) {
+            WrappedU32ToI32(group->reference_count) <= 0) {
             return true;
         }
         u32 total_x = 0;
@@ -2174,7 +2168,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x19: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         if (group == nullptr ||
-            signed_i32_from_wrapped_u32(group->reference_count) <= 0) {
+            WrappedU32ToI32(group->reference_count) <= 0) {
             return true;
         }
         u32 total_x = 0;
@@ -2185,12 +2179,12 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
             total_y += static_cast<u32>(object.y);
         });
         const i32 divisor =
-            signed_i32_from_wrapped_u32(group->reference_count);
+            WrappedU32ToI32(group->reference_count);
         state.opcode_context.camera_request_active = true;
         state.opcode_context.camera_x =
-            signed_i32_from_wrapped_u32(total_x) / divisor;
+            WrappedU32ToI32(total_x) / divisor;
         state.opcode_context.camera_y =
-            signed_i32_from_wrapped_u32(total_y) / divisor;
+            WrappedU32ToI32(total_y) / divisor;
         return true;
     }
     case 0x1a: {
@@ -2236,7 +2230,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x1f: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         if (group != nullptr &&
-            signed_i32_from_wrapped_u32(group->reference_count) > 0) {
+            WrappedU32ToI32(group->reference_count) > 0) {
             for_each_group_slot_object(state, *group,
                 [&](GameplayScriptTriggerObjectState& object) {
                 set_object_stat_by_mode(object, command[2], command[3]);
@@ -2361,7 +2355,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptTriggerObjectState* source =
             source_group != nullptr ? first_group_slot_object(state, *source_group) : nullptr;
         if (target_group != nullptr &&
-            signed_i32_from_wrapped_u32(target_group->reference_count) > 0) {
+            WrappedU32ToI32(target_group->reference_count) > 0) {
             for_each_group_slot_object(state, *target_group,
                 [&](GameplayScriptTriggerObjectState& object) {
                     if (source != nullptr) {
@@ -2410,7 +2404,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         GameplayScriptTriggerObjectState* object =
             group != nullptr &&
-                    signed_i32_from_wrapped_u32(group->reference_count) > 0 ?
+                    WrappedU32ToI32(group->reference_count) > 0 ?
                 first_group_slot_object(state, *group) : nullptr;
         if (object != nullptr && object->unit != nullptr) {
             SetOrQueueUnitCommand17(object->unit, command[2], true);
@@ -2423,7 +2417,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptTriggerObjectState* target =
             target_group != nullptr ? first_group_slot_object(state, *target_group) : nullptr;
         if (source_group == nullptr ||
-            signed_i32_from_wrapped_u32(source_group->reference_count) <= 0) {
+            WrappedU32ToI32(source_group->reference_count) <= 0) {
             return true;
         }
         for (u32 slot = 0; slot < source_group->object_indices.size(); ++slot) {
@@ -2452,7 +2446,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         GameplayScriptTriggerObjectState* object =
             group != nullptr &&
-                    signed_i32_from_wrapped_u32(group->reference_count) > 0 ?
+                    WrappedU32ToI32(group->reference_count) > 0 ?
                 first_group_slot_object(state, *group) : nullptr;
         if (object != nullptr && object->unit != nullptr) {
             SetOrQueueUnitCommand22(object->unit, command[2], true);
@@ -2467,7 +2461,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptTriggerObjectState* source =
             source_group != nullptr ? first_group_slot_object(state, *source_group) : nullptr;
         if (target_group == nullptr ||
-            signed_i32_from_wrapped_u32(target_group->reference_count) <= 0) {
+            WrappedU32ToI32(target_group->reference_count) <= 0) {
             return true;
         }
         u32 issued = 0;
@@ -2512,7 +2506,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x37: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         if (group == nullptr ||
-            signed_i32_from_wrapped_u32(group->reference_count) <= 0) {
+            WrappedU32ToI32(group->reference_count) <= 0) {
             return true;
         }
         for (u32 slot = 0; slot < group->object_indices.size(); ++slot) {
@@ -2548,15 +2542,15 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptTriggerGroup* second_group = group_state(state, command[2]);
         GameplayScriptTriggerObjectState* first =
             first_group != nullptr &&
-                    signed_i32_from_wrapped_u32(first_group->reference_count) > 0 ?
+                    WrappedU32ToI32(first_group->reference_count) > 0 ?
                 first_group_slot_object(state, *first_group) : nullptr;
         GameplayScriptTriggerObjectState* second =
             second_group != nullptr &&
-                    signed_i32_from_wrapped_u32(second_group->reference_count) > 0 ?
+                    WrappedU32ToI32(second_group->reference_count) > 0 ?
                 first_group_slot_object(state, *second_group) : nullptr;
         if (first_group != nullptr && second_group != nullptr &&
-            signed_i32_from_wrapped_u32(first_group->reference_count) > 0 &&
-            signed_i32_from_wrapped_u32(second_group->reference_count) > 0) {
+            WrappedU32ToI32(first_group->reference_count) > 0 &&
+            WrappedU32ToI32(second_group->reference_count) > 0) {
             trigger.blocked = 0;
         }
         if (first != nullptr && first->unit != nullptr &&
@@ -2587,7 +2581,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x4d: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         if (group == nullptr ||
-            signed_i32_from_wrapped_u32(group->reference_count) <= 0) {
+            WrappedU32ToI32(group->reference_count) <= 0) {
             return true;
         }
         for_each_group_slot_object(state, *group,
@@ -2599,7 +2593,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
                 mutate_gameplay_script_object_script_bit_flags(
                     object, 0, 1u << (command[2] & 0x1fu));
             } else if (command[0] == 0x3c) {
-                object.stat_2c = signed_i32_from_wrapped_u32(
+                object.stat_2c = WrappedU32ToI32(
                     static_cast<u32>(object.stat_2c) + command[2]);
             } else if (command[0] == 0x3e) {
                 object.stat_18 += command[2];
@@ -2671,7 +2665,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         const GameplayScriptArea* area = area_state(state, command[2]);
         if (group != nullptr &&
-            signed_i32_from_wrapped_u32(group->reference_count) > 0 &&
+            WrappedU32ToI32(group->reference_count) > 0 &&
             area != nullptr) {
             for_each_group_slot_object(state, *group,
                 [&](GameplayScriptTriggerObjectState& object) {
@@ -2686,7 +2680,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         const GameplayScriptArea* area = area_state(state, command[3]);
         if (group != nullptr &&
-            signed_i32_from_wrapped_u32(group->reference_count) > 0 &&
+            WrappedU32ToI32(group->reference_count) > 0 &&
             area != nullptr) {
             for_each_group_slot_object(state, *group,
                 [&](GameplayScriptTriggerObjectState& object) {
@@ -2722,7 +2716,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x58: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         if (group != nullptr &&
-            signed_i32_from_wrapped_u32(group->reference_count) > 0) {
+            WrappedU32ToI32(group->reference_count) > 0) {
             for_each_group_slot_object(state, *group,
                 [&](GameplayScriptTriggerObjectState& object) {
                 set_script_object_owner(object, command[2]);
@@ -2748,13 +2742,13 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
         return true;
     }
     case 0x5a: {
-        const i32 direction = signed_i32_from_wrapped_u32(command[2]);
+        const i32 direction = WrappedU32ToI32(command[2]);
         if (direction <= 0 || direction >= 9) {
             return true;
         }
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         if (group != nullptr &&
-            signed_i32_from_wrapped_u32(group->reference_count) > 0) {
+            WrappedU32ToI32(group->reference_count) > 0) {
             for_each_group_slot_object(state, *group,
                 [&](GameplayScriptTriggerObjectState& object) {
                 if (gameplay_script_object_lifecycle_class(object) != 2) {
@@ -2774,12 +2768,12 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x60: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         if (group == nullptr ||
-            signed_i32_from_wrapped_u32(group->reference_count) <= 0) {
+            WrappedU32ToI32(group->reference_count) <= 0) {
             return true;
         }
 
         begin_group_gameplay_script_selection_request(state, *group);
-        const i32 direction = signed_i32_from_wrapped_u32(command[2]);
+        const i32 direction = WrappedU32ToI32(command[2]);
         if (command[0] == 0x5d && direction > 0 && direction < 9) {
             for_each_group_slot_object(state, *group,
                 [&](GameplayScriptTriggerObjectState& object) {
@@ -2797,7 +2791,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x5e: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         if (group != nullptr &&
-            signed_i32_from_wrapped_u32(group->reference_count) > 0) {
+            WrappedU32ToI32(group->reference_count) > 0) {
             for_each_group_slot_object(state, *group,
                 [&](GameplayScriptTriggerObjectState& object) {
                 add_equipment_effect_slot(object, command[2]);
@@ -2808,7 +2802,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x5f: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         if (group != nullptr &&
-            signed_i32_from_wrapped_u32(group->reference_count) > 0) {
+            WrappedU32ToI32(group->reference_count) > 0) {
             for_each_group_slot_object(state, *group,
                 [&](GameplayScriptTriggerObjectState& object) {
                 remove_equipment_effect_slot(object, command[2]);
@@ -2991,7 +2985,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     case 0x78: {
         GameplayScriptTriggerGroup* group = group_state(state, command[1]);
         if (group != nullptr &&
-            signed_i32_from_wrapped_u32(group->reference_count) > 0) {
+            WrappedU32ToI32(group->reference_count) > 0) {
             for_each_group_slot_object(state, *group,
                 [&](GameplayScriptTriggerObjectState& object) {
                 mutate_gameplay_script_object_script_bit_flags(

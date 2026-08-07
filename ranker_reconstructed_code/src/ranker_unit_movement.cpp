@@ -66,14 +66,8 @@ constexpr u32 kUnitMovementTurnTimeoutTicks = 10;
 constexpr u32 kCommandFlag4000MaxHealthBonusPercent = 10;
 constexpr u32 kRuntimeFlag0c00DefenseBonusPercent = 100;
 
-i32 signed_i32_from_wrapped_u32(u32 value) {
-    i32 signed_value = 0;
-    std::memcpy(&signed_value, &value, sizeof(signed_value));
-    return signed_value;
-}
-
 u32 apply_signed_u16_cap(u32 value, u32 cap) {
-    return signed_i32_from_wrapped_u32(value) < static_cast<i32>(cap) ?
+    return WrappedU32ToI32(value) < static_cast<i32>(cap) ?
         value : cap;
 }
 
@@ -1392,7 +1386,7 @@ void SubtractUnitRuntimeStat28Clamped(UnitRuntimeStatBlock& stats, u32 amount) {
 u32 CalculateUnitVariantStepBudget(const UnitMovementUnit& unit) {
     const UnitMovementDefinition& definition = unit.definition;
     const u32 next_variant = unit.production_variant + 1;
-    const i32 signed_next_variant = signed_i32_from_wrapped_u32(next_variant);
+    const i32 signed_next_variant = WrappedU32ToI32(next_variant);
     if (signed_next_variant < 1) {
         return 0;
     }
@@ -1576,8 +1570,8 @@ bool ApplyUnitVariantProgressFromStoredValue(
         // FUN_004099e0 uses CMP/JGE: both raw dwords are interpreted as
         // signed values for the progress gate.  A wrapped high-bit progress
         // value therefore waits instead of producing spurious rank-ups.
-        if (signed_i32_from_wrapped_u32(unit.elite_progress_value) <
-            signed_i32_from_wrapped_u32(cost)) {
+        if (WrappedU32ToI32(unit.elite_progress_value) <
+            WrappedU32ToI32(cost)) {
             break;
         }
         unit.elite_progress_value -= cost;
@@ -1792,7 +1786,7 @@ u32 CalculateOrder2bAdjustedUnitValue(const ProductionOrderRuntimeState& product
     const i32 bonus = GetProductionOrderOrder2bBonusTotal(production_state, unit.owner_id);
     wrapped_value -= static_cast<u32>(bonus);
 
-    const i32 signed_value = signed_i32_from_wrapped_u32(wrapped_value);
+    const i32 signed_value = WrappedU32ToI32(wrapped_value);
     const i32 signed_minimum = minimum_value > 0x7fffffffu ?
         std::numeric_limits<i32>::max() : static_cast<i32>(minimum_value);
     if (signed_value < signed_minimum) {
@@ -1938,10 +1932,10 @@ u32 CalculateMovementStepDistanceThreshold(u32 step_limit, u32 movement_period) 
 }
 
 u32 CalculateMovementStepFromDistance(u32 distance, u32 movement_period) {
-    const i32 signed_distance = signed_i32_from_wrapped_u32(distance);
+    const i32 signed_distance = WrappedU32ToI32(distance);
     u32 threshold = 1;
     u32 step = 1;
-    while (signed_i32_from_wrapped_u32(threshold) <= signed_distance) {
+    while (WrappedU32ToI32(threshold) <= signed_distance) {
         ++step;
         threshold += step * movement_period;
     }

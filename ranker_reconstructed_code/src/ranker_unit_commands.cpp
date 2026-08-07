@@ -18,12 +18,6 @@ namespace {
 
 constexpr u32 kDefaultWorkerHarvestAmount = 12;
 
-i32 signed_i32_from_wrapped_u32(u32 value) {
-    i32 signed_value = 0;
-    std::memcpy(&signed_value, &value, sizeof(signed_value));
-    return signed_value;
-}
-
 UnitMovementContext& movement(UnitCommandContext& context) {
     return *context.movement;
 }
@@ -508,7 +502,7 @@ i32 patrol_command_x(const UnitMovementUnit& unit) {
 
 i32 patrol_command_y(const UnitMovementUnit& unit) {
     // The active payload's legacy-named `value` member mirrors raw +0xe0.
-    return signed_i32_from_wrapped_u32(unit.active_command_payload.value);
+    return WrappedU32ToI32(unit.active_command_payload.value);
 }
 
 void begin_patrol_leg(UnitCommandContext& context, UnitMovementUnit& unit,
@@ -3691,7 +3685,7 @@ bool ApplyGameSessionAvatarProductionRecord(UnitCommandContext& context,
     produced.health = record.max_health;
     produced.max_secondary_value = record.max_secondary_value;
     const i32 signed_secondary =
-        signed_i32_from_wrapped_u32(record.max_secondary_value);
+        WrappedU32ToI32(record.max_secondary_value);
     produced.secondary_value = static_cast<u32>(
         (signed_secondary >> 2) + (signed_secondary >> 3));
     produced.runtime_stat_1c = record.runtime_stat_1c;
@@ -3709,7 +3703,7 @@ bool ApplyGameSessionAvatarProductionRecord(UnitCommandContext& context,
         record.secondary_equipment;
     if (context.equipment_catalog != nullptr) {
         const auto apply_dedicated = [&](u32 effect_id) {
-            if (signed_i32_from_wrapped_u32(effect_id) < 1) {
+            if (WrappedU32ToI32(effect_id) < 1) {
                 return;
             }
             if (const UnitEquipmentEffectDefinition* effect =
@@ -3724,7 +3718,7 @@ bool ApplyGameSessionAvatarProductionRecord(UnitCommandContext& context,
         // order, allowing the effect category/mode to choose a generic or
         // dedicated slot exactly like an in-world pickup.
         for (u32 effect_id : record.pickup_effects) {
-            if (signed_i32_from_wrapped_u32(effect_id) >= 1) {
+            if (WrappedU32ToI32(effect_id) >= 1) {
                 TryApplyUnitEquipmentEffectToUnit(context, produced, effect_id,
                     0, *context.equipment_catalog);
             }
@@ -9974,8 +9968,8 @@ u32 CalculateOwnerResourceBudgetUnitDemand(u32 resource_budget,
     // hard-limit clamp then wraps +10 in a DWORD and branches with signed JLE.
     u32 budget = (resource_budget * build_percent) / 100u;
     const u32 wrapped_cap = cap_base + 10u;
-    if (signed_i32_from_wrapped_u32(budget) >
-        signed_i32_from_wrapped_u32(wrapped_cap)) {
+    if (WrappedU32ToI32(budget) >
+        WrappedU32ToI32(wrapped_cap)) {
         budget = wrapped_cap;
     }
     u32 demand = budget / unit_cost;

@@ -12909,12 +12909,6 @@ i32 default_i32_from_u32(u32 value) {
     return value > 0x7fffffffu ? 0x7fffffff : static_cast<i32>(value);
 }
 
-i32 default_i32_from_wrapped_u32(u32 value) {
-    i32 signed_value = 0;
-    std::memcpy(&signed_value, &value, sizeof(signed_value));
-    return signed_value;
-}
-
 void sync_default_owner_lifecycle_score_counter_tables(
     const UnitLifecycleContext& lifecycle, u32 owner) {
     if (owner >= lifecycle.owner_unit_score.size() ||
@@ -28309,13 +28303,13 @@ void transition_default_gameplay_script_camera_immediate(
     for (u32 step = 0; step < 40; ++step) {
         const i32 current_x = overlay.camera_x + anchor_x;
         const i32 current_y = overlay.camera_y + anchor_y;
-        const i32 delta_x = default_i32_from_wrapped_u32(
+        const i32 delta_x = WrappedU32ToI32(
             static_cast<u32>(target_x) - static_cast<u32>(current_x)) / 2;
-        const i32 delta_y = default_i32_from_wrapped_u32(
+        const i32 delta_y = WrappedU32ToI32(
             static_cast<u32>(target_y) - static_cast<u32>(current_y)) / 2;
-        const i32 next_x = default_i32_from_wrapped_u32(
+        const i32 next_x = WrappedU32ToI32(
             static_cast<u32>(current_x) + static_cast<u32>(delta_x));
-        const i32 next_y = default_i32_from_wrapped_u32(
+        const i32 next_y = WrappedU32ToI32(
             static_cast<u32>(current_y) + static_cast<u32>(delta_y));
         ClampCameraToMinimapPoint(overlay, next_x, next_y);
         publish_default_ui_overlay_camera(overlay);
@@ -28438,14 +28432,14 @@ void sync_default_gameplay_script_runtime_context(
         script.condition_context.owner_population_demand[owner] =
             lifecycle != nullptr &&
                 owner < lifecycle->owner_population_reserved.size()
-            ? default_i32_from_wrapped_u32(
+            ? WrappedU32ToI32(
                 lifecycle->owner_population_reserved[owner])
-            : default_i32_from_wrapped_u32(
+            : WrappedU32ToI32(
                 g_runtime.gameplay_unit_commands.owner_population_reserved[owner]);
         script.condition_context.owner_population_capacity[owner] =
             lifecycle != nullptr && owner < lifecycle->owner_population_used.size()
-            ? default_i32_from_wrapped_u32(lifecycle->owner_population_used[owner])
-            : default_i32_from_wrapped_u32(
+            ? WrappedU32ToI32(lifecycle->owner_population_used[owner])
+            : WrappedU32ToI32(
                 g_runtime.gameplay_unit_commands.owner_population_used[owner]);
     }
 

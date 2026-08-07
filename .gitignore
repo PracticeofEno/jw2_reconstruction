@@ -5,6 +5,7 @@
 
 !ranker_reconstructed_code/
 !ranker_reconstructed_code/CMakeLists.txt
+!ranker_reconstructed_code/READABILITY.md
 
 !ranker_reconstructed_code/include/
 !ranker_reconstructed_code/include/**
@@ -16,6 +17,7 @@
 !ranker_reconstructed_code/tests/evil_portal_construction_release_regression.cpp
 !ranker_reconstructed_code/tests/legacy_udp_burst_regression.cpp
 !ranker_reconstructed_code/tests/mixed_unit_skill_original_parity_regression.cpp
+!ranker_reconstructed_code/tests/wrapped_u32_conversion_regression.cpp
 !ranker_reconstructed_code/tests/unit_effect_intrusive_iteration_regression.cpp
 !ranker_reconstructed_code/tests/unit_equipment_type_replacement_visibility_regression.cpp
 !ranker_reconstructed_code/tests/subtype01_latest_cancel_parity_regression.cpp

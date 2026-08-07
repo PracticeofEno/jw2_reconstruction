@@ -1046,6 +1046,20 @@ if (RANKER_BUILD_IME_INPUT_REGRESSION_TEST)
         COMMAND ime_process_key_regression)
 endif()
 
+option(RANKER_BUILD_READABILITY_REGRESSION_TESTS
+    "Build focused regressions for shared readability helpers" OFF)
+if (RANKER_BUILD_READABILITY_REGRESSION_TESTS)
+    enable_testing()
+    add_executable(wrapped_u32_conversion_regression
+        tests/wrapped_u32_conversion_regression.cpp
+    )
+    target_include_directories(wrapped_u32_conversion_regression PRIVATE
+        include
+    )
+    add_test(NAME wrapped_u32_conversion_regression
+        COMMAND wrapped_u32_conversion_regression)
+endif()
+
 add_executable(ranker_rebuild WIN32
     resources/ranker_resources.rc
     src/main.cpp
