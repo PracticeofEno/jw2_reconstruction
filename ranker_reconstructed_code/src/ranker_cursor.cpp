@@ -8,12 +8,14 @@
 
 #include <algorithm>
 #include <cstring>
+#include <mutex>
 #include <vector>
 
 namespace ranker {
 namespace {
 
 SoftwareCursorState g_cursor_state;
+std::recursive_mutex g_cursor_mutex;
 
 constexpr char kSoftwareCursorArchiveName[] = "JW2_01.TRC";
 constexpr u32 kSoftwareCursorArchiveRecord = 0x0b;
@@ -415,6 +417,7 @@ void SetGameCursorHotspot(u32 cursor_index, i32 x, i32 y) {
 }
 
 void SetGameCursorPointerPosition(i32 x, i32 y) {
+    const std::lock_guard<std::recursive_mutex> lock(g_cursor_mutex);
     if (g_cursor_state.cursor_change_depth != 0) {
         ++g_cursor_state.cursor_change_depth;
         return;
@@ -449,6 +452,15 @@ void SetGameCursorPointerPosition(i32 x, i32 y) {
         HandleCurrentCursorDrawOnPrimary();
     }
     g_cursor_state.pointer_motion_locked = false;
+    if (IsD3D9CubicPresentationActive()) {
+        // The legacy DirectDraw path updates the primary surface immediately
+        // above.  D3D9 presents from the back buffer instead, so waiting for
+        // the next game/title frame makes pointer motion advance in visible
+        // 33 ms steps.  Present the cursor-composited back buffer for each
+        // actual mouse move, matching the original cursor's independent
+        // motion cadence.
+        HandleGameCursorPresentation();
+    }
 }
 
 void RestoreSystemCursorPosition() {
@@ -456,6 +468,7 @@ void RestoreSystemCursorPosition() {
 }
 
 void ShowGameCursor() {
+    const std::lock_guard<std::recursive_mutex> lock(g_cursor_mutex);
     if (g_cursor_state.visible || g_cursor_state.pointer_updates_suppressed) {
         return;
     }
@@ -466,6 +479,7 @@ void ShowGameCursor() {
 }
 
 void HideGameCursor() {
+    const std::lock_guard<std::recursive_mutex> lock(g_cursor_mutex);
     if (!g_cursor_state.visible) {
         return;
     }
@@ -476,6 +490,7 @@ void HideGameCursor() {
 }
 
 void SetGameCursorPresentationSuppressed(bool suppressed) {
+    const std::lock_guard<std::recursive_mutex> lock(g_cursor_mutex);
     if (suppressed) {
         HideGameCursor();
     }
@@ -483,6 +498,7 @@ void SetGameCursorPresentationSuppressed(bool suppressed) {
 }
 
 void SetGameCursorIndex(u32 cursor_index) {
+    const std::lock_guard<std::recursive_mutex> lock(g_cursor_mutex);
     if (!cursor_index_valid(cursor_index) || g_cursor_state.cursor_index == cursor_index) {
         return;
     }
@@ -604,6 +620,7 @@ HRESULT HandlePresentCursorDrawOnBack() {
 }
 
 HRESULT HandleGameCursorPresentation() {
+    const std::lock_guard<std::recursive_mutex> lock(g_cursor_mutex);
     if (!g_cursor_state.visible) {
         HRESULT result = PresentBackBufferToPrimary();
         if (ShouldCaptureScreenshot()) {

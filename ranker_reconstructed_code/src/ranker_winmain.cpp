@@ -2182,6 +2182,12 @@ void activate_frontend_window(HWND window, HACCEL accelerators) {
     g_runtime.frontend_route_window = window;
     g_runtime.active_accelerator_window = window;
     g_runtime.active_accelerators = accelerators;
+    // Reconstructed frontends are native child windows.  Retire the
+    // DirectDraw software cursor while they own input and immediately restore
+    // the Win32 arrow; otherwise the main window's locked-cursor policy leaves
+    // these controls with no visible pointer.
+    SetGameCursorPresentationSuppressed(true);
+    SetCursor(LoadCursorA(nullptr, IDC_ARROW));
 }
 
 template <typename T>
@@ -30468,7 +30474,7 @@ bool draw_title_main_menu_to_backbuffer(UiScreenDefinition& screen, bool* draw_r
     if (!draw_ok && screen.skipped_bink_entries == 0) {
         return false;
     }
-    return SUCCEEDED(PresentBackBufferToPrimary());
+    return SUCCEEDED(HandleGameCursorPresentation());
 }
 
 bool redraw_active_title_main_menu() {
@@ -30499,6 +30505,9 @@ bool open_title_main_menu_frontend(HWND window) {
 
     g_runtime.frontend_route_window = window;
     g_runtime.suppress_paint = false;
+    SetGameCursorPresentationSuppressed(false);
+    SetGameCursorIndex(0);
+    ShowGameCursor();
 
     bool draw_ok = false;
     const bool presented = draw_title_main_menu_to_backbuffer(screen, &draw_ok);
@@ -31138,6 +31147,15 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
         refresh_main_window_cursor_confinement(window);
         break;
     case WM_SETCURSOR:
+        if (g_runtime.frontend_route_window != nullptr &&
+            g_runtime.frontend_route_window != window &&
+            IsWindow(g_runtime.frontend_route_window)) {
+            // WM_SETCURSOR for a child first reaches its parent.  Returning the
+            // locked-game NULL cursor here prevented every native multiplayer
+            // frontend and its controls from applying their class arrow.
+            SetCursor(LoadCursorA(nullptr, IDC_ARROW));
+            return TRUE;
+        }
         if (reinterpret_cast<HWND>(wparam) == window &&
             (HIWORD(lparam) == WM_MOUSEMOVE ||
              HIWORD(lparam) == WM_LBUTTONDOWN)) {

@@ -42,6 +42,7 @@ constexpr u32 kMouseCodeLeftDouble = 0x20;
 constexpr u32 kMouseCodeRightDouble = 0x40;
 constexpr u32 kMouseCodeMiddleDown = 0x80;
 constexpr u32 kMouseCodeMiddleUp = 0x100;
+constexpr u32 kImeProcessVirtualKey = 0xe5;
 
 i32 signed_lparam_word(u32 value, u32 shift) {
     return static_cast<i16>((value >> shift) & 0xffffu);
@@ -374,13 +375,29 @@ bool HandleRightButtonDoubleClick(u32 wparam, u32 lparam) {
 }
 
 bool HandleKeyDown(u32 key, u32 legacy_scan_code) {
-    set_key_state(key, true);
-    set_set1_scan_state(legacy_scan_code & 0xffu, true);
-    return PushKeyboardInputEvent(legacy_scan_code & 0xffu);
+    // With an active East Asian IME, TranslateMessage can expose the physical
+    // press first as VK_PROCESSKEY and then deliver the IME's matching real
+    // key message.  Routing both by their shared set-1 scan byte makes one
+    // digit press recall a control group twice.  Some IMEs expose only the
+    // VK_PROCESSKEY form, so keep the first scan transition and suppress only
+    // a second keydown for the same still-held physical scan.
+    const u32 scan_code = legacy_scan_code & 0xffu;
+    const bool scan_already_down =
+        g_input_state.set1_scan_down[scan_code] != 0;
+    if (key != kImeProcessVirtualKey) {
+        set_key_state(key, true);
+    }
+    set_set1_scan_state(scan_code, true);
+    if (scan_already_down) {
+        return true;
+    }
+    return PushKeyboardInputEvent(scan_code);
 }
 
 void HandleKeyUp(u32 key, u32 legacy_scan_code) {
-    set_key_state(key, false);
+    if (key != kImeProcessVirtualKey) {
+        set_key_state(key, false);
+    }
     set_set1_scan_state(legacy_scan_code & 0xffu, false);
 }
 
@@ -388,14 +405,24 @@ bool HandleAltKeyPress(u32 key, u32 legacy_scan_code) {
     if (key == 0) {
         return false;
     }
-    set_key_state(key, true);
-    set_set1_scan_state(legacy_scan_code & 0xffu, true);
-    return PushKeyboardInputEvent(legacy_scan_code & 0xffu);
+    const u32 scan_code = legacy_scan_code & 0xffu;
+    const bool scan_already_down =
+        g_input_state.set1_scan_down[scan_code] != 0;
+    if (key != kImeProcessVirtualKey) {
+        set_key_state(key, true);
+    }
+    set_set1_scan_state(scan_code, true);
+    if (scan_already_down) {
+        return true;
+    }
+    return PushKeyboardInputEvent(scan_code);
 }
 
 void HandleAltKeyRelease(u32 key, u32 legacy_scan_code) {
     if (key != 0) {
-        set_key_state(key, false);
+        if (key != kImeProcessVirtualKey) {
+            set_key_state(key, false);
+        }
         set_set1_scan_state(legacy_scan_code & 0xffu, false);
     }
 }

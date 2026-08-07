@@ -4606,8 +4606,14 @@ void HandleGameplayChatKey(UiOverlayState& state, u8 key) {
         return;
     }
     if (key == '\r' || key == '\n') {
+        const bool is_unit_action_command =
+            !state.chat_input_text.empty() &&
+            state.chat_input_text.front() == '!';
         HandleGameplayChatBangCommand(state);
-        if (!state.chat_input_text.empty()) {
+        // A leading '!' is the original selected-unit subtype-0x19 command,
+        // not a chat line.  Keep publishing the unit action above, but do not
+        // echo it locally or forward it through the P2P chat callback.
+        if (!is_unit_action_command && !state.chat_input_text.empty()) {
             const bool submitted = g_ui_overlay_chat_submit_callback != nullptr &&
                 g_ui_overlay_chat_submit_callback(
                     state, state.chat_input_text, state.chat_channel);

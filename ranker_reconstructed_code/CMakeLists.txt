@@ -1018,6 +1018,34 @@ if (RANKER_BUILD_SUBTYPE01_CANCEL_PARITY_TEST)
         COMMAND subtype01_latest_cancel_parity_regression)
 endif()
 
+option(RANKER_BUILD_IME_INPUT_REGRESSION_TEST
+    "Build the Korean IME process-key input regression" OFF)
+if (RANKER_BUILD_IME_INPUT_REGRESSION_TEST)
+    enable_testing()
+    add_executable(ime_process_key_regression
+        tests/ime_process_key_regression.cpp
+        src/ranker_input.cpp
+    )
+    target_include_directories(ime_process_key_regression PRIVATE
+        include
+    )
+    if (MSVC)
+        target_compile_options(ime_process_key_regression PRIVATE /Gy)
+        target_link_options(ime_process_key_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(ime_process_key_regression PRIVATE
+            -O1
+            -ffunction-sections
+            -fdata-sections
+        )
+        target_link_options(ime_process_key_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME ime_process_key_regression
+        COMMAND ime_process_key_regression)
+endif()
+
 add_executable(ranker_rebuild WIN32
     resources/ranker_resources.rc
     src/main.cpp

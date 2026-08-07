@@ -256,6 +256,8 @@ const char* kFallbackPlayerRoleLabels[] = {
     "Computer",
 };
 
+constexpr std::array<int, 3> kEmptyPlayerSlotRoleOrder{{1, 2, 3}};
+
 const char* kFallbackTribeLabels[] = {
     "Primitive",
     "Elf",
@@ -1079,14 +1081,10 @@ std::vector<int> player_role_option_values(const LinkLobbyState& state,
     if ((mask & 1) != 0 && state.player_role_values[player_index] == 0) {
         values.push_back(0);
     }
-    if ((mask & 2) != 0) {
-        values.push_back(1);
-    }
-    if ((mask & 8) != 0) {
-        values.push_back(3);
-    }
-    if ((mask & 4) != 0) {
-        values.push_back(2);
+    for (const int role_value : kEmptyPlayerSlotRoleOrder) {
+        if ((mask & (1u << role_value)) != 0) {
+            values.push_back(role_value);
+        }
     }
     return values;
 }
@@ -3041,9 +3039,10 @@ void PopulateLinkLobbyPlayerRoleComboBox(LinkLobbyState& state, int player_index
     if ((mask & 1) != 0 && role_value == 0) {
         add_option(1, 0, link_lobby_player_name(state, player_index));
     }
-    add_option(2, 1, link_lobby_role_label(1));
-    add_option(8, 3, link_lobby_role_label(3));
-    add_option(4, 2, link_lobby_role_label(2));
+    for (const int empty_role : kEmptyPlayerSlotRoleOrder) {
+        add_option(1u << empty_role, empty_role,
+            link_lobby_role_label(empty_role));
+    }
     if (item_count == 0) {
         SendMessageA(combo, CB_ADDSTRING, 0,
             reinterpret_cast<LPARAM>(kFallbackPlayerRoleLabels[0]));
