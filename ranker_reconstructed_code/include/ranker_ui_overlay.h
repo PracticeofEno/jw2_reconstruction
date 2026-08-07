@@ -763,6 +763,9 @@ struct UiOverlayState {
     std::string detail_secondary_text;
     std::string detail_clock_text;
     std::string detail_route_text;
+    std::string replay_elapsed_text;
+    std::string replay_speed_heading_text;
+    std::string replay_speed_text;
     std::string selected_unit_name_text;
     std::string selected_unit_indestructible_text;
     std::string selected_unit_owner_text;
@@ -864,6 +867,8 @@ struct UiOverlayState {
     u32 selected_production_category = 0;
     u32 staged_unit_action_id = 0xffffffffu;
     u32 replay_speed_index = 4;
+    u32 replay_frame_counter = 0;
+    u32 replay_target_frame_count = 0;
     u32 last_hotkey_command = 0;
     u32 last_hotkey_aux = 0;
     u32 last_hotkey_flags = 0;

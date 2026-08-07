@@ -4820,6 +4820,7 @@ bool default_gameplay_modal_import_session_bundle(
     }
 
     g_runtime.gameplay_session_archive_path = path;
+    SetReplayControlsEnabled(replay_recording_state().playback_mode);
     const bool bundle_imported = HandleGameplaySessionBundleImport(path.c_str(), 0);
     if (!bundle_imported) {
         report_gameplay_session_import_resource_failure();
@@ -8023,6 +8024,7 @@ bool default_gameplay_flow_import_session_bundle(GameplaySessionFlowState& state
             lobby.tribe_choices[local_index] : 0u;
         SetRuntimeResourceThemeIndex(theme);
     }
+    SetReplayControlsEnabled(replay_recording_state().playback_mode);
     const bool bundle_imported = HandleGameplaySessionBundleImport(archive_path, 0);
     if (!bundle_imported) {
         report_gameplay_session_import_resource_failure();
@@ -11866,6 +11868,13 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     append_startup_log("start-slots: runtime reset begin");
     run_default_gameplay_session_runtime_reset(
         g_runtime.gameplay_startup_state, player_name);
+    if (replay_recording_state().playback_mode) {
+        // FUN_0044f2c0 seeds DAT_00722310 with the four replay observer rows.
+        // The runtime reset clears the script opcode mirror, so restore the
+        // startup mask only once here instead of reasserting it every frame.
+        gameplay_script_trigger_state().opcode_context.resource_hud_flags |=
+            g_runtime.p2p_session_start_state.setup_flags & 0x0fu;
+    }
     append_startup_log(
         "start-slots: runtime reset ok active_units=%zu lifecycle_units=%zu map=%lux%lu",
         g_runtime.gameplay_movement_context.active_units.size(),
@@ -19592,7 +19601,8 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
     // main-window runtime owns that mirror; keep the per-frame overlay copy
     // live instead of leaving its default false value latched forever.
     overlay.scenario_ai_profile_override =
-        g_runtime.generic_ai_scenario_active;
+        g_runtime.generic_ai_scenario_active ||
+        replay_recording_state().playback_mode;
     overlay.generic_ai_profile_mode = g_runtime.generic_ai_profile_mode;
     overlay.replay_timing_enabled = gameplay_loop_state().replay_timing_enabled;
     overlay.scripted_input_restricted =
@@ -19658,6 +19668,43 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
     overlay.replay_vpos_available = p2p.replay_vpos_loaded;
     overlay.alternate_slot_b = p2p.apply_replay_vpos_camera ? 1u : 0u;
     overlay.replay_speed_index = std::min<u32>(gameplay_loop_state().fixed_step_mode, 6);
+    overlay.replay_frame_counter = gameplay_loop_state().simulation_frame_counter;
+    overlay.replay_target_frame_count = p2p.replay_target_frame_count;
+    if (replay_recording_state().playback_mode &&
+        overlay.replay_target_frame_count != 0) {
+        constexpr u32 kReplayFramesPerSecond = 22;
+        constexpr u32 kReplayFramesPerMinute =
+            60 * kReplayFramesPerSecond;
+        char elapsed[96]{};
+        const char* elapsed_format = startup_platform_row(
+            193, "%d:%d / %d:%d");
+        std::snprintf(elapsed, sizeof(elapsed), elapsed_format,
+            static_cast<int>(overlay.replay_frame_counter /
+                kReplayFramesPerMinute),
+            static_cast<int>((overlay.replay_frame_counter /
+                kReplayFramesPerSecond) % 60u),
+            static_cast<int>(overlay.replay_target_frame_count /
+                kReplayFramesPerMinute),
+            static_cast<int>((overlay.replay_target_frame_count /
+                kReplayFramesPerSecond) % 60u));
+        overlay.replay_elapsed_text =
+            std::string(startup_platform_row(192, "Elapsed time:")) + " " +
+            elapsed;
+        overlay.replay_speed_heading_text =
+            startup_platform_row(194, "Speed:");
+        constexpr std::array<const char*, 7> kReplaySpeedFallbacks{{
+            "( Fastest x16 )", "( Fastest x8 )", "( Fastest x4 )",
+            "( Fastest x2 )", "( Fastest )", "( Normal )", "( Slow )",
+        }};
+        overlay.replay_speed_text = p2p.direct_music_paused ?
+            startup_platform_row(195, "(Paused)") :
+            startup_platform_row(211 + overlay.replay_speed_index,
+                kReplaySpeedFallbacks[overlay.replay_speed_index]);
+    } else {
+        overlay.replay_elapsed_text.clear();
+        overlay.replay_speed_heading_text.clear();
+        overlay.replay_speed_text.clear();
+    }
     overlay.game_speed = std::min<u32>(
         gameplay_loop_state().frame_interval_index, overlay.max_game_speed);
     overlay.camera_scroll_speed_index = default_camera_scroll_speed_index(
@@ -20261,13 +20308,20 @@ bool publish_default_ui_overlay_input_command(
     }
     if (action.item_id == 0x195u) {
         if (click) {
-            OpenGameplayRelationMaskDialog();
+            if (replay_recording_state().playback_mode) {
+                u32& flags = gameplay_script_trigger_state()
+                    .opcode_context.resource_hud_flags;
+                flags = (flags & 1u) != 0 ?
+                    (flags & ~0x0fu) : (flags | 0x0fu);
+            } else {
+                OpenGameplayObserverMaskDialog();
+            }
         }
         return true;
     }
     if (action.item_id == 0x196u) {
         if (click) {
-            OpenGameplayObserverMaskDialog();
+            OpenGameplayRelationMaskDialog();
         }
         return true;
     }

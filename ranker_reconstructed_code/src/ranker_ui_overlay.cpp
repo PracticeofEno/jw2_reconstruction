@@ -2478,6 +2478,29 @@ void BlitUiOverlayMaskedDisabledProductionIcon(UiOverlayState& state, u32 item_i
 }
 
 void DrawUiLargeSlotDetailTexts(UiOverlayState& state) {
+    if (state.replay_timing_enabled && state.replay_target_frame_count != 0) {
+        // FUN_004e12ea obtains the replay-bar span from the same three-way
+        // layout table used by the selected-unit progress frame.
+        constexpr std::array<u32, 3> kReplayProgressWidths{{98, 126, 98}};
+        const u32 layout = std::min<u32>(state.screen_layout_bucket, 2);
+        const i32 progress_width = static_cast<i32>(kReplayProgressWidths[layout]);
+        if (state.emit_sprite_draws &&
+            state.glyph_resource_base != kInvalidResourceEntry) {
+            DrawResourceSpriteNormal(state.glyph_resource_base + layout + 0x24u,
+                state.large_slot_x, state.large_slot_y - 0x0b);
+        }
+        append_progress(state, state.large_slot_x + 3, state.large_slot_y - 8,
+            state.large_slot_x + 3 + progress_width, state.large_slot_y - 6,
+            state.replay_frame_counter, state.replay_target_frame_count);
+        append_text(state, state.replay_elapsed_text, state.large_slot_x,
+            state.large_slot_y - 0x17, 1, false, false, false, 1, 3);
+        const i32 speed_center = state.large_slot_x + progress_width + 0x32;
+        append_text(state, state.replay_speed_heading_text, speed_center,
+            state.large_slot_y - 0x11, 1, true, false, false, 1, 3);
+        append_text(state, state.replay_speed_text, speed_center,
+            state.large_slot_y - 6, 1, true, false, false, 1, 3);
+        return;
+    }
     if (state.detail_progress_total != 0) {
         append_progress(state, state.large_slot_x, state.large_slot_y,
             state.large_slot_x + 0x32, state.large_slot_y + 0x0d,
