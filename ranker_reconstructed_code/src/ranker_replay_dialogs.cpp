@@ -23,8 +23,7 @@
 namespace ranker {
 namespace {
 
-constexpr DWORD kWindowStyleFullscreen = 0x90000000;
-constexpr DWORD kWindowStyleWindowed = 0x10cf0000;
+constexpr DWORD kWindowStyleFullscreen = WS_POPUP | WS_CLIPSIBLINGS;
 constexpr DWORD kListStyle =
     WS_CHILD | WS_VISIBLE | LBS_NOTIFY | LBS_SORT | LBS_OWNERDRAWFIXED |
     LBS_HASSTRINGS;
@@ -32,7 +31,7 @@ constexpr DWORD kReadOnlyEditStyle = WS_CHILD | WS_VISIBLE | WS_DISABLED;
 constexpr DWORD kSaveNameEditStyle = WS_CHILD | WS_VISIBLE;
 constexpr COLORREF kReplayWhite = RGB(255, 255, 255);
 constexpr COLORREF kReplayGray = RGB(210, 210, 210);
-constexpr COLORREF kReplayWarning = RGB(10, 10, 250);
+constexpr COLORREF kReplayWarning = RGB(250, 10, 10);
 constexpr COLORREF kReplayGreen = RGB(10, 210, 210);
 constexpr COLORREF kReplayBlack = RGB(0, 0, 0);
 constexpr COLORREF kReplaySelectedBlue = RGB(0, 0, 255);
@@ -714,25 +713,25 @@ void draw_replay_info(ReplayDialogState& state, const ReplayArchiveDescriptor& d
     if (descriptor.status == ReplayValidationStatus::None) {
         SetTextColor(item.hDC, kReplayGray);
         DrawTextA(item.hDC, text_row(190, "Select a replay file."), -1, &rect,
-            DT_CENTER | DT_VCENTER | DT_WORDBREAK | DT_NOPREFIX);
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         return;
     }
     if (descriptor.status == ReplayValidationStatus::OpenFailed) {
         SetTextColor(item.hDC, kReplayWarning);
         DrawTextA(item.hDC, text_row(191, "Replay open failed."), -1, &rect,
-            DT_CENTER | DT_VCENTER | DT_WORDBREAK | DT_NOPREFIX);
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         return;
     }
     if (descriptor.status == ReplayValidationStatus::Invalid) {
         SetTextColor(item.hDC, kReplayWarning);
         DrawTextA(item.hDC, text_row(192, "Invalid replay file."), -1, &rect,
-            DT_CENTER | DT_VCENTER | DT_WORDBREAK | DT_NOPREFIX);
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         return;
     }
     if (descriptor.status == ReplayValidationStatus::SaveFailed) {
         SetTextColor(item.hDC, kReplayWarning);
         DrawTextA(item.hDC, "Replay save failed.", -1, &rect,
-            DT_CENTER | DT_VCENTER | DT_WORDBREAK | DT_NOPREFIX);
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         return;
     }
 
@@ -837,7 +836,16 @@ void refresh_selection_descriptor(ReplayDialogState& state) {
     state.selected_replay = ReplayArchiveDescriptor{};
     state.status = ReplayValidationStatus::None;
     ReplayFileEntry* entry = selected_entry(state);
-    if (entry == nullptr || entry->directory) {
+    if (entry == nullptr) {
+        InvalidateRect(state.info_button.window, nullptr, TRUE);
+        return;
+    }
+    if (entry->directory) {
+        // The original immediately attempts to validate the initially
+        // selected directory and displays its open-failure message.  A double
+        // click still browses the directory before submission.
+        state.selected_replay.status = ReplayValidationStatus::OpenFailed;
+        state.status = state.selected_replay.status;
         InvalidateRect(state.info_button.window, nullptr, TRUE);
         return;
     }
@@ -970,8 +978,10 @@ bool create_common_dialog_window(ReplayDialogState& state, HWND parent,
     state.status = ReplayValidationStatus::None;
 
     const ReplayDialogLayoutRect window_rect = layout_at(state, 0);
-    const POINT origin = RankerFrontendWindowOrigin();
-    const DWORD style = parent != nullptr ? kWindowStyleWindowed : kWindowStyleFullscreen;
+    // Replay dialogs are fixed 800x600 owned popups in the original, even
+    // when the main window itself is positioned or scaled elsewhere.
+    const POINT origin{0, 0};
+    const DWORD style = kWindowStyleFullscreen;
     state.window = CreateWindowExA(WS_EX_CONTROLPARENT, class_name, title, style,
         origin.x, origin.y, window_rect.width, window_rect.height, parent,
         nullptr, instance, nullptr);

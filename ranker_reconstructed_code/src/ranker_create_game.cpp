@@ -43,7 +43,7 @@ constexpr DWORD kScreenSizeComboStyle =
 constexpr COLORREF kCreateGameWhite = RGB(255, 255, 255);
 constexpr COLORREF kCreateGameSoftWhite = RGB(250, 250, 250);
 constexpr COLORREF kCreateGameGray = RGB(210, 210, 210);
-constexpr COLORREF kCreateGameWarning = RGB(10, 10, 250);
+constexpr COLORREF kCreateGameWarning = RGB(250, 10, 10);
 constexpr COLORREF kCreateGameBlack = RGB(0, 0, 0);
 constexpr COLORREF kCreateGameSelectedBlue = RGB(0, 0, 255);
 constexpr UINT kCreateGameInfoLineFlags =
@@ -678,8 +678,11 @@ void add_scenario_entry(CreateGameState& state, const char* name,
     entry.parent = parent;
     state.scenario_entries.push_back(entry);
 
-    std::string display = directory && !parent ? "[" + std::string(name) + "]" :
-        std::string(name);
+    // The original sorted list stores a leading space for every directory.
+    // Owner drawing omits that sort prefix, so folders remain visually plain
+    // while sorting before map names such as "(2) ...".  Bracketing folders
+    // instead caused the first map file to become the initial selection.
+    std::string display = directory ? " " + std::string(name) : std::string(name);
     const LRESULT row = SendMessageA(state.scenario_list.window, LB_ADDSTRING, 0,
         reinterpret_cast<LPARAM>(display.c_str()));
     if (row != LB_ERR && row != LB_ERRSPACE) {
@@ -1571,12 +1574,17 @@ bool CreateCreateGameWindow(CreateGameState& state, HWND parent, HINSTANCE insta
     state.server_use_map_counts = {};
 
     const CreateGameLayoutRect window_rect = layout_at(state, 0);
-    const POINT origin = IsWindow(parent)
-        ? RankerCenteredChildFrontendWindowOrigin(parent,
-              window_rect.width, window_rect.height)
-        : RankerCenteredFrontendWindowOrigin(
-              window_rect.width, window_rect.height);
-    const DWORD style = parent != nullptr ? kWindowStyleWindowed : kWindowStyleFullscreen;
+    const bool single_player_popup = mode == 6 && IsWindow(parent);
+    const POINT origin = single_player_popup
+        ? POINT{0, 0}
+        : IsWindow(parent)
+            ? RankerCenteredChildFrontendWindowOrigin(parent,
+                  window_rect.width, window_rect.height)
+            : RankerCenteredFrontendWindowOrigin(
+                  window_rect.width, window_rect.height);
+    const DWORD style = single_player_popup
+        ? WS_POPUP | WS_CLIPSIBLINGS
+        : parent != nullptr ? kWindowStyleWindowed : kWindowStyleFullscreen;
     state.window = CreateWindowExA(WS_EX_CONTROLPARENT, "Create Game",
         "Create Game", style, origin.x, origin.y, window_rect.width,
         window_rect.height, parent, nullptr, instance, nullptr);
@@ -1681,6 +1689,9 @@ bool CreateCreateGameWindow(CreateGameState& state, HWND parent, HINSTANCE insta
     RedrawWindow(state.window, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE |
         RDW_UPDATENOW | RDW_ALLCHILDREN);
     SetFocus(state.name_edit.window);
+    if (state.mode == 6) {
+        SendMessageA(state.name_edit.window, EM_SETSEL, 0, -1);
+    }
     state.visible = true;
     return true;
 }

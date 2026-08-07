@@ -3924,20 +3924,26 @@ bool DrawUiScreenTextEntry(const UiScreenDefinition& screen, HDC dc,
 
     const i32 x = UiScreenEntryI32(entry, 0x20) + entry_i16(entry, 0x18);
     const i32 y = UiScreenEntryI32(entry, 0x24) + entry_i16(entry, 0x1a);
-    if (!screen.use_custom_text_renderer) {
-        if (dc == nullptr) {
-            return false;
-        }
+    if (!screen.use_custom_text_renderer && dc != nullptr) {
         const int length = static_cast<int>(std::strlen(text));
         return TextOutA(dc, x, y, text, length) != FALSE;
     }
 
-    const u8 font_index = static_cast<u8>(UiScreenEntryI32(entry, 0x08));
+    // The original GDI branch receives a surface HDC.  Reconstructed modal
+    // frames are normally drawn while the DirectDraw back buffer is locked,
+    // so no HDC is available.  Continue through the equivalent indexed text
+    // renderer instead of silently skipping every dynamic label.
+    const u8 draw_font_index = static_cast<u8>(UiScreenEntryI32(entry, 0x08));
+    const u8 metric_font_index = static_cast<u8>(UiScreenEntryI32(entry, 0x0c));
     const u8 foreground = selected_text_color(entry);
-    const u8 background = static_cast<u8>(UiScreenEntryI32(entry, 0x0c));
-    SelectTextDrawFont(font_index);
-    SelectTextMetricFont(font_index);
-    SetTextCursor(x, y, foreground, background);
+    // Original 0x00505ed0 treats entry +0x08 and +0x0c as the draw-font and
+    // metric-font selectors respectively.  It explicitly clears the text
+    // background color before drawing; +0x0c is not a background palette
+    // index.  Using it as one made dynamically replaced modal labels vanish
+    // against their panels, most visibly the empty save slots on MainLoad.mn.
+    SelectTextDrawFont(draw_font_index);
+    SelectTextMetricFont(metric_font_index);
+    SetTextCursor(x, y, foreground, 0);
     return std::strchr(text, '\r') == nullptr ? DrawTextString(text) :
         DrawTextLineUntilCrLf(text);
 }

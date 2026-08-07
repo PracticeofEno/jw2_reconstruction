@@ -436,6 +436,17 @@ bool with_back_buffer_dc(const std::function<bool(HDC)>& callback) {
         return false;
     }
 
+    // A live software sprite target means the DirectDraw back surface is
+    // already locked by the caller.  GetDC cannot succeed during that lock
+    // and some DirectDraw implementations wait for their internal timeout
+    // before returning DDERR_SURFACEBUSY.  Modal screens with eight dynamic
+    // save-slot labels paid that delay eight times before their first frame.
+    // Use the locked-target memory-DC fallback immediately instead.
+    const SpriteRenderState& sprite = sprite_render_state();
+    if (sprite.active && sprite.target.pixels != nullptr) {
+        return false;
+    }
+
     HDC dc = nullptr;
     if (FAILED(dd.back_surface->GetDC(&dc)) || dc == nullptr) {
         return false;
