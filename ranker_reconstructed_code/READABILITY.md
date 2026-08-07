@@ -47,19 +47,42 @@ Behavioral changes must not be hidden inside mechanical refactor commits.
   implementation-defined casts, host alignment, or host endianness.
 - Keep compatibility thunks thin and separate from the domain implementation.
 
-## Initial priority order
+## Current module boundaries
+
+- `ranker_startup_environment.*` owns startup diagnostics, executable/data
+  directory discovery, CPU capability checks, setup-version validation, and
+  the legacy CD-ROM fallback. Keep game/session state out of this module.
+- `ranker_text_tables.*` owns startup table lookup and display-string
+  formatting. Callers provide row numbers and fallbacks; they should not
+  duplicate table-presence checks.
+- `ranker_frontend_startup.*` owns bootstrap resources and registration of the
+  reconstructed frontend window classes.
+- `ranker_gameplay_unit_names.*` owns mutable session/script unit-name
+  overrides and indexed-table fallback lookup.
+- Compatibility entry points are split into `ranker_gameplay_aliases.cpp`,
+  `ranker_zlib_aliases.cpp`, and `ranker_mfc_aliases.cpp`. They delegate to
+  domain code and must not become a second implementation layer.
+- `ranker_mfc_geometry.cpp` owns stateless CSize/CPoint/CRect compatibility and
+  their archive shims. Stateful debug, window, exception, and OLE behavior
+  remains in `ranker_mfc_runtime.cpp` until extracted by subsystem.
+- `ranker_winmain.cpp` remains the composition root for default callbacks and
+  shared runtime state. New self-contained parsing, formatting, registry, or
+  resource logic belongs in its subsystem module rather than this file.
+
+## Current priority order
 
 The tracked project contains roughly 236,000 non-third-party C/C++ lines. The
 largest navigation bottlenecks are currently:
 
-1. `ranker_mfc_runtime.cpp` (about 33,800 lines): split runtime subsystems while
-   preserving legacy MFC object layouts.
-2. `ranker_winmain.cpp` (about 32,600 lines): extract startup, session wiring,
-   input/HUD adapters, and default callback groups.
+1. `ranker_mfc_runtime.cpp` (about 33,300 lines): continue splitting stateless
+   and self-contained runtime subsystems while preserving legacy MFC object
+   layouts.
+2. `ranker_winmain.cpp` (about 32,100 lines): extract session wiring, input/HUD
+   adapters, preview rendering, and default callback groups.
 3. `ranker_unit_commands.cpp` (about 12,000 lines): separate the unit command
    state machine from owner production/strategy helpers.
-4. `ranker_original_aliases.cpp` (about 6,300 lines): split compatibility thunks
-   by subsystem and keep them free of domain logic.
+4. `ranker_link_lobby.cpp` (about 7,000 lines): isolate packet codecs, session
+   preparation, and UI routing without changing network ordering.
 5. Repeated packet/archive readers and raw layout offsets: introduce checked,
    named accessors one format at a time.
 
