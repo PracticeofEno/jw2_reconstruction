@@ -204,6 +204,64 @@ const char* startup_message_row(std::size_t index, const char* fallback) {
     return fallback;
 }
 
+const char* startup_production_resource_failure_row(u32 code) {
+    constexpr std::size_t kResourceFailureRowBase = 94;
+    const char* fallback = "Cannot produce unit";
+    switch (code) {
+    case 0:
+        fallback = "Not enough resources";
+        break;
+    case 1:
+        fallback = "Not enough WATER";
+        break;
+    case 2:
+        fallback = "Not enough STONE";
+        break;
+    case 3:
+        fallback = "Population limit reached";
+        break;
+    case 0x0b:
+    case 0x0c:
+    case 0x0d:
+    case 0x0e:
+        fallback = "Not enough population capacity";
+        break;
+    case 0x0f:
+        fallback = "Missing prerequisite";
+        break;
+    default:
+        code = 0x0f;
+        break;
+    }
+    return startup_platform_row(kResourceFailureRowBase + code, fallback);
+}
+
+std::string startup_platform_label_value(
+    std::size_t index, const char* fallback, u32 value) {
+    return std::string(startup_platform_row(index, fallback)) +
+        std::to_string(value);
+}
+
+std::string startup_platform_ratio_value(
+    std::size_t index, const char* fallback, u32 value, u32 total) {
+    return std::string(startup_platform_row(index, fallback)) +
+        std::to_string(value) + "/" + std::to_string(std::max<u32>(total, 1));
+}
+
+std::string startup_auxiliary_text_or_empty(u32 slot, u32 row) {
+    std::string_view text =
+        GetIndexedTextTableRow(StartupAuxiliaryIndexedTextTable(slot), row);
+    return std::string(text.begin(), text.end());
+}
+
+std::string startup_action_name_or_empty(u32 action_id) {
+    std::string name = startup_auxiliary_text_or_empty(2, action_id);
+    if (!name.empty()) {
+        return name;
+    }
+    return startup_auxiliary_text_or_empty(1, action_id);
+}
+
 std::size_t startup_platform_text_count() {
     return g_startup_text_tables.platform_rows.rows.size();
 }
