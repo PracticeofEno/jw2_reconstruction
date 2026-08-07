@@ -26,7 +26,7 @@
 namespace ranker {
 namespace {
 
-constexpr DWORD kWindowStyleFullscreen = 0x90000000;
+constexpr DWORD kWindowStyleFullscreen = WS_POPUP;
 constexpr DWORD kListBoxStyle =
     WS_CHILD | WS_VISIBLE | WS_DISABLED | LBS_NOTIFY | LBS_OWNERDRAWFIXED;
 constexpr DWORD kChatEditStyle = WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | ES_NOHIDESEL;
@@ -6880,10 +6880,10 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
     // otherwise a later combo repaint can cover only the middle of the
     // 32-by-32 cursor and leave its previous/current pixels across "Random".
     SetGameCursorPresentationSuppressed(true);
-    SetFocus(state.chat_edit.window);
     ShowWindow(state.window, SW_SHOW);
     RedrawWindow(state.window, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE |
         RDW_UPDATENOW | RDW_ALLCHILDREN);
+    SetFocus(state.chat_edit.window);
     schedule_link_lobby_combo_refresh(state);
     state.visible = true;
     return true;

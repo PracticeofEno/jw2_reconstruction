@@ -2198,11 +2198,12 @@ void activate_frontend_state(const T& state) {
 void destroy_existing_window(HWND window) {
     if (window != nullptr && IsWindow(window)) {
         HWND parent = GetParent(window);
-        ShowWindow(window, SW_HIDE);
         DestroyWindow(window);
         if (parent != nullptr && IsWindow(parent)) {
-            RedrawWindow(parent, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE |
-                RDW_UPDATENOW | RDW_ALLCHILDREN);
+            // The replacement frontend is created synchronously by the caller.
+            // Queue the exposed parent repaint instead of forcing a visible
+            // empty frame between the old and new windows.
+            RedrawWindow(parent, nullptr, nullptr, RDW_INVALIDATE | RDW_NOERASE);
         }
     }
 }
@@ -3173,10 +3174,6 @@ void default_create_game_open_link_lobby(CreateGameState& state) {
     destroy_existing_window(lobby.window);
     configure_link_lobby_callbacks(lobby);
     destroy_existing_window(state.window);
-    if (owner != nullptr && IsWindow(owner)) {
-        RedrawWindow(owner, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE |
-            RDW_UPDATENOW | RDW_ALLCHILDREN);
-    }
     if (CreateLinkLobbyWindow(lobby, owner, instance, 0,
             reinterpret_cast<LPARAM>(map_descriptor.data()),
             reinterpret_cast<LPARAM>(session_seed.data()), mode, return_context,
@@ -30433,11 +30430,12 @@ void close_title_main_menu_frontend() {
     // Legacy frontend dialogs are fixed at the logical 800x600 size.  When the
     // resizable parent window is larger, part of the parent remains exposed
     // around the dialog.  Clear that exposed area before opening the next
-    // frontend so the released title frame is not left behind.
+    // frontend so the released title frame is not left behind.  Leave the
+    // repaint queued: forcing it now exposes a black frame before the next
+    // frontend has finished constructing its controls.
     g_runtime.suppress_paint = true;
     if (g_runtime.main_window != nullptr && IsWindow(g_runtime.main_window)) {
         InvalidateRect(g_runtime.main_window, nullptr, TRUE);
-        UpdateWindow(g_runtime.main_window);
     }
 }
 
@@ -32201,7 +32199,7 @@ int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_c
     }
 
     DWORD window_ex_style = 0;
-    DWORD window_style = WS_OVERLAPPEDWINDOW;
+    DWORD window_style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
     int window_x = 0;
     int window_y = 0;
     int window_width = kOriginalClientWidth;
@@ -32209,7 +32207,7 @@ int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_c
     if (g_runtime.windowed_mode) {
         const MainWindowPlacement placement =
             make_main_window_placement(window_ex_style);
-        window_style = placement.style;
+        window_style = placement.style | WS_CLIPCHILDREN;
         window_x = placement.x;
         window_y = placement.y;
         window_width = placement.width;
@@ -32217,7 +32215,7 @@ int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_c
     }
     else {
         window_ex_style = WS_EX_TOPMOST;
-        window_style = WS_POPUP | WS_VISIBLE | WS_SYSMENU;
+        window_style = WS_POPUP | WS_VISIBLE | WS_SYSMENU | WS_CLIPCHILDREN;
         window_width = GetSystemMetrics(SM_CXSCREEN);
         window_height = GetSystemMetrics(SM_CYSCREEN);
     }

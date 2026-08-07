@@ -28,9 +28,9 @@
 namespace ranker {
 namespace {
 
-constexpr DWORD kWindowStyleFullscreen = 0x90000000;
+constexpr DWORD kWindowStyleFullscreen = WS_POPUP;
 constexpr DWORD kWindowStyleWindowed =
-    WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+    WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
 constexpr DWORD kChildEditStyle = WS_CHILD;
 constexpr DWORD kChildEditReadOnlyAutoHScrollStyle =
     WS_CHILD | ES_READONLY | ES_AUTOHSCROLL;
@@ -1347,6 +1347,7 @@ bool CreateP2PLobbyWindow(P2PLobbyState& state, HWND parent, HINSTANCE instance,
     ShowWindow(state.name_edit, SW_SHOW);
     ShowWindow(state.local_address_edit, SW_SHOW);
     ShowWindow(state.remote_address_edit, SW_SHOW);
+    ShowWindow(state.window, SW_SHOW);
     RedrawWindow(state.window, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE |
         RDW_UPDATENOW | RDW_ALLCHILDREN);
     SetFocus(state.name_edit);

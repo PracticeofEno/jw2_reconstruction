@@ -28,8 +28,8 @@
 namespace ranker {
 namespace {
 
-constexpr DWORD kWindowStyleFullscreen = 0x90000000;
-constexpr DWORD kWindowStyleWindowed = WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN |
+constexpr DWORD kWindowStyleFullscreen = WS_POPUP;
+constexpr DWORD kWindowStyleWindowed = WS_CHILD | WS_CLIPCHILDREN |
     WS_CLIPSIBLINGS;
 constexpr DWORD kEditStyle = WS_CHILD | WS_VISIBLE;
 constexpr DWORD kScenarioListStyle =
@@ -951,12 +951,10 @@ bool launch_create_game_link_lobby(CreateGameState& state) {
     const int mode = state.mode;
     HWND old_window = state.window;
     if (old_window != nullptr && IsWindow(old_window)) {
-        ShowWindow(old_window, SW_HIDE);
         DestroyWindow(old_window);
     }
     if (owner != nullptr && IsWindow(owner)) {
-        RedrawWindow(owner, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE |
-            RDW_UPDATENOW | RDW_ALLCHILDREN);
+        RedrawWindow(owner, nullptr, nullptr, RDW_INVALIDATE | RDW_NOERASE);
     }
     CreateLinkLobbyWindow(link_lobby_state(), owner, instance, 0,
         reinterpret_cast<LPARAM>(state.map_descriptor_payload.data()),

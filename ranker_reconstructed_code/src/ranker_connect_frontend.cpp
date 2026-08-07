@@ -19,8 +19,8 @@
 namespace ranker {
 namespace {
 
-constexpr DWORD kWindowStyleFullscreen = 0x90000000;
-constexpr DWORD kWindowStyleWindowed = WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN |
+constexpr DWORD kWindowStyleFullscreen = WS_POPUP;
+constexpr DWORD kWindowStyleWindowed = WS_CHILD | WS_CLIPCHILDREN |
     WS_CLIPSIBLINGS;
 constexpr DWORD kDescriptionButtonStyle = 0x5800000b;
 constexpr COLORREF kConnectTextWhite = RGB(255, 255, 255);
@@ -711,6 +711,10 @@ bool CreateConnectFrontendWindow(ConnectFrontendState& state, HWND parent,
     }
 
     install_accelerators(state);
+    // Keep the frontend hidden until its bitmaps and child controls are ready.
+    // Showing it at creation time exposes partially initialized frames during
+    // the title-to-connect transition.
+    ShowWindow(state.window, SW_SHOW);
     RedrawWindow(state.window, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE |
         RDW_UPDATENOW | RDW_ALLCHILDREN);
     state.visible = true;
