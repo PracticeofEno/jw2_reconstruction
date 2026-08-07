@@ -399,6 +399,7 @@ void ApplyUnitEffectPointImpactAndSpawnChildren(UnitEffectRuntimeState& state,
 bool CheckUnitEffectAlreadyHitTarget(const UnitEffectRuntime& effect, u32 target_unit_id);
 UnitEffectRuntime* AllocateUnitEffectSlot(UnitEffectRuntimeState& state);
 void ReleaseUnitEffectSlot(UnitEffectRuntimeState& state, UnitEffectRuntime& effect);
+void BreakUnitRuntimeShield(UnitEffectRuntimeState& state, UnitMovementUnit& target);
 bool DispatchUnitEffectProjectileTrailRenderer(UnitEffectRuntimeState& state,
     UnitEffectRuntime& effect, u32 effect_id,
     i32 captured_screen_x, i32 captured_screen_y);

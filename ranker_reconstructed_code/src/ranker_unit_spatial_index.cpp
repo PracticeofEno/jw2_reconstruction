@@ -231,15 +231,33 @@ void sort_entries_by_x_legacy(std::vector<UnitSpatialIndexEntry>& entries,
 UnitMovementUnit* query_relative_box(UnitSpatialIndex& index,
     UnitMovementUnit& source_unit, i32 min_x, i32 max_x, i32 min_y, i32 max_y) {
     reset_query(index);
-    if (find_sorted_index(index, source_unit) == kInvalidUnitSpatialSortedIndex) {
+    const i32 source_sorted_index = find_sorted_index(index, source_unit);
+    if (source_sorted_index == kInvalidUnitSpatialSortedIndex) {
         return nullptr;
     }
 
-    const std::size_t first = first_index_with_x_at_least(index, min_x);
-    const std::size_t last = last_index_with_x_at_most(index, max_x);
-    if (first >= index.sorted_units.size() || last >= index.sorted_units.size() ||
-        first > last) {
-        return nullptr;
+    // Original 0x0040ec73..0x0040ed39 starts both X-bound walks at the
+    // source's frame-start sorted index.  It does not binary-search from the
+    // source's current X.  That distinction is observable when a carrier
+    // unloads a passenger after the index was built: replay 22 frame 10816
+    // moves slot 187 from x=3716 to x=3552, while the old anchor still makes
+    // slot 202 part of the original query range.
+    std::size_t first = static_cast<std::size_t>(source_sorted_index);
+    while (first > 0) {
+        --first;
+        if (index.sorted_units[first].x < min_x) {
+            ++first;
+            break;
+        }
+    }
+
+    std::size_t last = static_cast<std::size_t>(source_sorted_index);
+    while (last + 1 < index.sorted_units.size()) {
+        ++last;
+        if (index.sorted_units[last].x > max_x) {
+            --last;
+            break;
+        }
     }
 
     for (std::size_t sorted_index = first; sorted_index <= last; ++sorted_index) {

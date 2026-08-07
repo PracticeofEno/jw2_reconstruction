@@ -17,6 +17,12 @@ enum class Subtype01LatestCancelRoute : u8 {
     production_cost,
 };
 
+constexpr bool ShouldRetireMode1PacketShadowBeforeRuntimeQueue(
+    u32 queued_count, u32 shadow_capacity, bool runtime_callback_bound) {
+    return runtime_callback_bound && shadow_capacity != 0 &&
+        queued_count >= shadow_capacity;
+}
+
 // HandleSubtype01ProductionCommandPacket 0x004dca58 treats every queued
 // command other than the two resource-special states as ordinary production.
 // The active slot is stricter and accepts only its six explicit states.

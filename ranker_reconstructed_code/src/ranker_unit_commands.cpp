@@ -157,7 +157,11 @@ bool can_follow(UnitCommandContext& context, UnitMovementUnit& unit,
     if (context.callbacks.can_follow_target != nullptr) {
         return context.callbacks.can_follow_target(context, unit, target);
     }
-    return target_alive(&target);
+    // Original follow states 0x16/0x17 (0x004c987f and 0x004c9923) accept
+    // any fixed-pool pointer whose raw runtime flags do not contain 0x84.
+    // The target need not belong to the active list: a synchronized command
+    // can retain a pointer to a zeroed free slot and still remain in 0x16.
+    return (target.runtime_flags & 0x84u) == 0;
 }
 
 void dispatch_attack(UnitCommandContext& context, UnitMovementUnit& unit) {
@@ -217,6 +221,12 @@ UnitMovementPoint command_movement_frame_delta(UnitCommandContext& context,
 void copy_target_position_to_path(UnitMovementUnit& unit, const UnitMovementUnit& target) {
     unit.path_target_x = target.x;
     unit.path_target_y = target.y;
+}
+
+void set_command_target_identity_without_path(UnitMovementUnit& unit,
+    UnitMovementUnit& target) {
+    unit.target = &target;
+    unit.command_value = target.id;
 }
 
 void path_to_target(UnitCommandContext& context, UnitMovementUnit& unit,
@@ -633,6 +643,11 @@ UnitMovementUnit* find_unit_by_id(UnitCommandContext& context, u32 id) {
             return unit;
         }
     }
+    for (UnitMovementUnit* unit : movement(context).free_units) {
+        if (unit != nullptr && unit->id == id) {
+            return unit;
+        }
+    }
 
     // Saved command payloads may still contain a scenario slot index, while
     // original network commands contain the corresponding byte offset in the
@@ -660,6 +675,11 @@ UnitMovementUnit* find_unit_by_id(UnitCommandContext& context, u32 id) {
         }
     }
     for (UnitMovementUnit* unit : movement(context).lifecycle_units) {
+        if (unit != nullptr && unit->runtime_slot_index == runtime_slot_index) {
+            return unit;
+        }
+    }
+    for (UnitMovementUnit* unit : movement(context).free_units) {
         if (unit != nullptr && unit->runtime_slot_index == runtime_slot_index) {
             return unit;
         }
@@ -700,6 +720,7 @@ bool command_payload_carries_target_id(u32 command_state) {
     case 0x0d:
     case 0x16:
     case 0x23:
+    case 0x24:
         return true;
     default:
         return false;
@@ -1683,6 +1704,50 @@ void handle_spawn_cycle(UnitCommandContext& context, UnitMovementUnit& unit,
     }
 
     UnitMovementUnit* spawned = unit.target;
+    if (spawned == nullptr && unit.command_value != 0 &&
+        unit.command_value % 0x1d0u != 0) {
+        // State 0x5b keeps raw +0x68 as the requested building type until a
+        // placement succeeds.  Once the animation period has elapsed, the
+        // original 0x004cb779 path nevertheless treats that word as a fixed-
+        // pool byte offset without validating 0x1d0 alignment.  A failed
+        // type-116 placement therefore aliases zeroed storage inside slot 0,
+        // faces its type-0 centre at the origin, and remains in 0x5b instead
+        // of popping the command (replay 10, frame 2659).
+        UnitMovementUnit raw_pool_alias{};
+        const bool persistent_alias = context.callbacks.access_spawn_alias != nullptr &&
+            context.callbacks.access_spawn_alias(
+                context, unit.command_value, raw_pool_alias, false);
+        if (!persistent_alias) {
+            raw_pool_alias.definition =
+                definition_for_type_or(context, 0, raw_pool_alias.definition);
+        }
+        if ((raw_pool_alias.runtime_flags & 4u) != 0) {
+            PopDeferredUnitCommandOrReturnIdle(context, unit);
+            return;
+        }
+
+        face_spawned_unit(context, unit, raw_pool_alias);
+        if (!grow_spawned_unit(raw_pool_alias)) {
+            if (persistent_alias) {
+                context.callbacks.access_spawn_alias(
+                    context, unit.command_value, raw_pool_alias, true);
+            }
+            return;
+        }
+        raw_pool_alias.previous_command_state = 1;
+        raw_pool_alias.cell_channel_additive_frame = 0;
+        if (persistent_alias) {
+            // The original completes this malformed in-pool alias in place.
+            // Do not register a pointer to this temporary typed projection in
+            // movement cells; persist the raw words that the completion path
+            // reaches and finish the builder command.
+            context.callbacks.access_spawn_alias(
+                context, unit.command_value, raw_pool_alias, true);
+            PopDeferredUnitCommandOrReturnIdle(context, unit);
+            return;
+        }
+        return;
+    }
     if (spawned == nullptr || (spawned->runtime_flags & 4u) != 0) {
         PopDeferredUnitCommandOrReturnIdle(context, unit);
         return;
@@ -2014,14 +2079,26 @@ bool check_target_footprint_separated(const UnitMovementUnit& unit,
         return true;
     }
 
-    const i32 source_left = unit.x + unit.definition.bounds_left * 2;
-    const i32 source_top = unit.y + unit.definition.bounds_top * 2;
-    const i32 source_right = source_left + unit.definition.bounds_width * 2;
-    const i32 source_bottom = source_top + unit.definition.bounds_height * 2;
-    const i32 target_left = target->x + target->definition.bounds_left;
-    const i32 target_top = target->y + target->definition.bounds_top;
-    const i32 target_right = target_left + target->definition.bounds_width;
-    const i32 target_bottom = target_top + target->definition.bounds_height;
+    // FUN_004d17e3 reads the catalog +0x370..+0x37c interaction rectangle,
+    // not the +0x360..+0x36c display/name bounds.  Type 1 makes the distinction
+    // observable: the wider display rectangle overlaps while the interaction
+    // rectangles are still separated.
+    const i32 source_left =
+        unit.x + unit.definition.interaction_bounds_left * 2;
+    const i32 source_top =
+        unit.y + unit.definition.interaction_bounds_top * 2;
+    const i32 source_right =
+        source_left + unit.definition.interaction_bounds_width * 2;
+    const i32 source_bottom =
+        source_top + unit.definition.interaction_bounds_height * 2;
+    const i32 target_left =
+        target->x + target->definition.interaction_bounds_left;
+    const i32 target_top =
+        target->y + target->definition.interaction_bounds_top;
+    const i32 target_right =
+        target_left + target->definition.interaction_bounds_width;
+    const i32 target_bottom =
+        target_top + target->definition.interaction_bounds_height;
 
     return target_left > source_right || target_top > source_bottom ||
         source_left > target_right || source_top > target_bottom;
@@ -2086,14 +2163,23 @@ void HandleUnitReturnToIdleState(UnitCommandContext&, UnitMovementUnit& unit) {
         return;
     }
     unit.command_state = kUnitStateRuntimeIdleAcquire;
-    if (unit.definition.animation_timer_period <= unit.animation_frame) {
-        unit.animation_frame = 0;
+    // Original raw unit +0x64 is the animation frame while the unit is on the
+    // active list and the lifecycle work timer after it leaves that list.
+    // Scenario relocation can return a dead/lifecycle unit to idle before the
+    // lifecycle dispatcher runs, so clamp the view that currently owns the
+    // shared raw word.
+    u32& raw_frame = unit.active ? unit.animation_frame : unit.work_timer;
+    if (unit.definition.animation_timer_period <= raw_frame) {
+        raw_frame = 0;
     }
 }
 
 void StartUnitValueTransferEntry(UnitCommandContext&, UnitMovementUnit& unit,
     u32 command_value) {
-    unit.command_value = command_value;
+    // The state-0x73 entry stores the requested transfer value in original
+    // raw +0x4c.  That word is the typed cargo_amount union, not command_value
+    // (raw +0x68 is occupied by the target reference in these states).
+    unit.cargo_amount = command_value;
     unit.command_state = kUnitStateValueTransferStart;
 }
 
@@ -2889,9 +2975,12 @@ void HandleUnitRuntimeDispatchTick(UnitCommandContext& context, UnitMovementUnit
     if (unit.action_mode_gate == 1) {
         UnitMovementUnit* target = unit.target;
         if (target != nullptr &&
-            (((target->runtime_flags & 4u) != 0) ||
-                (target->type_id == 0x10 &&
-                    GetUnitCommandIdLow24(*target) != kUnitStateSpawnCreateCycle))) {
+            // Original 0x004cd9cf compares the complete raw command word with
+            // 0x5b.  A worker marked dead therefore stops owning the
+            // construction backlink immediately even though its low 24-bit
+            // command id is still 0x5b.
+            ShouldReleaseConstructionBacklinkTarget(target->runtime_flags,
+                target->type_id, target->command_state)) {
             unit.target = nullptr;
         }
         return;
@@ -3983,7 +4072,10 @@ void HandleUnitTargetInteractionApproach(UnitCommandContext& context,
 void StartUnitTargetProgressCommand(UnitCommandContext& context,
     UnitMovementUnit& unit) {
     UnitMovementUnit* target = resolve_active_payload_target_or_clear(context, unit);
-    if (target == nullptr || !target_alive(target)) {
+    // Original state 0x10 enters FUN_004c33d2 directly at 0x004c96d2.  It
+    // does not test active-list membership or runtime death flags before
+    // dereferencing the retained fixed-pool target.
+    if (target == nullptr) {
         PopDeferredUnitCommandOrReturnIdle(context, unit);
         return;
     }
@@ -4009,7 +4101,9 @@ void StartUnitTargetProgressCommand(UnitCommandContext& context,
 void HandleUnitTargetProgressCycle(UnitCommandContext& context,
     UnitMovementUnit& unit) {
     UnitMovementUnit* target = resolve_active_payload_target_or_clear(context, unit);
-    if (target == nullptr || !target_alive(target)) {
+    // State 0x11 likewise starts with the footprint test; a free-pool pointer
+    // remains meaningful until the later health/progress checks reject it.
+    if (target == nullptr) {
         anchor_and_pop_deferred(context, unit);
         return;
     }
@@ -4042,8 +4136,9 @@ void HandleUnitTargetProgressCycle(UnitCommandContext& context,
 void HandleUnitTargetProgressApproach(UnitCommandContext& context,
     UnitMovementUnit& unit) {
     UnitMovementUnit* target = resolve_active_payload_target_or_clear(context, unit);
-    if (target == nullptr || !target_alive(target) ||
-        !CheckCurrentTargetBelowStoredHealthCap(unit)) {
+    // Original state 0x12 checks the target health predicate but has no
+    // separate active/list/death gate (0x004c97c6..0x004c97d6).
+    if (target == nullptr || !CheckCurrentTargetBelowStoredHealthCap(unit)) {
         PopDeferredUnitCommandOrReturnIdle(context, unit);
         return;
     }
@@ -4072,7 +4167,11 @@ void StartUnitGuardAnchorCommand(UnitCommandContext& context,
         unit.command_flags |= 0x20;
         UnitMovementUnit* target = find_target(context, unit);
         if (target != nullptr && can_attack(context, unit, *target)) {
-            SetUnitCommandTarget(unit, target);
+            // State 0x1c's in-range branch 0x004c9a0e writes state 0x1d but
+            // never touches raw path +0x6c/+0x70.  Preserve the point carried
+            // by the new guard command; only the out-of-range path helper
+            // below replaces it with the scanned target position.
+            set_command_target_identity_without_path(unit, *target);
             if (!target_in_attack_range(context, unit, *target)) {
                 path_to_target_without_command_flag(context, unit, *target);
                 unit.command_state = kUnitStateGuardReturnTravel;
@@ -4187,7 +4286,9 @@ void StartUnitGuardReturnCommand(UnitCommandContext& context,
     unit.command_flags |= 0x20;
     UnitMovementUnit* target = find_target(context, unit);
     if (target != nullptr && can_attack(context, unit, *target)) {
-        SetUnitCommandTarget(unit, target);
+        // State 0x1f likewise reaches 0x004c9b95 without writing raw path
+        // coordinates when the newly scanned target is already in range.
+        set_command_target_identity_without_path(unit, *target);
         if (!target_in_attack_range(context, unit, *target)) {
             path_to_target_without_command_flag(context, unit, *target);
             unit.command_state = kUnitStateGuardReturnTravel;
@@ -6043,12 +6144,12 @@ void HandleUnitValueTransferCycle(UnitCommandContext& context, UnitMovementUnit&
         return;
     }
 
-    if (unit.action_mode > unit.command_value) {
+    if (unit.action_mode > unit.cargo_amount) {
         PopDeferredUnitCommandOrReturnIdle(context, unit);
         return;
     }
 
-    const u32 amount = unit.command_value - unit.action_mode;
+    const u32 amount = unit.cargo_amount - unit.action_mode;
     if (target->action_mode <= amount) {
         PopDeferredUnitCommandOrReturnIdle(context, unit);
         return;

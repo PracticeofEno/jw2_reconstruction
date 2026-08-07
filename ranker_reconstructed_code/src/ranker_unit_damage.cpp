@@ -24,8 +24,12 @@ bool is_dead_or_inactive(const UnitRecord& unit) {
         (unit.runtime_flags & kUnitRuntimeHiddenOrInactive) != 0;
 }
 
-bool is_elite_variant(const UnitRecord& unit) {
-    return unit.type_id > kUnitEliteVariantThreshold && unit.variant == 1;
+bool is_construction_damage_target(const UnitRecord& unit) {
+    // FUN_004c212c checks raw unit type > 0x5f and raw +0x30 == 1 in both
+    // its direct and area-damage paths.  For structure types raw +0x30 is the
+    // construction/action-mode gate, not the unrelated production variant.
+    return unit.type_id > kUnitConstructionDamageTypeThreshold &&
+        unit.construction_damage_gate == 1;
 }
 
 bool can_damage(UnitDamageContext& context, UnitRecord& target) {
@@ -122,21 +126,22 @@ bool ApplyUnitDamage(UnitDamageContext& context, UnitRecord& target, u32 damage)
     }
 
     if ((target.runtime_flags & kUnitRuntimeShielded) != 0) {
-        if (target.shield_points > damage) {
-            target.shield_points -= damage;
+        const UnitShieldDamageResult shield =
+            ResolveUnitShieldDamageRaw(target.shield_points, damage);
+        target.shield_points = shield.shield_points;
+        if (!shield.broken) {
             HandleUnitDamageReaction(context, target);
             NotifyLocalPlayerUnitUnderAttack(context, target);
             return false;
         }
-        damage -= target.shield_points;
-        target.shield_points = 0;
+        damage = shield.remaining_damage;
         target.runtime_flags &= ~kUnitRuntimeShielded;
         if (context.callbacks.on_shield_broken != nullptr) {
             context.callbacks.on_shield_broken(context, target);
         }
     }
 
-    if (is_elite_variant(target)) {
+    if (is_construction_damage_target(target)) {
         damage *= 2;
     }
 

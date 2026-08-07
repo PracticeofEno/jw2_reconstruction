@@ -854,6 +854,19 @@ void handle_unit_order_with_command(const Mode1ReliablePacket& packet,
         return;
     }
 
+    // The packet-side queue is only a diagnostic mirror.  Simulation removes
+    // commands from UnitMovementUnit without retiring this shadow, so after a
+    // long shift-queue sequence it can remain full while the authoritative
+    // raw queue has free slots.  Original 0x004dd55f delegates the packet to
+    // raw queue helper 0x004dd866; never let the stale mirror suppress that
+    // runtime delivery.  Retire only the shadow's oldest entry to keep its
+    // bounded diagnostics moving forward.
+    if (ShouldRetireMode1PacketShadowBeforeRuntimeQueue(
+            unit.queued_count, static_cast<u32>(unit.queued_commands.size()),
+            g_packet_dispatch_state.runtime_callbacks.set_unit_command_payload !=
+                nullptr)) {
+        retire_oldest_shadow_deferred_command(unit);
+    }
     if (push_deferred_command(unit, record)) {
         mirror_runtime_command_payload(fields.unit_offset, record, true, false);
     }

@@ -19,6 +19,18 @@ void expect_route(bool queued, u32 state, Subtype01LatestCancelRoute expected,
     }
 }
 
+void test_stale_packet_shadow_does_not_block_runtime_queue() {
+    if (!ShouldRetireMode1PacketShadowBeforeRuntimeQueue(10, 10, true)) {
+        fail("full diagnostic shadow suppressed the authoritative raw queue");
+    }
+    if (ShouldRetireMode1PacketShadowBeforeRuntimeQueue(10, 10, false)) {
+        fail("standalone packet shadow unexpectedly retired its oldest entry");
+    }
+    if (ShouldRetireMode1PacketShadowBeforeRuntimeQueue(7, 10, true)) {
+        fail("non-full packet shadow retired an active diagnostic entry");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -54,6 +66,8 @@ int main() {
     expect_route(false, 0x01u,
         Subtype01LatestCancelRoute::reject,
         "unrelated active state was accepted");
+
+    test_stale_packet_shadow_does_not_block_runtime_queue();
 
     std::cout << "SUBTYPE01_LATEST_CANCEL_PARITY_PASS\n";
     return EXIT_SUCCESS;

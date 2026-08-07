@@ -78,6 +78,9 @@ bool HandleOwnerPrimaryResourceSpendIfAllowed(UnitLifecycleContext& context,
 void HandleUnitPrimaryResourceCostRefund(UnitLifecycleContext& context,
     UnitMovementUnit& unit, u32 type_id);
 void HandleUnitLifecycleDispatchListTick(UnitLifecycleContext& context);
+// Original 0x004ceaa3 reads this shared value from JW2_11 record 8 raw
+// +0x20c instead of the current unit definition.
+void SetUnitLifecycleTransientObjectPeriod(u32 period);
 void HandleUnitLifecycleGrowthOrDecay(UnitLifecycleContext& context,
     UnitMovementUnit& unit);
 bool HandleUnitConstructionActivation(UnitLifecycleContext& context,

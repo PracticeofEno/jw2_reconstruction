@@ -719,12 +719,22 @@ constexpr std::size_t kJw211ProductionMovementClassMaskOffset = 0x154;
 constexpr std::size_t kJw211ProductionDefinitionIdOffset = 0x158;
 constexpr std::size_t kJw211ProductionOwnerRequirementOffset = 0x15c;
 constexpr std::size_t kJw211ProductionActiveLimitOffset = 0x160;
-constexpr std::size_t kJw211ProductionStatusRechargeAmountOffset = 0x16c;
+// HandleUnitStatusEffectTimer (0x004cc7cf) reads the selected action row at
+// raw +0x1ec before calling the clamped secondary-value adder.
+constexpr std::size_t kJw211ProductionStatusRechargeAmountOffset = 0x1ec;
 constexpr std::size_t kJw211ProductionResourceLimitOffset = 0x1e0;
 constexpr std::size_t kJw211ProductionQueuedLimitOffset = 0x1e4;
 constexpr std::size_t kJw211ActionDirectionModeOffset = 0x150;
 constexpr std::size_t kJw211ActionSourceHealthCostOffset = 0x1e0;
 constexpr std::size_t kJw211ActionSourceStat20DeltaOffset = 0x1f4;
+// ProcessUnitMovementStep/FUN_004c8c26 also reads action record 0x22's
+// raw +0x1f4 value while unit command flag 0x10000 is active.  It is a
+// temporary movement-frame modifier in that context (the shipped value is 1),
+// even though other JW2_11 action paths interpret the same record field as a
+// source-stat delta.
+constexpr u32 kJw211MovementFlag10000ActionId = 0x22;
+constexpr std::size_t kJw211MovementFlag10000ModifierOffset =
+    kJw211ActionSourceStat20DeltaOffset;
 constexpr std::size_t kJw211ActionCreateUnitRefundSecondaryOffset = 0x1e4;
 constexpr std::size_t kJw211ActionCreateUnitSecondaryValueOffset = 0x1ec;
 constexpr std::size_t kJw211ActionCreateUnitTypeOffset = 0x1f0;
@@ -747,6 +757,10 @@ constexpr std::size_t kJw211ActionStartupTicksOffset = 0x220;
 constexpr std::size_t kJw211ActionProjectileLoopTicksOffset = 0x224;
 constexpr std::size_t kJw211ActionSequenceImageIndexBaseOffset = 0x430;
 constexpr std::size_t kJw211ActionNearbyMarkerRadiusOffset = 0x1f8;
+// HandleUnitLifecycleGrowthOrDecay's runtime-flag-0x10 branch reads the live
+// JW2_11 record 8 raw +0x20c value at original 0x004ceaa3..0x004ceabb.
+constexpr u32 kJw211TransientObjectLifecycleActionId = 8;
+constexpr std::size_t kJw211TransientObjectLifecyclePeriodOffset = 0x20c;
 constexpr std::size_t kJw211AreaDamageOwnerRelationModeOffset = 0xac0;
 constexpr u32 kJw211FirstRecordId = 0x3d;
 constexpr u32 kJw211RestoreLinkedHealthEffectId = 0x65;
@@ -1390,6 +1404,8 @@ void configure_default_unit_action_context(UnitActionContext& action_context,
     UnitCommandContext& command_context);
 UnitMovementUnit* default_unit_command_find_target(UnitCommandContext& context,
     UnitMovementUnit& unit);
+UnitMovementUnit* default_unit_command_find_target_impl(UnitCommandContext& context,
+    UnitMovementUnit& unit, bool allow_type73_active_list_scan);
 bool default_unit_visibility_allows_target(const UnitMovementUnit& source,
     const UnitMovementUnit& candidate);
 UnitMovementUnit* default_unit_command_find_nearby_follow_target(
@@ -13451,6 +13467,11 @@ UnitMovementUnit* find_default_movement_unit_by_id(u32 unit_id) {
             return unit;
         }
     }
+    for (UnitMovementUnit* unit : lifecycle->movement->free_units) {
+        if (unit != nullptr && unit->id == unit_id) {
+            return unit;
+        }
+    }
 
     u32 runtime_slot_index = kInvalidUnitRuntimeSlotIndex;
     if (unit_id % kGameplayScenarioObjectStride == 0) {
@@ -13472,6 +13493,16 @@ UnitMovementUnit* find_default_movement_unit_by_id(u32 unit_id) {
         }
     }
     for (UnitMovementUnit* unit : lifecycle->movement->lifecycle_units) {
+        if (unit != nullptr && unit->runtime_slot_index == runtime_slot_index) {
+            return unit;
+        }
+    }
+    // Mode-1 handlers address the original fixed pool directly.  They do not
+    // require the referenced node to be on the active list before reading its
+    // queue fields or applying a resource command.  Replay 7 makes this
+    // observable when subtype 0x01 targets zeroed pool slot 211: the original
+    // accepts the production request and debits its cost.
+    for (UnitMovementUnit* unit : lifecycle->movement->free_units) {
         if (unit != nullptr && unit->runtime_slot_index == runtime_slot_index) {
             return unit;
         }
@@ -14520,8 +14551,11 @@ void default_unit_action_target_lost(UnitActionContext&, UnitMovementUnit&) {}
 
 UnitMovementUnit* default_unit_action_find_replacement_target(
     UnitActionContext&, UnitMovementUnit& source) {
-    return default_unit_command_find_target(
-        g_runtime.gameplay_unit_commands, source);
+    // FUN_004c1c87 calls the spatial target finder FUN_004c2e0f directly
+    // when replacing a transient/dead target.  It does not take the type-0x73
+    // idle-acquisition special path, whose active-list mask rejects 0x20000.
+    return default_unit_command_find_target_impl(
+        g_runtime.gameplay_unit_commands, source, false);
 }
 
 bool default_unit_effect_selected_production_gate(UnitEffectRuntimeState&,
@@ -14648,9 +14682,13 @@ UnitRecord make_default_unit_damage_record(const UnitMovementUnit& unit) {
     record.max_hit_points = unit.max_health != 0
         ? unit.max_health
         : std::max<u32>(unit.definition.initial_max_health, 1);
-    record.hit_points = std::min(unit.health, record.max_hit_points);
+    // The original damage walk operates on the live raw unit pool.  This
+    // adapter snapshots every active unit for area scans, including units
+    // that are not damaged, so its round trip must not normalize legal
+    // over-cap residue produced by other mechanics.
+    record.hit_points = unit.health;
     record.max_secondary_value = unit.max_secondary_value;
-    record.secondary_value = std::min(unit.secondary_value, record.max_secondary_value);
+    record.secondary_value = unit.secondary_value;
     record.experience = unit.elite_progress_value;
     // ProcessUnitKillExperienceAward (0x004c2da0) adds definition raw +0x184
     // (DAT_0087c47c after the original +0x2a8 record prefix).  The runtime
@@ -14679,7 +14717,7 @@ UnitRecord make_default_unit_damage_record(const UnitMovementUnit& unit) {
         unit.definition.interaction_bounds_width;
     record.interaction_bounds_bottom = record.interaction_bounds_top +
         unit.definition.interaction_bounds_height;
-    record.variant = unit.production_variant;
+    record.construction_damage_gate = unit.action_mode_gate;
     record.shield_points = default_unit_damage_shield_points(unit);
     record.point_target = unit.definition.render_class == 1;
     return record;
@@ -14697,9 +14735,8 @@ void apply_default_unit_damage_record(UnitMovementUnit& unit,
     // publishes the same death bit with its pre-cast health still intact.
     // Treating every command-dead record as lethal therefore desynchronizes
     // that original special-ability path.
-    unit.health = std::min(record.hit_points,
-        unit.max_health != 0 ? unit.max_health : record.max_hit_points);
-    unit.secondary_value = std::min(record.secondary_value, unit.max_secondary_value);
+    unit.health = record.hit_points;
+    unit.secondary_value = record.secondary_value;
     unit.elite_progress_value = record.experience;
 }
 
@@ -14710,7 +14747,7 @@ void mirror_default_unit_damage_record_stats(UnitRecord& record,
     record.max_secondary_value = unit.max_secondary_value;
     record.secondary_value = unit.secondary_value;
     record.experience = unit.elite_progress_value;
-    record.variant = unit.production_variant;
+    record.construction_damage_gate = unit.action_mode_gate;
     record.shield_points = default_unit_damage_shield_points(unit);
 }
 
@@ -21191,8 +21228,13 @@ void default_unit_damage_shield_broken(UnitDamageContext&, UnitRecord& target) {
     if (UnitEffectRuntime* shield_effect =
             default_unit_effect_from_original_slot_offset_allow_inactive(
                 effects, unit->linked_effect_slot_offset)) {
-        ReleaseUnitEffectSlot(effects, *shield_effect);
+        // ApplyUnitDamage has already performed the original raw SUB.  Copy
+        // its possibly-negative residual before BreakUnitRuntimeShield moves
+        // the node to the free list; low-id effect initializers intentionally
+        // preserve this raw +0x14 word on later slot reuse.
+        shield_effect->amount = target.shield_points;
     }
+    BreakUnitRuntimeShield(effects, *unit);
 }
 
 bool resolve_default_unit_sound_profile(const UnitMovementUnit& unit,
@@ -21481,7 +21523,7 @@ DefaultDamageReactionCombatGate default_unit_damage_reaction_combat_gate(
     }
     // Original 0x004c2542..0x004c2552 rejects only an under-construction
     // structure (raw +0x30), not a unit whose unrelated variant field is one.
-    if (damaged.type_id > kUnitEliteVariantThreshold &&
+    if (damaged.type_id > kUnitConstructionDamageTypeThreshold &&
         damaged.action_mode_gate == 1) {
         return DefaultDamageReactionCombatGate::stop;
     }
@@ -21787,7 +21829,7 @@ void default_unit_damage_reaction_scan_allies(UnitMovementUnit& damaged,
             range) {
             continue;
         }
-        if ((ally->type_id > kUnitEliteVariantThreshold &&
+        if ((ally->type_id > kUnitConstructionDamageTypeThreshold &&
                 ally->action_mode_gate == 1) ||
             (ally->type_flags & 0x20u) == 0 ||
             (ally->runtime_flags & kUnitDamageReactionSkipMask) != 0) {
@@ -22533,8 +22575,12 @@ bool default_unit_movement_attached_child_parent_death(UnitMovementContext& move
     }
     child.x = x;
     child.y = y;
-    child.destination_x = x;
-    child.destination_y = y;
+    // ranker.exe 0x004c8f1f updates raw +0xc0/+0xc4 (the current cell)
+    // and 0x004c8f2b updates raw +0xb8/+0xbc (the world position).  Raw
+    // +0x78/+0x7c, the movement destination, is deliberately left intact.
+    // This matters when an attached passenger is killed with its carrier:
+    // copying the release point into the destination changes the sync state
+    // on the passenger's death frame.
     child.current_cell_x = x & ~0x1f;
     child.current_cell_y = y & ~0x1f;
     SetUnitFootprintOccupancyBits(*lifecycle, child);
@@ -22547,6 +22593,16 @@ void configure_default_unit_movement_callbacks(UnitMovementContext& movement) {
     movement.equipment_catalog = &bootstrap.equipment_catalog;
     movement.direction_lookup_8 = &bootstrap.direction_lookup_8;
     movement.direction_lookup_16 = &bootstrap.direction_lookup_16;
+    movement.additional_movement_modifier = 0;
+    const AuxiliaryRuntimeCatalogState& action_catalog =
+        jw211_runtime_catalog_state();
+    if (kJw211MovementFlag10000ActionId < action_catalog.records.size()) {
+        const AuxiliaryRuntimeCatalogRecord& action =
+            action_catalog.records[kJw211MovementFlag10000ActionId];
+        movement.additional_movement_modifier = read_runtime_catalog_i32(
+            action.definition_bytes,
+            kJw211MovementFlag10000ModifierOffset, 0);
+    }
 
     if (movement.callbacks.on_unit_marked_dead == nullptr) {
         movement.callbacks.on_unit_marked_dead = default_unit_movement_marked_dead;
@@ -23014,6 +23070,18 @@ void default_unit_command_deferred_death_refund(UnitCommandContext& context,
 }
 
 void configure_default_unit_lifecycle_callbacks(UnitLifecycleContext& lifecycle) {
+    if (jw211_runtime_catalog_state().records.empty()) {
+        LoadJw211RuntimeCatalog();
+    }
+    const AuxiliaryRuntimeCatalogState& jw211 =
+        jw211_runtime_catalog_state();
+    if (kJw211TransientObjectLifecycleActionId < jw211.records.size()) {
+        const AuxiliaryRuntimeCatalogRecord& record =
+            jw211.records[kJw211TransientObjectLifecycleActionId];
+        SetUnitLifecycleTransientObjectPeriod(read_runtime_catalog_u32(
+            record.definition_bytes,
+            kJw211TransientObjectLifecyclePeriodOffset, 1));
+    }
     if (lifecycle.callbacks.on_before_active_simulation == nullptr) {
         lifecycle.callbacks.on_before_active_simulation =
             run_default_periodic_unit_support_effects;
@@ -23104,8 +23172,11 @@ bool default_unit_command_validate_action_target(UnitCommandContext& context,
 
 bool default_unit_command_can_follow(UnitCommandContext&,
     UnitMovementUnit&, UnitMovementUnit& target) {
-    return target.active && (target.command_state & kUnitCommandDead) == 0 &&
-        (target.runtime_flags & 0x84u) == 0;
+    // Original follow states 0x16/0x17 test only raw target +0xa0 bits 0x84
+    // (0x004c988d and 0x004c9931).  A packet can retain a valid fixed-pool
+    // pointer after that slot is on the free list; active membership and the
+    // command-dead high bit are not part of this predicate.
+    return (target.runtime_flags & 0x84u) == 0;
 }
 
 bool default_unit_command_can_board_transport(UnitCommandContext&,
@@ -23283,8 +23354,8 @@ UnitMovementUnit* default_unit_command_find_dropoff(UnitCommandContext& context,
         FindNearestOwnedDropoffBuilding(*context.movement, unit).unit : nullptr;
 }
 
-UnitMovementUnit* default_unit_command_find_target(UnitCommandContext& context,
-    UnitMovementUnit& unit) {
+UnitMovementUnit* default_unit_command_find_target_impl(UnitCommandContext& context,
+    UnitMovementUnit& unit, bool allow_type73_active_list_scan) {
     if (context.movement == nullptr) {
         return nullptr;
     }
@@ -23318,7 +23389,7 @@ UnitMovementUnit* default_unit_command_find_target(UnitCommandContext& context,
 
     targeting.spatial_candidates.reserve(targeting.active_units.size());
     UnitTargetingResult result{};
-    if (unit.type_id == 0x73) {
+    if (allow_type73_active_list_scan && unit.type_id == 0x73) {
         result = FindBestUnitTargetByActiveList(targeting);
     }
     else {
@@ -23334,6 +23405,11 @@ UnitMovementUnit* default_unit_command_find_target(UnitCommandContext& context,
     }
     return result.target != nullptr ? find_default_damage_record_unit(*result.target) :
         nullptr;
+}
+
+UnitMovementUnit* default_unit_command_find_target(UnitCommandContext& context,
+    UnitMovementUnit& unit) {
+    return default_unit_command_find_target_impl(context, unit, true);
 }
 
 void default_unit_command_dispatch_attack(UnitCommandContext& context,
@@ -24306,6 +24382,84 @@ void default_unit_command_equipment_slots_changed(UnitCommandContext&,
         g_runtime.gameplay_unit_equipment_publish_state, unit, 0);
 }
 
+bool default_unit_command_access_spawn_alias(UnitCommandContext& context,
+    u32 raw_unit_offset, UnitMovementUnit& alias, bool write_back) {
+    std::vector<u8>* raw_pool =
+        MutableGameplaySessionLoadedRecord(kGameplayScenarioObjectRecordIndex);
+    if (raw_pool == nullptr || raw_unit_offset >= raw_pool->size()) {
+        return false;
+    }
+    const auto field_fits = [&](std::size_t field) {
+        const std::size_t address =
+            static_cast<std::size_t>(raw_unit_offset) + field;
+        return address <= raw_pool->size() &&
+            raw_pool->size() - address >= sizeof(u32);
+    };
+    const auto read = [&](std::size_t field) {
+        return field_fits(field)
+            ? read_default_scenario_object_u32(
+                  *raw_pool, raw_unit_offset, field)
+            : 0u;
+    };
+    const auto write = [&](std::size_t field, u32 value) {
+        if (field_fits(field)) {
+            write_default_scenario_object_u32(
+                *raw_pool, raw_unit_offset, field, value);
+        }
+    };
+
+    if (write_back) {
+        write(kGameplayScenarioObjectHealthOffset, alias.health);
+        write(kGameplayScenarioObjectStat2cOffset, alias.action_mode);
+        write(kGameplayScenarioObjectStat30Offset,
+            alias.action_mode_gate);
+        write(kGameplayScenarioObjectEquipmentSlotOffsets[1],
+            alias.equipment_slots[1]);
+        write(kGameplayScenarioObjectPreviousCommandStateOffset,
+            alias.previous_command_state);
+        write(kGameplayScenarioObjectDestinationXOffset,
+            alias.cell_channel_additive_frame);
+        return true;
+    }
+
+    alias = UnitMovementUnit{};
+    alias.id = raw_unit_offset;
+    alias.type_id = read(kGameplayScenarioObjectTypeOffset);
+    alias.owner_id = read(kGameplayScenarioObjectOwnerOffset);
+    alias.max_health = read(kGameplayScenarioObjectMaxHealthOffset);
+    alias.max_secondary_value =
+        read(kGameplayScenarioObjectMaxSecondaryOffset);
+    alias.health = read(kGameplayScenarioObjectHealthOffset);
+    alias.runtime_stat_1c =
+        read(kGameplayScenarioObjectRuntimeStat1cOffset);
+    alias.runtime_stat_20 =
+        read(kGameplayScenarioObjectRuntimeStat20Offset);
+    alias.secondary_value =
+        read(kGameplayScenarioObjectSecondaryCurrentOffset);
+    alias.runtime_stat_28 =
+        read(kGameplayScenarioObjectRuntimeStat28Offset);
+    alias.action_mode = read(kGameplayScenarioObjectStat2cOffset);
+    alias.action_mode_gate = read(kGameplayScenarioObjectStat30Offset);
+    alias.equipment_slots[1] =
+        read(kGameplayScenarioObjectEquipmentSlotOffsets[1]);
+    alias.item_slots[1] = alias.equipment_slots[1];
+    alias.runtime_flags = read(kGameplayScenarioObjectFlagsOffset);
+    alias.command_flags = read(kGameplayScenarioObjectCommandFlagsOffset);
+    alias.previous_command_state =
+        read(kGameplayScenarioObjectPreviousCommandStateOffset);
+    alias.cell_channel_additive_frame =
+        read(kGameplayScenarioObjectDestinationXOffset);
+    alias.x = static_cast<i32>(read(kGameplayScenarioObjectXOffset));
+    alias.y = static_cast<i32>(read(kGameplayScenarioObjectYOffset));
+    if (context.callbacks.find_definition != nullptr) {
+        if (const UnitMovementDefinition* definition =
+                context.callbacks.find_definition(context, alias.type_id)) {
+            alias.definition = *definition;
+        }
+    }
+    return true;
+}
+
 void configure_default_unit_command_context(UnitCommandContext& command_context,
     UnitLifecycleContext& lifecycle, u32 frame_counter) {
     UnitEquipmentCatalog& equipment_catalog =
@@ -24511,6 +24665,10 @@ void configure_default_unit_command_context(UnitCommandContext& command_context,
     if (command_context.callbacks.find_definition == nullptr) {
         command_context.callbacks.find_definition =
             default_unit_command_find_definition;
+    }
+    if (command_context.callbacks.access_spawn_alias == nullptr) {
+        command_context.callbacks.access_spawn_alias =
+            default_unit_command_access_spawn_alias;
     }
     if (command_context.callbacks.production_type_id == nullptr) {
         command_context.callbacks.production_type_id =
@@ -27696,6 +27854,17 @@ void initialize_default_gameplay_original_unit_pool_slots() {
         free_unit->runtime_slot_index = slot;
         free_unit->id = slot * kGameplayScenarioObjectStride;
         free_unit->active = false;
+        // The original fixed pool stores only a type id; every command helper
+        // dynamically indexes the global definition table, even for a zeroed
+        // node on the free list.  The typed rebuild embeds the definition, so
+        // materialized free nodes must carry type 0's catalog entry as well.
+        if (lifecycle->callbacks.find_definition != nullptr) {
+            if (const UnitMovementDefinition* definition =
+                    lifecycle->callbacks.find_definition(
+                        *lifecycle, free_unit->type_id)) {
+                free_unit->definition = *definition;
+            }
+        }
         const GameplayScriptTriggerState& script =
             gameplay_script_trigger_state();
         if (slot < script.objects.size()) {

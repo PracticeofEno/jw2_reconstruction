@@ -11,8 +11,30 @@ constexpr u32 kUnitRuntimeHiddenOrInactive = 0x80;
 constexpr u32 kUnitRuntimeShielded = 0x100;
 constexpr u32 kUnitAreaDamageSkipMask = 0x20000086;
 constexpr u32 kUnitDamageReactionSkipMask = 0x08020064;
-constexpr u32 kUnitEliteVariantThreshold = 0x5f;
+constexpr u32 kUnitConstructionDamageTypeThreshold = 0x5f;
 constexpr u32 kLocalUnderAttackNotifyIntervalMs = 10000;
+
+struct UnitShieldDamageResult {
+    u32 shield_points = 0;
+    u32 remaining_damage = 0;
+    bool broken = false;
+};
+
+constexpr UnitShieldDamageResult ResolveUnitShieldDamageRaw(
+    u32 shield_points, u32 damage) {
+    // Original FUN_004c212c and its sibling damage paths perform the SUB on
+    // raw effect +0x14 first, then use signed JG to decide whether the shield
+    // survived.  A broken shield therefore keeps the negative overshoot in
+    // its recycled pool node while EAX/EBX receives its unsigned negation.
+    const u32 residual = shield_points - damage;
+    const bool remains_positive =
+        residual != 0 && (residual & 0x80000000u) == 0;
+    return UnitShieldDamageResult{
+        residual,
+        remains_positive ? 0u : 0u - residual,
+        !remains_positive,
+    };
+}
 
 struct UnitRecord {
     u32 id = 0;
@@ -41,7 +63,7 @@ struct UnitRecord {
     i32 interaction_bounds_top = 0;
     i32 interaction_bounds_right = 0;
     i32 interaction_bounds_bottom = 0;
-    u32 variant = 0;
+    u32 construction_damage_gate = 0;
     u32 shield_points = 0;
     bool point_target = false;
     bool grants_kill_experience = true;

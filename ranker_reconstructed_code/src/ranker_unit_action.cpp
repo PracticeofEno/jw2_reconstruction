@@ -1215,9 +1215,10 @@ void apply_unit_effect_area_stun_side_effect(UnitMovementUnit& unit) {
     // Active units expose that word as animation_frame; work_timer is the
     // typed lifecycle-list view of the same original storage.
     unit.animation_frame = 0;
-    unit.command_lockout_ticks = 0;
-    unit.command_entry_lockout_ticks = 0;
-    unit.animation_timer = 0;
+    // FUN_004ef3cb deliberately leaves raw +0x98, +0xec and +0xf4 intact.
+    // Those are the independent command-entry, animation and attack-recovery
+    // timers.  Clearing them here makes an area-stunned attacker recover
+    // immediately instead of continuing the timers it had before the pulse.
     // Original FUN_004ef3cb clears raw unit +0x110 here.  That field is the
     // movement step accumulator (also temporarily reused by obstacle probes),
     // not the raw +0xb4 direction-turn timeout counter.
@@ -1342,13 +1343,14 @@ bool apply_unit_effect_raw_health_damage(UnitEffectRuntimeState& state,
                     state, target.linked_effect_slot_offset)) {
             // FUN_004c212c follows raw unit +0xf0 directly.  It neither tests
             // list ownership nor revalidates the stale node's id/source.
-            if (shield->amount > amount) {
-                shield->amount -= amount;
+            const UnitShieldDamageResult shield_damage =
+                ResolveUnitShieldDamageRaw(shield->amount, amount);
+            shield->amount = shield_damage.shield_points;
+            if (!shield_damage.broken) {
                 return false;
             }
-            amount -= shield->amount;
-            target.runtime_flags &= ~0x100u;
-            ReleaseUnitEffectSlot(state, *shield);
+            amount = shield_damage.remaining_damage;
+            BreakUnitRuntimeShield(state, target);
         }
     }
 
@@ -1988,6 +1990,8 @@ void TickUnitEffectSourceMuzzleLineImpact(UnitEffectRuntimeState& state,
         effect.target_y = retained_target_y;
         effect.previous_x = target_center_x;
         effect.previous_y = target_center_y;
+        effect.accumulator_x = static_cast<u32>(target_center_x);
+        effect.accumulator_y = static_cast<u32>(target_center_y);
     }
 }
 
@@ -2027,17 +2031,25 @@ void TickUnitEffectTargetMarkerImpact(UnitEffectRuntimeState& state,
 
     effect.x = target->x;
     effect.y = target->y;
-    ++effect.frame;
+    // The effect-0x27 impact entry at 0x004ec9cb advances raw +0x0c.  That
+    // word is `tick`; raw +0x10 (`frame`) remains untouched.  Advancing the
+    // latter made target markers diverge on their first impact tick even
+    // though their target, position, and pool slot were still identical.
+    ++effect.tick;
     if ((target->runtime_flags & 0x20000u) != 0) {
-        if (effect.frame >= 9) {
-            effect.frame = 0;
+        if (effect.tick >= 9) {
+            effect.tick = 0;
         }
         return;
     }
 
     const UnitEffectDefinition* definition =
         find_effect_definition(state, effect.effect_id);
-    if (effect.frame >= active_frame_count(definition)) {
+    // 0x004eca25 reads JW2_12 raw +0x228 (definition +0xd0), the impact
+    // render lifetime.  The active-path frame count at +0xcc is a separate
+    // field.  Using it here released Bubble's target marker early as soon as
+    // the unit marker bit cleared, shifting every later pool allocation.
+    if (effect.tick >= impact_render_ticks(definition)) {
         finish_effect(state, effect);
     }
 }
@@ -2102,20 +2114,25 @@ void TickUnitEffectPathActive(UnitEffectRuntimeState& state, UnitEffectRuntime& 
     // what makes effects such as 0x2a reach a nearby target in the same tick.
     u32 remaining_iterations = definition->active_step_iterations;
     do {
-        if (!chain_path_active && effect.range != 0) {
-            --effect.range;
-            if (effect.range == 0) {
-                finish_effect(state, effect);
-                return;
-            }
-        }
-
         if ((definition->behavior_flags & kUnitEffectBehaviorBoundsImpact) != 0) {
             RetargetUnitEffectProjectilePath(state, effect);
         }
         if ((definition->behavior_flags & kUnitEffectBehaviorSkipImpactCheck) != 0) {
             ApplyUnitEffectPointImpactAndSpawnChildren(state, effect);
             if (!effect.active) {
+                return;
+            }
+        }
+        // The original loop performs both behavior scans at
+        // 0x004ec798..0x004ec7b5 before decrementing raw effect +0x10 at
+        // 0x004ec7ba.  The scan on the final path-budget point is observable:
+        // effect 4 can strike an intervening unit there even though the
+        // projectile is released immediately afterward.  Decrementing first
+        // dropped that final collision and desynchronized HP.
+        if (!chain_path_active && effect.range != 0) {
+            --effect.range;
+            if (effect.range == 0) {
+                finish_effect(state, effect);
                 return;
             }
         }
@@ -2130,15 +2147,18 @@ void TickUnitEffectPathActive(UnitEffectRuntimeState& state, UnitEffectRuntime& 
                 finish_effect(state, effect);
                 return;
             }
-            // Original 0x004ec81d..0x004ec82d has already changed the raw
-            // effect flags to 0x80 when it tests target raw +0xa0 (unit
-            // runtime flags) for bit 0x04.  A transient target skips only the
-            // damage tail and returns with the effect still linked.  The next
-            // effect-list tick dispatches that impact state and releases it.
-            // Finishing here shortened the projectile lifetime by one frame,
-            // reversing the free-list order of slots 3/8 in the paired frame
-            // 8296 trace and later swapping the frame-8308 effects.
+            // The generic reach route at 0x004ec81d..0x004ec82d has already
+            // changed raw effect flags to 0x80 when it tests target raw +0xa0
+            // for bit 0x04.  A transient target returns with the effect still
+            // linked, so most low-id projectiles release on the next tick.
+            // Effect 0x27 has a dedicated reach route: 0x004ec3f6..0x004ec406
+            // tests the same bit and jumps directly to the release thunk.
+            // Keeping Bubble's marker for that extra tick shifted the effect
+            // free-list from replay 14 frame 8486 onward.
             if ((target->runtime_flags & kUnitActionTargetTransient) != 0) {
+                if (effect.effect_id == 0x27) {
+                    finish_effect(state, effect);
+                }
                 return;
             }
             UnitMovementUnit* source =
@@ -2309,6 +2329,8 @@ void DispatchUnitEffectStartByAction(UnitEffectRuntimeState& state,
         effect.target_y = retained_slot_target_y;
         effect.previous_x = target_center_x;
         effect.previous_y = target_center_y;
+        effect.accumulator_x = static_cast<u32>(target_center_x);
+        effect.accumulator_y = static_cast<u32>(target_center_y);
         effect.flags = kUnitEffectFlagImpact;
         return;
     }
@@ -2561,8 +2583,12 @@ void TickUnitEffectSourceCommandFlagPhase(UnitEffectRuntimeState& state,
 
 void TickUnitEffectPathCounterCountdownThenGeneric(UnitEffectRuntimeState& state,
     UnitEffectRuntime& effect) {
-    if (effect.abs_delta_x != 0) {
-        --effect.abs_delta_x;
+    // Original raw effect +0x30 is the mutable Bresenham X accumulator;
+    // raw +0x38 is the fixed absolute X distance.  Both are seeded to the
+    // same value by the path initializer, which hid this distinction until an
+    // action-9 node reused a projectile slot after its accumulator advanced.
+    if (effect.accumulator_x != 0) {
+        --effect.accumulator_x;
         return;
     }
     DispatchUnitEffectGenericCommandState(state, effect);
@@ -3253,8 +3279,8 @@ void TickUnitEffectMarkNearbyActionFlagUnits(UnitEffectRuntimeState& state,
         return;
     }
 
-    --effect.abs_delta_x;
-    if (effect.abs_delta_x == 0) {
+    --effect.accumulator_x;
+    if (effect.accumulator_x == 0) {
         ReleaseUnitEffectSlot(state, effect);
         return;
     }
@@ -3334,20 +3360,19 @@ void TickUnitEffectPeriodicType31HealAura(UnitEffectRuntimeState& state,
                 }
             });
         }
-        // Live original/rebuild P2P state shows Recharge's slot disappearing
-        // when raw +0x10 reaches JW2_11 +0x1ec.  The typed runtime has no
-        // separate external pool-lifetime pass, while the animation tick below
-        // loops between +0x1f0 and +0x1f4.  Enforce the observed lifetime here
-        // or the reconstructed slot remains active forever after frame 170.
-        if (effect.frame >= definition->action_aura_frame_limit) {
-            ReleaseUnitEffectSlot(state, effect);
-            return;
+        // Original action 0x1a at 0x004eeea2..0x004eef8e stops advancing raw
+        // +0x10 once it reaches JW2_11 +0x1ec, but it does not free the slot
+        // there.  The tick loop below remains responsible for the lifetime.
+        // Replay 9 frame 17769 observes Recharge persist at frame 170/tick 15.
+        if (effect.tick >= definition->action_aura_tick_reset_threshold) {
+            effect.tick = definition->action_aura_tick_reset_value - 1u;
         }
     }
 
-    if (effect.tick >= definition->action_aura_tick_reset_threshold) {
-        effect.tick = definition->action_aura_tick_reset_value - 1u;
-    }
+    // At 0x004eeea2 the original jumps directly to the increment below when
+    // frame >= +0x1ec.  That jump deliberately bypasses the +0x1f0/+0x1f4
+    // reset block at 0x004eef61..0x004eef76, allowing tick to reach +0x228
+    // and release the held aura.
     ++effect.tick;
     if (effect.tick >= active_frame_count(definition)) {
         ReleaseUnitEffectSlot(state, effect);
@@ -3602,8 +3627,25 @@ UnitMovementUnit* find_reserved_tile_completion_dropoff(UnitEffectRuntimeState& 
 
 void initialize_reserved_tile_completion_path(UnitEffectRuntimeState& state,
     UnitEffectRuntime& effect, UnitMovementUnit& source, UnitMovementUnit& target,
-    i32 start_x, i32 start_y) {
-    effect.source_unit_id = source.id;
+    i32 start_x, i32 start_y, bool rerouted_from_transient_dropoff = false) {
+    if (rerouted_from_transient_dropoff) {
+        // The in-place Berry-fly reroute reaches the action-0x26 initializer
+        // at original 0x004efb9d with ESI still holding the effect node's raw
+        // pool offset, not the worker offset.  A live replay-2 watchpoint at
+        // frame 19669 observed slot 15 write 0xA80 to raw +0x18 before it
+        // selected the replacement dropoff.  State 0x58 deliberately sees
+        // that non-unit alias on the next frame and releases its link.
+        const std::size_t index = effect_slot_index(state, effect);
+        const u64 raw_offset = index != invalid_effect_slot_index()
+            ? (static_cast<u64>(index) + 1u) * 0xa8u
+            : 0u;
+        effect.source_unit_id = raw_offset <= std::numeric_limits<u32>::max()
+            ? static_cast<u32>(raw_offset)
+            : 0u;
+    }
+    else {
+        effect.source_unit_id = source.id;
+    }
     effect.target_unit_id = target.id;
     effect.linked_unit_id = target.id;
     effect.x = start_x;
@@ -3762,7 +3804,7 @@ void TickUnitEffectReservedTileCompletionDropoff(UnitEffectRuntimeState& state,
     const i32 start_x = effect.x;
     const i32 start_y = effect.y;
     initialize_reserved_tile_completion_path(
-        state, effect, *source, *dropoff, start_x, start_y);
+        state, effect, *source, *dropoff, start_x, start_y, true);
 }
 
 void DispatchUnitActionEffectCommand(UnitEffectRuntimeState& state,
@@ -4104,8 +4146,8 @@ void TickUnitEffectAreaStunFrames(UnitEffectRuntimeState& state, UnitEffectRunti
         effect.frame = 0;
         effect.tick = 0;
     }
-    ++effect.abs_delta_x;
-    if (effect.abs_delta_x >= definition->damage_amount) {
+    ++effect.accumulator_x;
+    if (effect.accumulator_x >= definition->damage_amount) {
         ReleaseUnitEffectSlot(state, effect);
     }
 }
@@ -4159,8 +4201,8 @@ void TickUnitEffectAreaDamageFrames(UnitEffectRuntimeState& state, UnitEffectRun
         effect.frame = 0;
         effect.tick = 0;
     }
-    --effect.abs_delta_x;
-    if (effect.abs_delta_x == 0) {
+    --effect.accumulator_x;
+    if (effect.accumulator_x == 0) {
         finish_effect(state, effect);
     }
 }
@@ -4373,7 +4415,7 @@ bool DispatchSelectedUnitScatterActionEffect(UnitEffectRuntimeState& state,
             reserved->linked_unit_id = 0;
             reserved->x = x;
             reserved->y = y;
-            reserved->abs_delta_x = counter;
+            reserved->accumulator_x = counter;
             append_effect_event(state, UnitEffectEventKind::started, *reserved);
             reserved = nullptr;
         }
@@ -4465,7 +4507,7 @@ bool DispatchSelectedUnitActionEffect(UnitEffectRuntimeState& state,
         // tail-jumping to the common initializer.  This is the lifetime
         // counter consumed by TickUnitEffectAreaStunFrames; retaining a
         // recycled slot's value can make the action expire immediately.
-        effect.abs_delta_x = 0;
+        effect.accumulator_x = 0;
         break;
     case 8: {
         // Fake (0x004efd35) creates a temporary clone of the selected target,
@@ -4715,6 +4757,8 @@ bool DispatchSelectedUnitActionEffect(UnitEffectRuntimeState& state,
         // rendering reads previous_x/y while save export reads abs_delta_x/y.
         effect.previous_x = target_center_x;
         effect.previous_y = target_center_y;
+        effect.accumulator_x = static_cast<u32>(target_center_x);
+        effect.accumulator_y = static_cast<u32>(target_center_y);
         effect.abs_delta_x = static_cast<u32>(target_center_x);
         effect.abs_delta_y = static_cast<u32>(target_center_y);
         effect.target_x = retained_target_x;
@@ -4786,12 +4830,12 @@ bool DispatchSelectedUnitActionEffect(UnitEffectRuntimeState& state,
     case 3:
         // Mass Temper initializer 0x004f0106 uses +0x30 as its remaining
         // lifetime.  Leaving it zero makes the first decrement wrap forever.
-        effect.abs_delta_x = effect.amount;
+        effect.accumulator_x = effect.amount;
         break;
     case 0x0d:
         // Noxious Gas initializer 0x004efe43 seeds the same lifetime word from
         // JW2_11 +0x1f4 rather than from the damage amount.
-        effect.abs_delta_x = definition->action_source_stat20_delta;
+        effect.accumulator_x = definition->action_source_stat20_delta;
         break;
     case 0x18:
         // Corrupt initializer 0x004f0141 owns command flag 0x2000 for the
@@ -5176,6 +5220,20 @@ void ReleaseUnitEffectSlot(UnitEffectRuntimeState& state, UnitEffectRuntime& eff
     }
 }
 
+void BreakUnitRuntimeShield(UnitEffectRuntimeState& state, UnitMovementUnit& target) {
+    // FUN_004c212c clears raw unit +0xa0 bit 0x100 synchronously before it
+    // enters HandleUnitDamageReaction.  The reaction callback can mirror the
+    // live unit back into its damage record, so delaying this write until the
+    // record commit reintroduced the stale shield bit after the shield node
+    // had already been released (replay 29 frame 17671).
+    target.runtime_flags &= ~kUnitRuntimeShielded;
+    if (UnitEffectRuntime* shield =
+            effect_slot_from_original_offset_allow_inactive(
+                state, target.linked_effect_slot_offset)) {
+        ReleaseUnitEffectSlot(state, *shield);
+    }
+}
+
 bool DispatchUnitEffectProjectileTrailRenderer(UnitEffectRuntimeState& state,
     UnitEffectRuntime& effect, u32 effect_id,
     i32 captured_screen_x, i32 captured_screen_y) {
@@ -5209,7 +5267,7 @@ bool DispatchUnitEffectProjectileTrailRenderer(UnitEffectRuntimeState& state,
         if ((effect.flags & kUnitEffectFlagImpact) == 0) {
             return generic_tail_suppressed();
         }
-        if (effect.abs_delta_x != 0) {
+        if (effect.accumulator_x != 0) {
             return true;
         }
         if (const UnitEffectDefinition* definition =

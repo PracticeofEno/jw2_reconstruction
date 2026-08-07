@@ -896,6 +896,17 @@ if (RANKER_BUILD_REGRESSION_TESTS)
         COMMAND unit_effect_intrusive_iteration_regression
     )
 
+    add_executable(unit_damage_construction_multiplier_regression
+        tests/unit_damage_construction_multiplier_regression.cpp
+        src/ranker_unit_damage.cpp
+    )
+    target_include_directories(unit_damage_construction_multiplier_regression PRIVATE
+        include
+    )
+    add_test(NAME unit_damage_construction_multiplier_regression
+        COMMAND unit_damage_construction_multiplier_regression
+    )
+
     add_executable(scenario_serialized_duplicate_regression
         tests/scenario_serialized_duplicate_regression.cpp
     )

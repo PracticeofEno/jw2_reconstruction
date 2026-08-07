@@ -40,7 +40,7 @@ struct GameplayProductionActionDefinition {
     u32 active_limit = 0xffffffffu; // JW2_11 +0x160, status_timer + 1 gate.
     u32 queued_limit = 0xffffffffu; // JW2_11 +0x1e4, secondary_value + 1 gate.
     u32 resource_limit = 0xffffffffu; // JW2_11 +0x1e0, health/action cost gate.
-    u32 status_recharge_amount = 1; // JW2_11 +0x16c, selected-action recharge.
+    u32 status_recharge_amount = 1; // JW2_11 +0x1ec, selected-action recharge.
     u32 unit_type = 0;
     u32 placement_width = 1;
     u32 placement_height = 1;

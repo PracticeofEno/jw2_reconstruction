@@ -1610,6 +1610,13 @@ void RebuildUnitRuntimeStatsFromDefinitionAndParents(UnitMovementUnit& unit,
         const bool use_second_parent = unit.type_id == 0x2b &&
             parent_b != nullptr && parent_b_stats != nullptr;
         const u32 divisor = use_second_parent ? 3 : 2;
+        // Original FUN_00408c80 adds raw unit +0x2c from every consumed
+        // parent without averaging it.  This is separate from the averaged
+        // variant/progress fields below.
+        unit.action_mode += parent_a->action_mode;
+        if (use_second_parent) {
+            unit.action_mode += parent_b->action_mode;
+        }
         // FUN_00408c80 has a deliberate type-0x2b quirk: raw +0x54 from the
         // first linked parent is added twice when averaging the rebuilt level.
         target_variant = (target_variant + parent_a->production_variant +
@@ -3009,10 +3016,22 @@ void DrawMovementProbePixelAndPresent(UnitMovementContext& context,
 
 bool ProcessUnitMovementStep(UnitMovementContext& context, UnitMovementUnit& unit) {
     if ((unit.command_flags & 0x1000) != 0) {
+        // FUN_004c756b routes this flag directly to FUN_004d0067.  That
+        // helper changes raw state +0x60 to idle and returns the resulting
+        // non-zero state to the caller; it is not a failed movement step.
+        // Returning false here made guard-pursuit immediately replan toward
+        // its moving target (replay 10, frame 9428) while the original
+        // stopped in state 1 with the existing path tuple untouched.
+        if (unit.command_state != 1) {
+            unit.command_state = 1;
+            if (unit.definition.animation_timer_period <= unit.animation_frame) {
+                unit.animation_frame = 0;
+            }
+        }
         if (context.callbacks.on_reached_destination != nullptr) {
             context.callbacks.on_reached_destination(context, unit);
         }
-        return false;
+        return unit.command_state != 0;
     }
 
     ++unit.animation_frame;

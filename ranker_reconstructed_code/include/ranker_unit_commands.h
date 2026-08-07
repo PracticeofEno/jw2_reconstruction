@@ -82,6 +82,13 @@ constexpr u32 kUnitStateReservedTileLinkedObject = 0x58;
 constexpr u32 kUnitStateSpawnPlacementStart = 0x5a;
 constexpr u32 kUnitStateSpawnCreateCycle = 0x5b;
 constexpr u32 kUnitStateSpawnPlacementWait = 0x5c;
+
+constexpr bool ShouldReleaseConstructionBacklinkTarget(
+    u32 runtime_flags, u32 type_id, u32 raw_command_state) {
+    return (runtime_flags & 4u) != 0 ||
+        (type_id == 0x10u && raw_command_state != kUnitStateSpawnCreateCycle);
+}
+
 constexpr u32 kUnitStateLinkedUnitReleaseStart = 0x5f;
 constexpr u32 kUnitStateLinkedUnitReleaseCycle = 0x60;
 constexpr u32 kUnitStateLinkedUnitReleaseApproach = 0x61;
@@ -220,6 +227,9 @@ using UnitCommandDefinitionLookupCallback = const UnitMovementDefinition* (*)(
     UnitCommandContext& context, u32 unit_type);
 using UnitCommandMetadataFlagsCallback = u32 (*)(
     UnitCommandContext& context, const UnitMovementUnit& unit);
+using UnitCommandSpawnAliasAccessCallback = bool (*)(
+    UnitCommandContext& context, u32 raw_unit_offset,
+    UnitMovementUnit& alias, bool write_back);
 using UnitCommandOversizedTransportPassengerCallback = void (*)(
     const UnitCommandContext& context, const UnitMovementUnit& unit, u32 owner_id,
     u32 group_id, u32 carrier_capacity);
@@ -295,6 +305,7 @@ struct UnitCommandCallbacks {
     UnitVariantRandomLimitCallback variant_random_limit = nullptr;
     UnitCommandSpawnCallback create_unit = nullptr;
     UnitCommandDefinitionLookupCallback find_definition = nullptr;
+    UnitCommandSpawnAliasAccessCallback access_spawn_alias = nullptr;
     UnitCommandMetadataFlagsCallback command_metadata_flags = nullptr;
     UnitCommandAbilityGateCallback ability_gate = nullptr;
     UnitCommandAbilityPredicate can_use_ability = nullptr;

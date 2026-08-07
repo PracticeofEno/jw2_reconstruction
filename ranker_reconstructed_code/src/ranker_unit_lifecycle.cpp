@@ -10,6 +10,8 @@
 namespace ranker {
 namespace {
 
+u32 g_transient_object_lifecycle_period = 1;
+
 constexpr u32 kUnitStateLifecycleConstructionActivation = 0x10000077u;
 
 bool has_movement(const UnitLifecycleContext& context) {
@@ -238,6 +240,15 @@ void reset_runtime_fields(UnitMovementUnit& unit) {
     unit.linked_unit = nullptr;
     unit.destination_aux_state = 0;
     unit.movement_step_accumulator = 0;
+    // InitializePlacedUnitFromMapSlot 0x004cf3b7..0x004cf3d5 clears original
+    // raw +0x114/+0x118 and +0x11c/+0x120 for every fixed-pool activation.
+    // These are the integer movement residuals followed by the floating-point
+    // interpolation accumulators.  Retaining either pair lets a newly
+    // produced unit inherit the previous generation's movement path.
+    unit.movement_residual_x = 0;
+    unit.movement_residual_y = 0;
+    unit.movement_interpolation_x = 0.0f;
+    unit.movement_interpolation_y = 0.0f;
     unit.work_timer = 0;
     // InitializePlacedUnitFromMapSlot clears raw +0x4c.  State 0x58's typed
     // OBB mirror follows that union, while independent raw +0xf0 deliberately
@@ -259,6 +270,10 @@ void reset_runtime_fields(UnitMovementUnit& unit) {
     }
     unit.status_timer = 0;
     unit.production_variant = 0;
+    // InitializePlacedUnitFromMapSlot 0x004cf399 clears raw unit +0x50.
+    // Fixed-pool activations must not inherit elite progress from the slot's
+    // previous unit generation.
+    unit.elite_progress_value = 0;
     // Only the state word of the pending tuple and the deferred count are
     // cleared.  The remaining pending words, the active tuple, and all
     // deferred tuple storage deliberately remain fixed-pool residue.
@@ -449,6 +464,10 @@ void HandleUnitCreationRegisterFootprint(UnitLifecycleContext& context,
     SetUnitFootprintOccupancyBits(context, unit);
 }
 
+void SetUnitLifecycleTransientObjectPeriod(u32 period) {
+    g_transient_object_lifecycle_period = std::max<u32>(period, 1);
+}
+
 bool CheckOwnerResourceAdjustmentGate(const UnitLifecycleContext& context,
     u32 owner_id, u32 amount) {
     return has_owner_slot(context, owner_id) &&
@@ -533,7 +552,7 @@ void HandleUnitLifecycleGrowthOrDecay(UnitLifecycleContext& context,
     const UnitMovementDefinition& definition = definition_for(context, unit);
     if ((unit.runtime_flags & 0x10) != 0) {
         ++unit.work_timer;
-        if (unit.work_timer >= std::max<u32>(definition.production_cycle_period, 1)) {
+        if (unit.work_timer >= g_transient_object_lifecycle_period) {
             unit.path_target_x = 1;
             unit.command_flags |= 0x80;
             unit.work_timer = 0xdc;
@@ -952,6 +971,23 @@ bool InitializePlacedUnitFromMapSlot(UnitLifecycleContext& context,
     const UnitMovementDefinition* definition = definition_for_type(context, type_id);
     if (definition == nullptr) {
         return false;
+    }
+
+    // Original raw +0x78/+0x7c are one pair of fixed-pool words.  Mobile
+    // units interpret them as destination x/y while types >= 0x60 reuse the
+    // same storage as cell-render scratch.  The typed runtime splits those
+    // interpretations, so carry the raw bit pattern across a recycled slot's
+    // type-class transition before replacing type_id.  FUN_004cf229 leaves
+    // both words untouched during placed-unit initialization.
+    const bool previous_uses_cell_scratch = unit.type_id >= 0x60u;
+    const bool placed_uses_cell_scratch = type_id >= 0x60u;
+    if (!previous_uses_cell_scratch && placed_uses_cell_scratch) {
+        unit.cell_channel_additive_frame = static_cast<u32>(unit.destination_x);
+        unit.cell_flag40_animation_frame = static_cast<u32>(unit.destination_y);
+    }
+    else if (previous_uses_cell_scratch && !placed_uses_cell_scratch) {
+        unit.destination_x = static_cast<i32>(unit.cell_channel_additive_frame);
+        unit.destination_y = static_cast<i32>(unit.cell_flag40_animation_frame);
     }
 
     unit.type_id = type_id;
