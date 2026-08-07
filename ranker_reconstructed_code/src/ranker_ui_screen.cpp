@@ -3953,7 +3953,7 @@ i32 UiScreenEntryI32(const UiScreenEntry& entry, std::size_t offset) {
     if (offset + sizeof(u32) > entry.bytes.size()) {
         return 0;
     }
-    return static_cast<i32>(read_le_u32(entry.bytes.data() + offset));
+    return WrappedU32ToI32(read_le_u32(entry.bytes.data() + offset));
 }
 
 void SetUiScreenEntryI32(UiScreenEntry& entry, std::size_t offset, i32 value) {

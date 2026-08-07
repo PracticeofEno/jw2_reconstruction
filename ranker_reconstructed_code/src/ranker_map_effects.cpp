@@ -192,8 +192,8 @@ bool HydrateMapEffectRawRecord(MapEffectInstance& effect,
     effect.effect_id = read_raw_u32(record, kRawTypeOffset);
     effect.flags = read_raw_u32(record, kRawFlagsOffset);
     effect.linked_unit_raw_offset = read_raw_u32(record, kRawLinkedUnitOffset);
-    effect.x = static_cast<i32>(read_raw_u32(record, kRawXOffset));
-    effect.y = static_cast<i32>(read_raw_u32(record, kRawYOffset));
+    effect.x = WrappedU32ToI32(read_raw_u32(record, kRawXOffset));
+    effect.y = WrappedU32ToI32(read_raw_u32(record, kRawYOffset));
     effect.frame_timer = read_raw_u32(record, kRawFrameTimerOffset);
     effect.repeat_count = read_raw_u32(record, kRawRepeatCountOffset);
     effect.linked_unit = nullptr;

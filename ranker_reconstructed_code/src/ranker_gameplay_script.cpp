@@ -996,10 +996,14 @@ void decode_area(GameplayScriptTriggerState& state, u32 area_index) {
     }
 
     GameplayScriptArea area{};
-    area.left = static_cast<i32>(read_le_u32(state.serialized_triggers, base + 0x00));
-    area.top = static_cast<i32>(read_le_u32(state.serialized_triggers, base + 0x04));
-    area.right = static_cast<i32>(read_le_u32(state.serialized_triggers, base + 0x08));
-    area.bottom = static_cast<i32>(read_le_u32(state.serialized_triggers, base + 0x0c));
+    area.left = WrappedU32ToI32(
+        read_le_u32(state.serialized_triggers, base + 0x00));
+    area.top = WrappedU32ToI32(
+        read_le_u32(state.serialized_triggers, base + 0x04));
+    area.right = WrappedU32ToI32(
+        read_le_u32(state.serialized_triggers, base + 0x08));
+    area.bottom = WrappedU32ToI32(
+        read_le_u32(state.serialized_triggers, base + 0x0c));
     area.active = state.serialized_triggers[base + 0x10] != 0;
     state.areas[area_index] = area;
 }

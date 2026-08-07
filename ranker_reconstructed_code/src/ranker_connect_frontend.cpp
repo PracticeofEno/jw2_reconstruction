@@ -606,9 +606,9 @@ void InitializeConnectFrontendHandshakeHeader(ConnectFrontendState& state,
 
 void WaitLegacyConnectFrontendTicks(u32 milliseconds) {
     i32 current = 0;
-    const i32 target = static_cast<i32>(GetTickCount() + milliseconds);
+    const i32 target = WrappedU32ToI32(GetTickCount() + milliseconds);
     while (current < target) {
-        current = static_cast<i32>(GetTickCount());
+        current = WrappedU32ToI32(GetTickCount());
     }
 }
 

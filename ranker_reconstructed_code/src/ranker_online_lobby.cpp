@@ -2042,7 +2042,8 @@ void post_online_lobby_user_record_list(OnlineLobbyState& state,
     constexpr const char* kSeparator =
         "---------------------------------------------";
 
-    const i32 count = static_cast<i32>(packet_u32(packet, byte_count, kCountOffset));
+    const i32 count =
+        WrappedU32ToI32(packet_u32(packet, byte_count, kCountOffset));
     if (count < 0) {
         PostOnlineLobbyColoredTextPayload(state,
             startup_message_row(219, "The selected player is not a guild member."));
@@ -2124,7 +2125,8 @@ bool DispatchOnlineLobbyServerPacket(OnlineLobbyState& state, const u8* packet,
         queue_online_lobby_game_page_request(state, 0);
         return true;
     case 0x13: {
-        const i32 page = static_cast<i32>(packet_u32(packet, byte_count, 0x0d));
+        const i32 page =
+            WrappedU32ToI32(packet_u32(packet, byte_count, 0x0d));
         if (page < 0) {
             update_online_lobby_game_count_label(state);
             return true;

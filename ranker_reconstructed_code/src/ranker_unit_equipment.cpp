@@ -306,7 +306,7 @@ u32 read_le_u32(const u8* data) {
 }
 
 i32 read_le_i32(const u8* data) {
-    return static_cast<i32>(read_le_u32(data));
+    return WrappedU32ToI32(read_le_u32(data));
 }
 
 bool has_range(std::size_t size, std::size_t offset, std::size_t bytes) {

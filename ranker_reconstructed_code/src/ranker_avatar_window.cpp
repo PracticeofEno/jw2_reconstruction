@@ -195,7 +195,7 @@ u32 read_le_u32(const u8* bytes) {
 }
 
 i32 read_le_i32(const u8* bytes) {
-    return static_cast<i32>(read_le_u32(bytes));
+    return WrappedU32ToI32(read_le_u32(bytes));
 }
 
 u32 read_u32(const u8* bytes, std::size_t byte_count, std::size_t offset) {
@@ -206,7 +206,7 @@ u32 read_u32(const u8* bytes, std::size_t byte_count, std::size_t offset) {
 }
 
 i32 read_i32(const u8* bytes, std::size_t byte_count, std::size_t offset) {
-    return static_cast<i32>(read_u32(bytes, byte_count, offset));
+    return WrappedU32ToI32(read_u32(bytes, byte_count, offset));
 }
 
 void write_le_u32(std::vector<u8>& packet, std::size_t offset, u32 value) {

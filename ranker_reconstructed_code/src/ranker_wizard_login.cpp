@@ -709,7 +709,8 @@ void handle_download_packet(WizardLoginState& state, const u8* packet,
         write_le32(ack, 4, 0x0c);
         queue_download_packet(state, ack.data(), static_cast<i32>(ack.size()));
     } else if (opcode == 0x0d && byte_count >= 0x0c) {
-        const i32 chunk_bytes = static_cast<i32>(read_le32(packet, byte_count, 8));
+        const i32 chunk_bytes =
+            WrappedU32ToI32(read_le32(packet, byte_count, 8));
         if (chunk_bytes < 0) {
             finalize_patch_download_file(state);
             state.download_active = false;

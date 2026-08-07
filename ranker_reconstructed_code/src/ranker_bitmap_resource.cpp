@@ -24,7 +24,7 @@ u32 read_le_u32(const u8* p) {
 }
 
 i32 read_le_i32(const u8* p) {
-    return static_cast<i32>(read_le_u32(p));
+    return WrappedU32ToI32(read_le_u32(p));
 }
 
 bool has_range(const std::vector<u8>& bytes, std::size_t offset, std::size_t size) {

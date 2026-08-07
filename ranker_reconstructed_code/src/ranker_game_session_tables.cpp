@@ -617,10 +617,10 @@ bool ImportProductionOrderSessionRuntimeRecord(SessionRuntimeImportState& state,
         return false;
     }
     bool ok = copy_record_range(destination, 0, source, 4, 0x44c);
-    if (static_cast<i32>(read_record_u32(source, 0x214)) != -1) {
+    if (WrappedU32ToI32(read_record_u32(source, 0x214)) != -1) {
         for (u32 owner = 0; owner < kGameSessionOwnerCount; ++owner) {
-            const i32 target =
-                static_cast<i32>(read_record_u32(source, 0x450 + owner * sizeof(u32)));
+            const i32 target = WrappedU32ToI32(
+                read_record_u32(source, 0x450 + owner * sizeof(u32)));
             while (static_cast<i32>(state.owner_order_variants[owner][variant_offset]) <
                 target - 1) {
                 const u8 before = state.owner_order_variants[owner][variant_offset];

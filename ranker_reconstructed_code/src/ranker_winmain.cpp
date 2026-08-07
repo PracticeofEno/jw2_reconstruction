@@ -130,8 +130,7 @@ u32 default_selected_unit_next_experience_threshold(
     wrapped_threshold -= static_cast<u32>(
         GetProductionOrderOrder2bBonusTotal(production, unit.owner_id));
 
-    i32 signed_threshold = 0;
-    std::memcpy(&signed_threshold, &wrapped_threshold, sizeof(signed_threshold));
+    const i32 signed_threshold = WrappedU32ToI32(wrapped_threshold);
     if (signed_threshold < 1) {
         return 1;
     }
@@ -9424,9 +9423,7 @@ bool encode_default_owner_ai_unit_pointer(u32 runtime_reference,
 i32 read_default_owner_ai_snapshot_i32(
     const std::vector<u8>& snapshot, std::size_t offset) {
     const u32 raw = read_default_session_record_u32(snapshot, offset, 0);
-    i32 value = 0;
-    std::memcpy(&value, &raw, sizeof(value));
-    return value;
+    return WrappedU32ToI32(raw);
 }
 
 bool import_default_owner_transport_state_from_snapshot(
@@ -10908,9 +10905,7 @@ void initialize_default_unit_effect_runtime_from_session_records() {
             };
             const auto read_signed_field = [&](std::size_t field) {
                 const u32 raw = read_field(field);
-                i32 value = 0;
-                std::memcpy(&value, &raw, sizeof(value));
-                return value;
+                return WrappedU32ToI32(raw);
             };
 
             effect.effect_id = read_field(kGameplayUnitEffectObjectIdOffset);
@@ -10985,8 +10980,8 @@ void initialize_default_unit_effect_runtime_from_session_records() {
                 kGameplayUnitEffectObjectAbsXOffset);
             const u32 raw_abs_y = read_field(
                 kGameplayUnitEffectObjectAbsYOffset);
-            effect.previous_x = static_cast<i32>(raw_axis30);
-            effect.previous_y = static_cast<i32>(raw_axis34);
+            effect.previous_x = WrappedU32ToI32(raw_axis30);
+            effect.previous_y = WrappedU32ToI32(raw_axis34);
             if (uses_serialized_path_axes) {
                 effect.previous_x = effect.x;
                 effect.previous_y = effect.y;
@@ -16526,7 +16521,7 @@ u16 read_runtime_catalog_u16(const std::vector<u8>& bytes, std::size_t offset,
 
 i32 read_runtime_catalog_i32(const std::vector<u8>& bytes, std::size_t offset,
     i32 fallback = 0) {
-    return static_cast<i32>(read_runtime_catalog_u32(
+    return WrappedU32ToI32(read_runtime_catalog_u32(
         bytes, offset, static_cast<u32>(fallback)));
 }
 
@@ -24278,8 +24273,8 @@ bool default_unit_command_access_spawn_alias(UnitCommandContext& context,
         read(kGameplayScenarioObjectPreviousCommandStateOffset);
     alias.cell_channel_additive_frame =
         read(kGameplayScenarioObjectDestinationXOffset);
-    alias.x = static_cast<i32>(read(kGameplayScenarioObjectXOffset));
-    alias.y = static_cast<i32>(read(kGameplayScenarioObjectYOffset));
+    alias.x = WrappedU32ToI32(read(kGameplayScenarioObjectXOffset));
+    alias.y = WrappedU32ToI32(read(kGameplayScenarioObjectYOffset));
     if (context.callbacks.find_definition != nullptr) {
         if (const UnitMovementDefinition* definition =
                 context.callbacks.find_definition(context, alias.type_id)) {

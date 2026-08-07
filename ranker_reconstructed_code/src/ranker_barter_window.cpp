@@ -97,7 +97,7 @@ u32 read_u32(const u8* payload, i32 byte_count, std::size_t offset) {
 }
 
 i32 read_i32(const u8* payload, i32 byte_count, std::size_t offset) {
-    return static_cast<i32>(read_u32(payload, byte_count, offset));
+    return WrappedU32ToI32(read_u32(payload, byte_count, offset));
 }
 
 void write_le32(std::vector<u8>& buffer, std::size_t offset, u32 value) {

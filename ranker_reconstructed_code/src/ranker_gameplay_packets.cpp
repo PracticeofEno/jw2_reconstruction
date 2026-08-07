@@ -77,7 +77,7 @@ u32 read_packet_u32(const Mode1ReliablePacket& packet, u32 offset) {
 }
 
 i32 read_packet_i32(const Mode1ReliablePacket& packet, u32 offset) {
-    return static_cast<i32>(read_packet_u32(packet, offset));
+    return WrappedU32ToI32(read_packet_u32(packet, offset));
 }
 
 u8 packet_channel(const Mode1ReliablePacket& packet) {

@@ -74,9 +74,7 @@ u32 ImportSetupU32(std::size_t offset, u32 default_value) {
 i32 ImportSetupI32(std::size_t offset, i32 default_value) {
     const u32 default_bits = static_cast<u32>(default_value);
     const u32 raw = ImportSetupU32(offset, default_bits);
-    i32 value = 0;
-    std::memcpy(&value, &raw, sizeof(value));
-    return value;
+    return WrappedU32ToI32(raw);
 }
 
 void ExportSetupU32(std::size_t offset, u32 value) {

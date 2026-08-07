@@ -351,8 +351,10 @@ bool LoadSoftwareCursorResourcesFromJw201Trc() {
         if (cursor + kSoftwareCursorFrameHeaderBytes > payload.size()) {
             return false;
         }
-        const i32 hotspot_x = static_cast<i32>(read_cursor_u32(payload.data() + cursor));
-        const i32 hotspot_y = static_cast<i32>(read_cursor_u32(payload.data() + cursor + 4));
+        const i32 hotspot_x =
+            WrappedU32ToI32(read_cursor_u32(payload.data() + cursor));
+        const i32 hotspot_y =
+            WrappedU32ToI32(read_cursor_u32(payload.data() + cursor + 4));
         cursor += kSoftwareCursorFrameHeaderBytes;
         if (cursor + frame_pixel_bytes > payload.size()) {
             return false;
