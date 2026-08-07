@@ -1267,6 +1267,12 @@ void destroy_window_resources(CreateGameState& state) {
 }
 
 void return_from_cancel(CreateGameState& state) {
+    if (state.mode == 6) {
+        if (state.callbacks.open_network_ai_lobby != nullptr) {
+            state.callbacks.open_network_ai_lobby(state);
+        }
+        return;
+    }
     if (state.mode == 1) {
         if (state.callbacks.open_p2p_lobby != nullptr) {
             state.callbacks.open_p2p_lobby(state);
@@ -1664,7 +1670,7 @@ bool CreateCreateGameWindow(CreateGameState& state, HWND parent, HINSTANCE insta
 
     RefreshCreateGameScenarioList(state);
     if (state.mode == 6) {
-        SetWindowTextA(state.name_edit.window, "Replay");
+        SetWindowTextA(state.name_edit.window, "Custom");
     } else {
         SetWindowTextA(state.name_edit.window, "Player's Game");
     }

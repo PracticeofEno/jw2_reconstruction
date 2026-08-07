@@ -1401,6 +1401,35 @@ void draw_gameplay_modal_screen(GameplayModalUiState& state, UiScreenDefinition&
     log_gameplay_modal_action(state, GameplayModalUiActionKind::DrawActiveScreen);
 }
 
+void draw_blocking_gameplay_modal_frame(
+    GameplayModalUiState& state, UiScreenDefinition& screen) {
+#ifdef _WIN32
+    SpriteRenderTarget target{};
+    if (SUCCEEDED(LockBackBufferSpriteRenderTarget(target))) {
+        const SpriteRenderTarget previous_target = sprite_render_state().target;
+        const bool previous_active = sprite_render_state().active;
+        SetSpriteRenderTarget(
+            target.pixels, target.width, target.height, target.stride_words);
+        draw_gameplay_modal_screen(state, screen);
+        if (previous_active) {
+            SetSpriteRenderTarget(previous_target.pixels,
+                previous_target.width, previous_target.height,
+                previous_target.stride_words);
+        }
+        else {
+            ClearSpriteRenderTarget();
+        }
+        UnlockBackBufferSpriteRenderTarget();
+    }
+    else {
+        draw_gameplay_modal_screen(state, screen);
+    }
+    HandleGameCursorPresentation();
+#else
+    draw_gameplay_modal_screen(state, screen);
+#endif
+}
+
 u32 run_gameplay_modal(GameplayModalUiState& state, UiScreenDefinition& screen) {
     int entry_state = 0;
     u32 activated = 0;
@@ -1943,15 +1972,32 @@ void OpenLocalNetworkAddressDialog() {
     OpenLocalNetworkAddressDialog(gameplay_modal_ui_state());
 }
 
-void OpenStageAvailabilityDialog(GameplayModalUiState& state) {
-    if (!load_gameplay_modal_screen(state, kGameplayModalStageAvailabilitySlot, 0x5f)) {
-        return;
-    }
+void OpenStageAvailabilityDialog(GameplayModalUiState& state, bool keep_loaded) {
+    state.last_activated_entry = 0;
+    state.last_entry_state = 0;
+    set_cursor_for_gameplay_modal();
     UiScreenDefinition& screen = modal_screen(kGameplayModalStageAvailabilitySlot);
-    if (!state.stage_archive_present) {
-        for (u32 entry = 5; entry < 9; ++entry) {
-            set_entry_enabled(screen, entry, false);
+    if (!screen.loaded) {
+        if (!load_gameplay_modal_screen(
+                state, kGameplayModalStageAvailabilitySlot, 0x5f)) {
+            return;
         }
+        if (!state.stage_archive_present) {
+            for (u32 entry = 5; entry < 9; ++entry) {
+                set_entry_enabled(screen, entry, false);
+            }
+        }
+    }
+    else {
+        for (UiScreenEntry& entry : screen.entries) {
+            const i32 entry_state = UiScreenEntryI32(entry, 0);
+            if (entry_state == 1 || entry_state == 2) {
+                SetUiScreenEntryI32(entry, 0, 0);
+            }
+        }
+        screen.selected_index = -1;
+        screen.scroll_tracking = false;
+        screen.active_scroll_entry = kInvalidUiScreenIndex;
     }
 
     state.stage_hover_hint = 0x25;
@@ -1977,7 +2023,7 @@ void OpenStageAvailabilityDialog(GameplayModalUiState& state) {
             break;
         }
 
-        draw_gameplay_modal_screen(state, screen);
+        draw_blocking_gameplay_modal_frame(state, screen);
         u32 hint = 0x25;
         for (u32 entry = 5; entry < 9 && entry < screen.entries.size(); ++entry) {
             const i32 state_value = UiScreenEntryI32(screen.entries[entry], 0);
@@ -1999,11 +2045,20 @@ void OpenStageAvailabilityDialog(GameplayModalUiState& state) {
             SetUiScreenEntryI32(screen.entries[9], 4, 4);
         }
     }
-    release_gameplay_modal_screen(state, kGameplayModalStageAvailabilitySlot);
+    if (!keep_loaded) {
+        release_gameplay_modal_screen(state, kGameplayModalStageAvailabilitySlot);
+    }
 }
 
 void OpenStageAvailabilityDialog() {
     OpenStageAvailabilityDialog(gameplay_modal_ui_state());
+}
+
+void CloseStageAvailabilityDialog(GameplayModalUiState& state) {
+    UiScreenDefinition& screen = modal_screen(kGameplayModalStageAvailabilitySlot);
+    if (screen.loaded) {
+        release_gameplay_modal_screen(state, kGameplayModalStageAvailabilitySlot);
+    }
 }
 
 bool OpenSkirmishLoadSessionDialog(GameplayModalUiState& state) {
@@ -3567,7 +3622,7 @@ bool RestartUiScreenFlaggedBinkEntries(UiScreenDefinition& screen) {
 #endif
 }
 
-void PlayJw204BinkMenuScreen(i32 column, i32 row,
+bool PlayJw204BinkMenuScreen(i32 column, i32 row,
     UiScreenModalPumpCallback pump_callback, void* user_data) {
     UiScreenDefinition screen;
     InitializeUiScreenDefinition(screen);
@@ -3576,7 +3631,7 @@ void PlayJw204BinkMenuScreen(i32 column, i32 row,
     const u32 record_index = static_cast<u32>(row * 0x14 + column * 0x50);
     if (!HandleUiScreenDefinitionTrcImport(screen, "JW2_04.TRC", record_index)) {
         HandleUiScreenDefinitionReleaseWrapper(screen);
-        return;
+        return false;
     }
 
     SetPrimaryMilesMusicPolicyMode(4);
@@ -3605,6 +3660,7 @@ void PlayJw204BinkMenuScreen(i32 column, i32 row,
 
     HandleUiScreenDefinitionResourceRelease(screen);
     HandleUiScreenDefinitionReleaseWrapper(screen);
+    return activated_entry_index != 3;
 }
 
 bool DrawBackBufferRectangleOutline16(i32 left, i32 top, i32 width, i32 height,

@@ -2885,6 +2885,9 @@ void ReturnFromLinkLobby(LinkLobbyState& state) {
         state.callbacks.open_p2p_lobby(state);
     } else if (state.mode == 3 && state.callbacks.open_ipx_lobby != nullptr) {
         state.callbacks.open_ipx_lobby(state);
+    } else if (state.mode == 6 &&
+        state.callbacks.open_replay_or_observer_lobby != nullptr) {
+        state.callbacks.open_replay_or_observer_lobby(state);
     } else if (state.callbacks.open_connect_frontend != nullptr) {
         state.callbacks.open_connect_frontend(state);
     }

@@ -287,8 +287,10 @@ void OpenLocalNetworkAddressDialogWithInputReset(GameplayModalUiState& state);
 void OpenLocalNetworkAddressDialogWithInputReset();
 void OpenLocalNetworkAddressDialog(GameplayModalUiState& state);
 void OpenLocalNetworkAddressDialog();
-void OpenStageAvailabilityDialog(GameplayModalUiState& state);
+void OpenStageAvailabilityDialog(
+    GameplayModalUiState& state, bool keep_loaded = false);
 void OpenStageAvailabilityDialog();
+void CloseStageAvailabilityDialog(GameplayModalUiState& state);
 bool OpenSkirmishLoadSessionDialog(GameplayModalUiState& state);
 bool OpenSkirmishLoadSessionDialog();
 void OpenGameplaySimpleInfoDialog(GameplayModalUiState& state);
@@ -437,7 +439,7 @@ bool DrawUiScreenResourceSprite(
     const UiScreenDefinition& screen, u32 resource_index, i32 x, i32 y);
 bool HandleUiScreenBinkEntryRender(UiScreenDefinition& screen, u32 entry_index);
 bool RestartUiScreenFlaggedBinkEntries(UiScreenDefinition& screen);
-void PlayJw204BinkMenuScreen(i32 column, i32 row,
+bool PlayJw204BinkMenuScreen(i32 column, i32 row,
     UiScreenModalPumpCallback pump_callback = nullptr, void* user_data = nullptr);
 bool DrawBackBufferRectangleOutline16(i32 left, i32 top, i32 width, i32 height,
     u16 color = 0xffffu);

@@ -82,8 +82,10 @@ bool LoadFrontendStageSessionBundle(FrontendStageFlowState& state,
     i32 column, i32 row, const char* archive_name) {
     state.column = column;
     state.row = row;
-    state.record_index =
-        static_cast<u32>(row) * kFrontendStageArchiveStride + static_cast<u32>(column);
+    // JW2_06.TRC stores a 12-record block per faction: P at 0, Elf at 12,
+    // Tyrano at 24, and Demon at 36.  Rows select the mission within that
+    // faction block, matching original FUN_00415c90 (faction * 12 + stage).
+    state.record_index = FrontendStageArchiveRecordIndex(column, row);
     state.active_stage_archive = archive_name != nullptr ? archive_name : "";
     state.stage_bundle_loaded = false;
     state.temp_stage_archive.clear();
@@ -121,7 +123,12 @@ bool StartFrontendStageFromMenu(FrontendStageFlowState& state, i32 column, i32 r
     state.start_briefing_played = true;
 
     SetGameCursorIndex(0);
-    PlayJw204BinkMenuScreen(column, row);
+    if (!PlayJw204BinkMenuScreen(column, row)) {
+        state.stage_started = false;
+        state.stage_transition_latched = false;
+        state.current_mode = state.previous_mode;
+        return false;
+    }
     return true;
 }
 
@@ -135,6 +142,7 @@ void HandleFrontendStageCompletion(FrontendStageFlowState& state, u32 result,
         PlayBriefingEndBinkSource();
         state.end_briefing_played = true;
         ++state.stage_completion_count;
+        ++state.row;
         state.current_mode = next_mode;
     }
 

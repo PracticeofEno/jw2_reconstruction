@@ -1107,6 +1107,8 @@ struct RuntimeGlobals {
     HWND gameplay_transition_owner = nullptr;
     bool gameplay_transition_pending = false;
     bool gameplay_transition_active = false;
+    bool single_player_frontend_pending = false;
+    bool single_player_return_after_gameplay = false;
     bool p2p_command_line_flow_pending = false;
     bool gameplay_session_loop_reached = false;
     u32 frontend_stage_session_mode = 0;
@@ -3031,6 +3033,10 @@ void default_link_open_ipx(LinkLobbyState& state) {
     open_ipx_lobby_window(state.main_window, state.instance, state.return_context);
 }
 
+void default_link_resume_single_player(LinkLobbyState&) {
+    resume_worker_after_modal_action();
+}
+
 void default_link_start_game(LinkLobbyState& state) {
     const u32 mode = state.mode >= 0 ?
         static_cast<u32>(state.mode) : g_runtime.frontend_mode;
@@ -3098,6 +3104,8 @@ void configure_link_lobby_callbacks(LinkLobbyState& state) {
     state.callbacks.open_online_lobby = default_link_open_online;
     state.callbacks.open_p2p_lobby = default_link_open_p2p;
     state.callbacks.open_ipx_lobby = default_link_open_ipx;
+    state.callbacks.open_replay_or_observer_lobby =
+        default_link_resume_single_player;
     state.callbacks.start_game = default_link_start_game;
     state.callbacks.shutdown_network = default_link_shutdown_network;
     state.callbacks.show_message = nullptr;
@@ -3115,6 +3123,10 @@ void default_create_game_open_ipx(CreateGameState& state) {
 
 void default_create_game_open_connect(CreateGameState& state) {
     open_connect_frontend_window(state.main_window, state.instance, state.return_context);
+}
+
+void default_create_game_resume_single_player(CreateGameState&) {
+    resume_worker_after_modal_action();
 }
 
 void default_create_game_queue_packet(CreateGameState&, const void* packet,
@@ -3191,6 +3203,9 @@ void default_create_game_open_link_lobby(CreateGameState& state) {
         }
         activate_frontend_state(lobby);
     }
+    else if (mode == 6) {
+        resume_worker_after_modal_action();
+    }
 }
 
 void configure_create_game_callbacks(CreateGameState& state) {
@@ -3201,6 +3216,8 @@ void configure_create_game_callbacks(CreateGameState& state) {
     state.callbacks.open_p2p_lobby = default_create_game_open_p2p;
     state.callbacks.open_ipx_lobby = default_create_game_open_ipx;
     state.callbacks.open_connect_frontend = default_create_game_open_connect;
+    state.callbacks.open_network_ai_lobby =
+        default_create_game_resume_single_player;
     state.callbacks.show_message = default_lobby_show_message;
     state.callbacks.queue_packet = default_create_game_queue_packet;
 }
@@ -3790,7 +3807,7 @@ GameplaySessionFlowState& prepare_default_modal_session_flow() {
             continue;
         }
         char path[MAX_PATH]{};
-        std::snprintf(path, sizeof(path), "Save\\Jw2_%02zu.sav", index + 1);
+        std::snprintf(path, sizeof(path), "Save\\_Jw2_%02zu.sav", index);
         flow.save_slots[index].path = path;
     }
     return flow;
@@ -11970,35 +11987,13 @@ void default_frontend_stage_reset_runtime(FrontendStageFlowState& state) {
     gameplay_loop_state().simulation_frame_counter = 0;
     gameplay_loop_state().present_frame_counter = 0;
 
-    g_runtime.session_runtime_import_state = SessionRuntimeImportState{};
-    g_runtime.active_session_definitions = SessionRuntimeDefinitionTableSet{};
-    g_runtime.base_session_definitions = SessionRuntimeDefinitionTableSet{};
-    g_runtime.staged_session_definitions = SessionRuntimeDefinitionTableSet{};
-    g_runtime.gameplay_session_runtime_buffers = SessionRuntimeBufferPairs{};
-    g_runtime.gameplay_session_forces_fixed_records.clear();
-    g_runtime.gameplay_session_user_runtime_overrides_loaded = false;
-    g_runtime.gameplay_session_forces_record_loaded = false;
-    g_runtime.gameplay_session_runtime_definitions_staged = false;
-    ResetGameSessionAvatarRuntime(g_runtime.gameplay_avatar_runtime);
-    g_runtime.gameplay_avatar_runtime_loaded = false;
-    g_runtime.unit_reference_tables = GameSessionUnitReferenceTables{};
-    g_runtime.gameplay_owner_counters = OwnerSessionCounterTables{};
-    g_runtime.gameplay_post_init_snapshot = PostInitTransitionSnapshot{};
-    g_runtime.gameplay_frame_random_state = GameplayFrameRandomState{};
-    ResetPlayerSlotRuntime(g_runtime.gameplay_player_slots);
-
-    reset_default_gameplay_startup_slots(g_runtime.gameplay_startup_state);
-    import_default_session_map_record_startup_state();
-    import_default_session_scenario_record_startup_state();
-    import_default_session_player_record_startup_state();
-    import_default_session_starting_unit_types();
-    import_default_session_owner_unit_availability();
-    stage_default_session_runtime_override_definitions();
-
-    const char* player_name = default_online_local_player_name();
-    run_default_gameplay_session_runtime_reset(
-        g_runtime.gameplay_startup_state, player_name);
-    apply_default_session_fixed44_player_slot_masks();
+    g_runtime.gameplay_terrain_tile_sheet_loaded =
+        load_default_gameplay_terrain_tile_sheet_bank();
+    GameplaySessionFlowState& flow = prepare_default_modal_session_flow();
+    flow.generic_ai_profile_mode = 0;
+    flow.close_requested = false;
+    flow.process_shutdown_requested = false;
+    default_gameplay_flow_start_session_from_slots(flow);
 
     state.current_mode = g_runtime.gameplay_startup_state.session_mode;
     state.selected_faction_id = g_runtime.gameplay_startup_state.owner_slots[0].faction_id;
@@ -30015,7 +30010,7 @@ void prepare_default_gameplay_session_state(GameplaySessionFlowState& state) {
 
     for (std::size_t index = 0; index < state.save_slots.size(); ++index) {
         char path[MAX_PATH]{};
-        std::snprintf(path, sizeof(path), "Save\\Jw2_%02zu.sav", index + 1);
+        std::snprintf(path, sizeof(path), "Save\\_Jw2_%02zu.sav", index);
         state.save_slots[index].path = path;
     }
 }
@@ -30306,6 +30301,9 @@ void default_open_game_frontend_modal(HWND window, HINSTANCE instance, u32 actio
             SetRankerMainWindowFrontendMode(static_cast<u32>(mode));
         }
         open_create_game_window(window, instance, 0, mode);
+        if (mode == 6 && create_game_state().window == nullptr) {
+            resume_worker_after_modal_action();
+        }
         return;
     }
 
@@ -30349,7 +30347,9 @@ void default_open_replay_load(HWND window, HINSTANCE instance, void*) {
     state.callbacks.start_replay_playback = default_start_replay_playback;
     if (OpenReplayLoadDialog(state, window, instance)) {
         activate_frontend_state(state);
+        return;
     }
+    resume_worker_after_modal_action();
 }
 
 void default_suspend_worker_thread(void*) {
@@ -30401,6 +30401,128 @@ void open_multiplayer_frontend(HWND window) {
 void open_game_frontend_modal(HWND window, u32 action);
 void open_replay_load_dialog(HWND window);
 bool background_test_mode_enabled();
+
+void reset_default_single_player_route_state() {
+    FrontendCreateGameRouteState& route = frontend_create_game_route_state();
+    route.network_ai_profile_override = false;
+    route.create_game_open_requested = false;
+    route.route_mode = 0;
+    route.profile_name.clear();
+    SetRankerMainWindowNetworkAiProfileOverride(false);
+    SetRankerMainWindowGenericAiProfileState(false, false);
+    SetRankerMainWindowFrontendMode(0);
+}
+
+GameplaySessionFlowState& prepare_default_single_player_session_flow() {
+    GameplaySessionFlowState& flow = g_runtime.gameplay_session_flow;
+    prepare_default_gameplay_session_state(flow);
+    flow.generic_ai_profile_mode = 0;
+    flow.close_requested = false;
+    flow.process_shutdown_requested = false;
+    flow.session_loop_iteration_budget = 0;
+    return flow;
+}
+
+void run_default_prepared_single_player_session(GameplaySessionFlowState& flow) {
+    g_runtime.gameplay_transition_active = true;
+    default_gameplay_flow_pre_session_runtime(flow);
+    default_gameplay_flow_post_session_runtime(flow);
+    default_gameplay_flow_set_cursor(flow);
+    default_gameplay_flow_show_cursor(flow);
+    default_gameplay_flow_enter_session_ui(flow);
+    default_gameplay_flow_reset_input(flow);
+    flow.setup_mode_flag = 0;
+    default_gameplay_flow_process_session_loop(flow);
+    default_gameplay_flow_cleanup_after_close(flow);
+    g_runtime.gameplay_transition_active = false;
+}
+
+void run_default_single_player_frontend_flow() {
+    GameplayModalUiState& modal = gameplay_modal_ui_state();
+    const bool previous_centering = modal.centered_for_replay;
+    modal.centered_for_replay = true;
+
+    while (g_runtime.worker_thread_running &&
+        g_runtime.main_window != nullptr && IsWindow(g_runtime.main_window)) {
+        reset_default_single_player_route_state();
+        configure_default_gameplay_modal_ui_callbacks(modal);
+        u32 stage_record_count = 0;
+        modal.stage_archive_present = QueryTrcArchiveRecordCount(
+            "JW2_06.TRC", &stage_record_count) && stage_record_count != 0;
+        ResetInputState();
+        OpenStageAvailabilityDialog(modal, true);
+
+        const u32 action = modal.last_activated_entry;
+        append_startup_log("single-player activate entry=%lu",
+            static_cast<unsigned long>(action));
+        if (action == 0 || action == 4) {
+            CloseStageAvailabilityDialog(modal);
+            modal.centered_for_replay = previous_centering;
+            if (g_runtime.main_window != nullptr && IsWindow(g_runtime.main_window)) {
+                PostMessageA(g_runtime.main_window, WM_USER + 4, 0, 0);
+            }
+            return;
+        }
+
+        if (action == 1) {
+            SendMessageA(g_runtime.main_window, WM_USER + 9, 0, 2);
+            if (g_runtime.gameplay_transition_pending) {
+                CloseStageAvailabilityDialog(modal);
+                g_runtime.single_player_return_after_gameplay = true;
+                modal.centered_for_replay = previous_centering;
+                return;
+            }
+            continue;
+        }
+
+        if (action == 2) {
+            RequestNetworkAiCreateGameRoute(
+                frontend_create_game_route_state(), "Custom");
+            SendMessageA(g_runtime.main_window, WM_USER + 8, 0, 0);
+            if (g_runtime.gameplay_transition_pending) {
+                CloseStageAvailabilityDialog(modal);
+                g_runtime.single_player_return_after_gameplay = true;
+                modal.centered_for_replay = previous_centering;
+                return;
+            }
+            continue;
+        }
+
+        if (action == 3) {
+            frontend_stage_flow_state().stage_started = false;
+            g_runtime.frontend_stage_transition_active = false;
+            const bool session_loaded = OpenSkirmishLoadSessionDialog(modal);
+            if (session_loaded) {
+                CloseStageAvailabilityDialog(modal);
+                GameplaySessionFlowState& flow =
+                    prepare_default_single_player_session_flow();
+                default_gameplay_flow_configure_display(flow);
+                default_gameplay_flow_start_session_from_slots(flow);
+                run_default_prepared_single_player_session(flow);
+            }
+            continue;
+        }
+
+        if (5 <= action && action <= 8) {
+            const u32 faction = action - 5;
+            CloseStageAvailabilityDialog(modal);
+            modal.selected_faction_id = faction;
+            g_runtime.frontend_stage_session_mode = 0;
+            g_runtime.frontend_stage_selected_faction = faction;
+            FrontendStageFlowState& stage = frontend_stage_flow_state();
+            stage = FrontendStageFlowState{};
+            GameplaySessionFlowState& flow =
+                prepare_default_single_player_session_flow();
+            if (StartRankerFrontendStageFromMenu(
+                    static_cast<i32>(faction), 0)) {
+                run_default_prepared_single_player_session(flow);
+            }
+        }
+    }
+
+    CloseStageAvailabilityDialog(modal);
+    modal.centered_for_replay = previous_centering;
+}
 
 constexpr std::size_t kTitleMenuScreenSlot = 14;
 constexpr u32 kTitleMenuRecord = 94;
@@ -30735,8 +30857,14 @@ bool route_title_main_menu_entry(HWND window, u32 entry_index) {
     switch (entry_index) {
     case kTitleMenuSingleEntry:
         close_title_main_menu_frontend();
-        pause_worker_for_modal_action();
-        open_game_frontend_modal(window, 0);
+        g_runtime.single_player_return_after_gameplay = false;
+        if (g_runtime.worker_thread_running) {
+            g_runtime.single_player_frontend_pending = true;
+        }
+        else {
+            pause_worker_for_modal_action();
+            open_game_frontend_modal(window, 0);
+        }
         return true;
     case kTitleMenuMultiEntry:
         close_title_main_menu_frontend();
@@ -31014,11 +31142,22 @@ void winmain_worker_enter_frontend_flow(GameplayLoopState&) {
     }
     g_runtime.message_wait_worker_suspend_enabled = true;
     while (g_runtime.worker_thread_running) {
+        if (g_runtime.single_player_frontend_pending) {
+            g_runtime.single_player_frontend_pending = false;
+            run_default_single_player_frontend_flow();
+        }
         if (g_runtime.gameplay_transition_pending) {
             const HWND owner = g_runtime.gameplay_transition_owner;
             const u32 mode = g_runtime.gameplay_transition_mode;
             g_runtime.gameplay_transition_pending = false;
             run_default_gameplay_session_transition(owner, mode);
+            if (g_runtime.single_player_return_after_gameplay &&
+                g_runtime.worker_thread_running &&
+                !g_runtime.gameplay_session_flow.close_requested &&
+                !g_runtime.gameplay_session_flow.process_shutdown_requested) {
+                g_runtime.single_player_return_after_gameplay = false;
+                g_runtime.single_player_frontend_pending = true;
+            }
         }
         YieldBackgroundWorkerThreadSlice();
     }
@@ -31615,8 +31754,12 @@ bool StartRankerFrontendStageFromMenu(i32 column, i32 row) {
     FrontendStageFlowState& state = frontend_stage_flow_state();
     state.current_mode = g_runtime.frontend_stage_session_mode;
     state.selected_faction_id = g_runtime.frontend_stage_selected_faction;
-    return StartFrontendStageFromMenu(
+    const bool started = StartFrontendStageFromMenu(
         state, column, row, default_frontend_stage_flow_callbacks());
+    if (!started) {
+        g_runtime.frontend_stage_transition_active = false;
+    }
+    return started;
 }
 
 void CompleteRankerFrontendStage(u32 result, u32 next_mode) {
