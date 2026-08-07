@@ -1163,7 +1163,9 @@ add_executable(ranker_rebuild WIN32
     src/ranker_unit_movement.cpp
     src/ranker_unit_spatial_index.cpp
     src/ranker_unit_commands.cpp
-    src/ranker_original_aliases.cpp
+    src/ranker_gameplay_aliases.cpp
+    src/ranker_zlib_aliases.cpp
+    src/ranker_mfc_aliases.cpp
     src/ranker_unit_equipment.cpp
     src/ranker_unit_lifecycle.cpp
     src/ranker_sprite_renderer.cpp
