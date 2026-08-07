@@ -109,6 +109,7 @@ struct ReplayArchiveDescriptor {
     u32 last_frame_tick = 0;
     std::array<char, kReplayDateBytes> date{};
     std::array<char, kReplayTimeBytes> time{};
+    std::array<char, MAX_PATH> map_path{};
     std::array<std::array<char, kReplayPlayerNameBytes>, kReplayPlayerCount> players{};
     std::vector<u8> payload;
 };
@@ -141,6 +142,8 @@ struct ReplayDialogState {
     HWND parent_window = nullptr;
     HWND main_window = nullptr;
     HINSTANCE instance = nullptr;
+    HFONT info_font = nullptr;
+    HFONT list_font = nullptr;
     bool save_dialog = false;
     bool visible = false;
 

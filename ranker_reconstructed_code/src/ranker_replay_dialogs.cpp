@@ -7,6 +7,7 @@
 #include "ranker_replay_archive.h"
 #include "ranker_gameplay_sound.h"
 #include "ranker_online_dialogs.h"
+#include "ranker_system_ui.h"
 #include "ranker_text_tables.h"
 #include "ranker_trc.h"
 #include "ranker_winmain.h"
@@ -33,13 +34,14 @@ constexpr DWORD kReadOnlyEditStyle = WS_CHILD | WS_VISIBLE | WS_DISABLED;
 constexpr DWORD kSaveNameEditStyle = WS_CHILD | WS_VISIBLE;
 constexpr COLORREF kReplayWhite = RGB(255, 255, 255);
 constexpr COLORREF kReplayGray = RGB(210, 210, 210);
-constexpr COLORREF kReplayWarning = RGB(250, 10, 10);
+constexpr COLORREF kReplayWarning = RGB(210, 10, 10);
 constexpr COLORREF kReplayGreen = RGB(10, 210, 210);
 constexpr COLORREF kReplayBlack = RGB(0, 0, 0);
 constexpr COLORREF kReplaySelectedBlue = RGB(0, 0, 255);
 constexpr UINT kReplayInfoLineFlags =
     DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS | DT_MODIFYSTRING;
 constexpr std::size_t kStartupReplayGameTypeRowBase = 109;
+constexpr std::size_t kReplayMapPathOffset = 0x1fb;
 constexpr const char* kReplayGameTypeFallbacks[] = {
     "Top Vs Bottom",
     "Melee",
@@ -65,6 +67,15 @@ bool g_replay_load_scroll_destructor_registered = false;
 std::array<bool, 5> g_replay_save_bitmap_destructor_registered{};
 std::array<bool, 3> g_replay_save_button_destructor_registered{};
 bool g_replay_save_scroll_destructor_registered = false;
+
+HFONT create_replay_ui_font(LONG height) {
+    LOGFONTA definition{};
+    definition.lfHeight = height;
+    definition.lfCharSet = DEFAULT_CHARSET;
+    definition.lfQuality = NONANTIALIASED_QUALITY;
+    definition.lfPitchAndFamily = VARIABLE_PITCH;
+    return CreateFontIndirectA(&definition);
+}
 
 struct FrontendLayoutTableOwner {
     FrontendLayoutRectTable table{};
@@ -528,6 +539,14 @@ void destroy_dialog_resources(ReplayDialogState& state) {
     destroy_text_control(state.file_list);
     destroy_text_control(state.directory_edit);
     destroy_text_control(state.name_edit);
+    if (state.list_font != nullptr) {
+        DeleteObject(state.list_font);
+        state.list_font = nullptr;
+    }
+    if (state.info_font != nullptr) {
+        DeleteObject(state.info_font);
+        state.info_font = nullptr;
+    }
     ReleaseBitmapMemoryResource(state.vpos_icon);
     ReleaseBitmapMemoryResource(state.speaker_icon);
     ReleaseBitmapMemoryResource(state.camera_icon);
@@ -595,6 +614,8 @@ void parse_descriptor_header(ReplayArchiveDescriptor& descriptor) {
         reinterpret_cast<const char*>(payload.data() + 0x3f));
     copy_c_string(descriptor.time,
         reinterpret_cast<const char*>(payload.data() + 0x4f));
+    copy_c_string(descriptor.map_path,
+        reinterpret_cast<const char*>(payload.data() + kReplayMapPathOffset));
 
     for (std::size_t i = 0; i < descriptor.players.size(); ++i) {
         const std::size_t offset = 0x1fff + i * kReplayPlayerNameBytes;
@@ -689,16 +710,17 @@ void draw_replay_info_line(HDC dc, RECT& rect, const char* text) {
     rect.top += 4 + std::max(height, 0);
 }
 
-std::string replay_info_display_name(const ReplayArchiveDescriptor& descriptor) {
-    if (descriptor.source_path.empty()) {
+std::string replay_map_display_name(const ReplayArchiveDescriptor& descriptor) {
+    const std::string map_path = descriptor.map_path.data();
+    if (map_path.empty()) {
         return {};
     }
-    const std::size_t separator = descriptor.source_path.find_last_of("\\/");
+    const std::size_t separator = map_path.find_last_of("\\/");
     if (separator != std::string::npos &&
-        separator + 1 < descriptor.source_path.size()) {
-        return descriptor.source_path.substr(separator + 1);
+        separator + 1 < map_path.size()) {
+        return map_path.substr(separator + 1);
     }
-    return descriptor.source_path;
+    return map_path;
 }
 
 void draw_replay_info(ReplayDialogState& state, const ReplayArchiveDescriptor& descriptor,
@@ -708,7 +730,6 @@ void draw_replay_info(ReplayDialogState& state, const ReplayArchiveDescriptor& d
     ExtTextOutA(item.hDC, rect.left, rect.top, ETO_OPAQUE, &item.rcItem, nullptr, 0,
         nullptr);
     rect.left += 5;
-    rect.top += 8;
     rect.right -= 5;
     SetBkMode(item.hDC, TRANSPARENT);
 
@@ -737,6 +758,7 @@ void draw_replay_info(ReplayDialogState& state, const ReplayArchiveDescriptor& d
         return;
     }
 
+    rect.top += 8;
     SetTextColor(item.hDC, kReplayGray);
     char line[256]{};
     std::snprintf(line, sizeof(line), text_row(187, "Replay data ver %d-%d-%d"),
@@ -749,8 +771,9 @@ void draw_replay_info(ReplayDialogState& state, const ReplayArchiveDescriptor& d
         descriptor.date.data(), descriptor.time.data());
     draw_replay_info_line(item.hDC, rect, line);
 
-    const std::string replay_name = replay_info_display_name(descriptor);
-    std::snprintf(line, sizeof(line), "File %s", replay_name.c_str());
+    const std::string map_name = replay_map_display_name(descriptor);
+    std::snprintf(line, sizeof(line), "%s%s",
+        text_row(142, "Map: "), map_name.c_str());
     draw_replay_info_line(item.hDC, rect, line);
 
     const char* game_type_name = replay_game_type_label(descriptor.game_type);
@@ -786,35 +809,39 @@ void draw_file_entry(ReplayDialogState& state, const DRAWITEMSTRUCT& item) {
     }
 
     const ReplayFileEntry& entry = state.entries[item.itemData];
-    RECT fill = item.rcItem;
-    SetBkColor(item.hDC,
-        (item.itemState & ODS_SELECTED) != 0 ? kReplaySelectedBlue : kReplayBlack);
-    ExtTextOutA(item.hDC, fill.left, fill.top, ETO_OPAQUE, &fill, nullptr, 0, nullptr);
-
     RECT rect = item.rcItem;
     rect.left += 4;
-    rect.top += 2;
     if (entry.directory) {
         BitmapMemoryResource& icon = entry.parent ? state.up_icon : state.folder_icon;
-        StretchBitmapMemoryResourceToDc(icon, item.hDC, rect.left, rect.top);
+        StretchBitmapMemoryResourceToDc(icon, item.hDC, rect.left, rect.top + 2);
         rect.left += 20;
     } else {
-        StretchBitmapMemoryResourceToDc(state.camera_icon, item.hDC, rect.left, rect.top);
+        StretchBitmapMemoryResourceToDc(state.camera_icon, item.hDC,
+            rect.left, rect.top + 2);
         rect.left += 20;
         if (!state.save_dialog && entry.has_mp3) {
             StretchBitmapMemoryResourceToDc(state.speaker_icon, item.hDC, rect.left,
-                rect.top);
+                rect.top + 2);
             rect.left += 20;
         }
         if (!state.save_dialog && entry.has_vpos) {
             StretchBitmapMemoryResourceToDc(state.vpos_icon, item.hDC, rect.left,
-                rect.top);
+                rect.top + 2);
             rect.left += 20;
         }
     }
 
+    rect.left += 2;
     SetTextColor(item.hDC, kReplayWhite);
-    SetBkMode(item.hDC, TRANSPARENT);
+    const bool selected = (item.itemState & ODS_SELECTED) != 0;
+    SetBkColor(item.hDC, selected ? kReplaySelectedBlue : kReplayBlack);
+    if (selected && entry.directory) {
+        RECT leading_background{
+            rect.left - 4, rect.top + 2, rect.left, rect.bottom - 2};
+        ExtTextOutA(item.hDC, leading_background.left, leading_background.top,
+            ETO_OPAQUE, &leading_background, nullptr, 0, nullptr);
+    }
+    SetBkMode(item.hDC, OPAQUE);
     DrawTextA(item.hDC, entry.name.data(), -1, &rect,
         DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
 }
@@ -1103,10 +1130,22 @@ void load_common_bitmaps(ReplayDialogState& state) {
 }
 
 void finish_dialog_creation(ReplayDialogState& state, int accelerator_resource) {
-    SendMessageA(state.window, WM_SETFONT, reinterpret_cast<WPARAM>(
-        GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+    state.info_font = create_replay_ui_font(-11);
+    state.list_font = create_replay_ui_font(-12);
+    HFONT info_font = state.info_font != nullptr ?
+        state.info_font : GetUiFontHandle(0);
+    HFONT list_font = state.list_font != nullptr ?
+        state.list_font : GetUiFontHandle(1);
+    if (info_font == nullptr) {
+        info_font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+    }
+    if (list_font == nullptr) {
+        list_font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+    }
+    SendMessageA(state.info_button.window, WM_SETFONT,
+        reinterpret_cast<WPARAM>(info_font), TRUE);
     SendMessageA(state.file_list.window, WM_SETFONT, reinterpret_cast<WPARAM>(
-        GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+        list_font), TRUE);
     if (state.name_edit.window != nullptr) {
         SendMessageA(state.name_edit.window, WM_SETFONT, reinterpret_cast<WPARAM>(
             GetStockObject(DEFAULT_GUI_FONT)), TRUE);
