@@ -1089,6 +1089,7 @@ add_executable(ranker_rebuild WIN32
     src/ranker_control_group_persistence.cpp
     src/ranker_legacy_file.cpp
     src/ranker_setup_data.cpp
+    src/ranker_startup_environment.cpp
     src/ranker_legacy_environment.cpp
     src/ranker_bitmap_resource.cpp
     src/ranker_bitmap_icon_collection.cpp
