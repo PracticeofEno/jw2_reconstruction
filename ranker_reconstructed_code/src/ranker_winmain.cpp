@@ -31683,63 +31683,6 @@ const std::vector<std::string>& FrontendNetworkChatMessages() {
 #endif
 
 #ifdef _WIN32
-bool register_frontend_window_class(HINSTANCE instance, const char* class_name) {
-    if (class_name == nullptr || class_name[0] == '\0') {
-        return false;
-    }
-
-    WNDCLASSA existing{};
-    if (GetClassInfoA(instance, class_name, &existing) != 0) {
-        return true;
-    }
-
-    WNDCLASSA window_class{};
-    window_class.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
-    window_class.lpfnWndProc = DefWindowProcA;
-    window_class.hInstance = instance;
-    window_class.hIcon = LoadIconA(instance, MAKEINTRESOURCEA(0x65));
-    window_class.hCursor = LoadCursorA(nullptr, IDC_ARROW);
-    window_class.hbrBackground = reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
-    window_class.lpszClassName = class_name;
-
-    return RegisterClassA(&window_class) != 0 ||
-        GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
-}
-
-bool register_reconstructed_frontend_classes(HINSTANCE instance) {
-    const char* class_names[] = {
-        "Account",
-        "Avatar",
-        "Barter",
-        "Change Lobby",
-        "ChangePassword",
-        "Connect",
-        "Create Game",
-        "Emo",
-        "FIGS",
-        "IPX",
-        "IPX Game",
-        "Join Game",
-        "Light",
-        "Link",
-        "Lobby",
-        "Memo",
-        "P2P",
-        "Player Profile",
-        "Replay",
-        "ReplaySave",
-        "Search",
-        "ViewRank",
-    };
-
-    for (const char* class_name : class_names) {
-        if (!register_frontend_window_class(instance, class_name)) {
-            return false;
-        }
-    }
-    return true;
-}
-
 void InitializeRuntimeClockSnapshot() {
     g_runtime.runtime_clock_snapshot = std::time(nullptr);
 }
@@ -31996,7 +31939,7 @@ int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_c
         show_startup_blocker("RegisterClassA failed in the reconstructed WinMain shell.");
         return 0;
     }
-    if (!register_reconstructed_frontend_classes(instance)) {
+    if (!RegisterReconstructedFrontendWindowClasses(instance)) {
         show_startup_blocker(
             "RegisterClassA failed while registering reconstructed frontend windows.");
         return 0;

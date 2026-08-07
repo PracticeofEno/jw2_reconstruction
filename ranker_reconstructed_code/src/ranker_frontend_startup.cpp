@@ -201,6 +201,32 @@ void normalize_16bpp_frame(std::vector<u8>& pixels) {
     }
 }
 
+#ifdef _WIN32
+bool register_frontend_window_class(HINSTANCE instance, const char* class_name) {
+    if (class_name == nullptr || class_name[0] == '\0') {
+        return false;
+    }
+
+    WNDCLASSA existing{};
+    if (GetClassInfoA(instance, class_name, &existing) != 0) {
+        return true;
+    }
+
+    WNDCLASSA window_class{};
+    window_class.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
+    window_class.lpfnWndProc = DefWindowProcA;
+    window_class.hInstance = instance;
+    window_class.hIcon = LoadIconA(instance, MAKEINTRESOURCEA(0x65));
+    window_class.hCursor = LoadCursorA(nullptr, IDC_ARROW);
+    window_class.hbrBackground =
+        reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+    window_class.lpszClassName = class_name;
+
+    return RegisterClassA(&window_class) != 0 ||
+        GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+}
+#endif
+
 } // namespace
 
 FrontendStartupState& frontend_startup_state() {
@@ -210,6 +236,42 @@ FrontendStartupState& frontend_startup_state() {
 FrontendBootstrapState& frontend_bootstrap_state() {
     return g_frontend_bootstrap_state;
 }
+
+#ifdef _WIN32
+bool RegisterReconstructedFrontendWindowClasses(HINSTANCE instance) {
+    constexpr std::array<const char*, 22> kClassNames{
+        "Account",
+        "Avatar",
+        "Barter",
+        "Change Lobby",
+        "ChangePassword",
+        "Connect",
+        "Create Game",
+        "Emo",
+        "FIGS",
+        "IPX",
+        "IPX Game",
+        "Join Game",
+        "Light",
+        "Link",
+        "Lobby",
+        "Memo",
+        "P2P",
+        "Player Profile",
+        "Replay",
+        "ReplaySave",
+        "Search",
+        "ViewRank",
+    };
+
+    for (const char* class_name : kClassNames) {
+        if (!register_frontend_window_class(instance, class_name)) {
+            return false;
+        }
+    }
+    return true;
+}
+#endif
 
 void StampFrontendStartupFileTime(FrontendStartupState& state) {
 #ifdef _WIN32

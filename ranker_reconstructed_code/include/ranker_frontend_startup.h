@@ -11,6 +11,11 @@
 #include <array>
 #include <vector>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
 namespace ranker {
 
 constexpr u32 kFrontendStartupFontRecordCount = 5;
@@ -134,5 +139,9 @@ bool RunFrontendStartupBootstrap(FrontendStartupState& startup_state,
 void ShutdownFrontendStartupResources(FrontendStartupState& startup_state,
     FrontendBootstrapState& bootstrap_state,
     const FrontendBootstrapCallbacks& callbacks = {});
+
+#ifdef _WIN32
+bool RegisterReconstructedFrontendWindowClasses(HINSTANCE instance);
+#endif
 
 }
