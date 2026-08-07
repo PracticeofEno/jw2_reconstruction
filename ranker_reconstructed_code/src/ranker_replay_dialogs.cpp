@@ -24,6 +24,8 @@ namespace ranker {
 namespace {
 
 constexpr DWORD kWindowStyleFullscreen = WS_POPUP | WS_CLIPSIBLINGS;
+constexpr DWORD kWindowStyleWindowed =
+    WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
 constexpr DWORD kListStyle =
     WS_CHILD | WS_VISIBLE | LBS_NOTIFY | LBS_SORT | LBS_OWNERDRAWFIXED |
     LBS_HASSTRINGS;
@@ -978,10 +980,15 @@ bool create_common_dialog_window(ReplayDialogState& state, HWND parent,
     state.status = ReplayValidationStatus::None;
 
     const ReplayDialogLayoutRect window_rect = layout_at(state, 0);
-    // Replay dialogs are fixed 800x600 owned popups in the original, even
-    // when the main window itself is positioned or scaled elsewhere.
-    const POINT origin{0, 0};
-    const DWORD style = kWindowStyleFullscreen;
+    // Keep the fixed 800x600 replay layout inside the game window.  Windowed
+    // frontends use the same centered child-window placement as the P2P flow.
+    const bool windowed = IsWindow(parent);
+    const POINT origin = windowed
+        ? RankerCenteredChildFrontendWindowOrigin(parent,
+              window_rect.width, window_rect.height)
+        : RankerCenteredFrontendWindowOrigin(
+              window_rect.width, window_rect.height);
+    const DWORD style = windowed ? kWindowStyleWindowed : kWindowStyleFullscreen;
     state.window = CreateWindowExA(WS_EX_CONTROLPARENT, class_name, title, style,
         origin.x, origin.y, window_rect.width, window_rect.height, parent,
         nullptr, instance, nullptr);
