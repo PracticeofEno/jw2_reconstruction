@@ -11869,6 +11869,21 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     run_default_gameplay_session_runtime_reset(
         g_runtime.gameplay_startup_state, player_name);
     if (replay_recording_state().playback_mode) {
+        // FUN_0044f2c0 copies all eight names from the replay header table
+        // (0x20-byte entries) into the live owner-name table before playback.
+        // The ordinary runtime reset has just restored the map's generic
+        // "Player" labels, so replace only entries actually present in the
+        // replay and retain map/AI fallbacks for empty slots.
+        const P2PGameSessionStartState& replay_session =
+            g_runtime.p2p_session_start_state;
+        for (u32 owner = 0;
+             owner < g_runtime.gameplay_startup_state.owner_display_names.size() &&
+             owner < replay_session.player_names.size(); ++owner) {
+            if (replay_session.player_names[owner][0] != '\0') {
+                g_runtime.gameplay_startup_state.owner_display_names[owner] =
+                    replay_session.player_names[owner].data();
+            }
+        }
         // FUN_0044f2c0 seeds DAT_00722310 with the four replay observer rows.
         // The runtime reset clears the script opcode mirror, so restore the
         // startup mask only once here instead of reasserting it every frame.
@@ -12931,7 +12946,7 @@ void sync_default_gameplay_player_resource_hud(
     const UnitLifecycleContext* lifecycle =
         g_runtime.gameplay_startup_state.lifecycle;
     const GameplayUiResourceState& ui_resources = gameplay_ui_resource_state();
-    const Jw207ResourcePackState& jw207 = jw207_resource_pack_state();
+    const InterfaceResourceState& interface_resources = interface_resource_state();
 
     hud.flags = opcode.resource_hud_flags & 0xffu;
     hud.start_x = opcode.resource_hud_start_x;
@@ -12942,7 +12957,11 @@ void sync_default_gameplay_player_resource_hud(
     hud.population_icon =
         ui_resources.misc_icons_start != kInvalidResourceEntry ?
         ui_resources.misc_icons_start + 0x23u : kInvalidResourceEntry;
-    hud.player_icon_base = jw207.start_location_start;
+    // FUN_00429bf0 draws DAT_00868618 + owner for resource-HUD bit 2.
+    // LoadInterfaceResourcePack fills that base from JW2_18 records 0..7;
+    // JW2_07 start-location markers are large map labels and must not appear
+    // in this HUD.
+    hud.player_icon_base = interface_resources.replay_timer_resource_start;
     hud.rotation_countdown_ticks = players.rotation_countdown_ticks;
     hud.rotation_countdown_x = opcode.countdown_x;
     hud.rotation_countdown_y = opcode.countdown_y;
