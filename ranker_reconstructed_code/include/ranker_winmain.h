@@ -60,11 +60,6 @@ inline i32 ScalePresentationCoordinateToLogical(
 
 const OriginalRoutineRef* winmain_routine_map(std::size_t& count);
 
-bool CpuSupportsMmx();
-void WriteStartupTimestampLog(const char* path = "Jw2.log");
-bool VerifySetupVersionData();
-bool VerifySetupOrFindJw208Archive();
-
 #ifdef _WIN32
 bool InitDirectXSubsystems();
 void ShutdownDirectXSubsystems();
@@ -77,8 +72,6 @@ void ClearActiveAcceleratorState();
 void SetActiveAcceleratorState(HWND window, HACCEL accelerators);
 void NoOpFrontendNetworkPayloadHandler(const void* packet, u32 byte_count);
 void QueueFrontendNetworkChatPacketDisplay(const void* packet, u32 byte_count);
-bool QueryRegistryValueBytes(HKEY root, const char* subkey, const char* value_name,
-    DWORD* type, BYTE* data, DWORD* byte_count);
 void InitializeRuntimeClockSnapshot();
 void NoOpStartupRuntimeHook();
 

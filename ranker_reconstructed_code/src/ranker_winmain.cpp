@@ -100,12 +100,6 @@
 #include <shellapi.h>
 #endif
 
-#if defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64))
-#include <intrin.h>
-#elif defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))
-#include <cpuid.h>
-#endif
-
 namespace ranker {
 namespace {
 
@@ -211,8 +205,6 @@ constexpr std::array<u8, 0x2a> kUiOverlayObjectIconMarkerCodes{
     0x42, 0x57, 0x54, 0x52, 0x00, 0x00, 0x00, 0x52,
     0x50, 0x48, 0x00, 0x46, 0x55, 0x00, 0x4f, 0x4f,
     0x4f, 0x4f};
-constexpr u64 kExpectedJw208Size = 0x0ddcc154ULL;
-constexpr u32 kSetupVersionXor = 0x11223344u;
 constexpr std::size_t kPatchProgramLaunchFailedTextRow = 13;
 constexpr const char* kPatchProgramLaunchFailedTextFallback =
     "Unable to run patch program.";
@@ -240,9 +232,6 @@ constexpr const char* kInterfaceBaseSpriteLoadErrorFallback =
     "Interface base sprite loading error.";
 constexpr std::size_t kMainWindowTitleTextRow = 223;
 constexpr const char* kMainWindowTitleFallback = "The Ranker";
-constexpr std::size_t kSetupRegistrySubkeyTextRow = 224;
-constexpr const char* kSetupRegistrySubkeyFallback =
-    "Software\\WIZARD SOFT\\The Ranker";
 constexpr std::size_t kSingleInstanceMutexTextRow = 225;
 constexpr const char* kSingleInstanceMutexFallback = "The Ranker is running.";
 constexpr u32 kGameplayMapSourceLayerRecordIndex = 10;
@@ -30242,7 +30231,6 @@ void open_multiplayer_frontend(HWND window) {
 
 void open_game_frontend_modal(HWND window, u32 action);
 void open_replay_load_dialog(HWND window);
-bool background_test_mode_enabled();
 
 void reset_default_single_player_route_state() {
     FrontendCreateGameRouteState& route = frontend_create_game_route_state();
@@ -31384,93 +31372,6 @@ void send_startup_fatal_and_close(const char* detail) {
     MessageBoxA(nullptr, detail, ranker_window_title(), MB_OK | MB_ICONWARNING);
 }
 
-bool find_expected_jw208_archive(const char* path) {
-    WIN32_FILE_ATTRIBUTE_DATA data{};
-    if (!GetFileAttributesExA(path, GetFileExInfoStandard, &data)) {
-        return false;
-    }
-
-    ULARGE_INTEGER size{};
-    size.HighPart = data.nFileSizeHigh;
-    size.LowPart = data.nFileSizeLow;
-    return size.QuadPart == kExpectedJw208Size;
-}
-
-bool background_test_mode_enabled() {
-    const char* value = std::getenv("RANKER_REBUILD_BACKGROUND_TEST");
-    return value != nullptr && value[0] != '\0' && value[0] != '0';
-}
-
-bool read_setup_version_file_value(u32& value) {
-    char windows_directory[MAX_PATH]{};
-    if (GetWindowsDirectoryA(windows_directory, static_cast<UINT>(sizeof(windows_directory))) == 0) {
-        return false;
-    }
-
-    std::string path = windows_directory;
-    path += "\\setuprk.dat";
-
-    FILE* file = nullptr;
-#if defined(_MSC_VER)
-    if (fopen_s(&file, path.c_str(), "r+b") != 0) {
-        file = nullptr;
-    }
-#else
-    file = std::fopen(path.c_str(), "r+b");
-#endif
-    if (file == nullptr) {
-        return false;
-    }
-
-    u32 stored_value = 0;
-    const bool ok = std::fread(&stored_value, sizeof(stored_value), 1, file) == 1;
-    std::fclose(file);
-    if (!ok) {
-        return false;
-    }
-
-    value = stored_value ^ kSetupVersionXor;
-    return true;
-}
-
-bool query_setup_registry_version_value(u32& value) {
-    DWORD type = REG_DWORD;
-    DWORD byte_count = sizeof(value);
-    const char* subkey = startup_platform_row(
-        kSetupRegistrySubkeyTextRow, kSetupRegistrySubkeyFallback);
-    return QueryRegistryValueBytes(HKEY_LOCAL_MACHINE, subkey, "VersionData",
-               &type, reinterpret_cast<LPBYTE>(&value), &byte_count) &&
-        byte_count == sizeof(value);
-}
-
-bool find_expected_jw208_archive_on_cdrom() {
-    if (!InitializeCdRomDriveScan()) {
-        return false;
-    }
-
-    while (!legacy_environment_state().selected_cdrom_root.empty()) {
-        std::string path = legacy_environment_state().selected_cdrom_root;
-        path += "jw2_08.trc";
-
-        CrtFindDataA find_data{};
-        const HANDLE find = CrtFindFirstFile(path.c_str(), find_data);
-        if (find != INVALID_HANDLE_VALUE) {
-            HANDLE file = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ,
-                nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-            if (file != INVALID_HANDLE_VALUE) {
-                const DWORD size = GetFileSize(file, nullptr);
-                CloseHandle(file);
-                if (size == kExpectedJw208Size) {
-                    CrtFindClose(find);
-                    return true;
-                }
-            }
-        }
-        SelectNextCdRomDrive();
-    }
-
-    return false;
-}
 #endif
 
 } // namespace
@@ -31781,74 +31682,6 @@ const std::vector<std::string>& FrontendNetworkChatMessages() {
 }
 #endif
 
-bool CpuSupportsMmx() {
-#if defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64))
-    int registers[4]{};
-    __cpuid(registers, 1);
-    return (registers[3] & (1 << 23)) != 0;
-#elif defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))
-    unsigned int eax = 0;
-    unsigned int ebx = 0;
-    unsigned int ecx = 0;
-    unsigned int edx = 0;
-    if (__get_cpuid(1, &eax, &ebx, &ecx, &edx) == 0) {
-        return false;
-    }
-    return (edx & (1u << 23)) != 0;
-#else
-    return false;
-#endif
-}
-
-void WriteStartupTimestampLog(const char* path) {
-    if (path == nullptr || *path == '\0') {
-        return;
-    }
-
-    std::time_t now = std::time(nullptr);
-    std::tm* local = std::localtime(&now);
-    FILE* file = nullptr;
-#if defined(_MSC_VER)
-    if (fopen_s(&file, path, "a") != 0) {
-        file = nullptr;
-    }
-#else
-    file = std::fopen(path, "a");
-#endif
-    if (file == nullptr) {
-        return;
-    }
-
-    if (local != nullptr) {
-        std::fputs(std::asctime(local), file);
-    }
-    std::fclose(file);
-}
-
-bool VerifySetupVersionData() {
-#ifdef _WIN32
-    u32 registry_value = 0;
-    u32 file_value = 0;
-    return query_setup_registry_version_value(registry_value) &&
-        read_setup_version_file_value(file_value) &&
-        registry_value == file_value;
-#else
-    return false;
-#endif
-}
-
-bool VerifySetupOrFindJw208Archive() {
-    if (VerifySetupVersionData()) {
-        return true;
-    }
-
-#ifdef _WIN32
-    return find_expected_jw208_archive_on_cdrom();
-#else
-    return false;
-#endif
-}
-
 #ifdef _WIN32
 bool register_frontend_window_class(HINSTANCE instance, const char* class_name) {
     if (class_name == nullptr || class_name[0] == '\0') {
@@ -31905,20 +31738,6 @@ bool register_reconstructed_frontend_classes(HINSTANCE instance) {
         }
     }
     return true;
-}
-
-bool QueryRegistryValueBytes(HKEY root, const char* subkey, const char* value_name,
-    DWORD* type, BYTE* data, DWORD* byte_count) {
-    HKEY key = nullptr;
-    const LSTATUS open_result = RegOpenKeyExA(root, subkey, 0, KEY_QUERY_VALUE, &key);
-    if (open_result != ERROR_SUCCESS) {
-        return false;
-    }
-
-    const LSTATUS query_result = RegQueryValueExA(key, value_name, nullptr, type, data,
-        byte_count);
-    RegCloseKey(key);
-    return query_result == ERROR_SUCCESS;
 }
 
 void InitializeRuntimeClockSnapshot() {
