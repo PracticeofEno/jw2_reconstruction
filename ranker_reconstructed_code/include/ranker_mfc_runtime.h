@@ -1025,6 +1025,10 @@ MfcRuntimeClassCompat* MfcExceptionRuntimeThunk_005e8ca8();
 MfcRuntimeClassCompat* AfxClassInitObject(MfcRuntimeClassCompat* runtime_class);
 void MfcDebugDeleteClientBlock(void* memory);
 void MfcDebugDeleteNormalBlock(void* memory);
+void* MfcDebugNewClientBlock(std::size_t size);
+bool AfxEnableMemoryTracking(bool enabled);
+bool AfxCheckMemoryCompat();
+void MfcExceptionDestroyStorage(void* exception_storage, bool auto_delete);
 #ifdef _WIN32
 void MfcThreadSlotRuntime_005ead15(HLOCAL memory);
 #endif
