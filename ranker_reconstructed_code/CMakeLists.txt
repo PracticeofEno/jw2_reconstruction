@@ -1120,6 +1120,7 @@ add_executable(ranker_rebuild WIN32
     src/ranker_mfc_runtime.cpp
     src/ranker_mfc_core.cpp
     src/ranker_mfc_data_exchange.cpp
+    src/ranker_mfc_dialog_template.cpp
     src/ranker_mfc_debug.cpp
     src/ranker_mfc_exceptions.cpp
     src/ranker_mfc_file.cpp
