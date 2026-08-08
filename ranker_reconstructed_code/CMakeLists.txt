@@ -1118,6 +1118,7 @@ add_executable(ranker_rebuild WIN32
     src/ranker_emoticon_popup.cpp
     src/ranker_ole_image_data.cpp
     src/ranker_mfc_runtime.cpp
+    src/ranker_mfc_core.cpp
     src/ranker_mfc_debug.cpp
     src/ranker_mfc_exceptions.cpp
     src/ranker_mfc_geometry.cpp
