@@ -23,6 +23,13 @@
 !ranker_reconstructed_code/tests/unit_equipment_type_replacement_visibility_regression.cpp
 !ranker_reconstructed_code/tests/subtype01_latest_cancel_parity_regression.cpp
 
+!ranker_reconstructed_code/tools/
+!ranker_reconstructed_code/tools/replay_debug/
+!ranker_reconstructed_code/tools/replay_debug/*.cpp
+!ranker_reconstructed_code/tools/replay_debug/*.ps1
+!ranker_reconstructed_code/tools/replay_debug/*.py
+!ranker_reconstructed_code/tools/replay_debug/README.md
+
 !ranker_reconstructed_code/resources/
 !ranker_reconstructed_code/resources/main_menu_bink_fallback_565.bin
 !ranker_reconstructed_code/resources/main_menu_bink_fallback_anim.z
