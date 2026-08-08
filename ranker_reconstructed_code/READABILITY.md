@@ -57,14 +57,27 @@ Behavioral changes must not be hidden inside mechanical refactor commits.
   duplicate table-presence checks.
 - `ranker_frontend_startup.*` owns bootstrap resources and registration of the
   reconstructed frontend window classes.
+- `ranker_frontend_layout.*` owns reusable window-placement calculations. The
+  pure placement helpers are covered by
+  `frontend_window_placement_regression.cpp` so UI wiring does not need to
+  duplicate coordinate arithmetic.
 - `ranker_gameplay_unit_names.*` owns mutable session/script unit-name
   overrides and indexed-table fallback lookup.
+- `ranker_gameplay_session_format.h` and `ranker_gameplay_terrain_layout.*`
+  describe session/map data used to produce previews. `ranker_minimap_preview.*`
+  owns preview rendering, and `ranker_display_constants.h` owns shared display
+  dimensions. Lobby and startup code consume these modules instead of carrying
+  private copies of the map tables and rendering pipeline.
 - Compatibility entry points are split into `ranker_gameplay_aliases.cpp`,
   `ranker_zlib_aliases.cpp`, and `ranker_mfc_aliases.cpp`. They delegate to
   domain code and must not become a second implementation layer.
-- `ranker_mfc_geometry.cpp` owns stateless CSize/CPoint/CRect compatibility and
-  their archive shims. Stateful debug, window, exception, and OLE behavior
-  remains in `ranker_mfc_runtime.cpp` until extracted by subsystem.
+- MFC compatibility is split by responsibility: core helpers, debug support,
+  exceptions, geometry, memory, object runtime, strings, time, files, data
+  exchange, dialog templates, archive streams, collections, and common
+  controls each have a `ranker_mfc_*.cpp` module. Window, document/view,
+  control-bar, device-context, and OLE behavior remains in
+  `ranker_mfc_runtime.cpp` until it can be extracted with equally clear
+  boundaries.
 - `ranker_winmain.cpp` remains the composition root for default callbacks and
   shared runtime state. New self-contained parsing, formatting, registry, or
   resource logic belongs in its subsystem module rather than this file.
@@ -74,11 +87,12 @@ Behavioral changes must not be hidden inside mechanical refactor commits.
 The tracked project contains roughly 236,000 non-third-party C/C++ lines. The
 largest navigation bottlenecks are currently:
 
-1. `ranker_mfc_runtime.cpp` (about 33,300 lines): continue splitting stateless
-   and self-contained runtime subsystems while preserving legacy MFC object
-   layouts.
-2. `ranker_winmain.cpp` (about 32,100 lines): extract session wiring, input/HUD
-   adapters, preview rendering, and default callback groups.
+1. `ranker_winmain.cpp` (about 31,900 lines): extract session wiring, input/HUD
+   adapters, and default callback groups after introducing narrow state
+   boundaries.
+2. `ranker_mfc_runtime.cpp` (about 28,900 lines): continue splitting cohesive
+   window, document/view, control-bar, device-context, and OLE subsystems while
+   preserving legacy MFC object layouts.
 3. `ranker_unit_commands.cpp` (about 12,000 lines): separate the unit command
    state machine from owner production/strategy helpers.
 4. `ranker_link_lobby.cpp` (about 7,000 lines): isolate packet codecs, session
