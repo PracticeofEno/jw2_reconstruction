@@ -31,6 +31,20 @@
 - Flight recording is diagnostic behavior of `ranker_rebuild.exe`; do not
   modify the original `ranker.exe` to add capture instrumentation.
 
+## PNG diagnostic artifacts
+
+- Store every newly captured or generated diagnostic `.png` under
+  `debug_artifacts/png`; do not create PNG screenshots in the workspace root,
+  source tree, deployment directory, or replay directory.
+- Put original-game reference and parity images under
+  `debug_artifacts/png/original_game` and replay synchronization images under
+  `debug_artifacts/png/replay_sync`.
+- Keep source resources, original game assets, map images, and third-party tool
+  resources in their existing required locations; they are not diagnostic
+  artifacts and must not be relocated.
+- Remove transient diagnostic PNGs when they no longer support original-game
+  analysis or replay synchronization debugging.
+
 ## Ranker deployment filenames
 
 - For every deployment under `RankerOCPV_Win`, the original executable is
