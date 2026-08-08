@@ -14,6 +14,7 @@
 #include "ranker_directplay.h"
 #include "ranker_emoticon_popup.h"
 #include "ranker_free_server_lobby.h"
+#include "ranker_frontend_layout.h"
 #include "ranker_frontend_startup.h"
 #include "ranker_frontend_stage_flow.h"
 #include "ranker_frontend_routes.h"
@@ -31444,16 +31445,17 @@ RankerMainWindowStateSnapshot RankerMainWindowState() {
 
 POINT RankerFrontendWindowOrigin() {
     const RECT rect = frontend_client_screen_rect_or_default();
-    return POINT{rect.left, rect.top};
+    const FrontendLayoutPoint origin = FrontendLayoutOrigin({
+        rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top});
+    return POINT{origin.x, origin.y};
 }
 
 POINT RankerCenteredFrontendWindowOrigin(int width, int height) {
     const RECT rect = frontend_client_screen_rect_or_default();
-    const int rect_width = rect.right - rect.left;
-    const int rect_height = rect.bottom - rect.top;
-    return POINT{
-        rect.left + (rect_width - width) / 2,
-        rect.top + (rect_height - height) / 2};
+    const FrontendLayoutPoint origin = CenteredFrontendLayoutOrigin({
+        rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top},
+        width, height);
+    return POINT{origin.x, origin.y};
 }
 
 POINT RankerCenteredChildFrontendWindowOrigin(
@@ -31464,11 +31466,10 @@ POINT RankerCenteredChildFrontendWindowOrigin(
         return POINT{0, 0};
     }
 
-    const int client_width = client.right - client.left;
-    const int client_height = client.bottom - client.top;
-    return POINT{
-        client.left + std::max(0, (client_width - width) / 2),
-        client.top + std::max(0, (client_height - height) / 2)};
+    const FrontendLayoutPoint origin = CenteredContainedFrontendLayoutOrigin({
+        client.left, client.top, client.right - client.left,
+        client.bottom - client.top}, width, height);
+    return POINT{origin.x, origin.y};
 }
 
 const std::vector<std::string>& FrontendNetworkChatMessages() {

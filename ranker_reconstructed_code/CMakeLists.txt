@@ -1058,6 +1058,15 @@ if (RANKER_BUILD_READABILITY_REGRESSION_TESTS)
     )
     add_test(NAME wrapped_u32_conversion_regression
         COMMAND wrapped_u32_conversion_regression)
+
+    add_executable(frontend_window_placement_regression
+        tests/frontend_window_placement_regression.cpp
+    )
+    target_include_directories(frontend_window_placement_regression PRIVATE
+        include
+    )
+    add_test(NAME frontend_window_placement_regression
+        COMMAND frontend_window_placement_regression)
 endif()
 
 add_executable(ranker_rebuild WIN32
