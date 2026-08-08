@@ -1121,6 +1121,7 @@ add_executable(ranker_rebuild WIN32
     src/ranker_mfc_core.cpp
     src/ranker_mfc_debug.cpp
     src/ranker_mfc_exceptions.cpp
+    src/ranker_mfc_file.cpp
     src/ranker_mfc_geometry.cpp
     src/ranker_mfc_memory.cpp
     src/ranker_mfc_object_runtime.cpp
