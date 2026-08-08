@@ -1038,6 +1038,12 @@ MfcObjectCompat* DeleteCObjectScalarDtor(MfcObjectCompat* object,
     unsigned flags);
 void CObjectSerializeNoop();
 void* CObjectSerializeReturnArchive(void* object, void* archive);
+bool RuntimeClassIsDerivedFrom(const MfcRuntimeClassCompat* candidate,
+    const MfcRuntimeClassCompat* target);
+bool ObjectIsKindOfRuntimeClass(const MfcObjectCompat* object,
+    const MfcRuntimeClassCompat* target);
+void CObjectAssertValid(const MfcObjectCompat* object);
+MfcRuntimeClassCompat* GetFirstRuntimeClass();
 MfcObjectCompat* AfxDynamicDownCast(const MfcRuntimeClassCompat* target,
     MfcObjectCompat* object);
 MfcObjectCompat* AfxStaticDownCast(const MfcRuntimeClassCompat* target,
