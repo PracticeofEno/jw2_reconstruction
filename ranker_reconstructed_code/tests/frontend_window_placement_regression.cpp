@@ -1,3 +1,4 @@
+#include "ranker_create_game.h"
 #include "ranker_frontend_layout.h"
 
 using namespace ranker;
@@ -16,6 +17,12 @@ static_assert(
     CenteredContainedFrontendLayoutOrigin(kBounds, 1200, 800).x == 100);
 static_assert(
     CenteredContainedFrontendLayoutOrigin(kBounds, 1200, 800).y == 50);
+static_assert(SelectCreateGameWindowPlacement(true, 6) ==
+    CreateGameWindowPlacement::contained_child);
+static_assert(SelectCreateGameWindowPlacement(true, 1) ==
+    CreateGameWindowPlacement::contained_child);
+static_assert(SelectCreateGameWindowPlacement(false, 6) ==
+    CreateGameWindowPlacement::fullscreen_popup);
 
 } // namespace
 

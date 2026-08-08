@@ -1566,17 +1566,17 @@ bool CreateCreateGameWindow(CreateGameState& state, HWND parent, HINSTANCE insta
     state.server_use_map_counts = {};
 
     const CreateGameLayoutRect window_rect = layout_at(state, 0);
-    const bool single_player_popup = mode == 6 && IsWindow(parent);
-    const POINT origin = single_player_popup
-        ? POINT{0, 0}
-        : IsWindow(parent)
-            ? RankerCenteredChildFrontendWindowOrigin(parent,
-                  window_rect.width, window_rect.height)
-            : RankerCenteredFrontendWindowOrigin(
-                  window_rect.width, window_rect.height);
-    const DWORD style = single_player_popup
-        ? WS_POPUP | WS_CLIPSIBLINGS
-        : parent != nullptr ? kWindowStyleWindowed : kWindowStyleFullscreen;
+    const CreateGameWindowPlacement placement = SelectCreateGameWindowPlacement(
+        IsWindow(parent), mode);
+    const bool contained_child =
+        placement == CreateGameWindowPlacement::contained_child;
+    const POINT origin = contained_child
+        ? RankerCenteredChildFrontendWindowOrigin(parent,
+              window_rect.width, window_rect.height)
+        : RankerCenteredFrontendWindowOrigin(
+              window_rect.width, window_rect.height);
+    const DWORD style = contained_child ?
+        kWindowStyleWindowed : kWindowStyleFullscreen;
     state.window = CreateWindowExA(WS_EX_CONTROLPARENT, "Create Game",
         "Create Game", style, origin.x, origin.y, window_rect.width,
         window_rect.height, parent, nullptr, instance, nullptr);

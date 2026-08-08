@@ -64,6 +64,19 @@ constexpr std::size_t kCreateGamePasswordBytes = 10;
 constexpr std::size_t kCreateGameSeedPayloadBytes = 0x196;
 constexpr std::size_t kCreateGameMapDescriptorBytes = 0x2dc;
 
+enum class CreateGameWindowPlacement {
+    fullscreen_popup,
+    contained_child,
+};
+
+constexpr CreateGameWindowPlacement SelectCreateGameWindowPlacement(
+    bool parent_is_window, int /*mode*/) {
+    // Practice mode uses the same in-client frontend host as network modes.
+    // A mode-specific popup would interpret (0, 0) as screen coordinates.
+    return parent_is_window ? CreateGameWindowPlacement::contained_child :
+        CreateGameWindowPlacement::fullscreen_popup;
+}
+
 struct LegacyAsyncTcpSocket;
 struct CreateGameState;
 
