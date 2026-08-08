@@ -6913,7 +6913,7 @@ LRESULT HandleLinkLobbyWindowMessage(LinkLobbyState& state, HWND hwnd, UINT mess
         if (hwnd == state.window) {
             PAINTSTRUCT paint{};
             HDC dc = BeginPaint(hwnd, &paint);
-            StretchBitmapMemoryResourceToDc(state.background, dc, 0, 0);
+            StretchBitmapMemoryResourceToClient(state.background, dc, state.window);
             if (state.game_type == 8) {
                 StretchBitmapMemoryResourceToDc(state.download_background, dc, 600, 277);
             }
@@ -6924,7 +6924,7 @@ LRESULT HandleLinkLobbyWindowMessage(LinkLobbyState& state, HWND hwnd, UINT mess
     case WM_ERASEBKGND:
         if (hwnd == state.window) {
             HDC dc = reinterpret_cast<HDC>(wparam);
-            StretchBitmapMemoryResourceToDc(state.background, dc, 0, 0);
+            StretchBitmapMemoryResourceToClient(state.background, dc, state.window);
             if (state.game_type == 8) {
                 StretchBitmapMemoryResourceToDc(state.download_background, dc, 600, 277);
             }

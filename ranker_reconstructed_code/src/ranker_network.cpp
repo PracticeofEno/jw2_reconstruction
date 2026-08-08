@@ -1025,6 +1025,9 @@ void QueueAsyncTcpLocaleFlag2Request(LegacyAsyncTcpSocket& socket_state,
 }
 
 void UpdateLegacyAsyncTcpPacketChecksum(void* packet, i32 byte_count) {
+    if (packet == nullptr || byte_count < 0x0d) {
+        return;
+    }
     auto* bytes = static_cast<u8*>(packet);
     bytes[0x0c] = 0;
     u8 checksum = 0;
@@ -1036,6 +1039,9 @@ void UpdateLegacyAsyncTcpPacketChecksum(void* packet, i32 byte_count) {
 }
 
 bool VerifyLegacyAsyncTcpPacketChecksum(const void* packet, i32 byte_count) {
+    if (packet == nullptr || byte_count < 0x0d) {
+        return false;
+    }
     const auto* bytes = static_cast<const u8*>(packet);
     u8 checksum = 0;
     for (i32 index = 0x0d; index < byte_count; ++index) {

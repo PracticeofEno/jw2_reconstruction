@@ -20,7 +20,8 @@ namespace ranker {
 namespace {
 
 constexpr DWORD kWindowStyleFullscreen = 0x90000000;
-constexpr DWORD kWindowStyleWindowed = 0x10cf0000;
+constexpr DWORD kWindowStyleWindowed =
+    WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
 constexpr DWORD kNameEditStyle = WS_CHILD;
 constexpr DWORD kInfoButtonStyle = 0x5800000b;
 constexpr COLORREF kIpxFrontendWhite = RGB(255, 255, 255);
@@ -296,8 +297,19 @@ void release_window_resources(IpxFrontendState& state) {
 }
 
 void draw_info_panel(IpxFrontendState& state, const DRAWITEMSTRUCT& draw) {
-    StretchBitmapMemoryResourceToDc(state.info_button.normal_bitmap, draw.hDC, 0, 0);
-    RECT text_rect = kInfoTextRect;
+    const BitmapMemoryResource& bitmap = state.info_button.normal_bitmap;
+    const BitmapDrawRect destination{
+        draw.rcItem.left, draw.rcItem.top,
+        draw.rcItem.right - draw.rcItem.left,
+        draw.rcItem.bottom - draw.rcItem.top};
+    const BitmapDrawRect source{
+        bitmap.source_x, bitmap.source_y, bitmap.width, bitmap.height};
+    StretchBitmapMemoryResourceRectToDc(bitmap, draw.hDC, destination, source);
+    RECT text_rect = draw.rcItem;
+    text_rect.left += kInfoTextRect.left;
+    text_rect.top += kInfoTextRect.top;
+    text_rect.right -= kInfoTextRect.left;
+    text_rect.bottom -= kInfoTextRect.top;
     SetTextColor(draw.hDC, kIpxFrontendWhite);
     SetBkColor(draw.hDC, kIpxFrontendBlack);
     SetBkMode(draw.hDC, TRANSPARENT);
@@ -585,7 +597,7 @@ LRESULT HandleIpxFrontendWindowMessage(IpxFrontendState& state, HWND hwnd,
         if (hwnd == state.window) {
             PAINTSTRUCT paint{};
             HDC dc = BeginPaint(hwnd, &paint);
-            StretchBitmapMemoryResourceToDc(state.background, dc, 0, 0);
+            StretchBitmapMemoryResourceToClient(state.background, dc, state.window);
             EndPaint(hwnd, &paint);
             return 0;
         }

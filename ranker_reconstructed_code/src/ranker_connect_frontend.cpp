@@ -261,8 +261,22 @@ std::string format_startup_message_u32(
 }
 
 void draw_description_text(ConnectFrontendState& state, const DRAWITEMSTRUCT& draw) {
-    StretchBitmapMemoryResourceToDc(state.description_background, draw.hDC, 0, 0);
-    RECT text_rect{15, 12, 400, 150};
+    const BitmapDrawRect destination{
+        draw.rcItem.left, draw.rcItem.top,
+        draw.rcItem.right - draw.rcItem.left,
+        draw.rcItem.bottom - draw.rcItem.top};
+    const BitmapDrawRect source{
+        state.description_background.source_x,
+        state.description_background.source_y,
+        state.description_background.width,
+        state.description_background.height};
+    StretchBitmapMemoryResourceRectToDc(
+        state.description_background, draw.hDC, destination, source);
+    RECT text_rect = draw.rcItem;
+    text_rect.left += 15;
+    text_rect.top += 12;
+    text_rect.right -= 15;
+    text_rect.bottom -= 12;
     SetTextColor(draw.hDC, kConnectTextWhite);
     SetBkColor(draw.hDC, kConnectBlack);
     SetBkMode(draw.hDC, TRANSPARENT);
@@ -278,8 +292,15 @@ void draw_mode_button(ConnectFrontendState& state, const DRAWITEMSTRUCT& draw) {
     }
 
     const bool selected = mode_for_button_id(draw.CtlID) == state.selected_mode;
-    StretchBitmapMemoryResourceToDc(selected ? button->normal_bitmap :
-        button->pressed_bitmap, draw.hDC, 0, 0);
+    const BitmapMemoryResource& bitmap = selected ? button->normal_bitmap :
+        button->pressed_bitmap;
+    const BitmapDrawRect destination{
+        draw.rcItem.left, draw.rcItem.top,
+        draw.rcItem.right - draw.rcItem.left,
+        draw.rcItem.bottom - draw.rcItem.top};
+    const BitmapDrawRect source{
+        bitmap.source_x, bitmap.source_y, bitmap.width, bitmap.height};
+    StretchBitmapMemoryResourceRectToDc(bitmap, draw.hDC, destination, source);
 }
 
 void launch_selected_mode(ConnectFrontendState& state) {
@@ -763,15 +784,15 @@ LRESULT HandleConnectFrontendWindowMessage(ConnectFrontendState& state, HWND hwn
         if (hwnd == state.window) {
             PAINTSTRUCT paint{};
             HDC dc = BeginPaint(hwnd, &paint);
-            StretchBitmapMemoryResourceToDc(state.background, dc, 0, 0);
+            StretchBitmapMemoryResourceToClient(state.background, dc, state.window);
             EndPaint(hwnd, &paint);
             return 0;
         }
         break;
     case WM_ERASEBKGND:
         if (hwnd == state.window) {
-            StretchBitmapMemoryResourceToDc(state.background,
-                reinterpret_cast<HDC>(wparam), 0, 0);
+            StretchBitmapMemoryResourceToClient(state.background,
+                reinterpret_cast<HDC>(wparam), state.window);
             return 1;
         }
         break;

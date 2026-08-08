@@ -1436,6 +1436,9 @@ void refresh_window_rects(HWND window) {
 
     GetWindowRect(window, &g_runtime.window_rect);
     GetClientRect(window, &g_runtime.client_rect);
+    SetFrontendLayoutTargetSize(
+        g_runtime.client_rect.right - g_runtime.client_rect.left,
+        g_runtime.client_rect.bottom - g_runtime.client_rect.top);
     g_runtime.client_screen_rect = g_runtime.client_rect;
     POINT top_left{g_runtime.client_screen_rect.left, g_runtime.client_screen_rect.top};
     POINT bottom_right{g_runtime.client_screen_rect.right, g_runtime.client_screen_rect.bottom};
@@ -2059,6 +2062,30 @@ void configure_wizard_callbacks(WizardLoginState& state) {
     state.callbacks.show_message = default_lobby_show_message;
     ConnectFrontendState& connect = connect_frontend_state();
     LoadConnectFrontendConfiguration(connect);
+
+    // WizardNet is intentionally redirected to the reconstructed control
+    // server.  Environment variables make remote/LAN deployments possible
+    // without rebuilding the executable.
+    const char* server_address = std::getenv("RANKER_RECONSTRUCTED_SERVER_ADDRESS");
+    if (server_address == nullptr || *server_address == '\0') {
+        server_address = "127.0.0.1";
+    }
+    std::snprintf(state.server_address.data(), state.server_address.size(), "%s",
+        server_address);
+
+    unsigned long server_port = 19777;
+    if (const char* port_text = std::getenv("RANKER_RECONSTRUCTED_SERVER_PORT")) {
+        char* end = nullptr;
+        const unsigned long parsed = std::strtoul(port_text, &end, 10);
+        if (end != port_text && *end == '\0' && parsed != 0 && parsed <= 0xffffu) {
+            server_port = parsed;
+        }
+    }
+    state.server_port = static_cast<u16>(server_port);
+    state.download_port = 0;
+    state.udp_port = connect.configuration.p2p_udp_port <= 0xffffu ?
+        static_cast<u16>(connect.configuration.p2p_udp_port) : 0;
+
     std::snprintf(state.patch_download_final_path.data(),
         state.patch_download_final_path.size(), "%s",
         connect.configuration.patcher_executable_name.empty() ?
@@ -2076,6 +2103,11 @@ void default_account_open_connect(AccountProfileState& state) {
 }
 
 void default_account_open_lobby(AccountProfileState& state) {
+    WizardLoginState& wizard = wizard_login_state();
+    std::snprintf(wizard.account.data(), wizard.account.size(), "%s",
+        state.submitted_account.data());
+    std::snprintf(wizard.password.data(), wizard.password.size(), "%s",
+        state.submitted_password.data());
     open_online_lobby_window(state.main_window, state.instance, state.return_context);
 }
 

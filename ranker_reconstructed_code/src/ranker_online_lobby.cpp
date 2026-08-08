@@ -70,13 +70,14 @@ constexpr std::size_t kOnlineLobbyChatBufferSize = 0x100;
 constexpr char kOnlineLobbyWrapDelimiter = ' ';
 constexpr std::size_t kOnlineLobbyGamePayloadBytes = 0x19e;
 constexpr DWORD kWindowStyleFullscreen = 0x90000000;
-constexpr DWORD kWindowStyleWindowed = 0x10cf0000;
+constexpr DWORD kWindowStyleWindowed =
+    WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
 constexpr std::size_t kStartupFriendAddTargetPromptRow = 209;
 constexpr std::size_t kStartupFriendRemoveTargetPromptRow = 210;
 
 constexpr OnlineLobbyButtonSpec kButtonSpecs[kOnlineLobbyButtonCount] = {
     {kOnlineLobbyNameButtonId, "Lobby Name", 0, 0, false},
-    {kOnlineLobbySendButtonId, "&Send", 0, 0, false},
+    {kOnlineLobbySendButtonId, ">", 0, 0, false},
     {kOnlineLobbyWhisperButtonId, "&Whisper", 0x18, 0x19, false},
     {kOnlineLobbyEmoticonButtonId, "Emoticons", 0x1a, 0x1b, false},
     {kOnlineLobbyMainTabButtonId, "Main TAB", 0x1c, 0x1d, false},
@@ -110,6 +111,12 @@ constexpr std::array<int, 5> kMainTabControls = {
     kOnlineLobbyCreateGameButtonId,
     kOnlineLobbyJoinGameButtonId,
     kOnlineLobbyMyAvatarButtonId,
+    kOnlineLobbyViewRankButtonId,
+};
+
+constexpr std::array<int, 3> kSimplifiedMainTabControls = {
+    kOnlineLobbyCreateGameButtonId,
+    kOnlineLobbyJoinGameButtonId,
     kOnlineLobbyViewRankButtonId,
 };
 
@@ -165,6 +172,62 @@ OnlineLobbyLayoutRect layout_at(const OnlineLobbyState& state,
         return state.layout_rects[index];
     }
     return OnlineLobbyLayoutRect{};
+}
+
+OnlineLobbyLayoutRect arrange_simplified_main_action(
+    const OnlineLobbyState& state, int control_id, OnlineLobbyLayoutRect rect) {
+    if (control_id != kOnlineLobbyCreateGameButtonId &&
+        control_id != kOnlineLobbyJoinGameButtonId &&
+        control_id != kOnlineLobbyViewRankButtonId) {
+        return rect;
+    }
+
+    const OnlineLobbyLayoutRect root = layout_at(state, 0);
+    const OnlineLobbyLayoutRect create = layout_at(state, 16);
+    const OnlineLobbyLayoutRect join = layout_at(state, 17);
+    const OnlineLobbyLayoutRect rank = layout_at(state, 19);
+    const OnlineLobbyLayoutRect action_panel = layout_at(state, 14);
+    const i32 gap = ScaleFrontendLayoutValue(12, 1024,
+        std::max<i32>(1, root.width));
+    const i32 panel_inset = ScaleFrontendLayoutValue(2, 1024,
+        std::max<i32>(1, root.width));
+    const i32 first_x = std::max<i32>(0, action_panel.x + panel_inset);
+
+    if (control_id == kOnlineLobbyCreateGameButtonId) {
+        rect.x = first_x;
+    } else if (control_id == kOnlineLobbyJoinGameButtonId) {
+        rect.x = first_x + create.width + gap;
+    } else {
+        rect.x = first_x + create.width + gap + join.width + gap;
+    }
+    return rect;
+}
+
+void paint_simplified_menu_masks(const OnlineLobbyState& state, HDC dc) {
+    if (dc == nullptr) {
+        return;
+    }
+
+    const OnlineLobbyLayoutRect friends_tab = layout_at(state, 11);
+    const OnlineLobbyLayoutRect personal_tab = layout_at(state, 13);
+    RECT removed_tabs{
+        friends_tab.x,
+        friends_tab.y,
+        personal_tab.x + personal_tab.width,
+        personal_tab.y + personal_tab.height,
+    };
+    FillRect(dc, &removed_tabs,
+        reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+
+    const OnlineLobbyLayoutRect cancel = layout_at(state, 20);
+    RECT removed_cancel{
+        cancel.x,
+        cancel.y,
+        cancel.x + cancel.width,
+        cancel.y + cancel.height,
+    };
+    FillRect(dc, &removed_cancel,
+        reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
 }
 
 void write_color_segment(u8* segment, COLORREF color, std::size_t text_length) {
@@ -1106,6 +1169,7 @@ bool create_button_from_spec(OnlineLobbyState& state, int spec_index,
     OnlineLobbyButtonSpec spec = kButtonSpecs[spec_index];
     OnlineLobbyLayoutRect rect = layout_at(state,
         static_cast<std::size_t>(layout_index));
+    rect = arrange_simplified_main_action(state, spec.id, rect);
     LegacyImageButtonControl& button =
         state.buttons[static_cast<std::size_t>(spec_index)];
     if (!CreateLegacyImageButtonWindow(button, state.window, spec.text,
@@ -1147,10 +1211,17 @@ void show_group(OnlineLobbyState& state, const T& ids, int command) {
     }
 }
 
-void send_small_async_packet(OnlineLobbyState& state, u32 code, u32 payload) {
-    std::array<u32, 3> packet{3, code, payload};
+void send_small_async_packet(OnlineLobbyState& state, u32 code, u32 packet_bytes) {
+    if (packet_bytes < 0x0d) {
+        return;
+    }
+    std::vector<u8> packet(packet_bytes, 0);
+    const u32 packet_type = 3;
+    std::memcpy(packet.data(), &packet_type, sizeof(packet_type));
+    std::memcpy(packet.data() + 4, &code, sizeof(code));
+    std::memcpy(packet.data() + 8, &packet_bytes, sizeof(packet_bytes));
     if (state.callbacks.send_async_packet != nullptr) {
-        state.callbacks.send_async_packet(packet.data(), packet.size() * sizeof(u32),
+        state.callbacks.send_async_packet(packet.data(), packet.size(),
             state.callbacks.user_data);
     }
 }
@@ -1540,14 +1611,24 @@ void HideOnlineLobbyControl(HWND window) {
 }
 
 void SetOnlineLobbyTab(OnlineLobbyState& state, OnlineLobbyTab tab) {
-    const int tab_value = static_cast<int>(tab);
-    if (state.active_tab == tab_value) {
-        return;
-    }
+    (void)tab;
+    state.active_tab = static_cast<int>(OnlineLobbyTab::Main);
+
+    show_id(state, kOnlineLobbyMainTabButtonId, SW_SHOW);
+    show_id(state, kOnlineLobbyFriendsTabButtonId, SW_HIDE);
+    show_id(state, kOnlineLobbyGuildTabButtonId, SW_HIDE);
+    show_id(state, kOnlineLobbyPersonalTabButtonId, SW_HIDE);
+    show_id(state, kOnlineLobbyTabBackgroundButtonId, SW_SHOW);
+
+    show_group(state, kMainTabControls, SW_HIDE);
+    show_group(state, kFriendsTabControls, SW_HIDE);
+    show_group(state, kGuildTabControls, SW_HIDE);
+    show_group(state, kPersonalTabControls, SW_HIDE);
+    show_group(state, kSimplifiedMainTabControls, SW_SHOW);
+    show_id(state, IDCANCEL, SW_HIDE);
 
     for (int tab_id : {kOnlineLobbyMainTabButtonId,
-             kOnlineLobbyFriendsTabButtonId, kOnlineLobbyGuildTabButtonId,
-             kOnlineLobbyPersonalTabButtonId, kOnlineLobbyTabBackgroundButtonId}) {
+             kOnlineLobbyTabBackgroundButtonId}) {
         if (LegacyImageButtonControl* button = button_by_id(state, tab_id)) {
             if (button->window != nullptr) {
                 RedrawWindow(button->window, nullptr, nullptr,
@@ -1555,16 +1636,6 @@ void SetOnlineLobbyTab(OnlineLobbyState& state, OnlineLobbyTab tab) {
             }
         }
     }
-
-    state.active_tab = tab_value;
-    show_group(state, kMainTabControls,
-        tab == OnlineLobbyTab::Main ? SW_SHOW : SW_HIDE);
-    show_group(state, kFriendsTabControls,
-        tab == OnlineLobbyTab::Friends ? SW_SHOW : SW_HIDE);
-    show_group(state, kGuildTabControls,
-        tab == OnlineLobbyTab::Guild ? SW_SHOW : SW_HIDE);
-    show_group(state, kPersonalTabControls,
-        tab == OnlineLobbyTab::Personal ? SW_SHOW : SW_HIDE);
 }
 
 bool CopySelectedOnlineLobbyGameListText(OnlineLobbyState& state, char* output,
@@ -1825,7 +1896,12 @@ bool ReadOnlineLobbyRichEditTextWithInlineIcons(OnlineLobbyState& state,
     }
 
     const int limit = static_cast<int>(std::min<std::size_t>(output_size, 199));
-    GetWindowTextA(state.chat_edit, output, limit);
+    if (state.chat_edit_original_proc != nullptr) {
+        CallWindowProcA(state.chat_edit_original_proc, state.chat_edit, WM_GETTEXT,
+            static_cast<WPARAM>(limit), reinterpret_cast<LPARAM>(output));
+    } else {
+        GetWindowTextA(state.chat_edit, output, limit);
+    }
     output[output_size - 1] = '\0';
     return output[0] != '\0';
 }
@@ -1870,14 +1946,15 @@ bool SendOnlineLobbyChatEditText(OnlineLobbyState& state, HWND owner,
     std::memcpy(payload.data() + 8 + prefix_size, outbound_text, text_size);
 
     if (state.callbacks.send_async_packet != nullptr) {
-        std::vector<u8> packet(12 + payload.size(), 0);
+        constexpr std::size_t kLegacyHeaderBytes = 0x0d;
+        std::vector<u8> packet(kLegacyHeaderBytes + payload.size(), 0);
         const u32 header0 = 0;
         const u32 opcode = 0x2a;
         const u32 packet_size = static_cast<u32>(packet.size());
         std::memcpy(packet.data(), &header0, sizeof(header0));
         std::memcpy(packet.data() + 4, &opcode, sizeof(opcode));
         std::memcpy(packet.data() + 8, &packet_size, sizeof(packet_size));
-        std::memcpy(packet.data() + 12, payload.data(), payload.size());
+        std::memcpy(packet.data() + kLegacyHeaderBytes, payload.data(), payload.size());
         state.callbacks.send_async_packet(packet.data(), packet.size(),
             state.callbacks.user_data);
     }
@@ -2292,7 +2369,10 @@ bool CreateOnlineLobbyWindow(OnlineLobbyState& state, HWND parent,
     LoadBitmapTileSheetSelectorResource(state.icon_sheet);
 
     OnlineLobbyLayoutRect root = layout_at(state, 0);
-    const POINT origin = RankerFrontendWindowOrigin();
+    const POINT origin = IsWindow(parent)
+        ? RankerCenteredChildFrontendWindowOrigin(
+              parent, root.width, root.height)
+        : RankerFrontendWindowOrigin();
     const DWORD style = IsWindow(parent) ? kWindowStyleWindowed : kWindowStyleFullscreen;
     state.window = CreateWindowExA(WS_EX_CONTROLPARENT, "Lobby", "Lobby",
         style, origin.x, origin.y, root.width, root.height, parent,
@@ -2304,9 +2384,19 @@ bool CreateOnlineLobbyWindow(OnlineLobbyState& state, HWND parent,
     SetWindowLongPtrA(state.window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&state));
     SetWindowLongPtrA(state.window, GWLP_WNDPROC,
         reinterpret_cast<LONG_PTR>(&online_lobby_window_proc));
+    if (state.async_tcp_socket != nullptr &&
+        !RegisterLegacyAsyncTcpSocketEvents(*state.async_tcp_socket, state.window,
+            kOnlineLobbyNetworkMessage, FD_READ | FD_WRITE | FD_CLOSE)) {
+        DestroyWindow(state.window);
+        state.window = nullptr;
+        return false;
+    }
 
     for (int i = 0; i < static_cast<int>(kOnlineLobbyButtonCount); ++i) {
-        const int layout_index = i == 0 ? 1 : i + 5;
+        // Layout entries 2..6 belong to the two lists, their scroll bars,
+        // and the chat edit.  Every button after the lobby-name control
+        // therefore begins at entry 7.
+        const int layout_index = OnlineLobbyButtonLayoutIndex(i);
         if (!create_button_from_spec(state, i, layout_index)) {
             DestroyWindow(state.window);
             state.window = nullptr;
@@ -2385,6 +2475,16 @@ bool CreateOnlineLobbyWindow(OnlineLobbyState& state, HWND parent,
         SendMessageA(state.chat_edit, EM_LIMITTEXT, 200, 0);
         SendMessageA(state.chat_edit, WM_SETFONT,
             reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+        SendMessageA(state.chat_edit, EM_SETBKGNDCOLOR, FALSE,
+            static_cast<LPARAM>(RGB(0, 0, 0)));
+        CHARFORMATA chat_format{};
+        chat_format.cbSize = sizeof(chat_format);
+        chat_format.dwMask = CFM_COLOR;
+        chat_format.crTextColor = kOnlineLobbyWhite;
+        SendMessageA(state.chat_edit, EM_SETCHARFORMAT, SCF_DEFAULT,
+            reinterpret_cast<LPARAM>(&chat_format));
+        SendMessageA(state.chat_edit, EM_SETCHARFORMAT, SCF_ALL,
+            reinterpret_cast<LPARAM>(&chat_format));
         subclass_control(state.chat_edit);
     }
 
@@ -2428,7 +2528,8 @@ LRESULT HandleOnlineLobbyWindowMessage(OnlineLobbyState& state, HWND hwnd,
         if (hwnd == state.window) {
             PAINTSTRUCT paint{};
             HDC dc = BeginPaint(hwnd, &paint);
-            StretchBitmapMemoryResourceToDc(state.background, dc, 0, 0);
+            StretchBitmapMemoryResourceToClient(state.background, dc, state.window);
+            paint_simplified_menu_masks(state, dc);
             EndPaint(hwnd, &paint);
         }
         return 0;

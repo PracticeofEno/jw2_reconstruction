@@ -281,6 +281,20 @@ i32 StretchBitmapMemoryResourceToDc(const BitmapMemoryResource& resource, HDC dc
     return result;
 }
 
+i32 StretchBitmapMemoryResourceToClient(const BitmapMemoryResource& resource,
+    HDC dc, HWND window) {
+    RECT client{};
+    if (window == nullptr || !GetClientRect(window, &client)) {
+        return StretchBitmapMemoryResourceToDc(resource, dc, 0, 0);
+    }
+    const BitmapDrawRect destination{
+        client.left, client.top,
+        client.right - client.left, client.bottom - client.top};
+    const BitmapDrawRect source{
+        resource.source_x, resource.source_y, resource.width, resource.height};
+    return StretchBitmapMemoryResourceRectToDc(resource, dc, destination, source);
+}
+
 i32 DrawBitmapMemoryResourceToDcAtPoint(const BitmapMemoryResource& resource, HDC dc,
     const POINT* point) {
     if (!has_owned_bitmap_bytes(resource) || dc == nullptr || point == nullptr) {

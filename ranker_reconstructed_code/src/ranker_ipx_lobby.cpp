@@ -824,7 +824,7 @@ LRESULT HandleIpxLobbyWindowMessage(IpxLobbyState& state, HWND hwnd, UINT messag
         if (hwnd == state.window) {
             PAINTSTRUCT paint{};
             HDC dc = BeginPaint(hwnd, &paint);
-            StretchBitmapMemoryResourceToDc(state.background, dc, 0, 0);
+            StretchBitmapMemoryResourceToClient(state.background, dc, state.window);
             EndPaint(hwnd, &paint);
             return 0;
         }

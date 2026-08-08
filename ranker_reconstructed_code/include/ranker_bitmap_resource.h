@@ -59,6 +59,8 @@ i32 GetBitmapMemoryResourceHeight(const BitmapMemoryResource& resource);
 #ifdef _WIN32
 i32 StretchBitmapMemoryResourceToDc(const BitmapMemoryResource& resource, HDC dc,
     i32 x, i32 y);
+i32 StretchBitmapMemoryResourceToClient(const BitmapMemoryResource& resource,
+    HDC dc, HWND window);
 i32 DrawBitmapMemoryResourceToDcAtPoint(const BitmapMemoryResource& resource, HDC dc,
     const POINT* point);
 i32 StretchBitmapMemoryResourceRectToDc(const BitmapMemoryResource& resource, HDC dc,

@@ -1361,15 +1361,15 @@ LRESULT HandleP2PLobbyWindowMessage(P2PLobbyState& state, HWND hwnd, UINT messag
         if (hwnd == state.window) {
             PAINTSTRUCT paint{};
             HDC dc = BeginPaint(hwnd, &paint);
-            StretchBitmapMemoryResourceToDc(state.background, dc, 0, 0);
+            StretchBitmapMemoryResourceToClient(state.background, dc, state.window);
             EndPaint(hwnd, &paint);
             return 0;
         }
         break;
     case WM_ERASEBKGND:
         if (hwnd == state.window) {
-            StretchBitmapMemoryResourceToDc(state.background,
-                reinterpret_cast<HDC>(wparam), 0, 0);
+            StretchBitmapMemoryResourceToClient(state.background,
+                reinterpret_cast<HDC>(wparam), state.window);
             return 1;
         }
         break;

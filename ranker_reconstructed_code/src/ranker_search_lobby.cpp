@@ -21,7 +21,8 @@ namespace ranker {
 namespace {
 
 constexpr DWORD kWindowStyleFullscreen = 0x90000000;
-constexpr DWORD kWindowStyleWindowed = 0x10cf0000;
+constexpr DWORD kWindowStyleWindowed =
+    WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
 constexpr DWORD kComboStyle =
     WS_CHILD | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS;
 constexpr DWORD kListBoxStyle =
@@ -759,7 +760,10 @@ bool CreateSearchLobbyWindow(SearchLobbyState& state, HWND parent, HINSTANCE ins
         fallback_categories, std::size(fallback_categories));
 
     const SearchLobbyLayoutRect window_rect = layout_at(layout.table, 0);
-    const POINT origin = RankerFrontendWindowOrigin();
+    const POINT origin = IsWindow(parent)
+        ? RankerCenteredChildFrontendWindowOrigin(
+              parent, window_rect.width, window_rect.height)
+        : RankerFrontendWindowOrigin();
     const DWORD window_style =
         IsWindow(parent) ? kWindowStyleWindowed : kWindowStyleFullscreen;
     state.window = CreateWindowExA(WS_EX_CONTROLPARENT, "Search", "Search",
@@ -883,7 +887,7 @@ LRESULT HandleSearchLobbyWindowMessage(SearchLobbyState& state, HWND hwnd, UINT 
         if (hwnd == state.window) {
             PAINTSTRUCT paint{};
             HDC dc = BeginPaint(hwnd, &paint);
-            StretchBitmapMemoryResourceToDc(state.background, dc, 0, 0);
+            StretchBitmapMemoryResourceToClient(state.background, dc, state.window);
             EndPaint(hwnd, &paint);
             return 0;
         }

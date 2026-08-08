@@ -18,7 +18,8 @@ namespace ranker {
 namespace {
 
 constexpr DWORD kWindowStyleFullscreen = 0x90000000;
-constexpr DWORD kWindowStyleWindowed = 0x10cf0000;
+constexpr DWORD kWindowStyleWindowed =
+    WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
 constexpr DWORD kListStyle = WS_CHILD | WS_VISIBLE | LBS_NOTIFY |
     LBS_OWNERDRAWFIXED | LBS_HASSTRINGS;
 constexpr DWORD kReadEditStyle = WS_CHILD | WS_VISIBLE | ES_MULTILINE |
@@ -474,7 +475,7 @@ bool paint_background_if_current(MemoWindowState& state, HWND hwnd) {
     }
     PAINTSTRUCT paint{};
     HDC dc = BeginPaint(hwnd, &paint);
-    StretchBitmapMemoryResourceToDc(state.background, dc, 0, 0);
+    StretchBitmapMemoryResourceToClient(state.background, dc, state.window);
     EndPaint(hwnd, &paint);
     return true;
 }
@@ -696,7 +697,10 @@ bool CreateMemoWindow(MemoWindowState& state, HWND parent, HINSTANCE instance,
         IsWindow(parent) && GetWindowLongPtrA(parent, GWL_STYLE) != 0 ?
         kWindowStyleWindowed : kWindowStyleFullscreen;
     const MemoLayoutRect window_rect = layout_at(state, 0);
-    const POINT origin = RankerFrontendWindowOrigin();
+    const POINT origin = IsWindow(parent)
+        ? RankerCenteredChildFrontendWindowOrigin(
+              parent, window_rect.width, window_rect.height)
+        : RankerFrontendWindowOrigin();
     state.window = CreateWindowExA(WS_EX_CONTROLPARENT, "Memo", "Memo", style,
         origin.x, origin.y, window_rect.width, window_rect.height,
         parent, nullptr, state.instance, nullptr);

@@ -1,0 +1,22 @@
+{
+  "listen": {
+    "host": "0.0.0.0",
+    "port": 19777
+  },
+  "server": {
+    "name": "Ranker Reconstructed WizardNet",
+    "default_lobby": "WizardNet",
+    "max_clients": 128,
+    "max_lobby_members": 64,
+    "auto_register_accounts": true,
+    "advertise_peer_address": true,
+    "room_ttl_seconds": 21600,
+    "rank_game_count": 10
+  },
+  "logging": {
+    "level": "INFO"
+  },
+  "data": {
+    "account_file": "data/accounts.json"
+  }
+}

@@ -15,6 +15,9 @@
 namespace ranker {
 namespace {
 
+i32 g_frontend_layout_target_width = kLegacyFrontendLayoutWidth;
+i32 g_frontend_layout_target_height = kLegacyFrontendLayoutHeight;
+
 bool equals_ascii_case_insensitive(const char* left, const char* right) {
     if (left == nullptr || right == nullptr) {
         return left == right;
@@ -166,7 +169,35 @@ bool LoadFrontendLayoutFromTrcRecord(FrontendLayoutRectTable& table,
 
 bool LoadFrontendLayoutFromJw219TrcRecord(FrontendLayoutRectTable& table,
     u32 record_index) {
-    return LoadFrontendLayoutFromTrcRecord(table, "Jw2_19.trc", record_index);
+    if (!LoadFrontendLayoutFromTrcRecord(table, "Jw2_19.trc", record_index)) {
+        return false;
+    }
+    ScaleFrontendLayoutRectTable(table, g_frontend_layout_target_width,
+        g_frontend_layout_target_height);
+    return true;
+}
+
+void SetFrontendLayoutTargetSize(i32 width, i32 height) {
+    g_frontend_layout_target_width = width > 0
+        ? width : kLegacyFrontendLayoutWidth;
+    g_frontend_layout_target_height = height > 0
+        ? height : kLegacyFrontendLayoutHeight;
+}
+
+FrontendLayoutPoint FrontendLayoutTargetSize() {
+    return {g_frontend_layout_target_width, g_frontend_layout_target_height};
+}
+
+void ScaleFrontendLayoutRectTable(FrontendLayoutRectTable& table,
+    i32 target_width, i32 target_height) {
+    if (table.rects == nullptr || table.count == 0 || target_width <= 0 ||
+        target_height <= 0) {
+        return;
+    }
+    for (u32 index = 0; index < table.count; ++index) {
+        table.rects[index] = ScaleFrontendLayoutRect(
+            table.rects[index], target_width, target_height);
+    }
 }
 
 std::vector<FrontendLayoutRect> CopyFrontendLayoutRectTable(

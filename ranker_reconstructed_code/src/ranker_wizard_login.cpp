@@ -17,7 +17,8 @@ namespace ranker {
 namespace {
 
 constexpr DWORD kWindowStyleFullscreen = 0x90000000;
-constexpr DWORD kWindowStyleWindowed = 0x10cf0000;
+constexpr DWORD kWindowStyleWindowed =
+    WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
 constexpr DWORD kAccountEditStyle = WS_CHILD | WS_VISIBLE | WS_TABSTOP;
 constexpr DWORD kPasswordEditStyle =
     WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_PASSWORD;
@@ -147,13 +148,19 @@ void copy_c_string(std::array<char, N>& destination, const char* text) {
     }
 }
 
-void read_window_text(HWND window, char* target, int target_size) {
+void read_window_text(const WizardLoginTextControl& control, char* target,
+    int target_size) {
     if (target == nullptr || target_size <= 0) {
         return;
     }
     target[0] = '\0';
-    if (window != nullptr) {
-        GetWindowTextA(window, target, target_size);
+    if (control.window != nullptr) {
+        if (control.original_window_proc != nullptr) {
+            CallWindowProcA(control.original_window_proc, control.window, WM_GETTEXT,
+                static_cast<WPARAM>(target_size), reinterpret_cast<LPARAM>(target));
+        } else {
+            GetWindowTextA(control.window, target, target_size);
+        }
     }
 }
 
@@ -268,7 +275,9 @@ void show_status(WizardLoginState& state, const char* text,
         state.callbacks.show_status(state.window, state.last_message.c_str(), color);
         return;
     }
-    show_message(state, text, color);
+    if (state.status_edit.window != nullptr) {
+        SetWindowTextA(state.status_edit.window, state.last_message.c_str());
+    }
 }
 
 const char* wizard_login_status_message(u32 status) {
@@ -528,7 +537,7 @@ void handle_login_status(WizardLoginState& state, u32 status) {
     state.request_pending = false;
     switch (status) {
     case 0:
-        read_window_text(state.account_edit.window, state.account.data(),
+        read_window_text(state.account_edit, state.account.data(),
             static_cast<int>(state.account.size()));
         write_setup_data(state);
         route_to_lobby(state);
@@ -665,9 +674,15 @@ void consume_server_payloads(WizardLoginState& state) {
     const u8* payload = GetLegacyAsyncTcpReceiveBuffer(*state.async_tcp_socket);
     i32 byte_count = GetLegacyAsyncTcpReceiveLength(*state.async_tcp_socket);
     while (payload != nullptr && byte_count >= 0x0d) {
-        u32 packet_bytes = read_le32(payload, byte_count, 8);
-        if (packet_bytes < 0x0d || packet_bytes > static_cast<u32>(byte_count)) {
-            packet_bytes = static_cast<u32>(byte_count);
+        const u32 packet_bytes = read_le32(payload, byte_count, 8);
+        if (packet_bytes < 0x0d) {
+            ConsumeLegacyAsyncTcpReceiveQueue(*state.async_tcp_socket, byte_count);
+            break;
+        }
+        if (packet_bytes > static_cast<u32>(byte_count)) {
+            // TCP may split a legacy packet at any byte.  Keep the partial
+            // frame queued until the rest arrives instead of dispatching it.
+            break;
         }
         handle_server_packet(state, payload, static_cast<i32>(packet_bytes));
         ConsumeLegacyAsyncTcpReceiveQueue(*state.async_tcp_socket,
@@ -1059,7 +1074,10 @@ bool CreateWizardLoginWindow(WizardLoginState& state, HWND parent,
     }
 
     const WizardLoginLayoutRect window_rect = layout_at(layout.table, 0);
-    const POINT origin = RankerFrontendWindowOrigin();
+    const POINT origin = IsWindow(parent)
+        ? RankerCenteredChildFrontendWindowOrigin(
+              parent, window_rect.width, window_rect.height)
+        : RankerFrontendWindowOrigin();
     const DWORD style = IsWindow(parent) ? kWindowStyleWindowed : kWindowStyleFullscreen;
     state.window = CreateWindowExA(WS_EX_CONTROLPARENT, "Light", "Light", style,
         origin.x, origin.y, window_rect.width, window_rect.height,
@@ -1219,7 +1237,7 @@ LRESULT HandleWizardLoginWindowMessage(WizardLoginState& state, HWND hwnd,
         if (hwnd == state.window) {
             PAINTSTRUCT paint{};
             HDC dc = BeginPaint(hwnd, &paint);
-            StretchBitmapMemoryResourceToDc(state.background, dc, 0, 0);
+            StretchBitmapMemoryResourceToClient(state.background, dc, state.window);
             EndPaint(hwnd, &paint);
             return 0;
         }
@@ -1251,9 +1269,9 @@ LRESULT HandleWizardLoginWindowMessage(WizardLoginState& state, HWND hwnd,
     case WM_COMMAND: {
         const int id = LOWORD(wparam);
         if (id == kWizardLoginChangePasswordButtonId) {
-            read_window_text(state.account_edit.window, state.account.data(),
+            read_window_text(state.account_edit, state.account.data(),
                 static_cast<int>(state.account.size()));
-            read_window_text(state.password_edit.window, state.password.data(),
+            read_window_text(state.password_edit, state.password.data(),
                 static_cast<int>(state.password.size()));
             destroy_login_window(state);
             if (state.callbacks.open_change_password != nullptr) {
@@ -1278,9 +1296,9 @@ LRESULT HandleWizardLoginWindowMessage(WizardLoginState& state, HWND hwnd,
             break;
         }
         if (id == kWizardLoginNewAccountButtonId) {
-            read_window_text(state.account_edit.window, state.account.data(),
+            read_window_text(state.account_edit, state.account.data(),
                 static_cast<int>(state.account.size()));
-            read_window_text(state.password_edit.window, state.password.data(),
+            read_window_text(state.password_edit, state.password.data(),
                 static_cast<int>(state.password.size()));
             destroy_login_window(state);
             if (state.callbacks.open_new_account != nullptr) {
@@ -1351,9 +1369,9 @@ LRESULT HandleWizardLoginControlMessage(WizardLoginState& state, HWND hwnd,
 }
 
 bool SubmitWizardLoginRequest(WizardLoginState& state) {
-    read_window_text(state.account_edit.window, state.account.data(),
+    read_window_text(state.account_edit, state.account.data(),
         static_cast<int>(state.account.size()));
-    read_window_text(state.password_edit.window, state.password.data(),
+    read_window_text(state.password_edit, state.password.data(),
         static_cast<int>(state.password.size()));
     if (std::strlen(state.account.data()) == 0 ||
         std::strlen(state.password.data()) == 0) {
@@ -1384,6 +1402,17 @@ bool SubmitWizardLoginRequest(WizardLoginState& state) {
 
 void DispatchWizardLoginNetworkMessage(WizardLoginState& state, WPARAM, LPARAM lparam) {
     const u16 event = LOWORD(lparam);
+    const int socket_error = WSAGETSELECTERROR(lparam);
+    if (socket_error != 0) {
+        state.server_connected = false;
+        state.request_pending = false;
+        char message[160]{};
+        std::snprintf(message, sizeof(message),
+            "WizardNet socket error %d while connecting to %s.", socket_error,
+            state.server_address.data());
+        show_message(state, message, kWizardErrorBlue);
+        return;
+    }
     if (event == FD_READ || event == 1) {
         if (state.async_tcp_socket != nullptr) {
             ReceiveLegacyAsyncTcpQueue(*state.async_tcp_socket);
@@ -1395,6 +1424,8 @@ void DispatchWizardLoginNetworkMessage(WizardLoginState& state, WPARAM, LPARAM l
         state.server_connected = true;
         queue_locale_handshake(state);
         start_udp_after_server_connect(state);
+        show_status(state,
+            "Connected to local WizardNet. Enter an account or create a new one.");
         return;
     }
     if ((event == FD_CLOSE || event == 0x20) && !state.close_after_error) {

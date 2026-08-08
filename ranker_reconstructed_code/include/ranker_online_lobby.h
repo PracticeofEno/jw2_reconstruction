@@ -62,6 +62,10 @@ constexpr std::size_t kOnlineLobbyButtonCount = 28;
 constexpr std::size_t kOnlineLobbyTabCount = 4;
 constexpr std::size_t kOnlineLobbyChatRowLimit = 300;
 
+constexpr int OnlineLobbyButtonLayoutIndex(int button_spec_index) {
+    return button_spec_index == 0 ? 1 : button_spec_index + 6;
+}
+
 enum class OnlineLobbyTab : int {
     Main = 0,
     Friends = 1,

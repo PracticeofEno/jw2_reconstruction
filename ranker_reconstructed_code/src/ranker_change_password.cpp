@@ -19,7 +19,8 @@ namespace ranker {
 namespace {
 
 constexpr DWORD kWindowStyleFullscreen = 0x90000000;
-constexpr DWORD kWindowStyleWindowed = 0x10cf0000;
+constexpr DWORD kWindowStyleWindowed =
+    WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
 constexpr DWORD kAccountEditStyle = WS_CHILD | WS_VISIBLE;
 constexpr DWORD kPasswordEditStyle = WS_CHILD | WS_VISIBLE | ES_PASSWORD;
 constexpr DWORD kStatusEditStyle = WS_CHILD | ES_MULTILINE | ES_READONLY;
@@ -192,13 +193,19 @@ void copy_c_string(std::vector<u8>& buffer, std::size_t offset, std::size_t fiel
     std::strncpy(reinterpret_cast<char*>(buffer.data() + offset), text, available - 1);
 }
 
-void read_window_text(HWND window, char* target, int target_size) {
+void read_window_text(const ChangePasswordTextControl& control, char* target,
+    int target_size) {
     if (target == nullptr || target_size <= 0) {
         return;
     }
     target[0] = '\0';
-    if (window != nullptr) {
-        GetWindowTextA(window, target, target_size);
+    if (control.window != nullptr) {
+        if (control.original_window_proc != nullptr) {
+            CallWindowProcA(control.original_window_proc, control.window, WM_GETTEXT,
+                static_cast<WPARAM>(target_size), reinterpret_cast<LPARAM>(target));
+        } else {
+            GetWindowTextA(control.window, target, target_size);
+        }
     }
 }
 
@@ -239,7 +246,7 @@ void write_setup_data(ChangePasswordState& state) {
 }
 
 void handle_success(ChangePasswordState& state) {
-    read_window_text(state.account_edit.window, state.submitted_account.data(),
+    read_window_text(state.account_edit, state.submitted_account.data(),
         static_cast<int>(state.submitted_account.size()));
     write_setup_data(state);
     destroy_password_window(state);
@@ -382,7 +389,10 @@ bool CreateChangePasswordWindow(ChangePasswordState& state, HWND parent,
     }
 
     const ChangePasswordLayoutRect window_rect = layout_at(layout.table, 0);
-    const POINT origin = RankerFrontendWindowOrigin();
+    const POINT origin = IsWindow(parent)
+        ? RankerCenteredChildFrontendWindowOrigin(
+              parent, window_rect.width, window_rect.height)
+        : RankerFrontendWindowOrigin();
     const DWORD style = IsWindow(parent) ? kWindowStyleWindowed : kWindowStyleFullscreen;
     state.window = CreateWindowExA(WS_EX_CONTROLPARENT, "ChangePassword",
         "ChangePassword", style, origin.x, origin.y, window_rect.width,
@@ -476,7 +486,7 @@ LRESULT HandleChangePasswordWindowMessage(ChangePasswordState& state, HWND hwnd,
         if (hwnd == state.window) {
             PAINTSTRUCT paint{};
             HDC dc = BeginPaint(hwnd, &paint);
-            StretchBitmapMemoryResourceToDc(state.background, dc, 0, 0);
+            StretchBitmapMemoryResourceToClient(state.background, dc, state.window);
             EndPaint(hwnd, &paint);
             return 0;
         }
@@ -620,15 +630,15 @@ LRESULT HandleChangePasswordControlMessage(ChangePasswordState& state, HWND hwnd
 }
 
 bool SubmitChangePasswordRequest(ChangePasswordState& state) {
-    read_window_text(state.account_edit.window, state.submitted_account.data(),
+    read_window_text(state.account_edit, state.submitted_account.data(),
         static_cast<int>(state.submitted_account.size()));
-    read_window_text(state.old_password_edit.window,
+    read_window_text(state.old_password_edit,
         state.submitted_old_password.data(),
         static_cast<int>(state.submitted_old_password.size()));
-    read_window_text(state.new_password_edit.window,
+    read_window_text(state.new_password_edit,
         state.submitted_new_password.data(),
         static_cast<int>(state.submitted_new_password.size()));
-    read_window_text(state.confirm_password_edit.window,
+    read_window_text(state.confirm_password_edit,
         state.submitted_confirm_password.data(),
         static_cast<int>(state.submitted_confirm_password.size()));
 

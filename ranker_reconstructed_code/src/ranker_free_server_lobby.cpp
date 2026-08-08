@@ -277,23 +277,32 @@ const char* free_server_screen_size_label(int screen_size) {
     return "";
 }
 
-FreeServerGameEntry entry_from_raw_record(const char* name, const void* raw_record,
-    std::size_t byte_count, u32 icon_slot) {
+FreeServerGameEntry entry_from_server_record(const char* name, const void* game_info,
+    u32 game_id, const void* map_descriptor) {
+    constexpr std::size_t kSockaddrBytes = 0x10;
+    constexpr std::size_t kMapDescriptorBytes = 0x2dc;
     FreeServerGameEntry entry;
     entry.name = name == nullptr ? "" : name;
-    entry.icon_slot = static_cast<int>(icon_slot);
-    if (raw_record != nullptr && byte_count != 0) {
-        entry.id = static_cast<int>(read_u32(raw_record, byte_count, 0));
-        entry.game_type = static_cast<int>(read_u32(raw_record, byte_count, 0x2a8));
-        entry.width = static_cast<int>(read_u32(raw_record, byte_count, 0x2e4));
-        entry.height = static_cast<int>(read_u32(raw_record, byte_count, 0x2e8));
-        entry.display_mode = static_cast<int>(read_u32(raw_record, byte_count, 0x2ec));
-        entry.address = read_u32(raw_record, byte_count, 0x2e0);
-        entry.port = read_u16(raw_record, byte_count, 0x2e2);
-        entry.password_required = read_u32(raw_record, byte_count, 0x2ac) != 0;
-        entry.map_name = c_string_at(raw_record, byte_count, 0x14, 0x80);
-        entry.host_name = c_string_at(raw_record, byte_count, 0x94, 0x80);
-        entry.description = c_string_at(raw_record, byte_count, 0x114, 0x80);
+    entry.id = static_cast<int>(game_id);
+    if (game_info != nullptr) {
+        entry.address = read_u32(game_info, kSockaddrBytes, 4);
+        entry.port = ntohs(read_u16(game_info, kSockaddrBytes, 2));
+    }
+    if (map_descriptor != nullptr) {
+        entry.game_type = static_cast<int>(
+            read_u32(map_descriptor, kMapDescriptorBytes, 0x2a8));
+        entry.width = static_cast<int>(
+            read_u32(map_descriptor, kMapDescriptorBytes, 0x174));
+        entry.height = static_cast<int>(
+            read_u32(map_descriptor, kMapDescriptorBytes, 0x178));
+        entry.display_mode = static_cast<int>(
+            read_u32(map_descriptor, kMapDescriptorBytes, 0x2ac));
+        entry.map_name = c_string_at(
+            map_descriptor, kMapDescriptorBytes, 0x08, 0x20);
+        entry.description = c_string_at(
+            map_descriptor, kMapDescriptorBytes, 0x28, 0x140);
+        entry.host_name = c_string_at(
+            map_descriptor, kMapDescriptorBytes, 0x2b0, 0x20);
     }
     return entry;
 }
@@ -531,7 +540,9 @@ void queue_game_type_filter(FreeServerLobbyState& state) {
     write_le32(packet, 0, 3);
     write_le32(packet, 4, 0x1d);
     write_le32(packet, 8, 0x11);
-    packet[0x0c] = static_cast<u8>(state.selected_game_type);
+    // Opcode 0x1d carries the game-list record index, not the UI filter.
+    // Filtering is local, so a refresh always restarts from the first record.
+    write_le32(packet, 0x0d, 0);
     queue_server_packet(state, packet.data(), static_cast<i32>(packet.size()));
 }
 
@@ -948,7 +959,7 @@ LRESULT HandleFreeServerLobbyWindowMessage(FreeServerLobbyState& state, HWND hwn
         if (hwnd == state.window) {
             PAINTSTRUCT paint{};
             HDC dc = BeginPaint(hwnd, &paint);
-            StretchBitmapMemoryResourceToDc(state.background, dc, 0, 0);
+            StretchBitmapMemoryResourceToClient(state.background, dc, state.window);
             EndPaint(hwnd, &paint);
             return 0;
         }
@@ -1193,8 +1204,9 @@ void ReportFreeServerJoinError(FreeServerLobbyState& state, const void* packet,
 }
 
 bool AddFreeServerLobbyEntry(FreeServerLobbyState& state, const char* name,
-    const void*, const void*, u32 icon_slot, const void* raw_record) {
-    FreeServerGameEntry entry = entry_from_raw_record(name, raw_record, 0x300, icon_slot);
+    const void* game_info, const void*, u32 game_id, const void* map_descriptor) {
+    FreeServerGameEntry entry = entry_from_server_record(
+        name, game_info, game_id, map_descriptor);
     if (entry.name.empty()) {
         entry.name = "Game";
     }
@@ -1429,11 +1441,38 @@ void DispatchFreeServerNetworkMessage(FreeServerLobbyState& state, HWND hwnd,
             break;
         }
         case 0x1e:
-        case 0x27:
+        case 0x27: {
+            if (packet_bytes < 0x395) {
+                break;
+            }
+            const u32 game_id = read_u32(payload, packet_bytes, 0xb1);
             AddFreeServerLobbyEntry(state,
-                reinterpret_cast<const char*>(payload + 0x0d), nullptr, nullptr,
-                0, payload + 0x0d);
+                reinterpret_cast<const char*>(payload + 0x0d), payload + 0x8d,
+                payload + 0x9d, game_id, payload + 0xb9);
+            auto game = std::find_if(state.games.begin(), state.games.end(),
+                [game_id](const FreeServerGameEntry& entry) {
+                    return entry.id == static_cast<int>(game_id);
+                });
+            if (game != state.games.end()) {
+                game->password_required =
+                    read_u32(payload, packet_bytes, 0xb5) != 0;
+            }
+            if (opcode == 0x1e) {
+                const i32 next_index = static_cast<i32>(
+                    read_u32(payload, packet_bytes, 0xad));
+                if (next_index >= 0) {
+                    std::vector<u8> next_packet(0x11, 0);
+                    write_le32(next_packet, 0, 3);
+                    write_le32(next_packet, 4, 0x1d);
+                    write_le32(next_packet, 8, 0x11);
+                    write_le32(next_packet, 0x0d,
+                        static_cast<u32>(next_index + 1));
+                    queue_server_packet(state, next_packet.data(),
+                        static_cast<i32>(next_packet.size()));
+                }
+            }
             break;
+        }
         case 0x26:
             RemoveFreeServerLobbyEntryById(state,
                 static_cast<int>(read_u32(payload, packet_bytes, 0x0d)));

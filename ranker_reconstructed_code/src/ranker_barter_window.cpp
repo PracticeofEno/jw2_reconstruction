@@ -571,7 +571,7 @@ bool paint_background_if_current(BarterWindowState& state, HWND hwnd) {
     }
     PAINTSTRUCT paint{};
     HDC dc = BeginPaint(hwnd, &paint);
-    StretchBitmapMemoryResourceToDc(state.background, dc, 0, 0);
+    StretchBitmapMemoryResourceToClient(state.background, dc, state.window);
     EndPaint(hwnd, &paint);
     return true;
 }

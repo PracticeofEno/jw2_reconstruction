@@ -40,3 +40,10 @@
 !ranker_reconstructed_code/third_party/
 !ranker_reconstructed_code/third_party/zlib113/
 !ranker_reconstructed_code/third_party/zlib113/**
+
+!ranker_reconstructed_server/
+!ranker_reconstructed_server/**
+ranker_reconstructed_server/**/__pycache__/
+ranker_reconstructed_server/**/*.pyc
+ranker_reconstructed_server/data/accounts.json
+ranker_reconstructed_server/data/accounts.json.tmp

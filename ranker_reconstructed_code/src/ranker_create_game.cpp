@@ -1218,7 +1218,7 @@ bool paint_background_if_current(CreateGameState& state, HWND hwnd) {
     }
     PAINTSTRUCT paint{};
     BeginPaint(hwnd, &paint);
-    StretchBitmapMemoryResourceToDc(state.background, paint.hdc, 0, 0);
+    StretchBitmapMemoryResourceToClient(state.background, paint.hdc, state.window);
     if (state.avatar_level_controls_visible) {
         StretchBitmapMemoryResourceToDc(state.avatar_level_panel, paint.hdc, 538, 202);
     }
@@ -1230,7 +1230,7 @@ bool erase_background_if_current(CreateGameState& state, HWND hwnd, HDC dc) {
     if (hwnd != state.window || dc == nullptr) {
         return false;
     }
-    StretchBitmapMemoryResourceToDc(state.background, dc, 0, 0);
+    StretchBitmapMemoryResourceToClient(state.background, dc, state.window);
     if (state.avatar_level_controls_visible) {
         StretchBitmapMemoryResourceToDc(state.avatar_level_panel, dc, 538, 202);
     }

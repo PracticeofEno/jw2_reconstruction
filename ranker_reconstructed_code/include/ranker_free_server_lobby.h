@@ -205,8 +205,8 @@ LRESULT HandleFreeServerLobbyControlMessage(FreeServerLobbyState& state, HWND hw
 void ReportFreeServerJoinError(FreeServerLobbyState& state, const void* packet,
     std::size_t packet_size);
 bool AddFreeServerLobbyEntry(FreeServerLobbyState& state, const char* name,
-    const void* game_info, const void* display_info, u32 icon_slot,
-    const void* raw_record);
+    const void* game_info, const void* display_info, u32 game_id,
+    const void* map_descriptor);
 bool RemoveFreeServerLobbyEntryById(FreeServerLobbyState& state, int id);
 void SelectFreeServerLobbyEntry(FreeServerLobbyState& state, HWND listbox);
 void ClearFreeServerLobbyEntries(FreeServerLobbyState& state, HWND listbox);

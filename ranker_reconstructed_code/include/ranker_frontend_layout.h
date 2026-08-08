@@ -7,6 +7,9 @@
 
 namespace ranker {
 
+constexpr i32 kLegacyFrontendLayoutWidth = 800;
+constexpr i32 kLegacyFrontendLayoutHeight = 600;
+
 struct FrontendLayoutRect {
     i32 x = 0;
     i32 y = 0;
@@ -40,6 +43,30 @@ constexpr FrontendLayoutPoint CenteredContainedFrontendLayoutOrigin(
         bounds.y + (centered_y > 0 ? centered_y : 0)};
 }
 
+constexpr i32 ScaleFrontendLayoutValue(i32 value, i32 source_extent,
+    i32 target_extent) {
+    if (source_extent <= 0 || target_extent <= 0 ||
+        source_extent == target_extent) {
+        return value;
+    }
+    const i64 product = static_cast<i64>(value) * target_extent;
+    const i64 rounding = source_extent / 2;
+    return static_cast<i32>(product >= 0
+        ? (product + rounding) / source_extent
+        : (product - rounding) / source_extent);
+}
+
+constexpr FrontendLayoutRect ScaleFrontendLayoutRect(
+    const FrontendLayoutRect& rect, i32 target_width, i32 target_height) {
+    return {
+        ScaleFrontendLayoutValue(rect.x, kLegacyFrontendLayoutWidth, target_width),
+        ScaleFrontendLayoutValue(rect.y, kLegacyFrontendLayoutHeight, target_height),
+        ScaleFrontendLayoutValue(
+            rect.width, kLegacyFrontendLayoutWidth, target_width),
+        ScaleFrontendLayoutValue(
+            rect.height, kLegacyFrontendLayoutHeight, target_height)};
+}
+
 struct FrontendLayoutRectTable {
     u32 count = 0;
     FrontendLayoutRect* rects = nullptr;
@@ -53,6 +80,10 @@ bool LoadFrontendLayoutFromTrcRecord(FrontendLayoutRectTable& table,
     const char* archive_name, u32 record_index);
 bool LoadFrontendLayoutFromJw219TrcRecord(FrontendLayoutRectTable& table,
     u32 record_index);
+void SetFrontendLayoutTargetSize(i32 width, i32 height);
+FrontendLayoutPoint FrontendLayoutTargetSize();
+void ScaleFrontendLayoutRectTable(FrontendLayoutRectTable& table,
+    i32 target_width, i32 target_height);
 std::vector<FrontendLayoutRect> CopyFrontendLayoutRectTable(
     const FrontendLayoutRectTable& table);
 

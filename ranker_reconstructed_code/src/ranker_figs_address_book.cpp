@@ -19,7 +19,8 @@ namespace ranker {
 namespace {
 
 constexpr DWORD kWindowStyleFullscreen = 0x90000000;
-constexpr DWORD kWindowStyleWindowed = 0x10cf0000;
+constexpr DWORD kWindowStyleWindowed =
+    WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
 constexpr DWORD kListBoxStyle =
     WS_CHILD | WS_VISIBLE | LBS_NOTIFY | LBS_OWNERDRAWFIXED;
 constexpr DWORD kEditStyle = WS_CHILD | ES_AUTOHSCROLL;
@@ -490,7 +491,10 @@ bool CreateFigsWindow(FigsState& state, HWND parent, HINSTANCE instance,
     import_setup_entries(state);
 
     const FigsLayoutRect window_rect = layout_at(state, 0);
-    const POINT origin = RankerFrontendWindowOrigin();
+    const POINT origin = IsWindow(parent)
+        ? RankerCenteredChildFrontendWindowOrigin(
+              parent, window_rect.width, window_rect.height)
+        : RankerFrontendWindowOrigin();
     const DWORD style = parent != nullptr ? kWindowStyleWindowed : kWindowStyleFullscreen;
     state.window = CreateWindowExA(WS_EX_CONTROLPARENT, "FIGS", "FIGS", style,
         origin.x, origin.y, window_rect.width, window_rect.height, parent,
@@ -626,7 +630,7 @@ bool paint_background_if_current(FigsState& state, HWND hwnd) {
     }
     PAINTSTRUCT paint{};
     BeginPaint(hwnd, &paint);
-    StretchBitmapMemoryResourceToDc(state.background, paint.hdc, 0, 0);
+    StretchBitmapMemoryResourceToClient(state.background, paint.hdc, state.window);
     EndPaint(hwnd, &paint);
     return true;
 }

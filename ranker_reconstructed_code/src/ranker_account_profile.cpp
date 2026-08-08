@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <map>
@@ -23,7 +24,8 @@ namespace ranker {
 namespace {
 
 constexpr DWORD kWindowStyleFullscreen = 0x90000000;
-constexpr DWORD kWindowStyleWindowed = 0x10cf0000;
+constexpr DWORD kWindowStyleWindowed =
+    WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
 constexpr DWORD kAccountEditStyle = WS_CHILD | WS_VISIBLE;
 constexpr DWORD kPasswordEditStyle = WS_CHILD | WS_VISIBLE | ES_PASSWORD;
 constexpr DWORD kStatusEditStyle = WS_CHILD | ES_MULTILINE | ES_READONLY;
@@ -175,13 +177,19 @@ void copy_fixed_string(std::vector<u8>& buffer, std::size_t offset,
     std::strncpy(reinterpret_cast<char*>(buffer.data() + offset), text, available);
 }
 
-void read_window_text(HWND window, char* target, int target_size) {
+void read_window_text(const AccountProfileTextControl& control, char* target,
+    int target_size) {
     if (target == nullptr || target_size <= 0) {
         return;
     }
     target[0] = '\0';
-    if (window != nullptr) {
-        GetWindowTextA(window, target, target_size);
+    if (control.window != nullptr) {
+        if (control.original_window_proc != nullptr) {
+            CallWindowProcA(control.original_window_proc, control.window, WM_GETTEXT,
+                static_cast<WPARAM>(target_size), reinterpret_cast<LPARAM>(target));
+        } else {
+            GetWindowTextA(control.window, target, target_size);
+        }
     }
 }
 
@@ -508,7 +516,7 @@ bool paint_background_if_current(AccountProfileState& state, HWND hwnd) {
     }
     PAINTSTRUCT paint{};
     HDC dc = BeginPaint(hwnd, &paint);
-    StretchBitmapMemoryResourceToDc(state.background, dc, 0, 0);
+    StretchBitmapMemoryResourceToClient(state.background, dc, state.window);
     EndPaint(hwnd, &paint);
     return true;
 }
@@ -666,7 +674,7 @@ void write_setup_data(AccountProfileState& state) {
 }
 
 void handle_account_success(AccountProfileState& state) {
-    read_window_text(state.account_edit.window, state.submitted_account.data(),
+    read_window_text(state.account_edit, state.submitted_account.data(),
         static_cast<int>(state.submitted_account.size()));
     write_setup_data(state);
     destroy_account_window(state);
@@ -953,7 +961,10 @@ bool CreateAccountProfileWindow(AccountProfileState& state, HWND parent,
     const std::vector<AccountProfileLayoutRect> layout =
         copy_layout_record(layout_table.table);
     const AccountProfileLayoutRect window_rect = layout_at(layout, 0);
-    const POINT origin = RankerFrontendWindowOrigin();
+    const POINT origin = IsWindow(parent)
+        ? RankerCenteredChildFrontendWindowOrigin(
+              parent, window_rect.width, window_rect.height)
+        : RankerFrontendWindowOrigin();
     const DWORD style = IsWindow(parent) ? kWindowStyleWindowed : kWindowStyleFullscreen;
     state.window = CreateWindowExA(WS_EX_CONTROLPARENT, "Account", "Account",
         style, origin.x, origin.y, window_rect.width, window_rect.height,
@@ -964,6 +975,12 @@ bool CreateAccountProfileWindow(AccountProfileState& state, HWND parent,
     }
     SetWindowLongPtrA(state.window, GWLP_WNDPROC,
         reinterpret_cast<LONG_PTR>(account_profile_window_proc));
+    if (state.async_tcp_socket != nullptr &&
+        !RegisterLegacyAsyncTcpSocketEvents(*state.async_tcp_socket, state.window,
+            kAccountProfileNetworkMessage, FD_READ | FD_WRITE | FD_CLOSE)) {
+        destroy_account_window(state);
+        return false;
+    }
 
     if (!create_text_control(state.account_edit, state.window, instance,
             kAccountEditStyle, kAccountProfileAccountEditId, layout_at(layout, 1)) ||
@@ -1067,19 +1084,34 @@ void RefreshAccountProfileAvatarStats(AccountProfileState& state) {
 }
 
 bool SubmitAccountProfileRequest(AccountProfileState& state) {
-    read_window_text(state.account_edit.window, state.submitted_account.data(),
+    read_window_text(state.account_edit, state.submitted_account.data(),
         static_cast<int>(state.submitted_account.size()));
-    read_window_text(state.password_edit.window, state.submitted_password.data(),
+    read_window_text(state.password_edit, state.submitted_password.data(),
         10);
-    read_window_text(state.confirm_password_edit.window,
+    read_window_text(state.confirm_password_edit,
         state.submitted_confirm_password.data(), 10);
-    read_window_text(state.intro_edit.window, state.submitted_intro.data(),
+    read_window_text(state.intro_edit, state.submitted_intro.data(),
         static_cast<int>(state.submitted_intro.size()));
     const int sex_index = selected_combo_index(state.sex_combo.window);
     const int location_index =
         GetLegacyStringSelectorSelectedIndex(state.location_selector);
     const int birth_year_index =
         GetLegacyStringSelectorSelectedIndex(state.birth_year_selector);
+
+    // Keep this deliberately free of account or password contents.  WizardNet
+    // account failures otherwise happen before any packet reaches the server,
+    // which makes field/selector regressions indistinguishable from a stalled
+    // connection in a deployed build.
+    if (FILE* log = std::fopen("Jw2.log", "a")) {
+        std::fprintf(log,
+            "wizard-account submit lengths=%zu/%zu/%zu/%zu selectors=%d/%d/%d\n",
+            std::strlen(state.submitted_account.data()),
+            std::strlen(state.submitted_password.data()),
+            std::strlen(state.submitted_confirm_password.data()),
+            std::strlen(state.submitted_intro.data()),
+            location_index, birth_year_index, sex_index);
+        std::fclose(log);
+    }
 
     if (std::strlen(state.submitted_account.data()) == 0 ||
         std::strlen(state.submitted_password.data()) == 0 ||
@@ -1289,7 +1321,14 @@ LRESULT HandleAccountProfileWindowMessage(AccountProfileState& state, HWND hwnd,
             const BitmapMemoryResource& bitmap =
                 index == state.selected_avatar_index ? button.pressed_bitmap :
                 button.normal_bitmap;
-            StretchBitmapMemoryResourceToDc(bitmap, draw->hDC, 0, 0);
+            const BitmapDrawRect destination{
+                draw->rcItem.left, draw->rcItem.top,
+                draw->rcItem.right - draw->rcItem.left,
+                draw->rcItem.bottom - draw->rcItem.top};
+            const BitmapDrawRect source{
+                bitmap.source_x, bitmap.source_y, bitmap.width, bitmap.height};
+            StretchBitmapMemoryResourceRectToDc(
+                bitmap, draw->hDC, destination, source);
             break;
         }
         if (draw->CtlID == kAccountProfileAvatarIconButtonId) {

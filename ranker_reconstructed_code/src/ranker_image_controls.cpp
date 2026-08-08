@@ -38,8 +38,12 @@ bool load_optional_bitmap(BitmapMemoryResource& resource, u32 record_index) {
         kLegacyImageControlBitmapArchive, record_index);
 }
 
-void draw_bitmap(const BitmapMemoryResource& bitmap, HDC dc) {
-    StretchBitmapMemoryResourceToDc(bitmap, dc, 0, 0);
+void draw_bitmap(const BitmapMemoryResource& bitmap, HDC dc, const RECT& rect) {
+    const BitmapDrawRect destination{
+        rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top};
+    const BitmapDrawRect source{
+        bitmap.source_x, bitmap.source_y, bitmap.width, bitmap.height};
+    StretchBitmapMemoryResourceRectToDc(bitmap, dc, destination, source);
 }
 
 } // namespace
@@ -106,7 +110,7 @@ void DrawLegacyImageButtonItem(LegacyImageButtonControl& control,
     const bool use_pressed_bitmap =
         item.itemAction == ODA_SELECT && item.itemState != ODS_FOCUS;
     draw_bitmap(use_pressed_bitmap ? control.pressed_bitmap : control.normal_bitmap,
-        item.hDC);
+        item.hDC, item.rcItem);
 }
 
 LegacyImageComboBoxControl& InitializeLegacyImageComboBoxControl(
@@ -235,7 +239,9 @@ void PaintLegacyImageComboBoxBackground(LegacyImageComboBoxControl& control) {
     PAINTSTRUCT paint{};
     HDC dc = BeginPaint(control.window, &paint);
     if (SendMessageA(control.window, CB_GETDROPPEDSTATE, 0, 0) == 0) {
-        draw_bitmap(control.normal_bitmap, dc);
+        RECT client{};
+        GetClientRect(control.window, &client);
+        draw_bitmap(control.normal_bitmap, dc, client);
     }
     control.saved_selection = static_cast<int>(
         SendMessageA(control.window, CB_GETCURSEL, 0, 0));

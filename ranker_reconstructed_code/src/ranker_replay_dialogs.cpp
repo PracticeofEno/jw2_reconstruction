@@ -852,7 +852,7 @@ bool paint_background_if_current(ReplayDialogState& state, HWND hwnd) {
     }
     PAINTSTRUCT paint{};
     BeginPaint(hwnd, &paint);
-    StretchBitmapMemoryResourceToDc(state.background, paint.hdc, 0, 0);
+    StretchBitmapMemoryResourceToClient(state.background, paint.hdc, state.window);
     EndPaint(hwnd, &paint);
     return true;
 }
