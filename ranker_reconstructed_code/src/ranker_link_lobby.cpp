@@ -6,6 +6,7 @@
 #include "ranker_directplay.h"
 #include "ranker_frontend_layout.h"
 #include "ranker_gameplay_sound.h"
+#include "ranker_minimap_preview.h"
 #include "ranker_network.h"
 #include "ranker_online_dialogs.h"
 #include "ranker_p2p_lobby.h"

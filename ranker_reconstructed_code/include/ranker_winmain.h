@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ranker_display_constants.h"
 #include "ranker_types.h"
 
 #include <array>
@@ -24,14 +25,6 @@ struct OriginalRoutineRef {
 constexpr u32 kRankerWinMainAddress = 0x00407250;
 constexpr u32 kRankerPeEntryAddress = 0x005257d0;
 constexpr std::size_t kRankerReplayPlayerNameCount = 8;
-// Ranker_WinMain initializes DAT_0143fff0/01440004/0143ffec to 800x600x16.
-// Keep these logical/back-buffer dimensions separate from the presentation
-// client size: the original 32-bit process is stretched by cnc-ddraw, whereas
-// the reconstructed 64-bit process must perform that presentation step itself.
-constexpr int kOriginalClientWidth = 800;
-constexpr int kOriginalClientHeight = 600;
-constexpr int kOriginalColorDepth = 16;
-
 constexpr bool PresentationCoordinateInsideClient(
     i32 coordinate, i32 presentation_extent) {
     return presentation_extent > 0 &&
@@ -148,9 +141,6 @@ bool StartRankerFrontendStageFromMenu(i32 column, i32 row);
 void CompleteRankerFrontendStage(u32 result, u32 next_mode);
 void SendMainWindowCloseMessage();
 void RebuildUnitSpatialIndexes();
-bool RenderGameplaySessionMinimapPreview(const char* archive_path,
-    u32 preview_width, u32 preview_height, std::vector<u16>& pixels);
-
 int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_command);
 #else
 int run_reconstructed_winmain();

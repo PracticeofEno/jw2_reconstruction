@@ -1150,6 +1150,8 @@ add_executable(ranker_rebuild WIN32
     src/ranker_gameplay_input_actions.cpp
     src/ranker_gameplay_production_actions.cpp
     src/ranker_gameplay_tooltips.cpp
+    src/ranker_gameplay_terrain_layout.cpp
+    src/ranker_minimap_preview.cpp
     src/ranker_frontend_layout.cpp
     src/ranker_frontend_startup.cpp
     src/ranker_frontend_stage_flow.cpp
