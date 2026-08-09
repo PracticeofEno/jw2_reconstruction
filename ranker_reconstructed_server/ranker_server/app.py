@@ -405,12 +405,15 @@ class RankerServer:
             peer_ip = ipaddress.ip_address(session.peer_host)
         except ValueError:
             return bytes(result)
-        if self.config.advertise_peer_address and (
-            source_ip.is_unspecified
-            or source_ip.is_loopback != peer_ip.is_loopback
-            or (not peer_ip.is_private and source_ip.is_private)
-        ):
-            result[4:8] = socket.inet_aton(str(peer_ip))
+        if not self.config.advertise_peer_address or source_ip.is_global:
+            return bytes(result)
+
+        replacement_ip = peer_ip
+        if (peer_ip.is_loopback or peer_ip.is_private or peer_ip.is_unspecified) and \
+                self.config.public_address:
+            replacement_ip = ipaddress.ip_address(self.config.public_address)
+        if not replacement_ip.is_unspecified:
+            result[4:8] = socket.inet_aton(str(replacement_ip))
         return bytes(result)
 
     async def _handle_host_game(self, session: ClientSession, packet: Packet) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import ipaddress
 import json
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ class ServerConfig:
     max_lobby_members: int = 64
     auto_register_accounts: bool = True
     advertise_peer_address: bool = True
+    public_address: str = ""
     room_ttl_seconds: int = 21600
     rank_game_count: int = 10
     log_level: str = "INFO"
@@ -36,6 +38,17 @@ class ServerConfig:
             raise ValueError("server.room_ttl_seconds must be at least 60")
         if self.rank_game_count < 0:
             raise ValueError("server.rank_game_count must not be negative")
+        if self.public_address:
+            try:
+                public_address = ipaddress.ip_address(self.public_address)
+            except ValueError as error:
+                raise ValueError(
+                    "server.public_address must be a valid IPv4 address"
+                ) from error
+            if public_address.version != 4:
+                raise ValueError(
+                    "server.public_address must be a valid IPv4 address"
+                )
 
 
 def _section(root: dict[str, Any], name: str) -> dict[str, Any]:
@@ -78,6 +91,9 @@ def load_config(path: str | Path | None = None) -> ServerConfig:
     config.advertise_peer_address = bool(
         server.get("advertise_peer_address", config.advertise_peer_address)
     )
+    config.public_address = str(
+        server.get("public_address", config.public_address)
+    ).strip()
     config.room_ttl_seconds = int(
         server.get("room_ttl_seconds", config.room_ttl_seconds)
     )

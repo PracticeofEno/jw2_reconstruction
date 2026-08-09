@@ -148,6 +148,36 @@ class ServerIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(read_u32(empty, 4), 0x1E)
         self.assertEqual(read_i32(empty, 0xAD), -1)
 
+    async def test_public_address_rewrites_local_host_advertisement(self) -> None:
+        self.server.config.public_address = "8.8.8.8"
+        host_reader, host_writer = await self.connect_and_login("LocalHost")
+        join_reader, join_writer = await self.connect_and_login("RemoteJoiner")
+
+        # LocalHost receives RemoteJoiner's lobby presence first.
+        await read_packet(host_reader)
+
+        request = bytearray(0x409 - HEADER_BYTES)
+        request[0:9] = b"LocalRoom"
+        local_sockaddr = (
+            struct.pack("<H", socket.AF_INET)
+            + struct.pack(">H", 23010)
+            + socket.inet_aton("127.0.0.1")
+            + b"\0" * 8
+        )
+        request[0x10D - HEADER_BYTES : 0x11D - HEADER_BYTES] = local_sockaddr
+        request[0x12D - HEADER_BYTES + 8 : 0x12D - HEADER_BYTES + 17] = b"LocalMap\0"
+        host_writer.write(build_packet(0x19, request))
+        await host_writer.drain()
+        hosted = await read_packet(host_reader)
+        self.assertEqual(read_u32(hosted, 4), 0x1A)
+
+        join_writer.write(build_packet(0x1D, struct.pack("<I", 0)))
+        await join_writer.drain()
+        listed = await read_packet(join_reader)
+        self.assertEqual(read_c_string(listed, 0x0D, 0x80), "LocalRoom")
+        self.assertEqual(socket.inet_ntoa(listed[0x91:0x95]), "8.8.8.8")
+        self.assertEqual(struct.unpack(">H", listed[0x8F:0x91])[0], 23010)
+
     async def test_fragmented_login_is_accepted(self) -> None:
         reader, writer = await asyncio.open_connection(
             "127.0.0.1", self.server.bound_port

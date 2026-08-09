@@ -17,12 +17,26 @@ cd C:\Users\note2\Downloads\jw_resversing\ranker_reconstructed_server
 기본 수신 주소는 `0.0.0.0:19777`입니다. 다른 포트를 쓰려면 `config.json`을
 수정하거나 다음과 같이 실행합니다.
 
+서버 PC 또는 같은 사설망의 PC가 방을 개설할 때는 `config.json`의
+`server.public_address`에 외부 참가자가 접속할 공인 IPv4 주소를 지정합니다.
+서버는 방장이 보낸 로컬 주소를 이 주소로 보정하며, 외부 방장이 접속한 경우에는
+그 방장의 실제 접속 주소를 사용합니다.
+
 ```powershell
 .\run_server.ps1 -ListenAddress 127.0.0.1 -Port 20000
 ```
 
 클라이언트는 기본적으로 `127.0.0.1:19777`을 사용합니다. 원격 서버를 사용할 때는
-`ranker_rebuild.exe`를 실행하기 전에 환경 변수를 지정합니다.
+`ranker_rebuild.exe` 옆의 `wizardnet_server.ini`를 수정합니다.
+
+```ini
+[WizardNet]
+Address=115.22.136.89
+Port=19777
+```
+
+자동화나 다중 인스턴스 테스트에서는 실행 전에 환경 변수를 지정할 수도 있습니다.
+환경 변수는 INI 파일보다 우선합니다.
 
 ```powershell
 $env:RANKER_RECONSTRUCTED_SERVER_ADDRESS = "server.example.net"

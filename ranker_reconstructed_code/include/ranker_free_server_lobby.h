@@ -50,7 +50,7 @@ constexpr u32 kFreeServerIconRecord2 = 0x7d;
 constexpr u32 kFreeServerIconRecord3 = 0x7e;
 constexpr u32 kFreeServerComboBitmapRecord = 0x80;
 constexpr UINT_PTR kFreeServerJoinTimerId = 1;
-constexpr UINT kFreeServerJoinRetryMs = 2000;
+constexpr UINT kFreeServerJoinRetryMs = 10000;
 
 enum class FreeServerInfoState : u32 {
     Empty = 0,

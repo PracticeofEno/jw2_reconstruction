@@ -260,6 +260,39 @@ std::string ipv4_string(u32 address) {
     return buffer;
 }
 
+bool is_loopback_or_unspecified_ipv4(u32 address) {
+    return address == INADDR_ANY || (address & 0xffu) == 127u;
+}
+
+u32 resolve_free_server_join_address(const FreeServerLobbyState& state,
+    u32 advertised_address) {
+    in_addr advertised{};
+    advertised.s_addr = advertised_address;
+    if (!is_loopback_or_unspecified_ipv4(advertised_address) &&
+        !IsPrivateIpv4Address(advertised)) {
+        return advertised_address;
+    }
+    if (state.async_tcp_socket == nullptr) {
+        return advertised_address;
+    }
+
+    sockaddr_in wizardnet_peer{};
+    int peer_size = sizeof(wizardnet_peer);
+    if (getpeername(GetLegacyAsyncTcpSocket(*state.async_tcp_socket),
+            reinterpret_cast<sockaddr*>(&wizardnet_peer), &peer_size) == SOCKET_ERROR ||
+        wizardnet_peer.sin_family != AF_INET) {
+        return advertised_address;
+    }
+    const u32 peer_address = wizardnet_peer.sin_addr.s_addr;
+    in_addr peer{};
+    peer.s_addr = peer_address;
+    if (is_loopback_or_unspecified_ipv4(peer_address) ||
+        IsPrivateIpv4Address(peer)) {
+        return advertised_address;
+    }
+    return peer_address;
+}
+
 const char* free_server_game_type_label(int game_type) {
     if (game_type >= 0 &&
         game_type < static_cast<int>(std::size(kFreeServerGameTypeFallbacks))) {
@@ -787,8 +820,6 @@ void ShowFreeServerSelectGameMessage(FreeServerLobbyState& state) {
 
 bool SubmitFreeServerJoinRequest(FreeServerLobbyState& state) {
     const std::size_t index = selected_entry_index(state);
-    read_control_text(state.name_edit.window, state.player_name.data(),
-        static_cast<int>(state.player_name.size()));
     if (state.player_name[0] == '\0') {
         show_startup_status(state, 32, "Select a game to join.", kFreeSoftWhite);
         return false;
@@ -809,14 +840,24 @@ bool SubmitFreeServerJoinRequest(FreeServerLobbyState& state) {
             kFreeSoftWhite);
         return false;
     }
-    if (!entry.joinable || entry.address == 0 || entry.port == 0) {
+    const u32 target_address =
+        resolve_free_server_join_address(state, entry.address);
+    if (!entry.joinable || target_address == 0 || entry.port == 0) {
         show_startup_status(state, 53,
             "Connection failed - game already started or no response.",
             kFreeSoftWhite);
         return false;
     }
 
-    const std::string address = ipv4_string(entry.address);
+    const std::string address = ipv4_string(target_address);
+    if (state.join_timer != 0) {
+        KillTimer(state.window, state.join_timer);
+        state.join_timer = 0;
+    }
+    if (state.game_socket != INVALID_SOCKET) {
+        CloseLegacySocketRecord(state.game_socket);
+        state.game_socket = INVALID_SOCKET;
+    }
     state.join_phase = FreeServerJoinPhase::Connecting;
     state.game_start_requested = false;
     if (StartLegacySocketConnect(state.game_socket, address.c_str(), entry.port,
@@ -1037,9 +1078,11 @@ LRESULT HandleFreeServerLobbyWindowMessage(FreeServerLobbyState& state, HWND hwn
             }
             break;
         case kFreeServerJoinButtonId:
-            if (state.info_state == FreeServerInfoState::Selected ||
-                (state.info_state == FreeServerInfoState::PasswordRequired &&
-                    free_server_list_has_selection(state))) {
+            if (free_server_list_has_selection(state)) {
+                // A server refresh can restore the native list-box selection
+                // without emitting LBN_SELCHANGE. Normalize the matching
+                // reconstructed state before deciding whether Join is valid.
+                SelectFreeServerLobbyEntry(state, state.game_list.window);
                 SubmitFreeServerJoinRequest(state);
             }
             else {
@@ -1052,7 +1095,8 @@ LRESULT HandleFreeServerLobbyWindowMessage(FreeServerLobbyState& state, HWND hwn
         break;
     }
     case WM_TIMER:
-        if (state.join_phase == FreeServerJoinPhase::Connecting) {
+        if (wparam == kFreeServerJoinTimerId &&
+            state.join_phase != FreeServerJoinPhase::Idle) {
             CloseLegacySocketRecord(state.game_socket);
             state.game_socket = INVALID_SOCKET;
             if (state.join_timer != 0) {
@@ -1075,9 +1119,17 @@ LRESULT HandleFreeServerLobbyWindowMessage(FreeServerLobbyState& state, HWND hwn
     case kFreeServerStartGameMessage:
         state.game_start_requested = true;
         queue_joined_game_removal_notice(state);
-        close_lobby(state, false);
-        if (state.callbacks.start_game != nullptr) {
-            state.callbacks.start_game(state);
+        {
+            // The joined Link lobby takes ownership of this socket. Detach it
+            // before destroying the browser so release_resources keeps it open.
+            const SOCKET joined_socket = state.game_socket;
+            state.game_socket = INVALID_SOCKET;
+            close_lobby(state, false);
+            state.game_socket = joined_socket;
+            if (state.callbacks.start_game != nullptr) {
+                state.callbacks.start_game(state);
+            }
+            state.game_socket = INVALID_SOCKET;
         }
         break;
     case kFreeServerJoinErrorMessage: {
@@ -1369,6 +1421,22 @@ void PumpFreeServerSocketReceiveQueue(FreeServerLobbyState& state,
 
 void HandleFreeServerSocketMessage(FreeServerLobbyState& state, SOCKET socket,
     LPARAM event) {
+    const int socket_error = HIWORD(event);
+    if (socket_error != 0) {
+        if (state.join_timer != 0 && state.window != nullptr) {
+            KillTimer(state.window, state.join_timer);
+            state.join_timer = 0;
+        }
+        CloseLegacySocketRecord(socket);
+        if (state.game_socket == socket) {
+            state.game_socket = INVALID_SOCKET;
+        }
+        state.join_phase = FreeServerJoinPhase::Idle;
+        show_startup_status(state, 37,
+            "Connection failed - no response.", kFreeErrorRed);
+        return;
+    }
+
     switch (LOWORD(event)) {
     case FD_READ: {
         LegacySocketRecord* record = ReceiveIntoLegacySocketQueue(socket);
@@ -1378,12 +1446,21 @@ void HandleFreeServerSocketMessage(FreeServerLobbyState& state, SOCKET socket,
         break;
     }
     case FD_WRITE:
-        state.join_phase = FreeServerJoinPhase::WaitingForStart;
-        show_startup_status(state, 36, "Getting connected player information.",
-            kFreeStatusCyan);
+        if (state.join_phase == FreeServerJoinPhase::Connecting) {
+            SendLinkLobbyRelayJoinPacket(link_lobby_state(), socket,
+                state.player_name.data(), state.password.data());
+            state.join_phase = FreeServerJoinPhase::WaitingForStart;
+            show_startup_status(state, 36,
+                "Getting connected player information.", kFreeStatusCyan);
+        }
+        else {
+            QueueAndFlushSocketSend(0, nullptr, socket);
+        }
         break;
     case FD_CONNECT:
-        RegisterLegacySocketRecord(socket);
+        if (FindLegacySocketRecord(socket) == nullptr) {
+            RegisterLegacySocketRecord(socket);
+        }
         break;
     case FD_CLOSE:
         CloseLegacySocketRecord(socket);
@@ -1453,16 +1530,21 @@ void DispatchFreeServerNetworkMessage(FreeServerLobbyState& state, HWND hwnd,
                 break;
             }
             const u32 game_id = read_u32(payload, packet_bytes, 0xb1);
-            AddFreeServerLobbyEntry(state,
-                reinterpret_cast<const char*>(payload + 0x0d), payload + 0x8d,
-                payload + 0x9d, game_id, payload + 0xb9);
-            auto game = std::find_if(state.games.begin(), state.games.end(),
-                [game_id](const FreeServerGameEntry& entry) {
-                    return entry.id == static_cast<int>(game_id);
-                });
-            if (game != state.games.end()) {
-                game->password_required =
-                    read_u32(payload, packet_bytes, 0xb5) != 0;
+            const char* game_name =
+                reinterpret_cast<const char*>(payload + 0x0d);
+            // The final paged response is a full-size empty sentinel. It is
+            // not a game and must not become a selectable fallback "Game".
+            if (game_name[0] != '\0') {
+                AddFreeServerLobbyEntry(state, game_name, payload + 0x8d,
+                    payload + 0x9d, game_id, payload + 0xb9);
+                auto game = std::find_if(state.games.begin(), state.games.end(),
+                    [game_id](const FreeServerGameEntry& entry) {
+                        return entry.id == static_cast<int>(game_id);
+                    });
+                if (game != state.games.end()) {
+                    game->password_required =
+                        read_u32(payload, packet_bytes, 0xb5) != 0;
+                }
             }
             if (opcode == 0x1e) {
                 const i32 next_index = static_cast<i32>(

@@ -10,6 +10,7 @@
     "max_lobby_members": 64,
     "auto_register_accounts": true,
     "advertise_peer_address": true,
+    "public_address": "115.22.136.89",
     "room_ttl_seconds": 21600,
     "rank_game_count": 10
   },

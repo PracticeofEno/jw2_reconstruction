@@ -2086,6 +2086,23 @@ void default_wizard_open_new_account(WizardLoginState& state,
         reinterpret_cast<LPARAM>(account), reinterpret_cast<LPARAM>(password));
 }
 
+const std::string& wizardnet_server_ini_path() {
+    static const std::string path = [] {
+        std::array<char, MAX_PATH> executable{};
+        const DWORD length = GetModuleFileNameA(nullptr, executable.data(),
+            static_cast<DWORD>(executable.size()));
+        if (length == 0 || length >= executable.size()) {
+            return std::string("wizardnet_server.ini");
+        }
+        std::string result(executable.data(), length);
+        const std::size_t separator = result.find_last_of("\\/");
+        result.resize(separator == std::string::npos ? 0 : separator + 1);
+        result += "wizardnet_server.ini";
+        return result;
+    }();
+    return path;
+}
+
 void configure_wizard_callbacks(WizardLoginState& state) {
     state.async_tcp_socket = &FrontendAsyncTcpSocket0();
     state.icon_collection = &GlobalBitmapIconResourceCollection();
@@ -2101,17 +2118,26 @@ void configure_wizard_callbacks(WizardLoginState& state) {
     ConnectFrontendState& connect = connect_frontend_state();
     LoadConnectFrontendConfiguration(connect);
 
-    // WizardNet is intentionally redirected to the reconstructed control
-    // server.  Environment variables make remote/LAN deployments possible
-    // without rebuilding the executable.
+    // Keep the reconstructed WizardNet endpoint beside the executable so a
+    // distributed client can be redirected without rebuilding it or setting
+    // a process environment.  Explicit environment variables remain the
+    // highest-priority override for automated and multi-instance tests.
+    std::array<char, 256> configured_address{};
+    GetPrivateProfileStringA("WizardNet", "Address", "127.0.0.1",
+        configured_address.data(), static_cast<DWORD>(configured_address.size()),
+        wizardnet_server_ini_path().c_str());
     const char* server_address = std::getenv("RANKER_RECONSTRUCTED_SERVER_ADDRESS");
     if (server_address == nullptr || *server_address == '\0') {
-        server_address = "127.0.0.1";
+        server_address = configured_address[0] != '\0' ?
+            configured_address.data() : "127.0.0.1";
     }
     std::snprintf(state.server_address.data(), state.server_address.size(), "%s",
         server_address);
 
-    unsigned long server_port = 19777;
+    const UINT configured_port = GetPrivateProfileIntA("WizardNet", "Port", 19777,
+        wizardnet_server_ini_path().c_str());
+    unsigned long server_port = configured_port != 0 && configured_port <= 0xffffu ?
+        configured_port : 19777;
     if (const char* port_text = std::getenv("RANKER_RECONSTRUCTED_SERVER_PORT")) {
         char* end = nullptr;
         const unsigned long parsed = std::strtoul(port_text, &end, 10);
@@ -2789,7 +2815,7 @@ void default_free_open_connect(FreeServerLobbyState& state) {
 
 void default_free_start_game(FreeServerLobbyState& state) {
     open_joined_link_lobby_from_staged_payloads(state.main_window, state.instance,
-        state.return_context, 2);
+        state.return_context, 2, state.game_socket);
 }
 
 void configure_free_server_callbacks(FreeServerLobbyState& state) {
@@ -3387,6 +3413,11 @@ void open_free_server_lobby_window(HWND parent, HINSTANCE instance,
     destroy_existing_window(state.window);
     configure_free_server_callbacks(state);
     if (CreateFreeServerLobbyWindow(state, parent, instance, return_context)) {
+        // The visible edit is the selected game name. Keep the authenticated
+        // player identity separately for the direct room handshake.
+        std::snprintf(state.player_name.data(), state.player_name.size(), "%s",
+            default_online_local_player_name());
+        SetFocus(state.game_list.window);
         activate_frontend_state(state);
     }
 }
