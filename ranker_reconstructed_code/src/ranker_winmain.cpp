@@ -2894,6 +2894,19 @@ void default_link_start_game(LinkLobbyState& state) {
     append_startup_log("link start_game mode=%lu start_payload=%zu map=%s",
         static_cast<unsigned long>(mode), state.start_parameter_payload.size(),
         state.map_file_name.c_str());
+    if (mode == 0) {
+        // WizardNet keeps its authenticated lobby alive underneath the Link
+        // room so Cancel can return without logging in again.  Once the match
+        // starts that retained native child must be hidden; otherwise
+        // destroying the Link room merely exposes the lobby over the running
+        // DirectDraw gameplay session.
+        OnlineLobbyState& online = online_lobby_state();
+        if (online.window != nullptr && IsWindow(online.window) &&
+            state.main_window == online.window) {
+            ShowWindow(online.window, SW_HIDE);
+            append_startup_log("wizardnet lobby hidden for gameplay");
+        }
+    }
     SetActiveNetworkTransportMode(static_cast<i32>(mode));
     queue_default_gameplay_session_transition(state.main_window, mode);
 }
@@ -12525,6 +12538,11 @@ void default_gameplay_flow_enter_session_ui(GameplaySessionFlowState&) {
     modal.observer_mask_active = false;
     modal.wait_dialog_active = false;
     modal.replay_modal_pending = false;
+    // Link-room destruction restores the accelerator table that was active
+    // before the room opened.  For WizardNet this belongs to the now-hidden
+    // online lobby.  Route input back to the main gameplay window after all
+    // frontend destruction has completed.
+    activate_frontend_window(nullptr, nullptr);
     if (g_runtime.main_window != nullptr && IsWindow(g_runtime.main_window)) {
         SetFocus(g_runtime.main_window);
     }
@@ -29990,6 +30008,14 @@ void run_default_gameplay_session_transition(HWND owner, u32 mode) {
         PostMessageA(g_runtime.main_window, WM_USER + 4, 0, 1);
         append_startup_log("gameplay transition queued direct-p2p frontend return");
     }
+    else if (!state.close_requested && !state.process_shutdown_requested &&
+        mode == 0 && g_runtime.main_window != nullptr &&
+        IsWindow(g_runtime.main_window)) {
+        // WizardNet matches return to the retained authenticated online lobby
+        // only after the gameplay loop has genuinely finished.
+        PostMessageA(g_runtime.main_window, WM_USER + 4, 0, 2);
+        append_startup_log("gameplay transition queued wizardnet lobby return");
+    }
 }
 
 void queue_default_gameplay_session_transition(HWND owner, u32 mode) {
@@ -31359,6 +31385,17 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
             reset_default_p2p_room_transport_after_game();
             OpenMultiplayerFrontendForActiveMode(window);
             append_startup_log("main opened post-game direct-p2p frontend");
+            return 0;
+        }
+        if (lparam == 2) {
+            pause_worker_for_modal_action();
+            g_runtime.suppress_paint = true;
+            HandleDirectDrawFrameBoundary();
+            InvalidateRect(window, nullptr, TRUE);
+            UpdateWindow(window);
+            reset_default_p2p_room_transport_after_game();
+            default_link_open_online(link_lobby_state());
+            append_startup_log("main restored post-game wizardnet lobby");
             return 0;
         }
         if (!open_title_main_menu_frontend(window)) {
