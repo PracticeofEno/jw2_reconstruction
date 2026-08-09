@@ -83,6 +83,29 @@ class ServerIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(read_c_string(page, 0x15, 0x20), "Alice")
         bob_writer.close()
 
+    async def test_lobby_reconnect_resynchronizes_all_member_presence(self) -> None:
+        alice_reader, _ = await self.connect_and_login("Alice")
+        bob_reader, bob_writer = await self.connect_and_login("Bob")
+
+        # Consume Bob's initial real-time login notification on Alice.
+        initial_presence = await read_packet(alice_reader)
+        self.assertEqual(read_u32(initial_presence, 4), 7)
+        self.assertEqual(read_c_string(initial_presence, 0x0D, 0x20), "Bob")
+
+        # Returning from a P2P game must produce a complete snapshot even when
+        # the other client returned while this client was outside the lobby UI.
+        bob_writer.write(build_packet(0x0E, b"\0" * 8))
+        await bob_writer.drain()
+        returned_names = {
+            read_c_string(await read_packet(bob_reader), 0x0D, 0x20),
+            read_c_string(await read_packet(bob_reader), 0x0D, 0x20),
+        }
+        self.assertEqual(returned_names, {"Alice", "Bob"})
+
+        repeated_presence = await read_packet(alice_reader)
+        self.assertEqual(read_u32(repeated_presence, 4), 7)
+        self.assertEqual(read_c_string(repeated_presence, 0x0D, 0x20), "Bob")
+
     async def test_host_advertisement_is_returned_to_join_browser(self) -> None:
         host_reader, host_writer = await self.connect_and_login("Host")
         join_reader, join_writer = await self.connect_and_login("Joiner")

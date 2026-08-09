@@ -283,6 +283,16 @@ class RankerServer:
         if session.hosted_game_id is not None:
             await self._remove_game(session.hosted_game_id)
         session.view = "online"
+        # A WizardNet game keeps the authenticated TCP connection alive while
+        # both clients are in the P2P session. They can return in either order,
+        # so real-time presence notifications alone are insufficient: the
+        # later client was not viewing the online lobby when the earlier one
+        # returned. Send an authoritative snapshot to the returning client and
+        # announce it to peers that have already returned.
+        await self._send_online_presence_snapshot(session)
+        await self._broadcast_online_presence(
+            session, added=True, exclude=session.client_id
+        )
 
     async def _handle_online_reset(self, session: ClientSession, packet: Packet) -> None:
         session.view = "online"
@@ -549,19 +559,29 @@ class RankerServer:
         exclude: int | None = None,
     ) -> None:
         target_lobby = subject.lobby_id if lobby_id is None else lobby_id
-        if added:
-            payload = bytearray(0x61 - HEADER_BYTES)
-            write_fixed_text(payload, 0, 0x20, subject.account)
-            write_u32(payload, 0x4D - HEADER_BYTES, subject.client_id)
-            packet = build_packet(7, payload)
-        else:
-            packet = build_packet(0x23, struct.pack("<I", subject.client_id))
+        packet = (
+            self._build_online_presence_packet(subject)
+            if added
+            else build_packet(0x23, struct.pack("<I", subject.client_id))
+        )
         targets = [
             client
             for client in self.state.lobby_clients(target_lobby)
             if client.view == "online"
         ]
         await self._broadcast(targets, packet, exclude=exclude)
+
+    @staticmethod
+    def _build_online_presence_packet(subject: ClientSession) -> bytes:
+        payload = bytearray(0x61 - HEADER_BYTES)
+        write_fixed_text(payload, 0, 0x20, subject.account)
+        write_u32(payload, 0x4D - HEADER_BYTES, subject.client_id)
+        return build_packet(7, payload)
+
+    async def _send_online_presence_snapshot(self, session: ClientSession) -> None:
+        for member in self.state.lobby_clients(session.lobby_id):
+            if member.authenticated:
+                await self._send(session, self._build_online_presence_packet(member))
 
     async def _broadcast_game_update(
         self, game: AdvertisedGame, *, added: bool, exclude: int | None = None

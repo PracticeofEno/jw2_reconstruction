@@ -1782,7 +1782,11 @@ bool ResumeOnlineLobbyWindow(OnlineLobbyState& state) {
     clear_online_lobby_game_list(state);
     SetOnlineLobbyTab(state, OnlineLobbyTab::Main);
     send_small_async_packet(state, 0x0e, 0x15);
-    queue_online_lobby_game_page_request(state, 0);
+    // Ask the server to begin a fresh paged snapshot after it has processed
+    // the reconnect command.  The 0x11 acknowledgement starts page zero; this
+    // preserves command ordering and avoids relying on stale pre-game list
+    // state when the two P2P clients return at different times.
+    queue_online_lobby_game_list_reset_request(state);
     ShowWindow(state.window, SW_SHOW);
     RedrawWindow(state.window, nullptr, nullptr,
         RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);

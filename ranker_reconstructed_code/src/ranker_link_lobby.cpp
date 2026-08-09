@@ -6744,8 +6744,13 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
     // reconstructed main-window client instead of placing it at desktop 0,0.
     const POINT origin = RankerCenteredFrontendWindowOrigin(
         window_rect.width, window_rect.height);
+    // Construct the complete image-backed lobby while hidden. WS_VISIBLE made
+    // USER32 expose the class window and its standard child controls before
+    // our window procedure and bitmap resources were ready, producing a brief
+    // white frame during a successful join.
+    const DWORD creation_style = kWindowStyleFullscreen & ~WS_VISIBLE;
     state.window = CreateWindowExA(WS_EX_CONTROLPARENT, "Link", "Link",
-        kWindowStyleFullscreen, origin.x, origin.y,
+        creation_style, origin.x, origin.y,
         window_rect.width, window_rect.height,
         parent, nullptr, instance, nullptr);
     if (state.window == nullptr) {
@@ -6904,6 +6909,14 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
     }
     ConfigureDirectPlayMode6WindowDispatch(state.window, state.host_mode);
     SetDirectPlayMessageDispatchMode(6);
+    // Frontend activation normally reparents the popup after this function
+    // returns. Do it before the first ShowWindow so no visible reparent frame
+    // can expose the default background between the join browser and Link.
+    HWND frontend_host = GetAncestor(parent, GA_ROOT);
+    if (frontend_host != nullptr && frontend_host != state.window &&
+        GetParent(state.window) != frontend_host) {
+        SetParent(state.window, frontend_host);
+    }
     // Link is a native GDI window layered over the DirectDraw presentation.
     // Restore and retire the software cursor before its child controls paint;
     // otherwise a later combo repaint can cover only the middle of the
