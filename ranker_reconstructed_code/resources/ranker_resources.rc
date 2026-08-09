@@ -27,3 +27,9 @@ LANGUAGE 0x12, 0x01
 // decoded title cycle plus a single-frame emergency fallback in RCDATA.
 2000 10 "resources/main_menu_bink_fallback_565.bin"
 2001 10 "resources/main_menu_bink_fallback_anim.z"
+
+// Reconstructed WizardNet lobby base, derived from debug_artifacts/lobby.png.
+2002 10 "resources/lobby_base.bmp"
+
+// Reconstructed single-tab WizardNet ranking background.
+2003 10 "resources/view_rank_base.bmp"

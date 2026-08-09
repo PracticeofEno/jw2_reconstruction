@@ -2879,6 +2879,14 @@ void ReturnFromLinkLobby(LinkLobbyState& state) {
     } else if (state.mode == 6 &&
         state.callbacks.open_replay_or_observer_lobby != nullptr) {
         state.callbacks.open_replay_or_observer_lobby(state);
+    } else if ((state.mode == 0 || state.mode == 2) &&
+        state.callbacks.open_online_lobby != nullptr) {
+        // WizardNet create/join rooms are subordinate to the authenticated
+        // online lobby.  Keep the control-server session and return there;
+        // falling through to the generic connection frontend needlessly made
+        // the player choose WizardNet and log in again.
+        state.returned_to_connect = false;
+        state.callbacks.open_online_lobby(state);
     } else if (state.callbacks.open_connect_frontend != nullptr) {
         state.callbacks.open_connect_frontend(state);
     }
@@ -5160,7 +5168,8 @@ void DrawLinkLobbyTabButton(LinkLobbyState& state, int tab_index,
         return;
     }
     const LegacyImageButtonControl& button = state.tab_buttons[tab_index];
-    StretchBitmapMemoryResourceToDc(button.normal_bitmap, draw.hDC, 0, 0);
+    StretchBitmapMemoryResourceToClient(
+        button.normal_bitmap, draw.hDC, draw.hwndItem);
 
     std::array<char, 0x80> text{};
     if (draw.hwndItem != nullptr) {
@@ -6731,6 +6740,17 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
     SetWindowLongPtrA(state.window, GWLP_WNDPROC,
         reinterpret_cast<LONG_PTR>(link_lobby_window_proc));
 
+    // Create/Join screens are destroyed as this lobby takes over.  Move the
+    // WizardNet control-socket notification route at the same transition so
+    // later server synchronization and disconnect events target a live HWND.
+    if ((state.mode == 0 || state.mode == 2) &&
+        state.async_tcp_socket != nullptr &&
+        !RegisterLegacyAsyncTcpSocketEvents(*state.async_tcp_socket, state.window,
+            kLinkLobbyNetworkMessage, FD_READ | FD_WRITE | FD_CLOSE)) {
+        DestroyWindow(state.window);
+        return false;
+    }
+
     if (!create_window_control(state.game_list, state.window, instance, "listbox",
             nullptr, kListBoxStyle, kLinkLobbyListBoxId, layout_at(state, 1)) ||
         !create_scroll(state.game_list_scroll, state.window, "Link List",
@@ -7001,6 +7021,10 @@ LRESULT HandleLinkLobbyWindowMessage(LinkLobbyState& state, HWND hwnd, UINT mess
         SetBkMode(reinterpret_cast<HDC>(wparam), TRANSPARENT);
         return reinterpret_cast<LRESULT>(GetStockObject(BLACK_BRUSH));
     case WM_CTLCOLOREDIT:
+        SetTextColor(reinterpret_cast<HDC>(wparam), kLinkSoftWhite);
+        SetBkColor(reinterpret_cast<HDC>(wparam), kLinkBlack);
+        SetBkMode(reinterpret_cast<HDC>(wparam), OPAQUE);
+        return reinterpret_cast<LRESULT>(GetStockObject(BLACK_BRUSH));
     case WM_CTLCOLORSTATIC:
         SetTextColor(reinterpret_cast<HDC>(wparam), kLinkSoftWhite);
         SetBkColor(reinterpret_cast<HDC>(wparam), kLinkBlack);

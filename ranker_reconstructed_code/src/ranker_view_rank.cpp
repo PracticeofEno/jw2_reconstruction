@@ -32,6 +32,7 @@ constexpr COLORREF kViewRankSoftWhite = RGB(250, 250, 250);
 constexpr COLORREF kViewRankGray = RGB(200, 200, 200);
 constexpr COLORREF kViewRankBlack = RGB(0, 0, 0);
 constexpr COLORREF kViewRankSelectedBlue = RGB(0, 0, 255);
+constexpr int kViewRankReconstructedBackgroundResourceId = 2003;
 
 ViewRankState g_view_rank_state;
 bool g_background_destructor_registered = false;
@@ -116,6 +117,23 @@ void assign_layout(ViewRankState& state, const FrontendLayoutRectTable& table) {
         const FrontendLayoutRect& rect = table.rects[i];
         state.layout.push_back({rect.x, rect.y, rect.width, rect.height});
     }
+}
+
+bool load_reconstructed_view_rank_background(ViewRankState& state) {
+    HMODULE module = state.instance != nullptr ? state.instance :
+        GetModuleHandleA(nullptr);
+    HRSRC info = FindResourceA(module,
+        MAKEINTRESOURCEA(kViewRankReconstructedBackgroundResourceId),
+        RT_RCDATA);
+    if (info == nullptr) {
+        return false;
+    }
+    HGLOBAL loaded = LoadResource(module, info);
+    const DWORD byte_count = SizeofResource(module, info);
+    const void* bytes = loaded != nullptr ? LockResource(loaded) : nullptr;
+    return bytes != nullptr && byte_count != 0 &&
+        LoadBitmapMemoryResourceFromMemory(
+            state.background, bytes, static_cast<std::size_t>(byte_count));
 }
 
 void write_le32(std::vector<u8>& buffer, std::size_t offset, u32 value) {
@@ -408,9 +426,51 @@ void draw_tab_button(ViewRankState& state, int id, const DRAWITEMSTRUCT& draw) {
     if (button == nullptr) {
         return;
     }
-    const bool selected = type_for_tab_id(id) == state.selected_type;
-    StretchBitmapMemoryResourceToDc(
-        selected ? button->pressed_bitmap : button->normal_bitmap, draw.hDC, 0, 0);
+    if (id != kViewRankNormalTabButtonId) {
+        const bool selected = type_for_tab_id(id) == state.selected_type;
+        StretchBitmapMemoryResourceToDc(
+            selected ? button->pressed_bitmap : button->normal_bitmap,
+            draw.hDC, 0, 0);
+        return;
+    }
+
+    // The legacy rank browser had separate Normal, Avatar, and Guild bitmap
+    // labels.  Draw the reconstructed single category from scratch so none of
+    // the old label or underline pixels can remain around its edge.
+    RECT tab_rect = draw.rcItem;
+    HBRUSH tab_brush = CreateSolidBrush(RGB(24, 21, 16));
+    if (tab_brush != nullptr) {
+        FillRect(draw.hDC, &tab_rect, tab_brush);
+        DeleteObject(tab_brush);
+    }
+    for (COLORREF color : {
+             RGB(9, 7, 5), RGB(133, 102, 58), RGB(48, 38, 25)}) {
+        HBRUSH frame_brush = CreateSolidBrush(color);
+        if (frame_brush != nullptr) {
+            FrameRect(draw.hDC, &tab_rect, frame_brush);
+            DeleteObject(frame_brush);
+        }
+        InflateRect(&tab_rect, -1, -1);
+    }
+
+    RECT label_rect = draw.rcItem;
+    InflateRect(&label_rect, -4, -4);
+    const int font_height = std::max(18, static_cast<int>(
+        (draw.rcItem.bottom - draw.rcItem.top) / 2));
+    HFONT font = CreateFontW(-font_height, 0, 0, 0, FW_NORMAL, FALSE, FALSE,
+        FALSE, HANGEUL_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Malgun Gothic");
+    HGDIOBJ old_font = font != nullptr ? SelectObject(draw.hDC, font) : nullptr;
+    SetBkMode(draw.hDC, TRANSPARENT);
+    SetTextColor(draw.hDC, kViewRankSoftWhite);
+    DrawTextW(draw.hDC, L"\ub7ad\ud0b9", -1, &label_rect,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    if (old_font != nullptr) {
+        SelectObject(draw.hDC, old_font);
+    }
+    if (font != nullptr) {
+        DeleteObject(font);
+    }
 }
 
 bool paint_background_if_current(ViewRankState& state, HWND hwnd) {
@@ -627,12 +687,10 @@ void QueueViewRankListRequest(ViewRankState& state, ViewRankListType type,
     write_le32(packet, 0x11, static_cast<u32>(type));
     queue_packet(state, packet.data(), static_cast<i32>(packet.size()));
 
-    for (int id : {kViewRankNormalTabButtonId, kViewRankAvatarTabButtonId,
-             kViewRankGuildTabButtonId}) {
-        if (LegacyImageButtonControl* button = button_for_id(state, id)) {
-            RedrawWindow(button->window, nullptr, nullptr,
-                RDW_INVALIDATE | RDW_UPDATENOW);
-        }
+    if (LegacyImageButtonControl* button =
+            button_for_id(state, kViewRankNormalTabButtonId)) {
+        RedrawWindow(button->window, nullptr, nullptr,
+            RDW_INVALIDATE | RDW_UPDATENOW);
     }
     RedrawViewRankList(state);
 }
@@ -719,6 +777,13 @@ bool CreateViewRankWindow(ViewRankState& state, HWND parent, HINSTANCE instance,
     SetWindowLongPtrA(state.window, GWLP_WNDPROC,
         reinterpret_cast<LONG_PTR>(view_rank_window_proc));
 
+    if (state.async_tcp_socket != nullptr &&
+        !RegisterLegacyAsyncTcpSocketEvents(*state.async_tcp_socket, state.window,
+            kViewRankNetworkMessage, FD_READ | FD_WRITE | FD_CLOSE)) {
+        DestroyWindow(state.window);
+        return false;
+    }
+
     if (!create_text_control(state.list_box, state.window, instance, "listbox",
             kListBoxStyle, kViewRankListBoxId, layout_at(state, 1)) ||
         !create_text_control(state.search_edit, state.window, instance, "edit",
@@ -735,6 +800,18 @@ bool CreateViewRankWindow(ViewRankState& state, HWND parent, HINSTANCE instance,
         }
     }
 
+    if (LegacyImageButtonControl* normal =
+            button_for_id(state, kViewRankNormalTabButtonId)) {
+        SetWindowTextW(normal->window, L"\ub7ad\ud0b9");
+    }
+    for (int removed_tab_id : {
+             kViewRankAvatarTabButtonId, kViewRankGuildTabButtonId}) {
+        if (LegacyImageButtonControl* removed =
+                button_for_id(state, removed_tab_id)) {
+            ShowWindow(removed->window, SW_HIDE);
+        }
+    }
+
     SendMessageA(state.window, WM_SETFONT,
         reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
     SendMessageA(state.list_box.window, WM_SETFONT,
@@ -743,8 +820,12 @@ bool CreateViewRankWindow(ViewRankState& state, HWND parent, HINSTANCE instance,
         reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
 
     InstallViewRankAccelerators(state);
-    LoadBitmapMemoryResourceFromTrcRecord(state.background, "Jw2_19.trc",
-        kViewRankBackgroundBitmapRecord);
+    if (!load_reconstructed_view_rank_background(state) &&
+        !LoadBitmapMemoryResourceFromTrcRecord(state.background, "Jw2_19.trc",
+            kViewRankBackgroundBitmapRecord)) {
+        DestroyWindow(state.window);
+        return false;
+    }
     ShowWindow(state.list_box.window, SW_SHOW);
     if (state.search_name[0] != '\0') {
         SetWindowTextA(state.search_edit.window, state.search_name.data());
@@ -894,19 +975,24 @@ LRESULT HandleViewRankWindowMessage(ViewRankState& state, HWND hwnd, UINT messag
             if (state.window != nullptr) {
                 DestroyWindow(state.window);
             }
-            if (state.parent_window != nullptr) {
-                SetFocus(state.parent_window);
-            }
+            // Closing a WizardNet-owned rank browser must also restore the
+            // control socket's async notifications to the still-live lobby.
+            // The callback falls back to the Connect frontend when this rank
+            // window was opened outside WizardNet.
+            open_connect_frontend(state);
             break;
         case kViewRankGoSiteButtonId:
             play_click_sound(state);
             QueueViewRankSiteRequest(state);
             break;
         case kViewRankNormalTabButtonId:
+            play_click_sound(state);
+            QueueViewRankListRequest(state, ViewRankListType::Normal, 0);
+            break;
         case kViewRankAvatarTabButtonId:
         case kViewRankGuildTabButtonId:
-            play_click_sound(state);
-            QueueViewRankListRequest(state, type_for_tab_id(id), 0);
+            // Retain the legacy IDs for layout/resource compatibility, but the
+            // simplified browser has no hidden category navigation.
             break;
         case kViewRankListBoxId:
             if (notify == LBN_SELCHANGE || notify == LBN_SELCANCEL) {

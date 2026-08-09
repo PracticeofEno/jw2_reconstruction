@@ -875,6 +875,13 @@ bool CreateFreeServerLobbyWindow(FreeServerLobbyState& state, HWND parent,
     SetWindowLongPtrA(state.window, GWLP_WNDPROC,
         reinterpret_cast<LONG_PTR>(free_server_window_proc));
 
+    if (state.async_tcp_socket != nullptr &&
+        !RegisterLegacyAsyncTcpSocketEvents(*state.async_tcp_socket, state.window,
+            kFreeServerNetworkMessage, FD_READ | FD_WRITE | FD_CLOSE)) {
+        DestroyWindow(state.window);
+        return false;
+    }
+
     const FreeServerLayoutRect list_rect = layout_at(layout.table, 3);
     const FreeServerLayoutRect scroll_rect = layout_at(layout.table, 4);
     const FreeServerLayoutRect combo_rect = layout_at(layout.table, 8);

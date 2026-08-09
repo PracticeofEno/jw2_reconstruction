@@ -1286,6 +1286,13 @@ void return_from_cancel(CreateGameState& state) {
         }
         return;
     }
+    if (state.mode == 0 && state.callbacks.open_online_lobby != nullptr) {
+        // WizardNet's create screen is subordinate to the authenticated
+        // online lobby.  Cancelling it restores that lobby and its control
+        // socket route instead of falling through to connection selection.
+        state.callbacks.open_online_lobby(state);
+        return;
+    }
     if (state.callbacks.open_connect_frontend != nullptr) {
         state.callbacks.open_connect_frontend(state);
     } else {
@@ -1585,6 +1592,18 @@ bool CreateCreateGameWindow(CreateGameState& state, HWND parent, HINSTANCE insta
     }
     SetWindowLongPtrA(state.window, GWLP_WNDPROC,
         reinterpret_cast<LONG_PTR>(create_game_window_proc));
+
+    // WSAAsyncSelect delivers a socket's events to exactly one window.  The
+    // online lobby originally owned this route; transfer it before the host
+    // request can be submitted so opcode 0x1a reaches this screen rather than
+    // remaining unread in the hidden lobby.
+    if ((state.mode == 0 || state.mode == 2) &&
+        state.async_tcp_socket != nullptr &&
+        !RegisterLegacyAsyncTcpSocketEvents(*state.async_tcp_socket, state.window,
+            kCreateGameNetworkMessage, FD_READ | FD_WRITE | FD_CLOSE)) {
+        DestroyWindow(state.window);
+        return false;
+    }
 
     if (!create_text_control(state.name_edit, state.window, instance, "edit",
             kEditStyle, kCreateGameNameEditId, layout_at(state, 1)) ||

@@ -112,6 +112,7 @@ struct CreateGameCallbacks {
     CreateGameActionCallback open_link_lobby = nullptr;
     CreateGameActionCallback open_p2p_lobby = nullptr;
     CreateGameActionCallback open_ipx_lobby = nullptr;
+    CreateGameActionCallback open_online_lobby = nullptr;
     CreateGameActionCallback open_connect_frontend = nullptr;
     CreateGameActionCallback open_network_ai_lobby = nullptr;
     CreateGameMessageCallback show_message = nullptr;

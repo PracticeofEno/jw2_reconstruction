@@ -280,6 +280,8 @@ class RankerServer:
         return all(character.isprintable() and not character.isspace() for character in value)
 
     async def _handle_lobby_reconnect(self, session: ClientSession, packet: Packet) -> None:
+        if session.hosted_game_id is not None:
+            await self._remove_game(session.hosted_game_id)
         session.view = "online"
 
     async def _handle_online_reset(self, session: ClientSession, packet: Packet) -> None:
@@ -419,7 +421,8 @@ class RankerServer:
             (
                 game
                 for game in self.state.lobby_games(session.lobby_id)
-                if game.name.casefold() == name.casefold()
+                if game.host_client_id != session.client_id
+                and game.name.casefold() == name.casefold()
             ),
             None,
         )

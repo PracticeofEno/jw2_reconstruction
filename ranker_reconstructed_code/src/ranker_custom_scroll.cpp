@@ -7,7 +7,6 @@ namespace {
 
 constexpr DWORD kScrollWindowExStyle = WS_EX_CONTROLPARENT;
 constexpr DWORD kVisibleScrollStyle = WS_CHILD | WS_VISIBLE | BS_OWNERDRAW;
-constexpr DWORD kHiddenScrollStyle = WS_CHILD | BS_OWNERDRAW;
 constexpr UINT kScrollRedrawFlags = RDW_INVALIDATE | RDW_NOERASE;
 
 HINSTANCE parent_instance(HWND parent) {
@@ -65,8 +64,15 @@ void update_thumb_position(LegacyCustomScrollControl& control) {
     control.thumb_position = (travel * control.value) / range + margin;
 }
 
-void draw_bitmap_at(const BitmapMemoryResource& bitmap, HDC dc, int x, int y) {
-    StretchBitmapMemoryResourceToDc(bitmap, dc, x, y);
+void draw_bitmap_stretched(const BitmapMemoryResource& bitmap, HDC dc,
+    int x, int y, int width, int height) {
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+    const BitmapDrawRect destination{x, y, width, height};
+    const BitmapDrawRect source{
+        bitmap.source_x, bitmap.source_y, bitmap.width, bitmap.height};
+    StretchBitmapMemoryResourceRectToDc(bitmap, dc, destination, source);
 }
 
 void redraw_scroll_window(const LegacyCustomScrollControl& control) {
@@ -74,26 +80,19 @@ void redraw_scroll_window(const LegacyCustomScrollControl& control) {
 }
 
 void draw_thumb_track(const LegacyCustomScrollControl& control, HDC dc) {
-    const int bitmap_width = GetBitmapMemoryResourceWidth(control.track_bitmap);
-    const int bitmap_height = GetBitmapMemoryResourceHeight(control.track_bitmap);
-
-    HDC memory_dc = CreateCompatibleDC(dc);
-    HBITMAP memory_bitmap = CreateCompatibleBitmap(dc, bitmap_width, bitmap_height);
-    SelectObject(memory_dc, memory_bitmap);
-    draw_bitmap_at(control.track_bitmap, memory_dc, 0, 0);
     if (control.horizontal) {
-        draw_bitmap_at(control.thumb_bitmap, memory_dc,
-            control.thumb_position - control.horizontal_margin, 0);
-        BitBlt(dc, control.horizontal_margin, 0, bitmap_width, bitmap_height,
-            memory_dc, 0, 0, SRCCOPY);
+        draw_bitmap_stretched(control.track_bitmap, dc,
+            control.horizontal_margin, 0,
+            control.width - control.horizontal_margin * 2, control.height);
+        draw_bitmap_stretched(control.thumb_bitmap, dc,
+            control.thumb_position, 0, control.thumb_width, control.height);
     } else {
-        draw_bitmap_at(control.thumb_bitmap, memory_dc, 0,
-            control.thumb_position - control.vertical_margin);
-        BitBlt(dc, 0, control.vertical_margin, bitmap_width, bitmap_height,
-            memory_dc, 0, 0, SRCCOPY);
+        draw_bitmap_stretched(control.track_bitmap, dc,
+            0, control.vertical_margin, control.width,
+            control.height - control.vertical_margin * 2);
+        draw_bitmap_stretched(control.thumb_bitmap, dc,
+            0, control.thumb_position, control.width, control.thumb_height);
     }
-    DeleteDC(memory_dc);
-    DeleteObject(memory_bitmap);
 }
 
 int lparam_x(LPARAM lparam) {
@@ -218,36 +217,38 @@ void DrawLegacyCustomScrollControl(LegacyCustomScrollControl& control, HDC dc) {
         return;
     }
 
+    RECT client{};
+    GetClientRect(control.window, &client);
+    FillRect(dc, &client,
+        reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+
     update_thumb_position(control);
     if (control.horizontal) {
-        draw_bitmap_at(control.start_bitmap, dc, 0, 0);
-        draw_bitmap_at(control.end_bitmap, dc,
-            control.width - control.horizontal_margin, 0);
+        draw_bitmap_stretched(control.start_bitmap, dc, 0, 0,
+            control.horizontal_margin, control.height);
+        draw_bitmap_stretched(control.end_bitmap, dc,
+            control.width - control.horizontal_margin, 0,
+            control.horizontal_margin, control.height);
     } else {
-        draw_bitmap_at(control.start_bitmap, dc, 0, 0);
-        draw_bitmap_at(control.end_bitmap, dc, 0,
-            control.height - control.vertical_margin);
+        draw_bitmap_stretched(control.start_bitmap, dc, 0, 0,
+            control.width, control.vertical_margin);
+        draw_bitmap_stretched(control.end_bitmap, dc, 0,
+            control.height - control.vertical_margin,
+            control.width, control.vertical_margin);
     }
     draw_thumb_track(control, dc);
 }
 
 void SetLegacyCustomScrollControlVisible(LegacyCustomScrollControl& control,
     bool visible) {
-    if (control.visible == visible) {
-        return;
-    }
     control.visible = visible;
 
     if (!visible) {
-        HDC dc = GetDC(control.window);
-        BitBlt(dc, 0, 0, control.width, control.height, nullptr, 0, 0,
-            BLACKNESS);
-        SetWindowLongPtrA(control.window, GWL_STYLE, kHiddenScrollStyle);
-        ReleaseDC(control.window, dc);
+        ShowWindow(control.window, SW_HIDE);
         return;
     }
 
-    SetWindowLongPtrA(control.window, GWL_STYLE, kVisibleScrollStyle);
+    ShowWindow(control.window, SW_SHOWNOACTIVATE);
     redraw_scroll_window(control);
 }
 

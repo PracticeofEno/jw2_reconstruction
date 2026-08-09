@@ -59,7 +59,10 @@ constexpr UINT kOnlineLobbyNetworkMessage = 0x465;
 constexpr UINT kOnlineLobbyCopiedTextMessage = 0x501;
 constexpr UINT kOnlineLobbyMakeSelectedIconBitmapMessage = 0x517;
 constexpr std::size_t kOnlineLobbyButtonCount = 28;
-constexpr std::size_t kOnlineLobbyTabCount = 4;
+// The reconstructed lobby exposes only the Main tab.  Keep the legacy button
+// slots in the state layout for wire/UI compatibility, but present a real
+// single-tab interface instead of reserving four visible tab cells.
+constexpr std::size_t kOnlineLobbyTabCount = 1;
 constexpr std::size_t kOnlineLobbyChatRowLimit = 300;
 
 constexpr int OnlineLobbyButtonLayoutIndex(int button_spec_index) {
@@ -326,6 +329,7 @@ void RestoreOnlineLobbyAccelerators(OnlineLobbyState& state);
 void ShowOnlineLobbyControl(HWND window);
 void HideOnlineLobbyControl(HWND window);
 void SetOnlineLobbyTab(OnlineLobbyState& state, OnlineLobbyTab tab);
+bool ResumeOnlineLobbyWindow(OnlineLobbyState& state);
 bool CopySelectedOnlineLobbyGameListText(OnlineLobbyState& state, char* output,
     std::size_t output_size);
 void* PostOnlineLobbyColoredTextPayload(OnlineLobbyState& state, const char* text);

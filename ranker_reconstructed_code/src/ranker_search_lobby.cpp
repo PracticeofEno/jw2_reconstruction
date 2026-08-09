@@ -959,7 +959,7 @@ LRESULT HandleSearchLobbyWindowMessage(SearchLobbyState& state, HWND hwnd, UINT 
             if (state.callbacks.focus_parent_control != nullptr) {
                 state.callbacks.focus_parent_control(state);
             }
-            close_search_window(state, false);
+            close_search_window(state, true);
             return 0;
         case kSearchLobbyNameListId:
             if (notify == LBN_DBLCLK) {

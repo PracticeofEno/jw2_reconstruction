@@ -50,8 +50,14 @@ constexpr DWORD kChatListStyle = WS_CHILD | WS_VISIBLE | WS_DISABLED |
     LBS_NOTIFY | LBS_OWNERDRAWFIXED;
 constexpr DWORD kRichEditStyle = WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL |
     ES_NOHIDESEL;
-constexpr DWORD kSendButtonStyle = WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON;
-constexpr DWORD kOwnerDrawStyle = WS_CHILD | WS_VISIBLE | BS_OWNERDRAW;
+// Several of the original owner-draw controls overlap by design.  In
+// particular, TAB BG occupies the same rectangle as the main action buttons.
+// Without sibling clipping a delayed repaint of that decorative control
+// erases the Create/Join/Rank pixels even though the buttons remain clickable.
+constexpr DWORD kSendButtonStyle =
+    WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | BS_DEFPUSHBUTTON;
+constexpr DWORD kOwnerDrawStyle =
+    WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | BS_OWNERDRAW;
 constexpr COLORREF kOnlineLobbyWhite = RGB(255, 255, 255);
 constexpr COLORREF kOnlineLobbyMuted = RGB(200, 200, 200);
 constexpr COLORREF kOnlineLobbySystemText = RGB(0, 250, 0);
@@ -74,6 +80,8 @@ constexpr DWORD kWindowStyleWindowed =
     WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
 constexpr std::size_t kStartupFriendAddTargetPromptRow = 209;
 constexpr std::size_t kStartupFriendRemoveTargetPromptRow = 210;
+constexpr int kOnlineLobbyReconstructedBackgroundResourceId = 2002;
+constexpr u32 kOnlineLobbyChatFontIndex = 3;
 
 constexpr OnlineLobbyButtonSpec kButtonSpecs[kOnlineLobbyButtonCount] = {
     {kOnlineLobbyNameButtonId, "Lobby Name", 0, 0, false},
@@ -152,6 +160,23 @@ struct FrontendLayoutTableOwner {
     }
 };
 
+bool load_reconstructed_lobby_background(OnlineLobbyState& state) {
+    HMODULE module = state.instance != nullptr ? state.instance :
+        GetModuleHandleA(nullptr);
+    HRSRC info = FindResourceA(module,
+        MAKEINTRESOURCEA(kOnlineLobbyReconstructedBackgroundResourceId),
+        RT_RCDATA);
+    if (info == nullptr) {
+        return false;
+    }
+    HGLOBAL loaded = LoadResource(module, info);
+    const DWORD byte_count = SizeofResource(module, info);
+    const void* bytes = loaded != nullptr ? LockResource(loaded) : nullptr;
+    return bytes != nullptr && byte_count != 0 &&
+        LoadBitmapMemoryResourceFromMemory(
+            state.background, bytes, static_cast<std::size_t>(byte_count));
+}
+
 std::vector<OnlineLobbyLayoutRect> copy_layout_record(
     const FrontendLayoutRectTable& table) {
     std::vector<OnlineLobbyLayoutRect> rects;
@@ -174,6 +199,29 @@ OnlineLobbyLayoutRect layout_at(const OnlineLobbyState& state,
     return OnlineLobbyLayoutRect{};
 }
 
+OnlineLobbyLayoutRect simplified_main_panel_rect(
+    const OnlineLobbyState& state) {
+    OnlineLobbyLayoutRect panel = layout_at(state, 14);
+    const OnlineLobbyLayoutRect root = layout_at(state, 0);
+    const OnlineLobbyLayoutRect create = layout_at(state, 16);
+    const OnlineLobbyLayoutRect join = layout_at(state, 17);
+    const OnlineLobbyLayoutRect rank = layout_at(state, 19);
+    const i32 gap = ScaleFrontendLayoutValue(12, 1024,
+        std::max<i32>(1, root.width));
+    const i32 inset = ScaleFrontendLayoutValue(12, 1024,
+        std::max<i32>(1, root.width));
+
+    // The old content background extended under all four legacy tabs.  Its
+    // reconstructed Main page contains only three actions, so terminate the
+    // panel immediately after Rank instead of leaving three empty tab cells'
+    // worth of framed space on the right.
+    const i32 content_width = inset + create.width + gap + join.width + gap +
+        rank.width + inset;
+    panel.width = std::clamp<i32>(content_width, 1,
+        std::max<i32>(1, panel.width));
+    return panel;
+}
+
 OnlineLobbyLayoutRect arrange_simplified_main_action(
     const OnlineLobbyState& state, int control_id, OnlineLobbyLayoutRect rect) {
     if (control_id != kOnlineLobbyCreateGameButtonId &&
@@ -186,12 +234,19 @@ OnlineLobbyLayoutRect arrange_simplified_main_action(
     const OnlineLobbyLayoutRect create = layout_at(state, 16);
     const OnlineLobbyLayoutRect join = layout_at(state, 17);
     const OnlineLobbyLayoutRect rank = layout_at(state, 19);
-    const OnlineLobbyLayoutRect action_panel = layout_at(state, 14);
+    const OnlineLobbyLayoutRect action_panel = simplified_main_panel_rect(state);
     const i32 gap = ScaleFrontendLayoutValue(12, 1024,
         std::max<i32>(1, root.width));
-    const i32 panel_inset = ScaleFrontendLayoutValue(2, 1024,
+    const i32 panel_inset = ScaleFrontendLayoutValue(12, 1024,
         std::max<i32>(1, root.width));
+    const i32 vertical_inset = ScaleFrontendLayoutValue(12, 600,
+        std::max<i32>(1, root.height));
     const i32 first_x = std::max<i32>(0, action_panel.x + panel_inset);
+
+    // The reconstructed background has a compact framed group for these
+    // three actions.  Center their live windows inside that frame so the
+    // painted buttons and their hit targets stay aligned.
+    rect.y = std::max<i32>(0, action_panel.y + vertical_inset);
 
     if (control_id == kOnlineLobbyCreateGameButtonId) {
         rect.x = first_x;
@@ -203,31 +258,86 @@ OnlineLobbyLayoutRect arrange_simplified_main_action(
     return rect;
 }
 
-void paint_simplified_menu_masks(const OnlineLobbyState& state, HDC dc) {
-    if (dc == nullptr) {
+OnlineLobbyLayoutRect arrange_chat_composer_control(
+    const OnlineLobbyState& state, OnlineLobbyLayoutRect rect) {
+    const OnlineLobbyLayoutRect root = layout_at(state, 0);
+    const i32 separation = ScaleFrontendLayoutValue(8, 768,
+        std::max<i32>(1, root.height));
+    rect.y += separation;
+    return rect;
+}
+
+HFONT online_lobby_chat_font() {
+    // The -16 UI font fills the 22-pixel RichEdit comfortably while leaving
+    // enough top/bottom breathing room for Korean glyphs and inline icons.
+    HFONT font = GetUiFontHandle(kOnlineLobbyChatFontIndex);
+    return font != nullptr ? font :
+        reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+}
+
+int online_lobby_chat_row_height(const OnlineLobbyState& state) {
+    const OnlineLobbyLayoutRect edit =
+        arrange_chat_composer_control(state, layout_at(state, 6));
+    return std::max(18, edit.height - 2);
+}
+
+void frame_online_lobby_rect(HDC dc, RECT rect, COLORREF color) {
+    HBRUSH brush = CreateSolidBrush(color);
+    if (brush != nullptr) {
+        FrameRect(dc, &rect, brush);
+        DeleteObject(brush);
+    }
+}
+
+void fill_online_lobby_rect(HDC dc, const RECT& rect, COLORREF color) {
+    HBRUSH brush = CreateSolidBrush(color);
+    if (brush != nullptr) {
+        FillRect(dc, &rect, brush);
+        DeleteObject(brush);
+    }
+}
+
+void paint_online_lobby_dynamic_chrome(
+    const OnlineLobbyState& state, HDC dc) {
+    const OnlineLobbyLayoutRect root = layout_at(state, 0);
+    const OnlineLobbyLayoutRect edit =
+        arrange_chat_composer_control(state, layout_at(state, 6));
+    const OnlineLobbyLayoutRect send =
+        arrange_chat_composer_control(state, layout_at(state, 7));
+    const OnlineLobbyLayoutRect whisper =
+        arrange_chat_composer_control(state, layout_at(state, 8));
+    if (dc == nullptr || root.width <= 0 || edit.width <= 0 ||
+        edit.height <= 0 || send.height <= 0 || whisper.x <= edit.x) {
         return;
     }
 
-    const OnlineLobbyLayoutRect friends_tab = layout_at(state, 11);
-    const OnlineLobbyLayoutRect personal_tab = layout_at(state, 13);
-    RECT removed_tabs{
-        friends_tab.x,
-        friends_tab.y,
-        personal_tab.x + personal_tab.width,
-        personal_tab.y + personal_tab.height,
+    const int horizontal_padding = ScaleFrontendLayoutValue(8, 1024,
+        std::max(1, root.width));
+    const int vertical_padding = ScaleFrontendLayoutValue(5, 768,
+        std::max(1, root.height));
+    RECT frame{
+        std::max(0, edit.x - horizontal_padding),
+        std::max(0, std::min(send.y, edit.y - vertical_padding)),
+        std::min(root.width, std::min(
+            whisper.x - horizontal_padding,
+            edit.x + edit.width + horizontal_padding)),
+        std::min(root.height, std::max(
+            send.y + send.height,
+            edit.y + edit.height + vertical_padding)),
     };
-    FillRect(dc, &removed_tabs,
-        reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+    if (frame.right <= frame.left || frame.bottom <= frame.top) {
+        return;
+    }
 
-    const OnlineLobbyLayoutRect cancel = layout_at(state, 20);
-    RECT removed_cancel{
-        cancel.x,
-        cancel.y,
-        cancel.x + cancel.width,
-        cancel.y + cancel.height,
-    };
-    FillRect(dc, &removed_cancel,
-        reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+    // The background contains only the static lobby masonry.  Build the chat
+    // composer around the real RichEdit rectangle so its field and the three
+    // live icon buttons share one baseline instead of overlapping baked art.
+    fill_online_lobby_rect(dc, frame, RGB(0, 0, 0));
+    frame_online_lobby_rect(dc, frame, RGB(10, 8, 5));
+    InflateRect(&frame, -1, -1);
+    frame_online_lobby_rect(dc, frame, RGB(151, 116, 66));
+    InflateRect(&frame, -1, -1);
+    frame_online_lobby_rect(dc, frame, RGB(47, 37, 24));
 }
 
 void write_color_segment(u8* segment, COLORREF color, std::size_t text_length) {
@@ -535,17 +645,22 @@ void draw_online_lobby_chat_item(OnlineLobbyState& state,
         return;
     }
 
+    HGDIOBJ previous_font = SelectObject(draw.hDC, online_lobby_chat_font());
     RECT fill = draw.rcItem;
     FillRect(draw.hDC, &fill, reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
     const auto* first =
         reinterpret_cast<const u8*>(draw.itemData);
     if (first == nullptr ||
         reinterpret_cast<LPARAM>(first) == static_cast<LPARAM>(LB_ERR)) {
+        if (previous_font != nullptr && previous_font != HGDI_ERROR) {
+            SelectObject(draw.hDC, previous_font);
+        }
         return;
     }
 
     RECT text_rect = draw.rcItem;
     text_rect.left += 2;
+    text_rect.top += 2;
     const u8* second = next_segment(first);
     int prefix_width = kOnlineLobbyChatContinuationMargin;
     if (first[3] != 0) {
@@ -555,6 +670,9 @@ void draw_online_lobby_chat_item(OnlineLobbyState& state,
     }
     text_rect.left += prefix_width;
     draw_segment_text(draw.hDC, text_rect, state.icon_sheet, second, true);
+    if (previous_font != nullptr && previous_font != HGDI_ERROR) {
+        SelectObject(draw.hDC, previous_font);
+    }
 }
 
 void draw_online_lobby_game_item(const DRAWITEMSTRUCT& draw) {
@@ -1170,6 +1288,11 @@ bool create_button_from_spec(OnlineLobbyState& state, int spec_index,
     OnlineLobbyLayoutRect rect = layout_at(state,
         static_cast<std::size_t>(layout_index));
     rect = arrange_simplified_main_action(state, spec.id, rect);
+    if (spec.id == kOnlineLobbySendButtonId ||
+        spec.id == kOnlineLobbyWhisperButtonId ||
+        spec.id == kOnlineLobbyEmoticonButtonId) {
+        rect = arrange_chat_composer_control(state, rect);
+    }
     LegacyImageButtonControl& button =
         state.buttons[static_cast<std::size_t>(spec_index)];
     if (!CreateLegacyImageButtonWindow(button, state.window, spec.text,
@@ -1285,6 +1408,9 @@ void destroy_child_windows(OnlineLobbyState& state) {
 }
 
 void release_resources(OnlineLobbyState& state) {
+    // Clear this first so a transition callback cannot mistake a window whose
+    // controls are currently being destroyed for a resumable lobby.
+    state.resources_ready = false;
     RestoreOnlineLobbyAccelerators(state);
     DestroyOnlineLobbyBackgroundBitmap(state);
     DestroyOnlineLobbyIconTileSheet(state);
@@ -1618,7 +1744,7 @@ void SetOnlineLobbyTab(OnlineLobbyState& state, OnlineLobbyTab tab) {
     show_id(state, kOnlineLobbyFriendsTabButtonId, SW_HIDE);
     show_id(state, kOnlineLobbyGuildTabButtonId, SW_HIDE);
     show_id(state, kOnlineLobbyPersonalTabButtonId, SW_HIDE);
-    show_id(state, kOnlineLobbyTabBackgroundButtonId, SW_SHOW);
+    show_id(state, kOnlineLobbyTabBackgroundButtonId, SW_HIDE);
 
     show_group(state, kMainTabControls, SW_HIDE);
     show_group(state, kFriendsTabControls, SW_HIDE);
@@ -1627,8 +1753,7 @@ void SetOnlineLobbyTab(OnlineLobbyState& state, OnlineLobbyTab tab) {
     show_group(state, kSimplifiedMainTabControls, SW_SHOW);
     show_id(state, IDCANCEL, SW_HIDE);
 
-    for (int tab_id : {kOnlineLobbyMainTabButtonId,
-             kOnlineLobbyTabBackgroundButtonId}) {
+    for (int tab_id : {kOnlineLobbyMainTabButtonId}) {
         if (LegacyImageButtonControl* button = button_by_id(state, tab_id)) {
             if (button->window != nullptr) {
                 RedrawWindow(button->window, nullptr, nullptr,
@@ -1636,6 +1761,35 @@ void SetOnlineLobbyTab(OnlineLobbyState& state, OnlineLobbyTab tab) {
             }
         }
     }
+}
+
+bool ResumeOnlineLobbyWindow(OnlineLobbyState& state) {
+    if (state.window == nullptr || !IsWindow(state.window) ||
+        !state.resources_ready || !state.background.loaded) {
+        return false;
+    }
+    if (state.async_tcp_socket != nullptr &&
+        !RegisterLegacyAsyncTcpSocketEvents(*state.async_tcp_socket, state.window,
+            kOnlineLobbyNetworkMessage, FD_READ | FD_WRITE | FD_CLOSE)) {
+        return false;
+    }
+
+    // The online lobby stays alive underneath the owned Link-room popup.  Put
+    // the control socket back on that existing HWND instead of destroying and
+    // rebuilding the full resource tree during the room's cancel callback.
+    // Refresh the advertised-game page after the server retires our room so a
+    // stale self-owned entry cannot remain in the browser.
+    clear_online_lobby_game_list(state);
+    SetOnlineLobbyTab(state, OnlineLobbyTab::Main);
+    send_small_async_packet(state, 0x0e, 0x15);
+    queue_online_lobby_game_page_request(state, 0);
+    ShowWindow(state.window, SW_SHOW);
+    RedrawWindow(state.window, nullptr, nullptr,
+        RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    if (state.chat_edit != nullptr) {
+        SetFocus(state.chat_edit);
+    }
+    return true;
 }
 
 bool CopySelectedOnlineLobbyGameListText(OnlineLobbyState& state, char* output,
@@ -1833,31 +1987,11 @@ void CaptureOnlineLobbyInlineIconRanges(OnlineLobbyState& state) {
 }
 
 bool ApplyOnlineLobbyChatFloodGuard(OnlineLobbyState& state, const char* text) {
-    if (text == nullptr || *text == '\0') {
-        return false;
-    }
-    const u32 now = GetTickCount();
-    if (now < state.chat_silence_until_tick) {
-        return false;
-    }
-    if (now - state.last_chat_tick < 600 ||
-        state.last_chat_line == text) {
-        ++state.duplicate_chat_count;
-    } else if (state.duplicate_chat_count > 0) {
-        --state.duplicate_chat_count;
-    }
-    if (state.duplicate_chat_count >= 5) {
-        state.duplicate_chat_count = 0;
-        state.chat_silence_until_tick = now + 60000;
-        const char* message = startup_message_row(81,
-            "You cannot send messages for 1 minute due to flood protection.");
-        PostOnlineLobbySingleColorText(state.window,
-            message, 0xfa, 0, 0);
-        return false;
-    }
-    state.last_chat_line = text;
-    state.last_chat_tick = now;
-    return true;
+    // The reconstructed WizardNet server does not impose a chat rate limit.
+    // Keep this compatibility entry point for callers, but accept every
+    // non-empty message instead of applying the legacy one-minute mute.
+    (void)state;
+    return text != nullptr && *text != '\0';
 }
 
 bool ReadOnlineLobbyRichEditTextWithInlineIcons(OnlineLobbyState& state,
@@ -1989,6 +2123,8 @@ void AppendOnlineLobbyChatPayload(OnlineLobbyState& state, const void* locked_pa
     const std::size_t row_size = first_length + second_length + 8;
 
     HDC dc = state.window != nullptr ? GetDC(state.window) : nullptr;
+    HGDIOBJ previous_font = dc != nullptr ?
+        SelectObject(dc, online_lobby_chat_font()) : nullptr;
     const int width = chat_list_width(state);
     const int first_width = first_length != 0 ?
         MeasureGdiTextWidth(dc, text_from_segment(first)) : 0;
@@ -2073,6 +2209,9 @@ void AppendOnlineLobbyChatPayload(OnlineLobbyState& state, const void* locked_pa
     const int count = static_cast<int>(SendMessageA(state.chat_list, LB_GETCOUNT, 0, 0));
     sync_chat_scrollbar(state, count);
     if (dc != nullptr) {
+        if (previous_font != nullptr && previous_font != HGDI_ERROR) {
+            SelectObject(dc, previous_font);
+        }
         ReleaseDC(state.window, dc);
     }
     free_locked_global_pointer(locked_payload);
@@ -2445,7 +2584,8 @@ bool CreateOnlineLobbyWindow(OnlineLobbyState& state, HWND parent,
             chat_scroll_rect.width, chat_scroll_rect.width);
         configure_scroll_for_list(chat_scroll, state.chat_list, 0, 0, false);
     }
-    OnlineLobbyLayoutRect edit_rect = layout_at(state, 6);
+    OnlineLobbyLayoutRect edit_rect =
+        arrange_chat_composer_control(state, layout_at(state, 6));
     state.chat_edit = CreateWindowExA(0, "RICHEDIT", "", kRichEditStyle,
         edit_rect.x, edit_rect.y, edit_rect.width, edit_rect.height, state.window,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kOnlineLobbyChatEditId)),
@@ -2456,6 +2596,10 @@ bool CreateOnlineLobbyWindow(OnlineLobbyState& state, HWND parent,
         subclass_control(state.game_list);
     }
     if (state.chat_list != nullptr) {
+        SendMessageA(state.chat_list, WM_SETFONT,
+            reinterpret_cast<WPARAM>(online_lobby_chat_font()), FALSE);
+        SendMessageA(state.chat_list, LB_SETITEMHEIGHT, 0,
+            static_cast<LPARAM>(online_lobby_chat_row_height(state)));
         state.chat_list_original_proc = reinterpret_cast<WNDPROC>(
             GetWindowLongPtrA(state.chat_list, GWLP_WNDPROC));
         subclass_control(state.chat_list);
@@ -2474,13 +2618,16 @@ bool CreateOnlineLobbyWindow(OnlineLobbyState& state, HWND parent,
             reinterpret_cast<LPARAM>(&state.rich_edit_ole));
         SendMessageA(state.chat_edit, EM_LIMITTEXT, 200, 0);
         SendMessageA(state.chat_edit, WM_SETFONT,
-            reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+            reinterpret_cast<WPARAM>(online_lobby_chat_font()), TRUE);
         SendMessageA(state.chat_edit, EM_SETBKGNDCOLOR, FALSE,
             static_cast<LPARAM>(RGB(0, 0, 0)));
         CHARFORMATA chat_format{};
         chat_format.cbSize = sizeof(chat_format);
-        chat_format.dwMask = CFM_COLOR;
+        chat_format.dwMask = CFM_COLOR | CFM_SIZE;
         chat_format.crTextColor = kOnlineLobbyWhite;
+        // RichEdit 1.0 does not reliably retain WM_SETFONT.  Set the matching
+        // 12-point (240 twip) character height explicitly as well.
+        chat_format.yHeight = 240;
         SendMessageA(state.chat_edit, EM_SETCHARFORMAT, SCF_DEFAULT,
             reinterpret_cast<LPARAM>(&chat_format));
         SendMessageA(state.chat_edit, EM_SETCHARFORMAT, SCF_ALL,
@@ -2488,14 +2635,19 @@ bool CreateOnlineLobbyWindow(OnlineLobbyState& state, HWND parent,
         subclass_control(state.chat_edit);
     }
 
-    LoadBitmapMemoryResourceFromTrcRecord(state.background, "Jw2_19.trc",
-        kOnlineLobbyBackgroundBitmapRecord);
+    if (!load_reconstructed_lobby_background(state) &&
+        !LoadBitmapMemoryResourceFromTrcRecord(state.background, "Jw2_19.trc",
+            kOnlineLobbyBackgroundBitmapRecord)) {
+        DestroyWindow(state.window);
+        return false;
+    }
     InstallOnlineLobbyAccelerators(state);
     SetOnlineLobbyTab(state, OnlineLobbyTab::Main);
     if (state.chat_edit != nullptr) {
         SetFocus(state.chat_edit);
     }
     state.resources_ready = true;
+    state.connected = true;
 
     if (reconnect_packet) {
         send_small_async_packet(state, 0x0e, 0x15);
@@ -2513,6 +2665,14 @@ LRESULT HandleOnlineLobbyWindowMessage(OnlineLobbyState& state, HWND hwnd,
     }
 
     switch (message) {
+    case WM_ERASEBKGND:
+        if (hwnd == state.window && state.background.loaded) {
+            HDC dc = reinterpret_cast<HDC>(wparam);
+            StretchBitmapMemoryResourceToClient(state.background, dc, state.window);
+            paint_online_lobby_dynamic_chrome(state, dc);
+            return TRUE;
+        }
+        break;
     case WM_CTLCOLOREDIT:
     case WM_CTLCOLORLISTBOX:
     case WM_CTLCOLORBTN:
@@ -2529,7 +2689,7 @@ LRESULT HandleOnlineLobbyWindowMessage(OnlineLobbyState& state, HWND hwnd,
             PAINTSTRUCT paint{};
             HDC dc = BeginPaint(hwnd, &paint);
             StretchBitmapMemoryResourceToClient(state.background, dc, state.window);
-            paint_simplified_menu_masks(state, dc);
+            paint_online_lobby_dynamic_chrome(state, dc);
             EndPaint(hwnd, &paint);
         }
         return 0;

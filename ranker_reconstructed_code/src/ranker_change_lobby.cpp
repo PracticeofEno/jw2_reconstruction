@@ -625,7 +625,7 @@ LRESULT HandleChangeLobbyWindowMessage(ChangeLobbyState& state, HWND hwnd, UINT 
             if (state.callbacks.focus_parent_control != nullptr) {
                 state.callbacks.focus_parent_control(state);
             }
-            close_change_lobby(state, false);
+            close_change_lobby(state, true);
             return 0;
         case kChangeLobbyListId:
             if (notify == LBN_SELCHANGE) {

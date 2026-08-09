@@ -120,6 +120,34 @@ class ServerIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(listed[0x8D:0x9D], sockaddr)
         self.assertEqual(listed[0xB9 + 8 : 0xB9 + 16], b"TestMap\0")
 
+        # A host request can race the preceding lobby-reconnect packet when a
+        # player leaves a room and immediately creates another one.  Reusing
+        # the same room name must replace that session's own advertisement,
+        # not fail the duplicate-name check.
+        host_writer.write(build_packet(0x19, request))
+        await host_writer.drain()
+        rehosted = await read_packet(host_reader)
+        self.assertEqual(read_u32(rehosted, 4), 0x1A)
+        self.assertEqual(read_u32(rehosted, 0x0D), 1)
+        replaced = await read_packet(join_reader)
+        readded = await read_packet(join_reader)
+        self.assertEqual(read_u32(replaced, 4), 0x26)
+        self.assertEqual(read_u32(readded, 4), 0x27)
+
+        # Leaving the hosted Link room reconnects the same authenticated
+        # session to WizardNet.  The advertisement must disappear at that
+        # transition rather than remaining as a stale, unjoinable room.
+        host_writer.write(build_packet(0x0E, b"\0" * 8))
+        await host_writer.drain()
+        removed = await read_packet(join_reader)
+        self.assertEqual(read_u32(removed, 4), 0x26)
+
+        join_writer.write(build_packet(0x1D, struct.pack("<I", 0)))
+        await join_writer.drain()
+        empty = await read_packet(join_reader)
+        self.assertEqual(read_u32(empty, 4), 0x1E)
+        self.assertEqual(read_i32(empty, 0xAD), -1)
+
     async def test_fragmented_login_is_accepted(self) -> None:
         reader, writer = await asyncio.open_connection(
             "127.0.0.1", self.server.bound_port

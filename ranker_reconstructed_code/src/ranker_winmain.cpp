@@ -1879,6 +1879,17 @@ void SendMainWindowCloseMessage() {
     SendMessageA(g_runtime.main_window, WM_CLOSE, 0, 0);
 }
 
+constexpr UINT_PTR kFrontendActivationRedrawTimerId = 0x5246;
+
+void CALLBACK deferred_frontend_activation_redraw(HWND window, UINT,
+    UINT_PTR timer_id, DWORD) {
+    KillTimer(window, timer_id);
+    if (window != nullptr && IsWindow(window)) {
+        RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE |
+            RDW_UPDATENOW | RDW_ALLCHILDREN);
+    }
+}
+
 void activate_frontend_window(HWND window, HACCEL accelerators) {
     if (window == nullptr) {
         g_runtime.frontend_route_window = g_runtime.main_window;
@@ -1886,6 +1897,32 @@ void activate_frontend_window(HWND window, HACCEL accelerators) {
         g_runtime.active_accelerators = nullptr;
         return;
     }
+
+    // Frontend transitions can stack a new full-client child window over the
+    // current lobby.  Do not leave that screen nested inside the lobby: the
+    // lobby's individual child controls can then paint independently over the
+    // nested screen even when its window is first in the sibling Z-order.
+    // Preserve the logical return parent stored by each frontend state, but
+    // attach the visual window directly to the main frontend host.
+    HWND frontend_host = GetAncestor(window, GA_ROOT);
+    if (frontend_host != nullptr && frontend_host != window &&
+        GetParent(window) != frontend_host) {
+        SetParent(window, frontend_host);
+    }
+
+    // Windows created hidden and shown after their controls have been
+    // initialized can remain at the bottom of the host's sibling Z-order.
+    // Promote the active frontend first, then repaint it and every descendant
+    // after sibling clipping reflects the final order.
+    SetWindowPos(window, HWND_TOP, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE |
+        RDW_UPDATENOW | RDW_ALLCHILDREN);
+    // WM_PAINT work queued by the old frontend can still run after the click
+    // handler returns.  A timer callback has lower queue priority than paint,
+    // so repaint once more after those stale draws have drained.
+    SetTimer(window, kFrontendActivationRedrawTimerId, USER_TIMER_MINIMUM,
+        deferred_frontend_activation_redraw);
 
     g_runtime.frontend_route_window = window;
     g_runtime.active_accelerator_window = window;
@@ -1939,6 +1976,7 @@ void open_figs_window(HWND parent, HINSTANCE instance, LPARAM return_context);
 void open_create_game_window(HWND parent, HINSTANCE instance, LPARAM return_context,
     int mode);
 void configure_link_lobby_callbacks(LinkLobbyState& state);
+bool resume_existing_online_lobby(HWND expected_parent);
 void run_default_gameplay_session_transition(HWND owner, u32 mode);
 void queue_default_gameplay_session_transition(HWND owner, u32 mode);
 void install_default_gameplay_loop_callbacks(GameplayLoopState& state);
@@ -2376,6 +2414,9 @@ void default_lobby_busy_state(BOOL busy) {
 
 void default_change_return_to_parent(HWND parent, HINSTANCE instance,
     LPARAM return_context) {
+    if (resume_existing_online_lobby(parent)) {
+        return;
+    }
     if (parent != nullptr && IsWindow(parent)) {
         activate_frontend_window(parent, g_runtime.active_accelerators);
         SetFocus(parent);
@@ -2552,6 +2593,22 @@ void configure_online_lobby_callbacks(OnlineLobbyState& state) {
     state.callbacks.user_data = nullptr;
 }
 
+bool resume_existing_online_lobby(HWND expected_parent) {
+    OnlineLobbyState& online = online_lobby_state();
+    if (expected_parent == nullptr || expected_parent != online.window ||
+        !IsWindow(expected_parent)) {
+        return false;
+    }
+
+    configure_online_lobby_callbacks(online);
+    online.local_player_name = default_online_local_player_name();
+    if (!ResumeOnlineLobbyWindow(online)) {
+        return false;
+    }
+    activate_frontend_state(online);
+    return true;
+}
+
 const char* default_online_local_player_name() {
     WizardLoginState& wizard = wizard_login_state();
     if (wizard.account[0] != '\0') {
@@ -2719,6 +2776,14 @@ void configure_p2p_callbacks(P2PLobbyState& state) {
 }
 
 void default_free_open_connect(FreeServerLobbyState& state) {
+    // The same browser is used both by the standalone Free Server route and
+    // by WizardNet's Join Game button.  When its logical parent is the live
+    // authenticated lobby, cancel must restore that exact lobby (and return
+    // socket notifications to it) instead of nesting a new Connect frontend
+    // underneath the old lobby.
+    if (resume_existing_online_lobby(state.parent_window)) {
+        return;
+    }
     open_connect_frontend_window(state.main_window, state.instance, state.return_context);
 }
 
@@ -2757,7 +2822,26 @@ void default_link_open_connect(LinkLobbyState& state) {
 }
 
 void default_link_open_online(LinkLobbyState& state) {
-    open_online_lobby_window(state.main_window, state.instance, state.return_context);
+    // Returning from a Link room reuses the authenticated WizardNet socket.
+    // The reconnect opcode also tells the reconstructed server to retire any
+    // room advertisement owned by this session.  The Link room is an owned
+    // popup over the still-live online lobby, so restore that existing lobby
+    // and its socket route.  This also avoids rebuilding its resource tree
+    // from inside the Link window's cancel callback.
+    OnlineLobbyState& online = online_lobby_state();
+    configure_online_lobby_callbacks(online);
+    online.local_player_name = default_online_local_player_name();
+    if (ResumeOnlineLobbyWindow(online)) {
+        activate_frontend_state(online);
+        return;
+    }
+
+    // Retain a reconstruction fallback for callers that genuinely no longer
+    // have the previous online-lobby window.
+    HWND parent = g_runtime.main_window != nullptr ? g_runtime.main_window :
+        GetParent(state.main_window);
+    open_online_lobby_reconnect_window(parent, state.instance,
+        state.return_context);
 }
 
 void default_link_open_p2p(LinkLobbyState& state) {
@@ -2799,7 +2883,21 @@ bool default_link_finalize_start_sync(LinkLobbyState& state) {
 }
 
 void default_link_shutdown_network(LinkLobbyState& state) {
-    CloseAllLegacySocketRecords();
+    if (state.mode >= 0 && state.mode < 3) {
+        // A Link room owns both the direct-P2P listen socket and its UDP
+        // route.  Merely closing the TCP records leaves the transport marked
+        // initialized and retains the UDP socket across the return to
+        // WizardNet.  Fully retire both transports so an immediate second
+        // host attempt starts with fresh sockets and window notification
+        // routes.
+        ShutdownLegacyTcpNetworking();
+        ShutdownLegacyUdpNetworking();
+        state.shared_peer_socket = INVALID_SOCKET;
+        state.pending_join_socket = INVALID_SOCKET;
+        state.player_sockets.fill(INVALID_SOCKET);
+    } else {
+        CloseAllLegacySocketRecords();
+    }
     if (state.map_download_state == 2 && !state.prepared_map_path.empty()) {
         DeleteFileA(state.prepared_map_path.c_str());
         state.map_download_state = 0;
@@ -2854,6 +2952,21 @@ void default_create_game_open_p2p(CreateGameState& state) {
 
 void default_create_game_open_ipx(CreateGameState& state) {
     open_ipx_lobby_window(state.main_window, state.instance, state.return_context);
+}
+
+void default_create_game_open_online(CreateGameState& state) {
+    OnlineLobbyState& online = online_lobby_state();
+    configure_online_lobby_callbacks(online);
+    online.local_player_name = default_online_local_player_name();
+    if (ResumeOnlineLobbyWindow(online)) {
+        activate_frontend_state(online);
+        return;
+    }
+
+    HWND parent = g_runtime.main_window != nullptr ? g_runtime.main_window :
+        GetParent(state.main_window);
+    open_online_lobby_reconnect_window(parent, state.instance,
+        state.return_context);
 }
 
 void default_create_game_open_connect(CreateGameState& state) {
@@ -2950,6 +3063,7 @@ void configure_create_game_callbacks(CreateGameState& state) {
     state.callbacks.open_link_lobby = default_create_game_open_link_lobby;
     state.callbacks.open_p2p_lobby = default_create_game_open_p2p;
     state.callbacks.open_ipx_lobby = default_create_game_open_ipx;
+    state.callbacks.open_online_lobby = default_create_game_open_online;
     state.callbacks.open_connect_frontend = default_create_game_open_connect;
     state.callbacks.open_network_ai_lobby =
         default_create_game_resume_single_player;
@@ -3239,6 +3353,9 @@ void open_figs_window(HWND parent, HINSTANCE instance, LPARAM return_context) {
 }
 
 void default_view_rank_open_connect(ViewRankState& state) {
+    if (resume_existing_online_lobby(state.parent_window)) {
+        return;
+    }
     HWND parent = g_runtime.main_window != nullptr ? g_runtime.main_window :
         state.main_window;
     open_connect_frontend_window(parent, state.instance, state.return_context);
