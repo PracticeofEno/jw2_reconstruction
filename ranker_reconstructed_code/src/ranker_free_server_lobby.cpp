@@ -579,28 +579,6 @@ void queue_game_type_filter(FreeServerLobbyState& state) {
     queue_server_packet(state, packet.data(), static_cast<i32>(packet.size()));
 }
 
-void queue_joined_game_removal_notice(FreeServerLobbyState& state) {
-    const std::size_t index = selected_entry_index(state);
-    if (index >= state.games.size()) {
-        return;
-    }
-    const int game_id = state.games[index].id;
-    if (game_id < 0) {
-        return;
-    }
-
-    std::vector<u8> packet(0x11, 0);
-    write_le32(packet, 0, 3);
-    write_le32(packet, 4, 0x1b);
-    write_le32(packet, 8, 0x11);
-    write_le32(packet, 0x0d, static_cast<u32>(game_id));
-    queue_server_packet(state, packet.data(), static_cast<i32>(packet.size()));
-
-    state.games.erase(state.games.begin() + static_cast<std::ptrdiff_t>(index));
-    state.selected_index = -1;
-    sync_game_list(state);
-}
-
 void release_resources(FreeServerLobbyState& state) {
     if (state.join_timer != 0 && state.window != nullptr) {
         KillTimer(state.window, state.join_timer);
@@ -1118,7 +1096,6 @@ LRESULT HandleFreeServerLobbyWindowMessage(FreeServerLobbyState& state, HWND hwn
         break;
     case kFreeServerStartGameMessage:
         state.game_start_requested = true;
-        queue_joined_game_removal_notice(state);
         {
             // The joined Link lobby takes ownership of this socket. Detach it
             // before destroying the browser so release_resources keeps it open.

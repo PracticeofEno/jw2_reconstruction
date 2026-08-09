@@ -120,6 +120,16 @@ class ServerIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(listed[0x8D:0x9D], sockaddr)
         self.assertEqual(listed[0xB9 + 8 : 0xB9 + 16], b"TestMap\0")
 
+        # A joining client only selected this advertisement; it does not own
+        # it and must not be able to retire the host's room.
+        join_writer.write(build_packet(0x1B, struct.pack("<I", 1)))
+        await join_writer.drain()
+        join_writer.write(build_packet(0x1D, struct.pack("<I", 0)))
+        await join_writer.drain()
+        still_listed = await read_packet(join_reader)
+        self.assertEqual(read_u32(still_listed, 4), 0x1E)
+        self.assertEqual(read_c_string(still_listed, 0x0D, 0x80), "TestRoom")
+
         # A host request can race the preceding lobby-reconnect packet when a
         # player leaves a room and immediately creates another one.  Reusing
         # the same room name must replace that session's own advertisement,

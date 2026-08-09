@@ -2814,8 +2814,11 @@ void default_free_open_connect(FreeServerLobbyState& state) {
 }
 
 void default_free_start_game(FreeServerLobbyState& state) {
+    const OnlineLobbyState& online = online_lobby_state();
+    const bool joined_from_wizardnet =
+        online.window != nullptr && state.parent_window == online.window;
     open_joined_link_lobby_from_staged_payloads(state.main_window, state.instance,
-        state.return_context, 2, state.game_socket);
+        state.return_context, joined_from_wizardnet ? 0 : 2, state.game_socket);
 }
 
 void configure_free_server_callbacks(FreeServerLobbyState& state) {

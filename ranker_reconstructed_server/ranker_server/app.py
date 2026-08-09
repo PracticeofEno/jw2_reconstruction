@@ -467,6 +467,15 @@ class RankerServer:
 
     async def _handle_remove_game(self, session: ClientSession, packet: Packet) -> None:
         game_id = read_u32(packet.raw, 0x0D)
+        game = self.state.games.get(game_id)
+        if game is None or game.host_client_id != session.client_id:
+            LOGGER.warning(
+                "client %d (%s) attempted to remove unowned game %d",
+                session.client_id,
+                session.account,
+                game_id,
+            )
+            return
         await self._remove_game(game_id)
 
     async def _handle_top_bottom_counts(

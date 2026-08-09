@@ -1234,10 +1234,14 @@ bool send_lobby_transport_payload(LinkLobbyState& state, const void* packet,
             sent = true;
         }
     }
-    if (!sent || state.callbacks.queue_packet != nullptr) {
-        if (state.callbacks.queue_packet != nullptr) {
-            state.callbacks.queue_packet(state, packet, byte_count);
-        }
+    // Modes 0..2 use the room's direct TCP sockets. queue_packet targets the
+    // authenticated WizardNet control socket and is only a fallback for modes
+    // without a live room route. Sending to both streams corrupts the central
+    // protocol as soon as a type-zero Link chat/status payload is emitted: the
+    // control server interprets its text bytes as a packet length and closes
+    // the connection, which in turn tears down the Link lobby.
+    if (!sent && state.callbacks.queue_packet != nullptr) {
+        state.callbacks.queue_packet(state, packet, byte_count);
     }
     return sent || state.callbacks.queue_packet != nullptr;
 }
@@ -5965,6 +5969,13 @@ void HandleLinkLobbyPeerSocketEvent(LinkLobbyState& state, WPARAM socket,
         RegisterLegacySocketRecord(static_cast<SOCKET>(socket));
         break;
     case FD_CLOSE:
+        append_link_lobby_log(
+            "link peer tcp close socket=%llu error=%u accepted=%s countdown=%ld map_bytes=%lu",
+            static_cast<unsigned long long>(socket),
+            static_cast<unsigned>(HIWORD(event)),
+            state.join_accepted ? "yes" : "no",
+            static_cast<long>(state.countdown_value),
+            static_cast<unsigned long>(state.map_download_received_bytes));
         CloseLegacySocketRecord(static_cast<SOCKET>(socket));
         if (state.map_download_received_bytes == 0xffffffffu) {
             const AsyncComContext* context = async_com_state().active_context;
@@ -6072,6 +6083,10 @@ void HandleLinkLobbyAsyncTcpSocketEvent(LinkLobbyState& state, WPARAM,
         return;
     }
     if (network_event == FD_CLOSE) {
+        append_link_lobby_log(
+            "link wizardnet tcp close error=%u mode=%ld accepted=%s",
+            static_cast<unsigned>(HIWORD(event)), static_cast<long>(state.mode),
+            state.join_accepted ? "yes" : "no");
         show_startup_message(state, 5, "Disconnected from the server.",
             kLinkMapFailureRed);
         if (state.async_tcp_socket != nullptr) {
@@ -6912,6 +6927,11 @@ LRESULT HandleLinkLobbyWindowMessage(LinkLobbyState& state, HWND hwnd, UINT mess
         }
         break;
     case WM_DESTROY:
+        append_link_lobby_log(
+            "link window destroy mode=%ld host=%s accepted=%s returned=%s",
+            static_cast<long>(state.mode), state.host_mode ? "yes" : "no",
+            state.join_accepted ? "yes" : "no",
+            state.returned_to_connect ? "yes" : "no");
         if (state.combo_refresh_timer != 0) {
             KillTimer(hwnd, state.combo_refresh_timer);
             state.combo_refresh_timer = 0;
