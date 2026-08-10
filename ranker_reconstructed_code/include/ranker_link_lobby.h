@@ -385,7 +385,8 @@ void HandleLinkLobbyIncomingPlayerJoinRequest(LinkLobbyState& state, u32 sender,
 void ApplyLinkLobbyPlayerRecordPacket(LinkLobbyState& state, const void* packet,
     std::size_t byte_count);
 void HandleLinkLobbyPlayerDisconnectPacket(LinkLobbyState& state,
-    const void* packet, std::size_t byte_count);
+    const void* packet, std::size_t byte_count,
+    SOCKET sender_socket = INVALID_SOCKET);
 void HandleLinkLobbyPlayerRemovalPacket(LinkLobbyState& state, const void* packet,
     std::size_t byte_count);
 void HandleLinkLobbyHostClosedPacket(LinkLobbyState& state);

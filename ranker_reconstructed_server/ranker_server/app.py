@@ -96,6 +96,7 @@ class RankerServer:
             await writer.wait_closed()
             return
 
+        self._configure_client_keepalive(writer)
         client_id = self.state.allocate_client_id()
         session = ClientSession(client_id, reader, writer, peer_host, peer_port)
         self.state.clients[client_id] = session
@@ -120,6 +121,42 @@ class RankerServer:
             LOGGER.exception("client %d handler failed", client_id)
         finally:
             await self._remove_client(session)
+
+    def _configure_client_keepalive(self, writer: asyncio.StreamWriter) -> None:
+        client_socket = writer.get_extra_info("socket")
+        if client_socket is None:
+            return
+        try:
+            client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            if hasattr(socket, "TCP_KEEPIDLE"):
+                client_socket.setsockopt(
+                    socket.IPPROTO_TCP,
+                    socket.TCP_KEEPIDLE,
+                    self.config.client_keepalive_idle_seconds,
+                )
+            elif hasattr(socket, "TCP_KEEPALIVE"):
+                client_socket.setsockopt(
+                    socket.IPPROTO_TCP,
+                    socket.TCP_KEEPALIVE,
+                    self.config.client_keepalive_idle_seconds,
+                )
+            if hasattr(socket, "TCP_KEEPINTVL"):
+                client_socket.setsockopt(
+                    socket.IPPROTO_TCP,
+                    socket.TCP_KEEPINTVL,
+                    self.config.client_keepalive_interval_seconds,
+                )
+            if hasattr(socket, "TCP_KEEPCNT"):
+                client_socket.setsockopt(
+                    socket.IPPROTO_TCP,
+                    socket.TCP_KEEPCNT,
+                    self.config.client_keepalive_probe_count,
+                )
+        except (AttributeError, OSError) as error:
+            # Keep serving older platforms even if they expose only part of
+            # the TCP keepalive option set. A normal FIN/RST is still handled
+            # by _remove_client, while the room TTL remains the final fallback.
+            LOGGER.warning("unable to configure client TCP keepalive: %s", error)
 
     async def _send(self, session: ClientSession, data: bytes) -> None:
         if session.writer.is_closing():

@@ -12,6 +12,9 @@
     "advertise_peer_address": true,
     "public_address": "115.22.136.89",
     "room_ttl_seconds": 21600,
+    "client_keepalive_idle_seconds": 30,
+    "client_keepalive_interval_seconds": 5,
+    "client_keepalive_probe_count": 5,
     "rank_game_count": 10
   },
   "logging": {

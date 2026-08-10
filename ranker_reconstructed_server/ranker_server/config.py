@@ -21,6 +21,9 @@ class ServerConfig:
     advertise_peer_address: bool = True
     public_address: str = ""
     room_ttl_seconds: int = 21600
+    client_keepalive_idle_seconds: int = 30
+    client_keepalive_interval_seconds: int = 5
+    client_keepalive_probe_count: int = 5
     rank_game_count: int = 10
     log_level: str = "INFO"
     account_file: Path | None = None
@@ -36,6 +39,18 @@ class ServerConfig:
             raise ValueError("server.max_lobby_members is outside the supported range")
         if self.room_ttl_seconds < 60:
             raise ValueError("server.room_ttl_seconds must be at least 60")
+        if not 1 <= self.client_keepalive_idle_seconds <= 86400:
+            raise ValueError(
+                "server.client_keepalive_idle_seconds must be between 1 and 86400"
+            )
+        if not 1 <= self.client_keepalive_interval_seconds <= 3600:
+            raise ValueError(
+                "server.client_keepalive_interval_seconds must be between 1 and 3600"
+            )
+        if not 1 <= self.client_keepalive_probe_count <= 100:
+            raise ValueError(
+                "server.client_keepalive_probe_count must be between 1 and 100"
+            )
         if self.rank_game_count < 0:
             raise ValueError("server.rank_game_count must not be negative")
         if self.public_address:
@@ -96,6 +111,24 @@ def load_config(path: str | Path | None = None) -> ServerConfig:
     ).strip()
     config.room_ttl_seconds = int(
         server.get("room_ttl_seconds", config.room_ttl_seconds)
+    )
+    config.client_keepalive_idle_seconds = int(
+        server.get(
+            "client_keepalive_idle_seconds",
+            config.client_keepalive_idle_seconds,
+        )
+    )
+    config.client_keepalive_interval_seconds = int(
+        server.get(
+            "client_keepalive_interval_seconds",
+            config.client_keepalive_interval_seconds,
+        )
+    )
+    config.client_keepalive_probe_count = int(
+        server.get(
+            "client_keepalive_probe_count",
+            config.client_keepalive_probe_count,
+        )
     )
     config.rank_game_count = int(
         server.get("rank_game_count", config.rank_game_count)

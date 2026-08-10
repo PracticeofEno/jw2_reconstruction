@@ -1132,6 +1132,19 @@ SOCKET start_sync_target_socket(const LinkLobbyState& state, int player_index) {
     return state.shared_peer_socket;
 }
 
+int connected_player_for_socket(const LinkLobbyState& state, SOCKET socket) {
+    if (socket == INVALID_SOCKET || socket == 0) {
+        return -1;
+    }
+    for (int player = 0; player < kLinkLobbyAvatarCount; ++player) {
+        if (state.player_socket_connected[player] &&
+            state.player_sockets[player] == socket) {
+            return player;
+        }
+    }
+    return -1;
+}
+
 const void* local_player_record_payload(const LinkLobbyState& state) {
     if (!player_index_valid(state.local_player_index)) {
         return nullptr;
@@ -2896,6 +2909,30 @@ void ReturnFromLinkLobby(LinkLobbyState& state) {
     }
 }
 
+void SendLinkLobbyLocalDeparturePacket(LinkLobbyState& state) {
+    if (state.returned_to_connect || state.mode < 0 || state.mode > 2) {
+        return;
+    }
+
+    if (state.host_mode) {
+        append_link_lobby_log(
+            "link local departure notifying peers host=yes countdown=%ld",
+            static_cast<long>(state.countdown_value));
+        SendLinkLobbyHostClosedPacket(state, INVALID_SOCKET);
+        return;
+    }
+
+    if (!state.join_accepted || !player_index_valid(state.local_player_index)) {
+        return;
+    }
+    append_link_lobby_log(
+        "link local departure notifying host slot=%ld countdown=%ld",
+        static_cast<long>(state.local_player_index),
+        static_cast<long>(state.countdown_value));
+    SendLinkLobbyPlayerDisconnectPacket(state,
+        static_cast<u32>(state.local_player_index));
+}
+
 #define DEFINE_LINK_PLAYER_ROLE_COMBO_CONTROL(N) \
 void InitializeLinkLobbyPlayerRoleComboControl##N(LinkLobbyState& state) { \
     initialize_link_lobby_player_role_combo_control(state, N); \
@@ -3876,7 +3913,7 @@ void ApplyLinkLobbyPlayerRecordPacket(LinkLobbyState& state, const void* packet,
 }
 
 void HandleLinkLobbyPlayerDisconnectPacket(LinkLobbyState& state, const void* packet,
-    std::size_t byte_count) {
+    std::size_t byte_count, SOCKET sender_socket) {
     int player_index = 0;
     if (!packet_player_index(packet, byte_count, player_index)) {
         return;
@@ -3885,6 +3922,17 @@ void HandleLinkLobbyPlayerDisconnectPacket(LinkLobbyState& state, const void* pa
     const AsyncComContext* context = async_com_state().active_context;
     const bool directplay_ready =
         context != nullptr && context->system_message_101_seen;
+    const bool raw_host_departure = state.host_mode && state.mode >= 0 &&
+        state.mode <= 2 && !directplay_ready &&
+        sender_socket != INVALID_SOCKET && sender_socket != 0;
+    if (raw_host_departure &&
+        connected_player_for_socket(state, sender_socket) != player_index) {
+        append_link_lobby_log(
+            "link ignored mismatched departure sender=%llu claimed_slot=%ld",
+            static_cast<unsigned long long>(sender_socket),
+            static_cast<long>(player_index));
+        return;
+    }
     if (state.mode == 3 &&
         link_lobby_player_record_socket(state, player_index) == state.shared_peer_socket &&
         !directplay_ready) {
@@ -3894,12 +3942,25 @@ void HandleLinkLobbyPlayerDisconnectPacket(LinkLobbyState& state, const void* pa
         return;
     }
 
+    if (raw_host_departure) {
+        // The explicit packet is the graceful equivalent of FD_CLOSE. Retire
+        // the sender first so the host's rebroadcast cannot be echoed to the
+        // player that is already leaving.
+        CloseLegacySocketRecord(sender_socket);
+    }
     HandleLinkLobbyPlayerDisconnected(state, static_cast<u32>(player_index));
     state.player_role_values[player_index] = 1;
     PopulateLinkLobbyPlayerRoleComboBox(state, player_index, 1);
     UpdateLinkLobbyTribeComboBoxState(state, player_index);
     UpdateLinkLobbyMapDownloadButtonVisibility(state, player_index);
     UpdateLinkLobbyLatencyButtonVisibility(state, player_index);
+    if (raw_host_departure) {
+        // Raw WizardNet rooms use the host as the authoritative player table.
+        // Relay the departure and reopened slot to every remaining peer.
+        SendLinkLobbyPlayerDisconnectPacket(state,
+            static_cast<u32>(player_index));
+        SendLinkLobbyOpenRolePacket(state, player_index);
+    }
 }
 
 void HandleLinkLobbyPlayerRemovalPacket(LinkLobbyState& state, const void* packet,
@@ -3924,9 +3985,8 @@ void HandleLinkLobbyHostClosedPacket(LinkLobbyState& state) {
     if (state.join_accepted) {
         if (state.countdown_value >= 0) {
             append_link_lobby_log(
-                "link host-close packet accepted during udp start countdown value=%ld",
+                "link explicit host-close accepted during udp start countdown value=%ld",
                 static_cast<long>(state.countdown_value));
-            return;
         }
         ReturnFromLinkLobby(state);
     }
@@ -4444,7 +4504,8 @@ void DispatchLinkLobbyTransportPacket(LinkLobbyState& state, u32 sender,
         BroadcastLinkLobbyRoleSelections(state);
         break;
     case kLinkLobbyPlayerDisconnectOpcode:
-        HandleLinkLobbyPlayerDisconnectPacket(state, packet, effective_size);
+        HandleLinkLobbyPlayerDisconnectPacket(state, packet, effective_size,
+            static_cast<SOCKET>(sender));
         break;
     case kLinkLobbyPlayerRemovalOpcode:
         HandleLinkLobbyPlayerRemovalPacket(state, packet, effective_size);
@@ -6005,6 +6066,21 @@ void HandleLinkLobbyPeerSocketEvent(LinkLobbyState& state, WPARAM socket,
                         "The game host canceled the game.", kLinkMapFailureRed);
                     ReturnFromLinkLobby(state);
                 }
+                else if (state.host_mode) {
+                    const int player_index = connected_player_for_socket(
+                        state, static_cast<SOCKET>(socket));
+                    if (player_index_valid(player_index) &&
+                        player_index != state.local_player_index) {
+                        append_link_lobby_log(
+                            "link raw peer close removing slot=%ld",
+                            static_cast<long>(player_index));
+                        SendLinkLobbyPlayerDisconnectPacket(state,
+                            static_cast<u32>(player_index));
+                        HandleLinkLobbyPlayerDisconnected(state,
+                            static_cast<u32>(player_index));
+                        SendLinkLobbyOpenRolePacket(state, player_index);
+                    }
+                }
             } else {
                 const SOCKET closed_socket = static_cast<SOCKET>(socket);
                 for (int i = 0; i < kLinkLobbyAvatarCount; ++i) {
@@ -7119,6 +7195,7 @@ LRESULT HandleLinkLobbyWindowMessage(LinkLobbyState& state, HWND hwnd, UINT mess
         const int notify = HIWORD(wparam);
         if (id == kLinkLobbyCancelButtonId) {
             HandleDefaultFrontendUiClickSound();
+            SendLinkLobbyLocalDeparturePacket(state);
             ReturnFromLinkLobby(state);
             return 0;
         }

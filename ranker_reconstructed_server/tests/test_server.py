@@ -83,6 +83,27 @@ class ServerIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(read_c_string(page, 0x15, 0x20), "Alice")
         bob_writer.close()
 
+    async def test_client_socket_uses_disconnect_keepalive(self) -> None:
+        _, _ = await self.connect_and_login("Keepalive")
+        session = next(iter(self.server.state.clients.values()))
+        server_socket = session.writer.get_extra_info("socket")
+        self.assertIsNotNone(server_socket)
+        self.assertEqual(
+            server_socket.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE), 1
+        )
+        for option_name, expected in (
+            ("TCP_KEEPIDLE", self.server.config.client_keepalive_idle_seconds),
+            ("TCP_KEEPINTVL", self.server.config.client_keepalive_interval_seconds),
+            ("TCP_KEEPCNT", self.server.config.client_keepalive_probe_count),
+        ):
+            if hasattr(socket, option_name):
+                self.assertEqual(
+                    server_socket.getsockopt(
+                        socket.IPPROTO_TCP, getattr(socket, option_name)
+                    ),
+                    expected,
+                )
+
     async def test_lobby_reconnect_resynchronizes_all_member_presence(self) -> None:
         alice_reader, _ = await self.connect_and_login("Alice")
         bob_reader, bob_writer = await self.connect_and_login("Bob")
@@ -180,6 +201,42 @@ class ServerIntegrationTests(unittest.IsolatedAsyncioTestCase):
         empty = await read_packet(join_reader)
         self.assertEqual(read_u32(empty, 4), 0x1E)
         self.assertEqual(read_i32(empty, 0xAD), -1)
+
+    async def test_abrupt_host_disconnect_removes_advertised_game(self) -> None:
+        host_reader, host_writer = await self.connect_and_login("ForceHost")
+        join_reader, join_writer = await self.connect_and_login("ForceJoin")
+
+        # Consume ForceJoin's presence notification on the host.
+        await read_packet(host_reader)
+
+        request = bytearray(0x409 - HEADER_BYTES)
+        request[0:10] = b"ForceRoom\0"
+        sockaddr = (
+            struct.pack("<H", socket.AF_INET)
+            + struct.pack(">H", 23055)
+            + socket.inet_aton("127.0.0.1")
+            + b"\0" * 8
+        )
+        request[0x10D - HEADER_BYTES : 0x11D - HEADER_BYTES] = sockaddr
+        request[0x12D - HEADER_BYTES + 8 : 0x12D - HEADER_BYTES + 17] = (
+            b"ForceMap\0"
+        )
+        host_writer.write(build_packet(0x19, request))
+        await host_writer.drain()
+        hosted = await read_packet(host_reader)
+        self.assertEqual(read_u32(hosted, 4), 0x1A)
+
+        join_writer.write(build_packet(0x1D, struct.pack("<I", 0)))
+        await join_writer.drain()
+        listed = await read_packet(join_reader)
+        self.assertEqual(read_u32(listed, 4), 0x1E)
+
+        # Abort instead of sending a lobby-reconnect/remove-game request. The
+        # server must retire the host's room and notify active join browsers.
+        host_writer.transport.abort()
+        removed = await asyncio.wait_for(read_packet(join_reader), timeout=2.0)
+        self.assertEqual(read_u32(removed, 4), 0x26)
+        self.assertEqual(read_u32(removed, 0x0D), 1)
 
     async def test_public_address_rewrites_local_host_advertisement(self) -> None:
         self.server.config.public_address = "8.8.8.8"
