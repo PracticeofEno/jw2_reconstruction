@@ -7,6 +7,9 @@
 !ranker_reconstructed_code/CMakeLists.txt
 !ranker_reconstructed_code/READABILITY.md
 
+!ranker_reconstructed_code/config/
+!ranker_reconstructed_code/config/ranker_client.ini
+
 !ranker_reconstructed_code/include/
 !ranker_reconstructed_code/include/**
 

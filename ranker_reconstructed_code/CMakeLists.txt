@@ -1061,6 +1061,7 @@ if (RANKER_BUILD_READABILITY_REGRESSION_TESTS)
 
     add_executable(frontend_window_placement_regression
         tests/frontend_window_placement_regression.cpp
+        src/ranker_client_config.cpp
     )
     target_include_directories(frontend_window_placement_regression PRIVATE
         include
@@ -1073,6 +1074,7 @@ add_executable(ranker_rebuild WIN32
     resources/ranker_resources.rc
     src/main.cpp
     src/imports.cpp
+    src/ranker_client_config.cpp
     src/ranker_winmain.cpp
     src/ranker_cd_audio.cpp
     src/ranker_directx.cpp
@@ -1204,6 +1206,13 @@ add_executable(ranker_rebuild WIN32
     src/ranker_indexed_text_table.cpp
     src/ranker_cycle_timers.cpp
     src/stubs.cpp
+)
+
+add_custom_command(TARGET ranker_rebuild POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/config/ranker_client.ini
+        $<TARGET_FILE_DIR:ranker_rebuild>/ranker_client.ini
+    COMMENT "Copying ranker client display configuration"
 )
 
 target_include_directories(ranker_rebuild PRIVATE

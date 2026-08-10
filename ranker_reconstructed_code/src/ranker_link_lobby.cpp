@@ -51,10 +51,8 @@ constexpr COLORREF kLinkHostCancelRed = RGB(250, 20, 20);
 constexpr COLORREF kLinkDisconnectYellow = RGB(250, 250, 0);
 constexpr COLORREF kLinkMapWaiterYellow = RGB(250, 250, 10);
 constexpr COLORREF kLinkBlack = RGB(0, 0, 0);
-constexpr int kLinkLobbyMapPreviewX = 629;
-constexpr int kLinkLobbyMapPreviewY = 40;
-constexpr u32 kLinkLobbyMapPreviewWidth = 111;
-constexpr u32 kLinkLobbyMapPreviewHeight = 120;
+constexpr u32 kLinkLobbyMapPreviewSourceWidth = 111;
+constexpr u32 kLinkLobbyMapPreviewSourceHeight = 120;
 constexpr UINT_PTR kLinkLobbyComboRefreshTimerId = 3;
 constexpr UINT kLinkLobbyTabTextFlags =
     DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS | DT_MODIFYSTRING;
@@ -669,12 +667,12 @@ void invalidate_link_lobby_map_preview(LinkLobbyState& state) {
     if (state.window == nullptr) {
         return;
     }
-    RECT rect{
-        kLinkLobbyMapPreviewX,
-        kLinkLobbyMapPreviewY,
-        kLinkLobbyMapPreviewX + static_cast<LONG>(kLinkLobbyMapPreviewWidth),
-        kLinkLobbyMapPreviewY + static_cast<LONG>(kLinkLobbyMapPreviewHeight),
-    };
+    const LinkLobbyLayoutRect preview = layout_at(state, 22);
+    if (preview.width <= 0 || preview.height <= 0) {
+        return;
+    }
+    RECT rect{preview.x, preview.y,
+        preview.x + preview.width, preview.y + preview.height};
     RedrawWindow(state.window, &rect, nullptr,
         RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
 }
@@ -694,14 +692,15 @@ bool refresh_link_lobby_map_preview(LinkLobbyState& state) {
     }
     if (state.map_preview_source_path == state.prepared_map_path &&
         state.map_preview_pixels.size() ==
-            static_cast<std::size_t>(kLinkLobbyMapPreviewWidth) *
-                kLinkLobbyMapPreviewHeight) {
+            static_cast<std::size_t>(kLinkLobbyMapPreviewSourceWidth) *
+                kLinkLobbyMapPreviewSourceHeight) {
         return true;
     }
 
     std::vector<u16> pixels;
     if (!RenderGameplaySessionMinimapPreview(state.prepared_map_path.c_str(),
-            kLinkLobbyMapPreviewWidth, kLinkLobbyMapPreviewHeight, pixels)) {
+            kLinkLobbyMapPreviewSourceWidth,
+            kLinkLobbyMapPreviewSourceHeight, pixels)) {
         append_link_lobby_log("link map preview load failed path=%s",
             state.prepared_map_path.c_str());
         clear_link_lobby_map_preview(state, true);
@@ -725,11 +724,13 @@ bool refresh_link_lobby_map_preview(LinkLobbyState& state) {
 }
 
 void draw_link_lobby_map_preview(
-    const LinkLobbyState& state, HDC dc, int target_x, int target_y) {
+    const LinkLobbyState& state, HDC dc, int target_x, int target_y,
+    int target_width, int target_height) {
     const std::size_t expected =
-        static_cast<std::size_t>(kLinkLobbyMapPreviewWidth) *
-        kLinkLobbyMapPreviewHeight;
-    if (dc == nullptr || state.map_preview_pixels.size() < expected) {
+        static_cast<std::size_t>(kLinkLobbyMapPreviewSourceWidth) *
+        kLinkLobbyMapPreviewSourceHeight;
+    if (dc == nullptr || target_width <= 0 || target_height <= 0 ||
+        state.map_preview_pixels.size() < expected) {
         return;
     }
 
@@ -751,19 +752,21 @@ void draw_link_lobby_map_preview(
 
     BITMAPINFO info{};
     info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    info.bmiHeader.biWidth = static_cast<LONG>(kLinkLobbyMapPreviewWidth);
-    info.bmiHeader.biHeight = -static_cast<LONG>(kLinkLobbyMapPreviewHeight);
+    info.bmiHeader.biWidth =
+        static_cast<LONG>(kLinkLobbyMapPreviewSourceWidth);
+    info.bmiHeader.biHeight =
+        -static_cast<LONG>(kLinkLobbyMapPreviewSourceHeight);
     info.bmiHeader.biPlanes = 1;
     info.bmiHeader.biBitCount = 32;
     info.bmiHeader.biCompression = BI_RGB;
 
+    SetStretchBltMode(dc, COLORONCOLOR);
     const int copied_lines = StretchDIBits(dc,
         target_x, target_y,
-        static_cast<int>(kLinkLobbyMapPreviewWidth),
-        static_cast<int>(kLinkLobbyMapPreviewHeight),
+        target_width, target_height,
         0, 0,
-        static_cast<int>(kLinkLobbyMapPreviewWidth),
-        static_cast<int>(kLinkLobbyMapPreviewHeight),
+        static_cast<int>(kLinkLobbyMapPreviewSourceWidth),
+        static_cast<int>(kLinkLobbyMapPreviewSourceHeight),
         rgb_pixels.data(), &info,
         DIB_RGB_COLORS, SRCCOPY);
     if (copied_lines == 0 || copied_lines == GDI_ERROR) {
@@ -777,7 +780,10 @@ void draw_link_lobby_map_preview_control(
     const LinkLobbyState& state, const DRAWITEMSTRUCT& draw) {
     FillRect(draw.hDC, &draw.rcItem,
         reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
-    draw_link_lobby_map_preview(state, draw.hDC, 0, 0);
+    draw_link_lobby_map_preview(state, draw.hDC,
+        draw.rcItem.left, draw.rcItem.top,
+        draw.rcItem.right - draw.rcItem.left,
+        draw.rcItem.bottom - draw.rcItem.top);
 }
 
 int link_lobby_active_start_slot_count(const LinkLobbyState& state) {

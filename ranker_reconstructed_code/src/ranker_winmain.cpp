@@ -3,6 +3,7 @@
 #include "ranker_avatar_window.h"
 #include "ranker_change_password.h"
 #include "ranker_change_lobby.h"
+#include "ranker_client_config.h"
 #include "ranker_connect_frontend.h"
 #include "ranker_control_group_persistence.h"
 #include "ranker_crt_runtime.h"
@@ -771,8 +772,8 @@ struct RuntimeGlobals {
     // layer reproduces cnc-ddraw's configured D3D9 cubic filter, with the
     // windowed DirectDraw stretch retained as a failure fallback.
     bool windowed_mode = true;
-    int presentation_client_width = kOriginalClientWidth;
-    int presentation_client_height = kOriginalClientHeight;
+    int presentation_client_width = kDefaultPresentationClientWidth;
+    int presentation_client_height = kDefaultPresentationClientHeight;
     int presentation_client_x = 0;
     int presentation_client_y = 0;
     bool presentation_position_set = false;
@@ -1262,26 +1263,6 @@ const char* main_window_ddraw_ini_path() {
     return RankerDdrawIniPath().c_str();
 }
 
-bool read_ddraw_ini_boolean(const char* key, bool fallback) {
-    char value[32]{};
-    GetPrivateProfileStringA("ddraw", key, fallback ? "true" : "false",
-        value, static_cast<DWORD>(sizeof(value)), main_window_ddraw_ini_path());
-    std::string normalized(value);
-    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
-        [](unsigned char character) {
-            return static_cast<char>(std::tolower(character));
-        });
-    if (normalized == "true" || normalized == "yes" ||
-        normalized == "on" || normalized == "1") {
-        return true;
-    }
-    if (normalized == "false" || normalized == "no" ||
-        normalized == "off" || normalized == "0") {
-        return false;
-    }
-    return fallback;
-}
-
 bool read_ddraw_ini_integer(const char* key, int& value) {
     char text[32]{};
     if (GetPrivateProfileStringA("ddraw", key, "", text,
@@ -1290,8 +1271,8 @@ bool read_ddraw_ini_integer(const char* key, int& value) {
     }
     char* end = nullptr;
     // cnc-ddraw hotkeys are conventionally stored as hexadecimal virtual-key
-    // values (for example 0x09 and 0xA3), while sizes and positions are
-    // decimal.  Base zero accepts both forms exactly as its config loader does.
+    // values (for example 0x09 and 0xA3).  Base zero accepts those values
+    // exactly as its config loader does.
     const long parsed = std::strtol(text, &end, 0);
     if (end == text || *end != '\0' ||
         parsed < std::numeric_limits<int>::min() ||
@@ -1303,31 +1284,16 @@ bool read_ddraw_ini_integer(const char* key, int& value) {
 }
 
 void load_main_window_presentation_settings() {
-    g_runtime.presentation_client_width = kOriginalClientWidth;
-    g_runtime.presentation_client_height = kOriginalClientHeight;
-    g_runtime.presentation_position_set = false;
-    g_runtime.presentation_resizable = true;
-    g_runtime.presentation_border = true;
+    const RankerClientDisplayConfig display = LoadRankerClientDisplayConfig();
+    g_runtime.presentation_client_width = display.width;
+    g_runtime.presentation_client_height = display.height;
+    g_runtime.presentation_client_x = display.x;
+    g_runtime.presentation_client_y = display.y;
+    g_runtime.presentation_position_set = display.position_set;
+    g_runtime.presentation_resizable = display.resizable;
+    g_runtime.presentation_border = display.border;
     g_runtime.cursor_unlock_key1 = VK_TAB;
     g_runtime.cursor_unlock_key2 = VK_RCONTROL;
-
-    if (GetFileAttributesA(main_window_ddraw_ini_path()) == INVALID_FILE_ATTRIBUTES ||
-        !read_ddraw_ini_boolean("windowed", false)) {
-        return;
-    }
-
-    int width = kOriginalClientWidth;
-    int height = kOriginalClientHeight;
-    if (!read_ddraw_ini_integer("width", width) || width <= 0 || width > 0x7fff) {
-        width = kOriginalClientWidth;
-    }
-    if (!read_ddraw_ini_integer("height", height) || height <= 0 || height > 0x7fff) {
-        height = kOriginalClientHeight;
-    }
-    g_runtime.presentation_client_width = width;
-    g_runtime.presentation_client_height = height;
-    g_runtime.presentation_resizable = read_ddraw_ini_boolean("resizing", true);
-    g_runtime.presentation_border = read_ddraw_ini_boolean("border", true);
 
     int unlock_key = 0;
     if (read_ddraw_ini_integer("keyunlockcursor1", unlock_key) &&
@@ -1339,22 +1305,14 @@ void load_main_window_presentation_settings() {
         g_runtime.cursor_unlock_key2 = static_cast<UINT>(unlock_key);
     }
 
-    int x = 0;
-    int y = 0;
-    if (read_ddraw_ini_integer("posX", x) &&
-        read_ddraw_ini_integer("posY", y)) {
-        g_runtime.presentation_client_x = x;
-        g_runtime.presentation_client_y = y;
-        g_runtime.presentation_position_set = true;
-    }
 }
 
 struct MainWindowPlacement {
     DWORD style = 0;
     int x = CW_USEDEFAULT;
     int y = CW_USEDEFAULT;
-    int width = kOriginalClientWidth;
-    int height = kOriginalClientHeight;
+    int width = kDefaultPresentationClientWidth;
+    int height = kDefaultPresentationClientHeight;
 };
 
 MainWindowPlacement make_main_window_placement(DWORD ex_style) {
@@ -1416,6 +1374,15 @@ MainWindowPlacement make_main_window_placement(DWORD ex_style) {
         placement.y = std::clamp(placement.y, work_top,
             std::max(work_top, work_bottom - placement.height));
     }
+    else {
+        // A saved cnc-ddraw position remains authoritative.  Without one,
+        // center the reconstructed client instead of letting CW_USEDEFAULT
+        // place differently on each machine or after a resolution change.
+        placement.x = work_left + std::max(0,
+            (work_right - work_left - placement.width) / 2);
+        placement.y = work_top + std::max(0,
+            (work_bottom - work_top - placement.height) / 2);
+    }
     return placement;
 }
 
@@ -1426,7 +1393,8 @@ RECT frontend_client_screen_rect_or_default() {
     if (rect_has_extent(g_runtime.window_rect)) {
         return g_runtime.window_rect;
     }
-    return RECT{0, 0, kOriginalClientWidth, kOriginalClientHeight};
+    return RECT{0, 0, kDefaultPresentationClientWidth,
+        kDefaultPresentationClientHeight};
 }
 
 void refresh_window_rects(HWND window) {
@@ -31882,6 +31850,10 @@ void QueueFrontendNetworkChatPacketDisplay(const void* packet, u32 byte_count) {
 }
 
 int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_command) {
+    // Disable Windows DPI virtualization before creating any window.  The
+    // requested 1280x960 client area and GetClientRect/D3D9 output dimensions
+    // must refer to physical pixels even when desktop scaling is above 100%.
+    SetProcessDPIAware();
     g_runtime.instance = instance;
     char current_directory[MAX_PATH]{};
     GetCurrentDirectoryA(static_cast<DWORD>(sizeof(current_directory)), current_directory);
@@ -31917,7 +31889,8 @@ int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_c
         startup_platform_text_count(), startup_message_text_count());
     load_main_window_presentation_settings();
     append_startup_log(
-        "presentation logical=%dx%d client=%dx%d position=%s,%d,%d resize=%s border=%s",
+        "presentation config=%s logical=%dx%d client=%dx%d position=%s,%d,%d resize=%s border=%s",
+        RankerClientConfigPath().c_str(),
         kOriginalClientWidth, kOriginalClientHeight,
         g_runtime.presentation_client_width,
         g_runtime.presentation_client_height,
@@ -31964,8 +31937,8 @@ int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_c
     DWORD window_style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
     int window_x = 0;
     int window_y = 0;
-    int window_width = kOriginalClientWidth;
-    int window_height = kOriginalClientHeight;
+    int window_width = kDefaultPresentationClientWidth;
+    int window_height = kDefaultPresentationClientHeight;
     if (g_runtime.windowed_mode) {
         const MainWindowPlacement placement =
             make_main_window_placement(window_ex_style);
@@ -31999,6 +31972,11 @@ int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_c
         SetFocus(g_runtime.main_window);
     }
     refresh_window_rects(g_runtime.main_window);
+    append_startup_log("main window outer=%ld,%ld,%ld,%ld client=%ldx%ld",
+        g_runtime.window_rect.left, g_runtime.window_rect.top,
+        g_runtime.window_rect.right, g_runtime.window_rect.bottom,
+        g_runtime.client_rect.right - g_runtime.client_rect.left,
+        g_runtime.client_rect.bottom - g_runtime.client_rect.top);
     refresh_main_window_cursor_confinement(g_runtime.main_window);
 
     const bool mouse_present = GetSystemMetrics(SM_MOUSEPRESENT) != 0;
