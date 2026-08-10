@@ -2414,6 +2414,9 @@ void SetLinkLobbyLocalPlayerIdentity(LinkLobbyState& state,
         kLinkLobbyPlayerRecordNameBytes - 1);
     state.player_payloads[state.local_player_index] = player.raw_payload;
     state.player_role_values[state.local_player_index] = 0;
+    if (state.player_role_combos[state.local_player_index].window != nullptr) {
+        PopulateLinkLobbyPlayerRoleComboBox(state, state.local_player_index, 0);
+    }
 }
 
 void InitializeLinkLobbyHostResourceComboControl(LinkLobbyState& state) {
@@ -3610,6 +3613,12 @@ void HandleLinkLobbyStartResult(LinkLobbyState& state, u32 player_index,
     }
 
     const int previous_local_player = state.local_player_index;
+    std::array<char, kLinkLobbyPlayerRecordNameBytes> local_player_name{};
+    if (player_index_valid(previous_local_player)) {
+        std::strncpy(local_player_name.data(),
+            state.players[previous_local_player].name.data(),
+            local_player_name.size() - 1);
+    }
     SOCKET assigned_peer_socket = state.player_sockets[player_index];
     if (assigned_peer_socket == INVALID_SOCKET) {
         assigned_peer_socket = state.shared_peer_socket;
@@ -3619,6 +3628,13 @@ void HandleLinkLobbyStartResult(LinkLobbyState& state, u32 player_index,
         assigned_peer_socket = state.player_sockets[previous_local_player];
     }
     state.local_player_index = static_cast<int>(player_index);
+    // A host may assign a different open slot than the one proposed in the
+    // session seed.  Keep the local identity attached to the player while the
+    // slot changes; otherwise the accepted client publishes an empty record
+    // and gameplay later falls back to "Player N".
+    if (local_player_name[0] != '\0') {
+        SetLinkLobbyLocalPlayerIdentity(state, local_player_name.data());
+    }
     state.join_accepted = true;
     state.start_locked = true;
     state.start_sync_complete = false;

@@ -2741,6 +2741,16 @@ void open_joined_link_lobby_from_staged_payloads(HWND parent, HINSTANCE instance
             reinterpret_cast<LPARAM>(map_descriptor.data()),
             reinterpret_cast<LPARAM>(session_seed.data()), mode, return_context,
             game_type, screen_size)) {
+        // WizardNet's relay handshake carries the authenticated account name,
+        // but the staged Link player record for the newly assigned local slot
+        // is still empty until the direct join request is sent.  Populate that
+        // record before the socket's queued FD_WRITE is dispatched so the host
+        // and the eventual gameplay startup payload receive the real name
+        // instead of the Link lobby's "Player" fallback.
+        if (mode == 0) {
+            SetLinkLobbyLocalPlayerIdentity(lobby,
+                default_online_local_player_name());
+        }
         if (!PrepareLinkLobbyMapDownload(lobby)) {
             ReturnFromLinkLobby(lobby);
             return;
@@ -2965,11 +2975,10 @@ void default_create_game_open_ipx(CreateGameState& state) {
 }
 
 void default_create_game_open_online(CreateGameState& state) {
-    OnlineLobbyState& online = online_lobby_state();
-    configure_online_lobby_callbacks(online);
-    online.local_player_name = default_online_local_player_name();
-    if (ResumeOnlineLobbyWindow(online)) {
-        activate_frontend_state(online);
+    // Use the same parent-validated restore path as Join Game cancellation.
+    // Both child screens borrow the authenticated control socket from this
+    // exact lobby window and must return its notification route to that HWND.
+    if (resume_existing_online_lobby(state.parent_window)) {
         return;
     }
 
@@ -3048,6 +3057,14 @@ void default_create_game_open_link_lobby(CreateGameState& state) {
             reinterpret_cast<LPARAM>(map_descriptor.data()),
             reinterpret_cast<LPARAM>(session_seed.data()), mode, return_context,
             state.game_type, state.screen_size)) {
+        // initialize_host_player_slots uses "Player" as a transport-safe
+        // fallback.  The WizardNet host already has an authenticated identity,
+        // so replace the fallback before publishing this player record to any
+        // joining peer or copying it into the gameplay startup parameters.
+        if (mode == 0) {
+            SetLinkLobbyLocalPlayerIdentity(lobby,
+                state.local_player_name.data());
+        }
         // The relay-join handler only admits a peer after the selected map has
         // been resolved locally.  Joined clients already perform this step in
         // open_joined_link_lobby_from_staged_payloads; the host must do the
@@ -3148,8 +3165,19 @@ void open_wizard_login_window(HWND parent, HINSTANCE instance, LPARAM return_con
     WizardLoginState& state = wizard_login_state();
     destroy_existing_window(state.window);
     configure_wizard_callbacks(state);
-    if (account != nullptr) {
+    if (account != nullptr && account[0] != '\0') {
         std::snprintf(state.account.data(), state.account.size(), "%s", account);
+    } else {
+        const std::string saved_account = LoadRankerClientLastWizardAccount();
+        if (!saved_account.empty()) {
+            std::snprintf(state.account.data(), state.account.size(), "%s",
+                saved_account.c_str());
+        } else {
+            // Migrate the original successful-login value on the first run
+            // after this setting was introduced.  Future successful logins
+            // are stored beside the executable and are independent of cwd.
+            ImportSetupText(state.account, kSetupWizardAccountOffset);
+        }
     }
     if (password != nullptr) {
         std::snprintf(state.password.data(), state.password.size(), "%s", password);

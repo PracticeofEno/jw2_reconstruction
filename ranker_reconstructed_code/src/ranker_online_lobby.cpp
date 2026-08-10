@@ -54,8 +54,6 @@ constexpr DWORD kRichEditStyle = WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL |
 // particular, TAB BG occupies the same rectangle as the main action buttons.
 // Without sibling clipping a delayed repaint of that decorative control
 // erases the Create/Join/Rank pixels even though the buttons remain clickable.
-constexpr DWORD kSendButtonStyle =
-    WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | BS_DEFPUSHBUTTON;
 constexpr DWORD kOwnerDrawStyle =
     WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | BS_OWNERDRAW;
 constexpr COLORREF kOnlineLobbyWhite = RGB(255, 255, 255);
@@ -98,7 +96,7 @@ constexpr OnlineLobbyButtonSpec kButtonSpecs[kOnlineLobbyButtonCount] = {
     {kOnlineLobbyJoinGameButtonId, "Join Game", 0x2a, 0x2b, true},
     {kOnlineLobbyMyAvatarButtonId, "My Avatar", 0x2d, 0x2e, false},
     {kOnlineLobbyViewRankButtonId, "View Rank", 0x2f, 0x30, false},
-    {IDCANCEL, "Cancel", 0x31, 0x32, false},
+    {IDCANCEL, "Exit", 0x31, 0x32, false},
     {kOnlineLobbyFriendDisplayButtonId, "F_DISPLAY", 0x33, 0x34, false},
     {kOnlineLobbyFriendAddButtonId, "F_ADD", 0x35, 0x36, false},
     {kOnlineLobbyFriendRemoveButtonId, "F_REMOVE", 0x37, 0x38, false},
@@ -267,6 +265,34 @@ OnlineLobbyLayoutRect arrange_chat_composer_control(
     return rect;
 }
 
+int online_lobby_chat_composer_gap(const OnlineLobbyState& state) {
+    const OnlineLobbyLayoutRect root = layout_at(state, 0);
+    return ScaleFrontendLayoutValue(8, 1024,
+        std::max<i32>(1, root.width));
+}
+
+OnlineLobbyLayoutRect online_lobby_single_emoticon_rect(
+    const OnlineLobbyState& state) {
+    const OnlineLobbyLayoutRect root = layout_at(state, 0);
+    const OnlineLobbyLayoutRect send_slot =
+        arrange_chat_composer_control(state, layout_at(state, 7));
+    const OnlineLobbyLayoutRect emoticon =
+        arrange_chat_composer_control(state, layout_at(state, 9));
+    const int right_inset = ScaleFrontendLayoutValue(6, 1024,
+        std::max<i32>(1, root.width));
+    return InsetOnlineLobbyComposerButton(
+        RightAlignOnlineLobbyComposerButton(emoticon, send_slot), right_inset);
+}
+
+OnlineLobbyLayoutRect online_lobby_expanded_chat_edit_rect(
+    const OnlineLobbyState& state) {
+    const OnlineLobbyLayoutRect edit =
+        arrange_chat_composer_control(state, layout_at(state, 6));
+    return ExpandOnlineLobbyChatEditToButton(edit,
+        online_lobby_single_emoticon_rect(state),
+        online_lobby_chat_composer_gap(state));
+}
+
 HFONT online_lobby_chat_font() {
     // The -16 UI font fills the 22-pixel RichEdit comfortably while leaving
     // enough top/bottom breathing room for Korean glyphs and inline icons.
@@ -276,8 +302,7 @@ HFONT online_lobby_chat_font() {
 }
 
 int online_lobby_chat_row_height(const OnlineLobbyState& state) {
-    const OnlineLobbyLayoutRect edit =
-        arrange_chat_composer_control(state, layout_at(state, 6));
+    const OnlineLobbyLayoutRect edit = online_lobby_expanded_chat_edit_rect(state);
     return std::max(18, edit.height - 2);
 }
 
@@ -300,14 +325,10 @@ void fill_online_lobby_rect(HDC dc, const RECT& rect, COLORREF color) {
 void paint_online_lobby_dynamic_chrome(
     const OnlineLobbyState& state, HDC dc) {
     const OnlineLobbyLayoutRect root = layout_at(state, 0);
-    const OnlineLobbyLayoutRect edit =
-        arrange_chat_composer_control(state, layout_at(state, 6));
-    const OnlineLobbyLayoutRect send =
-        arrange_chat_composer_control(state, layout_at(state, 7));
-    const OnlineLobbyLayoutRect whisper =
-        arrange_chat_composer_control(state, layout_at(state, 8));
+    const OnlineLobbyLayoutRect edit = online_lobby_expanded_chat_edit_rect(state);
+    const OnlineLobbyLayoutRect emoticon = online_lobby_single_emoticon_rect(state);
     if (dc == nullptr || root.width <= 0 || edit.width <= 0 ||
-        edit.height <= 0 || send.height <= 0 || whisper.x <= edit.x) {
+        edit.height <= 0 || emoticon.width <= 0 || emoticon.height <= 0) {
         return;
     }
 
@@ -317,12 +338,10 @@ void paint_online_lobby_dynamic_chrome(
         std::max(1, root.height));
     RECT frame{
         std::max(0, edit.x - horizontal_padding),
-        std::max(0, std::min(send.y, edit.y - vertical_padding)),
-        std::min(root.width, std::min(
-            whisper.x - horizontal_padding,
-            edit.x + edit.width + horizontal_padding)),
+        std::max(0, std::min(emoticon.y, edit.y - vertical_padding)),
+        std::min(root.width, edit.x + edit.width + horizontal_padding),
         std::min(root.height, std::max(
-            send.y + send.height,
+            emoticon.y + emoticon.height,
             edit.y + edit.height + vertical_padding)),
     };
     if (frame.right <= frame.left || frame.bottom <= frame.top) {
@@ -330,8 +349,8 @@ void paint_online_lobby_dynamic_chrome(
     }
 
     // The background contains only the static lobby masonry.  Build the chat
-    // composer around the real RichEdit rectangle so its field and the three
-    // live icon buttons share one baseline instead of overlapping baked art.
+    // composer around the expanded RichEdit rectangle.  Send remains bound to
+    // Enter, while the only visible button is the right-aligned emoticon picker.
     fill_online_lobby_rect(dc, frame, RGB(0, 0, 0));
     frame_online_lobby_rect(dc, frame, RGB(10, 8, 5));
     InflateRect(&frame, -1, -1);
@@ -1285,13 +1304,17 @@ void subclass_control(HWND window) {
 bool create_button_from_spec(OnlineLobbyState& state, int spec_index,
     int layout_index) {
     OnlineLobbyButtonSpec spec = kButtonSpecs[spec_index];
+    if (spec.id == kOnlineLobbySendButtonId ||
+        spec.id == kOnlineLobbyWhisperButtonId) {
+        // The simplified lobby sends normal chat with Enter and no longer
+        // exposes the redundant Send or Whisper buttons.
+        return true;
+    }
     OnlineLobbyLayoutRect rect = layout_at(state,
         static_cast<std::size_t>(layout_index));
     rect = arrange_simplified_main_action(state, spec.id, rect);
-    if (spec.id == kOnlineLobbySendButtonId ||
-        spec.id == kOnlineLobbyWhisperButtonId ||
-        spec.id == kOnlineLobbyEmoticonButtonId) {
-        rect = arrange_chat_composer_control(state, rect);
+    if (spec.id == kOnlineLobbyEmoticonButtonId) {
+        rect = online_lobby_single_emoticon_rect(state);
     }
     LegacyImageButtonControl& button =
         state.buttons[static_cast<std::size_t>(spec_index)];
@@ -1301,11 +1324,7 @@ bool create_button_from_spec(OnlineLobbyState& state, int spec_index,
         return false;
     }
 
-    if (spec.id == kOnlineLobbySendButtonId) {
-        SetWindowLongPtrA(button.window, GWL_STYLE, kSendButtonStyle);
-    } else {
-        SetWindowLongPtrA(button.window, GWL_STYLE, kOwnerDrawStyle);
-    }
+    SetWindowLongPtrA(button.window, GWL_STYLE, kOwnerDrawStyle);
 
     if (spec.hide_when_main_disabled && state.create_join_disabled) {
         const u32 disabled_record =
@@ -1751,7 +1770,10 @@ void SetOnlineLobbyTab(OnlineLobbyState& state, OnlineLobbyTab tab) {
     show_group(state, kGuildTabControls, SW_HIDE);
     show_group(state, kPersonalTabControls, SW_HIDE);
     show_group(state, kSimplifiedMainTabControls, SW_SHOW);
-    show_id(state, IDCANCEL, SW_HIDE);
+    // The original bottom-right Cancel control is the WizardNet exit action.
+    // Keep it visible in the simplified one-tab lobby as the explicit Exit
+    // button instead of requiring Escape or a window close gesture.
+    show_id(state, IDCANCEL, SW_SHOW);
 
     for (int tab_id : {kOnlineLobbyMainTabButtonId}) {
         if (LegacyImageButtonControl* button = button_by_id(state, tab_id)) {
@@ -1781,6 +1803,13 @@ bool ResumeOnlineLobbyWindow(OnlineLobbyState& state) {
     // stale self-owned entry cannot remain in the browser.
     clear_online_lobby_game_list(state);
     SetOnlineLobbyTab(state, OnlineLobbyTab::Main);
+
+    // A child window may have copied bytes from the kernel into the shared
+    // LegacyAsyncTcpSocket immediately before it was destroyed.  WSAAsyncSelect
+    // does not have to emit another FD_READ edge for bytes already held in our
+    // user-space queue, so explicitly schedule one drain on the restored HWND.
+    PostMessageA(state.window, kOnlineLobbyNetworkMessage, 0,
+        MAKELPARAM(FD_READ, 0));
     send_small_async_packet(state, 0x0e, 0x15);
     // Ask the server to begin a fresh paged snapshot after it has processed
     // the reconnect command.  The 0x11 acknowledgement starts page zero; this
@@ -2325,6 +2354,13 @@ bool DispatchOnlineLobbyServerPacket(OnlineLobbyState& state, const u8* packet,
         return false;
     }
     const u32 opcode = read_le32(packet + 4);
+    if (IsOnlineLobbyTransientChildResponseOpcode(opcode)) {
+        // These replies belong to a Create/Join child window that has already
+        // closed.  Leaving one at the head of the shared receive queue blocks
+        // the reconnect presence packets and makes the restored lobby appear
+        // empty, even though the server sent a complete member snapshot.
+        return true;
+    }
     switch (opcode) {
     case 2: {
         const u32 code = packet_u32(packet, byte_count, 0x0d);
@@ -2588,8 +2624,7 @@ bool CreateOnlineLobbyWindow(OnlineLobbyState& state, HWND parent,
             chat_scroll_rect.width, chat_scroll_rect.width);
         configure_scroll_for_list(chat_scroll, state.chat_list, 0, 0, false);
     }
-    OnlineLobbyLayoutRect edit_rect =
-        arrange_chat_composer_control(state, layout_at(state, 6));
+    OnlineLobbyLayoutRect edit_rect = online_lobby_expanded_chat_edit_rect(state);
     state.chat_edit = CreateWindowExA(0, "RICHEDIT", "", kRichEditStyle,
         edit_rect.x, edit_rect.y, edit_rect.width, edit_rect.height, state.window,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kOnlineLobbyChatEditId)),

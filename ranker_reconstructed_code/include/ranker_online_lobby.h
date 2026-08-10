@@ -69,6 +69,20 @@ constexpr int OnlineLobbyButtonLayoutIndex(int button_spec_index) {
     return button_spec_index == 0 ? 1 : button_spec_index + 6;
 }
 
+// WizardNet child screens share the authenticated control socket with the
+// online lobby.  A response can already be queued when one of those screens
+// is cancelled; the restored lobby must consume these completed child-screen
+// replies so the authoritative presence snapshot behind them can be read.
+constexpr bool IsOnlineLobbyTransientChildResponseOpcode(u32 opcode) {
+    return opcode == 0x1a || // Create Game host response.
+        opcode == 0x1e ||   // Join Game paged room record.
+        opcode == 0x26 ||   // Join Game room removed notification.
+        opcode == 0x27 ||   // Join Game room added notification.
+        opcode == 0x3e ||   // Join Game Top/Bottom counters.
+        opcode == 0x46 ||   // Join Game game-type counters.
+        opcode == 0x64;     // Join Game use-map counters.
+}
+
 enum class OnlineLobbyTab : int {
     Main = 0,
     Friends = 1,
@@ -84,6 +98,26 @@ struct OnlineLobbyLayoutRect {
     int width = 0;
     int height = 0;
 };
+
+constexpr OnlineLobbyLayoutRect RightAlignOnlineLobbyComposerButton(
+    OnlineLobbyLayoutRect button, const OnlineLobbyLayoutRect& rightmost_slot) {
+    button.x = rightmost_slot.x + rightmost_slot.width - button.width;
+    return button;
+}
+
+constexpr OnlineLobbyLayoutRect InsetOnlineLobbyComposerButton(
+    OnlineLobbyLayoutRect button, int right_inset) {
+    const int inset = right_inset > 0 ? right_inset : 0;
+    button.x = button.x > inset ? button.x - inset : 0;
+    return button;
+}
+
+constexpr OnlineLobbyLayoutRect ExpandOnlineLobbyChatEditToButton(
+    OnlineLobbyLayoutRect edit, const OnlineLobbyLayoutRect& button, int gap) {
+    const int expanded_width = button.x - gap - edit.x;
+    edit.width = expanded_width > 0 ? expanded_width : 1;
+    return edit;
+}
 
 struct OnlineLobbyButtonSpec {
     int id = 0;

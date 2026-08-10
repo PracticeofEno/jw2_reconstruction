@@ -29,6 +29,8 @@ struct RankerClientDisplayConfig {
 #ifdef _WIN32
 const std::string& RankerClientConfigPath();
 RankerClientDisplayConfig LoadRankerClientDisplayConfig();
+std::string LoadRankerClientLastWizardAccount();
+bool SaveRankerClientLastWizardAccount(const char* account);
 #endif
 
 } // namespace ranker

@@ -58,6 +58,29 @@ static_assert(OnlineLobbyButtonLayoutIndex(0) == 1);
 static_assert(OnlineLobbyButtonLayoutIndex(1) == 7);
 static_assert(OnlineLobbyButtonLayoutIndex(8) == 14);
 static_assert(OnlineLobbyButtonLayoutIndex(27) == 33);
+constexpr OnlineLobbyLayoutRect kLegacyChatEdit{469, 578, 409, 22};
+constexpr OnlineLobbyLayoutRect kLegacySendSlot{960, 578, 17, 22};
+constexpr OnlineLobbyLayoutRect kLegacyEmoticonButton{888, 578, 27, 22};
+constexpr OnlineLobbyLayoutRect kSingleEmoticonButton =
+    InsetOnlineLobbyComposerButton(
+        RightAlignOnlineLobbyComposerButton(
+            kLegacyEmoticonButton, kLegacySendSlot), 6);
+constexpr OnlineLobbyLayoutRect kExpandedChatEdit =
+    ExpandOnlineLobbyChatEditToButton(
+        kLegacyChatEdit, kSingleEmoticonButton, 8);
+static_assert(kSingleEmoticonButton.x == 944);
+static_assert(kSingleEmoticonButton.width == 27);
+static_assert(kExpandedChatEdit.x == 469);
+static_assert(kExpandedChatEdit.width == 467);
+static_assert(IsOnlineLobbyTransientChildResponseOpcode(0x1a));
+static_assert(IsOnlineLobbyTransientChildResponseOpcode(0x1e));
+static_assert(IsOnlineLobbyTransientChildResponseOpcode(0x26));
+static_assert(IsOnlineLobbyTransientChildResponseOpcode(0x27));
+static_assert(IsOnlineLobbyTransientChildResponseOpcode(0x3e));
+static_assert(IsOnlineLobbyTransientChildResponseOpcode(0x46));
+static_assert(IsOnlineLobbyTransientChildResponseOpcode(0x64));
+static_assert(!IsOnlineLobbyTransientChildResponseOpcode(0x07));
+static_assert(!IsOnlineLobbyTransientChildResponseOpcode(0x13));
 static_assert(SelectCreateGameWindowPlacement(true, 6) ==
     CreateGameWindowPlacement::contained_child);
 static_assert(SelectCreateGameWindowPlacement(true, 1) ==

@@ -2,6 +2,7 @@
 
 #ifdef _WIN32
 
+#include "ranker_client_config.h"
 #include "ranker_frontend_layout.h"
 #include "ranker_gameplay_sound.h"
 #include "ranker_setup_data.h"
@@ -544,6 +545,7 @@ void handle_login_status(WizardLoginState& state, u32 status) {
     case 0:
         read_window_text(state.account_edit, state.account.data(),
             static_cast<int>(state.account.size()));
+        SaveRankerClientLastWizardAccount(state.account.data());
         write_setup_data(state);
         route_to_lobby(state);
         break;

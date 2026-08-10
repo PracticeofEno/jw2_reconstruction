@@ -15,6 +15,9 @@ namespace ranker {
 namespace {
 
 constexpr const char* kDisplaySection = "Display";
+constexpr const char* kWizardNetSection = "WizardNet";
+constexpr const char* kLastWizardAccountKey = "LastAccount";
+constexpr std::size_t kMaximumWizardAccountBytes = 0x20;
 
 bool read_integer(const char* key, int& value) {
     std::array<char, 32> text{};
@@ -99,6 +102,23 @@ RankerClientDisplayConfig LoadRankerClientDisplayConfig() {
     config.position_set = !config.center &&
         read_integer("PosX", config.x) && read_integer("PosY", config.y);
     return config;
+}
+
+std::string LoadRankerClientLastWizardAccount() {
+    std::array<char, kMaximumWizardAccountBytes> account{};
+    GetPrivateProfileStringA(kWizardNetSection, kLastWizardAccountKey, "",
+        account.data(), static_cast<DWORD>(account.size()),
+        RankerClientConfigPath().c_str());
+    return std::string(account.data());
+}
+
+bool SaveRankerClientLastWizardAccount(const char* account) {
+    if (account == nullptr || account[0] == '\0') {
+        return false;
+    }
+    return WritePrivateProfileStringA(kWizardNetSection,
+        kLastWizardAccountKey, account,
+        RankerClientConfigPath().c_str()) != FALSE;
 }
 
 } // namespace ranker
