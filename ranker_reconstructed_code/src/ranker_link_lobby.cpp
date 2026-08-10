@@ -521,11 +521,13 @@ std::string bounded_c_string(const u8* text, std::size_t byte_count) {
 }
 
 void initialize_host_player_slots(LinkLobbyState& state) {
-    state.local_player_index = 0;
+    state.local_player_index = std::clamp(state.local_player_index, 0,
+        kLinkLobbyAvatarCount - 1);
+    const int local_player_index = state.local_player_index;
     state.player_role_values.fill(1);
-    state.player_role_values[0] = 0;
+    state.player_role_values[local_player_index] = 0;
 
-    LinkLobbyPlayerSlot& local = state.players[0];
+    LinkLobbyPlayerSlot& local = state.players[local_player_index];
     local.occupied = true;
     local.selected = true;
     local.ready = true;
@@ -535,8 +537,8 @@ void initialize_host_player_slots(LinkLobbyState& state) {
     std::strncpy(reinterpret_cast<char*>(local.raw_payload.data() + 0x60),
         local.name.data(), 0x1f);
 
-    std::memcpy(state.player_payloads[0].data(), local.raw_payload.data(),
-        state.player_payloads[0].size());
+    std::memcpy(state.player_payloads[local_player_index].data(),
+        local.raw_payload.data(), state.player_payloads[local_player_index].size());
 }
 
 void write_le32(std::vector<u8>& buffer, std::size_t offset, u32 value) {
@@ -1085,12 +1087,66 @@ void register_local_udp_route(LinkLobbyState& state,
         static_cast<unsigned>(state.secondary_peer_ports[slot]));
 }
 
+bool hydrate_missing_player_udp_route_from_tcp(LinkLobbyState& state,
+    int player_index) {
+    if (!player_index_valid(player_index) ||
+        player_index == state.local_player_index ||
+        player_has_advertised_udp_route(state, player_index) ||
+        state.default_udp_port == 0) {
+        return player_has_advertised_udp_route(state, player_index);
+    }
+
+    const SOCKET peer_socket = state.player_sockets[player_index];
+    sockaddr_in peer_address{};
+    if (peer_socket == INVALID_SOCKET || peer_socket == 0 ||
+        !CopyLegacySocketPeerAddress(peer_socket, peer_address)) {
+        return false;
+    }
+
+    // A joined player already has a working TCP route.  The original client
+    // can reach the start command before the reconstructed peer-route packet
+    // is processed, so use the observed peer host with the session's legacy
+    // UDP port as a temporary route.  A later explicit route packet replaces
+    // this value (including an ephemeral or reflexive UDP port).
+    peer_address.sin_port = htons(state.default_udp_port);
+    if (!udp_endpoint_ready(peer_address)) {
+        return false;
+    }
+    copy_udp_endpoint_to_route(state.primary_peer_hosts[player_index],
+        state.primary_peer_ports[player_index], peer_address);
+    state.udp_peer_addresses[player_index] = peer_address;
+    SetDirectPlayMode1UdpPeerAddress(player_index, peer_address);
+    append_link_lobby_log(
+        "link udp route fallback from tcp slot=%ld address=%s:%u mode=%ld",
+        static_cast<long>(player_index),
+        state.primary_peer_hosts[player_index].data(),
+        static_cast<unsigned>(state.primary_peer_ports[player_index]),
+        static_cast<long>(state.mode));
+    return true;
+}
+
 bool link_lobby_player_needs_start_sync(const LinkLobbyState& state,
     int player_index) {
-    return player_index_valid(player_index) &&
-        state.players[player_index].occupied &&
-        (state.player_socket_connected[player_index] ||
-            state.players[player_index].human);
+    if (!player_index_valid(player_index) ||
+        !state.players[player_index].occupied ||
+        !state.players[player_index].human) {
+        return false;
+    }
+    if (player_index == state.local_player_index) {
+        return true;
+    }
+    if (state.player_socket_connected[player_index] &&
+        state.player_sockets[player_index] != INVALID_SOCKET &&
+        state.player_sockets[player_index] != 0) {
+        return true;
+    }
+
+    // DirectPlay can represent a remote human without a raw Winsock handle.
+    // Raw P2P/WizardNet rooms cannot: treating an occupied record left by the
+    // previous match as a live peer makes the next room demand an IP route for
+    // a player that no longer exists.
+    const AsyncComContext* context = async_com_state().active_context;
+    return context != nullptr && context->system_message_101_seen;
 }
 
 const char* link_lobby_player_name(const LinkLobbyState& state, int player_index) {
@@ -1214,6 +1270,7 @@ void accept_link_lobby_join_request_slot(LinkLobbyState& state, int slot,
         static_cast<u32>(sender_socket));
     state.player_payloads[slot] = state.players[slot].raw_payload;
     ResetLinkLobbyPlayerRoleToHuman(state, slot);
+    hydrate_missing_player_udp_route_from_tcp(state, slot);
 }
 
 SOCKET link_lobby_player_record_socket(const LinkLobbyState& state, int slot) {
@@ -3289,6 +3346,16 @@ void SwapLinkLobbyPlayerSlots(LinkLobbyState& state, int left_player,
     std::swap(state.player_sockets[left_player], state.player_sockets[right_player]);
     std::swap(state.udp_peer_addresses[left_player],
         state.udp_peer_addresses[right_player]);
+    std::swap(state.primary_peer_hosts[left_player],
+        state.primary_peer_hosts[right_player]);
+    std::swap(state.secondary_peer_hosts[left_player],
+        state.secondary_peer_hosts[right_player]);
+    std::swap(state.primary_peer_ports[left_player],
+        state.primary_peer_ports[right_player]);
+    std::swap(state.secondary_peer_ports[left_player],
+        state.secondary_peer_ports[right_player]);
+    std::swap(state.peer_route_acknowledged[left_player],
+        state.peer_route_acknowledged[right_player]);
     SetDirectPlayMode1UdpPeerAddress(left_player, state.udp_peer_addresses[left_player]);
     SetDirectPlayMode1UdpPeerAddress(right_player, state.udp_peer_addresses[right_player]);
     SwapLinkLobbyPlayerPayloads(state, left_player, right_player);
@@ -3298,6 +3365,16 @@ void SwapLinkLobbyPlayerSlots(LinkLobbyState& state, int left_player,
     } else if (state.local_player_index == right_player) {
         state.local_player_index = left_player;
     }
+
+    append_link_lobby_log(
+        "link player slots swapped left=%ld right=%ld local=%ld "
+        "left_route=%s:%u right_route=%s:%u",
+        static_cast<long>(left_player), static_cast<long>(right_player),
+        static_cast<long>(state.local_player_index),
+        state.primary_peer_hosts[left_player].data(),
+        static_cast<unsigned>(state.primary_peer_ports[left_player]),
+        state.primary_peer_hosts[right_player].data(),
+        static_cast<unsigned>(state.primary_peer_ports[right_player]));
 
     PopulateLinkLobbyPlayerRoleComboBox(state, left_player,
         state.player_role_values[left_player]);
@@ -4078,7 +4155,9 @@ void HandleLinkLobbyAutoMoveOpenSlotPacket(LinkLobbyState& state, const void* pa
     }
 
     const AsyncComContext* context = async_com_state().active_context;
-    if (context != nullptr && context->system_message_101_seen) {
+    const bool directplay_ready =
+        context != nullptr && context->system_message_101_seen;
+    if (directplay_ready || state.host_mode) {
         SwapLinkLobbyPlayerSlots(state, from_player, target_player);
     }
     SendLinkLobbySlotSwapPacket(state, static_cast<u32>(from_player),
@@ -4568,6 +4647,14 @@ void DispatchLinkLobbyTransportPacket(LinkLobbyState& state, u32 sender,
         break;
     case kLinkLobbySlotSwapOpcode:
         ApplyLinkLobbyPlayerSlotSwapPacket(state, packet, effective_size);
+        if (state.host_mode && state.mode >= 0 && state.mode <= 2 &&
+            !link_lobby_directplay_ready()) {
+            // Raw TCP rooms do not provide DirectPlay's automatic fan-out.
+            // The requesting client has not applied this host-authoritative
+            // swap yet, so relay it to every connected room peer.
+            BroadcastLinkLobbyTransportPacketExcept(state, packet,
+                effective_size, INVALID_SOCKET);
+        }
         break;
     case kLinkLobbyTribeSelectionOpcode:
         ApplyLinkLobbyTribeSelectionPacket(state, packet, effective_size);
@@ -4768,7 +4855,8 @@ void SendLinkLobbyAutoMoveOpenSlotPacket(LinkLobbyState& state, u32 player_index
         write_le32(packet, 0x0c, player_index);
         write_le32(packet, 0x10, group_index);
         const AsyncComContext* context = async_com_state().active_context;
-        if (context != nullptr && context->system_message_101_seen) {
+        if ((context != nullptr && context->system_message_101_seen) ||
+            state.host_mode) {
             HandleLinkLobbyAutoMoveOpenSlotPacket(state, packet.data(), packet.size());
         } else {
             SendLinkLobbyRawTransportPacket(state, state.shared_peer_socket,
@@ -5940,11 +6028,30 @@ bool InitializeLinkLobbyNetworkRoute(LinkLobbyState& state) {
             return false;
         }
 
-        SOCKET udp_socket = StartLegacyUdpSocket(local_address,
+        const char* bind_address = local_address;
+        if (state.mode == 1) {
+            const char* selected_address = p2p_lobby_state().local_address.data();
+            const u_long parsed = inet_addr(selected_address);
+            if (selected_address[0] != '\0' && parsed != INADDR_NONE &&
+                parsed != INADDR_ANY) {
+                bind_address = selected_address;
+            }
+        }
+
+        SOCKET udp_socket = StartLegacyUdpSocket(bind_address,
             state.default_udp_port);
+        if (udp_socket == INVALID_SOCKET && bind_address != local_address) {
+            const int selected_address_error = WSAGetLastError();
+            append_link_lobby_log(
+                "link udp selected address unavailable address=%s error=%ld fallback=%s",
+                bind_address, static_cast<long>(selected_address_error), local_address);
+            bind_address = local_address;
+            udp_socket = StartLegacyUdpSocket(bind_address,
+                state.default_udp_port);
+        }
         if (udp_socket == INVALID_SOCKET) {
             const int requested_port_error = WSAGetLastError();
-            udp_socket = StartLegacyUdpSocket(local_address, 0);
+            udp_socket = StartLegacyUdpSocket(bind_address, 0);
             append_link_lobby_log(
                 "link udp requested port unavailable requested=%u error=%ld fallback=%s",
                 static_cast<unsigned>(state.default_udp_port),
@@ -6519,6 +6626,19 @@ bool SubmitLinkLobbyStartRequest(LinkLobbyState& state) {
         return true;
     }
 
+    if (legacy_network_state().udp_socket != INVALID_SOCKET &&
+        RefreshLegacyUdpLocalAddress()) {
+        register_local_udp_route(state);
+    }
+    if (state.host_mode) {
+        for (int slot = 0; slot < kLinkLobbyAvatarCount; ++slot) {
+            if (slot != state.local_player_index &&
+                link_lobby_player_needs_start_sync(state, slot)) {
+                hydrate_missing_player_udp_route_from_tcp(state, slot);
+            }
+        }
+    }
+
     const bool has_remote_start_players =
         LinkLobbyHostHasRemoteStartSyncPlayers(state);
     if (!player_has_advertised_udp_route(state, state.local_player_index) ||
@@ -6530,6 +6650,24 @@ bool SubmitLinkLobbyStartRequest(LinkLobbyState& state) {
             player_has_advertised_udp_route(state, state.local_player_index) ?
                 "yes" : "no",
             all_remote_human_routes_advertised(state) ? "yes" : "no");
+        for (int slot = 0; slot < kLinkLobbyAvatarCount; ++slot) {
+            if (slot == state.local_player_index ||
+                link_lobby_player_needs_start_sync(state, slot)) {
+                append_link_lobby_log(
+                    "link udp route check slot=%ld local=%s occupied=%s "
+                    "human=%s connected=%s socket=%llu primary=%s:%u secondary=%s:%u",
+                    static_cast<long>(slot),
+                    slot == state.local_player_index ? "yes" : "no",
+                    state.players[slot].occupied ? "yes" : "no",
+                    state.players[slot].human ? "yes" : "no",
+                    state.player_socket_connected[slot] ? "yes" : "no",
+                    static_cast<unsigned long long>(state.player_sockets[slot]),
+                    state.primary_peer_hosts[slot].data(),
+                    static_cast<unsigned>(state.primary_peer_ports[slot]),
+                    state.secondary_peer_hosts[slot].data(),
+                    static_cast<unsigned>(state.secondary_peer_ports[slot]));
+            }
+        }
         show_startup_message(state, 29,
             "Unable to resolve the local player IP address.",
             kLinkMapFailureRed);
@@ -6621,6 +6759,12 @@ void PumpLinkLobbyUdpStartSync(LinkLobbyState& state) {
                     state.callbacks.finalize_start_sync == nullptr ||
                     state.callbacks.finalize_start_sync(state);
                 if (!finalized) {
+                    append_link_lobby_log(
+                        "link start parameter transport failed after udp sync "
+                        "mode=%ld game_type=%ld payload=%zu",
+                        static_cast<long>(state.mode),
+                        static_cast<long>(state.game_type),
+                        state.start_parameter_payload.size());
                     show_startup_message(state, 29,
                         "Unable to resolve the local player IP address.",
                         kLinkMapFailureRed);
@@ -6749,13 +6893,21 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
     state.join_accepted = join_existing_lobby;
     state.join_request_pending = false;
     state.countdown_value = -1;
+    state.countdown_timer = 0;
     state.selected_avatar_index = -1;
+    state.local_player_index = 0;
+    state.active_human_count = 0;
+    state.selected_avatar_count = 0;
     state.players = {};
     state.player_payloads = {};
     state.avatar_payloads = {};
+    state.randomized_slots = {};
+    state.start_states = {};
     state.start_acknowledged = {};
     state.secondary_start_acknowledged = {};
+    state.tribe_choices = {};
     state.player_sockets.fill(INVALID_SOCKET);
+    state.player_socket_connected = {};
     state.udp_peer_addresses = {};
     state.local_udp_reflexive_address = {};
     state.local_udp_reflexive_address_valid = false;
@@ -6779,11 +6931,23 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
     state.player_team_values = {};
     state.player_role_option_masks.fill(0x0f);
     state.tribe_option_masks.fill(0x1f);
+    state.latency_values = {};
+    state.map_download_progress.fill(100);
+    state.tab_button_positions = {};
+    state.tab_button_labels = {};
+    state.tab_text_colors = {};
+    state.player_row_y = {};
     state.map_descriptor = {};
     state.map_download_candidate_valid = false;
+    state.expected_map_file_size = 0;
+    state.expected_map_file_time = {};
+    state.expected_map_file_time_valid = false;
     state.map_download_state = 0;
     state.last_map_download_progress_value = -1;
+    state.download_visible = false;
+    state.returned_to_connect = false;
     state.prepared_map_path.clear();
+    state.map_file_name.clear();
     clear_link_lobby_map_preview(state, false);
     state.session_seed_payload = {};
     state.password.fill('\0');
@@ -6805,7 +6969,17 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
         state.player_payloads = preserved_player_payloads;
         state.avatar_payloads = preserved_avatar_payloads;
     } else if (state.host_mode) {
+        if (link_lobby_session_seed_present(state)) {
+            state.local_player_index = std::clamp(static_cast<int>(
+                link_lobby_seed_u32(state,
+                    kLinkLobbySessionSeedLocalPlayerOffset)),
+                0, kLinkLobbyAvatarCount - 1);
+        }
         initialize_host_player_slots(state);
+        append_link_lobby_log(
+            "link host initialized fresh room local=%ld game_type=%ld mode=%ld",
+            static_cast<long>(state.local_player_index),
+            static_cast<long>(state.game_type), static_cast<long>(state.mode));
     }
     apply_link_lobby_session_seed_fields(state);
     if (state.mode == 1 && p2p_lobby_state().player_name[0] != '\0') {

@@ -630,6 +630,11 @@ constexpr std::size_t kProductionOrderDurationBaseOffset = 0x214;
 constexpr std::size_t kProductionOrderDurationModeOffset = 0x218;
 constexpr std::size_t kSessionScenarioRecordModeOffset = 0x00;
 constexpr std::size_t kSessionScenarioRecordActiveSlotCountOffset = 0x04;
+// P_SCENA is a byte-for-byte dump of original 0x00722868..0x00725100.
+// FUN_004d56b0 reads the victory mask at 0x00725070 and FUN_004d55f8 reads
+// the defeat mask at 0x007250b8.
+constexpr std::size_t kSessionScenarioRecordVictoryConditionMaskOffset = 0x2808;
+constexpr std::size_t kSessionScenarioRecordDefeatConditionMaskOffset = 0x2850;
 constexpr std::size_t kSessionPlayerRecordLocalOwnerOffset = 0x00;
 constexpr std::size_t kSessionPlayerRecordNameBaseOffset = 0x04;
 constexpr std::size_t kSessionPlayerRecordNameStride = 0x14;
@@ -2252,6 +2257,9 @@ std::string fixed_packet_string_raw(const u8* packet, std::size_t byte_count,
 
 void default_online_return_to_connect(HWND parent, HINSTANCE instance,
     LPARAM return_context, void*) {
+    WizardLoginState& wizard = wizard_login_state();
+    wizard.server_connected = false;
+    wizard.request_pending = false;
     open_connect_frontend_window(parent, instance, return_context);
 }
 
@@ -8034,6 +8042,10 @@ void default_gameplay_startup_reset_runtime_objects() {
     reset_default_gameplay_terrain_frame_cache();
 
     g_runtime.gameplay_end_condition_state = GameplayEndConditionState{};
+    g_runtime.gameplay_end_condition_state.scenario_victory_condition_mask =
+        g_runtime.gameplay_startup_state.scenario_victory_condition_mask;
+    g_runtime.gameplay_end_condition_state.scenario_defeat_condition_mask =
+        g_runtime.gameplay_startup_state.scenario_defeat_condition_mask;
     g_runtime.gameplay_started_player_mask = 0;
     g_runtime.gameplay_end_condition_units.clear();
     g_runtime.gameplay_online_transition_state = GameplayOnlineTransitionState{};
@@ -9059,6 +9071,10 @@ bool import_default_session_scenario_record_startup_state() {
         startup.active_slot_count = std::min<u32>(
             active_slot_count, kPlayerSlotCount);
     }
+    startup.scenario_victory_condition_mask = read_default_session_record_u32(
+        *record, kSessionScenarioRecordVictoryConditionMaskOffset, 0);
+    startup.scenario_defeat_condition_mask = read_default_session_record_u32(
+        *record, kSessionScenarioRecordDefeatConditionMaskOffset, 0);
     return true;
 }
 
@@ -11681,7 +11697,12 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
         static_cast<unsigned long>(g_runtime.gameplay_startup_state.active_slot_count));
     append_startup_log("start-slots: import scenario startup begin");
     import_default_session_scenario_record_startup_state();
-    append_startup_log("start-slots: import scenario startup ok");
+    append_startup_log(
+        "start-slots: import scenario startup ok victory_mask=0x%lx defeat_mask=0x%lx",
+        static_cast<unsigned long>(
+            g_runtime.gameplay_startup_state.scenario_victory_condition_mask),
+        static_cast<unsigned long>(
+            g_runtime.gameplay_startup_state.scenario_defeat_condition_mask));
     append_startup_log("start-slots: import player startup begin");
     import_default_session_player_record_startup_state();
     append_startup_log("start-slots: import player startup ok");
@@ -25249,22 +25270,6 @@ void activate_default_player_slots_from_active_units() {
     }
 }
 
-u32 default_gameplay_end_condition_mask_for_session_mode(u32 session_mode) {
-    switch (session_mode) {
-    case 0:
-    case 1:
-    case 2:
-    case 3:
-    case 4:
-    case 6:
-    case 7:
-    case 8:
-        return kGameplayEndConditionEliteUnit;
-    default:
-        return 0;
-    }
-}
-
 void sync_default_gameplay_end_condition_state() {
     GameplayEndConditionState& end_state = g_runtime.gameplay_end_condition_state;
     end_state.players = &g_runtime.gameplay_player_slots;
@@ -25277,24 +25282,7 @@ void sync_default_gameplay_end_condition_state() {
     end_state.session_mode = g_runtime.gameplay_startup_state.session_mode;
     end_state.generic_ai_profile_mode = g_runtime.generic_ai_profile_mode ? 1u : 0u;
     end_state.scenario_ai_profile_override = g_runtime.generic_ai_scenario_active;
-    const u32 default_mask = default_gameplay_end_condition_mask_for_session_mode(
-        end_state.session_mode);
-    if (default_mask != 0 && end_state.scenario_defeat_condition_mask == 0 &&
-        end_state.scenario_victory_condition_mask == 0) {
-        end_state.scenario_defeat_condition_mask = default_mask;
-        end_state.scenario_victory_condition_mask = default_mask;
-    }
-    else if (g_runtime.generic_ai_profile_mode && end_state.session_mode == 5 &&
-        end_state.scenario_defeat_condition_mask == 0 &&
-        end_state.scenario_victory_condition_mask == 0) {
-        // Mode 5 normally obtains these masks from saved scenario globals.
-        // Until those optional fields are present, leaving both at zero makes
-        // a loaded P2P match impossible to finish.  The normal direct-match
-        // objective is building elimination, so retain that original default
-        // instead of silently disabling all end conditions.
-        end_state.scenario_defeat_condition_mask = kGameplayEndConditionEliteUnit;
-        end_state.scenario_victory_condition_mask = kGameplayEndConditionEliteUnit;
-    }
+    ApplyGameplayEndConditionSessionModeDefaults(end_state);
 
     g_runtime.gameplay_end_condition_units.clear();
     end_state.active_units.clear();

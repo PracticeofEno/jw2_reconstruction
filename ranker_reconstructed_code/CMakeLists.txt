@@ -1070,6 +1070,21 @@ if (RANKER_BUILD_READABILITY_REGRESSION_TESTS)
         COMMAND frontend_window_placement_regression)
 endif()
 
+option(RANKER_BUILD_END_CONDITION_REGRESSION_TESTS
+    "Build focused gameplay end-condition regressions" OFF)
+if (RANKER_BUILD_END_CONDITION_REGRESSION_TESTS)
+    enable_testing()
+    add_executable(gameplay_use_map_end_condition_regression
+        tests/gameplay_use_map_end_condition_regression.cpp
+        src/ranker_gameplay_end_conditions.cpp
+    )
+    target_include_directories(gameplay_use_map_end_condition_regression PRIVATE
+        include
+    )
+    add_test(NAME gameplay_use_map_end_condition_regression
+        COMMAND gameplay_use_map_end_condition_regression)
+endif()
+
 add_executable(ranker_rebuild WIN32
     resources/ranker_resources.rc
     src/main.cpp

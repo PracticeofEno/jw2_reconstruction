@@ -36,6 +36,54 @@ constexpr int kSoMaxMessageSize = 0x2003;
 constexpr int kSoMaxMessageSize = SO_MAX_MSG_SIZE;
 #endif
 
+constexpr const char* kIpv4RouteProbeAddress = "8.8.8.8";
+
+bool configured_bind_address(sockaddr_in& address) {
+    const char* override_address =
+        std::getenv("RANKER_RECONSTRUCTED_BIND_ADDRESS");
+    if (override_address == nullptr || override_address[0] == '\0') {
+        return false;
+    }
+
+    const unsigned long parsed = inet_addr(override_address);
+    if (parsed == INADDR_NONE) {
+        return false;
+    }
+
+    address = sockaddr_in{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = parsed;
+    return true;
+}
+
+bool resolve_default_route_ipv4_address(sockaddr_in& address) {
+    const SOCKET probe = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (probe == INVALID_SOCKET) {
+        return false;
+    }
+
+    sockaddr_in target{};
+    target.sin_family = AF_INET;
+    target.sin_port = htons(9);
+    target.sin_addr.s_addr = inet_addr(kIpv4RouteProbeAddress);
+    const bool connected = connect(probe,
+        reinterpret_cast<const sockaddr*>(&target), sizeof(target)) != SOCKET_ERROR;
+
+    sockaddr_in local{};
+    int local_size = sizeof(local);
+    const bool resolved = connected && getsockname(probe,
+        reinterpret_cast<sockaddr*>(&local), &local_size) != SOCKET_ERROR &&
+        local.sin_family == AF_INET && local.sin_addr.s_addr != INADDR_ANY &&
+        local.sin_addr.s_addr != INADDR_NONE;
+    closesocket(probe);
+    if (!resolved) {
+        return false;
+    }
+
+    address = local;
+    return true;
+}
+
 void write_le32(u8* data, std::size_t offset, u32 value) {
     data[offset + 0] = static_cast<u8>(value & 0xffu);
     data[offset + 1] = static_cast<u8>((value >> 8) & 0xffu);
@@ -307,6 +355,10 @@ bool IsPrivateIpv4Address(const in_addr& address) {
 
 bool ResolveLocalHostDisplayAddress(char* host_name_out, u32 host_name_size,
     char* address_out, u32 address_size) {
+    if (host_name_out == nullptr || host_name_size == 0 ||
+        address_out == nullptr || address_size == 0) {
+        return false;
+    }
     if (!EnsureLegacyWinSockStartup(2, 0)) {
         return false;
     }
@@ -316,40 +368,35 @@ bool ResolveLocalHostDisplayAddress(char* host_name_out, u32 host_name_size,
     // machine; allow those tests to bind the reconstructed peer to a distinct
     // loopback endpoint so its UDP socket and advertised route stay in the
     // same address family as the original process.
-    if (const char* override_address =
-            std::getenv("RANKER_RECONSTRUCTED_BIND_ADDRESS")) {
-        const unsigned long parsed = inet_addr(override_address);
-        if (override_address[0] != '\0' && parsed != INADDR_NONE) {
-            std::snprintf(host_name_out, host_name_size, "%s", override_address);
-            std::snprintf(address_out, address_size, "%s", override_address);
-            return true;
-        }
+    sockaddr_in resolved_address{};
+    if (configured_bind_address(resolved_address)) {
+        const char* override_address = inet_ntoa(resolved_address.sin_addr);
+        std::snprintf(host_name_out, host_name_size, "%s", override_address);
+        std::snprintf(address_out, address_size, "%s", override_address);
+        return true;
     }
 
-    if (gethostname(host_name_out, 0x7f) == SOCKET_ERROR) {
+    const int host_buffer_size = static_cast<int>(
+        std::min<u32>(host_name_size, 0x80));
+    if (gethostname(host_name_out, host_buffer_size) == SOCKET_ERROR) {
         return false;
     }
+    host_name_out[host_name_size - 1] = '\0';
 
     hostent* host = gethostbyname(host_name_out);
     if (host == nullptr) {
         return false;
     }
-    std::sprintf(host_name_out, "%s", host->h_name);
+    std::snprintf(host_name_out, host_name_size, "%s", host->h_name);
 
-    for (char** current = host->h_addr_list; *current != nullptr; ++current) {
-        in_addr candidate{};
-        std::memcpy(&candidate, *current, sizeof(candidate));
-        if (!IsPrivateIpv4Address(candidate)) {
-            const char* text = inet_ntoa(candidate);
-            std::sprintf(address_out, "%s", text);
-            return true;
-        }
+    if (!ResolveLocalHostIpv4Address(resolved_address)) {
+        return false;
     }
-
-    in_addr fallback{};
-    std::memcpy(&fallback, host->h_addr_list[0], sizeof(fallback));
-    const char* text = inet_ntoa(fallback);
-    std::sprintf(address_out, "%s", text);
+    const char* text = inet_ntoa(resolved_address.sin_addr);
+    if (text == nullptr) {
+        return false;
+    }
+    std::snprintf(address_out, address_size, "%s", text);
     return true;
 }
 
@@ -610,12 +657,23 @@ LegacySocketRecord* FindLegacySocketRecord(SOCKET socket) {
 
 void RegisterLegacySocketRecord(SOCKET socket,
     const sockaddr_in* peer_address) {
-    (void)peer_address;
     // The original helper does not de-duplicate sockets before taking a slot.
     if (g_network_state.active_socket_count <=
         static_cast<i32>(kLegacySocketRecordCount)) {
         if (auto* record = first_free_socket_record()) {
             record->socket = socket;
+            record->peer_address = sockaddr_in{};
+            if (peer_address != nullptr) {
+                record->peer_address = *peer_address;
+            }
+            else {
+                int peer_size = sizeof(record->peer_address);
+                if (getpeername(socket,
+                        reinterpret_cast<sockaddr*>(&record->peer_address),
+                        &peer_size) == SOCKET_ERROR) {
+                    record->peer_address = sockaddr_in{};
+                }
+            }
             record->active = true;
             record->receive_queue.clear();
             record->send_queue.clear();
@@ -722,16 +780,40 @@ bool AcceptLegacySocketConnection(HWND notify_window, UINT notify_message) {
 }
 
 bool ResolveLocalHostIpv4Address(sockaddr_in& address) {
-    char host_name[0x80];
-    gethostname(host_name, 0x7f);
+    address = sockaddr_in{};
+    if (!EnsureLegacyWinSockStartup(2, 0)) {
+        return false;
+    }
+    if (configured_bind_address(address) ||
+        resolve_default_route_ipv4_address(address)) {
+        return true;
+    }
 
-    hostent* host = gethostbyname(host_name);
-    if (host == nullptr) {
+    char host_name[0x80]{};
+    if (gethostname(host_name, sizeof(host_name) - 1) == SOCKET_ERROR) {
         return false;
     }
 
-    std::memcpy(&address.sin_addr, host->h_addr_list[0], sizeof(address.sin_addr));
-    return true;
+    hostent* host = gethostbyname(host_name);
+    if (host == nullptr || host->h_addr_list == nullptr) {
+        return false;
+    }
+
+    for (char** current = host->h_addr_list; *current != nullptr; ++current) {
+        in_addr candidate{};
+        std::memcpy(&candidate, *current, sizeof(candidate));
+        const u32 host_order = ntohl(candidate.s_addr);
+        const u8 first = static_cast<u8>(host_order >> 24);
+        const u8 second = static_cast<u8>(host_order >> 16);
+        if (candidate.s_addr == INADDR_ANY || candidate.s_addr == INADDR_NONE ||
+            first == 127 || (first == 169 && second == 254)) {
+            continue;
+        }
+        address.sin_family = AF_INET;
+        address.sin_addr = candidate;
+        return true;
+    }
+    return false;
 }
 
 bool StartLegacySocketConnect(SOCKET& out_socket, const char* remote_address,
@@ -778,6 +860,20 @@ bool CopyLegacySocketPeerAddress(SOCKET socket, sockaddr_in& out_address) {
     auto* record = FindLegacySocketRecord(socket);
     if (record == nullptr) {
         return false;
+    }
+
+    if (record->peer_address.sin_family != AF_INET ||
+        record->peer_address.sin_addr.s_addr == INADDR_ANY ||
+        record->peer_address.sin_addr.s_addr == INADDR_NONE) {
+        sockaddr_in peer{};
+        int peer_size = sizeof(peer);
+        if (getpeername(socket, reinterpret_cast<sockaddr*>(&peer),
+                &peer_size) == SOCKET_ERROR || peer.sin_family != AF_INET ||
+            peer.sin_addr.s_addr == INADDR_ANY ||
+            peer.sin_addr.s_addr == INADDR_NONE) {
+            return false;
+        }
+        record->peer_address = peer;
     }
 
     out_address = record->peer_address;

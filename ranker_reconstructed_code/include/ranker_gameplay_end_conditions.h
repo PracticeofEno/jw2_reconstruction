@@ -42,6 +42,8 @@ struct GameplayEndConditionState {
     bool end_requested = false;
 };
 
+void ApplyGameplayEndConditionSessionModeDefaults(
+    GameplayEndConditionState& state);
 void TickGameplayEndConditionMonitor(GameplayEndConditionState& state);
 void CheckLocalDefeatCondition(GameplayEndConditionState& state);
 void CheckNoLocalEliteUnitDefeat(GameplayEndConditionState& state);

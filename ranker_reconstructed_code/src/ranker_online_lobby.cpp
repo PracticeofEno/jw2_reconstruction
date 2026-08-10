@@ -2771,14 +2771,30 @@ LRESULT HandleOnlineLobbyWindowMessage(OnlineLobbyState& state, HWND hwnd,
         const int id = LOWORD(wparam);
         const int notify_code = HIWORD(wparam);
         switch (id) {
-        case IDCANCEL:
+        case IDCANCEL: {
             play_online_lobby_click_sound();
-            if (state.callbacks.return_to_connect_frontend != nullptr) {
-                state.callbacks.return_to_connect_frontend(state.parent_window,
-                    state.instance, state.return_context, state.callbacks.user_data);
+            // Leaving WizardNet is a real logout, not just a frontend window
+            // transition.  Keeping the authenticated control socket alive
+            // leaves the account registered in the server's active-client
+            // table, so an immediate login is rejected as "already in use".
+            state.connected = false;
+            ShutdownLegacyUdpNetworking();
+            if (state.async_tcp_socket != nullptr) {
+                CloseLegacyAsyncTcpSocket(*state.async_tcp_socket);
             }
+
+            const HWND parent = state.parent_window;
+            const HINSTANCE instance = state.instance;
+            const LPARAM return_context = state.return_context;
+            const auto return_to_connect =
+                state.callbacks.return_to_connect_frontend;
+            void* user_data = state.callbacks.user_data;
             DestroyWindow(hwnd);
+            if (return_to_connect != nullptr) {
+                return_to_connect(parent, instance, return_context, user_data);
+            }
             return 0;
+        }
         case kOnlineLobbyGameListId:
             if (notify_code == LBN_SELCHANGE || notify_code == LBN_SELCANCEL) {
                 focus_online_lobby_chat_edit(state);

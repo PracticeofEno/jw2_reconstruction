@@ -251,6 +251,7 @@ struct P2PLobbyState {
     HWND saved_accelerator_window = nullptr;
     HACCEL active_accelerators = nullptr;
     HWND active_accelerator_window = nullptr;
+    HFONT ui_font = nullptr;
 
     std::array<char, 0x20> player_name{};
     std::array<char, 0x80> local_address{};

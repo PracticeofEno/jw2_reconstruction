@@ -225,6 +225,29 @@ void apply_scenario_victory_mask(GameplayEndConditionState& state, u32 mask) {
 
 } // namespace
 
+void ApplyGameplayEndConditionSessionModeDefaults(
+    GameplayEndConditionState& state) {
+    // FUN_00426770 writes the ordinary building-elimination masks for every
+    // built-in game type, but deliberately leaves mode 5's P_SCENA masks
+    // untouched.  A zero mask in Use Map Setting is meaningful: maps such as
+    // Garsian 2 finish exclusively through their trigger commands.
+    switch (state.session_mode) {
+    case 0:
+    case 1:
+    case 2:
+    case 3:
+    case 4:
+    case 6:
+    case 7:
+    case 8:
+        state.scenario_defeat_condition_mask = kGameplayEndConditionEliteUnit;
+        state.scenario_victory_condition_mask = kGameplayEndConditionEliteUnit;
+        break;
+    default:
+        break;
+    }
+}
+
 void TickGameplayEndConditionMonitor(GameplayEndConditionState& state) {
     if ((state.frame_counter & 0x3f) != 0 || state.scenario_ai_profile_override) {
         return;

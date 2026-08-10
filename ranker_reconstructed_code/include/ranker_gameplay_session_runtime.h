@@ -150,6 +150,8 @@ struct GameplaySessionStartupState {
     u32 session_mode = 0;
     u32 active_slot_count = kPlayerSlotCount;
     u32 ambient_map_effect_spawn_gate = 0;
+    u32 scenario_victory_condition_mask = 0;
+    u32 scenario_defeat_condition_mask = 0;
     u32 frame_interval_index = 8;
     u32 rotation_reset_units = 0;
     u32 frame_counter = 0;

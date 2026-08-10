@@ -12,6 +12,7 @@
 #include "ranker_online_dialogs.h"
 #include "ranker_reliable_packets.h"
 #include "ranker_replay.h"
+#include "ranker_system_ui.h"
 #include "ranker_text_tables.h"
 #include "ranker_trc.h"
 #include "ranker_winmain.h"
@@ -32,8 +33,6 @@ constexpr DWORD kWindowStyleFullscreen = WS_POPUP;
 constexpr DWORD kWindowStyleWindowed =
     WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
 constexpr DWORD kChildEditStyle = WS_CHILD;
-constexpr DWORD kChildEditReadOnlyAutoHScrollStyle =
-    WS_CHILD | ES_READONLY | ES_AUTOHSCROLL;
 constexpr DWORD kChildEditAutoHScrollStyle = WS_CHILD | ES_AUTOHSCROLL;
 constexpr COLORREF kP2PWhite = RGB(255, 255, 255);
 constexpr COLORREF kP2PBlack = RGB(0, 0, 0);
@@ -44,6 +43,27 @@ constexpr COLORREF kP2PDisconnectRed = RGB(250, 20, 20);
 constexpr HRESULT kP2PConnectStartFailed = static_cast<HRESULT>(0x887700aa);
 constexpr std::size_t kStartupP2PClockFormatRow = 193;
 constexpr std::size_t kStartupP2PRouteStateLabelRowBase = 211;
+
+HFONT p2p_lobby_ui_font(const P2PLobbyState& state) {
+    if (state.ui_font != nullptr) {
+        return state.ui_font;
+    }
+    HFONT font = GetUiFontHandle(1);
+    return font != nullptr ? font :
+        reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+}
+
+int scaled_p2p_lobby_x(int legacy_value) {
+    const FrontendLayoutPoint target = FrontendLayoutTargetSize();
+    return ScaleFrontendLayoutValue(legacy_value,
+        kLegacyFrontendLayoutWidth, target.x);
+}
+
+int scaled_p2p_lobby_y(int legacy_value) {
+    const FrontendLayoutPoint target = FrontendLayoutTargetSize();
+    return ScaleFrontendLayoutValue(legacy_value,
+        kLegacyFrontendLayoutHeight, target.y);
+}
 
 P2PLobbyState g_p2p_lobby_state;
 P2PNetworkLaunchParameters g_p2p_network_launch_parameters;
@@ -519,6 +539,10 @@ void release_lobby_resources(P2PLobbyState& state) {
     DestroyLegacyImageButtonControl(state.cancel_button);
     DestroyLegacyImageButtonControl(state.host_button);
     DestroyLegacyImageButtonControl(state.join_button);
+    if (state.ui_font != nullptr) {
+        DeleteObject(state.ui_font);
+        state.ui_font = nullptr;
+    }
     state.name_edit = nullptr;
     state.local_address_edit = nullptr;
     state.remote_address_edit = nullptr;
@@ -529,6 +553,8 @@ void handle_host_command(P2PLobbyState& state, HWND hwnd) {
     HandleDefaultFrontendUiClickSound();
     read_control_text(state.name_edit, state.player_name.data(),
         static_cast<int>(state.player_name.size()));
+    read_control_text(state.local_address_edit, state.local_address.data(),
+        static_cast<int>(state.local_address.size()));
     if (state.callbacks.start_host != nullptr) {
         state.callbacks.start_host(state);
     }
@@ -1251,7 +1277,7 @@ bool CreateP2PLobbyWindow(P2PLobbyState& state, HWND parent, HINSTANCE instance,
         layout_at(layout, 1), kChildEditStyle);
     state.local_address_edit = create_edit(state.window, instance,
         kP2PLobbyLocalAddressEditId, layout_at(layout, 2),
-        kChildEditReadOnlyAutoHScrollStyle);
+        kChildEditAutoHScrollStyle);
     state.remote_address_edit = create_edit(state.window, instance,
         kP2PLobbyRemoteAddressEditId, layout_at(layout, 3),
         kChildEditAutoHScrollStyle);
@@ -1297,15 +1323,26 @@ bool CreateP2PLobbyWindow(P2PLobbyState& state, HWND parent, HINSTANCE instance,
     set_control_proc(state.local_address_edit);
     set_control_proc(state.remote_address_edit);
 
-    HFONT default_font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
-    SendMessageA(state.window, WM_SETFONT, reinterpret_cast<WPARAM>(default_font), TRUE);
+    if (state.ui_font != nullptr) {
+        DeleteObject(state.ui_font);
+        state.ui_font = nullptr;
+    }
+    state.ui_font = CreateScaledFrontendUiFont(1);
+    const HFONT ui_font = p2p_lobby_ui_font(state);
+    SendMessageA(state.window, WM_SETFONT, reinterpret_cast<WPARAM>(ui_font), TRUE);
     SendMessageA(state.info_control.window, WM_SETFONT,
-        reinterpret_cast<WPARAM>(default_font), TRUE);
-    SendMessageA(state.name_edit, WM_SETFONT, reinterpret_cast<WPARAM>(default_font), TRUE);
+        reinterpret_cast<WPARAM>(ui_font), TRUE);
+    SendMessageA(state.cancel_button.window, WM_SETFONT,
+        reinterpret_cast<WPARAM>(ui_font), TRUE);
+    SendMessageA(state.host_button.window, WM_SETFONT,
+        reinterpret_cast<WPARAM>(ui_font), TRUE);
+    SendMessageA(state.join_button.window, WM_SETFONT,
+        reinterpret_cast<WPARAM>(ui_font), TRUE);
+    SendMessageA(state.name_edit, WM_SETFONT, reinterpret_cast<WPARAM>(ui_font), TRUE);
     SendMessageA(state.local_address_edit, WM_SETFONT,
-        reinterpret_cast<WPARAM>(default_font), TRUE);
+        reinterpret_cast<WPARAM>(ui_font), TRUE);
     SendMessageA(state.remote_address_edit, WM_SETFONT,
-        reinterpret_cast<WPARAM>(default_font), TRUE);
+        reinterpret_cast<WPARAM>(ui_font), TRUE);
     SendMessageA(state.name_edit, EM_LIMITTEXT, 0x13, 0);
 
     InstallP2PLobbyAccelerators(state);
@@ -1386,13 +1423,20 @@ LRESULT HandleP2PLobbyWindowMessage(P2PLobbyState& state, HWND hwnd, UINT messag
         if (draw != nullptr && draw->CtlID == kP2PLobbyInfoControlId) {
             FillRect(draw->hDC, &draw->rcItem,
                 reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
-            RECT text_rect{2, 12, 0x18c, 0x87};
+            RECT text_rect{
+                scaled_p2p_lobby_x(2), scaled_p2p_lobby_y(12),
+                scaled_p2p_lobby_x(0x18c), scaled_p2p_lobby_y(0x87)};
             SetTextColor(draw->hDC, kP2PWhite);
             SetBkColor(draw->hDC, kP2PBlack);
             SetBkMode(draw->hDC, TRANSPARENT);
+            const HGDIOBJ previous_font = SelectObject(draw->hDC,
+                p2p_lobby_ui_font(state));
             const char* text = state.instruction_text.empty() ?
                 state.last_status_text.c_str() : state.instruction_text.c_str();
             DrawTextA(draw->hDC, text, -1, &text_rect, 0);
+            if (previous_font != nullptr && previous_font != HGDI_ERROR) {
+                SelectObject(draw->hDC, previous_font);
+            }
             break;
         }
         if (draw != nullptr) {
