@@ -119,6 +119,10 @@ bool RenderGameplaySessionMinimapPreview(const char* archive_path,
     MinimapRenderState preview{};
     preview.minimap_width_pixels = preview_width;
     preview.minimap_height_pixels = preview_height;
+    // Gameplay keeps the original 100% cap, but the lobby owns a dedicated
+    // preview frame.  Small maps should grow to the largest contained size in
+    // that frame instead of remaining as a small native-pixel island.
+    preview.allow_terrain_upscale = true;
     preview.output_pitch_pixels = preview_width;
     preview.output_width_pixels = preview_width;
     preview.output_height_pixels = preview_height;

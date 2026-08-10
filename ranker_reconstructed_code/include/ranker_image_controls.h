@@ -71,6 +71,8 @@ void LoadLegacyImageComboBoxBitmaps(LegacyImageComboBoxControl& control,
     u32 normal_record, u32 pressed_record);
 void SetLegacyImageComboBoxColors(LegacyImageComboBoxControl& control,
     COLORREF outer_border, COLORREF inner_border);
+void SetLegacyImageComboBoxFont(LegacyImageComboBoxControl& control, HFONT font,
+    bool redraw = true);
 void DrawLegacyImageComboBoxItem(LegacyImageComboBoxControl& control,
     const DRAWITEMSTRUCT& item);
 void PaintLegacyImageComboBoxBackground(LegacyImageComboBoxControl& control);

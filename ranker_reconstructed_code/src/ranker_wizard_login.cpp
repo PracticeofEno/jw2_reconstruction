@@ -5,6 +5,7 @@
 #include "ranker_frontend_layout.h"
 #include "ranker_gameplay_sound.h"
 #include "ranker_setup_data.h"
+#include "ranker_system_ui.h"
 #include "ranker_text_tables.h"
 #include "ranker_trc.h"
 #include "ranker_winmain.h"
@@ -397,6 +398,10 @@ void release_window_resources(WizardLoginState& state) {
     state.account_edit.window = nullptr;
     state.password_edit.window = nullptr;
     state.status_edit.window = nullptr;
+    if (state.ui_font != nullptr) {
+        DeleteObject(state.ui_font);
+        state.ui_font = nullptr;
+    }
 }
 
 bool connect_to_configured_server(WizardLoginState& state) {
@@ -1121,14 +1126,21 @@ bool CreateWizardLoginWindow(WizardLoginState& state, HWND parent,
         return false;
     }
 
+    state.ui_font = CreateScaledFrontendUiFont(1);
+    HFONT ui_font = state.ui_font != nullptr ? state.ui_font :
+        reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+
     SendMessageA(state.account_edit.window, EM_LIMITTEXT,
         kWizardLoginAccountBytes - 1, 0);
     SendMessageA(state.password_edit.window, EM_LIMITTEXT,
         kWizardLoginPasswordBytes - 1, 0);
-    SendMessageA(state.window, WM_SETFONT,
-        reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+    SendMessageA(state.window, WM_SETFONT, reinterpret_cast<WPARAM>(ui_font), TRUE);
+    SendMessageA(state.account_edit.window, WM_SETFONT,
+        reinterpret_cast<WPARAM>(ui_font), TRUE);
+    SendMessageA(state.password_edit.window, WM_SETFONT,
+        reinterpret_cast<WPARAM>(ui_font), TRUE);
     SendMessageA(state.status_edit.window, WM_SETFONT,
-        reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+        reinterpret_cast<WPARAM>(ui_font), TRUE);
     LoadBitmapMemoryResourceFromTrcRecord(state.background, "Jw2_19.trc",
         kWizardLoginBackgroundBitmapRecord);
     InstallWizardLoginAccelerators(state);

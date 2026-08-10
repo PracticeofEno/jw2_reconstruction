@@ -1635,9 +1635,9 @@ void RenderMinimapTerrainBase(MinimapRenderState& state,
 
     state.map_width_tiles = map_width;
     state.map_height_tiles = map_height;
-    const u32 x_scale = (state.minimap_width_pixels * 100u) / map_width;
-    const u32 y_scale = (state.minimap_height_pixels * 100u) / map_height;
-    state.scale_percent = std::min({x_scale, y_scale, 100u});
+    state.scale_percent = ResolveMinimapTerrainScalePercent(
+        state.minimap_width_pixels, state.minimap_height_pixels,
+        map_width, map_height, state.allow_terrain_upscale);
     state.scaled_map_width_pixels = (map_width * state.scale_percent) / 100u;
     state.scaled_map_height_pixels = (map_height * state.scale_percent) / 100u;
     state.inset_x = state.scaled_map_width_pixels < state.minimap_width_pixels ?

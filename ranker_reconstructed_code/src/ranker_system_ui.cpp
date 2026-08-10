@@ -3,9 +3,11 @@
 #ifdef _WIN32
 
 #include "ranker_crt_runtime.h"
+#include "ranker_frontend_layout.h"
 
 #include <imm.h>
 
+#include <algorithm>
 #include <cstring>
 
 namespace ranker {
@@ -181,6 +183,32 @@ HFONT GetUiFontHandle(u32 index) {
         return nullptr;
     }
     return g_system_ui_state.fonts.handles[index];
+}
+
+HFONT CreateScaledFrontendUiFont(u32 index) {
+    if (index >= kRankerUiFontCount) {
+        return nullptr;
+    }
+
+    auto& fonts = g_system_ui_state.fonts;
+    LOGFONTA definition = fonts.definitions[index];
+    if (definition.lfHeight == 0) {
+        HFONT source = fonts.handles[index];
+        if (source == nullptr ||
+            GetObjectA(source, sizeof(definition), &definition) == 0) {
+            definition = build_default_font(-12);
+        }
+    }
+
+    const LONG legacy_height = definition.lfHeight < 0 ?
+        -definition.lfHeight : definition.lfHeight;
+    const FrontendLayoutPoint target = FrontendLayoutTargetSize();
+    const LONG scaled_height = std::max<LONG>(1,
+        ScaleFrontendLayoutValue(legacy_height,
+            kLegacyFrontendLayoutHeight, target.y));
+    definition.lfHeight = -scaled_height;
+    definition.lfWidth = 0;
+    return CreateFontIndirectA(&definition);
 }
 
 void SetWin32UiFontByHeight(u32 height) {

@@ -28,6 +28,18 @@ constexpr u32 kTerrainTileDecorationHeaderBytes = 0x394;
 constexpr u32 kTerrainTileBankRecordStride = 0x0f;
 constexpr u32 kInvalidTerrainTileResourceIndex = 0xffffffffu;
 
+constexpr u32 ResolveMinimapTerrainScalePercent(u32 minimap_width,
+    u32 minimap_height, u32 map_width, u32 map_height, bool allow_upscale) {
+    if (minimap_width == 0 || minimap_height == 0 ||
+        map_width == 0 || map_height == 0) {
+        return 0;
+    }
+    const u32 x_scale = (minimap_width * 100u) / map_width;
+    const u32 y_scale = (minimap_height * 100u) / map_height;
+    const u32 contained_scale = x_scale < y_scale ? x_scale : y_scale;
+    return allow_upscale || contained_scale < 100u ? contained_scale : 100u;
+}
+
 enum class MapBrushTileClass : u8 {
     clear = 0,
     edge = 1,
@@ -162,6 +174,7 @@ struct MinimapRenderState {
     i32 output_y = 0;
     u32 minimap_width_pixels = 0;
     u32 minimap_height_pixels = 0;
+    bool allow_terrain_upscale = false;
     u32 scale_percent = 100;
     u32 scaled_map_width_pixels = 0;
     u32 scaled_map_height_pixels = 0;

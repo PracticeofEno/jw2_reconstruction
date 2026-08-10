@@ -57,9 +57,12 @@ constexpr UINT_PTR kLinkLobbyComboRefreshTimerId = 3;
 constexpr UINT kLinkLobbyTabTextFlags =
     DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS | DT_MODIFYSTRING;
 
-HFONT link_lobby_ui_font() {
+HFONT link_lobby_ui_font(const LinkLobbyState& state) {
     // The original lobby uses DAT_0162ec38, the second font created by
     // InitializeUiFontHandles (LOGFONT height -12), for its Win32 controls.
+    if (state.ui_font != nullptr) {
+        return state.ui_font;
+    }
     HFONT font = GetUiFontHandle(1);
     return font != nullptr ? font :
         reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
@@ -784,6 +787,29 @@ void draw_link_lobby_map_preview_control(
         draw.rcItem.left, draw.rcItem.top,
         draw.rcItem.right - draw.rcItem.left,
         draw.rcItem.bottom - draw.rcItem.top);
+}
+
+int scaled_link_lobby_x(int legacy_value) {
+    const FrontendLayoutPoint target = FrontendLayoutTargetSize();
+    return ScaleFrontendLayoutValue(legacy_value,
+        kLegacyFrontendLayoutWidth, target.x);
+}
+
+int scaled_link_lobby_y(int legacy_value) {
+    const FrontendLayoutPoint target = FrontendLayoutTargetSize();
+    return ScaleFrontendLayoutValue(legacy_value,
+        kLegacyFrontendLayoutHeight, target.y);
+}
+
+void draw_scaled_link_lobby_bitmap_at(const BitmapMemoryResource& bitmap,
+    HDC dc, int legacy_x, int legacy_y) {
+    const BitmapDrawRect destination{
+        scaled_link_lobby_x(legacy_x), scaled_link_lobby_y(legacy_y),
+        scaled_link_lobby_x(std::abs(bitmap.width)),
+        scaled_link_lobby_y(std::abs(bitmap.height))};
+    const BitmapDrawRect source{
+        bitmap.source_x, bitmap.source_y, bitmap.width, bitmap.height};
+    StretchBitmapMemoryResourceRectToDc(bitmap, dc, destination, source);
 }
 
 int link_lobby_active_start_slot_count(const LinkLobbyState& state) {
@@ -2249,6 +2275,10 @@ void release_resources(LinkLobbyState& state) {
     state.message_lines.clear();
     state.game_list.window = nullptr;
     state.chat_edit.window = nullptr;
+    if (state.ui_font != nullptr) {
+        DeleteObject(state.ui_font);
+        state.ui_font = nullptr;
+    }
 }
 
 void draw_avatar_button(LinkLobbyState& state, const DRAWITEMSTRUCT& draw) {
@@ -3029,7 +3059,7 @@ bool CreateLinkLobbyPlayerRoleComboBox(LinkLobbyState& state, int player_index,
         const LinkLobbyLayoutRect rect = layout_at(state, 12);
         x = rect.x;
         width = rect.width;
-        height = rect.height + 0x96;
+        height = rect.height + scaled_link_lobby_y(0x96);
     }
     if (!CreateLegacyImageComboBoxWindow(combo, state.window, "Player",
             reinterpret_cast<HMENU>(static_cast<INT_PTR>(
@@ -3041,8 +3071,7 @@ bool CreateLinkLobbyPlayerRoleComboBox(LinkLobbyState& state, int player_index,
     subclass_combo(combo);
     LoadLegacyImageComboBoxBitmaps(combo, kLinkLobbyPlayerRoleEnabledBitmapRecord, 0);
     SetLegacyImageComboBoxColors(combo, RGB(176, 178, 171), 0);
-    SendMessageA(combo.window, WM_SETFONT,
-        reinterpret_cast<WPARAM>(link_lobby_ui_font()), TRUE);
+    SetLegacyImageComboBoxFont(combo, link_lobby_ui_font(state));
     return true;
 }
 
@@ -3155,11 +3184,11 @@ bool CreateLinkLobbyPlayerRoleControls(LinkLobbyState& state) {
 
     const LinkLobbyLayoutRect tab_rect = layout_at(state, 11);
     const LinkLobbyLayoutRect role_rect = layout_at(state, 12);
-    const int row_step = role_rect.height + 4;
+    const int row_step = role_rect.height + scaled_link_lobby_y(4);
     // FUN_004714f0 places the first player row at group_y + tab_height + 3.
     // Deriving it from the two independent TRC y values is one pixel shorter
     // and shifts a host-created tribe combo from y=135 to y=134.
-    const int first_row_offset = tab_rect.height + 3;
+    const int first_row_offset = tab_rect.height + scaled_link_lobby_y(3);
     const int player_count = std::clamp(
         static_cast<int>(link_lobby_seed_max_players(state)), 0,
         kLinkLobbyAvatarCount);
@@ -3200,7 +3229,7 @@ bool CreateLinkLobbyPlayerRoleControls(LinkLobbyState& state) {
             }
         }
         next_group_y += tab_rect.height +
-            std::max(1, group_players) * row_step + 8;
+            std::max(1, group_players) * row_step + scaled_link_lobby_y(8);
     }
     if (!CreateLinkLobbyTabButtons(state)) {
         return false;
@@ -3379,7 +3408,7 @@ bool CreateLinkLobbyTribeComboBox(LinkLobbyState& state, int player_index) {
         const LinkLobbyLayoutRect rect = layout_at(state, 13);
         x = rect.x;
         width = rect.width;
-        height = rect.height + 0x96;
+        height = rect.height + scaled_link_lobby_y(0x96);
     }
     LegacyImageComboBoxControl& combo = state.tribe_combos[player_index];
     if (!CreateLegacyImageComboBoxWindow(combo, state.window, "Tribe",
@@ -3390,8 +3419,7 @@ bool CreateLinkLobbyTribeComboBox(LinkLobbyState& state, int player_index) {
     }
     subclass_combo(combo);
     LoadLegacyImageComboBoxBitmaps(combo, kLinkLobbyTribeDisabledBitmapRecord, 0);
-    SendMessageA(combo.window, WM_SETFONT,
-        reinterpret_cast<WPARAM>(link_lobby_ui_font()), TRUE);
+    SetLegacyImageComboBoxFont(combo, link_lobby_ui_font(state));
     return true;
 }
 
@@ -5218,7 +5246,7 @@ bool CreateLinkLobbyTabButton(LinkLobbyState& state, int tab_index, int position
     subclass_button(button);
     LoadLegacyImageButtonBitmaps(button, kLinkLobbyPanelBitmapRecord, 0);
     SendMessageA(button.window, WM_SETFONT,
-        reinterpret_cast<WPARAM>(link_lobby_ui_font()), TRUE);
+        reinterpret_cast<WPARAM>(link_lobby_ui_font(state)), TRUE);
     SetWindowTextA(button.window, state.tab_button_labels[tab_index].data());
     return true;
 }
@@ -5251,12 +5279,18 @@ void DrawLinkLobbyTabButton(LinkLobbyState& state, int tab_index,
     }
 
     RECT rect = draw.rcItem;
-    rect.left += 0x0e;
-    rect.top += 0x0e;
-    rect.right -= 0x0e;
+    const int horizontal_inset = scaled_link_lobby_x(0x0e);
+    rect.left += horizontal_inset;
+    rect.right -= horizontal_inset;
     SetBkMode(draw.hDC, TRANSPARENT);
     SetTextColor(draw.hDC, state.tab_text_colors[tab_index]);
-    DrawTextA(draw.hDC, text.data(), -1, &rect, kLinkLobbyTabTextFlags);
+    HFONT old_font = reinterpret_cast<HFONT>(SelectObject(
+        draw.hDC, link_lobby_ui_font(state)));
+    DrawTextA(draw.hDC, text.data(), -1, &rect,
+        kLinkLobbyTabTextFlags | DT_VCENTER);
+    if (old_font != nullptr && old_font != HGDI_ERROR) {
+        SelectObject(draw.hDC, old_font);
+    }
 }
 
 void NoOpLinkLobbyUnusedOwnerDrawControl(LinkLobbyState&, const DRAWITEMSTRUCT&) {
@@ -5631,7 +5665,8 @@ bool CreateLinkLobbyMapDownloadButton(LinkLobbyState& state, int player_index) {
     button.height = 0x14;
     if (link_lobby_session_seed_present(state)) {
         const LinkLobbyLayoutRect role_rect = layout_at(state, 12);
-        button.x = role_rect.x - 0x1e;
+        button.x = role_rect.x - scaled_link_lobby_x(0x1e);
+        button.width = scaled_link_lobby_x(0x14);
         button.height = role_rect.height;
     }
     button.window = CreateWindowExA(0, "button", "Map DownLoad",
@@ -5647,7 +5682,7 @@ bool CreateLinkLobbyMapDownloadButton(LinkLobbyState& state, int player_index) {
         GetWindowLongPtrA(button.window, GWLP_WNDPROC));
     subclass_button(button);
     SendMessageA(button.window, WM_SETFONT,
-        reinterpret_cast<WPARAM>(link_lobby_ui_font()), TRUE);
+        reinterpret_cast<WPARAM>(link_lobby_ui_font(state)), TRUE);
     ShowWindow(button.window, SW_HIDE);
     return true;
 }
@@ -6817,6 +6852,11 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
         return false;
     }
     state.layout = copy_layout_record(layout.table);
+    if (state.ui_font != nullptr) {
+        DeleteObject(state.ui_font);
+        state.ui_font = nullptr;
+    }
+    state.ui_font = CreateScaledFrontendUiFont(1);
 
     const LinkLobbyLayoutRect window_rect = layout_at(state, 0);
     // The original fullscreen frontend path creates this lobby as an owned
@@ -6964,10 +7004,20 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
             std::size(host_resources), state.host_resource_index);
     }
 
+    HFONT ui_font = link_lobby_ui_font(state);
     SendMessageA(state.window, WM_SETFONT,
-        reinterpret_cast<WPARAM>(link_lobby_ui_font()), TRUE);
+        reinterpret_cast<WPARAM>(ui_font), TRUE);
     SendMessageA(state.game_list.window, WM_SETFONT,
-        reinterpret_cast<WPARAM>(link_lobby_ui_font()), TRUE);
+        reinterpret_cast<WPARAM>(ui_font), TRUE);
+    SendMessageA(state.game_list.window, LB_SETITEMHEIGHT, 0,
+        scaled_link_lobby_y(16));
+    SendMessageA(state.chat_edit.window, WM_SETFONT,
+        reinterpret_cast<WPARAM>(ui_font), TRUE);
+    SendMessageA(state.game_info_button.window, WM_SETFONT,
+        reinterpret_cast<WPARAM>(ui_font), TRUE);
+    SetLegacyImageComboBoxFont(state.start_resource_combo, ui_font);
+    SetLegacyImageComboBoxFont(state.screen_size_combo, ui_font);
+    SetLegacyImageComboBoxFont(state.host_resource_combo, ui_font);
     RedrawWindow(state.game_list.window, nullptr, nullptr,
         RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
     SendMessageA(state.chat_edit.window, EM_LIMITTEXT, 200, 0);
@@ -7050,7 +7100,8 @@ LRESULT HandleLinkLobbyWindowMessage(LinkLobbyState& state, HWND hwnd, UINT mess
             HDC dc = BeginPaint(hwnd, &paint);
             StretchBitmapMemoryResourceToClient(state.background, dc, state.window);
             if (state.game_type == 8) {
-                StretchBitmapMemoryResourceToDc(state.download_background, dc, 600, 277);
+                draw_scaled_link_lobby_bitmap_at(
+                    state.download_background, dc, 600, 277);
             }
             EndPaint(hwnd, &paint);
             return 0;
@@ -7061,7 +7112,8 @@ LRESULT HandleLinkLobbyWindowMessage(LinkLobbyState& state, HWND hwnd, UINT mess
             HDC dc = reinterpret_cast<HDC>(wparam);
             StretchBitmapMemoryResourceToClient(state.background, dc, state.window);
             if (state.game_type == 8) {
-                StretchBitmapMemoryResourceToDc(state.download_background, dc, 600, 277);
+                draw_scaled_link_lobby_bitmap_at(
+                    state.download_background, dc, 600, 277);
             }
             return 1;
         }

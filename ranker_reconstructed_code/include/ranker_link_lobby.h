@@ -149,6 +149,7 @@ struct LinkLobbyState {
     BitmapMemoryResource avatar_available_background;
     BitmapMemoryResource download_background;
     RawIndexedBitmapStrip avatar_strip;
+    HFONT ui_font = nullptr;
 
     LinkLobbyWindowControl game_list;
     LinkLobbyWindowControl chat_edit;

@@ -72,6 +72,9 @@ int MeasureGdiTextWidth(HDC dc, const char* text);
 void InitializeUiFontHandles();
 void ShutdownUiFontHandles();
 HFONT GetUiFontHandle(u32 index);
+// Creates a caller-owned copy of one of the legacy UI fonts whose pixel
+// height follows the configured frontend presentation height.
+HFONT CreateScaledFrontendUiFont(u32 index);
 void SetWin32UiFontByHeight(u32 height);
 bool InitializeWin32UiFontMetrics(HDC dc);
 int MeasureWin32FontCharacterWidth(HDC dc, UINT ch);

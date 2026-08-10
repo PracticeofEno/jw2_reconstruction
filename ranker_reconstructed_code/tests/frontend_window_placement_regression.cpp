@@ -2,6 +2,7 @@
 #include "ranker_client_config.h"
 #include "ranker_display_constants.h"
 #include "ranker_frontend_layout.h"
+#include "ranker_map_brush.h"
 #include "ranker_online_lobby.h"
 #include "ranker_winmain.h"
 
@@ -45,6 +46,14 @@ static_assert(kScaledRoomMapPreview.x == 1006);
 static_assert(kScaledRoomMapPreview.y == 64);
 static_assert(kScaledRoomMapPreview.width == 178);
 static_assert(kScaledRoomMapPreview.height == 192);
+static_assert(ScaleFrontendLayoutValue(12,
+    kLegacyFrontendLayoutHeight, kDefaultPresentationClientHeight) == 19);
+static_assert(ScaleFrontendLayoutValue(23,
+    kLegacyFrontendLayoutWidth, kDefaultPresentationClientWidth) == 37);
+static_assert(ResolveMinimapTerrainScalePercent(
+    111, 120, 96, 96, false) == 100);
+static_assert(ResolveMinimapTerrainScalePercent(
+    111, 120, 96, 96, true) == 115);
 static_assert(OnlineLobbyButtonLayoutIndex(0) == 1);
 static_assert(OnlineLobbyButtonLayoutIndex(1) == 7);
 static_assert(OnlineLobbyButtonLayoutIndex(8) == 14);

@@ -2,7 +2,9 @@
 
 #ifdef _WIN32
 
+#include <algorithm>
 #include <array>
+#include <cstdlib>
 
 namespace ranker {
 namespace {
@@ -44,6 +46,47 @@ void draw_bitmap(const BitmapMemoryResource& bitmap, HDC dc, const RECT& rect) {
     const BitmapDrawRect source{
         bitmap.source_x, bitmap.source_y, bitmap.width, bitmap.height};
     StretchBitmapMemoryResourceRectToDc(bitmap, dc, destination, source);
+}
+
+int combo_bitmap_scaled_height(const LegacyImageComboBoxControl& control) {
+    const int bitmap_width = std::abs(control.normal_bitmap.width);
+    const int bitmap_height = std::abs(control.normal_bitmap.height);
+    if (bitmap_width == 0 || bitmap_height == 0 || control.width <= 0) {
+        return 0;
+    }
+    return std::max(1, MulDiv(bitmap_height, control.width, bitmap_width));
+}
+
+void fit_combo_selection_field_to_bitmap(LegacyImageComboBoxControl& control) {
+    if (control.window == nullptr) {
+        return;
+    }
+    const int desired_outer_height = combo_bitmap_scaled_height(control);
+    if (desired_outer_height <= 0) {
+        return;
+    }
+
+    // CBS_DROPDOWNLIST keeps the closed selection field at the system-font
+    // height even when its x/y/width came from a scaled TRC layout.  First set
+    // a provisional height, then compensate for USER32's borders so the final
+    // closed window has the same aspect ratio as its image resource.
+    int selection_height = desired_outer_height;
+    SendMessageA(control.window, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1),
+        selection_height);
+    RECT window_rect{};
+    if (GetWindowRect(control.window, &window_rect)) {
+        const int actual_outer_height = window_rect.bottom - window_rect.top;
+        const int corrected_height = selection_height +
+            (desired_outer_height - actual_outer_height);
+        if (corrected_height > 0 &&
+            actual_outer_height < desired_outer_height * 3) {
+            selection_height = corrected_height;
+            SendMessageA(control.window, CB_SETITEMHEIGHT,
+                static_cast<WPARAM>(-1), selection_height);
+        }
+    }
+    SendMessageA(control.window, CB_SETITEMHEIGHT, 0,
+        std::max(1, selection_height));
 }
 
 } // namespace
@@ -166,12 +209,23 @@ void LoadLegacyImageComboBoxBitmaps(LegacyImageComboBoxControl& control,
     release_control_bitmaps(control.normal_bitmap, control.pressed_bitmap);
     load_optional_bitmap(control.normal_bitmap, normal_record);
     load_optional_bitmap(control.pressed_bitmap, pressed_record);
+    fit_combo_selection_field_to_bitmap(control);
 }
 
 void SetLegacyImageComboBoxColors(LegacyImageComboBoxControl& control,
     COLORREF outer_border, COLORREF inner_border) {
     control.outer_border_color = outer_border;
     control.inner_border_color = inner_border;
+}
+
+void SetLegacyImageComboBoxFont(LegacyImageComboBoxControl& control, HFONT font,
+    bool redraw) {
+    if (control.window == nullptr) {
+        return;
+    }
+    SendMessageA(control.window, WM_SETFONT,
+        reinterpret_cast<WPARAM>(font), redraw ? TRUE : FALSE);
+    fit_combo_selection_field_to_bitmap(control);
 }
 
 void DrawLegacyImageComboBoxItem(LegacyImageComboBoxControl& control,
@@ -208,10 +262,12 @@ void DrawLegacyImageComboBoxItem(LegacyImageComboBoxControl& control,
         return;
     }
 
-    DRAWITEMSTRUCT& mutable_item = const_cast<DRAWITEMSTRUCT&>(item);
-    mutable_item.rcItem.left += 2;
-    mutable_item.rcItem.top += 2;
-    mutable_item.rcItem.right -= 2;
+    RECT text_rect = item.rcItem;
+    const int bitmap_width = std::abs(control.normal_bitmap.width);
+    const int horizontal_padding = bitmap_width > 0 ?
+        std::max(2, MulDiv(2, control.width, bitmap_width)) : 2;
+    text_rect.left += horizontal_padding;
+    text_rect.right -= horizontal_padding;
     SetTextColor(item.hDC, RGB(255, 255, 255));
     // Modern USER32 can report ODS_SELECTED for the closed selection field
     // while it owns focus. The original lobby only shows the highlight in the
@@ -229,10 +285,11 @@ void DrawLegacyImageComboBoxItem(LegacyImageComboBoxControl& control,
     // drop-down rows retain the original pixels, including the area after the
     // final character in strings such as "Random".
     HBRUSH background = CreateSolidBrush(background_color);
-    FillRect(item.hDC, &mutable_item.rcItem, background);
+    FillRect(item.hDC, &text_rect, background);
     DeleteObject(background);
     SetBkMode(item.hDC, TRANSPARENT);
-    DrawTextA(item.hDC, text.data(), -1, &mutable_item.rcItem, DT_NOPREFIX);
+    DrawTextA(item.hDC, text.data(), -1, &text_rect,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
 }
 
 void PaintLegacyImageComboBoxBackground(LegacyImageComboBoxControl& control) {

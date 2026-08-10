@@ -141,6 +141,7 @@ struct WizardLoginState {
     LegacyImageButtonControl ok_button;
     LegacyImageButtonControl cancel_button;
     LegacyImageButtonControl info_background_button;
+    HFONT ui_font = nullptr;
 
     HACCEL saved_accelerators = nullptr;
     HWND saved_accelerator_window = nullptr;
