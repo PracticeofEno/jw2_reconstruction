@@ -5277,6 +5277,23 @@ void default_gameplay_input_handle_pointer_event(GameplayInputActionState& state
     overlay.mouse_x = event.x;
     overlay.mouse_y = event.y;
 
+    // WM_*BUTTON wParam preserves the modifier state that accompanied this
+    // pointer event.  Also retain the original live-global behavior as a
+    // fallback for injected messages which omit MK_SHIFT/MK_CONTROL.  Every
+    // pointer path (world selection, side portrait, command and minimap) must
+    // see the same modifiers; previously only keyboard and double-click
+    // dispatch refreshed these fields, while ordinary Shift-click/drag read
+    // an unrelated additive-selection flag that was never populated.
+    const InputState& input = input_state();
+    overlay.shift_modifier_down =
+        ResolveUiOverlayPointerModifierDown(
+            event.wparam, MK_SHIFT, input.shift_down);
+    overlay.ctrl_modifier_down =
+        ResolveUiOverlayPointerModifierDown(
+            event.wparam, MK_CONTROL, input.ctrl_down);
+    overlay.alt_modifier_down = input.alt_down;
+    overlay.control_group_assign_mode = overlay.ctrl_modifier_down;
+
     // WM_MOUSEMOVE updates InputState directly and is not queued for the
     // gameplay-input drain.  Resolve the current event point before a button
     // event consumes hover_context; resolving only after Handle made a
@@ -5292,9 +5309,7 @@ void default_gameplay_input_handle_pointer_event(GameplayInputActionState& state
     case 0x0203: {
         // Code 0x20 has its own FUN_004e9ed0 branch.  Read the key table at
         // the point of dispatch so Shift is not inherited from the last
-        // drained keyboard event or the unused additive-selection mirror.
-        const InputState& input = input_state();
-        overlay.shift_modifier_down = input.key_down[VK_SHIFT] != 0;
+        // drained keyboard event.
         const UiOverlayDoubleClickSelectionResult double_click_result =
             ResolveGameplayDoubleClickSelection(overlay);
         if (double_click_result ==

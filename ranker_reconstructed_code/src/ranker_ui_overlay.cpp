@@ -5545,8 +5545,7 @@ UiOverlaySelectionRectScanResult ScanVisibleUnitsInSelectionRect(
 
 bool unit_is_local_small_selection_candidate(
     const UiOverlayState& state, const UiOverlayMinimapUnit& unit) {
-    return UiOverlayUnitVisibleToLocalPlayer(unit) &&
-        unit.type_id < 0x60 && unit.owner_id == state.local_player_slot;
+    return UiOverlayLocalMobileSelectionCandidate(state, unit);
 }
 
 const UiOverlayMinimapUnit* best_local_small_unit_in_selection_rect(
@@ -5664,7 +5663,11 @@ void SelectLocalUnitsFromDragRectangle(UiOverlayState& state) {
 }
 
 void SelectUnitsInDragRectangle(UiOverlayState& state) {
-    if (!state.additive_selection_mode) {
+    // FUN_004eb063 reads the live Shift globals (DAT_014590a6/b2) for both
+    // click and rectangle selection.  Do not route this through a separate
+    // UI mode: that mirror can go stale and turns Shift+drag into a replacing
+    // selection even while Shift itself is correctly reported as held.
+    if (!UiOverlaySelectionIsAdditive(state.shift_modifier_down)) {
         ResetGameplaySelectionState(state);
         SelectLocalUnitsFromDragRectangle(state);
         BuildSelectedUnitCommandPanel(state);
@@ -5683,13 +5686,13 @@ void ResolveGameplayClickSelection(UiOverlayState& state) {
     }
 
     if (!FindUnitUnderStoredPointer(state)) {
-        if (!state.additive_selection_mode) {
+        if (!UiOverlaySelectionIsAdditive(state.shift_modifier_down)) {
             ResetGameplaySelectionState(state);
         }
         return;
     }
 
-    if (state.additive_selection_mode) {
+    if (UiOverlaySelectionIsAdditive(state.shift_modifier_down)) {
         if (unit_already_selected(state, state.hover_context.unit_id)) {
             ToggleUnitSelectionState(state);
         } else if (const UiOverlayMinimapUnit* unit =
@@ -5838,20 +5841,9 @@ void AddUnitsInDragRectangleToSelection(UiOverlayState& state) {
         }
     }
 
-    u32 reference_type = 0xffffffffu;
-    if (state.box_select_same_type_only && state.selected_unit_id != 0) {
-        if (const UiOverlayMinimapUnit* selected =
-                find_unit_by_id(state, state.selected_unit_id)) {
-            reference_type = selected->type_id;
-        }
-    }
-
     bool selection_changed = false;
     for (const UiOverlayMinimapUnit& unit : state.minimap_units) {
         if (!unit_is_local_small_selection_candidate(state, unit)) {
-            continue;
-        }
-        if (reference_type != 0xffffffffu && unit.type_id != reference_type) {
             continue;
         }
         if (rects_intersect(selection, unit_world_rect(unit))) {

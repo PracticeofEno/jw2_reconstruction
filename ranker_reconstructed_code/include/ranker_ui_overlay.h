@@ -929,8 +929,6 @@ struct UiOverlayState {
     bool camera_scroll_dirty = false;
     bool gameplay_overlay_flag = false;
     bool minimap_mode = false;
-    bool additive_selection_mode = false;
-    bool box_select_same_type_only = false;
     bool shift_modifier_down = false;
     bool ctrl_modifier_down = false;
     bool alt_modifier_down = false;
@@ -970,6 +968,26 @@ struct UiOverlayState {
     bool emit_sprite_draws = false;
     bool clear_queue_after_flush = false;
 };
+
+// Original FUN_004eb063 treats the live Shift byte itself as the additive
+// selection mode.  Keeping this relationship explicit prevents a detached UI
+// mirror from silently disabling Shift-click and Shift-drag.
+constexpr bool UiOverlaySelectionIsAdditive(bool shift_modifier_down) {
+    return shift_modifier_down;
+}
+
+// Prefer the modifier bits carried by a mouse event, while preserving the
+// original live-global fallback used by synthetic/injected pointer messages.
+constexpr bool ResolveUiOverlayPointerModifierDown(
+    u32 mouse_wparam, u32 modifier_mask, bool live_modifier_down) {
+    return (mouse_wparam & modifier_mask) != 0 || live_modifier_down;
+}
+
+constexpr bool UiOverlayLocalMobileSelectionCandidate(
+    const UiOverlayState& state, const UiOverlayMinimapUnit& unit) {
+    return UiOverlayUnitVisibleToLocalPlayer(unit) &&
+        unit.type_id < 0x60u && unit.owner_id == state.local_player_slot;
+}
 
 // FUN_004e030b dispatches the selected-info record (0x1a6) before the command
 // records which follow it.  Its HP/name/progress draws complete at that record

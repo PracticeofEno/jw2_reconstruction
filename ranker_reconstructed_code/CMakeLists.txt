@@ -1110,6 +1110,31 @@ if (RANKER_BUILD_GAME_LOOP_CATCHUP_REGRESSION_TESTS)
         COMMAND game_loop_catchup_presentation_regression)
 endif()
 
+option(RANKER_BUILD_GAMEPLAY_SELECTION_REGRESSION_TESTS
+    "Build focused gameplay selection modifier regressions" OFF)
+if (RANKER_BUILD_GAMEPLAY_SELECTION_REGRESSION_TESTS)
+    enable_testing()
+    add_executable(gameplay_selection_modifier_regression
+        tests/gameplay_selection_modifier_regression.cpp
+    )
+    target_include_directories(gameplay_selection_modifier_regression PRIVATE
+        include
+    )
+    if (MSVC)
+        target_compile_options(gameplay_selection_modifier_regression PRIVATE /Gy)
+        target_link_options(gameplay_selection_modifier_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(gameplay_selection_modifier_regression PRIVATE
+            -O1 -ffunction-sections -fdata-sections
+        )
+        target_link_options(gameplay_selection_modifier_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME gameplay_selection_modifier_regression
+        COMMAND gameplay_selection_modifier_regression)
+endif()
+
 add_executable(ranker_rebuild WIN32
     resources/ranker_resources.rc
     src/main.cpp
