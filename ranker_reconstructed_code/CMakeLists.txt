@@ -990,6 +990,35 @@ if (RANKER_BUILD_UDP_BURST_REGRESSION_TEST)
         COMMAND legacy_udp_burst_regression)
 endif()
 
+option(RANKER_BUILD_MODE1_PARTIAL_ROUND_RECEIVE_TEST
+    "Build the mode-1 partial-round transport receive regression" OFF)
+if (RANKER_BUILD_MODE1_PARTIAL_ROUND_RECEIVE_TEST)
+    enable_testing()
+    add_executable(mode1_partial_round_receive_regression
+        tests/mode1_partial_round_receive_regression.cpp
+        src/ranker_reliable_packets.cpp
+    )
+    target_include_directories(mode1_partial_round_receive_regression PRIVATE
+        include
+    )
+    add_test(NAME mode1_partial_round_receive_regression
+        COMMAND mode1_partial_round_receive_regression)
+endif()
+
+option(RANKER_BUILD_MODE1_AUX_VECTOR_PARITY_TEST
+    "Build the mode-1 subtype-08 aux-vector parity regression" OFF)
+if (RANKER_BUILD_MODE1_AUX_VECTOR_PARITY_TEST)
+    enable_testing()
+    add_executable(mode1_aux_vector_parity_regression
+        tests/mode1_aux_vector_parity_regression.cpp
+    )
+    target_include_directories(mode1_aux_vector_parity_regression PRIVATE
+        include
+    )
+    add_test(NAME mode1_aux_vector_parity_regression
+        COMMAND mode1_aux_vector_parity_regression)
+endif()
+
 option(RANKER_BUILD_EQUIPMENT_REPLACEMENT_PARITY_TEST
     "Build the equipment type-replacement visibility parity regression" OFF)
 if (RANKER_BUILD_EQUIPMENT_REPLACEMENT_PARITY_TEST)

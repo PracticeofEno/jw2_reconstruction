@@ -19,6 +19,8 @@
 !ranker_reconstructed_code/tests/
 !ranker_reconstructed_code/tests/evil_portal_construction_release_regression.cpp
 !ranker_reconstructed_code/tests/legacy_udp_burst_regression.cpp
+!ranker_reconstructed_code/tests/mode1_partial_round_receive_regression.cpp
+!ranker_reconstructed_code/tests/mode1_aux_vector_parity_regression.cpp
 !ranker_reconstructed_code/tests/mixed_unit_skill_original_parity_regression.cpp
 !ranker_reconstructed_code/tests/wrapped_u32_conversion_regression.cpp
 !ranker_reconstructed_code/tests/frontend_window_placement_regression.cpp

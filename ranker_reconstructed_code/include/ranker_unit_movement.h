@@ -344,6 +344,18 @@ struct UnitMovementUnit {
     u32 script_bit_flags = 0;
 };
 
+// Mode-1 subtype 0x08 (original 0x004ddad3) writes only raw unit +0x94,
+// +0xc8 and +0xcc.  In particular, the saved guard/return destination is a
+// separate field and must survive this packet unchanged.
+inline void ApplyMode1Subtype08AuxVector(UnitMovementUnit& unit,
+    UnitMovementUnit* linked_unit, u32 linked_object_id, i32 next_path_x,
+    i32 next_path_y) {
+    unit.linked_object_id = linked_object_id;
+    unit.linked_unit = linked_unit;
+    unit.next_path_x = next_path_x;
+    unit.next_path_y = next_path_y;
+}
+
 struct UnitRuntimeStatBlock {
     u32 max_health = 0;
     u32 max_secondary_value = 0;

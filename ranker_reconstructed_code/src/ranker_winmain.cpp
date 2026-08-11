@@ -15984,14 +15984,11 @@ void default_mode1_packet_set_unit_aux_vector(void*, u32 unit_offset,
         return;
     }
 
-    unit->linked_object_id = linked_unit_offset;
-    unit->linked_unit = linked_unit_offset == unit_offset
+    UnitMovementUnit* linked_unit = linked_unit_offset == unit_offset
         ? unit
         : find_default_movement_unit_by_id(linked_unit_offset);
-    unit->next_path_x = x;
-    unit->next_path_y = y;
-    unit->saved_path_target_x = x;
-    unit->saved_path_target_y = y;
+    ApplyMode1Subtype08AuxVector(
+        *unit, linked_unit, linked_unit_offset, x, y);
 }
 
 void default_mode1_packet_force_order21(void*, u32 unit_offset) {

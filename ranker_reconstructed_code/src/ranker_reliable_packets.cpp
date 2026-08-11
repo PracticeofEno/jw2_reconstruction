@@ -71,6 +71,19 @@ void invoke_simple_hook(Mode1ReliableSimpleHook hook) {
     }
 }
 
+void poll_mode1_transport_receive() {
+    Mode1ReliableSimpleHook poll_hook = nullptr;
+    void* poll_user_data = nullptr;
+    {
+        const std::lock_guard<std::recursive_mutex> lock(g_mode1_reliable_mutex);
+        poll_hook = g_mode1_reliable_state.callbacks.poll_transport_receive;
+        poll_user_data = g_mode1_reliable_state.callback_user_data;
+    }
+    if (poll_hook != nullptr) {
+        poll_hook(poll_user_data);
+    }
+}
+
 bool is_active_player_locked(u32 player) {
     if (player >= kMode1ReliableChannelCount) {
         return false;
@@ -631,17 +644,11 @@ void ApplyMode1SyncTimeoutPenalty() {
 }
 
 bool CheckMode1ReliableSync(u32 now_ms) {
-    Mode1ReliableSimpleHook poll_hook = nullptr;
-    void* poll_user_data = nullptr;
     {
         const std::lock_guard<std::recursive_mutex> lock(g_mode1_reliable_mutex);
         g_mode1_reliable_state.current_time_ms = now_ms;
-        poll_hook = g_mode1_reliable_state.callbacks.poll_transport_receive;
-        poll_user_data = g_mode1_reliable_state.callback_user_data;
     }
-    if (poll_hook != nullptr) {
-        poll_hook(poll_user_data);
-    }
+    poll_mode1_transport_receive();
 
     struct MissingRequest {
         u32 channel = 0;
@@ -833,6 +840,16 @@ u32 PumpMode1ReliablePackets(
             g_mode1_reliable_state.sync_round_required_mask =
                 active_player_mask_locked();
         }
+    }
+    else {
+        // The original remains inside its channel loop while the dedicated
+        // UDP worker continues receiving packets.  The reconstruction yields
+        // to the UI when PopMode1OrderedPacket has to wait, but its default
+        // legacy-UDP path has no continuously running receive worker.  Poll
+        // again whenever that partial round is resumed; otherwise the packet
+        // that would close the channel can sit in the socket forever because
+        // CheckMode1ReliableSync is skipped while the round-active bit is set.
+        poll_mode1_transport_receive();
     }
 
     // Original 0x00429955..0x004299A9 does not leave a channel until its
