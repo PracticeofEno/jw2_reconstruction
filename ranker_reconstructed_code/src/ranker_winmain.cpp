@@ -1312,6 +1312,8 @@ void load_main_window_presentation_settings() {
     g_runtime.presentation_position_set = display.position_set;
     g_runtime.presentation_resizable = display.resizable;
     g_runtime.presentation_border = display.border;
+    gameplay_loop_state().render_target_fps = static_cast<u32>(
+        display.render_frames_per_second);
     g_runtime.cursor_unlock_key1 = VK_TAB;
     g_runtime.cursor_unlock_key2 = VK_RCONTROL;
 
@@ -12300,9 +12302,33 @@ u32 seed_default_gameplay_result_screen(u32 result_mode) {
         g_runtime.generic_ai_scenario_active ||
         gameplay_modal_ui_state().scenario_ai_profile_override;
     result.replay_controls_available =
-        replay_state.packet_temp_open && replay_state.viewport_temp_open;
+        ReplayRecordingHasSaveControls(replay_state);
     result.replay_record_index_is_zero =
         session_load.loaded && session_load.base_record_index == 0;
+    ReplayRecordingState& mutable_replay_state = replay_recording_state();
+    if (!mutable_replay_state.automatic_save_attempted) {
+        mutable_replay_state.automatic_save_attempted = true;
+        if (result.replay_controls_available &&
+            result.replay_record_index_is_zero &&
+            !result.scenario_ai_profile_override) {
+            const auto player_names = RankerMainWindowReplayPlayerNames();
+            mutable_replay_state.automatic_save_succeeded =
+                AutoSaveReplayRecordingArchive(mutable_replay_state,
+                    player_names,
+                    mutable_replay_state.automatic_output_path);
+            append_startup_log("replay-auto-save: saved=%s path=%s",
+                mutable_replay_state.automatic_save_succeeded ? "yes" : "no",
+                mutable_replay_state.automatic_output_path.empty() ? "(none)" :
+                    mutable_replay_state.automatic_output_path.c_str());
+        }
+        else {
+            append_startup_log(
+                "replay-auto-save: skipped controls=%s base0=%s scenario=%s",
+                result.replay_controls_available ? "yes" : "no",
+                result.replay_record_index_is_zero ? "yes" : "no",
+                result.scenario_ai_profile_override ? "yes" : "no");
+        }
+    }
     const u32 elapsed_ticks =
         RefreshLegacyTickTime() - g_runtime.gameplay_session_start_tick_ms;
     result.elapsed_seconds = (elapsed_ticks >> 10) % 60;
@@ -12378,13 +12404,17 @@ void render_default_gameplay_result_screen_once() {
         g_runtime.gameplay_end_condition_state.result_code, player_count);
     const GameplayResultScreenState& rendered_result = gameplay_result_screen_state();
     append_startup_log(
-        "gameplay-result: mode=%lu tribe=%lu players=%lu rows=%zu replay=%s base0=%s actions=%zu",
+        "gameplay-result: mode=%lu tribe=%lu players=%lu rows=%zu replay=%s base0=%s packet_open=%s packets=%lu vpos_open=%s playback=%s actions=%zu",
         static_cast<unsigned long>(rendered_result.result_mode),
         static_cast<unsigned long>(rendered_result.selected_tribe_index),
         static_cast<unsigned long>(rendered_result.player_count),
         rendered_result.rows.size(),
         rendered_result.replay_controls_available ? "yes" : "no",
         rendered_result.replay_record_index_is_zero ? "yes" : "no",
+        replay_recording_state().packet_temp_open ? "yes" : "no",
+        static_cast<unsigned long>(replay_recording_state().packet_count),
+        replay_recording_state().viewport_temp_open ? "yes" : "no",
+        replay_recording_state().playback_mode ? "yes" : "no",
         rendered_result.action_log.size());
     for (const GameplayResultAction& action : rendered_result.action_log) {
         append_startup_log("gameplay-result: action=%lu value0=%lu value1=%lu",
@@ -13360,6 +13390,12 @@ void default_gameplay_loop_handle_replay_session_leave(GameplayLoopState&) {
     OpenGameplayResultTextDialog();
     CloseDirectMilesMusic();
     render_default_gameplay_result_and_leave_once();
+    // Original replay teardown clears DAT_01242a20 before returning to the
+    // front end. Without this, the next ordinary match can inherit playback
+    // mode and skip creation of Replay.tmp.
+    ClearReplayPlaybackState(replay_recording_state());
+    SetReplayControlsEnabled(false);
+    SetRankerMainWindowScenarioAiProfileOverride(false);
 }
 
 void default_gameplay_loop_handle_session_abort(GameplayLoopState&) {
@@ -29795,7 +29831,9 @@ void default_gameplay_loop_present_phase(GameplayLoopState& state) {
     const u64 simulation_interval_ns =
         static_cast<u64>(std::max<u32>(
             1, state.frame_intervals[frame_interval_index])) * 1000000ull;
-    const u32 interpolation_alpha = state.simulation_render_clock_initialized ?
+    const bool render_interpolation_enabled = state.render_target_fps != 0;
+    const u32 interpolation_alpha = render_interpolation_enabled &&
+        state.simulation_render_clock_initialized ?
         GameplayRenderInterpolationAlpha(state.current_render_tick_ns,
             state.last_simulation_render_tick_ns, simulation_interval_ns) :
         kGameplayRenderInterpolationOne;
@@ -31803,6 +31841,9 @@ std::array<std::string, kRankerReplayPlayerNameCount> RankerMainWindowReplayPlay
             p2p.player_names[network_index][0] != '\0') {
             names[owner] = p2p.player_names[network_index].data();
         }
+        if (names[owner].empty()) {
+            names[owner] = "Player " + std::to_string(owner + 1u);
+        }
     }
     return names;
 }
@@ -32116,7 +32157,7 @@ int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_c
         startup_platform_text_count(), startup_message_text_count());
     load_main_window_presentation_settings();
     append_startup_log(
-        "presentation config=%s logical=%dx%d client=%dx%d position=%s,%d,%d resize=%s border=%s",
+        "presentation config=%s logical=%dx%d client=%dx%d position=%s,%d,%d resize=%s border=%s render_fps=%lu",
         RankerClientConfigPath().c_str(),
         kOriginalClientWidth, kOriginalClientHeight,
         g_runtime.presentation_client_width,
@@ -32124,7 +32165,8 @@ int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_c
         g_runtime.presentation_position_set ? "set" : "default",
         g_runtime.presentation_client_x, g_runtime.presentation_client_y,
         g_runtime.presentation_resizable ? "yes" : "no",
-        g_runtime.presentation_border ? "yes" : "no");
+        g_runtime.presentation_border ? "yes" : "no",
+        static_cast<unsigned long>(gameplay_loop_state().render_target_fps));
     g_runtime.single_instance_mutex =
         CreateMutexA(nullptr, FALSE, ranker_single_instance_mutex_name());
     if (g_runtime.single_instance_mutex != nullptr && GetLastError() == ERROR_ALREADY_EXISTS) {

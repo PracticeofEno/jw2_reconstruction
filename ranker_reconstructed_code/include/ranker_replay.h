@@ -33,6 +33,7 @@ struct ReplayRecordingState {
     std::string source_archive_path;
     std::string last_output_path;
     std::string playback_archive_path;
+    std::string automatic_output_path;
     std::array<u8, kReplayHeaderBytes> header{};
     std::array<u8, kReplayPacketScratchBytes> packet_scratch{};
     std::vector<std::array<u8, kReplayPacketBytes>> packet_records;
@@ -52,7 +53,17 @@ struct ReplayRecordingState {
     i16 viewport_last_camera_y = 0;
     bool viewport_has_last_camera = false;
     bool scenario_ai_profile_override = false;
+    bool automatic_save_attempted = false;
+    bool automatic_save_succeeded = false;
 };
+
+inline bool ReplayRecordingHasSaveControls(
+    const ReplayRecordingState& state) {
+    // Original FUN_00430e20 checks the Replay.tmp handle and the recorded
+    // gameplay packet count. Replayvpo.tmp is optional when saving.
+    return !state.playback_mode && state.packet_temp_open &&
+        state.packet_count != 0;
+}
 
 ReplayRecordingState& replay_recording_state();
 
@@ -67,5 +78,10 @@ bool AppendReplayPacketRecord(ReplayRecordingState& state, const void* packet,
     u32 packet_size, u32 frame_tick);
 bool AppendReplayViewportRecord(ReplayRecordingState& state, u32 frame_tick,
     i32 camera_x, i32 camera_y);
+void ClearReplayPlaybackState(ReplayRecordingState& state);
+std::string SanitizeReplayFilenameComponent(const std::string& value);
+std::string BuildAutomaticReplayFilename(int year, int month, int day,
+    int hour, int minute, int second,
+    const std::array<std::string, kReplayChannelCount>& player_names);
 
 } // namespace ranker

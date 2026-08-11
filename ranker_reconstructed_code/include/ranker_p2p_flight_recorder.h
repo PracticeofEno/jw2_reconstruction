@@ -117,6 +117,6 @@ void ResetP2PFlightRecorder();
 void CaptureP2PFlightFrame(u32 simulation_frame, u32 gameplay_rng_seed,
     const UnitMovementContext& movement, const UnitEffectRuntimeState& effects);
 bool PersistP2PDropCapture(const P2PSyncMismatchCaptureInfo& mismatch,
-    ReplayRecordingState& replay);
+    const ReplayRecordingState& replay);
 
 } // namespace ranker

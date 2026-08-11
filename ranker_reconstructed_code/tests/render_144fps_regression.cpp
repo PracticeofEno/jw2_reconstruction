@@ -1,3 +1,4 @@
+#include "ranker_client_config.h"
 #include "ranker_game_loop.h"
 #include "ranker_unit_render_queue.h"
 
@@ -18,15 +19,27 @@ void require(bool condition, const char* message) {
 int main() {
     using namespace ranker;
 
-    require(kGameplayTargetRenderFramesPerSecond == 144,
-        "the experiment must target 144 presentation frames per second");
+    require(GameplayLoopState{}.render_target_fps == 0,
+        "the high-FPS experiment must be disabled by default");
+    require(NormalizeConfiguredRenderFramesPerSecond(0) == 0 &&
+            NormalizeConfiguredRenderFramesPerSecond(29) == 0 &&
+            NormalizeConfiguredRenderFramesPerSecond(361) == 0,
+        "disabled and out-of-range render FPS values must use original pacing");
+    require(NormalizeConfiguredRenderFramesPerSecond(60) == 60 &&
+            NormalizeConfiguredRenderFramesPerSecond(144) == 144,
+        "supported render FPS values must remain configurable");
+    require(kGameplayExperimentalRenderFramesPerSecond == 144,
+        "the optional experiment must retain its 144 FPS preset");
     const u64 interval_ns = GameplayTargetRenderIntervalNanoseconds(
-        kGameplayTargetRenderFramesPerSecond);
+        kGameplayExperimentalRenderFramesPerSecond);
     require(interval_ns == 6944444ull,
         "the 144 Hz interval must use the high-resolution render clock");
 
     bool initialized = false;
     u64 next_present_ns = 0;
+    require(ShouldPresentGameplayTargetFrame(900000000ull,
+            next_present_ns, initialized, 0) && !initialized,
+        "zero render FPS must preserve the uncapped original presentation path");
     require(ShouldPresentGameplayTargetFrame(1000000000ull,
             next_present_ns, initialized, 144),
         "the first frame must present immediately");

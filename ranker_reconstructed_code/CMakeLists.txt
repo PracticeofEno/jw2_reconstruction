@@ -1150,6 +1150,21 @@ if (RANKER_BUILD_RENDER_144FPS_REGRESSION_TESTS)
         COMMAND render_144fps_regression)
 endif()
 
+option(RANKER_BUILD_REPLAY_SAVE_CONTROLS_REGRESSION_TESTS
+    "Build focused replay result save-control regressions" OFF)
+if (RANKER_BUILD_REPLAY_SAVE_CONTROLS_REGRESSION_TESTS)
+    enable_testing()
+    add_executable(replay_save_controls_regression
+        tests/replay_save_controls_regression.cpp
+        src/ranker_replay.cpp
+    )
+    target_include_directories(replay_save_controls_regression PRIVATE
+        include
+    )
+    add_test(NAME replay_save_controls_regression
+        COMMAND replay_save_controls_regression)
+endif()
+
 add_executable(ranker_rebuild WIN32
     resources/ranker_resources.rc
     src/main.cpp

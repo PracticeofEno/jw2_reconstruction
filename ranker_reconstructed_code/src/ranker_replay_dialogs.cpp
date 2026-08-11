@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -973,6 +974,29 @@ void append_replay_session_end_packet(ReplayRecordingState& recording) {
         reliable.replay_frame_tick);
 }
 
+void append_replay_session_end_packet_to_payload(
+    std::vector<u8>& payload, const ReplayRecordingState& recording) {
+    if (recording.playback_mode || !recording.packet_temp_open) {
+        return;
+    }
+
+    const Mode1ReliableRuntimeState& reliable = mode1_reliable_state();
+    const u32 channel = reliable.local_player_index < kReplayChannelCount ?
+        reliable.local_player_index :
+        static_cast<u32>(recording.header[0x5f]);
+    if (channel >= kReplayChannelCount) {
+        return;
+    }
+
+    std::array<u8, kReplayPacketBytes> packet{};
+    write_packet_u32(packet, 0x00, 1);
+    write_packet_u32(packet, 0x04, reliable.replay_frame_tick);
+    write_packet_u32(packet, 0x08, GetMode1ReliableExpectedSequence(channel));
+    packet[0x0c] = static_cast<u8>(channel);
+    packet[0x0f] = 0x13;
+    payload.insert(payload.end(), packet.begin(), packet.end());
+}
+
 void notify_main_window_resume(ReplayDialogState& state, LPARAM reason) {
     if (state.main_window != nullptr) {
         SendMessageA(state.main_window, WM_USER + 9, 0, reason);
@@ -1447,6 +1471,55 @@ bool SaveReplayRecordingArchive(const char* output_path,
 bool SaveReplayArchiveFromRecording(const char* output_path,
     ReplayRecordingState& recording) {
     return SaveReplayRecordingArchive(output_path, recording);
+}
+
+bool SaveReplayRecordingArchiveSnapshot(const char* output_path,
+    const ReplayRecordingState& recording) {
+    if (output_path == nullptr || *output_path == '\0') {
+        return false;
+    }
+
+    std::vector<u8> payload = build_replay_payload_from_recording(recording);
+    if (payload.empty()) {
+        return false;
+    }
+    append_replay_session_end_packet_to_payload(payload, recording);
+    patch_replay_payload_player_names(payload);
+    return PersistReplayRecordingArchive(output_path, recording, payload);
+}
+
+bool AutoSaveReplayRecordingArchive(const ReplayRecordingState& recording,
+    const std::array<std::string, kReplayChannelCount>& player_names,
+    std::string& output_path) {
+    output_path.clear();
+    if (!ReplayRecordingHasSaveControls(recording)) {
+        return false;
+    }
+
+    std::time_t now = std::time(nullptr);
+    std::tm local{};
+    localtime_s(&local, &now);
+    const std::string leaf = BuildAutomaticReplayFilename(
+        local.tm_year + 1900, local.tm_mon + 1, local.tm_mday,
+        local.tm_hour, local.tm_min, local.tm_sec, player_names);
+
+    namespace fs = std::filesystem;
+    const fs::path directory(resolve_replays_directory());
+    fs::path candidate = directory / leaf;
+    std::error_code error;
+    for (u32 suffix = 2; fs::exists(candidate, error) && !error; ++suffix) {
+        const fs::path base(leaf);
+        candidate = directory /
+            (base.stem().string() + "_" + std::to_string(suffix) +
+                base.extension().string());
+    }
+    if (error) {
+        return false;
+    }
+
+    output_path = full_path(candidate.string());
+    return SaveReplayRecordingArchiveSnapshot(
+        output_path.c_str(), recording);
 }
 
 bool OpenReplayLoadDialog(ReplayDialogState& state, HWND parent, HINSTANCE instance) {

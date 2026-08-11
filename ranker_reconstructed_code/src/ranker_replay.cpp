@@ -1,6 +1,7 @@
 #include "ranker_replay.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -80,6 +81,7 @@ void InitializeReplayTempFiles(ReplayRecordingState& state, bool playback_mode,
     state.scenario_ai_profile_override = scenario_ai_profile_override;
     state.last_output_path.clear();
     state.playback_archive_path.clear();
+    state.automatic_output_path.clear();
     state.playback_payload.clear();
     state.packet_count = 0;
     state.playback_last_frame_tick = 0;
@@ -98,6 +100,8 @@ void InitializeReplayTempFiles(ReplayRecordingState& state, bool playback_mode,
     state.viewport_last_camera_x = 0;
     state.viewport_last_camera_y = 0;
     state.viewport_has_last_camera = false;
+    state.automatic_save_attempted = false;
+    state.automatic_save_succeeded = false;
 
     if (playback_mode || scenario_ai_profile_override) {
         return;
@@ -197,6 +201,76 @@ bool AppendReplayViewportRecord(ReplayRecordingState& state, u32 frame_tick,
         state.viewport_count = 0;
     }
     return true;
+}
+
+void ClearReplayPlaybackState(ReplayRecordingState& state) {
+    state.playback_mode = false;
+    state.scenario_ai_profile_override = false;
+    state.playback_archive_path.clear();
+    state.playback_payload.clear();
+    state.playback_last_frame_tick = 0;
+}
+
+std::string SanitizeReplayFilenameComponent(const std::string& value) {
+    std::string sanitized;
+    sanitized.reserve(value.size());
+    for (const unsigned char character : value) {
+        const bool forbidden = character < 0x20 || character == '<' ||
+            character == '>' || character == ':' || character == '"' ||
+            character == '/' || character == '\\' || character == '|' ||
+            character == '?' || character == '*';
+        sanitized.push_back(forbidden ? '_' : static_cast<char>(character));
+    }
+    while (!sanitized.empty() &&
+        (sanitized.back() == ' ' || sanitized.back() == '.')) {
+        sanitized.pop_back();
+    }
+    if (sanitized.empty()) {
+        return "Player";
+    }
+
+    std::string device_name = sanitized;
+    const std::size_t dot = device_name.find('.');
+    if (dot != std::string::npos) {
+        device_name.resize(dot);
+    }
+    std::transform(device_name.begin(), device_name.end(), device_name.begin(),
+        [](unsigned char character) {
+            return static_cast<char>(std::toupper(character));
+        });
+    const bool numbered_device = device_name.size() == 4 &&
+        (device_name.compare(0, 3, "COM") == 0 ||
+            device_name.compare(0, 3, "LPT") == 0) &&
+        device_name[3] >= '1' && device_name[3] <= '9';
+    if (device_name == "CON" || device_name == "PRN" ||
+        device_name == "AUX" || device_name == "NUL" || numbered_device) {
+        sanitized.insert(sanitized.begin(), '_');
+    }
+    return sanitized;
+}
+
+std::string BuildAutomaticReplayFilename(int year, int month, int day,
+    int hour, int minute, int second,
+    const std::array<std::string, kReplayChannelCount>& player_names) {
+    std::array<std::string, 2> selected_names{{"Player", "Player"}};
+    std::size_t selected_count = 0;
+    for (const std::string& name : player_names) {
+        if (name.empty()) {
+            continue;
+        }
+        selected_names[selected_count++] =
+            SanitizeReplayFilenameComponent(name);
+        if (selected_count == selected_names.size()) {
+            break;
+        }
+    }
+
+    char timestamp[32]{};
+    std::snprintf(timestamp, sizeof(timestamp),
+        "%04d-%02d-%02d-%02d-%02d-%02d",
+        year, month, day, hour, minute, second);
+    return std::string(timestamp) + "_" + selected_names[0] + "vs" +
+        selected_names[1] + ".ply";
 }
 
 } // namespace ranker

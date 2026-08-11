@@ -268,6 +268,11 @@ bool BuildReplayDescriptorFromRecording(const ReplayRecordingState& recording,
     ReplayArchiveDescriptor& descriptor);
 bool SaveReplayRecordingArchive(const char* output_path,
     ReplayRecordingState& recording);
+bool SaveReplayRecordingArchiveSnapshot(const char* output_path,
+    const ReplayRecordingState& recording);
+bool AutoSaveReplayRecordingArchive(const ReplayRecordingState& recording,
+    const std::array<std::string, kReplayChannelCount>& player_names,
+    std::string& output_path);
 bool SaveReplayArchiveFromRecording(const char* output_path,
     ReplayRecordingState& recording);
 

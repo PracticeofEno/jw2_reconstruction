@@ -308,7 +308,7 @@ void CaptureP2PFlightFrame(u32 simulation_frame, u32 gameplay_rng_seed,
 }
 
 bool PersistP2PDropCapture(const P2PSyncMismatchCaptureInfo& mismatch,
-    ReplayRecordingState& replay) {
+    const ReplayRecordingState& replay) {
     P2PFlightRecorderState& state = g_p2p_flight_recorder;
     if (state.drop_capture_attempted || replay.playback_mode) {
         return state.replay_saved || state.trace_saved;
@@ -327,7 +327,11 @@ bool PersistP2PDropCapture(const P2PSyncMismatchCaptureInfo& mismatch,
     if (state.trace_saved) {
         state.last_trace_path = trace_path.string();
     }
-    state.replay_saved = SaveReplayRecordingArchive(replay_path.string().c_str(), replay);
+    // A synchronization capture occurs before the normal result flow. Save a
+    // snapshot so appending the diagnostic end packet and closing its writer
+    // cannot consume the live recording or hide the result-screen save button.
+    state.replay_saved = SaveReplayRecordingArchiveSnapshot(
+        replay_path.string().c_str(), replay);
     if (state.replay_saved) {
         state.last_replay_path = replay_path.string();
     }
