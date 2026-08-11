@@ -43,6 +43,15 @@ constexpr FrontendLayoutPoint CenteredContainedFrontendLayoutOrigin(
         bounds.y + (centered_y > 0 ? centered_y : 0)};
 }
 
+constexpr FrontendLayoutPoint TranslateFrontendLayoutOriginForHostMove(
+    const FrontendLayoutPoint& origin,
+    const FrontendLayoutRect& previous_host_bounds,
+    const FrontendLayoutRect& current_host_bounds) {
+    return {
+        origin.x + current_host_bounds.x - previous_host_bounds.x,
+        origin.y + current_host_bounds.y - previous_host_bounds.y};
+}
+
 constexpr i32 ScaleFrontendLayoutValue(i32 value, i32 source_extent,
     i32 target_extent) {
     if (source_extent <= 0 || target_extent <= 0 ||

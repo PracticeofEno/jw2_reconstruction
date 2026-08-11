@@ -1437,6 +1437,41 @@ void refresh_window_rects(HWND window) {
     g_runtime.client_screen_rect.bottom = bottom_right.y;
 }
 
+void move_active_owned_frontend_with_main_window(
+    HWND window, const RECT& previous_client_screen_rect) {
+    HWND frontend = g_runtime.frontend_route_window;
+    if (window == nullptr || frontend == nullptr || frontend == window ||
+        !IsWindow(frontend) ||
+        GetAncestor(frontend, GA_ROOTOWNER) != window ||
+        (GetWindowLongPtrA(frontend, GWL_STYLE) & WS_CHILD) != 0 ||
+        !rect_has_extent(previous_client_screen_rect) ||
+        !rect_has_extent(g_runtime.client_screen_rect)) {
+        return;
+    }
+
+    RECT frontend_rect{};
+    if (!GetWindowRect(frontend, &frontend_rect)) {
+        return;
+    }
+
+    const FrontendLayoutPoint translated =
+        TranslateFrontendLayoutOriginForHostMove(
+            {frontend_rect.left, frontend_rect.top},
+            {previous_client_screen_rect.left, previous_client_screen_rect.top,
+                previous_client_screen_rect.right - previous_client_screen_rect.left,
+                previous_client_screen_rect.bottom - previous_client_screen_rect.top},
+            {g_runtime.client_screen_rect.left, g_runtime.client_screen_rect.top,
+                g_runtime.client_screen_rect.right - g_runtime.client_screen_rect.left,
+                g_runtime.client_screen_rect.bottom - g_runtime.client_screen_rect.top});
+    if (translated.x == frontend_rect.left &&
+        translated.y == frontend_rect.top) {
+        return;
+    }
+
+    SetWindowPos(frontend, nullptr, translated.x, translated.y, 0, 0,
+        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+}
+
 bool main_window_cursor_window_ready(HWND window) {
     return g_runtime.app_active && window != nullptr && IsWindow(window) &&
         IsWindowVisible(window) && !IsIconic(window);
@@ -31228,7 +31263,20 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
     case kD3D9CubicPresentationOwnerThreadMessage:
         HandleD3D9CubicPresentationOwnerThreadRequest(window, wparam);
         return 0;
-    case WM_MOVE:
+    case WM_MOVE: {
+        const RECT previous_client_screen_rect = g_runtime.client_screen_rect;
+        refresh_window_rects(window);
+        if (g_runtime.directx_initialized && g_runtime.windowed_mode) {
+            RefreshDirectDrawPresentationRect(window);
+            if (!g_runtime.suppress_paint && !IsIconic(window)) {
+                PresentBackBufferToPrimary();
+            }
+        }
+        move_active_owned_frontend_with_main_window(
+            window, previous_client_screen_rect);
+        refresh_main_window_cursor_confinement(window);
+        break;
+    }
     case WM_SIZE:
         refresh_window_rects(window);
         if (g_runtime.directx_initialized && g_runtime.windowed_mode) {
@@ -31351,7 +31399,7 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
     case WM_IME_SETCONTEXT:
         return 0;
     case WM_PAINT:
-        if (g_runtime.title_menu_active && g_runtime.directx_initialized) {
+        if (g_runtime.directx_initialized && !g_runtime.suppress_paint) {
             PAINTSTRUCT paint{};
             BeginPaint(window, &paint);
             EndPaint(window, &paint);
@@ -31361,6 +31409,14 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
         if (g_runtime.suppress_paint) {
             paint_main_window_black(window);
             return 0;
+        }
+        break;
+    case WM_ERASEBKGND:
+        if (g_runtime.directx_initialized && !g_runtime.suppress_paint) {
+            // DirectDraw/D3D owns the complete client.  Erasing it to the
+            // class background while USER32 runs the interactive move loop
+            // produces a black follower window before the next present.
+            return TRUE;
         }
         break;
     case WM_TIMER:

@@ -24,6 +24,13 @@ static_assert(
     CenteredContainedFrontendLayoutOrigin(kBounds, 1200, 800).x == 100);
 static_assert(
     CenteredContainedFrontendLayoutOrigin(kBounds, 1200, 800).y == 50);
+constexpr FrontendLayoutRect kMovedBounds{280, 146, 800, 600};
+constexpr FrontendLayoutPoint kOwnedFrontendOrigin{210, 125};
+constexpr FrontendLayoutPoint kMovedOwnedFrontendOrigin =
+    TranslateFrontendLayoutOriginForHostMove(
+        kOwnedFrontendOrigin, kBounds, kMovedBounds);
+static_assert(kMovedOwnedFrontendOrigin.x == 390);
+static_assert(kMovedOwnedFrontendOrigin.y == 221);
 constexpr FrontendLayoutRect kLegacyControl{100, 50, 200, 100};
 constexpr FrontendLayoutRect kScaledControl =
     ScaleFrontendLayoutRect(kLegacyControl,
