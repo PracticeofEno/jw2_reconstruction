@@ -259,6 +259,14 @@ int main() {
         << offsetof(GameplayLoopState, simulation_frame_counter)
         << ",\"loop_present_frame\":"
         << offsetof(GameplayLoopState, present_frame_counter)
+        << ",\"loop_frame_intervals\":"
+        << offsetof(GameplayLoopState, frame_intervals)
+        << ",\"loop_fixed_step_intervals\":"
+        << offsetof(GameplayLoopState, fixed_step_intervals)
+        << ",\"loop_fixed_step_repeat_counts\":"
+        << offsetof(GameplayLoopState, fixed_step_repeat_counts)
+        << ",\"loop_fixed_step_mode\":"
+        << offsetof(GameplayLoopState, fixed_step_mode)
         << ",\"loop_modal_subloop_active\":"
         << offsetof(GameplayLoopState, modal_subloop_active)
         << ",\"loop_session_active\":"

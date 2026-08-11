@@ -47,6 +47,8 @@ $layoutPath = if ($LayoutPath) {
 }
 $layout = Get-Content -LiteralPath $layoutPath -Raw | ConvertFrom-Json
 $loopRva = [Convert]::ToInt64(($layout.loop_rva -replace '^0x', ''), 16)
+$simulationFrameOffset = [Convert]::ToInt64(
+    ($layout.loop_layout.simulation_frame -replace '^0x', ''), 16)
 $out = [IO.Path]::GetFullPath($OutputDirectory)
 [IO.Directory]::CreateDirectory($out) | Out-Null
 
@@ -91,7 +93,7 @@ try {
     $rebuild = Get-Process -Id ([int]$pair.rebuild_pid)
     $rebuildBase = [Convert]::ToInt64(
         ($pair.rebuild_base -replace '^0x', ''), 16)
-    $rebuildFrameAddress = $rebuildBase + $loopRva + 0x1DC
+    $rebuildFrameAddress = $rebuildBase + $loopRva + $simulationFrameOffset
 
     $lastFrame = 0
     foreach ($targetFrame in ($Checkpoints | Sort-Object -Unique)) {
@@ -100,7 +102,7 @@ try {
         }
         & python (Join-Path $toolDirectory 'replay_pair_control.py') pace `
             $original.Id $rebuild.Id ('0x{0:X}' -f $rebuildBase) `
-            ('0x{0:X}' -f $loopRva) 1 0 | Out-Null
+            ('0x{0:X}' -f $loopRva) 1 0 $layoutPath | Out-Null
 
         $fastTarget = [Math]::Max($lastFrame + 1, $targetFrame - 20)
         $drivers = @(
@@ -128,7 +130,7 @@ try {
         }
         & python (Join-Path $toolDirectory 'replay_pair_control.py') pace `
             $original.Id $rebuild.Id ('0x{0:X}' -f $rebuildBase) `
-            ('0x{0:X}' -f $loopRva) 500 500 | Out-Null
+            ('0x{0:X}' -f $loopRva) 500 500 $layoutPath | Out-Null
         $drivers = @(
             Start-Process python -ArgumentList @(
                 (Join-Path $toolDirectory 'resume_to_frame.py'),
@@ -153,7 +155,7 @@ try {
         }
         $frames = (& python (Join-Path $toolDirectory 'replay_pair_control.py') frames `
             $original.Id $rebuild.Id ('0x{0:X}' -f $rebuildBase) `
-            ('0x{0:X}' -f $loopRva) | ConvertFrom-Json)
+            ('0x{0:X}' -f $loopRva) $layoutPath | ConvertFrom-Json)
         if ([int]$frames.original -ne $targetFrame -or
             [int]$frames.rebuild -ne $targetFrame) {
             throw "Stable frame mismatch: original=$($frames.original), rebuild=$($frames.rebuild), target=$targetFrame"

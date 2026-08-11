@@ -50,6 +50,8 @@ $layoutPath = if ($LayoutPath) {
 }
 $layout = Get-Content -LiteralPath $layoutPath -Raw | ConvertFrom-Json
 $loopRva = [Convert]::ToInt64(($layout.loop_rva -replace '^0x', ''), 16)
+$simulationFrameOffset = [Convert]::ToInt64(
+    ($layout.loop_layout.simulation_frame -replace '^0x', ''), 16)
 $out = [IO.Path]::GetFullPath($OutputDirectory)
 [IO.Directory]::CreateDirectory($out) | Out-Null
 
@@ -69,11 +71,11 @@ try {
     $rebuild = Get-Process -Id ([int]$pair.rebuild_pid)
     $rebuildBase = [Convert]::ToInt64(
         ($pair.rebuild_base -replace '^0x', ''), 16)
-    $rebuildFrameAddress = $rebuildBase + $loopRva + 0x1DC
+    $rebuildFrameAddress = $rebuildBase + $loopRva + $simulationFrameOffset
 
     & python (Join-Path $toolDirectory 'replay_pair_control.py') pace `
         $original.Id $rebuild.Id ('0x{0:X}' -f $rebuildBase) `
-        ('0x{0:X}' -f $loopRva) 1 0 | Out-Null
+        ('0x{0:X}' -f $loopRva) 1 0 $layoutPath | Out-Null
 
     $fastTarget = [Math]::Max(1, $StartFrame - 20)
     $drivers = @(
@@ -97,7 +99,8 @@ try {
 
     & python (Join-Path $toolDirectory 'replay_pair_control.py') pace `
         $original.Id $rebuild.Id ('0x{0:X}' -f $rebuildBase) `
-        ('0x{0:X}' -f $loopRva) $TraceIntervalMs $TraceIntervalMs | Out-Null
+        ('0x{0:X}' -f $loopRva) $TraceIntervalMs $TraceIntervalMs `
+        $layoutPath | Out-Null
     $drivers = @(
         Start-Process python -ArgumentList @(
             (Join-Path $toolDirectory 'resume_to_frame.py'),

@@ -232,6 +232,12 @@ $result = [pscustomobject]@{
     loop_layout = [ordered]@{
         simulation_frame = ('0x{0:X}' -f [int64]$layout.loop_simulation_frame)
         present_frame = ('0x{0:X}' -f [int64]$layout.loop_present_frame)
+        frame_intervals = ('0x{0:X}' -f [int64]$layout.loop_frame_intervals)
+        fixed_step_intervals = ('0x{0:X}' -f
+            [int64]$layout.loop_fixed_step_intervals)
+        fixed_step_repeat_counts = ('0x{0:X}' -f
+            [int64]$layout.loop_fixed_step_repeat_counts)
+        fixed_step_mode = ('0x{0:X}' -f [int64]$layout.loop_fixed_step_mode)
         size = ('0x{0:X}' -f [int64]$layout.loop_size)
     }
     visibility_layout = [ordered]@{

@@ -59,6 +59,8 @@ $layoutPath = if ($LayoutPath) {
 }
 $layout = Get-Content -LiteralPath $layoutPath -Raw | ConvertFrom-Json
 $loopRva = [Convert]::ToInt64(($layout.loop_rva -replace '^0x', ''), 16)
+$simulationFrameOffset = [Convert]::ToInt64(
+    ($layout.loop_layout.simulation_frame -replace '^0x', ''), 16)
 $out = if ($OutputDirectory) {
     [IO.Path]::GetFullPath($OutputDirectory)
 } else {
@@ -108,11 +110,11 @@ try {
     $rebuild = Get-Process -Id ([int]$pair.rebuild_pid)
     $rebuildBase = [Convert]::ToInt64(
         ($pair.rebuild_base -replace '^0x', ''), 16)
-    $rebuildFrameAddress = $rebuildBase + $loopRva + 0x1DC
+    $rebuildFrameAddress = $rebuildBase + $loopRva + $simulationFrameOffset
 
     & python (Join-Path $toolDirectory 'replay_pair_control.py') pace `
         $original.Id $rebuild.Id ('0x{0:X}' -f $rebuildBase) `
-        ('0x{0:X}' -f $loopRva) 1 0 | Out-Null
+        ('0x{0:X}' -f $loopRva) 1 0 $layoutPath | Out-Null
 
     $fastTarget = [Math]::Max(1, $TargetFrame - 20)
     $originalFastOut = Join-Path $out 'original-fast.out'
@@ -143,7 +145,7 @@ try {
     }
     & python (Join-Path $toolDirectory 'replay_pair_control.py') pace `
         $original.Id $rebuild.Id ('0x{0:X}' -f $rebuildBase) `
-        ('0x{0:X}' -f $loopRva) 100 100 | Out-Null
+        ('0x{0:X}' -f $loopRva) 100 100 $layoutPath | Out-Null
 
     $originalStableOut = Join-Path $out 'original-stable.out'
     $originalStableErr = Join-Path $out 'original-stable.err'
@@ -173,7 +175,7 @@ try {
     }
     $frames = (& python (Join-Path $toolDirectory 'replay_pair_control.py') frames `
         $original.Id $rebuild.Id ('0x{0:X}' -f $rebuildBase) `
-        ('0x{0:X}' -f $loopRva) | ConvertFrom-Json)
+        ('0x{0:X}' -f $loopRva) $layoutPath | ConvertFrom-Json)
     if ([int]$frames.original -ne $TargetFrame -or
         [int]$frames.rebuild -ne $TargetFrame) {
         throw "Stable frame mismatch: original=$($frames.original), rebuild=$($frames.rebuild), target=$TargetFrame"

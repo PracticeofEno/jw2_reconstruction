@@ -10,6 +10,12 @@ rebuild_pid = int(sys.argv[3], 0)
 rebuild_base = int(sys.argv[4], 0)
 loop_rva = int(sys.argv[5], 0)
 
+layout_path_index = 8 if command == "pace" else 6
+with open(sys.argv[layout_path_index], "r", encoding="utf-8-sig") as stream:
+    layout = json.load(stream)
+loop_layout = {key: int(value, 0)
+               for key, value in layout["loop_layout"].items()}
+
 k32 = ctypes.WinDLL("kernel32", use_last_error=True)
 k32.OpenProcess.restype = ctypes.c_void_p
 
@@ -51,16 +57,20 @@ try:
         original_interval = int(sys.argv[6], 0)
         rebuild_interval = int(sys.argv[7], 0)
         original.write_u32s(0x00725B74, [original_interval] * 16)
-        rebuild.write_u32s(loop + 0x140, [rebuild_interval] * 16)
-        rebuild.write_u32s(loop + 0x180, [rebuild_interval] * 7)
-        fixed_mode = rebuild.read_u32(loop + 0x1C8)
+        rebuild.write_u32s(loop + loop_layout["frame_intervals"],
+                           [rebuild_interval] * 16)
+        rebuild.write_u32s(loop + loop_layout["fixed_step_intervals"],
+                           [rebuild_interval] * 7)
+        fixed_mode = rebuild.read_u32(loop + loop_layout["fixed_step_mode"])
         if fixed_mode < 7:
-            rebuild.write_u32s(loop + 0x19C + fixed_mode * 4, [1])
+            rebuild.write_u32s(
+                loop + loop_layout["fixed_step_repeat_counts"] + fixed_mode * 4,
+                [1])
     elif command != "frames":
         raise ValueError(f"unknown command: {command}")
     print(json.dumps({
         "original": original.read_u32(0x007071A4),
-        "rebuild": rebuild.read_u32(loop + 0x1DC),
+        "rebuild": rebuild.read_u32(loop + loop_layout["simulation_frame"]),
     }))
 finally:
     original.close()
