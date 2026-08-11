@@ -97,6 +97,7 @@
 #include <numeric>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -18347,6 +18348,12 @@ UnitRenderItem make_default_unit_render_item(UnitMovementUnit& unit) {
     item.ability_id = unit.ability_id;
     item.x = unit.x;
     item.y = unit.y;
+    item.interpolation_start_x = unit.x;
+    item.interpolation_start_y = unit.y;
+    item.interpolation_target_x = unit.x;
+    item.interpolation_target_y = unit.y;
+    item.interpolated_x = unit.x;
+    item.interpolated_y = unit.y;
     item.visibility_cell_x = unit.current_cell_x;
     item.visibility_cell_y = unit.current_cell_y;
     item.center_offset_x = unit.definition.center_bounds_left;
@@ -18413,6 +18420,27 @@ void configure_default_gameplay_fog_context() {
 void sync_default_gameplay_visibility_and_render_inputs(
     u32 frame_counter, bool refresh_visibility) {
     UnitMovementContext* movement = default_gameplay_movement_context();
+    struct PreviousUnitRenderPosition {
+        u32 type_id = 0;
+        i32 x = 0;
+        i32 y = 0;
+    };
+    std::unordered_map<u32, PreviousUnitRenderPosition>
+        previous_unit_render_positions;
+    previous_unit_render_positions.reserve(
+        g_runtime.gameplay_unit_render_queue.units.size());
+    for (const UnitRenderItem& item :
+            g_runtime.gameplay_unit_render_queue.units) {
+        if (item.runtime_slot_index == 0 ||
+            item.runtime_slot_index == kInvalidUnitRuntimeSlotIndex) {
+            continue;
+        }
+        previous_unit_render_positions[item.runtime_slot_index] = {
+            item.type_id,
+            item.interpolation_target_x,
+            item.interpolation_target_y,
+        };
+    }
     g_runtime.gameplay_unit_render_queue.units.clear();
     g_runtime.gameplay_unit_render_queue.effects.clear();
     g_runtime.gameplay_unit_render_queue.queued_entries.clear();
@@ -18550,8 +18578,27 @@ void sync_default_gameplay_visibility_and_render_inputs(
         if (unit == nullptr || !unit->active) {
             continue;
         }
-        g_runtime.gameplay_unit_render_queue.units.push_back(
-            make_default_unit_render_item(*unit));
+        UnitRenderItem item = make_default_unit_render_item(*unit);
+        const auto previous =
+            previous_unit_render_positions.find(item.runtime_slot_index);
+        if (previous != previous_unit_render_positions.end() &&
+            previous->second.type_id == item.type_id) {
+            const i64 delta_x = static_cast<i64>(item.interpolation_target_x) -
+                previous->second.x;
+            const i64 delta_y = static_cast<i64>(item.interpolation_target_y) -
+                previous->second.y;
+            // A normal movement tick advances by only a few pixels.  Large
+            // script relocations, spawns and slot reuse must snap immediately
+            // instead of travelling visibly across the map for one frame.
+            constexpr i64 kMaximumInterpolatedMovementPixels = 0x40;
+            if (std::abs(delta_x) <= kMaximumInterpolatedMovementPixels &&
+                std::abs(delta_y) <= kMaximumInterpolatedMovementPixels) {
+                item.interpolation_start_x = previous->second.x;
+                item.interpolation_start_y = previous->second.y;
+                item.interpolation_enabled = delta_x != 0 || delta_y != 0;
+            }
+        }
+        g_runtime.gameplay_unit_render_queue.units.push_back(std::move(item));
     }
 
     // DAT_007071dc is rendered by ProcessVisibleEffectRenderQueue
@@ -29743,6 +29790,17 @@ void default_gameplay_loop_present_phase(GameplayLoopState& state) {
     context.viewport_height = surface.height;
     context.render_command_queue = &g_runtime.gameplay_render_command_queue;
     context.unit_render_queue = &g_runtime.gameplay_unit_render_queue;
+    const std::size_t frame_interval_index = std::min<std::size_t>(
+        state.frame_interval_index, state.frame_intervals.size() - 1);
+    const u64 simulation_interval_ns =
+        static_cast<u64>(std::max<u32>(
+            1, state.frame_intervals[frame_interval_index])) * 1000000ull;
+    const u32 interpolation_alpha = state.simulation_render_clock_initialized ?
+        GameplayRenderInterpolationAlpha(state.current_render_tick_ns,
+            state.last_simulation_render_tick_ns, simulation_interval_ns) :
+        kGameplayRenderInterpolationOne;
+    ApplyUnitRenderInterpolation(
+        g_runtime.gameplay_unit_render_queue, interpolation_alpha);
     GameplayHudTextState& hud = g_runtime.gameplay_hud_text;
     const u32 hud_viewport_height = ui_overlay_state().world_viewport_height;
     configure_default_gameplay_hud_text_callbacks(hud);

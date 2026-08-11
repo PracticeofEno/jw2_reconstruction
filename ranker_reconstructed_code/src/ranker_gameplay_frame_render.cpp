@@ -2159,8 +2159,10 @@ bool QueueGameplayUnitRenderCommand(GameplayRenderCommandQueue& queue,
     command.payload = entry.type_id;
     command.sort_key = entry.sort_key;
     command.sprite_entry_index = sprite_entry;
-    command.screen_x = item.x - camera_x;
-    command.screen_y = item.y - camera_y;
+    const i32 draw_x = item.interpolation_enabled ? item.interpolated_x : item.x;
+    const i32 draw_y = item.interpolation_enabled ? item.interpolated_y : item.y;
+    command.screen_x = draw_x - camera_x;
+    command.screen_y = draw_y - camera_y;
     command.packed_flags = item.type_id & kGameplayRenderPackedTypeMask;
     command.unit_render_context = source_context;
     command.unit_render_item = &item;

@@ -22,7 +22,49 @@ constexpr std::array<u32, 7> kGameplayFixedStepRepeatCounts = {
     200, 120, 60, 30, 22, 14, 7,
 };
 constexpr u32 kGameplayCatchupPresentationMaxGapMs = 50;
+constexpr u32 kGameplayTargetRenderFramesPerSecond = 144;
+constexpr u64 kGameplayRenderClockNanosecondsPerSecond = 1000000000ull;
+constexpr u32 kGameplayRenderInterpolationOne = 0x10000u;
 constexpr std::size_t kGameplaySimulationPhaseCount = 17;
+
+constexpr u64 GameplayTargetRenderIntervalNanoseconds(u32 target_fps) {
+    return target_fps == 0 ? 0 :
+        kGameplayRenderClockNanosecondsPerSecond / target_fps;
+}
+
+inline bool ShouldPresentGameplayTargetFrame(u64 current_tick_ns,
+    u64& next_present_tick_ns, bool& initialized, u32 target_fps) {
+    const u64 interval_ns = GameplayTargetRenderIntervalNanoseconds(target_fps);
+    if (interval_ns == 0) {
+        return true;
+    }
+    if (!initialized) {
+        initialized = true;
+        next_present_tick_ns = current_tick_ns + interval_ns;
+        return true;
+    }
+    if (current_tick_ns < next_present_tick_ns) {
+        return false;
+    }
+
+    const u64 elapsed_intervals =
+        (current_tick_ns - next_present_tick_ns) / interval_ns;
+    next_present_tick_ns += (elapsed_intervals + 1u) * interval_ns;
+    return true;
+}
+
+constexpr u32 GameplayRenderInterpolationAlpha(u64 current_tick_ns,
+    u64 simulation_tick_ns, u64 simulation_interval_ns) {
+    if (simulation_interval_ns == 0 || current_tick_ns <= simulation_tick_ns) {
+        return 0;
+    }
+    const u64 elapsed_ns = current_tick_ns - simulation_tick_ns;
+    if (elapsed_ns >= simulation_interval_ns) {
+        return kGameplayRenderInterpolationOne;
+    }
+    return static_cast<u32>(
+        elapsed_ns * kGameplayRenderInterpolationOne / simulation_interval_ns);
+}
 
 constexpr bool ShouldPresentGameplayCatchupFrame(u32 repeat_count,
     u32 repeat_limit, u32 current_tick_ms, u32 last_present_tick_ms) {
@@ -36,6 +78,8 @@ struct GameplayLoopState;
 using GameplayLoopCallback = void (*)(GameplayLoopState& state);
 using GameplayLoopGateCallback = bool (*)(GameplayLoopState& state);
 using GameplayLoopTickCallback = u32 (*)(GameplayLoopState& state);
+using GameplayLoopHighResolutionTickCallback =
+    u64 (*)(GameplayLoopState& state);
 
 struct GameplayFramePhaseFlags {
     bool pre_update = false;
@@ -52,6 +96,7 @@ struct GameplayLoopCallbacks {
     GameplayLoopCallback finish_worker_exit = nullptr;
 
     GameplayLoopTickCallback read_tick_ms = nullptr;
+    GameplayLoopHighResolutionTickCallback read_render_tick_ns = nullptr;
     GameplayLoopGateCallback sync_replay_direct_music = nullptr;
     GameplayLoopGateCallback external_turn_wait = nullptr;
     GameplayLoopGateCallback frame_gate = nullptr;
@@ -95,9 +140,13 @@ struct GameplayLoopState {
     u32 catchup_last_present_tick_ms = 0;
     u32 simulation_frame_counter = 0;
     u32 present_frame_counter = 0;
+    u32 render_target_fps = kGameplayTargetRenderFramesPerSecond;
     u32 exit_context = 3;
     u32 current_cursor_index = 0;
     u8 catchup_status_mode = 0;
+    u64 current_render_tick_ns = 0;
+    u64 next_present_tick_ns = 0;
+    u64 last_simulation_render_tick_ns = 0;
 
     bool catchup_enabled = false;
     bool fixed_step_initialized = false;
@@ -119,6 +168,8 @@ struct GameplayLoopState {
     bool leave_requested = false;
     bool process_shutdown_requested = false;
     bool special_exit_mode = false;
+    bool render_schedule_initialized = false;
+    bool simulation_render_clock_initialized = false;
 };
 
 GameplayLoopState& gameplay_loop_state();

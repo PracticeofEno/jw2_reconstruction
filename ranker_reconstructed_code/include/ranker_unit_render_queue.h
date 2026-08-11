@@ -69,6 +69,15 @@ struct UnitRenderItem {
     u32 ability_id = 0;
     i32 x = 0;
     i32 y = 0;
+    // Presentation-only endpoints.  x/y remain the authoritative simulation
+    // snapshot used for visibility and sort decisions; only interpolated_x/y
+    // are consumed as final sprite draw coordinates.
+    i32 interpolation_start_x = 0;
+    i32 interpolation_start_y = 0;
+    i32 interpolation_target_x = 0;
+    i32 interpolation_target_y = 0;
+    i32 interpolated_x = 0;
+    i32 interpolated_y = 0;
     i32 visibility_cell_x = 0;
     i32 visibility_cell_y = 0;
     i32 center_offset_x = 0;
@@ -77,6 +86,7 @@ struct UnitRenderItem {
     i32 center_height = 0;
     bool cell_construction_progress_active = false;
     bool cell_channel_additive_active = false;
+    bool interpolation_enabled = false;
     // The original name tail gates on raw unit +0x48, independently of the
     // bytes stored in that string slot.  An allocated empty slot must still
     // execute the font/color/cursor setup and empty text draw.
@@ -140,5 +150,8 @@ void ProcessVisibleUnitRenderQueue(UnitRenderQueueContext& context);
 void ProcessVisibleEffectRenderQueue(UnitRenderQueueContext& context);
 void DispatchUnitRenderByType(UnitRenderQueueContext& context, const UnitRenderItem& item,
     i32 screen_x, i32 screen_y);
+i32 InterpolateUnitRenderCoordinate(i32 start, i32 target, u32 alpha_16_16);
+void ApplyUnitRenderInterpolation(UnitRenderQueueContext& context,
+    u32 alpha_16_16);
 
 }

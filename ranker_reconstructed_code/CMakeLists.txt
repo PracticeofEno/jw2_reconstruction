@@ -1135,6 +1135,21 @@ if (RANKER_BUILD_GAMEPLAY_SELECTION_REGRESSION_TESTS)
         COMMAND gameplay_selection_modifier_regression)
 endif()
 
+option(RANKER_BUILD_RENDER_144FPS_REGRESSION_TESTS
+    "Build focused 144 FPS presentation and interpolation regressions" OFF)
+if (RANKER_BUILD_RENDER_144FPS_REGRESSION_TESTS)
+    enable_testing()
+    add_executable(render_144fps_regression
+        tests/render_144fps_regression.cpp
+        src/ranker_unit_render_queue.cpp
+    )
+    target_include_directories(render_144fps_regression PRIVATE
+        include
+    )
+    add_test(NAME render_144fps_regression
+        COMMAND render_144fps_regression)
+endif()
+
 add_executable(ranker_rebuild WIN32
     resources/ranker_resources.rc
     src/main.cpp

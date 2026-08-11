@@ -207,4 +207,28 @@ void DispatchUnitRenderByType(UnitRenderQueueContext& context, const UnitRenderI
     }
 }
 
+i32 InterpolateUnitRenderCoordinate(i32 start, i32 target, u32 alpha_16_16) {
+    constexpr u32 kInterpolationOne = 0x10000u;
+    const u32 clamped_alpha = std::min(alpha_16_16, kInterpolationOne);
+    const i64 delta = static_cast<i64>(target) - static_cast<i64>(start);
+    return static_cast<i32>(static_cast<i64>(start) +
+        delta * static_cast<i64>(clamped_alpha) /
+            static_cast<i64>(kInterpolationOne));
+}
+
+void ApplyUnitRenderInterpolation(UnitRenderQueueContext& context,
+    u32 alpha_16_16) {
+    for (UnitRenderItem& item : context.units) {
+        if (!item.interpolation_enabled) {
+            continue;
+        }
+        item.interpolated_x = InterpolateUnitRenderCoordinate(
+            item.interpolation_start_x,
+            item.interpolation_target_x, alpha_16_16);
+        item.interpolated_y = InterpolateUnitRenderCoordinate(
+            item.interpolation_start_y,
+            item.interpolation_target_y, alpha_16_16);
+    }
+}
+
 } // namespace ranker
