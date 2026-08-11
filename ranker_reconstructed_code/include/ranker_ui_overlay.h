@@ -414,6 +414,23 @@ struct UiOverlayMinimapMarker {
     bool valid = true;
 };
 
+struct UiOverlayMinimapCompositeCache {
+    bool enabled = false;
+    bool valid = false;
+    u32 frame_counter = 0;
+    u32 map_width_tiles = 0;
+    u32 map_height_tiles = 0;
+    u32 output_pitch_pixels = 0;
+    u32 minimap_width_pixels = 0;
+    u32 minimap_height_pixels = 0;
+    i32 output_x = 0;
+    i32 output_y = 0;
+    i32 camera_x = 0;
+    i32 camera_y = 0;
+    bool reveal_minimap_fog = false;
+    std::vector<UiOverlayMinimapMarker> markers;
+};
+
 struct UiOverlayMinimapUnit {
     u32 unit_id = 0;
     u32 type_id = 0;
@@ -654,6 +671,11 @@ struct UiOverlayState {
     std::vector<u8> text_command_flushed;
     std::vector<u8> progress_command_flushed;
     std::vector<UiOverlayMinimapMarker> minimap_markers;
+    // The original redraws the world for every presentation pass.  Minimap
+    // object/fog/unit inputs, however, advance only with the simulation frame;
+    // retaining just that composite avoids a full map scan on duplicate
+    // presents without freezing presentation-driven world effects.
+    UiOverlayMinimapCompositeCache minimap_composite_cache;
     std::vector<UiOverlayHudPulseCommand> pulse_commands;
     std::vector<UiOverlayCommandOption> command_options;
     std::vector<UiOverlayCommandOption> primary_production_options;

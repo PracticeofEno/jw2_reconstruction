@@ -12,6 +12,9 @@
 #include <vector>
 
 namespace ranker {
+
+static HRESULT handle_game_cursor_presentation(bool reuse_uploaded_background);
+
 namespace {
 
 SoftwareCursorState g_cursor_state;
@@ -461,7 +464,7 @@ void SetGameCursorPointerPosition(i32 x, i32 y) {
         // 33 ms steps.  Present the cursor-composited back buffer for each
         // actual mouse move, matching the original cursor's independent
         // motion cadence.
-        HandleGameCursorPresentation();
+        handle_game_cursor_presentation(true);
     }
 }
 
@@ -621,7 +624,7 @@ HRESULT HandlePresentCursorDrawOnBack() {
         g_cursor_state.presented_cursor_x, g_cursor_state.presented_cursor_y);
 }
 
-HRESULT HandleGameCursorPresentation() {
+static HRESULT handle_game_cursor_presentation(bool reuse_uploaded_background) {
     const std::lock_guard<std::recursive_mutex> lock(g_cursor_mutex);
     if (!g_cursor_state.visible) {
         HRESULT result = PresentBackBufferToPrimary();
@@ -642,6 +645,30 @@ HRESULT HandleGameCursorPresentation() {
     g_cursor_state.presentation_locked = true;
     g_cursor_state.presented_cursor_x = g_cursor_state.cursor_x;
     g_cursor_state.presented_cursor_y = g_cursor_state.cursor_y;
+
+    if (IsD3D9CubicPresentationActive()) {
+        HRESULT result = TryPresentBackBufferWithD3D9CubicCursor(
+            direct_draw_state().back_surface,
+            g_cursor_state.cursor_surfaces[g_cursor_state.cursor_index],
+            g_cursor_state.presented_cursor_x,
+            g_cursor_state.presented_cursor_y,
+            reuse_uploaded_background);
+        if (result == S_OK) {
+            // The D3D9 presentation keeps the cursor out of the logical game
+            // surface so Catmull-Rom cannot ring around its northwest edge.
+            // Screenshot capture still snapshots the same cursor-composited
+            // 800x600 image as the original DirectDraw path.
+            if (ShouldCaptureScreenshot()) {
+                HandleBackCursorBackgroundSaveForPresent();
+                HandlePresentCursorDrawOnBack();
+                HandleNextScreenshotCapture();
+                HandleBackCursorBackgroundRestoreAfterPresent();
+            }
+            g_cursor_state.presentation_locked = false;
+            g_cursor_state.last_result = result;
+            return result;
+        }
+    }
 
     HandleBackCursorBackgroundSaveForPresent();
     HandlePresentCursorDrawOnBack();
@@ -664,6 +691,10 @@ HRESULT HandleGameCursorPresentation() {
     g_cursor_state.presentation_locked = false;
     g_cursor_state.last_result = result;
     return result;
+}
+
+HRESULT HandleGameCursorPresentation() {
+    return handle_game_cursor_presentation(false);
 }
 
 HRESULT HandleCursorAwarePresentForwarder() {

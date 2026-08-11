@@ -21,7 +21,15 @@ constexpr std::array<u32, 7> kGameplayFixedStepIntervalsMs = {
 constexpr std::array<u32, 7> kGameplayFixedStepRepeatCounts = {
     200, 120, 60, 30, 22, 14, 7,
 };
+constexpr u32 kGameplayCatchupPresentationMaxGapMs = 50;
 constexpr std::size_t kGameplaySimulationPhaseCount = 17;
+
+constexpr bool ShouldPresentGameplayCatchupFrame(u32 repeat_count,
+    u32 repeat_limit, u32 current_tick_ms, u32 last_present_tick_ms) {
+    return repeat_count >= repeat_limit || last_present_tick_ms == 0 ||
+        static_cast<u32>(current_tick_ms - last_present_tick_ms) >=
+            kGameplayCatchupPresentationMaxGapMs;
+}
 
 struct GameplayLoopState;
 
@@ -84,6 +92,7 @@ struct GameplayLoopState {
     u32 catchup_repeat_counter = 0;
     u32 catchup_status_counter0 = 0;
     u32 catchup_status_counter1 = 0;
+    u32 catchup_last_present_tick_ms = 0;
     u32 simulation_frame_counter = 0;
     u32 present_frame_counter = 0;
     u32 exit_context = 3;

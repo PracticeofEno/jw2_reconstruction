@@ -960,6 +960,7 @@ struct RuntimeGlobals {
     bool gameplay_leave_reset_processed = false;
     bool gameplay_script_triggers_loaded = false;
     bool gameplay_script_scenario_objects_loaded = false;
+    u32 gameplay_script_scenario_record_sync_frame = 0xffffffffu;
     bool gameplay_unit_effect_definitions_initialized = false;
     bool gameplay_action_damage_profiles_initialized = false;
     u32 gameplay_script_trigger_record_index = 0xffffffffu;
@@ -986,7 +987,19 @@ struct GameplayTerrainFrameCache {
     bool valid = false;
 };
 
+struct GameplayMinimapBaseFrameCache {
+    u32 simulation_frame = 0;
+    u32 animation_slot = 0;
+    u32 map_width_tiles = 0;
+    u32 map_height_tiles = 0;
+    u32 minimap_width_pixels = 0;
+    u32 minimap_height_pixels = 0;
+    bool pixel_mode_555 = false;
+    bool valid = false;
+};
+
 GameplayTerrainFrameCache g_gameplay_terrain_frame_cache;
+GameplayMinimapBaseFrameCache g_gameplay_minimap_base_frame_cache;
 
 void reset_default_gameplay_terrain_frame_cache() {
     // The process-global cache survives the DirectDraw surface lifetime.  Drop
@@ -994,6 +1007,7 @@ void reset_default_gameplay_terrain_frame_cache() {
     // cannot restore bytes captured from the previous match if its first
     // terrain pass observes the same camera/animation tuple.
     g_gameplay_terrain_frame_cache = GameplayTerrainFrameCache{};
+    g_gameplay_minimap_base_frame_cache = GameplayMinimapBaseFrameCache{};
 }
 
 bool restore_default_gameplay_terrain_frame_cache(
@@ -4561,6 +4575,8 @@ bool export_default_loaded_gameplay_session_bundle_to(
             script.objects[object_index].animation_frame = unit->work_timer;
         }
         sync_default_gameplay_script_scenario_record(script);
+        g_runtime.gameplay_script_scenario_record_sync_frame =
+            gameplay_loop_state().simulation_frame_counter;
     }
     sync_default_gameplay_unit_pool_list_session_records();
     sync_default_unit_effect_runtime_session_record();
@@ -7855,9 +7871,36 @@ void prepare_default_ui_overlay_minimap_base(UiOverlayState& overlay) {
     ensure_default_ui_overlay_minimap_surface(overlay);
     configure_default_gameplay_minimap_render_config(
         g_runtime.gameplay_minimap_render_config);
+    const u32 simulation_frame =
+        gameplay_loop_state().simulation_frame_counter;
+    const MinimapRenderState& minimap = overlay.minimap;
+    const MinimapTerrainLayer& terrain = g_runtime.gameplay_terrain_layer;
+    const GameplayMinimapBaseFrameCache& cache =
+        g_gameplay_minimap_base_frame_cache;
+    if (cache.valid && cache.simulation_frame == simulation_frame &&
+        cache.animation_slot ==
+            g_runtime.gameplay_minimap_render_config.animated_terrain_bank &&
+        cache.map_width_tiles == terrain.width_tiles &&
+        cache.map_height_tiles == terrain.height_tiles &&
+        cache.minimap_width_pixels == minimap.minimap_width_pixels &&
+        cache.minimap_height_pixels == minimap.minimap_height_pixels &&
+        cache.pixel_mode_555 == SurfacePixelMode555()) {
+        return;
+    }
     RenderMinimapTerrainBase(overlay.minimap,
         g_runtime.gameplay_terrain_layer,
         g_runtime.gameplay_minimap_render_config);
+    GameplayMinimapBaseFrameCache& updated =
+        g_gameplay_minimap_base_frame_cache;
+    updated.simulation_frame = simulation_frame;
+    updated.animation_slot =
+        g_runtime.gameplay_minimap_render_config.animated_terrain_bank;
+    updated.map_width_tiles = terrain.width_tiles;
+    updated.map_height_tiles = terrain.height_tiles;
+    updated.minimap_width_pixels = minimap.minimap_width_pixels;
+    updated.minimap_height_pixels = minimap.minimap_height_pixels;
+    updated.pixel_mode_555 = SurfacePixelMode555();
+    updated.valid = true;
 }
 
 bool default_gameplay_flow_import_session_bundle(GameplaySessionFlowState& state) {
@@ -11556,6 +11599,7 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     g_runtime.gameplay_end_condition_units.clear();
     g_runtime.gameplay_script_triggers_loaded = false;
     g_runtime.gameplay_script_scenario_objects_loaded = false;
+    g_runtime.gameplay_script_scenario_record_sync_frame = 0xffffffffu;
     g_runtime.gameplay_script_trigger_record_index = 0xffffffffu;
     g_runtime.gameplay_script_next_unit_id = 0x80000000u;
     g_runtime.gameplay_end_condition_state = GameplayEndConditionState{};
@@ -19644,6 +19688,7 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
             ui_resources.misc_icons_start + 0x23u : 0;
     overlay.current_frame_counter =
         g_runtime.gameplay_frame_render_context.frame_counter;
+    overlay.minimap_composite_cache.enabled = true;
     overlay.current_tick_ms = gameplay_loop_state().current_tick_ms;
     overlay.local_player_slot = g_runtime.gameplay_player_slots.local_player_slot;
     overlay.local_owner_relation_mask =
@@ -24330,6 +24375,12 @@ void default_unit_command_equipment_slots_changed(UnitCommandContext&,
 
 bool default_unit_command_access_spawn_alias(UnitCommandContext& context,
     u32 raw_unit_offset, UnitMovementUnit& alias, bool write_back) {
+    const u32 current_frame = gameplay_loop_state().simulation_frame_counter;
+    if (g_runtime.gameplay_script_scenario_record_sync_frame != current_frame) {
+        sync_default_gameplay_script_scenario_record(
+            gameplay_script_trigger_state());
+        g_runtime.gameplay_script_scenario_record_sync_frame = current_frame;
+    }
     std::vector<u8>* raw_pool =
         MutableGameplaySessionLoadedRecord(kGameplayScenarioObjectRecordIndex);
     if (raw_pool == nullptr || raw_unit_offset >= raw_pool->size()) {
@@ -27814,6 +27865,18 @@ void purge_default_inactive_movement_units(UnitMovementContext& movement) {
 
 u32 find_default_gameplay_script_object_index_for_unit(
     GameplayScriptTriggerState& script, UnitMovementUnit& unit) {
+    // Record 7 is a fixed 0x800-node pool and the reconstructed unit retains
+    // its physical node index.  Imported and produced units therefore resolve
+    // in constant time.  Keep the identity scan only as a compatibility
+    // fallback for synthetic/test units that do not own a runtime slot.
+    const u32 runtime_slot = unit.runtime_slot_index;
+    if (runtime_slot != 0 && runtime_slot != kInvalidUnitRuntimeSlotIndex &&
+        runtime_slot < script.objects.size()) {
+        GameplayScriptTriggerObjectState& object = script.objects[runtime_slot];
+        if (object.unit == &unit || object.object_pointer == &unit) {
+            return runtime_slot;
+        }
+    }
     for (u32 index = 1; index < script.objects.size(); ++index) {
         GameplayScriptTriggerObjectState& object = script.objects[index];
         if (object.unit == &unit || object.object_pointer == &unit) {
@@ -28048,15 +28111,25 @@ void append_default_gameplay_script_scenario_active_objects(
 
     const u32 object_count = std::min<u32>(
         static_cast<u32>(script.objects.size()), kGameplayScenarioObjectMaxSlots);
+    std::vector<u8>& membership =
+        script.condition_context.active_object_membership;
+    if (membership.size() < object_count) {
+        membership.resize(object_count);
+    }
+    std::fill(membership.begin(), membership.begin() + object_count, u8{0});
+    for (const u32 index : script.condition_context.active_object_order) {
+        if (index < object_count) {
+            membership[index] = 1;
+        }
+    }
     for (u32 index = 1; index < object_count; ++index) {
         const GameplayScriptTriggerObjectState& object = script.objects[index];
         if (!default_gameplay_script_object_alive(object)) {
             continue;
         }
-        if (std::find(script.condition_context.active_object_order.begin(),
-                script.condition_context.active_object_order.end(), index) ==
-            script.condition_context.active_object_order.end()) {
+        if (membership[index] == 0) {
             script.condition_context.active_object_order.push_back(index);
+            membership[index] = 1;
         }
     }
 }
@@ -29269,7 +29342,12 @@ void run_default_gameplay_script_phase(GameplayLoopState& state, u32 phase) {
     sync_default_gameplay_script_runtime_context(state, script);
     ProcessGameplayScriptTriggers(script, phase);
     apply_default_gameplay_script_object_mutations(script);
-    sync_default_gameplay_script_scenario_record(script);
+    // The loaded record is save/export backing, not the live object pool in
+    // the original.  Serializing all 0x800 objects here added hundreds of
+    // thousands of byte writes to every Use Map Setting frame.  Save export
+    // snapshots it explicitly, and the sole raw-alias compatibility path
+    // refreshes it lazily when that malformed original behavior is exercised.
+    g_runtime.gameplay_script_scenario_record_sync_frame = 0xffffffffu;
     consume_default_gameplay_script_opcode_context(script, state);
     publish_default_gameplay_script_dialog_text(state);
 }
@@ -29342,8 +29420,12 @@ void run_default_unit_post_runtime_list_moves(UnitLifecycleContext& lifecycle) {
 void run_default_gameplay_end_condition_monitor(GameplayLoopState& state) {
     g_runtime.gameplay_end_condition_state.frame_counter =
         state.simulation_frame_counter;
-    sync_default_gameplay_end_condition_state();
-    TickGameplayEndConditionMonitor(g_runtime.gameplay_end_condition_state);
+    if (ShouldRefreshGameplayEndConditionSnapshot(
+            state.simulation_frame_counter,
+            g_runtime.gameplay_end_condition_state.scenario_ai_profile_override)) {
+        sync_default_gameplay_end_condition_state();
+        TickGameplayEndConditionMonitor(g_runtime.gameplay_end_condition_state);
+    }
     Mode1GameplayPacketDispatchState& packets = mode1_gameplay_packet_dispatch_state();
     if (g_runtime.generic_ai_profile_mode &&
         gameplay_input_action_state().player_reset_gate &&

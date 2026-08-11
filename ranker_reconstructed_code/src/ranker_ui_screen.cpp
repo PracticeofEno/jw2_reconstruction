@@ -3677,6 +3677,40 @@ bool PutBackBufferPixel16Clipped(i32 x, i32 y, u16 color) {
     });
 }
 
+bool BlitBackBufferPixels16(const u16* pixels, u32 source_pitch_pixels,
+    u32 width, u32 height, i32 destination_x, i32 destination_y) {
+    if (pixels == nullptr || source_pitch_pixels < width || width == 0 ||
+        height == 0) {
+        return false;
+    }
+
+    return draw_with_backbuffer_target([&](const SpriteRenderTarget& target) {
+        const i32 source_left = std::max<i32>(-destination_x, 0);
+        const i32 source_top = std::max<i32>(-destination_y, 0);
+        const i32 source_right = std::min<i32>(static_cast<i32>(width),
+            static_cast<i32>(target.width) - destination_x);
+        const i32 source_bottom = std::min<i32>(static_cast<i32>(height),
+            static_cast<i32>(target.height) - destination_y);
+        if (source_left >= source_right || source_top >= source_bottom) {
+            return true;
+        }
+
+        const std::size_t copy_width =
+            static_cast<std::size_t>(source_right - source_left);
+        for (i32 source_y = source_top; source_y < source_bottom; ++source_y) {
+            const u16* source_row = pixels +
+                static_cast<std::size_t>(source_y) * source_pitch_pixels +
+                static_cast<std::size_t>(source_left);
+            u16* destination_row = target.pixels +
+                static_cast<std::size_t>(destination_y + source_y) *
+                    target.stride_words +
+                static_cast<std::size_t>(destination_x + source_left);
+            std::copy_n(source_row, copy_width, destination_row);
+        }
+        return true;
+    });
+}
+
 bool DrawBackBufferFilledRectangle16(i32 left, i32 top, i32 right, i32 bottom,
     u16 color) {
     return draw_with_backbuffer_target([&](const SpriteRenderTarget& target) {

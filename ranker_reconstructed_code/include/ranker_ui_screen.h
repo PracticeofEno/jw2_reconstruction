@@ -444,6 +444,8 @@ bool PlayJw204BinkMenuScreen(i32 column, i32 row,
 bool DrawBackBufferRectangleOutline16(i32 left, i32 top, i32 width, i32 height,
     u16 color = 0xffffu);
 bool PutBackBufferPixel16Clipped(i32 x, i32 y, u16 color);
+bool BlitBackBufferPixels16(const u16* pixels, u32 source_pitch_pixels,
+    u32 width, u32 height, i32 destination_x, i32 destination_y);
 bool DrawBackBufferFilledRectangle16(i32 left, i32 top, i32 right, i32 bottom,
     u16 color = 0xffffu);
 bool DrawBackBufferStippledRectangle16(i32 left, i32 top, i32 right, i32 bottom,

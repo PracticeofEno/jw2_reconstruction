@@ -75,11 +75,25 @@ void verify_built_in_modes_keep_original_elimination_default() {
         "built-in mode lost its defeat default");
 }
 
+void verify_original_snapshot_cadence_precedes_unit_walk() {
+    require(ShouldRefreshGameplayEndConditionSnapshot(0, false),
+        "frame zero did not refresh the end-condition snapshot");
+    require(!ShouldRefreshGameplayEndConditionSnapshot(1, false),
+        "non-cadence frame refreshed the end-condition snapshot");
+    require(!ShouldRefreshGameplayEndConditionSnapshot(63, false),
+        "frame 63 refreshed the end-condition snapshot");
+    require(ShouldRefreshGameplayEndConditionSnapshot(64, false),
+        "frame 64 did not refresh the end-condition snapshot");
+    require(!ShouldRefreshGameplayEndConditionSnapshot(64, true),
+        "scenario override still refreshed the unit snapshot");
+}
+
 } // namespace
 
 int main() {
     verify_zero_use_map_masks_remain_script_controlled();
     verify_serialized_use_map_masks_are_preserved();
     verify_built_in_modes_keep_original_elimination_default();
+    verify_original_snapshot_cadence_precedes_unit_walk();
     return EXIT_SUCCESS;
 }

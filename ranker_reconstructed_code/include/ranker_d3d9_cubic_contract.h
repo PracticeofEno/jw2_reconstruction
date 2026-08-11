@@ -18,6 +18,7 @@ constexpr u32 kD3D9CubicTextureHeight = 1024;
 constexpr u32 kD3D9CubicTextureCount = 2;
 constexpr u32 kD3D9CubicLogicalWidth = 800;
 constexpr u32 kD3D9CubicLogicalHeight = 600;
+constexpr u32 kD3D9CursorTextureSize = 32;
 
 constexpr bool IsD3D9CubicRendererSupported(std::string_view renderer) {
     // direct3d9on12 needs the explicit D3D9On12 creation path. This presenter
@@ -55,6 +56,64 @@ constexpr std::array<D3D9CubicVertex, 4> BuildD3D9CubicVertices(
         {right, bottom, 0.0f, 1.0f, source_u, source_v},
         {right, -0.5f, 0.0f, 1.0f, source_u, 0.0f},
     }};
+}
+
+struct D3D9CursorOverlayGeometry {
+    std::array<D3D9CubicVertex, 4> vertices{};
+    i32 source_left = 0;
+    i32 source_top = 0;
+    i32 source_right = 0;
+    i32 source_bottom = 0;
+    bool visible = false;
+};
+
+constexpr D3D9CursorOverlayGeometry BuildD3D9CursorOverlayGeometry(
+    u32 output_width, u32 output_height, i32 cursor_x, i32 cursor_y) {
+    D3D9CursorOverlayGeometry geometry{};
+    geometry.source_left = cursor_x < 0 ? -cursor_x : 0;
+    geometry.source_top = cursor_y < 0 ? -cursor_y : 0;
+    geometry.source_right = cursor_x + static_cast<i32>(kD3D9CursorTextureSize) >
+            static_cast<i32>(kD3D9CubicLogicalWidth)
+        ? static_cast<i32>(kD3D9CubicLogicalWidth) - cursor_x
+        : static_cast<i32>(kD3D9CursorTextureSize);
+    geometry.source_bottom = cursor_y + static_cast<i32>(kD3D9CursorTextureSize) >
+            static_cast<i32>(kD3D9CubicLogicalHeight)
+        ? static_cast<i32>(kD3D9CubicLogicalHeight) - cursor_y
+        : static_cast<i32>(kD3D9CursorTextureSize);
+    if (output_width == 0 || output_height == 0 ||
+        geometry.source_left >= geometry.source_right ||
+        geometry.source_top >= geometry.source_bottom) {
+        return geometry;
+    }
+
+    const float output_scale_x = static_cast<float>(output_width) /
+        static_cast<float>(kD3D9CubicLogicalWidth);
+    const float output_scale_y = static_cast<float>(output_height) /
+        static_cast<float>(kD3D9CubicLogicalHeight);
+    const float left = static_cast<float>(cursor_x + geometry.source_left) *
+            output_scale_x - 0.5f;
+    const float top = static_cast<float>(cursor_y + geometry.source_top) *
+            output_scale_y - 0.5f;
+    const float right = static_cast<float>(cursor_x + geometry.source_right) *
+            output_scale_x - 0.5f;
+    const float bottom = static_cast<float>(cursor_y + geometry.source_bottom) *
+            output_scale_y - 0.5f;
+    const float u0 = static_cast<float>(geometry.source_left) /
+        static_cast<float>(kD3D9CursorTextureSize);
+    const float v0 = static_cast<float>(geometry.source_top) /
+        static_cast<float>(kD3D9CursorTextureSize);
+    const float u1 = static_cast<float>(geometry.source_right) /
+        static_cast<float>(kD3D9CursorTextureSize);
+    const float v1 = static_cast<float>(geometry.source_bottom) /
+        static_cast<float>(kD3D9CursorTextureSize);
+    geometry.vertices = {{
+        {left, bottom, 0.0f, 1.0f, u0, v1},
+        {left, top, 0.0f, 1.0f, u0, v0},
+        {right, bottom, 0.0f, 1.0f, u1, v1},
+        {right, top, 0.0f, 1.0f, u1, v0},
+    }};
+    geometry.visible = true;
+    return geometry;
 }
 
 constexpr bool ShouldUseD3D9CubicPresentation(bool is_64_bit, bool windowed,

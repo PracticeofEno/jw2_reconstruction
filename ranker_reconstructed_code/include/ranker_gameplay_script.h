@@ -238,6 +238,10 @@ struct GameplayScriptConditionContext {
     // population counts.
     const ProductionOrderRuntimeState* production_orders = nullptr;
     std::vector<u32> active_object_order;
+    // Scratch membership for the fixed 0x800-node scenario pool.  The
+    // original follows intrusive object links once; retaining this byte map
+    // prevents an O(active * pool) std::find pass on every script frame.
+    std::vector<u8> active_object_membership;
 };
 
 struct GameplayScriptOpcodeContext {

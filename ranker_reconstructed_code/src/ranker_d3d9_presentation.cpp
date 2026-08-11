@@ -22,12 +22,14 @@ struct D3D9CubicPresentationState {
     IDirect3D9* api = nullptr;
     IDirect3DDevice9* device = nullptr;
     std::array<IDirect3DTexture9*, kD3D9CubicTextureCount> textures{};
+    IDirect3DTexture9* cursor_texture = nullptr;
     IDirect3DVertexBuffer9* vertex_buffer = nullptr;
     IDirect3DPixelShader9* pixel_shader = nullptr;
     D3DPRESENT_PARAMETERS parameters{};
     u32 output_width = 0;
     u32 output_height = 0;
     u32 next_texture_index = 0;
+    u32 last_texture_index = 0;
     u32 generation = 0;
     DWORD lifecycle_retry_after = 0;
     u32 consecutive_lifecycle_failures = 0;
@@ -37,6 +39,7 @@ struct D3D9CubicPresentationState {
     bool owner_request_posted = false;
     bool lifecycle_in_progress = false;
     bool present_in_progress = false;
+    bool uploaded_background_valid = false;
     D3D9CubicPresentationTelemetry telemetry{};
 };
 
@@ -110,6 +113,7 @@ void release_resources_locked() {
     g_cubic.active = false;
     g_cubic.resources_ready = false;
     const bool resources_exist = g_cubic.pixel_shader != nullptr ||
+        g_cubic.cursor_texture != nullptr ||
         g_cubic.vertex_buffer != nullptr ||
         std::any_of(g_cubic.textures.begin(), g_cubic.textures.end(),
             [](IDirect3DTexture9* texture) { return texture != nullptr; });
@@ -120,11 +124,14 @@ void release_resources_locked() {
         g_cubic.device->SetTexture(0, nullptr);
     }
     release_com(g_cubic.pixel_shader);
+    release_com(g_cubic.cursor_texture);
     release_com(g_cubic.vertex_buffer);
     for (auto*& texture : g_cubic.textures) {
         release_com(texture);
     }
     g_cubic.next_texture_index = 0;
+    g_cubic.last_texture_index = 0;
+    g_cubic.uploaded_background_valid = false;
 }
 
 void shutdown_locked() {
@@ -292,6 +299,11 @@ HRESULT create_resources_locked(u32 width, u32 height) {
         }
     }
     if (SUCCEEDED(result)) {
+        result = g_cubic.device->CreateTexture(kD3D9CursorTextureSize,
+            kD3D9CursorTextureSize, 1, 0, D3DFMT_A8R8G8B8,
+            D3DPOOL_MANAGED, &g_cubic.cursor_texture, nullptr);
+    }
+    if (SUCCEEDED(result)) {
         result = g_cubic.device->CreatePixelShader(
             reinterpret_cast<const DWORD*>(kD3D9CatmullRomPixelShader.data()),
             &g_cubic.pixel_shader);
@@ -425,12 +437,126 @@ HRESULT upload_back_buffer_locked(LPDIRECTDRAWSURFACE7 back_surface,
     return FAILED(result) ? result : source_unlock;
 }
 
-HRESULT draw_and_present_locked() {
-    HRESULT result = g_cubic.device->BeginScene();
+HRESULT upload_cursor_locked(LPDIRECTDRAWSURFACE7 cursor_surface) {
+    if (cursor_surface == nullptr || g_cubic.cursor_texture == nullptr) {
+        return E_POINTER;
+    }
+
+    DDSURFACEDESC2 source{};
+    source.dwSize = sizeof(source);
+    HRESULT result = cursor_surface->Lock(
+        nullptr, &source, DDLOCK_WAIT | DDLOCK_READONLY, nullptr);
+    if (FAILED(result)) {
+        return result;
+    }
+    if (source.lpSurface == nullptr ||
+        source.lPitch < static_cast<LONG>(kD3D9CursorTextureSize * sizeof(u16)) ||
+        source.dwWidth < kD3D9CursorTextureSize ||
+        source.dwHeight < kD3D9CursorTextureSize) {
+        cursor_surface->Unlock(nullptr);
+        return DDERR_INVALIDPIXELFORMAT;
+    }
+
+    D3DLOCKED_RECT destination{};
+    result = g_cubic.cursor_texture->LockRect(0, &destination, nullptr, 0);
+    if (SUCCEEDED(result)) {
+        for (u32 y = 0; y < kD3D9CursorTextureSize; ++y) {
+            const auto* source_row = reinterpret_cast<const u16*>(
+                static_cast<const u8*>(source.lpSurface) +
+                static_cast<std::size_t>(y) * source.lPitch);
+            auto* destination_row = reinterpret_cast<u32*>(
+                static_cast<u8*>(destination.pBits) +
+                static_cast<std::size_t>(y) * destination.Pitch);
+            for (u32 x = 0; x < kD3D9CursorTextureSize; ++x) {
+                const u16 pixel = source_row[x];
+                if (pixel == 0) {
+                    destination_row[x] = 0;
+                    continue;
+                }
+                const u32 red5 = (pixel >> 11) & 0x1fu;
+                const u32 green6 = (pixel >> 5) & 0x3fu;
+                const u32 blue5 = pixel & 0x1fu;
+                const u32 red8 = (red5 << 3) | (red5 >> 2);
+                const u32 green8 = (green6 << 2) | (green6 >> 4);
+                const u32 blue8 = (blue5 << 3) | (blue5 >> 2);
+                destination_row[x] = 0xff000000u |
+                    (red8 << 16) | (green8 << 8) | blue8;
+            }
+        }
+        const HRESULT unlock_result = g_cubic.cursor_texture->UnlockRect(0);
+        if (FAILED(unlock_result)) {
+            result = unlock_result;
+        }
+    }
+    const HRESULT source_unlock = cursor_surface->Unlock(nullptr);
+    return FAILED(result) ? result : source_unlock;
+}
+
+HRESULT apply_cursor_render_state_locked() {
+    HRESULT result = g_cubic.device->SetPixelShader(nullptr);
+    if (SUCCEEDED(result)) {
+        result = g_cubic.device->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+    }
+    if (SUCCEEDED(result)) {
+        result = g_cubic.device->SetTexture(0, g_cubic.cursor_texture);
+    }
+    if (SUCCEEDED(result)) {
+        result = g_cubic.device->SetSamplerState(
+            0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+    }
+    if (SUCCEEDED(result)) {
+        result = g_cubic.device->SetSamplerState(
+            0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+    }
+    if (SUCCEEDED(result)) {
+        result = g_cubic.device->SetTextureStageState(
+            0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+    }
+    if (SUCCEEDED(result)) {
+        result = g_cubic.device->SetTextureStageState(
+            0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+    }
+    if (SUCCEEDED(result)) {
+        result = g_cubic.device->SetTextureStageState(
+            0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
+    }
+    if (SUCCEEDED(result)) {
+        result = g_cubic.device->SetTextureStageState(
+            0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+    }
+    if (SUCCEEDED(result)) {
+        result = g_cubic.device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+    }
+    if (SUCCEEDED(result)) {
+        result = g_cubic.device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+    }
+    if (SUCCEEDED(result)) {
+        result = g_cubic.device->SetRenderState(
+            D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+    }
+    return result;
+}
+
+HRESULT draw_and_present_locked(
+    const D3D9CursorOverlayGeometry* cursor_geometry) {
+    HRESULT result = apply_render_state_locked(
+        g_cubic.output_width, g_cubic.output_height);
+    if (FAILED(result)) {
+        return result;
+    }
+    result = g_cubic.device->BeginScene();
     if (FAILED(result)) {
         return result;
     }
     result = g_cubic.device->DrawPrimitive(D3DPT_TRIANGLESTRIP, 0, 2);
+    if (SUCCEEDED(result) && cursor_geometry != nullptr &&
+        cursor_geometry->visible) {
+        result = apply_cursor_render_state_locked();
+        if (SUCCEEDED(result)) {
+            result = g_cubic.device->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2,
+                cursor_geometry->vertices.data(), sizeof(D3D9CubicVertex));
+        }
+    }
     const HRESULT end_result = g_cubic.device->EndScene();
     if (FAILED(result)) {
         return result;
@@ -439,6 +565,88 @@ HRESULT draw_and_present_locked() {
         return end_result;
     }
     return g_cubic.device->Present(nullptr, nullptr, nullptr, nullptr);
+}
+
+HRESULT try_present_locked(LPDIRECTDRAWSURFACE7 back_surface,
+    LPDIRECTDRAWSURFACE7 cursor_surface, i32 cursor_x, i32 cursor_y,
+    bool reuse_uploaded_background) {
+    if (!g_cubic.requested) {
+        g_cubic.active = false;
+        return S_FALSE;
+    }
+    if (back_surface == nullptr || g_cubic.window == nullptr) {
+        return fallback_locked(E_POINTER, false);
+    }
+    if (g_cubic.lifecycle_in_progress || g_cubic.present_in_progress) {
+        return fallback_locked(S_FALSE, false);
+    }
+    RECT client{};
+    if (!GetClientRect(g_cubic.window, &client)) {
+        const DWORD error = GetLastError();
+        return fallback_locked(error != ERROR_SUCCESS ?
+            HRESULT_FROM_WIN32(error) : E_FAIL, true);
+    }
+    const LONG width = client.right - client.left;
+    const LONG height = client.bottom - client.top;
+    if (width <= 0 || height <= 0) {
+        return fallback_locked(D3DERR_DEVICELOST, true);
+    }
+    if (g_cubic.device == nullptr || !g_cubic.resources_ready ||
+        static_cast<u32>(width) != g_cubic.output_width ||
+        static_cast<u32>(height) != g_cubic.output_height) {
+        return fallback_locked(S_FALSE, true);
+    }
+    if (MayProbeD3D9CooperativeLevel(GetCurrentThreadId(),
+            g_cubic.owner_thread_id)) {
+        const HRESULT cooperative = g_cubic.device->TestCooperativeLevel();
+        if (cooperative != D3D_OK) {
+            return fallback_locked(cooperative, true);
+        }
+    }
+
+    D3D9CursorOverlayGeometry cursor_geometry{};
+    const D3D9CursorOverlayGeometry* cursor_geometry_pointer = nullptr;
+    if (cursor_surface != nullptr) {
+        cursor_geometry = BuildD3D9CursorOverlayGeometry(
+            g_cubic.output_width, g_cubic.output_height, cursor_x, cursor_y);
+        if (cursor_geometry.visible) {
+            cursor_geometry_pointer = &cursor_geometry;
+        }
+    }
+
+    g_cubic.present_in_progress = true;
+    const bool reuse_background = reuse_uploaded_background &&
+        g_cubic.uploaded_background_valid;
+    const u32 texture_index = reuse_background ?
+        g_cubic.last_texture_index : g_cubic.next_texture_index;
+    IDirect3DTexture9* texture = g_cubic.textures[texture_index];
+    HRESULT result = D3D_OK;
+    if (!reuse_background) {
+        result = upload_back_buffer_locked(back_surface, texture);
+    }
+    if (SUCCEEDED(result) && cursor_geometry_pointer != nullptr) {
+        result = upload_cursor_locked(cursor_surface);
+    }
+    if (SUCCEEDED(result)) {
+        result = g_cubic.device->SetTexture(0, texture);
+    }
+    if (SUCCEEDED(result)) {
+        result = draw_and_present_locked(cursor_geometry_pointer);
+    }
+    g_cubic.present_in_progress = false;
+    if (result != D3D_OK) {
+        return fallback_locked(result, true);
+    }
+    if (!reuse_background) {
+        g_cubic.last_texture_index = texture_index;
+        g_cubic.uploaded_background_valid = true;
+        g_cubic.next_texture_index =
+            (texture_index + 1) % kD3D9CubicTextureCount;
+    }
+    g_cubic.active = true;
+    g_cubic.telemetry.last_present_result = D3D_OK;
+    ++g_cubic.telemetry.successful_present_count;
+    return D3D_OK;
 }
 
 } // namespace
@@ -527,60 +735,16 @@ D3D9CubicPresentationTelemetry GetD3D9CubicPresentationTelemetry() {
 HRESULT TryPresentBackBufferWithD3D9Cubic(
     LPDIRECTDRAWSURFACE7 back_surface) {
     std::lock_guard<std::recursive_mutex> lock(g_cubic_mutex);
-    if (!g_cubic.requested) {
-        g_cubic.active = false;
-        return S_FALSE;
-    }
-    if (back_surface == nullptr || g_cubic.window == nullptr) {
-        return fallback_locked(E_POINTER, false);
-    }
-    if (g_cubic.lifecycle_in_progress || g_cubic.present_in_progress) {
-        return fallback_locked(S_FALSE, false);
-    }
-    RECT client{};
-    if (!GetClientRect(g_cubic.window, &client)) {
-        const DWORD error = GetLastError();
-        return fallback_locked(error != ERROR_SUCCESS ?
-            HRESULT_FROM_WIN32(error) : E_FAIL, true);
-    }
-    const LONG width = client.right - client.left;
-    const LONG height = client.bottom - client.top;
-    if (width <= 0 || height <= 0) {
-        return fallback_locked(D3DERR_DEVICELOST, true);
-    }
-    if (g_cubic.device == nullptr || !g_cubic.resources_ready ||
-        static_cast<u32>(width) != g_cubic.output_width ||
-        static_cast<u32>(height) != g_cubic.output_height) {
-        return fallback_locked(S_FALSE, true);
-    }
-    if (MayProbeD3D9CooperativeLevel(GetCurrentThreadId(),
-            g_cubic.owner_thread_id)) {
-        const HRESULT cooperative = g_cubic.device->TestCooperativeLevel();
-        if (cooperative != D3D_OK) {
-            return fallback_locked(cooperative, true);
-        }
-    }
+    return try_present_locked(back_surface, nullptr, 0, 0, false);
+}
 
-    g_cubic.present_in_progress = true;
-    const u32 texture_index = g_cubic.next_texture_index;
-    IDirect3DTexture9* texture = g_cubic.textures[texture_index];
-    HRESULT result = upload_back_buffer_locked(back_surface, texture);
-    if (SUCCEEDED(result)) {
-        result = g_cubic.device->SetTexture(0, texture);
-    }
-    if (SUCCEEDED(result)) {
-        result = draw_and_present_locked();
-    }
-    g_cubic.present_in_progress = false;
-    if (result != D3D_OK) {
-        return fallback_locked(result, true);
-    }
-    g_cubic.next_texture_index =
-        (texture_index + 1) % kD3D9CubicTextureCount;
-    g_cubic.active = true;
-    g_cubic.telemetry.last_present_result = D3D_OK;
-    ++g_cubic.telemetry.successful_present_count;
-    return D3D_OK;
+HRESULT TryPresentBackBufferWithD3D9CubicCursor(
+    LPDIRECTDRAWSURFACE7 back_surface,
+    LPDIRECTDRAWSURFACE7 cursor_surface,
+    i32 cursor_x, i32 cursor_y, bool reuse_uploaded_background) {
+    std::lock_guard<std::recursive_mutex> lock(g_cubic_mutex);
+    return try_present_locked(back_surface, cursor_surface,
+        cursor_x, cursor_y, reuse_uploaded_background);
 }
 
 } // namespace ranker

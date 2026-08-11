@@ -9,6 +9,7 @@
 #include "ranker_unit_movement.h"
 
 #include <algorithm>
+#include <iterator>
 #include <limits>
 #include <utility>
 
@@ -719,47 +720,19 @@ void flush_minimap_output_to_backbuffer(UiOverlayState& state) {
         return;
     }
 
-    const i32 left = minimap.output_x;
-    const i32 top = minimap.output_y;
-    const i32 right = left + static_cast<i32>(minimap.minimap_width_pixels);
-    const i32 bottom = top + static_cast<i32>(minimap.minimap_height_pixels);
-    if (right <= 0 || bottom <= 0) {
+    if (minimap.output_x < 0 || minimap.output_y < 0) {
         return;
     }
-    const i32 clipped_left = std::max<i32>(left, 0);
-    const i32 clipped_right = std::min<i32>(
-        right, static_cast<i32>(minimap.output_pitch_pixels));
-    if (clipped_left >= clipped_right) {
+    const std::size_t source_offset =
+        static_cast<std::size_t>(minimap.output_y) *
+            minimap.output_pitch_pixels +
+        static_cast<std::size_t>(minimap.output_x);
+    if (source_offset >= minimap.output_pixels.size()) {
         return;
     }
-
-    for (u32 y = 0; y < minimap.minimap_height_pixels; ++y) {
-        const i32 screen_y = top + static_cast<i32>(y);
-        if (screen_y < 0) {
-            continue;
-        }
-        const std::size_t row =
-            static_cast<std::size_t>(screen_y) * minimap.output_pitch_pixels;
-        if (row + static_cast<std::size_t>(clipped_right) >
-            minimap.output_pixels.size()) {
-            continue;
-        }
-
-        i32 run_left = clipped_left;
-        while (run_left < clipped_right) {
-            const u16 color =
-                minimap.output_pixels[row + static_cast<std::size_t>(run_left)];
-            i32 run_right = run_left + 1;
-            while (run_right < clipped_right &&
-                minimap.output_pixels[row + static_cast<std::size_t>(run_right)] ==
-                    color) {
-                ++run_right;
-            }
-            DrawBackBufferFilledRectangle16(run_left, screen_y,
-                run_right - 1, screen_y, color);
-            run_left = run_right;
-        }
-    }
+    BlitBackBufferPixels16(minimap.output_pixels.data() + source_offset,
+        minimap.output_pitch_pixels, minimap.minimap_width_pixels,
+        minimap.minimap_height_pixels, minimap.output_x, minimap.output_y);
 }
 
 void flush_minimap_object_footprint_spill_to_backbuffer(UiOverlayState& state) {
@@ -2864,6 +2837,30 @@ void RenderGameplayMinimapOverlay(UiOverlayState& state) {
             state.minimap.output_x, state.minimap.output_y);
     }
 
+    UiOverlayMinimapCompositeCache& cache = state.minimap_composite_cache;
+    const bool reuse_composite = cache.enabled && cache.valid &&
+        !state.minimap.output_pixels.empty() &&
+        cache.frame_counter == state.current_frame_counter &&
+        cache.map_width_tiles == state.minimap.map_width_tiles &&
+        cache.map_height_tiles == state.minimap.map_height_tiles &&
+        cache.output_pitch_pixels == state.minimap.output_pitch_pixels &&
+        cache.minimap_width_pixels == state.minimap.minimap_width_pixels &&
+        cache.minimap_height_pixels == state.minimap.minimap_height_pixels &&
+        cache.output_x == state.minimap.output_x &&
+        cache.output_y == state.minimap.output_y &&
+        cache.camera_x == state.camera_x && cache.camera_y == state.camera_y &&
+        cache.reveal_minimap_fog == state.reveal_minimap_fog;
+    if (reuse_composite) {
+        // Placement preview cells are pointer/presentation driven and have
+        // already been regenerated for this pass.  Retain them while
+        // restoring only the simulation-driven minimap markers.
+        state.minimap_markers.insert(state.minimap_markers.end(),
+            cache.markers.begin(), cache.markers.end());
+        flush_minimap_output_to_backbuffer(state);
+        flush_minimap_object_footprint_spill_to_backbuffer(state);
+        return;
+    }
+
     CopyMinimapScratchToOutput(state.minimap);
     RenderMinimapObjectAndTerrainMarkers(state);
     RenderMinimapFogMask(state);
@@ -2872,6 +2869,29 @@ void RenderGameplayMinimapOverlay(UiOverlayState& state) {
     DrawMinimapViewportBorder(state.minimap, state.camera_x, state.camera_y);
     flush_minimap_output_to_backbuffer(state);
     flush_minimap_object_footprint_spill_to_backbuffer(state);
+
+    if (cache.enabled) {
+        cache.valid = true;
+        cache.frame_counter = state.current_frame_counter;
+        cache.map_width_tiles = state.minimap.map_width_tiles;
+        cache.map_height_tiles = state.minimap.map_height_tiles;
+        cache.output_pitch_pixels = state.minimap.output_pitch_pixels;
+        cache.minimap_width_pixels = state.minimap.minimap_width_pixels;
+        cache.minimap_height_pixels = state.minimap.minimap_height_pixels;
+        cache.output_x = state.minimap.output_x;
+        cache.output_y = state.minimap.output_y;
+        cache.camera_x = state.camera_x;
+        cache.camera_y = state.camera_y;
+        cache.reveal_minimap_fog = state.reveal_minimap_fog;
+        cache.markers.clear();
+        cache.markers.reserve(state.minimap_markers.size());
+        std::copy_if(state.minimap_markers.begin(), state.minimap_markers.end(),
+            std::back_inserter(cache.markers),
+            [](const UiOverlayMinimapMarker& marker) {
+                return marker.kind !=
+                    UiOverlayMinimapMarkerKind::placement_preview;
+            });
+    }
 }
 
 void RenderMinimapObjectAndTerrainMarkers(UiOverlayState& state) {

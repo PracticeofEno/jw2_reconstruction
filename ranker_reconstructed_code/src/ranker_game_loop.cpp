@@ -150,6 +150,7 @@ void reset_session_transient_loop_state(GameplayLoopState& state) {
     state.catchup_repeat_counter = 0;
     state.catchup_status_counter0 = 0;
     state.catchup_status_counter1 = 0;
+    state.catchup_last_present_tick_ms = 0;
     state.catchup_status_mode = 0;
     state.fixed_step_initialized = false;
     state.external_single_step = false;
@@ -262,16 +263,28 @@ void UpdateGameplayFramePhaseFlags(GameplayLoopState& state) {
             if (state.current_tick_ms < next_tick) {
                 set_phase_flags(state, false, false, false, true);
                 state.catchup_repeat_counter = 0;
+                state.catchup_last_present_tick_ms = state.current_tick_ms;
                 return;
             }
 
             ++state.catchup_repeat_counter;
             state.frame_time_anchor = next_tick;
             if (!state.external_single_step && !state.replay_simulation_suppressed) {
-                const bool force_present = state.catchup_repeat_counter >= 0x32;
+                // The original forces one presentation every 50 catch-up
+                // simulations. Reconstructed Use Map Setting ticks are more
+                // expensive than the original's raw in-place object loop, so
+                // frame-count-only pacing can leave the display unchanged for
+                // seconds on the Fast Computer setting. Preserve that rule
+                // while also bounding the wall-clock display gap. Simulation
+                // and packet ordering are unchanged.
+                const bool force_present = ShouldPresentGameplayCatchupFrame(
+                    state.catchup_repeat_counter, 0x32,
+                    state.current_tick_ms,
+                    state.catchup_last_present_tick_ms);
                 set_phase_flags(state, true, true, true, force_present);
                 if (force_present) {
                     state.catchup_repeat_counter = 0;
+                    state.catchup_last_present_tick_ms = state.current_tick_ms;
                 }
                 return;
             }
@@ -465,6 +478,7 @@ void EnableGameplayCatchupTargetState(GameplayLoopState& state) {
 
 void DisableGameplayCatchupTargetState(GameplayLoopState& state) {
     state.catchup_enabled = false;
+    state.catchup_last_present_tick_ms = 0;
     ResetGameplayCatchupStatusMessage(state);
 }
 
@@ -484,6 +498,7 @@ void UpdateGameplayCatchupTargetIfActive(GameplayLoopState& state) {
 
 void UpdateGameplayCatchupTarget(GameplayLoopState& state) {
     RefreshGameplayLoopTick(state);
+    state.catchup_last_present_tick_ms = state.current_tick_ms;
     state.frame_time_anchor = state.current_tick_ms +
         interval_at(state.frame_intervals, state.frame_interval_index);
 }

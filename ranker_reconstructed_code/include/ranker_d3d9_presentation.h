@@ -31,6 +31,10 @@ bool HandleD3D9CubicPresentationOwnerThreadRequest(
     HWND window, WPARAM generation);
 D3D9CubicPresentationTelemetry GetD3D9CubicPresentationTelemetry();
 HRESULT TryPresentBackBufferWithD3D9Cubic(LPDIRECTDRAWSURFACE7 back_surface);
+HRESULT TryPresentBackBufferWithD3D9CubicCursor(
+    LPDIRECTDRAWSURFACE7 back_surface,
+    LPDIRECTDRAWSURFACE7 cursor_surface,
+    i32 cursor_x, i32 cursor_y, bool reuse_uploaded_background);
 #endif
 
 } // namespace ranker

@@ -17,6 +17,15 @@ constexpr u32 kGameplayEndEliteTypeThreshold = 0x5f;
 constexpr u32 kGameplayEndExcludedEliteType = 0x6a;
 constexpr u32 kGameplayEndDeadUnitFlag = 0x10000000;
 
+constexpr bool ShouldRefreshGameplayEndConditionSnapshot(
+    u32 frame_counter, bool scenario_ai_profile_override) {
+    // FUN_004d55c0 tests the 64-frame cadence and the scenario override before
+    // it walks the active-unit list.  Keeping the same gate outside the typed
+    // snapshot builder avoids copying every Use Map Setting unit on the other
+    // 63 frames while preserving the monitor's original decisions.
+    return (frame_counter & 0x3fu) == 0 && !scenario_ai_profile_override;
+}
+
 struct GameplayEndUnit {
     u32 owner_id = 0;
     u32 type_id = 0;

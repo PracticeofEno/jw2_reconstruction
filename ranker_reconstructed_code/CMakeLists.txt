@@ -4,6 +4,17 @@ project(ranker_reconstruction LANGUAGES C CXX RC)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# The deployed game runs timing-sensitive simulation loops.  Single-config
+# generators otherwise default to an unoptimized build when no build type is
+# supplied, which makes Fast Computer mode substantially slower than the
+# original executable.  Keep explicit Debug requests available, but make a
+# normal configure produce a deployment-suitable binary.
+if (NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
+        Debug Release RelWithDebInfo MinSizeRel)
+endif()
+
 add_library(zlib113 STATIC
     third_party/zlib113/adler32.c
     third_party/zlib113/compress.c
@@ -1083,6 +1094,20 @@ if (RANKER_BUILD_END_CONDITION_REGRESSION_TESTS)
     )
     add_test(NAME gameplay_use_map_end_condition_regression
         COMMAND gameplay_use_map_end_condition_regression)
+endif()
+
+option(RANKER_BUILD_GAME_LOOP_CATCHUP_REGRESSION_TESTS
+    "Build focused catch-up presentation pacing regressions" OFF)
+if (RANKER_BUILD_GAME_LOOP_CATCHUP_REGRESSION_TESTS)
+    enable_testing()
+    add_executable(game_loop_catchup_presentation_regression
+        tests/game_loop_catchup_presentation_regression.cpp
+    )
+    target_include_directories(game_loop_catchup_presentation_regression PRIVATE
+        include
+    )
+    add_test(NAME game_loop_catchup_presentation_regression
+        COMMAND game_loop_catchup_presentation_regression)
 endif()
 
 add_executable(ranker_rebuild WIN32
