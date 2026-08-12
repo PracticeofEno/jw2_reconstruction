@@ -2,6 +2,7 @@
 # Already tracked files remain tracked; these rules control new files only.
 *
 !.gitignore
+!.gitattributes
 
 !ranker_reconstructed_code/
 !ranker_reconstructed_code/CMakeLists.txt
@@ -26,12 +27,15 @@
 !ranker_reconstructed_code/tests/frontend_window_placement_regression.cpp
 !ranker_reconstructed_code/tests/gameplay_selection_modifier_regression.cpp
 !ranker_reconstructed_code/tests/render_144fps_regression.cpp
+!ranker_reconstructed_code/tests/animation_144hz_generator_regression.py
 !ranker_reconstructed_code/tests/replay_save_controls_regression.cpp
 !ranker_reconstructed_code/tests/unit_effect_intrusive_iteration_regression.cpp
 !ranker_reconstructed_code/tests/unit_equipment_type_replacement_visibility_regression.cpp
 !ranker_reconstructed_code/tests/subtype01_latest_cancel_parity_regression.cpp
 
 !ranker_reconstructed_code/tools/
+!ranker_reconstructed_code/tools/animation_144hz/
+!ranker_reconstructed_code/tools/animation_144hz/*.py
 !ranker_reconstructed_code/tools/replay_debug/
 !ranker_reconstructed_code/tools/replay_debug/*.cpp
 !ranker_reconstructed_code/tools/replay_debug/*.ps1
@@ -44,6 +48,10 @@
 !ranker_reconstructed_code/resources/ranker_resources.rc
 !ranker_reconstructed_code/resources/original/
 !ranker_reconstructed_code/resources/original/**
+
+!ranker_reconstructed_code/assets/
+!ranker_reconstructed_code/assets/animation_144hz/
+!ranker_reconstructed_code/assets/animation_144hz/**
 
 !ranker_reconstructed_code/third_party/
 !ranker_reconstructed_code/third_party/zlib113/

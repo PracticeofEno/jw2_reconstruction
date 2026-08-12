@@ -237,12 +237,14 @@ struct UnitAnimationDrawContext {
     u32 local_owner_id = 0;
     bool local_owner_is_observer = false;
     u32 global_frame_counter = 0;
+    u32 presentation_interpolation_alpha = 0x10000u;
     u32 highlight_level = 0;
     u32 selection_marker_base_entry = kUnitAnimationInvalidMarkerEntry;
     u32 current_marker_sprite_entry = kUnitAnimationInvalidMarkerEntry;
     std::array<u32, 8> owner_relation_masks{};
     bool special_overlay_resources_loaded = false;
     bool status_overlay_resources_loaded = false;
+    bool presentation_animation_interpolation_enabled = false;
     bool use_555_color = false;
     i32 ramp_x_step = 0;
     i32 ramp_y_step = 0;

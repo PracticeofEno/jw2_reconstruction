@@ -80,6 +80,8 @@
 #include "ranker_unit_support_effects.h"
 #include "ranker_unit_target_helpers.h"
 #include "ranker_unit_targeting.h"
+#include "ranker_visual_animation.h"
+#include "ranker_visual_animation_archive.h"
 #include "ranker_view_rank.h"
 #include "ranker_wizard_login.h"
 
@@ -91,6 +93,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -1314,6 +1317,17 @@ void load_main_window_presentation_settings() {
     g_runtime.presentation_border = display.border;
     gameplay_loop_state().render_target_fps = static_cast<u32>(
         display.render_frames_per_second);
+    if (ShouldInterpolateVisualAnimation(
+            gameplay_loop_state().render_target_fps)) {
+        const std::filesystem::path data_directory =
+            std::filesystem::path(RankerClientConfigPath()).parent_path();
+        LoadVisualAnimationArchive(
+            (data_directory / "Jw2_09_144hz.rfa").string(),
+            (data_directory / "Jw2_09.trc").string());
+    }
+    else {
+        UnloadVisualAnimationArchive();
+    }
     g_runtime.cursor_unlock_key1 = VK_TAB;
     g_runtime.cursor_unlock_key2 = VK_RCONTROL;
 
@@ -8135,6 +8149,8 @@ void default_gameplay_startup_reset_runtime_objects() {
     loop.frame_time_anchor = start_tick;
     loop.simulation_frame_counter = 0;
     loop.present_frame_counter = 0;
+    ResetVisualAnimationTransitionCache();
+    ResetResourceSpritePixelMorphCache();
     reset_default_gameplay_terrain_frame_cache();
 
     g_runtime.gameplay_end_condition_state = GameplayEndConditionState{};
@@ -29834,6 +29850,11 @@ void default_gameplay_loop_present_phase(GameplayLoopState& state) {
         GameplayRenderInterpolationAlpha(state.current_render_tick_ns,
             state.last_simulation_render_tick_ns, simulation_interval_ns) :
         kGameplayRenderInterpolationOne;
+    g_runtime.gameplay_unit_render_queue.presentation_interpolation_alpha =
+        interpolation_alpha;
+    g_runtime.gameplay_unit_render_queue.
+        presentation_animation_interpolation_enabled =
+            ShouldInterpolateVisualAnimation(state.render_target_fps);
     ApplyUnitRenderInterpolation(
         g_runtime.gameplay_unit_render_queue, interpolation_alpha);
     GameplayHudTextState& hud = g_runtime.gameplay_hud_text;
@@ -32164,6 +32185,14 @@ int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_c
         g_runtime.presentation_resizable ? "yes" : "no",
         g_runtime.presentation_border ? "yes" : "no",
         static_cast<unsigned long>(gameplay_loop_state().render_target_fps));
+    const VisualAnimationArchiveState& animation_archive =
+        visual_animation_archive_state();
+    append_startup_log(
+        "animation archive status=%lu transitions=%lu payload=%llu detail=%s",
+        static_cast<unsigned long>(animation_archive.status),
+        static_cast<unsigned long>(animation_archive.transition_count),
+        static_cast<unsigned long long>(animation_archive.payload_bytes),
+        animation_archive.detail.c_str());
     g_runtime.single_instance_mutex =
         CreateMutexA(nullptr, FALSE, ranker_single_instance_mutex_name());
     if (g_runtime.single_instance_mutex != nullptr && GetLastError() == ERROR_ALREADY_EXISTS) {

@@ -132,6 +132,11 @@ struct UnitRenderQueueContext {
     std::vector<UnitRenderItem> effects;
     std::vector<UnitRenderQueueEntry> queued_entries;
     u32 local_owner_id = 0;
+    // Presentation-only timing.  These values never enter a UnitRecord or a
+    // lockstep checksum; the unit animation renderer only consumes them while
+    // choosing a visual in-between pose.
+    u32 presentation_interpolation_alpha = 0x10000u;
+    bool presentation_animation_interpolation_enabled = false;
     bool local_owner_is_observer = false;
     std::array<u32, 8> owner_relation_masks{};
     std::array<u32, 8> owner_visibility_masks{};

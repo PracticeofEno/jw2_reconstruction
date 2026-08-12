@@ -22,7 +22,7 @@ constexpr std::array<u32, 7> kGameplayFixedStepRepeatCounts = {
     200, 120, 60, 30, 22, 14, 7,
 };
 constexpr u32 kGameplayCatchupPresentationMaxGapMs = 50;
-constexpr u32 kGameplayExperimentalRenderFramesPerSecond = 144;
+constexpr u32 kGameplayDefaultRenderFramesPerSecond = 144;
 constexpr u64 kGameplayRenderClockNanosecondsPerSecond = 1000000000ull;
 constexpr u32 kGameplayRenderInterpolationOne = 0x10000u;
 constexpr std::size_t kGameplaySimulationPhaseCount = 17;
@@ -140,9 +140,9 @@ struct GameplayLoopState {
     u32 catchup_last_present_tick_ms = 0;
     u32 simulation_frame_counter = 0;
     u32 present_frame_counter = 0;
-    // Zero is the original presentation path. A configured positive target
-    // enables render-only pacing and unit-position interpolation.
-    u32 render_target_fps = 0;
+    // Rendering defaults to 144 Hz while deterministic simulation retains the
+    // original cadence. An explicit configured zero restores original pacing.
+    u32 render_target_fps = kGameplayDefaultRenderFramesPerSecond;
     u32 exit_context = 3;
     u32 current_cursor_index = 0;
     u8 catchup_status_mode = 0;

@@ -284,6 +284,8 @@ u32 ResetLoadedUnitDefinitionConstructionTimers(u32 ticks = 10);
 u32 GetUnitDefinitionImageResourceEntry(u32 unit_type, u32 image_group);
 u32 GetUnitDefinitionImageFrameResourceEntry(
     u32 unit_type, u32 image_group, u32 frame_index);
+bool GetUnitDefinitionImageFrameIndex(u32 unit_type, u32 image_group,
+    u32 resource_entry, u32& frame_index);
 u32 GetUnitDefinitionAnimationFrameResourceEntry(
     u32 unit_type, u32 image_group, u32 animation_frame,
     u32 frame_table_group = 0);

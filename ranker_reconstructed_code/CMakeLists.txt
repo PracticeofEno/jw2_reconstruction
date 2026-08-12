@@ -1170,13 +1170,37 @@ if (RANKER_BUILD_RENDER_144FPS_REGRESSION_TESTS)
     enable_testing()
     add_executable(render_144fps_regression
         tests/render_144fps_regression.cpp
+        src/ranker_palette_cache.cpp
+        src/ranker_resource_store.cpp
+        src/ranker_sprite_renderer.cpp
+        src/ranker_trc.cpp
         src/ranker_unit_render_queue.cpp
+        src/ranker_visual_animation.cpp
+        src/ranker_visual_animation_archive.cpp
     )
     target_include_directories(render_144fps_regression PRIVATE
         include
     )
+    target_link_libraries(render_144fps_regression PRIVATE
+        zlib113
+    )
+    if (MSVC)
+        target_compile_options(render_144fps_regression PRIVATE /Gy)
+        target_link_options(render_144fps_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(render_144fps_regression PRIVATE
+            -ffunction-sections -fdata-sections
+        )
+        target_link_options(render_144fps_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
     add_test(NAME render_144fps_regression
         COMMAND render_144fps_regression)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME animation_144hz_generator_regression
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/animation_144hz_generator_regression.py)
 endif()
 
 option(RANKER_BUILD_REPLAY_SAVE_CONTROLS_REGRESSION_TESTS
@@ -1310,6 +1334,8 @@ add_executable(ranker_rebuild WIN32
     src/ranker_unit_targeting.cpp
     src/ranker_unit_render_queue.cpp
     src/ranker_unit_animation.cpp
+    src/ranker_visual_animation.cpp
+    src/ranker_visual_animation_archive.cpp
     src/ranker_unit_movement.cpp
     src/ranker_unit_spatial_index.cpp
     src/ranker_unit_commands.cpp
@@ -1337,6 +1363,13 @@ add_custom_command(TARGET ranker_rebuild POST_BUILD
         ${CMAKE_CURRENT_SOURCE_DIR}/config/ranker_client.ini
         $<TARGET_FILE_DIR:ranker_rebuild>/ranker_client.ini
     COMMENT "Copying ranker client display configuration"
+)
+
+add_custom_command(TARGET ranker_rebuild POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/assets/animation_144hz/Jw2_09_144hz.rfa
+        $<TARGET_FILE_DIR:ranker_rebuild>/Jw2_09_144hz.rfa
+    COMMENT "Copying pre-generated 144 Hz unit animation archive"
 )
 
 target_include_directories(ranker_rebuild PRIVATE

@@ -111,7 +111,8 @@ int main() {
     assert(display.border);
     assert(display.center);
     assert(!display.position_set);
-    assert(display.render_frames_per_second == 0);
+    assert(display.render_frames_per_second ==
+        kDefaultConfiguredRenderFramesPerSecond);
 #endif
     return 0;
 }

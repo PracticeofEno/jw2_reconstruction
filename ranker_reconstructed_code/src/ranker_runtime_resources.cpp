@@ -1370,6 +1370,36 @@ u32 GetUnitDefinitionImageFrameResourceEntry(
     return record.image_resource_entries[entry_index];
 }
 
+bool GetUnitDefinitionImageFrameIndex(u32 unit_type, u32 image_group,
+    u32 resource_entry, u32& frame_index) {
+    frame_index = 0;
+    if (unit_type >= g_unit_definition_resources.records.size() ||
+        image_group >= kUnitDefinitionImageGroupCount ||
+        resource_entry == kInvalidResourceEntry ||
+        !UnitDefinitionResourceCatalogImageResourcesValid()) {
+        return false;
+    }
+    const UnitDefinitionResourceRecord& record =
+        g_unit_definition_resources.records[unit_type];
+    if (!record.loaded) {
+        return false;
+    }
+    const u32 group_offset = record.image_group_offsets[image_group];
+    const u32 group_count = record.image_group_counts[image_group];
+    if (group_offset > record.image_resource_entries.size() ||
+        group_count > record.image_resource_entries.size() - group_offset) {
+        return false;
+    }
+    for (u32 index = 0; index < group_count; ++index) {
+        if (record.image_resource_entries[group_offset + index] ==
+            resource_entry) {
+            frame_index = index;
+            return true;
+        }
+    }
+    return false;
+}
+
 u32 GetUnitDefinitionAnimationFrameResourceEntry(
     u32 unit_type, u32 image_group, u32 animation_frame, u32 frame_table_group) {
     if (unit_type >= g_unit_definition_resources.records.size() ||

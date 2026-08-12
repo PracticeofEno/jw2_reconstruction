@@ -49,6 +49,29 @@ struct SpritePixelMaskConstants {
     bool pixel_mode_555 = false;
 };
 
+enum class SpritePixelMorphStyle : u32 {
+    unit_ramp_token1_shadow,
+    palette,
+    resource_mode,
+    or_mask_token1_shadow,
+    grayscale_token1_shadow,
+    blend_factor_token2_plus,
+    neighbor_copy,
+    unit_ramp_or_mask_token1_shadow,
+    channel_add_token1_shadow,
+};
+
+struct SpritePixelMorphDrawOptions {
+    SpritePixelMorphStyle style =
+        SpritePixelMorphStyle::unit_ramp_token1_shadow;
+    u32 mode_or_factor = 0;
+    u16 mask = 0;
+    u16 red_delta = 0;
+    u16 green_delta = 0;
+    u16 blue_delta = 0;
+    bool flipped = false;
+};
+
 void SetSpriteRenderTarget(u16* pixels, u32 width, u32 height, u32 stride_words = 0);
 void SetIndexedSpriteRenderTarget(u8* pixels, u32 width, u32 height, u32 stride_bytes = 0);
 void ClearSpriteRenderTarget();
@@ -95,6 +118,15 @@ bool DrawResourceSpriteFlippedUnitRampToken1Shadow(u32 entry_index, i32 x, i32 y
 bool DrawResourceSpriteBlendFactor(u32 entry_index, i32 x, i32 y, u32 source_weight_31);
 bool DrawResourceSpriteFlippedBlendFactor(u32 entry_index, i32 x, i32 y, u32 source_weight_31);
 bool DrawResourceSpriteDirectBlendFactor(u32 entry_index, i32 x, i32 y, u32 source_weight_31);
+bool DrawResourceSpriteUnitRampPixelMorphTransition(u32 unit_type,
+    u32 image_group, u32 source_frame, u32 target_frame,
+    u32 source_entry_index, u32 target_entry_index, i32 x, i32 y,
+    u32 subframe_index, bool flipped);
+bool DrawResourceSpritePixelMorphTransition(u32 unit_type, u32 image_group,
+    u32 source_frame, u32 target_frame, u32 source_entry_index,
+    u32 target_entry_index, i32 x, i32 y, u32 subframe_index,
+    const SpritePixelMorphDrawOptions& options);
+void ResetResourceSpritePixelMorphCache();
 bool DrawResourceSpriteDirectToken1Shadow(u32 entry_index, i32 x, i32 y);
 bool DrawResourceSpriteWidthLimitedToken1Shadow(
     u32 entry_index, i32 x, i32 y, u32 row_pixel_limit);
