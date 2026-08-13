@@ -379,6 +379,24 @@ int main() {
         "supported render FPS values must remain configurable");
     require(kGameplayDefaultRenderFramesPerSecond == 144,
         "the default gameplay render rate must remain 144 FPS");
+    GameplayLoopState toggle_state{};
+    toggle_state.next_present_tick_ns = 123456789ull;
+    toggle_state.render_schedule_initialized = true;
+    require(ToggleGameplayRenderFramesPerSecond(toggle_state) == 60 &&
+            toggle_state.render_target_fps == 60 &&
+            toggle_state.next_present_tick_ns == 0 &&
+            !toggle_state.render_schedule_initialized,
+        "F11 must switch 144 Hz to 60 Hz and restart presentation pacing");
+    toggle_state.next_present_tick_ns = 987654321ull;
+    toggle_state.render_schedule_initialized = true;
+    require(ToggleGameplayRenderFramesPerSecond(toggle_state) == 144 &&
+            toggle_state.render_target_fps == 144 &&
+            toggle_state.next_present_tick_ns == 0 &&
+            !toggle_state.render_schedule_initialized,
+        "a second F11 must switch 60 Hz back to 144 Hz");
+    toggle_state.render_target_fps = 0;
+    require(ToggleGameplayRenderFramesPerSecond(toggle_state) == 144,
+        "F11 from a non-toggle configured rate must enter the 144 Hz state");
     const u64 interval_ns = GameplayTargetRenderIntervalNanoseconds(
         kGameplayDefaultRenderFramesPerSecond);
     require(interval_ns == 6944444ull,

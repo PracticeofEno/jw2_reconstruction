@@ -1306,6 +1306,18 @@ bool read_ddraw_ini_integer(const char* key, int& value) {
     return true;
 }
 
+bool ensure_main_window_visual_animation_archive_loaded() {
+    if (visual_animation_archive_state().status ==
+        VisualAnimationArchiveStatus::loaded) {
+        return true;
+    }
+    const std::filesystem::path data_directory =
+        std::filesystem::path(RankerClientConfigPath()).parent_path();
+    return LoadVisualAnimationArchive(
+        (data_directory / "Jw2_09_144hz.rfa").string(),
+        (data_directory / "Jw2_09.trc").string());
+}
+
 void load_main_window_presentation_settings() {
     const RankerClientDisplayConfig display = LoadRankerClientDisplayConfig();
     g_runtime.presentation_client_width = display.width;
@@ -1319,11 +1331,7 @@ void load_main_window_presentation_settings() {
         display.render_frames_per_second);
     if (ShouldInterpolateVisualAnimation(
             gameplay_loop_state().render_target_fps)) {
-        const std::filesystem::path data_directory =
-            std::filesystem::path(RankerClientConfigPath()).parent_path();
-        LoadVisualAnimationArchive(
-            (data_directory / "Jw2_09_144hz.rfa").string(),
-            (data_directory / "Jw2_09.trc").string());
+        ensure_main_window_visual_animation_archive_loaded();
     }
     else {
         UnloadVisualAnimationArchive();
@@ -5397,6 +5405,31 @@ void default_gameplay_input_handle_keyboard_event(GameplayInputActionState& stat
     const u8 ascii = (raw_code & 0xff00u) != 0 ?
         static_cast<u8>((raw_code >> 8) & 0xffu) : 0;
     const u32 legacy_scan_code = ascii == 0 ? (raw_code & 0xffu) : 0;
+    if (legacy_scan_code == 0x57u) {
+        GameplayLoopState& loop = gameplay_loop_state();
+        const u32 render_fps = ToggleGameplayRenderFramesPerSecond(loop);
+        bool archive_loaded = visual_animation_archive_state().status ==
+            VisualAnimationArchiveStatus::loaded;
+        if (ShouldInterpolateVisualAnimation(render_fps) && !archive_loaded) {
+            archive_loaded = ensure_main_window_visual_animation_archive_loaded();
+        }
+        ResetVisualAnimationTransitionCache();
+
+        const char* status = render_fps ==
+                kGameplayRenderToggleHighFramesPerSecond
+            ? (archive_loaded ? "Rendering: 144 Hz" :
+                "Rendering: 144 Hz (animation archive unavailable)")
+            : "Rendering: 60 Hz";
+        QueueGameplayHudMessage(g_runtime.gameplay_hud_text, status);
+        append_startup_log("gameplay F11 render toggle fps=%lu archive=%s detail=%s",
+            static_cast<unsigned long>(render_fps),
+            archive_loaded ? "ready" : "unavailable",
+            visual_animation_archive_state().detail.empty() ? "(none)" :
+                visual_animation_archive_state().detail.c_str());
+        // ranker_rebuild repurposes the original F11 overlay scan for this
+        // local renderer switch. Do not publish it to gameplay or P2P state.
+        return;
+    }
     if (legacy_scan_code == 1u && !overlay.chat_active &&
         overlay.placement_mode == 0) {
         // The original has already published the current command records

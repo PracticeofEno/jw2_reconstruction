@@ -22,7 +22,10 @@ constexpr std::array<u32, 7> kGameplayFixedStepRepeatCounts = {
     200, 120, 60, 30, 22, 14, 7,
 };
 constexpr u32 kGameplayCatchupPresentationMaxGapMs = 50;
-constexpr u32 kGameplayDefaultRenderFramesPerSecond = 144;
+constexpr u32 kGameplayRenderToggleLowFramesPerSecond = 60;
+constexpr u32 kGameplayRenderToggleHighFramesPerSecond = 144;
+constexpr u32 kGameplayDefaultRenderFramesPerSecond =
+    kGameplayRenderToggleHighFramesPerSecond;
 constexpr u64 kGameplayRenderClockNanosecondsPerSecond = 1000000000ull;
 constexpr u32 kGameplayRenderInterpolationOne = 0x10000u;
 constexpr std::size_t kGameplaySimulationPhaseCount = 17;
@@ -173,6 +176,19 @@ struct GameplayLoopState {
     bool render_schedule_initialized = false;
     bool simulation_render_clock_initialized = false;
 };
+
+// F11 is a local presentation control. Resetting the deadline makes the first
+// frame at the newly selected rate present immediately without touching the
+// deterministic simulation clock or its frame counters.
+inline u32 ToggleGameplayRenderFramesPerSecond(GameplayLoopState& state) {
+    state.render_target_fps =
+        state.render_target_fps == kGameplayRenderToggleHighFramesPerSecond
+        ? kGameplayRenderToggleLowFramesPerSecond
+        : kGameplayRenderToggleHighFramesPerSecond;
+    state.next_present_tick_ns = 0;
+    state.render_schedule_initialized = false;
+    return state.render_target_fps;
+}
 
 GameplayLoopState& gameplay_loop_state();
 
