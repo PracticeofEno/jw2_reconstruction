@@ -1379,6 +1379,14 @@ target_include_directories(ranker_rebuild PRIVATE
 
 target_link_libraries(ranker_rebuild PRIVATE zlib113)
 
+if (MINGW)
+    # Keep the reconstructed executable self-contained on machines without
+    # the MinGW runtime DLLs.  The narrower -static-libgcc/-static-libstdc++
+    # pair still leaves libwinpthread-1.dll as a runtime dependency with the
+    # POSIX-thread MinGW toolchain used for release builds.
+    target_link_options(ranker_rebuild PRIVATE -static)
+endif()
+
 if (WIN32)
     target_link_libraries(ranker_rebuild PRIVATE
         user32
