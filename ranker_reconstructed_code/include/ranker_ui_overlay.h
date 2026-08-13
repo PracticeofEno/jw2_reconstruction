@@ -969,6 +969,11 @@ struct UiOverlayState {
     bool clear_queue_after_flush = false;
 };
 
+inline void ResetUiOverlayProductionCategoryForSelectionChange(
+    UiOverlayState& state) {
+    state.selected_production_category = 0;
+}
+
 // Original FUN_004eb063 treats the live Shift byte itself as the additive
 // selection mode.  Keeping this relationship explicit prevents a detached UI
 // mirror from silently disabling Shift-click and Shift-drag.

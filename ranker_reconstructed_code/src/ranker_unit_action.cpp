@@ -5761,7 +5761,10 @@ void ApplyUnitEffectAreaDamageByUnitFlagMask(UnitEffectRuntimeState& state,
     const UnitEffectDefinition& definition =
         unit_effect_area_definition_or_fallback(state, effect, fallback_definition);
     for_each_effect_unit_in_active_order(state, [&](UnitMovementUnit& unit) {
-        if ((unit.type_flags & unit_flag_mask) == 0 ||
+        // FUN_004f0629 reads definition +0x49c.  Runtime catalog records omit
+        // the definition's 0x2a8-byte prefix, so that is catalog +0x1f4: the
+        // immutable support-target flags, not the unit's +0x1ec type flags.
+        if ((unit.definition.support_target_flags & unit_flag_mask) == 0 ||
             !unit_effect_area_candidate_passes_common_gates(
                 state, effect, source, unit, definition,
                 kUnitEffectAreaRuntimeSkipMask, false)) {
@@ -5772,9 +5775,11 @@ void ApplyUnitEffectAreaDamageByUnitFlagMask(UnitEffectRuntimeState& state,
         }
         const u32 scaled_amount =
             effect_unit_area_damage_amount(effect, unit, amount, radius);
-        if (scaled_amount == 0) {
-            return;
-        }
+        // FUN_004f0629 still calls HandleUnitDamageReaction after subtracting
+        // a zero value.  Noxious (effect 0x4a) relies on that observable call:
+        // ordinary mobile targets consume two gameplay RNG values apiece even
+        // when the recycled effect amount is zero.  Suppressing zero-valued
+        // events therefore desynchronizes peers on the first impact frame.
         append_effect_event(state, UnitEffectEventKind::impact, effect,
             unit.id, scaled_amount);
     });

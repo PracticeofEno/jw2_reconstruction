@@ -458,6 +458,10 @@ bool place_unloaded_unit(UnitCommandContext& context, UnitMovementUnit& carrier,
     passenger.current_cell_y = point.y & ~0x1f;
     passenger.runtime_flags |= 1u;
     passenger.runtime_flags &= ~0x88u;
+    // Boarding has no separate original raw field for this typed mirror.  It
+    // must nevertheless follow raw +0xa0 bit 0x80 so reconstructed consumers
+    // stop treating a successfully placed passenger as parent-attached.
+    passenger.attached_to_parent = false;
     if (carrier_driven) {
         passenger.command_flags &= ~0x10u;
     }

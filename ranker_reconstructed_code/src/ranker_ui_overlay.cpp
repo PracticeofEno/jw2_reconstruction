@@ -4471,7 +4471,7 @@ void SelectUnitsInControlGroup(UiOverlayState& state, u32 group) {
     state.placement_definition_id = 0;
     state.placement_equipment_slot_code = 0;
     state.staged_unit_action_id = 0xffffffffu;
-    state.selected_production_category = 0;
+    ResetUiOverlayProductionCategoryForSelectionChange(state);
 
     // FUN_004e74e2 recalls by walking the current active-unit list, not the
     // stored assignment vector.  Units with raw +0xa0 bit 0x80 are excluded,
@@ -5440,6 +5440,11 @@ void DispatchUiOverlayHeldCommandAction(UiOverlayState& state, u32 item_id) {
 
 void ResetGameplaySelectionState(UiOverlayState& state) {
     ResetUiOverlayCommandPanelState(state);
+    // FUN_004eb063 rebuilds the command panel from its top-level page after a
+    // replacement selection.  The typed category selector is UI-only state,
+    // so leaving it set here made a worker's open construction page leak to
+    // the next worker selected by a normal click or drag.
+    ResetUiOverlayProductionCategoryForSelectionChange(state);
     state.staged_unit_action_id = 0xffffffffu;
     state.selected_unit_ids.clear();
     state.selected_unit_id = 0;

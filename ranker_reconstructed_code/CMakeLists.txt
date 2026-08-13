@@ -930,6 +930,42 @@ if (RANKER_BUILD_REGRESSION_TESTS)
 
 endif()
 
+# Focused transport/Noxious coverage is independent from the optional legacy
+# regression source bundle above.
+option(RANKER_BUILD_TRANSPORT_NOXIOUS_REGRESSION_TESTS
+    "Build focused transport unload and Noxious synchronization regressions" OFF)
+if (RANKER_BUILD_TRANSPORT_NOXIOUS_REGRESSION_TESTS)
+    enable_testing()
+    add_executable(transport_noxious_regression
+        tests/transport_noxious_regression.cpp
+        src/ranker_production_orders.cpp
+        src/ranker_unit_commands.cpp
+        src/ranker_unit_target_helpers.cpp
+        src/ranker_unit_damage.cpp
+        src/ranker_unit_equipment.cpp
+        src/ranker_unit_action.cpp
+        src/ranker_unit_movement.cpp
+        src/ranker_unit_spatial_index.cpp
+        src/ranker_unit_lifecycle.cpp
+        src/ranker_gameplay_visibility.cpp
+        src/ranker_map_effects.cpp
+    )
+    target_include_directories(transport_noxious_regression PRIVATE include)
+    set_property(TARGET transport_noxious_regression PROPERTY
+        INTERPROCEDURAL_OPTIMIZATION TRUE)
+    if (MSVC)
+        target_compile_options(transport_noxious_regression PRIVATE /Gy)
+        target_link_options(transport_noxious_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(transport_noxious_regression PRIVATE
+            -O1 -ffunction-sections -fdata-sections)
+        target_link_options(transport_noxious_regression PRIVATE
+            -Wl,--gc-sections)
+    endif()
+    add_test(NAME transport_noxious_regression
+        COMMAND transport_noxious_regression)
+endif()
+
 # This parity harness is independent from the historical out-of-tree regression
 # set above, whose source bundle is optional.  It can therefore be configured
 # and run against a minimal reconstruction checkout by itself.

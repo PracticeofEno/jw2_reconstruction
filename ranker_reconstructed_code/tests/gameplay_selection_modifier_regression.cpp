@@ -47,5 +47,14 @@ int main() {
     require(!ranker::UiOverlayLocalMobileSelectionCandidate(
         state, make_unit(0x60u, 2u)));
 
+    // A normal replacement selection returns the command panel to its root.
+    // In particular, an open worker construction category must not survive
+    // selecting a different worker.
+    state.selected_production_category = 3;
+    state.staged_unit_action_id = 0x2cu;
+    ranker::ResetUiOverlayProductionCategoryForSelectionChange(state);
+    require(state.selected_production_category == 0);
+    require(state.staged_unit_action_id == 0x2cu);
+
     return 0;
 }
