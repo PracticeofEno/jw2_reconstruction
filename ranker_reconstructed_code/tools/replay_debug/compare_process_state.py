@@ -13,6 +13,10 @@ IGNORE_COMPLETION_REVERSE_24 = (
     os.environ.get("NEXTDIV_IGNORE_COMPLETION_REVERSE_24") == "1")
 CAPTURE_SUSPENDED_ONCE = (
     os.environ.get("NEXTDIV_CAPTURE_SUSPENDED_ONCE") == "1")
+MAP_DEBUG_SLOTS = tuple(
+    int(value, 0)
+    for value in os.environ.get("NEXTDIV_MAP_DEBUG_SLOTS", "").split(",")
+    if value.strip())
 
 
 ORIGINAL_PID = int(sys.argv[1])
@@ -46,6 +50,7 @@ random_offset = number(layout["frame_random_offset"])
 visibility_offset = number(layout["visibility_offset"])
 movement_offset = number(layout["movement_offset"])
 lifecycle_offset = number(layout["lifecycle_offset"])
+production_runtime_offset = number(layout["production_runtime_offset"])
 owner_counters_offset = number(layout["owner_counters_offset"])
 unit_reference_tables_offset = number(
     layout["unit_reference_tables_offset"])
@@ -68,6 +73,9 @@ unit_layout = {key: number(value)
                for key, value in layout["unit_layout"].items()}
 context_layout = {key: number(value)
                   for key, value in layout["movement_context_layout"].items()}
+movement_map_layout = {
+    key: number(value) for key, value in layout["movement_map_layout"].items()
+}
 lifecycle_layout = {key: number(value)
                     for key, value in layout["lifecycle_layout"].items()}
 owner_counter_layout = {
@@ -91,6 +99,10 @@ owner_transport_route_layout = {
 owner_strategic_target_layout = {
     key: number(value)
     for key, value in layout["owner_strategic_target_layout"].items()
+}
+production_runtime_layout = {
+    key: number(value)
+    for key, value in layout["production_runtime_layout"].items()
 }
 
 
@@ -565,7 +577,7 @@ def rebuild_visibility_debug(memory, rows):
     return result
 
 
-REACH_DEBUG_SLOTS = (18, 99, 151, 153, 178, 211)
+REACH_DEBUG_SLOTS = (18, 21, 22, 99, 151, 153, 178, 211)
 
 
 def original_reach_debug(memory, rows):
@@ -576,6 +588,7 @@ def original_reach_debug(memory, rows):
             continue
         type_id = row["type"]
         definition = 0x0087C2F8 + type_id * 0x24BC
+        definition_index_offset = memory.u32(0x0087C050 + type_id * 4)
         profile = memory.u32(definition + 0x1A0)
         # FUN_004c1e85 indexes the runtime row-offset table first, then
         # addresses fields relative to the live JW2_12 storage globals.
@@ -586,6 +599,8 @@ def original_reach_debug(memory, rows):
             "profile": profile,
             "range": memory.u32(definition + 0x1B0),
             "range3": memory.u32(definition + 0x1B4),
+            "interaction_range_base": memory.u32(
+                0x0087C490 + definition_index_offset),
             "ability_timer_period": memory.u32(definition + 0x13DC),
             "action_recovery_base": memory.u32(definition + 0x1A4),
             "bounds": [memory.i32(definition + offset)
@@ -621,6 +636,9 @@ def rebuild_reach_debug(memory, rows, pointer_slots):
             "action_recovery_base": memory.u32(definition + 432),
             "range_bonus_per_count": memory.u32(definition + 448),
             "range_bonus_cap": memory.u32(definition + 452),
+            "interaction_range_base": memory.u32(
+                definition + unit_layout[
+                    "definition_effect_adjusted_interaction_range_base"]),
             "bounds": [memory.i32(definition + offset)
                        for offset in (192, 196, 200, 204)],
             "center": [memory.i32(definition + offset)
@@ -1131,6 +1149,7 @@ def capture(name, side):
         owners = sorted({row["owner"] for row in rows.values()
                          if row["owner"] < 8})
         economy = original_economy(memory, owners)
+        production = original_production_state(memory)
         ai_demand = original_ai_demand(memory, owners)
         owner_ai = original_owner_ai(memory, owners)
         unit_effects = original_unit_effects(memory)
@@ -1139,6 +1158,7 @@ def capture(name, side):
         planning_debug = original_planning_debug(memory, owners)
         transport_queues = original_transport_queues(memory, owners)
         visibility_debug = original_visibility_debug(memory, rows)
+        movement_map_debug = original_movement_map_debug(memory, rows)
         follow_pool_debug = original_follow_pool_debug(memory)
     else:
         rng = [memory.u32(random_state), memory.u32(random_state + 4),
@@ -1147,6 +1167,7 @@ def capture(name, side):
         owners = sorted({row["owner"] for row in rows.values()
                          if row["owner"] < 8})
         economy = rebuild_economy(memory, runtime, owners)
+        production = rebuild_production_state(memory, runtime)
         ai_demand = rebuild_ai_demand(memory, runtime, owners)
         owner_ai = rebuild_owner_ai(memory, runtime, owners, pointer_slots)
         unit_effects = rebuild_unit_effects(memory, runtime, id_slots)
@@ -1155,6 +1176,7 @@ def capture(name, side):
         planning_debug = rebuild_planning_debug(memory, runtime, owners)
         transport_queues = rebuild_transport_queues(memory, runtime, owners)
         visibility_debug = rebuild_visibility_debug(memory, rows)
+        movement_map_debug = rebuild_movement_map_debug(memory, rows)
         follow_pool_debug = rebuild_follow_pool_debug(memory, movement)
     # Owner 8+ rows include neutral map placeholders.  The original keeps stale
     # target pointers in some of those slots, while the rebuild clears them.
@@ -1190,6 +1212,7 @@ def capture(name, side):
         "active_order": orders["active"],
         "lifecycle_order": orders["lifecycle"],
         "economy": economy,
+        "production": production,
         "ai_demand": ai_demand,
         "owner_ai": owner_ai,
         "transport_queues": transport_queues,
@@ -1203,6 +1226,7 @@ def capture(name, side):
         "state_sha256": digest(state),
         "reach_debug": reach_debug,
         "visibility_debug": visibility_debug,
+        "movement_map_debug": movement_map_debug,
         "planning_debug": planning_debug,
         "follow_pool_debug": follow_pool_debug,
         "capture_ms": round((time.perf_counter() - started) * 1000.0, 3),
@@ -1222,7 +1246,9 @@ pending_rng_divergence = None
 consecutive_rng_unaligned = 0
 transient_divergences = 0
 coverage = {
+    "min_active_units": None,
     "max_active_units": 0,
+    "min_lifecycle_units": None,
     "max_lifecycle_units": 0,
     "max_unit_effects": 0,
     "max_map_effects": 0,
@@ -1233,7 +1259,11 @@ coverage = {
     "unit_types": set(),
     "command_states": set(),
     "unit_effect_ids": set(),
+    "unit_effect_links": set(),
     "map_effect_ids": set(),
+    "unit_health_ranges": {},
+    "player_unit_state_ranges": {},
+    "economy_ranges": {},
     "owners": set(),
     "owner_ai_digests": set(),
 }
@@ -1243,10 +1273,18 @@ os.makedirs(os.path.dirname(os.path.abspath(RESULT_PATH)), exist_ok=True)
 
 
 def update_coverage(state):
+    active_count = len(state["active_order"])
+    lifecycle_count = len(state["lifecycle_order"])
+    coverage["min_active_units"] = (
+        active_count if coverage["min_active_units"] is None else
+        min(coverage["min_active_units"], active_count))
+    coverage["min_lifecycle_units"] = (
+        lifecycle_count if coverage["min_lifecycle_units"] is None else
+        min(coverage["min_lifecycle_units"], lifecycle_count))
     coverage["max_active_units"] = max(
-        coverage["max_active_units"], len(state["active_order"]))
+        coverage["max_active_units"], active_count)
     coverage["max_lifecycle_units"] = max(
-        coverage["max_lifecycle_units"], len(state["lifecycle_order"]))
+        coverage["max_lifecycle_units"], lifecycle_count)
     coverage["max_unit_effects"] = max(
         coverage["max_unit_effects"], len(state["unit_effects"]))
     coverage["max_map_effects"] = max(
@@ -1258,24 +1296,261 @@ def update_coverage(state):
         any(owner[key] for key in
             ("unit_kills", "building_kills", "unit_lost", "building_lost"))
         for owner in state["economy"].values())
+    for owner, values in state["economy"].items():
+        owner_ranges = coverage["economy_ranges"].setdefault(str(owner), {})
+        for key, value in values.items():
+            value_range = owner_ranges.setdefault(
+                key, {"min": value, "max": value})
+            value_range["min"] = min(value_range["min"], value)
+            value_range["max"] = max(value_range["max"], value)
     for row in state["rows"].values():
         coverage["unit_types"].add(row["type"])
         coverage["command_states"].add(row["state"])
         if row["owner"] < 8:
             coverage["owners"].add(row["owner"])
+    for slot, row in state["rows"].items():
+        health = coverage["unit_health_ranges"].setdefault(
+            str(slot), {
+                "min": row["health"],
+                "max": row["health"],
+                "types": set(),
+                "owners": set(),
+            })
+        health["min"] = min(health["min"], row["health"])
+        health["max"] = max(health["max"], row["health"])
+        health["types"].add(row["type"])
+        health["owners"].add(row["owner"])
+        if row["owner"] < 8:
+            unit_range = coverage["player_unit_state_ranges"].setdefault(
+                str(slot), {
+                    "types": set(),
+                    "owners": set(),
+                    "lists": set(),
+                    "states": set(),
+                    "world_x": {"min": row["world"][0], "max": row["world"][0]},
+                    "world_y": {"min": row["world"][1], "max": row["world"][1]},
+                    "cargo": {"min": row["cargo"], "max": row["cargo"]},
+                    "secondary": {
+                        "min": row["secondary"], "max": row["secondary"]},
+                    "max_health": {
+                        "min": row["max_health"], "max": row["max_health"]},
+                    "max_secondary": {
+                        "min": row["max_secondary"],
+                        "max": row["max_secondary"]},
+                    "runtime_stat_1c": {
+                        "min": row["runtime_stat_1c"],
+                        "max": row["runtime_stat_1c"]},
+                    "runtime_stat_20": {
+                        "min": row["runtime_stat_20"],
+                        "max": row["runtime_stat_20"]},
+                    "runtime_stat_28": {
+                        "min": row["runtime_stat_28"],
+                        "max": row["runtime_stat_28"]},
+                    "elite_progress": {
+                        "min": row["elite_progress"],
+                        "max": row["elite_progress"]},
+                    "status_timer": {
+                        "min": row["status_timer"],
+                        "max": row["status_timer"]},
+                    "command_flags": {
+                        "min": row["command_flags"],
+                        "max": row["command_flags"]},
+                    "command_flag_values": set(),
+                    "action_mode": {
+                        "min": row["action_mode"], "max": row["action_mode"]},
+                    "production_variants": set(),
+                    "deferred_count": {
+                        "min": row["deferred_count"],
+                        "max": row["deferred_count"]},
+                    "equipment": set(),
+                })
+            unit_range["types"].add(row["type"])
+            unit_range["owners"].add(row["owner"])
+            unit_range["lists"].add(row["list"])
+            unit_range["states"].add(row["state"])
+            for axis, value in (("world_x", row["world"][0]),
+                                ("world_y", row["world"][1]),
+                                ("cargo", row["cargo"]),
+                                ("secondary", row["secondary"]),
+                                ("max_health", row["max_health"]),
+                                ("max_secondary", row["max_secondary"]),
+                                ("runtime_stat_1c", row["runtime_stat_1c"]),
+                                ("runtime_stat_20", row["runtime_stat_20"]),
+                                ("runtime_stat_28", row["runtime_stat_28"]),
+                                ("elite_progress", row["elite_progress"]),
+                                ("status_timer", row["status_timer"]),
+                                ("command_flags", row["command_flags"]),
+                                ("action_mode", row["action_mode"]),
+                                ("deferred_count", row["deferred_count"])):
+                unit_range[axis]["min"] = min(unit_range[axis]["min"], value)
+                unit_range[axis]["max"] = max(unit_range[axis]["max"], value)
+            unit_range["production_variants"].add(row["production_variant"])
+            unit_range["command_flag_values"].add(row["command_flags"])
+            unit_range["equipment"].add(tuple(row["equipment"]))
     coverage["unit_effect_ids"].update(
         effect["effect_id"] for effect in state["unit_effects"])
+    coverage["unit_effect_links"].update(
+        (effect["effect_id"], effect["source_slot"], effect["target_slot"])
+        for effect in state["unit_effects"])
     coverage["map_effect_ids"].update(
         effect["effect_id"] for effect in state["map_effects"])
     coverage["owner_ai_digests"].add(digest(state["owner_ai"]))
 
 
 def coverage_summary():
-    return {
-        key: (sorted(value) if isinstance(value, set) else value)
+    def sorted_coverage(values):
+        # Effect links may legitimately contain a null source or target.  A
+        # native tuple sort cannot compare None with integer slot numbers.
+        return sorted(
+            values,
+            key=lambda value: json.dumps(
+                value, sort_keys=True, separators=(",", ":")))
+
+    result = {
+        key: (sorted_coverage(value) if isinstance(value, set) else value)
         for key, value in coverage.items()
-        if key != "owner_ai_digests"
-    } | {"owner_ai_distinct_states": len(coverage["owner_ai_digests"])}
+        if key not in ("owner_ai_digests", "unit_health_ranges",
+                       "player_unit_state_ranges", "economy_ranges")
+    }
+    result["unit_health_ranges"] = {
+        slot: {
+            key: (sorted_coverage(value) if isinstance(value, set) else value)
+            for key, value in row.items()
+        }
+        for slot, row in coverage["unit_health_ranges"].items()
+    }
+    result["player_unit_state_ranges"] = {
+        slot: {
+            key: (sorted_coverage(value) if isinstance(value, set) else value)
+            for key, value in row.items()
+        }
+        for slot, row in coverage["player_unit_state_ranges"].items()
+    }
+    result["economy_ranges"] = coverage["economy_ranges"]
+    result["owner_ai_distinct_states"] = len(coverage["owner_ai_digests"])
+    return result
+
+
+def map_debug_tiles(rows):
+    tiles = set()
+    for slot in MAP_DEBUG_SLOTS:
+        row = rows.get(slot)
+        if row is None:
+            continue
+        for field in ("world", "current_cell", "path", "next", "destination"):
+            point = row.get(field)
+            if not isinstance(point, list) or len(point) != 2:
+                continue
+            tile_x = (point[0] & 0xFFFFFFFF) >> 5
+            tile_y = (point[1] & 0xFFFFFFFF) >> 5
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    if tile_x + dx >= 0 and tile_y + dy >= 0:
+                        tiles.add((tile_x + dx, tile_y + dy))
+    return sorted(tiles)
+
+
+def original_movement_map_debug(memory, rows):
+    result = {}
+    for tile_x, tile_y in map_debug_tiles(rows):
+        if tile_x >= 0x100 or tile_y >= 0x100:
+            continue
+        # The legacy grids have a 0x100-cell row stride (0x400 bytes).
+        offset = tile_y * 0x400 + tile_x * 4
+        result[f"{tile_x},{tile_y}"] = {
+            "source": memory.u32(0x00E99E74 + offset),
+            "terrain": memory.u32(0x00F19E74 + offset),
+            "brush": memory.u32(0x00758D40 + offset),
+        }
+    return result
+
+
+def rebuild_movement_map_debug(memory, rows):
+    map_address = movement + context_layout["map"]
+    width = memory.u32(map_address + movement_map_layout["width"])
+    height = memory.u32(map_address + movement_map_layout["height"])
+    stride = memory.u32(map_address + movement_map_layout["stride"])
+    # The map vector stores 12-byte structs, so read its begin pointer rather
+    # than treating it as the pointer vectors used by the unit lists.
+    cells_begin = u64(memory.read(
+        map_address + movement_map_layout["cells"], 8), 0)
+    cell_size = movement_map_layout["cell_size"]
+    result = {}
+    for tile_x, tile_y in map_debug_tiles(rows):
+        if tile_x >= width or tile_y >= height or cells_begin == 0:
+            continue
+        cell = memory.read(
+            cells_begin + (tile_y * stride + tile_x) * cell_size, cell_size)
+        result[f"{tile_x},{tile_y}"] = {
+            "source": u32(cell, 8),
+            "terrain": u32(cell, movement_map_layout["cell_flags"]),
+            "brush": u32(cell, 4),
+        }
+    return result
+
+
+def sparse_production_state(variant_bytes, lock_bytes, completed_words,
+                            effect_words, order_2b_words):
+    return {
+        "variants": [
+            [owner, order, variant_bytes[owner * 64 + order]]
+            for owner in range(8) for order in range(64)
+            if variant_bytes[owner * 64 + order] != 0
+        ],
+        "locks": [
+            [owner, order, lock_bytes[owner * 64 + order]]
+            for owner in range(8) for order in range(64)
+            if lock_bytes[owner * 64 + order] != 0
+        ],
+        "completed_types": [
+            [owner, unit_type, completed_words[owner * 170 + unit_type]]
+            for owner in range(8) for unit_type in range(170)
+            if completed_words[owner * 170 + unit_type] != 0
+        ],
+        "completion_effects": [
+            [effect, owner, unit_type,
+             effect_words[(effect * 8 + owner) * 170 + unit_type]]
+            for effect in range(18) for owner in range(8)
+            for unit_type in range(170)
+            if effect_words[(effect * 8 + owner) * 170 + unit_type] != 0
+        ],
+        "order_2b_bonus": order_2b_words,
+    }
+
+
+def original_production_state(memory):
+    # These original live tables are also the serialized primary-record
+    # regions: owner/order cells at DAT_00708970, completed-type DWORDs at
+    # DAT_00707430, order-2b totals at DAT_0070A434, and the 18 effect tables
+    # at DAT_0070A484.
+    cells = memory.read(0x00708970, 8 * 64 * 4)
+    variants = bytes(cells[index * 4] for index in range(8 * 64))
+    locks = bytes(cells[index * 4 + 1] for index in range(8 * 64))
+    completed = u32_words(memory.read(0x00707430, 8 * 170 * 4), 0, 8 * 170)
+    effects = u32_words(
+        memory.read(0x0070A484, 18 * 8 * 170 * 4),
+        0, 18 * 8 * 170)
+    order_2b = u32_words(memory.read(0x0070A434, 8 * 4), 0, 8)
+    return sparse_production_state(
+        variants, locks, completed, effects, order_2b)
+
+
+def rebuild_production_state(memory, runtime):
+    production = runtime + production_runtime_offset
+    variants = memory.read(
+        production + production_runtime_layout["variant_counts"], 8 * 64)
+    locks = memory.read(
+        production + production_runtime_layout["lock_flags"], 8 * 64)
+    # After the two byte tables and the 8x64x2 opaque cells, typed completed
+    # counts start at +0x800 and the 18 effect tables at +0x1D40.
+    completed = u32_words(
+        memory.read(production + 0x800, 8 * 170 * 4), 0, 8 * 170)
+    effects = u32_words(
+        memory.read(production + 0x1D40, 18 * 8 * 170 * 4),
+        0, 18 * 8 * 170)
+    order_2b = u32_words(memory.read(production + 0x19C00, 8 * 4), 0, 8)
+    return sparse_production_state(
+        variants, locks, completed, effects, order_2b)
 
 
 def terminal_summary():
@@ -1283,6 +1558,28 @@ def terminal_summary():
         return None
     snapshot = previous_exact["original"]
     state = snapshot["state"]
+    player_units = {}
+    for slot, row in state["rows"].items():
+        if row["owner"] >= 8:
+            continue
+        player_units[str(slot)] = {
+            key: row.get(key)
+            for key in (
+                "type", "owner", "list", "state", "previous_state",
+                "health", "max_health", "max_secondary", "secondary",
+                "runtime_stat_1c", "runtime_stat_20", "runtime_stat_28",
+                "elite_progress", "status_timer", "action_mode",
+                "production_variant", "equipment", "cargo",
+                "command_flags", "runtime_flags", "type_flags",
+                "area_marker_flags",
+                "distance_mode", "script_bits", "animation_frame",
+                "work_timer", "lockout",
+                "deferred_count", "deferred_first", "linked_effect",
+                "active_payload", "target_slot", "world",
+                "path", "current_cell", "next", "anchor",
+                "movement_flags", "movement_state",
+            )
+        }
     return {
         "frame": snapshot["frame"],
         "state_sha256": snapshot["state_sha256"],
@@ -1292,7 +1589,12 @@ def terminal_summary():
         "unit_effect_count": len(state["unit_effects"]),
         "map_effect_count": len(state["map_effects"]),
         "economy": state["economy"],
+        "production": state["production"],
+        "transport_queues": state["transport_queues"],
         "owner_ai_sha256": digest(state["owner_ai"]),
+        "player_units": player_units,
+        "unit_effects": state["unit_effects"],
+        "map_effects": state["map_effects"],
     }
 
 try:
@@ -1447,6 +1749,24 @@ try:
                         "field": difference[0],
                         "original": difference[1],
                         "rebuild": difference[2],
+                    }
+                    left_rows = left["state"].get("rows", {})
+                    right_rows = right["state"].get("rows", {})
+                    changed_slots = [
+                        slot for slot in sorted(
+                            set(left_rows) | set(right_rows),
+                            key=lambda value: int(value))
+                        if left_rows.get(slot) != right_rows.get(slot)
+                    ]
+                    # Keep enough surrounding unit state to diagnose a spawn,
+                    # death, or command transition whose first list difference
+                    # is merely the newly allocated/retired slot.
+                    journal_row["changed_rows"] = {
+                        slot: {
+                            "original": left_rows.get(slot),
+                            "rebuild": right_rows.get(slot),
+                        }
+                        for slot in changed_slots[:32]
                     }
                 journal.write(json.dumps(
                     journal_row, separators=(",", ":")) + "\n")

@@ -39,6 +39,15 @@ constexpr bool ShouldSetUnitEquipmentReplacementCommandFlag(
         equipment_command_flag_modifier != 0;
 }
 
+// ApplyUnitEquipmentEffect 0x00410300 changes raw unit +0x00 and adjusts the
+// runtime stats, but never copies the replacement definition's raw +0x58
+// flags into the live unit.  In particular, its auto-acquisition bit 0x20
+// remains the value carried by the original unit.
+constexpr u32 UnitEquipmentReplacementRuntimeTypeFlags(
+    u32 existing_type_flags, u32 /*replacement_type_flags*/) {
+    return existing_type_flags;
+}
+
 // Original FUN_00411b70 and the action-two publisher both test raw unit
 // +0x58 with mask 0x02.  This is a raw capability bit, not action index two
 // (1 << 2).  Keeping the predicate named and shared prevents those two gates

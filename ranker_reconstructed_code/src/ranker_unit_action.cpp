@@ -342,6 +342,9 @@ void reactivate_effect_target(UnitEffectRuntimeState& state,
         target.active = true;
     }
     register_effect_unit_ref(state, target);
+    if (state.callbacks.on_unit_reactivated != nullptr) {
+        state.callbacks.on_unit_reactivated(state, target);
+    }
 
     bool footprint_command_flag =
         (target.definition.footprint_flags & 2u) != 0;

@@ -129,6 +129,7 @@ void sync_default_gameplay_script_object_from_unit(
     GameplayScriptTriggerObjectState& object, UnitMovementUnit& unit);
 void sync_default_gameplay_script_scenario_record(
     const GameplayScriptTriggerState& script);
+void sync_default_owner_type_count_for_unit(const UnitMovementUnit& unit);
 
 u32 default_selected_unit_next_experience_threshold(
     const ProductionOrderRuntimeState& production, const UnitMovementUnit& unit) {
@@ -14521,8 +14522,15 @@ DefaultUnitActionFootprintReach default_unit_action_footprint_reach(
     const i32 target_top = target.y + target.definition.interaction_bounds_top;
     const i32 target_right = target_left + target.definition.interaction_bounds_width;
     const i32 target_bottom = target_top + target.definition.interaction_bounds_height;
-    result.command_x = target_right;
-    result.command_y = target_bottom;
+    // FUN_004c1e85's raw +0x14c == 0 footprint branch only compares the
+    // doubled source bounds with the target bounds (0x004c1f1f..0x004c1fd5).
+    // It does not replace the synchronized target point with the target
+    // definition's right/bottom bounds.  Keep the packet/object origin just
+    // like the type-0x6a branch.  Using target_right/target_bottom made an
+    // attack on a building diverge on the very next frame (for Bubble:
+    // original path 1456,2360 versus reconstructed 1424,2320).
+    result.command_x = target.x;
+    result.command_y = target.y;
     result.in_range = source_right >= target_left && source_bottom >= target_top &&
         target_right >= source_left && target_bottom >= source_top;
     return result;
@@ -15575,8 +15583,16 @@ bool default_mode1_packet_set_unit_deferred_resource_command(void*,
                     // clears the order lock/refunds first, then marks the
                     // active value invalid and pops.  Queued slots stop after
                     // their erase/refund path and never advance the producer.
+                    // The refund helper has already prepared the command
+                    // context, copied its resources into the production
+                    // runtime, applied both refunds, and copied the result
+                    // back.  Preparing it again here reloads the pre-refund
+                    // owner slots and erases only the active-slot refund;
+                    // queued cancellation does not take this branch.  The
+                    // original active index-0 path keeps the refunded values
+                    // while it invalidates and pops the command.
                     UnitCommandContext& command_context =
-                        prepare_default_mode1_packet_command_context();
+                        g_runtime.gameplay_unit_commands;
                     unit->command_value = 0xffffffffu;
                     PopDeferredUnitCommandOrReturnIdle(command_context, *unit);
                 }
@@ -16119,20 +16135,38 @@ void reset_default_live_unit_definition_timers() {
         g_runtime.active_session_definitions.unit_records,
         kUnitDefinitionResourceCount, kUnitDefinitionConstructionTimerOffset, 10);
 
+    // The original high-cluster reset writes the one global Jw2_10 unit
+    // definition table.  The reconstruction materializes that table both in
+    // the lookup cache and inside fixed-pool units, so changing only the raw
+    // resource bytes leaves an already cached production target at its old
+    // duration.  A producer can then finish one frame (or hundreds of frames)
+    // after the original and consume placement RNG in a different tick.
+    for (std::size_t type_id = 0;
+         type_id < g_runtime.unit_definition_cache.size(); ++type_id) {
+        if (g_runtime.unit_definition_cache_valid[type_id]) {
+            g_runtime.unit_definition_cache[type_id].production_spawn_time = 10;
+        }
+    }
+
     UnitMovementContext* movement = default_gameplay_movement_context();
     if (movement == nullptr) {
         return;
     }
 
-    for (UnitMovementUnit* unit : movement->active_units) {
-        if (unit == nullptr) {
-            continue;
+    const auto reset_units = [](const std::vector<UnitMovementUnit*>& units) {
+        for (UnitMovementUnit* unit : units) {
+            if (unit == nullptr) {
+                continue;
+            }
+            unit->definition.production_spawn_time = 10;
+            if (unit->type_id >= 0x60 && unit->action_mode_gate == 1) {
+                unit->action_mode = 0;
+            }
         }
-        unit->definition.production_spawn_time = 10;
-        if (unit->type_id >= 0x60 && unit->action_mode_gate == 1) {
-            unit->action_mode = 0;
-        }
-    }
+    };
+    reset_units(movement->active_units);
+    reset_units(movement->lifecycle_units);
+    reset_units(movement->free_units);
 }
 
 void default_mode1_packet_apply_global_reset(void*) {
@@ -18067,6 +18101,14 @@ u32 default_unit_effect_impact_damage(UnitEffectRuntimeState&,
     return default_unit_action_direct_damage(*source, target);
 }
 
+void default_unit_effect_unit_reactivated(UnitEffectRuntimeState&,
+    UnitMovementUnit& unit) {
+    // The original revive path updates DAT_00707430 in the same call that
+    // returns the corpse to the active list.  Keep the reconstruction's
+    // lifecycle, owner-AI, and production mirrors observable in that frame.
+    sync_default_owner_type_count_for_unit(unit);
+}
+
 void configure_default_unit_effect_runtime_state(UnitEffectRuntimeState& effects) {
     sync_default_unit_effect_definitions_from_runtime_catalogs();
     const UnitEquipmentCatalog& equipment_catalog =
@@ -18093,6 +18135,8 @@ void configure_default_unit_effect_runtime_state(UnitEffectRuntimeState& effects
     effects.callbacks.calculate_impact_damage = default_unit_effect_impact_damage;
     effects.callbacks.apply_simulation_event =
         default_unit_effect_simulation_event;
+    effects.callbacks.on_unit_reactivated =
+        default_unit_effect_unit_reactivated;
     // FUN_004f2aa4 selects its packed colors from DAT_01450834.
     ConfigureUnitEffectRenderPalette(effects, SurfacePixelMode555());
 }
@@ -22457,6 +22501,8 @@ void default_unit_command_cargo_deposited(UnitCommandContext& context,
     sync_default_owner_command_runtime_slots(context, unit.owner_id);
 }
 
+void sync_default_owner_type_count_for_unit(const UnitMovementUnit& unit);
+
 void default_unit_command_runtime_death_marked(UnitCommandContext&,
     UnitMovementUnit& unit) {
     ClearSelectedUnitMembershipFlagAndRefreshSelection(ui_overlay_state(), unit.id);
@@ -22472,6 +22518,12 @@ void default_unit_command_runtime_death_accounting(UnitCommandContext&,
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
     if (lifecycle != nullptr) {
         HandleUnitDeathOwnerCounters(*lifecycle, unit);
+        // The original counter array is the same storage observed by
+        // production/script checks in this frame.  The reconstruction keeps
+        // typed lifecycle, owner-AI, and production mirrors, so publish the
+        // decremented owner/type bucket before returning from the death tick
+        // instead of waiting for the following global mirror pass.
+        sync_default_owner_type_count_for_unit(unit);
     }
 }
 
@@ -22537,7 +22589,14 @@ void sync_default_owner_type_count(u32 owner, u32 type) {
 }
 
 void sync_default_owner_type_count_for_unit(const UnitMovementUnit& unit) {
-    sync_default_owner_type_count(unit.owner_id, unit.type_id);
+    // The morph/death routines account raw runtime-flag 0x40000 objects in
+    // their stored pre-morph definition bucket.  Publish that exact bucket to
+    // the typed production/owner-AI mirrors; using the visible type here
+    // leaves the original DAT_00707430 decrement hidden for one frame.
+    const u32 counted_type = (unit.runtime_flags & 0x40000u) != 0
+        ? unit.definition.alternate_type_id
+        : unit.type_id;
+    sync_default_owner_type_count(unit.owner_id, counted_type);
 }
 
 void default_unit_command_unit_spawned(UnitCommandContext&,
@@ -22556,7 +22615,10 @@ void default_unit_command_unit_spawned(UnitCommandContext&,
     if (lifecycle == nullptr) {
         return;
     }
-    HandleOwnerUnitTypeCountRebuild(*lifecycle);
+    // InitializePlacedUnitFromMapSlot already performs the original
+    // incremental count update (and deliberately excludes construction-class
+    // buildings).  A full active-list rebuild here destroys valid residual
+    // completed-type state after an unrelated spawn.
     sync_default_owner_type_count_for_unit(spawned);
 }
 
@@ -24008,7 +24070,7 @@ UnitMovementUnit* default_unit_command_create_unit(UnitCommandContext&,
         g_runtime.gameplay_script_spawned_units.push_back(std::move(owned_unit));
     }
     default_gameplay_startup_unit_placed(*unit);
-    HandleOwnerUnitTypeCountRebuild(*lifecycle);
+    sync_default_owner_type_count_for_unit(*unit);
     return unit;
 }
 
@@ -25150,6 +25212,12 @@ bool run_default_unit_runtime_pre_terrain_tick(UnitMovementContext&,
 void run_default_unit_runtime_death_side_effects(
     UnitLifecycleContext& lifecycle, UnitMovementUnit& unit) {
     HandleUnitDeathLifecycleTransition(lifecycle, unit);
+    // Low-type death accounting updates the lifecycle copy of the original
+    // DAT_00707430 table inside HandleUnitDeathLifecycleTransition.  The
+    // reconstruction has separate production and owner-AI mirrors, so expose
+    // that decrement in the same simulation frame instead of waiting for the
+    // next owner-AI metadata pass.
+    sync_default_owner_type_count_for_unit(unit);
     if (unit.type_id < 0x60 && lifecycle.movement != nullptr) {
         spawn_default_runtime_death_passive_effects(unit);
         HandleAttachedUnitParentDeath(*lifecycle.movement, unit);
@@ -27402,7 +27470,10 @@ void run_default_owner_ai_maintenance(GameplayLoopState& state) {
         configure_default_unit_movement_callbacks(*lifecycle->movement);
     }
 
-    HandleOwnerUnitTypeCountRebuild(*lifecycle);
+    // The original owner-AI maintenance path consumes DAT_00707430 as an
+    // incrementally maintained table.  Its full rebuild routine at 0x004cf9bd
+    // is not called every AI tick; doing so erases construction/death residual
+    // semantics before the next packet checksum.
     configure_default_unit_command_context(g_runtime.gameplay_unit_commands,
         *lifecycle, state.simulation_frame_counter);
     g_runtime.gameplay_unit_commands.production_state =
@@ -28768,7 +28839,11 @@ void apply_default_gameplay_script_object_mutations(
 
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
     if (lifecycle != nullptr) {
-        HandleOwnerUnitTypeCountRebuild(*lifecycle);
+        // The original script VM rebuilds DAT_00707430 only from its explicit
+        // opcode/condition paths (the calls through 0x0040298c), not after
+        // every phase-wide object mirror update.  Rebuilding here erases the
+        // original table's intentional residual entries between those VM
+        // operations; error1.ply first exposed that at frame 9176.
         if (lifecycle->movement != nullptr) {
             purge_default_inactive_movement_units(*lifecycle->movement);
         }
@@ -29262,7 +29337,7 @@ UnitMovementUnit* spawn_default_gameplay_script_unit(
     unit->active = true;
     unit->linked_unit = unit;
     refresh_default_unit_definition_runtime_fields(*unit);
-    HandleOwnerUnitTypeCountRebuild(*lifecycle);
+    sync_default_owner_type_count_for_unit(*unit);
     return unit;
 }
 

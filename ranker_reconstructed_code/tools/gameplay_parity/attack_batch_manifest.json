@@ -1,0 +1,5298 @@
+{
+  "schema": 1,
+  "source_unit_count": 87,
+  "target_render_classes": {
+    "0": 75,
+    "1": 164,
+    "2": 48,
+    "3": 77,
+    "4": 79
+  },
+  "command_frame": 31,
+  "end_frame": 180,
+  "missing_exact_row_templates": [
+    125
+  ],
+  "batches": [
+    {
+      "batch_index": 0,
+      "render_class": 0,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B00 C0.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B00 C0.ply",
+      "replay_sha256": "A33136FABB36157152B696063D7C92A305BF7ABBBBE3F8CDF6E24A095B0A32AC",
+      "cases": [
+        {
+          "unit_id": 1,
+          "unit_name": "PowerMan",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 2,
+          "unit_name": "Giant",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 3,
+          "unit_name": "Soldier",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 4,
+          "unit_name": "Knight",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 6,
+          "unit_name": "BowMachine",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 7,
+          "unit_name": "Squadron",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 8,
+          "unit_name": "Flattop",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 9,
+          "unit_name": "Chief",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 0,
+      "render_class": 1,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B00 C1.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B00 C1.ply",
+      "replay_sha256": "1EDB96F7B3699F6C0CBA6419609EA4AC31801ACD33DCB825D84BD9C6FB5C6E88",
+      "cases": [
+        {
+          "unit_id": 1,
+          "unit_name": "PowerMan",
+          "source_slot": 148,
+          "target": {
+            "slot": 13,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 2,
+          "unit_name": "Giant",
+          "source_slot": 147,
+          "target": {
+            "slot": 8,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 3,
+          "unit_name": "Soldier",
+          "source_slot": 146,
+          "target": {
+            "slot": 28,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 4,
+          "unit_name": "Knight",
+          "source_slot": 145,
+          "target": {
+            "slot": 18,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 6,
+          "unit_name": "BowMachine",
+          "source_slot": 144,
+          "target": {
+            "slot": 22,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 7,
+          "unit_name": "Squadron",
+          "source_slot": 143,
+          "target": {
+            "slot": 14,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 8,
+          "unit_name": "Flattop",
+          "source_slot": 142,
+          "target": {
+            "slot": 15,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 9,
+          "unit_name": "Chief",
+          "source_slot": 141,
+          "target": {
+            "slot": 1,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 0,
+      "render_class": 2,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B00 C2.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B00 C2.ply",
+      "replay_sha256": "05BCBF063D92F319DE2400DAD397960A8D5B000DF2A1CFA34B143A3BB652CECE",
+      "cases": [
+        {
+          "unit_id": 1,
+          "unit_name": "PowerMan",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 2,
+          "unit_name": "Giant",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 3,
+          "unit_name": "Soldier",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 4,
+          "unit_name": "Knight",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 6,
+          "unit_name": "BowMachine",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 7,
+          "unit_name": "Squadron",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 8,
+          "unit_name": "Flattop",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 9,
+          "unit_name": "Chief",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 0,
+      "render_class": 3,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B00 C3.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B00 C3.ply",
+      "replay_sha256": "AE84A88E93DFECE7316E3DFE04C784F7325E84D0F6BB6995EA184286852BD652",
+      "cases": [
+        {
+          "unit_id": 1,
+          "unit_name": "PowerMan",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 2,
+          "unit_name": "Giant",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 3,
+          "unit_name": "Soldier",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 4,
+          "unit_name": "Knight",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 6,
+          "unit_name": "BowMachine",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 7,
+          "unit_name": "Squadron",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 8,
+          "unit_name": "Flattop",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 9,
+          "unit_name": "Chief",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 0,
+      "render_class": 4,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B00 C4.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B00 C4.ply",
+      "replay_sha256": "D038A6323C4357E78730E5658382BB41AF3D65CE22924B29D4DCD2CE77A0863F",
+      "cases": [
+        {
+          "unit_id": 1,
+          "unit_name": "PowerMan",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 2,
+          "unit_name": "Giant",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 3,
+          "unit_name": "Soldier",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 4,
+          "unit_name": "Knight",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 6,
+          "unit_name": "BowMachine",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 7,
+          "unit_name": "Squadron",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 8,
+          "unit_name": "Flattop",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 9,
+          "unit_name": "Chief",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 1,
+      "render_class": 0,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B01 C0.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B01 C0.ply",
+      "replay_sha256": "20963F52ED08650F2CF0F66284A958C273DD986315C224FF424900DDCD4D6336",
+      "cases": [
+        {
+          "unit_id": 10,
+          "unit_name": "PowerMan (Shield of Peace)",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 11,
+          "unit_name": "Soldier (Fire Arrow)",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 12,
+          "unit_name": "Soldier (Venom Arrow)",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 13,
+          "unit_name": "Knight (Spear of Justice)",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 14,
+          "unit_name": "Kalma",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 15,
+          "unit_name": "Silvan",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 16,
+          "unit_name": "Wizard",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 17,
+          "unit_name": "RedElf",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 1,
+      "render_class": 1,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B01 C1.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B01 C1.ply",
+      "replay_sha256": "690CF672373B1984D0814EABAB61D257C93F6E0F92214232ADB67ECF83335673",
+      "cases": [
+        {
+          "unit_id": 10,
+          "unit_name": "PowerMan (Shield of Peace)",
+          "source_slot": 148,
+          "target": {
+            "slot": 13,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 11,
+          "unit_name": "Soldier (Fire Arrow)",
+          "source_slot": 147,
+          "target": {
+            "slot": 8,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 12,
+          "unit_name": "Soldier (Venom Arrow)",
+          "source_slot": 146,
+          "target": {
+            "slot": 28,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 13,
+          "unit_name": "Knight (Spear of Justice)",
+          "source_slot": 145,
+          "target": {
+            "slot": 18,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 14,
+          "unit_name": "Kalma",
+          "source_slot": 144,
+          "target": {
+            "slot": 22,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 15,
+          "unit_name": "Silvan",
+          "source_slot": 143,
+          "target": {
+            "slot": 14,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 16,
+          "unit_name": "Wizard",
+          "source_slot": 142,
+          "target": {
+            "slot": 15,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 17,
+          "unit_name": "RedElf",
+          "source_slot": 141,
+          "target": {
+            "slot": 1,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 1,
+      "render_class": 2,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B01 C2.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B01 C2.ply",
+      "replay_sha256": "EE277347514E1C00EC0510F6DEE9A5C6952237617A8776F5CF335D4E83D4FAD2",
+      "cases": [
+        {
+          "unit_id": 10,
+          "unit_name": "PowerMan (Shield of Peace)",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 11,
+          "unit_name": "Soldier (Fire Arrow)",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 12,
+          "unit_name": "Soldier (Venom Arrow)",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 13,
+          "unit_name": "Knight (Spear of Justice)",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 14,
+          "unit_name": "Kalma",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 15,
+          "unit_name": "Silvan",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 16,
+          "unit_name": "Wizard",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 17,
+          "unit_name": "RedElf",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 1,
+      "render_class": 3,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B01 C3.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B01 C3.ply",
+      "replay_sha256": "600454431E3F5D585BD3BB0E00DAD8D6746B4434FC6373A1F1948EE7BEC17A21",
+      "cases": [
+        {
+          "unit_id": 10,
+          "unit_name": "PowerMan (Shield of Peace)",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 11,
+          "unit_name": "Soldier (Fire Arrow)",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 12,
+          "unit_name": "Soldier (Venom Arrow)",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 13,
+          "unit_name": "Knight (Spear of Justice)",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 14,
+          "unit_name": "Kalma",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 15,
+          "unit_name": "Silvan",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 16,
+          "unit_name": "Wizard",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 17,
+          "unit_name": "RedElf",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 1,
+      "render_class": 4,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B01 C4.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B01 C4.ply",
+      "replay_sha256": "A6E80FBD718DE49A53E2B2A75058042BB6915F42238BD9171F5537C2DC8B78CA",
+      "cases": [
+        {
+          "unit_id": 10,
+          "unit_name": "PowerMan (Shield of Peace)",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 11,
+          "unit_name": "Soldier (Fire Arrow)",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 12,
+          "unit_name": "Soldier (Venom Arrow)",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 13,
+          "unit_name": "Knight (Spear of Justice)",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 14,
+          "unit_name": "Kalma",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 15,
+          "unit_name": "Silvan",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 16,
+          "unit_name": "Wizard",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 17,
+          "unit_name": "RedElf",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 2,
+      "render_class": 0,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B02 C0.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B02 C0.ply",
+      "replay_sha256": "74F8F102D1B204FC0021E78DA6FE7C52618EF5096FE9578D49B86F51116A6B2E",
+      "cases": [
+        {
+          "unit_id": 18,
+          "unit_name": "WhiteElf",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 19,
+          "unit_name": "Ranger",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 20,
+          "unit_name": "BlueElf",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 21,
+          "unit_name": "Unicorn",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 22,
+          "unit_name": "Pixie",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 23,
+          "unit_name": "ManaSpread",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 25,
+          "unit_name": "Dragon",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 26,
+          "unit_name": "phoenix",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 2,
+      "render_class": 1,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B02 C1.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B02 C1.ply",
+      "replay_sha256": "EAC10688A6CFAD4A3D9089D9C70774832AF3A5874E9588F8C854E89F3EC26617",
+      "cases": [
+        {
+          "unit_id": 18,
+          "unit_name": "WhiteElf",
+          "source_slot": 148,
+          "target": {
+            "slot": 13,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 19,
+          "unit_name": "Ranger",
+          "source_slot": 147,
+          "target": {
+            "slot": 8,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 20,
+          "unit_name": "BlueElf",
+          "source_slot": 146,
+          "target": {
+            "slot": 28,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 21,
+          "unit_name": "Unicorn",
+          "source_slot": 145,
+          "target": {
+            "slot": 18,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 22,
+          "unit_name": "Pixie",
+          "source_slot": 144,
+          "target": {
+            "slot": 22,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 23,
+          "unit_name": "ManaSpread",
+          "source_slot": 143,
+          "target": {
+            "slot": 14,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 25,
+          "unit_name": "Dragon",
+          "source_slot": 142,
+          "target": {
+            "slot": 15,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 26,
+          "unit_name": "phoenix",
+          "source_slot": 141,
+          "target": {
+            "slot": 1,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 2,
+      "render_class": 2,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B02 C2.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B02 C2.ply",
+      "replay_sha256": "36EA286FA4A67CDC73A06058438AD54127BD6F983A3920952BF4B310FB4B568B",
+      "cases": [
+        {
+          "unit_id": 18,
+          "unit_name": "WhiteElf",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 19,
+          "unit_name": "Ranger",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 20,
+          "unit_name": "BlueElf",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 21,
+          "unit_name": "Unicorn",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 22,
+          "unit_name": "Pixie",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 23,
+          "unit_name": "ManaSpread",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 25,
+          "unit_name": "Dragon",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 26,
+          "unit_name": "phoenix",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 2,
+      "render_class": 3,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B02 C3.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B02 C3.ply",
+      "replay_sha256": "1FA205583C5F1B5D6955C3F30F3AF823BB76A5EE2014A3AACE56321BE1BE162D",
+      "cases": [
+        {
+          "unit_id": 18,
+          "unit_name": "WhiteElf",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 19,
+          "unit_name": "Ranger",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 20,
+          "unit_name": "BlueElf",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 21,
+          "unit_name": "Unicorn",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 22,
+          "unit_name": "Pixie",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 23,
+          "unit_name": "ManaSpread",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 25,
+          "unit_name": "Dragon",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 26,
+          "unit_name": "phoenix",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 2,
+      "render_class": 4,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B02 C4.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B02 C4.ply",
+      "replay_sha256": "A22D629CB145F9B2AA48CEF39D3585C84757AE39B289A0C0D5044C70F06E285E",
+      "cases": [
+        {
+          "unit_id": 18,
+          "unit_name": "WhiteElf",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 19,
+          "unit_name": "Ranger",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 20,
+          "unit_name": "BlueElf",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 21,
+          "unit_name": "Unicorn",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 22,
+          "unit_name": "Pixie",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 23,
+          "unit_name": "ManaSpread",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 25,
+          "unit_name": "Dragon",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 26,
+          "unit_name": "phoenix",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 3,
+      "render_class": 0,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B03 C0.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B03 C0.ply",
+      "replay_sha256": "4B628682C600C11B3424CBBC10ABD4B5664B6521EB3818FE42E104D5A8E9C08D",
+      "cases": [
+        {
+          "unit_id": 27,
+          "unit_name": "AngelElf",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 28,
+          "unit_name": "GreenElf",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 29,
+          "unit_name": "DarkElf",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 30,
+          "unit_name": "Null.chr",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 32,
+          "unit_name": "Dinos",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 33,
+          "unit_name": "Masos",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 34,
+          "unit_name": "Velocis",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 35,
+          "unit_name": "TwinVelocis",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 3,
+      "render_class": 1,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B03 C1.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B03 C1.ply",
+      "replay_sha256": "20ADC3F29251E724C907FD86AB14506916C03571E2B9C9135B2688C947673D6F",
+      "cases": [
+        {
+          "unit_id": 27,
+          "unit_name": "AngelElf",
+          "source_slot": 148,
+          "target": {
+            "slot": 13,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 28,
+          "unit_name": "GreenElf",
+          "source_slot": 147,
+          "target": {
+            "slot": 8,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 29,
+          "unit_name": "DarkElf",
+          "source_slot": 146,
+          "target": {
+            "slot": 28,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 30,
+          "unit_name": "Null.chr",
+          "source_slot": 145,
+          "target": {
+            "slot": 18,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 32,
+          "unit_name": "Dinos",
+          "source_slot": 144,
+          "target": {
+            "slot": 22,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 33,
+          "unit_name": "Masos",
+          "source_slot": 143,
+          "target": {
+            "slot": 14,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 34,
+          "unit_name": "Velocis",
+          "source_slot": 142,
+          "target": {
+            "slot": 15,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 35,
+          "unit_name": "TwinVelocis",
+          "source_slot": 141,
+          "target": {
+            "slot": 1,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 3,
+      "render_class": 2,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B03 C2.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B03 C2.ply",
+      "replay_sha256": "72D42CADA58FE3710971DB78A24B35CC2AF7D2A9E4BF8ED4DB058B2E176F2925",
+      "cases": [
+        {
+          "unit_id": 27,
+          "unit_name": "AngelElf",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 28,
+          "unit_name": "GreenElf",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 29,
+          "unit_name": "DarkElf",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 30,
+          "unit_name": "Null.chr",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 32,
+          "unit_name": "Dinos",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 33,
+          "unit_name": "Masos",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 34,
+          "unit_name": "Velocis",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 35,
+          "unit_name": "TwinVelocis",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 3,
+      "render_class": 3,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B03 C3.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B03 C3.ply",
+      "replay_sha256": "37C309312F75DB64998193294F5AD81ABD2353789A7B6D4502AE3794584B85E9",
+      "cases": [
+        {
+          "unit_id": 27,
+          "unit_name": "AngelElf",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 28,
+          "unit_name": "GreenElf",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 29,
+          "unit_name": "DarkElf",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 30,
+          "unit_name": "Null.chr",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 32,
+          "unit_name": "Dinos",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 33,
+          "unit_name": "Masos",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 34,
+          "unit_name": "Velocis",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 35,
+          "unit_name": "TwinVelocis",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 3,
+      "render_class": 4,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B03 C4.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B03 C4.ply",
+      "replay_sha256": "68707E8628715557ABB2C5D12C20893DD7505EEB91BCE9195BCF7665DFEC7451",
+      "cases": [
+        {
+          "unit_id": 27,
+          "unit_name": "AngelElf",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 28,
+          "unit_name": "GreenElf",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 29,
+          "unit_name": "DarkElf",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 30,
+          "unit_name": "Null.chr",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 32,
+          "unit_name": "Dinos",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 33,
+          "unit_name": "Masos",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 34,
+          "unit_name": "Velocis",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 35,
+          "unit_name": "TwinVelocis",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 4,
+      "render_class": 0,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B04 C0.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B04 C0.ply",
+      "replay_sha256": "7538E3710EB4565C9E1918D95BF0C1088B8BC842264A49F7DB67E38DC37B1FDB",
+      "cases": [
+        {
+          "unit_id": 36,
+          "unit_name": "Dilophos",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 37,
+          "unit_name": "Rhamphos",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 38,
+          "unit_name": "TwinRhamphos",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 39,
+          "unit_name": "Pteras",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 40,
+          "unit_name": "Trices",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 42,
+          "unit_name": "EggThrower",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 43,
+          "unit_name": "Mutant",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 44,
+          "unit_name": "Tyranos",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 4,
+      "render_class": 1,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B04 C1.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B04 C1.ply",
+      "replay_sha256": "18D73DCD81A3D0E5D7D6DEA79FAA85CBAF61E71E0D2FBD91A62917ADD34E5C3C",
+      "cases": [
+        {
+          "unit_id": 36,
+          "unit_name": "Dilophos",
+          "source_slot": 148,
+          "target": {
+            "slot": 13,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 37,
+          "unit_name": "Rhamphos",
+          "source_slot": 147,
+          "target": {
+            "slot": 8,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 38,
+          "unit_name": "TwinRhamphos",
+          "source_slot": 146,
+          "target": {
+            "slot": 28,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 39,
+          "unit_name": "Pteras",
+          "source_slot": 145,
+          "target": {
+            "slot": 18,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 40,
+          "unit_name": "Trices",
+          "source_slot": 144,
+          "target": {
+            "slot": 22,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 42,
+          "unit_name": "EggThrower",
+          "source_slot": 143,
+          "target": {
+            "slot": 14,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 43,
+          "unit_name": "Mutant",
+          "source_slot": 142,
+          "target": {
+            "slot": 15,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 44,
+          "unit_name": "Tyranos",
+          "source_slot": 141,
+          "target": {
+            "slot": 1,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 4,
+      "render_class": 2,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B04 C2.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B04 C2.ply",
+      "replay_sha256": "06BEB42578A5ECD3E09C66FCA79257F2B075CC87B22F730025C05E1C0D1E38C1",
+      "cases": [
+        {
+          "unit_id": 36,
+          "unit_name": "Dilophos",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 37,
+          "unit_name": "Rhamphos",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 38,
+          "unit_name": "TwinRhamphos",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 39,
+          "unit_name": "Pteras",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 40,
+          "unit_name": "Trices",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 42,
+          "unit_name": "EggThrower",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 43,
+          "unit_name": "Mutant",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 44,
+          "unit_name": "Tyranos",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 4,
+      "render_class": 3,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B04 C3.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B04 C3.ply",
+      "replay_sha256": "74F228DA1AC6F4B0CB802E505EA6FC8C971B060C10059CD310E61D1984CAB974",
+      "cases": [
+        {
+          "unit_id": 36,
+          "unit_name": "Dilophos",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 37,
+          "unit_name": "Rhamphos",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 38,
+          "unit_name": "TwinRhamphos",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 39,
+          "unit_name": "Pteras",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 40,
+          "unit_name": "Trices",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 42,
+          "unit_name": "EggThrower",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 43,
+          "unit_name": "Mutant",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 44,
+          "unit_name": "Tyranos",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 4,
+      "render_class": 4,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B04 C4.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B04 C4.ply",
+      "replay_sha256": "2B292662A385DC8FD2E560AD05B77AA5087A7EC94181206E38CCB9E3E73AD3C3",
+      "cases": [
+        {
+          "unit_id": 36,
+          "unit_name": "Dilophos",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 37,
+          "unit_name": "Rhamphos",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 38,
+          "unit_name": "TwinRhamphos",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 39,
+          "unit_name": "Pteras",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 40,
+          "unit_name": "Trices",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 42,
+          "unit_name": "EggThrower",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 43,
+          "unit_name": "Mutant",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 44,
+          "unit_name": "Tyranos",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 5,
+      "render_class": 0,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B05 C0.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B05 C0.ply",
+      "replay_sha256": "578D53983B55F0FB963A702A4D63E3F39C2F077538B01F9D64C0AC0C48C6676E",
+      "cases": [
+        {
+          "unit_id": 45,
+          "unit_name": "TwinPteras",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 46,
+          "unit_name": "Kentros",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 48,
+          "unit_name": "Insect",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 49,
+          "unit_name": "Skeleton",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 50,
+          "unit_name": "MudMan",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 53,
+          "unit_name": "Gargoyle",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 54,
+          "unit_name": "Kelpa",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 55,
+          "unit_name": "Warlock",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 5,
+      "render_class": 1,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B05 C1.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B05 C1.ply",
+      "replay_sha256": "7D5C112BEFAF44BF2A1378119C5D2EDEEA4B5D3C73D7846FCE554D734A38B1F3",
+      "cases": [
+        {
+          "unit_id": 45,
+          "unit_name": "TwinPteras",
+          "source_slot": 148,
+          "target": {
+            "slot": 13,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 46,
+          "unit_name": "Kentros",
+          "source_slot": 147,
+          "target": {
+            "slot": 8,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 48,
+          "unit_name": "Insect",
+          "source_slot": 146,
+          "target": {
+            "slot": 28,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 49,
+          "unit_name": "Skeleton",
+          "source_slot": 145,
+          "target": {
+            "slot": 18,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 50,
+          "unit_name": "MudMan",
+          "source_slot": 144,
+          "target": {
+            "slot": 22,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 53,
+          "unit_name": "Gargoyle",
+          "source_slot": 143,
+          "target": {
+            "slot": 14,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 54,
+          "unit_name": "Kelpa",
+          "source_slot": 142,
+          "target": {
+            "slot": 15,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 55,
+          "unit_name": "Warlock",
+          "source_slot": 141,
+          "target": {
+            "slot": 1,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 5,
+      "render_class": 2,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B05 C2.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B05 C2.ply",
+      "replay_sha256": "330CD633437EFD44C2F7B386EE20C9D9F3981D02EDEFA1E6DCA320341B1D8D8F",
+      "cases": [
+        {
+          "unit_id": 45,
+          "unit_name": "TwinPteras",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 46,
+          "unit_name": "Kentros",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 48,
+          "unit_name": "Insect",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 49,
+          "unit_name": "Skeleton",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 50,
+          "unit_name": "MudMan",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 53,
+          "unit_name": "Gargoyle",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 54,
+          "unit_name": "Kelpa",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 55,
+          "unit_name": "Warlock",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 5,
+      "render_class": 3,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B05 C3.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B05 C3.ply",
+      "replay_sha256": "775CDDB0C25A4E53BD03E580D331EE89328AE25F636AFC41A5EC742A03DE5EF3",
+      "cases": [
+        {
+          "unit_id": 45,
+          "unit_name": "TwinPteras",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 46,
+          "unit_name": "Kentros",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 48,
+          "unit_name": "Insect",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 49,
+          "unit_name": "Skeleton",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 50,
+          "unit_name": "MudMan",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 53,
+          "unit_name": "Gargoyle",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 54,
+          "unit_name": "Kelpa",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 55,
+          "unit_name": "Warlock",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 5,
+      "render_class": 4,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B05 C4.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B05 C4.ply",
+      "replay_sha256": "96BB3360A00D5AB480A8CD8B147FA79733114413BFB01FF14063BAA6FD763AC2",
+      "cases": [
+        {
+          "unit_id": 45,
+          "unit_name": "TwinPteras",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 46,
+          "unit_name": "Kentros",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 48,
+          "unit_name": "Insect",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 49,
+          "unit_name": "Skeleton",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 50,
+          "unit_name": "MudMan",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 53,
+          "unit_name": "Gargoyle",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 54,
+          "unit_name": "Kelpa",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 55,
+          "unit_name": "Warlock",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 6,
+      "render_class": 0,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B06 C0.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B06 C0.ply",
+      "replay_sha256": "BC8607A0D239256D69625FB8C5ECA1EA3D2A9069616F1AFD3B28B8002F79F2E2",
+      "cases": [
+        {
+          "unit_id": 56,
+          "unit_name": "KingDemon",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 57,
+          "unit_name": "Darkbat",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 58,
+          "unit_name": "Devil",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 59,
+          "unit_name": "RiseZombie1",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 60,
+          "unit_name": "RiseZombie2",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 62,
+          "unit_name": "FemmeFatale",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 63,
+          "unit_name": "Nightmare",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 64,
+          "unit_name": "Tyranosaurus",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 6,
+      "render_class": 1,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B06 C1.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B06 C1.ply",
+      "replay_sha256": "77B0CC4EDC15C5C6A8802CBC6DB12D95FE2838078BD6F6048FB75C340AE42732",
+      "cases": [
+        {
+          "unit_id": 56,
+          "unit_name": "KingDemon",
+          "source_slot": 148,
+          "target": {
+            "slot": 13,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 57,
+          "unit_name": "Darkbat",
+          "source_slot": 147,
+          "target": {
+            "slot": 8,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 58,
+          "unit_name": "Devil",
+          "source_slot": 146,
+          "target": {
+            "slot": 28,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 59,
+          "unit_name": "RiseZombie1",
+          "source_slot": 145,
+          "target": {
+            "slot": 18,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 60,
+          "unit_name": "RiseZombie2",
+          "source_slot": 144,
+          "target": {
+            "slot": 22,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 62,
+          "unit_name": "FemmeFatale",
+          "source_slot": 143,
+          "target": {
+            "slot": 14,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 63,
+          "unit_name": "Nightmare",
+          "source_slot": 142,
+          "target": {
+            "slot": 15,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 64,
+          "unit_name": "Tyranosaurus",
+          "source_slot": 141,
+          "target": {
+            "slot": 1,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 6,
+      "render_class": 2,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B06 C2.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B06 C2.ply",
+      "replay_sha256": "970FB98BF443A330D4DC68FED7C673F2D1977572F0F2753057D467D1691EFE09",
+      "cases": [
+        {
+          "unit_id": 56,
+          "unit_name": "KingDemon",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 57,
+          "unit_name": "Darkbat",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 58,
+          "unit_name": "Devil",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 59,
+          "unit_name": "RiseZombie1",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 60,
+          "unit_name": "RiseZombie2",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 62,
+          "unit_name": "FemmeFatale",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 63,
+          "unit_name": "Nightmare",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 64,
+          "unit_name": "Tyranosaurus",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 6,
+      "render_class": 3,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B06 C3.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B06 C3.ply",
+      "replay_sha256": "1FAABB34C89E4E5844B5509B5FA2CF46FF7FED1DBA88EAF439B96033B3C473EB",
+      "cases": [
+        {
+          "unit_id": 56,
+          "unit_name": "KingDemon",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 57,
+          "unit_name": "Darkbat",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 58,
+          "unit_name": "Devil",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 59,
+          "unit_name": "RiseZombie1",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 60,
+          "unit_name": "RiseZombie2",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 62,
+          "unit_name": "FemmeFatale",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 63,
+          "unit_name": "Nightmare",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 64,
+          "unit_name": "Tyranosaurus",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 6,
+      "render_class": 4,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B06 C4.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B06 C4.ply",
+      "replay_sha256": "6805C5E02869908C2EC7E4221A654DBC3E138ABE00F2D2EE5D30AF14905878F3",
+      "cases": [
+        {
+          "unit_id": 56,
+          "unit_name": "KingDemon",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 57,
+          "unit_name": "Darkbat",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 58,
+          "unit_name": "Devil",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 59,
+          "unit_name": "RiseZombie1",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 60,
+          "unit_name": "RiseZombie2",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 62,
+          "unit_name": "FemmeFatale",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 63,
+          "unit_name": "Nightmare",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 64,
+          "unit_name": "Tyranosaurus",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 7,
+      "render_class": 0,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B07 C0.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B07 C0.ply",
+      "replay_sha256": "2928AFE0352E6802A3B4953D2C485DBED5AC1A42E12966FFE41DB457FA4DA8FC",
+      "cases": [
+        {
+          "unit_id": 68,
+          "unit_name": "Dilophosaurus",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 81,
+          "unit_name": "PicaTyrano",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 83,
+          "unit_name": "Alien1",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 84,
+          "unit_name": "Alien2",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 85,
+          "unit_name": "Alien3",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 87,
+          "unit_name": "Nashka",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 90,
+          "unit_name": "BoneFighter",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 91,
+          "unit_name": "Silvan_item",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 7,
+      "render_class": 1,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B07 C1.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B07 C1.ply",
+      "replay_sha256": "3B3443B34214E794D1A5C3B5305E354D425EE6D9E991BA7D22372FD9D225CA62",
+      "cases": [
+        {
+          "unit_id": 68,
+          "unit_name": "Dilophosaurus",
+          "source_slot": 148,
+          "target": {
+            "slot": 13,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 81,
+          "unit_name": "PicaTyrano",
+          "source_slot": 147,
+          "target": {
+            "slot": 8,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 83,
+          "unit_name": "Alien1",
+          "source_slot": 146,
+          "target": {
+            "slot": 28,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 84,
+          "unit_name": "Alien2",
+          "source_slot": 145,
+          "target": {
+            "slot": 18,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 85,
+          "unit_name": "Alien3",
+          "source_slot": 144,
+          "target": {
+            "slot": 22,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 87,
+          "unit_name": "Nashka",
+          "source_slot": 143,
+          "target": {
+            "slot": 14,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 90,
+          "unit_name": "BoneFighter",
+          "source_slot": 142,
+          "target": {
+            "slot": 15,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 91,
+          "unit_name": "Silvan_item",
+          "source_slot": 141,
+          "target": {
+            "slot": 1,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 7,
+      "render_class": 2,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B07 C2.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B07 C2.ply",
+      "replay_sha256": "236223C8092479C051C8DCAAF8D8D39843D703AAB0E58B426BB61DCCF5DE4FB2",
+      "cases": [
+        {
+          "unit_id": 68,
+          "unit_name": "Dilophosaurus",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 81,
+          "unit_name": "PicaTyrano",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 83,
+          "unit_name": "Alien1",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 84,
+          "unit_name": "Alien2",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 85,
+          "unit_name": "Alien3",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 87,
+          "unit_name": "Nashka",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 90,
+          "unit_name": "BoneFighter",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 91,
+          "unit_name": "Silvan_item",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 7,
+      "render_class": 3,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B07 C3.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B07 C3.ply",
+      "replay_sha256": "7F484E7742371633C4D9B7759F9BE21D7ED4DEC59EEC3A4543D04984989A80C7",
+      "cases": [
+        {
+          "unit_id": 68,
+          "unit_name": "Dilophosaurus",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 81,
+          "unit_name": "PicaTyrano",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 83,
+          "unit_name": "Alien1",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 84,
+          "unit_name": "Alien2",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 85,
+          "unit_name": "Alien3",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 87,
+          "unit_name": "Nashka",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 90,
+          "unit_name": "BoneFighter",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 91,
+          "unit_name": "Silvan_item",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 7,
+      "render_class": 4,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B07 C4.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B07 C4.ply",
+      "replay_sha256": "5386AD1D4B105B24A6AC15EEBEE8F98D0FD5020DDDEE33B5313FD1B6865F754B",
+      "cases": [
+        {
+          "unit_id": 68,
+          "unit_name": "Dilophosaurus",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 81,
+          "unit_name": "PicaTyrano",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 83,
+          "unit_name": "Alien1",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 84,
+          "unit_name": "Alien2",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 85,
+          "unit_name": "Alien3",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 87,
+          "unit_name": "Nashka",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 90,
+          "unit_name": "BoneFighter",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 91,
+          "unit_name": "Silvan_item",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 8,
+      "render_class": 0,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B08 C0.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B08 C0.ply",
+      "replay_sha256": "001D328457D2B38594C862280A1F269429A8EA88AB61718846C7E5C10871C28E",
+      "cases": [
+        {
+          "unit_id": 92,
+          "unit_name": "SkyBallista",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 93,
+          "unit_name": "SkyBullet",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 94,
+          "unit_name": "Giant_item",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 95,
+          "unit_name": "DoubleBow_item",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 99,
+          "unit_name": "StoneTower",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 106,
+          "unit_name": "Trap",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 113,
+          "unit_name": "Bubble",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 115,
+          "unit_name": "Bubble",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 8,
+      "render_class": 1,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B08 C1.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B08 C1.ply",
+      "replay_sha256": "30167828362ADEB9C0EFDF9A90DABE7FBAEED97DF6307CA1AF6E12619174E69F",
+      "cases": [
+        {
+          "unit_id": 92,
+          "unit_name": "SkyBallista",
+          "source_slot": 148,
+          "target": {
+            "slot": 13,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 93,
+          "unit_name": "SkyBullet",
+          "source_slot": 147,
+          "target": {
+            "slot": 8,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 94,
+          "unit_name": "Giant_item",
+          "source_slot": 146,
+          "target": {
+            "slot": 28,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 95,
+          "unit_name": "DoubleBow_item",
+          "source_slot": 145,
+          "target": {
+            "slot": 18,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 99,
+          "unit_name": "StoneTower",
+          "source_slot": 144,
+          "target": {
+            "slot": 22,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 106,
+          "unit_name": "Trap",
+          "source_slot": 143,
+          "target": {
+            "slot": 14,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 113,
+          "unit_name": "Bubble",
+          "source_slot": 142,
+          "target": {
+            "slot": 15,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 115,
+          "unit_name": "Bubble",
+          "source_slot": 141,
+          "target": {
+            "slot": 1,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 8,
+      "render_class": 2,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B08 C2.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B08 C2.ply",
+      "replay_sha256": "1F54F4622F7BAC856A128AA3D89EF01326F6E53B2F8F5D14448BAF1B44D582C3",
+      "cases": [
+        {
+          "unit_id": 92,
+          "unit_name": "SkyBallista",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 93,
+          "unit_name": "SkyBullet",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 94,
+          "unit_name": "Giant_item",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 95,
+          "unit_name": "DoubleBow_item",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 99,
+          "unit_name": "StoneTower",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 106,
+          "unit_name": "Trap",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 113,
+          "unit_name": "Bubble",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 115,
+          "unit_name": "Bubble",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 8,
+      "render_class": 3,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B08 C3.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B08 C3.ply",
+      "replay_sha256": "14AD78A3BE58785719F6B827006510BD35F63D405492A0862757106922B93F7C",
+      "cases": [
+        {
+          "unit_id": 92,
+          "unit_name": "SkyBallista",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 93,
+          "unit_name": "SkyBullet",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 94,
+          "unit_name": "Giant_item",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 95,
+          "unit_name": "DoubleBow_item",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 99,
+          "unit_name": "StoneTower",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 106,
+          "unit_name": "Trap",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 113,
+          "unit_name": "Bubble",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 115,
+          "unit_name": "Bubble",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 8,
+      "render_class": 4,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B08 C4.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B08 C4.ply",
+      "replay_sha256": "F87ED109774F2A519EA3E2377A435AE33B10A7F69798DE3FC5DB4FB27E4DA1CA",
+      "cases": [
+        {
+          "unit_id": 92,
+          "unit_name": "SkyBallista",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 93,
+          "unit_name": "SkyBullet",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 94,
+          "unit_name": "Giant_item",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 95,
+          "unit_name": "DoubleBow_item",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 99,
+          "unit_name": "StoneTower",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 106,
+          "unit_name": "Trap",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 113,
+          "unit_name": "Bubble",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 115,
+          "unit_name": "Bubble",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 9,
+      "render_class": 0,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B09 C0.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B09 C0.ply",
+      "replay_sha256": "37D54F73AFEC2A56A7A576C0FB47AC313692EA477A98CC80F55B8BD18C15A963",
+      "cases": [
+        {
+          "unit_id": 125,
+          "unit_name": "Hurdle",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": false
+        },
+        {
+          "unit_id": 131,
+          "unit_name": "Ascomoid",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 147,
+          "unit_name": "Volcano",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 151,
+          "unit_name": "Hell",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 160,
+          "unit_name": "NoxiousWeed",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 161,
+          "unit_name": "Poisonous",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 162,
+          "unit_name": "Treant",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 163,
+          "unit_name": "DemonFlower",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 9,
+      "render_class": 1,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B09 C1.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B09 C1.ply",
+      "replay_sha256": "F3C15F82B8B82EFA56461936FB82E204780AAD39483CC2091E5F81F6994F0987",
+      "cases": [
+        {
+          "unit_id": 125,
+          "unit_name": "Hurdle",
+          "source_slot": 148,
+          "target": {
+            "slot": 13,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": false
+        },
+        {
+          "unit_id": 131,
+          "unit_name": "Ascomoid",
+          "source_slot": 147,
+          "target": {
+            "slot": 8,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 147,
+          "unit_name": "Volcano",
+          "source_slot": 146,
+          "target": {
+            "slot": 28,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 151,
+          "unit_name": "Hell",
+          "source_slot": 145,
+          "target": {
+            "slot": 18,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 160,
+          "unit_name": "NoxiousWeed",
+          "source_slot": 144,
+          "target": {
+            "slot": 22,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 161,
+          "unit_name": "Poisonous",
+          "source_slot": 143,
+          "target": {
+            "slot": 14,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 162,
+          "unit_name": "Treant",
+          "source_slot": 142,
+          "target": {
+            "slot": 15,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 163,
+          "unit_name": "DemonFlower",
+          "source_slot": 141,
+          "target": {
+            "slot": 1,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 9,
+      "render_class": 2,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B09 C2.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B09 C2.ply",
+      "replay_sha256": "E5ECECBA17156CCAF9C614ED5EAFD59D0D8E4B4B60281F7E3C1D4FA63B859AA6",
+      "cases": [
+        {
+          "unit_id": 125,
+          "unit_name": "Hurdle",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": false
+        },
+        {
+          "unit_id": 131,
+          "unit_name": "Ascomoid",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 147,
+          "unit_name": "Volcano",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 151,
+          "unit_name": "Hell",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 160,
+          "unit_name": "NoxiousWeed",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 161,
+          "unit_name": "Poisonous",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 162,
+          "unit_name": "Treant",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 163,
+          "unit_name": "DemonFlower",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 9,
+      "render_class": 3,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B09 C3.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B09 C3.ply",
+      "replay_sha256": "42241133B3206991262522C6E37FFB319E40A1B8A939D5D503B9D725B0338FB7",
+      "cases": [
+        {
+          "unit_id": 125,
+          "unit_name": "Hurdle",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": false
+        },
+        {
+          "unit_id": 131,
+          "unit_name": "Ascomoid",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 147,
+          "unit_name": "Volcano",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 151,
+          "unit_name": "Hell",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 160,
+          "unit_name": "NoxiousWeed",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 161,
+          "unit_name": "Poisonous",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 162,
+          "unit_name": "Treant",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 163,
+          "unit_name": "DemonFlower",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 9,
+      "render_class": 4,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B09 C4.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B09 C4.ply",
+      "replay_sha256": "EBC5B66B4F7FBBC4C8AC2BB5AB45BB87DE7C805D50F40C6AB0D955B83F52EAB6",
+      "cases": [
+        {
+          "unit_id": 125,
+          "unit_name": "Hurdle",
+          "source_slot": 52,
+          "target": {
+            "slot": 41,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": false
+        },
+        {
+          "unit_id": 131,
+          "unit_name": "Ascomoid",
+          "source_slot": 50,
+          "target": {
+            "slot": 49,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 147,
+          "unit_name": "Volcano",
+          "source_slot": 51,
+          "target": {
+            "slot": 48,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 151,
+          "unit_name": "Hell",
+          "source_slot": 40,
+          "target": {
+            "slot": 47,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 160,
+          "unit_name": "NoxiousWeed",
+          "source_slot": 39,
+          "target": {
+            "slot": 46,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 161,
+          "unit_name": "Poisonous",
+          "source_slot": 38,
+          "target": {
+            "slot": 30,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 162,
+          "unit_name": "Treant",
+          "source_slot": 43,
+          "target": {
+            "slot": 31,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 163,
+          "unit_name": "DemonFlower",
+          "source_slot": 42,
+          "target": {
+            "slot": 34,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 10,
+      "render_class": 0,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B10 C0.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B10 C0.ply",
+      "replay_sha256": "F96D48744BA2620C3B2181CEBE3D11589BDA17FE80B36690E56C90EDDB920711",
+      "cases": [
+        {
+          "unit_id": 0,
+          "unit_name": "BuildMan",
+          "source_slot": 52,
+          "target": {
+            "slot": 42,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 47,
+          "unit_name": "Null.chr",
+          "source_slot": 50,
+          "target": {
+            "slot": 41,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 61,
+          "unit_name": "Imp",
+          "source_slot": 51,
+          "target": {
+            "slot": 49,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 65,
+          "unit_name": "Triceratops",
+          "source_slot": 40,
+          "target": {
+            "slot": 48,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 66,
+          "unit_name": "Ceratosaurus",
+          "source_slot": 39,
+          "target": {
+            "slot": 47,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 67,
+          "unit_name": "Pachycephalosaurus",
+          "source_slot": 38,
+          "target": {
+            "slot": 46,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 69,
+          "unit_name": "Velociraptor",
+          "source_slot": 43,
+          "target": {
+            "slot": 30,
+            "unit_id": 75,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 10,
+      "render_class": 1,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B10 C1.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B10 C1.ply",
+      "replay_sha256": "82E7E090EA331C694F0841D03D8FE31E68C00EC18AA7F75EC81E57977BE1E81C",
+      "cases": [
+        {
+          "unit_id": 0,
+          "unit_name": "BuildMan",
+          "source_slot": 148,
+          "target": {
+            "slot": 13,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 47,
+          "unit_name": "Null.chr",
+          "source_slot": 147,
+          "target": {
+            "slot": 8,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 61,
+          "unit_name": "Imp",
+          "source_slot": 146,
+          "target": {
+            "slot": 28,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 65,
+          "unit_name": "Triceratops",
+          "source_slot": 145,
+          "target": {
+            "slot": 18,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 66,
+          "unit_name": "Ceratosaurus",
+          "source_slot": 144,
+          "target": {
+            "slot": 22,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 67,
+          "unit_name": "Pachycephalosaurus",
+          "source_slot": 143,
+          "target": {
+            "slot": 14,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 69,
+          "unit_name": "Velociraptor",
+          "source_slot": 142,
+          "target": {
+            "slot": 15,
+            "unit_id": 164,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 10,
+      "render_class": 2,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B10 C2.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B10 C2.ply",
+      "replay_sha256": "D4C68FDE2FAA30B6BEADD65DB06790F8AB9277AAAF36FB61B139AB25C37E14C5",
+      "cases": [
+        {
+          "unit_id": 0,
+          "unit_name": "BuildMan",
+          "source_slot": 52,
+          "target": {
+            "slot": 42,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 47,
+          "unit_name": "Null.chr",
+          "source_slot": 50,
+          "target": {
+            "slot": 41,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 61,
+          "unit_name": "Imp",
+          "source_slot": 51,
+          "target": {
+            "slot": 49,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 65,
+          "unit_name": "Triceratops",
+          "source_slot": 40,
+          "target": {
+            "slot": 48,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 66,
+          "unit_name": "Ceratosaurus",
+          "source_slot": 39,
+          "target": {
+            "slot": 47,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 67,
+          "unit_name": "Pachycephalosaurus",
+          "source_slot": 38,
+          "target": {
+            "slot": 46,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 69,
+          "unit_name": "Velociraptor",
+          "source_slot": 43,
+          "target": {
+            "slot": 30,
+            "unit_id": 48,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 10,
+      "render_class": 3,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B10 C3.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B10 C3.ply",
+      "replay_sha256": "E25FF03C650C06C3188207CF05BD9F0F7E9D6421F8DBD2D71D37137F48793A34",
+      "cases": [
+        {
+          "unit_id": 0,
+          "unit_name": "BuildMan",
+          "source_slot": 52,
+          "target": {
+            "slot": 42,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 47,
+          "unit_name": "Null.chr",
+          "source_slot": 50,
+          "target": {
+            "slot": 41,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 61,
+          "unit_name": "Imp",
+          "source_slot": 51,
+          "target": {
+            "slot": 49,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 65,
+          "unit_name": "Triceratops",
+          "source_slot": 40,
+          "target": {
+            "slot": 48,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 66,
+          "unit_name": "Ceratosaurus",
+          "source_slot": 39,
+          "target": {
+            "slot": 47,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 67,
+          "unit_name": "Pachycephalosaurus",
+          "source_slot": 38,
+          "target": {
+            "slot": 46,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 69,
+          "unit_name": "Velociraptor",
+          "source_slot": 43,
+          "target": {
+            "slot": 30,
+            "unit_id": 77,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    },
+    {
+      "batch_index": 10,
+      "render_class": 4,
+      "map": "RankerOCPV_Win/Maps/(2) GP Attack B10 C4.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Attack B10 C4.ply",
+      "replay_sha256": "F8F47C88F62B46F47D31FD38EFCCC565FB2F1C51C8D73DF5B67710B482C84EDB",
+      "cases": [
+        {
+          "unit_id": 0,
+          "unit_name": "BuildMan",
+          "source_slot": 52,
+          "target": {
+            "slot": 42,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 47,
+          "unit_name": "Null.chr",
+          "source_slot": 50,
+          "target": {
+            "slot": 41,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 61,
+          "unit_name": "Imp",
+          "source_slot": 51,
+          "target": {
+            "slot": 49,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 65,
+          "unit_name": "Triceratops",
+          "source_slot": 40,
+          "target": {
+            "slot": 48,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 66,
+          "unit_name": "Ceratosaurus",
+          "source_slot": 39,
+          "target": {
+            "slot": 47,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 67,
+          "unit_name": "Pachycephalosaurus",
+          "source_slot": 38,
+          "target": {
+            "slot": 46,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        },
+        {
+          "unit_id": 69,
+          "unit_name": "Velociraptor",
+          "source_slot": 43,
+          "target": {
+            "slot": 30,
+            "unit_id": 79,
+            "initial_health": 1000000
+          },
+          "used_exact_row_template": true
+        }
+      ]
+    }
+  ]
+}

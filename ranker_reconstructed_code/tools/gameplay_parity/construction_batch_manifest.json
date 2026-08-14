@@ -1,0 +1,1038 @@
+{
+  "schema": 1,
+  "binding_count": 52,
+  "command_frame": 31,
+  "end_frame": 120,
+  "batches": [
+    {
+      "batch_index": 0,
+      "map": "RankerOCPV_Win/Maps/(2) GP Construction B00.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Construction B00.ply",
+      "replay_sha256": "08BAA4F0864B0E66583BA17DBA85195F84A8FAD54CD736371B8A1EDB09F347C1",
+      "cases": [
+        {
+          "case_id": "construction_000_096",
+          "builder_slot": 52,
+          "builder_unit_id": 0,
+          "builder_unit_name": "BuildMan",
+          "building_unit_id": 96,
+          "building_unit_name": "Sanctuary",
+          "primary_cost": 1200,
+          "secondary_cost": 0,
+          "construction_ticks": 2100,
+          "building_world": [
+            1152,
+            448
+          ]
+        },
+        {
+          "case_id": "construction_000_098",
+          "builder_slot": 50,
+          "builder_unit_id": 0,
+          "builder_unit_name": "BuildMan",
+          "building_unit_id": 98,
+          "building_unit_name": "House",
+          "primary_cost": 200,
+          "secondary_cost": 0,
+          "construction_ticks": 400,
+          "building_world": [
+            1472,
+            288
+          ]
+        },
+        {
+          "case_id": "construction_000_099",
+          "builder_slot": 51,
+          "builder_unit_id": 0,
+          "builder_unit_name": "BuildMan",
+          "building_unit_id": 99,
+          "building_unit_name": "StoneTower",
+          "primary_cost": 400,
+          "secondary_cost": 0,
+          "construction_ticks": 700,
+          "building_world": [
+            1536,
+            288
+          ]
+        },
+        {
+          "case_id": "construction_000_100",
+          "builder_slot": 40,
+          "builder_unit_id": 0,
+          "builder_unit_name": "BuildMan",
+          "building_unit_id": 100,
+          "building_unit_name": "PowerHouse",
+          "primary_cost": 400,
+          "secondary_cost": 0,
+          "construction_ticks": 1000,
+          "building_world": [
+            1344,
+            352
+          ]
+        },
+        {
+          "case_id": "construction_000_101",
+          "builder_slot": 39,
+          "builder_unit_id": 0,
+          "builder_unit_name": "BuildMan",
+          "building_unit_id": 101,
+          "building_unit_name": "SoldierHouse",
+          "primary_cost": 400,
+          "secondary_cost": 0,
+          "construction_ticks": 1100,
+          "building_world": [
+            1344,
+            448
+          ]
+        },
+        {
+          "case_id": "construction_000_102",
+          "builder_slot": 38,
+          "builder_unit_id": 0,
+          "builder_unit_name": "BuildMan",
+          "building_unit_id": 102,
+          "building_unit_name": "SkyHouse",
+          "primary_cost": 550,
+          "secondary_cost": 0,
+          "construction_ticks": 1120,
+          "building_world": [
+            1504,
+            448
+          ]
+        }
+      ],
+      "prerequisite_unit_ids": [
+        96,
+        100
+      ],
+      "initial_completed_type_counts": {
+        "96": 1,
+        "100": 1
+      },
+      "expected_completed_type_counts": {
+        "96": 2,
+        "98": 1,
+        "99": 1,
+        "100": 2,
+        "101": 1,
+        "102": 1
+      }
+    },
+    {
+      "batch_index": 1,
+      "map": "RankerOCPV_Win/Maps/(2) GP Construction B01.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Construction B01.ply",
+      "replay_sha256": "7774B3AEDC8329A0D899264CEA2D2B106763F32EAD318C213EB529592106FC9B",
+      "cases": [
+        {
+          "case_id": "construction_000_103",
+          "builder_slot": 52,
+          "builder_unit_id": 0,
+          "builder_unit_name": "BuildMan",
+          "building_unit_id": 103,
+          "building_unit_name": "Blacksmith",
+          "primary_cost": 400,
+          "secondary_cost": 0,
+          "construction_ticks": 1000,
+          "building_world": [
+            1344,
+            352
+          ]
+        },
+        {
+          "case_id": "construction_000_104",
+          "builder_slot": 50,
+          "builder_unit_id": 0,
+          "builder_unit_name": "BuildMan",
+          "building_unit_id": 104,
+          "building_unit_name": "LandIncreaser",
+          "primary_cost": 700,
+          "secondary_cost": 0,
+          "construction_ticks": 1600,
+          "building_world": [
+            1152,
+            448
+          ]
+        },
+        {
+          "case_id": "construction_000_105",
+          "builder_slot": 51,
+          "builder_unit_id": 0,
+          "builder_unit_name": "BuildMan",
+          "building_unit_id": 105,
+          "building_unit_name": "SkyIncreaser",
+          "primary_cost": 800,
+          "secondary_cost": 0,
+          "construction_ticks": 1150,
+          "building_world": [
+            1312,
+            448
+          ]
+        },
+        {
+          "case_id": "construction_000_106",
+          "builder_slot": 40,
+          "builder_unit_id": 0,
+          "builder_unit_name": "BuildMan",
+          "building_unit_id": 106,
+          "building_unit_name": "Trap",
+          "primary_cost": 200,
+          "secondary_cost": 0,
+          "construction_ticks": 350,
+          "building_world": [
+            1472,
+            288
+          ]
+        },
+        {
+          "case_id": "construction_000_107",
+          "builder_slot": 39,
+          "builder_unit_id": 0,
+          "builder_unit_name": "BuildMan",
+          "building_unit_id": 107,
+          "building_unit_name": "PowerIncreaser",
+          "primary_cost": 800,
+          "secondary_cost": 0,
+          "construction_ticks": 1400,
+          "building_world": [
+            1472,
+            448
+          ]
+        },
+        {
+          "case_id": "construction_000_108",
+          "builder_slot": 38,
+          "builder_unit_id": 0,
+          "builder_unit_name": "BuildMan",
+          "building_unit_id": 108,
+          "building_unit_name": "IronIncreaser",
+          "primary_cost": 600,
+          "secondary_cost": 0,
+          "construction_ticks": 1150,
+          "building_world": [
+            2624,
+            480
+          ]
+        }
+      ],
+      "prerequisite_unit_ids": [
+        100,
+        101,
+        102,
+        104
+      ],
+      "initial_completed_type_counts": {
+        "100": 1,
+        "101": 1,
+        "102": 1,
+        "104": 1
+      },
+      "expected_completed_type_counts": {
+        "103": 1,
+        "104": 2,
+        "105": 1,
+        "106": 1,
+        "107": 1,
+        "108": 1
+      }
+    },
+    {
+      "batch_index": 2,
+      "map": "RankerOCPV_Win/Maps/(2) GP Construction B02.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Construction B02.ply",
+      "replay_sha256": "3F051D7A4E8642097A0496B3026F1ABBB4CB422B3C670CDAA5C38BFB342C07DA",
+      "cases": [
+        {
+          "case_id": "construction_000_111",
+          "builder_slot": 52,
+          "builder_unit_id": 0,
+          "builder_unit_name": "BuildMan",
+          "building_unit_id": 111,
+          "building_unit_name": "SummonHouse",
+          "primary_cost": 800,
+          "secondary_cost": 0,
+          "construction_ticks": 2280,
+          "building_world": [
+            1472,
+            288
+          ]
+        },
+        {
+          "case_id": "construction_016_112",
+          "builder_slot": 50,
+          "builder_unit_id": 16,
+          "builder_unit_name": "Wizard",
+          "building_unit_id": 112,
+          "building_unit_name": "Heaven",
+          "primary_cost": 1200,
+          "secondary_cost": 0,
+          "construction_ticks": 2100,
+          "building_world": [
+            1152,
+            448
+          ]
+        },
+        {
+          "case_id": "construction_016_114",
+          "builder_slot": 51,
+          "builder_unit_id": 16,
+          "builder_unit_name": "Wizard",
+          "building_unit_id": 114,
+          "building_unit_name": "ElfTree",
+          "primary_cost": 200,
+          "secondary_cost": 0,
+          "construction_ticks": 400,
+          "building_world": [
+            1408,
+            320
+          ]
+        },
+        {
+          "case_id": "construction_016_115",
+          "builder_slot": 40,
+          "builder_unit_id": 16,
+          "builder_unit_name": "Wizard",
+          "building_unit_id": 115,
+          "building_unit_name": "Bubble",
+          "primary_cost": 400,
+          "secondary_cost": 0,
+          "construction_ticks": 625,
+          "building_world": [
+            1344,
+            352
+          ]
+        },
+        {
+          "case_id": "construction_016_116",
+          "builder_slot": 39,
+          "builder_unit_id": 16,
+          "builder_unit_name": "Wizard",
+          "building_unit_id": 116,
+          "building_unit_name": "RedHall",
+          "primary_cost": 400,
+          "secondary_cost": 0,
+          "construction_ticks": 900,
+          "building_world": [
+            1344,
+            384
+          ]
+        },
+        {
+          "case_id": "construction_016_117",
+          "builder_slot": 38,
+          "builder_unit_id": 16,
+          "builder_unit_name": "Wizard",
+          "building_unit_id": 117,
+          "building_unit_name": "BlueHall",
+          "primary_cost": 400,
+          "secondary_cost": 0,
+          "construction_ticks": 900,
+          "building_world": [
+            1504,
+            448
+          ]
+        }
+      ],
+      "prerequisite_unit_ids": [
+        96,
+        98,
+        112,
+        114
+      ],
+      "initial_completed_type_counts": {
+        "96": 1,
+        "98": 1,
+        "112": 1,
+        "114": 1
+      },
+      "expected_completed_type_counts": {
+        "111": 1,
+        "112": 2,
+        "114": 2,
+        "115": 1,
+        "116": 1,
+        "117": 1
+      }
+    },
+    {
+      "batch_index": 3,
+      "map": "RankerOCPV_Win/Maps/(2) GP Construction B03.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Construction B03.ply",
+      "replay_sha256": "4B3BF061DDDF206366A94991FFBEBA0C71A4FCB9059C6D59468C5354A9734DCC",
+      "cases": [
+        {
+          "case_id": "construction_016_118",
+          "builder_slot": 52,
+          "builder_unit_id": 16,
+          "builder_unit_name": "Wizard",
+          "building_unit_id": 118,
+          "building_unit_name": "ManaHall",
+          "primary_cost": 400,
+          "secondary_cost": 0,
+          "construction_ticks": 950,
+          "building_world": [
+            1344,
+            352
+          ]
+        },
+        {
+          "case_id": "construction_016_119",
+          "builder_slot": 50,
+          "builder_unit_id": 16,
+          "builder_unit_name": "Wizard",
+          "building_unit_id": 119,
+          "building_unit_name": "SkyHall",
+          "primary_cost": 600,
+          "secondary_cost": 0,
+          "construction_ticks": 1420,
+          "building_world": [
+            1216,
+            416
+          ]
+        },
+        {
+          "case_id": "construction_016_120",
+          "builder_slot": 51,
+          "builder_unit_id": 16,
+          "builder_unit_name": "Wizard",
+          "building_unit_id": 120,
+          "building_unit_name": "ElfLibrary",
+          "primary_cost": 500,
+          "secondary_cost": 0,
+          "construction_ticks": 900,
+          "building_world": [
+            1504,
+            416
+          ]
+        },
+        {
+          "case_id": "construction_016_121",
+          "builder_slot": 40,
+          "builder_unit_id": 16,
+          "builder_unit_name": "Wizard",
+          "building_unit_id": 121,
+          "building_unit_name": "SkyLibrary",
+          "primary_cost": 500,
+          "secondary_cost": 0,
+          "construction_ticks": 1150,
+          "building_world": [
+            1344,
+            448
+          ]
+        },
+        {
+          "case_id": "construction_016_122",
+          "builder_slot": 39,
+          "builder_unit_id": 16,
+          "builder_unit_name": "Wizard",
+          "building_unit_id": 122,
+          "building_unit_name": "ManaLibrary",
+          "primary_cost": 500,
+          "secondary_cost": 0,
+          "construction_ticks": 900,
+          "building_world": [
+            2688,
+            448
+          ]
+        },
+        {
+          "case_id": "construction_016_124",
+          "builder_slot": 38,
+          "builder_unit_id": 16,
+          "builder_unit_name": "Wizard",
+          "building_unit_id": 124,
+          "building_unit_name": "HonyTemple",
+          "primary_cost": 500,
+          "secondary_cost": 0,
+          "construction_ticks": 950,
+          "building_world": [
+            1088,
+            480
+          ]
+        }
+      ],
+      "prerequisite_unit_ids": [
+        116,
+        117,
+        118,
+        119,
+        120
+      ],
+      "initial_completed_type_counts": {
+        "116": 1,
+        "117": 1,
+        "118": 1,
+        "119": 1,
+        "120": 1
+      },
+      "expected_completed_type_counts": {
+        "118": 2,
+        "119": 2,
+        "120": 2,
+        "121": 1,
+        "122": 1,
+        "124": 1
+      }
+    },
+    {
+      "batch_index": 4,
+      "map": "RankerOCPV_Win/Maps/(2) GP Construction B04.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Construction B04.ply",
+      "replay_sha256": "9BBFCE563ACAB4DBAE3EEB78F6414992B5223DFED9191FDCDB00A35F6E5DCC5B",
+      "cases": [
+        {
+          "case_id": "construction_016_127",
+          "builder_slot": 52,
+          "builder_unit_id": 16,
+          "builder_unit_name": "Wizard",
+          "building_unit_id": 127,
+          "building_unit_name": "SummonHall",
+          "primary_cost": 500,
+          "secondary_cost": 0,
+          "construction_ticks": 2280,
+          "building_world": [
+            1472,
+            288
+          ]
+        },
+        {
+          "case_id": "construction_032_128",
+          "builder_slot": 50,
+          "builder_unit_id": 32,
+          "builder_unit_name": "Dinos",
+          "building_unit_id": 128,
+          "building_unit_name": "TyranoNest",
+          "primary_cost": 1000,
+          "secondary_cost": 0,
+          "construction_ticks": 2100,
+          "building_world": [
+            1152,
+            448
+          ]
+        },
+        {
+          "case_id": "construction_032_130",
+          "builder_slot": 51,
+          "builder_unit_id": 32,
+          "builder_unit_name": "Dinos",
+          "building_unit_id": 130,
+          "building_unit_name": "Nest",
+          "primary_cost": 200,
+          "secondary_cost": 0,
+          "construction_ticks": 400,
+          "building_world": [
+            1344,
+            352
+          ]
+        },
+        {
+          "case_id": "construction_032_131",
+          "builder_slot": 40,
+          "builder_unit_id": 32,
+          "builder_unit_name": "Dinos",
+          "building_unit_id": 131,
+          "building_unit_name": "Ascomoid",
+          "primary_cost": 350,
+          "secondary_cost": 0,
+          "construction_ticks": 650,
+          "building_world": [
+            1632,
+            352
+          ]
+        },
+        {
+          "case_id": "construction_032_132",
+          "builder_slot": 39,
+          "builder_unit_id": 32,
+          "builder_unit_name": "Dinos",
+          "building_unit_id": 132,
+          "building_unit_name": "EggNest",
+          "primary_cost": 400,
+          "secondary_cost": 0,
+          "construction_ticks": 800,
+          "building_world": [
+            1344,
+            416
+          ]
+        },
+        {
+          "case_id": "construction_032_133",
+          "builder_slot": 38,
+          "builder_unit_id": 32,
+          "builder_unit_name": "Dinos",
+          "building_unit_id": 133,
+          "building_unit_name": "LandNest",
+          "primary_cost": 600,
+          "secondary_cost": 0,
+          "construction_ticks": 1400,
+          "building_world": [
+            1472,
+            416
+          ]
+        }
+      ],
+      "prerequisite_unit_ids": [
+        112,
+        114,
+        128,
+        132
+      ],
+      "initial_completed_type_counts": {
+        "112": 1,
+        "114": 1,
+        "128": 1,
+        "132": 1
+      },
+      "expected_completed_type_counts": {
+        "127": 1,
+        "128": 2,
+        "130": 1,
+        "131": 1,
+        "132": 2,
+        "133": 1
+      }
+    },
+    {
+      "batch_index": 5,
+      "map": "RankerOCPV_Win/Maps/(2) GP Construction B05.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Construction B05.ply",
+      "replay_sha256": "9B1FB1D008ED3405D1CEDDCC9B1D2D6F672002364E9F0D75107A55C6F0737DA1",
+      "cases": [
+        {
+          "case_id": "construction_032_134",
+          "builder_slot": 52,
+          "builder_unit_id": 32,
+          "builder_unit_name": "Dinos",
+          "building_unit_id": 134,
+          "building_unit_name": "SkyNest",
+          "primary_cost": 600,
+          "secondary_cost": 0,
+          "construction_ticks": 1400,
+          "building_world": [
+            1472,
+            288
+          ]
+        },
+        {
+          "case_id": "construction_032_135",
+          "builder_slot": 50,
+          "builder_unit_id": 32,
+          "builder_unit_name": "Dinos",
+          "building_unit_id": 135,
+          "building_unit_name": "ThrowNest",
+          "primary_cost": 400,
+          "secondary_cost": 0,
+          "construction_ticks": 950,
+          "building_world": [
+            1280,
+            384
+          ]
+        },
+        {
+          "case_id": "construction_032_136",
+          "builder_slot": 51,
+          "builder_unit_id": 32,
+          "builder_unit_name": "Dinos",
+          "building_unit_id": 136,
+          "building_unit_name": "UpgradeNest",
+          "primary_cost": 500,
+          "secondary_cost": 0,
+          "construction_ticks": 1150,
+          "building_world": [
+            1440,
+            416
+          ]
+        },
+        {
+          "case_id": "construction_032_137",
+          "builder_slot": 40,
+          "builder_unit_id": 32,
+          "builder_unit_name": "Dinos",
+          "building_unit_id": 137,
+          "building_unit_name": "LandNisdos",
+          "primary_cost": 800,
+          "secondary_cost": 0,
+          "construction_ticks": 1750,
+          "building_world": [
+            1152,
+            448
+          ]
+        },
+        {
+          "case_id": "construction_032_138",
+          "builder_slot": 39,
+          "builder_unit_id": 32,
+          "builder_unit_name": "Dinos",
+          "building_unit_id": 138,
+          "building_unit_name": "SkyNisdos",
+          "primary_cost": 800,
+          "secondary_cost": 0,
+          "construction_ticks": 1750,
+          "building_world": [
+            2688,
+            448
+          ]
+        },
+        {
+          "case_id": "construction_032_143",
+          "builder_slot": 38,
+          "builder_unit_id": 32,
+          "builder_unit_name": "Dinos",
+          "building_unit_id": 143,
+          "building_unit_name": "SummonNest",
+          "primary_cost": 500,
+          "secondary_cost": 0,
+          "construction_ticks": 2280,
+          "building_world": [
+            1280,
+            480
+          ]
+        }
+      ],
+      "prerequisite_unit_ids": [
+        128,
+        130,
+        132,
+        133,
+        134,
+        136
+      ],
+      "initial_completed_type_counts": {
+        "128": 1,
+        "130": 1,
+        "132": 1,
+        "133": 1,
+        "134": 1,
+        "136": 1
+      },
+      "expected_completed_type_counts": {
+        "134": 2,
+        "135": 1,
+        "136": 2,
+        "137": 1,
+        "138": 1,
+        "143": 1
+      }
+    },
+    {
+      "batch_index": 6,
+      "map": "RankerOCPV_Win/Maps/(2) GP Construction B06.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Construction B06.ply",
+      "replay_sha256": "F3F9E0E02651024FA21281848E4451335964293164AFDE536482311ECB3B7959",
+      "cases": [
+        {
+          "case_id": "construction_048_144",
+          "builder_slot": 52,
+          "builder_unit_id": 48,
+          "builder_unit_name": "Insect",
+          "building_unit_id": 144,
+          "building_unit_name": "DemonDen",
+          "primary_cost": 1200,
+          "secondary_cost": 0,
+          "construction_ticks": 2100,
+          "building_world": [
+            1152,
+            448
+          ]
+        },
+        {
+          "case_id": "construction_048_146",
+          "builder_slot": 50,
+          "builder_unit_id": 48,
+          "builder_unit_name": "Insect",
+          "building_unit_id": 146,
+          "building_unit_name": "Tomb",
+          "primary_cost": 200,
+          "secondary_cost": 0,
+          "construction_ticks": 400,
+          "building_world": [
+            1472,
+            288
+          ]
+        },
+        {
+          "case_id": "construction_048_147",
+          "builder_slot": 51,
+          "builder_unit_id": 48,
+          "builder_unit_name": "Insect",
+          "building_unit_id": 147,
+          "building_unit_name": "Volcano",
+          "primary_cost": 400,
+          "secondary_cost": 0,
+          "construction_ticks": 750,
+          "building_world": [
+            1408,
+            320
+          ]
+        },
+        {
+          "case_id": "construction_048_148",
+          "builder_slot": 40,
+          "builder_unit_id": 48,
+          "builder_unit_name": "Insect",
+          "building_unit_id": 148,
+          "building_unit_name": "DeathDen",
+          "primary_cost": 400,
+          "secondary_cost": 0,
+          "construction_ticks": 1000,
+          "building_world": [
+            1344,
+            352
+          ]
+        },
+        {
+          "case_id": "construction_048_149",
+          "builder_slot": 39,
+          "builder_unit_id": 48,
+          "builder_unit_name": "Insect",
+          "building_unit_id": 149,
+          "building_unit_name": "FlyPortal",
+          "primary_cost": 500,
+          "secondary_cost": 0,
+          "construction_ticks": 1200,
+          "building_world": [
+            1344,
+            416
+          ]
+        },
+        {
+          "case_id": "construction_048_150",
+          "builder_slot": 38,
+          "builder_unit_id": 48,
+          "builder_unit_name": "Insect",
+          "building_unit_id": 150,
+          "building_unit_name": "MagicDen",
+          "primary_cost": 500,
+          "secondary_cost": 0,
+          "construction_ticks": 1220,
+          "building_world": [
+            1504,
+            448
+          ]
+        }
+      ],
+      "prerequisite_unit_ids": [
+        144,
+        148,
+        154
+      ],
+      "initial_completed_type_counts": {
+        "144": 1,
+        "148": 1,
+        "154": 1
+      },
+      "expected_completed_type_counts": {
+        "144": 2,
+        "146": 1,
+        "147": 1,
+        "148": 2,
+        "149": 1,
+        "150": 1
+      }
+    },
+    {
+      "batch_index": 7,
+      "map": "RankerOCPV_Win/Maps/(2) GP Construction B07.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Construction B07.ply",
+      "replay_sha256": "7B66F0E2D240D5AB5F9E5DAF5F887856E2B482E94FE5337BA7D3011A1C76380B",
+      "cases": [
+        {
+          "case_id": "construction_048_151",
+          "builder_slot": 52,
+          "builder_unit_id": 48,
+          "builder_unit_name": "Insect",
+          "building_unit_id": 151,
+          "building_unit_name": "Hell",
+          "primary_cost": 700,
+          "secondary_cost": 0,
+          "construction_ticks": 1250,
+          "building_world": [
+            1344,
+            352
+          ]
+        },
+        {
+          "case_id": "construction_048_152",
+          "builder_slot": 50,
+          "builder_unit_id": 48,
+          "builder_unit_name": "Insect",
+          "building_unit_id": 152,
+          "building_unit_name": "DirtyPortal",
+          "primary_cost": 500,
+          "secondary_cost": 0,
+          "construction_ticks": 1500,
+          "building_world": [
+            1152,
+            448
+          ]
+        },
+        {
+          "case_id": "construction_048_153",
+          "builder_slot": 51,
+          "builder_unit_id": 48,
+          "builder_unit_name": "Insect",
+          "building_unit_id": 153,
+          "building_unit_name": "HighPortal",
+          "primary_cost": 500,
+          "secondary_cost": 0,
+          "construction_ticks": 1500,
+          "building_world": [
+            1504,
+            416
+          ]
+        },
+        {
+          "case_id": "construction_048_154",
+          "builder_slot": 40,
+          "builder_unit_id": 48,
+          "builder_unit_name": "Insect",
+          "building_unit_id": 154,
+          "building_unit_name": "FlyDen",
+          "primary_cost": 500,
+          "secondary_cost": 0,
+          "construction_ticks": 1100,
+          "building_world": [
+            1312,
+            448
+          ]
+        },
+        {
+          "case_id": "construction_048_155",
+          "builder_slot": 39,
+          "builder_unit_id": 48,
+          "builder_unit_name": "Insect",
+          "building_unit_id": 155,
+          "building_unit_name": "EvilPortal",
+          "primary_cost": 500,
+          "secondary_cost": 0,
+          "construction_ticks": 1250,
+          "building_world": [
+            2688,
+            448
+          ]
+        },
+        {
+          "case_id": "construction_083_099",
+          "builder_slot": 38,
+          "builder_unit_id": 83,
+          "builder_unit_name": "Alien1",
+          "building_unit_id": 99,
+          "building_unit_name": "StoneTower",
+          "primary_cost": 400,
+          "secondary_cost": 0,
+          "construction_ticks": 700,
+          "building_world": [
+            1472,
+            288
+          ]
+        }
+      ],
+      "prerequisite_unit_ids": [
+        100,
+        148,
+        150,
+        154,
+        155
+      ],
+      "initial_completed_type_counts": {
+        "100": 1,
+        "148": 1,
+        "150": 1,
+        "154": 1,
+        "155": 1
+      },
+      "expected_completed_type_counts": {
+        "151": 1,
+        "152": 1,
+        "153": 1,
+        "154": 2,
+        "155": 2,
+        "99": 1
+      }
+    },
+    {
+      "batch_index": 8,
+      "map": "RankerOCPV_Win/Maps/(2) GP Construction B08.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Construction B08.ply",
+      "replay_sha256": "17646451FB191FA0AD1F745E22F79BCE807D1438556FAC31AFCAC9A692F37B68",
+      "cases": [
+        {
+          "case_id": "construction_083_115",
+          "builder_slot": 52,
+          "builder_unit_id": 83,
+          "builder_unit_name": "Alien1",
+          "building_unit_id": 115,
+          "building_unit_name": "Bubble",
+          "primary_cost": 400,
+          "secondary_cost": 0,
+          "construction_ticks": 625,
+          "building_world": [
+            1472,
+            288
+          ]
+        },
+        {
+          "case_id": "construction_083_131",
+          "builder_slot": 50,
+          "builder_unit_id": 83,
+          "builder_unit_name": "Alien1",
+          "building_unit_id": 131,
+          "building_unit_name": "Ascomoid",
+          "primary_cost": 350,
+          "secondary_cost": 0,
+          "construction_ticks": 650,
+          "building_world": [
+            1536,
+            288
+          ]
+        },
+        {
+          "case_id": "construction_083_147",
+          "builder_slot": 51,
+          "builder_unit_id": 83,
+          "builder_unit_name": "Alien1",
+          "building_unit_id": 147,
+          "building_unit_name": "Volcano",
+          "primary_cost": 400,
+          "secondary_cost": 0,
+          "construction_ticks": 750,
+          "building_world": [
+            1408,
+            320
+          ]
+        },
+        {
+          "case_id": "construction_083_164",
+          "builder_slot": 40,
+          "builder_unit_id": 83,
+          "builder_unit_name": "Alien1",
+          "building_unit_id": 164,
+          "building_unit_name": "Alien4",
+          "primary_cost": 0,
+          "secondary_cost": 0,
+          "construction_ticks": 100,
+          "building_world": [
+            1472,
+            320
+          ]
+        }
+      ],
+      "prerequisite_unit_ids": [
+        114,
+        132,
+        148
+      ],
+      "initial_completed_type_counts": {
+        "114": 1,
+        "132": 1,
+        "148": 1
+      },
+      "expected_completed_type_counts": {
+        "115": 1,
+        "131": 1,
+        "147": 1,
+        "164": 1
+      }
+    }
+  ]
+}

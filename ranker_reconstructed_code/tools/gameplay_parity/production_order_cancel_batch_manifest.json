@@ -1,0 +1,3708 @@
+{
+  "schema": 1,
+  "binding_count": 54,
+  "case_count": 188,
+  "enqueue_frame": 31,
+  "cancel_frame": 34,
+  "end_frame": 40,
+  "batches": [
+    {
+      "batch_index": 0,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B00.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B00.ply",
+      "replay_sha256": "287A090EE53A7C8B78E58B8806B1E9D05FA256C9A9EF5B9A246E3A45147DCE85",
+      "expected_owner_primary_after_batch": 100000,
+      "expected_owner_secondary_after_batch": 103000,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u096_o00_q0",
+          "source_unit_id": 96,
+          "source_unit_name": "Sanctuary",
+          "order_id": 0,
+          "order_name": "베리 채집량 증가",
+          "logical_index": 0,
+          "queued_order_ids": [
+            0
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u096_o01_q0",
+          "source_unit_id": 96,
+          "source_unit_name": "Sanctuary",
+          "order_id": 1,
+          "order_name": "폴아웃 개발",
+          "logical_index": 0,
+          "queued_order_ids": [
+            1
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u096_o43_q0",
+          "source_unit_id": 96,
+          "source_unit_name": "Sanctuary",
+          "order_id": 43,
+          "order_name": "레벨 업 경험치 감소",
+          "logical_index": 0,
+          "queued_order_ids": [
+            43
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u096_o55_q0",
+          "source_unit_id": 96,
+          "source_unit_name": "Sanctuary",
+          "order_id": 55,
+          "order_name": "원시인 레이지 개발",
+          "logical_index": 0,
+          "queued_order_ids": [
+            55
+          ],
+          "owner": 0,
+          "source_slot": 40,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u104_o02_q0",
+          "source_unit_id": 104,
+          "source_unit_name": "LandIncreaser",
+          "order_id": 2,
+          "order_name": "파워맨 이동속도 증가",
+          "logical_index": 0,
+          "queued_order_ids": [
+            2
+          ],
+          "owner": 0,
+          "source_slot": 39,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u104_o03_q0",
+          "source_unit_id": 104,
+          "source_unit_name": "LandIncreaser",
+          "order_id": 3,
+          "order_name": "원시인 지상 유닛 공격 업",
+          "logical_index": 0,
+          "queued_order_ids": [
+            3
+          ],
+          "owner": 0,
+          "source_slot": 38,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u104_o04_q0",
+          "source_unit_id": 104,
+          "source_unit_name": "LandIncreaser",
+          "order_id": 4,
+          "order_name": "원시인 지상 유닛 방어 업",
+          "logical_index": 0,
+          "queued_order_ids": [
+            4
+          ],
+          "owner": 0,
+          "source_slot": 43,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u105_o07_q0",
+          "source_unit_id": 105,
+          "source_unit_name": "SkyIncreaser",
+          "order_id": 7,
+          "order_name": "스쿼드론 이동속도 증가",
+          "logical_index": 0,
+          "queued_order_ids": [
+            7
+          ],
+          "owner": 0,
+          "source_slot": 42,
+          "expected_remaining_order_ids": []
+        }
+      ]
+    },
+    {
+      "batch_index": 1,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B01.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B01.ply",
+      "replay_sha256": "D264A4B9121D5590E8DF1B15143658A445997C2FB46D08857AB0C2408A58CADE",
+      "expected_owner_primary_after_batch": 98900,
+      "expected_owner_secondary_after_batch": 103400,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u096_o00_q1",
+          "source_unit_id": 96,
+          "source_unit_name": "Sanctuary",
+          "order_id": 0,
+          "order_name": "베리 채집량 증가",
+          "logical_index": 1,
+          "queued_order_ids": [
+            1,
+            0
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            1
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u104_o02_q1",
+          "source_unit_id": 104,
+          "source_unit_name": "LandIncreaser",
+          "order_id": 2,
+          "order_name": "파워맨 이동속도 증가",
+          "logical_index": 1,
+          "queued_order_ids": [
+            3,
+            2
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            3
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u105_o07_q1",
+          "source_unit_id": 105,
+          "source_unit_name": "SkyIncreaser",
+          "order_id": 7,
+          "order_name": "스쿼드론 이동속도 증가",
+          "logical_index": 1,
+          "queued_order_ids": [
+            9,
+            7
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            9
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u105_o10_q0",
+          "source_unit_id": 105,
+          "source_unit_name": "SkyIncreaser",
+          "order_id": 10,
+          "order_name": "원시인 비행 유닛 방어 업",
+          "logical_index": 0,
+          "queued_order_ids": [
+            10
+          ],
+          "owner": 0,
+          "source_slot": 40,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u108_o06_q0",
+          "source_unit_id": 108,
+          "source_unit_name": "IronIncreaser",
+          "order_id": 6,
+          "order_name": "메카닉 이동속도 증가",
+          "logical_index": 0,
+          "queued_order_ids": [
+            6
+          ],
+          "owner": 0,
+          "source_slot": 39,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u108_o08_q0",
+          "source_unit_id": 108,
+          "source_unit_name": "IronIncreaser",
+          "order_id": 8,
+          "order_name": "리볼버 수송량 증가",
+          "logical_index": 0,
+          "queued_order_ids": [
+            8
+          ],
+          "owner": 0,
+          "source_slot": 38,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u108_o44_q0",
+          "source_unit_id": 108,
+          "source_unit_name": "IronIncreaser",
+          "order_id": 44,
+          "order_name": "스톤 타워 강화 업그래이드",
+          "logical_index": 0,
+          "queued_order_ids": [
+            44
+          ],
+          "owner": 0,
+          "source_slot": 43,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u112_o11_q0",
+          "source_unit_id": 112,
+          "source_unit_name": "Heaven",
+          "order_id": 11,
+          "order_name": "베리 채집량 증가",
+          "logical_index": 0,
+          "queued_order_ids": [
+            11
+          ],
+          "owner": 0,
+          "source_slot": 42,
+          "expected_remaining_order_ids": []
+        }
+      ]
+    },
+    {
+      "batch_index": 2,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B02.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B02.ply",
+      "replay_sha256": "47B1770EC9387951E40B2939E45556181901FA607253548401E1342D8FF4D154",
+      "expected_owner_primary_after_batch": 97000,
+      "expected_owner_secondary_after_batch": 103000,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u096_o00_q2",
+          "source_unit_id": 96,
+          "source_unit_name": "Sanctuary",
+          "order_id": 0,
+          "order_name": "베리 채집량 증가",
+          "logical_index": 2,
+          "queued_order_ids": [
+            1,
+            43,
+            0
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            1,
+            43
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u104_o02_q2",
+          "source_unit_id": 104,
+          "source_unit_name": "LandIncreaser",
+          "order_id": 2,
+          "order_name": "파워맨 이동속도 증가",
+          "logical_index": 2,
+          "queued_order_ids": [
+            3,
+            4,
+            2
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            3,
+            4
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u105_o07_q2",
+          "source_unit_id": 105,
+          "source_unit_name": "SkyIncreaser",
+          "order_id": 7,
+          "order_name": "스쿼드론 이동속도 증가",
+          "logical_index": 2,
+          "queued_order_ids": [
+            9,
+            10,
+            7
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            9,
+            10
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u108_o06_q1",
+          "source_unit_id": 108,
+          "source_unit_name": "IronIncreaser",
+          "order_id": 6,
+          "order_name": "메카닉 이동속도 증가",
+          "logical_index": 1,
+          "queued_order_ids": [
+            8,
+            6
+          ],
+          "owner": 0,
+          "source_slot": 40,
+          "expected_remaining_order_ids": [
+            8
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u112_o11_q1",
+          "source_unit_id": 112,
+          "source_unit_name": "Heaven",
+          "order_id": 11,
+          "order_name": "베리 채집량 증가",
+          "logical_index": 1,
+          "queued_order_ids": [
+            12,
+            11
+          ],
+          "owner": 0,
+          "source_slot": 39,
+          "expected_remaining_order_ids": [
+            12
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u112_o17_q0",
+          "source_unit_id": 112,
+          "source_unit_name": "Heaven",
+          "order_id": 17,
+          "order_name": "최대 MP 연구",
+          "logical_index": 0,
+          "queued_order_ids": [
+            17
+          ],
+          "owner": 0,
+          "source_slot": 38,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u112_o57_q0",
+          "source_unit_id": 112,
+          "source_unit_name": "Heaven",
+          "order_id": 57,
+          "order_name": "엘프 홀리마인드 개발",
+          "logical_index": 0,
+          "queued_order_ids": [
+            57
+          ],
+          "owner": 0,
+          "source_slot": 43,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u120_o13_q0",
+          "source_unit_id": 120,
+          "source_unit_name": "ElfLibrary",
+          "order_id": 13,
+          "order_name": "엘프 유닛 공격 업",
+          "logical_index": 0,
+          "queued_order_ids": [
+            13
+          ],
+          "owner": 0,
+          "source_slot": 42,
+          "expected_remaining_order_ids": []
+        }
+      ]
+    },
+    {
+      "batch_index": 3,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B03.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B03.ply",
+      "replay_sha256": "2A9C331339AC36B9AFF5A5396A3F83A76277264FFF1BD2D97206E0BFC55055C7",
+      "expected_owner_primary_after_batch": 96200,
+      "expected_owner_secondary_after_batch": 103000,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u096_o00_q3",
+          "source_unit_id": 96,
+          "source_unit_name": "Sanctuary",
+          "order_id": 0,
+          "order_name": "베리 채집량 증가",
+          "logical_index": 3,
+          "queued_order_ids": [
+            1,
+            43,
+            55,
+            0
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            1,
+            43,
+            55
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u104_o03_q1",
+          "source_unit_id": 104,
+          "source_unit_name": "LandIncreaser",
+          "order_id": 3,
+          "order_name": "원시인 지상 유닛 공격 업",
+          "logical_index": 1,
+          "queued_order_ids": [
+            2,
+            3
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            2
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u105_o09_q0",
+          "source_unit_id": 105,
+          "source_unit_name": "SkyIncreaser",
+          "order_id": 9,
+          "order_name": "원시인 비행 유닛 공격 업",
+          "logical_index": 0,
+          "queued_order_ids": [
+            9
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u105_o10_q1",
+          "source_unit_id": 105,
+          "source_unit_name": "SkyIncreaser",
+          "order_id": 10,
+          "order_name": "원시인 비행 유닛 방어 업",
+          "logical_index": 1,
+          "queued_order_ids": [
+            7,
+            10
+          ],
+          "owner": 0,
+          "source_slot": 40,
+          "expected_remaining_order_ids": [
+            7
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u108_o06_q2",
+          "source_unit_id": 108,
+          "source_unit_name": "IronIncreaser",
+          "order_id": 6,
+          "order_name": "메카닉 이동속도 증가",
+          "logical_index": 2,
+          "queued_order_ids": [
+            8,
+            44,
+            6
+          ],
+          "owner": 0,
+          "source_slot": 39,
+          "expected_remaining_order_ids": [
+            8,
+            44
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u112_o11_q2",
+          "source_unit_id": 112,
+          "source_unit_name": "Heaven",
+          "order_id": 11,
+          "order_name": "베리 채집량 증가",
+          "logical_index": 2,
+          "queued_order_ids": [
+            12,
+            17,
+            11
+          ],
+          "owner": 0,
+          "source_slot": 38,
+          "expected_remaining_order_ids": [
+            12,
+            17
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u120_o13_q1",
+          "source_unit_id": 120,
+          "source_unit_name": "ElfLibrary",
+          "order_id": 13,
+          "order_name": "엘프 유닛 공격 업",
+          "logical_index": 1,
+          "queued_order_ids": [
+            14,
+            13
+          ],
+          "owner": 0,
+          "source_slot": 43,
+          "expected_remaining_order_ids": [
+            14
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u121_o19_q0",
+          "source_unit_id": 121,
+          "source_unit_name": "SkyLibrary",
+          "order_id": 19,
+          "order_name": "엘프 링 이동 속도 증가",
+          "logical_index": 0,
+          "queued_order_ids": [
+            19
+          ],
+          "owner": 0,
+          "source_slot": 42,
+          "expected_remaining_order_ids": []
+        }
+      ]
+    },
+    {
+      "batch_index": 4,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B04.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B04.ply",
+      "replay_sha256": "AD2FDB9B9290279A74352ED1950D5440CBB1C6894906ACA1AF89CD75F4651AF5",
+      "expected_owner_primary_after_batch": 96700,
+      "expected_owner_secondary_after_batch": 103000,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u096_o01_q1",
+          "source_unit_id": 96,
+          "source_unit_name": "Sanctuary",
+          "order_id": 1,
+          "order_name": "폴아웃 개발",
+          "logical_index": 1,
+          "queued_order_ids": [
+            0,
+            1
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            0
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u104_o03_q2",
+          "source_unit_id": 104,
+          "source_unit_name": "LandIncreaser",
+          "order_id": 3,
+          "order_name": "원시인 지상 유닛 공격 업",
+          "logical_index": 2,
+          "queued_order_ids": [
+            2,
+            4,
+            3
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            2,
+            4
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u105_o09_q1",
+          "source_unit_id": 105,
+          "source_unit_name": "SkyIncreaser",
+          "order_id": 9,
+          "order_name": "원시인 비행 유닛 공격 업",
+          "logical_index": 1,
+          "queued_order_ids": [
+            7,
+            9
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            7
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u108_o08_q1",
+          "source_unit_id": 108,
+          "source_unit_name": "IronIncreaser",
+          "order_id": 8,
+          "order_name": "리볼버 수송량 증가",
+          "logical_index": 1,
+          "queued_order_ids": [
+            6,
+            8
+          ],
+          "owner": 0,
+          "source_slot": 40,
+          "expected_remaining_order_ids": [
+            6
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u112_o11_q3",
+          "source_unit_id": 112,
+          "source_unit_name": "Heaven",
+          "order_id": 11,
+          "order_name": "베리 채집량 증가",
+          "logical_index": 3,
+          "queued_order_ids": [
+            12,
+            17,
+            43,
+            11
+          ],
+          "owner": 0,
+          "source_slot": 39,
+          "expected_remaining_order_ids": [
+            12,
+            17,
+            43
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u120_o14_q0",
+          "source_unit_id": 120,
+          "source_unit_name": "ElfLibrary",
+          "order_id": 14,
+          "order_name": "엘프 유닛 방어 업",
+          "logical_index": 0,
+          "queued_order_ids": [
+            14
+          ],
+          "owner": 0,
+          "source_slot": 38,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u121_o19_q1",
+          "source_unit_id": 121,
+          "source_unit_name": "SkyLibrary",
+          "order_id": 19,
+          "order_name": "엘프 링 이동 속도 증가",
+          "logical_index": 1,
+          "queued_order_ids": [
+            46,
+            19
+          ],
+          "owner": 0,
+          "source_slot": 43,
+          "expected_remaining_order_ids": [
+            46
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u121_o47_q0",
+          "source_unit_id": 121,
+          "source_unit_name": "SkyLibrary",
+          "order_id": 47,
+          "order_name": "엘프 공중 유닛 방어 업",
+          "logical_index": 0,
+          "queued_order_ids": [
+            47
+          ],
+          "owner": 0,
+          "source_slot": 42,
+          "expected_remaining_order_ids": []
+        }
+      ]
+    },
+    {
+      "batch_index": 5,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B05.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B05.ply",
+      "replay_sha256": "5B346A7C3D49C2FD0C29DC9A8264D3ADDCCDA29187D25100A8AEBFE10FA84EEB",
+      "expected_owner_primary_after_batch": 95700,
+      "expected_owner_secondary_after_batch": 102800,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u096_o01_q2",
+          "source_unit_id": 96,
+          "source_unit_name": "Sanctuary",
+          "order_id": 1,
+          "order_name": "폴아웃 개발",
+          "logical_index": 2,
+          "queued_order_ids": [
+            0,
+            43,
+            1
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            0,
+            43
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u104_o04_q1",
+          "source_unit_id": 104,
+          "source_unit_name": "LandIncreaser",
+          "order_id": 4,
+          "order_name": "원시인 지상 유닛 방어 업",
+          "logical_index": 1,
+          "queued_order_ids": [
+            2,
+            4
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            2
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u105_o09_q2",
+          "source_unit_id": 105,
+          "source_unit_name": "SkyIncreaser",
+          "order_id": 9,
+          "order_name": "원시인 비행 유닛 공격 업",
+          "logical_index": 2,
+          "queued_order_ids": [
+            7,
+            10,
+            9
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            7,
+            10
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u108_o08_q2",
+          "source_unit_id": 108,
+          "source_unit_name": "IronIncreaser",
+          "order_id": 8,
+          "order_name": "리볼버 수송량 증가",
+          "logical_index": 2,
+          "queued_order_ids": [
+            6,
+            44,
+            8
+          ],
+          "owner": 0,
+          "source_slot": 40,
+          "expected_remaining_order_ids": [
+            6,
+            44
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u112_o12_q0",
+          "source_unit_id": 112,
+          "source_unit_name": "Heaven",
+          "order_id": 12,
+          "order_name": "버블 강화 업그레이드",
+          "logical_index": 0,
+          "queued_order_ids": [
+            12
+          ],
+          "owner": 0,
+          "source_slot": 39,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u112_o17_q1",
+          "source_unit_id": 112,
+          "source_unit_name": "Heaven",
+          "order_id": 17,
+          "order_name": "최대 MP 연구",
+          "logical_index": 1,
+          "queued_order_ids": [
+            11,
+            17
+          ],
+          "owner": 0,
+          "source_slot": 38,
+          "expected_remaining_order_ids": [
+            11
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u120_o14_q1",
+          "source_unit_id": 120,
+          "source_unit_name": "ElfLibrary",
+          "order_id": 14,
+          "order_name": "엘프 유닛 방어 업",
+          "logical_index": 1,
+          "queued_order_ids": [
+            13,
+            14
+          ],
+          "owner": 0,
+          "source_slot": 43,
+          "expected_remaining_order_ids": [
+            13
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u121_o19_q2",
+          "source_unit_id": 121,
+          "source_unit_name": "SkyLibrary",
+          "order_id": 19,
+          "order_name": "엘프 링 이동 속도 증가",
+          "logical_index": 2,
+          "queued_order_ids": [
+            46,
+            47,
+            19
+          ],
+          "owner": 0,
+          "source_slot": 42,
+          "expected_remaining_order_ids": [
+            46,
+            47
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 6,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B06.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B06.ply",
+      "replay_sha256": "3695CD55F4AD7745743C76CDD567674FFED5FABD5871C455A9DC1E755CD3958B",
+      "expected_owner_primary_after_batch": 96200,
+      "expected_owner_secondary_after_batch": 103000,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u096_o01_q3",
+          "source_unit_id": 96,
+          "source_unit_name": "Sanctuary",
+          "order_id": 1,
+          "order_name": "폴아웃 개발",
+          "logical_index": 3,
+          "queued_order_ids": [
+            0,
+            43,
+            55,
+            1
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            0,
+            43,
+            55
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u104_o04_q2",
+          "source_unit_id": 104,
+          "source_unit_name": "LandIncreaser",
+          "order_id": 4,
+          "order_name": "원시인 지상 유닛 방어 업",
+          "logical_index": 2,
+          "queued_order_ids": [
+            2,
+            3,
+            4
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            2,
+            3
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u105_o10_q2",
+          "source_unit_id": 105,
+          "source_unit_name": "SkyIncreaser",
+          "order_id": 10,
+          "order_name": "원시인 비행 유닛 방어 업",
+          "logical_index": 2,
+          "queued_order_ids": [
+            7,
+            9,
+            10
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            7,
+            9
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u108_o44_q1",
+          "source_unit_id": 108,
+          "source_unit_name": "IronIncreaser",
+          "order_id": 44,
+          "order_name": "스톤 타워 강화 업그래이드",
+          "logical_index": 1,
+          "queued_order_ids": [
+            6,
+            44
+          ],
+          "owner": 0,
+          "source_slot": 40,
+          "expected_remaining_order_ids": [
+            6
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u112_o12_q1",
+          "source_unit_id": 112,
+          "source_unit_name": "Heaven",
+          "order_id": 12,
+          "order_name": "버블 강화 업그레이드",
+          "logical_index": 1,
+          "queued_order_ids": [
+            11,
+            12
+          ],
+          "owner": 0,
+          "source_slot": 39,
+          "expected_remaining_order_ids": [
+            11
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u121_o46_q0",
+          "source_unit_id": 121,
+          "source_unit_name": "SkyLibrary",
+          "order_id": 46,
+          "order_name": "엘프 공중 유닛 공격 업",
+          "logical_index": 0,
+          "queued_order_ids": [
+            46
+          ],
+          "owner": 0,
+          "source_slot": 38,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u121_o47_q1",
+          "source_unit_id": 121,
+          "source_unit_name": "SkyLibrary",
+          "order_id": 47,
+          "order_name": "엘프 공중 유닛 방어 업",
+          "logical_index": 1,
+          "queued_order_ids": [
+            19,
+            47
+          ],
+          "owner": 0,
+          "source_slot": 43,
+          "expected_remaining_order_ids": [
+            19
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u122_o18_q0",
+          "source_unit_id": 122,
+          "source_unit_name": "ManaLibrary",
+          "order_id": 18,
+          "order_name": "메테오 연구",
+          "logical_index": 0,
+          "queued_order_ids": [
+            18
+          ],
+          "owner": 0,
+          "source_slot": 42,
+          "expected_remaining_order_ids": []
+        }
+      ]
+    },
+    {
+      "batch_index": 7,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B07.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B07.ply",
+      "replay_sha256": "83B2DA8C56009878C89BCAF00CD1A531BC1921A9494E71F6EB8AD4886D423B7B",
+      "expected_owner_primary_after_batch": 97400,
+      "expected_owner_secondary_after_batch": 103000,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u096_o43_q1",
+          "source_unit_id": 96,
+          "source_unit_name": "Sanctuary",
+          "order_id": 43,
+          "order_name": "레벨 업 경험치 감소",
+          "logical_index": 1,
+          "queued_order_ids": [
+            0,
+            43
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            0
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u108_o44_q2",
+          "source_unit_id": 108,
+          "source_unit_name": "IronIncreaser",
+          "order_id": 44,
+          "order_name": "스톤 타워 강화 업그래이드",
+          "logical_index": 2,
+          "queued_order_ids": [
+            6,
+            8,
+            44
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            6,
+            8
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u112_o12_q2",
+          "source_unit_id": 112,
+          "source_unit_name": "Heaven",
+          "order_id": 12,
+          "order_name": "버블 강화 업그레이드",
+          "logical_index": 2,
+          "queued_order_ids": [
+            11,
+            17,
+            12
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            11,
+            17
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u121_o46_q1",
+          "source_unit_id": 121,
+          "source_unit_name": "SkyLibrary",
+          "order_id": 46,
+          "order_name": "엘프 공중 유닛 공격 업",
+          "logical_index": 1,
+          "queued_order_ids": [
+            19,
+            46
+          ],
+          "owner": 0,
+          "source_slot": 40,
+          "expected_remaining_order_ids": [
+            19
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u124_o16_q0",
+          "source_unit_id": 124,
+          "source_unit_name": "HonyTemple",
+          "order_id": 16,
+          "order_name": "블루엘프 이동속도 증가",
+          "logical_index": 0,
+          "queued_order_ids": [
+            16
+          ],
+          "owner": 0,
+          "source_slot": 39,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u124_o50_q0",
+          "source_unit_id": 124,
+          "source_unit_name": "HonyTemple",
+          "order_id": 50,
+          "order_name": "익스체인지 기술 습득",
+          "logical_index": 0,
+          "queued_order_ids": [
+            50
+          ],
+          "owner": 0,
+          "source_slot": 38,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u128_o20_q0",
+          "source_unit_id": 128,
+          "source_unit_name": "TyranoNest",
+          "order_id": 20,
+          "order_name": "베리 채집량 증가",
+          "logical_index": 0,
+          "queued_order_ids": [
+            20
+          ],
+          "owner": 0,
+          "source_slot": 43,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u128_o42_q0",
+          "source_unit_id": 128,
+          "source_unit_name": "TyranoNest",
+          "order_id": 42,
+          "order_name": "공룡 변신 업그레이드",
+          "logical_index": 0,
+          "queued_order_ids": [
+            42
+          ],
+          "owner": 0,
+          "source_slot": 42,
+          "expected_remaining_order_ids": []
+        }
+      ]
+    },
+    {
+      "batch_index": 8,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B08.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B08.ply",
+      "replay_sha256": "B6D72A6B82138245B52E7DF78E8E973D22FA8255BF57FD55937430AA9B1ECA5B",
+      "expected_owner_primary_after_batch": 97000,
+      "expected_owner_secondary_after_batch": 102800,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u096_o43_q2",
+          "source_unit_id": 96,
+          "source_unit_name": "Sanctuary",
+          "order_id": 43,
+          "order_name": "레벨 업 경험치 감소",
+          "logical_index": 2,
+          "queued_order_ids": [
+            0,
+            1,
+            43
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            0,
+            1
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u112_o17_q2",
+          "source_unit_id": 112,
+          "source_unit_name": "Heaven",
+          "order_id": 17,
+          "order_name": "최대 MP 연구",
+          "logical_index": 2,
+          "queued_order_ids": [
+            11,
+            12,
+            17
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            11,
+            12
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u121_o46_q2",
+          "source_unit_id": 121,
+          "source_unit_name": "SkyLibrary",
+          "order_id": 46,
+          "order_name": "엘프 공중 유닛 공격 업",
+          "logical_index": 2,
+          "queued_order_ids": [
+            19,
+            47,
+            46
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            19,
+            47
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u124_o16_q1",
+          "source_unit_id": 124,
+          "source_unit_name": "HonyTemple",
+          "order_id": 16,
+          "order_name": "블루엘프 이동속도 증가",
+          "logical_index": 1,
+          "queued_order_ids": [
+            50,
+            16
+          ],
+          "owner": 0,
+          "source_slot": 40,
+          "expected_remaining_order_ids": [
+            50
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u128_o20_q1",
+          "source_unit_id": 128,
+          "source_unit_name": "TyranoNest",
+          "order_id": 20,
+          "order_name": "베리 채집량 증가",
+          "logical_index": 1,
+          "queued_order_ids": [
+            42,
+            20
+          ],
+          "owner": 0,
+          "source_slot": 39,
+          "expected_remaining_order_ids": [
+            42
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u128_o56_q0",
+          "source_unit_id": 128,
+          "source_unit_name": "TyranoNest",
+          "order_id": 56,
+          "order_name": "티라노 헤이스트 개발",
+          "logical_index": 0,
+          "queued_order_ids": [
+            56
+          ],
+          "owner": 0,
+          "source_slot": 38,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u133_o22_q0",
+          "source_unit_id": 133,
+          "source_unit_name": "LandNest",
+          "order_id": 22,
+          "order_name": "벨로시스, 딜로포스 이동 속도 증가",
+          "logical_index": 0,
+          "queued_order_ids": [
+            22
+          ],
+          "owner": 0,
+          "source_slot": 43,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u133_o25_q0",
+          "source_unit_id": 133,
+          "source_unit_name": "LandNest",
+          "order_id": 25,
+          "order_name": "티라노 지상 유닛 공격 업",
+          "logical_index": 0,
+          "queued_order_ids": [
+            25
+          ],
+          "owner": 0,
+          "source_slot": 42,
+          "expected_remaining_order_ids": []
+        }
+      ]
+    },
+    {
+      "batch_index": 9,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B09.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B09.ply",
+      "replay_sha256": "E9E6079A6E217F8A223B03EBA10B45C678AC4C09E5274AE19C9E6AA80E067F57",
+      "expected_owner_primary_after_batch": 96600,
+      "expected_owner_secondary_after_batch": 102600,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u096_o43_q3",
+          "source_unit_id": 96,
+          "source_unit_name": "Sanctuary",
+          "order_id": 43,
+          "order_name": "레벨 업 경험치 감소",
+          "logical_index": 3,
+          "queued_order_ids": [
+            0,
+            1,
+            55,
+            43
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            0,
+            1,
+            55
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u112_o57_q1",
+          "source_unit_id": 112,
+          "source_unit_name": "Heaven",
+          "order_id": 57,
+          "order_name": "엘프 홀리마인드 개발",
+          "logical_index": 1,
+          "queued_order_ids": [
+            11,
+            57
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            11
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u121_o47_q2",
+          "source_unit_id": 121,
+          "source_unit_name": "SkyLibrary",
+          "order_id": 47,
+          "order_name": "엘프 공중 유닛 방어 업",
+          "logical_index": 2,
+          "queued_order_ids": [
+            19,
+            46,
+            47
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            19,
+            46
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u124_o50_q1",
+          "source_unit_id": 124,
+          "source_unit_name": "HonyTemple",
+          "order_id": 50,
+          "order_name": "익스체인지 기술 습득",
+          "logical_index": 1,
+          "queued_order_ids": [
+            16,
+            50
+          ],
+          "owner": 0,
+          "source_slot": 40,
+          "expected_remaining_order_ids": [
+            16
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u128_o42_q1",
+          "source_unit_id": 128,
+          "source_unit_name": "TyranoNest",
+          "order_id": 42,
+          "order_name": "공룡 변신 업그레이드",
+          "logical_index": 1,
+          "queued_order_ids": [
+            20,
+            42
+          ],
+          "owner": 0,
+          "source_slot": 39,
+          "expected_remaining_order_ids": [
+            20
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u133_o22_q1",
+          "source_unit_id": 133,
+          "source_unit_name": "LandNest",
+          "order_id": 22,
+          "order_name": "벨로시스, 딜로포스 이동 속도 증가",
+          "logical_index": 1,
+          "queued_order_ids": [
+            25,
+            22
+          ],
+          "owner": 0,
+          "source_slot": 38,
+          "expected_remaining_order_ids": [
+            25
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u133_o26_q0",
+          "source_unit_id": 133,
+          "source_unit_name": "LandNest",
+          "order_id": 26,
+          "order_name": "티라노 지상 유닛 방어 업",
+          "logical_index": 0,
+          "queued_order_ids": [
+            26
+          ],
+          "owner": 0,
+          "source_slot": 43,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u134_o24_q0",
+          "source_unit_id": 134,
+          "source_unit_name": "SkyNest",
+          "order_id": 24,
+          "order_name": "뮤턴트 합체 업그레이드",
+          "logical_index": 0,
+          "queued_order_ids": [
+            24
+          ],
+          "owner": 0,
+          "source_slot": 42,
+          "expected_remaining_order_ids": []
+        }
+      ]
+    },
+    {
+      "batch_index": 10,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B10.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B10.ply",
+      "replay_sha256": "8CA40CC95C61F8752A659C31423AF38A9024EFD8DBAD798BE64522EE6AD530C7",
+      "expected_owner_primary_after_batch": 97000,
+      "expected_owner_secondary_after_batch": 103100,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u096_o55_q1",
+          "source_unit_id": 96,
+          "source_unit_name": "Sanctuary",
+          "order_id": 55,
+          "order_name": "원시인 레이지 개발",
+          "logical_index": 1,
+          "queued_order_ids": [
+            0,
+            55
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            0
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u112_o11_q4",
+          "source_unit_id": 112,
+          "source_unit_name": "Heaven",
+          "order_id": 11,
+          "order_name": "베리 채집량 증가",
+          "logical_index": 4,
+          "queued_order_ids": [
+            12,
+            17,
+            43,
+            57,
+            11
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            12,
+            17,
+            43,
+            57
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u128_o56_q1",
+          "source_unit_id": 128,
+          "source_unit_name": "TyranoNest",
+          "order_id": 56,
+          "order_name": "티라노 헤이스트 개발",
+          "logical_index": 1,
+          "queued_order_ids": [
+            20,
+            56
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            20
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u133_o22_q2",
+          "source_unit_id": 133,
+          "source_unit_name": "LandNest",
+          "order_id": 22,
+          "order_name": "벨로시스, 딜로포스 이동 속도 증가",
+          "logical_index": 2,
+          "queued_order_ids": [
+            25,
+            26,
+            22
+          ],
+          "owner": 0,
+          "source_slot": 40,
+          "expected_remaining_order_ids": [
+            25,
+            26
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u134_o24_q1",
+          "source_unit_id": 134,
+          "source_unit_name": "SkyNest",
+          "order_id": 24,
+          "order_name": "뮤턴트 합체 업그레이드",
+          "logical_index": 1,
+          "queued_order_ids": [
+            28,
+            24
+          ],
+          "owner": 0,
+          "source_slot": 39,
+          "expected_remaining_order_ids": [
+            28
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u134_o29_q0",
+          "source_unit_id": 134,
+          "source_unit_name": "SkyNest",
+          "order_id": 29,
+          "order_name": "티라노 공중 유닛 방어 업",
+          "logical_index": 0,
+          "queued_order_ids": [
+            29
+          ],
+          "owner": 0,
+          "source_slot": 38,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u137_o27_q0",
+          "source_unit_id": 137,
+          "source_unit_name": "LandNisdos",
+          "order_id": 27,
+          "order_name": "근접 강화 업그래이드",
+          "logical_index": 0,
+          "queued_order_ids": [
+            27
+          ],
+          "owner": 0,
+          "source_slot": 43,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u137_o45_q0",
+          "source_unit_id": 137,
+          "source_unit_name": "LandNisdos",
+          "order_id": 45,
+          "order_name": "트리세스 이동 속도 증가",
+          "logical_index": 0,
+          "queued_order_ids": [
+            45
+          ],
+          "owner": 0,
+          "source_slot": 42,
+          "expected_remaining_order_ids": []
+        }
+      ]
+    },
+    {
+      "batch_index": 11,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B11.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B11.ply",
+      "replay_sha256": "8B5423034FF96B2A732E39F4C3E3F50589CA0C7C331D368BD3AB0BDFBFD4AC7B",
+      "expected_owner_primary_after_batch": 95600,
+      "expected_owner_secondary_after_batch": 103100,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u096_o55_q2",
+          "source_unit_id": 96,
+          "source_unit_name": "Sanctuary",
+          "order_id": 55,
+          "order_name": "원시인 레이지 개발",
+          "logical_index": 2,
+          "queued_order_ids": [
+            0,
+            1,
+            55
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            0,
+            1
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u112_o12_q3",
+          "source_unit_id": 112,
+          "source_unit_name": "Heaven",
+          "order_id": 12,
+          "order_name": "버블 강화 업그레이드",
+          "logical_index": 3,
+          "queued_order_ids": [
+            11,
+            17,
+            43,
+            12
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            11,
+            17,
+            43
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u128_o56_q2",
+          "source_unit_id": 128,
+          "source_unit_name": "TyranoNest",
+          "order_id": 56,
+          "order_name": "티라노 헤이스트 개발",
+          "logical_index": 2,
+          "queued_order_ids": [
+            20,
+            42,
+            56
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            20,
+            42
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u133_o25_q1",
+          "source_unit_id": 133,
+          "source_unit_name": "LandNest",
+          "order_id": 25,
+          "order_name": "티라노 지상 유닛 공격 업",
+          "logical_index": 1,
+          "queued_order_ids": [
+            22,
+            25
+          ],
+          "owner": 0,
+          "source_slot": 40,
+          "expected_remaining_order_ids": [
+            22
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u134_o24_q2",
+          "source_unit_id": 134,
+          "source_unit_name": "SkyNest",
+          "order_id": 24,
+          "order_name": "뮤턴트 합체 업그레이드",
+          "logical_index": 2,
+          "queued_order_ids": [
+            28,
+            29,
+            24
+          ],
+          "owner": 0,
+          "source_slot": 39,
+          "expected_remaining_order_ids": [
+            28,
+            29
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u137_o27_q1",
+          "source_unit_id": 137,
+          "source_unit_name": "LandNisdos",
+          "order_id": 27,
+          "order_name": "근접 강화 업그래이드",
+          "logical_index": 1,
+          "queued_order_ids": [
+            45,
+            27
+          ],
+          "owner": 0,
+          "source_slot": 38,
+          "expected_remaining_order_ids": [
+            45
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u138_o30_q0",
+          "source_unit_id": 138,
+          "source_unit_name": "SkyNisdos",
+          "order_id": 30,
+          "order_name": "공중 강화 업그래이드",
+          "logical_index": 0,
+          "queued_order_ids": [
+            30
+          ],
+          "owner": 0,
+          "source_slot": 43,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u144_o31_q0",
+          "source_unit_id": 144,
+          "source_unit_name": "DemonDen",
+          "order_id": 31,
+          "order_name": "베리 채집량 증가",
+          "logical_index": 0,
+          "queued_order_ids": [
+            31
+          ],
+          "owner": 0,
+          "source_slot": 42,
+          "expected_remaining_order_ids": []
+        }
+      ]
+    },
+    {
+      "batch_index": 12,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B12.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B12.ply",
+      "replay_sha256": "01CB1CECD06767258E2EBC5701ECEFE07DCB02763234D681EEF0163C89789C3E",
+      "expected_owner_primary_after_batch": 95700,
+      "expected_owner_secondary_after_batch": 102500,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u096_o55_q3",
+          "source_unit_id": 96,
+          "source_unit_name": "Sanctuary",
+          "order_id": 55,
+          "order_name": "원시인 레이지 개발",
+          "logical_index": 3,
+          "queued_order_ids": [
+            0,
+            1,
+            43,
+            55
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            0,
+            1,
+            43
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u112_o57_q2",
+          "source_unit_id": 112,
+          "source_unit_name": "Heaven",
+          "order_id": 57,
+          "order_name": "엘프 홀리마인드 개발",
+          "logical_index": 2,
+          "queued_order_ids": [
+            11,
+            12,
+            57
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            11,
+            12
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u133_o25_q2",
+          "source_unit_id": 133,
+          "source_unit_name": "LandNest",
+          "order_id": 25,
+          "order_name": "티라노 지상 유닛 공격 업",
+          "logical_index": 2,
+          "queued_order_ids": [
+            22,
+            26,
+            25
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            22,
+            26
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u134_o28_q0",
+          "source_unit_id": 134,
+          "source_unit_name": "SkyNest",
+          "order_id": 28,
+          "order_name": "티라노 공중 유닛 공격 업",
+          "logical_index": 0,
+          "queued_order_ids": [
+            28
+          ],
+          "owner": 0,
+          "source_slot": 40,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u134_o29_q1",
+          "source_unit_id": 134,
+          "source_unit_name": "SkyNest",
+          "order_id": 29,
+          "order_name": "티라노 공중 유닛 방어 업",
+          "logical_index": 1,
+          "queued_order_ids": [
+            24,
+            29
+          ],
+          "owner": 0,
+          "source_slot": 39,
+          "expected_remaining_order_ids": [
+            24
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u137_o45_q1",
+          "source_unit_id": 137,
+          "source_unit_name": "LandNisdos",
+          "order_id": 45,
+          "order_name": "트리세스 이동 속도 증가",
+          "logical_index": 1,
+          "queued_order_ids": [
+            27,
+            45
+          ],
+          "owner": 0,
+          "source_slot": 38,
+          "expected_remaining_order_ids": [
+            27
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u144_o31_q1",
+          "source_unit_id": 144,
+          "source_unit_name": "DemonDen",
+          "order_id": 31,
+          "order_name": "베리 채집량 증가",
+          "logical_index": 1,
+          "queued_order_ids": [
+            32,
+            31
+          ],
+          "owner": 0,
+          "source_slot": 43,
+          "expected_remaining_order_ids": [
+            32
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u144_o58_q0",
+          "source_unit_id": 144,
+          "source_unit_name": "DemonDen",
+          "order_id": 58,
+          "order_name": "데몬 블러드가드 개발",
+          "logical_index": 0,
+          "queued_order_ids": [
+            58
+          ],
+          "owner": 0,
+          "source_slot": 42,
+          "expected_remaining_order_ids": []
+        }
+      ]
+    },
+    {
+      "batch_index": 13,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B13.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B13.ply",
+      "replay_sha256": "0A656C6BD536DA02898808FBFA0EEAB72B3BDF8181E74A4F91FEC0D49DC614DD",
+      "expected_owner_primary_after_batch": 97200,
+      "expected_owner_secondary_after_batch": 102400,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u112_o12_q4",
+          "source_unit_id": 112,
+          "source_unit_name": "Heaven",
+          "order_id": 12,
+          "order_name": "버블 강화 업그레이드",
+          "logical_index": 4,
+          "queued_order_ids": [
+            11,
+            17,
+            43,
+            57,
+            12
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            11,
+            17,
+            43,
+            57
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u133_o26_q1",
+          "source_unit_id": 133,
+          "source_unit_name": "LandNest",
+          "order_id": 26,
+          "order_name": "티라노 지상 유닛 방어 업",
+          "logical_index": 1,
+          "queued_order_ids": [
+            22,
+            26
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            22
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u134_o28_q1",
+          "source_unit_id": 134,
+          "source_unit_name": "SkyNest",
+          "order_id": 28,
+          "order_name": "티라노 공중 유닛 공격 업",
+          "logical_index": 1,
+          "queued_order_ids": [
+            24,
+            28
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            24
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u144_o32_q0",
+          "source_unit_id": 144,
+          "source_unit_name": "DemonDen",
+          "order_id": 32,
+          "order_name": "볼케이노 강화 업그래이드",
+          "logical_index": 0,
+          "queued_order_ids": [
+            32
+          ],
+          "owner": 0,
+          "source_slot": 40,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u144_o58_q1",
+          "source_unit_id": 144,
+          "source_unit_name": "DemonDen",
+          "order_id": 58,
+          "order_name": "데몬 블러드가드 개발",
+          "logical_index": 1,
+          "queued_order_ids": [
+            31,
+            58
+          ],
+          "owner": 0,
+          "source_slot": 39,
+          "expected_remaining_order_ids": [
+            31
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u149_o35_q0",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 35,
+          "order_name": "데몬 공중 유닛 공격 업",
+          "logical_index": 0,
+          "queued_order_ids": [
+            35
+          ],
+          "owner": 0,
+          "source_slot": 38,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u149_o36_q0",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 36,
+          "order_name": "데몬 공중 유닛 방어 업",
+          "logical_index": 0,
+          "queued_order_ids": [
+            36
+          ],
+          "owner": 0,
+          "source_slot": 43,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u149_o38_q0",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 38,
+          "order_name": "데스 아이 시야 증가",
+          "logical_index": 0,
+          "queued_order_ids": [
+            38
+          ],
+          "owner": 0,
+          "source_slot": 42,
+          "expected_remaining_order_ids": []
+        }
+      ]
+    },
+    {
+      "batch_index": 14,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B14.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B14.ply",
+      "replay_sha256": "7930ED429BFE69C2929416240A94EC7E93C99DFBF20296FD67229D31016783B8",
+      "expected_owner_primary_after_batch": 96800,
+      "expected_owner_secondary_after_batch": 102700,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u112_o17_q3",
+          "source_unit_id": 112,
+          "source_unit_name": "Heaven",
+          "order_id": 17,
+          "order_name": "최대 MP 연구",
+          "logical_index": 3,
+          "queued_order_ids": [
+            11,
+            12,
+            43,
+            17
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            11,
+            12,
+            43
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u133_o26_q2",
+          "source_unit_id": 133,
+          "source_unit_name": "LandNest",
+          "order_id": 26,
+          "order_name": "티라노 지상 유닛 방어 업",
+          "logical_index": 2,
+          "queued_order_ids": [
+            22,
+            25,
+            26
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            22,
+            25
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u134_o28_q2",
+          "source_unit_id": 134,
+          "source_unit_name": "SkyNest",
+          "order_id": 28,
+          "order_name": "티라노 공중 유닛 공격 업",
+          "logical_index": 2,
+          "queued_order_ids": [
+            24,
+            29,
+            28
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            24,
+            29
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u144_o32_q1",
+          "source_unit_id": 144,
+          "source_unit_name": "DemonDen",
+          "order_id": 32,
+          "order_name": "볼케이노 강화 업그래이드",
+          "logical_index": 1,
+          "queued_order_ids": [
+            31,
+            32
+          ],
+          "owner": 0,
+          "source_slot": 40,
+          "expected_remaining_order_ids": [
+            31
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u149_o35_q1",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 35,
+          "order_name": "데몬 공중 유닛 공격 업",
+          "logical_index": 1,
+          "queued_order_ids": [
+            36,
+            35
+          ],
+          "owner": 0,
+          "source_slot": 39,
+          "expected_remaining_order_ids": [
+            36
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u149_o39_q0",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 39,
+          "order_name": "팬텀 이동 속도 증가",
+          "logical_index": 0,
+          "queued_order_ids": [
+            39
+          ],
+          "owner": 0,
+          "source_slot": 38,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u149_o41_q0",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 41,
+          "order_name": "다크벳 강화 업그래이드",
+          "logical_index": 0,
+          "queued_order_ids": [
+            41
+          ],
+          "owner": 0,
+          "source_slot": 43,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u149_o53_q0",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 53,
+          "order_name": "데스 아이 커럽트 기술 습득",
+          "logical_index": 0,
+          "queued_order_ids": [
+            53
+          ],
+          "owner": 0,
+          "source_slot": 42,
+          "expected_remaining_order_ids": []
+        }
+      ]
+    },
+    {
+      "batch_index": 15,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B15.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B15.ply",
+      "replay_sha256": "F1ABE90CB8758DB649991DFF7C229292C3FFF5C2EE2E6A06EE0CA7013127934F",
+      "expected_owner_primary_after_batch": 96300,
+      "expected_owner_secondary_after_batch": 102300,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u112_o17_q4",
+          "source_unit_id": 112,
+          "source_unit_name": "Heaven",
+          "order_id": 17,
+          "order_name": "최대 MP 연구",
+          "logical_index": 4,
+          "queued_order_ids": [
+            11,
+            12,
+            43,
+            57,
+            17
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            11,
+            12,
+            43,
+            57
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u134_o29_q2",
+          "source_unit_id": 134,
+          "source_unit_name": "SkyNest",
+          "order_id": 29,
+          "order_name": "티라노 공중 유닛 방어 업",
+          "logical_index": 2,
+          "queued_order_ids": [
+            24,
+            28,
+            29
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            24,
+            28
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u144_o58_q2",
+          "source_unit_id": 144,
+          "source_unit_name": "DemonDen",
+          "order_id": 58,
+          "order_name": "데몬 블러드가드 개발",
+          "logical_index": 2,
+          "queued_order_ids": [
+            31,
+            32,
+            58
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            31,
+            32
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u149_o35_q2",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 35,
+          "order_name": "데몬 공중 유닛 공격 업",
+          "logical_index": 2,
+          "queued_order_ids": [
+            36,
+            38,
+            35
+          ],
+          "owner": 0,
+          "source_slot": 40,
+          "expected_remaining_order_ids": [
+            36,
+            38
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u152_o52_q0",
+          "source_unit_id": 152,
+          "source_unit_name": "DirtyPortal",
+          "order_id": 52,
+          "order_name": "본파이터 강화, 자폭 업그래이드",
+          "logical_index": 0,
+          "queued_order_ids": [
+            52
+          ],
+          "owner": 0,
+          "source_slot": 39,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u155_o33_q0",
+          "source_unit_id": 155,
+          "source_unit_name": "EvilPortal",
+          "order_id": 33,
+          "order_name": "데몬 지상 유닛 공격 업",
+          "logical_index": 0,
+          "queued_order_ids": [
+            33
+          ],
+          "owner": 0,
+          "source_slot": 38,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u155_o34_q0",
+          "source_unit_id": 155,
+          "source_unit_name": "EvilPortal",
+          "order_id": 34,
+          "order_name": "데몬 지상 유닛 방어 업",
+          "logical_index": 0,
+          "queued_order_ids": [
+            34
+          ],
+          "owner": 0,
+          "source_slot": 43,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u155_o37_q0",
+          "source_unit_id": 155,
+          "source_unit_name": "EvilPortal",
+          "order_id": 37,
+          "order_name": "스켈레톤 사정거리 증가",
+          "logical_index": 0,
+          "queued_order_ids": [
+            37
+          ],
+          "owner": 0,
+          "source_slot": 42,
+          "expected_remaining_order_ids": []
+        }
+      ]
+    },
+    {
+      "batch_index": 16,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B16.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B16.ply",
+      "replay_sha256": "ACE644C7A96C4345A6FAB3F4EDDB0F6B2C7D9454191DDD4FD53484E059104A40",
+      "expected_owner_primary_after_batch": 97600,
+      "expected_owner_secondary_after_batch": 101700,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u112_o43_q0",
+          "source_unit_id": 112,
+          "source_unit_name": "Heaven",
+          "order_id": 43,
+          "order_name": "레벨 업 경험치 감소",
+          "logical_index": 0,
+          "queued_order_ids": [
+            43
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u112_o57_q3",
+          "source_unit_id": 112,
+          "source_unit_name": "Heaven",
+          "order_id": 57,
+          "order_name": "엘프 홀리마인드 개발",
+          "logical_index": 3,
+          "queued_order_ids": [
+            11,
+            12,
+            17,
+            57
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            11,
+            12,
+            17
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u149_o35_q3",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 35,
+          "order_name": "데몬 공중 유닛 공격 업",
+          "logical_index": 3,
+          "queued_order_ids": [
+            36,
+            38,
+            39,
+            35
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            36,
+            38,
+            39
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u155_o33_q1",
+          "source_unit_id": 155,
+          "source_unit_name": "EvilPortal",
+          "order_id": 33,
+          "order_name": "데몬 지상 유닛 공격 업",
+          "logical_index": 1,
+          "queued_order_ids": [
+            34,
+            33
+          ],
+          "owner": 0,
+          "source_slot": 40,
+          "expected_remaining_order_ids": [
+            34
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u155_o48_q0",
+          "source_unit_id": 155,
+          "source_unit_name": "EvilPortal",
+          "order_id": 48,
+          "order_name": "스켈레톤 이동 속도 증가",
+          "logical_index": 0,
+          "queued_order_ids": [
+            48
+          ],
+          "owner": 0,
+          "source_slot": 39,
+          "expected_remaining_order_ids": []
+        }
+      ]
+    },
+    {
+      "batch_index": 17,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B17.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B17.ply",
+      "replay_sha256": "1F981AE9F4305EAB53D09E4850DA4CD96ED8248A17B2483D22A61CF2003C6108",
+      "expected_owner_primary_after_batch": 97600,
+      "expected_owner_secondary_after_batch": 101100,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u112_o43_q1",
+          "source_unit_id": 112,
+          "source_unit_name": "Heaven",
+          "order_id": 43,
+          "order_name": "레벨 업 경험치 감소",
+          "logical_index": 1,
+          "queued_order_ids": [
+            11,
+            43
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            11
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u149_o35_q4",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 35,
+          "order_name": "데몬 공중 유닛 공격 업",
+          "logical_index": 4,
+          "queued_order_ids": [
+            36,
+            38,
+            39,
+            41,
+            35
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            36,
+            38,
+            39,
+            41
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u155_o33_q2",
+          "source_unit_id": 155,
+          "source_unit_name": "EvilPortal",
+          "order_id": 33,
+          "order_name": "데몬 지상 유닛 공격 업",
+          "logical_index": 2,
+          "queued_order_ids": [
+            34,
+            37,
+            33
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            34,
+            37
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 18,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B18.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B18.ply",
+      "replay_sha256": "C2C19EF41D63C004D01C3A63AA0B6BABF55C510A3C5D97C203312D186B3AED58",
+      "expected_owner_primary_after_batch": 98000,
+      "expected_owner_secondary_after_batch": 101100,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u112_o43_q2",
+          "source_unit_id": 112,
+          "source_unit_name": "Heaven",
+          "order_id": 43,
+          "order_name": "레벨 업 경험치 감소",
+          "logical_index": 2,
+          "queued_order_ids": [
+            11,
+            12,
+            43
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            11,
+            12
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u149_o36_q1",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 36,
+          "order_name": "데몬 공중 유닛 방어 업",
+          "logical_index": 1,
+          "queued_order_ids": [
+            35,
+            36
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            35
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u155_o33_q3",
+          "source_unit_id": 155,
+          "source_unit_name": "EvilPortal",
+          "order_id": 33,
+          "order_name": "데몬 지상 유닛 공격 업",
+          "logical_index": 3,
+          "queued_order_ids": [
+            34,
+            37,
+            48,
+            33
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            34,
+            37,
+            48
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 19,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B19.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B19.ply",
+      "replay_sha256": "937BCB12A3362AD4784CD7008A499268557AD6285A92401C47A39F04A45FC0BE",
+      "expected_owner_primary_after_batch": 98000,
+      "expected_owner_secondary_after_batch": 101100,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u112_o43_q3",
+          "source_unit_id": 112,
+          "source_unit_name": "Heaven",
+          "order_id": 43,
+          "order_name": "레벨 업 경험치 감소",
+          "logical_index": 3,
+          "queued_order_ids": [
+            11,
+            12,
+            17,
+            43
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            11,
+            12,
+            17
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u149_o36_q2",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 36,
+          "order_name": "데몬 공중 유닛 방어 업",
+          "logical_index": 2,
+          "queued_order_ids": [
+            35,
+            38,
+            36
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            35,
+            38
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u155_o34_q1",
+          "source_unit_id": 155,
+          "source_unit_name": "EvilPortal",
+          "order_id": 34,
+          "order_name": "데몬 지상 유닛 방어 업",
+          "logical_index": 1,
+          "queued_order_ids": [
+            33,
+            34
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            33
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 20,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B20.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B20.ply",
+      "replay_sha256": "D60F6F4C2DFB0F9CF84E85868277F0B517B2D515EF2A5BBEB34276771921F848",
+      "expected_owner_primary_after_batch": 97000,
+      "expected_owner_secondary_after_batch": 101100,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u112_o43_q4",
+          "source_unit_id": 112,
+          "source_unit_name": "Heaven",
+          "order_id": 43,
+          "order_name": "레벨 업 경험치 감소",
+          "logical_index": 4,
+          "queued_order_ids": [
+            11,
+            12,
+            17,
+            57,
+            43
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            11,
+            12,
+            17,
+            57
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u149_o36_q3",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 36,
+          "order_name": "데몬 공중 유닛 방어 업",
+          "logical_index": 3,
+          "queued_order_ids": [
+            35,
+            38,
+            39,
+            36
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            35,
+            38,
+            39
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u155_o34_q2",
+          "source_unit_id": 155,
+          "source_unit_name": "EvilPortal",
+          "order_id": 34,
+          "order_name": "데몬 지상 유닛 방어 업",
+          "logical_index": 2,
+          "queued_order_ids": [
+            33,
+            37,
+            34
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            33,
+            37
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 21,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B21.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B21.ply",
+      "replay_sha256": "061EF842F560E3DC1D5ED9BED3F743771C42F1A1CD29BA66009353D3AE7A9ABC",
+      "expected_owner_primary_after_batch": 96200,
+      "expected_owner_secondary_after_batch": 100900,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u112_o57_q4",
+          "source_unit_id": 112,
+          "source_unit_name": "Heaven",
+          "order_id": 57,
+          "order_name": "엘프 홀리마인드 개발",
+          "logical_index": 4,
+          "queued_order_ids": [
+            11,
+            12,
+            17,
+            43,
+            57
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            11,
+            12,
+            17,
+            43
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u149_o36_q4",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 36,
+          "order_name": "데몬 공중 유닛 방어 업",
+          "logical_index": 4,
+          "queued_order_ids": [
+            35,
+            38,
+            39,
+            41,
+            36
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            35,
+            38,
+            39,
+            41
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u155_o34_q3",
+          "source_unit_id": 155,
+          "source_unit_name": "EvilPortal",
+          "order_id": 34,
+          "order_name": "데몬 지상 유닛 방어 업",
+          "logical_index": 3,
+          "queued_order_ids": [
+            33,
+            37,
+            48,
+            34
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            33,
+            37,
+            48
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 22,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B22.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B22.ply",
+      "replay_sha256": "976D096E3BF820C1B92F18FC282A472C339D0C3875BBB46918B2EFBDC07B7A7D",
+      "expected_owner_primary_after_batch": 98600,
+      "expected_owner_secondary_after_batch": 101100,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u128_o20_q2",
+          "source_unit_id": 128,
+          "source_unit_name": "TyranoNest",
+          "order_id": 20,
+          "order_name": "베리 채집량 증가",
+          "logical_index": 2,
+          "queued_order_ids": [
+            42,
+            43,
+            20
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            42,
+            43
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u149_o38_q1",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 38,
+          "order_name": "데스 아이 시야 증가",
+          "logical_index": 1,
+          "queued_order_ids": [
+            35,
+            38
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            35
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u155_o37_q1",
+          "source_unit_id": 155,
+          "source_unit_name": "EvilPortal",
+          "order_id": 37,
+          "order_name": "스켈레톤 사정거리 증가",
+          "logical_index": 1,
+          "queued_order_ids": [
+            33,
+            37
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            33
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 23,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B23.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B23.ply",
+      "replay_sha256": "EBA4D66E9113F5C7CB927E301BC2CD2ADEA56E4BAA6CF21C15A2EACE5E31D362",
+      "expected_owner_primary_after_batch": 97700,
+      "expected_owner_secondary_after_batch": 101100,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u128_o20_q3",
+          "source_unit_id": 128,
+          "source_unit_name": "TyranoNest",
+          "order_id": 20,
+          "order_name": "베리 채집량 증가",
+          "logical_index": 3,
+          "queued_order_ids": [
+            42,
+            43,
+            56,
+            20
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            42,
+            43,
+            56
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u149_o38_q2",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 38,
+          "order_name": "데스 아이 시야 증가",
+          "logical_index": 2,
+          "queued_order_ids": [
+            35,
+            36,
+            38
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            35,
+            36
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u155_o37_q2",
+          "source_unit_id": 155,
+          "source_unit_name": "EvilPortal",
+          "order_id": 37,
+          "order_name": "스켈레톤 사정거리 증가",
+          "logical_index": 2,
+          "queued_order_ids": [
+            33,
+            34,
+            37
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            33,
+            34
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 24,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B24.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B24.ply",
+      "replay_sha256": "0A4356D2429C086D9B18D2EC217F04B8BCAD3771C05F1701861AB087FD793158",
+      "expected_owner_primary_after_batch": 97100,
+      "expected_owner_secondary_after_batch": 100900,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u128_o42_q2",
+          "source_unit_id": 128,
+          "source_unit_name": "TyranoNest",
+          "order_id": 42,
+          "order_name": "공룡 변신 업그레이드",
+          "logical_index": 2,
+          "queued_order_ids": [
+            20,
+            43,
+            42
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            20,
+            43
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u149_o38_q3",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 38,
+          "order_name": "데스 아이 시야 증가",
+          "logical_index": 3,
+          "queued_order_ids": [
+            35,
+            36,
+            39,
+            38
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            35,
+            36,
+            39
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u155_o37_q3",
+          "source_unit_id": 155,
+          "source_unit_name": "EvilPortal",
+          "order_id": 37,
+          "order_name": "스켈레톤 사정거리 증가",
+          "logical_index": 3,
+          "queued_order_ids": [
+            33,
+            34,
+            48,
+            37
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            33,
+            34,
+            48
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 25,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B25.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B25.ply",
+      "replay_sha256": "EBA8CAC107E9D51F4A62FE8E3F3528BDAD728752E9A40211ADC40E042CDEB76A",
+      "expected_owner_primary_after_batch": 97100,
+      "expected_owner_secondary_after_batch": 100900,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u128_o42_q3",
+          "source_unit_id": 128,
+          "source_unit_name": "TyranoNest",
+          "order_id": 42,
+          "order_name": "공룡 변신 업그레이드",
+          "logical_index": 3,
+          "queued_order_ids": [
+            20,
+            43,
+            56,
+            42
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            20,
+            43,
+            56
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u149_o38_q4",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 38,
+          "order_name": "데스 아이 시야 증가",
+          "logical_index": 4,
+          "queued_order_ids": [
+            35,
+            36,
+            39,
+            41,
+            38
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            35,
+            36,
+            39,
+            41
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u155_o48_q1",
+          "source_unit_id": 155,
+          "source_unit_name": "EvilPortal",
+          "order_id": 48,
+          "order_name": "스켈레톤 이동 속도 증가",
+          "logical_index": 1,
+          "queued_order_ids": [
+            33,
+            48
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            33
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 26,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B26.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B26.ply",
+      "replay_sha256": "CBE2233B041FC9FDA3745AFE9366CDE9EB15422657D1151B8657398A90CDEDBB",
+      "expected_owner_primary_after_batch": 99100,
+      "expected_owner_secondary_after_batch": 101200,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u128_o43_q0",
+          "source_unit_id": 128,
+          "source_unit_name": "TyranoNest",
+          "order_id": 43,
+          "order_name": "레벨 업 경험치 감소",
+          "logical_index": 0,
+          "queued_order_ids": [
+            43
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u149_o39_q1",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 39,
+          "order_name": "팬텀 이동 속도 증가",
+          "logical_index": 1,
+          "queued_order_ids": [
+            35,
+            39
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            35
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u155_o48_q2",
+          "source_unit_id": 155,
+          "source_unit_name": "EvilPortal",
+          "order_id": 48,
+          "order_name": "스켈레톤 이동 속도 증가",
+          "logical_index": 2,
+          "queued_order_ids": [
+            33,
+            34,
+            48
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            33,
+            34
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 27,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B27.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B27.ply",
+      "replay_sha256": "1FA12C8A58C47CD5DE2EB927BF36B9F41CD924442486B5579E5B1662406C41FB",
+      "expected_owner_primary_after_batch": 98000,
+      "expected_owner_secondary_after_batch": 101200,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u128_o43_q1",
+          "source_unit_id": 128,
+          "source_unit_name": "TyranoNest",
+          "order_id": 43,
+          "order_name": "레벨 업 경험치 감소",
+          "logical_index": 1,
+          "queued_order_ids": [
+            20,
+            43
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            20
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u149_o39_q2",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 39,
+          "order_name": "팬텀 이동 속도 증가",
+          "logical_index": 2,
+          "queued_order_ids": [
+            35,
+            36,
+            39
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            35,
+            36
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u155_o48_q3",
+          "source_unit_id": 155,
+          "source_unit_name": "EvilPortal",
+          "order_id": 48,
+          "order_name": "스켈레톤 이동 속도 증가",
+          "logical_index": 3,
+          "queued_order_ids": [
+            33,
+            34,
+            37,
+            48
+          ],
+          "owner": 0,
+          "source_slot": 51,
+          "expected_remaining_order_ids": [
+            33,
+            34,
+            37
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 28,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B28.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B28.ply",
+      "replay_sha256": "3AB2BCFC3FEFAC72BB57D38270DCB2692BE7CFC1B76FF4277233EF81A10971D6",
+      "expected_owner_primary_after_batch": 98300,
+      "expected_owner_secondary_after_batch": 100900,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u128_o43_q2",
+          "source_unit_id": 128,
+          "source_unit_name": "TyranoNest",
+          "order_id": 43,
+          "order_name": "레벨 업 경험치 감소",
+          "logical_index": 2,
+          "queued_order_ids": [
+            20,
+            42,
+            43
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            20,
+            42
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u149_o39_q3",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 39,
+          "order_name": "팬텀 이동 속도 증가",
+          "logical_index": 3,
+          "queued_order_ids": [
+            35,
+            36,
+            38,
+            39
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            35,
+            36,
+            38
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 29,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B29.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B29.ply",
+      "replay_sha256": "B8B7682C8E0F2031D3DC3BA4340B104E86455FC0C907FF08515038B82272E498",
+      "expected_owner_primary_after_batch": 97700,
+      "expected_owner_secondary_after_batch": 100900,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u128_o43_q3",
+          "source_unit_id": 128,
+          "source_unit_name": "TyranoNest",
+          "order_id": 43,
+          "order_name": "레벨 업 경험치 감소",
+          "logical_index": 3,
+          "queued_order_ids": [
+            20,
+            42,
+            56,
+            43
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            20,
+            42,
+            56
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u149_o39_q4",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 39,
+          "order_name": "팬텀 이동 속도 증가",
+          "logical_index": 4,
+          "queued_order_ids": [
+            35,
+            36,
+            38,
+            41,
+            39
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            35,
+            36,
+            38,
+            41
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 30,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B30.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B30.ply",
+      "replay_sha256": "12F33D1E7FBF73DEE134FB0D2161284E0BDD5BB9EE92992D14411FC85CD72240",
+      "expected_owner_primary_after_batch": 98400,
+      "expected_owner_secondary_after_batch": 100600,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u128_o56_q3",
+          "source_unit_id": 128,
+          "source_unit_name": "TyranoNest",
+          "order_id": 56,
+          "order_name": "티라노 헤이스트 개발",
+          "logical_index": 3,
+          "queued_order_ids": [
+            20,
+            42,
+            43,
+            56
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            20,
+            42,
+            43
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u149_o41_q1",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 41,
+          "order_name": "다크벳 강화 업그래이드",
+          "logical_index": 1,
+          "queued_order_ids": [
+            35,
+            41
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            35
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 31,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B31.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B31.ply",
+      "replay_sha256": "C303C8E6A1DCA64B2A9BAA64188F721E96A4BF7AF9C5A099677002EBB4CC9580",
+      "expected_owner_primary_after_batch": 98400,
+      "expected_owner_secondary_after_batch": 100800,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u144_o31_q2",
+          "source_unit_id": 144,
+          "source_unit_name": "DemonDen",
+          "order_id": 31,
+          "order_name": "베리 채집량 증가",
+          "logical_index": 2,
+          "queued_order_ids": [
+            32,
+            43,
+            31
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            32,
+            43
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u149_o41_q2",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 41,
+          "order_name": "다크벳 강화 업그래이드",
+          "logical_index": 2,
+          "queued_order_ids": [
+            35,
+            36,
+            41
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            35,
+            36
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 32,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B32.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B32.ply",
+      "replay_sha256": "5FD63F718EC3B0CF7FD86C58A1155798ED4AD1BE07219C993CB5BDC60A90FD4C",
+      "expected_owner_primary_after_batch": 97800,
+      "expected_owner_secondary_after_batch": 100800,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u144_o31_q3",
+          "source_unit_id": 144,
+          "source_unit_name": "DemonDen",
+          "order_id": 31,
+          "order_name": "베리 채집량 증가",
+          "logical_index": 3,
+          "queued_order_ids": [
+            32,
+            43,
+            58,
+            31
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            32,
+            43,
+            58
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u149_o41_q3",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 41,
+          "order_name": "다크벳 강화 업그래이드",
+          "logical_index": 3,
+          "queued_order_ids": [
+            35,
+            36,
+            38,
+            41
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            35,
+            36,
+            38
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 33,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B33.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B33.ply",
+      "replay_sha256": "74E543E7A054493ED238B75024EFB3FE7263A9F3D648FA55B22B195E7035FAF2",
+      "expected_owner_primary_after_batch": 97700,
+      "expected_owner_secondary_after_batch": 100800,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u144_o32_q2",
+          "source_unit_id": 144,
+          "source_unit_name": "DemonDen",
+          "order_id": 32,
+          "order_name": "볼케이노 강화 업그래이드",
+          "logical_index": 2,
+          "queued_order_ids": [
+            31,
+            43,
+            32
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            31,
+            43
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u149_o41_q4",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 41,
+          "order_name": "다크벳 강화 업그래이드",
+          "logical_index": 4,
+          "queued_order_ids": [
+            35,
+            36,
+            38,
+            39,
+            41
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            35,
+            36,
+            38,
+            39
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 34,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B34.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B34.ply",
+      "replay_sha256": "164A04145BEA2E600EE44A18867BB1096DA9879DB261F4AB371BDE6BD7880A7C",
+      "expected_owner_primary_after_batch": 98400,
+      "expected_owner_secondary_after_batch": 101000,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u144_o32_q3",
+          "source_unit_id": 144,
+          "source_unit_name": "DemonDen",
+          "order_id": 32,
+          "order_name": "볼케이노 강화 업그래이드",
+          "logical_index": 3,
+          "queued_order_ids": [
+            31,
+            43,
+            58,
+            32
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            31,
+            43,
+            58
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u149_o53_q1",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 53,
+          "order_name": "데스 아이 커럽트 기술 습득",
+          "logical_index": 1,
+          "queued_order_ids": [
+            35,
+            53
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            35
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 35,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B35.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B35.ply",
+      "replay_sha256": "F5EAA0357D7681E5A55F97FEA7C0DF30EA80FD423CDDF64BE2CF678FE80CF691",
+      "expected_owner_primary_after_batch": 99400,
+      "expected_owner_secondary_after_batch": 101000,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u144_o43_q0",
+          "source_unit_id": 144,
+          "source_unit_name": "DemonDen",
+          "order_id": 43,
+          "order_name": "레벨 업 경험치 감소",
+          "logical_index": 0,
+          "queued_order_ids": [
+            43
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": []
+        },
+        {
+          "case_id": "production_order_cancel_u149_o53_q2",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 53,
+          "order_name": "데스 아이 커럽트 기술 습득",
+          "logical_index": 2,
+          "queued_order_ids": [
+            35,
+            36,
+            53
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            35,
+            36
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 36,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B36.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B36.ply",
+      "replay_sha256": "D727879F4701991A569C032DB6884F65BD5735ACE8F55C31DBC1CB93A46090CD",
+      "expected_owner_primary_after_batch": 98600,
+      "expected_owner_secondary_after_batch": 101000,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u144_o43_q1",
+          "source_unit_id": 144,
+          "source_unit_name": "DemonDen",
+          "order_id": 43,
+          "order_name": "레벨 업 경험치 감소",
+          "logical_index": 1,
+          "queued_order_ids": [
+            31,
+            43
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            31
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u149_o53_q3",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 53,
+          "order_name": "데스 아이 커럽트 기술 습득",
+          "logical_index": 3,
+          "queued_order_ids": [
+            35,
+            36,
+            38,
+            53
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            35,
+            36,
+            38
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 37,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B37.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B37.ply",
+      "replay_sha256": "776F08EDCE87015A792EF616245238AD5A8885FAD64975F24DCEC596C8EB566E",
+      "expected_owner_primary_after_batch": 97700,
+      "expected_owner_secondary_after_batch": 101000,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u144_o43_q2",
+          "source_unit_id": 144,
+          "source_unit_name": "DemonDen",
+          "order_id": 43,
+          "order_name": "레벨 업 경험치 감소",
+          "logical_index": 2,
+          "queued_order_ids": [
+            31,
+            32,
+            43
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            31,
+            32
+          ]
+        },
+        {
+          "case_id": "production_order_cancel_u149_o53_q4",
+          "source_unit_id": 149,
+          "source_unit_name": "FlyPortal",
+          "order_id": 53,
+          "order_name": "데스 아이 커럽트 기술 습득",
+          "logical_index": 4,
+          "queued_order_ids": [
+            35,
+            36,
+            38,
+            39,
+            53
+          ],
+          "owner": 0,
+          "source_slot": 50,
+          "expected_remaining_order_ids": [
+            35,
+            36,
+            38,
+            39
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 38,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B38.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B38.ply",
+      "replay_sha256": "487BE03BFCFFC7DF2F12DBC366D939899580193CF51F3DAC5919987EE3AB12F9",
+      "expected_owner_primary_after_batch": 98700,
+      "expected_owner_secondary_after_batch": 100500,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u144_o43_q3",
+          "source_unit_id": 144,
+          "source_unit_name": "DemonDen",
+          "order_id": 43,
+          "order_name": "레벨 업 경험치 감소",
+          "logical_index": 3,
+          "queued_order_ids": [
+            31,
+            32,
+            58,
+            43
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            31,
+            32,
+            58
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 39,
+      "map": "RankerOCPV_Win/Maps/(2) GP Production Cancel B39.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Production Cancel B39.ply",
+      "replay_sha256": "CCC2A2906C759B9EF6E829917E8D618F07D8CCD2CA1B64DC4A84B5A3BA075058",
+      "expected_owner_primary_after_batch": 98500,
+      "expected_owner_secondary_after_batch": 100300,
+      "cases": [
+        {
+          "case_id": "production_order_cancel_u144_o58_q3",
+          "source_unit_id": 144,
+          "source_unit_name": "DemonDen",
+          "order_id": 58,
+          "order_name": "데몬 블러드가드 개발",
+          "logical_index": 3,
+          "queued_order_ids": [
+            31,
+            32,
+            43,
+            58
+          ],
+          "owner": 0,
+          "source_slot": 52,
+          "expected_remaining_order_ids": [
+            31,
+            32,
+            43
+          ]
+        }
+      ]
+    }
+  ]
+}

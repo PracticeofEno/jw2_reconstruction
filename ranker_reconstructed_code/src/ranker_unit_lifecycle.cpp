@@ -1162,6 +1162,14 @@ void HandleUnitDeathOwnerCounters(UnitLifecycleContext& context,
             ++context.owner_unit_lost_count[unit.owner_id];
         }
     }
+    // Original 0x004cf8e5..0x004cf90c decrements the building-active total,
+    // then returns without touching DAT_00707430 when raw +0x30 is one.  A
+    // construction-class building is not added to the completed-type table
+    // until HandleUnitCreationRegisterFootprint, so subtracting it on death
+    // creates a wrapped/stale prerequisite count that the original never has.
+    if (is_building_type(unit.type_id) && unit.action_mode_gate == 1) {
+        return;
+    }
     u32 counted_type = unit.type_id;
     if ((unit.runtime_flags & 0x40000) != 0) {
         counted_type = unit.definition.alternate_type_id;
@@ -1177,15 +1185,41 @@ void HandleOwnerUnitTypeCountRebuild(UnitLifecycleContext& context) {
         return;
     }
     for (UnitMovementUnit* unit : context.movement->active_units) {
-        if (unit == nullptr || !unit->active || !has_owner_type_count_slot(unit->owner_id,
-                unit->type_id)) {
+        if (unit == nullptr || !unit->active) {
             continue;
         }
         if (unit->type_id >= 0x60 && unit->action_mode_gate == 1) {
             continue;
         }
+        // A state-0x56 morph replaces the live definition/type but leaves raw
+        // runtime flag 0x40000 set until state 0x57 restores the original
+        // form.  The original owner-count table continues to account that
+        // object in the pre-morph bucket during this interval.  The death
+        // path above already applies the same reverse-definition rule; the
+        // full per-frame rebuild must not silently move it to the visual
+        // alternate bucket one frame after the morph completes.
+        u32 counted_type = unit->type_id;
+        if ((unit->command_state & kUnitCommandStateMask) ==
+                kUnitStateLinkedUnitReleaseCycle &&
+            unit->cargo_amount != 0) {
+            // During state 0x60 the visual parent has already changed to its
+            // linked result, but raw +0x4c still holds the consumed source
+            // type.  The original completed-type table remains in the source
+            // bucket until the release lockout commits and frees the hidden
+            // children.  Rebuilding from the live visual type one frame early
+            // makes requirements and AI state diverge even though unit rows
+            // themselves still match.
+            counted_type = unit->cargo_amount;
+        }
+        else if ((unit->runtime_flags & 0x40000u) != 0 &&
+            unit->definition.alternate_type_id != 0) {
+            counted_type = unit->definition.alternate_type_id;
+        }
+        if (!has_owner_type_count_slot(unit->owner_id, counted_type)) {
+            continue;
+        }
         u32& count =
-            context.owner_unit_type_counts[unit->owner_id][unit->type_id];
+            context.owner_unit_type_counts[unit->owner_id][counted_type];
         count = static_cast<u8>(count + 1u);
     }
 }

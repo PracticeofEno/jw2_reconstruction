@@ -64,6 +64,8 @@ using UnitEffectImpactDamageCallback = u32 (*)(
     UnitMovementUnit* source, UnitMovementUnit& target);
 using UnitEffectSimulationEventCallback = bool (*)(
     UnitEffectRuntimeState& state, const UnitEffectEvent& event);
+using UnitEffectUnitReactivatedCallback = void (*)(
+    UnitEffectRuntimeState& state, UnitMovementUnit& unit);
 
 struct UnitActionCallbacks {
     UnitActionCanTargetCallback can_target = nullptr;
@@ -92,6 +94,7 @@ struct UnitEffectRuntimeCallbacks {
     UnitEffectCreateUnitCallback create_unit = nullptr;
     UnitEffectImpactDamageCallback calculate_impact_damage = nullptr;
     UnitEffectSimulationEventCallback apply_simulation_event = nullptr;
+    UnitEffectUnitReactivatedCallback on_unit_reactivated = nullptr;
 };
 
 struct UnitActionTargetValidation {

@@ -930,6 +930,73 @@ if (RANKER_BUILD_REGRESSION_TESTS)
 
 endif()
 
+# The historical all-regression switch references source files that are not
+# part of this reconstruction checkout.  Keep the available gameplay-heavy
+# tests independently buildable so transport, effects, spawning and linked
+# construction coverage does not disappear with that optional bundle.
+option(RANKER_BUILD_EXTENDED_GAMEPLAY_REGRESSION_TESTS
+    "Build available extended gameplay simulation regressions" OFF)
+if (RANKER_BUILD_EXTENDED_GAMEPLAY_REGRESSION_TESTS AND
+        NOT RANKER_BUILD_REGRESSION_TESTS)
+    enable_testing()
+    add_executable(unit_effect_intrusive_iteration_regression
+        tests/unit_effect_intrusive_iteration_regression.cpp
+        src/ranker_production_orders.cpp
+        src/ranker_unit_commands.cpp
+        src/ranker_unit_target_helpers.cpp
+        src/ranker_unit_damage.cpp
+        src/ranker_unit_equipment.cpp
+        src/ranker_unit_action.cpp
+        src/ranker_unit_movement.cpp
+        src/ranker_unit_spatial_index.cpp
+        src/ranker_unit_lifecycle.cpp
+        src/ranker_gameplay_visibility.cpp
+        src/ranker_map_effects.cpp
+    )
+    target_include_directories(unit_effect_intrusive_iteration_regression PRIVATE
+        include
+    )
+    set_property(TARGET unit_effect_intrusive_iteration_regression PROPERTY
+        INTERPROCEDURAL_OPTIMIZATION TRUE
+    )
+    if (MSVC)
+        target_compile_options(unit_effect_intrusive_iteration_regression PRIVATE /Gy)
+        target_link_options(unit_effect_intrusive_iteration_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(unit_effect_intrusive_iteration_regression PRIVATE
+            -O1 -ffunction-sections -fdata-sections
+        )
+        target_link_options(unit_effect_intrusive_iteration_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME unit_effect_intrusive_iteration_regression
+        COMMAND unit_effect_intrusive_iteration_regression
+    )
+
+    add_executable(evil_portal_construction_release_regression
+        tests/evil_portal_construction_release_regression.cpp
+        src/ranker_evil_portal_release.cpp
+    )
+    target_include_directories(evil_portal_construction_release_regression PRIVATE
+        include
+    )
+    if (MSVC)
+        target_compile_options(evil_portal_construction_release_regression PRIVATE /Gy)
+        target_link_options(evil_portal_construction_release_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(evil_portal_construction_release_regression PRIVATE
+            -O1 -ffunction-sections -fdata-sections
+        )
+        target_link_options(evil_portal_construction_release_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME evil_portal_construction_release_regression
+        COMMAND evil_portal_construction_release_regression
+    )
+endif()
+
 # Focused transport/Noxious coverage is independent from the optional legacy
 # regression source bundle above.
 option(RANKER_BUILD_TRANSPORT_NOXIOUS_REGRESSION_TESTS

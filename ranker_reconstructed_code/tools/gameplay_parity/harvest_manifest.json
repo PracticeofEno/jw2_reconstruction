@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "binding_count": 4,
+  "command_frame": 31,
+  "end_frame": 250,
+  "map": "RankerOCPV_Win/Maps/(2) GP Harvest.trk",
+  "replay": "RankerOCPV_Win/Replays/(2) GP Harvest.ply",
+  "replay_sha256": "76234D6FC24767E91EAF48BB0D2AC5A57EE3D628245C264A0887E86D3F77342C",
+  "cases": [
+    {
+      "unit_slot": 52,
+      "unit_id": 0,
+      "unit_name": "BuildMan",
+      "resource_tile": [
+        47,
+        12
+      ],
+      "resource_initial_amount": 4000
+    },
+    {
+      "unit_slot": 50,
+      "unit_id": 16,
+      "unit_name": "Wizard",
+      "resource_tile": [
+        49,
+        12
+      ],
+      "resource_initial_amount": 4000
+    },
+    {
+      "unit_slot": 51,
+      "unit_id": 32,
+      "unit_name": "Dinos",
+      "resource_tile": [
+        51,
+        13
+      ],
+      "resource_initial_amount": 4000
+    },
+    {
+      "unit_slot": 40,
+      "unit_id": 48,
+      "unit_name": "Insect",
+      "resource_tile": [
+        53,
+        14
+      ],
+      "resource_initial_amount": 4000
+    }
+  ]
+}

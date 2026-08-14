@@ -1,0 +1,1994 @@
+{
+  "schema": 1,
+  "source_count": 4,
+  "target_count": 45,
+  "pair_count": 180,
+  "command_frame": 31,
+  "end_frame": 180,
+  "batches": [
+    {
+      "batch_index": 0,
+      "map": "RankerOCPV_Win/Maps/(2) GP Definition Group B00.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Definition Group B00.ply",
+      "replay_sha256": "B4F307DC4B1B87287C49A1EF2999C7FA5D99D58BD0C3587DD0A8F5CB1F99ED7F",
+      "cases": [
+        {
+          "case_id": "definition_group_000_005",
+          "source_slot": 52,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 41,
+          "target_unit_id": 5,
+          "target_unit_name": "Revolver",
+          "target_initial_health": 200
+        },
+        {
+          "case_id": "definition_group_000_006",
+          "source_slot": 50,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 49,
+          "target_unit_id": 6,
+          "target_unit_name": "BowMachine",
+          "target_initial_health": 175
+        },
+        {
+          "case_id": "definition_group_000_007",
+          "source_slot": 51,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 48,
+          "target_unit_id": 7,
+          "target_unit_name": "Squadron",
+          "target_initial_health": 82
+        },
+        {
+          "case_id": "definition_group_000_008",
+          "source_slot": 40,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 47,
+          "target_unit_id": 8,
+          "target_unit_name": "Flattop",
+          "target_initial_health": 325
+        },
+        {
+          "case_id": "definition_group_000_023",
+          "source_slot": 39,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 46,
+          "target_unit_id": 23,
+          "target_unit_name": "ManaSpread",
+          "target_initial_health": 107
+        },
+        {
+          "case_id": "definition_group_000_024",
+          "source_slot": 38,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 30,
+          "target_unit_id": 24,
+          "target_unit_name": "ElfRing",
+          "target_initial_health": 175
+        },
+        {
+          "case_id": "definition_group_000_042",
+          "source_slot": 43,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 31,
+          "target_unit_id": 42,
+          "target_unit_name": "EggThrower",
+          "target_initial_health": 185
+        },
+        {
+          "case_id": "definition_group_000_092",
+          "source_slot": 42,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 34,
+          "target_unit_id": 92,
+          "target_unit_name": "SkyBallista",
+          "target_initial_health": 165
+        }
+      ]
+    },
+    {
+      "batch_index": 1,
+      "map": "RankerOCPV_Win/Maps/(2) GP Definition Group B01.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Definition Group B01.ply",
+      "replay_sha256": "7FA0E127700ED7EC697CB30A78452922B153C3A1DBA57549C859AF58F13DE639",
+      "cases": [
+        {
+          "case_id": "definition_group_000_093",
+          "source_slot": 52,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 41,
+          "target_unit_id": 93,
+          "target_unit_name": "SkyBullet",
+          "target_initial_health": 165
+        },
+        {
+          "case_id": "definition_group_000_095",
+          "source_slot": 50,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 49,
+          "target_unit_id": 95,
+          "target_unit_name": "DoubleBow_item",
+          "target_initial_health": 175
+        },
+        {
+          "case_id": "definition_group_000_096",
+          "source_slot": 51,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 48,
+          "target_unit_id": 96,
+          "target_unit_name": "Sanctuary",
+          "target_initial_health": 1500
+        },
+        {
+          "case_id": "definition_group_000_098",
+          "source_slot": 40,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 47,
+          "target_unit_id": 98,
+          "target_unit_name": "House",
+          "target_initial_health": 250
+        },
+        {
+          "case_id": "definition_group_000_099",
+          "source_slot": 39,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 46,
+          "target_unit_id": 99,
+          "target_unit_name": "StoneTower",
+          "target_initial_health": 250
+        },
+        {
+          "case_id": "definition_group_000_100",
+          "source_slot": 38,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 30,
+          "target_unit_id": 100,
+          "target_unit_name": "PowerHouse",
+          "target_initial_health": 1000
+        },
+        {
+          "case_id": "definition_group_000_101",
+          "source_slot": 43,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 31,
+          "target_unit_id": 101,
+          "target_unit_name": "SoldierHouse",
+          "target_initial_health": 1000
+        },
+        {
+          "case_id": "definition_group_000_102",
+          "source_slot": 42,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 34,
+          "target_unit_id": 102,
+          "target_unit_name": "SkyHouse",
+          "target_initial_health": 1000
+        }
+      ]
+    },
+    {
+      "batch_index": 2,
+      "map": "RankerOCPV_Win/Maps/(2) GP Definition Group B02.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Definition Group B02.ply",
+      "replay_sha256": "9BFB46A3F4AA4E537093321DDBB04BBF013CA9D1C7EADD6B06B058C3DE89E3F9",
+      "cases": [
+        {
+          "case_id": "definition_group_000_103",
+          "source_slot": 52,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 41,
+          "target_unit_id": 103,
+          "target_unit_name": "Blacksmith",
+          "target_initial_health": 1250
+        },
+        {
+          "case_id": "definition_group_000_104",
+          "source_slot": 50,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 49,
+          "target_unit_id": 104,
+          "target_unit_name": "LandIncreaser",
+          "target_initial_health": 850
+        },
+        {
+          "case_id": "definition_group_000_105",
+          "source_slot": 51,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 48,
+          "target_unit_id": 105,
+          "target_unit_name": "SkyIncreaser",
+          "target_initial_health": 1000
+        },
+        {
+          "case_id": "definition_group_000_106",
+          "source_slot": 40,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 47,
+          "target_unit_id": 106,
+          "target_unit_name": "Trap",
+          "target_initial_health": 100
+        },
+        {
+          "case_id": "definition_group_000_107",
+          "source_slot": 39,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 46,
+          "target_unit_id": 107,
+          "target_unit_name": "PowerIncreaser",
+          "target_initial_health": 850
+        },
+        {
+          "case_id": "definition_group_000_108",
+          "source_slot": 38,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 30,
+          "target_unit_id": 108,
+          "target_unit_name": "IronIncreaser",
+          "target_initial_health": 1000
+        },
+        {
+          "case_id": "definition_group_000_111",
+          "source_slot": 43,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 31,
+          "target_unit_id": 111,
+          "target_unit_name": "SummonHouse",
+          "target_initial_health": 750
+        },
+        {
+          "case_id": "definition_group_000_112",
+          "source_slot": 42,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 34,
+          "target_unit_id": 112,
+          "target_unit_name": "Heaven",
+          "target_initial_health": 1500
+        }
+      ]
+    },
+    {
+      "batch_index": 3,
+      "map": "RankerOCPV_Win/Maps/(2) GP Definition Group B03.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Definition Group B03.ply",
+      "replay_sha256": "1A51E616245576AC995FF9AF3152FCD0028368BDA07D2A6922735BD6949E6C2C",
+      "cases": [
+        {
+          "case_id": "definition_group_000_113",
+          "source_slot": 52,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 41,
+          "target_unit_id": 113,
+          "target_unit_name": "Bubble",
+          "target_initial_health": 200
+        },
+        {
+          "case_id": "definition_group_000_114",
+          "source_slot": 50,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 49,
+          "target_unit_id": 114,
+          "target_unit_name": "ElfTree",
+          "target_initial_health": 300
+        },
+        {
+          "case_id": "definition_group_000_115",
+          "source_slot": 51,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 48,
+          "target_unit_id": 115,
+          "target_unit_name": "Bubble",
+          "target_initial_health": 200
+        },
+        {
+          "case_id": "definition_group_000_116",
+          "source_slot": 40,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 47,
+          "target_unit_id": 116,
+          "target_unit_name": "RedHall",
+          "target_initial_health": 900
+        },
+        {
+          "case_id": "definition_group_000_117",
+          "source_slot": 39,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 46,
+          "target_unit_id": 117,
+          "target_unit_name": "BlueHall",
+          "target_initial_health": 900
+        },
+        {
+          "case_id": "definition_group_000_118",
+          "source_slot": 38,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 30,
+          "target_unit_id": 118,
+          "target_unit_name": "ManaHall",
+          "target_initial_health": 800
+        },
+        {
+          "case_id": "definition_group_000_119",
+          "source_slot": 43,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 31,
+          "target_unit_id": 119,
+          "target_unit_name": "SkyHall",
+          "target_initial_health": 875
+        },
+        {
+          "case_id": "definition_group_000_120",
+          "source_slot": 42,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 34,
+          "target_unit_id": 120,
+          "target_unit_name": "ElfLibrary",
+          "target_initial_health": 700
+        }
+      ]
+    },
+    {
+      "batch_index": 4,
+      "map": "RankerOCPV_Win/Maps/(2) GP Definition Group B04.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Definition Group B04.ply",
+      "replay_sha256": "449B9834025B3EDF27F024A7DAE11562134BBCD4BDBEF3F07E8C537838C110B2",
+      "cases": [
+        {
+          "case_id": "definition_group_000_121",
+          "source_slot": 52,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 41,
+          "target_unit_id": 121,
+          "target_unit_name": "SkyLibrary",
+          "target_initial_health": 625
+        },
+        {
+          "case_id": "definition_group_000_122",
+          "source_slot": 50,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 49,
+          "target_unit_id": 122,
+          "target_unit_name": "ManaLibrary",
+          "target_initial_health": 625
+        },
+        {
+          "case_id": "definition_group_000_123",
+          "source_slot": 51,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 48,
+          "target_unit_id": 123,
+          "target_unit_name": "GreenHall",
+          "target_initial_health": 1000
+        },
+        {
+          "case_id": "definition_group_000_124",
+          "source_slot": 40,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 47,
+          "target_unit_id": 124,
+          "target_unit_name": "HonyTemple",
+          "target_initial_health": 625
+        },
+        {
+          "case_id": "definition_group_000_128",
+          "source_slot": 39,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 46,
+          "target_unit_id": 128,
+          "target_unit_name": "TyranoNest",
+          "target_initial_health": 1250
+        },
+        {
+          "case_id": "definition_group_000_130",
+          "source_slot": 38,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 30,
+          "target_unit_id": 130,
+          "target_unit_name": "Nest",
+          "target_initial_health": 225
+        },
+        {
+          "case_id": "definition_group_000_132",
+          "source_slot": 43,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 31,
+          "target_unit_id": 132,
+          "target_unit_name": "EggNest",
+          "target_initial_health": 800
+        },
+        {
+          "case_id": "definition_group_000_133",
+          "source_slot": 42,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 34,
+          "target_unit_id": 133,
+          "target_unit_name": "LandNest",
+          "target_initial_health": 800
+        }
+      ]
+    },
+    {
+      "batch_index": 5,
+      "map": "RankerOCPV_Win/Maps/(2) GP Definition Group B05.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Definition Group B05.ply",
+      "replay_sha256": "AE8EDED736A329ED17B45290C660C4B985833D41DE34EF6AEDBD1304713AD24E",
+      "cases": [
+        {
+          "case_id": "definition_group_000_134",
+          "source_slot": 52,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 41,
+          "target_unit_id": 134,
+          "target_unit_name": "SkyNest",
+          "target_initial_health": 800
+        },
+        {
+          "case_id": "definition_group_000_135",
+          "source_slot": 50,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 49,
+          "target_unit_id": 135,
+          "target_unit_name": "ThrowNest",
+          "target_initial_health": 900
+        },
+        {
+          "case_id": "definition_group_000_136",
+          "source_slot": 51,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 48,
+          "target_unit_id": 136,
+          "target_unit_name": "UpgradeNest",
+          "target_initial_health": 750
+        },
+        {
+          "case_id": "definition_group_000_137",
+          "source_slot": 40,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 47,
+          "target_unit_id": 137,
+          "target_unit_name": "LandNisdos",
+          "target_initial_health": 900
+        },
+        {
+          "case_id": "definition_group_000_138",
+          "source_slot": 39,
+          "source_unit_id": 0,
+          "source_unit_name": "BuildMan",
+          "target_slot": 46,
+          "target_unit_id": 138,
+          "target_unit_name": "SkyNisdos",
+          "target_initial_health": 900
+        },
+        {
+          "case_id": "definition_group_016_005",
+          "source_slot": 38,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 30,
+          "target_unit_id": 5,
+          "target_unit_name": "Revolver",
+          "target_initial_health": 200
+        },
+        {
+          "case_id": "definition_group_016_006",
+          "source_slot": 43,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 31,
+          "target_unit_id": 6,
+          "target_unit_name": "BowMachine",
+          "target_initial_health": 175
+        },
+        {
+          "case_id": "definition_group_016_007",
+          "source_slot": 42,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 34,
+          "target_unit_id": 7,
+          "target_unit_name": "Squadron",
+          "target_initial_health": 82
+        }
+      ]
+    },
+    {
+      "batch_index": 6,
+      "map": "RankerOCPV_Win/Maps/(2) GP Definition Group B06.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Definition Group B06.ply",
+      "replay_sha256": "9BE103B0482DCACC7CC03BBBBB0BFE2A0F5C6A7A36C40AF33567B684BED83DDA",
+      "cases": [
+        {
+          "case_id": "definition_group_016_008",
+          "source_slot": 52,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 41,
+          "target_unit_id": 8,
+          "target_unit_name": "Flattop",
+          "target_initial_health": 325
+        },
+        {
+          "case_id": "definition_group_016_023",
+          "source_slot": 50,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 49,
+          "target_unit_id": 23,
+          "target_unit_name": "ManaSpread",
+          "target_initial_health": 107
+        },
+        {
+          "case_id": "definition_group_016_024",
+          "source_slot": 51,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 48,
+          "target_unit_id": 24,
+          "target_unit_name": "ElfRing",
+          "target_initial_health": 175
+        },
+        {
+          "case_id": "definition_group_016_042",
+          "source_slot": 40,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 47,
+          "target_unit_id": 42,
+          "target_unit_name": "EggThrower",
+          "target_initial_health": 185
+        },
+        {
+          "case_id": "definition_group_016_092",
+          "source_slot": 39,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 46,
+          "target_unit_id": 92,
+          "target_unit_name": "SkyBallista",
+          "target_initial_health": 165
+        },
+        {
+          "case_id": "definition_group_016_093",
+          "source_slot": 38,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 30,
+          "target_unit_id": 93,
+          "target_unit_name": "SkyBullet",
+          "target_initial_health": 165
+        },
+        {
+          "case_id": "definition_group_016_095",
+          "source_slot": 43,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 31,
+          "target_unit_id": 95,
+          "target_unit_name": "DoubleBow_item",
+          "target_initial_health": 175
+        },
+        {
+          "case_id": "definition_group_016_096",
+          "source_slot": 42,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 34,
+          "target_unit_id": 96,
+          "target_unit_name": "Sanctuary",
+          "target_initial_health": 1500
+        }
+      ]
+    },
+    {
+      "batch_index": 7,
+      "map": "RankerOCPV_Win/Maps/(2) GP Definition Group B07.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Definition Group B07.ply",
+      "replay_sha256": "16F14C3FC0119A0D07890C370E2041424132B2FB65872F865B52E5ECB6000172",
+      "cases": [
+        {
+          "case_id": "definition_group_016_098",
+          "source_slot": 52,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 41,
+          "target_unit_id": 98,
+          "target_unit_name": "House",
+          "target_initial_health": 250
+        },
+        {
+          "case_id": "definition_group_016_099",
+          "source_slot": 50,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 49,
+          "target_unit_id": 99,
+          "target_unit_name": "StoneTower",
+          "target_initial_health": 250
+        },
+        {
+          "case_id": "definition_group_016_100",
+          "source_slot": 51,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 48,
+          "target_unit_id": 100,
+          "target_unit_name": "PowerHouse",
+          "target_initial_health": 1000
+        },
+        {
+          "case_id": "definition_group_016_101",
+          "source_slot": 40,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 47,
+          "target_unit_id": 101,
+          "target_unit_name": "SoldierHouse",
+          "target_initial_health": 1000
+        },
+        {
+          "case_id": "definition_group_016_102",
+          "source_slot": 39,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 46,
+          "target_unit_id": 102,
+          "target_unit_name": "SkyHouse",
+          "target_initial_health": 1000
+        },
+        {
+          "case_id": "definition_group_016_103",
+          "source_slot": 38,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 30,
+          "target_unit_id": 103,
+          "target_unit_name": "Blacksmith",
+          "target_initial_health": 1250
+        },
+        {
+          "case_id": "definition_group_016_104",
+          "source_slot": 43,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 31,
+          "target_unit_id": 104,
+          "target_unit_name": "LandIncreaser",
+          "target_initial_health": 850
+        },
+        {
+          "case_id": "definition_group_016_105",
+          "source_slot": 42,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 34,
+          "target_unit_id": 105,
+          "target_unit_name": "SkyIncreaser",
+          "target_initial_health": 1000
+        }
+      ]
+    },
+    {
+      "batch_index": 8,
+      "map": "RankerOCPV_Win/Maps/(2) GP Definition Group B08.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Definition Group B08.ply",
+      "replay_sha256": "7CB725467BC371967001BDE5E7DCE85688ADF88CB98151AF8EBE5781C7B70797",
+      "cases": [
+        {
+          "case_id": "definition_group_016_106",
+          "source_slot": 52,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 41,
+          "target_unit_id": 106,
+          "target_unit_name": "Trap",
+          "target_initial_health": 100
+        },
+        {
+          "case_id": "definition_group_016_107",
+          "source_slot": 50,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 49,
+          "target_unit_id": 107,
+          "target_unit_name": "PowerIncreaser",
+          "target_initial_health": 850
+        },
+        {
+          "case_id": "definition_group_016_108",
+          "source_slot": 51,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 48,
+          "target_unit_id": 108,
+          "target_unit_name": "IronIncreaser",
+          "target_initial_health": 1000
+        },
+        {
+          "case_id": "definition_group_016_111",
+          "source_slot": 40,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 47,
+          "target_unit_id": 111,
+          "target_unit_name": "SummonHouse",
+          "target_initial_health": 750
+        },
+        {
+          "case_id": "definition_group_016_112",
+          "source_slot": 39,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 46,
+          "target_unit_id": 112,
+          "target_unit_name": "Heaven",
+          "target_initial_health": 1500
+        },
+        {
+          "case_id": "definition_group_016_113",
+          "source_slot": 38,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 30,
+          "target_unit_id": 113,
+          "target_unit_name": "Bubble",
+          "target_initial_health": 200
+        },
+        {
+          "case_id": "definition_group_016_114",
+          "source_slot": 43,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 31,
+          "target_unit_id": 114,
+          "target_unit_name": "ElfTree",
+          "target_initial_health": 300
+        },
+        {
+          "case_id": "definition_group_016_115",
+          "source_slot": 42,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 34,
+          "target_unit_id": 115,
+          "target_unit_name": "Bubble",
+          "target_initial_health": 200
+        }
+      ]
+    },
+    {
+      "batch_index": 9,
+      "map": "RankerOCPV_Win/Maps/(2) GP Definition Group B09.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Definition Group B09.ply",
+      "replay_sha256": "28694151DC33963B54BE8F9C3E0A3C83B7E3767D6D92EE6D011A4E90E78F9F3E",
+      "cases": [
+        {
+          "case_id": "definition_group_016_116",
+          "source_slot": 52,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 41,
+          "target_unit_id": 116,
+          "target_unit_name": "RedHall",
+          "target_initial_health": 900
+        },
+        {
+          "case_id": "definition_group_016_117",
+          "source_slot": 50,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 49,
+          "target_unit_id": 117,
+          "target_unit_name": "BlueHall",
+          "target_initial_health": 900
+        },
+        {
+          "case_id": "definition_group_016_118",
+          "source_slot": 51,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 48,
+          "target_unit_id": 118,
+          "target_unit_name": "ManaHall",
+          "target_initial_health": 800
+        },
+        {
+          "case_id": "definition_group_016_119",
+          "source_slot": 40,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 47,
+          "target_unit_id": 119,
+          "target_unit_name": "SkyHall",
+          "target_initial_health": 875
+        },
+        {
+          "case_id": "definition_group_016_120",
+          "source_slot": 39,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 46,
+          "target_unit_id": 120,
+          "target_unit_name": "ElfLibrary",
+          "target_initial_health": 700
+        },
+        {
+          "case_id": "definition_group_016_121",
+          "source_slot": 38,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 30,
+          "target_unit_id": 121,
+          "target_unit_name": "SkyLibrary",
+          "target_initial_health": 625
+        },
+        {
+          "case_id": "definition_group_016_122",
+          "source_slot": 43,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 31,
+          "target_unit_id": 122,
+          "target_unit_name": "ManaLibrary",
+          "target_initial_health": 625
+        },
+        {
+          "case_id": "definition_group_016_123",
+          "source_slot": 42,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 34,
+          "target_unit_id": 123,
+          "target_unit_name": "GreenHall",
+          "target_initial_health": 1000
+        }
+      ]
+    },
+    {
+      "batch_index": 10,
+      "map": "RankerOCPV_Win/Maps/(2) GP Definition Group B10.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Definition Group B10.ply",
+      "replay_sha256": "2DA5DB79CFC814E492FD128952992300053EDC56AA851EBEEBAE8EC4CB0B454B",
+      "cases": [
+        {
+          "case_id": "definition_group_016_124",
+          "source_slot": 52,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 41,
+          "target_unit_id": 124,
+          "target_unit_name": "HonyTemple",
+          "target_initial_health": 625
+        },
+        {
+          "case_id": "definition_group_016_128",
+          "source_slot": 50,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 49,
+          "target_unit_id": 128,
+          "target_unit_name": "TyranoNest",
+          "target_initial_health": 1250
+        },
+        {
+          "case_id": "definition_group_016_130",
+          "source_slot": 51,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 48,
+          "target_unit_id": 130,
+          "target_unit_name": "Nest",
+          "target_initial_health": 225
+        },
+        {
+          "case_id": "definition_group_016_132",
+          "source_slot": 40,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 47,
+          "target_unit_id": 132,
+          "target_unit_name": "EggNest",
+          "target_initial_health": 800
+        },
+        {
+          "case_id": "definition_group_016_133",
+          "source_slot": 39,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 46,
+          "target_unit_id": 133,
+          "target_unit_name": "LandNest",
+          "target_initial_health": 800
+        },
+        {
+          "case_id": "definition_group_016_134",
+          "source_slot": 38,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 30,
+          "target_unit_id": 134,
+          "target_unit_name": "SkyNest",
+          "target_initial_health": 800
+        },
+        {
+          "case_id": "definition_group_016_135",
+          "source_slot": 43,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 31,
+          "target_unit_id": 135,
+          "target_unit_name": "ThrowNest",
+          "target_initial_health": 900
+        },
+        {
+          "case_id": "definition_group_016_136",
+          "source_slot": 42,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 34,
+          "target_unit_id": 136,
+          "target_unit_name": "UpgradeNest",
+          "target_initial_health": 750
+        }
+      ]
+    },
+    {
+      "batch_index": 11,
+      "map": "RankerOCPV_Win/Maps/(2) GP Definition Group B11.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Definition Group B11.ply",
+      "replay_sha256": "C927FD0D08D49AFEB83A4AF609C8340E7E0D1FA89536027211CE50E100BF0A11",
+      "cases": [
+        {
+          "case_id": "definition_group_016_137",
+          "source_slot": 52,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 41,
+          "target_unit_id": 137,
+          "target_unit_name": "LandNisdos",
+          "target_initial_health": 900
+        },
+        {
+          "case_id": "definition_group_016_138",
+          "source_slot": 50,
+          "source_unit_id": 16,
+          "source_unit_name": "Wizard",
+          "target_slot": 49,
+          "target_unit_id": 138,
+          "target_unit_name": "SkyNisdos",
+          "target_initial_health": 900
+        },
+        {
+          "case_id": "definition_group_032_005",
+          "source_slot": 51,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 48,
+          "target_unit_id": 5,
+          "target_unit_name": "Revolver",
+          "target_initial_health": 200
+        },
+        {
+          "case_id": "definition_group_032_006",
+          "source_slot": 40,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 47,
+          "target_unit_id": 6,
+          "target_unit_name": "BowMachine",
+          "target_initial_health": 175
+        },
+        {
+          "case_id": "definition_group_032_007",
+          "source_slot": 39,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 46,
+          "target_unit_id": 7,
+          "target_unit_name": "Squadron",
+          "target_initial_health": 82
+        },
+        {
+          "case_id": "definition_group_032_008",
+          "source_slot": 38,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 30,
+          "target_unit_id": 8,
+          "target_unit_name": "Flattop",
+          "target_initial_health": 325
+        },
+        {
+          "case_id": "definition_group_032_023",
+          "source_slot": 43,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 31,
+          "target_unit_id": 23,
+          "target_unit_name": "ManaSpread",
+          "target_initial_health": 107
+        },
+        {
+          "case_id": "definition_group_032_024",
+          "source_slot": 42,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 34,
+          "target_unit_id": 24,
+          "target_unit_name": "ElfRing",
+          "target_initial_health": 175
+        }
+      ]
+    },
+    {
+      "batch_index": 12,
+      "map": "RankerOCPV_Win/Maps/(2) GP Definition Group B12.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Definition Group B12.ply",
+      "replay_sha256": "60D560B06DD43D72F78C79FEFAEC956896132336515B4A0E1DAC14E8EED530F3",
+      "cases": [
+        {
+          "case_id": "definition_group_032_042",
+          "source_slot": 52,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 41,
+          "target_unit_id": 42,
+          "target_unit_name": "EggThrower",
+          "target_initial_health": 185
+        },
+        {
+          "case_id": "definition_group_032_092",
+          "source_slot": 50,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 49,
+          "target_unit_id": 92,
+          "target_unit_name": "SkyBallista",
+          "target_initial_health": 165
+        },
+        {
+          "case_id": "definition_group_032_093",
+          "source_slot": 51,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 48,
+          "target_unit_id": 93,
+          "target_unit_name": "SkyBullet",
+          "target_initial_health": 165
+        },
+        {
+          "case_id": "definition_group_032_095",
+          "source_slot": 40,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 47,
+          "target_unit_id": 95,
+          "target_unit_name": "DoubleBow_item",
+          "target_initial_health": 175
+        },
+        {
+          "case_id": "definition_group_032_096",
+          "source_slot": 39,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 46,
+          "target_unit_id": 96,
+          "target_unit_name": "Sanctuary",
+          "target_initial_health": 1500
+        },
+        {
+          "case_id": "definition_group_032_098",
+          "source_slot": 38,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 30,
+          "target_unit_id": 98,
+          "target_unit_name": "House",
+          "target_initial_health": 250
+        },
+        {
+          "case_id": "definition_group_032_099",
+          "source_slot": 43,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 31,
+          "target_unit_id": 99,
+          "target_unit_name": "StoneTower",
+          "target_initial_health": 250
+        },
+        {
+          "case_id": "definition_group_032_100",
+          "source_slot": 42,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 34,
+          "target_unit_id": 100,
+          "target_unit_name": "PowerHouse",
+          "target_initial_health": 1000
+        }
+      ]
+    },
+    {
+      "batch_index": 13,
+      "map": "RankerOCPV_Win/Maps/(2) GP Definition Group B13.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Definition Group B13.ply",
+      "replay_sha256": "F84638E2AB73D6EFA285E6019A8D09FD7BDCE3A760E3D369F1BA4E93C9A6B89C",
+      "cases": [
+        {
+          "case_id": "definition_group_032_101",
+          "source_slot": 52,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 41,
+          "target_unit_id": 101,
+          "target_unit_name": "SoldierHouse",
+          "target_initial_health": 1000
+        },
+        {
+          "case_id": "definition_group_032_102",
+          "source_slot": 50,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 49,
+          "target_unit_id": 102,
+          "target_unit_name": "SkyHouse",
+          "target_initial_health": 1000
+        },
+        {
+          "case_id": "definition_group_032_103",
+          "source_slot": 51,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 48,
+          "target_unit_id": 103,
+          "target_unit_name": "Blacksmith",
+          "target_initial_health": 1250
+        },
+        {
+          "case_id": "definition_group_032_104",
+          "source_slot": 40,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 47,
+          "target_unit_id": 104,
+          "target_unit_name": "LandIncreaser",
+          "target_initial_health": 850
+        },
+        {
+          "case_id": "definition_group_032_105",
+          "source_slot": 39,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 46,
+          "target_unit_id": 105,
+          "target_unit_name": "SkyIncreaser",
+          "target_initial_health": 1000
+        },
+        {
+          "case_id": "definition_group_032_106",
+          "source_slot": 38,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 30,
+          "target_unit_id": 106,
+          "target_unit_name": "Trap",
+          "target_initial_health": 100
+        },
+        {
+          "case_id": "definition_group_032_107",
+          "source_slot": 43,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 31,
+          "target_unit_id": 107,
+          "target_unit_name": "PowerIncreaser",
+          "target_initial_health": 850
+        },
+        {
+          "case_id": "definition_group_032_108",
+          "source_slot": 42,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 34,
+          "target_unit_id": 108,
+          "target_unit_name": "IronIncreaser",
+          "target_initial_health": 1000
+        }
+      ]
+    },
+    {
+      "batch_index": 14,
+      "map": "RankerOCPV_Win/Maps/(2) GP Definition Group B14.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Definition Group B14.ply",
+      "replay_sha256": "328C91EED415AAA958A1D053EF8AB21DA7BD57FAF7C763126A3EBA1FB35AA7CE",
+      "cases": [
+        {
+          "case_id": "definition_group_032_111",
+          "source_slot": 52,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 41,
+          "target_unit_id": 111,
+          "target_unit_name": "SummonHouse",
+          "target_initial_health": 750
+        },
+        {
+          "case_id": "definition_group_032_112",
+          "source_slot": 50,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 49,
+          "target_unit_id": 112,
+          "target_unit_name": "Heaven",
+          "target_initial_health": 1500
+        },
+        {
+          "case_id": "definition_group_032_113",
+          "source_slot": 51,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 48,
+          "target_unit_id": 113,
+          "target_unit_name": "Bubble",
+          "target_initial_health": 200
+        },
+        {
+          "case_id": "definition_group_032_114",
+          "source_slot": 40,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 47,
+          "target_unit_id": 114,
+          "target_unit_name": "ElfTree",
+          "target_initial_health": 300
+        },
+        {
+          "case_id": "definition_group_032_115",
+          "source_slot": 39,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 46,
+          "target_unit_id": 115,
+          "target_unit_name": "Bubble",
+          "target_initial_health": 200
+        },
+        {
+          "case_id": "definition_group_032_116",
+          "source_slot": 38,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 30,
+          "target_unit_id": 116,
+          "target_unit_name": "RedHall",
+          "target_initial_health": 900
+        },
+        {
+          "case_id": "definition_group_032_117",
+          "source_slot": 43,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 31,
+          "target_unit_id": 117,
+          "target_unit_name": "BlueHall",
+          "target_initial_health": 900
+        },
+        {
+          "case_id": "definition_group_032_118",
+          "source_slot": 42,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 34,
+          "target_unit_id": 118,
+          "target_unit_name": "ManaHall",
+          "target_initial_health": 800
+        }
+      ]
+    },
+    {
+      "batch_index": 15,
+      "map": "RankerOCPV_Win/Maps/(2) GP Definition Group B15.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Definition Group B15.ply",
+      "replay_sha256": "31B92BB33F1937431BAB19A32BE025D704236A10C587C01968D8B7F8EA008A9F",
+      "cases": [
+        {
+          "case_id": "definition_group_032_119",
+          "source_slot": 52,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 41,
+          "target_unit_id": 119,
+          "target_unit_name": "SkyHall",
+          "target_initial_health": 875
+        },
+        {
+          "case_id": "definition_group_032_120",
+          "source_slot": 50,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 49,
+          "target_unit_id": 120,
+          "target_unit_name": "ElfLibrary",
+          "target_initial_health": 700
+        },
+        {
+          "case_id": "definition_group_032_121",
+          "source_slot": 51,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 48,
+          "target_unit_id": 121,
+          "target_unit_name": "SkyLibrary",
+          "target_initial_health": 625
+        },
+        {
+          "case_id": "definition_group_032_122",
+          "source_slot": 40,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 47,
+          "target_unit_id": 122,
+          "target_unit_name": "ManaLibrary",
+          "target_initial_health": 625
+        },
+        {
+          "case_id": "definition_group_032_123",
+          "source_slot": 39,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 46,
+          "target_unit_id": 123,
+          "target_unit_name": "GreenHall",
+          "target_initial_health": 1000
+        },
+        {
+          "case_id": "definition_group_032_124",
+          "source_slot": 38,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 30,
+          "target_unit_id": 124,
+          "target_unit_name": "HonyTemple",
+          "target_initial_health": 625
+        },
+        {
+          "case_id": "definition_group_032_128",
+          "source_slot": 43,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 31,
+          "target_unit_id": 128,
+          "target_unit_name": "TyranoNest",
+          "target_initial_health": 1250
+        },
+        {
+          "case_id": "definition_group_032_130",
+          "source_slot": 42,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 34,
+          "target_unit_id": 130,
+          "target_unit_name": "Nest",
+          "target_initial_health": 225
+        }
+      ]
+    },
+    {
+      "batch_index": 16,
+      "map": "RankerOCPV_Win/Maps/(2) GP Definition Group B16.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Definition Group B16.ply",
+      "replay_sha256": "AB3BE45C7FE3B496E3DBB1916F14F30588C6504458252B209B09E855D41FE321",
+      "cases": [
+        {
+          "case_id": "definition_group_032_132",
+          "source_slot": 52,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 41,
+          "target_unit_id": 132,
+          "target_unit_name": "EggNest",
+          "target_initial_health": 800
+        },
+        {
+          "case_id": "definition_group_032_133",
+          "source_slot": 50,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 49,
+          "target_unit_id": 133,
+          "target_unit_name": "LandNest",
+          "target_initial_health": 800
+        },
+        {
+          "case_id": "definition_group_032_134",
+          "source_slot": 51,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 48,
+          "target_unit_id": 134,
+          "target_unit_name": "SkyNest",
+          "target_initial_health": 800
+        },
+        {
+          "case_id": "definition_group_032_135",
+          "source_slot": 40,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 47,
+          "target_unit_id": 135,
+          "target_unit_name": "ThrowNest",
+          "target_initial_health": 900
+        },
+        {
+          "case_id": "definition_group_032_136",
+          "source_slot": 39,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 46,
+          "target_unit_id": 136,
+          "target_unit_name": "UpgradeNest",
+          "target_initial_health": 750
+        },
+        {
+          "case_id": "definition_group_032_137",
+          "source_slot": 38,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 30,
+          "target_unit_id": 137,
+          "target_unit_name": "LandNisdos",
+          "target_initial_health": 900
+        },
+        {
+          "case_id": "definition_group_032_138",
+          "source_slot": 43,
+          "source_unit_id": 32,
+          "source_unit_name": "Dinos",
+          "target_slot": 31,
+          "target_unit_id": 138,
+          "target_unit_name": "SkyNisdos",
+          "target_initial_health": 900
+        },
+        {
+          "case_id": "definition_group_083_005",
+          "source_slot": 42,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 34,
+          "target_unit_id": 5,
+          "target_unit_name": "Revolver",
+          "target_initial_health": 200
+        }
+      ]
+    },
+    {
+      "batch_index": 17,
+      "map": "RankerOCPV_Win/Maps/(2) GP Definition Group B17.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Definition Group B17.ply",
+      "replay_sha256": "0F53ED77BA61EF4E3B2C64ACC195B743DE724A4A0303CD85FB1BF99F8D31BFEA",
+      "cases": [
+        {
+          "case_id": "definition_group_083_006",
+          "source_slot": 52,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 41,
+          "target_unit_id": 6,
+          "target_unit_name": "BowMachine",
+          "target_initial_health": 175
+        },
+        {
+          "case_id": "definition_group_083_007",
+          "source_slot": 50,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 49,
+          "target_unit_id": 7,
+          "target_unit_name": "Squadron",
+          "target_initial_health": 82
+        },
+        {
+          "case_id": "definition_group_083_008",
+          "source_slot": 51,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 48,
+          "target_unit_id": 8,
+          "target_unit_name": "Flattop",
+          "target_initial_health": 325
+        },
+        {
+          "case_id": "definition_group_083_023",
+          "source_slot": 40,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 47,
+          "target_unit_id": 23,
+          "target_unit_name": "ManaSpread",
+          "target_initial_health": 107
+        },
+        {
+          "case_id": "definition_group_083_024",
+          "source_slot": 39,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 46,
+          "target_unit_id": 24,
+          "target_unit_name": "ElfRing",
+          "target_initial_health": 175
+        },
+        {
+          "case_id": "definition_group_083_042",
+          "source_slot": 38,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 30,
+          "target_unit_id": 42,
+          "target_unit_name": "EggThrower",
+          "target_initial_health": 185
+        },
+        {
+          "case_id": "definition_group_083_092",
+          "source_slot": 43,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 31,
+          "target_unit_id": 92,
+          "target_unit_name": "SkyBallista",
+          "target_initial_health": 165
+        },
+        {
+          "case_id": "definition_group_083_093",
+          "source_slot": 42,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 34,
+          "target_unit_id": 93,
+          "target_unit_name": "SkyBullet",
+          "target_initial_health": 165
+        }
+      ]
+    },
+    {
+      "batch_index": 18,
+      "map": "RankerOCPV_Win/Maps/(2) GP Definition Group B18.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Definition Group B18.ply",
+      "replay_sha256": "361F6D95DB6AEF60E9F142D3B79A777352A24496925D48F5698AC8B6DB56E1B4",
+      "cases": [
+        {
+          "case_id": "definition_group_083_095",
+          "source_slot": 52,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 41,
+          "target_unit_id": 95,
+          "target_unit_name": "DoubleBow_item",
+          "target_initial_health": 175
+        },
+        {
+          "case_id": "definition_group_083_096",
+          "source_slot": 50,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 49,
+          "target_unit_id": 96,
+          "target_unit_name": "Sanctuary",
+          "target_initial_health": 1500
+        },
+        {
+          "case_id": "definition_group_083_098",
+          "source_slot": 51,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 48,
+          "target_unit_id": 98,
+          "target_unit_name": "House",
+          "target_initial_health": 250
+        },
+        {
+          "case_id": "definition_group_083_099",
+          "source_slot": 40,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 47,
+          "target_unit_id": 99,
+          "target_unit_name": "StoneTower",
+          "target_initial_health": 250
+        },
+        {
+          "case_id": "definition_group_083_100",
+          "source_slot": 39,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 46,
+          "target_unit_id": 100,
+          "target_unit_name": "PowerHouse",
+          "target_initial_health": 1000
+        },
+        {
+          "case_id": "definition_group_083_101",
+          "source_slot": 38,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 30,
+          "target_unit_id": 101,
+          "target_unit_name": "SoldierHouse",
+          "target_initial_health": 1000
+        },
+        {
+          "case_id": "definition_group_083_102",
+          "source_slot": 43,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 31,
+          "target_unit_id": 102,
+          "target_unit_name": "SkyHouse",
+          "target_initial_health": 1000
+        },
+        {
+          "case_id": "definition_group_083_103",
+          "source_slot": 42,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 34,
+          "target_unit_id": 103,
+          "target_unit_name": "Blacksmith",
+          "target_initial_health": 1250
+        }
+      ]
+    },
+    {
+      "batch_index": 19,
+      "map": "RankerOCPV_Win/Maps/(2) GP Definition Group B19.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Definition Group B19.ply",
+      "replay_sha256": "600B61518851E7A0875E4ED4F1261C0D60907426AE2A9FCDC60D851E19BF7FC4",
+      "cases": [
+        {
+          "case_id": "definition_group_083_104",
+          "source_slot": 52,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 41,
+          "target_unit_id": 104,
+          "target_unit_name": "LandIncreaser",
+          "target_initial_health": 850
+        },
+        {
+          "case_id": "definition_group_083_105",
+          "source_slot": 50,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 49,
+          "target_unit_id": 105,
+          "target_unit_name": "SkyIncreaser",
+          "target_initial_health": 1000
+        },
+        {
+          "case_id": "definition_group_083_106",
+          "source_slot": 51,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 48,
+          "target_unit_id": 106,
+          "target_unit_name": "Trap",
+          "target_initial_health": 100
+        },
+        {
+          "case_id": "definition_group_083_107",
+          "source_slot": 40,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 47,
+          "target_unit_id": 107,
+          "target_unit_name": "PowerIncreaser",
+          "target_initial_health": 850
+        },
+        {
+          "case_id": "definition_group_083_108",
+          "source_slot": 39,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 46,
+          "target_unit_id": 108,
+          "target_unit_name": "IronIncreaser",
+          "target_initial_health": 1000
+        },
+        {
+          "case_id": "definition_group_083_111",
+          "source_slot": 38,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 30,
+          "target_unit_id": 111,
+          "target_unit_name": "SummonHouse",
+          "target_initial_health": 750
+        },
+        {
+          "case_id": "definition_group_083_112",
+          "source_slot": 43,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 31,
+          "target_unit_id": 112,
+          "target_unit_name": "Heaven",
+          "target_initial_health": 1500
+        },
+        {
+          "case_id": "definition_group_083_113",
+          "source_slot": 42,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 34,
+          "target_unit_id": 113,
+          "target_unit_name": "Bubble",
+          "target_initial_health": 200
+        }
+      ]
+    },
+    {
+      "batch_index": 20,
+      "map": "RankerOCPV_Win/Maps/(2) GP Definition Group B20.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Definition Group B20.ply",
+      "replay_sha256": "0AB34BE265D9247EDF65BE9B6FBB8D24F8DDC51E2D23DA7939F47D7D31B15250",
+      "cases": [
+        {
+          "case_id": "definition_group_083_114",
+          "source_slot": 52,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 41,
+          "target_unit_id": 114,
+          "target_unit_name": "ElfTree",
+          "target_initial_health": 300
+        },
+        {
+          "case_id": "definition_group_083_115",
+          "source_slot": 50,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 49,
+          "target_unit_id": 115,
+          "target_unit_name": "Bubble",
+          "target_initial_health": 200
+        },
+        {
+          "case_id": "definition_group_083_116",
+          "source_slot": 51,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 48,
+          "target_unit_id": 116,
+          "target_unit_name": "RedHall",
+          "target_initial_health": 900
+        },
+        {
+          "case_id": "definition_group_083_117",
+          "source_slot": 40,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 47,
+          "target_unit_id": 117,
+          "target_unit_name": "BlueHall",
+          "target_initial_health": 900
+        },
+        {
+          "case_id": "definition_group_083_118",
+          "source_slot": 39,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 46,
+          "target_unit_id": 118,
+          "target_unit_name": "ManaHall",
+          "target_initial_health": 800
+        },
+        {
+          "case_id": "definition_group_083_119",
+          "source_slot": 38,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 30,
+          "target_unit_id": 119,
+          "target_unit_name": "SkyHall",
+          "target_initial_health": 875
+        },
+        {
+          "case_id": "definition_group_083_120",
+          "source_slot": 43,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 31,
+          "target_unit_id": 120,
+          "target_unit_name": "ElfLibrary",
+          "target_initial_health": 700
+        },
+        {
+          "case_id": "definition_group_083_121",
+          "source_slot": 42,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 34,
+          "target_unit_id": 121,
+          "target_unit_name": "SkyLibrary",
+          "target_initial_health": 625
+        }
+      ]
+    },
+    {
+      "batch_index": 21,
+      "map": "RankerOCPV_Win/Maps/(2) GP Definition Group B21.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Definition Group B21.ply",
+      "replay_sha256": "FB3952D69D7CB511CC849B6FCD617A7E6F4D29AE8DC801C42C9B4DF7B97C290E",
+      "cases": [
+        {
+          "case_id": "definition_group_083_122",
+          "source_slot": 52,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 41,
+          "target_unit_id": 122,
+          "target_unit_name": "ManaLibrary",
+          "target_initial_health": 625
+        },
+        {
+          "case_id": "definition_group_083_123",
+          "source_slot": 50,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 49,
+          "target_unit_id": 123,
+          "target_unit_name": "GreenHall",
+          "target_initial_health": 1000
+        },
+        {
+          "case_id": "definition_group_083_124",
+          "source_slot": 51,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 48,
+          "target_unit_id": 124,
+          "target_unit_name": "HonyTemple",
+          "target_initial_health": 625
+        },
+        {
+          "case_id": "definition_group_083_128",
+          "source_slot": 40,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 47,
+          "target_unit_id": 128,
+          "target_unit_name": "TyranoNest",
+          "target_initial_health": 1250
+        },
+        {
+          "case_id": "definition_group_083_130",
+          "source_slot": 39,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 46,
+          "target_unit_id": 130,
+          "target_unit_name": "Nest",
+          "target_initial_health": 225
+        },
+        {
+          "case_id": "definition_group_083_132",
+          "source_slot": 38,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 30,
+          "target_unit_id": 132,
+          "target_unit_name": "EggNest",
+          "target_initial_health": 800
+        },
+        {
+          "case_id": "definition_group_083_133",
+          "source_slot": 43,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 31,
+          "target_unit_id": 133,
+          "target_unit_name": "LandNest",
+          "target_initial_health": 800
+        },
+        {
+          "case_id": "definition_group_083_134",
+          "source_slot": 42,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 34,
+          "target_unit_id": 134,
+          "target_unit_name": "SkyNest",
+          "target_initial_health": 800
+        }
+      ]
+    },
+    {
+      "batch_index": 22,
+      "map": "RankerOCPV_Win/Maps/(2) GP Definition Group B22.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Definition Group B22.ply",
+      "replay_sha256": "4E5386ED534544CA63F18CD39B6A7EABBFFD41E86D08289A71E44E9C360C750B",
+      "cases": [
+        {
+          "case_id": "definition_group_083_135",
+          "source_slot": 52,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 39,
+          "target_unit_id": 135,
+          "target_unit_name": "ThrowNest",
+          "target_initial_health": 900
+        },
+        {
+          "case_id": "definition_group_083_136",
+          "source_slot": 50,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 38,
+          "target_unit_id": 136,
+          "target_unit_name": "UpgradeNest",
+          "target_initial_health": 750
+        },
+        {
+          "case_id": "definition_group_083_137",
+          "source_slot": 51,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 43,
+          "target_unit_id": 137,
+          "target_unit_name": "LandNisdos",
+          "target_initial_health": 900
+        },
+        {
+          "case_id": "definition_group_083_138",
+          "source_slot": 40,
+          "source_unit_id": 83,
+          "source_unit_name": "Alien1",
+          "target_slot": 42,
+          "target_unit_id": 138,
+          "target_unit_name": "SkyNisdos",
+          "target_initial_health": 900
+        }
+      ]
+    }
+  ]
+}

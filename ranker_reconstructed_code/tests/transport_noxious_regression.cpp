@@ -1,5 +1,8 @@
 #include "ranker_unit_action.h"
 #include "ranker_unit_commands.h"
+#include "ranker_unit_lifecycle.h"
+#include "ranker_unit_equipment.h"
+#include "ranker_unit_target_helpers.h"
 
 #include <array>
 #include <cstdlib>
@@ -135,11 +138,180 @@ void test_successful_transport_unload_detaches_visible_passenger() {
         "transport unload did not publish the placed passenger state");
 }
 
+void test_linked_release_count_rebuild_keeps_source_bucket_during_cycle() {
+    UnitMovementContext movement{};
+    UnitMovementUnit parent{};
+    parent.active = true;
+    parent.owner_id = 0;
+    parent.type_id = 35;
+    parent.command_state = kUnitStateLinkedUnitReleaseCycle;
+    parent.cargo_amount = 34;
+    UnitMovementUnit child{};
+    child.active = true;
+    child.owner_id = 0;
+    child.type_id = 34;
+    child.command_state = kUnitStateLinkedUnitReleaseCycle;
+    child.runtime_flags = 0x80;
+    movement.active_units = {&parent, &child};
+
+    UnitLifecycleContext lifecycle{};
+    lifecycle.movement = &movement;
+    HandleOwnerUnitTypeCountRebuild(lifecycle);
+
+    require(lifecycle.owner_unit_type_counts[0][34] == 2,
+        "linked release moved the parent out of its source count bucket");
+    require(lifecycle.owner_unit_type_counts[0][35] == 0,
+        "linked release published its result count before cycle completion");
+}
+
+void test_unfinished_building_death_preserves_completed_type_count() {
+    UnitLifecycleContext lifecycle{};
+    lifecycle.owner_unit_type_counts[1][114] = 5;
+
+    UnitMovementUnit unfinished{};
+    unfinished.owner_id = 1;
+    unfinished.type_id = 114;
+    unfinished.action_mode_gate = 1;
+    HandleUnitDeathOwnerCounters(lifecycle, unfinished);
+
+    require(lifecycle.owner_building_lost_count[1] == 1,
+        "unfinished building death did not update the building-loss counter");
+    require(lifecycle.owner_unit_type_counts[1][114] == 5,
+        "unfinished building death changed the completed-type count");
+
+    UnitMovementUnit completed = unfinished;
+    completed.action_mode_gate = 0;
+    HandleUnitDeathOwnerCounters(lifecycle, completed);
+
+    require(lifecycle.owner_building_lost_count[1] == 2,
+        "completed building death did not update the building-loss counter");
+    require(lifecycle.owner_unit_type_counts[1][114] == 4,
+        "completed building death did not decrement the completed-type count");
+}
+
+void test_target_interaction_preserves_original_payload_unions() {
+    UnitMovementUnit source{};
+    source.id = 1;
+    source.command_value = 2;
+    source.path_target_x = 3;
+    source.path_target_y = 900;
+    source.active_command_payload.x = 2;
+    UnitMovementUnit target{};
+    target.id = 2;
+    target.x = 640;
+    target.y = 704;
+
+    UnitMovementContext movement{};
+    movement.active_units = {&source, &target};
+    UnitCommandContext context{};
+    context.movement = &movement;
+    StartUnitTargetOrPointCommandEntry(context, source);
+
+    require(source.cargo_amount == 3,
+        "target interaction did not copy its slot payload to raw +0x4c");
+    require(source.command_value == target.id,
+        "target interaction overwrote its raw +0x68 target reference");
+    require(source.target == &target && source.path_target_x == target.x &&
+            source.path_target_y == target.y,
+        "target interaction did not resolve the synchronized target point");
+}
+
+void test_special_target_interaction_uses_effect_adjusted_range() {
+    UnitMovementUnit source{};
+    source.type_id = kUnitTargetHelperSpecialSpawnType;
+    source.owner_id = 0;
+    source.x = 856;
+    source.y = 2056;
+    source.definition.effect_adjusted_interaction_range_base = 260;
+
+    UnitMovementUnit target{};
+    target.type_id = 0x60;
+    target.x = 888;
+    target.y = 2056;
+    target.definition.interaction_bounds_width = 192;
+    target.definition.interaction_bounds_height = 138;
+    source.target = &target;
+
+    ProductionOrderRuntimeState production{};
+    production.completion_effect_totals[
+        kProductionEffectSlotUnitInteractionRange][0][source.type_id] = 40;
+
+    require(!CheckTargetInteractionNeedsApproach(source, &production, nullptr),
+        "special target interaction ignored its adjusted interaction range");
+    require(source.path_target_x == 984 && source.path_target_y == 2125,
+        "special target interaction did not retain the target footprint center");
+    require(CheckTargetInteractionNeedsApproach(source, nullptr, nullptr),
+        "special target interaction did not apply the half-range distance gate");
+}
+
+void test_target_interaction_approach_updates_payload_point_union() {
+    UnitMovementUnit source{};
+    source.type_id = 17;
+    source.command_state = kUnitStateTargetInteractionApproach;
+    source.active_command_payload.state = kUnitStateTargetOrPointCommand;
+    source.id = 1;
+    source.active = true;
+    source.active_command_payload.x = 2;
+    source.active_command_payload.y = 1281;
+    source.active_command_payload.value = 2056;
+    source.x = 100;
+    source.y = 100;
+
+    UnitMovementUnit target{};
+    target.id = 2;
+    target.active = true;
+    target.type_id = 1;
+    target.x = 600;
+    target.y = 700;
+    source.target = &target;
+
+    UnitMovementContext movement{};
+    movement.active_units = {&source, &target};
+    UnitCommandContext context{};
+    context.movement = &movement;
+    HandleUnitTargetInteractionApproach(context, source);
+
+    require(source.active_command_payload.y == target.x &&
+            source.active_command_payload.value == static_cast<u32>(target.y),
+        "target approach did not update the active payload point union");
+    require(source.saved_path_target_x == target.x &&
+            source.saved_path_target_y == target.y,
+        "target approach did not update the retained target point");
+}
+
+void test_equipment_remove_uses_definition_command_flag_gate() {
+    UnitEquipmentCatalog catalog{};
+    UnitEquipmentEffectDefinition effect{};
+    effect.id = 88;
+    effect.replacement_type_id = kInvalidUnitEquipmentType;
+    effect.category = UnitEquipmentCategory::Generic;
+    effect.generic_modifiers[kUnitEquipmentGenericModifierCommandFlag] = 1;
+    catalog.effects.push_back(effect);
+
+    UnitMovementUnit unit{};
+    unit.type_flags = 0x2;
+    unit.definition.footprint_flags = 0;
+    unit.command_flags = 0x40;
+    unit.equipment_slots[0] = effect.id;
+    UnitCommandContext context{};
+
+    require(RemoveUnitEquipmentEffect(context, unit, effect, &catalog),
+        "equipment effect removal was rejected");
+    require((unit.command_flags & 0x40u) == 0,
+        "equipment removal tested mutable type flags instead of definition flags");
+}
+
 } // namespace
 
 int main() {
     test_zero_damage_unit_flag_area_preserves_reactions();
     test_successful_transport_unload_detaches_visible_passenger();
+    test_linked_release_count_rebuild_keeps_source_bucket_during_cycle();
+    test_unfinished_building_death_preserves_completed_type_count();
+    test_target_interaction_preserves_original_payload_unions();
+    test_special_target_interaction_uses_effect_adjusted_range();
+    test_target_interaction_approach_updates_payload_point_union();
+    test_equipment_remove_uses_definition_command_flag_gate();
     std::cout << "TRANSPORT_NOXIOUS_REGRESSION_PASS\n";
     return EXIT_SUCCESS;
 }

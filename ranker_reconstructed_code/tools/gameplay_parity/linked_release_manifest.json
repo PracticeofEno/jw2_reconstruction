@@ -1,0 +1,64 @@
+{
+  "schema": 1,
+  "command_frame": 31,
+  "end_frame": 350,
+  "map": "RankerOCPV_Win/Maps/(2) GP Linked Release.trk",
+  "replay": "RankerOCPV_Win/Replays/(2) GP Linked Release.ply",
+  "replay_sha256": "18835DFFA3D465DABE9BB21CD71ABA1FEE1C3E57CA097B78850741F8F4827B20",
+  "cases": [
+    {
+      "case_id": "pair_velocis",
+      "source_unit_ids": [
+        34,
+        34
+      ],
+      "source_slots": [
+        52,
+        50
+      ],
+      "result_unit_id": 35,
+      "result_unit_name": "TwinVelocis"
+    },
+    {
+      "case_id": "pair_rhamphos",
+      "source_unit_ids": [
+        37,
+        37
+      ],
+      "source_slots": [
+        51,
+        40
+      ],
+      "result_unit_id": 38,
+      "result_unit_name": "TwinRhamphos"
+    },
+    {
+      "case_id": "pair_pteras",
+      "source_unit_ids": [
+        39,
+        39
+      ],
+      "source_slots": [
+        39,
+        38
+      ],
+      "result_unit_id": 45,
+      "result_unit_name": "TwinPteras"
+    },
+    {
+      "case_id": "triad_dilophos_pteras_trices",
+      "source_unit_ids": [
+        36,
+        39,
+        40
+      ],
+      "source_slots": [
+        43,
+        42,
+        41
+      ],
+      "result_unit_id": 43,
+      "result_unit_name": "Mutant"
+    }
+  ]
+}

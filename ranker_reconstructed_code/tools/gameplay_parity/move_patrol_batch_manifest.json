@@ -1,0 +1,1561 @@
+{
+  "schema": 1,
+  "binding_count": 91,
+  "move_frame": 31,
+  "patrol_frame": 32,
+  "end_frame": 180,
+  "batches": [
+    {
+      "batch_index": 0,
+      "map": "RankerOCPV_Win/Maps/(2) GP Move Patrol B00.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Move Patrol B00.ply",
+      "replay_sha256": "EA2A6455EC5D3C5EE35BC9F7C9A9CE701EA7DE565B3903578AEAA978D15C75E2",
+      "cases": [
+        {
+          "case_id": "move_patrol_000",
+          "unit_slot": 52,
+          "unit_id": 0,
+          "unit_name": "BuildMan",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1456,
+            336
+          ],
+          "move_world": [
+            1552,
+            336
+          ]
+        },
+        {
+          "case_id": "move_patrol_001",
+          "unit_slot": 50,
+          "unit_id": 1,
+          "unit_name": "PowerMan",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1392,
+            368
+          ],
+          "move_world": [
+            1488,
+            368
+          ]
+        },
+        {
+          "case_id": "move_patrol_002",
+          "unit_slot": 51,
+          "unit_id": 2,
+          "unit_name": "Giant",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1520,
+            368
+          ],
+          "move_world": [
+            1616,
+            368
+          ]
+        },
+        {
+          "case_id": "move_patrol_003",
+          "unit_slot": 40,
+          "unit_id": 3,
+          "unit_name": "Soldier",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1328,
+            400
+          ],
+          "move_world": [
+            1424,
+            400
+          ]
+        },
+        {
+          "case_id": "move_patrol_004",
+          "unit_slot": 39,
+          "unit_id": 4,
+          "unit_name": "Knight",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1648,
+            400
+          ],
+          "move_world": [
+            1744,
+            400
+          ]
+        },
+        {
+          "case_id": "move_patrol_005",
+          "unit_slot": 38,
+          "unit_id": 5,
+          "unit_name": "Revolver",
+          "movement_class": 3,
+          "expected_travel": true,
+          "source_world": [
+            272,
+            272
+          ],
+          "move_world": [
+            368,
+            272
+          ]
+        },
+        {
+          "case_id": "move_patrol_006",
+          "unit_slot": 43,
+          "unit_id": 6,
+          "unit_name": "BowMachine",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1264,
+            432
+          ],
+          "move_world": [
+            1360,
+            432
+          ]
+        },
+        {
+          "case_id": "move_patrol_007",
+          "unit_slot": 42,
+          "unit_id": 7,
+          "unit_name": "Squadron",
+          "movement_class": 3,
+          "expected_travel": true,
+          "source_world": [
+            400,
+            272
+          ],
+          "move_world": [
+            496,
+            272
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 1,
+      "map": "RankerOCPV_Win/Maps/(2) GP Move Patrol B01.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Move Patrol B01.ply",
+      "replay_sha256": "2A33FC0FF1CB41A43A4A7F03F2E1FDC45E8BBE8B0A898B365A59ACD691AC56B5",
+      "cases": [
+        {
+          "case_id": "move_patrol_008",
+          "unit_slot": 52,
+          "unit_id": 8,
+          "unit_name": "Flattop",
+          "movement_class": 3,
+          "expected_travel": true,
+          "source_world": [
+            272,
+            272
+          ],
+          "move_world": [
+            368,
+            272
+          ]
+        },
+        {
+          "case_id": "move_patrol_009",
+          "unit_slot": 50,
+          "unit_id": 9,
+          "unit_name": "Chief",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1456,
+            336
+          ],
+          "move_world": [
+            1552,
+            336
+          ]
+        },
+        {
+          "case_id": "move_patrol_010",
+          "unit_slot": 51,
+          "unit_id": 10,
+          "unit_name": "PowerMan (Shield of Peace)",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1392,
+            368
+          ],
+          "move_world": [
+            1488,
+            368
+          ]
+        },
+        {
+          "case_id": "move_patrol_011",
+          "unit_slot": 40,
+          "unit_id": 11,
+          "unit_name": "Soldier (Fire Arrow)",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1520,
+            368
+          ],
+          "move_world": [
+            1616,
+            368
+          ]
+        },
+        {
+          "case_id": "move_patrol_012",
+          "unit_slot": 39,
+          "unit_id": 12,
+          "unit_name": "Soldier (Venom Arrow)",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1328,
+            400
+          ],
+          "move_world": [
+            1424,
+            400
+          ]
+        },
+        {
+          "case_id": "move_patrol_013",
+          "unit_slot": 38,
+          "unit_id": 13,
+          "unit_name": "Knight (Spear of Justice)",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1648,
+            400
+          ],
+          "move_world": [
+            1744,
+            400
+          ]
+        },
+        {
+          "case_id": "move_patrol_014",
+          "unit_slot": 43,
+          "unit_id": 14,
+          "unit_name": "Kalma",
+          "movement_class": 3,
+          "expected_travel": true,
+          "source_world": [
+            400,
+            272
+          ],
+          "move_world": [
+            496,
+            272
+          ]
+        },
+        {
+          "case_id": "move_patrol_015",
+          "unit_slot": 42,
+          "unit_id": 15,
+          "unit_name": "Silvan",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1264,
+            432
+          ],
+          "move_world": [
+            1360,
+            432
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 2,
+      "map": "RankerOCPV_Win/Maps/(2) GP Move Patrol B02.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Move Patrol B02.ply",
+      "replay_sha256": "7AF14A9E3BA9CF861F2431E382858BD2D0456CDDAB73434E4891C578C8322A81",
+      "cases": [
+        {
+          "case_id": "move_patrol_016",
+          "unit_slot": 52,
+          "unit_id": 16,
+          "unit_name": "Wizard",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1456,
+            336
+          ],
+          "move_world": [
+            1552,
+            336
+          ]
+        },
+        {
+          "case_id": "move_patrol_017",
+          "unit_slot": 50,
+          "unit_id": 17,
+          "unit_name": "RedElf",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1392,
+            368
+          ],
+          "move_world": [
+            1488,
+            368
+          ]
+        },
+        {
+          "case_id": "move_patrol_018",
+          "unit_slot": 51,
+          "unit_id": 18,
+          "unit_name": "WhiteElf",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1520,
+            368
+          ],
+          "move_world": [
+            1616,
+            368
+          ]
+        },
+        {
+          "case_id": "move_patrol_019",
+          "unit_slot": 40,
+          "unit_id": 19,
+          "unit_name": "Ranger",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1328,
+            400
+          ],
+          "move_world": [
+            1424,
+            400
+          ]
+        },
+        {
+          "case_id": "move_patrol_020",
+          "unit_slot": 39,
+          "unit_id": 20,
+          "unit_name": "BlueElf",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1648,
+            400
+          ],
+          "move_world": [
+            1744,
+            400
+          ]
+        },
+        {
+          "case_id": "move_patrol_021",
+          "unit_slot": 38,
+          "unit_id": 21,
+          "unit_name": "Unicorn",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1264,
+            432
+          ],
+          "move_world": [
+            1360,
+            432
+          ]
+        },
+        {
+          "case_id": "move_patrol_022",
+          "unit_slot": 43,
+          "unit_id": 22,
+          "unit_name": "Pixie",
+          "movement_class": 3,
+          "expected_travel": true,
+          "source_world": [
+            272,
+            272
+          ],
+          "move_world": [
+            368,
+            272
+          ]
+        },
+        {
+          "case_id": "move_patrol_023",
+          "unit_slot": 42,
+          "unit_id": 23,
+          "unit_name": "ManaSpread",
+          "movement_class": 2,
+          "expected_travel": true,
+          "source_world": [
+            1392,
+            432
+          ],
+          "move_world": [
+            1488,
+            432
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 3,
+      "map": "RankerOCPV_Win/Maps/(2) GP Move Patrol B03.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Move Patrol B03.ply",
+      "replay_sha256": "A810B224682CF4D378DCFA53C91D392885C36A937602F86AAB31B9A2DED2E170",
+      "cases": [
+        {
+          "case_id": "move_patrol_024",
+          "unit_slot": 52,
+          "unit_id": 24,
+          "unit_name": "ElfRing",
+          "movement_class": 3,
+          "expected_travel": true,
+          "source_world": [
+            272,
+            272
+          ],
+          "move_world": [
+            368,
+            272
+          ]
+        },
+        {
+          "case_id": "move_patrol_025",
+          "unit_slot": 50,
+          "unit_id": 25,
+          "unit_name": "Dragon",
+          "movement_class": 3,
+          "expected_travel": true,
+          "source_world": [
+            400,
+            272
+          ],
+          "move_world": [
+            496,
+            272
+          ]
+        },
+        {
+          "case_id": "move_patrol_026",
+          "unit_slot": 51,
+          "unit_id": 26,
+          "unit_name": "phoenix",
+          "movement_class": 3,
+          "expected_travel": true,
+          "source_world": [
+            528,
+            272
+          ],
+          "move_world": [
+            624,
+            272
+          ]
+        },
+        {
+          "case_id": "move_patrol_027",
+          "unit_slot": 40,
+          "unit_id": 27,
+          "unit_name": "AngelElf",
+          "movement_class": 3,
+          "expected_travel": true,
+          "source_world": [
+            656,
+            272
+          ],
+          "move_world": [
+            752,
+            272
+          ]
+        },
+        {
+          "case_id": "move_patrol_028",
+          "unit_slot": 39,
+          "unit_id": 28,
+          "unit_name": "GreenElf",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1456,
+            336
+          ],
+          "move_world": [
+            1552,
+            336
+          ]
+        },
+        {
+          "case_id": "move_patrol_029",
+          "unit_slot": 38,
+          "unit_id": 29,
+          "unit_name": "DarkElf",
+          "movement_class": 2,
+          "expected_travel": true,
+          "source_world": [
+            1392,
+            368
+          ],
+          "move_world": [
+            1488,
+            368
+          ]
+        },
+        {
+          "case_id": "move_patrol_030",
+          "unit_slot": 43,
+          "unit_id": 30,
+          "unit_name": "Null.chr",
+          "movement_class": 0,
+          "expected_travel": false,
+          "source_world": [
+            1520,
+            368
+          ],
+          "move_world": [
+            1616,
+            368
+          ]
+        },
+        {
+          "case_id": "move_patrol_032",
+          "unit_slot": 42,
+          "unit_id": 32,
+          "unit_name": "Dinos",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1328,
+            400
+          ],
+          "move_world": [
+            1424,
+            400
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 4,
+      "map": "RankerOCPV_Win/Maps/(2) GP Move Patrol B04.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Move Patrol B04.ply",
+      "replay_sha256": "0DF3E8058DF9E48D4A2123632FAD5208C6DA56FC69CB8082B25AD90F1B459992",
+      "cases": [
+        {
+          "case_id": "move_patrol_033",
+          "unit_slot": 52,
+          "unit_id": 33,
+          "unit_name": "Masos",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1456,
+            336
+          ],
+          "move_world": [
+            1552,
+            336
+          ]
+        },
+        {
+          "case_id": "move_patrol_034",
+          "unit_slot": 50,
+          "unit_id": 34,
+          "unit_name": "Velocis",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1392,
+            368
+          ],
+          "move_world": [
+            1488,
+            368
+          ]
+        },
+        {
+          "case_id": "move_patrol_035",
+          "unit_slot": 51,
+          "unit_id": 35,
+          "unit_name": "TwinVelocis",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1520,
+            368
+          ],
+          "move_world": [
+            1616,
+            368
+          ]
+        },
+        {
+          "case_id": "move_patrol_036",
+          "unit_slot": 40,
+          "unit_id": 36,
+          "unit_name": "Dilophos",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1328,
+            400
+          ],
+          "move_world": [
+            1424,
+            400
+          ]
+        },
+        {
+          "case_id": "move_patrol_037",
+          "unit_slot": 39,
+          "unit_id": 37,
+          "unit_name": "Rhamphos",
+          "movement_class": 2,
+          "expected_travel": true,
+          "source_world": [
+            1648,
+            400
+          ],
+          "move_world": [
+            1744,
+            400
+          ]
+        },
+        {
+          "case_id": "move_patrol_038",
+          "unit_slot": 38,
+          "unit_id": 38,
+          "unit_name": "TwinRhamphos",
+          "movement_class": 3,
+          "expected_travel": true,
+          "source_world": [
+            272,
+            272
+          ],
+          "move_world": [
+            368,
+            272
+          ]
+        },
+        {
+          "case_id": "move_patrol_039",
+          "unit_slot": 43,
+          "unit_id": 39,
+          "unit_name": "Pteras",
+          "movement_class": 3,
+          "expected_travel": true,
+          "source_world": [
+            400,
+            272
+          ],
+          "move_world": [
+            496,
+            272
+          ]
+        },
+        {
+          "case_id": "move_patrol_040",
+          "unit_slot": 42,
+          "unit_id": 40,
+          "unit_name": "Trices",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1264,
+            432
+          ],
+          "move_world": [
+            1360,
+            432
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 5,
+      "map": "RankerOCPV_Win/Maps/(2) GP Move Patrol B05.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Move Patrol B05.ply",
+      "replay_sha256": "2519219BE2BBF176BCD6AB0033E2BCF6170A407487C234D8D2EB48C5E1CF0396",
+      "cases": [
+        {
+          "case_id": "move_patrol_041",
+          "unit_slot": 52,
+          "unit_id": 41,
+          "unit_name": "Dsunguri",
+          "movement_class": 3,
+          "expected_travel": true,
+          "source_world": [
+            272,
+            272
+          ],
+          "move_world": [
+            368,
+            272
+          ]
+        },
+        {
+          "case_id": "move_patrol_042",
+          "unit_slot": 50,
+          "unit_id": 42,
+          "unit_name": "EggThrower",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1456,
+            336
+          ],
+          "move_world": [
+            1552,
+            336
+          ]
+        },
+        {
+          "case_id": "move_patrol_043",
+          "unit_slot": 51,
+          "unit_id": 43,
+          "unit_name": "Mutant",
+          "movement_class": 3,
+          "expected_travel": true,
+          "source_world": [
+            400,
+            272
+          ],
+          "move_world": [
+            496,
+            272
+          ]
+        },
+        {
+          "case_id": "move_patrol_044",
+          "unit_slot": 40,
+          "unit_id": 44,
+          "unit_name": "Tyranos",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1392,
+            368
+          ],
+          "move_world": [
+            1488,
+            368
+          ]
+        },
+        {
+          "case_id": "move_patrol_045",
+          "unit_slot": 39,
+          "unit_id": 45,
+          "unit_name": "TwinPteras",
+          "movement_class": 3,
+          "expected_travel": true,
+          "source_world": [
+            528,
+            272
+          ],
+          "move_world": [
+            624,
+            272
+          ]
+        },
+        {
+          "case_id": "move_patrol_046",
+          "unit_slot": 38,
+          "unit_id": 46,
+          "unit_name": "Kentros",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1520,
+            368
+          ],
+          "move_world": [
+            1616,
+            368
+          ]
+        },
+        {
+          "case_id": "move_patrol_047",
+          "unit_slot": 43,
+          "unit_id": 47,
+          "unit_name": "Null.chr",
+          "movement_class": 0,
+          "expected_travel": false,
+          "source_world": [
+            1328,
+            400
+          ],
+          "move_world": [
+            1424,
+            400
+          ]
+        },
+        {
+          "case_id": "move_patrol_048",
+          "unit_slot": 42,
+          "unit_id": 48,
+          "unit_name": "Insect",
+          "movement_class": 2,
+          "expected_travel": true,
+          "source_world": [
+            1648,
+            400
+          ],
+          "move_world": [
+            1744,
+            400
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 6,
+      "map": "RankerOCPV_Win/Maps/(2) GP Move Patrol B06.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Move Patrol B06.ply",
+      "replay_sha256": "109587C187E926C55D64E0A8601D48305B1DDB8366CB3185CEFA5947D9F8AF7D",
+      "cases": [
+        {
+          "case_id": "move_patrol_049",
+          "unit_slot": 52,
+          "unit_id": 49,
+          "unit_name": "Skeleton",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1456,
+            336
+          ],
+          "move_world": [
+            1552,
+            336
+          ]
+        },
+        {
+          "case_id": "move_patrol_050",
+          "unit_slot": 50,
+          "unit_id": 50,
+          "unit_name": "MudMan",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1392,
+            368
+          ],
+          "move_world": [
+            1488,
+            368
+          ]
+        },
+        {
+          "case_id": "move_patrol_051",
+          "unit_slot": 51,
+          "unit_id": 51,
+          "unit_name": "DeathEye",
+          "movement_class": 3,
+          "expected_travel": true,
+          "source_world": [
+            272,
+            272
+          ],
+          "move_world": [
+            368,
+            272
+          ]
+        },
+        {
+          "case_id": "move_patrol_052",
+          "unit_slot": 40,
+          "unit_id": 52,
+          "unit_name": "Phantom",
+          "movement_class": 3,
+          "expected_travel": true,
+          "source_world": [
+            400,
+            272
+          ],
+          "move_world": [
+            496,
+            272
+          ]
+        },
+        {
+          "case_id": "move_patrol_053",
+          "unit_slot": 39,
+          "unit_id": 53,
+          "unit_name": "Gargoyle",
+          "movement_class": 3,
+          "expected_travel": true,
+          "source_world": [
+            528,
+            272
+          ],
+          "move_world": [
+            624,
+            272
+          ]
+        },
+        {
+          "case_id": "move_patrol_054",
+          "unit_slot": 38,
+          "unit_id": 54,
+          "unit_name": "Kelpa",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1520,
+            368
+          ],
+          "move_world": [
+            1616,
+            368
+          ]
+        },
+        {
+          "case_id": "move_patrol_055",
+          "unit_slot": 43,
+          "unit_id": 55,
+          "unit_name": "Warlock",
+          "movement_class": 2,
+          "expected_travel": true,
+          "source_world": [
+            1328,
+            400
+          ],
+          "move_world": [
+            1424,
+            400
+          ]
+        },
+        {
+          "case_id": "move_patrol_056",
+          "unit_slot": 42,
+          "unit_id": 56,
+          "unit_name": "KingDemon",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1648,
+            400
+          ],
+          "move_world": [
+            1744,
+            400
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 7,
+      "map": "RankerOCPV_Win/Maps/(2) GP Move Patrol B07.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Move Patrol B07.ply",
+      "replay_sha256": "0DB73134DC7ED8CF71D63C9676682AAA75495A1C67F8219A6D4E1D05BD73D64B",
+      "cases": [
+        {
+          "case_id": "move_patrol_057",
+          "unit_slot": 52,
+          "unit_id": 57,
+          "unit_name": "Darkbat",
+          "movement_class": 3,
+          "expected_travel": true,
+          "source_world": [
+            272,
+            272
+          ],
+          "move_world": [
+            368,
+            272
+          ]
+        },
+        {
+          "case_id": "move_patrol_058",
+          "unit_slot": 50,
+          "unit_id": 58,
+          "unit_name": "Devil",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1456,
+            336
+          ],
+          "move_world": [
+            1552,
+            336
+          ]
+        },
+        {
+          "case_id": "move_patrol_059",
+          "unit_slot": 51,
+          "unit_id": 59,
+          "unit_name": "RiseZombie1",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1392,
+            368
+          ],
+          "move_world": [
+            1488,
+            368
+          ]
+        },
+        {
+          "case_id": "move_patrol_060",
+          "unit_slot": 40,
+          "unit_id": 60,
+          "unit_name": "RiseZombie2",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1520,
+            368
+          ],
+          "move_world": [
+            1616,
+            368
+          ]
+        },
+        {
+          "case_id": "move_patrol_061",
+          "unit_slot": 39,
+          "unit_id": 61,
+          "unit_name": "Imp",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1328,
+            400
+          ],
+          "move_world": [
+            1424,
+            400
+          ]
+        },
+        {
+          "case_id": "move_patrol_062",
+          "unit_slot": 38,
+          "unit_id": 62,
+          "unit_name": "FemmeFatale",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1648,
+            400
+          ],
+          "move_world": [
+            1744,
+            400
+          ]
+        },
+        {
+          "case_id": "move_patrol_063",
+          "unit_slot": 43,
+          "unit_id": 63,
+          "unit_name": "Nightmare",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1264,
+            432
+          ],
+          "move_world": [
+            1360,
+            432
+          ]
+        },
+        {
+          "case_id": "move_patrol_064",
+          "unit_slot": 42,
+          "unit_id": 64,
+          "unit_name": "Tyranosaurus",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1392,
+            432
+          ],
+          "move_world": [
+            1488,
+            432
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 8,
+      "map": "RankerOCPV_Win/Maps/(2) GP Move Patrol B08.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Move Patrol B08.ply",
+      "replay_sha256": "107575B1FD922CA75BB2F7B497A3BB814325A27FE3E24268F9E42DABED0FA91F",
+      "cases": [
+        {
+          "case_id": "move_patrol_065",
+          "unit_slot": 52,
+          "unit_id": 65,
+          "unit_name": "Triceratops",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1456,
+            336
+          ],
+          "move_world": [
+            1552,
+            336
+          ]
+        },
+        {
+          "case_id": "move_patrol_066",
+          "unit_slot": 50,
+          "unit_id": 66,
+          "unit_name": "Ceratosaurus",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1392,
+            368
+          ],
+          "move_world": [
+            1488,
+            368
+          ]
+        },
+        {
+          "case_id": "move_patrol_067",
+          "unit_slot": 51,
+          "unit_id": 67,
+          "unit_name": "Pachycephalosaurus",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1520,
+            368
+          ],
+          "move_world": [
+            1616,
+            368
+          ]
+        },
+        {
+          "case_id": "move_patrol_068",
+          "unit_slot": 40,
+          "unit_id": 68,
+          "unit_name": "Dilophosaurus",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1328,
+            400
+          ],
+          "move_world": [
+            1424,
+            400
+          ]
+        },
+        {
+          "case_id": "move_patrol_069",
+          "unit_slot": 39,
+          "unit_id": 69,
+          "unit_name": "Velociraptor",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1648,
+            400
+          ],
+          "move_world": [
+            1744,
+            400
+          ]
+        },
+        {
+          "case_id": "move_patrol_070",
+          "unit_slot": 38,
+          "unit_id": 70,
+          "unit_name": "Brachiosaurus",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1264,
+            432
+          ],
+          "move_world": [
+            1360,
+            432
+          ]
+        },
+        {
+          "case_id": "move_patrol_071",
+          "unit_slot": 43,
+          "unit_id": 71,
+          "unit_name": "Stegosaurus",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1392,
+            432
+          ],
+          "move_world": [
+            1488,
+            432
+          ]
+        },
+        {
+          "case_id": "move_patrol_072",
+          "unit_slot": 42,
+          "unit_id": 72,
+          "unit_name": "Parasaurolophus",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1520,
+            432
+          ],
+          "move_world": [
+            1616,
+            432
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 9,
+      "map": "RankerOCPV_Win/Maps/(2) GP Move Patrol B09.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Move Patrol B09.ply",
+      "replay_sha256": "56CA68A7408E64B41AC465D48311DF26BAF5EF49D8D6FBCFD4813B65DF50934C",
+      "cases": [
+        {
+          "case_id": "move_patrol_073",
+          "unit_slot": 52,
+          "unit_id": 73,
+          "unit_name": "Saltasaurus",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1456,
+            336
+          ],
+          "move_world": [
+            1552,
+            336
+          ]
+        },
+        {
+          "case_id": "move_patrol_074",
+          "unit_slot": 50,
+          "unit_id": 74,
+          "unit_name": "Protoceratops",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1392,
+            368
+          ],
+          "move_world": [
+            1488,
+            368
+          ]
+        },
+        {
+          "case_id": "move_patrol_075",
+          "unit_slot": 51,
+          "unit_id": 75,
+          "unit_name": "Galimimus",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1520,
+            368
+          ],
+          "move_world": [
+            1616,
+            368
+          ]
+        },
+        {
+          "case_id": "move_patrol_076",
+          "unit_slot": 40,
+          "unit_id": 76,
+          "unit_name": "Psittacosaurus",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1328,
+            400
+          ],
+          "move_world": [
+            1424,
+            400
+          ]
+        },
+        {
+          "case_id": "move_patrol_077",
+          "unit_slot": 39,
+          "unit_id": 77,
+          "unit_name": "Pteranodon",
+          "movement_class": 3,
+          "expected_travel": true,
+          "source_world": [
+            272,
+            272
+          ],
+          "move_world": [
+            368,
+            272
+          ]
+        },
+        {
+          "case_id": "move_patrol_078",
+          "unit_slot": 38,
+          "unit_id": 78,
+          "unit_name": "Rhamphorhynchus",
+          "movement_class": 3,
+          "expected_travel": true,
+          "source_world": [
+            400,
+            272
+          ],
+          "move_world": [
+            496,
+            272
+          ]
+        },
+        {
+          "case_id": "move_patrol_079",
+          "unit_slot": 43,
+          "unit_id": 79,
+          "unit_name": "Plesiosaurs",
+          "movement_class": 4,
+          "expected_travel": true,
+          "source_world": [
+            528,
+            272
+          ],
+          "move_world": [
+            624,
+            272
+          ]
+        },
+        {
+          "case_id": "move_patrol_080",
+          "unit_slot": 42,
+          "unit_id": 80,
+          "unit_name": "Peleneustes",
+          "movement_class": 4,
+          "expected_travel": true,
+          "source_world": [
+            656,
+            272
+          ],
+          "move_world": [
+            752,
+            272
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 10,
+      "map": "RankerOCPV_Win/Maps/(2) GP Move Patrol B10.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Move Patrol B10.ply",
+      "replay_sha256": "E038B57C4672128938A6C78657AAED8836A29F0D65C619C466D0EC5F6C734A38",
+      "cases": [
+        {
+          "case_id": "move_patrol_081",
+          "unit_slot": 52,
+          "unit_id": 81,
+          "unit_name": "PicaTyrano",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1456,
+            336
+          ],
+          "move_world": [
+            1552,
+            336
+          ]
+        },
+        {
+          "case_id": "move_patrol_083",
+          "unit_slot": 50,
+          "unit_id": 83,
+          "unit_name": "Alien1",
+          "movement_class": 2,
+          "expected_travel": true,
+          "source_world": [
+            1392,
+            368
+          ],
+          "move_world": [
+            1488,
+            368
+          ]
+        },
+        {
+          "case_id": "move_patrol_084",
+          "unit_slot": 51,
+          "unit_id": 84,
+          "unit_name": "Alien2",
+          "movement_class": 2,
+          "expected_travel": true,
+          "source_world": [
+            1520,
+            368
+          ],
+          "move_world": [
+            1616,
+            368
+          ]
+        },
+        {
+          "case_id": "move_patrol_085",
+          "unit_slot": 40,
+          "unit_id": 85,
+          "unit_name": "Alien3",
+          "movement_class": 3,
+          "expected_travel": true,
+          "source_world": [
+            272,
+            272
+          ],
+          "move_world": [
+            368,
+            272
+          ]
+        },
+        {
+          "case_id": "move_patrol_087",
+          "unit_slot": 39,
+          "unit_id": 87,
+          "unit_name": "Nashka",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1328,
+            400
+          ],
+          "move_world": [
+            1424,
+            400
+          ]
+        },
+        {
+          "case_id": "move_patrol_090",
+          "unit_slot": 38,
+          "unit_id": 90,
+          "unit_name": "BoneFighter",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1648,
+            400
+          ],
+          "move_world": [
+            1744,
+            400
+          ]
+        },
+        {
+          "case_id": "move_patrol_091",
+          "unit_slot": 43,
+          "unit_id": 91,
+          "unit_name": "Silvan_item",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1264,
+            432
+          ],
+          "move_world": [
+            1360,
+            432
+          ]
+        },
+        {
+          "case_id": "move_patrol_092",
+          "unit_slot": 42,
+          "unit_id": 92,
+          "unit_name": "SkyBallista",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1392,
+            432
+          ],
+          "move_world": [
+            1488,
+            432
+          ]
+        }
+      ]
+    },
+    {
+      "batch_index": 11,
+      "map": "RankerOCPV_Win/Maps/(2) GP Move Patrol B11.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Move Patrol B11.ply",
+      "replay_sha256": "F394AB5A8F0CF4F653787DAC0CB71763A34272336F1DDCCCC0BB2015BCE430E1",
+      "cases": [
+        {
+          "case_id": "move_patrol_093",
+          "unit_slot": 52,
+          "unit_id": 93,
+          "unit_name": "SkyBullet",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1456,
+            336
+          ],
+          "move_world": [
+            1552,
+            336
+          ]
+        },
+        {
+          "case_id": "move_patrol_094",
+          "unit_slot": 50,
+          "unit_id": 94,
+          "unit_name": "Giant_item",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1392,
+            368
+          ],
+          "move_world": [
+            1488,
+            368
+          ]
+        },
+        {
+          "case_id": "move_patrol_095",
+          "unit_slot": 51,
+          "unit_id": 95,
+          "unit_name": "DoubleBow_item",
+          "movement_class": 0,
+          "expected_travel": true,
+          "source_world": [
+            1520,
+            368
+          ],
+          "move_world": [
+            1616,
+            368
+          ]
+        }
+      ]
+    }
+  ]
+}

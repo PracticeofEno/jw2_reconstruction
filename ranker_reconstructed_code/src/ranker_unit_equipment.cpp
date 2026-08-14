@@ -64,8 +64,16 @@ void apply_unit_experience_delta(UnitCommandContext& context,
     }
 
     UnitRuntimeStatBlock stats = runtime_stats_from_unit(unit);
+    bool rank_up = false;
     ApplyUnitVariantProgressFromStoredValue(*context.production_state, unit, stats,
-        nullptr, context.callbacks.variant_random_limit);
+        &rank_up, context.callbacks.variant_random_limit);
+    // Original FUN_004027cf, called by ApplyUnitEquipmentEffect at
+    // 0x004106ba, publishes action 0x2d once when stored experience crosses
+    // one or more rank thresholds.  This is the same attachment used after a
+    // kill-award rank-up; omitting it changes the intrusive unit-effect pool.
+    if (rank_up && context.callbacks.start_ability_attachment != nullptr) {
+        context.callbacks.start_ability_attachment(context, unit, &unit, 0x2du);
+    }
 }
 
 void remove_unit_experience_bonus(UnitCommandContext& context,
@@ -204,7 +212,8 @@ void apply_unit_type_replacement(UnitCommandContext& context, UnitMovementUnit& 
     unit.type_id = effect.replacement_type_id;
     if (replacement_definition != nullptr) {
         unit.definition = *replacement_definition;
-        unit.type_flags = replacement_definition->type_flags;
+        unit.type_flags = UnitEquipmentReplacementRuntimeTypeFlags(
+            unit.type_flags, replacement_definition->type_flags);
     }
 
     if (context.callbacks.on_unit_type_replaced != nullptr) {
@@ -792,7 +801,12 @@ bool ApplyUnitEquipmentEffect(UnitCommandContext& context, UnitMovementUnit& uni
         apply_signed_delta(unit.runtime_stat_20, effect.runtime_stat_20_delta);
     unit.runtime_stat_28 =
         apply_signed_delta(unit.runtime_stat_28, effect.runtime_stat_28_delta);
-    if (effect.generic_modifiers[kUnitEquipmentGenericModifierCommandFlag] > 0) {
+    // Original 0x0041065e calls FUN_00402ad6, which totals currently stored
+    // active equipment slots.  A direct subtype-03 effect is not implicitly
+    // installed into a slot, so its own modifier must not set this flag.
+    if (context.equipment_catalog != nullptr &&
+        CalculateUnitEquipmentCommandFlagModifier(
+            unit, *context.equipment_catalog) > 0) {
         unit.command_flags |= 0x40;
     }
     apply_unit_experience_delta(context, unit, effect.experience_delta);
@@ -837,7 +851,12 @@ bool RemoveUnitEquipmentEffect(UnitCommandContext& context, UnitMovementUnit& un
         effect.generic_modifiers[kUnitEquipmentGenericModifierCommandFlag] > 0 &&
         catalog != nullptr &&
         CalculateUnitEquipmentCommandFlagModifier(unit, *catalog) <= 1 &&
-        (unit.type_flags & 0x2u) == 0 &&
+        // RemoveUnitEquipmentEffect 0x00410a92 indexes the unit definition
+        // by raw type id and tests definition +0x1f8 bit 1.  It does not test
+        // mutable raw unit +0x58/type_flags; BuildMan deliberately has those
+        // values opposed and must clear flag 0x40 after transferring effect
+        // 0x58 from its generic slot.
+        (unit.definition.footprint_flags & 0x2u) == 0 &&
         (unit.command_flags & 0x800u) == 0) {
         unit.command_flags &= ~0x40u;
     }

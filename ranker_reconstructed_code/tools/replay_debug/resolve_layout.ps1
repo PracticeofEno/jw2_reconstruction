@@ -462,6 +462,7 @@ $result = [pscustomobject]@{
         definition_passive_recovery_enabled = ('0x{0:X}' -f [int64]$layout.definition_passive_recovery_enabled)
         definition_passive_recovery_flags = ('0x{0:X}' -f [int64]$layout.definition_passive_recovery_flags)
         definition_passive_map_effect_seed = ('0x{0:X}' -f [int64]$layout.definition_passive_map_effect_seed)
+        definition_effect_adjusted_interaction_range_base = ('0x{0:X}' -f [int64]$layout.definition_effect_adjusted_interaction_range_base)
         definition_production_spawn_time = ('0x{0:X}' -f [int64]$layout.definition_production_spawn_time)
         definition_footprint_width = ('0x{0:X}' -f [int64]$layout.definition_footprint_width)
         definition_footprint_height = ('0x{0:X}' -f [int64]$layout.definition_footprint_height)

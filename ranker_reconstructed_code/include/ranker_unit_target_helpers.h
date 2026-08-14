@@ -60,8 +60,12 @@ bool CheckUnitTargetOwnerMask(UnitTargetHelperContext& context,
 UnitMovementUnit* FindNearestHostileActionTargetByActiveList(
     UnitTargetHelperContext& context, const UnitMovementUnit& source);
 bool CheckCurrentTargetBelowStoredHealthCap(const UnitMovementUnit& source);
-bool CheckCurrentTargetOutsideExpandedFootprint(UnitMovementUnit& source);
-bool CheckTargetInteractionNeedsApproach(UnitMovementUnit& source);
+bool CheckCurrentTargetOutsideExpandedFootprint(UnitMovementUnit& source,
+    const ProductionOrderRuntimeState* production_state = nullptr,
+    const UnitEquipmentCatalog* equipment_catalog = nullptr);
+bool CheckTargetInteractionNeedsApproach(UnitMovementUnit& source,
+    const ProductionOrderRuntimeState* production_state = nullptr,
+    const UnitEquipmentCatalog* equipment_catalog = nullptr);
 UnitTargetProgressResult ApplyCurrentTargetBuildOrRepairProgress(
     UnitTargetHelperContext& context, UnitMovementUnit& source);
 bool CheckCurrentTargetWithinAxisOneTile(const UnitMovementUnit& source);

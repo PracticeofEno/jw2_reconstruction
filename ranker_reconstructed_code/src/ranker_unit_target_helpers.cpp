@@ -146,7 +146,9 @@ bool CheckCurrentTargetBelowStoredHealthCap(const UnitMovementUnit& source) {
         target->health < target->max_health;
 }
 
-bool CheckCurrentTargetOutsideExpandedFootprint(UnitMovementUnit& source) {
+bool CheckCurrentTargetOutsideExpandedFootprint(UnitMovementUnit& source,
+    const ProductionOrderRuntimeState* production_state,
+    const UnitEquipmentCatalog* equipment_catalog) {
     UnitMovementUnit* target = source.target;
     if (target == nullptr || source.distance_check_mode == 1) {
         return true;
@@ -156,8 +158,15 @@ bool CheckCurrentTargetOutsideExpandedFootprint(UnitMovementUnit& source) {
         const UnitMovementPoint center = target_center_without_source_offset(*target);
         source.path_target_x = center.x;
         source.path_target_y = center.y;
+        static const ProductionOrderRuntimeState empty_production_state;
+        const u32 interaction_range =
+            CalculateUnitInteractionRangeWithProductionAndEquipmentEffects(
+                production_state != nullptr ? *production_state :
+                    empty_production_state,
+                source, source.definition.effect_adjusted_interaction_range_base,
+                equipment_catalog);
         return CalculateApproxUnitDistance(source.x, source.y, center.x, center.y) >
-            kUnitTargetHelperOneTileDistance;
+            (interaction_range >> 1);
     }
 
     const i32 source_left = source.x + source.definition.interaction_bounds_left * 3;
@@ -177,7 +186,9 @@ bool CheckCurrentTargetOutsideExpandedFootprint(UnitMovementUnit& source) {
         target_right < source_left || target_bottom < source_top;
 }
 
-bool CheckTargetInteractionNeedsApproach(UnitMovementUnit& source) {
+bool CheckTargetInteractionNeedsApproach(UnitMovementUnit& source,
+    const ProductionOrderRuntimeState* production_state,
+    const UnitEquipmentCatalog* equipment_catalog) {
     UnitMovementUnit* target = source.target;
     if (target == nullptr) {
         return CalculateApproxUnitDistance(source.x, source.y, source.path_target_x,
@@ -186,7 +197,8 @@ bool CheckTargetInteractionNeedsApproach(UnitMovementUnit& source) {
 
     if (target->type_id == 0x60 || target->type_id == 0x70 ||
         target->type_id == 0x80 || target->type_id == 0x90) {
-        return CheckCurrentTargetOutsideExpandedFootprint(source);
+        return CheckCurrentTargetOutsideExpandedFootprint(
+            source, production_state, equipment_catalog);
     }
 
     return CalculateApproxUnitDistance(source.x, source.y, target->x, target->y) >=

@@ -1,0 +1,720 @@
+{
+  "schema": 1,
+  "guard_binding_count": 101,
+  "primary_binding_count": 66,
+  "primary_frame": 31,
+  "guard_frame": 70,
+  "end_frame": 120,
+  "batches": [
+    {
+      "batch_index": 0,
+      "map": "RankerOCPV_Win/Maps/(2) GP Basic Command B00.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Basic Command B00.ply",
+      "replay_sha256": "6C08D97D138A773D57AE587BA1AAE59AB24F52F3A7817477BAD2890B7582C0E1",
+      "cases": [
+        {
+          "unit_slot": 52,
+          "unit_id": 0,
+          "unit_name": "BuildMan",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 50,
+          "unit_id": 1,
+          "unit_name": "PowerMan",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 51,
+          "unit_id": 2,
+          "unit_name": "Giant",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 40,
+          "unit_id": 3,
+          "unit_name": "Soldier",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 39,
+          "unit_id": 4,
+          "unit_name": "Knight",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 38,
+          "unit_id": 5,
+          "unit_name": "Revolver",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 43,
+          "unit_id": 6,
+          "unit_name": "BowMachine",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 42,
+          "unit_id": 7,
+          "unit_name": "Squadron",
+          "primary_capable": false
+        }
+      ]
+    },
+    {
+      "batch_index": 1,
+      "map": "RankerOCPV_Win/Maps/(2) GP Basic Command B01.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Basic Command B01.ply",
+      "replay_sha256": "B8C4835A3AE2D4E1A9F317F18BD5BAD92D0C50110ABAB426999BF23ACC6EFBE1",
+      "cases": [
+        {
+          "unit_slot": 52,
+          "unit_id": 8,
+          "unit_name": "Flattop",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 50,
+          "unit_id": 9,
+          "unit_name": "Chief",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 51,
+          "unit_id": 10,
+          "unit_name": "PowerMan (Shield of Peace)",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 40,
+          "unit_id": 11,
+          "unit_name": "Soldier (Fire Arrow)",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 39,
+          "unit_id": 12,
+          "unit_name": "Soldier (Venom Arrow)",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 38,
+          "unit_id": 13,
+          "unit_name": "Knight (Spear of Justice)",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 43,
+          "unit_id": 14,
+          "unit_name": "Kalma",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 42,
+          "unit_id": 15,
+          "unit_name": "Silvan",
+          "primary_capable": true
+        }
+      ]
+    },
+    {
+      "batch_index": 2,
+      "map": "RankerOCPV_Win/Maps/(2) GP Basic Command B02.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Basic Command B02.ply",
+      "replay_sha256": "73E74A3C7B8AF65C9F77690A5CA1A2DE28C608E75E398C80CF2EEE6C706046F6",
+      "cases": [
+        {
+          "unit_slot": 52,
+          "unit_id": 16,
+          "unit_name": "Wizard",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 50,
+          "unit_id": 17,
+          "unit_name": "RedElf",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 51,
+          "unit_id": 18,
+          "unit_name": "WhiteElf",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 40,
+          "unit_id": 19,
+          "unit_name": "Ranger",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 39,
+          "unit_id": 20,
+          "unit_name": "BlueElf",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 38,
+          "unit_id": 21,
+          "unit_name": "Unicorn",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 43,
+          "unit_id": 22,
+          "unit_name": "Pixie",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 42,
+          "unit_id": 23,
+          "unit_name": "ManaSpread",
+          "primary_capable": true
+        }
+      ]
+    },
+    {
+      "batch_index": 3,
+      "map": "RankerOCPV_Win/Maps/(2) GP Basic Command B03.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Basic Command B03.ply",
+      "replay_sha256": "168732FD2E46CB2A1AC141BC169719B7803145534AA5A6C863EAC56600E518F8",
+      "cases": [
+        {
+          "unit_slot": 52,
+          "unit_id": 24,
+          "unit_name": "ElfRing",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 50,
+          "unit_id": 25,
+          "unit_name": "Dragon",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 51,
+          "unit_id": 26,
+          "unit_name": "phoenix",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 40,
+          "unit_id": 27,
+          "unit_name": "AngelElf",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 39,
+          "unit_id": 28,
+          "unit_name": "GreenElf",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 38,
+          "unit_id": 29,
+          "unit_name": "DarkElf",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 43,
+          "unit_id": 30,
+          "unit_name": "Null.chr",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 42,
+          "unit_id": 32,
+          "unit_name": "Dinos",
+          "primary_capable": true
+        }
+      ]
+    },
+    {
+      "batch_index": 4,
+      "map": "RankerOCPV_Win/Maps/(2) GP Basic Command B04.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Basic Command B04.ply",
+      "replay_sha256": "8B705D0EC411C5E848BA055146B8DEDA560420E993990838023DCA46F3ABCB0B",
+      "cases": [
+        {
+          "unit_slot": 52,
+          "unit_id": 33,
+          "unit_name": "Masos",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 50,
+          "unit_id": 34,
+          "unit_name": "Velocis",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 51,
+          "unit_id": 35,
+          "unit_name": "TwinVelocis",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 40,
+          "unit_id": 36,
+          "unit_name": "Dilophos",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 39,
+          "unit_id": 37,
+          "unit_name": "Rhamphos",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 38,
+          "unit_id": 38,
+          "unit_name": "TwinRhamphos",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 43,
+          "unit_id": 39,
+          "unit_name": "Pteras",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 42,
+          "unit_id": 40,
+          "unit_name": "Trices",
+          "primary_capable": true
+        }
+      ]
+    },
+    {
+      "batch_index": 5,
+      "map": "RankerOCPV_Win/Maps/(2) GP Basic Command B05.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Basic Command B05.ply",
+      "replay_sha256": "88C3664FB807580CFDF45FCCFCD2989E4FBCEF6BE7FE1172904DA3D275061EDA",
+      "cases": [
+        {
+          "unit_slot": 52,
+          "unit_id": 41,
+          "unit_name": "Dsunguri",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 50,
+          "unit_id": 42,
+          "unit_name": "EggThrower",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 51,
+          "unit_id": 43,
+          "unit_name": "Mutant",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 40,
+          "unit_id": 44,
+          "unit_name": "Tyranos",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 39,
+          "unit_id": 45,
+          "unit_name": "TwinPteras",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 38,
+          "unit_id": 46,
+          "unit_name": "Kentros",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 43,
+          "unit_id": 47,
+          "unit_name": "Null.chr",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 42,
+          "unit_id": 48,
+          "unit_name": "Insect",
+          "primary_capable": true
+        }
+      ]
+    },
+    {
+      "batch_index": 6,
+      "map": "RankerOCPV_Win/Maps/(2) GP Basic Command B06.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Basic Command B06.ply",
+      "replay_sha256": "9DFA9FB24CDA482F212E35CE093AACCB1507701666952A131190CC25453670DB",
+      "cases": [
+        {
+          "unit_slot": 52,
+          "unit_id": 49,
+          "unit_name": "Skeleton",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 50,
+          "unit_id": 50,
+          "unit_name": "MudMan",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 51,
+          "unit_id": 51,
+          "unit_name": "DeathEye",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 40,
+          "unit_id": 52,
+          "unit_name": "Phantom",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 39,
+          "unit_id": 53,
+          "unit_name": "Gargoyle",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 38,
+          "unit_id": 54,
+          "unit_name": "Kelpa",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 43,
+          "unit_id": 55,
+          "unit_name": "Warlock",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 42,
+          "unit_id": 56,
+          "unit_name": "KingDemon",
+          "primary_capable": true
+        }
+      ]
+    },
+    {
+      "batch_index": 7,
+      "map": "RankerOCPV_Win/Maps/(2) GP Basic Command B07.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Basic Command B07.ply",
+      "replay_sha256": "3FCD1E4842AAFC45CD177510AD23A9A85A19A8B4A568C2AA93345445C530FB51",
+      "cases": [
+        {
+          "unit_slot": 52,
+          "unit_id": 57,
+          "unit_name": "Darkbat",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 50,
+          "unit_id": 58,
+          "unit_name": "Devil",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 51,
+          "unit_id": 59,
+          "unit_name": "RiseZombie1",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 40,
+          "unit_id": 60,
+          "unit_name": "RiseZombie2",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 39,
+          "unit_id": 61,
+          "unit_name": "Imp",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 38,
+          "unit_id": 62,
+          "unit_name": "FemmeFatale",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 43,
+          "unit_id": 63,
+          "unit_name": "Nightmare",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 42,
+          "unit_id": 64,
+          "unit_name": "Tyranosaurus",
+          "primary_capable": false
+        }
+      ]
+    },
+    {
+      "batch_index": 8,
+      "map": "RankerOCPV_Win/Maps/(2) GP Basic Command B08.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Basic Command B08.ply",
+      "replay_sha256": "52C1C20D95076DBB57E1CE422AAD017179999B830B4F97FE76A0A92B3736250D",
+      "cases": [
+        {
+          "unit_slot": 52,
+          "unit_id": 65,
+          "unit_name": "Triceratops",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 50,
+          "unit_id": 66,
+          "unit_name": "Ceratosaurus",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 51,
+          "unit_id": 67,
+          "unit_name": "Pachycephalosaurus",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 40,
+          "unit_id": 68,
+          "unit_name": "Dilophosaurus",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 39,
+          "unit_id": 69,
+          "unit_name": "Velociraptor",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 38,
+          "unit_id": 70,
+          "unit_name": "Brachiosaurus",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 43,
+          "unit_id": 71,
+          "unit_name": "Stegosaurus",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 42,
+          "unit_id": 72,
+          "unit_name": "Parasaurolophus",
+          "primary_capable": false
+        }
+      ]
+    },
+    {
+      "batch_index": 9,
+      "map": "RankerOCPV_Win/Maps/(2) GP Basic Command B09.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Basic Command B09.ply",
+      "replay_sha256": "6F658CF0F1181881B4FA86687221BD9978FE5A945ABFA7D2D17546A0DAC674D5",
+      "cases": [
+        {
+          "unit_slot": 52,
+          "unit_id": 73,
+          "unit_name": "Saltasaurus",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 50,
+          "unit_id": 74,
+          "unit_name": "Protoceratops",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 51,
+          "unit_id": 75,
+          "unit_name": "Galimimus",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 40,
+          "unit_id": 76,
+          "unit_name": "Psittacosaurus",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 39,
+          "unit_id": 77,
+          "unit_name": "Pteranodon",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 38,
+          "unit_id": 78,
+          "unit_name": "Rhamphorhynchus",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 43,
+          "unit_id": 79,
+          "unit_name": "Plesiosaurs",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 42,
+          "unit_id": 80,
+          "unit_name": "Peleneustes",
+          "primary_capable": false
+        }
+      ]
+    },
+    {
+      "batch_index": 10,
+      "map": "RankerOCPV_Win/Maps/(2) GP Basic Command B10.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Basic Command B10.ply",
+      "replay_sha256": "AAB1BC7C39561D164ECFA5C48BAB984B7E32D5DBB9FDEA651B3DCBCEF860A7ED",
+      "cases": [
+        {
+          "unit_slot": 52,
+          "unit_id": 81,
+          "unit_name": "PicaTyrano",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 50,
+          "unit_id": 83,
+          "unit_name": "Alien1",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 51,
+          "unit_id": 84,
+          "unit_name": "Alien2",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 40,
+          "unit_id": 85,
+          "unit_name": "Alien3",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 39,
+          "unit_id": 87,
+          "unit_name": "Nashka",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 38,
+          "unit_id": 90,
+          "unit_name": "BoneFighter",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 43,
+          "unit_id": 91,
+          "unit_name": "Silvan_item",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 42,
+          "unit_id": 92,
+          "unit_name": "SkyBallista",
+          "primary_capable": true
+        }
+      ]
+    },
+    {
+      "batch_index": 11,
+      "map": "RankerOCPV_Win/Maps/(2) GP Basic Command B11.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Basic Command B11.ply",
+      "replay_sha256": "FBC7863C58B2993AD7A66502C1847F5AFBE35B8FF3E511C4D9C675F33922CD14",
+      "cases": [
+        {
+          "unit_slot": 52,
+          "unit_id": 93,
+          "unit_name": "SkyBullet",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 50,
+          "unit_id": 94,
+          "unit_name": "Giant_item",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 51,
+          "unit_id": 95,
+          "unit_name": "DoubleBow_item",
+          "primary_capable": true
+        },
+        {
+          "unit_slot": 40,
+          "unit_id": 99,
+          "unit_name": "StoneTower",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 39,
+          "unit_id": 106,
+          "unit_name": "Trap",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 38,
+          "unit_id": 113,
+          "unit_name": "Bubble",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 43,
+          "unit_id": 115,
+          "unit_name": "Bubble",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 42,
+          "unit_id": 131,
+          "unit_name": "Ascomoid",
+          "primary_capable": true
+        }
+      ]
+    },
+    {
+      "batch_index": 12,
+      "map": "RankerOCPV_Win/Maps/(2) GP Basic Command B12.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Basic Command B12.ply",
+      "replay_sha256": "7EF07E371C24F014E61128C66D5244FA83FB50D7B06D9C8533D3BEAC2D9A3220",
+      "cases": [
+        {
+          "unit_slot": 52,
+          "unit_id": 147,
+          "unit_name": "Volcano",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 50,
+          "unit_id": 160,
+          "unit_name": "NoxiousWeed",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 51,
+          "unit_id": 161,
+          "unit_name": "Poisonous",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 40,
+          "unit_id": 162,
+          "unit_name": "Treant",
+          "primary_capable": false
+        },
+        {
+          "unit_slot": 39,
+          "unit_id": 163,
+          "unit_name": "DemonFlower",
+          "primary_capable": false
+        }
+      ]
+    }
+  ]
+}

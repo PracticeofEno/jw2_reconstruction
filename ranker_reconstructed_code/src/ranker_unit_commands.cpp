@@ -1452,7 +1452,9 @@ bool targeted_spawn_target_outside(UnitCommandContext& context,
         return CheckUnitSpawnDistanceThreshold(
             context, unit, center.x, center.y);
     }
-    return CheckCurrentTargetOutsideExpandedFootprint(unit);
+    return CheckCurrentTargetOutsideExpandedFootprint(unit,
+        &command_production_state_or_empty(context),
+        command_equipment_catalog(context));
 }
 
 u32 spawn_direction_from_points(UnitCommandContext& context,
@@ -2191,14 +2193,20 @@ void StartUnitTargetOrPointCommandEntry(UnitCommandContext& context,
     const bool encoded_point_payload = (payload_target & 0x80000000u) != 0;
     if (!encoded_point_payload) {
         UnitMovementUnit* target = resolve_command_payload_target(context, unit);
-        unit.command_value = static_cast<u32>(unit.path_target_x);
+        // The original state-0x02 entry preserves the resolved target in raw
+        // +0x68 and copies the equipment/return payload from raw +0xdc into
+        // raw +0x4c.  That
+        // union word is cargo_amount in the typed runtime.  Storing the slot
+        // in command_value instead made every equipment transfer diverge on
+        // entry and made action-0x1d dropoff routing consume different RNG.
+        unit.cargo_amount = static_cast<u32>(unit.path_target_x);
         if (target != nullptr) {
             unit.path_target_x = target->x;
             unit.path_target_y = target->y;
         }
     }
     else {
-        unit.command_value = payload_target & 0x7fffffffu;
+        unit.cargo_amount = payload_target & 0x7fffffffu;
         unit.active_command_payload.x = 0;
     }
     unit.command_state = kUnitStateTargetOrPointCommand;
@@ -4009,7 +4017,9 @@ void HandleUnitPointActionTravel(UnitCommandContext& context,
 void StartUnitTargetInteractionCommand(UnitCommandContext& context,
     UnitMovementUnit& unit) {
     UnitMovementUnit* target = resolve_active_payload_target_or_clear(context, unit);
-    if (target != nullptr && CheckTargetInteractionNeedsApproach(unit)) {
+    if (target != nullptr && CheckTargetInteractionNeedsApproach(unit,
+            &command_production_state_or_empty(context),
+            command_equipment_catalog(context))) {
         path_to_target_without_command_flag(context, unit, *target);
         unit.command_state = kUnitStateTargetInteractionApproach;
         return;
@@ -4022,7 +4032,7 @@ void HandleUnitTargetInteractionCycle(UnitCommandContext& context,
     UnitMovementUnit* target = resolve_active_payload_target_or_clear(context, unit);
     if (target != nullptr) {
         if (context.equipment_catalog != nullptr) {
-            TransferUnitEquipmentSlot(context, unit, *target, unit.command_value,
+            TransferUnitEquipmentSlot(context, unit, *target, unit.cargo_amount,
                 *context.equipment_catalog);
         }
         mark_equipment_slots_changed(context, *target);
@@ -4031,7 +4041,7 @@ void HandleUnitTargetInteractionCycle(UnitCommandContext& context,
     }
     else {
         const bool cleared = context.equipment_catalog != nullptr &&
-            ClearUnitEquipmentSlot(context, unit, unit.command_value,
+            ClearUnitEquipmentSlot(context, unit, unit.cargo_amount,
                 *context.equipment_catalog);
         mark_equipment_slots_changed(context, unit);
         if (!cleared) {
@@ -4051,14 +4061,22 @@ void HandleUnitTargetInteractionApproach(UnitCommandContext& context,
         unit.command_state = kUnitStateTargetInteractionCycle;
         return;
     }
-    if (!CheckTargetInteractionNeedsApproach(unit)) {
+    if (!CheckTargetInteractionNeedsApproach(unit,
+            &command_production_state_or_empty(context),
+            command_equipment_catalog(context))) {
         unit.command_state = kUnitStateTargetInteractionCycle;
         return;
     }
     if (movement_step(context, unit)) {
         return;
     }
-    if (unit.saved_path_target_x != target->x || unit.saved_path_target_y != target->y) {
+    // Original state 0x0e compares and overwrites raw +0xdc/+0xe0.  Those
+    // words are both the retained moving-target point and the y/value words
+    // of the active command payload.  Keep both typed views synchronized.
+    if (unit.active_command_payload.y != target->x ||
+        static_cast<i32>(unit.active_command_payload.value) != target->y) {
+        unit.active_command_payload.y = target->x;
+        unit.active_command_payload.value = static_cast<u32>(target->y);
         unit.saved_path_target_x = target->x;
         unit.saved_path_target_y = target->y;
         path_to_target_without_command_flag(context, unit, *target);
@@ -4077,7 +4095,9 @@ void StartUnitTargetProgressCommand(UnitCommandContext& context,
         PopDeferredUnitCommandOrReturnIdle(context, unit);
         return;
     }
-    if (CheckCurrentTargetOutsideExpandedFootprint(unit)) {
+    if (CheckCurrentTargetOutsideExpandedFootprint(unit,
+            &command_production_state_or_empty(context),
+            command_equipment_catalog(context))) {
         unit.command_state = kUnitStateTargetProgressApproach;
         path_to_current_target_center(context, unit);
         return;
@@ -4105,7 +4125,9 @@ void HandleUnitTargetProgressCycle(UnitCommandContext& context,
         anchor_and_pop_deferred(context, unit);
         return;
     }
-    if (CheckCurrentTargetOutsideExpandedFootprint(unit)) {
+    if (CheckCurrentTargetOutsideExpandedFootprint(unit,
+            &command_production_state_or_empty(context),
+            command_equipment_catalog(context))) {
         unit.command_state = kUnitStateTargetProgressApproach;
         path_to_current_target_center(context, unit);
         return;
@@ -4140,7 +4162,9 @@ void HandleUnitTargetProgressApproach(UnitCommandContext& context,
         PopDeferredUnitCommandOrReturnIdle(context, unit);
         return;
     }
-    if (!CheckCurrentTargetOutsideExpandedFootprint(unit)) {
+    if (!CheckCurrentTargetOutsideExpandedFootprint(unit,
+            &command_production_state_or_empty(context),
+            command_equipment_catalog(context))) {
         // State 0x12 rejoins the same center-to-center facing path at
         // 0x004c97e6..0x004c97f5 after the worker reaches the footprint.
         const u32 direction =

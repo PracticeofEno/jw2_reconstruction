@@ -1,0 +1,551 @@
+{
+  "schema": 1,
+  "binding_count": 54,
+  "activate_frame": 31,
+  "cancel_frame": 55,
+  "end_frame": 85,
+  "batches": [
+    {
+      "batch_index": 0,
+      "map": "RankerOCPV_Win/Maps/(2) GP Secondary Command B00.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Secondary Command B00.ply",
+      "replay_sha256": "2884E4A80B9A16CAB48FA000A2EF9ADD24A56AE9A62EFD71DCFA520CDB5AD593",
+      "cases": [
+        {
+          "case_id": "secondary_12_001",
+          "unit_slot": 52,
+          "unit_id": 1,
+          "unit_name": "PowerMan",
+          "action_selector": 18,
+          "attachment_action_id": 32,
+          "command_flag": 16384
+        },
+        {
+          "case_id": "secondary_12_002",
+          "unit_slot": 50,
+          "unit_id": 2,
+          "unit_name": "Giant",
+          "action_selector": 18,
+          "attachment_action_id": 32,
+          "command_flag": 16384
+        },
+        {
+          "case_id": "secondary_12_003",
+          "unit_slot": 51,
+          "unit_id": 3,
+          "unit_name": "Soldier",
+          "action_selector": 18,
+          "attachment_action_id": 32,
+          "command_flag": 16384
+        },
+        {
+          "case_id": "secondary_12_004",
+          "unit_slot": 40,
+          "unit_id": 4,
+          "unit_name": "Knight",
+          "action_selector": 18,
+          "attachment_action_id": 32,
+          "command_flag": 16384
+        },
+        {
+          "case_id": "secondary_12_009",
+          "unit_slot": 39,
+          "unit_id": 9,
+          "unit_name": "Chief",
+          "action_selector": 18,
+          "attachment_action_id": 32,
+          "command_flag": 16384
+        },
+        {
+          "case_id": "secondary_12_010",
+          "unit_slot": 38,
+          "unit_id": 10,
+          "unit_name": "PowerMan (Shield of Peace)",
+          "action_selector": 18,
+          "attachment_action_id": 32,
+          "command_flag": 16384
+        },
+        {
+          "case_id": "secondary_12_011",
+          "unit_slot": 43,
+          "unit_id": 11,
+          "unit_name": "Soldier (Fire Arrow)",
+          "action_selector": 18,
+          "attachment_action_id": 32,
+          "command_flag": 16384
+        },
+        {
+          "case_id": "secondary_12_012",
+          "unit_slot": 42,
+          "unit_id": 12,
+          "unit_name": "Soldier (Venom Arrow)",
+          "action_selector": 18,
+          "attachment_action_id": 32,
+          "command_flag": 16384
+        }
+      ]
+    },
+    {
+      "batch_index": 1,
+      "map": "RankerOCPV_Win/Maps/(2) GP Secondary Command B01.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Secondary Command B01.ply",
+      "replay_sha256": "55D1553F0DA7382CB3138E2A90CFFD5A9B5D956CD42EB504E3D30DC346517754",
+      "cases": [
+        {
+          "case_id": "secondary_12_013",
+          "unit_slot": 52,
+          "unit_id": 13,
+          "unit_name": "Knight (Spear of Justice)",
+          "action_selector": 18,
+          "attachment_action_id": 32,
+          "command_flag": 16384
+        },
+        {
+          "case_id": "secondary_12_014",
+          "unit_slot": 50,
+          "unit_id": 14,
+          "unit_name": "Kalma",
+          "action_selector": 18,
+          "attachment_action_id": 32,
+          "command_flag": 16384
+        },
+        {
+          "case_id": "secondary_12_015",
+          "unit_slot": 51,
+          "unit_id": 15,
+          "unit_name": "Silvan",
+          "action_selector": 18,
+          "attachment_action_id": 32,
+          "command_flag": 16384
+        },
+        {
+          "case_id": "secondary_13_017",
+          "unit_slot": 40,
+          "unit_id": 17,
+          "unit_name": "RedElf",
+          "action_selector": 19,
+          "attachment_action_id": 33,
+          "command_flag": 32768
+        },
+        {
+          "case_id": "secondary_13_018",
+          "unit_slot": 39,
+          "unit_id": 18,
+          "unit_name": "WhiteElf",
+          "action_selector": 19,
+          "attachment_action_id": 33,
+          "command_flag": 32768
+        },
+        {
+          "case_id": "secondary_13_019",
+          "unit_slot": 38,
+          "unit_id": 19,
+          "unit_name": "Ranger",
+          "action_selector": 19,
+          "attachment_action_id": 33,
+          "command_flag": 32768
+        },
+        {
+          "case_id": "secondary_13_020",
+          "unit_slot": 43,
+          "unit_id": 20,
+          "unit_name": "BlueElf",
+          "action_selector": 19,
+          "attachment_action_id": 33,
+          "command_flag": 32768
+        },
+        {
+          "case_id": "secondary_13_021",
+          "unit_slot": 42,
+          "unit_id": 21,
+          "unit_name": "Unicorn",
+          "action_selector": 19,
+          "attachment_action_id": 33,
+          "command_flag": 32768
+        }
+      ]
+    },
+    {
+      "batch_index": 2,
+      "map": "RankerOCPV_Win/Maps/(2) GP Secondary Command B02.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Secondary Command B02.ply",
+      "replay_sha256": "10F001A733A7E32510C04CF6CE45D2E3CDAC347E8002E7879EC6B08BC2DB14AF",
+      "cases": [
+        {
+          "case_id": "secondary_13_022",
+          "unit_slot": 52,
+          "unit_id": 22,
+          "unit_name": "Pixie",
+          "action_selector": 19,
+          "attachment_action_id": 33,
+          "command_flag": 32768
+        },
+        {
+          "case_id": "secondary_13_023",
+          "unit_slot": 50,
+          "unit_id": 23,
+          "unit_name": "ManaSpread",
+          "action_selector": 19,
+          "attachment_action_id": 33,
+          "command_flag": 32768
+        },
+        {
+          "case_id": "secondary_13_027",
+          "unit_slot": 51,
+          "unit_id": 27,
+          "unit_name": "AngelElf",
+          "action_selector": 19,
+          "attachment_action_id": 33,
+          "command_flag": 32768
+        },
+        {
+          "case_id": "secondary_13_028",
+          "unit_slot": 40,
+          "unit_id": 28,
+          "unit_name": "GreenElf",
+          "action_selector": 19,
+          "attachment_action_id": 33,
+          "command_flag": 32768
+        },
+        {
+          "case_id": "secondary_13_029",
+          "unit_slot": 39,
+          "unit_id": 29,
+          "unit_name": "DarkElf",
+          "action_selector": 19,
+          "attachment_action_id": 33,
+          "command_flag": 32768
+        },
+        {
+          "case_id": "secondary_15_030",
+          "unit_slot": 38,
+          "unit_id": 30,
+          "unit_name": "Null.chr",
+          "action_selector": 21,
+          "attachment_action_id": 35,
+          "command_flag": 131072
+        },
+        {
+          "case_id": "secondary_14_033",
+          "unit_slot": 43,
+          "unit_id": 33,
+          "unit_name": "Masos",
+          "action_selector": 20,
+          "attachment_action_id": 34,
+          "command_flag": 65536
+        },
+        {
+          "case_id": "secondary_14_034",
+          "unit_slot": 42,
+          "unit_id": 34,
+          "unit_name": "Velocis",
+          "action_selector": 20,
+          "attachment_action_id": 34,
+          "command_flag": 65536
+        }
+      ]
+    },
+    {
+      "batch_index": 3,
+      "map": "RankerOCPV_Win/Maps/(2) GP Secondary Command B03.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Secondary Command B03.ply",
+      "replay_sha256": "40722A04A2CA74237319A83BD9ED1BAD21B22E94777FF1C71220301821777C2A",
+      "cases": [
+        {
+          "case_id": "secondary_14_035",
+          "unit_slot": 52,
+          "unit_id": 35,
+          "unit_name": "TwinVelocis",
+          "action_selector": 20,
+          "attachment_action_id": 34,
+          "command_flag": 65536
+        },
+        {
+          "case_id": "secondary_14_036",
+          "unit_slot": 50,
+          "unit_id": 36,
+          "unit_name": "Dilophos",
+          "action_selector": 20,
+          "attachment_action_id": 34,
+          "command_flag": 65536
+        },
+        {
+          "case_id": "secondary_14_037",
+          "unit_slot": 51,
+          "unit_id": 37,
+          "unit_name": "Rhamphos",
+          "action_selector": 20,
+          "attachment_action_id": 34,
+          "command_flag": 65536
+        },
+        {
+          "case_id": "secondary_14_038",
+          "unit_slot": 40,
+          "unit_id": 38,
+          "unit_name": "TwinRhamphos",
+          "action_selector": 20,
+          "attachment_action_id": 34,
+          "command_flag": 65536
+        },
+        {
+          "case_id": "secondary_14_039",
+          "unit_slot": 39,
+          "unit_id": 39,
+          "unit_name": "Pteras",
+          "action_selector": 20,
+          "attachment_action_id": 34,
+          "command_flag": 65536
+        },
+        {
+          "case_id": "secondary_14_040",
+          "unit_slot": 38,
+          "unit_id": 40,
+          "unit_name": "Trices",
+          "action_selector": 20,
+          "attachment_action_id": 34,
+          "command_flag": 65536
+        },
+        {
+          "case_id": "secondary_14_041",
+          "unit_slot": 43,
+          "unit_id": 41,
+          "unit_name": "Dsunguri",
+          "action_selector": 20,
+          "attachment_action_id": 34,
+          "command_flag": 65536
+        },
+        {
+          "case_id": "secondary_14_043",
+          "unit_slot": 42,
+          "unit_id": 43,
+          "unit_name": "Mutant",
+          "action_selector": 20,
+          "attachment_action_id": 34,
+          "command_flag": 65536
+        }
+      ]
+    },
+    {
+      "batch_index": 4,
+      "map": "RankerOCPV_Win/Maps/(2) GP Secondary Command B04.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Secondary Command B04.ply",
+      "replay_sha256": "5463B3C02BBA83604D61B72454E5ADED4C2BAF66AB581F2FF5FF5B50941D3C60",
+      "cases": [
+        {
+          "case_id": "secondary_14_044",
+          "unit_slot": 52,
+          "unit_id": 44,
+          "unit_name": "Tyranos",
+          "action_selector": 20,
+          "attachment_action_id": 34,
+          "command_flag": 65536
+        },
+        {
+          "case_id": "secondary_14_045",
+          "unit_slot": 50,
+          "unit_id": 45,
+          "unit_name": "TwinPteras",
+          "action_selector": 20,
+          "attachment_action_id": 34,
+          "command_flag": 65536
+        },
+        {
+          "case_id": "secondary_14_046",
+          "unit_slot": 51,
+          "unit_id": 46,
+          "unit_name": "Kentros",
+          "action_selector": 20,
+          "attachment_action_id": 34,
+          "command_flag": 65536
+        },
+        {
+          "case_id": "secondary_15_049",
+          "unit_slot": 40,
+          "unit_id": 49,
+          "unit_name": "Skeleton",
+          "action_selector": 21,
+          "attachment_action_id": 35,
+          "command_flag": 131072
+        },
+        {
+          "case_id": "secondary_15_050",
+          "unit_slot": 39,
+          "unit_id": 50,
+          "unit_name": "MudMan",
+          "action_selector": 21,
+          "attachment_action_id": 35,
+          "command_flag": 131072
+        },
+        {
+          "case_id": "secondary_15_052",
+          "unit_slot": 38,
+          "unit_id": 52,
+          "unit_name": "Phantom",
+          "action_selector": 21,
+          "attachment_action_id": 35,
+          "command_flag": 131072
+        },
+        {
+          "case_id": "secondary_15_053",
+          "unit_slot": 43,
+          "unit_id": 53,
+          "unit_name": "Gargoyle",
+          "action_selector": 21,
+          "attachment_action_id": 35,
+          "command_flag": 131072
+        },
+        {
+          "case_id": "secondary_15_054",
+          "unit_slot": 42,
+          "unit_id": 54,
+          "unit_name": "Kelpa",
+          "action_selector": 21,
+          "attachment_action_id": 35,
+          "command_flag": 131072
+        }
+      ]
+    },
+    {
+      "batch_index": 5,
+      "map": "RankerOCPV_Win/Maps/(2) GP Secondary Command B05.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Secondary Command B05.ply",
+      "replay_sha256": "240C2116716BBE31B2772801C884DD215BAB683B7B74580A1A755E0505AED39D",
+      "cases": [
+        {
+          "case_id": "secondary_15_055",
+          "unit_slot": 52,
+          "unit_id": 55,
+          "unit_name": "Warlock",
+          "action_selector": 21,
+          "attachment_action_id": 35,
+          "command_flag": 131072
+        },
+        {
+          "case_id": "secondary_15_056",
+          "unit_slot": 50,
+          "unit_id": 56,
+          "unit_name": "KingDemon",
+          "action_selector": 21,
+          "attachment_action_id": 35,
+          "command_flag": 131072
+        },
+        {
+          "case_id": "secondary_15_057",
+          "unit_slot": 51,
+          "unit_id": 57,
+          "unit_name": "Darkbat",
+          "action_selector": 21,
+          "attachment_action_id": 35,
+          "command_flag": 131072
+        },
+        {
+          "case_id": "secondary_15_058",
+          "unit_slot": 40,
+          "unit_id": 58,
+          "unit_name": "Devil",
+          "action_selector": 21,
+          "attachment_action_id": 35,
+          "command_flag": 131072
+        },
+        {
+          "case_id": "secondary_15_059",
+          "unit_slot": 39,
+          "unit_id": 59,
+          "unit_name": "RiseZombie1",
+          "action_selector": 21,
+          "attachment_action_id": 35,
+          "command_flag": 131072
+        },
+        {
+          "case_id": "secondary_15_060",
+          "unit_slot": 38,
+          "unit_id": 60,
+          "unit_name": "RiseZombie2",
+          "action_selector": 21,
+          "attachment_action_id": 35,
+          "command_flag": 131072
+        },
+        {
+          "case_id": "secondary_15_062",
+          "unit_slot": 43,
+          "unit_id": 62,
+          "unit_name": "FemmeFatale",
+          "action_selector": 21,
+          "attachment_action_id": 35,
+          "command_flag": 131072
+        },
+        {
+          "case_id": "secondary_15_063",
+          "unit_slot": 42,
+          "unit_id": 63,
+          "unit_name": "Nightmare",
+          "action_selector": 21,
+          "attachment_action_id": 35,
+          "command_flag": 131072
+        }
+      ]
+    },
+    {
+      "batch_index": 6,
+      "map": "RankerOCPV_Win/Maps/(2) GP Secondary Command B06.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Secondary Command B06.ply",
+      "replay_sha256": "C9AB3E9C6AE878348A11831570698F39DCBD2C140883D97D74236D806D0BC89E",
+      "cases": [
+        {
+          "case_id": "secondary_15_087",
+          "unit_slot": 52,
+          "unit_id": 87,
+          "unit_name": "Nashka",
+          "action_selector": 21,
+          "attachment_action_id": 35,
+          "command_flag": 131072
+        },
+        {
+          "case_id": "secondary_15_090",
+          "unit_slot": 50,
+          "unit_id": 90,
+          "unit_name": "BoneFighter",
+          "action_selector": 21,
+          "attachment_action_id": 35,
+          "command_flag": 131072
+        },
+        {
+          "case_id": "secondary_12_091",
+          "unit_slot": 51,
+          "unit_id": 91,
+          "unit_name": "Silvan_item",
+          "action_selector": 18,
+          "attachment_action_id": 32,
+          "command_flag": 16384
+        },
+        {
+          "case_id": "secondary_12_092",
+          "unit_slot": 40,
+          "unit_id": 92,
+          "unit_name": "SkyBallista",
+          "action_selector": 18,
+          "attachment_action_id": 32,
+          "command_flag": 16384
+        },
+        {
+          "case_id": "secondary_12_093",
+          "unit_slot": 39,
+          "unit_id": 93,
+          "unit_name": "SkyBullet",
+          "action_selector": 18,
+          "attachment_action_id": 32,
+          "command_flag": 16384
+        },
+        {
+          "case_id": "secondary_12_094",
+          "unit_slot": 38,
+          "unit_id": 94,
+          "unit_name": "Giant_item",
+          "action_selector": 18,
+          "attachment_action_id": 32,
+          "command_flag": 16384
+        }
+      ]
+    }
+  ]
+}

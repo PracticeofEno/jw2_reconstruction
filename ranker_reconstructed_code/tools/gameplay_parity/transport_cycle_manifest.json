@@ -1,0 +1,2314 @@
+{
+  "schema": 1,
+  "pair_count": 192,
+  "carrier_count": 4,
+  "load_frame": 31,
+  "unload_frame": 70,
+  "end_frame": 220,
+  "batches": [
+    {
+      "batch_index": 0,
+      "map": "RankerOCPV_Win/Maps/(2) GP Transport Cycle B00.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Transport Cycle B00.ply",
+      "replay_sha256": "5DBE12286E49DD3F0E1E3C8C0BF7FA7EAE989029E73FC430C9B3008DB60146FC",
+      "cases": [
+        {
+          "case_id": "transport_cycle_005_000",
+          "carrier_slot": 52,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 41,
+          "passenger_unit_id": 0,
+          "passenger_unit_name": "BuildMan",
+          "passenger_size": 1
+        },
+        {
+          "case_id": "transport_cycle_005_001",
+          "carrier_slot": 50,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 49,
+          "passenger_unit_id": 1,
+          "passenger_unit_name": "PowerMan",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_005_002",
+          "carrier_slot": 51,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 48,
+          "passenger_unit_id": 2,
+          "passenger_unit_name": "Giant",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_005_003",
+          "carrier_slot": 40,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 47,
+          "passenger_unit_id": 3,
+          "passenger_unit_name": "Soldier",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_005_004",
+          "carrier_slot": 39,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 46,
+          "passenger_unit_id": 4,
+          "passenger_unit_name": "Knight",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_005_006",
+          "carrier_slot": 38,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 30,
+          "passenger_unit_id": 6,
+          "passenger_unit_name": "BowMachine",
+          "passenger_size": 5
+        },
+        {
+          "case_id": "transport_cycle_005_009",
+          "carrier_slot": 43,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 31,
+          "passenger_unit_id": 9,
+          "passenger_unit_name": "Chief",
+          "passenger_size": 8
+        },
+        {
+          "case_id": "transport_cycle_005_010",
+          "carrier_slot": 42,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 34,
+          "passenger_unit_id": 10,
+          "passenger_unit_name": "PowerMan (Shield of Peace)",
+          "passenger_size": 2
+        }
+      ]
+    },
+    {
+      "batch_index": 1,
+      "map": "RankerOCPV_Win/Maps/(2) GP Transport Cycle B01.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Transport Cycle B01.ply",
+      "replay_sha256": "2C6682D254C44D40D79E5D14C730905DAF8FA518C887F8FDA29B9EBE6B257A24",
+      "cases": [
+        {
+          "case_id": "transport_cycle_005_011",
+          "carrier_slot": 52,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 41,
+          "passenger_unit_id": 11,
+          "passenger_unit_name": "Soldier (Fire Arrow)",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_005_012",
+          "carrier_slot": 50,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 49,
+          "passenger_unit_id": 12,
+          "passenger_unit_name": "Soldier (Venom Arrow)",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_005_013",
+          "carrier_slot": 51,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 48,
+          "passenger_unit_id": 13,
+          "passenger_unit_name": "Knight (Spear of Justice)",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_005_015",
+          "carrier_slot": 40,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 47,
+          "passenger_unit_id": 15,
+          "passenger_unit_name": "Silvan",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_005_016",
+          "carrier_slot": 39,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 46,
+          "passenger_unit_id": 16,
+          "passenger_unit_name": "Wizard",
+          "passenger_size": 1
+        },
+        {
+          "case_id": "transport_cycle_005_017",
+          "carrier_slot": 38,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 30,
+          "passenger_unit_id": 17,
+          "passenger_unit_name": "RedElf",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_005_018",
+          "carrier_slot": 43,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 31,
+          "passenger_unit_id": 18,
+          "passenger_unit_name": "WhiteElf",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_005_019",
+          "carrier_slot": 42,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 34,
+          "passenger_unit_id": 19,
+          "passenger_unit_name": "Ranger",
+          "passenger_size": 2
+        }
+      ]
+    },
+    {
+      "batch_index": 2,
+      "map": "RankerOCPV_Win/Maps/(2) GP Transport Cycle B02.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Transport Cycle B02.ply",
+      "replay_sha256": "0F4AB934A4ACCC16E269C5CF8F3E871220129C2D551AE3A0A5FBC7A95B5D6136",
+      "cases": [
+        {
+          "case_id": "transport_cycle_005_020",
+          "carrier_slot": 52,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 41,
+          "passenger_unit_id": 20,
+          "passenger_unit_name": "BlueElf",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_005_021",
+          "carrier_slot": 50,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 49,
+          "passenger_unit_id": 21,
+          "passenger_unit_name": "Unicorn",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_005_023",
+          "carrier_slot": 51,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 48,
+          "passenger_unit_id": 23,
+          "passenger_unit_name": "ManaSpread",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_005_028",
+          "carrier_slot": 40,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 47,
+          "passenger_unit_id": 28,
+          "passenger_unit_name": "GreenElf",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_005_029",
+          "carrier_slot": 39,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 46,
+          "passenger_unit_id": 29,
+          "passenger_unit_name": "DarkElf",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_005_032",
+          "carrier_slot": 38,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 30,
+          "passenger_unit_id": 32,
+          "passenger_unit_name": "Dinos",
+          "passenger_size": 1
+        },
+        {
+          "case_id": "transport_cycle_005_033",
+          "carrier_slot": 43,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 31,
+          "passenger_unit_id": 33,
+          "passenger_unit_name": "Masos",
+          "passenger_size": 1
+        },
+        {
+          "case_id": "transport_cycle_005_034",
+          "carrier_slot": 42,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 34,
+          "passenger_unit_id": 34,
+          "passenger_unit_name": "Velocis",
+          "passenger_size": 2
+        }
+      ]
+    },
+    {
+      "batch_index": 3,
+      "map": "RankerOCPV_Win/Maps/(2) GP Transport Cycle B03.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Transport Cycle B03.ply",
+      "replay_sha256": "B4A49D2CE55E41DFA5302D35129DA4B601977FD3C2DF2441E69711EADA0D55D0",
+      "cases": [
+        {
+          "case_id": "transport_cycle_005_035",
+          "carrier_slot": 52,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 41,
+          "passenger_unit_id": 35,
+          "passenger_unit_name": "TwinVelocis",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_005_036",
+          "carrier_slot": 50,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 49,
+          "passenger_unit_id": 36,
+          "passenger_unit_name": "Dilophos",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_005_037",
+          "carrier_slot": 51,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 48,
+          "passenger_unit_id": 37,
+          "passenger_unit_name": "Rhamphos",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_005_040",
+          "carrier_slot": 40,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 47,
+          "passenger_unit_id": 40,
+          "passenger_unit_name": "Trices",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_005_042",
+          "carrier_slot": 39,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 46,
+          "passenger_unit_id": 42,
+          "passenger_unit_name": "EggThrower",
+          "passenger_size": 4
+        },
+        {
+          "case_id": "transport_cycle_005_044",
+          "carrier_slot": 38,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 30,
+          "passenger_unit_id": 44,
+          "passenger_unit_name": "Tyranos",
+          "passenger_size": 8
+        },
+        {
+          "case_id": "transport_cycle_005_046",
+          "carrier_slot": 43,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 31,
+          "passenger_unit_id": 46,
+          "passenger_unit_name": "Kentros",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_005_048",
+          "carrier_slot": 42,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 34,
+          "passenger_unit_id": 48,
+          "passenger_unit_name": "Insect",
+          "passenger_size": 1
+        }
+      ]
+    },
+    {
+      "batch_index": 4,
+      "map": "RankerOCPV_Win/Maps/(2) GP Transport Cycle B04.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Transport Cycle B04.ply",
+      "replay_sha256": "DE1BFC8E91F36DBFEDD6326F2304B29C70FE197B79DCE88277F3DF8462A00194",
+      "cases": [
+        {
+          "case_id": "transport_cycle_005_049",
+          "carrier_slot": 52,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 41,
+          "passenger_unit_id": 49,
+          "passenger_unit_name": "Skeleton",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_005_050",
+          "carrier_slot": 50,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 49,
+          "passenger_unit_id": 50,
+          "passenger_unit_name": "MudMan",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_005_054",
+          "carrier_slot": 51,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 48,
+          "passenger_unit_id": 54,
+          "passenger_unit_name": "Kelpa",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_005_055",
+          "carrier_slot": 40,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 47,
+          "passenger_unit_id": 55,
+          "passenger_unit_name": "Warlock",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_005_056",
+          "carrier_slot": 39,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 46,
+          "passenger_unit_id": 56,
+          "passenger_unit_name": "KingDemon",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_005_058",
+          "carrier_slot": 38,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 30,
+          "passenger_unit_id": 58,
+          "passenger_unit_name": "Devil",
+          "passenger_size": 8
+        },
+        {
+          "case_id": "transport_cycle_005_059",
+          "carrier_slot": 43,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 31,
+          "passenger_unit_id": 59,
+          "passenger_unit_name": "RiseZombie1",
+          "passenger_size": 1
+        },
+        {
+          "case_id": "transport_cycle_005_060",
+          "carrier_slot": 42,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 34,
+          "passenger_unit_id": 60,
+          "passenger_unit_name": "RiseZombie2",
+          "passenger_size": 1
+        }
+      ]
+    },
+    {
+      "batch_index": 5,
+      "map": "RankerOCPV_Win/Maps/(2) GP Transport Cycle B05.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Transport Cycle B05.ply",
+      "replay_sha256": "D91DFF7924867C9661FC321E89D7C573AF4AA08AC2615EF1B57D0CD9C3B7A682",
+      "cases": [
+        {
+          "case_id": "transport_cycle_005_062",
+          "carrier_slot": 52,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 41,
+          "passenger_unit_id": 62,
+          "passenger_unit_name": "FemmeFatale",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_005_063",
+          "carrier_slot": 50,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 49,
+          "passenger_unit_id": 63,
+          "passenger_unit_name": "Nightmare",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_005_090",
+          "carrier_slot": 51,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 48,
+          "passenger_unit_id": 90,
+          "passenger_unit_name": "BoneFighter",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_005_091",
+          "carrier_slot": 40,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 47,
+          "passenger_unit_id": 91,
+          "passenger_unit_name": "Silvan_item",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_005_092",
+          "carrier_slot": 39,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 46,
+          "passenger_unit_id": 92,
+          "passenger_unit_name": "SkyBallista",
+          "passenger_size": 4
+        },
+        {
+          "case_id": "transport_cycle_005_093",
+          "carrier_slot": 38,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 30,
+          "passenger_unit_id": 93,
+          "passenger_unit_name": "SkyBullet",
+          "passenger_size": 4
+        },
+        {
+          "case_id": "transport_cycle_005_094",
+          "carrier_slot": 43,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 31,
+          "passenger_unit_id": 94,
+          "passenger_unit_name": "Giant_item",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_005_095",
+          "carrier_slot": 42,
+          "carrier_unit_id": 5,
+          "carrier_unit_name": "Revolver",
+          "carrier_capacity": 14,
+          "passenger_slot": 34,
+          "passenger_unit_id": 95,
+          "passenger_unit_name": "DoubleBow_item",
+          "passenger_size": 5
+        }
+      ]
+    },
+    {
+      "batch_index": 6,
+      "map": "RankerOCPV_Win/Maps/(2) GP Transport Cycle B06.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Transport Cycle B06.ply",
+      "replay_sha256": "1B80396C03F80B6F8790F49DB6F6E5F4881AC44447ED8277A5BF663CC8607D47",
+      "cases": [
+        {
+          "case_id": "transport_cycle_024_000",
+          "carrier_slot": 52,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 41,
+          "passenger_unit_id": 0,
+          "passenger_unit_name": "BuildMan",
+          "passenger_size": 1
+        },
+        {
+          "case_id": "transport_cycle_024_001",
+          "carrier_slot": 50,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 49,
+          "passenger_unit_id": 1,
+          "passenger_unit_name": "PowerMan",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_024_002",
+          "carrier_slot": 51,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 48,
+          "passenger_unit_id": 2,
+          "passenger_unit_name": "Giant",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_024_003",
+          "carrier_slot": 40,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 47,
+          "passenger_unit_id": 3,
+          "passenger_unit_name": "Soldier",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_024_004",
+          "carrier_slot": 39,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 46,
+          "passenger_unit_id": 4,
+          "passenger_unit_name": "Knight",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_024_006",
+          "carrier_slot": 38,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 30,
+          "passenger_unit_id": 6,
+          "passenger_unit_name": "BowMachine",
+          "passenger_size": 5
+        },
+        {
+          "case_id": "transport_cycle_024_009",
+          "carrier_slot": 43,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 31,
+          "passenger_unit_id": 9,
+          "passenger_unit_name": "Chief",
+          "passenger_size": 8
+        },
+        {
+          "case_id": "transport_cycle_024_010",
+          "carrier_slot": 42,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 34,
+          "passenger_unit_id": 10,
+          "passenger_unit_name": "PowerMan (Shield of Peace)",
+          "passenger_size": 2
+        }
+      ]
+    },
+    {
+      "batch_index": 7,
+      "map": "RankerOCPV_Win/Maps/(2) GP Transport Cycle B07.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Transport Cycle B07.ply",
+      "replay_sha256": "6D1BF0B7AB60322D110ECF982A8D74BA2A6560D7F09D7F30E86526856ABB5292",
+      "cases": [
+        {
+          "case_id": "transport_cycle_024_011",
+          "carrier_slot": 52,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 41,
+          "passenger_unit_id": 11,
+          "passenger_unit_name": "Soldier (Fire Arrow)",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_024_012",
+          "carrier_slot": 50,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 49,
+          "passenger_unit_id": 12,
+          "passenger_unit_name": "Soldier (Venom Arrow)",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_024_013",
+          "carrier_slot": 51,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 48,
+          "passenger_unit_id": 13,
+          "passenger_unit_name": "Knight (Spear of Justice)",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_024_015",
+          "carrier_slot": 40,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 47,
+          "passenger_unit_id": 15,
+          "passenger_unit_name": "Silvan",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_024_016",
+          "carrier_slot": 39,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 46,
+          "passenger_unit_id": 16,
+          "passenger_unit_name": "Wizard",
+          "passenger_size": 1
+        },
+        {
+          "case_id": "transport_cycle_024_017",
+          "carrier_slot": 38,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 30,
+          "passenger_unit_id": 17,
+          "passenger_unit_name": "RedElf",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_024_018",
+          "carrier_slot": 43,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 31,
+          "passenger_unit_id": 18,
+          "passenger_unit_name": "WhiteElf",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_024_019",
+          "carrier_slot": 42,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 34,
+          "passenger_unit_id": 19,
+          "passenger_unit_name": "Ranger",
+          "passenger_size": 2
+        }
+      ]
+    },
+    {
+      "batch_index": 8,
+      "map": "RankerOCPV_Win/Maps/(2) GP Transport Cycle B08.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Transport Cycle B08.ply",
+      "replay_sha256": "7CFEEB7C3BF2953FBDA040545825B805C737D47B184A9AFF92D23FC61CEACE65",
+      "cases": [
+        {
+          "case_id": "transport_cycle_024_020",
+          "carrier_slot": 52,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 41,
+          "passenger_unit_id": 20,
+          "passenger_unit_name": "BlueElf",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_024_021",
+          "carrier_slot": 50,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 49,
+          "passenger_unit_id": 21,
+          "passenger_unit_name": "Unicorn",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_024_023",
+          "carrier_slot": 51,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 48,
+          "passenger_unit_id": 23,
+          "passenger_unit_name": "ManaSpread",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_024_028",
+          "carrier_slot": 40,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 47,
+          "passenger_unit_id": 28,
+          "passenger_unit_name": "GreenElf",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_024_029",
+          "carrier_slot": 39,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 46,
+          "passenger_unit_id": 29,
+          "passenger_unit_name": "DarkElf",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_024_032",
+          "carrier_slot": 38,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 30,
+          "passenger_unit_id": 32,
+          "passenger_unit_name": "Dinos",
+          "passenger_size": 1
+        },
+        {
+          "case_id": "transport_cycle_024_033",
+          "carrier_slot": 43,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 31,
+          "passenger_unit_id": 33,
+          "passenger_unit_name": "Masos",
+          "passenger_size": 1
+        },
+        {
+          "case_id": "transport_cycle_024_034",
+          "carrier_slot": 42,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 34,
+          "passenger_unit_id": 34,
+          "passenger_unit_name": "Velocis",
+          "passenger_size": 2
+        }
+      ]
+    },
+    {
+      "batch_index": 9,
+      "map": "RankerOCPV_Win/Maps/(2) GP Transport Cycle B09.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Transport Cycle B09.ply",
+      "replay_sha256": "02D4F31B506AE5AC83E74A8DAE0AB2782FFFFE43BCD6D287FB99885BC421023D",
+      "cases": [
+        {
+          "case_id": "transport_cycle_024_035",
+          "carrier_slot": 52,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 41,
+          "passenger_unit_id": 35,
+          "passenger_unit_name": "TwinVelocis",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_024_036",
+          "carrier_slot": 50,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 49,
+          "passenger_unit_id": 36,
+          "passenger_unit_name": "Dilophos",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_024_037",
+          "carrier_slot": 51,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 48,
+          "passenger_unit_id": 37,
+          "passenger_unit_name": "Rhamphos",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_024_040",
+          "carrier_slot": 40,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 47,
+          "passenger_unit_id": 40,
+          "passenger_unit_name": "Trices",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_024_042",
+          "carrier_slot": 39,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 46,
+          "passenger_unit_id": 42,
+          "passenger_unit_name": "EggThrower",
+          "passenger_size": 4
+        },
+        {
+          "case_id": "transport_cycle_024_044",
+          "carrier_slot": 38,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 30,
+          "passenger_unit_id": 44,
+          "passenger_unit_name": "Tyranos",
+          "passenger_size": 8
+        },
+        {
+          "case_id": "transport_cycle_024_046",
+          "carrier_slot": 43,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 31,
+          "passenger_unit_id": 46,
+          "passenger_unit_name": "Kentros",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_024_048",
+          "carrier_slot": 42,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 34,
+          "passenger_unit_id": 48,
+          "passenger_unit_name": "Insect",
+          "passenger_size": 1
+        }
+      ]
+    },
+    {
+      "batch_index": 10,
+      "map": "RankerOCPV_Win/Maps/(2) GP Transport Cycle B10.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Transport Cycle B10.ply",
+      "replay_sha256": "2D4A74346E70C9AEC50BA96CB7F5DA1C420E5BEB64FD54A2360FA561E5E237C9",
+      "cases": [
+        {
+          "case_id": "transport_cycle_024_049",
+          "carrier_slot": 52,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 41,
+          "passenger_unit_id": 49,
+          "passenger_unit_name": "Skeleton",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_024_050",
+          "carrier_slot": 50,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 49,
+          "passenger_unit_id": 50,
+          "passenger_unit_name": "MudMan",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_024_054",
+          "carrier_slot": 51,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 48,
+          "passenger_unit_id": 54,
+          "passenger_unit_name": "Kelpa",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_024_055",
+          "carrier_slot": 40,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 47,
+          "passenger_unit_id": 55,
+          "passenger_unit_name": "Warlock",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_024_056",
+          "carrier_slot": 39,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 46,
+          "passenger_unit_id": 56,
+          "passenger_unit_name": "KingDemon",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_024_058",
+          "carrier_slot": 38,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 30,
+          "passenger_unit_id": 58,
+          "passenger_unit_name": "Devil",
+          "passenger_size": 8
+        },
+        {
+          "case_id": "transport_cycle_024_059",
+          "carrier_slot": 43,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 31,
+          "passenger_unit_id": 59,
+          "passenger_unit_name": "RiseZombie1",
+          "passenger_size": 1
+        },
+        {
+          "case_id": "transport_cycle_024_060",
+          "carrier_slot": 42,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 34,
+          "passenger_unit_id": 60,
+          "passenger_unit_name": "RiseZombie2",
+          "passenger_size": 1
+        }
+      ]
+    },
+    {
+      "batch_index": 11,
+      "map": "RankerOCPV_Win/Maps/(2) GP Transport Cycle B11.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Transport Cycle B11.ply",
+      "replay_sha256": "0F8408739747BD7D510C0B149E75251F0884A250DB14D47FF28A932CA2306682",
+      "cases": [
+        {
+          "case_id": "transport_cycle_024_062",
+          "carrier_slot": 52,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 41,
+          "passenger_unit_id": 62,
+          "passenger_unit_name": "FemmeFatale",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_024_063",
+          "carrier_slot": 50,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 49,
+          "passenger_unit_id": 63,
+          "passenger_unit_name": "Nightmare",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_024_090",
+          "carrier_slot": 51,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 48,
+          "passenger_unit_id": 90,
+          "passenger_unit_name": "BoneFighter",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_024_091",
+          "carrier_slot": 40,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 47,
+          "passenger_unit_id": 91,
+          "passenger_unit_name": "Silvan_item",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_024_092",
+          "carrier_slot": 39,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 46,
+          "passenger_unit_id": 92,
+          "passenger_unit_name": "SkyBallista",
+          "passenger_size": 4
+        },
+        {
+          "case_id": "transport_cycle_024_093",
+          "carrier_slot": 38,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 30,
+          "passenger_unit_id": 93,
+          "passenger_unit_name": "SkyBullet",
+          "passenger_size": 4
+        },
+        {
+          "case_id": "transport_cycle_024_094",
+          "carrier_slot": 43,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 31,
+          "passenger_unit_id": 94,
+          "passenger_unit_name": "Giant_item",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_024_095",
+          "carrier_slot": 42,
+          "carrier_unit_id": 24,
+          "carrier_unit_name": "ElfRing",
+          "carrier_capacity": 15,
+          "passenger_slot": 34,
+          "passenger_unit_id": 95,
+          "passenger_unit_name": "DoubleBow_item",
+          "passenger_size": 5
+        }
+      ]
+    },
+    {
+      "batch_index": 12,
+      "map": "RankerOCPV_Win/Maps/(2) GP Transport Cycle B12.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Transport Cycle B12.ply",
+      "replay_sha256": "0C41EA901FB5697FB65A454F7377814E6606397583948ED6732A249ED46A2EA3",
+      "cases": [
+        {
+          "case_id": "transport_cycle_041_000",
+          "carrier_slot": 52,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 41,
+          "passenger_unit_id": 0,
+          "passenger_unit_name": "BuildMan",
+          "passenger_size": 1
+        },
+        {
+          "case_id": "transport_cycle_041_001",
+          "carrier_slot": 50,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 49,
+          "passenger_unit_id": 1,
+          "passenger_unit_name": "PowerMan",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_041_002",
+          "carrier_slot": 51,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 48,
+          "passenger_unit_id": 2,
+          "passenger_unit_name": "Giant",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_041_003",
+          "carrier_slot": 40,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 47,
+          "passenger_unit_id": 3,
+          "passenger_unit_name": "Soldier",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_041_004",
+          "carrier_slot": 39,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 46,
+          "passenger_unit_id": 4,
+          "passenger_unit_name": "Knight",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_041_006",
+          "carrier_slot": 38,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 30,
+          "passenger_unit_id": 6,
+          "passenger_unit_name": "BowMachine",
+          "passenger_size": 5
+        },
+        {
+          "case_id": "transport_cycle_041_009",
+          "carrier_slot": 43,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 31,
+          "passenger_unit_id": 9,
+          "passenger_unit_name": "Chief",
+          "passenger_size": 8
+        },
+        {
+          "case_id": "transport_cycle_041_010",
+          "carrier_slot": 42,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 34,
+          "passenger_unit_id": 10,
+          "passenger_unit_name": "PowerMan (Shield of Peace)",
+          "passenger_size": 2
+        }
+      ]
+    },
+    {
+      "batch_index": 13,
+      "map": "RankerOCPV_Win/Maps/(2) GP Transport Cycle B13.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Transport Cycle B13.ply",
+      "replay_sha256": "C92BCF2E7DF5B432920E7AF57AC30254ACCC123F7D128D7692E5E11F6EE479D9",
+      "cases": [
+        {
+          "case_id": "transport_cycle_041_011",
+          "carrier_slot": 52,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 41,
+          "passenger_unit_id": 11,
+          "passenger_unit_name": "Soldier (Fire Arrow)",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_041_012",
+          "carrier_slot": 50,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 49,
+          "passenger_unit_id": 12,
+          "passenger_unit_name": "Soldier (Venom Arrow)",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_041_013",
+          "carrier_slot": 51,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 48,
+          "passenger_unit_id": 13,
+          "passenger_unit_name": "Knight (Spear of Justice)",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_041_015",
+          "carrier_slot": 40,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 47,
+          "passenger_unit_id": 15,
+          "passenger_unit_name": "Silvan",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_041_016",
+          "carrier_slot": 39,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 46,
+          "passenger_unit_id": 16,
+          "passenger_unit_name": "Wizard",
+          "passenger_size": 1
+        },
+        {
+          "case_id": "transport_cycle_041_017",
+          "carrier_slot": 38,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 30,
+          "passenger_unit_id": 17,
+          "passenger_unit_name": "RedElf",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_041_018",
+          "carrier_slot": 43,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 31,
+          "passenger_unit_id": 18,
+          "passenger_unit_name": "WhiteElf",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_041_019",
+          "carrier_slot": 42,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 34,
+          "passenger_unit_id": 19,
+          "passenger_unit_name": "Ranger",
+          "passenger_size": 2
+        }
+      ]
+    },
+    {
+      "batch_index": 14,
+      "map": "RankerOCPV_Win/Maps/(2) GP Transport Cycle B14.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Transport Cycle B14.ply",
+      "replay_sha256": "A75C028B014452BED6852B289791E0E28444BE5849104FEDDB459FB83727871E",
+      "cases": [
+        {
+          "case_id": "transport_cycle_041_020",
+          "carrier_slot": 52,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 41,
+          "passenger_unit_id": 20,
+          "passenger_unit_name": "BlueElf",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_041_021",
+          "carrier_slot": 50,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 49,
+          "passenger_unit_id": 21,
+          "passenger_unit_name": "Unicorn",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_041_023",
+          "carrier_slot": 51,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 48,
+          "passenger_unit_id": 23,
+          "passenger_unit_name": "ManaSpread",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_041_028",
+          "carrier_slot": 40,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 47,
+          "passenger_unit_id": 28,
+          "passenger_unit_name": "GreenElf",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_041_029",
+          "carrier_slot": 39,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 46,
+          "passenger_unit_id": 29,
+          "passenger_unit_name": "DarkElf",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_041_032",
+          "carrier_slot": 38,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 30,
+          "passenger_unit_id": 32,
+          "passenger_unit_name": "Dinos",
+          "passenger_size": 1
+        },
+        {
+          "case_id": "transport_cycle_041_033",
+          "carrier_slot": 43,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 31,
+          "passenger_unit_id": 33,
+          "passenger_unit_name": "Masos",
+          "passenger_size": 1
+        },
+        {
+          "case_id": "transport_cycle_041_034",
+          "carrier_slot": 42,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 34,
+          "passenger_unit_id": 34,
+          "passenger_unit_name": "Velocis",
+          "passenger_size": 2
+        }
+      ]
+    },
+    {
+      "batch_index": 15,
+      "map": "RankerOCPV_Win/Maps/(2) GP Transport Cycle B15.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Transport Cycle B15.ply",
+      "replay_sha256": "B28723DF4E2B98A7A6A25F41F9BEBEEB2A286FE0C821EADF4A1CAB1A6E2E268D",
+      "cases": [
+        {
+          "case_id": "transport_cycle_041_035",
+          "carrier_slot": 52,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 41,
+          "passenger_unit_id": 35,
+          "passenger_unit_name": "TwinVelocis",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_041_036",
+          "carrier_slot": 50,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 49,
+          "passenger_unit_id": 36,
+          "passenger_unit_name": "Dilophos",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_041_037",
+          "carrier_slot": 51,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 48,
+          "passenger_unit_id": 37,
+          "passenger_unit_name": "Rhamphos",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_041_040",
+          "carrier_slot": 40,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 47,
+          "passenger_unit_id": 40,
+          "passenger_unit_name": "Trices",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_041_042",
+          "carrier_slot": 39,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 46,
+          "passenger_unit_id": 42,
+          "passenger_unit_name": "EggThrower",
+          "passenger_size": 4
+        },
+        {
+          "case_id": "transport_cycle_041_044",
+          "carrier_slot": 38,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 30,
+          "passenger_unit_id": 44,
+          "passenger_unit_name": "Tyranos",
+          "passenger_size": 8
+        },
+        {
+          "case_id": "transport_cycle_041_046",
+          "carrier_slot": 43,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 31,
+          "passenger_unit_id": 46,
+          "passenger_unit_name": "Kentros",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_041_048",
+          "carrier_slot": 42,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 34,
+          "passenger_unit_id": 48,
+          "passenger_unit_name": "Insect",
+          "passenger_size": 1
+        }
+      ]
+    },
+    {
+      "batch_index": 16,
+      "map": "RankerOCPV_Win/Maps/(2) GP Transport Cycle B16.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Transport Cycle B16.ply",
+      "replay_sha256": "75DD0E58FB0C0A6CB59F4E1365303CD877046D83E2C5F92E71B8182382B139BA",
+      "cases": [
+        {
+          "case_id": "transport_cycle_041_049",
+          "carrier_slot": 52,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 41,
+          "passenger_unit_id": 49,
+          "passenger_unit_name": "Skeleton",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_041_050",
+          "carrier_slot": 50,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 49,
+          "passenger_unit_id": 50,
+          "passenger_unit_name": "MudMan",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_041_054",
+          "carrier_slot": 51,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 48,
+          "passenger_unit_id": 54,
+          "passenger_unit_name": "Kelpa",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_041_055",
+          "carrier_slot": 40,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 47,
+          "passenger_unit_id": 55,
+          "passenger_unit_name": "Warlock",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_041_056",
+          "carrier_slot": 39,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 46,
+          "passenger_unit_id": 56,
+          "passenger_unit_name": "KingDemon",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_041_058",
+          "carrier_slot": 38,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 30,
+          "passenger_unit_id": 58,
+          "passenger_unit_name": "Devil",
+          "passenger_size": 8
+        },
+        {
+          "case_id": "transport_cycle_041_059",
+          "carrier_slot": 43,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 31,
+          "passenger_unit_id": 59,
+          "passenger_unit_name": "RiseZombie1",
+          "passenger_size": 1
+        },
+        {
+          "case_id": "transport_cycle_041_060",
+          "carrier_slot": 42,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 34,
+          "passenger_unit_id": 60,
+          "passenger_unit_name": "RiseZombie2",
+          "passenger_size": 1
+        }
+      ]
+    },
+    {
+      "batch_index": 17,
+      "map": "RankerOCPV_Win/Maps/(2) GP Transport Cycle B17.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Transport Cycle B17.ply",
+      "replay_sha256": "270D9DF99759D3367409A8015692C063657818A829FF40E13D6B5173B26EAD95",
+      "cases": [
+        {
+          "case_id": "transport_cycle_041_062",
+          "carrier_slot": 52,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 41,
+          "passenger_unit_id": 62,
+          "passenger_unit_name": "FemmeFatale",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_041_063",
+          "carrier_slot": 50,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 49,
+          "passenger_unit_id": 63,
+          "passenger_unit_name": "Nightmare",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_041_090",
+          "carrier_slot": 51,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 48,
+          "passenger_unit_id": 90,
+          "passenger_unit_name": "BoneFighter",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_041_091",
+          "carrier_slot": 40,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 47,
+          "passenger_unit_id": 91,
+          "passenger_unit_name": "Silvan_item",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_041_092",
+          "carrier_slot": 39,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 46,
+          "passenger_unit_id": 92,
+          "passenger_unit_name": "SkyBallista",
+          "passenger_size": 4
+        },
+        {
+          "case_id": "transport_cycle_041_093",
+          "carrier_slot": 38,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 30,
+          "passenger_unit_id": 93,
+          "passenger_unit_name": "SkyBullet",
+          "passenger_size": 4
+        },
+        {
+          "case_id": "transport_cycle_041_094",
+          "carrier_slot": 43,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 31,
+          "passenger_unit_id": 94,
+          "passenger_unit_name": "Giant_item",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_041_095",
+          "carrier_slot": 42,
+          "carrier_unit_id": 41,
+          "carrier_unit_name": "Dsunguri",
+          "carrier_capacity": 16,
+          "passenger_slot": 34,
+          "passenger_unit_id": 95,
+          "passenger_unit_name": "DoubleBow_item",
+          "passenger_size": 5
+        }
+      ]
+    },
+    {
+      "batch_index": 18,
+      "map": "RankerOCPV_Win/Maps/(2) GP Transport Cycle B18.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Transport Cycle B18.ply",
+      "replay_sha256": "4CA8BC64F196D5D3868876459BBF74BA99203001CEBE25F14CA05693BB64FF4C",
+      "cases": [
+        {
+          "case_id": "transport_cycle_052_000",
+          "carrier_slot": 52,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 41,
+          "passenger_unit_id": 0,
+          "passenger_unit_name": "BuildMan",
+          "passenger_size": 1
+        },
+        {
+          "case_id": "transport_cycle_052_001",
+          "carrier_slot": 50,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 49,
+          "passenger_unit_id": 1,
+          "passenger_unit_name": "PowerMan",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_052_002",
+          "carrier_slot": 51,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 48,
+          "passenger_unit_id": 2,
+          "passenger_unit_name": "Giant",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_052_003",
+          "carrier_slot": 40,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 47,
+          "passenger_unit_id": 3,
+          "passenger_unit_name": "Soldier",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_052_004",
+          "carrier_slot": 39,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 46,
+          "passenger_unit_id": 4,
+          "passenger_unit_name": "Knight",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_052_006",
+          "carrier_slot": 38,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 30,
+          "passenger_unit_id": 6,
+          "passenger_unit_name": "BowMachine",
+          "passenger_size": 5
+        },
+        {
+          "case_id": "transport_cycle_052_009",
+          "carrier_slot": 43,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 31,
+          "passenger_unit_id": 9,
+          "passenger_unit_name": "Chief",
+          "passenger_size": 8
+        },
+        {
+          "case_id": "transport_cycle_052_010",
+          "carrier_slot": 42,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 34,
+          "passenger_unit_id": 10,
+          "passenger_unit_name": "PowerMan (Shield of Peace)",
+          "passenger_size": 2
+        }
+      ]
+    },
+    {
+      "batch_index": 19,
+      "map": "RankerOCPV_Win/Maps/(2) GP Transport Cycle B19.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Transport Cycle B19.ply",
+      "replay_sha256": "A0B748F4255F1BCB9433BE16290824898296D4D9BE232B5B6C94FDA43B52C7F6",
+      "cases": [
+        {
+          "case_id": "transport_cycle_052_011",
+          "carrier_slot": 52,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 41,
+          "passenger_unit_id": 11,
+          "passenger_unit_name": "Soldier (Fire Arrow)",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_052_012",
+          "carrier_slot": 50,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 49,
+          "passenger_unit_id": 12,
+          "passenger_unit_name": "Soldier (Venom Arrow)",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_052_013",
+          "carrier_slot": 51,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 48,
+          "passenger_unit_id": 13,
+          "passenger_unit_name": "Knight (Spear of Justice)",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_052_015",
+          "carrier_slot": 40,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 47,
+          "passenger_unit_id": 15,
+          "passenger_unit_name": "Silvan",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_052_016",
+          "carrier_slot": 39,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 46,
+          "passenger_unit_id": 16,
+          "passenger_unit_name": "Wizard",
+          "passenger_size": 1
+        },
+        {
+          "case_id": "transport_cycle_052_017",
+          "carrier_slot": 38,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 30,
+          "passenger_unit_id": 17,
+          "passenger_unit_name": "RedElf",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_052_018",
+          "carrier_slot": 43,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 31,
+          "passenger_unit_id": 18,
+          "passenger_unit_name": "WhiteElf",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_052_019",
+          "carrier_slot": 42,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 34,
+          "passenger_unit_id": 19,
+          "passenger_unit_name": "Ranger",
+          "passenger_size": 2
+        }
+      ]
+    },
+    {
+      "batch_index": 20,
+      "map": "RankerOCPV_Win/Maps/(2) GP Transport Cycle B20.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Transport Cycle B20.ply",
+      "replay_sha256": "4BF5FAF78E5EC97CDBF753327D5CB7AECB3434FB4DB3449E88FC410EDAB383D4",
+      "cases": [
+        {
+          "case_id": "transport_cycle_052_020",
+          "carrier_slot": 52,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 41,
+          "passenger_unit_id": 20,
+          "passenger_unit_name": "BlueElf",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_052_021",
+          "carrier_slot": 50,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 49,
+          "passenger_unit_id": 21,
+          "passenger_unit_name": "Unicorn",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_052_023",
+          "carrier_slot": 51,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 48,
+          "passenger_unit_id": 23,
+          "passenger_unit_name": "ManaSpread",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_052_028",
+          "carrier_slot": 40,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 47,
+          "passenger_unit_id": 28,
+          "passenger_unit_name": "GreenElf",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_052_029",
+          "carrier_slot": 39,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 46,
+          "passenger_unit_id": 29,
+          "passenger_unit_name": "DarkElf",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_052_032",
+          "carrier_slot": 38,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 30,
+          "passenger_unit_id": 32,
+          "passenger_unit_name": "Dinos",
+          "passenger_size": 1
+        },
+        {
+          "case_id": "transport_cycle_052_033",
+          "carrier_slot": 43,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 31,
+          "passenger_unit_id": 33,
+          "passenger_unit_name": "Masos",
+          "passenger_size": 1
+        },
+        {
+          "case_id": "transport_cycle_052_034",
+          "carrier_slot": 42,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 34,
+          "passenger_unit_id": 34,
+          "passenger_unit_name": "Velocis",
+          "passenger_size": 2
+        }
+      ]
+    },
+    {
+      "batch_index": 21,
+      "map": "RankerOCPV_Win/Maps/(2) GP Transport Cycle B21.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Transport Cycle B21.ply",
+      "replay_sha256": "0A427392FF69CAD57B9DC485F0A63EBC00BD1D566638042D7F24EBF5E89FEA5B",
+      "cases": [
+        {
+          "case_id": "transport_cycle_052_035",
+          "carrier_slot": 52,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 41,
+          "passenger_unit_id": 35,
+          "passenger_unit_name": "TwinVelocis",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_052_036",
+          "carrier_slot": 50,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 49,
+          "passenger_unit_id": 36,
+          "passenger_unit_name": "Dilophos",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_052_037",
+          "carrier_slot": 51,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 48,
+          "passenger_unit_id": 37,
+          "passenger_unit_name": "Rhamphos",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_052_040",
+          "carrier_slot": 40,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 47,
+          "passenger_unit_id": 40,
+          "passenger_unit_name": "Trices",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_052_042",
+          "carrier_slot": 39,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 46,
+          "passenger_unit_id": 42,
+          "passenger_unit_name": "EggThrower",
+          "passenger_size": 4
+        },
+        {
+          "case_id": "transport_cycle_052_044",
+          "carrier_slot": 38,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 30,
+          "passenger_unit_id": 44,
+          "passenger_unit_name": "Tyranos",
+          "passenger_size": 8
+        },
+        {
+          "case_id": "transport_cycle_052_046",
+          "carrier_slot": 43,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 31,
+          "passenger_unit_id": 46,
+          "passenger_unit_name": "Kentros",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_052_048",
+          "carrier_slot": 42,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 34,
+          "passenger_unit_id": 48,
+          "passenger_unit_name": "Insect",
+          "passenger_size": 1
+        }
+      ]
+    },
+    {
+      "batch_index": 22,
+      "map": "RankerOCPV_Win/Maps/(2) GP Transport Cycle B22.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Transport Cycle B22.ply",
+      "replay_sha256": "04B6796B417F27482C0BF7009B026DA5DA577E9FF47E655E3FE94C835DC5CD9E",
+      "cases": [
+        {
+          "case_id": "transport_cycle_052_049",
+          "carrier_slot": 52,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 41,
+          "passenger_unit_id": 49,
+          "passenger_unit_name": "Skeleton",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_052_050",
+          "carrier_slot": 50,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 49,
+          "passenger_unit_id": 50,
+          "passenger_unit_name": "MudMan",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_052_054",
+          "carrier_slot": 51,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 48,
+          "passenger_unit_id": 54,
+          "passenger_unit_name": "Kelpa",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_052_055",
+          "carrier_slot": 40,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 47,
+          "passenger_unit_id": 55,
+          "passenger_unit_name": "Warlock",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_052_056",
+          "carrier_slot": 39,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 46,
+          "passenger_unit_id": 56,
+          "passenger_unit_name": "KingDemon",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_052_058",
+          "carrier_slot": 38,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 30,
+          "passenger_unit_id": 58,
+          "passenger_unit_name": "Devil",
+          "passenger_size": 8
+        },
+        {
+          "case_id": "transport_cycle_052_059",
+          "carrier_slot": 43,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 31,
+          "passenger_unit_id": 59,
+          "passenger_unit_name": "RiseZombie1",
+          "passenger_size": 1
+        },
+        {
+          "case_id": "transport_cycle_052_060",
+          "carrier_slot": 42,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 34,
+          "passenger_unit_id": 60,
+          "passenger_unit_name": "RiseZombie2",
+          "passenger_size": 1
+        }
+      ]
+    },
+    {
+      "batch_index": 23,
+      "map": "RankerOCPV_Win/Maps/(2) GP Transport Cycle B23.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Transport Cycle B23.ply",
+      "replay_sha256": "035298FF5FFE55458F4727C3DA652B293AC2D08A6CF8A5799BCAD0545BB9EC76",
+      "cases": [
+        {
+          "case_id": "transport_cycle_052_062",
+          "carrier_slot": 52,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 41,
+          "passenger_unit_id": 62,
+          "passenger_unit_name": "FemmeFatale",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_052_063",
+          "carrier_slot": 50,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 49,
+          "passenger_unit_id": 63,
+          "passenger_unit_name": "Nightmare",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_052_090",
+          "carrier_slot": 51,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 48,
+          "passenger_unit_id": 90,
+          "passenger_unit_name": "BoneFighter",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_052_091",
+          "carrier_slot": 40,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 47,
+          "passenger_unit_id": 91,
+          "passenger_unit_name": "Silvan_item",
+          "passenger_size": 2
+        },
+        {
+          "case_id": "transport_cycle_052_092",
+          "carrier_slot": 39,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 46,
+          "passenger_unit_id": 92,
+          "passenger_unit_name": "SkyBallista",
+          "passenger_size": 4
+        },
+        {
+          "case_id": "transport_cycle_052_093",
+          "carrier_slot": 38,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 30,
+          "passenger_unit_id": 93,
+          "passenger_unit_name": "SkyBullet",
+          "passenger_size": 4
+        },
+        {
+          "case_id": "transport_cycle_052_094",
+          "carrier_slot": 43,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 31,
+          "passenger_unit_id": 94,
+          "passenger_unit_name": "Giant_item",
+          "passenger_size": 3
+        },
+        {
+          "case_id": "transport_cycle_052_095",
+          "carrier_slot": 42,
+          "carrier_unit_id": 52,
+          "carrier_unit_name": "Phantom",
+          "carrier_capacity": 16,
+          "passenger_slot": 34,
+          "passenger_unit_id": 95,
+          "passenger_unit_name": "DoubleBow_item",
+          "passenger_size": 5
+        }
+      ]
+    }
+  ]
+}

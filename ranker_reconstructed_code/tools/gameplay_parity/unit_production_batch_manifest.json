@@ -1,0 +1,974 @@
+{
+  "schema": 1,
+  "binding_count": 69,
+  "command_frame": 31,
+  "end_frame": 110,
+  "batches": [
+    {
+      "batch_index": 0,
+      "map": "RankerOCPV_Win/Maps/(2) GP Unit Production B00.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Unit Production B00.ply",
+      "replay_sha256": "515FFBF1F4CD8A375CAD73C06909966A7D38E1ABF20EC979E859FB672DC4BDB8",
+      "cases": [
+        {
+          "case_id": "unit_production_096_000",
+          "producer_slot": 52,
+          "producer_unit_id": 96,
+          "producer_unit_name": "Sanctuary",
+          "produced_unit_id": 0,
+          "produced_unit_name": "BuildMan",
+          "primary_cost": 100,
+          "secondary_cost": 0,
+          "population_cost": 1,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_096_009",
+          "producer_slot": 50,
+          "producer_unit_id": 96,
+          "producer_unit_name": "Sanctuary",
+          "produced_unit_id": 9,
+          "produced_unit_name": "Chief",
+          "primary_cost": 5000,
+          "secondary_cost": 0,
+          "population_cost": 25,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_100_005",
+          "producer_slot": 51,
+          "producer_unit_id": 100,
+          "producer_unit_name": "PowerHouse",
+          "produced_unit_id": 5,
+          "produced_unit_name": "Revolver",
+          "primary_cost": 500,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_100_006",
+          "producer_slot": 40,
+          "producer_unit_id": 100,
+          "producer_unit_name": "PowerHouse",
+          "produced_unit_id": 6,
+          "produced_unit_name": "BowMachine",
+          "primary_cost": 600,
+          "secondary_cost": 0,
+          "population_cost": 4,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_100_092",
+          "producer_slot": 39,
+          "producer_unit_id": 100,
+          "producer_unit_name": "PowerHouse",
+          "produced_unit_id": 92,
+          "produced_unit_name": "SkyBallista",
+          "primary_cost": 500,
+          "secondary_cost": 0,
+          "population_cost": 3,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_101_001",
+          "producer_slot": 38,
+          "producer_unit_id": 101,
+          "producer_unit_name": "SoldierHouse",
+          "produced_unit_id": 1,
+          "produced_unit_name": "PowerMan",
+          "primary_cost": 250,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_101_002",
+          "producer_slot": 43,
+          "producer_unit_id": 101,
+          "producer_unit_name": "SoldierHouse",
+          "produced_unit_id": 2,
+          "produced_unit_name": "Giant",
+          "primary_cost": 550,
+          "secondary_cost": 0,
+          "population_cost": 3,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_101_003",
+          "producer_slot": 42,
+          "producer_unit_id": 101,
+          "producer_unit_name": "SoldierHouse",
+          "produced_unit_id": 3,
+          "produced_unit_name": "Soldier",
+          "primary_cost": 250,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        }
+      ],
+      "prerequisite_unit_ids": [
+        103,
+        104,
+        105,
+        107,
+        108
+      ],
+      "population_support_count": 2
+    },
+    {
+      "batch_index": 1,
+      "map": "RankerOCPV_Win/Maps/(2) GP Unit Production B01.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Unit Production B01.ply",
+      "replay_sha256": "06CDCF12004711D32E73B515B3C112280F8C56E971A67EF37ECC62E8517A779A",
+      "cases": [
+        {
+          "case_id": "unit_production_101_004",
+          "producer_slot": 52,
+          "producer_unit_id": 101,
+          "producer_unit_name": "SoldierHouse",
+          "produced_unit_id": 4,
+          "produced_unit_name": "Knight",
+          "primary_cost": 700,
+          "secondary_cost": 0,
+          "population_cost": 4,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_101_015",
+          "producer_slot": 50,
+          "producer_unit_id": 101,
+          "producer_unit_name": "SoldierHouse",
+          "produced_unit_id": 15,
+          "produced_unit_name": "Silvan",
+          "primary_cost": 500,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_102_007",
+          "producer_slot": 51,
+          "producer_unit_id": 102,
+          "producer_unit_name": "SkyHouse",
+          "produced_unit_id": 7,
+          "produced_unit_name": "Squadron",
+          "primary_cost": 300,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_102_008",
+          "producer_slot": 40,
+          "producer_unit_id": 102,
+          "producer_unit_name": "SkyHouse",
+          "produced_unit_id": 8,
+          "produced_unit_name": "Flattop",
+          "primary_cost": 1000,
+          "secondary_cost": 0,
+          "population_cost": 5,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_102_014",
+          "producer_slot": 39,
+          "producer_unit_id": 102,
+          "producer_unit_name": "SkyHouse",
+          "produced_unit_id": 14,
+          "produced_unit_name": "Kalma",
+          "primary_cost": 500,
+          "secondary_cost": 0,
+          "population_cost": 3,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_112_016",
+          "producer_slot": 38,
+          "producer_unit_id": 112,
+          "producer_unit_name": "Heaven",
+          "produced_unit_id": 16,
+          "produced_unit_name": "Wizard",
+          "primary_cost": 80,
+          "secondary_cost": 0,
+          "population_cost": 1,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_112_027",
+          "producer_slot": 43,
+          "producer_unit_id": 112,
+          "producer_unit_name": "Heaven",
+          "produced_unit_id": 27,
+          "produced_unit_name": "AngelElf",
+          "primary_cost": 5000,
+          "secondary_cost": 0,
+          "population_cost": 25,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_116_017",
+          "producer_slot": 42,
+          "producer_unit_id": 116,
+          "producer_unit_name": "RedHall",
+          "produced_unit_id": 17,
+          "produced_unit_name": "RedElf",
+          "primary_cost": 200,
+          "secondary_cost": 0,
+          "population_cost": 1,
+          "used_exact_row_template": true
+        }
+      ],
+      "prerequisite_unit_ids": [
+        103,
+        105,
+        107,
+        120,
+        121,
+        122,
+        124
+      ],
+      "population_support_count": 2
+    },
+    {
+      "batch_index": 2,
+      "map": "RankerOCPV_Win/Maps/(2) GP Unit Production B02.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Unit Production B02.ply",
+      "replay_sha256": "51E991ABA2FE6922AC654EF007945E8E1A3B9CB8F3414CBD0868CD34F5FDE353",
+      "cases": [
+        {
+          "case_id": "unit_production_116_028",
+          "producer_slot": 52,
+          "producer_unit_id": 116,
+          "producer_unit_name": "RedHall",
+          "produced_unit_id": 28,
+          "produced_unit_name": "GreenElf",
+          "primary_cost": 400,
+          "secondary_cost": 0,
+          "population_cost": 3,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_116_029",
+          "producer_slot": 50,
+          "producer_unit_id": 116,
+          "producer_unit_name": "RedHall",
+          "produced_unit_id": 29,
+          "produced_unit_name": "DarkElf",
+          "primary_cost": 400,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_117_018",
+          "producer_slot": 51,
+          "producer_unit_id": 117,
+          "producer_unit_name": "BlueHall",
+          "produced_unit_id": 18,
+          "produced_unit_name": "WhiteElf",
+          "primary_cost": 400,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_117_019",
+          "producer_slot": 40,
+          "producer_unit_id": 117,
+          "producer_unit_name": "BlueHall",
+          "produced_unit_id": 19,
+          "produced_unit_name": "Ranger",
+          "primary_cost": 200,
+          "secondary_cost": 0,
+          "population_cost": 1,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_117_020",
+          "producer_slot": 39,
+          "producer_unit_id": 117,
+          "producer_unit_name": "BlueHall",
+          "produced_unit_id": 20,
+          "produced_unit_name": "BlueElf",
+          "primary_cost": 400,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_118_021",
+          "producer_slot": 38,
+          "producer_unit_id": 118,
+          "producer_unit_name": "ManaHall",
+          "produced_unit_id": 21,
+          "produced_unit_name": "Unicorn",
+          "primary_cost": 300,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_118_022",
+          "producer_slot": 43,
+          "producer_unit_id": 118,
+          "producer_unit_name": "ManaHall",
+          "produced_unit_id": 22,
+          "produced_unit_name": "Pixie",
+          "primary_cost": 250,
+          "secondary_cost": 0,
+          "population_cost": 1,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_118_023",
+          "producer_slot": 42,
+          "producer_unit_id": 118,
+          "producer_unit_name": "ManaHall",
+          "produced_unit_id": 23,
+          "produced_unit_name": "ManaSpread",
+          "primary_cost": 400,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        }
+      ],
+      "prerequisite_unit_ids": [
+        120,
+        124
+      ],
+      "population_support_count": 1
+    },
+    {
+      "batch_index": 3,
+      "map": "RankerOCPV_Win/Maps/(2) GP Unit Production B03.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Unit Production B03.ply",
+      "replay_sha256": "5AB218E87730582D73479552F2B73AA49E1A3DEAE05DD087DCE07E916B577CE3",
+      "cases": [
+        {
+          "case_id": "unit_production_119_024",
+          "producer_slot": 52,
+          "producer_unit_id": 119,
+          "producer_unit_name": "SkyHall",
+          "produced_unit_id": 24,
+          "produced_unit_name": "ElfRing",
+          "primary_cost": 400,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_119_025",
+          "producer_slot": 50,
+          "producer_unit_id": 119,
+          "producer_unit_name": "SkyHall",
+          "produced_unit_id": 25,
+          "produced_unit_name": "Dragon",
+          "primary_cost": 800,
+          "secondary_cost": 0,
+          "population_cost": 5,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_119_026",
+          "producer_slot": 51,
+          "producer_unit_id": 119,
+          "producer_unit_name": "SkyHall",
+          "produced_unit_id": 26,
+          "produced_unit_name": "phoenix",
+          "primary_cost": 350,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_123_010",
+          "producer_slot": 40,
+          "producer_unit_id": 123,
+          "producer_unit_name": "GreenHall",
+          "produced_unit_id": 10,
+          "produced_unit_name": "PowerMan (Shield of Peace)",
+          "primary_cost": 250,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_123_011",
+          "producer_slot": 39,
+          "producer_unit_id": 123,
+          "producer_unit_name": "GreenHall",
+          "produced_unit_id": 11,
+          "produced_unit_name": "Soldier (Fire Arrow)",
+          "primary_cost": 300,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_123_012",
+          "producer_slot": 38,
+          "producer_unit_id": 123,
+          "producer_unit_name": "GreenHall",
+          "produced_unit_id": 12,
+          "produced_unit_name": "Soldier (Venom Arrow)",
+          "primary_cost": 300,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_123_013",
+          "producer_slot": 43,
+          "producer_unit_id": 123,
+          "producer_unit_name": "GreenHall",
+          "produced_unit_id": 13,
+          "produced_unit_name": "Knight (Spear of Justice)",
+          "primary_cost": 800,
+          "secondary_cost": 0,
+          "population_cost": 4,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_123_035",
+          "producer_slot": 42,
+          "producer_unit_id": 123,
+          "producer_unit_name": "GreenHall",
+          "produced_unit_id": 35,
+          "produced_unit_name": "TwinVelocis",
+          "primary_cost": 300,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        }
+      ],
+      "prerequisite_unit_ids": [
+        103,
+        133
+      ],
+      "population_support_count": 2
+    },
+    {
+      "batch_index": 4,
+      "map": "RankerOCPV_Win/Maps/(2) GP Unit Production B04.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Unit Production B04.ply",
+      "replay_sha256": "4113AB8DAECBECFE153CC7A1B5FD9B0A3E96D19B3CB12AD84B696B8EF9F314D6",
+      "cases": [
+        {
+          "case_id": "unit_production_123_038",
+          "producer_slot": 52,
+          "producer_unit_id": 123,
+          "producer_unit_name": "GreenHall",
+          "produced_unit_id": 38,
+          "produced_unit_name": "TwinRhamphos",
+          "primary_cost": 0,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_123_043",
+          "producer_slot": 50,
+          "producer_unit_id": 123,
+          "producer_unit_name": "GreenHall",
+          "produced_unit_id": 43,
+          "produced_unit_name": "Mutant",
+          "primary_cost": 1500,
+          "secondary_cost": 0,
+          "population_cost": 8,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_123_045",
+          "producer_slot": 51,
+          "producer_unit_id": 123,
+          "producer_unit_name": "GreenHall",
+          "produced_unit_id": 45,
+          "produced_unit_name": "TwinPteras",
+          "primary_cost": 800,
+          "secondary_cost": 0,
+          "population_cost": 4,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_123_061",
+          "producer_slot": 40,
+          "producer_unit_id": 123,
+          "producer_unit_name": "GreenHall",
+          "produced_unit_id": 61,
+          "produced_unit_name": "Imp",
+          "primary_cost": 0,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_123_087",
+          "producer_slot": 39,
+          "producer_unit_id": 123,
+          "producer_unit_name": "GreenHall",
+          "produced_unit_id": 87,
+          "produced_unit_name": "Nashka",
+          "primary_cost": 150,
+          "secondary_cost": 0,
+          "population_cost": 1,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_123_091",
+          "producer_slot": 38,
+          "producer_unit_id": 123,
+          "producer_unit_name": "GreenHall",
+          "produced_unit_id": 91,
+          "produced_unit_name": "Silvan_item",
+          "primary_cost": 500,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_123_093",
+          "producer_slot": 43,
+          "producer_unit_id": 123,
+          "producer_unit_name": "GreenHall",
+          "produced_unit_id": 93,
+          "produced_unit_name": "SkyBullet",
+          "primary_cost": 600,
+          "secondary_cost": 0,
+          "population_cost": 3,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_123_094",
+          "producer_slot": 42,
+          "producer_unit_id": 123,
+          "producer_unit_name": "GreenHall",
+          "produced_unit_id": 94,
+          "produced_unit_name": "Giant_item",
+          "primary_cost": 500,
+          "secondary_cost": 0,
+          "population_cost": 3,
+          "used_exact_row_template": true
+        }
+      ],
+      "prerequisite_unit_ids": [
+        104,
+        134,
+        138,
+        146
+      ],
+      "population_support_count": 2
+    },
+    {
+      "batch_index": 5,
+      "map": "RankerOCPV_Win/Maps/(2) GP Unit Production B05.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Unit Production B05.ply",
+      "replay_sha256": "1E1789DD9714D2A851075A0B1FB62826CD1C16B85147F59E73EFB7705972FC33",
+      "cases": [
+        {
+          "case_id": "unit_production_123_095",
+          "producer_slot": 52,
+          "producer_unit_id": 123,
+          "producer_unit_name": "GreenHall",
+          "produced_unit_id": 95,
+          "produced_unit_name": "DoubleBow_item",
+          "primary_cost": 700,
+          "secondary_cost": 0,
+          "population_cost": 4,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_128_032",
+          "producer_slot": 50,
+          "producer_unit_id": 128,
+          "producer_unit_name": "TyranoNest",
+          "produced_unit_id": 32,
+          "produced_unit_name": "Dinos",
+          "primary_cost": 100,
+          "secondary_cost": 0,
+          "population_cost": 1,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_128_044",
+          "producer_slot": 51,
+          "producer_unit_id": 128,
+          "producer_unit_name": "TyranoNest",
+          "produced_unit_id": 44,
+          "produced_unit_name": "Tyranos",
+          "primary_cost": 5000,
+          "secondary_cost": 0,
+          "population_cost": 25,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_132_033",
+          "producer_slot": 40,
+          "producer_unit_id": 132,
+          "producer_unit_name": "EggNest",
+          "produced_unit_id": 33,
+          "produced_unit_name": "Masos",
+          "primary_cost": 100,
+          "secondary_cost": 0,
+          "population_cost": 1,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_132_034",
+          "producer_slot": 39,
+          "producer_unit_id": 132,
+          "producer_unit_name": "EggNest",
+          "produced_unit_id": 34,
+          "produced_unit_name": "Velocis",
+          "primary_cost": 250,
+          "secondary_cost": 0,
+          "population_cost": 1,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_132_036",
+          "producer_slot": 38,
+          "producer_unit_id": 132,
+          "producer_unit_name": "EggNest",
+          "produced_unit_id": 36,
+          "produced_unit_name": "Dilophos",
+          "primary_cost": 250,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_132_037",
+          "producer_slot": 43,
+          "producer_unit_id": 132,
+          "producer_unit_name": "EggNest",
+          "produced_unit_id": 37,
+          "produced_unit_name": "Rhamphos",
+          "primary_cost": 300,
+          "secondary_cost": 0,
+          "population_cost": 1,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_132_039",
+          "producer_slot": 42,
+          "producer_unit_id": 132,
+          "producer_unit_name": "EggNest",
+          "produced_unit_id": 39,
+          "produced_unit_name": "Pteras",
+          "primary_cost": 450,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        }
+      ],
+      "prerequisite_unit_ids": [
+        133,
+        134,
+        136,
+        137,
+        138
+      ],
+      "population_support_count": 1
+    },
+    {
+      "batch_index": 6,
+      "map": "RankerOCPV_Win/Maps/(2) GP Unit Production B06.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Unit Production B06.ply",
+      "replay_sha256": "021FE11046D714C673DB0F65FE4211F16B76DD006AD788F77E940E81B19DB91A",
+      "cases": [
+        {
+          "case_id": "unit_production_132_040",
+          "producer_slot": 52,
+          "producer_unit_id": 132,
+          "producer_unit_name": "EggNest",
+          "produced_unit_id": 40,
+          "produced_unit_name": "Trices",
+          "primary_cost": 800,
+          "secondary_cost": 0,
+          "population_cost": 4,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_132_046",
+          "producer_slot": 50,
+          "producer_unit_id": 132,
+          "producer_unit_name": "EggNest",
+          "produced_unit_id": 46,
+          "produced_unit_name": "Kentros",
+          "primary_cost": 600,
+          "secondary_cost": 0,
+          "population_cost": 3,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_135_041",
+          "producer_slot": 51,
+          "producer_unit_id": 135,
+          "producer_unit_name": "ThrowNest",
+          "produced_unit_id": 41,
+          "produced_unit_name": "Dsunguri",
+          "primary_cost": 400,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_135_042",
+          "producer_slot": 40,
+          "producer_unit_id": 135,
+          "producer_unit_name": "ThrowNest",
+          "produced_unit_id": 42,
+          "produced_unit_name": "EggThrower",
+          "primary_cost": 600,
+          "secondary_cost": 0,
+          "population_cost": 4,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_144_048",
+          "producer_slot": 39,
+          "producer_unit_id": 144,
+          "producer_unit_name": "DemonDen",
+          "produced_unit_id": 48,
+          "produced_unit_name": "Insect",
+          "primary_cost": 100,
+          "secondary_cost": 0,
+          "population_cost": 1,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_144_058",
+          "producer_slot": 38,
+          "producer_unit_id": 144,
+          "producer_unit_name": "DemonDen",
+          "produced_unit_id": 58,
+          "produced_unit_name": "Devil",
+          "primary_cost": 5000,
+          "secondary_cost": 0,
+          "population_cost": 25,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_148_049",
+          "producer_slot": 43,
+          "producer_unit_id": 148,
+          "producer_unit_name": "DeathDen",
+          "produced_unit_id": 49,
+          "produced_unit_name": "Skeleton",
+          "primary_cost": 150,
+          "secondary_cost": 0,
+          "population_cost": 1,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_148_050",
+          "producer_slot": 42,
+          "producer_unit_id": 148,
+          "producer_unit_name": "DeathDen",
+          "produced_unit_id": 50,
+          "produced_unit_name": "MudMan",
+          "primary_cost": 400,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        }
+      ],
+      "prerequisite_unit_ids": [
+        133,
+        134,
+        136,
+        137,
+        149,
+        152,
+        153,
+        155
+      ],
+      "population_support_count": 2
+    },
+    {
+      "batch_index": 7,
+      "map": "RankerOCPV_Win/Maps/(2) GP Unit Production B07.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Unit Production B07.ply",
+      "replay_sha256": "9719A865B86D000C6E16F814676035A8677A304E76A75BE4B2B35BC063E7BA5E",
+      "cases": [
+        {
+          "case_id": "unit_production_148_062",
+          "producer_slot": 52,
+          "producer_unit_id": 148,
+          "producer_unit_name": "DeathDen",
+          "produced_unit_id": 62,
+          "produced_unit_name": "FemmeFatale",
+          "primary_cost": 300,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_148_090",
+          "producer_slot": 50,
+          "producer_unit_id": 148,
+          "producer_unit_name": "DeathDen",
+          "produced_unit_id": 90,
+          "produced_unit_name": "BoneFighter",
+          "primary_cost": 300,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_150_054",
+          "producer_slot": 51,
+          "producer_unit_id": 150,
+          "producer_unit_name": "MagicDen",
+          "produced_unit_id": 54,
+          "produced_unit_name": "Kelpa",
+          "primary_cost": 400,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_150_055",
+          "producer_slot": 40,
+          "producer_unit_id": 150,
+          "producer_unit_name": "MagicDen",
+          "produced_unit_id": 55,
+          "produced_unit_name": "Warlock",
+          "primary_cost": 600,
+          "secondary_cost": 0,
+          "population_cost": 3,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_150_056",
+          "producer_slot": 39,
+          "producer_unit_id": 150,
+          "producer_unit_name": "MagicDen",
+          "produced_unit_id": 56,
+          "produced_unit_name": "KingDemon",
+          "primary_cost": 800,
+          "secondary_cost": 0,
+          "population_cost": 4,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_150_063",
+          "producer_slot": 38,
+          "producer_unit_id": 150,
+          "producer_unit_name": "MagicDen",
+          "produced_unit_id": 63,
+          "produced_unit_name": "Nightmare",
+          "primary_cost": 600,
+          "secondary_cost": 0,
+          "population_cost": 3,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_154_051",
+          "producer_slot": 43,
+          "producer_unit_id": 154,
+          "producer_unit_name": "FlyDen",
+          "produced_unit_id": 51,
+          "produced_unit_name": "DeathEye",
+          "primary_cost": 250,
+          "secondary_cost": 0,
+          "population_cost": 1,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_154_052",
+          "producer_slot": 42,
+          "producer_unit_id": 154,
+          "producer_unit_name": "FlyDen",
+          "produced_unit_id": 52,
+          "produced_unit_name": "Phantom",
+          "primary_cost": 500,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        }
+      ],
+      "prerequisite_unit_ids": [
+        149,
+        151,
+        152,
+        155
+      ],
+      "population_support_count": 1
+    },
+    {
+      "batch_index": 8,
+      "map": "RankerOCPV_Win/Maps/(2) GP Unit Production B08.trk",
+      "replay": "RankerOCPV_Win/Replays/(2) GP Unit Production B08.ply",
+      "replay_sha256": "9039A4F43E677C72C1D89378933A6506E1FB02C4CD78EA30E3E27F92DAD9B066",
+      "cases": [
+        {
+          "case_id": "unit_production_154_053",
+          "producer_slot": 52,
+          "producer_unit_id": 154,
+          "producer_unit_name": "FlyDen",
+          "produced_unit_id": 53,
+          "produced_unit_name": "Gargoyle",
+          "primary_cost": 600,
+          "secondary_cost": 0,
+          "population_cost": 4,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_154_057",
+          "producer_slot": 50,
+          "producer_unit_id": 154,
+          "producer_unit_name": "FlyDen",
+          "produced_unit_id": 57,
+          "produced_unit_name": "Darkbat",
+          "primary_cost": 350,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_164_083",
+          "producer_slot": 51,
+          "producer_unit_id": 164,
+          "producer_unit_name": "Alien4",
+          "produced_unit_id": 83,
+          "produced_unit_name": "Alien1",
+          "primary_cost": 0,
+          "secondary_cost": 0,
+          "population_cost": 2,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_164_084",
+          "producer_slot": 40,
+          "producer_unit_id": 164,
+          "producer_unit_name": "Alien4",
+          "produced_unit_id": 84,
+          "produced_unit_name": "Alien2",
+          "primary_cost": 0,
+          "secondary_cost": 0,
+          "population_cost": 4,
+          "used_exact_row_template": true
+        },
+        {
+          "case_id": "unit_production_164_085",
+          "producer_slot": 39,
+          "producer_unit_id": 164,
+          "producer_unit_name": "Alien4",
+          "produced_unit_id": 85,
+          "produced_unit_name": "Alien3",
+          "primary_cost": 0,
+          "secondary_cost": 0,
+          "population_cost": 4,
+          "used_exact_row_template": true
+        }
+      ],
+      "prerequisite_unit_ids": [
+        149,
+        153
+      ],
+      "population_support_count": 2
+    }
+  ]
+}

@@ -756,6 +756,8 @@ int main() {
         << offsetof(UnitMovementDefinition, passive_recovery_flags)
         << ",\"definition_passive_map_effect_seed\":"
         << offsetof(UnitMovementDefinition, passive_map_effect_seed)
+        << ",\"definition_effect_adjusted_interaction_range_base\":"
+        << offsetof(UnitMovementDefinition, effect_adjusted_interaction_range_base)
         << ",\"definition_production_spawn_time\":"
         << offsetof(UnitMovementDefinition, production_spawn_time)
         << ",\"definition_footprint_width\":"

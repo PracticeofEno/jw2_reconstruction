@@ -1,0 +1,96 @@
+{
+  "schema": 1,
+  "pass": true,
+  "current_rebuild_sha256": "A22E3DD14B5BE706BD7381BD449BAFF206D1E1F5812DF0BDDF7BCCABAE0B7AF2",
+  "expected_case_count": 21369,
+  "recorded_case_count": 21369,
+  "suites": {
+    "area_toggle": {
+      "exact": 73,
+      "expected": 73
+    },
+    "attack_bindings": {
+      "exact": 133,
+      "not_player_reachable": 33,
+      "expected": 166
+    },
+    "attack_target_classes": {
+      "exact": 435,
+      "expected": 435
+    },
+    "construction": {
+      "exact": 52,
+      "expected": 52
+    },
+    "definition_group": {
+      "exact": 180,
+      "expected": 180
+    },
+    "direct_commands": {
+      "exact": 964,
+      "expected": 964
+    },
+    "equipment_apply": {
+      "exact": 8499,
+      "expected": 8499
+    },
+    "equipment_toggle": {
+      "exact": 9924,
+      "expected": 9924
+    },
+    "guard_idle": {
+      "exact": 101,
+      "expected": 101
+    },
+    "harvest": {
+      "exact": 4,
+      "expected": 4
+    },
+    "linked_release": {
+      "exact": 4,
+      "expected": 4
+    },
+    "morph_cycle": {
+      "exact": 5,
+      "expected": 5
+    },
+    "move_patrol": {
+      "exact": 91,
+      "expected": 91
+    },
+    "primary_point_action": {
+      "exact": 66,
+      "expected": 66
+    },
+    "production_order_cancel": {
+      "exact": 188,
+      "expected": 188
+    },
+    "production_orders": {
+      "exact": 54,
+      "expected": 54
+    },
+    "secondary_commands": {
+      "exact": 54,
+      "expected": 54
+    },
+    "skills": {
+      "exact": 29,
+      "expected": 29
+    },
+    "transport_cycle": {
+      "exact": 192,
+      "expected": 192
+    },
+    "transport_unload": {
+      "exact": 212,
+      "not_player_reachable": 7,
+      "expected": 219
+    },
+    "unit_production": {
+      "exact": 69,
+      "expected": 69
+    }
+  },
+  "errors": []
+}

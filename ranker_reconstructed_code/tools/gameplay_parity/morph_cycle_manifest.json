@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "enter_frame": 31,
+  "exit_frame": 55,
+  "end_frame": 90,
+  "map": "RankerOCPV_Win/Maps/(2) GP Morph Cycle.trk",
+  "replay": "RankerOCPV_Win/Replays/(2) GP Morph Cycle.ply",
+  "replay_sha256": "F23B5F0C5E2BC895B1964BE8B59D96175522F284E5E0147FBD99F3B69C78E52A",
+  "cases": [
+    {
+      "case_id": "morph_034_069",
+      "unit_slot": 52,
+      "source_unit_id": 34,
+      "source_unit_name": "Velocis",
+      "morph_unit_id": 69,
+      "morph_unit_name": "Velociraptor"
+    },
+    {
+      "case_id": "morph_036_068",
+      "unit_slot": 50,
+      "source_unit_id": 36,
+      "source_unit_name": "Dilophos",
+      "morph_unit_id": 68,
+      "morph_unit_name": "Dilophosaurus"
+    },
+    {
+      "case_id": "morph_037_078",
+      "unit_slot": 51,
+      "source_unit_id": 37,
+      "source_unit_name": "Rhamphos",
+      "morph_unit_id": 78,
+      "morph_unit_name": "Rhamphorhynchus"
+    },
+    {
+      "case_id": "morph_039_077",
+      "unit_slot": 40,
+      "source_unit_id": 39,
+      "source_unit_name": "Pteras",
+      "morph_unit_id": 77,
+      "morph_unit_name": "Pteranodon"
+    },
+    {
+      "case_id": "morph_046_071",
+      "unit_slot": 39,
+      "source_unit_id": 46,
+      "source_unit_name": "Kentros",
+      "morph_unit_id": 71,
+      "morph_unit_name": "Stegosaurus"
+    }
+  ]
+}

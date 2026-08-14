@@ -10,7 +10,8 @@ param(
     [string]$RebuildExecutable = 'RankerOCPV_Win\ranker_rebuild.exe',
     [int]$TimeoutSeconds = 600,
     [string]$AuditScript = 'compare_process_state.py',
-    [int]$TraceIntervalMs = 100
+    [int]$TraceIntervalMs = 100,
+    [string]$TemporaryReplayName = 'DebugReplay_Audit.ply'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -39,7 +40,11 @@ if (-not $source.StartsWith(
         $replayPrefix, [StringComparison]::OrdinalIgnoreCase)) {
     throw "Replay source escaped RankerOCPV_Win/Replays: $source"
 }
-$temporaryReplay = Join-Path $replayRoot 'DebugReplay_Audit.ply'
+if ([IO.Path]::GetFileName($TemporaryReplayName) -ne $TemporaryReplayName -or
+    [IO.Path]::GetExtension($TemporaryReplayName) -ine '.ply') {
+    throw "TemporaryReplayName must be a replay basename ending in .ply: $TemporaryReplayName"
+}
+$temporaryReplay = Join-Path $replayRoot $TemporaryReplayName
 Copy-Item -LiteralPath $source -Destination $temporaryReplay -Force
 
 $layoutPath = if ($LayoutPath) {
@@ -61,7 +66,7 @@ $drivers = @()
 $audit = $null
 try {
     $launchText = & (Join-Path $toolDirectory 'launch_replay_pair.ps1') `
-        -ReplayName 'DebugReplay_Audit.ply' `
+        -ReplayName $TemporaryReplayName `
         -RepositoryRoot $repositoryRoot `
         -OriginalExecutable $OriginalExecutable `
         -RebuildExecutable $RebuildExecutable `

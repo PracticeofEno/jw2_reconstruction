@@ -48,13 +48,23 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $ninjaPath = Join-Path $build 'build.ninja'
-$linkLine = Select-String -LiteralPath $ninjaPath `
-    -Pattern '^build ranker_rebuild\.exe:' |
-    Select-Object -First 1 -ExpandProperty Line
-if (-not $linkLine) {
-    throw "ranker_rebuild.exe link rule was not found in $ninjaPath."
+$objectList = if (Test-Path -LiteralPath $ninjaPath) {
+    $linkLine = Select-String -LiteralPath $ninjaPath `
+        -Pattern '^build ranker_rebuild\.exe:' |
+        Select-Object -First 1 -ExpandProperty Line
+    if (-not $linkLine) {
+        throw "ranker_rebuild.exe link rule was not found in $ninjaPath."
+    }
+    $linkLine
+} else {
+    $makeObjectsPath = Join-Path $build `
+        'CMakeFiles\ranker_rebuild.dir\objects1.rsp'
+    if (-not (Test-Path -LiteralPath $makeObjectsPath)) {
+        throw "Neither Ninja nor Makefile target objects were found in $build."
+    }
+    Get-Content -LiteralPath $makeObjectsPath -Raw
 }
-$objects = [regex]::Matches($linkLine, '[^\s]+\.obj') |
+$objects = [regex]::Matches($objectList, '[^\s]+\.obj') |
     ForEach-Object { $_.Value } |
     Where-Object {
         $_ -notmatch '(^|/)(resources|src/(main|ranker_winmain)\.cpp\.obj$)'

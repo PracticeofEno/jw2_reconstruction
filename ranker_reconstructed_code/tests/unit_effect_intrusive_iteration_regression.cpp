@@ -905,13 +905,15 @@ void test_follow_command_preserves_zeroed_free_pool_target() {
         "selector-0x04 discarded its zeroed free-pool wire target");
 
     // State 0x14 immediately dispatches the follow start in the same runtime
-    // tick.  With no movement context the original still enters 0x16 because
-    // the free slot has type zero and no raw 0x84 runtime bits.
+    // tick.  Original 0x004c9840 writes 0x16 and jumps to 0x004c987f; at zero
+    // distance that handler reaches 0x004c990e and finishes in hold state
+    // 0x17.  The free slot remains a valid target because its type is zero
+    // and its raw +0xa0 flags do not contain 0x84.
     context.movement = nullptr;
     ProcessUnitFollowTargetStart(context, follower);
     require(follower.target == &target &&
-            follower.command_state == kUnitStateFollowMovingTarget,
-        "follow start rejected a free-pool target allowed by raw flags");
+            follower.command_state == kUnitStateFollowHoldRange,
+        "follow start did not retain the zero-distance free-pool target");
 }
 
 void test_target_progress_uses_zeroed_free_pool_target_definition() {
@@ -1009,9 +1011,12 @@ void test_spawn_cycle_pops_dead_misaligned_raw_pool_alias() {
 
     HandleUnitSpawnCreateCycle(context, builder);
 
+    // Original 0x004cb77f takes the bit-4 branch to the shared pop at
+    // 0x004cb852.  The no-queue tail at 0x004cfdd0 clears raw +0x9c and
+    // enters idle but deliberately leaves the raw +0x68 alias residue.
     require(builder.command_state == kUnitStateRuntimeIdleAcquire &&
-            builder.command_value == 0,
-        "state-0x5b ignored bit 4 in the unaligned raw +0xa0 alias");
+            builder.command_value == 116,
+        "state-0x5b did not pop while preserving the raw alias residue");
 }
 
 UnitMovementUnit g_persistent_spawn_alias;
