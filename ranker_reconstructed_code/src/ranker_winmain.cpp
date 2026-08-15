@@ -13385,11 +13385,29 @@ bool default_defer_startup_unit_definition_catalog(FrontendBootstrapState& state
     return true;
 }
 
+void default_play_frontend_intro_sequence(FrontendBootstrapState&) {
+    HandleJw208IntroVideoSequence(g_runtime.main_window);
+    const BinkVideoRuntimeState& bink = bink_video_state();
+    append_startup_log(
+        "frontend intro playback archive=%s record=%lu api=%s mf=%s failed=%s stage=%lu event=%lu resource=%lu window=%s hr=0x%08lx",
+        bink.archive_name.c_str(),
+        static_cast<unsigned long>(bink.record_index),
+        bink.bink_api_ready ? "yes" : "no",
+        bink.played_with_media_foundation ? "yes" : "no",
+        bink.failed ? "yes" : "no",
+        static_cast<unsigned long>(bink.media_foundation_stage),
+        static_cast<unsigned long>(bink.media_foundation_event_type),
+        static_cast<unsigned long>(bink.media_foundation_resource_id),
+        bink.media_foundation_window_valid ? "yes" : "no",
+        static_cast<unsigned long>(bink.media_foundation_result));
+}
+
 void default_gameplay_loop_initialize_worker_runtime(GameplayLoopState&) {
     FrontendBootstrapState& bootstrap = frontend_bootstrap_state();
     FrontendBootstrapCallbacks callbacks{};
     callbacks.load_unit_definition_catalog =
         default_defer_startup_unit_definition_catalog;
+    callbacks.play_intro_sequence = default_play_frontend_intro_sequence;
     append_startup_log("frontend bootstrap begin");
     if (!RunFrontendStartupBootstrap(frontend_startup_state(), bootstrap, callbacks)) {
         append_startup_log("frontend bootstrap failed stage=%lu",
@@ -30841,7 +30859,7 @@ constexpr std::size_t kTitleMenuScreenSlot = 14;
 constexpr u32 kTitleMenuRecord = 94;
 constexpr u32 kTitleMenuSingleEntry = 1;
 constexpr u32 kTitleMenuMultiEntry = 2;
-constexpr u32 kTitleMenuReplayEntry = 3;
+constexpr u32 kTitleMenuOpeningEntry = 3;
 constexpr u32 kTitleMenuCreditEntry = 4;
 constexpr u32 kTitleMenuQuitEntry = 5;
 constexpr u32 kTitleMenuFirstButtonEntry = kTitleMenuSingleEntry;
@@ -31055,8 +31073,8 @@ const char* title_menu_entry_name(u32 entry_index) {
         return "single";
     case kTitleMenuMultiEntry:
         return "multi";
-    case kTitleMenuReplayEntry:
-        return "replay";
+    case kTitleMenuOpeningEntry:
+        return "opening";
     case kTitleMenuCreditEntry:
         return "credit";
     case kTitleMenuQuitEntry:
@@ -31064,69 +31082,6 @@ const char* title_menu_entry_name(u32 entry_index) {
     default:
         return "unknown";
     }
-}
-
-bool read_bink_dll_machine_type(u16& machine) {
-    FILE* file = nullptr;
-#if defined(_MSC_VER)
-    if (fopen_s(&file, "binkw32.dll", "rb") != 0) {
-        file = nullptr;
-    }
-#else
-    file = std::fopen("binkw32.dll", "rb");
-#endif
-    if (file == nullptr) {
-        return false;
-    }
-
-    u8 dos_header[0x40]{};
-    const bool dos_ok = std::fread(dos_header, 1, sizeof(dos_header), file) ==
-        sizeof(dos_header);
-    if (!dos_ok || dos_header[0] != 'M' || dos_header[1] != 'Z') {
-        std::fclose(file);
-        return false;
-    }
-
-    const u32 pe_offset =
-        static_cast<u32>(dos_header[0x3c]) |
-        (static_cast<u32>(dos_header[0x3d]) << 8) |
-        (static_cast<u32>(dos_header[0x3e]) << 16) |
-        (static_cast<u32>(dos_header[0x3f]) << 24);
-    if (std::fseek(file, static_cast<long>(pe_offset), SEEK_SET) != 0) {
-        std::fclose(file);
-        return false;
-    }
-
-    u8 pe_header[6]{};
-    const bool pe_ok = std::fread(pe_header, 1, sizeof(pe_header), file) ==
-        sizeof(pe_header);
-    std::fclose(file);
-    if (!pe_ok || pe_header[0] != 'P' || pe_header[1] != 'E' ||
-        pe_header[2] != 0 || pe_header[3] != 0) {
-        return false;
-    }
-
-    machine = static_cast<u16>(pe_header[4] | (static_cast<u16>(pe_header[5]) << 8));
-    return true;
-}
-
-bool title_credit_bink_runtime_compatible() {
-    u16 machine = 0;
-    if (!read_bink_dll_machine_type(machine)) {
-        append_startup_log("title credit bink skipped missing-or-invalid-dll");
-        return false;
-    }
-
-#if defined(_WIN64)
-    const bool compatible = machine == IMAGE_FILE_MACHINE_AMD64;
-#else
-    const bool compatible = machine == IMAGE_FILE_MACHINE_I386;
-#endif
-    if (!compatible) {
-        append_startup_log("title credit bink skipped incompatible-dll machine=0x%04x",
-            static_cast<unsigned>(machine));
-    }
-    return compatible;
 }
 
 i32 title_menu_button_state_for_pointer(const UiScreenDefinition& screen, u32 entry_index,
@@ -31189,34 +31144,37 @@ bool route_title_main_menu_entry(HWND window, u32 entry_index) {
         pause_worker_for_modal_action();
         OpenMultiplayerFrontendForActiveMode(window);
         return true;
-    case kTitleMenuReplayEntry:
+    case kTitleMenuOpeningEntry:
         close_title_main_menu_frontend();
         pause_worker_for_modal_action();
-        open_replay_load_dialog(window);
+        HandleJw208IntroVideoSequence(window);
+        if (bink_video_state().failed) {
+            const BinkVideoRuntimeState& bink = bink_video_state();
+            append_startup_log(
+                "title opening playback failed record=%lu api=%s mf=%s payload=%lu frames=%lu hr=0x%08lx",
+                static_cast<unsigned long>(bink.record_index),
+                bink.bink_api_ready ? "yes" : "no",
+                bink.played_with_media_foundation ? "yes" : "no",
+                static_cast<unsigned long>(bink.payload_bytes),
+                static_cast<unsigned long>(bink.frame_count),
+                static_cast<unsigned long>(bink.media_foundation_result));
+        }
+        resume_worker_after_modal_action();
+        open_title_main_menu_frontend(window);
         return true;
     case kTitleMenuCreditEntry:
         close_title_main_menu_frontend();
         pause_worker_for_modal_action();
-        {
-            const bool bink_compatible = title_credit_bink_runtime_compatible();
-            if (bink_compatible) {
-                SetPrimaryMilesMusicPolicyMode(1);
-            }
-            const bool played_credit = bink_compatible &&
-                PlayBinkTrcRecord("JW2_08.TRC", 3, -1, -1);
-            if (played_credit) {
-                HandleBackBufferFadeToBlack();
-                HandleDirectDrawFrameBoundary();
-            }
-            else if (bink_video_state().payload_bytes != 0) {
-                const BinkVideoRuntimeState& bink = bink_video_state();
-                append_startup_log(
-                    "title credit bink skipped api=%s failed=%s payload=%lu frames=%lu",
-                    bink.bink_api_ready ? "yes" : "no",
-                    bink.failed ? "yes" : "no",
-                    static_cast<unsigned long>(bink.payload_bytes),
-                    static_cast<unsigned long>(bink.frame_count));
-            }
+        HandleJw208Record3VideoTransition(window);
+        if (bink_video_state().failed) {
+            const BinkVideoRuntimeState& bink = bink_video_state();
+            append_startup_log(
+                "title credit playback failed api=%s mf=%s payload=%lu frames=%lu hr=0x%08lx",
+                bink.bink_api_ready ? "yes" : "no",
+                bink.played_with_media_foundation ? "yes" : "no",
+                static_cast<unsigned long>(bink.payload_bytes),
+                static_cast<unsigned long>(bink.frame_count),
+                static_cast<unsigned long>(bink.media_foundation_result));
         }
         resume_worker_after_modal_action();
         open_title_main_menu_frontend(window);
@@ -31528,7 +31486,13 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
         window, message, lparam);
     if (HandleWindowInputMessage(message, static_cast<u32>(wparam),
             static_cast<u32>(input_lparam))) {
-        if (g_runtime.suppress_paint && bink_video_state().active) {
+        const bool deliberate_bink_skip =
+            message == WM_KEYDOWN || message == WM_SYSKEYDOWN ||
+            message == WM_LBUTTONDOWN || message == WM_LBUTTONDBLCLK ||
+            message == WM_RBUTTONDOWN || message == WM_RBUTTONDBLCLK ||
+            message == WM_MBUTTONDOWN || message == WM_MBUTTONDBLCLK;
+        if (g_runtime.suppress_paint && bink_video_state().active &&
+            deliberate_bink_skip) {
             CancelBinkVideoPlayback();
         }
         if (handle_title_main_menu_input(window, message, wparam, input_lparam)) {

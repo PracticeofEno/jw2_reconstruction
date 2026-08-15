@@ -25,6 +25,7 @@ struct SpriteRenderTarget;
 struct TrcRecordReader;
 
 struct DirectDrawRuntimeState {
+    HWND presentation_window = nullptr;
     LPDIRECTDRAW7 direct_draw = nullptr;
     LPDIRECTDRAWSURFACE7 primary_surface = nullptr;
     LPDIRECTDRAWSURFACE7 back_surface = nullptr;
@@ -91,6 +92,11 @@ struct BinkVideoRuntimeState {
     u32 surface_type = 0;
     u32 fade_steps = 0;
     u32 surface_clear_count = 0;
+    u32 media_foundation_stage = 0;
+    u32 media_foundation_event_type = 0xffffffffu;
+    u32 media_foundation_resource_id = 0;
+    bool media_foundation_window_valid = false;
+    HRESULT media_foundation_result = S_OK;
     bool centered = false;
     bool active = false;
     bool completed = false;
@@ -99,6 +105,7 @@ struct BinkVideoRuntimeState {
     bool bink_api_ready = false;
     bool played_with_bink = false;
     bool played_with_callback = false;
+    bool played_with_media_foundation = false;
     bool frame_surface_configured = false;
 };
 

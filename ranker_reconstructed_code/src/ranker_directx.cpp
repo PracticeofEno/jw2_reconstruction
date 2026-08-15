@@ -9,12 +9,19 @@
 #ifdef _WIN32
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <cmath>
 #include <cstring>
+#include <cwchar>
 #include <initializer_list>
 #include <limits>
+#include <new>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include <mfapi.h>
+#include <mfplay.h>
 
 namespace ranker {
 namespace {
@@ -33,6 +40,13 @@ constexpr DWORD kOriginalDirectSoundLockFlags = 1;
 constexpr u32 kBinkOpenFromFileHandle = 0x00800000u;
 constexpr u32 kBinkOpenFromMemory = 0x04000000u;
 constexpr u32 kBinkCopyDirectDrawFlags = 0x00080000u;
+constexpr WORD kJw208FallbackResourceBase = 2010;
+constexpr DWORD kEmbeddedVideoWaitMilliseconds = 10;
+constexpr DWORD kEmbeddedVideoInputArmMilliseconds = 100;
+constexpr DWORD kEmbeddedVideoMaximumMilliseconds = 10u * 60u * 1000u;
+constexpr GUID kEmbeddedMediaPlayerCallbackIid{
+    0x766c8ffb, 0x5fdb, 0x4fea,
+    {0xa2, 0x8d, 0xb9, 0x12, 0x99, 0x6f, 0x51, 0xbd}};
 
 struct PcmWaveInfo {
     DWORD riff_total_bytes = 0;
@@ -56,6 +70,76 @@ struct BinkFileHeaderInfo {
     u32 height = 0;
     u32 frame_count = 0;
     u32 largest_frame_bytes = 0;
+};
+
+class EmbeddedMediaPlayerCallback final : public IMFPMediaPlayerCallback {
+public:
+    EmbeddedMediaPlayerCallback() : completed_event_(
+        CreateEventW(nullptr, TRUE, FALSE, nullptr)) {
+    }
+
+    ~EmbeddedMediaPlayerCallback() {
+        if (completed_event_ != nullptr) {
+            CloseHandle(completed_event_);
+        }
+    }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (object == nullptr) {
+            return E_POINTER;
+        }
+        if (iid == IID_IUnknown || iid == kEmbeddedMediaPlayerCallbackIid) {
+            *object = static_cast<IMFPMediaPlayerCallback*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+
+    ULONG STDMETHODCALLTYPE AddRef() override {
+        return static_cast<ULONG>(InterlockedIncrement(&reference_count_));
+    }
+
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG remaining =
+            static_cast<ULONG>(InterlockedDecrement(&reference_count_));
+        if (remaining == 0) {
+            delete this;
+        }
+        return remaining;
+    }
+
+    void STDMETHODCALLTYPE OnMediaPlayerEvent(MFP_EVENT_HEADER* event) override {
+        if (event == nullptr) {
+            result_.store(E_POINTER);
+            SetEvent(completed_event_);
+            return;
+        }
+        g_bink_video_state.media_foundation_event_type =
+            static_cast<u32>(event->eEventType);
+        if (FAILED(event->hrEvent)) {
+            result_.store(event->hrEvent);
+            SetEvent(completed_event_);
+            return;
+        }
+        if (event->eEventType == MFP_EVENT_TYPE_PLAYBACK_ENDED) {
+            SetEvent(completed_event_);
+        }
+    }
+
+    HANDLE completed_event() const {
+        return completed_event_;
+    }
+
+    HRESULT result() const {
+        return result_.load();
+    }
+
+private:
+    LONG reference_count_ = 1;
+    HANDLE completed_event_ = nullptr;
+    std::atomic<HRESULT> result_{S_OK};
 };
 
 void ensure_direct_sound_slots();
@@ -257,6 +341,413 @@ BinkApi& bink_api() {
         api = BinkApi{};
     }
     return api;
+}
+
+WORD embedded_jw208_resource_id(const BinkVideoRuntimeState& state) {
+    if (state.record_index > 3 || state.archive_name.empty()) {
+        return 0;
+    }
+
+    const std::size_t separator = state.archive_name.find_last_of("/\\");
+    const char* base_name = state.archive_name.c_str() +
+        (separator == std::string::npos ? 0 : separator + 1);
+    if (lstrcmpiA(base_name, "JW2_08.TRC") != 0) {
+        return 0;
+    }
+    return static_cast<WORD>(kJw208FallbackResourceBase + state.record_index);
+}
+
+bool write_embedded_jw208_video_to_temp_file(
+    WORD resource_id, std::wstring& temp_path) {
+    temp_path.clear();
+    HMODULE module = GetModuleHandleW(nullptr);
+    HRSRC resource = FindResourceW(module, MAKEINTRESOURCEW(resource_id),
+        MAKEINTRESOURCEW(10));
+    if (resource == nullptr) {
+        return false;
+    }
+    HGLOBAL loaded = LoadResource(module, resource);
+    const DWORD byte_count = SizeofResource(module, resource);
+    const void* bytes = loaded == nullptr ? nullptr : LockResource(loaded);
+    if (bytes == nullptr || byte_count == 0) {
+        return false;
+    }
+
+    wchar_t temp_directory[MAX_PATH]{};
+    const DWORD directory_length = GetTempPathW(MAX_PATH, temp_directory);
+    if (directory_length == 0 || directory_length >= MAX_PATH) {
+        return false;
+    }
+
+    static LONG serial = 0;
+    HANDLE file = INVALID_HANDLE_VALUE;
+    for (u32 attempt = 0; attempt < 32 && file == INVALID_HANDLE_VALUE; ++attempt) {
+        const LONG suffix = InterlockedIncrement(&serial);
+        wchar_t file_name[96]{};
+        std::swprintf(file_name, sizeof(file_name) / sizeof(file_name[0]),
+            L"ranker_jw208_%lu_%lu_%ld.mp4",
+            static_cast<unsigned long>(GetCurrentProcessId()),
+            static_cast<unsigned long>(GetCurrentThreadId()),
+            static_cast<long>(suffix));
+        temp_path.assign(temp_directory);
+        temp_path.append(file_name);
+        file = CreateFileW(temp_path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+            FILE_ATTRIBUTE_TEMPORARY, nullptr);
+    }
+    if (file == INVALID_HANDLE_VALUE) {
+        temp_path.clear();
+        return false;
+    }
+
+    DWORD written = 0;
+    const bool ok = WriteFile(file, bytes, byte_count, &written, nullptr) != FALSE &&
+        written == byte_count;
+    CloseHandle(file);
+    if (!ok) {
+        DeleteFileW(temp_path.c_str());
+        temp_path.clear();
+    }
+    return ok;
+}
+
+bool embedded_video_input_down() {
+    for (int key = 1; key < 0xff; ++key) {
+        if ((GetAsyncKeyState(key) & 0x8000) != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+float embedded_video_volume() {
+    const LONG direct_sound_volume = std::clamp<LONG>(
+        g_direct_sound_state.last_volume, DSBVOLUME_MIN, DSBVOLUME_MAX);
+    return std::pow(10.0f, static_cast<float>(direct_sound_volume) / 2000.0f);
+}
+
+float embedded_video_balance() {
+    const LONG direct_sound_pan = std::clamp<LONG>(
+        g_direct_sound_state.last_pan, DSBPAN_LEFT, DSBPAN_RIGHT);
+    return static_cast<float>(direct_sound_pan) / static_cast<float>(DSBPAN_RIGHT);
+}
+
+void dispatch_embedded_video_thread_messages() {
+    MSG message{};
+    while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE) != 0) {
+        if (message.message == WM_QUIT) {
+            PostQuitMessage(static_cast<int>(message.wParam));
+            return;
+        }
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+}
+
+void settle_embedded_video_skip_input() {
+    const DWORD deadline = GetTickCount() + 500;
+    while (embedded_video_input_down() &&
+        static_cast<i32>(deadline - GetTickCount()) > 0) {
+        dispatch_embedded_video_thread_messages();
+        Sleep(5);
+    }
+
+    MSG discarded{};
+    while (PeekMessageW(&discarded, nullptr, WM_KEYFIRST, WM_KEYLAST,
+        PM_REMOVE) != 0) {
+    }
+    while (PeekMessageW(&discarded, nullptr, WM_MOUSEFIRST, WM_MOUSELAST,
+        PM_REMOVE) != 0) {
+    }
+}
+
+BOOL CALLBACK find_current_process_window(HWND candidate, LPARAM parameter) {
+    DWORD process_id = 0;
+    GetWindowThreadProcessId(candidate, &process_id);
+    if (process_id != GetCurrentProcessId()) {
+        return TRUE;
+    }
+    *reinterpret_cast<HWND*>(parameter) = candidate;
+    return FALSE;
+}
+
+HWND resolve_embedded_video_window() {
+    HWND window = g_direct_draw_state.presentation_window;
+    if (window != nullptr && IsWindow(window)) {
+        return window;
+    }
+    window = FindWindowA("The Ranker", nullptr);
+    DWORD process_id = 0;
+    if (window != nullptr) {
+        GetWindowThreadProcessId(window, &process_id);
+        if (process_id == GetCurrentProcessId()) {
+            return window;
+        }
+    }
+    window = nullptr;
+    EnumWindows(find_current_process_window, reinterpret_cast<LPARAM>(&window));
+    return window;
+}
+
+struct EmbeddedVideoWindows {
+    HWND backdrop = nullptr;
+    HWND surface = nullptr;
+};
+
+bool resolve_embedded_video_bounds(HWND owner, RECT& rect) {
+    if (owner != nullptr && IsWindow(owner)) {
+        RECT client{};
+        if (GetClientRect(owner, &client)) {
+            POINT top_left{client.left, client.top};
+            POINT bottom_right{client.right, client.bottom};
+            if (ClientToScreen(owner, &top_left) &&
+                ClientToScreen(owner, &bottom_right) &&
+                bottom_right.x > top_left.x && bottom_right.y > top_left.y) {
+                rect = RECT{top_left.x, top_left.y, bottom_right.x, bottom_right.y};
+                return true;
+            }
+        }
+    }
+
+    rect = g_direct_draw_state.screen_rect;
+    if (rect.right > rect.left && rect.bottom > rect.top) {
+        return true;
+    }
+    rect = RECT{0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)};
+    return rect.right > rect.left && rect.bottom > rect.top;
+}
+
+RECT embedded_video_surface_rect(const BinkVideoRuntimeState& state,
+    LONG backdrop_width, LONG backdrop_height) {
+    const LONG logical_width = static_cast<LONG>(
+        g_direct_draw_state.width != 0 ? g_direct_draw_state.width : state.width);
+    const LONG logical_height = static_cast<LONG>(
+        g_direct_draw_state.height != 0 ? g_direct_draw_state.height : state.height);
+    if (logical_width <= 0 || logical_height <= 0 ||
+        state.width == 0 || state.height == 0) {
+        return RECT{0, 0, backdrop_width, backdrop_height};
+    }
+
+    LONG left = MulDiv(state.target_x, backdrop_width, logical_width);
+    LONG top = MulDiv(state.target_y, backdrop_height, logical_height);
+    LONG right = MulDiv(state.target_x + static_cast<LONG>(state.width),
+        backdrop_width, logical_width);
+    LONG bottom = MulDiv(state.target_y + static_cast<LONG>(state.height),
+        backdrop_height, logical_height);
+    left = std::clamp<LONG>(left, 0, backdrop_width - 1);
+    top = std::clamp<LONG>(top, 0, backdrop_height - 1);
+    right = std::clamp<LONG>(right, left + 1, backdrop_width);
+    bottom = std::clamp<LONG>(bottom, top + 1, backdrop_height);
+    return RECT{left, top, right, bottom};
+}
+
+EmbeddedVideoWindows create_embedded_video_windows(HWND owner,
+    const BinkVideoRuntimeState& state) {
+    EmbeddedVideoWindows windows{};
+    constexpr wchar_t kVideoWindowClass[] = L"RankerEmbeddedVideo";
+    HINSTANCE instance = GetModuleHandleW(nullptr);
+    WNDCLASSW window_class{};
+    if (GetClassInfoW(instance, kVideoWindowClass, &window_class) == 0) {
+        window_class.lpfnWndProc = DefWindowProcW;
+        window_class.hInstance = instance;
+        window_class.hCursor = nullptr;
+        window_class.hbrBackground =
+            reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+        window_class.lpszClassName = kVideoWindowClass;
+        if (RegisterClassW(&window_class) == 0 &&
+            GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+            return windows;
+        }
+    }
+
+    RECT rect{};
+    if (!resolve_embedded_video_bounds(owner, rect)) {
+        return windows;
+    }
+    const LONG width = rect.right - rect.left;
+    const LONG height = rect.bottom - rect.top;
+    windows.backdrop = CreateWindowExW(
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+        kVideoWindowClass, L"", WS_POPUP | WS_VISIBLE,
+        rect.left, rect.top, width, height,
+        nullptr, nullptr, instance, nullptr);
+    if (windows.backdrop == nullptr) {
+        return windows;
+    }
+
+    const RECT surface_rect = embedded_video_surface_rect(state, width, height);
+    windows.surface = CreateWindowExW(0, kVideoWindowClass, L"",
+        WS_CHILD | WS_VISIBLE, surface_rect.left, surface_rect.top,
+        surface_rect.right - surface_rect.left,
+        surface_rect.bottom - surface_rect.top,
+        windows.backdrop, nullptr, instance, nullptr);
+    if (windows.surface == nullptr) {
+        DestroyWindow(windows.backdrop);
+        windows.backdrop = nullptr;
+        return windows;
+    }
+
+    SetWindowPos(windows.backdrop, HWND_TOPMOST, rect.left, rect.top,
+        width, height, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+    UpdateWindow(windows.backdrop);
+    UpdateWindow(windows.surface);
+    return windows;
+}
+
+bool play_embedded_jw208_video(const BinkVideoRuntimeState& state) {
+    g_bink_video_state.media_foundation_stage = 1;
+    const WORD resource_id = embedded_jw208_resource_id(state);
+    if (resource_id == 0) {
+        g_bink_video_state.media_foundation_result = E_INVALIDARG;
+        return false;
+    }
+    HWND owner = resolve_embedded_video_window();
+    const EmbeddedVideoWindows windows =
+        create_embedded_video_windows(owner, state);
+    g_bink_video_state.media_foundation_resource_id = resource_id;
+    g_bink_video_state.media_foundation_window_valid =
+        windows.backdrop != nullptr && IsWindow(windows.backdrop) &&
+        windows.surface != nullptr && IsWindow(windows.surface);
+    if (!g_bink_video_state.media_foundation_window_valid) {
+        g_bink_video_state.media_foundation_result = HRESULT_FROM_WIN32(GetLastError());
+        if (windows.backdrop != nullptr) {
+            DestroyWindow(windows.backdrop);
+        }
+        return false;
+    }
+
+    std::wstring temp_path;
+    if (!write_embedded_jw208_video_to_temp_file(resource_id, temp_path)) {
+        g_bink_video_state.media_foundation_result = HRESULT_FROM_WIN32(GetLastError());
+        DestroyWindow(windows.backdrop);
+        return false;
+    }
+    g_bink_video_state.media_foundation_stage = 2;
+
+    const HRESULT com_result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool uninitialize_com = SUCCEEDED(com_result);
+    g_bink_video_state.media_foundation_stage = 3;
+    HRESULT result = MFStartup(MF_VERSION, MFSTARTUP_FULL);
+    const bool media_foundation_started = SUCCEEDED(result);
+    g_bink_video_state.media_foundation_stage = 4;
+
+    EmbeddedMediaPlayerCallback* callback = nullptr;
+    IMFPMediaPlayer* player = nullptr;
+    bool ok = false;
+    if (media_foundation_started) {
+        callback = new (std::nothrow) EmbeddedMediaPlayerCallback();
+        g_bink_video_state.media_foundation_stage = 5;
+        if (callback != nullptr && callback->completed_event() != nullptr) {
+            result = MFPCreateMediaPlayer(temp_path.c_str(), TRUE, MFP_OPTION_NONE,
+                callback, windows.surface, &player);
+            g_bink_video_state.media_foundation_stage = 6;
+        }
+        else {
+            result = E_OUTOFMEMORY;
+        }
+    }
+
+    if (SUCCEEDED(result) && player == nullptr) {
+        result = E_POINTER;
+    }
+
+    if (SUCCEEDED(result) && player != nullptr) {
+        player->SetBorderColor(RGB(0, 0, 0));
+        // The original copies each Bink frame into its native-sized rectangle
+        // on the logical DirectDraw surface.  The child window above is that
+        // exact rectangle after presentation scaling, so fill it without
+        // allowing MFPlay to reinterpret the movie's display aspect ratio.
+        player->SetAspectRatioMode(MFVideoARMode_None);
+        player->SetVolume(embedded_video_volume());
+        player->SetBalance(embedded_video_balance());
+        player->UpdateVideo();
+
+        const DWORD started_at = GetTickCount();
+        DWORD neutral_input_since = 0;
+        bool input_armed = false;
+        bool playback_finished = false;
+        while (!playback_finished) {
+            g_bink_video_state.media_foundation_stage = 7;
+            HANDLE completed_event = callback->completed_event();
+            const DWORD wait_result = MsgWaitForMultipleObjects(1, &completed_event,
+                FALSE, kEmbeddedVideoWaitMilliseconds, QS_ALLINPUT);
+            if (wait_result == WAIT_OBJECT_0) {
+                result = callback->result();
+                playback_finished = true;
+                continue;
+            }
+            if (wait_result == WAIT_OBJECT_0 + 1) {
+                MSG message{};
+                while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE) != 0) {
+                    if (message.message == WM_QUIT) {
+                        PostQuitMessage(static_cast<int>(message.wParam));
+                        result = E_ABORT;
+                        break;
+                    }
+                    TranslateMessage(&message);
+                    DispatchMessageW(&message);
+                }
+                if (FAILED(result)) {
+                    break;
+                }
+            }
+            if (wait_result == WAIT_FAILED || !IsWindow(windows.backdrop) ||
+                !IsWindow(windows.surface) ||
+                GetTickCount() - started_at > kEmbeddedVideoMaximumMilliseconds) {
+                result = E_FAIL;
+                break;
+            }
+
+            const bool input_down = embedded_video_input_down();
+            const DWORD now = GetTickCount();
+            if (!input_armed) {
+                if (input_down) {
+                    neutral_input_since = 0;
+                }
+                else if (neutral_input_since == 0) {
+                    neutral_input_since = now;
+                }
+                else if (now - neutral_input_since >=
+                    kEmbeddedVideoInputArmMilliseconds) {
+                    input_armed = true;
+                }
+            }
+            else if (input_down || g_bink_video_state.cancelled) {
+                g_bink_video_state.cancelled = true;
+                player->Stop();
+                ok = true;
+                break;
+            }
+        }
+        if (!ok) {
+            ok = playback_finished && SUCCEEDED(result);
+        }
+        if (ok && !g_bink_video_state.cancelled) {
+            g_bink_video_state.decoded_frames = g_bink_video_state.frame_count;
+        }
+        if (g_bink_video_state.cancelled) {
+            settle_embedded_video_skip_input();
+        }
+        player->Shutdown();
+        player->Release();
+    }
+
+    if (callback != nullptr) {
+        callback->Release();
+    }
+    if (media_foundation_started) {
+        MFShutdown();
+    }
+    if (uninitialize_com) {
+        CoUninitialize();
+    }
+    DestroyWindow(windows.backdrop);
+    if (owner != nullptr && IsWindow(owner)) {
+        SetForegroundWindow(owner);
+    }
+    DeleteFileW(temp_path.c_str());
+    g_bink_video_state.media_foundation_stage = 8;
+    g_bink_video_state.media_foundation_result = result;
+    return ok;
 }
 
 bool parse_bink_file_header(const std::vector<u8>& payload, BinkFileHeaderInfo& info) {
@@ -1139,6 +1630,7 @@ HRESULT configure_direct_draw_surfaces(HWND window, int width, int height, int c
     g_direct_draw_state.height = static_cast<u32>(height);
     g_direct_draw_state.color_depth = actual_color_depth;
     g_direct_draw_state.windowed = windowed;
+    g_direct_draw_state.presentation_window = window;
     g_direct_draw_state.active = true;
     ConfigureD3D9CubicPresentation(window, g_direct_draw_state.width,
         g_direct_draw_state.height, g_direct_draw_state.color_depth,
@@ -1195,6 +1687,7 @@ void ShutdownDirectDrawSubsystem(HWND window) {
     release_com(g_direct_draw_state.back_surface);
     release_com(g_direct_draw_state.primary_surface);
     g_direct_draw_state.active = false;
+    g_direct_draw_state.presentation_window = nullptr;
 }
 
 void RefreshDirectDrawPresentationRect(HWND window) {
@@ -2187,11 +2680,28 @@ bool PlayBinkTrcRecord(const char* archive_name, u32 record_index, i32 x, i32 y)
     }
 
     std::vector<u8> payload;
-    payload = std::move(reader.payload);
     const TrcDirectoryEntry entry = reader.entry;
     const std::string archive_path = reader.archive_path;
     const u32 payload_offset = reader.payload_offset;
     const bool prefer_file_handle = entry.method == 0 && entry.stored_size == entry.original_size;
+    if (entry.method == 0) {
+        try {
+            payload.assign(entry.original_size, 0);
+        }
+        catch (const std::bad_alloc&) {
+            CloseTrcRecordReader(reader);
+            g_bink_video_state.failed = true;
+            return false;
+        }
+        if (!ReadOpenTrcRecordBytes(reader, payload.data(), payload.size())) {
+            CloseTrcRecordReader(reader);
+            g_bink_video_state.failed = true;
+            return false;
+        }
+    }
+    else {
+        payload = std::move(reader.payload);
+    }
     CloseTrcRecordReader(reader);
 
     g_bink_video_state.record_name = entry.name;
@@ -2214,6 +2724,12 @@ bool PlayBinkTrcRecord(const char* archive_name, u32 record_index, i32 x, i32 y)
             g_bink_video_callback_user_data);
         g_bink_video_state.active = false;
         g_bink_video_state.played_with_callback = ok;
+    }
+    if (!ok) {
+        g_bink_video_state.active = true;
+        ok = play_embedded_jw208_video(g_bink_video_state);
+        g_bink_video_state.active = false;
+        g_bink_video_state.played_with_media_foundation = ok;
     }
 
     g_bink_video_state.completed = ok;
@@ -2289,6 +2805,11 @@ void HandleJw208IntroVideoSequence(HWND window) {
     const u32 previous_color_depth = g_direct_draw_state.color_depth;
 
     ConfigureDirectDrawSurfaces(window, 640, 480, static_cast<int>(previous_color_depth));
+    // The legacy surface reconfiguration may report a transient failure on a
+    // modern windowed presenter.  Media Foundation still needs the original
+    // main HWND in order to show the compatibility movie before the 800x600
+    // surfaces are rebuilt below.
+    g_direct_draw_state.presentation_window = window;
     HandleDirectDrawFrameBoundary();
 
     SetPrimaryMilesMusicPolicyMode(1);
@@ -2305,7 +2826,7 @@ void HandleJw208IntroVideoSequence(HWND window) {
 }
 
 void HandleJw208Record3VideoTransition(HWND window) {
-    (void)window;
+    g_direct_draw_state.presentation_window = window;
     HandleDirectDrawFrameBoundary();
     SetPrimaryMilesMusicPolicyMode(1);
     PlayBinkTrcRecord("JW2_08.TRC", 3, -1, -1);

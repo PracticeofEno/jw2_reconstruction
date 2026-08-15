@@ -1546,6 +1546,9 @@ if (WIN32)
         dxguid
         gdiplus
         imm32
+        mfplay
+        mfplat
+        mfuuid
     )
 
     find_file(RANKER_ZLIB_RUNTIME_DLL

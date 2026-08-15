@@ -35,3 +35,10 @@ LANGUAGE 0x12, 0x01
 2003 10 "resources/view_rank_base.bmp"
 // Five unique 42x18 nickname marks: LEAGUE, WIZARD, USER, RANKER, RANK.
 2004 10 "resources/wizardnet_rank_marks.bmp"
+
+// Original JW2_08.TRC Bink records transcoded at visually transparent quality for the x64
+// Media Foundation fallback.  The 32-bit build continues to prefer binkw32.
+2010 10 "resources/jw208_record0.mp4"
+2011 10 "resources/jw208_record1.mp4"
+2012 10 "resources/jw208_record2.mp4"
+2013 10 "resources/jw208_record3.mp4"
