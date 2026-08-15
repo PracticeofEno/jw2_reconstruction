@@ -264,8 +264,13 @@ def main() -> int:
                     changed_range(target_range.get("runtime_stat_20", {}),
                                   target_terminal.get("runtime_stat_20", 0)))
                 interaction_seen = bool(states & INTERACTION_STATES)
-                transfer_completed = (
-                    source_cleared and target_received and interaction_seen)
+                # Adjacent equipment transfers can enter and finish states
+                # 0x0d/0x0f inside one simulation tick, so no suspended
+                # post-tick frame is guaranteed to expose the intermediate
+                # interaction state.  The generated fixture starts with the
+                # effect only on the source; observing it removed there and
+                # applied to the target is conclusive execution evidence.
+                transfer_completed = source_cleared and target_received
                 immobile_approach_seen = (
                     case.get("expected_immobile_approach", False) and
                     0x0E in states and not source_cleared and

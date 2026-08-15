@@ -350,6 +350,36 @@ enum class UiOverlayIconBlitKind : u32 {
     masked_disabled_production = 18,
 };
 
+// FUN_004e102f normally draws 0xaa..0xd3 command items from action.trt after
+// subtracting 0xaa.  Item 0xb5 is the linked-release exception: at
+// 0x004e1134..0x004e1145 the original moves the result unit type from ECX to
+// EAX and calls the char_small blitter instead.  action.trt has only 42
+// frames, so treating result types 43 (Mutant) and 45 (TwinPteras) as action
+// frames makes their combine buttons disappear entirely.
+constexpr UiOverlayIconBlitKind ResolveUiOverlayUnitOrObjectIconBlitKind(
+    u32 item_id) {
+    return item_id == 0xb5u ? UiOverlayIconBlitKind::base :
+        UiOverlayIconBlitKind::unit;
+}
+
+constexpr u32 ResolveUiOverlayUnitOrObjectIconFrame(u32 item_id, u32 aux) {
+    return item_id == 0xb5u ? aux :
+        (item_id >= 0xaau ? item_id - 0xaau : item_id);
+}
+
+constexpr bool HasUiOverlayGroupedPairSelection(
+    const std::array<u32, 0x60>& selected_type_counts, u32 source_type) {
+    return source_type < selected_type_counts.size() &&
+        selected_type_counts[source_type] >= 2u;
+}
+
+constexpr bool HasUiOverlayMutantTriadSelection(
+    const std::array<u32, 0x60>& selected_type_counts) {
+    return selected_type_counts[0x24u] != 0u &&
+        selected_type_counts[0x27u] != 0u &&
+        selected_type_counts[0x28u] != 0u;
+}
+
 struct UiOverlayIconBlitRequest {
     UiOverlayIconBlitKind kind = UiOverlayIconBlitKind::base;
     u32 item_id = 0;

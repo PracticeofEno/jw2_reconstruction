@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from parity_result_store import atomic_json, record_key
+from parity_trace_support import verify_missing_exact_frames
 
 
 DIRECT_DAMAGE_PROFILES = {0, 1, 8, 12, 13, 17, 18, 19, 26, 27, 29, 35, 36}
@@ -27,6 +28,7 @@ def main() -> int:
     parser.add_argument("--end-frame", type=int, default=180)
     parser.add_argument("--trace-interval-ms", type=int, default=100)
     parser.add_argument("--timeout-seconds", type=int, default=300)
+    parser.add_argument("--reuse-artifact-root", type=Path)
     args = parser.parse_args()
 
     root = args.root.resolve()
@@ -49,11 +51,16 @@ def main() -> int:
 
     trace_script = (root / "ranker_reconstructed_code" / "tools" /
                     "replay_debug" / "trace_replay_divergence.ps1")
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    artifact_root = (root / "ranker_reconstructed_code" / "tools" /
-                     "replay_debug" / "artifacts" / "runs" /
-                     f"attack_parity_{stamp}")
-    artifact_root.mkdir(parents=True, exist_ok=False)
+    if args.reuse_artifact_root:
+        artifact_root = args.reuse_artifact_root.resolve()
+        if not artifact_root.is_dir():
+            raise FileNotFoundError(artifact_root)
+    else:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        artifact_root = (root / "ranker_reconstructed_code" / "tools" /
+                         "replay_debug" / "artifacts" / "runs" /
+                         f"attack_parity_{stamp}")
+        artifact_root.mkdir(parents=True, exist_ok=False)
     failures = 0
 
     for number, batch in enumerate(batches, 1):
@@ -73,28 +80,42 @@ def main() -> int:
         ]
         print(f"[{number:02d}/{len(batches):02d}] {label} "
               f"sources={len(batch['cases'])}", flush=True)
-        completed = subprocess.run(
-            command, cwd=root, capture_output=True, text=True,
-            timeout=args.timeout_seconds + 60)
         result_path = artifact / "result.json"
-        if completed.returncode == 0 and result_path.exists():
-            trace = json.loads(result_path.read_text(encoding="utf-8"))
+        if args.reuse_artifact_root:
+            trace = (json.loads(result_path.read_text(encoding="utf-8"))
+                     if result_path.exists() else {
+                         "pass": False,
+                         "reason": f"missing reused trace: {result_path}",
+                     })
         else:
-            trace = {
-                "pass": False,
-                "reason": (completed.stderr.strip() or
-                           completed.stdout.strip() or
-                           f"trace command exited {completed.returncode}"),
-            }
+            completed = subprocess.run(
+                command, cwd=root, capture_output=True, text=True,
+                timeout=args.timeout_seconds + 60)
+            trace = (json.loads(result_path.read_text(encoding="utf-8"))
+                     if completed.returncode == 0 and result_path.exists()
+                     else {
+                         "pass": False,
+                         "reason": (completed.stderr.strip() or
+                                    completed.stdout.strip() or
+                                    f"trace command exited {completed.returncode}"),
+                     })
+        gap_fallback = verify_missing_exact_frames(
+            root, batch["replay"], artifact, trace,
+            args.start_frame, args.end_frame, args.timeout_seconds)
         coverage = trace.get("semantic_coverage") or {}
         links = {tuple(row) for row in coverage.get("unit_effect_links", [])}
         health_ranges = coverage.get("unit_health_ranges", {})
         player_ranges = coverage.get("player_unit_state_ranges", {})
-        continuous_exact = bool(
-            trace.get("pass") and
+        sampler_complete = bool(
             trace.get("first_exact_frame") is not None and
             trace.get("last_exact_frame") is not None and
+            trace.get("first_exact_frame") <= args.start_frame and
+            trace.get("last_exact_frame") >= args.end_frame - 1 and
             not trace.get("pair_gaps"))
+        continuous_exact = bool(
+            trace.get("pass") and
+            (sampler_complete or
+             (gap_fallback and gap_fallback.get("pass"))))
         batch_failures = 0
 
         for case in batch["cases"]:
@@ -164,6 +185,7 @@ def main() -> int:
                 "first_exact_frame": trace.get("first_exact_frame"),
                 "last_exact_frame": trace.get("last_exact_frame"),
                 "pair_gaps": trace.get("pair_gaps", []),
+                "gap_one_shot": gap_fallback,
                 "used_exact_row_template": case["used_exact_row_template"],
                 "trace_reason": trace.get("reason"),
                 "recorded_at_utc": datetime.now(timezone.utc).isoformat(),

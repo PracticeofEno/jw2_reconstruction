@@ -2294,15 +2294,13 @@ bool DrawUiOverlayUnitOrObjectIconRecord(UiOverlayState& state,
     }
     adjusted.width = adjusted.height = 0x26;
     const bool disabled = (adjusted.flags & kUiOverlayFlagDisabled) != 0;
-    if (adjusted.item_id == 0xb5) {
-        return draw_record_command_icon_blit(state, adjusted,
-            UiOverlayIconBlitKind::unit, adjusted.aux, disabled);
-    }
     const bool masked = !disabled && (adjusted.flags & 0x34u) != 0;
-    const u32 action_frame = adjusted.item_id >= 0xaau ?
-        adjusted.item_id - 0xaau : adjusted.item_id;
+    const UiOverlayIconBlitKind kind =
+        ResolveUiOverlayUnitOrObjectIconBlitKind(adjusted.item_id);
+    const u32 frame = ResolveUiOverlayUnitOrObjectIconFrame(
+        adjusted.item_id, adjusted.aux);
     return draw_record_command_icon_blit(state, adjusted,
-        UiOverlayIconBlitKind::unit, action_frame, disabled, masked);
+        kind, frame, disabled, masked);
 }
 
 bool DrawUiOverlayEquipmentIconRecord(UiOverlayState& state,
@@ -3607,8 +3605,8 @@ u32 CheckGroupedMorphCommandDisabled(const UiOverlayState& state,
 
 void QueueGroupedSpecialUnitCommandIfPresent(UiOverlayState& state,
     u32 source_type, u32 command_type) {
-    if (source_type >= state.selected_grouped_mobile_type_counts.size() ||
-        state.selected_grouped_mobile_type_counts[source_type] < 2) {
+    if (!HasUiOverlayGroupedPairSelection(
+            state.selected_grouped_mobile_type_counts, source_type)) {
         return;
     }
     QueueUiOverlayCommandRecordByItemId(state, 0xb5, command_type,
@@ -3624,9 +3622,8 @@ void QueueGroupedSpecialUnitCommands(UiOverlayState& state) {
     QueueGroupedSpecialUnitCommandIfPresent(state, 0x22, 0x23);
     QueueGroupedSpecialUnitCommandIfPresent(state, 0x25, 0x26);
     QueueGroupedSpecialUnitCommandIfPresent(state, 0x27, 0x2d);
-    if (state.selected_grouped_mobile_type_counts[0x24] != 0 &&
-        state.selected_grouped_mobile_type_counts[0x27] != 0 &&
-        state.selected_grouped_mobile_type_counts[0x28] != 0) {
+    if (HasUiOverlayMutantTriadSelection(
+            state.selected_grouped_mobile_type_counts)) {
         QueueUiOverlayCommandRecordByItemId(state, 0xb5, 0x2b,
             CheckGroupedMorphCommandDisabled(
                 state, 0x2b, state.local_player_slot));
