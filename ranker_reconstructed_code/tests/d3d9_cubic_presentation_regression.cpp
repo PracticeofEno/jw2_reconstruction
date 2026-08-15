@@ -32,7 +32,8 @@ void verify_full_frame_geometry() {
 }
 
 void verify_cursor_is_a_separate_point_sampled_quad() {
-    const auto geometry = BuildD3D9CursorOverlayGeometry(1600, 1200, 10, 20);
+    const auto geometry =
+        BuildD3D9CursorOverlayGeometry(1600, 1200, 10, 20, 0, 0);
     require(geometry.visible, "onscreen cursor geometry is hidden");
     require(geometry.source_left == 0 && geometry.source_top == 0 &&
             geometry.source_right == 32 && geometry.source_bottom == 32,
@@ -40,13 +41,25 @@ void verify_cursor_is_a_separate_point_sampled_quad() {
     require(close(geometry.vertices[1].x, 19.5f) &&
             close(geometry.vertices[1].y, 39.5f),
         "cursor origin was not scaled independently");
-    require(close(geometry.vertices[2].x, 83.5f) &&
-            close(geometry.vertices[2].y, 103.5f),
-        "cursor size did not follow output resolution");
+    require(close(geometry.vertices[2].x, 51.5f) &&
+            close(geometry.vertices[2].y, 71.5f),
+        "cursor was enlarged with the gameplay presentation");
+
+    const auto hotspot_geometry =
+        BuildD3D9CursorOverlayGeometry(1600, 1200, 10, 20, 1, 1);
+    require(close(hotspot_geometry.vertices[1].x, 20.5f) &&
+            close(hotspot_geometry.vertices[1].y, 40.5f),
+        "fixed-size cursor did not preserve its physical hotspot");
+    require(close(hotspot_geometry.vertices[2].x -
+                hotspot_geometry.vertices[1].x, 32.0f) &&
+            close(hotspot_geometry.vertices[0].y -
+                hotspot_geometry.vertices[1].y, 32.0f),
+        "fixed-size cursor quad is not 32 by 32 pixels");
 }
 
 void verify_cursor_edge_clipping_preserves_source_offset() {
-    const auto geometry = BuildD3D9CursorOverlayGeometry(800, 600, -5, -7);
+    const auto geometry =
+        BuildD3D9CursorOverlayGeometry(800, 600, -5, -7, 0, 0);
     require(geometry.visible, "partially visible cursor was rejected");
     require(geometry.source_left == 5 && geometry.source_top == 7 &&
             geometry.source_right == 32 && geometry.source_bottom == 32,
@@ -55,7 +68,8 @@ void verify_cursor_edge_clipping_preserves_source_offset() {
             close(geometry.vertices[1].y, -0.5f),
         "clipped cursor did not begin at the output boundary");
 
-    const auto hidden = BuildD3D9CursorOverlayGeometry(800, 600, -32, 100);
+    const auto hidden =
+        BuildD3D9CursorOverlayGeometry(800, 600, -32, 100, 0, 0);
     require(!hidden.visible, "fully offscreen cursor remained visible");
 }
 

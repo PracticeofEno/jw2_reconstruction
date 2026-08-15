@@ -569,7 +569,7 @@ HRESULT draw_and_present_locked(
 
 HRESULT try_present_locked(LPDIRECTDRAWSURFACE7 back_surface,
     LPDIRECTDRAWSURFACE7 cursor_surface, i32 cursor_x, i32 cursor_y,
-    bool reuse_uploaded_background) {
+    i32 hotspot_x, i32 hotspot_y, bool reuse_uploaded_background) {
     if (!g_cubic.requested) {
         g_cubic.active = false;
         return S_FALSE;
@@ -608,7 +608,8 @@ HRESULT try_present_locked(LPDIRECTDRAWSURFACE7 back_surface,
     const D3D9CursorOverlayGeometry* cursor_geometry_pointer = nullptr;
     if (cursor_surface != nullptr) {
         cursor_geometry = BuildD3D9CursorOverlayGeometry(
-            g_cubic.output_width, g_cubic.output_height, cursor_x, cursor_y);
+            g_cubic.output_width, g_cubic.output_height, cursor_x, cursor_y,
+            hotspot_x, hotspot_y);
         if (cursor_geometry.visible) {
             cursor_geometry_pointer = &cursor_geometry;
         }
@@ -735,16 +736,17 @@ D3D9CubicPresentationTelemetry GetD3D9CubicPresentationTelemetry() {
 HRESULT TryPresentBackBufferWithD3D9Cubic(
     LPDIRECTDRAWSURFACE7 back_surface) {
     std::lock_guard<std::recursive_mutex> lock(g_cubic_mutex);
-    return try_present_locked(back_surface, nullptr, 0, 0, false);
+    return try_present_locked(back_surface, nullptr, 0, 0, 0, 0, false);
 }
 
 HRESULT TryPresentBackBufferWithD3D9CubicCursor(
     LPDIRECTDRAWSURFACE7 back_surface,
     LPDIRECTDRAWSURFACE7 cursor_surface,
-    i32 cursor_x, i32 cursor_y, bool reuse_uploaded_background) {
+    i32 cursor_x, i32 cursor_y, i32 hotspot_x, i32 hotspot_y,
+    bool reuse_uploaded_background) {
     std::lock_guard<std::recursive_mutex> lock(g_cubic_mutex);
     return try_present_locked(back_surface, cursor_surface,
-        cursor_x, cursor_y, reuse_uploaded_background);
+        cursor_x, cursor_y, hotspot_x, hotspot_y, reuse_uploaded_background);
 }
 
 } // namespace ranker

@@ -1573,8 +1573,12 @@ bool set_main_window_system_cursor_logical_position(
 }
 
 void set_main_window_system_cursor_for_lock_state() {
-    SetCursor(g_runtime.cursor_confined
-        ? nullptr : LoadCursorA(nullptr, IDC_ARROW));
+    if (software_cursor_state().pointer_updates_suppressed) {
+        SetCursor(GetFrontendGameCursor());
+        return;
+    }
+    SetCursor(g_runtime.cursor_confined ?
+        nullptr : LoadCursorA(nullptr, IDC_ARROW));
 }
 
 void release_main_window_cursor_confinement(bool restore_logical_position = true) {
@@ -1976,12 +1980,12 @@ void activate_frontend_window(HWND window, HACCEL accelerators) {
     g_runtime.frontend_route_window = window;
     g_runtime.active_accelerator_window = window;
     g_runtime.active_accelerators = accelerators;
-    // Reconstructed frontends are native child windows.  Retire the
-    // DirectDraw software cursor while they own input and immediately restore
-    // the Win32 arrow; otherwise the main window's locked-cursor policy leaves
-    // these controls with no visible pointer.
+    // Reconstructed frontends are native child windows. Retire the DirectDraw
+    // software cursor while they own input and present frame zero of the
+    // original mouse100.mc resource as a native cursor. This keeps the game
+    // pointer visible above Win32 edit/list/button controls as well.
     SetGameCursorPresentationSuppressed(true);
-    SetCursor(LoadCursorA(nullptr, IDC_ARROW));
+    SetCursor(GetFrontendGameCursor());
 }
 
 template <typename T>
@@ -30934,9 +30938,13 @@ bool open_title_main_menu_frontend(HWND window) {
 
     g_runtime.frontend_route_window = window;
     g_runtime.suppress_paint = false;
-    SetGameCursorPresentationSuppressed(false);
+    // The title screen is rendered at the legacy 800x600 logical size, so its
+    // 32x32 software cursor is enlarged with the presentation surface. Use
+    // the same original-resource frontend cursor as the multiplayer windows
+    // to keep its visible size identical while leaving gameplay unchanged.
+    SetGameCursorPresentationSuppressed(true);
     SetGameCursorIndex(0);
-    ShowGameCursor();
+    SetCursor(GetFrontendGameCursor());
 
     bool draw_ok = false;
     const bool presented = draw_title_main_menu_to_backbuffer(screen, &draw_ok);
@@ -31606,13 +31614,15 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
         refresh_main_window_cursor_confinement(window);
         break;
     case WM_SETCURSOR:
-        if (g_runtime.frontend_route_window != nullptr &&
-            g_runtime.frontend_route_window != window &&
-            IsWindow(g_runtime.frontend_route_window)) {
-            // WM_SETCURSOR for a child first reaches its parent.  Returning the
-            // locked-game NULL cursor here prevented every native multiplayer
-            // frontend and its controls from applying their class arrow.
-            SetCursor(LoadCursorA(nullptr, IDC_ARROW));
+        if (software_cursor_state().pointer_updates_suppressed ||
+            (g_runtime.frontend_route_window != nullptr &&
+             g_runtime.frontend_route_window != window &&
+             IsWindow(g_runtime.frontend_route_window))) {
+            // WM_SETCURSOR for a native child first reaches its parent. Set
+            // the same game cursor for every frontend control so edit boxes,
+            // lists, buttons and popup boundaries cannot fall back to a
+            // Windows arrow or I-beam.
+            SetCursor(GetFrontendGameCursor());
             return TRUE;
         }
         if (reinterpret_cast<HWND>(wparam) == window &&
@@ -32375,6 +32385,9 @@ int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_c
             "RegisterClassA failed while registering reconstructed frontend windows.");
         return 0;
     }
+    append_startup_log("frontend game cursor source=%s",
+        IsFrontendGameCursorResourceLoaded() ?
+            "JW2_01.TRC record 0x0b frame 0" : "system-arrow fallback");
 
     DWORD window_ex_style = 0;
     DWORD window_style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;

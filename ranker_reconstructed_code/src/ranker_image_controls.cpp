@@ -2,12 +2,32 @@
 
 #ifdef _WIN32
 
+#include "ranker_cursor.h"
+
+#include <commctrl.h>
+
 #include <algorithm>
 #include <array>
 #include <cstdlib>
 
 namespace ranker {
 namespace {
+
+constexpr UINT_PTR kFrontendComboListCursorSubclassId = 0x52434c43u;
+
+LRESULT CALLBACK frontend_combo_list_cursor_subclass_proc(
+    HWND window, UINT message, WPARAM wparam, LPARAM lparam,
+    UINT_PTR subclass_id, DWORD_PTR cursor_value) {
+    if (message == WM_SETCURSOR) {
+        SetCursor(reinterpret_cast<HCURSOR>(cursor_value));
+        return TRUE;
+    }
+    if (message == WM_NCDESTROY) {
+        RemoveWindowSubclass(window, frontend_combo_list_cursor_subclass_proc,
+            subclass_id);
+    }
+    return DefSubclassProc(window, message, wparam, lparam);
+}
 
 HINSTANCE parent_instance(HWND parent) {
     return reinterpret_cast<HINSTANCE>(GetWindowLongPtrA(parent, GWLP_HINSTANCE));
@@ -190,8 +210,24 @@ bool CreateLegacyImageComboBoxWindow(LegacyImageComboBoxControl& control, HWND p
         nullptr);
     control.original_window_proc = original_proc(control.window);
     SendMessageA(control.window, CB_RESETCONTENT, 0, 0);
+    ApplyFrontendGameCursorToComboBoxPopup(control.window);
     release_control_bitmaps(control.normal_bitmap, control.pressed_bitmap);
     return control.window != nullptr;
+}
+
+bool ApplyFrontendGameCursorToComboBoxPopup(HWND combo_box) {
+    if (combo_box == nullptr || !IsWindow(combo_box)) {
+        return false;
+    }
+    COMBOBOXINFO info{};
+    info.cbSize = sizeof(info);
+    if (!GetComboBoxInfo(combo_box, &info) || info.hwndList == nullptr) {
+        return false;
+    }
+    return SetWindowSubclass(info.hwndList,
+        frontend_combo_list_cursor_subclass_proc,
+        kFrontendComboListCursorSubclassId,
+        reinterpret_cast<DWORD_PTR>(GetFrontendGameCursor())) != FALSE;
 }
 
 void DestroyLegacyImageComboBoxControl(LegacyImageComboBoxControl& control) {

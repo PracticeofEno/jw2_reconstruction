@@ -66,6 +66,7 @@ bool ConstructLegacyImageComboBoxControl(LegacyImageComboBoxControl& control,
 bool CreateLegacyImageComboBoxWindow(LegacyImageComboBoxControl& control, HWND parent,
     const char* text, HMENU id_or_menu, DWORD style, int x, int y, int width,
     int height);
+bool ApplyFrontendGameCursorToComboBoxPopup(HWND combo_box);
 void DestroyLegacyImageComboBoxControl(LegacyImageComboBoxControl& control);
 void LoadLegacyImageComboBoxBitmaps(LegacyImageComboBoxControl& control,
     u32 normal_record, u32 pressed_record);

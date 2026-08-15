@@ -16,6 +16,19 @@ namespace ranker {
 constexpr u32 kSoftwareCursorSize = 0x20;
 constexpr u32 kSoftwareCursorSurfaceCount = 100;
 
+constexpr u32 FrontendCursorArgbFromRgb565(u16 pixel) {
+    if (pixel == 0) {
+        return 0;
+    }
+    const u32 red5 = (pixel >> 11) & 0x1fu;
+    const u32 green6 = (pixel >> 5) & 0x3fu;
+    const u32 blue5 = pixel & 0x1fu;
+    const u32 red8 = (red5 << 3) | (red5 >> 2);
+    const u32 green8 = (green6 << 2) | (green6 >> 4);
+    const u32 blue8 = (blue5 << 3) | (blue5 >> 2);
+    return 0xff000000u | (red8 << 16) | (green8 << 8) | blue8;
+}
+
 struct SoftwareCursorState {
     LPDIRECTDRAWSURFACE7 primary_backup_surface = nullptr;
     LPDIRECTDRAWSURFACE7 back_backup_surface = nullptr;
@@ -42,6 +55,8 @@ struct SoftwareCursorState {
 };
 
 SoftwareCursorState& software_cursor_state();
+HCURSOR GetFrontendGameCursor();
+bool IsFrontendGameCursorResourceLoaded();
 bool InitializeSoftwareCursorSurfaces();
 bool LoadSoftwareCursorResourcesFromJw201Trc();
 void ShutdownSoftwareCursorSurfaces();

@@ -1,5 +1,6 @@
 #include "ranker_create_game.h"
 #include "ranker_client_config.h"
+#include "ranker_cursor.h"
 #include "ranker_display_constants.h"
 #include "ranker_frontend_layout.h"
 #include "ranker_map_brush.h"
@@ -94,6 +95,11 @@ static_assert(SelectCreateGameWindowPlacement(true, 1) ==
     CreateGameWindowPlacement::contained_child);
 static_assert(SelectCreateGameWindowPlacement(false, 6) ==
     CreateGameWindowPlacement::fullscreen_popup);
+static_assert(FrontendCursorArgbFromRgb565(0x0000) == 0x00000000u);
+static_assert(FrontendCursorArgbFromRgb565(0xf800) == 0xffff0000u);
+static_assert(FrontendCursorArgbFromRgb565(0x07e0) == 0xff00ff00u);
+static_assert(FrontendCursorArgbFromRgb565(0x001f) == 0xff0000ffu);
+static_assert(FrontendCursorArgbFromRgb565(0xffff) == 0xffffffffu);
 
 } // namespace
 

@@ -19,6 +19,8 @@ namespace {
 
 SoftwareCursorState g_cursor_state;
 std::recursive_mutex g_cursor_mutex;
+HCURSOR g_frontend_game_cursor = nullptr;
+bool g_frontend_game_cursor_load_attempted = false;
 
 constexpr char kSoftwareCursorArchiveName[] = "JW2_01.TRC";
 constexpr u32 kSoftwareCursorArchiveRecord = 0x0b;
@@ -30,6 +32,95 @@ u32 read_cursor_u32(const u8* bytes) {
         (static_cast<u32>(bytes[1]) << 8) |
         (static_cast<u32>(bytes[2]) << 16) |
         (static_cast<u32>(bytes[3]) << 24);
+}
+
+HCURSOR create_frontend_game_cursor() {
+    std::vector<u8> payload;
+    if (!read_trc_record(kSoftwareCursorArchiveName,
+            kSoftwareCursorArchiveRecord, payload) ||
+        payload.size() < kSoftwareCursorHeaderBytes +
+            kSoftwareCursorFrameHeaderBytes) {
+        return nullptr;
+    }
+
+    const u32 bits_per_pixel = read_cursor_u32(payload.data());
+    const u32 frame_count = read_cursor_u32(payload.data() + 4);
+    const u32 width = read_cursor_u32(payload.data() + 8);
+    const u32 height = read_cursor_u32(payload.data() + 12);
+    if (bits_per_pixel != 16 || frame_count == 0 || width == 0 || height == 0 ||
+        width > kSoftwareCursorSize || height > kSoftwareCursorSize) {
+        return nullptr;
+    }
+
+    const std::size_t pixel_offset =
+        kSoftwareCursorHeaderBytes + kSoftwareCursorFrameHeaderBytes;
+    const std::size_t pixel_bytes =
+        static_cast<std::size_t>(width) * height * sizeof(u16);
+    if (pixel_offset > payload.size() ||
+        pixel_bytes > payload.size() - pixel_offset) {
+        return nullptr;
+    }
+
+    BITMAPINFO bitmap_info{};
+    bitmap_info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bitmap_info.bmiHeader.biWidth = static_cast<LONG>(width);
+    bitmap_info.bmiHeader.biHeight = -static_cast<LONG>(height);
+    bitmap_info.bmiHeader.biPlanes = 1;
+    bitmap_info.bmiHeader.biBitCount = 32;
+    bitmap_info.bmiHeader.biCompression = BI_RGB;
+
+    void* dib_pixels = nullptr;
+    HBITMAP color_bitmap = CreateDIBSection(nullptr, &bitmap_info,
+        DIB_RGB_COLORS, &dib_pixels, nullptr, 0);
+    if (color_bitmap == nullptr || dib_pixels == nullptr) {
+        if (color_bitmap != nullptr) {
+            DeleteObject(color_bitmap);
+        }
+        return nullptr;
+    }
+
+    auto* destination = static_cast<u32*>(dib_pixels);
+    const u8* source = payload.data() + pixel_offset;
+    for (u32 y = 0; y < height; ++y) {
+        for (u32 x = 0; x < width; ++x) {
+            const std::size_t source_offset =
+                (static_cast<std::size_t>(y) * width + x) * sizeof(u16);
+            const u16 pixel = static_cast<u16>(source[source_offset]) |
+                static_cast<u16>(source[source_offset + 1] << 8);
+            destination[static_cast<std::size_t>(y) * width + x] =
+                FrontendCursorArgbFromRgb565(pixel);
+        }
+    }
+
+    // A color cursor still requires a monochrome mask. On supported Windows
+    // versions the per-pixel alpha in the 32-bit DIB supplies the original
+    // mouse100.mc transparency; the zeroed mask preserves opaque pixels.
+    const std::size_t mask_stride =
+        ((static_cast<std::size_t>(width) + 15u) / 16u) * 2u;
+    std::vector<u8> mask_pixels(mask_stride * height, 0);
+    HBITMAP mask_bitmap = CreateBitmap(static_cast<int>(width),
+        static_cast<int>(height), 1, 1, mask_pixels.data());
+    if (mask_bitmap == nullptr) {
+        DeleteObject(color_bitmap);
+        return nullptr;
+    }
+
+    const i32 hotspot_x = WrappedU32ToI32(
+        read_cursor_u32(payload.data() + kSoftwareCursorHeaderBytes));
+    const i32 hotspot_y = WrappedU32ToI32(
+        read_cursor_u32(payload.data() + kSoftwareCursorHeaderBytes + 4));
+    ICONINFO cursor_info{};
+    cursor_info.fIcon = FALSE;
+    cursor_info.xHotspot = static_cast<DWORD>(
+        std::clamp<i32>(hotspot_x, 0, static_cast<i32>(width) - 1));
+    cursor_info.yHotspot = static_cast<DWORD>(
+        std::clamp<i32>(hotspot_y, 0, static_cast<i32>(height) - 1));
+    cursor_info.hbmMask = mask_bitmap;
+    cursor_info.hbmColor = color_bitmap;
+    HCURSOR cursor = CreateIconIndirect(&cursor_info);
+    DeleteObject(mask_bitmap);
+    DeleteObject(color_bitmap);
+    return cursor;
 }
 
 template <typename T>
@@ -273,6 +364,22 @@ u16 normalize_cursor_pixel(u16 pixel) {
 
 SoftwareCursorState& software_cursor_state() {
     return g_cursor_state;
+}
+
+HCURSOR GetFrontendGameCursor() {
+    const std::lock_guard<std::recursive_mutex> lock(g_cursor_mutex);
+    if (!g_frontend_game_cursor_load_attempted) {
+        g_frontend_game_cursor_load_attempted = true;
+        g_frontend_game_cursor = create_frontend_game_cursor();
+    }
+    return g_frontend_game_cursor != nullptr ?
+        g_frontend_game_cursor : LoadCursorA(nullptr, IDC_ARROW);
+}
+
+bool IsFrontendGameCursorResourceLoaded() {
+    GetFrontendGameCursor();
+    const std::lock_guard<std::recursive_mutex> lock(g_cursor_mutex);
+    return g_frontend_game_cursor != nullptr;
 }
 
 bool InitializeSoftwareCursorSurfaces() {
@@ -652,6 +759,8 @@ static HRESULT handle_game_cursor_presentation(bool reuse_uploaded_background) {
             g_cursor_state.cursor_surfaces[g_cursor_state.cursor_index],
             g_cursor_state.presented_cursor_x,
             g_cursor_state.presented_cursor_y,
+            g_cursor_state.hotspot_x[g_cursor_state.cursor_index],
+            g_cursor_state.hotspot_y[g_cursor_state.cursor_index],
             reuse_uploaded_background);
         if (result == S_OK) {
             // The D3D9 presentation keeps the cursor out of the logical game

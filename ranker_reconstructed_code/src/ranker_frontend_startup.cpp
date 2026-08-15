@@ -217,7 +217,7 @@ bool register_frontend_window_class(HINSTANCE instance, const char* class_name) 
     window_class.lpfnWndProc = DefWindowProcA;
     window_class.hInstance = instance;
     window_class.hIcon = LoadIconA(instance, MAKEINTRESOURCEA(0x65));
-    window_class.hCursor = LoadCursorA(nullptr, IDC_ARROW);
+    window_class.hCursor = GetFrontendGameCursor();
     window_class.hbrBackground =
         reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
     window_class.lpszClassName = class_name;

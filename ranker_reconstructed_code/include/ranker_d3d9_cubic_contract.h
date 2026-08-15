@@ -2,6 +2,7 @@
 
 #include "ranker_types.h"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <string_view>
@@ -68,21 +69,10 @@ struct D3D9CursorOverlayGeometry {
 };
 
 constexpr D3D9CursorOverlayGeometry BuildD3D9CursorOverlayGeometry(
-    u32 output_width, u32 output_height, i32 cursor_x, i32 cursor_y) {
+    u32 output_width, u32 output_height, i32 cursor_x, i32 cursor_y,
+    i32 hotspot_x, i32 hotspot_y) {
     D3D9CursorOverlayGeometry geometry{};
-    geometry.source_left = cursor_x < 0 ? -cursor_x : 0;
-    geometry.source_top = cursor_y < 0 ? -cursor_y : 0;
-    geometry.source_right = cursor_x + static_cast<i32>(kD3D9CursorTextureSize) >
-            static_cast<i32>(kD3D9CubicLogicalWidth)
-        ? static_cast<i32>(kD3D9CubicLogicalWidth) - cursor_x
-        : static_cast<i32>(kD3D9CursorTextureSize);
-    geometry.source_bottom = cursor_y + static_cast<i32>(kD3D9CursorTextureSize) >
-            static_cast<i32>(kD3D9CubicLogicalHeight)
-        ? static_cast<i32>(kD3D9CubicLogicalHeight) - cursor_y
-        : static_cast<i32>(kD3D9CursorTextureSize);
-    if (output_width == 0 || output_height == 0 ||
-        geometry.source_left >= geometry.source_right ||
-        geometry.source_top >= geometry.source_bottom) {
+    if (output_width == 0 || output_height == 0) {
         return geometry;
     }
 
@@ -90,14 +80,53 @@ constexpr D3D9CursorOverlayGeometry BuildD3D9CursorOverlayGeometry(
         static_cast<float>(kD3D9CubicLogicalWidth);
     const float output_scale_y = static_cast<float>(output_height) /
         static_cast<float>(kD3D9CubicLogicalHeight);
-    const float left = static_cast<float>(cursor_x + geometry.source_left) *
-            output_scale_x - 0.5f;
-    const float top = static_cast<float>(cursor_y + geometry.source_top) *
-            output_scale_y - 0.5f;
-    const float right = static_cast<float>(cursor_x + geometry.source_right) *
-            output_scale_x - 0.5f;
-    const float bottom = static_cast<float>(cursor_y + geometry.source_bottom) *
-            output_scale_y - 0.5f;
+    const float pointer_x =
+        static_cast<float>(cursor_x + hotspot_x) * output_scale_x;
+    const float pointer_y =
+        static_cast<float>(cursor_y + hotspot_y) * output_scale_y;
+    const float unclipped_left = pointer_x - static_cast<float>(hotspot_x);
+    const float unclipped_top = pointer_y - static_cast<float>(hotspot_y);
+    const float unclipped_right =
+        unclipped_left + static_cast<float>(kD3D9CursorTextureSize);
+    const float unclipped_bottom =
+        unclipped_top + static_cast<float>(kD3D9CursorTextureSize);
+    if (unclipped_right <= 0.0f || unclipped_bottom <= 0.0f ||
+        unclipped_left >= static_cast<float>(output_width) ||
+        unclipped_top >= static_cast<float>(output_height)) {
+        return geometry;
+    }
+
+    const auto ceil_positive = [](float value) constexpr {
+        const i32 truncated = static_cast<i32>(value);
+        return static_cast<float>(truncated) < value ? truncated + 1 : truncated;
+    };
+    geometry.source_left = unclipped_left < 0.0f ?
+        std::min<i32>(static_cast<i32>(kD3D9CursorTextureSize),
+            ceil_positive(-unclipped_left)) : 0;
+    geometry.source_top = unclipped_top < 0.0f ?
+        std::min<i32>(static_cast<i32>(kD3D9CursorTextureSize),
+            ceil_positive(-unclipped_top)) : 0;
+    geometry.source_right = unclipped_right > static_cast<float>(output_width) ?
+        std::max<i32>(0, static_cast<i32>(
+            static_cast<float>(output_width) - unclipped_left)) :
+        static_cast<i32>(kD3D9CursorTextureSize);
+    geometry.source_bottom = unclipped_bottom > static_cast<float>(output_height) ?
+        std::max<i32>(0, static_cast<i32>(
+            static_cast<float>(output_height) - unclipped_top)) :
+        static_cast<i32>(kD3D9CursorTextureSize);
+    if (geometry.source_left >= geometry.source_right ||
+        geometry.source_top >= geometry.source_bottom) {
+        return geometry;
+    }
+
+    const float left = unclipped_left +
+        static_cast<float>(geometry.source_left) - 0.5f;
+    const float top = unclipped_top +
+        static_cast<float>(geometry.source_top) - 0.5f;
+    const float right = unclipped_left +
+        static_cast<float>(geometry.source_right) - 0.5f;
+    const float bottom = unclipped_top +
+        static_cast<float>(geometry.source_bottom) - 0.5f;
     const float u0 = static_cast<float>(geometry.source_left) /
         static_cast<float>(kD3D9CursorTextureSize);
     const float v0 = static_cast<float>(geometry.source_top) /

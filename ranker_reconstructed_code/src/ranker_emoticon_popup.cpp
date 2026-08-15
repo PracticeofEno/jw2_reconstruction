@@ -2,6 +2,7 @@
 
 #ifdef _WIN32
 
+#include "ranker_cursor.h"
 #include "ranker_gameplay_sound.h"
 #include "ranker_online_dialogs.h"
 #include "ranker_winmain.h"
@@ -75,18 +76,29 @@ void accept_emoticon_popup_selection(EmoticonPopupState& state, HWND hwnd) {
     PostMessageA(state.owner_dialog, kEmoticonPopupAcceptMessage, 0, 0);
     state.active_modal_window = state.owner_dialog;
     DestroyWindow(hwnd);
-    if (state.focus_after_close != nullptr) {
-        SetFocus(state.focus_after_close);
-    }
 }
 
 void close_emoticon_popup(EmoticonPopupState& state, HWND hwnd) {
+    const HWND owner_dialog = state.owner_dialog;
+    const HWND focus_after_close = state.focus_after_close;
     ReleaseCapture();
     RestoreEmoticonPopupAccelerators(state);
     clear_image_button_bitmaps(state.button);
     state.popup_window = nullptr;
     if (hwnd != nullptr && IsWindow(hwnd)) {
         DestroyWindow(hwnd);
+    }
+    if (owner_dialog != nullptr && IsWindow(owner_dialog)) {
+        // activate_frontend_window routes input to the popup while it is open.
+        // Leaving that destroyed HWND as the active route makes the main
+        // window's WM_SETCURSOR path restore the locked-game NULL cursor.
+        SetRankerMainWindowFrontendRouteWindow(owner_dialog);
+        SetCursor(GetFrontendGameCursor());
+        if (focus_after_close != nullptr && IsWindow(focus_after_close)) {
+            SetFocus(focus_after_close);
+        } else {
+            SetFocus(owner_dialog);
+        }
     }
 }
 

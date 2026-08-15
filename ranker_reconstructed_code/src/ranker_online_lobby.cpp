@@ -86,6 +86,7 @@ constexpr int kOnlineLobbyRankMarkPickerColumns = 5;
 constexpr int kOnlineLobbyRankMarkChoiceWidth = 46;
 constexpr int kOnlineLobbyRankMarkChoiceHeight = 22;
 constexpr int kOnlineLobbyRankMarkChoiceGap = 2;
+constexpr int kOnlineLobbyRankMarkTextGap = 6;
 
 constexpr OnlineLobbyButtonSpec kButtonSpecs[kOnlineLobbyButtonCount] = {
     {kOnlineLobbyNameButtonId, "Lobby Name", 0, 0, false},
@@ -900,7 +901,8 @@ void draw_online_lobby_game_item(OnlineLobbyState& state,
                 state.rank_mark_strip, draw.hDC, destination, source);
         }
     }
-    rect.left += kOnlineLobbyRankMarkFrameWidth;
+    rect.left += kOnlineLobbyRankMarkFrameWidth +
+        kOnlineLobbyRankMarkTextGap;
     DrawTextA(draw.hDC, text, -1, &rect, DT_LEFT | DT_SINGLELINE | DT_NOCLIP);
 }
 

@@ -2189,6 +2189,16 @@ bool has_link_lobby_saved_proc_id(int id) {
             id < kLinkLobbyMapDownloadFirstId + kLinkLobbyAvatarCount);
 }
 
+bool is_link_lobby_combo_id(int id) {
+    return id == kLinkLobbyHostResourceComboId ||
+        id == kLinkLobbyStartResourceComboId ||
+        id == kLinkLobbyScreenSizeComboId ||
+        (id >= kLinkLobbyPlayerRoleComboFirstId &&
+            id < kLinkLobbyPlayerRoleComboFirstId + kLinkLobbyAvatarCount) ||
+        (id >= kLinkLobbyTribeComboFirstId &&
+            id < kLinkLobbyTribeComboFirstId + kLinkLobbyAvatarCount);
+}
+
 WNDPROC original_proc_for_id(LinkLobbyState& state, int id) {
     if (id == kLinkLobbyListBoxId) {
         return state.game_list.original_window_proc;
@@ -7680,6 +7690,11 @@ LRESULT HandleLinkLobbyWindowMessage(LinkLobbyState& state, HWND hwnd, UINT mess
     case WM_COMMAND: {
         const int id = LOWORD(wparam);
         const int notify = HIWORD(wparam);
+        if (notify == CBN_DROPDOWN && is_link_lobby_combo_id(id)) {
+            ApplyFrontendGameCursorToComboBoxPopup(
+                reinterpret_cast<HWND>(lparam));
+            SetCursor(GetFrontendGameCursor());
+        }
         if (id == kLinkLobbyCancelButtonId) {
             HandleDefaultFrontendUiClickSound();
             SendLinkLobbyLocalDeparturePacket(state);
@@ -7853,6 +7868,11 @@ LRESULT HandleLinkLobbyWindowMessage(LinkLobbyState& state, HWND hwnd, UINT mess
 LRESULT HandleLinkLobbyControlMessage(LinkLobbyState& state, HWND hwnd, UINT message,
     WPARAM wparam, LPARAM lparam) {
     const int id = static_cast<int>(GetWindowLongPtrA(hwnd, GWLP_ID));
+
+    if (message == WM_SETCURSOR && is_link_lobby_combo_id(id)) {
+        SetCursor(GetFrontendGameCursor());
+        return TRUE;
+    }
 
     if (message == WM_ERASEBKGND &&
         erase_game_list_background_if_current(
