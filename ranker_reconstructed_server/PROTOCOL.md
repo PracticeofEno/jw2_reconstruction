@@ -1,35 +1,128 @@
-# Reconstructed protocol notes
+# Reconstructed Protocol Notes
 
-패킷은 little-endian이며 일반 제어 패킷 헤더는 다음과 같습니다.
+## Legacy Async TCP Header
 
-| 오프셋 | 크기 | 의미 |
+Normal server packets use the legacy type-3 async TCP header:
+
+| Offset | Size | Meaning |
 |---:|---:|---|
-| `0x00` | 4 | 패킷 형식, 일반적으로 `3` |
+| `0x00` | 4 | packet type, normally `3` |
 | `0x04` | 4 | opcode |
-| `0x08` | 4 | 헤더를 포함한 전체 길이 |
-| `0x0c` | 1 | 가중 합 체크섬 |
-| `0x0d` | 가변 | payload |
+| `0x08` | 4 | total packet bytes, including this header |
+| `0x0c` | 1 | weighted checksum |
+| `0x0d` | variable | payload |
 
-체크섬은 `0x0d`부터 끝까지 각 바이트에 `(offset % 9) + 1`을 곱한 뒤 하위
-8비트를 취합니다. TCP 수신에서는 한 번의 `recv`와 한 패킷이 일치한다고 가정하지
-않고 길이 필드만큼 모일 때까지 보존합니다.
+The checksum is the low 8 bits of every payload byte multiplied by
+`(offset % 9) + 1`, starting at offset `0x0d`. TCP receives are decoded by the
+length field; one `recv` is not assumed to contain exactly one packet.
 
-주요 클라이언트 요청은 다음과 같습니다.
+## Base Requests
 
-| 요청 | 응답 | 역할 |
+| Request | Response | Purpose |
 |---:|---:|---|
-| `0x01` | `0x02` | 로그인 및 상태 코드 |
-| `0x03` | `0x04` | 계정 및 프로필 생성 |
-| `0x39` | `0x3a` | 계정 생성 화면 안내 문자열 |
-| `0x12` | `0x13` | 현재 로비 사용자 페이지 |
-| `0x14` | `0x15` | 로비 채널 페이지 |
-| `0x05` | `0x06` | 기존 로비 입장 |
-| `0x08` | `0x09` | 새 로비 생성 |
-| `0x2a` | 형식 0 | 채팅/명령 문자열 |
-| `0x83` | `0x84` | 사용자 검색 |
-| `0x19` | `0x1a` | 게임 호스트 광고 등록 |
-| `0x1d` | `0x1e` | 참가 화면의 게임 광고 페이지 |
-| `0x1b` | `0x26` | 광고 제거 및 실시간 제거 알림 |
+| `0x01` | `0x02` | login and status code |
+| `0x03` | `0x04` | account/profile creation |
+| `0x39` | `0x3a` | account creation screen text |
+| `0x12` | `0x13` | current lobby user page |
+| `0x14` | `0x15` | lobby channel page |
+| `0x05` | `0x06` | join existing lobby |
+| `0x08` | `0x09` | create lobby |
+| `0x2a` | type `0` | chat/status text |
+| `0x83` | `0x84` | user search |
+| `0x19` | `0x1a` | advertise a game and configure host relay |
+| `0x1d` | `0x1e` or `0x27` | game-browser page or live game add |
+| `0x1b` | `0x26` | remove public game advertisement |
+| `0x28` | `0x26` | start game and hide public advertisement |
 
-게임 광고 응답은 원본 `FUN_0045fa40`/`FUN_0045ee70` 흐름을 따라 게임 이름,
-두 개의 16바이트 주소 레코드, 다음 인덱스, 게임 ID, 0x2dc 맵 설명자를 전달합니다.
+## WizardNet Relay Extension
+
+The reconstructed server supports a game-room relay path so clients behind NAT
+can create and join WizardNet rooms without a separate LAN VPN. This is a
+game-specific relay, not a full OS virtual network adapter.
+
+Relay packets use the same type-3 async TCP packet header.
+
+| Opcode | Direction | Payload |
+|---:|---|---|
+| `0x90` | client -> server | `u32 game_id`, followed by an optional Link-lobby join payload |
+| `0x91` | client -> server | optional `u32 game_id`; stale nonzero mismatches are ignored |
+| `0x92` | client -> server | `u32 game_id`, `u32 target_member_id`, `u32 stream_id`, followed by relayed data |
+| `0x93` | server -> client | `u32 status`, `u32 game_id`, `u32 local_member_id` |
+| `0x94` | server -> client | `u32 game_id`, `u32 from_member_id`, `u32 stream_id`, followed by relayed data |
+| `0x95` | server -> client | `u32 game_id`, `u32 member_id` that left |
+
+Relay member `1` is always the host. Joiners receive the lowest free member ID
+from `2` through `8`; a room accepts up to eight relay members including the
+host. A `target_member_id` of `0` broadcasts to every other relay member in the
+same room. Stream `0` carries Link-lobby traffic and stream `1` carries gameplay
+Mode1 reliable payloads. Other stream IDs are invalid and are not forwarded.
+
+The reconstructed client encrypts the relayed stream payload before sending
+`0x90` join payloads or `0x92` relay frames. The encrypted payload starts with a
+`WRL1` wrapper, followed by the plaintext length, nonce, SipHash tag, and a
+ChaCha20-encrypted body. The server does not decrypt that body, but it requires
+the wrapper magic, nonzero plaintext length, and declared/actual wire lengths to
+match before routing by `game_id`, `target_member_id`, and `stream_id`.
+
+The first non-host `0x90` join payload is encrypted with a deterministic
+fallback key because the joiner has not received the room secret yet. Successful
+host and join responses include the room secret, and normal Link and Mode1
+frames are then encrypted with that room key. The client receive path rejects
+plaintext relay payloads; once a room secret is available, gameplay Mode1
+stream `1` also rejects fallback-key payloads. Link stream `0` still accepts the
+fallback key so the host can process an initial join payload from a new member.
+
+The server supports both targeted and broadcast fan-out. The reconstructed
+client uses targeted member `1` for a non-host player's default Link-room send
+path, and broadcast target `0` for the host's default room fan-out. That keeps
+the relay behavior aligned with the original star-shaped TCP/IP Link-room
+topology.
+
+`0x93` status values:
+
+| Status | Meaning |
+|---:|---|
+| `0` | OK |
+| `1` | game not found |
+| `2` | relay room full |
+| `3` | sender is not a relay member |
+| `4` | host session is missing |
+
+Hosting a game with opcode `0x19` returns opcode `0x1a` with payload
+`u32 status`, `u32 game_id`, `u32 local_member_id`. A successful host response
+uses `status=1`, `local_member_id=1`.
+
+Opcode `0x1b` removes the room from the public game browser. Opcode `0x28`,
+sent by the Link lobby when the start countdown reaches zero, also retires the
+host's public advertisement. In both cases the server keeps existing relay
+membership alive so in-progress Link/gameplay traffic is not interrupted.
+
+Hidden relay rooms reject new `0x90` joins unless the sender is already a
+member. Host disconnect, host relay leave, or lobby reconnect tears down the
+relay room and notifies joined members with `0x95`.
+
+When a non-host member leaves, the server remembers that departed member ID for
+the lifetime of the room. Later frames targeting that departed member, or empty
+broadcasts after peers have left, are treated as stale shutdown traffic and are
+not counted as `no_target` relay failures. Frames targeting a member ID that was
+never part of the room are still counted as `no_target`.
+
+When a relay room is removed, the server writes one `relay summary` log line.
+Besides aggregate Link and Mode1 frame totals, current summaries include
+`invalid_payload`, `member_peers`, and `member_frames`. `invalid_payload` counts
+join or relay payloads rejected for a missing or malformed `WRL1` wrapper and
+must remain zero for release evidence. `member_peers` records the last
+server-observed TCP endpoint for each relay member. `link_bytes` and
+`mode1_bytes` are encrypted wire-byte totals, including the relay crypto
+wrapper. `member_frames` uses this compact format:
+
+```text
+member_frames=1:link_tx=4:link_rx=3:mode1_tx=120:mode1_rx=118;2:link_tx=3:link_rx=4:mode1_tx=118:mode1_rx=120
+```
+
+For a two-player NAT release gate, both member `1` and member `2` should have
+distinct `member_peers` endpoints and nonzero `mode1_tx` and `mode1_rx`.
+When `data.relay_evidence_dir` is configured, the server also writes the same
+summary as per-room JSON evidence for `run_two_pc_release_gate.ps1`; that JSON
+is revalidated against the requested room, game ID, member count, endpoint
+count, and bidirectional Mode1 thresholds before it can pass the final gate.

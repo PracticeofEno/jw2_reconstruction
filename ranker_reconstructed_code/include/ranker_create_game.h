@@ -5,6 +5,7 @@
 #include "ranker_image_controls.h"
 #include "ranker_string_selector.h"
 #include "ranker_wizard_login.h"
+#include "ranker_wizardnet_relay.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -172,6 +173,8 @@ struct CreateGameState {
     int screen_size = 0;
     int avatar_level_start = 10;
     int avatar_level_end = 1;
+    u32 wizardnet_relay_game_id = 0;
+    u32 wizardnet_relay_member_id = 0;
     bool visible = false;
     bool selected_session_valid = false;
     bool avatar_level_controls_visible = false;

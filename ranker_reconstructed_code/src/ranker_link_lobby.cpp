@@ -14,6 +14,7 @@
 #include "ranker_text_tables.h"
 #include "ranker_trc.h"
 #include "ranker_winmain.h"
+#include "ranker_wizardnet_relay.h"
 
 #include <algorithm>
 #include <cstdarg>
@@ -23,6 +24,7 @@
 #include <cstring>
 #include <iterator>
 #include <utility>
+#include <vector>
 
 namespace ranker {
 namespace {
@@ -990,6 +992,15 @@ bool player_index_valid(int player_index) {
     return player_index >= 0 && player_index < kLinkLobbyAvatarCount;
 }
 
+void remember_relay_member_for_player_socket(int player_index, SOCKET socket) {
+    if (!player_index_valid(player_index) ||
+        !WizardNetRelaySocketIsMember(socket)) {
+        return;
+    }
+    SetWizardNetRelayPlayerMember(static_cast<u32>(player_index),
+        WizardNetRelayMemberForSocket(socket));
+}
+
 void set_local_player_transport_handle(LinkLobbyState& state, SOCKET socket) {
     if (!player_index_valid(state.local_player_index)) {
         return;
@@ -1001,6 +1012,7 @@ void set_local_player_transport_handle(LinkLobbyState& state, SOCKET socket) {
     write_le32(state.players[slot].raw_payload,
         kLinkLobbyPlayerRecordSocketOffset, handle);
     state.player_payloads[slot] = state.players[slot].raw_payload;
+    remember_relay_member_for_player_socket(slot, socket);
 }
 
 bool udp_endpoint_ready(const sockaddr_in& address) {
@@ -1269,6 +1281,7 @@ void accept_link_lobby_join_request_slot(LinkLobbyState& state, int slot,
     write_le32(state.players[slot].raw_payload, kLinkLobbyPlayerRecordSocketOffset,
         static_cast<u32>(sender_socket));
     state.player_payloads[slot] = state.players[slot].raw_payload;
+    remember_relay_member_for_player_socket(slot, sender_socket);
     ResetLinkLobbyPlayerRoleToHuman(state, slot);
     hydrate_missing_player_udp_route_from_tcp(state, slot);
 }
@@ -1281,6 +1294,20 @@ SOCKET link_lobby_player_record_socket(const LinkLobbyState& state, int slot) {
     }
     return static_cast<SOCKET>(read_le32(
         state.players[slot].raw_payload.data() + kLinkLobbyPlayerRecordSocketOffset));
+}
+
+void refresh_relay_player_members_from_records(const LinkLobbyState& state) {
+    if (!WizardNetRelayEnabled()) {
+        return;
+    }
+    ClearWizardNetRelayPlayerMembers();
+    for (int slot = 0; slot < kLinkLobbyAvatarCount; ++slot) {
+        const SOCKET socket = link_lobby_player_record_socket(state, slot);
+        if (WizardNetRelaySocketIsMember(socket)) {
+            SetWizardNetRelayPlayerMember(static_cast<u32>(slot),
+                WizardNetRelayMemberForSocket(socket));
+        }
+    }
 }
 
 void stop_start_sync_timer(LinkLobbyState& state) {
@@ -1327,6 +1354,19 @@ bool send_lobby_transport_payload(LinkLobbyState& state, const void* packet,
 
     LinkLobbySocketCriticalSectionScope lock(state);
     bool sent = false;
+    const bool relay_enabled = state.mode == 0 && WizardNetRelayEnabled();
+    const bool relay_socket_target = WizardNetRelaySocketIsMember(target_socket);
+    const bool relay_broadcast_target =
+        target_socket == INVALID_SOCKET || target_socket == 0;
+    if (relay_enabled && (relay_socket_target || relay_broadcast_target)) {
+        const u32 target_member = relay_socket_target ?
+            WizardNetRelayMemberForSocket(target_socket) :
+            WizardNetRelayDefaultTargetMember();
+        const bool relay_sent = QueueWizardNetRelayFrame(target_member,
+            kWizardNetRelayStreamLink,
+            packet, static_cast<u32>(byte_count));
+        return relay_sent;
+    }
     if (state.mode >= 0 && state.mode <= 2) {
         if (target_socket != INVALID_SOCKET && target_socket != 0) {
             sent = QueueAndFlushSocketSend(static_cast<u32>(byte_count), packet,
@@ -1385,7 +1425,7 @@ u32 packet_u32(const void* packet, std::size_t byte_count, std::size_t offset) {
 }
 
 bool packet_player_index(const void* packet, std::size_t byte_count, int& out_index) {
-    if (byte_count < 0x10) {
+    if (packet == nullptr || byte_count < 0x10) {
         return false;
     }
     out_index = static_cast<int>(packet_u32(packet, byte_count, 0x0c));
@@ -1532,6 +1572,9 @@ void apply_link_lobby_start_parameter_payload_fields(LinkLobbyState& state,
                 kLinkLobbyPlayerPayloadBodyBytes);
             std::memcpy(state.players[i].raw_payload.data(),
                 state.player_payloads[i].data(), state.player_payloads[i].size());
+            remember_relay_member_for_player_socket(i,
+                static_cast<SOCKET>(read_le32(state.players[i].raw_payload.data() +
+                    kLinkLobbyPlayerRecordSocketOffset)));
         }
     }
 }
@@ -3359,6 +3402,7 @@ void SwapLinkLobbyPlayerSlots(LinkLobbyState& state, int left_player,
     SetDirectPlayMode1UdpPeerAddress(left_player, state.udp_peer_addresses[left_player]);
     SetDirectPlayMode1UdpPeerAddress(right_player, state.udp_peer_addresses[right_player]);
     SwapLinkLobbyPlayerPayloads(state, left_player, right_player);
+    refresh_relay_player_members_from_records(state);
 
     if (state.local_player_index == left_player) {
         state.local_player_index = right_player;
@@ -3730,7 +3774,35 @@ void HandleLinkLobbyStartResult(LinkLobbyState& state, u32 player_index,
             static_cast<u32>(previous_local_player), sockaddr_in{});
     }
 
-    if (state.mode >= 0 && state.mode < 3) {
+    if (state.mode == 0 && WizardNetRelayEnabled()) {
+        const WizardNetRelayState& relay = wizardnet_relay_state();
+        if (assigned_peer_socket == INVALID_SOCKET) {
+            assigned_peer_socket = WizardNetRelaySocketForMember(1);
+        }
+        state.player_sockets[state.local_player_index] = assigned_peer_socket;
+        state.shared_peer_socket = assigned_peer_socket;
+        set_local_player_transport_handle(state,
+            WizardNetRelaySocketForMember(relay.local_member_id));
+        SetWizardNetRelayPlayerMember(static_cast<u32>(state.local_player_index),
+            relay.local_member_id);
+        if (WizardNetRelaySocketIsMember(assigned_peer_socket)) {
+            const u32 peer_member = WizardNetRelayMemberForSocket(assigned_peer_socket);
+            for (int slot = 0; slot < kLinkLobbyAvatarCount; ++slot) {
+                if (slot != state.local_player_index &&
+                    WizardNetRelayMemberForPlayer(static_cast<u32>(slot)) == 0) {
+                    SetWizardNetRelayPlayerMember(static_cast<u32>(slot),
+                        peer_member);
+                    break;
+                }
+            }
+        }
+        state.player_socket_connected[state.local_player_index] = true;
+        append_link_lobby_log(
+            "link relay join accepted slot=%lu local_member=%lu peer_socket=%llu",
+            static_cast<unsigned long>(state.local_player_index),
+            static_cast<unsigned long>(relay.local_member_id),
+            static_cast<unsigned long long>(assigned_peer_socket));
+    } else if (state.mode >= 0 && state.mode < 3) {
         state.player_sockets[state.local_player_index] = assigned_peer_socket;
         state.shared_peer_socket = assigned_peer_socket;
         set_local_player_transport_handle(state, assigned_peer_socket);
@@ -3799,6 +3871,7 @@ void HandleLinkLobbyPlayerDisconnected(LinkLobbyState& state, u32 player_index) 
 
     state.player_socket_connected[player_index] = false;
     state.player_sockets[player_index] = INVALID_SOCKET;
+    SetWizardNetRelayPlayerMember(player_index, 0);
     if (static_cast<int>(player_index) == state.local_player_index) {
         ShutdownLinkLobbyNetworkRoute(state);
         show_startup_message(state, 75, "The host rejected you.",
@@ -4034,6 +4107,8 @@ void ApplyLinkLobbyPlayerRecordPacket(LinkLobbyState& state, const void* packet,
     std::memcpy(state.players[player_index].raw_payload.data(), bytes + 0x10,
         std::min<std::size_t>(0x19e, state.players[player_index].raw_payload.size()));
     state.player_payloads[player_index] = state.players[player_index].raw_payload;
+    remember_relay_member_for_player_socket(player_index,
+        link_lobby_player_record_socket(state, player_index));
     state.players[player_index].occupied = true;
     state.players[player_index].ready = true;
     ResetLinkLobbyPlayerRoleToHuman(state, player_index);
@@ -4051,7 +4126,8 @@ void HandleLinkLobbyPlayerDisconnectPacket(LinkLobbyState& state, const void* pa
         context != nullptr && context->system_message_101_seen;
     const bool raw_host_departure = state.host_mode && state.mode >= 0 &&
         state.mode <= 2 && !directplay_ready &&
-        sender_socket != INVALID_SOCKET && sender_socket != 0;
+        sender_socket != INVALID_SOCKET && sender_socket != 0 &&
+        !WizardNetRelaySocketIsMember(sender_socket);
     if (raw_host_departure &&
         connected_player_for_socket(state, sender_socket) != player_index) {
         append_link_lobby_log(
@@ -4425,6 +4501,8 @@ void ApplyLinkLobbyPlayerPresencePacket(LinkLobbyState& state, const void* packe
     std::memcpy(state.players[player_index].raw_payload.data(), bytes + 0x10,
         std::min<std::size_t>(0x19e, state.players[player_index].raw_payload.size()));
     state.player_payloads[player_index] = state.players[player_index].raw_payload;
+    remember_relay_member_for_player_socket(player_index,
+        link_lobby_player_record_socket(state, player_index));
 
     const bool present = byte_count <= 0x19a || packet_u32(packet, byte_count, 0x19a) != 0;
     if (present) {
@@ -4871,7 +4949,7 @@ void SendLinkLobbySlotSwapPacket(LinkLobbyState& state, u32 left_player,
         left_player, right_player);
 }
 
-void SendLinkLobbyRelayJoinPacket(LinkLobbyState& state, SOCKET target_socket,
+std::vector<u8> BuildLinkLobbyRelayJoinPacket(LinkLobbyState& state,
     const char* player_name, const char* password) {
     std::vector<u8> packet(kLinkLobbyRelayJoinPacketBytes, 0);
     write_le32(packet, 0, kLinkLobbyTransportPacketType);
@@ -4887,6 +4965,13 @@ void SendLinkLobbyRelayJoinPacket(LinkLobbyState& state, SOCKET target_socket,
     if (password != nullptr) {
         std::strncpy(reinterpret_cast<char*>(packet.data() + 0x3c), password, 10);
     }
+    return packet;
+}
+
+void SendLinkLobbyRelayJoinPacket(LinkLobbyState& state, SOCKET target_socket,
+    const char* player_name, const char* password) {
+    std::vector<u8> packet =
+        BuildLinkLobbyRelayJoinPacket(state, player_name, password);
     SendLinkLobbyRawTransportPacket(state, target_socket, packet.data(),
         packet.size());
 }
@@ -6018,6 +6103,41 @@ bool InitializeLinkLobbyNetworkRoute(LinkLobbyState& state) {
         return true;
     }
 
+    if (state.mode == 0 && WizardNetRelayEnabled()) {
+        const WizardNetRelayState& relay = wizardnet_relay_state();
+        state.relay_game_id = relay.game_id;
+        const SOCKET local_socket =
+            WizardNetRelaySocketForMember(relay.local_member_id);
+        refresh_relay_player_members_from_records(state);
+        if (player_index_valid(state.local_player_index)) {
+            set_local_player_transport_handle(state, local_socket);
+            SetWizardNetRelayPlayerMember(
+                static_cast<u32>(state.local_player_index),
+                relay.local_member_id);
+        }
+        if (state.host_mode) {
+            if (player_index_valid(state.local_player_index)) {
+                state.player_sockets[state.local_player_index] = local_socket;
+            }
+        } else {
+            const SOCKET host_socket = WizardNetRelaySocketForMember(1);
+            if (state.shared_peer_socket == INVALID_SOCKET) {
+                state.shared_peer_socket = host_socket;
+            }
+            if (state.local_player_index != 0 &&
+                WizardNetRelayMemberForPlayer(0) == 0) {
+                SetWizardNetRelayPlayerMember(0, 1);
+            }
+        }
+        append_link_lobby_log(
+            "link relay route initialized game=%lu local_member=%lu host=%s local_slot=%ld",
+            static_cast<unsigned long>(relay.game_id),
+            static_cast<unsigned long>(relay.local_member_id),
+            relay.host_mode ? "yes" : "no",
+            static_cast<long>(state.local_player_index));
+        return true;
+    }
+
     if (state.default_udp_port != 0) {
         char host_name[0x100]{};
         char local_address[0x100]{};
@@ -6265,6 +6385,10 @@ void HandleLinkLobbyPeerSocketEvent(LinkLobbyState& state, WPARAM socket,
 void HandleLinkLobbyAsyncTcpSocketEvent(LinkLobbyState& state, WPARAM,
     LPARAM event) {
     const WORD network_event = LOWORD(event);
+    if (network_event == FD_WRITE) {
+        FlushWizardNetRelayAsyncSendQueue();
+        return;
+    }
     if (network_event == FD_READ) {
         if (state.async_tcp_socket == nullptr) {
             return;
@@ -6307,6 +6431,94 @@ void HandleLinkLobbyAsyncTcpSocketEvent(LinkLobbyState& state, WPARAM,
             if (packet_count == 0 ||
                 static_cast<u32>(byte_count) < packet_count) {
                 break;
+            }
+            if (packet_type == 3 && opcode == kWizardNetRelayFrameOpcode) {
+                if (packet_count >= 0x19) {
+                    const u32 game_id = read_le32(payload + 0x0d);
+                    const u32 from_member = read_le32(payload + 0x11);
+                    const u32 stream_id = read_le32(payload + 0x15);
+                    const u8* frame_payload = payload + 0x19;
+                    const u32 frame_bytes = packet_count - 0x19;
+                    if (WizardNetRelayReadyForGame(game_id)) {
+                        std::vector<u8> decoded;
+                        if (!DecodeWizardNetRelayPayload(game_id, frame_payload,
+                                frame_bytes, decoded)) {
+                            ConsumeLegacyAsyncTcpReceiveQueue(*state.async_tcp_socket,
+                                static_cast<i32>(packet_count));
+                            payload = GetLegacyAsyncTcpReceiveBuffer(
+                                *state.async_tcp_socket);
+                            byte_count = GetLegacyAsyncTcpReceiveLength(
+                                *state.async_tcp_socket);
+                            continue;
+                        }
+                        if (stream_id == kWizardNetRelayStreamLink) {
+                            RecordWizardNetRelayLinkFrameReceived(game_id,
+                                from_member, static_cast<u32>(decoded.size()), "link");
+                            post_copied_window_payload(state.window,
+                                kLinkLobbyCopiedPayloadMessage,
+                                static_cast<WPARAM>(
+                                    WizardNetRelaySocketForMember(from_member)),
+                                decoded.data(), static_cast<u32>(decoded.size()));
+                        } else if (stream_id == kWizardNetRelayStreamMode1) {
+                            EnqueueWizardNetRelayMode1Payload(decoded.data(),
+                                static_cast<u32>(decoded.size()), from_member);
+                        }
+                    }
+                }
+                ConsumeLegacyAsyncTcpReceiveQueue(*state.async_tcp_socket,
+                    static_cast<i32>(packet_count));
+                payload = GetLegacyAsyncTcpReceiveBuffer(*state.async_tcp_socket);
+                byte_count = GetLegacyAsyncTcpReceiveLength(*state.async_tcp_socket);
+                continue;
+            }
+            if (packet_type == 3 && opcode == kWizardNetRelayMemberLeftOpcode) {
+                if (packet_count >= 0x15) {
+                    const u32 game_id = read_le32(payload + 0x0d);
+                    const u32 member_id = read_le32(payload + 0x11);
+                    if (WizardNetRelayReadyForGame(game_id)) {
+                        const SOCKET relay_socket =
+                            WizardNetRelaySocketForMember(member_id);
+                        const int player_index =
+                            connected_player_for_socket(state, relay_socket);
+                        if (!state.host_mode && member_id == 1) {
+                            show_startup_message(state, 30,
+                                "The game host canceled the game.",
+                                kLinkHostCancelRed);
+                            ResetWizardNetRelayState();
+                            state.relay_game_id = 0;
+                            ReturnFromLinkLobby(state);
+                            return;
+                        }
+                        if (player_index_valid(player_index)) {
+                            HandleLinkLobbyPlayerDisconnected(state,
+                                static_cast<u32>(player_index));
+                        }
+                    }
+                }
+                ConsumeLegacyAsyncTcpReceiveQueue(*state.async_tcp_socket,
+                    static_cast<i32>(packet_count));
+                payload = GetLegacyAsyncTcpReceiveBuffer(*state.async_tcp_socket);
+                byte_count = GetLegacyAsyncTcpReceiveLength(*state.async_tcp_socket);
+                continue;
+            }
+            if (packet_type == 3 && opcode == kWizardNetRelayJoinStatusOpcode) {
+                ConsumeLegacyAsyncTcpReceiveQueue(*state.async_tcp_socket,
+                    static_cast<i32>(packet_count));
+                payload = GetLegacyAsyncTcpReceiveBuffer(*state.async_tcp_socket);
+                byte_count = GetLegacyAsyncTcpReceiveLength(*state.async_tcp_socket);
+                continue;
+            }
+            if (packet_type == 3 &&
+                WizardNetRelayCanDiscardStaleAsyncOpcode(opcode)) {
+                append_link_lobby_log(
+                    "link relay discarded stale async opcode=0x%02lx bytes=%lu",
+                    static_cast<unsigned long>(opcode),
+                    static_cast<unsigned long>(packet_count));
+                ConsumeLegacyAsyncTcpReceiveQueue(*state.async_tcp_socket,
+                    static_cast<i32>(packet_count));
+                payload = GetLegacyAsyncTcpReceiveBuffer(*state.async_tcp_socket);
+                byte_count = GetLegacyAsyncTcpReceiveLength(*state.async_tcp_socket);
+                continue;
             }
             if (opcode != kLinkLobbyPeerRouteSyncOpcode) {
                 break;
@@ -6611,6 +6823,21 @@ bool SubmitLinkLobbyStartRequest(LinkLobbyState& state) {
         return false;
     }
 
+    if (state.mode == 0 && WizardNetRelayEnabled()) {
+        if (!SendLinkLobbyStartParametersPacket(state)) {
+            ClearLinkLobbyDirectPlayJoinDisabled(state);
+            append_link_lobby_log("link relay submit blocked start parameters send");
+            show_startup_message(state, 28, "Another player is required.",
+                kLinkMapFailureRed);
+            return false;
+        }
+        if (state.window != nullptr) {
+            PostMessageA(state.window, kLinkLobbyStartDecisionMessage, 0, 0);
+        }
+        append_link_lobby_log("link relay submit posted start decision");
+        return true;
+    }
+
     if (state.mode < 0 || state.mode > 2) {
         if (!SendLinkLobbyStartParametersPacket(state)) {
             ClearLinkLobbyDirectPlayJoinDisabled(state);
@@ -6835,6 +7062,9 @@ bool CopyIncomingLinkLobbyPlayerPayload(LinkLobbyState& state, const void* messa
         bytes + kLinkLobbyPlayerPayloadBodyOffset, kLinkLobbyPlayerPayloadBodyBytes);
     std::memcpy(state.players[slot].raw_payload.data(),
         state.player_payloads[slot].data(), state.player_payloads[slot].size());
+    remember_relay_member_for_player_socket(static_cast<int>(slot),
+        static_cast<SOCKET>(read_le32(state.players[slot].raw_payload.data() +
+            kLinkLobbyPlayerRecordSocketOffset)));
     return true;
 }
 
@@ -6925,6 +7155,8 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
     state.directplay_join_disabled = false;
     state.udp_probe_route_toggle = false;
     state.store_avatar_publish_locally = state.host_mode;
+    state.relay_game_id = mode == 0 && WizardNetRelayEnabled() ?
+        wizardnet_relay_state().game_id : 0;
     state.shared_peer_socket = INVALID_SOCKET;
     state.pending_join_socket = INVALID_SOCKET;
     state.player_role_values = {};
@@ -7219,7 +7451,14 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
     }
     MarkLinkLobbyResourcesReady(state);
     if (join_existing_lobby) {
-        if (state.mode >= 0 && state.mode <= 2) {
+        if (state.mode == 0 && WizardNetRelayEnabled()) {
+            if (state.shared_peer_socket != INVALID_SOCKET) {
+                state.join_request_pending = true;
+                PostMessageA(state.window, kLinkLobbySocketMessage,
+                    static_cast<WPARAM>(state.shared_peer_socket),
+                    MAKELPARAM(FD_WRITE, 0));
+            }
+        } else if (state.mode >= 0 && state.mode <= 2) {
             if (state.shared_peer_socket != INVALID_SOCKET) {
                 state.join_request_pending = true;
                 WSAAsyncSelect(state.shared_peer_socket, state.window,
@@ -7576,14 +7815,19 @@ LRESULT HandleLinkLobbyWindowMessage(LinkLobbyState& state, HWND hwnd, UINT mess
     case kLinkLobbyCopiedPayloadMessage:
         if (lparam != 0) {
             const void* payload = reinterpret_cast<const void*>(lparam);
+            const std::size_t payload_size = locked_window_payload_size(lparam);
             std::size_t byte_count = kLinkLobbyPlayerPayloadBodyOffset +
                 kLinkLobbyPlayerPayloadBodyBytes;
             const auto* bytes = static_cast<const u8*>(payload);
-            if (read_le32(bytes) == kLinkLobbyTransportPacketType) {
+            if (payload_size >= 0x0c &&
+                read_le32(bytes) == kLinkLobbyTransportPacketType) {
                 const u32 declared_size = read_le32(bytes + 8);
-                if (declared_size != 0) {
+                if (declared_size != 0 && declared_size <= payload_size) {
                     byte_count = declared_size;
                 }
+            }
+            if (byte_count > payload_size) {
+                byte_count = payload_size;
             }
             DispatchLinkLobbyTransportPacket(state, static_cast<u32>(wparam),
                 payload, byte_count);

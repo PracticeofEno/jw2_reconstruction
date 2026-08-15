@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 import socket
 import struct
+import tempfile
+import time
 import unittest
 
 from ranker_server.app import RankerServer
@@ -16,6 +20,10 @@ from ranker_server.protocol import (
     read_i32,
     read_u32,
 )
+from ranker_server.state import ClientSession
+
+RELAY_SECRET_BYTES = 32
+RELAY_CIPHER_HEADER_BYTES = 28
 
 
 def login_packet(account: str, password: str) -> bytes:
@@ -34,10 +42,79 @@ def create_account_packet(account: str, password: str) -> bytes:
     return build_packet(3, payload)
 
 
+def relay_secret(packet: bytes) -> bytes:
+    return packet[0x19 : 0x19 + RELAY_SECRET_BYTES]
+
+
+def relay_wire_payload(payload: bytes) -> bytes:
+    return b"WRL1" + struct.pack("<I", len(payload)) + b"\0" * 20 + payload
+
+
+def relay_plain_payload(payload: bytes) -> bytes:
+    assert payload[:4] == b"WRL1"
+    plain_bytes = read_u32(payload, 4)
+    assert plain_bytes == len(payload) - RELAY_CIPHER_HEADER_BYTES
+    return payload[RELAY_CIPHER_HEADER_BYTES:]
+
+
 async def read_packet(reader: asyncio.StreamReader) -> bytes:
     header = await reader.readexactly(12)
     packet_bytes = read_u32(header, 8)
     return header + await reader.readexactly(packet_bytes - 12)
+
+
+async def read_until_opcode(
+    reader: asyncio.StreamReader, opcode: int, *, limit: int = 20
+) -> bytes:
+    for _ in range(limit):
+        packet = await asyncio.wait_for(read_packet(reader), timeout=2.0)
+        if read_u32(packet, 4) == opcode:
+            return packet
+    raise AssertionError(f"opcode 0x{opcode:02x} was not received")
+
+
+async def wait_until(predicate, *, timeout: float = 1.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not predicate():
+        if asyncio.get_running_loop().time() >= deadline:
+            raise AssertionError("condition was not reached before timeout")
+        await asyncio.sleep(0.01)
+
+
+def host_game_packet(
+    name: str = "RelayRoom", *, port: int = 23010, map_name: str = "RelayMap"
+) -> bytes:
+    request = bytearray(0x409 - HEADER_BYTES)
+    request[0 : len(name)] = name.encode("ascii")[:0x80]
+    sockaddr = (
+        struct.pack("<H", socket.AF_INET)
+        + struct.pack(">H", port)
+        + socket.inet_aton("127.0.0.1")
+        + b"\0" * 8
+    )
+    request[0x10D - HEADER_BYTES : 0x11D - HEADER_BYTES] = sockaddr
+    encoded_map = map_name.encode("ascii")[:0x20]
+    map_offset = 0x12D - HEADER_BYTES + 8
+    request[map_offset : map_offset + len(encoded_map)] = encoded_map
+    return build_packet(0x19, request)
+
+
+class SlowDrainWriter:
+    def __init__(self) -> None:
+        self.closed = False
+        self.written = bytearray()
+
+    def is_closing(self) -> bool:
+        return self.closed
+
+    def write(self, data: bytes) -> None:
+        self.written.extend(data)
+
+    async def drain(self) -> None:
+        await asyncio.sleep(60)
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class ServerIntegrationTests(unittest.IsolatedAsyncioTestCase):
@@ -66,6 +143,34 @@ class ServerIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(read_u32(response, 4), 2)
         self.assertEqual(read_u32(response, 0x0D), 0)
         return reader, writer
+
+    async def test_slow_client_send_is_closed_after_timeout(self) -> None:
+        self.server.config.send_timeout_seconds = 0.01
+        writer = SlowDrainWriter()
+        session = ClientSession(999, None, writer, "127.0.0.1", 12345)
+
+        await self.server._send(session, b"payload")
+
+        self.assertEqual(bytes(writer.written), b"payload")
+        self.assertTrue(writer.closed)
+
+    async def advertise_relay_game(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        name: str = "RelayRoom",
+    ) -> int:
+        writer.write(host_game_packet(name))
+        await writer.drain()
+        hosted = await read_until_opcode(reader, 0x1A)
+        self.assertEqual(read_u32(hosted, 0x0D), 1)
+        game_id = read_u32(hosted, 0x11)
+        self.assertNotEqual(game_id, 0)
+        self.assertEqual(read_u32(hosted, 0x15), 1)
+        secret = relay_secret(hosted)
+        self.assertEqual(len(secret), RELAY_SECRET_BYTES)
+        self.assertNotEqual(secret, b"\0" * RELAY_SECRET_BYTES)
+        return game_id
 
     async def test_login_and_online_user_paging(self) -> None:
         alice_reader, alice_writer = await self.connect_and_login("Alice")
@@ -267,6 +372,1063 @@ class ServerIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(read_c_string(listed, 0x0D, 0x80), "LocalRoom")
         self.assertEqual(socket.inet_ntoa(listed[0x91:0x95]), "8.8.8.8")
         self.assertEqual(struct.unpack(">H", listed[0x8F:0x91])[0], 23010)
+
+    async def test_game_relay_join_and_frames_are_forwarded_by_member_id(self) -> None:
+        host_reader, host_writer = await self.connect_and_login("RelayHost")
+        join_reader, join_writer = await self.connect_and_login("RelayJoin")
+        third_reader, third_writer = await self.connect_and_login("RelayThird")
+
+        # RelayHost receives the joiners' real-time lobby presence first.
+        await read_packet(host_reader)
+        await read_packet(host_reader)
+        await read_packet(join_reader)
+
+        join_writer.write(build_packet(0x1D, struct.pack("<I", 0)))
+        await join_writer.drain()
+        empty_list = await read_packet(join_reader)
+        self.assertEqual(read_u32(empty_list, 4), 0x1E)
+        self.assertEqual(read_i32(empty_list, 0xAD), -1)
+
+        request = bytearray(0x409 - HEADER_BYTES)
+        request[0:9] = b"RelayRoom"
+        sockaddr = (
+            struct.pack("<H", socket.AF_INET)
+            + struct.pack(">H", 23010)
+            + socket.inet_aton("127.0.0.1")
+            + b"\0" * 8
+        )
+        request[0x10D - HEADER_BYTES : 0x11D - HEADER_BYTES] = sockaddr
+        request[0x12D - HEADER_BYTES + 8 : 0x12D - HEADER_BYTES + 17] = b"RelayMap\0"
+        host_writer.write(build_packet(0x19, request))
+        await host_writer.drain()
+
+        hosted = await read_packet(host_reader)
+        self.assertEqual(read_u32(hosted, 4), 0x1A)
+        self.assertEqual(read_u32(hosted, 0x0D), 1)
+        game_id = read_u32(hosted, 0x11)
+        self.assertEqual(game_id, 1)
+        self.assertEqual(read_u32(hosted, 0x15), 1)
+        host_relay_secret = relay_secret(hosted)
+        self.assertEqual(len(host_relay_secret), RELAY_SECRET_BYTES)
+        self.assertNotEqual(host_relay_secret, b"\0" * RELAY_SECRET_BYTES)
+
+        advertised_update = await read_packet(join_reader)
+        self.assertEqual(read_u32(advertised_update, 4), 0x27)
+
+        join_payload = b"link-join"
+        join_writer.write(
+            build_packet(
+                0x90, struct.pack("<I", game_id) + relay_wire_payload(join_payload)
+            )
+        )
+        await join_writer.drain()
+        joined = await read_packet(join_reader)
+        self.assertEqual(read_u32(joined, 4), 0x93)
+        self.assertEqual(read_u32(joined, 0x0D), 0)
+        self.assertEqual(read_u32(joined, 0x11), game_id)
+        join_member_id = read_u32(joined, 0x15)
+        self.assertEqual(join_member_id, 2)
+        self.assertEqual(relay_secret(joined), host_relay_secret)
+        join_session = next(
+            client
+            for client in self.server.state.clients.values()
+            if client.account == "RelayJoin"
+        )
+        self.assertEqual(join_session.view, "link")
+
+        forwarded_join = await read_packet(host_reader)
+        self.assertEqual(read_u32(forwarded_join, 4), 0x94)
+        self.assertEqual(read_u32(forwarded_join, 0x0D), game_id)
+        self.assertEqual(read_u32(forwarded_join, 0x11), join_member_id)
+        self.assertEqual(read_u32(forwarded_join, 0x15), 0)
+        self.assertEqual(relay_plain_payload(forwarded_join[0x19:]), join_payload)
+
+        reply_payload = b"host-reply"
+        host_writer.write(
+            build_packet(
+                0x92,
+                struct.pack("<III", game_id, join_member_id, 0)
+                + relay_wire_payload(reply_payload),
+            )
+        )
+        await host_writer.drain()
+        forwarded_reply = await read_packet(join_reader)
+        self.assertEqual(read_u32(forwarded_reply, 4), 0x94)
+        self.assertEqual(read_u32(forwarded_reply, 0x0D), game_id)
+        self.assertEqual(read_u32(forwarded_reply, 0x11), 1)
+        self.assertEqual(read_u32(forwarded_reply, 0x15), 0)
+        self.assertEqual(relay_plain_payload(forwarded_reply[0x19:]), reply_payload)
+
+        large_payload = b"R" * 0x5000
+        host_writer.write(
+            build_packet(
+                0x92,
+                struct.pack("<III", game_id, join_member_id, 1)
+                + relay_wire_payload(large_payload),
+            )
+        )
+        await host_writer.drain()
+        forwarded_large = await read_packet(join_reader)
+        self.assertEqual(read_u32(forwarded_large, 4), 0x94)
+        self.assertEqual(read_u32(forwarded_large, 0x0D), game_id)
+        self.assertEqual(read_u32(forwarded_large, 0x11), 1)
+        self.assertEqual(read_u32(forwarded_large, 0x15), 1)
+        self.assertEqual(relay_plain_payload(forwarded_large[0x19:]), large_payload)
+
+        for index in range(16):
+            ordered_payload = f"ordered-gameplay-{index:02d}".encode("ascii")
+            host_writer.write(
+                build_packet(
+                    0x92,
+                    struct.pack("<III", game_id, join_member_id, 1)
+                    + relay_wire_payload(ordered_payload),
+                )
+            )
+        await host_writer.drain()
+        for index in range(16):
+            ordered = await read_packet(join_reader)
+            self.assertEqual(read_u32(ordered, 4), 0x94)
+            self.assertEqual(read_u32(ordered, 0x0D), game_id)
+            self.assertEqual(read_u32(ordered, 0x11), 1)
+            self.assertEqual(read_u32(ordered, 0x15), 1)
+            self.assertEqual(
+                relay_plain_payload(ordered[0x19:]),
+                f"ordered-gameplay-{index:02d}".encode("ascii"),
+            )
+
+        third_writer.write(
+            build_packet(0x90, struct.pack("<I", game_id) + relay_wire_payload(b"third"))
+        )
+        await third_writer.drain()
+        third_joined = await read_packet(third_reader)
+        self.assertEqual(read_u32(third_joined, 4), 0x93)
+        third_member_id = read_u32(third_joined, 0x15)
+        self.assertEqual(third_member_id, 3)
+        await read_packet(host_reader)
+
+        host_only_payload = b"joiner-to-host-only"
+        join_writer.write(
+            build_packet(
+                0x92,
+                struct.pack("<III", game_id, 1, 1)
+                + relay_wire_payload(host_only_payload),
+            )
+        )
+        await join_writer.drain()
+        host_only = await read_packet(host_reader)
+        self.assertEqual(read_u32(host_only, 4), 0x94)
+        self.assertEqual(read_u32(host_only, 0x0D), game_id)
+        self.assertEqual(read_u32(host_only, 0x11), join_member_id)
+        self.assertEqual(read_u32(host_only, 0x15), 1)
+        self.assertEqual(relay_plain_payload(host_only[0x19:]), host_only_payload)
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(read_packet(third_reader), timeout=0.05)
+
+        missing_target_payload = b"missing-target"
+        join_writer.write(
+            build_packet(
+                0x92,
+                struct.pack("<III", game_id, 99, 1)
+                + relay_wire_payload(missing_target_payload),
+            )
+        )
+        await join_writer.drain()
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(read_packet(host_reader), timeout=0.05)
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(read_packet(third_reader), timeout=0.05)
+        self.assertEqual(
+            self.server.state.games[game_id].relay_no_target_frames,
+            1,
+        )
+
+        invalid_stream_payload = b"invalid-stream"
+        join_writer.write(
+            build_packet(
+                0x92,
+                struct.pack("<III", game_id, 1, 99)
+                + relay_wire_payload(invalid_stream_payload),
+            )
+        )
+        await join_writer.drain()
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(read_packet(host_reader), timeout=0.05)
+        self.assertEqual(
+            self.server.state.games[game_id].relay_invalid_stream_frames,
+            1,
+        )
+        self.assertGreaterEqual(
+            self.server.state.games[game_id].relay_mode1_frames,
+            18,
+        )
+        self.assertGreater(self.server.state.games[game_id].relay_mode1_bytes, 0)
+
+        broadcast_payload = b"host-broadcast"
+        host_writer.write(
+            build_packet(
+                0x92,
+                struct.pack("<III", game_id, 0, 1)
+                + relay_wire_payload(broadcast_payload),
+            )
+        )
+        await host_writer.drain()
+        join_broadcast = await read_packet(join_reader)
+        third_broadcast = await read_packet(third_reader)
+        self.assertEqual(read_u32(join_broadcast, 4), 0x94)
+        self.assertEqual(read_u32(third_broadcast, 4), 0x94)
+        self.assertEqual(read_u32(join_broadcast, 0x15), 1)
+        self.assertEqual(read_u32(third_broadcast, 0x15), 1)
+        self.assertEqual(relay_plain_payload(join_broadcast[0x19:]), broadcast_payload)
+        self.assertEqual(relay_plain_payload(third_broadcast[0x19:]), broadcast_payload)
+        game = self.server.state.games[game_id]
+        self.assertGreaterEqual(game.relay_member_link_tx[1], 1)
+        self.assertGreaterEqual(game.relay_member_link_rx[1], 2)
+        self.assertGreaterEqual(game.relay_member_link_tx[join_member_id], 1)
+        self.assertGreaterEqual(game.relay_member_link_rx[join_member_id], 1)
+        self.assertGreaterEqual(game.relay_member_mode1_tx[1], 18)
+        self.assertGreaterEqual(game.relay_member_mode1_rx[1], 1)
+        self.assertGreaterEqual(game.relay_member_mode1_tx[join_member_id], 1)
+        self.assertGreaterEqual(game.relay_member_mode1_rx[join_member_id], 18)
+        self.assertGreaterEqual(game.relay_member_mode1_rx[third_member_id], 1)
+
+        join_writer.write(build_packet(0x0E, b"\0" * 8))
+        await join_writer.drain()
+        host_member_left = await read_packet(host_reader)
+        third_member_left = await read_packet(third_reader)
+        self.assertEqual(read_u32(host_member_left, 4), 0x95)
+        self.assertEqual(read_u32(third_member_left, 4), 0x95)
+        self.assertEqual(read_u32(host_member_left, 0x0D), game_id)
+        self.assertEqual(read_u32(third_member_left, 0x0D), game_id)
+        self.assertEqual(read_u32(host_member_left, 0x11), join_member_id)
+        self.assertEqual(read_u32(third_member_left, 0x11), join_member_id)
+
+        replacement_reader, replacement_writer = await self.connect_and_login(
+            "RelayReplacement"
+        )
+        replacement_writer.write(
+            build_packet(
+                0x90, struct.pack("<I", game_id) + relay_wire_payload(b"replacement")
+            )
+        )
+        await replacement_writer.drain()
+        replacement_joined = await read_until_opcode(replacement_reader, 0x93)
+        self.assertEqual(read_u32(replacement_joined, 0x0D), 0)
+        replacement_member_id = read_u32(replacement_joined, 0x15)
+        self.assertEqual(replacement_member_id, join_member_id)
+        replacement_forwarded = await read_until_opcode(host_reader, 0x94, limit=40)
+        self.assertEqual(read_u32(replacement_forwarded, 0x0D), game_id)
+        self.assertEqual(read_u32(replacement_forwarded, 0x11), replacement_member_id)
+        self.assertEqual(
+            relay_plain_payload(replacement_forwarded[0x19:]), b"replacement"
+        )
+
+        replacement_writer.write(build_packet(0x91, struct.pack("<I", game_id)))
+        await replacement_writer.drain()
+        replacement_left = await read_until_opcode(host_reader, 0x95, limit=40)
+        self.assertEqual(read_u32(replacement_left, 0x0D), game_id)
+        self.assertEqual(read_u32(replacement_left, 0x11), replacement_member_id)
+
+        third_writer.write(build_packet(0x91, struct.pack("<I", game_id)))
+        await third_writer.drain()
+        host_third_left = await read_packet(host_reader)
+        self.assertEqual(read_u32(host_third_left, 4), 0x95)
+        self.assertEqual(read_u32(host_third_left, 0x0D), game_id)
+        self.assertEqual(read_u32(host_third_left, 0x11), third_member_id)
+
+    async def test_removing_advertisement_preserves_active_relay_members(self) -> None:
+        host_reader, host_writer = await self.connect_and_login("RelayHideHost")
+        join_reader, join_writer = await self.connect_and_login("RelayHideJoin")
+        browser_reader, browser_writer = await self.connect_and_login("RelayHideBrowse")
+
+        # Consume lobby presence notifications that are unrelated to relay framing.
+        await read_packet(host_reader)
+        await read_packet(host_reader)
+        await read_packet(join_reader)
+
+        browser_writer.write(build_packet(0x1D, struct.pack("<I", 0)))
+        await browser_writer.drain()
+        initial_empty = await read_until_opcode(browser_reader, 0x1E, limit=40)
+        self.assertEqual(read_i32(initial_empty, 0xAD), -1)
+
+        game_id = await self.advertise_relay_game(
+            host_reader, host_writer, "RelayHiddenRoom"
+        )
+        listed = await read_until_opcode(browser_reader, 0x27, limit=40)
+        self.assertEqual(read_u32(listed, 0xB1), game_id)
+
+        join_writer.write(
+            build_packet(
+                0x90, struct.pack("<I", game_id) + relay_wire_payload(b"join")
+            )
+        )
+        await join_writer.drain()
+        joined = await read_until_opcode(join_reader, 0x93, limit=40)
+        self.assertEqual(read_u32(joined, 0x0D), 0)
+        join_member_id = read_u32(joined, 0x15)
+        self.assertEqual(join_member_id, 2)
+        await read_until_opcode(host_reader, 0x94, limit=40)
+
+        host_writer.write(build_packet(0x1B, struct.pack("<I", game_id)))
+        await host_writer.drain()
+        hidden = await read_until_opcode(browser_reader, 0x26, limit=40)
+        self.assertEqual(read_u32(hidden, 0x0D), game_id)
+
+        game = self.server.state.games.get(game_id)
+        self.assertIsNotNone(game)
+        self.assertFalse(game.advertised)
+        self.assertEqual(game.relay_members, {1: 1, 2: 2})
+
+        browser_writer.write(build_packet(0x1D, struct.pack("<I", 0)))
+        await browser_writer.drain()
+        empty = await read_until_opcode(browser_reader, 0x1E, limit=40)
+        self.assertEqual(read_i32(empty, 0xAD), -1)
+
+        late_reader, late_writer = await self.connect_and_login("RelayHideLate")
+        late_writer.write(
+            build_packet(
+                0x90, struct.pack("<I", game_id) + relay_wire_payload(b"late")
+            )
+        )
+        await late_writer.drain()
+        rejected = await read_until_opcode(late_reader, 0x93, limit=40)
+        self.assertEqual(read_u32(rejected, 0x0D), 1)
+        self.assertEqual(read_u32(rejected, 0x11), game_id)
+
+        probe_payload = b"still-relayed-after-hide"
+        join_writer.write(
+            build_packet(
+                0x92,
+                struct.pack("<III", game_id, 1, 1)
+                + relay_wire_payload(probe_payload),
+            )
+        )
+        await join_writer.drain()
+        forwarded_probe = await read_until_opcode(host_reader, 0x94, limit=40)
+        self.assertEqual(read_u32(forwarded_probe, 0x0D), game_id)
+        self.assertEqual(read_u32(forwarded_probe, 0x11), join_member_id)
+        self.assertEqual(relay_plain_payload(forwarded_probe[0x19:]), probe_payload)
+
+    async def test_start_game_hides_advertisement_and_preserves_relay_members(
+        self,
+    ) -> None:
+        host_reader, host_writer = await self.connect_and_login("RelayStartHost")
+        join_reader, join_writer = await self.connect_and_login("RelayStartJoin")
+        browser_reader, browser_writer = await self.connect_and_login("RelayStartBrowse")
+
+        await read_packet(host_reader)
+        await read_packet(host_reader)
+        await read_packet(join_reader)
+
+        browser_writer.write(build_packet(0x1D, struct.pack("<I", 0)))
+        await browser_writer.drain()
+        initial_empty = await read_until_opcode(browser_reader, 0x1E, limit=40)
+        self.assertEqual(read_i32(initial_empty, 0xAD), -1)
+
+        game_id = await self.advertise_relay_game(
+            host_reader, host_writer, "RelayStartRoom"
+        )
+        listed = await read_until_opcode(browser_reader, 0x27, limit=40)
+        self.assertEqual(read_u32(listed, 0xB1), game_id)
+
+        join_writer.write(
+            build_packet(
+                0x90, struct.pack("<I", game_id) + relay_wire_payload(b"join")
+            )
+        )
+        await join_writer.drain()
+        joined = await read_until_opcode(join_reader, 0x93, limit=40)
+        self.assertEqual(read_u32(joined, 0x0D), 0)
+        join_member_id = read_u32(joined, 0x15)
+        self.assertEqual(join_member_id, 2)
+        await read_until_opcode(host_reader, 0x94, limit=40)
+
+        host_writer.write(build_packet(0x28, b"\0" * 0x20))
+        await host_writer.drain()
+        hidden = await read_until_opcode(browser_reader, 0x26, limit=40)
+        self.assertEqual(read_u32(hidden, 0x0D), game_id)
+
+        game = self.server.state.games.get(game_id)
+        self.assertIsNotNone(game)
+        self.assertFalse(game.advertised)
+        self.assertEqual(game.relay_members, {1: 1, 2: 2})
+
+        browser_writer.write(build_packet(0x1D, struct.pack("<I", 0)))
+        await browser_writer.drain()
+        empty = await read_until_opcode(browser_reader, 0x1E, limit=40)
+        self.assertEqual(read_i32(empty, 0xAD), -1)
+
+        probe_payload = b"still-relayed-after-start"
+        join_writer.write(
+            build_packet(
+                0x92,
+                struct.pack("<III", game_id, 1, 1)
+                + relay_wire_payload(probe_payload),
+            )
+        )
+        await join_writer.drain()
+        forwarded_probe = await read_until_opcode(host_reader, 0x94, limit=40)
+        self.assertEqual(read_u32(forwarded_probe, 0x0D), game_id)
+        self.assertEqual(read_u32(forwarded_probe, 0x11), join_member_id)
+        self.assertEqual(relay_plain_payload(forwarded_probe[0x19:]), probe_payload)
+
+    async def test_online_chat_does_not_pollute_active_relay_stream(self) -> None:
+        host_reader, host_writer = await self.connect_and_login("RelayChatHost")
+        join_reader, join_writer = await self.connect_and_login("RelayChatJoin")
+        _, observer_writer = await self.connect_and_login("RelayChatOnline")
+
+        await read_packet(host_reader)
+        await read_packet(host_reader)
+        await read_packet(join_reader)
+
+        game_id = await self.advertise_relay_game(
+            host_reader, host_writer, "RelayChatRoom"
+        )
+        join_writer.write(
+            build_packet(
+                0x90, struct.pack("<I", game_id) + relay_wire_payload(b"join")
+            )
+        )
+        await join_writer.drain()
+        joined = await read_until_opcode(join_reader, 0x93, limit=40)
+        self.assertEqual(read_u32(joined, 0x0D), 0)
+        join_member_id = read_u32(joined, 0x15)
+        await read_until_opcode(host_reader, 0x94, limit=40)
+
+        raw_chat = build_colored_text_packet("Online> ", "hello lobby")
+        observer_writer.write(build_packet(0x2A, raw_chat[4:]))
+        await observer_writer.drain()
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(join_reader.readexactly(1), timeout=0.05)
+
+        relay_payload = b"relay-after-online-chat"
+        host_writer.write(
+            build_packet(
+                0x92,
+                struct.pack("<III", game_id, join_member_id, 1)
+                + relay_wire_payload(relay_payload),
+            )
+        )
+        await host_writer.drain()
+        forwarded = await read_until_opcode(join_reader, 0x94, limit=40)
+        self.assertEqual(read_u32(forwarded, 0x0D), game_id)
+        self.assertEqual(read_u32(forwarded, 0x11), 1)
+        self.assertEqual(relay_plain_payload(forwarded[0x19:]), relay_payload)
+
+    async def test_expired_active_relay_room_is_hidden_not_disconnected(self) -> None:
+        host_reader, host_writer = await self.connect_and_login("RelayExpireHost")
+        join_reader, join_writer = await self.connect_and_login("RelayExpireJoin")
+
+        await read_packet(host_reader)
+        game_id = await self.advertise_relay_game(
+            host_reader, host_writer, "RelayExpireRoom"
+        )
+
+        join_writer.write(
+            build_packet(
+                0x90, struct.pack("<I", game_id) + relay_wire_payload(b"join")
+            )
+        )
+        await join_writer.drain()
+        joined = await read_until_opcode(join_reader, 0x93, limit=40)
+        self.assertEqual(read_u32(joined, 0x0D), 0)
+        join_member_id = read_u32(joined, 0x15)
+        await read_until_opcode(host_reader, 0x94, limit=40)
+
+        game = self.server.state.games[game_id]
+        game.created_at = time.monotonic() - self.server.config.room_ttl_seconds - 1
+        await self.server._cleanup_expired_games_once()
+        self.assertIn(game_id, self.server.state.games)
+        self.assertFalse(game.advertised)
+        self.assertEqual(game.relay_members, {1: 1, 2: 2})
+
+        probe_payload = b"still-relayed-after-expire"
+        join_writer.write(
+            build_packet(
+                0x92,
+                struct.pack("<III", game_id, 1, 1)
+                + relay_wire_payload(probe_payload),
+            )
+        )
+        await join_writer.drain()
+        forwarded_probe = await read_until_opcode(host_reader, 0x94, limit=40)
+        self.assertEqual(read_u32(forwarded_probe, 0x0D), game_id)
+        self.assertEqual(read_u32(forwarded_probe, 0x11), join_member_id)
+        self.assertEqual(relay_plain_payload(forwarded_probe[0x19:]), probe_payload)
+
+    async def test_hidden_relay_host_disconnect_notifies_members_and_removes_room(
+        self,
+    ) -> None:
+        host_reader, host_writer = await self.connect_and_login("RelayHiddenDropHost")
+        join_reader, join_writer = await self.connect_and_login("RelayHiddenDropJoin")
+
+        await read_packet(host_reader)
+        game_id = await self.advertise_relay_game(
+            host_reader, host_writer, "RelayHiddenDropRoom"
+        )
+        join_writer.write(
+            build_packet(
+                0x90, struct.pack("<I", game_id) + relay_wire_payload(b"join")
+            )
+        )
+        await join_writer.drain()
+        joined = await read_until_opcode(join_reader, 0x93, limit=40)
+        self.assertEqual(read_u32(joined, 0x0D), 0)
+        await read_until_opcode(host_reader, 0x94, limit=40)
+
+        host_writer.write(build_packet(0x1B, struct.pack("<I", game_id)))
+        await host_writer.drain()
+        await wait_until(lambda: not self.server.state.games[game_id].advertised)
+        self.assertFalse(self.server.state.games[game_id].advertised)
+
+        host_writer.transport.abort()
+        host_left = await read_until_opcode(join_reader, 0x95, limit=40)
+        self.assertEqual(read_u32(host_left, 0x0D), game_id)
+        self.assertEqual(read_u32(host_left, 0x11), 1)
+        self.assertNotIn(game_id, self.server.state.games)
+        join_session = next(
+            client
+            for client in self.server.state.clients.values()
+            if client.account == "RelayHiddenDropJoin"
+        )
+        self.assertIsNone(join_session.relay_game_id)
+        self.assertEqual(join_session.relay_member_id, 0)
+
+    async def test_hidden_relay_joiner_leave_keeps_host_until_lobby_return(
+        self,
+    ) -> None:
+        host_reader, host_writer = await self.connect_and_login("RelayHiddenSoloHost")
+        join_reader, join_writer = await self.connect_and_login("RelayHiddenSoloJoin")
+
+        await read_packet(host_reader)
+        game_id = await self.advertise_relay_game(
+            host_reader, host_writer, "RelayHiddenSoloRoom"
+        )
+        join_writer.write(
+            build_packet(
+                0x90, struct.pack("<I", game_id) + relay_wire_payload(b"join")
+            )
+        )
+        await join_writer.drain()
+        joined = await read_until_opcode(join_reader, 0x93, limit=40)
+        self.assertEqual(read_u32(joined, 0x0D), 0)
+        join_member_id = read_u32(joined, 0x15)
+        await read_until_opcode(host_reader, 0x94, limit=40)
+
+        host_writer.write(build_packet(0x1B, struct.pack("<I", game_id)))
+        await host_writer.drain()
+        await wait_until(lambda: not self.server.state.games[game_id].advertised)
+        self.assertFalse(self.server.state.games[game_id].advertised)
+
+        join_writer.write(build_packet(0x91, struct.pack("<I", game_id)))
+        await join_writer.drain()
+        left = await read_until_opcode(host_reader, 0x95, limit=40)
+        self.assertEqual(read_u32(left, 0x0D), game_id)
+        self.assertEqual(read_u32(left, 0x11), join_member_id)
+        game = self.server.state.games[game_id]
+        self.assertFalse(game.advertised)
+        self.assertEqual(game.relay_members, {1: 1})
+
+        host_writer.write(build_packet(0x0E, b"\0" * 8))
+        await host_writer.drain()
+        await wait_until(lambda: game_id not in self.server.state.games)
+        self.assertNotIn(game_id, self.server.state.games)
+
+    async def test_hidden_relay_room_name_reuse_is_isolated_by_game_id(self) -> None:
+        first_host_reader, first_host_writer = await self.connect_and_login(
+            "RelayReuseHostA"
+        )
+        first_join_reader, first_join_writer = await self.connect_and_login(
+            "RelayReuseJoinA"
+        )
+        second_host_reader, second_host_writer = await self.connect_and_login(
+            "RelayReuseHostB"
+        )
+        second_join_reader, second_join_writer = await self.connect_and_login(
+            "RelayReuseJoinB"
+        )
+        browser_reader, browser_writer = await self.connect_and_login(
+            "RelayReuseBrowser"
+        )
+
+        # Consume presence notifications that are unrelated to game relay packets.
+        for _ in range(4):
+            await read_packet(first_host_reader)
+        for _ in range(3):
+            await read_packet(first_join_reader)
+        for _ in range(2):
+            await read_packet(second_host_reader)
+        await read_packet(second_join_reader)
+
+        room_name = "RelaySameName"
+        first_game_id = await self.advertise_relay_game(
+            first_host_reader, first_host_writer, room_name
+        )
+        first_join_writer.write(
+            build_packet(
+                0x90,
+                struct.pack("<I", first_game_id)
+                + relay_wire_payload(b"first-join"),
+            )
+        )
+        await first_join_writer.drain()
+        first_joined = await read_until_opcode(first_join_reader, 0x93, limit=40)
+        first_join_member = read_u32(first_joined, 0x15)
+        self.assertEqual(first_join_member, 2)
+        await read_until_opcode(first_host_reader, 0x94, limit=40)
+
+        first_host_writer.write(build_packet(0x1B, struct.pack("<I", first_game_id)))
+        await first_host_writer.drain()
+        await wait_until(lambda: not self.server.state.games[first_game_id].advertised)
+
+        browser_writer.write(build_packet(0x1D, struct.pack("<I", 0)))
+        await browser_writer.drain()
+        empty = await read_until_opcode(browser_reader, 0x1E, limit=40)
+        self.assertEqual(read_i32(empty, 0xAD), -1)
+
+        second_game_id = await self.advertise_relay_game(
+            second_host_reader, second_host_writer, room_name
+        )
+        self.assertNotEqual(first_game_id, second_game_id)
+        listed = await read_until_opcode(browser_reader, 0x27, limit=40)
+        self.assertEqual(read_c_string(listed, 0x0D, 0x80), room_name)
+        self.assertEqual(read_u32(listed, 0xB1), second_game_id)
+
+        second_join_writer.write(
+            build_packet(
+                0x90,
+                struct.pack("<I", second_game_id)
+                + relay_wire_payload(b"second-join"),
+            )
+        )
+        await second_join_writer.drain()
+        second_joined = await read_until_opcode(second_join_reader, 0x93, limit=40)
+        second_join_member = read_u32(second_joined, 0x15)
+        self.assertEqual(second_join_member, 2)
+        forwarded_second_join = await read_until_opcode(
+            second_host_reader, 0x94, limit=40
+        )
+        self.assertEqual(read_u32(forwarded_second_join, 0x0D), second_game_id)
+        self.assertEqual(
+            relay_plain_payload(forwarded_second_join[0x19:]), b"second-join"
+        )
+
+        old_payload = b"old-hidden-room"
+        first_join_writer.write(
+            build_packet(
+                0x92,
+                struct.pack("<III", first_game_id, 1, 1)
+                + relay_wire_payload(old_payload),
+            )
+        )
+        await first_join_writer.drain()
+        old_forwarded = await read_until_opcode(first_host_reader, 0x94, limit=40)
+        self.assertEqual(read_u32(old_forwarded, 0x0D), first_game_id)
+        self.assertEqual(read_u32(old_forwarded, 0x11), first_join_member)
+        self.assertEqual(relay_plain_payload(old_forwarded[0x19:]), old_payload)
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(read_packet(second_host_reader), timeout=0.05)
+
+        new_payload = b"new-visible-room"
+        second_join_writer.write(
+            build_packet(
+                0x92,
+                struct.pack("<III", second_game_id, 1, 1)
+                + relay_wire_payload(new_payload),
+            )
+        )
+        await second_join_writer.drain()
+        new_forwarded = await read_until_opcode(second_host_reader, 0x94, limit=40)
+        self.assertEqual(read_u32(new_forwarded, 0x0D), second_game_id)
+        self.assertEqual(read_u32(new_forwarded, 0x11), second_join_member)
+        self.assertEqual(relay_plain_payload(new_forwarded[0x19:]), new_payload)
+
+    async def test_stale_relay_leave_does_not_remove_new_membership(self) -> None:
+        first_host_reader, first_host_writer = await self.connect_and_login(
+            "RelayStaleHostA"
+        )
+        second_host_reader, second_host_writer = await self.connect_and_login(
+            "RelayStaleHostB"
+        )
+        join_reader, join_writer = await self.connect_and_login("RelayStaleJoin")
+
+        first_game_id = await self.advertise_relay_game(
+            first_host_reader, first_host_writer, "RelayStaleRoomA"
+        )
+        second_game_id = await self.advertise_relay_game(
+            second_host_reader, second_host_writer, "RelayStaleRoomB"
+        )
+
+        join_writer.write(
+            build_packet(
+                0x90, struct.pack("<I", first_game_id) + relay_wire_payload(b"a")
+            )
+        )
+        await join_writer.drain()
+        first_joined = await read_until_opcode(join_reader, 0x93, limit=40)
+        self.assertEqual(read_u32(first_joined, 0x0D), 0)
+        first_member_id = read_u32(first_joined, 0x15)
+        self.assertEqual(first_member_id, 2)
+        await read_until_opcode(first_host_reader, 0x94, limit=40)
+
+        join_writer.write(
+            build_packet(
+                0x90, struct.pack("<I", second_game_id) + relay_wire_payload(b"b")
+            )
+        )
+        await join_writer.drain()
+        second_joined = await read_until_opcode(join_reader, 0x93, limit=40)
+        self.assertEqual(read_u32(second_joined, 0x0D), 0)
+        second_member_id = read_u32(second_joined, 0x15)
+        self.assertEqual(second_member_id, 2)
+        first_left = await read_until_opcode(first_host_reader, 0x95, limit=40)
+        self.assertEqual(read_u32(first_left, 0x0D), first_game_id)
+        self.assertEqual(read_u32(first_left, 0x11), first_member_id)
+        await read_until_opcode(second_host_reader, 0x94, limit=40)
+
+        join_writer.write(build_packet(0x91, struct.pack("<I", first_game_id)))
+        await join_writer.drain()
+        probe_payload = b"still-in-second-room"
+        join_writer.write(
+            build_packet(
+                0x92,
+                struct.pack("<III", second_game_id, 1, 1)
+                + relay_wire_payload(probe_payload),
+            )
+        )
+        await join_writer.drain()
+        forwarded_probe = await read_until_opcode(second_host_reader, 0x94, limit=40)
+        self.assertEqual(read_u32(forwarded_probe, 0x0D), second_game_id)
+        self.assertEqual(read_u32(forwarded_probe, 0x11), second_member_id)
+        self.assertEqual(read_u32(forwarded_probe, 0x15), 1)
+        self.assertEqual(relay_plain_payload(forwarded_probe[0x19:]), probe_payload)
+        join_session = next(
+            client
+            for client in self.server.state.clients.values()
+            if client.account == "RelayStaleJoin"
+        )
+        self.assertEqual(join_session.relay_game_id, second_game_id)
+        self.assertEqual(join_session.relay_member_id, second_member_id)
+
+    async def test_relay_rejects_missing_game_and_non_member_frame(self) -> None:
+        reader, writer = await self.connect_and_login("RelayStray")
+        missing_game_id = 404
+
+        writer.write(build_packet(0x90, struct.pack("<I", missing_game_id) + b"join"))
+        await writer.drain()
+        missing = await read_packet(reader)
+        self.assertEqual(read_u32(missing, 4), 0x93)
+        self.assertEqual(read_u32(missing, 0x0D), 1)
+        self.assertEqual(read_u32(missing, 0x11), missing_game_id)
+        self.assertEqual(read_u32(missing, 0x15), 0)
+
+        writer.write(
+            build_packet(0x92, struct.pack("<III", missing_game_id, 0, 0) + b"data")
+        )
+        await writer.drain()
+        rejected = await read_packet(reader)
+        self.assertEqual(read_u32(rejected, 4), 0x93)
+        self.assertEqual(read_u32(rejected, 0x0D), 3)
+        self.assertEqual(read_u32(rejected, 0x11), missing_game_id)
+        self.assertEqual(read_u32(rejected, 0x15), 0)
+
+    async def test_relay_rejects_unwrapped_join_and_gameplay_payloads(self) -> None:
+        host_reader, host_writer = await self.connect_and_login("RelayCipherHost")
+        join_reader, join_writer = await self.connect_and_login("RelayCipherJoin")
+
+        await read_packet(host_reader)
+        game_id = await self.advertise_relay_game(
+            host_reader, host_writer, "RelayCipherRoom"
+        )
+
+        join_writer.write(
+            build_packet(0x90, struct.pack("<I", game_id) + b"plaintext-join")
+        )
+        await join_writer.drain()
+        joined = await read_until_opcode(join_reader, 0x93, limit=40)
+        self.assertEqual(read_u32(joined, 0x0D), 0)
+        self.assertEqual(read_u32(joined, 0x15), 2)
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(read_packet(host_reader), timeout=0.05)
+
+        join_writer.write(
+            build_packet(
+                0x92,
+                struct.pack("<III", game_id, 1, 1) + b"plaintext-gameplay",
+            )
+        )
+        await join_writer.drain()
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(read_packet(host_reader), timeout=0.05)
+
+        game = self.server.state.games[game_id]
+        self.assertEqual(game.relay_invalid_payload_frames, 2)
+        self.assertEqual(game.relay_link_frames, 0)
+        self.assertEqual(game.relay_mode1_frames, 0)
+
+    async def test_malformed_relay_packets_do_not_poison_client_session(self) -> None:
+        reader, writer = await self.connect_and_login("RelayMalformed")
+
+        writer.write(build_packet(0x90, b""))
+        await writer.drain()
+        rejected_join = await read_packet(reader)
+        self.assertEqual(read_u32(rejected_join, 4), 0x93)
+        self.assertEqual(read_u32(rejected_join, 0x0D), 1)
+        self.assertEqual(read_u32(rejected_join, 0x11), 0)
+        self.assertEqual(read_u32(rejected_join, 0x15), 0)
+
+        writer.write(build_packet(0x92, b"short"))
+        writer.write(build_packet(0x12, struct.pack("<I", 0)))
+        await writer.drain()
+        player_page = await read_packet(reader)
+        self.assertEqual(read_u32(player_page, 4), 0x13)
+        self.assertEqual(read_c_string(player_page, 0x15, 0x20), "RelayMalformed")
+
+    async def test_relay_host_disconnect_notifies_members_and_clears_state(self) -> None:
+        host_reader, host_writer = await self.connect_and_login("RelayDropHost")
+        join_reader, join_writer = await self.connect_and_login("RelayDropJoin")
+
+        # The host receives the joiner's online-lobby presence notification.
+        await read_packet(host_reader)
+        game_id = await self.advertise_relay_game(
+            host_reader, host_writer, "RelayDropRoom"
+        )
+
+        join_writer.write(
+            build_packet(
+                0x90, struct.pack("<I", game_id) + relay_wire_payload(b"join")
+            )
+        )
+        await join_writer.drain()
+        joined = await read_until_opcode(join_reader, 0x93)
+        self.assertEqual(read_u32(joined, 0x0D), 0)
+        self.assertEqual(read_u32(joined, 0x15), 2)
+        forwarded_join = await read_until_opcode(host_reader, 0x94)
+        self.assertEqual(read_u32(forwarded_join, 0x11), 2)
+
+        host_writer.transport.abort()
+        host_left = await read_until_opcode(join_reader, 0x95)
+        self.assertEqual(read_u32(host_left, 0x0D), game_id)
+        self.assertEqual(read_u32(host_left, 0x11), 1)
+        self.assertNotIn(game_id, self.server.state.games)
+        join_session = next(
+            client
+            for client in self.server.state.clients.values()
+            if client.account == "RelayDropJoin"
+        )
+        self.assertIsNone(join_session.relay_game_id)
+        self.assertEqual(join_session.relay_member_id, 0)
+
+    async def test_relay_frame_to_departed_member_does_not_count_no_target(
+        self,
+    ) -> None:
+        host_reader, host_writer = await self.connect_and_login("RelayStaleHost")
+        join_reader, join_writer = await self.connect_and_login("RelayStaleJoin")
+
+        # The host receives the joiner's online-lobby presence notification.
+        await read_packet(host_reader)
+        game_id = await self.advertise_relay_game(
+            host_reader, host_writer, "RelayStaleRoom"
+        )
+
+        join_writer.write(
+            build_packet(
+                0x90, struct.pack("<I", game_id) + relay_wire_payload(b"join")
+            )
+        )
+        await join_writer.drain()
+        joined = await read_until_opcode(join_reader, 0x93)
+        self.assertEqual(read_u32(joined, 0x15), 2)
+        forwarded_join = await read_until_opcode(host_reader, 0x94)
+        self.assertEqual(read_u32(forwarded_join, 0x11), 2)
+
+        join_writer.write(build_packet(0x91, struct.pack("<I", game_id)))
+        await join_writer.drain()
+        member_left = await read_until_opcode(host_reader, 0x95)
+        self.assertEqual(read_u32(member_left, 0x11), 2)
+
+        host_writer.write(
+            build_packet(
+                0x92,
+                struct.pack("<III", game_id, 2, 1)
+                + relay_wire_payload(b"late"),
+            )
+        )
+        await host_writer.drain()
+
+        self.assertEqual(
+            self.server.state.games[game_id].relay_no_target_frames,
+            0,
+        )
+        member_count, distinct_peer_hosts, member_peers = (
+            self.server._relay_member_peer_summary(
+                self.server.state.games[game_id],
+                list(self.server.state.games[game_id].relay_members.items()),
+            )
+        )
+        self.assertEqual(member_count, 2)
+        self.assertEqual(distinct_peer_hosts, 1)
+        self.assertIn("1@127.0.0.1", member_peers)
+        self.assertIn("2@127.0.0.1", member_peers)
+
+    async def test_relay_joiner_can_resume_game_browser_after_host_disconnect(
+        self,
+    ) -> None:
+        host_reader, host_writer = await self.connect_and_login("RelayResumeHost")
+        join_reader, join_writer = await self.connect_and_login("RelayResumeJoin")
+
+        await read_packet(host_reader)
+        join_writer.write(build_packet(0x1D, struct.pack("<I", 0)))
+        await join_writer.drain()
+        empty_list = await read_packet(join_reader)
+        self.assertEqual(read_u32(empty_list, 4), 0x1E)
+
+        game_id = await self.advertise_relay_game(
+            host_reader, host_writer, "RelayResumeRoom"
+        )
+        listed = await read_until_opcode(join_reader, 0x27)
+        self.assertEqual(read_c_string(listed, 0x0D, 0x80), "RelayResumeRoom")
+
+        join_writer.write(
+            build_packet(
+                0x90, struct.pack("<I", game_id) + relay_wire_payload(b"join")
+            )
+        )
+        await join_writer.drain()
+        joined = await read_until_opcode(join_reader, 0x93)
+        self.assertEqual(read_u32(joined, 0x0D), 0)
+        join_session = next(
+            client
+            for client in self.server.state.clients.values()
+            if client.account == "RelayResumeJoin"
+        )
+        self.assertEqual(join_session.view, "link")
+        await read_until_opcode(host_reader, 0x94)
+
+        host_writer.transport.abort()
+        host_left = await read_until_opcode(join_reader, 0x95)
+        self.assertEqual(read_u32(host_left, 0x0D), game_id)
+        self.assertEqual(read_u32(host_left, 0x11), 1)
+
+        join_writer.write(build_packet(0x1D, struct.pack("<I", 0)))
+        await join_writer.drain()
+        refreshed = await read_until_opcode(join_reader, 0x1E)
+        self.assertEqual(read_i32(refreshed, 0xAD), -1)
+        self.assertEqual(join_session.view, "free_server")
+
+        new_host_reader, new_host_writer = await self.connect_and_login(
+            "RelayResumeNewHost"
+        )
+        await self.advertise_relay_game(
+            new_host_reader, new_host_writer, "RelayResumeNewRoom"
+        )
+        relisted = await read_until_opcode(join_reader, 0x27)
+        self.assertEqual(read_c_string(relisted, 0x0D, 0x80), "RelayResumeNewRoom")
+
+    async def test_remove_game_writes_auto_relay_evidence_when_configured(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            evidence_dir = Path(directory) / "relay_evidence"
+            self.server.config.relay_evidence_dir = evidence_dir
+            host_reader, host_writer = await self.connect_and_login(
+                "RelayEvidenceHost"
+            )
+            join_reader, join_writer = await self.connect_and_login(
+                "RelayEvidenceJoin"
+            )
+
+            game_id = await self.advertise_relay_game(
+                host_reader, host_writer, "RelayEvidenceRoom"
+            )
+            join_writer.write(
+                build_packet(
+                    0x90,
+                    struct.pack("<I", game_id) + relay_wire_payload(b"join"),
+                )
+            )
+            await join_writer.drain()
+            joined = await read_until_opcode(join_reader, 0x93)
+            join_member_id = read_u32(joined, 0x15)
+            self.assertEqual(join_member_id, 2)
+            await read_until_opcode(host_reader, 0x94)
+
+            host_writer.write(
+                build_packet(
+                    0x92,
+                    struct.pack("<III", game_id, join_member_id, 0)
+                    + relay_wire_payload(b"link-frame"),
+                )
+            )
+            await host_writer.drain()
+            await read_until_opcode(join_reader, 0x94)
+
+            host_writer.write(
+                build_packet(
+                    0x92,
+                    struct.pack("<III", game_id, join_member_id, 1)
+                    + relay_wire_payload(b"mode1-host"),
+                )
+            )
+            join_writer.write(
+                build_packet(
+                    0x92,
+                    struct.pack("<III", game_id, 1, 1)
+                    + relay_wire_payload(b"mode1-join")
+                )
+            )
+            await host_writer.drain()
+            await join_writer.drain()
+            await read_until_opcode(join_reader, 0x94)
+            await read_until_opcode(host_reader, 0x94)
+
+            await self.server._remove_game(game_id)
+
+            evidence_files = list(evidence_dir.glob("relay_*_game*_*.json"))
+            self.assertEqual(len(evidence_files), 1)
+            evidence = json.loads(evidence_files[0].read_text(encoding="utf-8"))
+            self.assertTrue(evidence["ok"])
+            self.assertEqual(evidence["source"], "server_auto_export")
+            self.assertEqual(evidence["room"], "RelayEvidenceRoom")
+            self.assertEqual(evidence["game_id"], game_id)
+            server_summary = evidence["server_summary"]
+            self.assertTrue(server_summary["ok"])
+            self.assertEqual(server_summary["matched_summary_count"], 1)
+            summary = server_summary["summary"]
+            self.assertEqual(summary["room"], "RelayEvidenceRoom")
+            self.assertEqual(summary["game_id"], game_id)
+            self.assertEqual(summary["members"], 2)
+            self.assertEqual(summary["distinct_peer_endpoints"], 2)
+            self.assertEqual(summary["bidirectional_mode1_members"], 2)
+            self.assertIn("relay summary game=", summary["line"])
+            self.assertEqual(server_summary["summary_lines"], [summary["line"]])
+
+    async def test_relay_room_capacity_includes_the_host_member(self) -> None:
+        host_reader, host_writer = await self.connect_and_login("RelayCapHost")
+        joiners: list[tuple[asyncio.StreamReader, asyncio.StreamWriter]] = []
+        for index in range(8):
+            reader, writer = await self.connect_and_login(f"RelayCap{index}")
+            joiners.append((reader, writer))
+            await read_until_opcode(host_reader, 7)
+
+        game_id = await self.advertise_relay_game(
+            host_reader, host_writer, "RelayCapRoom"
+        )
+        for index, (reader, writer) in enumerate(joiners):
+            writer.write(
+                build_packet(
+                    0x90,
+                    struct.pack("<I", game_id)
+                    + relay_wire_payload(f"join{index}".encode("ascii")),
+                )
+            )
+            await writer.drain()
+            joined = await read_until_opcode(reader, 0x93, limit=40)
+            if index < 7:
+                self.assertEqual(read_u32(joined, 0x0D), 0)
+                self.assertEqual(read_u32(joined, 0x15), index + 2)
+            else:
+                self.assertEqual(read_u32(joined, 0x0D), 2)
+                self.assertEqual(read_u32(joined, 0x15), 0)
 
     async def test_fragmented_login_is_accepted(self) -> None:
         reader, writer = await asyncio.open_connection(

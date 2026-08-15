@@ -5,8 +5,11 @@
 #include "ranker_frontend_layout.h"
 #include "ranker_gameplay_sound.h"
 #include "ranker_link_lobby.h"
+#include "ranker_online_lobby.h"
+#include "ranker_startup_environment.h"
 #include "ranker_text_tables.h"
 #include "ranker_winmain.h"
+#include "ranker_wizardnet_relay.h"
 
 #include <algorithm>
 #include <array>
@@ -14,6 +17,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iterator>
+#include <vector>
 
 namespace ranker {
 namespace {
@@ -535,6 +539,37 @@ void queue_server_packet(FreeServerLobbyState& state, const void* packet,
     }
 }
 
+void schedule_free_server_async_drain(FreeServerLobbyState& state) {
+    if (state.window == nullptr || !IsWindow(state.window)) {
+        return;
+    }
+    PostMessageA(state.window, kFreeServerNetworkMessage, 0,
+        MAKELPARAM(FD_READ, 0));
+}
+
+bool post_free_server_socket_payload(FreeServerLobbyState& state, SOCKET sender,
+    const void* packet, u32 byte_count) {
+    if (packet == nullptr || byte_count == 0 || state.window == nullptr) {
+        return false;
+    }
+    HGLOBAL global = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, byte_count);
+    void* copy = global == nullptr ? nullptr : GlobalLock(global);
+    if (copy == nullptr) {
+        if (global != nullptr) {
+            GlobalFree(global);
+        }
+        return false;
+    }
+    std::memcpy(copy, packet, byte_count);
+    if (PostMessageA(state.window, kFreeServerSocketPayloadMessage,
+            static_cast<WPARAM>(sender), reinterpret_cast<LPARAM>(copy)) == FALSE) {
+        GlobalUnlock(global);
+        GlobalFree(global);
+        return false;
+    }
+    return true;
+}
+
 void write_le32(std::vector<u8>& packet, std::size_t offset, u32 value) {
     if (offset + sizeof(u32) > packet.size()) {
         return;
@@ -579,15 +614,39 @@ void queue_game_type_filter(FreeServerLobbyState& state) {
     queue_server_packet(state, packet.data(), static_cast<i32>(packet.size()));
 }
 
+void resume_free_server_game_list_after_relay_join(FreeServerLobbyState& state) {
+    const OnlineLobbyState& online = online_lobby_state();
+    const bool joined_from_wizardnet =
+        online.window != nullptr && state.parent_window == online.window;
+    if (!joined_from_wizardnet || state.async_tcp_socket == nullptr) {
+        return;
+    }
+    queue_game_type_filter(state);
+}
+
+void close_free_server_game_socket(FreeServerLobbyState& state) {
+    if (state.game_socket == INVALID_SOCKET) {
+        state.relay_game_id = 0;
+        return;
+    }
+    if (WizardNetRelaySocketIsMember(state.game_socket)) {
+        QueueWizardNetRelayLeaveForGame(state.relay_game_id);
+    } else {
+        CloseLegacySocketRecord(state.game_socket);
+    }
+    state.game_socket = INVALID_SOCKET;
+    state.relay_game_id = 0;
+}
+
 void release_resources(FreeServerLobbyState& state) {
     if (state.join_timer != 0 && state.window != nullptr) {
         KillTimer(state.window, state.join_timer);
         state.join_timer = 0;
     }
-    if (state.game_socket != INVALID_SOCKET) {
-        CloseLegacySocketRecord(state.game_socket);
-        state.game_socket = INVALID_SOCKET;
+    if (state.window != nullptr) {
+        KillTimer(state.window, kFreeServerBrowserPumpTimerId);
     }
+    close_free_server_game_socket(state);
     RestoreFreeServerAccelerators(state);
     ClearFreeServerLobbyEntries(state, state.game_list.window);
     ReleaseBitmapMemoryResource(state.background);
@@ -818,9 +877,15 @@ bool SubmitFreeServerJoinRequest(FreeServerLobbyState& state) {
             kFreeSoftWhite);
         return false;
     }
+    const OnlineLobbyState& online = online_lobby_state();
+    const bool joined_from_wizardnet =
+        online.window != nullptr && state.parent_window == online.window;
+    const bool relay_available =
+        joined_from_wizardnet && state.async_tcp_socket != nullptr && entry.id > 0;
     const u32 target_address =
         resolve_free_server_join_address(state, entry.address);
-    if (!entry.joinable || target_address == 0 || entry.port == 0) {
+    if (!entry.joinable ||
+        (!relay_available && (target_address == 0 || entry.port == 0))) {
         show_startup_status(state, 53,
             "Connection failed - game already started or no response.",
             kFreeSoftWhite);
@@ -833,11 +898,45 @@ bool SubmitFreeServerJoinRequest(FreeServerLobbyState& state) {
         state.join_timer = 0;
     }
     if (state.game_socket != INVALID_SOCKET) {
-        CloseLegacySocketRecord(state.game_socket);
-        state.game_socket = INVALID_SOCKET;
+        close_free_server_game_socket(state);
     }
+    state.relay_game_id = 0;
     state.join_phase = FreeServerJoinPhase::Connecting;
     state.game_start_requested = false;
+    if (relay_available) {
+        std::vector<u8> relay_join = BuildLinkLobbyRelayJoinPacket(
+            link_lobby_state(), state.player_name.data(), state.password.data());
+        if (QueueWizardNetRelayJoin(static_cast<u32>(entry.id),
+                relay_join.data(), static_cast<u32>(relay_join.size()))) {
+            append_startup_log(
+                "wizardnet relay browser join queued game=%ld room=%s bytes=%zu",
+                static_cast<long>(entry.id), entry.name.c_str(),
+                relay_join.size());
+            state.game_socket = WizardNetRelaySocketForMember(1);
+            state.relay_game_id = static_cast<u32>(entry.id);
+            state.join_timer = SetTimer(state.window, kFreeServerJoinTimerId,
+                kFreeServerJoinRetryMs, nullptr);
+            const std::string message =
+                format_startup_status(33, "%s connecting.", state.player_name.data());
+            show_status(state, message.c_str(), kFreeStatusCyan);
+            return true;
+        }
+        append_startup_log("wizardnet relay browser join queue failed game=%ld room=%s",
+            static_cast<long>(entry.id), entry.name.c_str());
+    }
+    if (joined_from_wizardnet) {
+        state.join_phase = FreeServerJoinPhase::Idle;
+        resume_free_server_game_list_after_relay_join(state);
+        show_startup_status(state, 37,
+            "Connection failed - no response.", kFreeErrorRed);
+        return false;
+    }
+    if (target_address == 0 || entry.port == 0) {
+        state.join_phase = FreeServerJoinPhase::Idle;
+        show_startup_status(state, 34, "TCP/IP initialization error.",
+            kFreeSoftWhite);
+        return false;
+    }
     if (StartLegacySocketConnect(state.game_socket, address.c_str(), entry.port,
             state.window, kFreeServerSocketNotifyMessage)) {
         state.join_timer =
@@ -967,6 +1066,13 @@ bool CreateFreeServerLobbyWindow(FreeServerLobbyState& state, HWND parent,
     SetFocus(state.name_edit.window);
     queue_initial_server_requests(state);
     state.visible = true;
+    SetTimer(state.window, kFreeServerBrowserPumpTimerId,
+        kFreeServerBrowserPumpMs, nullptr);
+    // The Online Lobby can leave stale or newly-arrived bytes in the shared
+    // async TCP queue while socket events are being moved to the Join Game HWND.
+    // Drain once after the initial browser requests so the first game-list page
+    // cannot depend on a later Winsock edge.
+    schedule_free_server_async_drain(state);
     return true;
 }
 
@@ -1073,15 +1179,19 @@ LRESULT HandleFreeServerLobbyWindowMessage(FreeServerLobbyState& state, HWND hwn
         break;
     }
     case WM_TIMER:
+        if (wparam == kFreeServerBrowserPumpTimerId) {
+            schedule_free_server_async_drain(state);
+            return 0;
+        }
         if (wparam == kFreeServerJoinTimerId &&
             state.join_phase != FreeServerJoinPhase::Idle) {
-            CloseLegacySocketRecord(state.game_socket);
-            state.game_socket = INVALID_SOCKET;
+            close_free_server_game_socket(state);
             if (state.join_timer != 0) {
                 KillTimer(hwnd, state.join_timer);
                 state.join_timer = 0;
             }
             state.join_phase = FreeServerJoinPhase::Idle;
+            resume_free_server_game_list_after_relay_join(state);
             show_startup_status(state, 37,
                 "Connection failed - no response.",
                 kFreeErrorRed);
@@ -1096,19 +1206,23 @@ LRESULT HandleFreeServerLobbyWindowMessage(FreeServerLobbyState& state, HWND hwn
         break;
     case kFreeServerStartGameMessage:
         state.game_start_requested = true;
-        {
-            // The joined Link lobby takes ownership of this socket. Detach it
-            // before destroying the browser so release_resources keeps it open.
-            const SOCKET joined_socket = state.game_socket;
-            state.game_socket = INVALID_SOCKET;
-            close_lobby(state, false);
-            state.game_socket = joined_socket;
-            if (state.callbacks.start_game != nullptr) {
-                state.callbacks.start_game(state);
+            {
+                // The joined Link lobby takes ownership of this socket. Detach it
+                // before destroying the browser so release_resources keeps it open.
+                const SOCKET joined_socket = state.game_socket;
+                const u32 joined_relay_game_id = state.relay_game_id;
+                state.game_socket = INVALID_SOCKET;
+                state.relay_game_id = 0;
+                close_lobby(state, false);
+                state.game_socket = joined_socket;
+                state.relay_game_id = joined_relay_game_id;
+                if (state.callbacks.start_game != nullptr) {
+                    state.callbacks.start_game(state);
+                }
+                state.game_socket = INVALID_SOCKET;
+                state.relay_game_id = 0;
             }
-            state.game_socket = INVALID_SOCKET;
-        }
-        break;
+            break;
     case kFreeServerJoinErrorMessage: {
         show_startup_status(state, 42, "Connection failed - general error.",
             kFreeErrorRed);
@@ -1302,10 +1416,21 @@ void DispatchFreeServerSocketPayload(FreeServerLobbyState& state, WPARAM sender,
         return;
     }
     const void* packet = reinterpret_cast<const void*>(payload);
-    const u32 type = read_u32(packet, 0x24, 4);
+    HGLOBAL global = GlobalHandle(const_cast<void*>(packet));
+    const std::size_t payload_size =
+        global != nullptr ? static_cast<std::size_t>(GlobalSize(global)) : 0;
+    if (payload_size == 0) {
+        if (global != nullptr) {
+            GlobalUnlock(global);
+            GlobalFree(global);
+        }
+        return;
+    }
+
+    const u32 type = read_u32(packet, payload_size, 4);
     LinkLobbyState& link = link_lobby_state();
-    std::size_t packet_size = read_u32(packet, 0x0c, 8);
-    if (packet_size < 0x0c) {
+    std::size_t packet_size = read_u32(packet, payload_size, 8);
+    if (packet_size < 0x0c || packet_size > payload_size) {
         switch (type) {
         case 10:
             packet_size = 0x0c + link.session_seed_payload.size();
@@ -1321,8 +1446,13 @@ void DispatchFreeServerSocketPayload(FreeServerLobbyState& state, WPARAM sender,
             break;
         }
     }
-    if (packet_size > 0x4000) {
-        packet_size = 0x24;
+    if (packet_size > payload_size) {
+        packet_size = payload_size;
+    }
+    if (packet_size == 0) {
+        GlobalUnlock(global);
+        GlobalFree(global);
+        return;
     }
     FreeServerSocketPayload socket_payload;
     socket_payload.type = type;
@@ -1351,7 +1481,6 @@ void DispatchFreeServerSocketPayload(FreeServerLobbyState& state, WPARAM sender,
         break;
     }
 
-    HGLOBAL global = GlobalHandle(const_cast<void*>(packet));
     if (global != nullptr) {
         GlobalUnlock(global);
         GlobalFree(global);
@@ -1378,17 +1507,10 @@ void PumpFreeServerSocketReceiveQueue(FreeServerLobbyState& state,
             if (byte_count == 0 || byte_count > record.receive_queue.size()) {
                 return;
             }
-            HGLOBAL global = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, byte_count);
-            void* copy = global == nullptr ? nullptr : GlobalLock(global);
-            if (copy == nullptr) {
-                if (global != nullptr) {
-                    GlobalFree(global);
-                }
+            if (!post_free_server_socket_payload(state, record.socket,
+                    record.receive_queue.data(), byte_count)) {
                 return;
             }
-            std::memcpy(copy, record.receive_queue.data(), byte_count);
-            PostMessageA(state.window, kFreeServerSocketPayloadMessage,
-                static_cast<WPARAM>(record.socket), reinterpret_cast<LPARAM>(copy));
             ConsumeLegacySocketReceiveQueue(record, byte_count);
             continue;
         }
@@ -1404,7 +1526,12 @@ void HandleFreeServerSocketMessage(FreeServerLobbyState& state, SOCKET socket,
             KillTimer(state.window, state.join_timer);
             state.join_timer = 0;
         }
-        CloseLegacySocketRecord(socket);
+        if (WizardNetRelaySocketIsMember(socket)) {
+            QueueWizardNetRelayLeaveForGame(state.relay_game_id);
+            state.relay_game_id = 0;
+        } else {
+            CloseLegacySocketRecord(socket);
+        }
         if (state.game_socket == socket) {
             state.game_socket = INVALID_SOCKET;
         }
@@ -1440,7 +1567,12 @@ void HandleFreeServerSocketMessage(FreeServerLobbyState& state, SOCKET socket,
         }
         break;
     case FD_CLOSE:
-        CloseLegacySocketRecord(socket);
+        if (WizardNetRelaySocketIsMember(socket)) {
+            QueueWizardNetRelayLeaveForGame(state.relay_game_id);
+            state.relay_game_id = 0;
+        } else {
+            CloseLegacySocketRecord(socket);
+        }
         state.game_socket = INVALID_SOCKET;
         if (state.join_phase != FreeServerJoinPhase::Idle) {
             state.join_phase = FreeServerJoinPhase::Idle;
@@ -1464,6 +1596,10 @@ void DispatchFreeServerNetworkMessage(FreeServerLobbyState& state, HWND hwnd,
             CloseLegacyAsyncTcpSocket(*state.async_tcp_socket);
         }
         close_lobby(state, true);
+        return;
+    }
+    if (event == FD_WRITE) {
+        FlushWizardNetRelayAsyncSendQueue();
         return;
     }
     if (event != 1) {
@@ -1499,6 +1635,126 @@ void DispatchFreeServerNetworkMessage(FreeServerLobbyState& state, HWND hwnd,
                     "Connection failed - game already started or no response." :
                     "Connection failed - selected game is full.",
                 kFreeSoftWhite);
+            break;
+        }
+        case kWizardNetRelayJoinStatusOpcode: {
+            const u32 status = read_u32(payload, packet_bytes, 0x0d);
+            const u32 game_id = read_u32(payload, packet_bytes, 0x11);
+            const u32 member_id = read_u32(payload, packet_bytes, 0x15);
+            const bool waiting_for_this_relay_game =
+                state.game_socket == WizardNetRelaySocketForMember(1) &&
+                state.relay_game_id != 0 &&
+                state.relay_game_id == game_id;
+            if (!waiting_for_this_relay_game) {
+                append_startup_log(
+                    "wizardnet relay join status ignored status=%lu game=%lu "
+                    "member=%lu waiting_game=%lu socket=%llu",
+                    static_cast<unsigned long>(status),
+                    static_cast<unsigned long>(game_id),
+                    static_cast<unsigned long>(member_id),
+                    static_cast<unsigned long>(state.relay_game_id),
+                    static_cast<unsigned long long>(state.game_socket));
+                break;
+            }
+            if (status == 0 && game_id != 0 && member_id != 0) {
+                const void* relay_secret =
+                    packet_bytes >= 0x19 + kWizardNetRelaySecretBytes ?
+                        payload + 0x19 : nullptr;
+                const u32 relay_secret_bytes =
+                    relay_secret != nullptr ? kWizardNetRelaySecretBytes : 0;
+                ConfigureWizardNetRelayState(game_id, member_id, false,
+                    relay_secret, relay_secret_bytes);
+                state.game_socket = WizardNetRelaySocketForMember(1);
+                state.relay_game_id = game_id;
+                state.join_phase = FreeServerJoinPhase::WaitingForStart;
+                append_startup_log(
+                    "wizardnet relay browser join accepted game=%lu member=%lu",
+                    static_cast<unsigned long>(game_id),
+                    static_cast<unsigned long>(member_id));
+                show_startup_status(state, 36,
+                    "Getting connected player information.", kFreeStatusCyan);
+            } else {
+                state.join_phase = FreeServerJoinPhase::Idle;
+                state.game_socket = INVALID_SOCKET;
+                state.relay_game_id = 0;
+                resume_free_server_game_list_after_relay_join(state);
+                append_startup_log(
+                    "wizardnet relay browser join rejected status=%lu game=%lu member=%lu",
+                    static_cast<unsigned long>(status),
+                    static_cast<unsigned long>(game_id),
+                    static_cast<unsigned long>(member_id));
+                show_startup_status(state, status == 2 ? 45 : 53,
+                    status == 2 ?
+                        "Connection failed - selected game is full." :
+                        "Connection failed - game already started or no response.",
+                    kFreeErrorRed);
+            }
+            break;
+        }
+        case kWizardNetRelayFrameOpcode: {
+            if (packet_bytes < 0x19) {
+                break;
+            }
+            const u32 game_id = read_u32(payload, packet_bytes, 0x0d);
+            const u32 from_member = read_u32(payload, packet_bytes, 0x11);
+            const u32 stream_id = read_u32(payload, packet_bytes, 0x15);
+            const u8* frame_payload = payload + 0x19;
+            const u32 frame_bytes = packet_bytes - 0x19;
+            if (!WizardNetRelayReadyForGame(game_id)) {
+                append_startup_log(
+                    "wizardnet relay browser frame ignored active_game=%lu "
+                    "packet_game=%lu member=%lu stream=%lu bytes=%lu",
+                    static_cast<unsigned long>(wizardnet_relay_state().game_id),
+                    static_cast<unsigned long>(game_id),
+                    static_cast<unsigned long>(from_member),
+                    static_cast<unsigned long>(stream_id),
+                    static_cast<unsigned long>(frame_bytes));
+                break;
+            }
+            std::vector<u8> decoded;
+            if (!DecodeWizardNetRelayPayload(game_id, frame_payload,
+                    frame_bytes, decoded)) {
+                append_startup_log(
+                    "wizardnet relay browser crypto rejected game=%lu "
+                    "member=%lu stream=%lu bytes=%lu",
+                    static_cast<unsigned long>(game_id),
+                    static_cast<unsigned long>(from_member),
+                    static_cast<unsigned long>(stream_id),
+                    static_cast<unsigned long>(frame_bytes));
+                break;
+            }
+            if (stream_id == kWizardNetRelayStreamLink) {
+                RecordWizardNetRelayLinkFrameReceived(game_id, from_member,
+                    static_cast<u32>(decoded.size()), "browser");
+                post_free_server_socket_payload(state,
+                    WizardNetRelaySocketForMember(from_member),
+                    decoded.data(), static_cast<u32>(decoded.size()));
+            } else if (stream_id == kWizardNetRelayStreamMode1) {
+                EnqueueWizardNetRelayMode1Payload(decoded.data(),
+                    static_cast<u32>(decoded.size()), from_member);
+            }
+            break;
+        }
+        case kWizardNetRelayMemberLeftOpcode: {
+            if (packet_bytes < 0x15) {
+                break;
+            }
+            const u32 game_id = read_u32(payload, packet_bytes, 0x0d);
+            const u32 member_id = read_u32(payload, packet_bytes, 0x11);
+            if (WizardNetRelayReadyForGame(game_id) && member_id == 1) {
+                append_startup_log(
+                    "wizardnet relay browser host-left game=%lu member=%lu",
+                    static_cast<unsigned long>(game_id),
+                    static_cast<unsigned long>(member_id));
+                ResetWizardNetRelayState();
+                state.join_phase = FreeServerJoinPhase::Idle;
+                state.game_socket = INVALID_SOCKET;
+                state.relay_game_id = 0;
+                resume_free_server_game_list_after_relay_join(state);
+                show_startup_status(state, 52,
+                    "Connection failed - game already started or disconnected.",
+                    kFreeCloseRed);
+            }
             break;
         }
         case 0x1e:
@@ -1563,6 +1819,18 @@ void DispatchFreeServerNetworkMessage(FreeServerLobbyState& state, HWND hwnd,
             state.server_use_map_counts[9] = read_u32(payload, packet_bytes, 0x25);
             break;
         default:
+            if (WizardNetRelayCanDiscardStaleAsyncOpcode(opcode)) {
+                append_startup_log(
+                    "free server discarded stale async opcode=0x%02lx bytes=%lu",
+                    static_cast<unsigned long>(opcode),
+                    static_cast<unsigned long>(packet_bytes));
+                schedule_free_server_async_drain(state);
+                break;
+            }
+            append_startup_log(
+                "free server forwarded unknown opcode=0x%02lx bytes=%lu to parent",
+                static_cast<unsigned long>(opcode),
+                static_cast<unsigned long>(packet_bytes));
             if (state.parent_window != nullptr && IsWindow(state.parent_window)) {
                 PostMessageA(state.parent_window, message, wparam, lparam);
             }

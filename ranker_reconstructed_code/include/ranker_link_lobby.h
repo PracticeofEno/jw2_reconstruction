@@ -249,6 +249,7 @@ struct LinkLobbyState {
     u32 start_sync_retry_interval_ms = 300;
     u32 start_sync_retry_limit_ms = 0x1389;
     u32 expected_map_file_size = 0;
+    u32 relay_game_id = 0;
     SOCKET shared_peer_socket = INVALID_SOCKET;
     SOCKET pending_join_socket = INVALID_SOCKET;
     FILETIME expected_map_file_time{};
@@ -466,6 +467,8 @@ void SendLinkLobbyAutoMoveOpenSlotPacket(LinkLobbyState& state, u32 player_index
     u32 group_index);
 void SendLinkLobbySlotSwapPacket(LinkLobbyState& state, u32 left_player,
     u32 right_player);
+std::vector<u8> BuildLinkLobbyRelayJoinPacket(LinkLobbyState& state,
+    const char* player_name, const char* password);
 void SendLinkLobbyRelayJoinPacket(LinkLobbyState& state, SOCKET target_socket,
     const char* player_name, const char* password);
 void SendLinkLobbyTribeSelectionPacket(LinkLobbyState& state, u32 player_index,

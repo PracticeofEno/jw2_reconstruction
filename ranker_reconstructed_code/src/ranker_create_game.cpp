@@ -13,9 +13,11 @@
 #include "ranker_network.h"
 #include "ranker_online_dialogs.h"
 #include "ranker_p2p_lobby.h"
+#include "ranker_startup_environment.h"
 #include "ranker_text_tables.h"
 #include "ranker_trc.h"
 #include "ranker_winmain.h"
+#include "ranker_wizardnet_relay.h"
 
 #include <algorithm>
 #include <cctype>
@@ -993,7 +995,30 @@ bool handle_create_game_server_packet(CreateGameState& state, HWND hwnd,
         const u32 status = read_le32(payload, packet_bytes, 0x0d);
         stop_after_packet = true;
         if (status == 1) {
+            state.wizardnet_relay_game_id =
+                read_le32(payload, packet_bytes, 0x11);
+            state.wizardnet_relay_member_id =
+                read_le32(payload, packet_bytes, 0x15);
+            if (state.mode == 0 && state.wizardnet_relay_game_id != 0 &&
+                state.wizardnet_relay_member_id != 0) {
+                const void* relay_secret =
+                    packet_bytes >= 0x19 + kWizardNetRelaySecretBytes ?
+                        payload + 0x19 : nullptr;
+                const u32 relay_secret_bytes =
+                    relay_secret != nullptr ? kWizardNetRelaySecretBytes : 0;
+                ConfigureWizardNetRelayState(state.wizardnet_relay_game_id,
+                    state.wizardnet_relay_member_id, true,
+                    relay_secret, relay_secret_bytes);
+                append_startup_log(
+                    "wizardnet relay host configured game=%lu room=%s member=%lu",
+                    static_cast<unsigned long>(state.wizardnet_relay_game_id),
+                    state.game_name.data(),
+                    static_cast<unsigned long>(state.wizardnet_relay_member_id));
+            }
             return true;
+        }
+        if (state.mode == 0) {
+            ResetWizardNetRelayState();
         }
         if (status == 0) {
             PostMessageA(hwnd, kCreateGameDuplicateNamePromptMessage, 0, 0);
@@ -1040,6 +1065,10 @@ void DispatchCreateGameNetworkMessage(CreateGameState& state, HWND hwnd,
     const u16 event = LOWORD(lparam);
     if (event == 0x20) {
         return_to_connect_after_server_close(state, hwnd);
+        return;
+    }
+    if (event == FD_WRITE) {
+        FlushWizardNetRelayAsyncSendQueue();
         return;
     }
     if (event != FD_READ && event != 1) {
@@ -1704,6 +1733,11 @@ bool CreateCreateGameWindow(CreateGameState& state, HWND parent, HINSTANCE insta
         SendMessageA(state.name_edit.window, EM_SETSEL, 0, -1);
     }
     state.visible = true;
+    state.wizardnet_relay_game_id = 0;
+    state.wizardnet_relay_member_id = 0;
+    if (mode == 0) {
+        ResetWizardNetRelayState();
+    }
     return true;
 }
 

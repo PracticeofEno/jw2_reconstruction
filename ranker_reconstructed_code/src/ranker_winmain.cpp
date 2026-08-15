@@ -81,6 +81,7 @@
 #include "ranker_unit_target_helpers.h"
 #include "ranker_unit_targeting.h"
 #include "ranker_view_rank.h"
+#include "ranker_wizardnet_relay.h"
 #include "ranker_wizard_login.h"
 
 #include <algorithm>
@@ -2134,8 +2135,11 @@ void configure_wizard_callbacks(WizardLoginState& state) {
     }
     state.server_port = static_cast<u16>(server_port);
     state.download_port = 0;
-    state.udp_port = connect.configuration.p2p_udp_port <= 0xffffu ?
-        static_cast<u16>(connect.configuration.p2p_udp_port) : 0;
+    // WizardNet rooms now use the authenticated TCP relay for Link and
+    // gameplay traffic.  Do not bind the legacy P2P UDP port here; leaving it
+    // open makes relay-only sessions look like they still depend on LAN/NAT
+    // routing even though no WizardNet server packet uses that socket.
+    state.udp_port = 0;
 
     std::snprintf(state.patch_download_final_path.data(),
         state.patch_download_final_path.size(), "%s",
@@ -2925,6 +2929,13 @@ bool default_link_finalize_start_sync(LinkLobbyState& state) {
 }
 
 void default_link_shutdown_network(LinkLobbyState& state) {
+    if (state.mode == 0 &&
+        (state.relay_game_id != 0 || WizardNetRelayEnabled())) {
+        const u32 relay_game_id = state.relay_game_id != 0 ?
+            state.relay_game_id : wizardnet_relay_state().game_id;
+        QueueWizardNetRelayLeaveForGame(relay_game_id);
+        state.relay_game_id = 0;
+    }
     if (state.mode >= 0 && state.mode < 3) {
         // A Link room owns both the direct-P2P listen socket and its UDP
         // route.  Merely closing the TCP records leaves the transport marked
@@ -31459,6 +31470,13 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
             HandleDirectDrawFrameBoundary();
             InvalidateRect(window, nullptr, TRUE);
             UpdateWindow(window);
+            LinkLobbyState& link = link_lobby_state();
+            if (link.relay_game_id != 0 || WizardNetRelayEnabled()) {
+                const u32 relay_game_id = link.relay_game_id != 0 ?
+                    link.relay_game_id : wizardnet_relay_state().game_id;
+                QueueWizardNetRelayLeaveForGame(relay_game_id);
+                link.relay_game_id = 0;
+            }
             reset_default_p2p_room_transport_after_game();
             default_link_open_online(link_lobby_state());
             append_startup_log("main restored post-game wizardnet lobby");

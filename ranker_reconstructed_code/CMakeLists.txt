@@ -990,6 +990,39 @@ if (RANKER_BUILD_UDP_BURST_REGRESSION_TEST)
         COMMAND legacy_udp_burst_regression)
 endif()
 
+option(RANKER_BUILD_WIZARDNET_RELAY_REGRESSION_TEST
+    "Build the WizardNet relay packet/state regression" OFF)
+if (RANKER_BUILD_WIZARDNET_RELAY_REGRESSION_TEST)
+    enable_testing()
+    add_executable(wizardnet_relay_regression
+        tests/wizardnet_relay_regression.cpp
+        src/ranker_directplay.cpp
+        src/ranker_network.cpp
+        src/ranker_reliable_packets.cpp
+        src/ranker_replay.cpp
+        src/ranker_wizardnet_relay.cpp
+    )
+    target_include_directories(wizardnet_relay_regression PRIVATE include)
+    if (MSVC)
+        target_compile_options(wizardnet_relay_regression PRIVATE /Gy)
+        target_link_options(wizardnet_relay_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(wizardnet_relay_regression PRIVATE
+            -O1 -ffunction-sections -fdata-sections)
+        target_link_options(wizardnet_relay_regression PRIVATE
+            -Wl,--gc-sections)
+    endif()
+    if (WIN32)
+        target_link_libraries(wizardnet_relay_regression PRIVATE
+            ole32
+            wsock32
+            winmm
+        )
+    endif()
+    add_test(NAME wizardnet_relay_regression
+        COMMAND wizardnet_relay_regression)
+endif()
+
 option(RANKER_BUILD_EQUIPMENT_REPLACEMENT_PARITY_TEST
     "Build the equipment type-replacement visibility parity regression" OFF)
 if (RANKER_BUILD_EQUIPMENT_REPLACEMENT_PARITY_TEST)
@@ -1123,6 +1156,7 @@ add_executable(ranker_rebuild WIN32
     src/ranker_directplay.cpp
     src/ranker_reliable_packets.cpp
     src/ranker_network.cpp
+    src/ranker_wizardnet_relay.cpp
     src/ranker_screenshot.cpp
     src/ranker_miles.cpp
     src/ranker_mixer.cpp
@@ -1252,6 +1286,9 @@ add_custom_command(TARGET ranker_rebuild POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_CURRENT_SOURCE_DIR}/config/ranker_client.ini
         $<TARGET_FILE_DIR:ranker_rebuild>/ranker_client.ini
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/config/wizardnet_server.ini
+        $<TARGET_FILE_DIR:ranker_rebuild>/wizardnet_server.ini
     COMMENT "Copying ranker client display configuration"
 )
 
