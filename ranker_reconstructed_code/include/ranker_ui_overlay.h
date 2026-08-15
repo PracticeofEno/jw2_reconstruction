@@ -367,6 +367,15 @@ constexpr u32 ResolveUiOverlayUnitOrObjectIconFrame(u32 item_id, u32 aux) {
         (item_id >= 0xaau ? item_id - 0xaau : item_id);
 }
 
+// The linked-release button stores the requested result definition in its
+// auxiliary word. Original selector 0x0b reads that value from
+// DAT_00862418; leaving the ordinary pointer snapshot there makes every
+// otherwise valid Twin/Mutant click fall through without publishing a pair.
+constexpr u32 ResolveUiOverlayCommandSnapshotField3(
+    u32 item_id, u32 aux, u32 current_field3) {
+    return item_id == 0xb5u ? aux : current_field3;
+}
+
 constexpr bool HasUiOverlayGroupedPairSelection(
     const std::array<u32, 0x60>& selected_type_counts, u32 source_type) {
     return source_type < selected_type_counts.size() &&
@@ -1009,6 +1018,25 @@ inline void ResetUiOverlayProductionCategoryForSelectionChange(
 // mirror from silently disabling Shift-click and Shift-drag.
 constexpr bool UiOverlaySelectionIsAdditive(bool shift_modifier_down) {
     return shift_modifier_down;
+}
+
+enum class UiOverlayClickSelectionPolicy : u8 {
+    preserve,
+    replace,
+    additive,
+};
+
+// FUN_004eb063 calls the hit test at 0x004eb108 before clearing the existing
+// selection. Its carry/no-hit edge jumps directly to the return at
+// 0x004eb45e, so an ordinary click on empty terrain preserves both the current
+// party/building and its command panel.
+constexpr UiOverlayClickSelectionPolicy ResolveUiOverlayClickSelectionPolicy(
+    bool unit_hit, bool shift_modifier_down) {
+    if (!unit_hit) {
+        return UiOverlayClickSelectionPolicy::preserve;
+    }
+    return shift_modifier_down ? UiOverlayClickSelectionPolicy::additive :
+        UiOverlayClickSelectionPolicy::replace;
 }
 
 // Prefer the modifier bits carried by a mouse event, while preserving the

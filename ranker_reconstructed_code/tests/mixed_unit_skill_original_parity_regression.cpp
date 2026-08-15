@@ -327,6 +327,40 @@ void verify_production_action_target_mode_encoding() {
         "target-mode upper boundary accepted a non-spell command");
 }
 
+void verify_passenger_icon_unload_packet() {
+    constexpr u32 kPassenger = 0x1200u;
+    constexpr u32 kCarrier = 0x3400u;
+    GameplayProductionActionState state{};
+    state.local_player_index = 2;
+    state.current_unit_offset = kPassenger;
+
+    GameplayProductionUnitState passenger{};
+    passenger.offset = kPassenger;
+    passenger.command_state = 0x45u;
+    passenger.command_target_offset = kCarrier;
+    passenger.command_target_lockout_ticks = 0;
+    state.units.push_back(passenger);
+
+    require_selector(PublishLinkedUnitCommand24IfIdle(state), 0x24u,
+        "idle passenger icon did not publish an unload command");
+    require_selector(state.published_actions.size() == 1u, 0x24u,
+        "passenger icon published an unexpected packet count");
+    const GameplayPublishedAction& action = state.published_actions.front();
+    require_selector(action.subtype == 0x02u, 0x24u,
+        "passenger icon used the wrong packet subtype");
+    require_selector(action.unit_offset == kPassenger, 0x24u,
+        "passenger icon assigned command 0x24 to the carrier");
+    require_selector(action.arg0 == 0x24u && action.arg1 == kCarrier, 0x24u,
+        "passenger icon did not encode its target carrier");
+
+    state.published_actions.clear();
+    state.units.front().command_target_lockout_ticks = 1;
+    require_selector(!PublishLinkedUnitCommand24IfIdle(state), 0x24u,
+        "passenger ignored the carrier +0xac lockout gate");
+    require_selector(state.published_actions.empty(), 0x24u,
+        "locked carrier still received an unload packet");
+}
+
 void verify_mixed_selection_dispatch(u32 selector, bool capable_primary) {
     GameplayProductionActionState state = make_mixed_state(selector);
     const OriginalMixedSelectionPolicy policy =
@@ -387,6 +421,7 @@ int main() {
     verify_original_selector_metadata();
     verify_p2p_hurdle_authority_gate();
     verify_production_action_target_mode_encoding();
+    verify_passenger_icon_unload_packet();
     for (u32 selector = 0; selector < kGameplayProductionSelectorCount;
          ++selector) {
         // The first pass proves fallback from a non-capable primary selection;

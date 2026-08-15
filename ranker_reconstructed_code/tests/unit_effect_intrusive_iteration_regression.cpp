@@ -1278,6 +1278,57 @@ void test_value_transfer_entry_uses_raw_cargo_union() {
         "value-transfer entry overwrote the target-reference union");
 }
 
+void test_effect_resource_entry_zero_is_drawable() {
+    UnitEffectRuntimeState state{};
+    UnitEffectDefinition definition{};
+    definition.id = 2;
+    definition.sprite_entry = 0;
+    definition.active_frames = 1;
+    definition.render_ticks = 1;
+    definition.image_resource_entries = {0};
+    definition.active_sprite_entries = {0};
+    state.definitions.push_back(definition);
+
+    UnitEffectRuntime effect{};
+    effect.active = true;
+    effect.effect_id = 2;
+    effect.tick = 0;
+
+    u32 sprite_entry = kInvalidResourceEntry;
+    u32 draw_mode = 0xffffffffu;
+    require(ResolveUnitEffectGenericSpriteRender(
+                state, effect, sprite_entry, draw_mode) &&
+            sprite_entry == 0 && draw_mode == 0,
+        "valid resource entry zero was mistaken for a missing attack sprite");
+}
+
+void test_effect_raw_image_index_can_cross_catalog_row() {
+    UnitEffectRuntimeState state{};
+    UnitEffectDefinition definition{};
+    definition.id = 4;
+    definition.sprite_entry = 100;
+    definition.impact_render_ticks = 1;
+    definition.impact_draw_mode = 4;
+    definition.impact_image_indices = {40};
+    for (u32 index = 0; index < 40; ++index) {
+        definition.image_resource_entries.push_back(100 + index);
+    }
+    state.definitions.push_back(definition);
+
+    UnitEffectRuntime effect{};
+    effect.active = true;
+    effect.effect_id = 4;
+    effect.flags = kUnitEffectFlagImpact;
+    effect.tick = 0;
+
+    u32 sprite_entry = kInvalidResourceEntry;
+    u32 draw_mode = 0xffffffffu;
+    require(ResolveUnitEffectGenericSpriteRender(
+                state, effect, sprite_entry, draw_mode) &&
+            sprite_entry == 140 && draw_mode == 4,
+        "raw attack image index did not continue from the catalog resource base");
+}
+
 } // namespace
 
 int main() {
@@ -1314,6 +1365,8 @@ int main() {
     test_linked_release_sums_parent_action_mode();
     test_value_transfer_uses_interaction_bounds();
     test_value_transfer_entry_uses_raw_cargo_union();
+    test_effect_resource_entry_zero_is_drawable();
+    test_effect_raw_image_index_can_cross_catalog_row();
     std::cout << "UNIT_EFFECT_INTRUSIVE_ITERATION_PASS\n";
     return EXIT_SUCCESS;
 }

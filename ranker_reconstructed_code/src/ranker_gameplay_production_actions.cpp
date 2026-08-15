@@ -945,11 +945,12 @@ u32 DispatchOwnerProductionActionCommand(GameplayProductionActionState& state,
 bool PublishLinkedUnitCommand24IfIdle(GameplayProductionActionState& state) {
     GameplayProductionUnitState* unit = selected_unit(state);
     if (unit == nullptr || unit->command_state != 0x45 ||
-        unit->linked_unit_offset == 0 || unit->linked_unit_runtime_state != 0) {
+        unit->command_target_offset == 0 ||
+        unit->command_target_lockout_ticks != 0) {
         return false;
     }
     return publish(state, make_action(state, kSubtypeUnitOrder,
-        unit->offset, 0x24, unit->linked_unit_offset));
+        unit->offset, 0x24, unit->command_target_offset));
 }
 
 bool PublishSelectedUnitEquipmentCommand(GameplayProductionActionState& state,

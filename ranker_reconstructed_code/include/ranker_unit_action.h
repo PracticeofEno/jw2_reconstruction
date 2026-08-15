@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ranker_production_orders.h"
+#include "ranker_resource_store.h"
 #include "ranker_unit_equipment.h"
 #include "ranker_unit_movement.h"
 
@@ -160,7 +161,9 @@ struct UnitEffectDefinition {
     u32 impact_render_ticks = 1;
     u32 impact_radius = 0;
     u32 damage_amount = 0;
-    u32 sprite_entry = 0;
+    // Resource-store entry zero is valid.  Use the store's explicit invalid
+    // sentinel so JW2_12's first image group remains drawable.
+    u32 sprite_entry = kInvalidResourceEntry;
     u32 startup_draw_mode = 0;
     u32 active_draw_mode = 0;
     u32 impact_draw_mode = 0;

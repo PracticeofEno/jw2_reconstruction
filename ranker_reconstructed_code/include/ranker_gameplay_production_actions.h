@@ -92,9 +92,11 @@ struct GameplayProductionUnitState {
     u32 linked_object_id = 0;
     i32 saved_path_target_x = 0;
     i32 saved_path_target_y = 0;
-    u32 linked_unit_offset = 0;
-    // Original linked unit +0xa040ac action recovery/lockout tick gate.
-    u32 linked_unit_runtime_state = 0;
+    // State 0x45 passenger raw +0x68 points at its carrier. The passenger
+    // icon handler at 0x004db5e1 publishes command 0x24 against that target.
+    u32 command_target_offset = 0;
+    // Original target carrier raw +0xac action recovery/lockout tick gate.
+    u32 command_target_lockout_ticks = 0;
     u32 action_mode_gate = 0;
     // Original raw unit +0x124 deferred-command count.
     u32 deferred_command_count = 0;

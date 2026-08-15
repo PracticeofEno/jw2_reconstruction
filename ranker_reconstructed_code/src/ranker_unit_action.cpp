@@ -524,6 +524,22 @@ u32 effect_sprite_animation_frame(const UnitEffectRuntime& effect) {
     return effect.tick;
 }
 
+u32 effect_resource_entry_for_raw_image_index(
+    const UnitEffectDefinition& definition, u32 raw_image_index) {
+    if (raw_image_index < definition.image_resource_entries.size()) {
+        return definition.image_resource_entries[raw_image_index];
+    }
+    if (definition.sprite_entry == kInvalidResourceEntry ||
+        raw_image_index > std::numeric_limits<u32>::max() -
+            definition.sprite_entry) {
+        return kInvalidResourceEntry;
+    }
+    // Auxiliary image allocations form one global contiguous stack in the
+    // original.  Raw effect indices are relative to the row's captured base,
+    // not bounded by that row's image count.
+    return definition.sprite_entry + raw_image_index;
+}
+
 bool effect_sprite_frame_in_range(const UnitEffectRuntime& effect, std::size_t size,
     std::size_t& index) {
     const u32 frame = effect_sprite_animation_frame(effect);
@@ -538,11 +554,11 @@ u32 effect_sprite_entry_for_frame(const UnitEffectRuntimeState& state,
     const UnitEffectDefinition& definition, const UnitEffectRuntime& effect) {
     if ((effect.flags & kUnitEffectFlagImpact) != 0 &&
         !definition.impact_image_indices.empty() &&
-        !definition.image_resource_entries.empty()) {
+        definition.sprite_entry != kInvalidResourceEntry) {
         std::size_t frame_index = 0;
         if (!effect_sprite_frame_in_range(
                 effect, definition.impact_image_indices.size(), frame_index)) {
-            return 0;
+            return kInvalidResourceEntry;
         }
         u32 image_index = definition.impact_image_indices[frame_index];
         if (const UnitMovementUnit* target =
@@ -551,8 +567,10 @@ u32 effect_sprite_entry_for_frame(const UnitEffectRuntimeState& state,
                 definition.impact_class_frame_count *
                 target->definition.projectile_impact_class;
         }
-        if (image_index < definition.image_resource_entries.size()) {
-            return definition.image_resource_entries[image_index];
+        const u32 resource_entry =
+            effect_resource_entry_for_raw_image_index(definition, image_index);
+        if (resource_entry != kInvalidResourceEntry) {
+            return resource_entry;
         }
     }
 
@@ -569,19 +587,19 @@ u32 effect_sprite_entry_for_frame(const UnitEffectRuntimeState& state,
                 definition.active_sprite_entries.size() / 8;
             if (frame_stride == 0 || effect.direction == 0 ||
                 effect.direction > 8) {
-                return 0;
+                return kInvalidResourceEntry;
             }
             const u32 frame = effect_sprite_animation_frame(effect);
             if (frame == 0xffffffffu ||
                 static_cast<std::size_t>(frame) >= frame_stride) {
-                return 0;
+                return kInvalidResourceEntry;
             }
             const std::size_t index =
                 static_cast<std::size_t>(effect.direction - 1) * frame_stride +
                 static_cast<std::size_t>(frame);
             return index < definition.active_sprite_entries.size()
                 ? definition.active_sprite_entries[index]
-                : 0;
+                : kInvalidResourceEntry;
         }
         sequence = &definition.active_sprite_entries;
     }
@@ -592,12 +610,12 @@ u32 effect_sprite_entry_for_frame(const UnitEffectRuntimeState& state,
         // Build (effect 0x64) remains alive with flags 0x200 for 62 cleanup
         // ticks after completion, but its active-frame count is zero and the
         // original therefore draws nothing during that interval.
-        return 0;
+        return kInvalidResourceEntry;
     }
 
     std::size_t index = 0;
     if (!effect_sprite_frame_in_range(effect, sequence->size(), index)) {
-        return 0;
+        return kInvalidResourceEntry;
     }
     return (*sequence)[index];
 }
@@ -972,10 +990,7 @@ void request_projectile_camera_shake(
 
 u32 projectile_impact_entry_for_raw_image_index(
     const UnitEffectDefinition& definition, u32 raw_image_index) {
-    if (raw_image_index < definition.image_resource_entries.size()) {
-        return definition.image_resource_entries[raw_image_index];
-    }
-    return 0;
+    return effect_resource_entry_for_raw_image_index(definition, raw_image_index);
 }
 
 bool draw_projectile_parity_impact_sprite(
@@ -993,7 +1008,7 @@ bool draw_projectile_parity_impact_sprite(
             definition.impact_class_frame_count * parity_class;
     const u32 sprite_entry =
         projectile_impact_entry_for_raw_image_index(definition, raw_image_index);
-    if (sprite_entry == 0) {
+    if (sprite_entry == kInvalidResourceEntry) {
         return true;
     }
     DrawResourceSpriteMode(sprite_entry, screen_x, screen_y,
@@ -1033,7 +1048,7 @@ bool draw_projectile_direct_active_sprite(
         return true;
     }
     const u32 sprite_entry = definition.active_sprite_entries[frame];
-    if (sprite_entry == 0) {
+    if (sprite_entry == kInvalidResourceEntry) {
         return true;
     }
     if ((effect.flags & kUnitEffectFlagRefundOnFinish) != 0) {
@@ -2413,7 +2428,8 @@ void RenderUnitEffectRuntimeSprite(UnitEffectRuntimeState& state,
     UnitEffectRuntime& effect) {
     const UnitEffectDefinition* definition =
         find_effect_definition(state, effect.effect_id);
-    if (definition == nullptr || definition->sprite_entry == 0) {
+    if (definition == nullptr ||
+        definition->sprite_entry == kInvalidResourceEntry) {
         return;
     }
     if (!unit_effect_low_id_sprite_blit_allowed(*definition, effect)) {
@@ -2429,12 +2445,13 @@ bool ResolveUnitEffectGenericSpriteRender(const UnitEffectRuntimeState& state,
     const UnitEffectRuntime& effect, u32& sprite_entry, u32& draw_mode) {
     const UnitEffectDefinition* definition =
         find_effect_definition(state, effect.effect_id);
-    if (definition == nullptr || definition->sprite_entry == 0 ||
+    if (definition == nullptr ||
+        definition->sprite_entry == kInvalidResourceEntry ||
         !unit_effect_low_id_sprite_blit_allowed(*definition, effect)) {
         return false;
     }
     sprite_entry = effect_sprite_entry_for_frame(state, *definition, effect);
-    if (sprite_entry == 0) {
+    if (sprite_entry == kInvalidResourceEntry) {
         return false;
     }
     draw_mode = effect_draw_mode_for_frame(*definition, effect);
@@ -4917,7 +4934,8 @@ void RenderUnitEffectOrProjectileRuntime(UnitEffectRuntimeState& state,
 
     const UnitEffectDefinition* definition =
         find_effect_definition(state, effect.effect_id);
-    if (definition == nullptr || definition->sprite_entry == 0) {
+    if (definition == nullptr ||
+        definition->sprite_entry == kInvalidResourceEntry) {
         return;
     }
     const u32 sprite_entry = effect_sprite_entry_for_frame(state, *definition, effect);

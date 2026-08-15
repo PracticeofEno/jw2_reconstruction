@@ -5687,14 +5687,14 @@ void ResolveGameplayClickSelection(UiOverlayState& state) {
         return;
     }
 
-    if (!FindUnitUnderStoredPointer(state)) {
-        if (!UiOverlaySelectionIsAdditive(state.shift_modifier_down)) {
-            ResetGameplaySelectionState(state);
-        }
+    const UiOverlayClickSelectionPolicy selection_policy =
+        ResolveUiOverlayClickSelectionPolicy(
+            FindUnitUnderStoredPointer(state), state.shift_modifier_down);
+    if (selection_policy == UiOverlayClickSelectionPolicy::preserve) {
         return;
     }
 
-    if (UiOverlaySelectionIsAdditive(state.shift_modifier_down)) {
+    if (selection_policy == UiOverlayClickSelectionPolicy::additive) {
         if (unit_already_selected(state, state.hover_context.unit_id)) {
             ToggleUnitSelectionState(state);
         } else if (const UiOverlayMinimapUnit* unit =

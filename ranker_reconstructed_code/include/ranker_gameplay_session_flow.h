@@ -10,6 +10,15 @@
 
 namespace ranker {
 
+// A local surrender is a match/session exit request, not a Win32 process
+// shutdown request. Only the gameplay loop's explicit shutdown edge (window
+// close, fatal startup failure, or worker termination) may close ranker.
+constexpr bool ShouldCloseApplicationAfterP2PMatch(
+    bool loop_process_shutdown_requested, bool surrender_requested) {
+    (void)surrender_requested;
+    return loop_process_shutdown_requested;
+}
+
 constexpr u32 kGameplaySaveSlotCount = 8;
 constexpr u32 kGameplaySaveMagicJwar = 0x5241574a;
 constexpr u32 kGameplaySaveVersion = 0x97;

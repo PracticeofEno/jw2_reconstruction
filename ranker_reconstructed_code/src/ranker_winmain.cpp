@@ -12764,17 +12764,17 @@ void default_gameplay_flow_process_session_loop(GameplaySessionFlowState& state)
     g_runtime.gameplay_session_loop_reached = true;
     append_startup_log("session-flow: process loop reached");
     ProcessGameplaySessionLoop(loop_state, state.session_loop_iteration_budget);
-    state.process_shutdown_requested = loop_state.process_shutdown_requested;
-    state.close_requested = loop_state.process_shutdown_requested;
     GameplayModalUiState& modal = gameplay_modal_ui_state();
+    const bool close_application = ShouldCloseApplicationAfterP2PMatch(
+        loop_state.process_shutdown_requested, modal.surrender_requested);
+    state.process_shutdown_requested = close_application;
+    state.close_requested = close_application;
     if (!loop_state.session_active && modal.surrender_requested) {
         // FUN_0042e510 sets DAT_00725c0a after publishing the local inactive
-        // vote.  The original outer network loop exits the program only after
-        // ProcessGameplaySessionLoop has shown the result and returned.
+        // vote. Original direct-P2P flow 0x004d94c7..0x004d9561 leaves the
+        // match loop on that edge and returns to its outer frontend; it does
+        // not stop the worker or post WM_CLOSE to the application.
         modal.surrender_requested = false;
-        g_runtime.worker_thread_running = false;
-        state.process_shutdown_requested = true;
-        state.close_requested = true;
     }
     state.p2p_win_result = g_runtime.gameplay_end_condition_state.result_code;
     append_startup_log("session-flow: process loop returned shutdown=%s result=%lu",
@@ -17691,6 +17691,23 @@ u32 auxiliary_effect_sound_slot_for_raw_ref(
     return record.sound_slots.front();
 }
 
+u32 auxiliary_effect_resource_entry_for_raw_index(
+    const AuxiliaryRuntimeCatalogRecord& record, u32 image_index) {
+    if (image_index < record.image_resource_entries.size()) {
+        return record.image_resource_entries[image_index];
+    }
+    if (record.image_resource_base_entry == kInvalidResourceEntry ||
+        image_index > std::numeric_limits<u32>::max() -
+            record.image_resource_base_entry) {
+        return kInvalidResourceEntry;
+    }
+    // Original FUN_004ed940 adds the raw phase-table index to the resource
+    // base without clamping it to this record's declared image count.  Profile
+    // 4 uses indices 40..50 after a 40-image row, thereby selecting the first
+    // eleven entries allocated by the following catalog row.
+    return record.image_resource_base_entry + image_index;
+}
+
 void append_auxiliary_effect_sprite_entries(std::vector<u32>& out,
     const AuxiliaryRuntimeCatalogRecord& record, std::size_t count_offset,
     std::size_t table_offset, std::vector<u32>* raw_indices = nullptr) {
@@ -17704,8 +17721,10 @@ void append_auxiliary_effect_sprite_entries(std::vector<u32>& out,
         if (raw_indices != nullptr) {
             raw_indices->push_back(image_index);
         }
-        if (image_index < record.image_resource_entries.size()) {
-            out.push_back(record.image_resource_entries[image_index]);
+        const u32 resource_entry =
+            auxiliary_effect_resource_entry_for_raw_index(record, image_index);
+        if (resource_entry != kInvalidResourceEntry) {
+            out.push_back(resource_entry);
         }
     }
 }
@@ -17777,9 +17796,7 @@ void append_default_unit_effect_definition_from_catalog_record(
     // example Kelpa's effect 0x1f) into direct point hits.
     definition.action_area_damage_radius = read_runtime_catalog_u32(
         record.definition_bytes, kJw211ActionAreaDamageRadiusOffset, 0);
-    definition.sprite_entry = record.image_resource_entries.empty()
-        ? 0
-        : record.image_resource_entries.front();
+    definition.sprite_entry = record.image_resource_base_entry;
     definition.startup_draw_mode = read_runtime_catalog_u32(
         record.definition_bytes, kAuxiliaryEffectStartupDrawModeOffset, 0);
     definition.active_draw_mode = read_runtime_catalog_u32(
@@ -20378,6 +20395,11 @@ bool publish_default_ui_overlay_input_command(
     }
     if (action.item_id >= 0xaau && action.item_id < 0xd4u) {
         const u32 action_id = action.item_id - 0xaau;
+        if (click) {
+            input.current_snapshot.field3 =
+                ResolveUiOverlayCommandSnapshotField3(action.item_id,
+                    action.aux, input.current_snapshot.field3);
+        }
         if (action.action == kUiOverlayCommandActionPlacement ||
             action.action == kUiOverlayCommandActionContextual) {
             const bool placement_action =
@@ -21049,10 +21071,10 @@ void sync_default_gameplay_production_action_units(
                     effect->attachment_definition_id;
             }
         }
-        if (unit->linked_unit != nullptr) {
-            production_unit.linked_unit_offset = unit->linked_unit->id;
-            production_unit.linked_unit_runtime_state =
-                unit->linked_unit->command_lockout_ticks;
+        if (unit->target != nullptr) {
+            production_unit.command_target_offset = unit->target->id;
+            production_unit.command_target_lockout_ticks =
+                unit->target->command_lockout_ticks;
         }
         production_unit.selected = std::find(overlay.selected_unit_ids.begin(),
             overlay.selected_unit_ids.end(), unit->id) !=

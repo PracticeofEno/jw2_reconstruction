@@ -509,6 +509,10 @@ bool load_auxiliary_runtime_catalog_record(AuxiliaryRuntimeCatalogState& state,
     }
 
     ServeMilesSound();
+    // FUN_005056xx records the current global image-resource stack base even
+    // for a zero-image row.  Effect tables add their raw indices to this base;
+    // Shoot sword, for example, intentionally reaches the following row.
+    record.image_resource_base_entry = resource_store_state().next_entry;
     for (u32 i = 0; i < record.image_count; ++i) {
         ServeMilesSound();
         u32 entry_index = kInvalidResourceEntry;

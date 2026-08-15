@@ -195,6 +195,10 @@ struct AuxiliaryRuntimeCatalogRecord {
     bool loaded = false;
     u32 source_record_index = 0;
     u32 palette_slot = kInvalidPaletteCacheSlot;
+    // The original stores the resource-stack position captured before this
+    // record's first image.  Raw image indices are added to that base and may
+    // deliberately continue into the next catalog record.
+    u32 image_resource_base_entry = kInvalidResourceEntry;
     std::string display_name;
     std::vector<u8> definition_bytes;
     std::vector<u32> image_resource_entries;

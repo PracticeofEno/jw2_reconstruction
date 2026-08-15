@@ -1,4 +1,5 @@
 #include "ranker_ui_overlay.h"
+#include "ranker_gameplay_session_flow.h"
 
 #include <cstdlib>
 
@@ -25,6 +26,18 @@ int main() {
     // additive_selection_mode field failed to provide.
     require(!ranker::UiOverlaySelectionIsAdditive(false));
     require(ranker::UiOverlaySelectionIsAdditive(true));
+    require(ranker::ResolveUiOverlayClickSelectionPolicy(false, false) ==
+        ranker::UiOverlayClickSelectionPolicy::preserve);
+    require(ranker::ResolveUiOverlayClickSelectionPolicy(false, true) ==
+        ranker::UiOverlayClickSelectionPolicy::preserve);
+    require(ranker::ResolveUiOverlayClickSelectionPolicy(true, false) ==
+        ranker::UiOverlayClickSelectionPolicy::replace);
+    require(ranker::ResolveUiOverlayClickSelectionPolicy(true, true) ==
+        ranker::UiOverlayClickSelectionPolicy::additive);
+
+    require(!ranker::ShouldCloseApplicationAfterP2PMatch(false, false));
+    require(!ranker::ShouldCloseApplicationAfterP2PMatch(false, true));
+    require(ranker::ShouldCloseApplicationAfterP2PMatch(true, false));
 
     // Pointer-event flags retain Shift/Ctrl if the key is released before the
     // gameplay worker drains the event; live state remains the injection
@@ -66,7 +79,11 @@ int main() {
             ranker::UiOverlayIconBlitKind::base);
         require(ranker::ResolveUiOverlayUnitOrObjectIconFrame(
             0xb5u, result_type) == result_type);
+        require(ranker::ResolveUiOverlayCommandSnapshotField3(
+            0xb5u, result_type, 0xfeedu) == result_type);
     }
+    require(ranker::ResolveUiOverlayCommandSnapshotField3(
+        0xb6u, 0x2du, 0xfeedu) == 0xfeedu);
     require(ranker::ResolveUiOverlayUnitOrObjectIconBlitKind(0xb6u) ==
         ranker::UiOverlayIconBlitKind::unit);
     require(ranker::ResolveUiOverlayUnitOrObjectIconFrame(0xb6u, 0x2du) ==
