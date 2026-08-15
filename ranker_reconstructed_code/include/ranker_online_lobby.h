@@ -22,6 +22,10 @@ namespace ranker {
 
 constexpr u32 kOnlineLobbyLayoutTrcRecord = 0x16e;
 constexpr u32 kOnlineLobbyBackgroundBitmapRecord = 0x12;
+constexpr int kOnlineLobbyRankMarkFrameWidth = 42;
+constexpr int kOnlineLobbyRankMarkFrameHeight = 18;
+constexpr int kOnlineLobbyRankMarkFrameCount = 5;
+constexpr int kOnlineLobbyRankMarkListRowHeight = 22;
 constexpr int kOnlineLobbyNameButtonId = 3000;
 constexpr int kOnlineLobbyGameListId = 0xbb9;
 constexpr int kOnlineLobbyGameListScrollId = 0xbba;
@@ -54,6 +58,11 @@ constexpr int kOnlineLobbyGuildSubSiteButtonId = 0xbd5;
 constexpr int kOnlineLobbyGuildSubSendMessageButtonId = 0xbd6;
 constexpr int kOnlineLobbyGuildSubSendMemoButtonId = 0xbd7;
 constexpr int kOnlineLobbyTabBackgroundButtonId = 0xbd8;
+constexpr int kOnlineLobbyRankMarkChoiceFirstId = 0xbd9;
+constexpr int kOnlineLobbyRankMarkChoiceLastId =
+    kOnlineLobbyRankMarkChoiceFirstId + kOnlineLobbyRankMarkFrameCount - 1;
+constexpr u32 kOnlineLobbySetRankMarkRequestOpcode = 0x96;
+constexpr u32 kOnlineLobbySetRankMarkResponseOpcode = 0x97;
 constexpr int kOnlineLobbyAcceleratorResourceId = 0x12c;
 constexpr UINT kOnlineLobbyNetworkMessage = 0x465;
 constexpr UINT kOnlineLobbyCopiedTextMessage = 0x501;
@@ -170,11 +179,13 @@ struct OnlineLobbyState {
     HWND game_list = nullptr;
     HWND chat_list = nullptr;
     HWND chat_edit = nullptr;
+    std::array<HWND, kOnlineLobbyRankMarkFrameCount> rank_mark_choices{};
     WNDPROC game_list_original_proc = nullptr;
     WNDPROC chat_list_original_proc = nullptr;
     WNDPROC chat_edit_original_proc = nullptr;
 
     BitmapMemoryResource background;
+    BitmapMemoryResource rank_mark_strip;
     BitmapTileSheetSelector icon_sheet;
     std::array<LegacyImageButtonControl, kOnlineLobbyButtonCount> buttons{};
     std::array<OnlineLobbyScrollControl, 2> scroll_controls{};
@@ -196,6 +207,8 @@ struct OnlineLobbyState {
     bool connected = true;
     bool create_join_disabled = false;
     bool resources_ready = false;
+    bool rank_mark_picker_visible = false;
+    u32 selected_rank_mark = 0;
     std::string lobby_name;
     std::string local_player_name;
     std::string last_chat_line;

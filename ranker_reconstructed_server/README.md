@@ -85,7 +85,8 @@ $env:RANKER_RECONSTRUCTED_SERVER_PORT = "19777"
 - Legacy type-3 async TCP packet framing, checksums, fragmentation, and merging.
 - Login, automatic account registration, account creation, and minimal profile
   replies.
-- Lobby list, lobby movement, online presence paging, and lobby chat.
+- Lobby list, lobby movement, online presence paging, lobby chat, and persistent
+  per-account selection of the five unique lobby nickname marks.
 - Game advertisement, duplicate-name handling, game browser paging, and removal
   notices.
 - Room-scoped relay join, leave, member-left notification, targeted frame

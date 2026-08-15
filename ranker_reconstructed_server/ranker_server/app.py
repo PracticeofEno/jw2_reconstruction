@@ -41,6 +41,9 @@ RELAY_FRAME_REQUEST_OPCODE = 0x92
 RELAY_JOIN_STATUS_OPCODE = 0x93
 RELAY_FRAME_OPCODE = 0x94
 RELAY_MEMBER_LEFT_OPCODE = 0x95
+LOBBY_MARK_SET_REQUEST_OPCODE = 0x96
+LOBBY_MARK_SET_RESPONSE_OPCODE = 0x97
+LOBBY_MARK_COUNT = 5
 RELAY_MAX_MEMBERS = 8
 RELAY_STREAM_LINK = 0
 RELAY_STREAM_MODE1 = 1
@@ -266,6 +269,7 @@ class RankerServer:
             RELAY_JOIN_REQUEST_OPCODE: self._handle_relay_join,
             RELAY_LEAVE_REQUEST_OPCODE: self._handle_relay_leave,
             RELAY_FRAME_REQUEST_OPCODE: self._handle_relay_frame,
+            LOBBY_MARK_SET_REQUEST_OPCODE: self._handle_lobby_mark_set,
             0x2A: self._handle_chat,
             0x37: self._handle_profile,
             0x3D: self._handle_top_bottom_counts,
@@ -305,6 +309,12 @@ class RankerServer:
 
         old_lobby = self.state.lobbies.get(session.lobby_id)
         session.account = account
+        stored_mark = self.accounts.profile_value(account, "lobby_mark", 0)
+        session.lobby_mark = (
+            stored_mark
+            if isinstance(stored_mark, int) and 0 <= stored_mark < LOBBY_MARK_COUNT
+            else 0
+        )
         session.view = "online"
         if old_lobby is not None:
             old_lobby.members.add(session.client_id)
@@ -342,11 +352,13 @@ class RankerServer:
             "mp": read_u32(packet.raw, 0x91),
             "op": read_u32(packet.raw, 0x95),
             "dp": read_u32(packet.raw, 0x99),
+            "lobby_mark": 0,
         }
         if not self.accounts.create(account, password, profile):
             await self._send(session, build_status_packet(4, 1))
             return
         session.account = account
+        session.lobby_mark = 0
         session.view = "online"
         lobby = self.state.lobbies.get(session.lobby_id)
         if lobby is not None:
@@ -396,7 +408,44 @@ class RankerServer:
         write_u32(payload, 0x0D - HEADER_BYTES, page)
         write_u32(payload, 0x11 - HEADER_BYTES, member.client_id)
         write_fixed_text(payload, 0x15 - HEADER_BYTES, 0x20, member.account)
+        write_u32(payload, 0x5D - HEADER_BYTES, member.lobby_mark)
         await self._send(session, build_packet(0x13, payload))
+
+    async def _handle_lobby_mark_set(
+        self, session: ClientSession, packet: Packet
+    ) -> None:
+        requested_mark = read_u32(packet.raw, 0x0D, LOBBY_MARK_COUNT)
+        if requested_mark >= LOBBY_MARK_COUNT:
+            await self._send(
+                session,
+                build_packet(
+                    LOBBY_MARK_SET_RESPONSE_OPCODE,
+                    struct.pack("<II", 1, session.lobby_mark),
+                ),
+            )
+            return
+
+        if not self.accounts.set_profile_value(
+            session.account, "lobby_mark", requested_mark
+        ):
+            await self._send(
+                session,
+                build_packet(
+                    LOBBY_MARK_SET_RESPONSE_OPCODE,
+                    struct.pack("<II", 2, session.lobby_mark),
+                ),
+            )
+            return
+
+        session.lobby_mark = requested_mark
+        await self._send(
+            session,
+            build_packet(
+                LOBBY_MARK_SET_RESPONSE_OPCODE,
+                struct.pack("<II", 0, session.lobby_mark),
+            ),
+        )
+        await self._broadcast_online_presence(session, added=True)
 
     async def _handle_chat(self, session: ClientSession, packet: Packet) -> None:
         if len(packet.raw) <= HEADER_BYTES + 8:
@@ -1252,6 +1301,7 @@ class RankerServer:
         payload = bytearray(0x61 - HEADER_BYTES)
         write_fixed_text(payload, 0, 0x20, subject.account)
         write_u32(payload, 0x4D - HEADER_BYTES, subject.client_id)
+        write_u32(payload, 0x59 - HEADER_BYTES, subject.lobby_mark)
         return build_packet(7, payload)
 
     async def _send_online_presence_snapshot(self, session: ClientSession) -> None:

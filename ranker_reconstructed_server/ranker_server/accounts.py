@@ -70,6 +70,27 @@ class AccountStore:
         self.save()
         return True
 
+    def profile_value(self, account: str, key: str, default: Any = None) -> Any:
+        record = self._records.get(account.casefold())
+        if record is None:
+            return default
+        profile = record.get("profile")
+        if not isinstance(profile, dict):
+            return default
+        return profile.get(key, default)
+
+    def set_profile_value(self, account: str, key: str, value: Any) -> bool:
+        record = self._records.get(account.casefold())
+        if record is None:
+            return False
+        profile = record.get("profile")
+        if not isinstance(profile, dict):
+            profile = {}
+            record["profile"] = profile
+        profile[key] = value
+        self.save()
+        return True
+
     def save(self) -> None:
         if self.path is None:
             return

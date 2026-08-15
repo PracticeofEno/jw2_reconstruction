@@ -22,6 +22,7 @@ class ClientSession:
     hosted_game_id: int | None = None
     relay_game_id: int | None = None
     relay_member_id: int = 0
+    lobby_mark: int = 0
     connected_at: float = field(default_factory=time.monotonic)
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 

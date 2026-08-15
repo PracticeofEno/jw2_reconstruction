@@ -46,7 +46,7 @@ namespace ranker {
 namespace {
 
 constexpr DWORD kListBoxGameStyle = WS_CHILD | WS_VISIBLE | LBS_NOTIFY |
-    LBS_OWNERDRAWFIXED | LBS_HASSTRINGS;
+    WS_CLIPSIBLINGS | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS;
 constexpr DWORD kChatListStyle = WS_CHILD | WS_VISIBLE | WS_DISABLED |
     LBS_NOTIFY | LBS_OWNERDRAWFIXED;
 constexpr DWORD kRichEditStyle = WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL |
@@ -80,7 +80,12 @@ constexpr DWORD kWindowStyleWindowed =
 constexpr std::size_t kStartupFriendAddTargetPromptRow = 209;
 constexpr std::size_t kStartupFriendRemoveTargetPromptRow = 210;
 constexpr int kOnlineLobbyReconstructedBackgroundResourceId = 2002;
+constexpr int kOnlineLobbyRankMarksResourceId = 2004;
 constexpr u32 kOnlineLobbyChatFontIndex = 3;
+constexpr int kOnlineLobbyRankMarkPickerColumns = 5;
+constexpr int kOnlineLobbyRankMarkChoiceWidth = 46;
+constexpr int kOnlineLobbyRankMarkChoiceHeight = 22;
+constexpr int kOnlineLobbyRankMarkChoiceGap = 2;
 
 constexpr OnlineLobbyButtonSpec kButtonSpecs[kOnlineLobbyButtonCount] = {
     {kOnlineLobbyNameButtonId, "Lobby Name", 0, 0, false},
@@ -174,6 +179,28 @@ bool load_reconstructed_lobby_background(OnlineLobbyState& state) {
     return bytes != nullptr && byte_count != 0 &&
         LoadBitmapMemoryResourceFromMemory(
             state.background, bytes, static_cast<std::size_t>(byte_count));
+}
+
+bool load_reconstructed_rank_marks(OnlineLobbyState& state) {
+    HMODULE module = state.instance != nullptr ? state.instance :
+        GetModuleHandleA(nullptr);
+    HRSRC info = FindResourceA(module,
+        MAKEINTRESOURCEA(kOnlineLobbyRankMarksResourceId), RT_RCDATA);
+    if (info == nullptr) {
+        return false;
+    }
+    HGLOBAL loaded = LoadResource(module, info);
+    const DWORD byte_count = SizeofResource(module, info);
+    const void* bytes = loaded != nullptr ? LockResource(loaded) : nullptr;
+    if (bytes == nullptr || byte_count == 0 ||
+        !LoadBitmapMemoryResourceFromMemory(state.rank_mark_strip, bytes,
+            static_cast<std::size_t>(byte_count))) {
+        return false;
+    }
+    return GetBitmapMemoryResourceWidth(state.rank_mark_strip) ==
+            kOnlineLobbyRankMarkFrameWidth * kOnlineLobbyRankMarkFrameCount &&
+        GetBitmapMemoryResourceHeight(state.rank_mark_strip) ==
+            kOnlineLobbyRankMarkFrameHeight;
 }
 
 std::vector<OnlineLobbyLayoutRect> copy_layout_record(
@@ -321,6 +348,153 @@ void fill_online_lobby_rect(HDC dc, const RECT& rect, COLORREF color) {
         FillRect(dc, &rect, brush);
         DeleteObject(brush);
     }
+}
+
+int online_lobby_rank_mark_picker_width() {
+    return kOnlineLobbyRankMarkPickerColumns * kOnlineLobbyRankMarkChoiceWidth +
+        (kOnlineLobbyRankMarkPickerColumns - 1) *
+            kOnlineLobbyRankMarkChoiceGap;
+}
+
+bool draw_online_lobby_rank_mark(OnlineLobbyState& state, HDC dc,
+    u32 mark_index, const RECT& bounds, bool left_aligned) {
+    if (!state.rank_mark_strip.loaded ||
+        mark_index >= static_cast<u32>(kOnlineLobbyRankMarkFrameCount)) {
+        return false;
+    }
+    const int available_width = std::max<int>(
+        0, static_cast<int>(bounds.right - bounds.left));
+    const int available_height = std::max<int>(
+        0, static_cast<int>(bounds.bottom - bounds.top));
+    const int x = left_aligned ? bounds.left + 3 :
+        bounds.left + std::max(0,
+            (available_width - kOnlineLobbyRankMarkFrameWidth) / 2);
+    const int y = bounds.top + std::max(0,
+        (available_height - kOnlineLobbyRankMarkFrameHeight) / 2);
+    const BitmapDrawRect destination{x, y,
+        kOnlineLobbyRankMarkFrameWidth, kOnlineLobbyRankMarkFrameHeight};
+    const BitmapDrawRect source{
+        static_cast<i32>(mark_index) * kOnlineLobbyRankMarkFrameWidth, 0,
+        kOnlineLobbyRankMarkFrameWidth, kOnlineLobbyRankMarkFrameHeight};
+    StretchBitmapMemoryResourceRectToDc(
+        state.rank_mark_strip, dc, destination, source);
+    return true;
+}
+
+void draw_online_lobby_rank_mark_button(OnlineLobbyState& state,
+    const DRAWITEMSTRUCT& draw, u32 mark_index) {
+    RECT rect = draw.rcItem;
+    const bool pressed = (draw.itemState & ODS_SELECTED) != 0;
+    fill_online_lobby_rect(draw.hDC, rect,
+        pressed ? RGB(47, 37, 24) : RGB(0, 0, 0));
+    frame_online_lobby_rect(draw.hDC, rect, RGB(10, 8, 5));
+    InflateRect(&rect, -1, -1);
+    const bool selected_choice = mark_index == state.selected_rank_mark;
+    frame_online_lobby_rect(draw.hDC, rect,
+        selected_choice ? RGB(255, 210, 48) : RGB(151, 116, 66));
+    InflateRect(&rect, -1, -1);
+    frame_online_lobby_rect(draw.hDC, rect,
+        selected_choice ? RGB(151, 116, 66) : RGB(47, 37, 24));
+
+    draw_online_lobby_rank_mark(state, draw.hDC, mark_index,
+        draw.rcItem, false);
+}
+
+void invalidate_online_lobby_rank_mark_controls(OnlineLobbyState& state) {
+    for (HWND choice : state.rank_mark_choices) {
+        if (choice != nullptr) {
+            InvalidateRect(choice, nullptr, FALSE);
+        }
+    }
+}
+
+bool position_online_lobby_rank_mark_picker(OnlineLobbyState& state,
+    int list_index) {
+    if (state.window == nullptr || state.game_list == nullptr || list_index < 0) {
+        return false;
+    }
+    RECT item_rect{};
+    RECT list_rect{};
+    if (SendMessageA(state.game_list, LB_GETITEMRECT,
+            static_cast<WPARAM>(list_index),
+            reinterpret_cast<LPARAM>(&item_rect)) == LB_ERR ||
+        !GetClientRect(state.game_list, &list_rect)) {
+        return false;
+    }
+    MapWindowPoints(state.game_list, state.window,
+        reinterpret_cast<POINT*>(&item_rect), 2);
+    MapWindowPoints(state.game_list, state.window,
+        reinterpret_cast<POINT*>(&list_rect), 2);
+
+    const int picker_width = online_lobby_rank_mark_picker_width();
+    int picker_x = static_cast<int>(item_rect.left) + 2;
+    picker_x = std::clamp(picker_x,
+        static_cast<int>(list_rect.left),
+        std::max(static_cast<int>(list_rect.left),
+            static_cast<int>(list_rect.right) - picker_width));
+    int picker_y = static_cast<int>(item_rect.bottom) + 2;
+    if (picker_y + kOnlineLobbyRankMarkChoiceHeight > list_rect.bottom) {
+        picker_y = static_cast<int>(item_rect.top) -
+            kOnlineLobbyRankMarkChoiceHeight - 2;
+    }
+    picker_y = std::clamp(picker_y,
+        static_cast<int>(list_rect.top),
+        std::max(static_cast<int>(list_rect.top),
+            static_cast<int>(list_rect.bottom) -
+                kOnlineLobbyRankMarkChoiceHeight));
+
+    for (int mark_index = 0;
+        mark_index < kOnlineLobbyRankMarkFrameCount; ++mark_index) {
+        HWND choice = state.rank_mark_choices[
+            static_cast<std::size_t>(mark_index)];
+        if (choice == nullptr) {
+            return false;
+        }
+        const int column = mark_index % kOnlineLobbyRankMarkPickerColumns;
+        SetWindowPos(choice, HWND_TOP,
+            picker_x + column *
+                (kOnlineLobbyRankMarkChoiceWidth +
+                    kOnlineLobbyRankMarkChoiceGap),
+            picker_y, kOnlineLobbyRankMarkChoiceWidth,
+            kOnlineLobbyRankMarkChoiceHeight,
+            SWP_NOACTIVATE);
+    }
+    return true;
+}
+
+void show_online_lobby_rank_mark_picker(OnlineLobbyState& state, bool visible) {
+    state.rank_mark_picker_visible = visible;
+    for (HWND choice : state.rank_mark_choices) {
+        if (choice == nullptr) {
+            continue;
+        }
+        ShowWindow(choice, visible ? SW_SHOW : SW_HIDE);
+        if (visible) {
+            SetWindowPos(choice, HWND_TOP, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+    }
+    invalidate_online_lobby_rank_mark_controls(state);
+}
+
+bool create_online_lobby_rank_mark_controls(OnlineLobbyState& state) {
+    const OnlineLobbyLayoutRect game = layout_at(state, 2);
+    for (int mark_index = 0;
+        mark_index < kOnlineLobbyRankMarkFrameCount; ++mark_index) {
+        HWND window = CreateWindowExA(0, "button", "",
+            WS_CHILD | WS_CLIPSIBLINGS | BS_OWNERDRAW,
+            game.x, game.y, kOnlineLobbyRankMarkChoiceWidth,
+            kOnlineLobbyRankMarkChoiceHeight, state.window,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(
+                kOnlineLobbyRankMarkChoiceFirstId + mark_index)),
+            state.instance, nullptr);
+        if (window == nullptr) {
+            return false;
+        }
+        state.rank_mark_choices[static_cast<std::size_t>(mark_index)] = window;
+    }
+    state.rank_mark_picker_visible = false;
+    return true;
 }
 
 void paint_online_lobby_dynamic_chrome(
@@ -695,7 +869,8 @@ void draw_online_lobby_chat_item(OnlineLobbyState& state,
     }
 }
 
-void draw_online_lobby_game_item(const DRAWITEMSTRUCT& draw) {
+void draw_online_lobby_game_item(OnlineLobbyState& state,
+    const DRAWITEMSTRUCT& draw) {
     if (draw.itemID == static_cast<UINT>(-1)) {
         return;
     }
@@ -709,7 +884,23 @@ void draw_online_lobby_game_item(const DRAWITEMSTRUCT& draw) {
         RGB(0, 0, 255) : RGB(0, 0, 0));
     SetBkMode(draw.hDC, (draw.itemState & ODS_SELECTED) != 0 ?
         OPAQUE : TRANSPARENT);
-    rect.left += 0x2a;
+
+    const auto* payload = reinterpret_cast<const u8*>(draw.itemData);
+    if (state.rank_mark_strip.loaded && payload != nullptr &&
+        reinterpret_cast<LPARAM>(payload) != static_cast<LPARAM>(LB_ERR)) {
+        const u32 mark_index = read_le32(payload + 0x2c);
+        if (mark_index < static_cast<u32>(kOnlineLobbyRankMarkFrameCount)) {
+            const BitmapDrawRect destination{
+                draw.rcItem.left, draw.rcItem.top,
+                kOnlineLobbyRankMarkFrameWidth, kOnlineLobbyRankMarkFrameHeight};
+            const BitmapDrawRect source{
+                static_cast<i32>(mark_index) * kOnlineLobbyRankMarkFrameWidth, 0,
+                kOnlineLobbyRankMarkFrameWidth, kOnlineLobbyRankMarkFrameHeight};
+            StretchBitmapMemoryResourceRectToDc(
+                state.rank_mark_strip, draw.hDC, destination, source);
+        }
+    }
+    rect.left += kOnlineLobbyRankMarkFrameWidth;
     DrawTextA(draw.hDC, text, -1, &rect, DT_LEFT | DT_SINGLELINE | DT_NOCLIP);
 }
 
@@ -753,6 +944,17 @@ std::vector<u8> make_online_lobby_command_packet(u32 opcode,
 
 void queue_online_lobby_simple_command(OnlineLobbyState& state, u32 opcode) {
     std::vector<u8> packet = make_online_lobby_command_packet(opcode, 0x0d);
+    queue_online_lobby_async_bytes(state, packet.data(), packet.size());
+}
+
+void queue_online_lobby_rank_mark_selection(OnlineLobbyState& state,
+    u32 mark_index) {
+    if (mark_index >= static_cast<u32>(kOnlineLobbyRankMarkFrameCount)) {
+        return;
+    }
+    std::vector<u8> packet = make_online_lobby_command_packet(
+        kOnlineLobbySetRankMarkRequestOpcode, 0x11);
+    write_le32(packet.data() + 0x0d, mark_index);
     queue_online_lobby_async_bytes(state, packet.data(), packet.size());
 }
 
@@ -1047,9 +1249,9 @@ void HandleOnlineLobbyPromptResult(OnlineLobbyState& state, WPARAM route,
     }
 }
 
-bool online_lobby_game_name_exists(OnlineLobbyState& state, const char* name) {
+int find_online_lobby_game_name(OnlineLobbyState& state, const char* name) {
     if (state.game_list == nullptr || name == nullptr || *name == '\0') {
-        return false;
+        return -1;
     }
     const int count = static_cast<int>(SendMessageA(state.game_list, LB_GETCOUNT, 0, 0));
     char row_text[0x100]{};
@@ -1057,11 +1259,53 @@ bool online_lobby_game_name_exists(OnlineLobbyState& state, const char* name) {
         row_text[0] = '\0';
         SendMessageA(state.game_list, LB_GETTEXT, static_cast<WPARAM>(i),
             reinterpret_cast<LPARAM>(row_text));
-        if (std::strcmp(row_text, name) == 0) {
-            return true;
+        if (_stricmp(row_text, name) == 0) {
+            return i;
         }
     }
-    return false;
+    return -1;
+}
+
+bool handle_online_lobby_local_mark_click(OnlineLobbyState& state,
+    HWND window, UINT message, LPARAM lparam) {
+    if (window != state.game_list || message != WM_LBUTTONUP ||
+        state.game_list == nullptr) {
+        return false;
+    }
+    const int x = static_cast<int>(
+        static_cast<short>(LOWORD(static_cast<DWORD_PTR>(lparam))));
+    const int y = static_cast<int>(
+        static_cast<short>(HIWORD(static_cast<DWORD_PTR>(lparam))));
+    const LRESULT hit = SendMessageA(state.game_list, LB_ITEMFROMPOINT, 0,
+        MAKELPARAM(x, y));
+    const int list_index = LOWORD(static_cast<DWORD_PTR>(hit));
+    const bool outside = HIWORD(static_cast<DWORD_PTR>(hit)) != 0;
+    if (outside || x < 0 || x >= kOnlineLobbyRankMarkFrameWidth ||
+        list_index < 0 || state.local_player_name.empty()) {
+        if (state.rank_mark_picker_visible) {
+            show_online_lobby_rank_mark_picker(state, false);
+        }
+        return false;
+    }
+
+    char row_name[0x100]{};
+    if (SendMessageA(state.game_list, LB_GETTEXT,
+            static_cast<WPARAM>(list_index),
+            reinterpret_cast<LPARAM>(row_name)) == LB_ERR ||
+        _stricmp(row_name, state.local_player_name.c_str()) != 0) {
+        if (state.rank_mark_picker_visible) {
+            show_online_lobby_rank_mark_picker(state, false);
+        }
+        return false;
+    }
+
+    play_online_lobby_click_sound();
+    if (state.rank_mark_picker_visible) {
+        show_online_lobby_rank_mark_picker(state, false);
+    } else if (position_online_lobby_rank_mark_picker(state, list_index)) {
+        show_online_lobby_rank_mark_picker(state, true);
+    }
+    return true;
 }
 
 void update_online_lobby_game_count_label(OnlineLobbyState& state) {
@@ -1086,17 +1330,34 @@ void clear_online_lobby_game_list(OnlineLobbyState& state) {
 
 void add_online_lobby_game_row(OnlineLobbyState& state, const char* name,
     const u8* packet, std::size_t byte_count, bool paged_record) {
-    if (state.game_list == nullptr || name == nullptr || *name == '\0' ||
-        online_lobby_game_name_exists(state, name)) {
+    if (state.game_list == nullptr || name == nullptr || *name == '\0') {
         return;
     }
-    const LRESULT index = SendMessageA(state.game_list, LB_ADDSTRING, 0,
-        reinterpret_cast<LPARAM>(name));
-    if (index == LB_ERR) {
+    int index = find_online_lobby_game_name(state, name);
+    u8* payload = nullptr;
+    bool added = false;
+    if (index >= 0) {
+        const LRESULT item_data = SendMessageA(state.game_list, LB_GETITEMDATA,
+            static_cast<WPARAM>(index), 0);
+        if (item_data != LB_ERR && item_data != 0) {
+            payload = reinterpret_cast<u8*>(item_data);
+        }
+    } else {
+        const LRESULT added_index = SendMessageA(state.game_list, LB_ADDSTRING, 0,
+            reinterpret_cast<LPARAM>(name));
+        if (added_index == LB_ERR) {
+            return;
+        }
+        index = static_cast<int>(added_index);
+        payload = static_cast<u8*>(
+            ::operator new(kOnlineLobbyGamePayloadBytes));
+        SendMessageA(state.game_list, LB_SETITEMDATA,
+            static_cast<WPARAM>(index), reinterpret_cast<LPARAM>(payload));
+        added = true;
+    }
+    if (payload == nullptr) {
         return;
     }
-
-    auto* payload = static_cast<u8*>(::operator new(kOnlineLobbyGamePayloadBytes));
     std::memset(payload, 0, kOnlineLobbyGamePayloadBytes);
     if (paged_record) {
         write_le32(payload, packet_u32(packet, byte_count, 0x55));
@@ -1111,9 +1372,17 @@ void add_online_lobby_game_row(OnlineLobbyState& state, const char* name,
         write_le32(payload + 0x5c, packet_u32(packet, byte_count, 0x5d));
         write_le32(payload + 0x18a, packet_u32(packet, byte_count, 0x4d));
     }
-    SendMessageA(state.game_list, LB_SETITEMDATA, static_cast<WPARAM>(index),
-        reinterpret_cast<LPARAM>(payload));
-    update_online_lobby_game_count_label(state);
+    const u32 mark_index = read_le32(payload + 0x2c);
+    if (!state.local_player_name.empty() &&
+        _stricmp(name, state.local_player_name.c_str()) == 0 &&
+        mark_index < static_cast<u32>(kOnlineLobbyRankMarkFrameCount)) {
+        state.selected_rank_mark = mark_index;
+        invalidate_online_lobby_rank_mark_controls(state);
+    }
+    InvalidateRect(state.game_list, nullptr, FALSE);
+    if (added) {
+        update_online_lobby_game_count_label(state);
+    }
 }
 
 void remove_online_lobby_game_by_id(OnlineLobbyState& state, u32 game_id) {
@@ -1423,6 +1692,13 @@ void destroy_child_windows(OnlineLobbyState& state) {
         DestroyWindow(state.chat_edit);
         state.chat_edit = nullptr;
     }
+    for (HWND& choice : state.rank_mark_choices) {
+        if (choice != nullptr) {
+            DestroyWindow(choice);
+            choice = nullptr;
+        }
+    }
+    state.rank_mark_picker_visible = false;
     DestroyOnlineLobbyScrollControls(state);
     DestroyOnlineLobbyImageButtons(state);
 }
@@ -1433,6 +1709,7 @@ void release_resources(OnlineLobbyState& state) {
     state.resources_ready = false;
     RestoreOnlineLobbyAccelerators(state);
     DestroyOnlineLobbyBackgroundBitmap(state);
+    ReleaseBitmapMemoryResource(state.rank_mark_strip);
     DestroyOnlineLobbyIconTileSheet(state);
     destroy_child_windows(state);
     state.layout_rects.clear();
@@ -2393,6 +2670,16 @@ bool DispatchOnlineLobbyServerPacket(OnlineLobbyState& state, const u8* packet,
         queue_online_lobby_game_page_request(state, static_cast<u32>(page + 1));
         return true;
     }
+    case kOnlineLobbySetRankMarkResponseOpcode: {
+        const u32 status = packet_u32(packet, byte_count, 0x0d);
+        const u32 mark_index = packet_u32(packet, byte_count, 0x11);
+        if (status == 0 &&
+            mark_index < static_cast<u32>(kOnlineLobbyRankMarkFrameCount)) {
+            state.selected_rank_mark = mark_index;
+            invalidate_online_lobby_rank_mark_controls(state);
+        }
+        return true;
+    }
     case 0x23:
         remove_online_lobby_game_by_id(state, packet_u32(packet, byte_count, 0x0d));
         return true;
@@ -2539,6 +2826,7 @@ bool CreateOnlineLobbyWindow(OnlineLobbyState& state, HWND parent,
     state.return_context = return_context;
     state.resources_ready = false;
     InitializeOnlineLobbyBackgroundBitmapStatic(state);
+    InitializeBitmapMemoryResource(state.rank_mark_strip);
     InitializeOnlineLobbyIconTileSheetStatic(state);
     InitializeOnlineLobbyScrollControls(state);
     InitializeOnlineLobbyImageButtons(state);
@@ -2600,6 +2888,11 @@ bool CreateOnlineLobbyWindow(OnlineLobbyState& state, HWND parent,
         chat_rect.x, chat_rect.y, chat_rect.width, chat_rect.height, state.window,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kOnlineLobbyChatListId)),
         instance, nullptr);
+    if (!create_online_lobby_rank_mark_controls(state)) {
+        DestroyWindow(state.window);
+        state.window = nullptr;
+        return false;
+    }
     OnlineLobbyLayoutRect game_scroll_rect = layout_at(state, 3);
     OnlineLobbyScrollControl& game_scroll = state.scroll_controls[0];
     if (CreateLegacyCustomScrollControlWindow(game_scroll.control, state.window, "",
@@ -2637,6 +2930,8 @@ bool CreateOnlineLobbyWindow(OnlineLobbyState& state, HWND parent,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kOnlineLobbyChatEditId)),
         instance, nullptr);
     if (state.game_list != nullptr) {
+        SendMessageA(state.game_list, LB_SETITEMHEIGHT, 0,
+            static_cast<LPARAM>(kOnlineLobbyRankMarkListRowHeight));
         state.game_list_original_proc = reinterpret_cast<WNDPROC>(
             GetWindowLongPtrA(state.game_list, GWLP_WNDPROC));
         subclass_control(state.game_list);
@@ -2687,6 +2982,15 @@ bool CreateOnlineLobbyWindow(OnlineLobbyState& state, HWND parent,
         DestroyWindow(state.window);
         return false;
     }
+    if (!load_reconstructed_rank_marks(state)) {
+        DestroyWindow(state.window);
+        return false;
+    }
+    if (state.selected_rank_mark >=
+        static_cast<u32>(kOnlineLobbyRankMarkFrameCount)) {
+        state.selected_rank_mark = 0;
+    }
+    invalidate_online_lobby_rank_mark_controls(state);
     InstallOnlineLobbyAccelerators(state);
     SetOnlineLobbyTab(state, OnlineLobbyTab::Main);
     if (state.chat_edit != nullptr) {
@@ -2753,8 +3057,15 @@ LRESULT HandleOnlineLobbyWindowMessage(OnlineLobbyState& state, HWND hwnd,
                 DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
             return TRUE;
         }
+        if (draw->CtlID >= kOnlineLobbyRankMarkChoiceFirstId &&
+            draw->CtlID <= kOnlineLobbyRankMarkChoiceLastId) {
+            draw_online_lobby_rank_mark_button(state, *draw,
+                static_cast<u32>(
+                    draw->CtlID - kOnlineLobbyRankMarkChoiceFirstId));
+            return TRUE;
+        }
         if (draw->CtlID == kOnlineLobbyGameListId) {
-            draw_online_lobby_game_item(*draw);
+            draw_online_lobby_game_item(state, *draw);
             return TRUE;
         }
         if (draw->CtlID == kOnlineLobbyChatListId) {
@@ -2976,6 +3287,18 @@ LRESULT HandleOnlineLobbyWindowMessage(OnlineLobbyState& state, HWND hwnd,
             send_online_lobby_help_chat(state, hwnd);
             return 0;
         default:
+            if (id >= kOnlineLobbyRankMarkChoiceFirstId &&
+                id <= kOnlineLobbyRankMarkChoiceLastId &&
+                notify_code == BN_CLICKED) {
+                const u32 mark_index = static_cast<u32>(
+                    id - kOnlineLobbyRankMarkChoiceFirstId);
+                play_online_lobby_click_sound();
+                state.selected_rank_mark = mark_index;
+                show_online_lobby_rank_mark_picker(state, false);
+                queue_online_lobby_rank_mark_selection(state, mark_index);
+                focus_online_lobby_chat_edit(state);
+                return 0;
+            }
             break;
         }
         break;
@@ -3033,10 +3356,18 @@ LRESULT HandleOnlineLobbyControlMessage(OnlineLobbyState& state, HWND hwnd,
         SendMessageA(state.parent_window, message, wparam, lparam);
     }
 
+    if (handle_online_lobby_local_mark_click(state, hwnd, message, lparam)) {
+        return 0;
+    }
+
     if (OnlineLobbyScrollControl* scroll = scroll_by_id(state, id)) {
         const bool scroll_handled = HandleLegacyCustomScrollControlMouseMessage(
             scroll->control, message, wparam, lparam);
         if (scroll_handled) {
+            if (scroll == &state.scroll_controls[0] &&
+                state.rank_mark_picker_visible) {
+                show_online_lobby_rank_mark_picker(state, false);
+            }
             synchronize_scroll_to_list(state, *scroll,
                 list_for_scroll(state, *scroll));
         }

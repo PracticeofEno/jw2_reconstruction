@@ -33,3 +33,5 @@ LANGUAGE 0x12, 0x01
 // independent of these UI-only resources.
 2002 10 "resources/lobby_base.bmp"
 2003 10 "resources/view_rank_base.bmp"
+// Five unique 42x18 nickname marks: LEAGUE, WIZARD, USER, RANKER, RANK.
+2004 10 "resources/wizardnet_rank_marks.bmp"

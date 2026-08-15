@@ -33,6 +33,23 @@ length field; one `recv` is not assumed to contain exactly one packet.
 | `0x1d` | `0x1e` or `0x27` | game-browser page or live game add |
 | `0x1b` | `0x26` | remove public game advertisement |
 | `0x28` | `0x26` | start game and hide public advertisement |
+| `0x96` | `0x97` | save the authenticated user's lobby mark |
+
+## Lobby Mark Extension
+
+The reconstructed lobby exposes five unique 42x18 mark frames. A client sends
+opcode `0x96` with `u32 mark_index` (`0` through `4`). The server stores
+the value in the authenticated account profile and answers with opcode `0x97`:
+
+| Offset | Size | Meaning |
+|---:|---:|---|
+| `0x0d` | 4 | status: `0` saved, `1` invalid index, `2` account unavailable |
+| `0x11` | 4 | authoritative current mark index |
+
+After a successful save the server rebroadcasts the normal opcode `0x07`
+online-presence record. Its mark index is at packet offset `0x59`; opcode
+`0x13` paged presence carries the same value at offset `0x5d`. This lets
+already-open lobby lists update the existing nickname row without reconnecting.
 
 ## WizardNet Relay Extension
 

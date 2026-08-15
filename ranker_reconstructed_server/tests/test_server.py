@@ -42,6 +42,10 @@ def create_account_packet(account: str, password: str) -> bytes:
     return build_packet(3, payload)
 
 
+def lobby_mark_packet(mark_index: int) -> bytes:
+    return build_packet(0x96, struct.pack("<I", mark_index))
+
+
 def relay_secret(packet: bytes) -> bytes:
     return packet[0x19 : 0x19 + RELAY_SECRET_BYTES]
 
@@ -187,6 +191,46 @@ class ServerIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(read_u32(page, 4), 0x13)
         self.assertEqual(read_c_string(page, 0x15, 0x20), "Alice")
         bob_writer.close()
+
+    async def test_lobby_mark_is_saved_and_broadcast_in_presence(self) -> None:
+        alice_reader, alice_writer = await self.connect_and_login("Alice")
+        bob_reader, bob_writer = await self.connect_and_login("Bob")
+
+        initial_presence = await read_packet(alice_reader)
+        self.assertEqual(read_u32(initial_presence, 4), 7)
+        self.assertEqual(read_u32(initial_presence, 0x59), 0)
+
+        bob_writer.write(lobby_mark_packet(4))
+        await bob_writer.drain()
+        acknowledgement = await read_until_opcode(bob_reader, 0x97)
+        self.assertEqual(read_u32(acknowledgement, 0x0D), 0)
+        self.assertEqual(read_u32(acknowledgement, 0x11), 4)
+        self.assertEqual(self.server.accounts.profile_value("Bob", "lobby_mark"), 4)
+
+        alice_presence = await read_until_opcode(alice_reader, 7)
+        self.assertEqual(read_c_string(alice_presence, 0x0D, 0x20), "Bob")
+        self.assertEqual(read_u32(alice_presence, 0x59), 4)
+
+        alice_writer.write(build_packet(0x12, struct.pack("<I", 1)))
+        await alice_writer.drain()
+        bob_page = await read_until_opcode(alice_reader, 0x13)
+        self.assertEqual(read_c_string(bob_page, 0x15, 0x20), "Bob")
+        self.assertEqual(read_u32(bob_page, 0x5D), 4)
+
+        bob_writer.write(lobby_mark_packet(5))
+        await bob_writer.drain()
+        rejected = await read_until_opcode(bob_reader, 0x97)
+        self.assertEqual(read_u32(rejected, 0x0D), 1)
+        self.assertEqual(read_u32(rejected, 0x11), 4)
+        self.assertEqual(self.server.accounts.profile_value("Bob", "lobby_mark"), 4)
+
+        bob_writer.close()
+        await bob_writer.wait_closed()
+        await wait_until(lambda: self.server.state.find_client_by_account("Bob") is None)
+        _, _ = await self.connect_and_login("Bob")
+        restored_presence = await read_until_opcode(alice_reader, 7)
+        self.assertEqual(read_c_string(restored_presence, 0x0D, 0x20), "Bob")
+        self.assertEqual(read_u32(restored_presence, 0x59), 4)
 
     async def test_client_socket_uses_disconnect_keepalive(self) -> None:
         _, _ = await self.connect_and_login("Keepalive")
