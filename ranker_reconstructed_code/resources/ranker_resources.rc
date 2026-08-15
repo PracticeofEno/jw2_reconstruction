@@ -27,3 +27,9 @@ LANGUAGE 0x12, 0x01
 // decoded title cycle plus a single-frame emergency fallback in RCDATA.
 2000 10 "resources/main_menu_bink_fallback_565.bin"
 2001 10 "resources/main_menu_bink_fallback_anim.z"
+
+// Keep the reconstructed WizardNet frontend instead of falling back to the
+// original Jw2_19 lobby art.  The server, relay, and packet paths are
+// independent of these UI-only resources.
+2002 10 "resources/lobby_base.bmp"
+2003 10 "resources/view_rank_base.bmp"

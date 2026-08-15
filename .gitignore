@@ -58,6 +58,8 @@ ranker_reconstructed_code/tools/gameplay_parity/reports/gameplay_inventory.json
 !ranker_reconstructed_code/resources/
 !ranker_reconstructed_code/resources/main_menu_bink_fallback_565.bin
 !ranker_reconstructed_code/resources/main_menu_bink_fallback_anim.z
+!ranker_reconstructed_code/resources/lobby_base.bmp
+!ranker_reconstructed_code/resources/view_rank_base.bmp
 !ranker_reconstructed_code/resources/ranker_resources.rc
 !ranker_reconstructed_code/resources/original/
 !ranker_reconstructed_code/resources/original/**
