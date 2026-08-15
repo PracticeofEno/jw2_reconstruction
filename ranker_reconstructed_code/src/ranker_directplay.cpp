@@ -2,6 +2,7 @@
 #include "ranker_network.h"
 #include "ranker_player_slots.h"
 #include "ranker_reliable_packets.h"
+#include "ranker_wizardnet_relay.h"
 
 #ifdef _WIN32
 #include <dplobby.h>
@@ -1373,6 +1374,7 @@ bool ClearDirectPlayPlayerId(DPID player_id) {
 
 bool ClearDirectPlayPlayerSlotId(u32 player_slot, bool notify_inactive) {
     bool cleared = false;
+    const bool valid_player_slot = player_slot < kPlayerSlotCount;
 
     lock_async_state();
     if (player_slot < g_async_com_state.players.size()) {
@@ -1381,7 +1383,7 @@ bool ClearDirectPlayPlayerSlotId(u32 player_slot, bool notify_inactive) {
     }
     unlock_async_state();
 
-    if (cleared && notify_inactive) {
+    if ((cleared || valid_player_slot) && notify_inactive) {
         notify_player_slot_inactive(player_slot);
     }
 
@@ -1475,6 +1477,17 @@ i32 SendMode1ReliablePayloadToPlayerDefault(const void* payload, u32 byte_count,
             return 0;
         }
 
+        if (transport_mode == 0 && WizardNetRelayEnabled()) {
+            const u32 target_member = WizardNetRelayMemberForPlayer(target_player);
+            const bool sent = target_member != 0 &&
+                QueueWizardNetRelayFrame(target_member,
+                    kWizardNetRelayStreamMode1, payload, byte_count);
+            record_mode1_udp_send_result(sent);
+            const i32 status = sent ? 0 : -1;
+            set_mode1_send_status(status);
+            return status;
+        }
+
         sockaddr_in target_address{};
         bool address_valid = false;
         lock_async_state();
@@ -1534,6 +1547,25 @@ i32 BroadcastMode1ReliablePayloadDefault(const void* payload, u32 byte_count) {
     if (mode1_reliable_uses_legacy_udp_transport(transport_mode)) {
         const Mode1ReliableRuntimeState& reliable = mode1_reliable_state();
         i32 status = 0;
+        if (transport_mode == 0 && WizardNetRelayEnabled()) {
+            for (u32 slot = 0; slot < kPlayerSlotCount; ++slot) {
+                if (slot == reliable.local_player_index ||
+                    !mode1_slot_active_for_udp_send(slot, reliable)) {
+                    continue;
+                }
+                const u32 target_member = WizardNetRelayMemberForPlayer(slot);
+                const bool sent = target_member != 0 &&
+                    QueueWizardNetRelayFrame(target_member,
+                        kWizardNetRelayStreamMode1, payload, byte_count);
+                record_mode1_udp_send_result(sent);
+                if (!sent) {
+                    status = -1;
+                }
+            }
+            set_mode1_send_status(status);
+            return status;
+        }
+
         for (u32 slot = 0; slot < kPlayerSlotCount; ++slot) {
             if (slot == reliable.local_player_index ||
                 !mode1_slot_active_for_udp_send(slot, reliable)) {
@@ -1592,12 +1624,40 @@ void InstallDefaultMode1ReliableTransportCallbacks() {
     SetMode1ReliableCallbacks(callbacks, reliable.callback_user_data);
 }
 
+void ProcessWizardNetRelayMemberLeftEvents() {
+    u32 game_id = 0;
+    u32 member_id = 0;
+    while (TakeWizardNetRelayMemberLeft(game_id, member_id)) {
+        const WizardNetRelayState relay = wizardnet_relay_state();
+        u32 player_slot = WizardNetRelayPlayerForMember(member_id);
+        if (player_slot >= kPlayerSlotCount && member_id == 1 &&
+            !relay.host_mode) {
+            player_slot = 0;
+        }
+        if (player_slot < kPlayerSlotCount) {
+            SetWizardNetRelayPlayerMember(player_slot, 0);
+            ClearDirectPlayPlayerSlotId(player_slot, true);
+        }
+        if (member_id == 1 && !relay.host_mode &&
+            WizardNetRelayReadyForGame(game_id)) {
+            ResetWizardNetRelayState();
+            break;
+        }
+    }
+}
+
 void PumpLegacyUdpMode1Messages(AsyncComContext* context) {
     auto& network = legacy_network_state();
+    const bool relay_enabled = WizardNetRelayEnabled();
     for (;;) {
         const std::size_t queued_before_receive =
             network.udp_receive_queue.size();
-        ReceiveLegacyUdpPacket();
+        if (relay_enabled) {
+            PumpWizardNetRelayMode1Frames();
+            ProcessWizardNetRelayMemberLeftEvents();
+        } else {
+            ReceiveLegacyUdpPacket();
+        }
         const bool received_datagram =
             network.udp_receive_queue.size() > queued_before_receive;
         bool consumed_message = false;

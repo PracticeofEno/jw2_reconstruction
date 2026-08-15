@@ -15,12 +15,14 @@
     "client_keepalive_idle_seconds": 30,
     "client_keepalive_interval_seconds": 5,
     "client_keepalive_probe_count": 5,
+    "send_timeout_seconds": 10,
     "rank_game_count": 10
   },
   "logging": {
     "level": "INFO"
   },
   "data": {
-    "account_file": "data/accounts.json"
+    "account_file": "data/accounts.json",
+    "relay_evidence_dir": "../debug_artifacts/relay_server_evidence"
   }
 }

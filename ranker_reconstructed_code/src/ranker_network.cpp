@@ -172,6 +172,19 @@ bool append_to_send_queue(LegacySocketRecord& record, const void* data,
     return true;
 }
 
+int normalized_async_tcp_socket_buffer_bytes(int byte_count) {
+    return byte_count < 0 ? kLegacyAsyncTcpSocketBufferBytes : byte_count;
+}
+
+void configure_async_tcp_low_latency_options(LegacyAsyncTcpSocket& socket_state) {
+    if (socket_state.socket == INVALID_SOCKET) {
+        return;
+    }
+    int no_delay = 1;
+    setsockopt(socket_state.socket, IPPROTO_TCP, TCP_NODELAY,
+        reinterpret_cast<const char*>(&no_delay), sizeof(no_delay));
+}
+
 bool flush_send_queue(LegacySocketRecord& record) {
     if (record.send_queue.empty()) {
         return true;
@@ -998,6 +1011,7 @@ bool CreateLegacyAsyncTcpSocket(LegacyAsyncTcpSocket& socket_state) {
         ShutdownLegacyAsyncTcpWinSock();
         return false;
     }
+    configure_async_tcp_low_latency_options(socket_state);
     return true;
 }
 
@@ -1340,17 +1354,19 @@ void FlushLegacyAsyncTcpSendQueue(LegacyAsyncTcpSocket& socket_state,
 
 void SetLegacyAsyncTcpReceiveBufferSize(LegacyAsyncTcpSocket& socket_state,
     int byte_count) {
-    if (byte_count >= 0) {
+    if (socket_state.socket != INVALID_SOCKET) {
+        const int buffer_bytes = normalized_async_tcp_socket_buffer_bytes(byte_count);
         setsockopt(socket_state.socket, SOL_SOCKET, SO_RCVBUF,
-            reinterpret_cast<const char*>(&byte_count), sizeof(byte_count));
+            reinterpret_cast<const char*>(&buffer_bytes), sizeof(buffer_bytes));
     }
 }
 
 void SetLegacyAsyncTcpSendBufferSize(LegacyAsyncTcpSocket& socket_state,
     int byte_count) {
-    if (byte_count >= 0) {
+    if (socket_state.socket != INVALID_SOCKET) {
+        const int buffer_bytes = normalized_async_tcp_socket_buffer_bytes(byte_count);
         setsockopt(socket_state.socket, SOL_SOCKET, SO_SNDBUF,
-            reinterpret_cast<const char*>(&byte_count), sizeof(byte_count));
+            reinterpret_cast<const char*>(&buffer_bytes), sizeof(buffer_bytes));
     }
 }
 

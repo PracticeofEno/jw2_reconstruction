@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+import secrets
 import time
 
 
@@ -19,6 +20,8 @@ class ClientSession:
     lobby_id: int = 1
     view: str = "login"
     hosted_game_id: int | None = None
+    relay_game_id: int | None = None
+    relay_member_id: int = 0
     connected_at: float = field(default_factory=time.monotonic)
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -45,7 +48,24 @@ class AdvertisedGame:
     sockaddr: bytes
     game_type: int
     map_descriptor: bytes
+    relay_members: dict[int, int] = field(default_factory=dict)
+    relay_member_peers: dict[int, tuple[str, int]] = field(default_factory=dict)
+    relay_departed_members: set[int] = field(default_factory=set)
+    relay_secret: bytes = field(default_factory=lambda: secrets.token_bytes(32))
+    advertised: bool = True
     created_at: float = field(default_factory=time.monotonic)
+    relay_link_frames: int = 0
+    relay_link_bytes: int = 0
+    relay_mode1_frames: int = 0
+    relay_mode1_bytes: int = 0
+    relay_deliveries: int = 0
+    relay_no_target_frames: int = 0
+    relay_invalid_stream_frames: int = 0
+    relay_invalid_payload_frames: int = 0
+    relay_member_link_tx: dict[int, int] = field(default_factory=dict)
+    relay_member_link_rx: dict[int, int] = field(default_factory=dict)
+    relay_member_mode1_tx: dict[int, int] = field(default_factory=dict)
+    relay_member_mode1_rx: dict[int, int] = field(default_factory=dict)
 
 
 class ServerState:
@@ -104,6 +124,10 @@ class ServerState:
 
     def lobby_games(self, lobby_id: int) -> list[AdvertisedGame]:
         return sorted(
-            (game for game in self.games.values() if game.lobby_id == lobby_id),
+            (
+                game
+                for game in self.games.values()
+                if game.lobby_id == lobby_id and game.advertised
+            ),
             key=lambda game: game.game_id,
         )

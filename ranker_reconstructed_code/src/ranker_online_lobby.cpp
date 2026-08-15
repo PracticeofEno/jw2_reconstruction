@@ -4,6 +4,7 @@
 
 #include "ranker_avatar_window.h"
 #include "ranker_barter_window.h"
+#include "ranker_free_server_lobby.h"
 #include "ranker_frontend_layout.h"
 #include "ranker_gameplay_sound.h"
 #include "ranker_icon_marked_text.h"
@@ -2477,6 +2478,12 @@ void DispatchOnlineLobbyNetworkMessage(OnlineLobbyState& state, LPARAM event) {
         return;
     }
     if (network_event != FD_READ || state.async_tcp_socket == nullptr) {
+        return;
+    }
+    FreeServerLobbyState& free_server = free_server_lobby_state();
+    if (free_server.window != nullptr && IsWindow(free_server.window) &&
+        free_server.async_tcp_socket == state.async_tcp_socket) {
+        PostMessageA(free_server.window, kFreeServerNetworkMessage, 0, event);
         return;
     }
 

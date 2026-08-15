@@ -24,9 +24,11 @@ class ServerConfig:
     client_keepalive_idle_seconds: int = 30
     client_keepalive_interval_seconds: int = 5
     client_keepalive_probe_count: int = 5
+    send_timeout_seconds: float = 10.0
     rank_game_count: int = 10
     log_level: str = "INFO"
     account_file: Path | None = None
+    relay_evidence_dir: Path | None = None
 
     def validate(self) -> None:
         if not self.host:
@@ -51,6 +53,8 @@ class ServerConfig:
             raise ValueError(
                 "server.client_keepalive_probe_count must be between 1 and 100"
             )
+        if not 0.1 <= self.send_timeout_seconds <= 3600:
+            raise ValueError("server.send_timeout_seconds must be between 0.1 and 3600")
         if self.rank_game_count < 0:
             raise ValueError("server.rank_game_count must not be negative")
         if self.public_address:
@@ -130,6 +134,9 @@ def load_config(path: str | Path | None = None) -> ServerConfig:
             config.client_keepalive_probe_count,
         )
     )
+    config.send_timeout_seconds = float(
+        server.get("send_timeout_seconds", config.send_timeout_seconds)
+    )
     config.rank_game_count = int(
         server.get("rank_game_count", config.rank_game_count)
     )
@@ -139,6 +146,14 @@ def load_config(path: str | Path | None = None) -> ServerConfig:
         candidate = Path(account_file)
         config.account_file = (
             candidate if candidate.is_absolute() else config_path.parent / candidate
+        )
+    relay_evidence_dir = str(data.get("relay_evidence_dir", "")).strip()
+    if relay_evidence_dir:
+        candidate = Path(relay_evidence_dir)
+        config.relay_evidence_dir = (
+            candidate
+            if candidate.is_absolute()
+            else (config_path.parent / candidate).resolve()
         )
     config.validate()
     return config

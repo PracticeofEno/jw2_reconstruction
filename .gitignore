@@ -11,6 +11,7 @@
 
 !ranker_reconstructed_code/config/
 !ranker_reconstructed_code/config/ranker_client.ini
+!ranker_reconstructed_code/config/wizardnet_server.ini
 
 !ranker_reconstructed_code/include/
 !ranker_reconstructed_code/include/**
@@ -34,6 +35,7 @@
 !ranker_reconstructed_code/tests/unit_equipment_type_replacement_visibility_regression.cpp
 !ranker_reconstructed_code/tests/subtype01_latest_cancel_parity_regression.cpp
 !ranker_reconstructed_code/tests/transport_noxious_regression.cpp
+!ranker_reconstructed_code/tests/wizardnet_relay_regression.cpp
 
 !ranker_reconstructed_code/tools/
 !ranker_reconstructed_code/tools/animation_144hz/
@@ -74,3 +76,4 @@ ranker_reconstructed_server/**/__pycache__/
 ranker_reconstructed_server/**/*.pyc
 ranker_reconstructed_server/data/accounts.json
 ranker_reconstructed_server/data/accounts.json.tmp
+ranker_reconstructed_server/data/*.log

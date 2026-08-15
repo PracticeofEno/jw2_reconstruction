@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from datetime import datetime, timezone
 import ipaddress
+import json
 import logging
+from pathlib import Path
 import socket
 import struct
 import time
@@ -31,6 +34,24 @@ from .state import AdvertisedGame, ClientSession, LobbyChannel, ServerState
 
 
 LOGGER = logging.getLogger("ranker_server")
+
+RELAY_JOIN_REQUEST_OPCODE = 0x90
+RELAY_LEAVE_REQUEST_OPCODE = 0x91
+RELAY_FRAME_REQUEST_OPCODE = 0x92
+RELAY_JOIN_STATUS_OPCODE = 0x93
+RELAY_FRAME_OPCODE = 0x94
+RELAY_MEMBER_LEFT_OPCODE = 0x95
+RELAY_MAX_MEMBERS = 8
+RELAY_STREAM_LINK = 0
+RELAY_STREAM_MODE1 = 1
+RELAY_CIPHER_MAGIC = b"WRL1"
+RELAY_CIPHER_HEADER_BYTES = 28
+
+RELAY_STATUS_OK = 0
+RELAY_STATUS_NO_GAME = 1
+RELAY_STATUS_FULL = 2
+RELAY_STATUS_NOT_MEMBER = 3
+RELAY_STATUS_HOST_MISSING = 4
 
 
 class RankerServer:
@@ -162,8 +183,28 @@ class RankerServer:
         if session.writer.is_closing():
             return
         async with session.send_lock:
-            session.writer.write(data)
-            await session.writer.drain()
+            if session.writer.is_closing():
+                return
+            try:
+                session.writer.write(data)
+                await asyncio.wait_for(
+                    session.writer.drain(),
+                    timeout=self.config.send_timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                LOGGER.warning(
+                    "client %d send timed out after %.2fs; closing connection",
+                    session.client_id,
+                    self.config.send_timeout_seconds,
+                )
+                session.writer.close()
+            except (ConnectionError, OSError) as error:
+                LOGGER.debug(
+                    "client %d send failed; closing connection: %s",
+                    session.client_id,
+                    error,
+                )
+                session.writer.close()
 
     async def _broadcast(
         self,
@@ -221,6 +262,10 @@ class RankerServer:
             0x19: self._handle_host_game,
             0x1B: self._handle_remove_game,
             0x1D: self._handle_game_list,
+            0x28: self._handle_start_game,
+            RELAY_JOIN_REQUEST_OPCODE: self._handle_relay_join,
+            RELAY_LEAVE_REQUEST_OPCODE: self._handle_relay_leave,
+            RELAY_FRAME_REQUEST_OPCODE: self._handle_relay_frame,
             0x2A: self._handle_chat,
             0x37: self._handle_profile,
             0x3D: self._handle_top_bottom_counts,
@@ -319,6 +364,8 @@ class RankerServer:
     async def _handle_lobby_reconnect(self, session: ClientSession, packet: Packet) -> None:
         if session.hosted_game_id is not None:
             await self._remove_game(session.hosted_game_id)
+        elif session.relay_game_id is not None:
+            await self._remove_relay_member(session)
         session.view = "online"
         # A WizardNet game keeps the authenticated TCP connection alive while
         # both clients are in the P2P session. They can return in either order,
@@ -354,10 +401,18 @@ class RankerServer:
     async def _handle_chat(self, session: ClientSession, packet: Packet) -> None:
         if len(packet.raw) <= HEADER_BYTES + 8:
             return
-        session.view = "online" if session.view != "link" else session.view
+        if session.view == "link":
+            LOGGER.debug("client %d ignored lobby chat while in relay link view", session.client_id)
+            return
+        session.view = "online"
         raw_chat = struct.pack("<I", 0) + packet.raw[HEADER_BYTES:]
+        targets = [
+            client
+            for client in self.state.lobby_clients(session.lobby_id)
+            if client.view == "online"
+        ]
         await self._broadcast(
-            self.state.lobby_clients(session.lobby_id),
+            targets,
             raw_chat,
             exclude=session.client_id,
         )
@@ -495,10 +550,17 @@ class RankerServer:
             game_type=read_u32(packet.raw, 0x11D),
             map_descriptor=bytes(packet.raw[0x12D : 0x12D + 0x2DC]),
         )
+        game.relay_members[session.client_id] = 1
+        game.relay_member_peers[1] = (session.peer_host, session.peer_port)
         self.state.games[game_id] = game
         session.hosted_game_id = game_id
+        session.relay_game_id = game_id
+        session.relay_member_id = 1
         session.view = "link"
-        await self._send(session, build_status_packet(0x1A, 1))
+        await self._send(
+            session,
+            build_packet(0x1A, struct.pack("<III", 1, game_id, 1) + game.relay_secret),
+        )
         LOGGER.info("%s advertised game %s (%d)", session.account, name, game_id)
         await self._broadcast_game_update(game, added=True, exclude=session.client_id)
 
@@ -508,8 +570,24 @@ class RankerServer:
         games = self.state.lobby_games(session.lobby_id)
         if start_index < len(games):
             response = self._build_game_record_packet(0x1E, games[start_index], start_index)
+            LOGGER.debug(
+                "client %d game-list response opcode=0x1e game=%s id=%d index=%d total=%d bytes=%d",
+                session.client_id,
+                games[start_index].name,
+                games[start_index].game_id,
+                start_index,
+                len(games),
+                len(response),
+            )
         else:
             response = self._build_empty_game_record_packet(0x1E)
+            LOGGER.debug(
+                "client %d game-list response opcode=0x1e empty index=%d total=%d bytes=%d",
+                session.client_id,
+                start_index,
+                len(games),
+                len(response),
+            )
         await self._send(session, response)
 
     async def _handle_remove_game(self, session: ClientSession, packet: Packet) -> None:
@@ -523,7 +601,568 @@ class RankerServer:
                 game_id,
             )
             return
+        if len(game.relay_members) > 1:
+            await self._retire_game_advertisement(game)
+            return
         await self._remove_game(game_id)
+
+    async def _handle_start_game(self, session: ClientSession, packet: Packet) -> None:
+        del packet
+        if session.hosted_game_id is None:
+            return
+        game = self.state.games.get(session.hosted_game_id)
+        if game is None or game.host_client_id != session.client_id:
+            return
+        await self._retire_game_advertisement(game)
+
+    async def _handle_relay_join(self, session: ClientSession, packet: Packet) -> None:
+        game_id = read_u32(packet.raw, 0x0D)
+        game = self.state.games.get(game_id)
+        if game is None:
+            LOGGER.info(
+                "relay join rejected no-game client=%d account=%s game=%d",
+                session.client_id,
+                session.account,
+                game_id,
+            )
+            await self._send_relay_join_status(session, RELAY_STATUS_NO_GAME, game_id, 0)
+            return
+        if not game.advertised and session.client_id not in game.relay_members:
+            LOGGER.info(
+                "relay join rejected hidden-room client=%d account=%s game=%d",
+                session.client_id,
+                session.account,
+                game_id,
+            )
+            await self._send_relay_join_status(session, RELAY_STATUS_NO_GAME, game_id, 0)
+            return
+        host = self.state.clients.get(game.host_client_id)
+        if host is None or host.writer.is_closing():
+            LOGGER.info(
+                "relay join rejected missing-host client=%d account=%s game=%d",
+                session.client_id,
+                session.account,
+                game_id,
+            )
+            await self._send_relay_join_status(
+                session, RELAY_STATUS_HOST_MISSING, game_id, 0
+            )
+            return
+        if session.relay_game_id is not None and session.relay_game_id != game_id:
+            await self._remove_relay_member(session)
+        member_id = game.relay_members.get(session.client_id, 0)
+        if member_id == 0:
+            if len(game.relay_members) >= RELAY_MAX_MEMBERS:
+                LOGGER.info(
+                    "relay join rejected full client=%d account=%s game=%d members=%d",
+                    session.client_id,
+                    session.account,
+                    game_id,
+                    len(game.relay_members),
+                )
+                await self._send_relay_join_status(
+                    session, RELAY_STATUS_FULL, game_id, 0
+                )
+                return
+            member_id = self._allocate_relay_member_id(game)
+            if member_id == 0:
+                await self._send_relay_join_status(
+                    session, RELAY_STATUS_FULL, game_id, 0
+                )
+                return
+            game.relay_members[session.client_id] = member_id
+        game.relay_member_peers[member_id] = (session.peer_host, session.peer_port)
+        game.relay_departed_members.discard(member_id)
+        session.relay_game_id = game_id
+        session.relay_member_id = member_id
+        session.view = "link"
+        await self._send_relay_join_status(
+            session, RELAY_STATUS_OK, game_id, member_id, game.relay_secret
+        )
+        LOGGER.info(
+            "relay join accepted game=%d client=%d account=%s member=%d members=%d",
+            game_id,
+            session.client_id,
+            session.account,
+            member_id,
+            len(game.relay_members),
+        )
+        if len(packet.raw) > 0x11:
+            join_payload = packet.raw[0x11:]
+            if not self._relay_payload_has_cipher_wrapper(join_payload):
+                game.relay_invalid_payload_frames += 1
+                LOGGER.debug(
+                    "relay join ignored invalid-payload client=%d account=%s game=%d bytes=%d",
+                    session.client_id,
+                    session.account,
+                    game_id,
+                    len(join_payload),
+                )
+                return
+            self._record_relay_frame_stats(
+                game,
+                member_id,
+                RELAY_STREAM_LINK,
+                len(join_payload),
+                [host],
+            )
+            await self._send_relay_frame(
+                host, game_id, member_id, RELAY_STREAM_LINK, join_payload
+            )
+
+    async def _handle_relay_leave(self, session: ClientSession, packet: Packet) -> None:
+        requested_game_id = read_u32(packet.raw, 0x0D) if len(packet.raw) >= 0x11 else 0
+        if (
+            requested_game_id != 0
+            and session.relay_game_id is not None
+            and requested_game_id != session.relay_game_id
+        ):
+            LOGGER.debug(
+                "client %d ignored stale relay leave for game %d while in game %d",
+                session.client_id,
+                requested_game_id,
+                session.relay_game_id,
+            )
+            return
+        await self._remove_relay_member(session)
+
+    async def _handle_relay_frame(self, session: ClientSession, packet: Packet) -> None:
+        if len(packet.raw) < 0x19:
+            return
+        game_id = read_u32(packet.raw, 0x0D)
+        target_member_id = read_u32(packet.raw, 0x11)
+        stream_id = read_u32(packet.raw, 0x15)
+        data = packet.raw[0x19:]
+        game = self.state.games.get(game_id)
+        if (
+            game is None
+            or session.relay_game_id != game_id
+            or game.relay_members.get(session.client_id) != session.relay_member_id
+            or session.relay_member_id == 0
+        ):
+            await self._send_relay_join_status(
+                session, RELAY_STATUS_NOT_MEMBER, game_id, 0
+            )
+            return
+        if not data:
+            return
+        if stream_id not in (RELAY_STREAM_LINK, RELAY_STREAM_MODE1):
+            game.relay_invalid_stream_frames += 1
+            LOGGER.debug(
+                "relay frame ignored invalid-stream client=%d account=%s game=%d stream=%d",
+                session.client_id,
+                session.account,
+                game_id,
+                stream_id,
+            )
+            return
+        if not self._relay_payload_has_cipher_wrapper(data):
+            game.relay_invalid_payload_frames += 1
+            LOGGER.debug(
+                "relay frame ignored invalid-payload client=%d account=%s game=%d stream=%d bytes=%d",
+                session.client_id,
+                session.account,
+                game_id,
+                stream_id,
+                len(data),
+            )
+            return
+        targets = self._relay_targets(game, session.client_id, target_member_id)
+        if not targets:
+            if target_member_id == 0 or target_member_id in game.relay_departed_members:
+                LOGGER.debug(
+                    "relay frame ignored stale target game=%d from_member=%d target_member=%d stream=%d bytes=%d",
+                    game_id,
+                    session.relay_member_id,
+                    target_member_id,
+                    stream_id,
+                    len(data),
+                )
+                return
+            game.relay_no_target_frames += 1
+            LOGGER.debug(
+                "relay frame had no targets game=%d from_member=%d target_member=%d stream=%d bytes=%d",
+                game_id,
+                session.relay_member_id,
+                target_member_id,
+                stream_id,
+                len(data),
+            )
+            return
+        self._record_relay_frame_stats(
+            game, session.relay_member_id, stream_id, len(data), targets
+        )
+        LOGGER.debug(
+            "relay frame game=%d from_member=%d target_member=%d stream=%d bytes=%d targets=%d",
+            game_id,
+            session.relay_member_id,
+            target_member_id,
+            stream_id,
+            len(data),
+            len(targets),
+        )
+        await self._broadcast(
+            targets,
+            build_packet(
+                RELAY_FRAME_OPCODE,
+                struct.pack("<III", game_id, session.relay_member_id, stream_id) + data,
+            ),
+        )
+
+    async def _send_relay_join_status(
+        self,
+        session: ClientSession,
+        status: int,
+        game_id: int,
+        member_id: int,
+        relay_secret: bytes | None = None,
+    ) -> None:
+        payload = struct.pack("<III", status, game_id, member_id)
+        if status == RELAY_STATUS_OK and relay_secret is not None:
+            payload += relay_secret
+        await self._send(
+            session,
+            build_packet(RELAY_JOIN_STATUS_OPCODE, payload),
+        )
+
+    async def _send_relay_frame(
+        self,
+        session: ClientSession,
+        game_id: int,
+        from_member_id: int,
+        stream_id: int,
+        data: bytes,
+    ) -> None:
+        if not data:
+            return
+        await self._send(
+            session,
+            build_packet(
+                RELAY_FRAME_OPCODE,
+                struct.pack("<III", game_id, from_member_id, stream_id) + data,
+            ),
+        )
+
+    @staticmethod
+    def _relay_payload_has_cipher_wrapper(data: bytes) -> bool:
+        if len(data) < RELAY_CIPHER_HEADER_BYTES:
+            return False
+        if data[:4] != RELAY_CIPHER_MAGIC:
+            return False
+        plain_bytes = struct.unpack_from("<I", data, 4)[0]
+        return plain_bytes > 0 and plain_bytes == len(data) - RELAY_CIPHER_HEADER_BYTES
+
+    def _relay_targets(
+        self,
+        game: AdvertisedGame,
+        source_client_id: int,
+        target_member_id: int,
+    ) -> list[ClientSession]:
+        targets: list[ClientSession] = []
+        for client_id, member_id in game.relay_members.items():
+            if client_id == source_client_id:
+                continue
+            if target_member_id != 0 and member_id != target_member_id:
+                continue
+            session = self.state.clients.get(client_id)
+            if session is not None and not session.writer.is_closing():
+                targets.append(session)
+        return targets
+
+    def _allocate_relay_member_id(self, game: AdvertisedGame) -> int:
+        used_member_ids = set(game.relay_members.values())
+        for member_id in range(2, RELAY_MAX_MEMBERS + 1):
+            if member_id not in used_member_ids:
+                return member_id
+        return 0
+
+    def _record_relay_frame_stats(
+        self,
+        game: AdvertisedGame,
+        from_member_id: int,
+        stream_id: int,
+        byte_count: int,
+        targets: list[ClientSession],
+    ) -> None:
+        if stream_id == RELAY_STREAM_LINK:
+            game.relay_link_frames += 1
+            game.relay_link_bytes += byte_count
+        elif stream_id == RELAY_STREAM_MODE1:
+            game.relay_mode1_frames += 1
+            game.relay_mode1_bytes += byte_count
+        else:
+            return
+        game.relay_deliveries += len(targets)
+        self._record_relay_member_stats(game, from_member_id, stream_id, targets)
+
+    @staticmethod
+    def _record_relay_member_stats(
+        game: AdvertisedGame,
+        from_member_id: int,
+        stream_id: int,
+        targets: list[ClientSession],
+    ) -> None:
+        if stream_id == RELAY_STREAM_LINK:
+            tx_counts = game.relay_member_link_tx
+            rx_counts = game.relay_member_link_rx
+        elif stream_id == RELAY_STREAM_MODE1:
+            tx_counts = game.relay_member_mode1_tx
+            rx_counts = game.relay_member_mode1_rx
+        else:
+            return
+        tx_counts[from_member_id] = tx_counts.get(from_member_id, 0) + 1
+        for target in targets:
+            target_member_id = game.relay_members.get(target.client_id, 0)
+            if target_member_id != 0:
+                rx_counts[target_member_id] = rx_counts.get(target_member_id, 0) + 1
+
+    def _relay_member_peer_summary(
+        self, game: AdvertisedGame, relay_members: list[tuple[int, int]]
+    ) -> tuple[int, int, str]:
+        peer_records = self._relay_member_peer_records(game, relay_members)
+        peer_hosts = {
+            str(peer["host"])
+            for peer in peer_records.values()
+            if peer.get("host") != "disconnected"
+        }
+        peer_parts = [
+            f"{member_id}@{peer['host']}:{peer['port']}"
+            for member_id, peer in sorted(peer_records.items())
+        ]
+        return len(peer_records), len(peer_hosts), ",".join(peer_parts)
+
+    def _relay_member_peer_records(
+        self, game: AdvertisedGame, relay_members: list[tuple[int, int]]
+    ) -> dict[int, dict[str, object]]:
+        peers_by_member = dict(game.relay_member_peers)
+        for client_id, member_id in relay_members:
+            member = self.state.clients.get(client_id)
+            if member is not None:
+                peers_by_member[member_id] = (member.peer_host, member.peer_port)
+        result: dict[int, dict[str, object]] = {}
+        for member_id, (peer_host, peer_port) in peers_by_member.items():
+            result[member_id] = {
+                "host": peer_host,
+                "port": peer_port,
+                "endpoint": f"{peer_host}:{peer_port}",
+            }
+        return result
+
+    @staticmethod
+    def _relay_member_frame_records(game: AdvertisedGame) -> dict[int, dict[str, int]]:
+        member_ids = set(game.relay_member_peers)
+        member_ids.update(game.relay_members.values())
+        member_ids.update(game.relay_member_link_tx)
+        member_ids.update(game.relay_member_link_rx)
+        member_ids.update(game.relay_member_mode1_tx)
+        member_ids.update(game.relay_member_mode1_rx)
+        return {
+            member_id: {
+                "link_tx": game.relay_member_link_tx.get(member_id, 0),
+                "link_rx": game.relay_member_link_rx.get(member_id, 0),
+                "mode1_tx": game.relay_member_mode1_tx.get(member_id, 0),
+                "mode1_rx": game.relay_member_mode1_rx.get(member_id, 0),
+            }
+            for member_id in sorted(member_ids)
+        }
+
+    @staticmethod
+    def _relay_member_peer_summary_from_records(
+        peer_records: dict[int, dict[str, object]]
+    ) -> str:
+        return ",".join(
+            f"{member_id}@{peer['host']}:{peer['port']}"
+            for member_id, peer in sorted(peer_records.items())
+        )
+
+    @staticmethod
+    def _relay_member_frame_summary(game: AdvertisedGame) -> str:
+        return RankerServer._relay_member_frame_summary_from_records(
+            RankerServer._relay_member_frame_records(game)
+        )
+
+    @staticmethod
+    def _relay_member_frame_summary_from_records(
+        member_frames: dict[int, dict[str, int]]
+    ) -> str:
+        parts: list[str] = []
+        for member_id, counters in member_frames.items():
+            parts.append(
+                f"{member_id}:"
+                f"link_tx={counters['link_tx']}:"
+                f"link_rx={counters['link_rx']}:"
+                f"mode1_tx={counters['mode1_tx']}:"
+                f"mode1_rx={counters['mode1_rx']}"
+            )
+        return ";".join(parts)
+
+    def _build_relay_summary_record(
+        self, game: AdvertisedGame, relay_members: list[tuple[int, int]]
+    ) -> dict[str, object]:
+        peer_records = self._relay_member_peer_records(game, relay_members)
+        peer_hosts = {
+            str(peer["host"])
+            for peer in peer_records.values()
+            if peer.get("host") != "disconnected"
+        }
+        member_peers = self._relay_member_peer_summary_from_records(peer_records)
+        member_frames = self._relay_member_frame_records(game)
+        member_frames_text = self._relay_member_frame_summary_from_records(
+            member_frames
+        )
+        distinct_peer_endpoints = len(
+            {
+                str(peer.get("endpoint", ""))
+                for peer in peer_records.values()
+                if peer.get("endpoint")
+            }
+        )
+        bidirectional_mode1_members = sum(
+            1
+            for counters in member_frames.values()
+            if counters.get("mode1_tx", 0) > 0
+            and counters.get("mode1_rx", 0) > 0
+        )
+        line = (
+            f"relay summary game={game.game_id} name={game.name} "
+            f"link_frames={game.relay_link_frames} "
+            f"link_bytes={game.relay_link_bytes} "
+            f"mode1_frames={game.relay_mode1_frames} "
+            f"mode1_bytes={game.relay_mode1_bytes} "
+            f"deliveries={game.relay_deliveries} "
+            f"no_target={game.relay_no_target_frames} "
+            f"invalid_stream={game.relay_invalid_stream_frames} "
+            f"invalid_payload={game.relay_invalid_payload_frames} "
+            f"members={len(peer_records)} "
+            f"distinct_peer_hosts={len(peer_hosts)} "
+            f"member_peers={member_peers} "
+            f"member_frames={member_frames_text}"
+        )
+        return {
+            "line_number": 1,
+            "line": line,
+            "room": game.name,
+            "game_id": game.game_id,
+            "link_frames": game.relay_link_frames,
+            "link_bytes": game.relay_link_bytes,
+            "mode1_frames": game.relay_mode1_frames,
+            "mode1_bytes": game.relay_mode1_bytes,
+            "deliveries": game.relay_deliveries,
+            "no_target": game.relay_no_target_frames,
+            "invalid_stream": game.relay_invalid_stream_frames,
+            "invalid_payload": game.relay_invalid_payload_frames,
+            "members": len(peer_records),
+            "distinct_peer_hosts": len(peer_hosts),
+            "member_peers": member_peers,
+            "parsed_member_peers": peer_records,
+            "distinct_peer_endpoints": distinct_peer_endpoints,
+            "member_frames": member_frames,
+            "bidirectional_mode1_members": bidirectional_mode1_members,
+        }
+
+    @staticmethod
+    def _build_relay_evidence_summary(
+        summary: dict[str, object]
+    ) -> dict[str, object]:
+        criteria = {
+            "min_link_frames": 1,
+            "min_mode1_frames": 1,
+            "min_deliveries": 1,
+            "min_members": 2,
+            "min_distinct_peer_hosts": 0,
+            "min_distinct_peer_endpoints": 2,
+            "min_bidirectional_mode1_members": 2,
+            "max_no_target": 0,
+            "max_invalid_stream": 0,
+            "max_invalid_payload": 0,
+        }
+        checks = {
+            "summary_found": True,
+            "link_frames_min": int(summary["link_frames"]) >= 1,
+            "mode1_frames_min": int(summary["mode1_frames"]) >= 1,
+            "deliveries_min": int(summary["deliveries"]) >= 1,
+            "no_target_max": int(summary["no_target"]) <= 0,
+            "invalid_stream_max": int(summary["invalid_stream"]) <= 0,
+            "invalid_payload_max": int(summary["invalid_payload"]) <= 0,
+            "members_min": int(summary["members"]) >= 2,
+            "distinct_peer_hosts_min": True,
+            "distinct_peer_endpoints_min": int(summary["distinct_peer_endpoints"])
+            >= 2,
+            "bidirectional_mode1_members_min": int(
+                summary["bidirectional_mode1_members"]
+            )
+            >= 2,
+        }
+        missing = [name for name, ok in checks.items() if not ok]
+        return {
+            "ok": not missing,
+            "log": None,
+            "tail_bytes": 0,
+            "room": summary["room"],
+            "game_id": summary["game_id"],
+            "criteria": criteria,
+            "checks": checks,
+            "missing_checks": missing,
+            "summary": summary,
+            "matched_summary_count": 1,
+            "summary_lines": [summary["line"]],
+        }
+
+    @staticmethod
+    def _safe_relay_evidence_name(text: str) -> str:
+        safe = "".join(
+            char
+            if char.isascii() and (char.isalnum() or char in "._-")
+            else "_"
+            for char in text
+        ).strip("._")
+        return safe[:80] or "room"
+
+    def _write_relay_evidence(self, summary: dict[str, object]) -> None:
+        evidence_dir = self.config.relay_evidence_dir
+        if evidence_dir is None:
+            return
+        exported_at = datetime.now(timezone.utc)
+        server_summary = self._build_relay_evidence_summary(summary)
+        evidence = {
+            "ok": server_summary["ok"],
+            "exported_utc": exported_at.isoformat(),
+            "source": "server_auto_export",
+            "source_log": None,
+            "room": summary["room"],
+            "game_id": summary["game_id"],
+            "server_summary": server_summary,
+        }
+        room_name = self._safe_relay_evidence_name(str(summary["room"]))
+        timestamp = exported_at.strftime("%Y%m%dT%H%M%S_%fZ")
+        output_dir = Path(evidence_dir)
+        output_path = (
+            output_dir
+            / f"relay_{timestamp}_game{summary['game_id']}_{room_name}.json"
+        )
+        temporary_path = output_path.with_suffix(output_path.suffix + ".tmp")
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            temporary_path.write_text(
+                json.dumps(evidence, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            temporary_path.replace(output_path)
+            LOGGER.info(
+                "relay evidence exported game=%d name=%s ok=%s path=%s",
+                summary["game_id"],
+                summary["room"],
+                server_summary["ok"],
+                output_path,
+            )
+        except Exception:
+            LOGGER.exception(
+                "failed to write relay evidence game=%s name=%s path=%s",
+                summary.get("game_id"),
+                summary.get("room"),
+                output_path,
+            )
+
 
     async def _handle_top_bottom_counts(
         self, session: ClientSession, packet: Packet
@@ -639,11 +1278,41 @@ class RankerServer:
         game = self.state.games.pop(game_id, None)
         if game is None:
             return
+        relay_members = list(game.relay_members.items())
+        for client_id, member_id in relay_members:
+            member = self.state.clients.get(client_id)
+            if member is not None:
+                member.relay_game_id = None
+                member.relay_member_id = 0
+        await self._broadcast(
+            (
+                self.state.clients[client_id]
+                for client_id, _ in relay_members
+                if client_id in self.state.clients and client_id != game.host_client_id
+            ),
+            build_packet(RELAY_MEMBER_LEFT_OPCODE, struct.pack("<II", game_id, 1)),
+        )
         host = self.state.clients.get(game.host_client_id)
         if host is not None and host.hosted_game_id == game_id:
             host.hosted_game_id = None
+        if game.advertised:
+            await self._broadcast_game_update(game, added=False)
+        relay_summary = self._build_relay_summary_record(game, relay_members)
+        LOGGER.info("%s", relay_summary["line"])
+        self._write_relay_evidence(relay_summary)
+        LOGGER.info("removed game %s (%d)", game.name, game.game_id)
+
+    async def _retire_game_advertisement(self, game: AdvertisedGame) -> None:
+        if not game.advertised:
+            return
+        game.advertised = False
         await self._broadcast_game_update(game, added=False)
-        LOGGER.info("removed advertised game %s (%d)", game.name, game.game_id)
+        LOGGER.info(
+            "retired advertised game %s (%d) while preserving %d relay members",
+            game.name,
+            game.game_id,
+            len(game.relay_members),
+        )
 
     async def _remove_client(self, session: ClientSession) -> None:
         if session.client_id not in self.state.clients:
@@ -657,6 +1326,8 @@ class RankerServer:
             lobby.members.discard(session.client_id)
         if session.hosted_game_id is not None:
             await self._remove_game(session.hosted_game_id)
+        elif session.relay_game_id is not None:
+            await self._remove_relay_member(session)
         self.state.clients.pop(session.client_id, None)
         session.writer.close()
         with contextlib.suppress(Exception):
@@ -666,11 +1337,46 @@ class RankerServer:
     async def _cleanup_expired_games(self) -> None:
         while True:
             await asyncio.sleep(30)
-            cutoff = time.monotonic() - self.config.room_ttl_seconds
-            expired = [
-                game.game_id
-                for game in self.state.games.values()
-                if game.created_at < cutoff
-            ]
-            for game_id in expired:
-                await self._remove_game(game_id)
+            await self._cleanup_expired_games_once()
+
+    async def _cleanup_expired_games_once(self) -> None:
+        cutoff = time.monotonic() - self.config.room_ttl_seconds
+        expired = [
+            game
+            for game in self.state.games.values()
+            if game.created_at < cutoff and game.advertised
+        ]
+        for game in expired:
+            if len(game.relay_members) > 1:
+                await self._retire_game_advertisement(game)
+            else:
+                await self._remove_game(game.game_id)
+
+    async def _remove_relay_member(self, session: ClientSession) -> None:
+        game_id = session.relay_game_id
+        member_id = session.relay_member_id
+        session.relay_game_id = None
+        session.relay_member_id = 0
+        if game_id is None or member_id == 0:
+            return
+        game = self.state.games.get(game_id)
+        if game is None:
+            return
+        if game.host_client_id == session.client_id:
+            await self._remove_game(game_id)
+            return
+        if game.relay_members.pop(session.client_id, None) is None:
+            return
+        game.relay_departed_members.add(member_id)
+        LOGGER.info(
+            "relay member left game=%d client=%d account=%s member=%d members=%d",
+            game_id,
+            session.client_id,
+            session.account,
+            member_id,
+            len(game.relay_members),
+        )
+        await self._broadcast(
+            self._relay_targets(game, session.client_id, 0),
+            build_packet(RELAY_MEMBER_LEFT_OPCODE, struct.pack("<II", game_id, member_id)),
+        )

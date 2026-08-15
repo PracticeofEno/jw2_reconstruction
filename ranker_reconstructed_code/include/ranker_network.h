@@ -28,7 +28,11 @@ constexpr u32 kLegacyUdpSafePayloadBytes = 0x558; // 38 * 0x24 = 1368
 static_assert(kLegacyUdpSafePayloadBytes % 0x24 == 0);
 constexpr u32 kLegacyUdpSendAttemptCount = 8;
 constexpr u32 kLegacyUdpSendRetryDelayMs = 1;
-constexpr u32 kLegacyAsyncTcpQueueBytes = 0x4000;
+// WizardNet relay carries Link-lobby and mode-1 gameplay traffic over the
+// authenticated async TCP socket.  Keep enough userspace headroom for bursts
+// that previously lived on the larger UDP receive path.
+constexpr u32 kLegacyAsyncTcpQueueBytes = 0x100000;
+constexpr int kLegacyAsyncTcpSocketBufferBytes = 0x100000;
 constexpr u32 kLegacyAsyncTcpLocaleRequestBytes = 0x91;
 
 enum class LegacyAsyncTcpStatus : u32 {
