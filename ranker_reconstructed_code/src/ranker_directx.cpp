@@ -344,7 +344,7 @@ BinkApi& bink_api() {
 }
 
 WORD embedded_jw208_resource_id(const BinkVideoRuntimeState& state) {
-    if (state.record_index > 3 || state.archive_name.empty()) {
+    if (state.record_index > 16 || state.archive_name.empty()) {
         return 0;
     }
 
@@ -672,8 +672,18 @@ bool play_embedded_jw208_video(const BinkVideoRuntimeState& state) {
                 FALSE, kEmbeddedVideoWaitMilliseconds, QS_ALLINPUT);
             if (wait_result == WAIT_OBJECT_0) {
                 result = callback->result();
-                playback_finished = true;
-                continue;
+                if (state.frame_count == 1 && SUCCEEDED(result)) {
+                    // JW2_08 records 4..12 are readable full-screen story
+                    // cards, encoded as one-frame Bink movies.  The original
+                    // leaves that frame visible until the player advances it.
+                    // Keep the MF child alive after playback ends instead of
+                    // flashing the card for only 1/30 second.
+                    ResetEvent(callback->completed_event());
+                }
+                else {
+                    playback_finished = true;
+                    continue;
+                }
             }
             if (wait_result == WAIT_OBJECT_0 + 1) {
                 MSG message{};

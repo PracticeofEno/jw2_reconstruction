@@ -210,6 +210,8 @@ void InitializeGameplaySessionRuntimeState(GameplaySessionRuntimeResetState& sta
 void StartGameplaySessionFromScenarioSlots(GameplaySessionStartupState& state);
 void StartGameplaySessionFromScenarioSlotsIncludingObservers(
     GameplaySessionStartupState& state);
+void StartGameplaySessionFromImportedScenarioUnits(
+    GameplaySessionStartupState& state);
 void ResetGameplayPlayerReadyFlags(GameplaySessionStartupState& state);
 void RequestGameplayStateWhenNoPlayersReady(
     GameplaySessionStartupState& state, u32 requested_state = 2);

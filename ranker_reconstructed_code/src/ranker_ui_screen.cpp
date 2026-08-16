@@ -8,19 +8,26 @@
 #include "ranker_resource_store.h"
 #include "ranker_runtime_resources.h"
 #include "ranker_sprite_renderer.h"
+#include "ranker_startup_environment.h"
 #include "ranker_text_renderer.h"
 #include "ranker_trc.h"
 #include "ranker_winmain.h"
 #include "zlib.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <cwchar>
 #include <initializer_list>
+#include <new>
 
 #ifdef _WIN32
 #include <mmsystem.h>
+#include <mfapi.h>
+#include <mfplay.h>
 #endif
 
 namespace ranker {
@@ -352,6 +359,8 @@ BinkApi& bink_api() {
     return api;
 }
 
+void close_ui_bink_media_fallback(UiScreenBinkEntryState& state);
+
 void close_bink_entry(UiScreenBinkEntryState& state) {
     if (state.handle != nullptr) {
         BinkApi& api = bink_api();
@@ -361,6 +370,7 @@ void close_bink_entry(UiScreenBinkEntryState& state) {
     }
     state.handle = nullptr;
     state.source = nullptr;
+    close_ui_bink_media_fallback(state);
     state.paused = false;
 }
 
@@ -483,6 +493,489 @@ bool read_embedded_binary_resource(WORD resource_id, std::vector<u8>& out) {
 
     const auto* first = static_cast<const u8*>(data);
     out.assign(first, first + byte_count);
+    return true;
+}
+
+constexpr WORD kScenarioUiBinkPackResourceId = 2030;
+constexpr std::array<u8, 8> kScenarioUiBinkPackMagic{
+    'R', 'M', 'P', '4', 'P', 'A', 'C', 'K'};
+constexpr u32 kScenarioUiBinkPackVersion = 1;
+constexpr GUID kUiBinkMediaPlayerCallbackIid{
+    0xdf371136, 0xbd4a, 0x43be,
+    {0x94, 0xa6, 0xf9, 0xa0, 0xe1, 0xe9, 0x65, 0x27}};
+
+struct ScenarioUiBinkPackEntry {
+    u32 record_index = 0;
+    u32 blob_index = 0;
+    u32 offset = 0;
+    u32 byte_count = 0;
+};
+
+class UiBinkMediaPlayerCallback final : public IMFPMediaPlayerCallback {
+public:
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (object == nullptr) {
+            return E_POINTER;
+        }
+        if (iid == IID_IUnknown || iid == kUiBinkMediaPlayerCallbackIid) {
+            *object = static_cast<IMFPMediaPlayerCallback*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+
+    ULONG STDMETHODCALLTYPE AddRef() override {
+        return static_cast<ULONG>(InterlockedIncrement(&reference_count_));
+    }
+
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG remaining =
+            static_cast<ULONG>(InterlockedDecrement(&reference_count_));
+        if (remaining == 0) {
+            delete this;
+        }
+        return remaining;
+    }
+
+    void STDMETHODCALLTYPE OnMediaPlayerEvent(MFP_EVENT_HEADER* event) override {
+        if (event == nullptr || FAILED(event->hrEvent)) {
+            failed_.store(true);
+            return;
+        }
+        if (event->eEventType == MFP_EVENT_TYPE_PLAYBACK_ENDED) {
+            ended_.store(true);
+        }
+    }
+
+    bool ended() const {
+        return ended_.load();
+    }
+
+    bool failed() const {
+        return failed_.load();
+    }
+
+    void reset() {
+        ended_.store(false);
+        failed_.store(false);
+    }
+
+private:
+    LONG reference_count_ = 1;
+    std::atomic<bool> ended_{false};
+    std::atomic<bool> failed_{false};
+};
+
+bool scenario_ui_archive_name(const std::string& archive_name) {
+    if (archive_name.empty()) {
+        return false;
+    }
+    const std::size_t separator = archive_name.find_last_of("/\\");
+    const char* base_name = archive_name.c_str() +
+        (separator == std::string::npos ? 0 : separator + 1);
+    return lstrcmpiA(base_name, "JW2_04.TRC") == 0;
+}
+
+bool find_scenario_ui_bink_mp4(const UiScreenDefinition& screen, u32 blob_index,
+    const u8*& bytes, u32& byte_count) {
+    bytes = nullptr;
+    byte_count = 0;
+    if (!scenario_ui_archive_name(screen.source_archive_name) ||
+        screen.source_record_index == kInvalidUiScreenIndex) {
+        return false;
+    }
+
+    HMODULE module = GetModuleHandleW(nullptr);
+    HRSRC resource = FindResourceW(module,
+        MAKEINTRESOURCEW(kScenarioUiBinkPackResourceId), MAKEINTRESOURCEW(10));
+    HGLOBAL loaded = resource != nullptr ? LoadResource(module, resource) : nullptr;
+    const DWORD pack_size = resource != nullptr ? SizeofResource(module, resource) : 0;
+    const auto* pack = loaded != nullptr ? static_cast<const u8*>(LockResource(loaded)) : nullptr;
+    if (pack == nullptr || pack_size < 16 ||
+        !std::equal(kScenarioUiBinkPackMagic.begin(),
+            kScenarioUiBinkPackMagic.end(), pack) ||
+        read_le_u32(pack + 8) != kScenarioUiBinkPackVersion) {
+        return false;
+    }
+
+    const u32 entry_count = read_le_u32(pack + 12);
+    const std::size_t directory_end = 16u +
+        static_cast<std::size_t>(entry_count) * 16u;
+    if (directory_end > pack_size) {
+        return false;
+    }
+    for (u32 index = 0; index < entry_count; ++index) {
+        const u8* entry = pack + 16u + static_cast<std::size_t>(index) * 16u;
+        if (read_le_u32(entry) != screen.source_record_index ||
+            read_le_u32(entry + 4) != blob_index) {
+            continue;
+        }
+        const ScenarioUiBinkPackEntry found{
+            read_le_u32(entry), read_le_u32(entry + 4),
+            read_le_u32(entry + 8), read_le_u32(entry + 12)};
+        if (found.offset < directory_end || found.offset > pack_size ||
+            found.byte_count > pack_size - found.offset) {
+            return false;
+        }
+        bytes = pack + found.offset;
+        byte_count = found.byte_count;
+        return byte_count != 0;
+    }
+    return false;
+}
+
+bool write_scenario_ui_bink_temp_file(const void* bytes, u32 byte_count,
+    std::wstring& temp_path) {
+    temp_path.clear();
+    if (bytes == nullptr || byte_count == 0) {
+        return false;
+    }
+
+    wchar_t temp_directory[MAX_PATH]{};
+    const DWORD directory_length = GetTempPathW(MAX_PATH, temp_directory);
+    if (directory_length == 0 || directory_length >= MAX_PATH) {
+        return false;
+    }
+
+    static LONG serial = 0;
+    HANDLE file = INVALID_HANDLE_VALUE;
+    for (u32 attempt = 0; attempt < 32 && file == INVALID_HANDLE_VALUE; ++attempt) {
+        const LONG suffix = InterlockedIncrement(&serial);
+        wchar_t file_name[96]{};
+        std::swprintf(file_name, sizeof(file_name) / sizeof(file_name[0]),
+            L"ranker_scenario_%lu_%lu_%ld.mp4",
+            static_cast<unsigned long>(GetCurrentProcessId()),
+            static_cast<unsigned long>(GetCurrentThreadId()),
+            static_cast<long>(suffix));
+        temp_path.assign(temp_directory);
+        temp_path.append(file_name);
+        file = CreateFileW(temp_path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+            FILE_ATTRIBUTE_TEMPORARY, nullptr);
+    }
+    if (file == INVALID_HANDLE_VALUE) {
+        temp_path.clear();
+        return false;
+    }
+
+    DWORD written = 0;
+    const bool ok = WriteFile(file, bytes, byte_count, &written, nullptr) != FALSE &&
+        written == byte_count;
+    CloseHandle(file);
+    if (!ok) {
+        DeleteFileW(temp_path.c_str());
+        temp_path.clear();
+    }
+    return ok;
+}
+
+LRESULT CALLBACK scenario_ui_bink_window_proc(HWND window, UINT message,
+    WPARAM wparam, LPARAM lparam) {
+    if (message == WM_NCHITTEST) {
+        return HTTRANSPARENT;
+    }
+    if (message == WM_SETCURSOR) {
+        return TRUE;
+    }
+    return DefWindowProcW(window, message, wparam, lparam);
+}
+
+struct ScenarioUiBinkWindows {
+    HWND backdrop = nullptr;
+    HWND surface = nullptr;
+};
+
+ScenarioUiBinkWindows create_scenario_ui_bink_windows(
+    const UiScreenEntry& entry) {
+    ScenarioUiBinkWindows windows{};
+    const DirectDrawRuntimeState& dd = direct_draw_state();
+    HWND owner = dd.presentation_window;
+    if (owner == nullptr || !IsWindow(owner)) {
+        owner = RankerMainWindowState().main_window;
+    }
+    if (owner == nullptr || !IsWindow(owner)) {
+        return windows;
+    }
+
+    constexpr wchar_t kWindowClass[] = L"RankerScenarioUiBink";
+    HINSTANCE instance = GetModuleHandleW(nullptr);
+    WNDCLASSW window_class{};
+    if (GetClassInfoW(instance, kWindowClass, &window_class) == 0) {
+        window_class.lpfnWndProc = scenario_ui_bink_window_proc;
+        window_class.hInstance = instance;
+        window_class.hCursor = nullptr;
+        window_class.hbrBackground =
+            reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+        window_class.lpszClassName = kWindowClass;
+        if (RegisterClassW(&window_class) == 0 &&
+            GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+            return windows;
+        }
+    }
+
+    RECT client{};
+    if (!GetClientRect(owner, &client)) {
+        return windows;
+    }
+    const LONG client_width = client.right - client.left;
+    const LONG client_height = client.bottom - client.top;
+    const LONG logical_width = static_cast<LONG>(dd.width != 0 ? dd.width : 800);
+    const LONG logical_height = static_cast<LONG>(dd.height != 0 ? dd.height : 600);
+    if (client_width <= 0 || client_height <= 0 ||
+        logical_width <= 0 || logical_height <= 0) {
+        return windows;
+    }
+
+    const LONG left = MulDiv(UiScreenEntryI32(entry, 0x20),
+        client_width, logical_width);
+    const LONG top = MulDiv(UiScreenEntryI32(entry, 0x24),
+        client_height, logical_height);
+    const LONG right = MulDiv(UiScreenEntryI32(entry, 0x28),
+        client_width, logical_width);
+    const LONG bottom = MulDiv(UiScreenEntryI32(entry, 0x2c),
+        client_height, logical_height);
+    if (right <= left || bottom <= top) {
+        return windows;
+    }
+
+    POINT top_left{left, top};
+    POINT bottom_right{right, bottom};
+    if (!ClientToScreen(owner, &top_left) ||
+        !ClientToScreen(owner, &bottom_right)) {
+        return windows;
+    }
+
+    // DirectDraw presents directly over ordinary child HWNDs.  Match the
+    // full-screen MF fallback and use an owned, no-activate popup so the two
+    // movies stay above the legacy primary-surface blit while remaining part
+    // of the modal screen's lifetime.
+    windows.backdrop = CreateWindowExW(
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+        kWindowClass, L"", WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN,
+        top_left.x, top_left.y,
+        bottom_right.x - top_left.x, bottom_right.y - top_left.y,
+        nullptr, nullptr, instance, nullptr);
+    if (windows.backdrop == nullptr) {
+        return windows;
+    }
+
+    const LONG width = bottom_right.x - top_left.x;
+    const LONG height = bottom_right.y - top_left.y;
+    windows.surface = CreateWindowExW(0, kWindowClass, L"",
+        WS_CHILD | WS_VISIBLE, 0, 0, width, height,
+        windows.backdrop, nullptr, instance, nullptr);
+    if (windows.surface == nullptr) {
+        DestroyWindow(windows.backdrop);
+        windows.backdrop = nullptr;
+        return windows;
+    }
+
+    SetWindowPos(windows.backdrop, HWND_TOPMOST, top_left.x, top_left.y,
+        width, height, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+    UpdateWindow(windows.backdrop);
+    UpdateWindow(windows.surface);
+    return windows;
+}
+
+float scenario_ui_bink_volume() {
+    const LONG volume = std::clamp<LONG>(
+        direct_sound_state().last_volume, DSBVOLUME_MIN, DSBVOLUME_MAX);
+    return std::pow(10.0f, static_cast<float>(volume) / 2000.0f);
+}
+
+float scenario_ui_bink_balance() {
+    const LONG pan = std::clamp<LONG>(
+        direct_sound_state().last_pan, DSBPAN_LEFT, DSBPAN_RIGHT);
+    return static_cast<float>(pan) / static_cast<float>(DSBPAN_RIGHT);
+}
+
+void dispatch_scenario_ui_bink_window_messages() {
+    // These compatibility video HWNDs are created by the synchronous
+    // frontend worker, while the ordinary Ranker window is pumped by the UI
+    // thread.  MFPlay's video host and event window therefore need their own
+    // worker-thread message dispatch, just like the full-screen JW2_08
+    // compatibility player.
+    MSG message{};
+    while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE) != 0) {
+        if (message.message == WM_QUIT) {
+            PostQuitMessage(static_cast<int>(message.wParam));
+            return;
+        }
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+}
+
+void close_ui_bink_media_fallback(UiScreenBinkEntryState& state) {
+    if (state.fallback_player != nullptr) {
+        auto* player = static_cast<IMFPMediaPlayer*>(state.fallback_player);
+        player->Shutdown();
+        player->Release();
+    }
+    state.fallback_player = nullptr;
+    if (state.fallback_callback != nullptr) {
+        static_cast<UiBinkMediaPlayerCallback*>(state.fallback_callback)->Release();
+    }
+    state.fallback_callback = nullptr;
+    if (state.fallback_window != nullptr && IsWindow(state.fallback_window)) {
+        DestroyWindow(state.fallback_window);
+    }
+    state.fallback_window = nullptr;
+    state.fallback_surface_window = nullptr;
+    if (!state.fallback_temp_path.empty()) {
+        DeleteFileW(state.fallback_temp_path.c_str());
+        state.fallback_temp_path.clear();
+    }
+    if (state.fallback_media_foundation_started) {
+        MFShutdown();
+        state.fallback_media_foundation_started = false;
+    }
+    if (state.fallback_com_initialized) {
+        CoUninitialize();
+        state.fallback_com_initialized = false;
+    }
+}
+
+bool restart_ui_bink_media_fallback(UiScreenBinkEntryState& state) {
+    auto* player = static_cast<IMFPMediaPlayer*>(state.fallback_player);
+    auto* callback =
+        static_cast<UiBinkMediaPlayerCallback*>(state.fallback_callback);
+    if (player == nullptr || callback == nullptr) {
+        return false;
+    }
+
+    callback->reset();
+    PROPVARIANT position{};
+    position.vt = VT_I8;
+    position.hVal.QuadPart = 0;
+    HRESULT result = player->Stop();
+    if (SUCCEEDED(result)) {
+        result = player->SetPosition(MFP_POSITIONTYPE_100NS, &position);
+    }
+    if (SUCCEEDED(result)) {
+        result = player->Play();
+    }
+    state.paused = false;
+    return SUCCEEDED(result);
+}
+
+bool start_ui_bink_media_fallback(const UiScreenDefinition& screen,
+    const UiScreenEntry& entry, UiScreenBinkEntryState& state) {
+    const i32 blob_index = UiScreenEntryI32(entry, 0x4c);
+    if (blob_index < 0) {
+        return false;
+    }
+    const u8* bytes = nullptr;
+    u32 byte_count = 0;
+    if (!find_scenario_ui_bink_mp4(screen, static_cast<u32>(blob_index),
+            bytes, byte_count) ||
+        !write_scenario_ui_bink_temp_file(
+            bytes, byte_count, state.fallback_temp_path)) {
+        append_startup_log(
+            "scenario-ui-video: materialize failed record=%lu blob=%ld",
+            static_cast<unsigned long>(screen.source_record_index),
+            static_cast<long>(blob_index));
+        return false;
+    }
+    append_startup_log(
+        "scenario-ui-video: materialized record=%lu blob=%ld bytes=%lu",
+        static_cast<unsigned long>(screen.source_record_index),
+        static_cast<long>(blob_index), static_cast<unsigned long>(byte_count));
+
+    const ScenarioUiBinkWindows windows =
+        create_scenario_ui_bink_windows(entry);
+    state.fallback_window = windows.backdrop;
+    state.fallback_surface_window = windows.surface;
+    if (state.fallback_window == nullptr ||
+        state.fallback_surface_window == nullptr) {
+        append_startup_log(
+            "scenario-ui-video: windows failed record=%lu blob=%ld error=%lu",
+            static_cast<unsigned long>(screen.source_record_index),
+            static_cast<long>(blob_index),
+            static_cast<unsigned long>(GetLastError()));
+        close_ui_bink_media_fallback(state);
+        return false;
+    }
+    append_startup_log(
+        "scenario-ui-video: windows ok record=%lu blob=%ld backdrop=%p surface=%p",
+        static_cast<unsigned long>(screen.source_record_index),
+        static_cast<long>(blob_index), state.fallback_window,
+        state.fallback_surface_window);
+
+    const HRESULT com_result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    state.fallback_com_initialized = SUCCEEDED(com_result);
+    append_startup_log(
+        "scenario-ui-video: com record=%lu blob=%ld hr=0x%08lx",
+        static_cast<unsigned long>(screen.source_record_index),
+        static_cast<long>(blob_index), static_cast<unsigned long>(com_result));
+    HRESULT result = MFStartup(MF_VERSION, MFSTARTUP_FULL);
+    state.fallback_media_foundation_started = SUCCEEDED(result);
+    append_startup_log(
+        "scenario-ui-video: mf-startup record=%lu blob=%ld hr=0x%08lx",
+        static_cast<unsigned long>(screen.source_record_index),
+        static_cast<long>(blob_index), static_cast<unsigned long>(result));
+    if (FAILED(result)) {
+        close_ui_bink_media_fallback(state);
+        return false;
+    }
+
+    auto* callback = new (std::nothrow) UiBinkMediaPlayerCallback();
+    IMFPMediaPlayer* player = nullptr;
+    if (callback == nullptr) {
+        close_ui_bink_media_fallback(state);
+        return false;
+    }
+    state.fallback_callback = callback;
+    append_startup_log(
+        "scenario-ui-video: player-create begin record=%lu blob=%ld",
+        static_cast<unsigned long>(screen.source_record_index),
+        static_cast<long>(blob_index));
+    result = MFPCreateMediaPlayer(state.fallback_temp_path.c_str(), TRUE,
+        MFP_OPTION_NONE, callback, state.fallback_surface_window, &player);
+    append_startup_log(
+        "scenario-ui-video: player-create end record=%lu blob=%ld hr=0x%08lx player=%p",
+        static_cast<unsigned long>(screen.source_record_index),
+        static_cast<long>(blob_index), static_cast<unsigned long>(result), player);
+    if (SUCCEEDED(result) && player == nullptr) {
+        result = E_POINTER;
+    }
+    if (FAILED(result)) {
+        close_ui_bink_media_fallback(state);
+        return false;
+    }
+
+    state.fallback_player = player;
+    player->SetBorderColor(RGB(0, 0, 0));
+    player->SetAspectRatioMode(MFVideoARMode_None);
+    player->SetVolume(scenario_ui_bink_volume());
+    player->SetBalance(scenario_ui_bink_balance());
+    player->UpdateVideo();
+    state.paused = false;
+    return true;
+}
+
+bool render_ui_bink_media_fallback(const UiScreenDefinition& screen,
+    const UiScreenEntry& entry, UiScreenBinkEntryState& state) {
+    dispatch_scenario_ui_bink_window_messages();
+    if (state.fallback_player == nullptr &&
+        !start_ui_bink_media_fallback(screen, entry, state)) {
+        return false;
+    }
+
+    auto* callback =
+        static_cast<UiBinkMediaPlayerCallback*>(state.fallback_callback);
+    if (callback == nullptr || callback->failed()) {
+        close_ui_bink_media_fallback(state);
+        return false;
+    }
+    if (callback->ended() && !state.paused) {
+        if (UiScreenEntryI32(entry, 0x94) == 0) {
+            return restart_ui_bink_media_fallback(state);
+        }
+        state.paused = true;
+    }
+    dispatch_scenario_ui_bink_window_messages();
     return true;
 }
 #endif
@@ -3119,6 +3612,8 @@ bool HandleUiScreenDefinitionTrcImport(UiScreenDefinition& screen, const char* a
         return false;
     }
 
+    screen.source_archive_name = archive_name != nullptr ? archive_name : "";
+    screen.source_record_index = record_index;
     capture_resource_marks(screen);
     MemoryReader reader(record.data(), record.size());
     std::array<u8, 8> header{};
@@ -3177,6 +3672,8 @@ void HandleUiScreenDefinitionResourceRelease(UiScreenDefinition& screen) {
     screen.bink_entries.clear();
     screen.bink_initialized = false;
     screen.bink_surface_type = 0;
+    screen.source_archive_name.clear();
+    screen.source_record_index = kInvalidUiScreenIndex;
 
     for (auto& blob : screen.embedded_blobs) {
         blob.clear();
@@ -3520,16 +4017,25 @@ bool HandleUiScreenBinkEntryRender(UiScreenDefinition& screen, u32 entry_index) 
     UiScreenEntry& entry = screen.entries[entry_index];
     UiScreenBinkEntryState& state = screen.bink_entries[entry_index];
     if (!initialize_bink_runtime(screen)) {
-        return draw_main_menu_bink_fallback(screen, entry, state);
+        if (draw_main_menu_bink_fallback(screen, entry, state)) {
+            return true;
+        }
+        return render_ui_bink_media_fallback(screen, entry, state);
     }
 
     if (state.handle == nullptr && !open_bink_entry(screen, entry, state)) {
-        return draw_main_menu_bink_fallback(screen, entry, state);
+        if (draw_main_menu_bink_fallback(screen, entry, state)) {
+            return true;
+        }
+        return render_ui_bink_media_fallback(screen, entry, state);
     }
 
     BinkApi& api = bink_api();
     if (!api.ready()) {
-        return draw_main_menu_bink_fallback(screen, entry, state);
+        if (draw_main_menu_bink_fallback(screen, entry, state)) {
+            return true;
+        }
+        return render_ui_bink_media_fallback(screen, entry, state);
     }
 
     auto* handle = static_cast<BinkHeaderPrefix*>(state.handle);
@@ -3590,7 +4096,19 @@ bool RestartUiScreenFlaggedBinkEntries(UiScreenDefinition& screen) {
         screen.bink_entries.resize(screen.entries.size());
     }
     if (!initialize_bink_runtime(screen)) {
-        return false;
+        bool ok = true;
+        bool found = false;
+        for (std::size_t index = 0; index < screen.entries.size(); ++index) {
+            UiScreenEntry& entry = screen.entries[index];
+            UiScreenBinkEntryState& state = screen.bink_entries[index];
+            const u32 flags = static_cast<u32>(UiScreenEntryI32(entry, 4));
+            if ((flags & 0x30000u) == 0 || state.fallback_player == nullptr) {
+                continue;
+            }
+            found = true;
+            ok = restart_ui_bink_media_fallback(state) && ok;
+        }
+        return found && ok;
     }
 
     BinkApi& api = bink_api();
@@ -3628,7 +4146,7 @@ bool PlayJw204BinkMenuScreen(i32 column, i32 row,
     InitializeUiScreenDefinition(screen);
     SetGameCursorIndex(0);
 
-    const u32 record_index = static_cast<u32>(row * 0x14 + column * 0x50);
+    const u32 record_index = Jw204StageScreenRecordIndex(column, row);
     if (!HandleUiScreenDefinitionTrcImport(screen, "JW2_04.TRC", record_index)) {
         HandleUiScreenDefinitionReleaseWrapper(screen);
         return false;

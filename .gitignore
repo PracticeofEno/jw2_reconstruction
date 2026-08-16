@@ -8,6 +8,8 @@
 !ranker_reconstructed_code/
 !ranker_reconstructed_code/CMakeLists.txt
 !ranker_reconstructed_code/READABILITY.md
+!ranker_reconstructed_code/docs/
+!ranker_reconstructed_code/docs/SCENARIO_MISSION_RESTORATION_REPORT.md
 
 !ranker_reconstructed_code/config/
 !ranker_reconstructed_code/config/ranker_client.ini
@@ -62,6 +64,20 @@ ranker_reconstructed_code/tools/gameplay_parity/reports/gameplay_inventory.json
 !ranker_reconstructed_code/resources/jw208_record1.mp4
 !ranker_reconstructed_code/resources/jw208_record2.mp4
 !ranker_reconstructed_code/resources/jw208_record3.mp4
+!ranker_reconstructed_code/resources/jw208_record4.mp4
+!ranker_reconstructed_code/resources/jw208_record5.mp4
+!ranker_reconstructed_code/resources/jw208_record6.mp4
+!ranker_reconstructed_code/resources/jw208_record7.mp4
+!ranker_reconstructed_code/resources/jw208_record8.mp4
+!ranker_reconstructed_code/resources/jw208_record9.mp4
+!ranker_reconstructed_code/resources/jw208_record10.mp4
+!ranker_reconstructed_code/resources/jw208_record11.mp4
+!ranker_reconstructed_code/resources/jw208_record12.mp4
+!ranker_reconstructed_code/resources/jw208_record13.mp4
+!ranker_reconstructed_code/resources/jw208_record14.mp4
+!ranker_reconstructed_code/resources/jw208_record15.mp4
+!ranker_reconstructed_code/resources/jw208_record16.mp4
+!ranker_reconstructed_code/resources/scenario_ui_bink_mp4.pack
 !ranker_reconstructed_code/resources/lobby_base.bmp
 !ranker_reconstructed_code/resources/view_rank_base.bmp
 !ranker_reconstructed_code/resources/wizardnet_rank_marks.png

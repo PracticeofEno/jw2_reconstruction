@@ -11677,6 +11677,8 @@ void run_default_gameplay_session_runtime_reset(
 }
 
 void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& state) {
+    const bool campaign_stage_session =
+        g_runtime.frontend_stage_transition_active;
     append_startup_log("start-slots: begin archive=%s frontend_mode=%lu",
         g_runtime.gameplay_session_archive_path.c_str(),
         static_cast<unsigned long>(g_runtime.frontend_mode));
@@ -11873,6 +11875,25 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     append_startup_log("start-slots: import starting unit types ok");
     append_startup_log("start-slots: apply pending link params begin");
     apply_pending_link_lobby_start_parameters_to_gameplay_startup();
+    if (campaign_stage_session) {
+        // Preserve the archive's 0..7 mission ordinal separately from the
+        // gameplay runtime mode.  Frontend progression and the final mission
+        // gate consume this value after the live session has been normalized
+        // to Use Map Setting mode 5 below.
+        g_runtime.frontend_stage_session_mode =
+            g_runtime.gameplay_startup_state.session_mode;
+    }
+    if (g_runtime.gameplay_in_game_load_resume.pending || campaign_stage_session) {
+        // The campaign menu's row is a mission/progression index, not the
+        // gameplay session mode stored in the extracted map record.  Original
+        // faction scenarios enter the same Use Map Setting runtime used by a
+        // loaded mode-5 session: record-5 triggers, authored record-7 units,
+        // zero end-condition masks and per-owner availability all remain live.
+        // Keeping the map's raw value (mission 1 commonly stores zero) resets
+        // TRIGGERS as a skirmish and makes every protected-unit defeat group
+        // empty before the first simulation frame.
+        g_runtime.gameplay_startup_state.session_mode = 5;
+    }
     if (g_runtime.gameplay_in_game_load_resume.pending) {
         const u32 local_player = std::min<u32>(
             g_runtime.gameplay_in_game_load_resume.local_player_index,
@@ -11950,11 +11971,16 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     append_startup_log("start-slots: instantiate script scenario units ok active=%zu spawned=%zu",
         g_runtime.gameplay_movement_context.active_units.size(),
         g_runtime.gameplay_script_spawned_units.size());
+    const bool campaign_stage_units = campaign_stage_session;
+
     // The original imports record 7 into the live unit pool before
     // FUN_00426770.  Our archive decoder materializes those objects later, so
     // replay just the unit portion now: normal sessions remove owners 0..7
     // and clear only six generic slots on neutral survivors; mode 5 preserves
-    // every survivor byte except disabled-player removal.
+    // every survivor byte except disabled-player removal.  The scenario
+    // frontend is a third, authored-map path: its record-7 active/lifecycle
+    // chains are the mission roster and must not be converted into generic
+    // skirmish starting units.
     GameplaySessionRuntimeResetState imported_unit_reset{};
     imported_unit_reset.players = &g_runtime.gameplay_player_slots;
     imported_unit_reset.lifecycle = g_runtime.gameplay_startup_state.lifecycle;
@@ -11962,11 +11988,40 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
         g_runtime.gameplay_startup_state.session_mode;
     imported_unit_reset.callbacks.on_unit_reset_or_removed =
         default_gameplay_session_unit_reset_or_removed;
-    ResetGameplaySessionRuntimeUnits(imported_unit_reset);
+    if (!campaign_stage_units) {
+        ResetGameplaySessionRuntimeUnits(imported_unit_reset);
+    }
     if (g_runtime.gameplay_startup_state.lifecycle != nullptr) {
+        UnitLifecycleContext& lifecycle =
+            *g_runtime.gameplay_startup_state.lifecycle;
+        if (campaign_stage_units) {
+            lifecycle.owner_unit_active_count.fill(0);
+            lifecycle.owner_building_active_count.fill(0);
+            lifecycle.owner_unit_score.fill(0);
+            lifecycle.owner_building_score.fill(0);
+            for (const UnitMovementUnit* unit :
+                 g_runtime.gameplay_movement_context.active_units) {
+                if (unit == nullptr || !unit->active ||
+                    unit->owner_id >= kPlayerSlotCount) {
+                    continue;
+                }
+                const UnitMovementDefinition& definition = unit->definition;
+                const u32 score = definition.production_resource_cost +
+                    definition.production_secondary_cost;
+                if (unit->type_id < 0x60) {
+                    ++lifecycle.owner_unit_active_count[unit->owner_id];
+                    lifecycle.owner_unit_score[unit->owner_id] += score;
+                }
+                else {
+                    ++lifecycle.owner_building_active_count[unit->owner_id];
+                    lifecycle.owner_building_score[unit->owner_id] += score;
+                }
+            }
+            HandleOwnerPopulationReservationTotals(lifecycle);
+        }
         for (u32 owner = 0; owner < kProductionOrderOwnerCount; ++owner) {
             sync_default_owner_type_counts_from_lifecycle(
-                *g_runtime.gameplay_startup_state.lifecycle, owner);
+                lifecycle, owner);
         }
     }
     sync_default_gameplay_session_runtime_views_after_reset();
@@ -11976,7 +12031,14 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
         static_cast<unsigned long>(imported_unit_reset.units_preserved),
         g_runtime.gameplay_movement_context.active_units.size());
     append_startup_log("start-slots: StartGameplaySessionFromScenarioSlots begin");
-    StartGameplaySessionFromScenarioSlots(g_runtime.gameplay_startup_state);
+    if (campaign_stage_units) {
+        StartGameplaySessionFromImportedScenarioUnits(
+            g_runtime.gameplay_startup_state);
+    }
+    else {
+        StartGameplaySessionFromScenarioSlots(
+            g_runtime.gameplay_startup_state);
+    }
     append_startup_log("start-slots: StartGameplaySessionFromScenarioSlots ok placed=%zu active=%zu",
         g_runtime.gameplay_startup_state.placed_units.size(),
         g_runtime.gameplay_movement_context.active_units.size());
@@ -11991,7 +12053,9 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     }
     initialize_default_gameplay_original_unit_pool_slots();
     append_startup_log("start-slots: activate player slots begin");
-    activate_default_player_slots_from_active_units();
+    if (!campaign_stage_session) {
+        activate_default_player_slots_from_active_units();
+    }
     append_startup_log("start-slots: activate player slots ok active_count=%lu local=%lu",
         static_cast<unsigned long>(g_runtime.gameplay_player_slots.active_slot_count),
         static_cast<unsigned long>(g_runtime.gameplay_player_slots.local_player_slot));
@@ -12057,7 +12121,9 @@ void default_frontend_stage_reset_runtime(FrontendStageFlowState& state) {
     flow.process_shutdown_requested = false;
     default_gameplay_flow_start_session_from_slots(flow);
 
-    state.current_mode = g_runtime.gameplay_startup_state.session_mode;
+    state.current_mode = g_runtime.frontend_stage_transition_active ?
+        g_runtime.frontend_stage_session_mode :
+        g_runtime.gameplay_startup_state.session_mode;
     state.selected_faction_id = g_runtime.gameplay_startup_state.owner_slots[0].faction_id;
     state.active_player_slot_count = g_runtime.gameplay_player_slots.active_slot_count;
     state.runtime_tables_imported =
@@ -12066,7 +12132,8 @@ void default_frontend_stage_reset_runtime(FrontendStageFlowState& state) {
         !g_runtime.active_session_definitions.production_order_records.empty() ||
         !g_runtime.active_session_definitions.tail8_records.empty() ||
         !g_runtime.active_session_definitions.tail4_records.empty();
-    state.non_empty_runtime_tables_imported = state.current_mode == 5 &&
+    state.non_empty_runtime_tables_imported =
+        g_runtime.gameplay_startup_state.session_mode == 5 &&
         state.runtime_tables_imported;
     state.player_slot_masks_rebuilt =
         g_runtime.gameplay_session_runtime_definitions_staged;
@@ -12522,8 +12589,9 @@ void complete_default_frontend_stage_result_once(u32 result) {
     }
 
     FrontendStageFlowState& stage = frontend_stage_flow_state();
-    const u32 current_mode = stage.current_mode != 0 ?
-        stage.current_mode : g_runtime.gameplay_startup_state.session_mode;
+    // Mission one legitimately uses ordinal zero.  Falling back to the live
+    // UMS session mode turns its successor into mission six.
+    const u32 current_mode = stage.current_mode;
     CompleteRankerFrontendStage(result, current_mode + 1);
 }
 
@@ -29277,8 +29345,10 @@ void consume_default_gameplay_script_stage_result(
     g_runtime.gameplay_end_condition_state.result_code = opcode.stage_result;
     g_runtime.gameplay_end_condition_state.end_requested = true;
     const FrontendStageFlowState& stage = frontend_stage_flow_state();
-    const u32 current_mode = stage.current_mode != 0 ?
-        stage.current_mode : g_runtime.gameplay_startup_state.session_mode;
+    const u32 current_mode = g_runtime.frontend_stage_transition_active ?
+        stage.current_mode :
+        (stage.current_mode != 0 ? stage.current_mode :
+            g_runtime.gameplay_startup_state.session_mode);
     CompleteRankerFrontendStage(opcode.stage_result, current_mode + 1);
     g_runtime.gameplay_result_screen_rendered = true;
     opcode.stage_result_pending = false;

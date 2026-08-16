@@ -19,6 +19,22 @@ struct SpriteRenderTarget;
 constexpr u32 kUiScreenEntryBytes = 0x2a4;
 constexpr u32 kUiScreenBlobSlots = 10;
 constexpr u32 kInvalidUiScreenIndex = 0xffffffffu;
+constexpr u32 kJw204StageMissionStride = 0x50;
+constexpr u32 kJw204StageFactionStride = 0x14;
+
+// JW2_04.TRC is mission-major (P, Elf, Tyrano, Demon inside each row),
+// unlike the faction-major JW2_06.TRC session archive.
+constexpr u32 Jw204StageScreenRecordIndex(i32 faction, i32 mission) {
+    return static_cast<u32>(mission) * kJw204StageMissionStride +
+        static_cast<u32>(faction) * kJw204StageFactionStride;
+}
+
+static_assert(Jw204StageScreenRecordIndex(0, 0) == 0);
+static_assert(Jw204StageScreenRecordIndex(1, 0) == 20);
+static_assert(Jw204StageScreenRecordIndex(2, 0) == 40);
+static_assert(Jw204StageScreenRecordIndex(3, 0) == 60);
+static_assert(Jw204StageScreenRecordIndex(0, 1) == 80);
+static_assert(Jw204StageScreenRecordIndex(3, 7) == 620);
 
 struct UiScreenEntry {
     std::array<u8, kUiScreenEntryBytes> bytes{};
@@ -28,10 +44,21 @@ struct UiScreenBinkEntryState {
     void* handle = nullptr;
     const void* source = nullptr;
     u64 fallback_started_tick_ms = 0;
+#ifdef _WIN32
+    HWND fallback_window = nullptr;
+    HWND fallback_surface_window = nullptr;
+    void* fallback_player = nullptr;
+    void* fallback_callback = nullptr;
+    std::wstring fallback_temp_path;
+    bool fallback_com_initialized = false;
+    bool fallback_media_foundation_started = false;
+#endif
     bool paused = false;
 };
 
 struct UiScreenDefinition {
+    std::string source_archive_name;
+    u32 source_record_index = kInvalidUiScreenIndex;
     u32 operation_count = 0;
     u32 entry_count = 0;
     std::vector<UiScreenEntry> entries;

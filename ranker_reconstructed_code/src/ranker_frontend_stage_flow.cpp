@@ -1,6 +1,7 @@
 #include "ranker_frontend_stage_flow.h"
 
 #include "ranker_cursor.h"
+#include "ranker_input.h"
 #include "ranker_miles.h"
 #include "ranker_runtime_resources.h"
 #include "ranker_trc.h"
@@ -80,11 +81,16 @@ bool ExtractFrontendStageRecordToTempArchive(FrontendStageFlowState& state,
 
 bool LoadFrontendStageSessionBundle(FrontendStageFlowState& state,
     i32 column, i32 row, const char* archive_name) {
+    if (column < 0 || column >= kFrontendStageFactionCount ||
+        row < 0 || row >= kFrontendStageMissionCount) {
+        return false;
+    }
+
     state.column = column;
     state.row = row;
     // JW2_06.TRC stores a 12-record block per faction: P at 0, Elf at 12,
-    // Tyrano at 24, and Demon at 36.  Rows select the mission within that
-    // faction block, matching original FUN_00415c90 (faction * 12 + stage).
+    // Tyrano at 24, and Demon at 36.  Only the first eight records in each
+    // block are playable missions; the final four are non-TRC placeholders.
     state.record_index = FrontendStageArchiveRecordIndex(column, row);
     state.active_stage_archive = archive_name != nullptr ? archive_name : "";
     state.stage_bundle_loaded = false;
@@ -118,9 +124,16 @@ bool StartFrontendStageFromMenu(FrontendStageFlowState& state, i32 column, i32 r
     call_stage_callback(callbacks.reset_runtime_before_stage, state);
     call_stage_callback(callbacks.reset_render_state_before_stage, state);
 
+    SetBriefingBinkActiveGameMode(state.current_mode);
     SetPrimaryMilesMusicPolicyMode(1);
     PlayBriefingStartBinkSource();
     state.start_briefing_played = true;
+
+    // The story-card player advances on an asynchronous keyboard or mouse
+    // state.  Do not let that same physical transition activate a button in
+    // the mission briefing screen opened immediately below.  The original
+    // establishes a fresh input edge at this modal boundary.
+    ResetInputState();
 
     SetGameCursorIndex(0);
     if (!PlayJw204BinkMenuScreen(column, row)) {
@@ -139,6 +152,7 @@ void HandleFrontendStageCompletion(FrontendStageFlowState& state, u32 result,
     call_stage_result_callback(callbacks.handle_stage_result, state, result);
 
     if (result == 0) {
+        SetBriefingBinkActiveGameMode(state.current_mode);
         PlayBriefingEndBinkSource();
         state.end_briefing_played = true;
         ++state.stage_completion_count;

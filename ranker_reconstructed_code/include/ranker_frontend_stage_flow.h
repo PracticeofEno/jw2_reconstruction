@@ -7,6 +7,8 @@
 namespace ranker {
 
 constexpr u32 kFrontendStageArchiveStride = 0x0c;
+constexpr i32 kFrontendStageFactionCount = 4;
+constexpr i32 kFrontendStageMissionCount = 8;
 
 constexpr u32 FrontendStageArchiveRecordIndex(i32 column, i32 row) {
     return static_cast<u32>(column) * kFrontendStageArchiveStride +
@@ -17,6 +19,7 @@ static_assert(FrontendStageArchiveRecordIndex(0, 0) == 0);
 static_assert(FrontendStageArchiveRecordIndex(1, 0) == 12);
 static_assert(FrontendStageArchiveRecordIndex(2, 0) == 24);
 static_assert(FrontendStageArchiveRecordIndex(3, 0) == 36);
+static_assert(FrontendStageArchiveRecordIndex(3, 7) == 43);
 
 struct FrontendStageFlowState {
     i32 column = 0;

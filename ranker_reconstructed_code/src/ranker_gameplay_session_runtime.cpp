@@ -476,6 +476,56 @@ void StartGameplaySessionFromScenarioSlotsIncludingObservers(
     start_gameplay_session(state, false);
 }
 
+void StartGameplaySessionFromImportedScenarioUnits(
+    GameplaySessionStartupState& state) {
+    // Campaign archives already contain the exact active/lifecycle unit pool.
+    // Finalize the ordinary player/session mirrors without replacing those
+    // authored units with the six generic skirmish start units.
+    if (state.callbacks.reset_runtime_objects != nullptr) {
+        state.callbacks.reset_runtime_objects();
+    }
+
+    ResetGameplayPlayerReadyFlags(state);
+    state.non_player_slot_count = 0;
+    state.frame_counter = 0;
+    state.local_camera_initialized = false;
+    state.placed_units.clear();
+    mirror_owner_slots(state);
+
+    if (state.callbacks.reset_owner_ai != nullptr) {
+        state.callbacks.reset_owner_ai();
+    }
+
+    for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+        const u8 lobby_slot_state = state.players != nullptr
+            ? state.players->lobby_slot_states[owner]
+            : state.owner_slots[owner].slot_state;
+        if (!slot_state_is_disabled(lobby_slot_state) &&
+            !slot_state_is_player(lobby_slot_state)) {
+            ++state.non_player_slot_count;
+        }
+    }
+
+    if (state.lifecycle != nullptr && state.lifecycle->movement != nullptr &&
+        state.callbacks.initialize_local_camera != nullptr) {
+        for (const UnitMovementUnit* unit :
+             state.lifecycle->movement->active_units) {
+            if (unit == nullptr || !unit->active ||
+                unit->owner_id != state.local_owner_id) {
+                continue;
+            }
+            state.callbacks.initialize_local_camera(unit->x, unit->y);
+            state.local_camera_initialized = true;
+            break;
+        }
+    }
+
+    if (state.players != nullptr) {
+        SelectNearestHostilePlayerSlots(*state.players);
+    }
+    append_snapshot(state);
+}
+
 void ResetGameplayPlayerReadyFlags(GameplaySessionStartupState& state) {
     state.ready_flags.fill(0);
 }
