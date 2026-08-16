@@ -20074,8 +20074,8 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
         overlay.population_limit =
             lifecycle.owner_population_limit[overlay.local_player_slot];
     }
-    overlay.selected_production_category =
-        gameplay_input_action_state().pointer_aux_state;
+    SyncUiOverlayProductionCategoryFromPointerState(
+        overlay, gameplay_input_action_state().pointer_aux_state);
     if (overlay.local_player_slot < g_runtime.gameplay_player_slots.slot_states.size()) {
         overlay.local_player_type =
             g_runtime.gameplay_player_slots.slot_states[overlay.local_player_slot];
@@ -20195,6 +20195,11 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
 
 void apply_default_ui_overlay_runtime_mutations() {
     UiOverlayState& overlay = ui_overlay_state();
+    // Original selection replacement writes zero directly to DAT_00864bb4.
+    // The overlay reset is raised in the UI module, then published here to
+    // the gameplay input mirror before any later frame can restore the page.
+    ApplyUiOverlayProductionCategorySelectionReset(
+        overlay, gameplay_input_action_state().pointer_aux_state);
     const u32 speed = default_gameplay_speed_index(overlay.game_speed);
     if (gameplay_loop_state().frame_interval_index != speed) {
         apply_default_gameplay_speed_index(speed, true);

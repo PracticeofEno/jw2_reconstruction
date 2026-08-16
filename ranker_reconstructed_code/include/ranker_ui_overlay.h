@@ -926,6 +926,7 @@ struct UiOverlayState {
     std::array<u32, 4> selected_unit_special_action_states{};
     bool selected_unit_order_2a_available = false;
     u32 selected_production_category = 0;
+    bool production_category_reset_requested = false;
     u32 staged_unit_action_id = 0xffffffffu;
     u32 replay_speed_index = 4;
     u32 replay_frame_counter = 0;
@@ -1011,6 +1012,27 @@ struct UiOverlayState {
 inline void ResetUiOverlayProductionCategoryForSelectionChange(
     UiOverlayState& state) {
     state.selected_production_category = 0;
+    state.production_category_reset_requested = true;
+}
+
+inline void SyncUiOverlayProductionCategoryFromPointerState(
+    UiOverlayState& state, u32 pointer_aux_state) {
+    // FUN_004eb063 clears DAT_00864bb4 before the new selection is built.
+    // Keep the visible page at its root until that master-state mutation is
+    // published; otherwise the ordinary frame mirror resurrects the old page.
+    if (!state.production_category_reset_requested) {
+        state.selected_production_category = pointer_aux_state;
+    }
+}
+
+inline void ApplyUiOverlayProductionCategorySelectionReset(
+    UiOverlayState& state, u32& pointer_aux_state) {
+    if (!state.production_category_reset_requested) {
+        return;
+    }
+    pointer_aux_state = 0;
+    state.selected_production_category = 0;
+    state.production_category_reset_requested = false;
 }
 
 // Original FUN_004eb063 treats the live Shift byte itself as the additive

@@ -2,6 +2,7 @@
 #include "ranker_gameplay_session_flow.h"
 
 #include <cstdlib>
+#include <cstring>
 
 namespace {
 
@@ -18,9 +19,44 @@ ranker::UiOverlayMinimapUnit make_unit(u32 type, u32 owner) {
     return unit;
 }
 
+void verify_worker_build_category_selection_reset() {
+    ranker::UiOverlayState state{};
+    u32 pointer_aux_state = 3;
+    state.selected_production_category = pointer_aux_state;
+    state.staged_unit_action_id = 0x2cu;
+
+    ranker::ResetUiOverlayProductionCategoryForSelectionChange(state);
+    require(state.selected_production_category == 0);
+    require(state.production_category_reset_requested);
+
+    // A frame sync can occur before mutations are published.  It must not
+    // resurrect the previous worker's construction category in that window.
+    ranker::SyncUiOverlayProductionCategoryFromPointerState(
+        state, pointer_aux_state);
+    require(state.selected_production_category == 0);
+
+    ranker::ApplyUiOverlayProductionCategorySelectionReset(
+        state, pointer_aux_state);
+    require(pointer_aux_state == 0);
+    require(state.selected_production_category == 0);
+    require(!state.production_category_reset_requested);
+    require(state.staged_unit_action_id == 0x2cu);
+
+    // Once the reset is published, normal category mirroring remains active.
+    pointer_aux_state = 2;
+    ranker::SyncUiOverlayProductionCategoryFromPointerState(
+        state, pointer_aux_state);
+    require(state.selected_production_category == 2);
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc == 2 &&
+        std::strcmp(argv[1], "worker_build_category_selection_reset") == 0) {
+        verify_worker_build_category_selection_reset();
+        return 0;
+    }
     // FUN_004eb063 uses the live Shift bytes directly for both click and box
     // selection.  This is the exact routing that the old disconnected
     // additive_selection_mode field failed to provide.
@@ -63,11 +99,7 @@ int main() {
     // A normal replacement selection returns the command panel to its root.
     // In particular, an open worker construction category must not survive
     // selecting a different worker.
-    state.selected_production_category = 3;
-    state.staged_unit_action_id = 0x2cu;
-    ranker::ResetUiOverlayProductionCategoryForSelectionChange(state);
-    require(state.selected_production_category == 0);
-    require(state.staged_unit_action_id == 0x2cu);
+    verify_worker_build_category_selection_reset();
 
     // Original 0x004e1134's item-0xb5 branch draws the result unit from the
     // 170-frame char_small table.  The ordinary object-command path instead

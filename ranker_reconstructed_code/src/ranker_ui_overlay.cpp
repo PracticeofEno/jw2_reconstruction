@@ -1762,6 +1762,10 @@ const UiOverlayMinimapUnit* double_click_unit_at_screen_point(
 }
 
 void clear_primary_selection_command_state(UiOverlayState& state) {
+    // Original FUN_004eb063 also clears DAT_00864bb4 when the primary unit is
+    // removed from an additive selection.  The next primary must therefore
+    // rebuild its command panel from the root page.
+    ResetUiOverlayProductionCategoryForSelectionChange(state);
     state.placement_mode = 0;
     state.placement_definition_id = 0;
     state.pressed_command_id = 0xffffffffu;

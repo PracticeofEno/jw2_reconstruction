@@ -48,6 +48,24 @@
 - Release `ranker_rebuild` 빌드: 성공
   - 정식 배포 파일 `RankerOCPV_Win/ranker_rebuild.exe`에 반영했다.
 
+## 일꾼 선택 변경 후 건설 메뉴 초기화
+
+- 원본 `FUN_004eb063`은 새 개체를 정상 선택하는 경로의 `0x004eb124`에서
+  건설 분류의 원본 상태값 `DAT_00864bb4`를 0으로 초기화한 뒤 선택 개체와
+  명령 패널을 다시 구성한다.
+- 재구성판은 `UiOverlayState::selected_production_category`만 0으로 만들었고,
+  다음 프레임에 `GameplayInputActionState::pointer_aux_state`의 이전 값이 다시
+  복사되어 일반/테크/생산 건물 하위 아이콘이 새 일꾼에도 남았다.
+- 선택 변경 시 초기화 요청을 보존하고, 프레임 동기화 중에는 이전 분류가
+  되살아나지 않게 했다. 런타임 변경 반영 단계에서는 원본과 같이 입력 미러와
+  화면 분류를 모두 0으로 확정한다. 주 선택 유닛을 Shift로 해제하는 경로에도
+  같은 원본 규칙을 적용했다.
+- 관련 항목만 실행하는
+  `gameplay_selection_modifier_regression.exe worker_build_category_selection_reset`
+  집중 회귀 테스트가 통과했다. 선택 초기화, 중간 동기화, 입력 미러 반영,
+  이후 정상 분류 동기화를 검증했으며 다른 회귀 항목은 실행하지 않았다.
+- Release `ranker_rebuild` 대상의 통합 컴파일과 링크가 성공했다.
+
 ## 테스트 범위 메모
 
 전체 공격 리플레이 묶음을 실행하려던 검증은 원본이 리플레이로 진입하지 않고
