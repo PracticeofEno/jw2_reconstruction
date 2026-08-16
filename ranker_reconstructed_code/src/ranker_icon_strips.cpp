@@ -1,6 +1,7 @@
 #include "ranker_icon_strips.h"
 
 #include "ranker_palette_cache.h"
+#include "ranker_runtime_resources.h"
 #include "ranker_trc.h"
 
 #include <vector>
@@ -18,8 +19,6 @@ constexpr i32 kIconFrameHeight = -0x26;
 
 std::vector<u8> g_avatar_icon_frames;
 std::vector<u8> g_item_icon_frames;
-u32 g_primary_palette_slot = kInvalidPaletteCacheSlot;
-u32 g_secondary_palette_slot = kInvalidPaletteCacheSlot;
 
 bool load_record_once(std::vector<u8>& storage, u32 record_index) {
     if (!storage.empty()) {
@@ -41,28 +40,45 @@ bool load_record_once(std::vector<u8>& storage, u32 record_index) {
     return true;
 }
 
-u32 load_palette_once(u32& slot, u32 record_index) {
-    if (slot == kInvalidPaletteCacheSlot) {
-        slot = LoadPaletteCacheTrcRecord(kIconArchive, record_index);
-    }
-    return slot;
-}
-
 const u8* palette_bytes_for_slot(u32 slot) {
-    if (slot >= kPaletteCacheSlotCount) {
+    if (!IsPaletteCacheSlotActive(slot)) {
         return nullptr;
     }
     return palette_cache_state().raw_slots[slot].data();
 }
 
+u32 acquire_strip_palette(CommandPaletteKind kind, u32 record_index,
+    bool& temporary) {
+    temporary = false;
+    const CommandThemeResourceState& command = command_theme_resource_state();
+    const PaletteSlotRef& theme_palette =
+        command.palettes[static_cast<std::size_t>(kind)];
+    if (command.loaded && PaletteCacheSlotAllocationMatches(
+            theme_palette.slot, theme_palette.allocation_serial)) {
+        return theme_palette.slot;
+    }
+
+    temporary = true;
+    return LoadPaletteCacheTrcRecord(kIconArchive, record_index);
+}
+
+void release_temporary_palette(u32 slot, bool temporary) {
+    if (temporary && IsPaletteCacheSlotActive(slot)) {
+        ReleasePaletteCacheSlotsFrom(slot);
+    }
+}
+
 bool load_primary_strip(RawIndexedBitmapStrip& strip, std::vector<u8>& frames) {
-    const u32 slot = load_palette_once(g_primary_palette_slot, kPrimaryPaletteRecord);
+    bool temporary = false;
+    const u32 slot = acquire_strip_palette(
+        CommandPaletteKind::SmallCharacter, kPrimaryPaletteRecord, temporary);
     const u8* palette = palette_bytes_for_slot(slot);
     const bool loaded = palette != nullptr ?
         LoadRawIndexedBitmapStrip(strip, frames.data(), kIconFrameWidth,
             kIconFrameHeight, palette, kPaletteRawBytesPerSlot) :
         LoadRawIndexedBitmapStrip(strip, frames.data(), kIconFrameWidth,
             kIconFrameHeight);
+    release_temporary_palette(slot, temporary);
     if (loaded) {
         strip.frame_count = static_cast<u32>(
             frames.size() / (static_cast<std::size_t>(kIconFrameWidth) *
@@ -72,13 +88,16 @@ bool load_primary_strip(RawIndexedBitmapStrip& strip, std::vector<u8>& frames) {
 }
 
 bool load_secondary_strip(RawIndexedBitmapStrip& strip, std::vector<u8>& frames) {
-    const u32 slot = load_palette_once(g_secondary_palette_slot, kSecondaryPaletteRecord);
+    bool temporary = false;
+    const u32 slot = acquire_strip_palette(
+        CommandPaletteKind::Item, kSecondaryPaletteRecord, temporary);
     const u8* palette = palette_bytes_for_slot(slot);
     const bool loaded = palette != nullptr ?
         LoadSecondaryRawIndexedBitmapStrip(strip, frames.data(), kIconFrameWidth,
             kIconFrameHeight, palette, kPaletteRawBytesPerSlot) :
         LoadSecondaryRawIndexedBitmapStrip(strip, frames.data(), kIconFrameWidth,
             kIconFrameHeight);
+    release_temporary_palette(slot, temporary);
     if (loaded) {
         strip.frame_count = static_cast<u32>(
             frames.size() / (static_cast<std::size_t>(kIconFrameWidth) *

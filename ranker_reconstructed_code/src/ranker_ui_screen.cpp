@@ -2,6 +2,7 @@
 
 #include "ranker_cursor.h"
 #include "ranker_directx.h"
+#include "ranker_gameplay_modal_rules.h"
 #include "ranker_input.h"
 #include "ranker_miles.h"
 #include "ranker_palette_cache.h"
@@ -1693,10 +1694,10 @@ void set_entry_enabled(UiScreenDefinition& screen, u32 entry_index, bool enabled
         return;
     }
     UiScreenEntry& entry = screen.entries[entry_index];
+    const u32 draw_flags = static_cast<u32>(UiScreenEntryI32(entry, 4));
     SetUiScreenEntryI32(entry, 0, enabled ? 0 : -1);
-    if (!enabled) {
-        SetUiScreenEntryI32(entry, 4, 0);
-    }
+    SetUiScreenEntryI32(entry, 4, static_cast<i32>(
+        GameplayMenuEntryFlagsForEnabledState(draw_flags, enabled)));
 }
 
 void set_entry_flags_bit(UiScreenDefinition& screen, u32 entry_index, u32 bit, bool enabled) {
@@ -1965,6 +1966,24 @@ u32 poll_or_run_gameplay_modal(GameplayModalUiState& state, UiScreenDefinition& 
     return activated;
 }
 
+template <typename Callback>
+bool run_gameplay_pause_menu_child(
+    GameplayModalUiState& state, Callback&& callback) {
+    const bool use_snapshot =
+        GameplayPauseMenuUsesChildSnapshot(state.generic_ai_profile_mode);
+    const u32 previous_depth = direct_draw_state().surface_snapshot_depth;
+    if (use_snapshot) {
+        PushBackSurfaceSnapshot();
+    }
+
+    const bool result = callback();
+    if (use_snapshot &&
+        direct_draw_state().surface_snapshot_depth > previous_depth) {
+        PopBackSurfaceSnapshot();
+    }
+    return result;
+}
+
 void set_cursor_for_gameplay_modal() {
 #ifdef _WIN32
     SetGameCursorIndex(0);
@@ -2192,11 +2211,10 @@ std::string scenario_modal_objective_text(const GameplayModalUiState& state) {
 }
 
 bool pause_menu_modal_pause_available(const GameplayModalUiState& state) {
-    if (state.scenario_ai_profile_override || !state.generic_ai_profile_mode) {
-        return false;
-    }
-    return state.modal_pause_suppressed ||
-        local_player_modal_pause_uses_remaining(state) != 0;
+    return GameplayPauseMenuModalPauseEnabled(
+        state.replay_mode, state.generic_ai_profile_mode,
+        state.modal_pause_suppressed,
+        local_player_modal_pause_uses_remaining(state));
 }
 
 void configure_pause_menu_modal_pause_entry(
@@ -2208,8 +2226,9 @@ void configure_pause_menu_modal_pause_entry(
 
     const u8 local_pause_uses =
         local_player_modal_pause_uses_remaining(state);
-    if (state.scenario_ai_profile_override || !state.generic_ai_profile_mode ||
-        (!state.modal_pause_suppressed && local_pause_uses == 0)) {
+    if (!GameplayPauseMenuModalPauseEnabled(
+            state.replay_mode, state.generic_ai_profile_mode,
+            state.modal_pause_suppressed, local_pause_uses)) {
         set_entry_enabled(screen, kEntry, false);
         set_entry_button_triplet(screen, kEntry, 0x15, 0x15);
         return;
@@ -2240,6 +2259,10 @@ void toggle_low_observer_flags(GameplayModalUiState& state) {
     }
     else {
         state.compact_observer_flags &= 0xfffffff0u;
+    }
+    if (state.callbacks.apply_compact_observer_flags != nullptr) {
+        state.callbacks.apply_compact_observer_flags(
+            state, state.compact_observer_flags);
     }
 }
 
@@ -2617,8 +2640,10 @@ bool OpenGameplayPauseMenu(GameplayModalUiState& state) {
                 break;
             }
             UiScreenDefinition& screen = modal_screen(kGameplayModalMainSlot);
-            set_entry_enabled(screen, 1, !state.generic_ai_profile_mode);
-            set_entry_enabled(screen, 2, !state.generic_ai_profile_mode);
+            const bool save_load_enabled =
+                GameplayPauseMenuSaveLoadEnabled(state.generic_ai_profile_mode);
+            set_entry_enabled(screen, 1, save_load_enabled);
+            set_entry_enabled(screen, 2, save_load_enabled);
             configure_pause_menu_modal_pause_entry(state, screen);
         }
 
@@ -2632,48 +2657,78 @@ bool OpenGameplayPauseMenu(GameplayModalUiState& state) {
 
         switch (activated) {
         case 1:
-            if (OpenGameplaySaveSessionDialog(state)) {
+        {
+            const bool saved = run_gameplay_pause_menu_child(state, [&]() {
+                return OpenGameplaySaveSessionDialog(state);
+            });
+            if (saved) {
                 release_gameplay_modal_screen(state, kGameplayModalMainSlot,
                     static_cast<int>(kGameplayModalMainFlag));
                 goto close_pause_menu;
             }
             break;
+        }
         case 2:
             release_gameplay_modal_screen(state, kGameplayModalMainSlot,
                 static_cast<int>(kGameplayModalMainFlag));
-            if (OpenGameplayLoadSessionDialog(state)) {
+        {
+            const bool loaded = run_gameplay_pause_menu_child(state, [&]() {
+                return OpenGameplayLoadSessionDialog(state);
+            });
+            if (loaded) {
                 goto close_pause_menu;
             }
             reload_menu = true;
             break;
+        }
         case 3:
-            if (OpenGameplayOptionsDialog(state)) {
+        {
+            const bool applied = run_gameplay_pause_menu_child(state, [&]() {
+                return OpenGameplayOptionsDialog(state);
+            });
+            if (applied) {
                 release_gameplay_modal_screen(state, kGameplayModalMainSlot,
                     static_cast<int>(kGameplayModalMainFlag));
                 goto close_pause_menu;
             }
             break;
+        }
         case 4:
-            if (OpenGameplayScenarioMessageDialog(state)) {
+        {
+            const bool closed_main = run_gameplay_pause_menu_child(state, [&]() {
+                return OpenGameplayScenarioMessageDialog(state);
+            });
+            if (closed_main) {
                 release_gameplay_modal_screen(state, kGameplayModalMainSlot,
                     static_cast<int>(kGameplayModalMainFlag));
                 goto close_pause_menu;
             }
             break;
+        }
         case 5:
             if (state.scenario_ai_profile_override) {
-                state.quit_to_frontend_requested = true;
-                log_gameplay_modal_action(state, GameplayModalUiActionKind::QuitRequested);
+                // The scenario variant labels this entry Restart.  Original
+                // FUN_0042d5f0 sets DAT_00725c0c, which re-enters the current
+                // stage; it does not route back through the single-player
+                // frontend.
+                state.end_session_requested = true;
+                log_gameplay_modal_action(
+                    state, GameplayModalUiActionKind::RestartRequested);
                 release_gameplay_modal_screen(state, kGameplayModalMainSlot,
                     static_cast<int>(kGameplayModalMainFlag));
                 goto close_pause_menu;
             }
-            if (OpenGameplayExitSurrenderDialog(state)) {
+        {
+            const bool closed_main = run_gameplay_pause_menu_child(state, [&]() {
+                return OpenGameplayExitSurrenderDialog(state);
+            });
+            if (closed_main) {
                 release_gameplay_modal_screen(state, kGameplayModalMainSlot,
                     static_cast<int>(kGameplayModalMainFlag));
                 goto close_pause_menu;
             }
             break;
+        }
         case 7:
             if (pause_menu_modal_pause_available(state)) {
                 if (state.callbacks.publish_modal_pause != nullptr) {
@@ -3076,8 +3131,8 @@ void RefreshGameplayRelationMaskDialogControls(u32 relation_mask, u32 visibility
 }
 
 bool OpenGameplayRelationMaskDialog(GameplayModalUiState& state) {
-    if (state.scenario_ai_profile_override || !state.generic_ai_profile_mode ||
-        state.transport_mode == 2 || state.transport_mode == 4) {
+    if (!ShouldOpenGameplayRelationMaskDialog(state.replay_mode,
+            state.generic_ai_profile_mode, state.transport_mode)) {
         return false;
     }
     if (!state.relation_mask_active) {
@@ -3212,8 +3267,13 @@ void RefreshGameplayObserverMaskDialogControls(u32 mode, u32 mask) {
 bool OpenGameplayObserverMaskDialog(GameplayModalUiState& state) {
     const bool local_is_observer = state.local_player_index < kGameplayModalPlayerSlots &&
         state.players[state.local_player_index].slot_state == 2;
-    if (state.scenario_ai_profile_override || !state.generic_ai_profile_mode ||
-        local_is_observer) {
+    const GameplayMessageSettingsRoute route =
+        ResolveGameplayMessageSettingsRoute(state.replay_mode,
+            state.generic_ai_profile_mode, local_is_observer ? 2u : 0u);
+    if (route == GameplayMessageSettingsRoute::None) {
+        return false;
+    }
+    if (route == GameplayMessageSettingsRoute::ToggleOverlayFlags) {
         toggle_low_observer_flags(state);
         return false;
     }
@@ -3243,6 +3303,11 @@ bool OpenGameplayObserverMaskDialog(GameplayModalUiState& state) {
         case 1:
             state.committed_observer_mode = state.pending_observer_mode;
             state.committed_observer_mask = state.pending_observer_mask;
+            if (state.callbacks.apply_observer_settings != nullptr) {
+                state.callbacks.apply_observer_settings(state,
+                    state.committed_observer_mode,
+                    state.committed_observer_mask);
+            }
             release_gameplay_modal_screen(state, kGameplayModalObserverSlot,
                 static_cast<int>(kGameplayModalObserverFlag));
             return true;
@@ -3827,11 +3892,14 @@ bool HandleUiScreenInputTick(UiScreenDefinition& screen, u32& activated_entry_in
                 continue;
             }
 
-            if (entry_contains_point(entry, mouse_x, mouse_y)) {
+            const bool pointer_inside =
+                entry_contains_point(entry, mouse_x, mouse_y);
+            if (pointer_inside) {
                 set_entry_state(entry, 2);
                 entry_state = 2;
             }
-            else if (state == 2) {
+            else if (ShouldRestoreIdleUiScreenEntryState(
+                    state, pointer_inside)) {
                 set_entry_state(entry, 0);
                 entry_state = 0;
             }

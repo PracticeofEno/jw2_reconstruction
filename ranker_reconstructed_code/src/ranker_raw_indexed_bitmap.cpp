@@ -177,7 +177,7 @@ bool LoadRawIndexedBitmapStrip(RawIndexedBitmapStrip& strip, const void* pixel_f
 bool LoadRawIndexedBitmapStripFromPaletteSlot(RawIndexedBitmapStrip& strip,
     const void* pixel_frames, i32 width, i32 height, u32 palette_slot) {
     const PaletteCacheState& cache = palette_cache_state();
-    if (palette_slot >= kPaletteCacheSlotCount) {
+    if (!IsPaletteCacheSlotActive(palette_slot)) {
         return LoadRawIndexedBitmapStrip(strip, pixel_frames, width, height);
     }
 

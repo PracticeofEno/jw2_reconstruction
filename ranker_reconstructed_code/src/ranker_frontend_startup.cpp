@@ -551,6 +551,11 @@ bool RunFrontendStartupBootstrap(FrontendStartupState& startup_state,
         return fail_bootstrap(bootstrap_state,
             FrontendBootstrapFailureStage::PaletteRecord5);
     }
+    // FUN_00414da0 publishes JW2_01 record 5 as DAT_00b88eb0 before any
+    // command-theme rewind point is captured.  Interface resources then bind
+    // JW2_18 records 0..7 to this startup-owned palette for the process
+    // lifetime instead of allocating a duplicate inside the session stack.
+    SetSharedUiPaletteSlot(bootstrap_state.startup_palette_slot);
     append_frontend_bootstrap_log("bootstrap step palette5 ok slot=%lu",
         static_cast<unsigned long>(bootstrap_state.startup_palette_slot));
     advance_loading_progress(startup_state, bootstrap_state);

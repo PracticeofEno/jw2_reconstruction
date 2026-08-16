@@ -15,13 +15,22 @@ constexpr u32 kInvalidPaletteCacheSlot = 0xffffffffu;
 struct PaletteCacheState {
     std::array<std::array<u8, kPaletteRawBytesPerSlot>, kPaletteCacheSlotCount> raw_slots{};
     std::array<std::array<u16, kPalettePixelCount>, kPaletteCacheSlotCount> pixel_slots{};
+    // Slots are stack-reused after ReleasePaletteCacheSlotsFrom.  Keep a
+    // monotonic identity so persistent UI references can distinguish the
+    // palette they loaded from an unrelated later allocation at the same
+    // numeric slot.
+    std::array<u64, kPaletteCacheSlotCount> allocation_serials{};
     u32 next_slot = 0;
+    u64 next_allocation_serial = 1;
     u16 transparent_mask = 0;
 };
 
 u32 AllocatePaletteCacheSlot();
 void ReleasePaletteCacheSlotsFrom(u32 first_slot);
 void ResetPaletteCache();
+bool IsPaletteCacheSlotActive(u32 slot_index);
+u64 GetPaletteCacheSlotAllocationSerial(u32 slot_index);
+bool PaletteCacheSlotAllocationMatches(u32 slot_index, u64 allocation_serial);
 
 bool SetPaletteCacheRawSlot(u32 slot_index, const void* data, std::size_t byte_count);
 void ConvertPaletteCacheSlot(u32 slot_index);

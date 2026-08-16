@@ -22,6 +22,7 @@
 #include "ranker_figs_address_book.h"
 #include "ranker_game_session_tables.h"
 #include "ranker_game_loop.h"
+#include "ranker_gameplay_cheats.h"
 #include "ranker_gameplay_context_cursor.h"
 #include "ranker_gameplay_end_conditions.h"
 #include "ranker_gameplay_frame_render.h"
@@ -34,6 +35,7 @@
 #include "ranker_gameplay_session_format.h"
 #include "ranker_gameplay_session_runtime.h"
 #include "ranker_gameplay_session_flow.h"
+#include "ranker_gameplay_session_rules.h"
 #include "ranker_gameplay_sound.h"
 #include "ranker_gameplay_tooltips.h"
 #include "ranker_gameplay_terrain_layout.h"
@@ -229,6 +231,9 @@ constexpr std::size_t kGameplayHeaderMapEffectFreeListHeadOffset = 0x144c;
 constexpr std::size_t kGameplayHeaderRandomLimitOffset = 0x1420;
 constexpr std::size_t kGameplayHeaderRandomSeedOffset = 0x1424;
 constexpr std::size_t kGameplayHeaderRandomCallCountOffset = 0x1428;
+// DAT_00722304 is primary session record offset 0x1c56c and suppresses only
+// the transition-class local cheats (commands 2 through 14).
+constexpr std::size_t kGameplayHeaderCheatTransitionRestrictionOffset = 0x1c56c;
 
 // DAT_0122ff28 is both the original live owner-AI state and record 19's
 // serialized image.  These transport tables are structure-of-arrays in that
@@ -5027,6 +5032,12 @@ void default_gameplay_modal_reset_and_publish_inactive(GameplayModalUiState&) {
         g_runtime.gameplay_startup_state.ready_flags[local_slot] != 2) {
         input.pending_action_arg2 = 1;
     }
+    const bool local_forces_early_result =
+        g_runtime.gameplay_startup_state.ready_flags[local_slot] == 2u;
+    g_runtime.gameplay_end_condition_state.result_code =
+        ResolveGameplayManualLeaveResult(
+            gameplay_loop_state().simulation_frame_counter,
+            local_forces_early_result);
     ResetAndPublishPlayerInactiveState(input);
 }
 
@@ -5163,6 +5174,21 @@ void default_gameplay_modal_show_message(GameplayModalUiState&, const char* mess
     }
 }
 
+void default_gameplay_modal_apply_observer_settings(
+    GameplayModalUiState&, u32 channel, u32 recipient_mask) {
+    UiOverlayState& overlay = ui_overlay_state();
+    overlay.default_chat_channel = std::min<u32>(channel, 3u);
+    if (!overlay.chat_active) {
+        overlay.chat_channel = overlay.default_chat_channel;
+    }
+    g_gameplay_chat_target_mask = recipient_mask & 0xffu;
+}
+
+void default_gameplay_modal_apply_compact_observer_flags(
+    GameplayModalUiState&, u32 flags) {
+    gameplay_script_trigger_state().opcode_context.resource_hud_flags = flags;
+}
+
 void default_gameplay_modal_send_replay_modal_action(
     GameplayModalUiState& state, u32 action) {
     if (g_runtime.main_window == nullptr || !IsWindow(g_runtime.main_window)) {
@@ -5229,12 +5255,22 @@ void configure_default_gameplay_modal_ui_callbacks(GameplayModalUiState& state) 
         std::max<i32>(async_com_state().active_network_transport_mode, 0));
     state.session_mode = g_runtime.gameplay_startup_state.session_mode;
     state.generic_ai_profile_mode = g_runtime.generic_ai_profile_mode;
+    state.replay_mode = replay_recording_state().playback_mode;
     state.scenario_ai_profile_override =
         g_runtime.generic_ai_scenario_active;
     state.network_ai_profile_override = g_runtime.network_ai_profile_override;
     state.modal_pause_suppressed =
         gameplay_loop_state().modal_pause_suppressed ||
         gameplay_loop_state().replay_direct_music_paused;
+    if (!state.observer_mask_active) {
+        state.committed_observer_mode = std::min<u32>(
+            ui_overlay_state().default_chat_channel, 3u);
+        state.pending_observer_mode = state.committed_observer_mode;
+        state.committed_observer_mask = g_gameplay_chat_target_mask & 0xffu;
+        state.pending_observer_mask = state.committed_observer_mask;
+    }
+    state.compact_observer_flags =
+        gameplay_script_trigger_state().opcode_context.resource_hud_flags;
     sync_default_gameplay_modal_players(state);
     state.sound_options_available = direct_sound_state().active;
     state.unit_resource_pack_variant =
@@ -5323,6 +5359,14 @@ void configure_default_gameplay_modal_ui_callbacks(GameplayModalUiState& state) 
     if (state.callbacks.toggle_unit_resource_pack == nullptr) {
         state.callbacks.toggle_unit_resource_pack =
             default_gameplay_modal_toggle_unit_resource_pack;
+    }
+    if (state.callbacks.apply_observer_settings == nullptr) {
+        state.callbacks.apply_observer_settings =
+            default_gameplay_modal_apply_observer_settings;
+    }
+    if (state.callbacks.apply_compact_observer_flags == nullptr) {
+        state.callbacks.apply_compact_observer_flags =
+            default_gameplay_modal_apply_compact_observer_flags;
     }
     if (state.callbacks.exit_worker_thread == nullptr) {
         state.callbacks.exit_worker_thread =
@@ -11860,6 +11904,7 @@ void run_default_gameplay_session_runtime_reset(
 void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& state) {
     const bool campaign_stage_session =
         g_runtime.frontend_stage_transition_active;
+    const bool frontend_loaded_save = state.loaded_save_session;
     append_startup_log("start-slots: begin archive=%s frontend_mode=%lu",
         g_runtime.gameplay_session_archive_path.c_str(),
         static_cast<unsigned long>(g_runtime.frontend_mode));
@@ -12077,16 +12122,27 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
         g_runtime.frontend_stage_session_mode =
             g_runtime.gameplay_startup_state.session_mode;
     }
-    if (g_runtime.gameplay_in_game_load_resume.pending || campaign_stage_session) {
+    g_runtime.gameplay_startup_state.session_mode =
+        ResolveGameplayMaterializationMode(
+            g_runtime.gameplay_startup_state.session_mode,
+            frontend_loaded_save,
+            g_runtime.gameplay_in_game_load_resume.pending,
+            campaign_stage_session);
+    if (frontend_loaded_save ||
+        g_runtime.gameplay_in_game_load_resume.pending ||
+        campaign_stage_session) {
         // The campaign menu's row is a mission/progression index, not the
         // gameplay session mode stored in the extracted map record.  Original
         // faction scenarios enter the same Use Map Setting runtime used by a
-        // loaded mode-5 session: record-5 triggers, authored record-7 units,
-        // zero end-condition masks and per-owner availability all remain live.
-        // Keeping the map's raw value (mission 1 commonly stores zero) resets
-        // TRIGGERS as a skirmish and makes every protected-unit defeat group
-        // empty before the first simulation frame.
-        g_runtime.gameplay_startup_state.session_mode = 5;
+        // loaded mode-5 session.  The frontend Load entry at 0x004d94a9 also
+        // enters the gameplay loop without fresh-skirmish slot replacement:
+        // record-5 triggers, record-7 units, resources, clock and RNG remain
+        // the imported saved state.
+        append_startup_log(
+            "start-slots: saved-session materialization mode=5 frontend=%s active=%s campaign=%s",
+            frontend_loaded_save ? "yes" : "no",
+            g_runtime.gameplay_in_game_load_resume.pending ? "yes" : "no",
+            campaign_stage_session ? "yes" : "no");
     }
     if (g_runtime.gameplay_in_game_load_resume.pending) {
         const u32 local_player = std::min<u32>(
@@ -12118,6 +12174,11 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
             static_cast<unsigned long>(slot.starting_unit_type),
             static_cast<unsigned long>(slot.secondary_starting_unit_type));
     }
+    g_runtime.gameplay_startup_state.frame_interval_index =
+        ResolveGameplayInitialSpeedIndex(
+            state.generic_ai_profile_mode != 0,
+            replay_recording_state().playback_mode,
+            g_runtime.gameplay_startup_state.frame_interval_index);
     append_startup_log("start-slots: runtime reset begin");
     run_default_gameplay_session_runtime_reset(
         g_runtime.gameplay_startup_state, player_name);
@@ -14658,9 +14719,15 @@ void default_gameplay_loop_pre_update_phase(GameplayLoopState& state) {
     // which ProcessGameplaySessionLoop consumes immediately after the frame.
     // The typed modal state previously recorded those writes but left them
     // unread, so End Game and Quit to Frontend merely closed the dialog.
-    if (modal.end_session_requested || modal.quit_to_frontend_requested) {
-        modal.end_session_requested = false;
-        modal.quit_to_frontend_requested = false;
+    const GameplayModalSessionRequest session_request =
+        ResolveGameplayModalSessionRequest(modal.end_session_requested,
+            modal.quit_to_frontend_requested);
+    modal.end_session_requested = false;
+    modal.quit_to_frontend_requested = false;
+    if (session_request == GameplayModalSessionRequest::Restart) {
+        state.restart_requested = true;
+    }
+    else if (session_request == GameplayModalSessionRequest::Leave) {
         state.leave_requested = true;
     }
 
@@ -19013,12 +19080,11 @@ void sync_default_gameplay_visibility_and_render_inputs(
             continue;
         }
 
-        unit->scenario_string_slot &= ~0x80u;
-        if (std::find(overlay.selected_unit_ids.begin(),
+        const bool selected = std::find(overlay.selected_unit_ids.begin(),
                 overlay.selected_unit_ids.end(), unit->id) !=
-            overlay.selected_unit_ids.end()) {
-            unit->scenario_string_slot |= 0x80u;
-        }
+            overlay.selected_unit_ids.end();
+        unit->scenario_string_slot = SynchronizeUiOverlayUnitSelectionFlag(
+            unit->scenario_string_slot, selected);
     }
 
     g_runtime.gameplay_unit_render_queue.units.reserve(active_count);
@@ -20087,6 +20153,14 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
     overlay.replay_timing_enabled = gameplay_loop_state().replay_timing_enabled;
     overlay.scripted_input_restricted =
         gameplay_script_trigger_state().opcode_context.global_flag_22358;
+    // FUN_004e7b68 reads DAT_00722304 before accepting transition cheats
+    // 2..14.  That value is the dword at +0x1c56c in the active primary
+    // session snapshot; keep the chat resolver tied to the same source.
+    const GameplaySessionLoadState& session_load = gameplay_session_load_state();
+    overlay.local_cheat_transition_restricted =
+        !session_load.records.empty() && session_load.record_loaded[0] &&
+        read_default_session_record_u32(session_load.records[0],
+            kGameplayHeaderCheatTransitionRestrictionOffset, 0) == 1u;
     const GameplayUiResourceState& ui_resources = gameplay_ui_resource_state();
     const InterfaceResourceState& interface_resources = interface_resource_state();
     overlay.interface_theme_index = std::min<u32>(interface_resources.theme_index, 3);
@@ -21693,7 +21767,11 @@ void process_default_ui_overlay_command_actions() {
     const bool has_pending_unit_action =
         !overlay.pending_unit_action_text.empty() &&
         overlay.pending_unit_action_text.front() == '!';
-    if (overlay.command_actions.empty() && !has_pending_unit_action) {
+    const bool has_pending_gameplay_cheat =
+        overlay.pending_gameplay_cheat_command !=
+            kInvalidGameplayCheatCommand;
+    if (overlay.command_actions.empty() && !has_pending_unit_action &&
+        !has_pending_gameplay_cheat) {
         return;
     }
 
@@ -21719,6 +21797,18 @@ void process_default_ui_overlay_command_actions() {
         std::memcpy(&input.pending_action_arg3, payload.data() + 12, 4);
         PublishSelectedUnitsPendingAction(input, static_cast<u32>(text.size()));
         overlay.pending_unit_action_text.clear();
+    }
+
+    if (has_pending_gameplay_cheat) {
+        // FUN_004d9ffb publishes local cheat commands as subtype 0x0d.  Only
+        // command 16 carries the selected unit pointer in the next dword.
+        const u32 local = mode1_reliable_state().local_player_index & 0xffu;
+        PublishLocalMode1GameplayPacket((0x0du << 24) | local,
+            overlay.pending_gameplay_cheat_command,
+            overlay.pending_gameplay_cheat_unit_offset);
+        overlay.pending_gameplay_cheat_command =
+            kInvalidGameplayCheatCommand;
+        overlay.pending_gameplay_cheat_unit_offset = 0;
     }
 
     for (const UiOverlayCommandAction& action : overlay.command_actions) {
@@ -30270,6 +30360,11 @@ void default_gameplay_loop_present_phase(GameplayLoopState& state) {
         resolve_active_gameplay_logical_surface_size();
     GameplayFrameRenderContext& context = g_runtime.gameplay_frame_render_context;
     context.current_tick_ms = state.current_tick_ms;
+    // The ordered subtype-0x16 pause packet owns DAT_00862de9 in the
+    // original.  Reassert it after rebuilding the per-frame context so the
+    // already reconstructed three-line/blinking pause overlay is visible.
+    context.pause_overlay_active = ResolveGameplayPauseOverlayVisible(
+        mode1_gameplay_packet_dispatch_state().modal_pause_visible);
     // Every gameplay renderer reached from FUN_004d7790 observes
     // DAT_007071a4, the lockstep simulation frame.  present_frame_counter can
     // advance thousands of times while waiting for the next simulation tick,
@@ -31128,12 +31223,22 @@ void run_default_single_player_frontend_flow() {
         if (action == 3) {
             frontend_stage_flow_state().stage_started = false;
             g_runtime.frontend_stage_transition_active = false;
+            // The original parent menu releases its UI definition before the
+            // selected action dispatches to FUN_0042cfc0.  Resource entries,
+            // palettes and sounds use stack marks, so keeping record 0x5f
+            // alive until after the save import makes its later release also
+            // discard the newly loaded terrain/unit graphics.  Their indices
+            // are then reused and the loaded game renders unrelated pixels.
+            CloseStageAvailabilityDialog(modal);
             const bool session_loaded = OpenSkirmishLoadSessionDialog(modal);
             if (session_loaded) {
-                CloseStageAvailabilityDialog(modal);
                 GameplaySessionFlowState& flow =
                     prepare_default_single_player_session_flow();
-                default_gameplay_flow_configure_display(flow);
+                flow.loaded_save_session = true;
+                // Original 0x004d94a9 performs cursor/frame-boundary work and
+                // enters ProcessGameplaySessionLoop directly after a
+                // successful load.  Recreating the already-correct 800x600
+                // surfaces here additionally drops every saved UI snapshot.
                 default_gameplay_flow_start_session_from_slots(flow);
                 run_default_prepared_single_player_session(flow);
             }
@@ -31168,6 +31273,8 @@ constexpr u32 kTitleMenuMultiEntry = 2;
 constexpr u32 kTitleMenuOpeningEntry = 3;
 constexpr u32 kTitleMenuCreditEntry = 4;
 constexpr u32 kTitleMenuQuitEntry = 5;
+constexpr u32 kTitleMenuVersionEntry = 6;
+constexpr std::size_t kTitleMenuVersionFormatRow = 236;
 constexpr u32 kTitleMenuFirstButtonEntry = kTitleMenuSingleEntry;
 constexpr u32 kTitleMenuLastButtonEntry = kTitleMenuQuitEntry;
 constexpr u32 kInvalidTitleMenuEntry = 0xffffffffu;
@@ -31176,6 +31283,32 @@ constexpr UINT kTitleMenuAnimationTimerIntervalMs = 33;
 
 UiScreenDefinition& title_main_menu_screen() {
     return GlobalUiScreenSlot(kTitleMenuScreenSlot);
+}
+
+void configure_title_main_menu_version(UiScreenDefinition& screen) {
+    if (screen.entries.size() <= kTitleMenuVersionEntry) {
+        return;
+    }
+
+    // Original FUN_0042cc20 formats startup-platform row 236 into record 94's
+    // seventh entry and selects draw/metric fonts 1 and 3 before the title
+    // modal starts.  Preserve the packed version's 16/8/8-bit components.
+    const u32 version = LoadTrcRecord9Value();
+    char text[128]{};
+    std::snprintf(text, sizeof(text),
+        startup_platform_row(kTitleMenuVersionFormatRow, "Ver %d-%d-%d"),
+        static_cast<int>(version & 0xffffu),
+        static_cast<int>((version >> 16) & 0xffu),
+        static_cast<int>((version >> 24) & 0xffu));
+
+    UiScreenEntry& entry = screen.entries[kTitleMenuVersionEntry];
+    SetUiScreenEntryI32(entry, 0x08, 1);
+    SetUiScreenEntryI32(entry, 0x0c, 3);
+    constexpr std::size_t kEntryTextOffset = 0xa4;
+    static_assert(kEntryTextOffset < kUiScreenEntryBytes);
+    const std::size_t capacity = entry.bytes.size() - kEntryTextOffset;
+    std::snprintf(reinterpret_cast<char*>(entry.bytes.data() + kEntryTextOffset),
+        capacity, "%s", text);
 }
 
 void close_title_main_menu_frontend() {
@@ -31259,6 +31392,7 @@ bool open_title_main_menu_frontend(HWND window) {
         append_startup_log("title menu import failed");
         return false;
     }
+    configure_title_main_menu_version(screen);
 
     g_runtime.frontend_route_window = window;
     g_runtime.suppress_paint = false;

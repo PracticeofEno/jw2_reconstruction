@@ -1429,6 +1429,98 @@ if (RANKER_BUILD_GAMEPLAY_LAUNCH_STATE_REGRESSION_TESTS)
         COMMAND gameplay_launch_state_regression)
 endif()
 
+option(RANKER_BUILD_GAMEPLAY_MODAL_RULES_REGRESSION_TESTS
+    "Build focused gameplay save/load and modal-state regressions" OFF)
+if (RANKER_BUILD_GAMEPLAY_MODAL_RULES_REGRESSION_TESTS)
+    enable_testing()
+    add_executable(gameplay_modal_rules_regression
+        tests/gameplay_modal_rules_regression.cpp
+    )
+    target_include_directories(gameplay_modal_rules_regression PRIVATE
+        include
+    )
+    add_test(NAME gameplay_modal_rules_regression
+        COMMAND gameplay_modal_rules_regression)
+endif()
+
+option(RANKER_BUILD_GAMEPLAY_FLOW_MODES_REGRESSION_TESTS
+    "Build focused cheat, restart, speed, leave-result and pause regressions" OFF)
+if (RANKER_BUILD_GAMEPLAY_FLOW_MODES_REGRESSION_TESTS)
+    enable_testing()
+    add_executable(gameplay_flow_modes_regression
+        tests/gameplay_flow_modes_regression.cpp
+    )
+    target_include_directories(gameplay_flow_modes_regression PRIVATE
+        include
+    )
+    add_test(NAME gameplay_flow_modes_regression
+        COMMAND gameplay_flow_modes_regression)
+endif()
+
+option(RANKER_BUILD_GAMEPLAY_AUXILIARY_BUTTONS_REGRESSION_TESTS
+    "Build focused alliance/message button and world-bar regressions" OFF)
+if (RANKER_BUILD_GAMEPLAY_AUXILIARY_BUTTONS_REGRESSION_TESTS)
+    enable_testing()
+    add_executable(gameplay_auxiliary_buttons_regression
+        tests/gameplay_auxiliary_buttons_regression.cpp
+    )
+    target_include_directories(gameplay_auxiliary_buttons_regression PRIVATE
+        include
+    )
+    add_test(NAME gameplay_auxiliary_buttons_regression
+        COMMAND gameplay_auxiliary_buttons_regression)
+endif()
+
+option(RANKER_BUILD_UNIT_DEATH_RESOURCE_VARIANT_REGRESSION_TESTS
+    "Build focused Change Death resource-pack regressions" OFF)
+if (RANKER_BUILD_UNIT_DEATH_RESOURCE_VARIANT_REGRESSION_TESTS)
+    enable_testing()
+    add_executable(unit_death_resource_variant_regression
+        tests/unit_death_resource_variant_regression.cpp
+        src/ranker_resource_store.cpp
+        src/ranker_trc.cpp
+        src/ranker_unit_death_resources.cpp
+    )
+    target_include_directories(unit_death_resource_variant_regression PRIVATE
+        include
+    )
+    target_link_libraries(unit_death_resource_variant_regression PRIVATE
+        zlib113
+    )
+    if (MSVC)
+        target_compile_options(unit_death_resource_variant_regression PRIVATE /Gy)
+        target_link_options(unit_death_resource_variant_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(unit_death_resource_variant_regression PRIVATE
+            -ffunction-sections -fdata-sections
+        )
+        target_link_options(unit_death_resource_variant_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME unit_death_resource_variant_regression
+        COMMAND unit_death_resource_variant_regression)
+endif()
+
+option(RANKER_BUILD_SAVE_LOAD_CACHE_REGRESSION_TESTS
+    "Build focused save overwrite/load cache regressions" OFF)
+if (RANKER_BUILD_SAVE_LOAD_CACHE_REGRESSION_TESTS)
+    enable_testing()
+    add_executable(save_load_cache_regression
+        tests/save_load_cache_regression.cpp
+        src/ranker_trc.cpp
+        src/ranker_resource_store.cpp
+    )
+    target_include_directories(save_load_cache_regression PRIVATE
+        include
+    )
+    target_link_libraries(save_load_cache_regression PRIVATE
+        zlib113
+    )
+    add_test(NAME save_load_cache_regression
+        COMMAND save_load_cache_regression)
+endif()
+
 add_executable(ranker_rebuild WIN32
     resources/ranker_resources.rc
     src/main.cpp
@@ -1456,6 +1548,7 @@ add_executable(ranker_rebuild WIN32
     src/ranker_dpg_archive.cpp
     src/ranker_owner_ai.cpp
     src/ranker_runtime_resources.cpp
+    src/ranker_unit_death_resources.cpp
     src/ranker_input.cpp
     src/ranker_control_group_persistence.cpp
     src/ranker_legacy_file.cpp

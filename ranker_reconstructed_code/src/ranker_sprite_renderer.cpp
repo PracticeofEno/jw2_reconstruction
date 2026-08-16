@@ -242,7 +242,7 @@ bool validate_common_entry(u32 entry_index, const ResourceStoreEntry** entry_out
         *entry_out = entry;
     }
     return entry != nullptr && !entry->payload.empty() &&
-        entry->palette_slot < kPaletteCacheSlotCount;
+        IsPaletteCacheSlotActive(entry->palette_slot);
 }
 
 bool draw_resource_sprite_rle(u32 entry_index, i32 x, i32 y,
@@ -937,7 +937,7 @@ bool draw_precomputed_pixel_morph_frame(
     const SpritePixelMorphDrawOptions& options) {
     const auto& target = g_sprite_render_state.target;
     if (!render_target_valid(target) || frame.payload == nullptr ||
-        target_entry.palette_slot >= kPaletteCacheSlotCount) {
+        !IsPaletteCacheSlotActive(target_entry.palette_slot)) {
         return false;
     }
     const bool apply_unit_ramp =
@@ -1593,8 +1593,8 @@ bool DrawResourceSpritePixelMorphTransition(u32 unit_type, u32 image_group,
     const ResourceStoreEntry* target_entry = GetResourceEntry(target_entry_index);
     if (source_entry == nullptr || target_entry == nullptr ||
         source_entry->payload.empty() || target_entry->payload.empty() ||
-        source_entry->palette_slot >= kPaletteCacheSlotCount ||
-        target_entry->palette_slot >= kPaletteCacheSlotCount) {
+        !IsPaletteCacheSlotActive(source_entry->palette_slot) ||
+        !IsPaletteCacheSlotActive(target_entry->palette_slot)) {
         return false;
     }
     if (subframe_index == 0 || subframe_index >= kVisualAnimationIntervalCount) {

@@ -64,6 +64,7 @@ enum class GameplaySessionLoadStage {
 struct PaletteSlotRef {
     u32 slot = kInvalidPaletteCacheSlot;
     const u16* pixels = nullptr;
+    u64 allocation_serial = 0;
 };
 
 struct RuntimeResourceFailure {
@@ -103,7 +104,7 @@ struct InterfaceResourceState {
     bool replay_controls_enabled = false;
     bool loaded = false;
 
-    u32 shared_ui_palette_slot = kInvalidPaletteCacheSlot;
+    PaletteSlotRef shared_ui_palette{};
     PaletteSlotRef primary_palette{};
     u32 background_image_entry = kInvalidResourceEntry;
     u32 primary_resource_start = kInvalidResourceEntry;

@@ -9,6 +9,9 @@ namespace ranker {
 
 constexpr u32 kUnitAnimFlagSelectedOrTargeted = 0x0f;
 constexpr u32 kUnitAnimFlagShowBars = 0x80;
+constexpr bool ShouldDrawUnitWorldBars(u32 animation_flags) {
+    return (animation_flags & kUnitAnimFlagShowBars) != 0;
+}
 constexpr u32 kUnitAnimCommandMoving = 0x1;
 constexpr u32 kUnitAnimCommandConditionalAlternateMask = 0x3;
 constexpr u32 kUnitAnimCommandAlternate = 0x4;

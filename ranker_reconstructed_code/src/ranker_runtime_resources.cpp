@@ -1,6 +1,7 @@
 #include "ranker_runtime_resources.h"
 
 #include "ranker_indexed_text_table.h"
+#include "ranker_unit_death_resources.h"
 
 #include "ranker_directx.h"
 #include "ranker_miles.h"
@@ -18,7 +19,9 @@ namespace {
 constexpr char kJw201Archive[] = "JW2_01.TRC";
 constexpr char kJw202Archive[] = "JW2_02.TRC";
 constexpr char kJw207Archive[] = "JW2_07.TRC";
+constexpr char kJw209Archive[] = "JW2_09.TRC";
 constexpr char kJw218Archive[] = "JW2_18.TRC";
+constexpr char kJw220Archive[] = "JW2_20.TRC";
 constexpr u32 kSharedUiPaletteRecord = 5;
 constexpr u32 kInterfaceThemeRecordBase = 0x133;
 constexpr u32 kInterfaceThemeRecordStride = 8;
@@ -28,6 +31,8 @@ constexpr u32 kUnitDefinitionConstructionTimerOffset = 0x18c;
 constexpr std::size_t kUnitDefinitionNameOffset = 0x10c;
 constexpr std::size_t kUnitDefinitionNameBytes = 0x40;
 constexpr u32 kSetupUnitResourcePackVariantBit = 0x20;
+constexpr std::size_t kUnitDefinitionEmbeddedResourceOffset =
+    kUnitDefinitionRecordBytes + kPaletteRawBytesPerSlot;
 constexpr std::size_t kUnitDefinitionAnimationFrameOffsetTableBase = 0x140c;
 constexpr std::size_t kUnitDefinitionAnimationFrameOffsetTableStride = 0x100;
 constexpr std::size_t kUnitDefinitionAnimationRowOffsetTableBase = 0x2248;
@@ -151,14 +156,15 @@ u32 normalized_theme(u32 theme_index) {
 }
 
 const u16* palette_pixels_for_slot(u32 slot) {
-    if (slot >= kPaletteCacheSlotCount) {
+    if (!IsPaletteCacheSlotActive(slot)) {
         return nullptr;
     }
     return palette_cache_state().pixel_slots[slot].data();
 }
 
 PaletteSlotRef make_palette_ref(u32 slot) {
-    return PaletteSlotRef{slot, palette_pixels_for_slot(slot)};
+    return PaletteSlotRef{slot, palette_pixels_for_slot(slot),
+        GetPaletteCacheSlotAllocationSerial(slot)};
 }
 
 void set_failure(RuntimeResourceFailure& failure, RuntimeResourceFailureStage stage,
@@ -213,13 +219,13 @@ void reset_command_loaded_state(u32 theme_index, u32 rewind_slot) {
 }
 
 void reset_interface_loaded_state(u32 theme_index, bool replay_controls_enabled,
-    u32 shared_ui_palette_slot, u32 resource_rewind_entry, u32 palette_rewind_slot) {
+    PaletteSlotRef shared_ui_palette, u32 resource_rewind_entry, u32 palette_rewind_slot) {
     g_interface_resources.loaded = false;
     g_interface_resources.theme_index = theme_index;
     g_interface_resources.record_base_index =
         kInterfaceThemeRecordBase + theme_index * kInterfaceThemeRecordStride;
     g_interface_resources.replay_controls_enabled = replay_controls_enabled;
-    g_interface_resources.shared_ui_palette_slot = shared_ui_palette_slot;
+    g_interface_resources.shared_ui_palette = shared_ui_palette;
     g_interface_resources.resource_rewind_entry = resource_rewind_entry;
     g_interface_resources.palette_rewind_slot = palette_rewind_slot;
     clear_failure(g_interface_resources.last_failure);
@@ -389,6 +395,52 @@ bool load_embedded_image_resource_stream(TrcRecordReader& reader, u32 palette_sl
     }
 
     ConfigureResourceEntry(entry_index, metadata, palette_slot);
+    return true;
+}
+
+bool skip_open_trc_record_bytes(TrcRecordReader& reader, std::size_t byte_count) {
+    std::array<u8, 4096> scratch{};
+    while (byte_count != 0) {
+        const std::size_t chunk = std::min<std::size_t>(byte_count, scratch.size());
+        if (!ReadOpenTrcRecordBytes(reader, scratch.data(), chunk)) {
+            return false;
+        }
+        byte_count -= chunk;
+    }
+    return true;
+}
+
+bool skip_embedded_image_resource_stream(TrcRecordReader& reader) {
+    std::array<u8, 0x20> header{};
+    if (!ReadOpenTrcRecordBytes(reader, header.data(), header.size())) {
+        return false;
+    }
+    return skip_open_trc_record_bytes(reader,
+        read_le_u32(header.data() + 0x18));
+}
+
+bool replace_embedded_image_resource_stream(TrcRecordReader& reader,
+    u32 target_entry, const char* archive_name, u32 record_index) {
+    std::array<u8, 0x20> header{};
+    if (!ReadOpenTrcRecordBytes(reader, header.data(), header.size())) {
+        set_failure(g_unit_definition_resources.last_failure,
+            RuntimeResourceFailureStage::Resource, archive_name, record_index);
+        return false;
+    }
+
+    std::array<u32, 6> metadata{};
+    for (std::size_t i = 0; i < metadata.size(); ++i) {
+        metadata[i] = read_le_u32(header.data() + i * sizeof(u32));
+    }
+    const u32 payload_size = read_le_u32(header.data() + 0x18);
+    std::vector<u8> payload(payload_size);
+    if (!ReadOpenTrcRecordBytes(reader, payload.data(), payload.size()) ||
+        !ReplaceResourceEntryPayload(target_entry, metadata,
+            payload.data(), payload.size())) {
+        set_failure(g_unit_definition_resources.last_failure,
+            RuntimeResourceFailureStage::Resource, archive_name, record_index);
+        return false;
+    }
     return true;
 }
 
@@ -749,15 +801,16 @@ void SetReplayControlsEnabled(bool enabled) {
 }
 
 void SetSharedUiPaletteSlot(u32 palette_slot) {
-    g_interface_resources.shared_ui_palette_slot =
-        palette_slot < kPaletteCacheSlotCount ? palette_slot : kInvalidPaletteCacheSlot;
+    g_interface_resources.shared_ui_palette = make_palette_ref(palette_slot);
 }
 
 bool EnsureSharedUiPaletteSlot() {
-    if (g_interface_resources.shared_ui_palette_slot < kPaletteCacheSlotCount &&
-        palette_pixels_for_slot(g_interface_resources.shared_ui_palette_slot) != nullptr) {
+    PaletteSlotRef& shared = g_interface_resources.shared_ui_palette;
+    if (PaletteCacheSlotAllocationMatches(shared.slot, shared.allocation_serial)) {
+        shared.pixels = palette_pixels_for_slot(shared.slot);
         return true;
     }
+    shared = {};
 
     PaletteSlotRef ref{};
     RuntimeResourceFailure failure{};
@@ -766,7 +819,7 @@ bool EnsureSharedUiPaletteSlot() {
         return false;
     }
 
-    g_interface_resources.shared_ui_palette_slot = ref.slot;
+    shared = ref;
     return true;
 }
 
@@ -882,26 +935,26 @@ bool LoadCommandThemeResourcePack() {
 bool LoadInterfaceResourcePack() {
     const u32 theme_index = normalized_theme(g_interface_resources.theme_index);
     const bool replay_controls_enabled = g_interface_resources.replay_controls_enabled;
-    u32 shared_ui_palette_slot = g_interface_resources.shared_ui_palette_slot;
+    PaletteSlotRef shared_ui_palette = g_interface_resources.shared_ui_palette;
 
     if (g_interface_resources.resource_rewind_entry != kInvalidResourceEntry) {
         ReleaseResourceEntriesFrom(g_interface_resources.resource_rewind_entry);
     }
     if (g_interface_resources.palette_rewind_slot != kInvalidPaletteCacheSlot) {
-        if (shared_ui_palette_slot >= g_interface_resources.palette_rewind_slot) {
-            shared_ui_palette_slot = kInvalidPaletteCacheSlot;
+        if (shared_ui_palette.slot >= g_interface_resources.palette_rewind_slot) {
+            shared_ui_palette = {};
         }
         ReleasePaletteCacheSlotsFrom(g_interface_resources.palette_rewind_slot);
     }
 
-    reset_interface_loaded_state(theme_index, replay_controls_enabled, shared_ui_palette_slot,
+    reset_interface_loaded_state(theme_index, replay_controls_enabled, shared_ui_palette,
         resource_store_state().next_entry, palette_cache_state().next_slot);
     if (!EnsureSharedUiPaletteSlot()) {
         return false;
     }
 
     reset_interface_loaded_state(theme_index, replay_controls_enabled,
-        g_interface_resources.shared_ui_palette_slot, resource_store_state().next_entry,
+        g_interface_resources.shared_ui_palette, resource_store_state().next_entry,
         palette_cache_state().next_slot);
 
     const u32 base_record = g_interface_resources.record_base_index;
@@ -930,7 +983,7 @@ bool LoadInterfaceResourcePack() {
     g_interface_resources.replay_timer_resource_start = resource_store_state().next_entry;
     for (std::size_t i = 0; i < g_interface_resources.replay_timer_resource_entries.size(); ++i) {
         if (!load_palette_bound_resource(kJw218Archive, static_cast<u32>(i),
-                g_interface_resources.shared_ui_palette_slot,
+                g_interface_resources.shared_ui_palette.slot,
                 g_interface_resources.replay_timer_resource_entries[i], failure)) {
             return false;
         }
@@ -1252,17 +1305,148 @@ bool LoadUnitDefinitionResourceRecord(const char* archive_name, u32 source_recor
 
 bool load_unit_variant_metadata_record() {
     std::vector<u8> metadata;
-    if (!LoadTrcRecordAlloc("JW2_20.TRC", 0, metadata, 1)) {
+    if (!LoadTrcRecordAlloc(kJw220Archive, 0, metadata, 1)) {
         set_failure(g_unit_definition_resources.last_failure,
-            RuntimeResourceFailureStage::TrcBlob, "JW2_20.TRC", 0);
+            RuntimeResourceFailureStage::TrcBlob, kJw220Archive, 0);
         return false;
     }
     g_unit_definition_resources.variant_metadata = std::move(metadata);
     return true;
 }
 
+bool selected_death_group_entries(const UnitDefinitionResourceRecord& record,
+    u32& offset, u32& count) {
+    if (!record.loaded ||
+        kUnitDeathAnimationImageGroup >= record.image_group_offsets.size()) {
+        return false;
+    }
+    offset = record.image_group_offsets[kUnitDeathAnimationImageGroup];
+    count = record.image_group_counts[kUnitDeathAnimationImageGroup];
+    return offset <= record.image_resource_entries.size() &&
+        count <= record.image_resource_entries.size() - offset;
+}
+
+bool reload_selected_death_groups_from_jw209(
+    const std::array<bool, kUnitDefinitionResourceCount>& selected) {
+    for (u32 unit_type = 0; unit_type < selected.size(); ++unit_type) {
+        if (!selected[unit_type]) {
+            continue;
+        }
+
+        UnitDefinitionResourceRecord& record =
+            g_unit_definition_resources.records[unit_type];
+        u32 target_offset = 0;
+        u32 target_count = 0;
+        if (!selected_death_group_entries(record, target_offset, target_count)) {
+            set_failure(g_unit_definition_resources.last_failure,
+                RuntimeResourceFailureStage::Resource, kJw209Archive, unit_type);
+            return false;
+        }
+
+        TrcRecordReader reader;
+        if (!OpenTrcRecordDirectoryEntry(reader, kJw209Archive, unit_type) ||
+            !OpenTrcRecordPayload(reader)) {
+            CloseTrcRecordReader(reader);
+            set_failure(g_unit_definition_resources.last_failure,
+                RuntimeResourceFailureStage::TrcBlob, kJw209Archive, unit_type);
+            return false;
+        }
+        // A definition-only record has no images and is skipped by
+        // FUN_00409390 before its group counts are consulted.
+        if (reader.entry.original_size == kUnitDefinitionRecordBytes) {
+            CloseTrcRecordReader(reader);
+            continue;
+        }
+        if (!skip_open_trc_record_bytes(reader,
+                kUnitDefinitionEmbeddedResourceOffset)) {
+            CloseTrcRecordReader(reader);
+            set_failure(g_unit_definition_resources.last_failure,
+                RuntimeResourceFailureStage::Resource, kJw209Archive, unit_type);
+            return false;
+        }
+
+        // Original 0x0040943f..0x004094c7 skips groups 0..2, then replaces
+        // group 3 at DAT_00aebfc4 without changing its resource indices.
+        for (u32 group = 0; group < kUnitDeathAnimationImageGroup; ++group) {
+            for (u32 frame = 0; frame < record.image_group_counts[group]; ++frame) {
+                if (!skip_embedded_image_resource_stream(reader)) {
+                    CloseTrcRecordReader(reader);
+                    set_failure(g_unit_definition_resources.last_failure,
+                        RuntimeResourceFailureStage::Resource,
+                        kJw209Archive, unit_type);
+                    return false;
+                }
+            }
+        }
+        for (u32 frame = 0; frame < target_count; ++frame) {
+            ServeMilesSound();
+            const u32 target_entry =
+                record.image_resource_entries[target_offset + frame];
+            if (!replace_embedded_image_resource_stream(reader, target_entry,
+                    kJw209Archive, unit_type)) {
+                CloseTrcRecordReader(reader);
+                return false;
+            }
+        }
+        CloseTrcRecordReader(reader);
+    }
+    return true;
+}
+
+bool reload_selected_death_groups_from_jw220(
+    const std::array<bool, kUnitDefinitionResourceCount>& selected) {
+    u32 source_record_index = 1;
+    for (u32 unit_type = 0; unit_type < selected.size(); ++unit_type) {
+        if (!selected[unit_type]) {
+            continue;
+        }
+
+        UnitDefinitionResourceRecord& record =
+            g_unit_definition_resources.records[unit_type];
+        u32 target_offset = 0;
+        u32 target_count = 0;
+        if (!selected_death_group_entries(record, target_offset, target_count)) {
+            set_failure(g_unit_definition_resources.last_failure,
+                RuntimeResourceFailureStage::Resource,
+                kJw220Archive, source_record_index);
+            return false;
+        }
+
+        // JW2_20 record zero is the sparse "unit = Yes" manifest.  The
+        // remaining records are one serialized group-3 resource per frame,
+        // packed consecutively in manifest/unit order (FUN_00409720).
+        for (u32 frame = 0; frame < target_count; ++frame, ++source_record_index) {
+            ServeMilesSound();
+            TrcRecordReader reader;
+            if (!OpenTrcRecordDirectoryEntry(reader, kJw220Archive,
+                    source_record_index) || !OpenTrcRecordPayload(reader)) {
+                CloseTrcRecordReader(reader);
+                set_failure(g_unit_definition_resources.last_failure,
+                    RuntimeResourceFailureStage::TrcBlob,
+                    kJw220Archive, source_record_index);
+                return false;
+            }
+            const u32 target_entry =
+                record.image_resource_entries[target_offset + frame];
+            const bool replaced = replace_embedded_image_resource_stream(
+                reader, target_entry, kJw220Archive, source_record_index);
+            CloseTrcRecordReader(reader);
+            if (!replaced) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 bool ReloadUnitImageResourcesFromJw209Archive() {
     if (!load_unit_variant_metadata_record()) {
+        return false;
+    }
+    const auto selected = ParseUnitDeathResourceManifest(
+        g_unit_definition_resources.variant_metadata.data(),
+        g_unit_definition_resources.variant_metadata.size());
+    if (!reload_selected_death_groups_from_jw209(selected)) {
         return false;
     }
     g_unit_definition_resources.alternate_pack_active = true;
@@ -1271,6 +1455,12 @@ bool ReloadUnitImageResourcesFromJw209Archive() {
 
 bool ReloadUnitImageResourcesFromJw220Archive() {
     if (!load_unit_variant_metadata_record()) {
+        return false;
+    }
+    const auto selected = ParseUnitDeathResourceManifest(
+        g_unit_definition_resources.variant_metadata.data(),
+        g_unit_definition_resources.variant_metadata.size());
+    if (!reload_selected_death_groups_from_jw220(selected)) {
         return false;
     }
     g_unit_definition_resources.alternate_pack_active = false;

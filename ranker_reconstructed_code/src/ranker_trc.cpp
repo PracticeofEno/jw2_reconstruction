@@ -282,6 +282,18 @@ ArchiveCacheKey archive_cache_key(const std::filesystem::path& path) {
     return ec ? path.native() : fallback.native();
 }
 
+void invalidate_archive_read_cache_after_write() {
+    // The original opens every save archive afresh.  The reconstruction keeps
+    // immutable archive bytes for the render/import hot paths, but a save can
+    // replace a file with the same length inside the filesystem timestamp's
+    // observable granularity.  Size + mtime alone can then make a later Load
+    // reuse the previous game's bytes.  Writes are rare, so clearing the small
+    // process cache here preserves original save/load semantics without
+    // penalizing ordinary record reads.
+    std::lock_guard<std::mutex> lock(g_archive_cache_mutex);
+    g_archive_cache.clear();
+}
+
 bool read_all_bytes_cached(const std::filesystem::path& path,
     std::shared_ptr<const std::vector<u8>>& data) {
     data.reset();
@@ -1189,7 +1201,16 @@ bool ExtractTrcRecordToFile(const char* archive_name, u32 record_index,
         output.write(reinterpret_cast<const char*>(record.data()),
             static_cast<std::streamsize>(record.size()));
     }
-    return static_cast<bool>(output);
+    output.flush();
+    if (!output) {
+        return false;
+    }
+    output.close();
+    if (!output) {
+        return false;
+    }
+    invalidate_archive_read_cache_after_write();
+    return true;
 }
 
 bool QueryTrcArchiveRecordCount(const char* archive_name, u32* active_records,
@@ -1391,7 +1412,16 @@ bool WriteEmptyTrcBuilderHeader(const char* archive_name, u32 directory_slots) {
     for (u32 slot = 0; slot < directory_slots; ++slot) {
         output.write(reinterpret_cast<const char*>(empty_entry.data()), empty_entry.size());
     }
-    return static_cast<bool>(output);
+    output.flush();
+    if (!output) {
+        return false;
+    }
+    output.close();
+    if (!output) {
+        return false;
+    }
+    invalidate_archive_read_cache_after_write();
+    return true;
 }
 
 bool CheckTrcBuilderDirectorySlots(TrcOutputBuilder& builder, u32 required_records) {
@@ -1703,7 +1733,16 @@ bool WriteTrcRecords(const char* archive_name, const std::vector<TrcWriteRecord>
         }
     }
 
-    return static_cast<bool>(output);
+    output.flush();
+    if (!output) {
+        return false;
+    }
+    output.close();
+    if (!output) {
+        return false;
+    }
+    invalidate_archive_read_cache_after_write();
+    return true;
 }
 
 }

@@ -9,9 +9,11 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <digitalv.h>
 #include <mmsystem.h>
 #endif
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -22,6 +24,7 @@
 #include <new>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace ranker {
 namespace {
@@ -228,6 +231,179 @@ void update_original_checksum(MilesComputedStreamContext& context, const u8* dat
 }
 
 #ifdef _WIN32
+struct MciMilesStream {
+    MCIDEVICEID device_id = 0;
+    std::string temporary_path;
+    int playback_rate = 0xac44;
+    int remaining_restarts = 0;
+    bool active = false;
+    bool paused = false;
+};
+
+std::vector<MciMilesStream*> g_mci_streams;
+
+MciMilesStream* find_mci_stream(MilesStreamHandle stream) {
+    const auto found = std::find(g_mci_streams.begin(), g_mci_streams.end(), stream);
+    return found != g_mci_streams.end() ? *found : nullptr;
+}
+
+bool write_mci_memory_stream_file(const char* path, std::string& temporary_path) {
+    if (path == nullptr || path[0] != '\\' || path[1] != '\\') {
+        return false;
+    }
+
+    char* address_end = nullptr;
+    const unsigned long long address_value = std::strtoull(path + 2, &address_end, 10);
+    if (address_end == path + 2 || address_end == nullptr || *address_end != ',') {
+        return false;
+    }
+    char* size_end = nullptr;
+    const unsigned long long size_value = std::strtoull(address_end + 1, &size_end, 10);
+    if (size_end == address_end + 1 || size_end == nullptr ||
+        std::strcmp(size_end, ".mp3") != 0 || address_value == 0 || size_value == 0 ||
+        size_value > static_cast<unsigned long long>(
+            std::numeric_limits<std::size_t>::max())) {
+        return false;
+    }
+
+    char temp_directory[MAX_PATH]{};
+    if (GetTempPathA(static_cast<DWORD>(std::size(temp_directory)),
+            temp_directory) == 0) {
+        return false;
+    }
+    char temp_file[MAX_PATH]{};
+    if (GetTempFileNameA(temp_directory, "JwM", 0, temp_file) == 0) {
+        return false;
+    }
+
+    HANDLE file = CreateFileA(temp_file, GENERIC_WRITE, 0, nullptr,
+        CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        DeleteFileA(temp_file);
+        return false;
+    }
+
+    const auto* bytes = reinterpret_cast<const u8*>(
+        static_cast<std::uintptr_t>(address_value));
+    std::size_t remaining = static_cast<std::size_t>(size_value);
+    bool ok = true;
+    while (remaining != 0) {
+        const DWORD chunk = static_cast<DWORD>(std::min<std::size_t>(
+            remaining, std::numeric_limits<DWORD>::max()));
+        DWORD written = 0;
+        if (!WriteFile(file, bytes, chunk, &written, nullptr) || written != chunk) {
+            ok = false;
+            break;
+        }
+        bytes += chunk;
+        remaining -= chunk;
+    }
+    CloseHandle(file);
+    if (!ok) {
+        DeleteFileA(temp_file);
+        return false;
+    }
+    temporary_path = temp_file;
+    return true;
+}
+
+MciMilesStream* open_mci_stream(const char* path) {
+    if (path == nullptr || path[0] == '\0') {
+        return nullptr;
+    }
+
+    std::string temporary_path;
+    const char* media_path = path;
+    if (path[0] == '\\' && path[1] == '\\') {
+        if (!write_mci_memory_stream_file(path, temporary_path)) {
+            return nullptr;
+        }
+        media_path = temporary_path.c_str();
+    }
+
+    auto* stream = new (std::nothrow) MciMilesStream;
+    if (stream == nullptr) {
+        if (!temporary_path.empty()) {
+            DeleteFileA(temporary_path.c_str());
+        }
+        return nullptr;
+    }
+
+    MCI_OPEN_PARMSA open{};
+    open.lpstrDeviceType = "MPEGVideo";
+    open.lpstrElementName = media_path;
+    const MCIERROR error = mciSendCommandA(0, MCI_OPEN,
+        MCI_OPEN_TYPE | MCI_OPEN_ELEMENT | MCI_WAIT,
+        reinterpret_cast<DWORD_PTR>(&open));
+    if (error != 0) {
+        delete stream;
+        if (!temporary_path.empty()) {
+            DeleteFileA(temporary_path.c_str());
+        }
+        return nullptr;
+    }
+
+    stream->device_id = open.wDeviceID;
+    stream->temporary_path = std::move(temporary_path);
+    MCI_SET_PARMS time_format{};
+    time_format.dwTimeFormat = MCI_FORMAT_MILLISECONDS;
+    mciSendCommandA(stream->device_id, MCI_SET,
+        MCI_SET_TIME_FORMAT | MCI_WAIT,
+        reinterpret_cast<DWORD_PTR>(&time_format));
+    g_mci_streams.push_back(stream);
+    return stream;
+}
+
+void close_mci_stream(MciMilesStream* stream) {
+    if (stream == nullptr) {
+        return;
+    }
+    MCI_GENERIC_PARMS close{};
+    mciSendCommandA(stream->device_id, MCI_CLOSE, MCI_WAIT,
+        reinterpret_cast<DWORD_PTR>(&close));
+    if (!stream->temporary_path.empty()) {
+        DeleteFileA(stream->temporary_path.c_str());
+    }
+    const auto found = std::find(g_mci_streams.begin(), g_mci_streams.end(), stream);
+    if (found != g_mci_streams.end()) {
+        g_mci_streams.erase(found);
+    }
+    delete stream;
+}
+
+int mci_stream_position(MciMilesStream& stream, DWORD item) {
+    MCI_STATUS_PARMS status{};
+    status.dwItem = item;
+    if (mciSendCommandA(stream.device_id, MCI_STATUS,
+            MCI_STATUS_ITEM | MCI_WAIT,
+            reinterpret_cast<DWORD_PTR>(&status)) != 0) {
+        return -1;
+    }
+    return static_cast<int>(status.dwReturn);
+}
+
+MCIERROR play_mci_stream(MciMilesStream& stream, bool repeat) {
+    MCI_PLAY_PARMS play{};
+    MCIERROR error = mciSendCommandA(stream.device_id, MCI_PLAY,
+        repeat ? MCI_DGV_PLAY_REPEAT : 0,
+        reinterpret_cast<DWORD_PTR>(&play));
+    // Some MPEGVideo drivers do not advertise MCI_DGV_PLAY_REPEAT.  The
+    // periodic service path below also implements infinite repeat, so retry a
+    // plain play and let it restart the device at EOF in that case.
+    if (error != 0 && repeat) {
+        error = mciSendCommandA(stream.device_id, MCI_PLAY, 0,
+            reinterpret_cast<DWORD_PTR>(&play));
+    }
+    return error;
+}
+
+bool seek_mci_stream_to_start(MciMilesStream& stream) {
+    MCI_SEEK_PARMS seek{};
+    return mciSendCommandA(stream.device_id, MCI_SEEK,
+        MCI_SEEK_TO_START | MCI_WAIT,
+        reinterpret_cast<DWORD_PTR>(&seek)) == 0;
+}
+
 struct MilesApi {
     using AIL_set_redist_directory = void (WINAPI*)(const char*);
     using AIL_startup = void (WINAPI*)();
@@ -284,6 +460,11 @@ void clear_miles_api() {
 }
 
 bool load_miles_module() {
+    // The shipped Miles binary is PE32.  The reconstruction is PE32+, so it
+    // cannot be loaded into this process; MCI is used as the native fallback.
+    if constexpr (sizeof(void*) > sizeof(u32)) {
+        return false;
+    }
     if (g_miles_state.module != nullptr) {
         return true;
     }
@@ -360,7 +541,10 @@ bool InitMilesSoundSubsystem(const char* redist_directory, int sample_rate,
     ShutdownMilesSoundSubsystem();
     if (!load_miles_api()) {
         unload_miles_module();
-        return false;
+        // Modern 64-bit builds cannot load the original 32-bit Mss32.dll.
+        // Windows' MPEGVideo MCI driver supplies the stream operations used
+        // by the original music policy and replay-side MP3 playback.
+        return true;
     }
 
     g_miles_api.set_redist_directory(redist_directory != nullptr ? redist_directory : ".");
@@ -391,6 +575,9 @@ void ShutdownMilesSoundSubsystem() {
         if (g_miles_api.shutdown != nullptr) {
             g_miles_api.shutdown();
         }
+    }
+    while (!g_mci_streams.empty()) {
+        close_mci_stream(g_mci_streams.back());
     }
     unload_miles_module();
 #endif
@@ -453,11 +640,17 @@ void InitializeAndRegisterSecondaryMilesArchiveContext() {
 
 bool OpenMilesStream(const char* path, MilesStreamHandle* stream_out) {
 #ifdef _WIN32
-    if (!load_miles_api()) {
-        return false;
+    if (stream_out != nullptr) {
+        *stream_out = nullptr;
     }
-
-    void* stream = g_miles_api.open_stream(g_miles_state.digital_driver, path, 0);
+    if (g_miles_state.digital_driver != nullptr && load_miles_api()) {
+        void* stream = g_miles_api.open_stream(g_miles_state.digital_driver, path, 0);
+        if (stream_out != nullptr) {
+            *stream_out = stream;
+        }
+        return stream != nullptr;
+    }
+    MciMilesStream* stream = open_mci_stream(path);
     if (stream_out != nullptr) {
         *stream_out = stream;
     }
@@ -715,6 +908,10 @@ bool OpenComputedMilesMp3Stream(MilesComputedStreamContext& context,
 
 void CloseMilesStream(MilesStreamHandle stream) {
 #ifdef _WIN32
+    if (MciMilesStream* fallback = find_mci_stream(stream)) {
+        close_mci_stream(fallback);
+        return;
+    }
     if (load_miles_api()) {
         g_miles_api.close_stream(stream);
     }
@@ -733,6 +930,16 @@ void ResetMilesStreamArchiveState() {
 
 void StartMilesStreamWithLoopCount(MilesStreamHandle stream, int loop_count) {
 #ifdef _WIN32
+    if (MciMilesStream* fallback = find_mci_stream(stream)) {
+        // Miles treats zero as infinite and a positive value as the total
+        // number of plays.  Native MCI repeat covers the infinite case; the
+        // service path handles finite counts and drivers without repeat.
+        fallback->remaining_restarts = loop_count <= 0 ? -1 : loop_count - 1;
+        fallback->paused = false;
+        fallback->active = play_mci_stream(*fallback,
+            fallback->remaining_restarts < 0) == 0;
+        return;
+    }
     if (load_miles_api()) {
         g_miles_api.set_stream_loop_count(stream, loop_count);
         g_miles_api.start_stream(stream);
@@ -745,6 +952,14 @@ void StartMilesStreamWithLoopCount(MilesStreamHandle stream, int loop_count) {
 
 void PauseMilesStream(MilesStreamHandle stream) {
 #ifdef _WIN32
+    if (MciMilesStream* fallback = find_mci_stream(stream)) {
+        MCI_GENERIC_PARMS pause{};
+        if (mciSendCommandA(fallback->device_id, MCI_PAUSE, MCI_WAIT,
+                reinterpret_cast<DWORD_PTR>(&pause)) == 0) {
+            fallback->paused = true;
+        }
+        return;
+    }
     if (load_miles_api()) {
         g_miles_api.pause_stream(stream, 1);
     }
@@ -759,6 +974,18 @@ void StopMilesStream(MilesStreamHandle stream) {
 
 void ResumeMilesStream(MilesStreamHandle stream) {
 #ifdef _WIN32
+    if (MciMilesStream* fallback = find_mci_stream(stream)) {
+        MCI_GENERIC_PARMS resume{};
+        MCIERROR error = mciSendCommandA(fallback->device_id, MCI_RESUME, 0,
+            reinterpret_cast<DWORD_PTR>(&resume));
+        if (error != 0) {
+            error = play_mci_stream(*fallback,
+                fallback->remaining_restarts < 0);
+        }
+        fallback->paused = error != 0;
+        fallback->active = error == 0;
+        return;
+    }
     if (load_miles_api()) {
         g_miles_api.pause_stream(stream, 0);
     }
@@ -769,6 +996,18 @@ void ResumeMilesStream(MilesStreamHandle stream) {
 
 int GetMilesStreamStatus(MilesStreamHandle stream) {
 #ifdef _WIN32
+    if (MciMilesStream* fallback = find_mci_stream(stream)) {
+        MCI_STATUS_PARMS status{};
+        status.dwItem = MCI_STATUS_MODE;
+        if (mciSendCommandA(fallback->device_id, MCI_STATUS,
+                MCI_STATUS_ITEM | MCI_WAIT,
+                reinterpret_cast<DWORD_PTR>(&status)) != 0) {
+            return 0;
+        }
+        return status.dwReturn == MCI_MODE_PLAY ||
+            status.dwReturn == MCI_MODE_PAUSE ||
+            status.dwReturn == MCI_MODE_SEEK ? 1 : 0;
+    }
     if (load_miles_api()) {
         g_miles_state.last_status = g_miles_api.stream_status(stream);
         return g_miles_state.last_status;
@@ -781,6 +1020,9 @@ int GetMilesStreamStatus(MilesStreamHandle stream) {
 
 int GetMilesStreamVolume(MilesStreamHandle stream) {
 #ifdef _WIN32
+    if (find_mci_stream(stream) != nullptr) {
+        return g_miles_state.last_volume_percent;
+    }
     if (load_miles_api()) {
         float left = 0.0f;
         float right = 0.0f;
@@ -796,6 +1038,17 @@ int GetMilesStreamVolume(MilesStreamHandle stream) {
 
 void SetMilesStreamVolume(MilesStreamHandle stream, int volume_percent) {
 #ifdef _WIN32
+    if (MciMilesStream* fallback = find_mci_stream(stream)) {
+        volume_percent = std::clamp(volume_percent, 0, 100);
+        MCI_DGV_SETAUDIO_PARMS volume{};
+        volume.dwItem = MCI_DGV_SETAUDIO_VOLUME;
+        volume.dwValue = static_cast<DWORD>(volume_percent * 10);
+        mciSendCommandA(fallback->device_id, MCI_SETAUDIO,
+            MCI_DGV_SETAUDIO_ITEM | MCI_DGV_SETAUDIO_VALUE | MCI_WAIT,
+            reinterpret_cast<DWORD_PTR>(&volume));
+        g_miles_state.last_volume_percent = volume_percent;
+        return;
+    }
     if (load_miles_api()) {
         const float level = static_cast<float>(volume_percent) / 100.0f;
         g_miles_api.set_stream_volume_levels(stream, level, level);
@@ -819,20 +1072,46 @@ void SetMilesSoundPreference(int value) {
 
 void ServeMilesSound() {
 #ifdef _WIN32
-    if (g_miles_state.digital_driver == nullptr || !load_miles_api()) {
+    const u32 now = timeGetTime();
+    if (now - g_miles_state.last_serve_time <= 99) {
         return;
     }
-
-    const u32 now = timeGetTime();
-    if (now - g_miles_state.last_serve_time > 99) {
+    if (g_miles_state.digital_driver != nullptr && load_miles_api()) {
         g_miles_api.serve();
-        g_miles_state.last_serve_time = now;
     }
+    for (MciMilesStream* stream : g_mci_streams) {
+        if (stream == nullptr || !stream->active || stream->paused) {
+            continue;
+        }
+        MCI_STATUS_PARMS status{};
+        status.dwItem = MCI_STATUS_MODE;
+        if (mciSendCommandA(stream->device_id, MCI_STATUS,
+                MCI_STATUS_ITEM | MCI_WAIT,
+                reinterpret_cast<DWORD_PTR>(&status)) != 0 ||
+            status.dwReturn != MCI_MODE_STOP) {
+            continue;
+        }
+        if (stream->remaining_restarts == 0) {
+            stream->active = false;
+            continue;
+        }
+        if (stream->remaining_restarts > 0) {
+            --stream->remaining_restarts;
+        }
+        stream->active = seek_mci_stream_to_start(*stream) &&
+            play_mci_stream(*stream, stream->remaining_restarts < 0) == 0;
+    }
+    g_miles_state.last_serve_time = now;
 #endif
 }
 
 int GetMilesStreamCurrentMs(MilesStreamHandle stream) {
 #ifdef _WIN32
+    if (MciMilesStream* fallback = find_mci_stream(stream)) {
+        g_miles_state.last_current_ms =
+            mci_stream_position(*fallback, MCI_STATUS_POSITION);
+        return g_miles_state.last_current_ms;
+    }
     if (g_miles_state.digital_driver != nullptr && load_miles_api()) {
         int current = 0;
         g_miles_api.stream_ms_position(stream, &current, nullptr);
@@ -847,6 +1126,11 @@ int GetMilesStreamCurrentMs(MilesStreamHandle stream) {
 
 int GetMilesStreamLengthMs(MilesStreamHandle stream) {
 #ifdef _WIN32
+    if (MciMilesStream* fallback = find_mci_stream(stream)) {
+        g_miles_state.last_length_ms =
+            mci_stream_position(*fallback, MCI_STATUS_LENGTH);
+        return g_miles_state.last_length_ms;
+    }
     if (g_miles_state.digital_driver != nullptr && load_miles_api()) {
         int length = 0;
         g_miles_api.stream_ms_position(stream, nullptr, &length);
@@ -861,6 +1145,13 @@ int GetMilesStreamLengthMs(MilesStreamHandle stream) {
 
 void SetMilesStreamMsPosition(MilesStreamHandle stream, int position_ms) {
 #ifdef _WIN32
+    if (MciMilesStream* fallback = find_mci_stream(stream)) {
+        MCI_SEEK_PARMS seek{};
+        seek.dwTo = static_cast<DWORD>(std::max(position_ms, 0));
+        mciSendCommandA(fallback->device_id, MCI_SEEK,
+            MCI_TO | MCI_WAIT, reinterpret_cast<DWORD_PTR>(&seek));
+        return;
+    }
     if (g_miles_state.digital_driver != nullptr && load_miles_api()) {
         g_miles_api.set_stream_ms_position(stream, position_ms);
     }
@@ -872,6 +1163,9 @@ void SetMilesStreamMsPosition(MilesStreamHandle stream, int position_ms) {
 
 int GetMilesStreamPlaybackRate(MilesStreamHandle stream) {
 #ifdef _WIN32
+    if (MciMilesStream* fallback = find_mci_stream(stream)) {
+        return fallback->playback_rate;
+    }
     if (g_miles_state.digital_driver != nullptr && load_miles_api()) {
         g_miles_state.last_playback_rate = g_miles_api.stream_playback_rate(stream);
         return g_miles_state.last_playback_rate;
@@ -884,6 +1178,21 @@ int GetMilesStreamPlaybackRate(MilesStreamHandle stream) {
 
 void SetMilesStreamPlaybackRate(MilesStreamHandle stream, int playback_rate) {
 #ifdef _WIN32
+    if (MciMilesStream* fallback = find_mci_stream(stream)) {
+        if (playback_rate <= 0) {
+            return;
+        }
+        MCI_DGV_SET_PARMS speed{};
+        speed.dwSpeed = static_cast<DWORD>(std::clamp<std::uint64_t>(
+            (static_cast<std::uint64_t>(playback_rate) * 1000u) / 0xac44u,
+            1u, std::numeric_limits<DWORD>::max()));
+        if (mciSendCommandA(fallback->device_id, MCI_SET,
+                MCI_DGV_SET_SPEED | MCI_WAIT,
+                reinterpret_cast<DWORD_PTR>(&speed)) == 0) {
+            fallback->playback_rate = playback_rate;
+        }
+        return;
+    }
     if (g_miles_state.digital_driver != nullptr && load_miles_api()) {
         g_miles_api.set_stream_playback_rate(stream, playback_rate);
     }

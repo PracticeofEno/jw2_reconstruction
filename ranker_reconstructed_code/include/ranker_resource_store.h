@@ -37,6 +37,13 @@ bool AllocateResourceEntry(std::size_t byte_count, u32* entry_index, void** payl
 void ReleaseResourceEntriesFrom(u32 first_entry);
 bool ConfigureResourceEntry(
     u32 entry_index, const std::array<u32, 6>& metadata, u32 palette_slot);
+// Replaces the serialized 0x20 resource body while retaining the entry's
+// stable index, palette binding, and allocation identity.  The original
+// Change Death path updates animation resources in place for exactly this
+// reason: live render state already refers to their resource indices.
+bool ReplaceResourceEntryPayload(u32 entry_index,
+    const std::array<u32, 6>& metadata, const void* payload,
+    std::size_t payload_size);
 
 #ifdef _WIN32
 u32 LoadResourceHandle(HANDLE file);

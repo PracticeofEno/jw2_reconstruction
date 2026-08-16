@@ -21,7 +21,8 @@ constexpr u32 kUnitRampTargetFirstIndex = 0xf5;
 constexpr u32 kUnitRampColorCount = 10;
 
 bool valid_slot(u32 slot_index) {
-    return slot_index < kPaletteCacheSlotCount;
+    return slot_index < g_palette_cache_state.next_slot &&
+        slot_index < kPaletteCacheSlotCount;
 }
 
 bool surface_uses_565() {
@@ -38,6 +39,14 @@ u32 next_slot_or_invalid() {
 u32 commit_next_slot() {
     const u32 slot = next_slot_or_invalid();
     if (slot != kInvalidPaletteCacheSlot) {
+        u64 serial = g_palette_cache_state.next_allocation_serial++;
+        if (serial == 0) {
+            serial = g_palette_cache_state.next_allocation_serial++;
+        }
+        if (g_palette_cache_state.next_allocation_serial == 0) {
+            ++g_palette_cache_state.next_allocation_serial;
+        }
+        g_palette_cache_state.allocation_serials[slot] = serial;
         ++g_palette_cache_state.next_slot;
     }
     return slot;
@@ -90,6 +99,20 @@ void ReleasePaletteCacheSlotsFrom(u32 first_slot) {
 void ResetPaletteCache() {
     g_palette_cache_state.next_slot = 0;
     g_palette_cache_state.transparent_mask = 0;
+}
+
+bool IsPaletteCacheSlotActive(u32 slot_index) {
+    return valid_slot(slot_index);
+}
+
+u64 GetPaletteCacheSlotAllocationSerial(u32 slot_index) {
+    return valid_slot(slot_index) ?
+        g_palette_cache_state.allocation_serials[slot_index] : 0;
+}
+
+bool PaletteCacheSlotAllocationMatches(u32 slot_index, u64 allocation_serial) {
+    return allocation_serial != 0 && valid_slot(slot_index) &&
+        g_palette_cache_state.allocation_serials[slot_index] == allocation_serial;
 }
 
 bool SetPaletteCacheRawSlot(u32 slot_index, const void* data, std::size_t byte_count) {

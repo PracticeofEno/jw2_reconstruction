@@ -231,7 +231,7 @@ void draw_tail_overlays_and_final_sprite(UnitAnimationDrawContext& context,
     if ((unit.command_flags & kUnitAnimCommandStatusOverlayMask) != 0) {
         DrawUnitStatusOverlayIfEnabled(context, unit);
     }
-    if ((unit.animation_flags & kUnitAnimFlagShowBars) != 0) {
+    if (ShouldDrawUnitWorldBars(unit.animation_flags)) {
         ApplyUnitOwnerRelationTint(context, unit);
     }
 
@@ -241,7 +241,7 @@ void draw_tail_overlays_and_final_sprite(UnitAnimationDrawContext& context,
         direction_row, flipped);
 
     DrawUnitSelectionOrTargetMarker(context, unit);
-    if ((unit.animation_flags & kUnitAnimFlagShowBars) != 0) {
+    if (ShouldDrawUnitWorldBars(unit.animation_flags)) {
         DrawUnitHealthAndSecondaryBars(context, unit);
     }
     DrawUnitDisplayNameIfPresent(context, unit);
@@ -583,7 +583,7 @@ void DrawUnitAnimationFrameFlipped(UnitAnimationDrawContext& context,
 
 void DrawUnitAnimationFrameForcedHighlight(UnitAnimationDrawContext& context,
     const UnitAnimationUnit& unit, u32 resource_frame, UnitAnimationSequence sequence) {
-    if ((unit.animation_flags & kUnitAnimFlagShowBars) != 0) {
+    if (ShouldDrawUnitWorldBars(unit.animation_flags)) {
         ApplyUnitOwnerRelationTint(context, unit);
     }
     u32 animation_frame = 0;
@@ -593,7 +593,7 @@ void DrawUnitAnimationFrameForcedHighlight(UnitAnimationDrawContext& context,
     dispatch_draw(context, unit, sequence, forced_channel_additive_kind(sequence),
         resource_frame, animation_frame, direction_row, true);
     DrawUnitSelectionOrTargetMarker(context, unit);
-    if ((unit.animation_flags & kUnitAnimFlagShowBars) != 0) {
+    if (ShouldDrawUnitWorldBars(unit.animation_flags)) {
         DrawUnitHealthAndSecondaryBars(context, unit);
     }
     DrawUnitDisplayNameIfPresent(context, unit);
@@ -799,7 +799,7 @@ void DrawUnitMovingActionAlternateFrame(UnitAnimationDrawContext& context,
 
 void DrawUnitAnimationFrameForcedNormalHighlight(UnitAnimationDrawContext& context,
     const UnitAnimationUnit& unit, u32 resource_frame, UnitAnimationSequence sequence) {
-    if ((unit.animation_flags & kUnitAnimFlagShowBars) != 0) {
+    if (ShouldDrawUnitWorldBars(unit.animation_flags)) {
         ApplyUnitOwnerRelationTint(context, unit);
     }
     u32 animation_frame = 0;
@@ -809,7 +809,7 @@ void DrawUnitAnimationFrameForcedNormalHighlight(UnitAnimationDrawContext& conte
     dispatch_draw(context, unit, sequence, forced_channel_additive_kind(sequence),
         resource_frame, animation_frame, direction_row, false);
     DrawUnitSelectionOrTargetMarker(context, unit);
-    if ((unit.animation_flags & kUnitAnimFlagShowBars) != 0) {
+    if (ShouldDrawUnitWorldBars(unit.animation_flags)) {
         DrawUnitHealthAndSecondaryBars(context, unit);
     }
     DrawUnitDisplayNameIfPresent(context, unit);
@@ -827,7 +827,7 @@ void DispatchUnitCellResourceDraw(UnitAnimationDrawContext& context,
         DrawUnitShadowAndAttachmentSprites(context, unit);
         return;
     }
-    if ((unit.animation_flags & kUnitAnimFlagShowBars) != 0) {
+    if (ShouldDrawUnitWorldBars(unit.animation_flags)) {
         ApplyUnitOwnerRelationTint(context, unit);
     }
     if (unit.cell_construction_progress_active) {
@@ -861,7 +861,7 @@ void DispatchUnitCellResourceDraw(UnitAnimationDrawContext& context,
         DrawUnitLowHealthDamageOverlay(context, unit);
     }
     DrawUnitSelectionOrTargetMarker(context, unit);
-    if ((unit.animation_flags & kUnitAnimFlagShowBars) != 0) {
+    if (ShouldDrawUnitWorldBars(unit.animation_flags)) {
         DrawUnitHealthAndSecondaryBars(context, unit);
     }
     DrawUnitDisplayNameIfPresent(context, unit);

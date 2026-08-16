@@ -122,7 +122,35 @@ enum class GameplayModalUiActionKind : u32 {
     SurrenderRequested,
     WorkerExitRequested,
     MessageShown,
+    RestartRequested,
 };
+
+enum class GameplayMessageSettingsRoute : u8 {
+    None = 0,
+    ToggleOverlayFlags,
+    OpenDialog,
+};
+
+// Original item 0x195 (0x00402234) is mode-sensitive: replay and observer
+// players toggle the compact HUD flags, an ordinary generic/P2P player opens
+// the recipient dialog, and the non-generic local profile ignores the button.
+constexpr GameplayMessageSettingsRoute ResolveGameplayMessageSettingsRoute(
+    bool replay_mode, bool generic_ai_profile_mode, u32 local_player_type) {
+    if (replay_mode || (generic_ai_profile_mode && local_player_type == 2u)) {
+        return GameplayMessageSettingsRoute::ToggleOverlayFlags;
+    }
+    return generic_ai_profile_mode
+        ? GameplayMessageSettingsRoute::OpenDialog
+        : GameplayMessageSettingsRoute::None;
+}
+
+// Original item 0x196 (0x004021f3) suppresses alliance configuration during
+// replay, outside the generic/P2P profile, and for transport modes 2 and 4.
+constexpr bool ShouldOpenGameplayRelationMaskDialog(bool replay_mode,
+    bool generic_ai_profile_mode, u32 transport_mode) {
+    return !replay_mode && generic_ai_profile_mode &&
+        transport_mode != 2u && transport_mode != 4u;
+}
 
 struct GameplayModalUiState;
 
@@ -141,6 +169,8 @@ using GameplayModalUiMaskCallback =
     void (*)(GameplayModalUiState& state, u32 relation_mask, u32 visibility_mask,
         bool observer_flag);
 using GameplayModalUiValueCallback = void (*)(GameplayModalUiState& state, u32 value);
+using GameplayModalUiValuePairCallback =
+    void (*)(GameplayModalUiState& state, u32 value0, u32 value1);
 
 struct GameplayModalUiCallbacks {
     GameplayModalUiScreenCallback load_screen = nullptr;
@@ -169,6 +199,8 @@ struct GameplayModalUiCallbacks {
     GameplayModalUiCallback update_catchup_target = nullptr;
     GameplayModalUiCallback toggle_catchup = nullptr;
     GameplayModalUiCallback toggle_unit_resource_pack = nullptr;
+    GameplayModalUiValuePairCallback apply_observer_settings = nullptr;
+    GameplayModalUiValueCallback apply_compact_observer_flags = nullptr;
     GameplayModalUiBoolCallback pump_wait_dialog = nullptr;
     GameplayModalUiMessageCallback show_message = nullptr;
     GameplayModalUiValueCallback send_replay_modal_action = nullptr;

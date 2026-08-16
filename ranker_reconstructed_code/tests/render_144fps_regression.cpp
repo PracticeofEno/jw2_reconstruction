@@ -68,6 +68,36 @@ void require(bool condition, const char* message) {
     }
 }
 
+void test_palette_slot_lifetime() {
+    using namespace ranker;
+    ResetPaletteCache();
+
+    const u32 first = AllocatePaletteCacheSlot();
+    const u64 first_serial = GetPaletteCacheSlotAllocationSerial(first);
+    require(first == 0 && first_serial != 0 && IsPaletteCacheSlotActive(first),
+        "the first palette allocation must publish a live identity");
+    require(PaletteCacheSlotAllocationMatches(first, first_serial),
+        "the live palette identity must match its allocation");
+
+    ReleasePaletteCacheSlotsFrom(first);
+    require(!IsPaletteCacheSlotActive(first) &&
+            GetPaletteCacheSlotAllocationSerial(first) == 0 &&
+            !PaletteCacheSlotAllocationMatches(first, first_serial),
+        "a rewound palette slot must immediately become invalid");
+
+    std::array<u8, kPaletteRawBytesPerSlot> raw{};
+    require(!SetPaletteCacheRawSlot(first, raw.data(), raw.size()),
+        "a released palette slot must reject writes");
+
+    const u32 reused = AllocatePaletteCacheSlot();
+    const u64 reused_serial = GetPaletteCacheSlotAllocationSerial(reused);
+    require(reused == first && reused_serial != 0 && reused_serial != first_serial,
+        "a reused numeric slot must receive a new allocation identity");
+    require(!PaletteCacheSlotAllocationMatches(reused, first_serial) &&
+            PaletteCacheSlotAllocationMatches(reused, reused_serial),
+        "a persistent palette reference must not bind to a later reuse");
+}
+
 std::vector<u8> encode_sprite_rows(
     const std::vector<std::vector<u8>>& rows) {
     std::vector<u8> payload;
@@ -522,6 +552,7 @@ int main() {
     require(VisualAnimationTransitionCacheSize() == 2,
         "visual animation state must isolate independent direction rows");
 
+    test_palette_slot_lifetime();
     test_pre_generated_pixel_morph_sprites();
 
     std::cout << "144 fps render pacing regression: PASS\n";

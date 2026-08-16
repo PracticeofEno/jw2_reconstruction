@@ -36,6 +36,17 @@ constexpr u32 kUiOverlayCommandActionMinimap = 3;
 constexpr u32 kUiOverlayCommandActionPlacement = 4;
 constexpr u32 kUiOverlayCommandActionSelection = 5;
 constexpr u32 kUiOverlayCommandActionContextual = 6;
+
+// FUN_004e127b/FUN_004e12a0/FUN_004e12c5 and the ordinary command-record
+// renderers compare only the live press globals written by FUN_004ea47f.
+// FUN_004ea512 clears those globals before dispatching the click, so a command
+// button must never retain its pressed frame after the mouse is released.
+constexpr bool IsUiOverlayCommandButtonPressed(bool press_active,
+    u32 pressed_command_id, u32 pressed_command_aux,
+    u32 item_id, u32 item_aux, bool match_aux) {
+    return press_active && pressed_command_id == item_id &&
+        (!match_aux || pressed_command_aux == item_aux);
+}
 // Original 0x004ea939 stages a nonzero-mode JW2_11 production action by
 // storing selector + 0x2a in DAT_00869dfc.  The next map/unit click converts
 // that mode back to command item 0xd4 + selector.
@@ -724,7 +735,6 @@ struct UiOverlayState {
     std::vector<UiOverlayChatMessage> chat_messages;
     std::vector<UiOverlayCommandAction> command_actions;
 
-    u32 selected_context_id = 0;
     u32 small_icon_resource_base = kInvalidResourceEntry;
     u32 large_icon_resource_base = kInvalidResourceEntry;
     u32 marker_resource_base = kInvalidResourceEntry;
@@ -886,6 +896,7 @@ struct UiOverlayState {
     bool generic_ai_profile_mode = false;
     bool replay_timing_enabled = false;
     bool scripted_input_restricted = false;
+    bool local_cheat_transition_restricted = false;
     std::vector<u32> minimap_visibility_flags;
     std::vector<u32> minimap_object_flags;
     std::vector<u32> minimap_overlay_flags;
@@ -944,6 +955,10 @@ struct UiOverlayState {
     u32 replay_frame_counter = 0;
     u32 replay_target_frame_count = 0;
     u32 last_hotkey_command = 0;
+    // Local chat cheats publish through subtype 0x0d and must not alias an
+    // ordinary UI hotkey item id.
+    u32 pending_gameplay_cheat_command = 0xffffffffu;
+    u32 pending_gameplay_cheat_unit_offset = 0;
     u32 last_hotkey_aux = 0;
     u32 last_hotkey_flags = 0;
     u32 last_hotkey_hover_kind = 0;
@@ -1052,6 +1067,15 @@ inline void ApplyUiOverlayProductionCategorySelectionReset(
 // mirror from silently disabling Shift-click and Shift-drag.
 constexpr bool UiOverlaySelectionIsAdditive(bool shift_modifier_down) {
     return shift_modifier_down;
+}
+
+// Raw unit +0x08 bit 0x80 is both the original selection bit and the sole
+// world health/secondary-bar gate. The per-frame overlay mirror clears it on
+// the first render preparation after deselection, so bars do not use a
+// separate timeout after the unit leaves the selected set.
+constexpr u32 SynchronizeUiOverlayUnitSelectionFlag(
+    u32 flags, bool selected) {
+    return selected ? (flags | 0x80u) : (flags & ~0x80u);
 }
 
 enum class UiOverlayClickSelectionPolicy : u8 {
@@ -1307,6 +1331,8 @@ void QueueGameplayChatMessageDisplay(UiOverlayState& state, const std::string& t
     u32 channel, bool local_echo);
 void HandleGameplayChatBangCommand(UiOverlayState& state);
 bool DispatchGameplayChatSlashCommand(UiOverlayState& state, const std::string& text);
+bool DispatchLocalGameplayChatCheatCommand(
+    UiOverlayState& state, const std::string& text);
 void ScrollCameraLeft(UiOverlayState& state);
 void ScrollCameraRight(UiOverlayState& state);
 void ScrollCameraUp(UiOverlayState& state);

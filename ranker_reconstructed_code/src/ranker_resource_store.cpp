@@ -175,6 +175,24 @@ bool ConfigureResourceEntry(
     return true;
 }
 
+bool ReplaceResourceEntryPayload(u32 entry_index,
+    const std::array<u32, 6>& metadata, const void* payload,
+    std::size_t payload_size) {
+    if (!valid_entry(entry_index) || (payload == nullptr && payload_size != 0)) {
+        return false;
+    }
+
+    std::vector<u8> replacement(payload_size);
+    if (payload_size != 0) {
+        std::memcpy(replacement.data(), payload, payload_size);
+    }
+
+    ResourceStoreEntry& entry = g_resource_store_state.entries[entry_index];
+    entry.metadata = metadata;
+    entry.payload.swap(replacement);
+    return true;
+}
+
 #ifdef _WIN32
 u32 LoadResourceHandle(HANDLE file) {
     if (file == INVALID_HANDLE_VALUE) {

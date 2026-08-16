@@ -1,5 +1,6 @@
 #include "ranker_ui_overlay.h"
 
+#include "ranker_gameplay_cheats.h"
 #include "ranker_gameplay_tooltips.h"
 #include "ranker_palette_cache.h"
 #include "ranker_runtime_resources.h"
@@ -89,7 +90,11 @@ struct RawCommandIconSource {
 };
 
 u32 selected_increment(u32 context_id) {
-    return context_id == g_ui_overlay_state.selected_context_id ? 1u : 0u;
+    return IsUiOverlayCommandButtonPressed(
+        g_ui_overlay_state.command_button_press_active,
+        g_ui_overlay_state.pressed_command_id,
+        g_ui_overlay_state.pressed_command_aux,
+        context_id, 0, false) ? 1u : 0u;
 }
 
 bool draw_small_slot(u32 context_id, u32 base_offset, i32 x, i32 y) {
@@ -185,12 +190,11 @@ bool record_visible(const UiOverlayState& state, const UiOverlayDrawRecord& reco
 UiOverlayDrawRecord selected_adjusted_record(
     const UiOverlayState& state, const UiOverlayDrawRecord& record, bool match_aux) {
     UiOverlayDrawRecord adjusted = record;
-    const bool pressed = state.command_button_press_active &&
-        record.item_id == state.pressed_command_id &&
-        (!match_aux || record.aux == state.pressed_command_aux);
-    const bool selected = !pressed && record.item_id == state.selected_context_id &&
-        (!match_aux || record.aux == state.alternate_slot_a);
-    if (pressed || selected) {
+    const bool pressed = IsUiOverlayCommandButtonPressed(
+        state.command_button_press_active,
+        state.pressed_command_id, state.pressed_command_aux,
+        record.item_id, record.aux, match_aux);
+    if (pressed) {
         ++adjusted.x;
         ++adjusted.y;
     }
@@ -654,8 +658,14 @@ void flush_ui_overlay_progress_commands(UiOverlayState& state,
         // FUN_004e1544 scales the endpoint span (right - left), then passes
         // left + fill as an inclusive endpoint to FUN_005083fd.
         const i32 width = command.right - command.left;
+        // Replay playback can observe the terminal tick just after the
+        // authored final frame.  Keep that transient from painting beyond the
+        // progress frame and corrupting adjacent UI pixels.
+        const u32 bounded_numerator =
+            std::min(command.numerator, command.denominator);
         const i32 filled_width = static_cast<i32>(
-            (static_cast<u64>(width) * command.numerator) / command.denominator);
+            (static_cast<u64>(width) * bounded_numerator) /
+            command.denominator);
         if (filled_width <= 0) {
             continue;
         }
@@ -4677,10 +4687,14 @@ void HandleGameplayChatKey(UiOverlayState& state, u8 key) {
         // not a chat line.  Keep publishing the unit action above, but do not
         // echo it locally or forward it through the P2P chat callback.
         if (!is_unit_action_command && !state.chat_input_text.empty()) {
-            const bool submitted = g_ui_overlay_chat_submit_callback != nullptr &&
+            const bool cheat_dispatched =
+                DispatchLocalGameplayChatCheatCommand(
+                    state, state.chat_input_text);
+            const bool submitted = !cheat_dispatched &&
+                g_ui_overlay_chat_submit_callback != nullptr &&
                 g_ui_overlay_chat_submit_callback(
                     state, state.chat_input_text, state.chat_channel);
-            if (!submitted &&
+            if (!cheat_dispatched && !submitted &&
                 !DispatchGameplayChatSlashCommand(state, state.chat_input_text)) {
                 QueueGameplayChatMessageDisplay(state, state.chat_input_text,
                     state.chat_channel, true);
@@ -4738,6 +4752,31 @@ void HandleGameplayChatBangCommand(UiOverlayState& state) {
         state.pending_unit_action_text = state.chat_input_text;
         state.pending_local_command = true;
     }
+}
+
+bool DispatchLocalGameplayChatCheatCommand(
+    UiOverlayState& state, const std::string& text) {
+    // FUN_004e7090 invokes FUN_004e7b68 only in a non-replay local session.
+    // Generic/P2P slash commands remain frontend chat commands.
+    if (state.generic_ai_profile_mode || state.replay_observer_mode) {
+        return false;
+    }
+    const bool selected_unit_owned_by_local_player =
+        state.selected_unit_id != 0 &&
+        state.selected_unit_owner == state.local_player_slot;
+    const GameplayCheatMatch match = ResolveLocalGameplayCheatText(text,
+        state.local_cheat_transition_restricted,
+        selected_unit_owned_by_local_player);
+    if (!match.recognized) {
+        return false;
+    }
+
+    state.pending_gameplay_cheat_command = match.command;
+    state.pending_gameplay_cheat_unit_offset = match.uses_selected_unit
+        ? state.selected_unit_id
+        : 0u;
+    state.pending_local_command = true;
+    return true;
 }
 
 bool DispatchGameplayChatSlashCommand(UiOverlayState& state, const std::string& text) {
@@ -5456,9 +5495,6 @@ bool TryBeginUiOverlayBuildingPlacement(UiOverlayState& state,
 void DispatchUiOverlayCommandAction(UiOverlayState& state, u32 item_id) {
     if (handle_local_command_panel_selector(state, item_id)) {
         return;
-    }
-    if (item_id == 0x194u || item_id == 0x195u || item_id == 0x196u) {
-        state.selected_context_id = item_id;
     }
     const u32 aux = state.last_hotkey_command == item_id ? state.last_hotkey_aux : 0;
     const u32 flags =

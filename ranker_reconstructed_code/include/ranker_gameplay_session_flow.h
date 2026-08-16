@@ -161,6 +161,10 @@ struct GameplaySessionFlowState {
     bool close_requested = false;
     bool process_shutdown_requested = false;
     bool loaded_resource_base_owned = false;
+    // The single-player frontend Load command has already imported a complete
+    // saved runtime.  Its materialization uses the mode-5 preservation path,
+    // not the fresh skirmish path that replaces authored player units.
+    bool loaded_save_session = false;
 };
 
 void RunP2PGameplayFlow(GameplaySessionFlowState& state);
