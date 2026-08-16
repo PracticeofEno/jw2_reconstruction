@@ -9,7 +9,7 @@ namespace ranker {
 constexpr int kMaximumPresentationClientExtent = 0x7fff;
 constexpr int kMinimumConfiguredRenderFramesPerSecond = 30;
 constexpr int kMaximumConfiguredRenderFramesPerSecond = 360;
-constexpr int kDefaultConfiguredRenderFramesPerSecond = 144;
+constexpr int kDefaultConfiguredRenderFramesPerSecond = 60;
 
 constexpr int NormalizeConfiguredRenderFramesPerSecond(int frames_per_second) {
     return frames_per_second >= kMinimumConfiguredRenderFramesPerSecond &&
@@ -29,7 +29,7 @@ struct RankerClientDisplayConfig {
     int height = kDefaultPresentationClientHeight;
     int x = 0;
     int y = 0;
-    // Rendering defaults to 144 Hz. An explicit RenderFPS=0 preserves the
+    // Rendering defaults to 60 Hz. An explicit RenderFPS=0 preserves the
     // original presentation cadence and disables render-only interpolation.
     int render_frames_per_second = kDefaultConfiguredRenderFramesPerSecond;
     bool resizable = false;

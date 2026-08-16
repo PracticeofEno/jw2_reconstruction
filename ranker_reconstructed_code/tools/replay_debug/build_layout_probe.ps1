@@ -80,6 +80,7 @@ $libraries = @(
     '-luser32', '-lgdi32', '-lwinmm', '-lole32', '-loleaut32',
     '-lcomdlg32', '-lcomctl32', '-lshell32', '-lshlwapi', '-ladvapi32',
     '-lwsock32', '-lddraw', '-ld3d9', '-ldsound', '-ldxguid', '-lgdiplus', '-limm32',
+    '-lmfplay', '-lmfplat', '-lmfuuid',
     '-lkernel32', '-lwinspool', '-luuid'
 )
 $linkArgs = @('-O3', '-DNDEBUG', $object) + $objects + $libraries +

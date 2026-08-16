@@ -25,7 +25,7 @@ constexpr u32 kGameplayCatchupPresentationMaxGapMs = 50;
 constexpr u32 kGameplayRenderToggleLowFramesPerSecond = 60;
 constexpr u32 kGameplayRenderToggleHighFramesPerSecond = 144;
 constexpr u32 kGameplayDefaultRenderFramesPerSecond =
-    kGameplayRenderToggleHighFramesPerSecond;
+    kGameplayRenderToggleLowFramesPerSecond;
 constexpr u64 kGameplayRenderClockNanosecondsPerSecond = 1000000000ull;
 constexpr u32 kGameplayRenderInterpolationOne = 0x10000u;
 constexpr std::size_t kGameplaySimulationPhaseCount = 17;
@@ -143,7 +143,7 @@ struct GameplayLoopState {
     u32 catchup_last_present_tick_ms = 0;
     u32 simulation_frame_counter = 0;
     u32 present_frame_counter = 0;
-    // Rendering defaults to 144 Hz while deterministic simulation retains the
+    // Rendering defaults to 60 Hz while deterministic simulation retains the
     // original cadence. An explicit configured zero restores original pacing.
     u32 render_target_fps = kGameplayDefaultRenderFramesPerSecond;
     u32 exit_context = 3;

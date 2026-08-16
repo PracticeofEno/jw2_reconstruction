@@ -8,6 +8,11 @@
 - The goal is to enable normal gameplay of the original P2P game without
   synchronization interruptions or disconnects.
 
+## Test scope
+
+- Run only tests that are directly related to the code changed in the current
+  task. Do not run unrelated test suites or unrelated gameplay checks.
+
 ## P2P synchronization flight recording
 
 - During a live P2P game, `ranker_rebuild.exe` continuously keeps the ordered

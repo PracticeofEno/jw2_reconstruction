@@ -513,14 +513,10 @@ u32 effect_animation_frame(const UnitEffectRuntime& effect) {
 
 u32 effect_sprite_animation_frame(const UnitEffectRuntime& effect) {
     // Original FUN_004ed940 selects the generic effect sprite through raw
-    // +0x0c for both low and high effect ids.  High-id simulation still uses
-    // raw +0x10 for its separate impact lifetime, so keep this rule confined
-    // to sprite selection instead of changing effect_animation_frame().
-    // The 0x20 afterimage clone is rendered by its specialized half-rate path.
-    if (effect.effect_id == 0x20u &&
-        (effect.flags & kUnitEffectFlagAfterimageClone) != 0) {
-        return effect.frame;
-    }
+    // +0x0c for every low/high effect id.  The 0x20 afterimage updater stores
+    // (+0x10 >> 1) in that word specifically so each KingDemon Fire frame is
+    // held for two ticks; selecting raw +0x10 here advances twice as fast and
+    // suppresses the second half once its value exceeds the eight-frame row.
     return effect.tick;
 }
 

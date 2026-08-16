@@ -369,7 +369,7 @@ int main() {
 
     require(GameplayLoopState{}.render_target_fps ==
             kGameplayDefaultRenderFramesPerSecond,
-        "gameplay rendering must default to 144 FPS");
+        "gameplay rendering must default to 60 FPS");
     require(NormalizeConfiguredRenderFramesPerSecond(0) == 0 &&
             NormalizeConfiguredRenderFramesPerSecond(29) == 0 &&
             NormalizeConfiguredRenderFramesPerSecond(361) == 0,
@@ -377,30 +377,30 @@ int main() {
     require(NormalizeConfiguredRenderFramesPerSecond(60) == 60 &&
             NormalizeConfiguredRenderFramesPerSecond(144) == 144,
         "supported render FPS values must remain configurable");
-    require(kGameplayDefaultRenderFramesPerSecond == 144,
-        "the default gameplay render rate must remain 144 FPS");
+    require(kGameplayDefaultRenderFramesPerSecond == 60,
+        "the default gameplay render rate must remain 60 FPS");
     GameplayLoopState toggle_state{};
     toggle_state.next_present_tick_ns = 123456789ull;
-    toggle_state.render_schedule_initialized = true;
-    require(ToggleGameplayRenderFramesPerSecond(toggle_state) == 60 &&
-            toggle_state.render_target_fps == 60 &&
-            toggle_state.next_present_tick_ns == 0 &&
-            !toggle_state.render_schedule_initialized,
-        "F11 must switch 144 Hz to 60 Hz and restart presentation pacing");
-    toggle_state.next_present_tick_ns = 987654321ull;
     toggle_state.render_schedule_initialized = true;
     require(ToggleGameplayRenderFramesPerSecond(toggle_state) == 144 &&
             toggle_state.render_target_fps == 144 &&
             toggle_state.next_present_tick_ns == 0 &&
             !toggle_state.render_schedule_initialized,
-        "a second F11 must switch 60 Hz back to 144 Hz");
+        "F11 must switch the 60 Hz default to 144 Hz and restart presentation pacing");
+    toggle_state.next_present_tick_ns = 987654321ull;
+    toggle_state.render_schedule_initialized = true;
+    require(ToggleGameplayRenderFramesPerSecond(toggle_state) == 60 &&
+            toggle_state.render_target_fps == 60 &&
+            toggle_state.next_present_tick_ns == 0 &&
+            !toggle_state.render_schedule_initialized,
+        "a second F11 must switch 144 Hz back to 60 Hz");
     toggle_state.render_target_fps = 0;
     require(ToggleGameplayRenderFramesPerSecond(toggle_state) == 144,
         "F11 from a non-toggle configured rate must enter the 144 Hz state");
     const u64 interval_ns = GameplayTargetRenderIntervalNanoseconds(
         kGameplayDefaultRenderFramesPerSecond);
-    require(interval_ns == 6944444ull,
-        "the 144 Hz interval must use the high-resolution render clock");
+    require(interval_ns == 16666666ull,
+        "the 60 Hz interval must use the high-resolution render clock");
 
     bool initialized = false;
     u64 next_present_ns = 0;
@@ -408,19 +408,19 @@ int main() {
             next_present_ns, initialized, 0) && !initialized,
         "zero render FPS must preserve the uncapped original presentation path");
     require(ShouldPresentGameplayTargetFrame(1000000000ull,
-            next_present_ns, initialized, 144),
+            next_present_ns, initialized, 60),
         "the first frame must present immediately");
     require(!ShouldPresentGameplayTargetFrame(1000000000ull + interval_ns - 1,
-            next_present_ns, initialized, 144),
-        "a frame before the 144 Hz deadline must stay presentation-only idle");
+            next_present_ns, initialized, 60),
+        "a frame before the 60 Hz deadline must stay presentation-only idle");
     require(ShouldPresentGameplayTargetFrame(1000000000ull + interval_ns,
-            next_present_ns, initialized, 144),
-        "the 144 Hz deadline must publish a frame");
+            next_present_ns, initialized, 60),
+        "the 60 Hz deadline must publish a frame");
     require(ShouldPresentGameplayTargetFrame(1000000000ull + interval_ns * 5,
-            next_present_ns, initialized, 144),
+            next_present_ns, initialized, 60),
         "a late renderer must skip missed deadlines without catch-up redraws");
     require(!ShouldPresentGameplayTargetFrame(1000000000ull + interval_ns * 5,
-            next_present_ns, initialized, 144),
+            next_present_ns, initialized, 60),
         "a skipped deadline must not redraw twice at the same clock value");
 
     constexpr u64 simulation_interval_ns = 45000000ull;

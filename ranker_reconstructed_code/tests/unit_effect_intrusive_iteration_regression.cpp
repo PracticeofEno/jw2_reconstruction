@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
+#include <string>
 
 namespace {
 
@@ -1329,9 +1330,48 @@ void test_effect_raw_image_index_can_cross_catalog_row() {
         "raw attack image index did not continue from the catalog resource base");
 }
 
+void test_kingdemon_afterimage_uses_half_rate_render_tick() {
+    UnitEffectRuntimeState state{};
+    UnitEffectDefinition definition{};
+    definition.id = 0x20;
+    definition.sprite_entry = 200;
+    definition.projectile = true;
+    definition.render_ticks = 8;
+    definition.active_frames = 8;
+    definition.active_draw_mode = 4;
+    for (u32 frame = 0; frame < 8; ++frame) {
+        definition.image_resource_entries.push_back(200 + frame);
+        definition.active_sprite_entries.push_back(200 + frame);
+    }
+    state.definitions.push_back(definition);
+
+    UnitEffectRuntime effect{};
+    effect.active = true;
+    effect.effect_id = 0x20;
+    effect.flags = kUnitEffectFlagAfterimageClone;
+    // Original 0x004ec770..0x004ec778: raw +0x10 is the doubled lifetime
+    // counter and raw +0x0c is the half-rate sprite frame selected by
+    // FUN_004ed940.
+    effect.frame = 14;
+    effect.tick = effect.frame >> 1;
+
+    u32 sprite_entry = kInvalidResourceEntry;
+    u32 draw_mode = 0xffffffffu;
+    require(ResolveUnitEffectGenericSpriteRender(
+                state, effect, sprite_entry, draw_mode) &&
+            sprite_entry == 207 && draw_mode == 4,
+        "KingDemon Fire afterimage used the doubled lifetime as its sprite frame");
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc == 2 &&
+        std::string(argv[1]) == "kingdemon_afterimage_render") {
+        test_kingdemon_afterimage_uses_half_rate_render_tick();
+        std::cout << "KINGDEMON_AFTERIMAGE_RENDER_PASS\n";
+        return EXIT_SUCCESS;
+    }
     test_cached_next_continues_through_free_tail();
     test_unlinked_non_next_node_is_not_visited_from_entry_snapshot();
     test_action9_counts_down_raw_effect_30_accumulator();
@@ -1367,6 +1407,7 @@ int main() {
     test_value_transfer_entry_uses_raw_cargo_union();
     test_effect_resource_entry_zero_is_drawable();
     test_effect_raw_image_index_can_cross_catalog_row();
+    test_kingdemon_afterimage_uses_half_rate_render_tick();
     std::cout << "UNIT_EFFECT_INTRUSIVE_ITERATION_PASS\n";
     return EXIT_SUCCESS;
 }

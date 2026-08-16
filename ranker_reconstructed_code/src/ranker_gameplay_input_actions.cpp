@@ -774,7 +774,15 @@ u32 DispatchSelectedUnitActionCommand(GameplayInputActionState& state, u32 selec
 
     const u8 mode = state.selector_modes[selector];
     if (mode != 1) {
-        if (state.current_snapshot.field2 != 1) {
+        if (state.current_snapshot.field2 == 1) {
+            // The minimap caller reaches FUN_004da038 with hover kind one.
+            // Original 0x004da08a..0x004da0b2 explicitly XORs EDI before
+            // dispatch, so a point command cannot inherit the unit hit left
+            // in that register by an earlier world-view click.  The typed
+            // reconstruction keeps EDI's target identity in this cache.
+            state.last_validation_unit_offset = 0;
+        }
+        else {
             const bool high_mode = mode > 3;
             const bool has_action_hit =
                 validate_action(state, selector, world_x, world_y, high_mode);

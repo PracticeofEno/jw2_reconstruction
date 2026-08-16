@@ -1108,6 +1108,28 @@ if (RANKER_BUILD_MODE1_PARTIAL_ROUND_RECEIVE_TEST)
         COMMAND mode1_partial_round_receive_regression)
 endif()
 
+option(RANKER_BUILD_MINIMAP_ATTACK_TARGET_REGRESSION_TEST
+    "Build the minimap attack stale-target parity regression" OFF)
+if (RANKER_BUILD_MINIMAP_ATTACK_TARGET_REGRESSION_TEST)
+    enable_testing()
+    add_executable(minimap_attack_target_regression
+        tests/minimap_attack_target_regression.cpp
+        src/ranker_gameplay_input_actions.cpp
+    )
+    target_include_directories(minimap_attack_target_regression PRIVATE include)
+    if (MSVC)
+        target_compile_options(minimap_attack_target_regression PRIVATE /Gy)
+        target_link_options(minimap_attack_target_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(minimap_attack_target_regression PRIVATE
+            -O1 -ffunction-sections -fdata-sections)
+        target_link_options(minimap_attack_target_regression PRIVATE
+            -Wl,--gc-sections)
+    endif()
+    add_test(NAME minimap_attack_target_regression
+        COMMAND minimap_attack_target_regression)
+endif()
+
 option(RANKER_BUILD_MODE1_AUX_VECTOR_PARITY_TEST
     "Build the mode-1 subtype-08 aux-vector parity regression" OFF)
 if (RANKER_BUILD_MODE1_AUX_VECTOR_PARITY_TEST)
