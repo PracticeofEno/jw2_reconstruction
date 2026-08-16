@@ -1261,6 +1261,21 @@ if (RANKER_BUILD_END_CONDITION_REGRESSION_TESTS)
         COMMAND gameplay_use_map_end_condition_regression)
 endif()
 
+option(RANKER_BUILD_UNIT_STRING_SLOT_REGRESSION_TESTS
+    "Build focused session unit-name table regressions" OFF)
+if (RANKER_BUILD_UNIT_STRING_SLOT_REGRESSION_TESTS)
+    enable_testing()
+    add_executable(unit_string_slots_session_header_regression
+        tests/unit_string_slots_session_header_regression.cpp
+        src/ranker_unit_string_slots.cpp
+    )
+    target_include_directories(unit_string_slots_session_header_regression PRIVATE
+        include
+    )
+    add_test(NAME unit_string_slots_session_header_regression
+        COMMAND unit_string_slots_session_header_regression)
+endif()
+
 option(RANKER_BUILD_GAME_LOOP_CATCHUP_REGRESSION_TESTS
     "Build focused catch-up presentation pacing regressions" OFF)
 if (RANKER_BUILD_GAME_LOOP_CATCHUP_REGRESSION_TESTS)
@@ -1474,6 +1489,7 @@ add_executable(ranker_rebuild WIN32
     src/ranker_visual_animation.cpp
     src/ranker_visual_animation_archive.cpp
     src/ranker_unit_movement.cpp
+    src/ranker_unit_string_slots.cpp
     src/ranker_unit_spatial_index.cpp
     src/ranker_unit_commands.cpp
     src/ranker_gameplay_aliases.cpp

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ranker_types.h"
+#include "ranker_unit_string_slots.h"
 
 #include <array>
 #include <cstddef>
@@ -25,9 +26,6 @@ constexpr u32 kReservedTileCommandBAlt = 0x2a;
 constexpr u32 kReservedTileCommandB = 0x54;
 constexpr u32 kUnitCommandDead = 0x10000000;
 constexpr u32 kUnitMovementSkipMask = 0x080200e0;
-constexpr u32 kUnitStringSlotCount = 0x100;
-constexpr u32 kUnitStringSlotBytes = 0x14;
-constexpr u32 kInvalidUnitStringSlot = 0xffffffffu;
 constexpr u32 kInvalidUnitRuntimeSlotIndex = 0xffffffffu;
 constexpr u32 kUnitMovementFlagInterpolatingTowardTarget = 0x00000002;
 constexpr u32 kUnitCommandMetadataPreserveAnimationFrame = 0x00000002;
@@ -548,7 +546,7 @@ struct UnitMovementContext {
     std::vector<UnitMovementUnit*> active_units;
     std::vector<UnitMovementUnit*> free_units;
     std::vector<UnitMovementUnit*> lifecycle_units;
-    std::array<std::array<char, kUnitStringSlotBytes>, kUnitStringSlotCount> string_slots{};
+    UnitStringSlotTable string_slots{};
     std::array<UnitReservedMapTile, kReservedMapTileSlots> reserved_tiles{};
     u32 reserved_tile_count = 0;
 };

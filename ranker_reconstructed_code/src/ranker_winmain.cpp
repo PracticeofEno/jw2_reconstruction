@@ -78,6 +78,7 @@
 #include "ranker_unit_lifecycle.h"
 #include "ranker_unit_spatial_index.h"
 #include "ranker_unit_support_effects.h"
+#include "ranker_unit_string_slots.h"
 #include "ranker_unit_target_helpers.h"
 #include "ranker_unit_targeting.h"
 #include "ranker_visual_animation.h"
@@ -11545,6 +11546,13 @@ void default_gameplay_frame_draw_terrain_decorations(
 
 void sync_default_gameplay_clock_and_random_state_to_session_header(
     std::vector<u8>& header) {
+    // OBC raw +0x48 indexes the 256 x 20-byte table at primary-record +0x08.
+    // Keep runtime-created names and authored campaign hero names in the same
+    // record when saving, exactly as the original fixed string pool does.
+    ExportUnitStringSlotsToSessionHeader(
+        g_runtime.gameplay_movement_context.string_slots,
+        header.data(), header.size());
+
     const GameplayLoopState& loop = gameplay_loop_state();
     const GameplayFrameRandomState& random =
         g_runtime.gameplay_frame_random_state;
@@ -11602,6 +11610,18 @@ void restore_default_gameplay_random_state_from_session_header() {
         header, kGameplayHeaderRandomCallCountOffset, random.call_count);
 }
 
+void restore_default_gameplay_unit_string_slots_from_session_header() {
+    const GameplaySessionLoadState& load = gameplay_session_load_state();
+    if (load.records.empty() || !load.record_loaded[0]) {
+        return;
+    }
+
+    const std::vector<u8>& header = load.records[0];
+    ImportUnitStringSlotsFromSessionHeader(
+        g_runtime.gameplay_movement_context.string_slots,
+        header.data(), header.size());
+}
+
 void run_default_gameplay_session_runtime_reset(
     GameplaySessionStartupState& startup, const char* player_name) {
     mirror_startup_slots_to_player_runtime(startup, g_runtime.gameplay_player_slots);
@@ -11656,6 +11676,7 @@ void run_default_gameplay_session_runtime_reset(
         g_runtime.gameplay_player_slots, startup.lifecycle);
     finalize_default_session_runtime_definition_import();
     restore_default_gameplay_random_state_from_session_header();
+    restore_default_gameplay_unit_string_slots_from_session_header();
     sync_default_gameplay_session_runtime_views_after_reset();
     rebuild_default_unit_reference_tables_from_catalog();
     load_default_game_session_avatar_runtime();
