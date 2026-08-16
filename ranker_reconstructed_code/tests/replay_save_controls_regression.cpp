@@ -1,6 +1,7 @@
 #include "ranker_replay.h"
 #include "ranker_replay_dialogs.h"
 #include "ranker_gameplay_session_flow.h"
+#include "ranker_gameplay_packets.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -35,6 +36,23 @@ void verify_replay_frontend_return_route() {
             0, true, true, false) ==
             GameplayPostSessionFrontendRoute::none,
         "application close must suppress every frontend return");
+    require(ShouldHonorTitleFrontendRequest(false),
+        "a title request must run when no child frontend is active");
+    require(!ShouldHonorTitleFrontendRequest(true),
+        "a stale title request must not replace the restored WizardNet lobby");
+}
+
+void verify_terminal_packet_replay_boundary() {
+    using namespace ranker;
+
+    require(!CanSynthesizeMode1SessionCompletion(false, false, true),
+        "an empty local ordered queue must not enter the result screen");
+    require(CanSynthesizeMode1SessionCompletion(true, false, true),
+        "a consumed local terminal packet must finish a computer-only match");
+    require(!CanSynthesizeMode1SessionCompletion(true, true, false),
+        "a live remote player must keep P2P consensus open");
+    require(CanSynthesizeMode1SessionCompletion(true, true, true),
+        "a consumed local vote plus departed remotes must complete the match");
 }
 
 void verify_replay_live_game_boundary() {
@@ -75,6 +93,7 @@ int main(int argc, char** argv) {
     }
 
     verify_replay_frontend_return_route();
+    verify_terminal_packet_replay_boundary();
     verify_replay_live_game_boundary();
 
     static_assert(std::is_same_v<

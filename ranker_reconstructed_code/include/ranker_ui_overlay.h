@@ -583,12 +583,12 @@ constexpr u32 ResolveUiOverlayDeferredQueueDispatchItem(u32 command_state) {
 
 // 0x004e5298/0x004e52c9 and 0x004e52d6..0x004e5300 admit queue records only
 // for one selected structure that the local player may inspect.  Player type
-// 2 and the replay/scenario override retain the original observer access.
+// 2 and the replay-observer override retain the original observer access.
 constexpr bool ShouldPublishUiOverlaySelectedStructureQueue(
-    u32 selected_count, u32 selected_type, bool replay_or_scenario_override,
+    u32 selected_count, u32 selected_type, bool replay_observer_mode,
     u32 local_player_type, u32 selected_owner, u32 local_owner) {
     return selected_count == 1u && selected_type >= 0x60u &&
-        (replay_or_scenario_override || local_player_type == 2u ||
+        (replay_observer_mode || local_player_type == 2u ||
             selected_owner == local_owner);
 }
 
@@ -860,6 +860,15 @@ struct UiOverlayState {
     bool stored_minimap_point_valid = false;
     u32 placement_mode = 0;
     u32 placement_definition_id = 0;
+    // FUN_004d9be2 restores these event-time values into a separate input
+    // snapshot. They guide only the queued pointer record being dispatched;
+    // they must never overwrite a newer live placement/cursor state.
+    bool pointer_command_snapshot_active = false;
+    u32 pointer_snapshot_placement_mode = 0;
+    u32 pointer_snapshot_contextual_action = 0;
+    u32 pointer_snapshot_hover_kind = 0;
+    u32 pointer_snapshot_hover_aux_or_target = 0;
+    u32 pointer_snapshot_placement_definition = 0;
     u32 placement_equipment_slot_code = 0;
     i32 placement_pointer_x = 0;
     i32 placement_pointer_y = 0;
@@ -868,7 +877,10 @@ struct UiOverlayState {
     bool placement_preview_valid = true;
     std::vector<u8> placement_preview_cell_validity;
     bool reveal_minimap_fog = false;
-    bool scenario_ai_profile_override = false;
+    // Mirrors original DAT_01242a20. This is a replay-observer UI override,
+    // not a scenario/AI flag; ordinary scenario play must retain local HUD
+    // ownership, resource counters, and minimap commands.
+    bool replay_observer_mode = false;
     // Mirrors original DAT_00725bf8.  Both P2P and the worker-driven
     // single-player profile use this non-modal gameplay path.
     bool generic_ai_profile_mode = false;
@@ -1061,11 +1073,14 @@ constexpr UiOverlayClickSelectionPolicy ResolveUiOverlayClickSelectionPolicy(
         UiOverlayClickSelectionPolicy::replace;
 }
 
-// Prefer the modifier bits carried by a mouse event, while preserving the
-// original live-global fallback used by synthetic/injected pointer messages.
+// FUN_004eb063 reads the live held-key bytes when a queued pointer record is
+// consumed. The older MK_* bits carried by the Win32 message are restored but
+// are not consulted by selection handling.
 constexpr bool ResolveUiOverlayPointerModifierDown(
     u32 mouse_wparam, u32 modifier_mask, bool live_modifier_down) {
-    return (mouse_wparam & modifier_mask) != 0 || live_modifier_down;
+    (void)mouse_wparam;
+    (void)modifier_mask;
+    return live_modifier_down;
 }
 
 constexpr bool UiOverlayLocalMobileSelectionCandidate(

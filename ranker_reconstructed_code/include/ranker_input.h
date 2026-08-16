@@ -40,6 +40,20 @@ struct InputEvent {
     u32 button_mask = 0;
 };
 
+// State captured by the original window-message producer alongside every
+// mouse event.  Coordinates, message code, and button state remain in
+// InputEvent; these five fields describe the gameplay/UI interpretation that
+// was current when the Win32 message arrived.
+struct GameplayMouseCommandSnapshot {
+    u32 placement_action_mode = 0;
+    u32 contextual_action_mode = 0;
+    u32 hover_kind = 0;
+    u32 hover_aux_or_target = 0;
+    u32 placement_definition = 0;
+};
+
+static_assert(sizeof(GameplayMouseCommandSnapshot) == sizeof(u32) * 5u);
+
 // The original Win32 message thread writes one-byte held-key globals while
 // the gameplay worker reads their current values.  Preserve that live-read
 // behavior (an input record does not snapshot modifiers), but make the same
@@ -179,6 +193,12 @@ inline InputCameraDirectionState ResolveSet1CameraDirectionState(
 }
 
 InputState& input_state();
+// The gameplay worker publishes the current command interpretation while the
+// Win32 thread reads it when enqueuing a mouse event.  Reads return one
+// coherent five-field publication even when the two threads overlap.
+void PublishGameplayMouseCommandSnapshot(
+    const GameplayMouseCommandSnapshot& snapshot) noexcept;
+GameplayMouseCommandSnapshot ReadGameplayMouseCommandSnapshot() noexcept;
 // Queue reset is a consumer-side flush during gameplay.  Call it from the
 // gameplay consumer or while the producer is quiescent; it deliberately does
 // not rewrite the producer-owned head cursor.

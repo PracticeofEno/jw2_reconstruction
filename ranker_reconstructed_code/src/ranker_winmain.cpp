@@ -5346,6 +5346,45 @@ void publish_default_ui_overlay_camera(UiOverlayState& overlay) {
     g_runtime.gameplay_frame_render_context.camera_y = overlay.camera_y;
 }
 
+u32 default_ui_overlay_mouse_snapshot_hover_aux(
+    const UiOverlayState& overlay) {
+    if (overlay.hover_context.kind == 0x0bu ||
+        overlay.hover_context.kind == 0x0cu) {
+        return overlay.hover_context.kind;
+    }
+    return overlay.hover_context.unit_id;
+}
+
+void publish_default_gameplay_mouse_command_snapshot(
+    const UiOverlayState& overlay) {
+    GameplayMouseCommandSnapshot snapshot{};
+    snapshot.placement_action_mode = overlay.placement_mode;
+    snapshot.contextual_action_mode = overlay.context_cursor.animation_mode;
+    snapshot.hover_kind = overlay.hover_context.kind;
+    snapshot.hover_aux_or_target =
+        default_ui_overlay_mouse_snapshot_hover_aux(overlay);
+    snapshot.placement_definition = overlay.placement_definition_id;
+    PublishGameplayMouseCommandSnapshot(snapshot);
+}
+
+void begin_default_gameplay_mouse_command_snapshot(
+    UiOverlayState& overlay, const GameplayInputSnapshot& snapshot) {
+    overlay.pointer_command_snapshot_active = true;
+    overlay.pointer_snapshot_placement_mode = snapshot.field0;
+    overlay.pointer_snapshot_contextual_action = snapshot.field1;
+    overlay.pointer_snapshot_hover_kind = snapshot.field2;
+    overlay.pointer_snapshot_hover_aux_or_target = snapshot.field3;
+    overlay.pointer_snapshot_placement_definition = snapshot.field4;
+    // Hover context is recomputed from the live pointer after dispatch, so its
+    // event-time typed fields can be installed directly for target handling.
+    overlay.hover_context.kind = snapshot.field2;
+    overlay.hover_context.unit_id = snapshot.field3;
+}
+
+void end_default_gameplay_mouse_command_snapshot(UiOverlayState& overlay) {
+    overlay.pointer_command_snapshot_active = false;
+}
+
 void run_default_ui_overlay_pointer_frame(u32 pointer_state) {
     sync_default_ui_overlay_runtime_from_gameplay_state();
     UiOverlayState& overlay = ui_overlay_state();
@@ -5364,6 +5403,7 @@ void run_default_ui_overlay_pointer_frame(u32 pointer_state) {
         gameplay_input_action_state().pointer_aux_state = 0;
     }
     UpdateGameplayHoverContextAndTooltip(overlay);
+    publish_default_gameplay_mouse_command_snapshot(overlay);
     publish_default_ui_overlay_camera(overlay);
 }
 
@@ -5379,13 +5419,9 @@ void default_gameplay_input_handle_pointer_event(GameplayInputActionState& state
     overlay.mouse_x = event.x;
     overlay.mouse_y = event.y;
 
-    // WM_*BUTTON wParam preserves the modifier state that accompanied this
-    // pointer event.  Also retain the original live-global behavior as a
-    // fallback for injected messages which omit MK_SHIFT/MK_CONTROL.  Every
-    // pointer path (world selection, side portrait, command and minimap) must
-    // see the same modifiers; previously only keyboard and double-click
-    // dispatch refreshed these fields, while ordinary Shift-click/drag read
-    // an unrelated additive-selection flag that was never populated.
+    // FUN_004eb063 reads the live key table at dispatch time. The MK_* flags
+    // retained in the older queued message are deliberately not selection
+    // modifiers in the original.
     const InputState& input = input_state();
     overlay.shift_modifier_down =
         ResolveUiOverlayPointerModifierDown(
@@ -5396,11 +5432,31 @@ void default_gameplay_input_handle_pointer_event(GameplayInputActionState& state
     overlay.alt_modifier_down = input.alt_down;
     overlay.control_group_assign_mode = overlay.ctrl_modifier_down;
 
-    // WM_MOUSEMOVE updates InputState directly and is not queued for the
-    // gameplay-input drain.  Resolve the current event point before a button
-    // event consumes hover_context; resolving only after Handle made a
-    // same-pump MOVE -> RBUTTONDOWN use the previous tile's contextual action.
-    UpdateGameplayHoverContextAndTooltip(overlay);
+    // Resolve coordinates/item metadata at the event point, then restore the
+    // five gameplay interpretation fields captured by FUN_004d9c41 when the
+    // window thread enqueued this mouse record. This prevents a delayed drain
+    // from borrowing a newer placement mode, cursor action, or hover target.
+    ResolveGameplayHoverContext(overlay);
+    begin_default_gameplay_mouse_command_snapshot(
+        overlay, state.current_snapshot);
+
+    // DAT_00722358 admits only ordinary left press/release so the scripted
+    // continue item (0x194) can still be clicked. World selection, minimap,
+    // right/middle buttons, double click, and placement cancel are ignored.
+    if (overlay.scripted_input_restricted) {
+        overlay.selection_rectangle_active = false;
+        if (event.message == 0x0201u) {
+            BeginUiCommandButtonPress(overlay);
+        }
+        else if (event.message == 0x0202u) {
+            ReleaseUiCommandButtonPress(overlay);
+        }
+        end_default_gameplay_mouse_command_snapshot(overlay);
+        UpdateGameplayHoverContextAndTooltip(overlay);
+        publish_default_gameplay_mouse_command_snapshot(overlay);
+        publish_default_ui_overlay_camera(overlay);
+        return;
+    }
 
     u32 pointer_state = 0;
     bool resolve_selection = false;
@@ -5440,6 +5496,20 @@ void default_gameplay_input_handle_pointer_event(GameplayInputActionState& state
     case 0x0205:
         pointer_state = kUiOverlayPointerHoldRelease;
         break;
+    case 0x0207:
+        // Original mouse code 0x80 enters the same scan-0x29 control-group
+        // cycle used by the keyboard dispatcher.
+        end_default_gameplay_mouse_command_snapshot(overlay);
+        CycleSelectedControlGroup(overlay);
+        apply_default_ui_overlay_runtime_mutations();
+        BuildSelectedUnitCommandPanel(overlay);
+        UpdateGameplayHoverContextAndTooltip(overlay);
+        publish_default_gameplay_mouse_command_snapshot(overlay);
+        publish_default_ui_overlay_camera(overlay);
+        return;
+    case 0x0208:
+        end_default_gameplay_mouse_command_snapshot(overlay);
+        return;
     default:
         pointer_state = event.button_mask != 0 ? kUiOverlayPointerDrag : 0;
         break;
@@ -5450,21 +5520,16 @@ void default_gameplay_input_handle_pointer_event(GameplayInputActionState& state
     if (resolve_selection) {
         ResolveGameplayClickSelection(overlay);
     }
-    if ((pointer_state & kUiOverlayPointerHoldPress) != 0 &&
-        overlay.placement_mode == 0) {
-        // Original input snapshots DAT_00862410 after the contextual cursor
-        // table has resolved the current hover.  Resolve it now as well so a
-        // same-pump MOVE -> RBUTTONDOWN cannot dispatch the previous selector.
-        default_gameplay_input_restore_cursor(state);
-    }
     const bool cancel_mode =
         (pointer_state & kUiOverlayPointerHoldPress) != 0 &&
-        overlay.placement_mode != 0;
+        state.current_snapshot.field0 != 0;
     HandleGameplayPointerActionFrame(overlay);
+    end_default_gameplay_mouse_command_snapshot(overlay);
     if (cancel_mode) {
         state.pointer_aux_state = 0;
     }
     UpdateGameplayHoverContextAndTooltip(overlay);
+    publish_default_gameplay_mouse_command_snapshot(overlay);
     publish_default_ui_overlay_camera(overlay);
 }
 
@@ -5771,12 +5836,15 @@ void default_gameplay_input_restore_cursor(GameplayInputActionState& input) {
             ShowGameCursor();
         }
     }
+    publish_default_gameplay_mouse_command_snapshot(overlay);
     publish_default_ui_overlay_camera(overlay);
 }
 
 void default_gameplay_input_finalize_cursor_frame(GameplayInputActionState&) {
     UiOverlayState& overlay = ui_overlay_state();
     BuildSelectedUnitCommandPanel(overlay);
+    ResolveGameplayHoverContext(overlay);
+    publish_default_gameplay_mouse_command_snapshot(overlay);
 }
 
 void default_gameplay_input_finalize_input_event(GameplayInputActionState&) {
@@ -5785,6 +5853,9 @@ void default_gameplay_input_finalize_input_event(GameplayInputActionState&) {
     // another input record; deferring this until the entire ring was drained
     // let a following control-group key replace the producer/unit identity.
     process_default_ui_overlay_command_actions();
+    UiOverlayState& overlay = ui_overlay_state();
+    ResolveGameplayHoverContext(overlay);
+    publish_default_gameplay_mouse_command_snapshot(overlay);
 }
 
 bool default_gameplay_input_publish_action(GameplayInputActionState&,
@@ -13828,10 +13899,10 @@ UnitMovementUnit* find_default_movement_unit_by_id(u32 unit_id) {
 bool default_ui_overlay_selection_sound_allowed(
     const UiOverlayState& state, u32 selected_owner) {
     // FUN_004e9ed0 allows the selected response for scenario/neutral owners,
-    // observers, the scenario-AI override, and the local owner.  Ordinary
+    // observers, the replay-observer override, and the local owner. Ordinary
     // remote-player selections remain silent.
     return selected_owner >= 8 || state.local_player_type == 2 ||
-        state.scenario_ai_profile_override ||
+        state.replay_observer_mode ||
         selected_owner == state.local_player_slot;
 }
 
@@ -14201,6 +14272,7 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
     g_runtime.gameplay_action_damage_profiles = UnitActionDamageProfileTable{};
     g_runtime.gameplay_action_damage_profiles_initialized = false;
     ResetUiOverlayStatePreservingSessionCamera();
+    PublishGameplayMouseCommandSnapshot(GameplayMouseCommandSnapshot{});
     {
         UiOverlayState& overlay = ui_overlay_state();
         const u32 local_player =
@@ -19180,7 +19252,7 @@ void append_default_ui_overlay_selected_unit_queue_options(
     UiOverlayState& overlay, const UnitMovementUnit& unit) {
     if (!ShouldPublishUiOverlaySelectedStructureQueue(
             overlay.selected_unit_count, unit.type_id,
-            overlay.scenario_ai_profile_override, overlay.local_player_type,
+            overlay.replay_observer_mode, overlay.local_player_type,
             unit.owner_id, overlay.local_player_slot)) {
         return;
     }
@@ -19868,7 +19940,7 @@ void sync_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
             // outer command-panel ownership/scenario gate has admitted this
             // mobile selection.  Clear both mirrors so a later all-capable
             // selection cannot resurrect the previously open category page.
-            if (overlay.scenario_ai_profile_override ||
+            if (overlay.replay_observer_mode ||
                 overlay.local_player_type == 2u ||
                 unit->owner_id == overlay.local_player_slot) {
                 overlay.selected_production_category = 0;
@@ -19896,7 +19968,7 @@ void sync_default_ui_overlay_selected_unit_details(UiOverlayState& overlay) {
         }
     }
     overlay.selected_unit_details_visible =
-        overlay.scenario_ai_profile_override ||
+        overlay.replay_observer_mode ||
         overlay.local_player_type == 2 ||
         unit->owner_id == overlay.local_player_slot;
     overlay.detail_progress = default_selected_unit_progress_value(*unit);
@@ -20007,13 +20079,10 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
     // mirror tied to the counter state so a later sync cannot erase F11.
     overlay.gameplay_overlay_flag =
         g_runtime.gameplay_hud_text.debug_counter.enabled;
-    // DAT_01242a20 is raised by the replay-load path and admits the same
-    // remote-player queue inspection as the original observer branch.  The
-    // main-window runtime owns that mirror; keep the per-frame overlay copy
-    // live instead of leaving its default false value latched forever.
-    overlay.scenario_ai_profile_override =
-        g_runtime.generic_ai_scenario_active ||
-        replay_recording_state().playback_mode;
+    // DAT_01242a20 is raised only by replay load and cleared by replay exit.
+    // Scenario activity is unrelated and must not disable ordinary local HUD
+    // ownership, counters, or minimap commands.
+    overlay.replay_observer_mode = replay_recording_state().playback_mode;
     overlay.generic_ai_profile_mode = g_runtime.generic_ai_profile_mode;
     overlay.replay_timing_enabled = gameplay_loop_state().replay_timing_enabled;
     overlay.scripted_input_restricted =
@@ -29979,9 +30048,10 @@ void run_default_gameplay_end_condition_monitor(GameplayLoopState& state) {
                 break;
             }
         }
-        packets.session_complete_requested =
-            !remote_network_player_seen ||
-            all_remote_network_players_inactive;
+        packets.session_complete_requested = CanSynthesizeMode1SessionCompletion(
+            packets.local_inactive_packet_consumed,
+            remote_network_player_seen,
+            all_remote_network_players_inactive);
     }
     if (packets.session_complete_requested) {
         // DAT_00725c09 is the P2P consensus/leave flag in the original
@@ -32007,9 +32077,20 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
             append_startup_log("main restored post-game wizardnet lobby");
             return 0;
         }
-        if (!open_title_main_menu_frontend(window)) {
-            pause_worker_for_modal_action();
-            OpenMultiplayerFrontendForActiveMode(window);
+        {
+            const bool active_child_frontend =
+                g_runtime.frontend_route_window != nullptr &&
+                g_runtime.frontend_route_window != window &&
+                IsWindow(g_runtime.frontend_route_window);
+            if (!ShouldHonorTitleFrontendRequest(active_child_frontend)) {
+                append_startup_log(
+                    "title frontend request ignored because a newer child frontend is active");
+                return 0;
+            }
+            if (!open_title_main_menu_frontend(window)) {
+                pause_worker_for_modal_action();
+                OpenMultiplayerFrontendForActiveMode(window);
+            }
         }
         return 0;
     case WM_USER + 5:

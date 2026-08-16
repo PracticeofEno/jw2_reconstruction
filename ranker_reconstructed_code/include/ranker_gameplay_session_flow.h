@@ -19,6 +19,13 @@ constexpr bool ShouldCloseApplicationAfterP2PMatch(
     return loop_process_shutdown_requested;
 }
 
+// Frontend transitions are posted across the window/worker-thread boundary.
+// A stale title request must not replace a live child frontend that a newer
+// post-game transition has already restored.
+constexpr bool ShouldHonorTitleFrontendRequest(bool active_child_frontend) {
+    return !active_child_frontend;
+}
+
 enum class GameplayPostSessionFrontendRoute : u8 {
     none = 0,
     single_player,

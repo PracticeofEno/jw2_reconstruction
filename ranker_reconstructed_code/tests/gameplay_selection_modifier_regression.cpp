@@ -75,12 +75,17 @@ int main(int argc, char** argv) {
     require(!ranker::ShouldCloseApplicationAfterP2PMatch(false, true));
     require(ranker::ShouldCloseApplicationAfterP2PMatch(true, false));
 
-    // Pointer-event flags retain Shift/Ctrl if the key is released before the
-    // gameplay worker drains the event; live state remains the injection
-    // fallback for messages with no MK_* bits.
-    require(ranker::ResolveUiOverlayPointerModifierDown(0x0004u, 0x0004u, false));
-    require(ranker::ResolveUiOverlayPointerModifierDown(0x0008u, 0x0008u, false));
+    // FUN_004eb063 reads the live Shift/Ctrl key bytes when the gameplay
+    // worker handles a queued click.  The MK_* bits captured in the window
+    // message are not consulted, so releasing a modifier before the worker
+    // drains the event must not leave a stale additive/same-type selection.
+    require(!ranker::ResolveUiOverlayPointerModifierDown(0x0004u, 0x0004u, false));
+    require(!ranker::ResolveUiOverlayPointerModifierDown(0x0008u, 0x0008u, false));
+
+    // Conversely, a modifier pressed after the mouse message was queued is
+    // active by the time the original selection routine consumes the event.
     require(ranker::ResolveUiOverlayPointerModifierDown(0, 0x0004u, true));
+    require(ranker::ResolveUiOverlayPointerModifierDown(0, 0x0008u, true));
     require(!ranker::ResolveUiOverlayPointerModifierDown(0, 0x0004u, false));
 
     ranker::UiOverlayState state{};

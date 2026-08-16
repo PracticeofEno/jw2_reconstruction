@@ -1123,8 +1123,14 @@ void handle_player_inactive_packet(const Mode1ReliablePacket& packet, void*) {
         fields.channel);
 
     const u32 player = fields.channel;
-    if (player >= g_packet_dispatch_state.players.size() ||
-        player == g_packet_dispatch_state.local_player_index) {
+    if (player >= g_packet_dispatch_state.players.size()) {
+        return;
+    }
+    if (player == g_packet_dispatch_state.local_player_index) {
+        // This marker is intentionally set by ordered dispatch, not by the
+        // publisher.  FUN_004db82d reaches this point only after the local
+        // terminal packet has advanced through the reliable read sequence.
+        g_packet_dispatch_state.local_inactive_packet_consumed = true;
         return;
     }
 

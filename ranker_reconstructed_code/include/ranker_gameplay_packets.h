@@ -238,6 +238,7 @@ struct Mode1GameplayPacketDispatchState {
     bool catchup_target_enabled = false;
     bool modal_pause_visible = false;
     bool vote_completion_gate_open = false;
+    bool local_inactive_packet_consumed = false;
     bool session_complete_requested = false;
     bool auto_broadcast_published_packets = false;
     bool vote_collection_active = false;
@@ -251,6 +252,18 @@ struct Mode1GameplayPacketDispatchState {
     void* user_data = nullptr;
     void* runtime_user_data = nullptr;
 };
+
+// The original live-P2P loop cannot raise its terminal consensus byte until
+// the local subtype-0x13 packet has passed through the ordered packet pump.
+// Keep the socket-backed consensus fallback on the same boundary so the
+// terminal packet is also present in Replay.tmp before the result UI checks
+// whether replay save controls are available.
+constexpr bool CanSynthesizeMode1SessionCompletion(
+    bool local_inactive_packet_consumed, bool remote_network_player_seen,
+    bool all_remote_network_players_inactive) {
+    return local_inactive_packet_consumed &&
+        (!remote_network_player_seen || all_remote_network_players_inactive);
+}
 
 Mode1GameplayPacketDispatchState& mode1_gameplay_packet_dispatch_state();
 

@@ -14,6 +14,18 @@ namespace {
 InputState g_input_state;
 std::atomic_flag g_mouse_event_snapshot_gate = ATOMIC_FLAG_INIT;
 
+struct GameplayMouseCommandSnapshotStorage {
+    std::atomic_flag writer_gate = ATOMIC_FLAG_INIT;
+    std::atomic<u32> sequence{0};
+    std::atomic<u32> placement_action_mode{0};
+    std::atomic<u32> contextual_action_mode{0};
+    std::atomic<u32> hover_kind{0};
+    std::atomic<u32> hover_aux_or_target{0};
+    std::atomic<u32> placement_definition{0};
+};
+
+GameplayMouseCommandSnapshotStorage g_gameplay_mouse_command_snapshot;
+
 class MouseEventSnapshotGuard {
 public:
     MouseEventSnapshotGuard() {
@@ -94,12 +106,14 @@ bool push_mouse_input_event_locked(
     event.dy = g_input_state.mouse_dy;
     event.button_mask = g_input_state.mouse_button_mask;
 
+    const GameplayMouseCommandSnapshot command_snapshot =
+        ReadGameplayMouseCommandSnapshot();
     GameplayInputSnapshot snapshot{};
-    snapshot.field0 = static_cast<u32>(InputEventKind::mouse);
-    snapshot.field1 = code;
-    snapshot.field2 = static_cast<u32>(event.x);
-    snapshot.field3 = static_cast<u32>(event.y);
-    snapshot.field4 = event.button_mask;
+    snapshot.field0 = command_snapshot.placement_action_mode;
+    snapshot.field1 = command_snapshot.contextual_action_mode;
+    snapshot.field2 = command_snapshot.hover_kind;
+    snapshot.field3 = command_snapshot.hover_aux_or_target;
+    snapshot.field4 = command_snapshot.placement_definition;
     return push_mouse_event_with_snapshot(
         event, gameplay_input_action_state(), snapshot);
 }
@@ -207,6 +221,62 @@ void reset_input_state_only() {
 
 InputState& input_state() {
     return g_input_state;
+}
+
+void PublishGameplayMouseCommandSnapshot(
+    const GameplayMouseCommandSnapshot& snapshot) noexcept {
+    GameplayMouseCommandSnapshotStorage& storage =
+        g_gameplay_mouse_command_snapshot;
+    while (storage.writer_gate.test_and_set(std::memory_order_acquire)) {
+    }
+
+    // Odd means that a publication is in progress; even means readers may
+    // accept the five field loads if the sequence remains unchanged.
+    // Use one sequentially consistent atomic order for the sequence and all
+    // payload fields.  This prevents a reader from observing a newer payload
+    // while both sequence reads still appear to be the preceding even value.
+    storage.sequence.fetch_add(1u, std::memory_order_seq_cst);
+    storage.placement_action_mode.store(
+        snapshot.placement_action_mode, std::memory_order_seq_cst);
+    storage.contextual_action_mode.store(
+        snapshot.contextual_action_mode, std::memory_order_seq_cst);
+    storage.hover_kind.store(snapshot.hover_kind, std::memory_order_seq_cst);
+    storage.hover_aux_or_target.store(
+        snapshot.hover_aux_or_target, std::memory_order_seq_cst);
+    storage.placement_definition.store(
+        snapshot.placement_definition, std::memory_order_seq_cst);
+    storage.sequence.fetch_add(1u, std::memory_order_seq_cst);
+    storage.writer_gate.clear(std::memory_order_release);
+}
+
+GameplayMouseCommandSnapshot ReadGameplayMouseCommandSnapshot() noexcept {
+    GameplayMouseCommandSnapshotStorage& storage =
+        g_gameplay_mouse_command_snapshot;
+    GameplayMouseCommandSnapshot snapshot{};
+    for (;;) {
+        const u32 sequence_before =
+            storage.sequence.load(std::memory_order_seq_cst);
+        if ((sequence_before & 1u) != 0) {
+            continue;
+        }
+
+        snapshot.placement_action_mode =
+            storage.placement_action_mode.load(std::memory_order_seq_cst);
+        snapshot.contextual_action_mode =
+            storage.contextual_action_mode.load(std::memory_order_seq_cst);
+        snapshot.hover_kind =
+            storage.hover_kind.load(std::memory_order_seq_cst);
+        snapshot.hover_aux_or_target =
+            storage.hover_aux_or_target.load(std::memory_order_seq_cst);
+        snapshot.placement_definition =
+            storage.placement_definition.load(std::memory_order_seq_cst);
+
+        const u32 sequence_after =
+            storage.sequence.load(std::memory_order_seq_cst);
+        if (sequence_before == sequence_after) {
+            return snapshot;
+        }
+    }
 }
 
 void ResetInputState() {
@@ -406,15 +476,13 @@ bool HandleAltKeyPress(u32 key, u32 legacy_scan_code) {
         return false;
     }
     const u32 scan_code = legacy_scan_code & 0xffu;
-    const bool scan_already_down =
-        g_input_state.set1_scan_down[scan_code] != 0;
     if (key != kImeProcessVirtualKey) {
         set_key_state(key, true);
     }
     set_set1_scan_state(scan_code, true);
-    if (scan_already_down) {
-        return true;
-    }
+    // Original WM_SYSKEYDOWN handling enqueues every delivered message,
+    // including auto-repeat, unlike the IME duplicate suppression used by the
+    // regular WM_KEYDOWN path.
     return PushKeyboardInputEvent(scan_code);
 }
 

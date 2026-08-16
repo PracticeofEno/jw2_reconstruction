@@ -50,6 +50,24 @@ constexpr u32 kProductionGateFlagOwnerOrActiveLimit = 0x02;
 constexpr u32 kCommandIconFrameSmall = 0x26;
 constexpr u32 kCommandIconFrameLarge = 0x32;
 
+u32 pointer_event_placement_mode(const UiOverlayState& state) {
+    return state.pointer_command_snapshot_active
+        ? state.pointer_snapshot_placement_mode
+        : state.placement_mode;
+}
+
+u32 pointer_event_contextual_action(const UiOverlayState& state) {
+    return state.pointer_command_snapshot_active
+        ? state.pointer_snapshot_contextual_action
+        : state.context_cursor.animation_mode;
+}
+
+u32 pointer_event_placement_definition(const UiOverlayState& state) {
+    return state.pointer_command_snapshot_active
+        ? state.pointer_snapshot_placement_definition
+        : state.placement_definition_id;
+}
+
 constexpr std::array<UiOverlayRect, 7> kDefaultManualEquipmentSlotBounds{{
     {266, 523, 0x26, 0x26},
     {175, 570, 0x13, 0x13},
@@ -3020,7 +3038,7 @@ void ClampCameraToMinimapPoint(UiOverlayState& state, i32 world_x, i32 world_y) 
 }
 
 void RenderGameplayResourceCounters(UiOverlayState& state) {
-    if (state.scenario_ai_profile_override || state.local_player_type == 2) {
+    if (state.replay_observer_mode || state.local_player_type == 2) {
         return;
     }
 
@@ -3537,10 +3555,11 @@ void BuildSelectedUnitCommandPanel(UiOverlayState& state) {
     }
     // 0x004e4020..0x004e4048 keeps FUN_004e5292's portrait/queue-info pass,
     // then returns before every mobile/structure command builder unless the
-    // scenario override, player-type-2 override, or local ownership applies.
+    // replay-observer override, player-type-2 override, or local ownership
+    // applies.
     // In particular, an enemy structure must not expose production actions or
     // the construction-cancel c6 record.
-    if (!state.scenario_ai_profile_override && state.local_player_type != 2u &&
+    if (!state.replay_observer_mode && state.local_player_type != 2u &&
         state.selected_unit_owner != state.local_player_slot) {
         return;
     }
@@ -3638,7 +3657,7 @@ void QueueDefaultGameplayCommandSlots(UiOverlayState& state) {
     QueueUiOverlayCommandRecordByItemId(state, 0x194, 0, 0);
     QueueUiOverlayCommandRecordByItemId(state, 0x195, 1, 0);
     QueueUiOverlayCommandRecordByItemId(state, 0x196, 2, 0);
-    if (state.scenario_ai_profile_override) {
+    if (state.replay_observer_mode) {
         QueueUiOverlayCommandRecordByItemId(state,
             state.direct_music_paused ? 0x197 : 0x198,
             state.direct_music_paused ? 3 : 4, 0);
@@ -3932,7 +3951,7 @@ void PadUiOverlayLargeCommandSlots(UiOverlayState& state) {
 
 void QueueSelectedUnitCurrentOrderButtons(UiOverlayState& state) {
     if (state.selected_unit_count != 1 || state.selected_unit_type < 0x60u ||
-        (!state.scenario_ai_profile_override && state.local_player_type != 2u &&
+        (!state.replay_observer_mode && state.local_player_type != 2u &&
             state.selected_unit_owner != state.local_player_slot)) {
         return;
     }
@@ -4246,7 +4265,7 @@ void ClampCameraToStoredMinimapPoint(UiOverlayState& state, i32 world_x, i32 wor
 
 void IncreaseGameplaySpeed(UiOverlayState& state) {
     // FUN_004e7263 gates this on DAT_00725bf8 (the generic/P2P profile), not
-    // DAT_01242a20's replay/scenario override.  P2P must not let one peer
+    // DAT_01242a20's replay-observer override. P2P must not let one peer
     // change its local lockstep interval with the +/- shortcuts.  The CMP at
     // 0x004e726c uses the fixed legacy cap 0x0f rather than a setup value.
     if (!state.generic_ai_profile_mode && state.game_speed < 0x0fu) {
@@ -4356,7 +4375,7 @@ void RecallOrStoreCameraBookmark(UiOverlayState& state, u32 bookmark_index,
 
 void HandleGameplayMenuKey3c(UiOverlayState& state, u32 bookmark_index, bool store) {
     // 0x004e7376 tests only DAT_00725bf8 (the generic/P2P profile mode).
-    // DAT_01242a20's replay/scenario override does not redirect F2 away from
+    // DAT_01242a20's replay-observer override does not redirect F2 away from
     // the save dialog.
     if (state.generic_ai_profile_mode) {
         RecallOrStoreCameraBookmark(state, bookmark_index, store);
@@ -5019,31 +5038,34 @@ void HandleGameplayPointerActionFrame(UiOverlayState& state) {
     }
 
     if ((state.pointer_state & kPointerPress) != 0) {
+        const u32 event_placement_mode = pointer_event_placement_mode(state);
+        const u32 event_placement_definition =
+            pointer_event_placement_definition(state);
         BeginUiCommandButtonPress(state);
         if (state.pressed_command_id == 0xffffffffu) {
             const bool over_hud =
                 CheckUiOverlayIconMaskPixel(state, state.mouse_x, state.mouse_y);
-            if (state.placement_mode == 6 &&
+            if (event_placement_mode == 6 &&
                 !CheckMouseInsideMinimap(state) && !over_hud) {
                 // A mobile unit's build icon stores (unit_type - 0x60) in the
                 // placement definition.  Route the map click through original
                 // object action 6 so the lockstep command contains the chosen
                 // building index and placement point.
                 append_command_action(state, 0xaau + 6u,
-                    state.placement_definition_id, kCommandActionPlacement);
+                    event_placement_definition, kCommandActionPlacement);
                 state.pending_local_command = true;
             }
-            else if (state.placement_mode == 2 &&
+            else if (event_placement_mode == 2 &&
                 !CheckMouseInsideMinimap(state) && !over_hud) {
                 // FUN_004e9ed0 sends every low placement mode through
                 // FUN_004da02c.  Mode two is the held food/equipment transfer
                 // command; retaining the logical slot in aux also snapshots
                 // raw +0x2c's slot-code zero for deferred UI processing.
                 append_command_action(state, 0xaau + 2u,
-                    state.placement_definition_id, kCommandActionPlacement);
+                    event_placement_definition, kCommandActionPlacement);
                 state.pending_local_command = true;
             }
-            else if (state.placement_mode == 0x0eu &&
+            else if (event_placement_mode == 0x0eu &&
                 !CheckMouseInsideMinimap(state) && !over_hud) {
                 // FUN_004e9ed0's dedicated mode-0e branch calls FUN_004db650,
                 // which publishes the staged equipment slot at this point.
@@ -5052,19 +5074,19 @@ void HandleGameplayPointerActionFrame(UiOverlayState& state) {
                     kCommandActionPlacement);
                 state.pending_local_command = true;
             }
-            else if (IsUiOverlayProductionActionMode(state.placement_mode) &&
+            else if (IsUiOverlayProductionActionMode(event_placement_mode) &&
                 !CheckMouseInsideMinimap(state) && !over_hud) {
                 // 0x004ea939 stores selector+0x2a on the spell-button click.
                 // Only this second terrain/unit click reaches FUN_004db0f7.
                 const u32 selector = UiOverlayProductionActionSelector(
-                    state.placement_mode);
+                    event_placement_mode);
                 append_command_action(state, 0xd4u + selector, 0,
                     kCommandActionPlacement);
                 state.pending_local_command = true;
             }
-            else if (state.staged_unit_action_id != 0xffffffffu &&
+            else if (event_placement_mode != 0 &&
                 !CheckMouseInsideMinimap(state) && !over_hud) {
-                const u32 action_id = state.staged_unit_action_id;
+                const u32 action_id = event_placement_mode;
                 append_command_action(state, 0xaau + action_id, 0,
                     kCommandActionPlacement);
                 state.staged_unit_action_id = 0xffffffffu;
@@ -5109,8 +5131,22 @@ void HandleGameplayPointerActionFrame(UiOverlayState& state) {
     if ((state.pointer_state & kPointerHoldPress) != 0) {
         // RBUTTONDOWN snapshots raw placement mode before any HUD/minimap hit
         // testing.  A nonzero mode cancels it and emits no world command.
-        if (state.placement_mode != 0) {
-            CancelCurrentUiModeOrActivateCommand(state);
+        if (pointer_event_placement_mode(state) != 0) {
+            if (state.placement_mode != 0) {
+                CancelCurrentUiModeOrActivateCommand(state);
+            }
+            else {
+                // A later queued record may already have changed the live
+                // mode. The original still takes the snapshot's cancellation
+                // branch and clears the associated live command globals.
+                state.staged_unit_action_id = 0xffffffffu;
+                state.selected_production_category = 0;
+                state.command_slot_count = 0;
+                state.context_cursor.animation_mode = 0;
+                if (state.callbacks.play_click_sound != nullptr) {
+                    state.callbacks.play_click_sound(state);
+                }
+            }
             return;
         }
         BeginUiCommandButtonHold(state);
@@ -5121,7 +5157,7 @@ void HandleGameplayPointerActionFrame(UiOverlayState& state) {
                 // RBUTTONDOWN forwards the resolved contextual cursor mode
                 // verbatim: pickup 1, repair 3, move 4, attack 5, harvest 7,
                 // special 8, boarding 10, and the preserved/stale table cases.
-                const u32 action_id = state.context_cursor.animation_mode;
+                const u32 action_id = pointer_event_contextual_action(state);
                 if (action_id == 0u) {
                     return;
                 }
@@ -5276,13 +5312,20 @@ void ScrollCameraFromEdgeOrKeys(UiOverlayState& state) {
 }
 
 void BeginUiCommandButtonPress(UiOverlayState& state) {
+    const UiOverlayHotRegion* region =
+        hot_region_at(state, state.mouse_x, state.mouse_y);
+    // FUN_004ea47f returns before rewriting DAT_00869e04/08 when scripted
+    // input is restricted and the hit record is not the continue item. Keep
+    // any prior captured press intact for the matching release path.
+    if (state.scripted_input_restricted && region != nullptr &&
+        region->record.item_id != 0x194u) {
+        return;
+    }
     state.pressed_command_id = 0xffffffffu;
     state.pressed_command_aux = 0xffffffffu;
     state.command_button_press_active = false;
     state.last_hot_region_x = state.mouse_x;
     state.last_hot_region_y = state.mouse_y;
-    const UiOverlayHotRegion* region =
-        hot_region_at(state, state.mouse_x, state.mouse_y);
     if (region == nullptr) {
         return;
     }
@@ -5334,38 +5377,35 @@ bool CheckPointerInsideMinimapAndPlacementMode(UiOverlayState& state) {
     if (!CheckMouseInsideMinimap(state)) {
         return false;
     }
+    const u32 event_placement_mode = pointer_event_placement_mode(state);
+    const u32 event_placement_definition =
+        pointer_event_placement_definition(state);
     const i32 local_x = state.mouse_x - state.minimap.output_x;
     const i32 local_y = state.mouse_y - state.minimap.output_y;
     const i32 world_x = minimap_input_screen_to_world_x(state, local_x);
     const i32 world_y = minimap_command_screen_to_world_y(state, local_y);
-    if (state.placement_mode == 2) {
+    if (event_placement_mode == 2) {
         append_command_action_at_world(state, 0xaau + 2u,
-            state.placement_definition_id, kCommandActionPlacement, 0,
+            event_placement_definition, kCommandActionPlacement, 0,
             world_x, world_y);
         return true;
     }
-    if (state.placement_mode == 0x0eu) {
+    if (event_placement_mode == 0x0eu) {
         append_command_action_at_world(state, 0x0eu,
             state.placement_equipment_slot_code, kCommandActionPlacement, 0,
             world_x, world_y);
         return true;
     }
-    if (IsUiOverlayProductionActionMode(state.placement_mode)) {
+    if (IsUiOverlayProductionActionMode(event_placement_mode)) {
         const u32 selector = UiOverlayProductionActionSelector(
-            state.placement_mode);
+            event_placement_mode);
         append_command_action_at_world(state, 0xd4u + selector, 0,
             kCommandActionPlacement, 0, world_x, world_y);
         return true;
     }
-    if (state.staged_unit_action_id != 0xffffffffu) {
-        append_command_action_at_world(state,
-            0xaau + state.staged_unit_action_id, 0,
-            kCommandActionPlacement, 0, world_x, world_y);
-        return true;
-    }
-    if (state.placement_mode != 0 && state.placement_mode != 6) {
-        append_command_action_at_world(state, state.placement_mode,
-            state.placement_definition_id, kCommandActionPlacement, 0,
+    if (event_placement_mode != 0 && event_placement_mode != 6) {
+        append_command_action_at_world(state, 0xaau + event_placement_mode,
+            event_placement_definition, kCommandActionPlacement, 0,
             world_x, world_y);
         return true;
     }
@@ -5378,7 +5418,7 @@ bool CheckPointerInsideMinimapForAction(UiOverlayState& state) {
     if (!point_inside_minimap_rect(state, true)) {
         return false;
     }
-    if (state.scenario_ai_profile_override) {
+    if (state.replay_observer_mode) {
         return true;
     }
     const i32 local_x = state.mouse_x - state.minimap.output_x;
@@ -5683,6 +5723,118 @@ void SelectUnitsInDragRectangle(UiOverlayState& state) {
     BuildSelectedUnitCommandPanel(state);
 }
 
+namespace {
+
+bool primary_selection_blocks_additive_type_expansion(
+    const UiOverlayState& state) {
+    if (state.selected_unit_id == 0) {
+        return false;
+    }
+    const UiOverlayMinimapUnit* primary =
+        find_unit_by_id(state, state.selected_unit_id);
+    if (primary != nullptr) {
+        return primary->type_id >= 0x60u ||
+            primary->owner_id != state.local_player_slot;
+    }
+    return state.selected_unit_type >= 0x60u ||
+        state.selected_unit_owner != state.local_player_slot;
+}
+
+bool primary_selection_has_remote_owner(const UiOverlayState& state) {
+    if (state.selected_unit_id == 0) {
+        return false;
+    }
+    const UiOverlayMinimapUnit* primary =
+        find_unit_by_id(state, state.selected_unit_id);
+    return primary != nullptr
+        ? primary->owner_id != state.local_player_slot
+        : state.selected_unit_owner != state.local_player_slot;
+}
+
+bool select_visible_local_units_matching_type(
+    UiOverlayState& state, const UiOverlayMinimapUnit& target) {
+    // FUN_004ead82 is shared by world double-click and Ctrl+single-click.
+    // Shift preserves a compatible local-mobile party; an ordinary invocation
+    // replaces it before expanding the clicked unit's type/flag class.
+    if (!state.shift_modifier_down ||
+        primary_selection_has_remote_owner(state)) {
+        ResetGameplaySelectionState(state);
+    }
+    else {
+        RecountGameplaySelectedUnits(state);
+    }
+
+    constexpr std::size_t kOriginalSelectionCapacity = 14;
+    const std::size_t configured_capacity = state.max_selected_unit_count == 0
+        ? kOriginalSelectionCapacity
+        : static_cast<std::size_t>(state.max_selected_unit_count);
+    const std::size_t selection_capacity =
+        std::min(kOriginalSelectionCapacity, configured_capacity);
+    std::size_t selection_budget =
+        std::min(state.selected_unit_ids.size(), selection_capacity);
+    const auto append_expansion_if_room = [&](const UiOverlayMinimapUnit& unit) {
+        if (unit_already_selected(state, unit.unit_id) ||
+            selection_budget >= selection_capacity) {
+            return false;
+        }
+        state.selected_unit_ids.push_back(unit.unit_id);
+        ++selection_budget;
+        return true;
+    };
+
+    bool target_selected = unit_already_selected(state, target.unit_id);
+    if (selection_budget < selection_capacity) {
+        // FUN_004ead82 consumes one local-count slot for the clicked unit even
+        // when Shift preserved its existing membership. Keep the vector
+        // unique while retaining that original cap-budget quirk.
+        ++selection_budget;
+        if (!target_selected) {
+            state.selected_unit_ids.push_back(target.unit_id);
+            target_selected = true;
+        }
+    }
+    const u32 reference_type = target.type_id;
+    const u32 reference_flags = target.runtime_flags & 0x31u;
+    if (target_selected) {
+        state.selected_unit_id = target.unit_id;
+        state.selected_unit_type = target.type_id;
+        state.selected_unit_owner = target.owner_id;
+    }
+
+    if (selection_budget < selection_capacity) {
+        for (const UiOverlayMinimapUnit& unit : state.minimap_units) {
+            if (unit.unit_id == target.unit_id ||
+                unit.owner_id != target.owner_id ||
+                unit.type_id != reference_type ||
+                (unit.runtime_flags & 0x31u) != reference_flags ||
+                !double_click_unit_visibility_passes(state, unit, true) ||
+                !double_click_unit_intersects_viewport(state, unit)) {
+                continue;
+            }
+            append_expansion_if_room(unit);
+            if (selection_budget >= selection_capacity) {
+                break;
+            }
+        }
+    }
+
+    RecountGameplaySelectedUnits(state);
+    if (target_selected && unit_already_selected(state, target.unit_id)) {
+        // Recount can discard stale preserved ids. Restore the clicked unit as
+        // the finalized primary before rebuilding its panel and selection cue.
+        state.selected_unit_id = target.unit_id;
+        state.selected_unit_type = target.type_id;
+        state.selected_unit_owner = target.owner_id;
+    }
+    BuildSelectedUnitCommandPanel(state);
+    if (target_selected) {
+        NotifyPrimaryGameplayUnitSelected(state);
+    }
+    return target_selected;
+}
+
+} // namespace
+
 void ResolveGameplayClickSelection(UiOverlayState& state) {
     const i32 drag_width = std::abs(state.selection_right - state.selection_left);
     const i32 drag_height = std::abs(state.selection_bottom - state.selection_top);
@@ -5691,9 +5843,40 @@ void ResolveGameplayClickSelection(UiOverlayState& state) {
         return;
     }
 
+    const bool unit_hit = FindUnitUnderStoredPointer(state);
+    if (state.ctrl_modifier_down) {
+        // FUN_004eb063 sends only a sub-five-pixel Ctrl click to
+        // FUN_004ead82. Ctrl+drag stays on the ordinary rectangle path above.
+        // With Shift held, a structure or remote primary blocks additive type
+        // expansion before the new hit is inspected (0x004eb5e1..0x004eb60f).
+        if (state.shift_modifier_down &&
+            primary_selection_blocks_additive_type_expansion(state)) {
+            return;
+        }
+
+        const UiOverlayMinimapUnit* target = unit_hit
+            ? find_unit_by_id(state, state.hover_context.unit_id)
+            : nullptr;
+        if (target != nullptr &&
+            unit_is_local_small_selection_candidate(state, *target)) {
+            select_visible_local_units_matching_type(state, *target);
+            return;
+        }
+
+        // 0x004eb6e5 preserves an existing primary when the Ctrl-click hit is
+        // not a local mobile. With no primary, the original falls back to a
+        // normal one-object selection instead of silently discarding the hit.
+        if (state.selected_unit_id != 0 || !unit_hit) {
+            return;
+        }
+        ResetGameplaySelectionState(state);
+        select_clicked_unit_by_original_priority(state);
+        BuildSelectedUnitCommandPanel(state);
+        return;
+    }
+
     const UiOverlayClickSelectionPolicy selection_policy =
-        ResolveUiOverlayClickSelectionPolicy(
-            FindUnitUnderStoredPointer(state), state.shift_modifier_down);
+        ResolveUiOverlayClickSelectionPolicy(unit_hit, state.shift_modifier_down);
     if (selection_policy == UiOverlayClickSelectionPolicy::preserve) {
         return;
     }
@@ -5725,12 +5908,16 @@ UiOverlayDoubleClickSelectionResult ResolveGameplayDoubleClickSelection(
         return UiOverlayDoubleClickSelectionResult::ignored;
     }
 
-    if (const UiOverlayHotRegion* region =
-            hot_region_at(state, state.mouse_x, state.mouse_y)) {
-        set_hot_region_result(state, *region);
-        if (can_capture_ui_command_button_press(state, *region)) {
-            return UiOverlayDoubleClickSelectionResult::ignored;
-        }
+    // Windows replaces the second WM_LBUTTONDOWN of a rapid click pair with
+    // WM_LBUTTONDBLCLK.  Original FUN_004e9ed0 still calls FUN_004ea47f for
+    // code 0x20 before it considers the world double-selection path.  That
+    // call stores DAT_00869e04/08, so the following button-up dispatches the
+    // HUD command normally.  Merely returning from this branch left rebuild's
+    // pressed-command fields empty and consequently discarded every mouse
+    // production click which Windows promoted to a double click.
+    BeginUiCommandButtonPress(state);
+    if (state.pressed_command_id != 0xffffffffu) {
+        return UiOverlayDoubleClickSelectionResult::ignored;
     }
 
     if (CheckPointerInsideMinimapAndPlacementMode(state)) {
@@ -5752,86 +5939,7 @@ UiOverlayDoubleClickSelectionResult ResolveGameplayDoubleClickSelection(
         return UiOverlayDoubleClickSelectionResult::fallback_release;
     }
 
-    bool primary_is_remote = false;
-    if (state.selected_unit_id != 0) {
-        const UiOverlayMinimapUnit* primary =
-            find_unit_by_id(state, state.selected_unit_id);
-        primary_is_remote = primary != nullptr
-            ? primary->owner_id != state.local_player_slot
-            : state.selected_unit_owner != state.local_player_slot;
-    }
-    if (!state.shift_modifier_down || primary_is_remote) {
-        ResetGameplaySelectionState(state);
-    }
-    else {
-        RecountGameplaySelectedUnits(state);
-    }
-
-    constexpr std::size_t kOriginalSelectionCapacity = 14;
-    const std::size_t configured_capacity = state.max_selected_unit_count == 0
-        ? kOriginalSelectionCapacity
-        : static_cast<std::size_t>(state.max_selected_unit_count);
-    const std::size_t selection_capacity =
-        std::min(kOriginalSelectionCapacity, configured_capacity);
-    std::size_t selection_budget =
-        std::min(state.selected_unit_ids.size(), selection_capacity);
-    const auto append_expansion_if_room = [&](const UiOverlayMinimapUnit& unit) {
-        if (unit_already_selected(state, unit.unit_id) ||
-            selection_budget >= selection_capacity) {
-            return false;
-        }
-        state.selected_unit_ids.push_back(unit.unit_id);
-        ++selection_budget;
-        return true;
-    };
-
-    bool target_selected = unit_already_selected(state, target->unit_id);
-    if (selection_budget < selection_capacity) {
-        // FUN_004ead82 consumes one local-count slot for the clicked unit even
-        // when Shift preserved its existing membership.  Keep the vector
-        // unique, but retain that original cap-budget quirk.
-        ++selection_budget;
-        if (!target_selected) {
-            state.selected_unit_ids.push_back(target->unit_id);
-            target_selected = true;
-        }
-    }
-    const u32 reference_type = target->type_id;
-    const u32 reference_flags = target->runtime_flags & 0x31u;
-    if (target_selected) {
-        state.selected_unit_id = target->unit_id;
-        state.selected_unit_type = target->type_id;
-        state.selected_unit_owner = target->owner_id;
-    }
-
-    if (selection_budget < selection_capacity) {
-        for (const UiOverlayMinimapUnit& unit : state.minimap_units) {
-            if (unit.unit_id == target->unit_id ||
-                unit.owner_id != target->owner_id || unit.type_id != reference_type ||
-                (unit.runtime_flags & 0x31u) != reference_flags ||
-                !double_click_unit_visibility_passes(state, unit, true) ||
-                !double_click_unit_intersects_viewport(state, unit)) {
-                continue;
-            }
-            append_expansion_if_room(unit);
-            if (selection_budget >= selection_capacity) {
-                break;
-            }
-        }
-    }
-
-    RecountGameplaySelectedUnits(state);
-    if (target_selected && unit_already_selected(state, target->unit_id)) {
-        // Recount may discard stale preserved ids; restore the clicked unit as
-        // the finalized primary exactly once before panel rebuild and voice.
-        state.selected_unit_id = target->unit_id;
-        state.selected_unit_type = target->type_id;
-        state.selected_unit_owner = target->owner_id;
-    }
-    BuildSelectedUnitCommandPanel(state);
-    if (target_selected) {
-        NotifyPrimaryGameplayUnitSelected(state);
-    }
+    select_visible_local_units_matching_type(state, *target);
     return UiOverlayDoubleClickSelectionResult::selected;
 }
 
