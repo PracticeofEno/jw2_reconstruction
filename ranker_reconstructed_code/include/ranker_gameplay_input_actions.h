@@ -142,6 +142,11 @@ struct GameplayInputActionCallbacks {
     GameplayInputActionEventPopCallback pop_input_event = nullptr;
     GameplayInputActionEventCallback handle_pointer_event = nullptr;
     GameplayInputActionEventCallback handle_keyboard_event = nullptr;
+    // FUN_004d9b87 dispatches each popped Win32 input record completely
+    // before it advances to the next record.  Keep an explicit event boundary
+    // so UI commands created by one record cannot observe selection state from
+    // a later record drained during the same render frame.
+    GameplayInputActionSimpleCallback finalize_input_event = nullptr;
     GameplayInputActionSimpleCallback pre_cursor_update = nullptr;
     GameplayInputActionSimpleCallback post_cursor_update = nullptr;
     GameplayInputActionSimpleCallback set_game_cursor_index = nullptr;

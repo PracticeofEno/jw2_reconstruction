@@ -11,6 +11,7 @@
 !ranker_reconstructed_code/docs/
 !ranker_reconstructed_code/docs/SCENARIO_MISSION_RESTORATION_REPORT.md
 !ranker_reconstructed_code/docs/ATTACK_EFFECT_MINIMAP_60HZ_REPORT_2026-08-16.md
+!ranker_reconstructed_code/docs/DEBUG_REPLAY_COMMAND_AUDIT_2026-08-16.md
 
 !ranker_reconstructed_code/config/
 !ranker_reconstructed_code/config/ranker_client.ini
@@ -32,6 +33,8 @@
 !ranker_reconstructed_code/tests/wrapped_u32_conversion_regression.cpp
 !ranker_reconstructed_code/tests/frontend_window_placement_regression.cpp
 !ranker_reconstructed_code/tests/gameplay_selection_modifier_regression.cpp
+!ranker_reconstructed_code/tests/gameplay_launch_state_regression.cpp
+!ranker_reconstructed_code/tests/gameplay_input_event_order_regression.cpp
 !ranker_reconstructed_code/tests/render_144fps_regression.cpp
 !ranker_reconstructed_code/tests/animation_144hz_generator_regression.py
 !ranker_reconstructed_code/tests/replay_save_controls_regression.cpp

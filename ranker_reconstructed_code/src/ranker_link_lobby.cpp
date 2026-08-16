@@ -2504,6 +2504,15 @@ LinkLobbyState& link_lobby_state() {
     return g_link_lobby_state;
 }
 
+void ClearLinkLobbySessionLaunchState(LinkLobbyState& state) {
+    // These fields form a one-shot handoff from the Link room to gameplay.
+    // Keep room presentation/selections intact for the retained lobby, but do
+    // not let an already-consumed map or startup packet reach another route.
+    state.start_parameter_payload.clear();
+    state.prepared_map_path.clear();
+    state.start_sync_complete = false;
+}
+
 void SetLinkLobbyLocalPlayerIdentity(LinkLobbyState& state,
     const char* player_name) {
     if (!player_index_valid(state.local_player_index)) {

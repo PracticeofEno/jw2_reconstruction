@@ -1567,6 +1567,10 @@ void HandleFreeServerSocketMessage(FreeServerLobbyState& state, SOCKET socket,
         }
         break;
     case FD_CLOSE:
+        if (state.join_timer != 0 && state.window != nullptr) {
+            KillTimer(state.window, state.join_timer);
+            state.join_timer = 0;
+        }
         if (WizardNetRelaySocketIsMember(socket)) {
             QueueWizardNetRelayLeaveForGame(state.relay_game_id);
             state.relay_game_id = 0;

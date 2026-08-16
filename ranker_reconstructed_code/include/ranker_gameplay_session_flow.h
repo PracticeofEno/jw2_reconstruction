@@ -19,6 +19,36 @@ constexpr bool ShouldCloseApplicationAfterP2PMatch(
     return loop_process_shutdown_requested;
 }
 
+enum class GameplayPostSessionFrontendRoute : u8 {
+    none = 0,
+    single_player,
+    direct_p2p,
+    wizardnet,
+};
+
+// Network transport mode zero is also used by replay playback.  The original
+// returns a replay launched from the single-player menu to that same menu; it
+// must not be mistaken for a completed WizardNet match merely because both
+// paths share transport mode zero.
+constexpr GameplayPostSessionFrontendRoute
+ResolveGameplayPostSessionFrontendRoute(u32 transition_mode,
+    bool single_player_return_after_gameplay, bool close_requested,
+    bool process_shutdown_requested) {
+    if (close_requested || process_shutdown_requested) {
+        return GameplayPostSessionFrontendRoute::none;
+    }
+    if (single_player_return_after_gameplay) {
+        return GameplayPostSessionFrontendRoute::single_player;
+    }
+    if (transition_mode == 1) {
+        return GameplayPostSessionFrontendRoute::direct_p2p;
+    }
+    if (transition_mode == 0) {
+        return GameplayPostSessionFrontendRoute::wizardnet;
+    }
+    return GameplayPostSessionFrontendRoute::none;
+}
+
 constexpr u32 kGameplaySaveSlotCount = 8;
 constexpr u32 kGameplaySaveMagicJwar = 0x5241574a;
 constexpr u32 kGameplaySaveVersion = 0x97;

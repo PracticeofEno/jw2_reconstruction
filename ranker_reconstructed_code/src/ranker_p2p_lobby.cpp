@@ -1187,6 +1187,7 @@ HRESULT StartP2PLobbyJoinAttempt(P2PLobbyState& state, const char* display_name,
             app_context, state.window, kP2PLobbySocketNotifyMessage);
     }
     if (!started) {
+        state.join_pending = false;
         return kP2PConnectStartFailed;
     }
 
@@ -1778,7 +1779,15 @@ void HandleP2PLobbySocketNotification(P2PLobbyState& state, WPARAM socket,
         } else {
             ApplyP2PLobbySocketEvent(state, socket, event);
         }
+        // Original 0x004baf90 leaves the pending join and its five-second
+        // retry timer alive after a close.  Once the join packet has already
+        // been sent, there is nothing left to retry and the timer must be
+        // retired with the connection-failed message.
         if (!was_join_pending) {
+            if (state.join_timer != 0 && state.window != nullptr) {
+                KillTimer(state.window, state.join_timer);
+                state.join_timer = 0;
+            }
             end_active_p2p_modal_prompt();
             show_startup_lobby_message(state, 52,
                 "Connection failed - game already started or disconnected.",

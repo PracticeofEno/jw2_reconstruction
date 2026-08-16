@@ -470,6 +470,7 @@ void DrainGameplayInputEvents(GameplayInputActionState& state) {
             if (state.callbacks.handle_pointer_event != nullptr) {
                 state.callbacks.handle_pointer_event(state, event);
             }
+            call(state, state.callbacks.finalize_input_event);
             continue;
         }
 
@@ -480,6 +481,7 @@ void DrainGameplayInputEvents(GameplayInputActionState& state) {
                 state.callbacks.handle_keyboard_event(state, event);
             }
         }
+        call(state, state.callbacks.finalize_input_event);
     }
 }
 

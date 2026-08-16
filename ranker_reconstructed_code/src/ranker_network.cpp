@@ -149,13 +149,28 @@ void close_udp_socket_handle() {
     g_network_state.udp_socket = INVALID_SOCKET;
 }
 
-void close_udp_socket_start_failure_send_side_only() {
+void close_udp_socket_start_failure() {
+    const int start_error = WSAGetLastError();
     if (g_network_state.udp_socket == INVALID_SOCKET) {
+        g_network_state.last_error = start_error;
         return;
     }
 
     shutdown(g_network_state.udp_socket, 1);
     closesocket(g_network_state.udp_socket);
+    g_network_state.udp_socket = INVALID_SOCKET;
+    g_network_state.udp_bind_address = sockaddr_in{};
+    g_network_state.udp_payload_limit = 0;
+    g_network_state.last_error = start_error;
+    WSASetLastError(start_error);
+}
+
+bool rollback_listen_socket_start_failure() {
+    const int start_error = WSAGetLastError();
+    CloseAllLegacySocketRecords();
+    g_network_state.last_error = start_error;
+    WSASetLastError(start_error);
+    return false;
 }
 
 bool append_to_send_queue(LegacySocketRecord& record, const void* data,
@@ -450,13 +465,13 @@ SOCKET StartLegacyUdpSocket(const char* bind_address, u16 port) {
     if (setsockopt(g_network_state.udp_socket, SOL_SOCKET, SO_RCVBUF,
             reinterpret_cast<const char*>(&buffer_bytes), sizeof(buffer_bytes)) ==
         SOCKET_ERROR) {
-        close_udp_socket_start_failure_send_side_only();
+        close_udp_socket_start_failure();
         return INVALID_SOCKET;
     }
     if (setsockopt(g_network_state.udp_socket, SOL_SOCKET, SO_SNDBUF,
             reinterpret_cast<const char*>(&buffer_bytes), sizeof(buffer_bytes)) ==
         SOCKET_ERROR) {
-        close_udp_socket_start_failure_send_side_only();
+        close_udp_socket_start_failure();
         return INVALID_SOCKET;
     }
 
@@ -464,7 +479,7 @@ SOCKET StartLegacyUdpSocket(const char* bind_address, u16 port) {
     int option_size = sizeof(payload_limit);
     if (getsockopt(g_network_state.udp_socket, SOL_SOCKET, kSoMaxMessageSize,
             reinterpret_cast<char*>(&payload_limit), &option_size) == SOCKET_ERROR) {
-        close_udp_socket_start_failure_send_side_only();
+        close_udp_socket_start_failure();
         return INVALID_SOCKET;
     }
     u32 udp_payload_limit = static_cast<u32>(payload_limit);
@@ -486,6 +501,7 @@ SOCKET StartLegacyUdpSocket(const char* bind_address, u16 port) {
     u_long nonblocking = 1;
     if (ioctlsocket(g_network_state.udp_socket, FIONBIO, &nonblocking) ==
         SOCKET_ERROR) {
+        close_udp_socket_start_failure();
         return INVALID_SOCKET;
     }
 
@@ -494,10 +510,12 @@ SOCKET StartLegacyUdpSocket(const char* bind_address, u16 port) {
     if (bind(g_network_state.udp_socket,
             reinterpret_cast<sockaddr*>(&g_network_state.udp_bind_address),
             sizeof(g_network_state.udp_bind_address)) == SOCKET_ERROR) {
+        close_udp_socket_start_failure();
         return INVALID_SOCKET;
     }
 
     if (!RefreshLegacyUdpLocalAddress()) {
+        close_udp_socket_start_failure();
         return INVALID_SOCKET;
     }
     return g_network_state.udp_socket;
@@ -719,9 +737,11 @@ void CloseAllLegacySocketRecords() {
     }
 
     g_network_state.active_socket_count = 0;
-    if (g_network_state.listen_socket_active) {
+    if (g_network_state.listen_socket != INVALID_SOCKET) {
         shutdown_send_and_close_socket(g_network_state.listen_socket);
     }
+    g_network_state.listen_socket = INVALID_SOCKET;
+    g_network_state.listen_address = sockaddr_in{};
     g_network_state.listen_socket_active = false;
 }
 
@@ -730,7 +750,10 @@ bool StartLegacyListenSocket(u16 port, HWND notify_window, UINT notify_message) 
         return false;
     }
 
-    clear_socket_table();
+    // A previous partial bind/listen attempt does not set the active flag.
+    // Close by handle before replacing it so retries cannot leak or retain the
+    // requested port.  The original 0x004f8530 omitted this error rollback.
+    CloseAllLegacySocketRecords();
     g_network_state.listen_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (g_network_state.listen_socket == INVALID_SOCKET) {
         return false;
@@ -743,16 +766,16 @@ bool StartLegacyListenSocket(u16 port, HWND notify_window, UINT notify_message) 
     if (bind(g_network_state.listen_socket,
             reinterpret_cast<sockaddr*>(&g_network_state.listen_address),
             sizeof(g_network_state.listen_address)) == SOCKET_ERROR) {
-        return false;
+        return rollback_listen_socket_start_failure();
     }
 
     if (listen(g_network_state.listen_socket, 5) == SOCKET_ERROR) {
-        return false;
+        return rollback_listen_socket_start_failure();
     }
 
     if (!select_async_socket_events(g_network_state.listen_socket, notify_window,
             notify_message, FD_ACCEPT)) {
-        return false;
+        return rollback_listen_socket_start_failure();
     }
 
     g_network_state.listen_socket_active = true;

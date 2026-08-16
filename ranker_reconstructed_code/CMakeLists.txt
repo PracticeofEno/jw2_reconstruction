@@ -930,6 +930,30 @@ if (RANKER_BUILD_REGRESSION_TESTS)
 
 endif()
 
+option(RANKER_BUILD_GAMEPLAY_INPUT_EVENT_ORDER_TEST
+    "Build the per-input-event gameplay command ordering regression" OFF)
+if (RANKER_BUILD_GAMEPLAY_INPUT_EVENT_ORDER_TEST)
+    enable_testing()
+    add_executable(gameplay_input_event_order_regression
+        tests/gameplay_input_event_order_regression.cpp
+        src/ranker_gameplay_input_actions.cpp
+    )
+    target_include_directories(gameplay_input_event_order_regression PRIVATE
+        include
+    )
+    if (MSVC)
+        target_compile_options(gameplay_input_event_order_regression PRIVATE /Gy)
+        target_link_options(gameplay_input_event_order_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(gameplay_input_event_order_regression PRIVATE
+            -O1 -ffunction-sections -fdata-sections)
+        target_link_options(gameplay_input_event_order_regression PRIVATE
+            -Wl,--gc-sections)
+    endif()
+    add_test(NAME gameplay_input_event_order_regression
+        COMMAND gameplay_input_event_order_regression)
+endif()
+
 # The historical all-regression switch references source files that are not
 # part of this reconstruction checkout.  Keep the available gameplay-heavy
 # tests independently buildable so transport, effects, spawning and linked
@@ -1389,6 +1413,20 @@ if (RANKER_BUILD_REPLAY_SAVE_CONTROLS_REGRESSION_TESTS)
     )
     add_test(NAME replay_save_controls_regression
         COMMAND replay_save_controls_regression)
+endif()
+
+option(RANKER_BUILD_GAMEPLAY_LAUNCH_STATE_REGRESSION_TESTS
+    "Build focused one-shot gameplay launch-state regressions" OFF)
+if (RANKER_BUILD_GAMEPLAY_LAUNCH_STATE_REGRESSION_TESTS)
+    enable_testing()
+    add_executable(gameplay_launch_state_regression
+        tests/gameplay_launch_state_regression.cpp
+    )
+    target_include_directories(gameplay_launch_state_regression PRIVATE
+        include
+    )
+    add_test(NAME gameplay_launch_state_regression
+        COMMAND gameplay_launch_state_regression)
 endif()
 
 add_executable(ranker_rebuild WIN32

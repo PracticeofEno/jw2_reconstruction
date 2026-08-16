@@ -26,6 +26,7 @@
 #include "ranker_gameplay_end_conditions.h"
 #include "ranker_gameplay_frame_render.h"
 #include "ranker_gameplay_input_actions.h"
+#include "ranker_gameplay_launch.h"
 #include "ranker_gameplay_packets.h"
 #include "ranker_gameplay_production_actions.h"
 #include "ranker_gameplay_result_screen.h"
@@ -826,6 +827,8 @@ struct RuntimeGlobals {
     bool single_player_frontend_pending = false;
     bool single_player_return_after_gameplay = false;
     bool p2p_command_line_flow_pending = false;
+    bool p2p_command_line_flow_active = false;
+    GameplayLaunchSource gameplay_launch_source = GameplayLaunchSource::none;
     bool gameplay_session_loop_reached = false;
     u32 frontend_stage_session_mode = 0;
     u32 frontend_stage_selected_faction = 0;
@@ -2038,6 +2041,32 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState& state
 void configure_default_mode1_gameplay_runtime_callbacks();
 const char* default_online_local_player_name();
 
+void finish_default_p2p_command_line_flow(const char* reason) {
+    const bool was_active = g_runtime.p2p_command_line_flow_active ||
+        g_runtime.p2p_command_line_flow_pending;
+    g_runtime.p2p_command_line_flow_active = false;
+    g_runtime.p2p_command_line_flow_pending = false;
+    if (GameplayLaunchUsesCommandLineP2P(g_runtime.gameplay_launch_source)) {
+        g_runtime.gameplay_launch_source = GameplayLaunchSource::none;
+    }
+    ResetP2PNetworkLaunchParameters(p2p_network_launch_parameters());
+    if (was_active) {
+        append_startup_log("p2p command-line launch consumed reason=%s",
+            reason != nullptr ? reason : "unspecified");
+    }
+}
+
+void clear_consumed_gameplay_launch_state(const char* reason) {
+    const GameplayLaunchSource source = g_runtime.gameplay_launch_source;
+    g_runtime.gameplay_launch_source = GameplayLaunchSource::none;
+    g_runtime.link_lobby_start_parameters_pending = false;
+    ClearLinkLobbySessionLaunchState(link_lobby_state());
+    if (GameplayLaunchUsesCommandLineP2P(source) ||
+        g_runtime.p2p_command_line_flow_active) {
+        finish_default_p2p_command_line_flow(reason);
+    }
+}
+
 void default_setup_data_write_failed(const char* path, void*) {
     if (path != nullptr && g_runtime.main_window != nullptr &&
         IsWindow(g_runtime.main_window)) {
@@ -2109,7 +2138,8 @@ void default_wizard_open_figs(WizardLoginState& state) {
 }
 
 void default_wizard_route_game_start(WizardLoginState& state) {
-    g_runtime.link_lobby_start_parameters_pending = false;
+    clear_consumed_gameplay_launch_state("wizard-session-route");
+    g_runtime.gameplay_launch_source = GameplayLaunchSource::wizard_session;
     PostMessageA(state.main_window, WM_USER + 8, 0, 2);
 }
 
@@ -2703,7 +2733,9 @@ const char* default_online_local_player_name() {
     if (wizard.display_name[0] != '\0') {
         return wizard.display_name.data();
     }
-    if (p2p_network_launch_parameters().player_name[0] != '\0') {
+    if ((g_runtime.p2p_command_line_flow_pending ||
+            g_runtime.p2p_command_line_flow_active) &&
+        p2p_network_launch_parameters().player_name[0] != '\0') {
         return p2p_network_launch_parameters().player_name.data();
     }
     return "Player";
@@ -2739,10 +2771,12 @@ void default_p2p_handle_prompt_result(P2PLobbyState&, UINT);
 
 bool default_p2p_initialize_network(P2PLobbyState& state) {
     P2PNetworkLaunchParameters& launch = p2p_network_launch_parameters();
-    if (launch.player_name[0] != '\0') {
+    const bool command_line_launch = g_runtime.p2p_command_line_flow_pending ||
+        g_runtime.p2p_command_line_flow_active;
+    if (command_line_launch && launch.player_name[0] != '\0') {
         copy_p2p_lobby_text(state.player_name, launch.player_name.data());
     }
-    if (launch.remote_address[0] != '\0') {
+    if (command_line_launch && launch.remote_address[0] != '\0') {
         copy_p2p_lobby_text(state.remote_address, launch.remote_address.data());
     }
 
@@ -2793,6 +2827,9 @@ void default_p2p_cancel_connection(P2PLobbyState& state) {
     state.join_pending = false;
     state.join_socket = INVALID_SOCKET;
     ShutdownLegacyUdpNetworking();
+    if (g_runtime.p2p_command_line_flow_active) {
+        finish_default_p2p_command_line_flow("p2p-lobby-cancel");
+    }
 }
 
 void default_p2p_shutdown_network(P2PLobbyState&) {
@@ -2955,10 +2992,33 @@ void default_link_resume_single_player(LinkLobbyState&) {
     resume_worker_after_modal_action();
 }
 
+void clear_default_replay_playback_runtime(const char* reason) {
+    ReplayRecordingState& replay = replay_recording_state();
+    const bool playback_was_active = replay.playback_mode;
+    ClearReplayPlaybackState(replay);
+    SetReplayControlsEnabled(false);
+    SetRankerMainWindowScenarioAiProfileOverride(false);
+    if (playback_was_active) {
+        append_startup_log("replay playback state cleared reason=%s",
+            reason != nullptr ? reason : "unspecified");
+    }
+}
+
 void default_link_start_game(LinkLobbyState& state) {
+    // A Link-lobby start is always a live session.  Original replay teardown
+    // ends at 0x004d93e8 by clearing DAT_01242a20; enforce the same invariant
+    // here as a boundary guard so a prior replay can never override the room's
+    // prepared map or route the frame gate through replay packet playback.
+    if (replay_recording_state().playback_mode) {
+        clear_default_replay_playback_runtime("live-link-session-start");
+    }
     const u32 mode = state.mode >= 0 ?
         static_cast<u32>(state.mode) : g_runtime.frontend_mode;
     g_runtime.frontend_mode = mode;
+    g_runtime.gameplay_launch_source =
+        g_runtime.p2p_command_line_flow_active ?
+        GameplayLaunchSource::command_line_p2p :
+        GameplayLaunchSource::link_lobby;
     g_runtime.link_lobby_start_parameters_pending =
         !state.start_parameter_payload.empty();
     append_startup_log("link start_game mode=%lu start_payload=%zu map=%s",
@@ -5410,7 +5470,6 @@ void default_gameplay_input_handle_pointer_event(GameplayInputActionState& state
 
 void default_gameplay_input_handle_keyboard_event(GameplayInputActionState& state,
     const InputEvent& event) {
-    (void)state;
     sync_default_ui_overlay_runtime_from_gameplay_state();
     UiOverlayState& overlay = ui_overlay_state();
     const InputState& input = input_state();
@@ -5457,21 +5516,31 @@ void default_gameplay_input_handle_keyboard_event(GameplayInputActionState& stat
         // while an unprocessed production click remains idle and is ignored.
         BuildSelectedUnitCommandPanel(overlay);
     }
+    const UiOverlayGameplayKeyboardRoute keyboard_route =
+        ResolveUiOverlayGameplayKeyboardRoute(
+            legacy_scan_code, ascii, overlay.chat_active);
+    const bool selection_recall =
+        !overlay.control_group_assign_mode &&
+        (keyboard_route == UiOverlayGameplayKeyboardRoute::control_group ||
+            keyboard_route ==
+                UiOverlayGameplayKeyboardRoute::cycle_control_group);
     const bool cancel_mode =
         legacy_scan_code == 1u && overlay.placement_mode != 0;
     DispatchGameplayUiKeyboardInput(overlay, legacy_scan_code, ascii);
-    const bool recalled_control_group =
-        !overlay.control_group_assign_mode &&
-        ((legacy_scan_code >= 2u && legacy_scan_code <= 0x0bu) ||
-            legacy_scan_code == 0x29u) &&
-        overlay.selected_production_category == 0;
-    if (cancel_mode || recalled_control_group) {
+    if (cancel_mode || selection_recall) {
         // DAT_00864bb4 is mirrored by pointer_aux_state on the next frame.
         // FUN_004e74e2 clears it for digit recall/cycle; clear both views so
         // sync cannot resurrect the just-cancelled production category.
         state.pointer_aux_state = 0;
     }
     apply_default_ui_overlay_runtime_mutations();
+    if (selection_recall) {
+        // FUN_004e74e2 has finished changing the active selection before
+        // FUN_004d9b87 accepts the next queued input record.  Rebuild the hit
+        // regions at the same boundary so a fast digit -> production click
+        // addresses the newly selected building instead of an empty panel.
+        BuildSelectedUnitCommandPanel(overlay);
+    }
     publish_default_ui_overlay_camera(overlay);
 }
 
@@ -5708,6 +5777,14 @@ void default_gameplay_input_restore_cursor(GameplayInputActionState& input) {
 void default_gameplay_input_finalize_cursor_frame(GameplayInputActionState&) {
     UiOverlayState& overlay = ui_overlay_state();
     BuildSelectedUnitCommandPanel(overlay);
+}
+
+void default_gameplay_input_finalize_input_event(GameplayInputActionState&) {
+    // UI overlay actions are emitted while a pointer record is handled.  The
+    // original immediately converts them to gameplay packets before reading
+    // another input record; deferring this until the entire ring was drained
+    // let a following control-group key replace the producer/unit identity.
+    process_default_ui_overlay_command_actions();
 }
 
 bool default_gameplay_input_publish_action(GameplayInputActionState&,
@@ -7227,6 +7304,10 @@ void configure_default_gameplay_input_action_context(
         state.callbacks.handle_keyboard_event =
             default_gameplay_input_handle_keyboard_event;
     }
+    if (state.callbacks.finalize_input_event == nullptr) {
+        state.callbacks.finalize_input_event =
+            default_gameplay_input_finalize_input_event;
+    }
     if (state.callbacks.pre_cursor_update == nullptr) {
         state.callbacks.pre_cursor_update =
             default_gameplay_input_pre_cursor_update;
@@ -7382,49 +7463,60 @@ void default_gameplay_flow_configure_display(GameplaySessionFlowState&) {
 }
 
 const char* resolve_gameplay_session_archive_path() {
-    const ReplayRecordingState& replay = replay_recording_state();
-    if (replay.playback_mode && !replay.playback_archive_path.empty()) {
-        const DWORD attributes =
-            GetFileAttributesA(replay.playback_archive_path.c_str());
-        if (attributes != INVALID_FILE_ATTRIBUTES &&
-            (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
-            return replay.playback_archive_path.c_str();
+    const auto existing_file = [](const char* path) -> const char* {
+        if (path == nullptr || path[0] == '\0') {
+            return nullptr;
         }
-    }
+        const DWORD attributes = GetFileAttributesA(path);
+        return attributes != INVALID_FILE_ATTRIBUTES &&
+            (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0 ? path : nullptr;
+    };
 
-    P2PNetworkLaunchParameters& launch = p2p_network_launch_parameters();
-    if (launch.uses_map_file && launch.map_path[0] != '\0') {
-        return launch.map_path.data();
+    const GameplayLaunchSource source = g_runtime.gameplay_launch_source;
+    if (GameplayLaunchUsesReplay(source)) {
+        const ReplayRecordingState& replay = replay_recording_state();
+        return replay.playback_mode ?
+            existing_file(replay.playback_archive_path.c_str()) : nullptr;
     }
-
-    // The original Link lobby normalizes the descriptor's map name into its
-    // absolute DAT_01244a40 path (cwd + "\\Maps" + descriptor tail), then
-    // passes that path directly to the gameplay session importer.  The
-    // reconstructed download preparation already performs the same safe
-    // basename-based resolution; retain and consume that resolved path here.
-    LinkLobbyState& link_lobby = link_lobby_state();
-    if (!link_lobby.prepared_map_path.empty()) {
-        const DWORD attributes =
-            GetFileAttributesA(link_lobby.prepared_map_path.c_str());
-        if (attributes != INVALID_FILE_ATTRIBUTES &&
-            (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
-            return link_lobby.prepared_map_path.c_str();
+    if (GameplayLaunchUsesCommandLineP2P(source)) {
+        const P2PNetworkLaunchParameters& launch =
+            p2p_network_launch_parameters();
+        if (launch.uses_map_file) {
+            return existing_file(launch.map_path.data());
         }
+        // A command-line join receives its map through the Link room.
     }
-
-    CreateGameState& create_game = create_game_state();
-    if (create_game.selected_session_valid &&
-        create_game.selected_session.archive_path[0] != '\0') {
-        return create_game.selected_session.archive_path.data();
+    if (GameplayLaunchUsesLinkLobby(source)) {
+        // Original Link startup passes the current DAT_01244a40 map path
+        // directly into the synchronous importer.  Read only this launch's
+        // Link handoff instead of searching every retained frontend singleton.
+        return existing_file(link_lobby_state().prepared_map_path.c_str());
     }
-
-    WizardLoginState& wizard = wizard_login_state();
-    if (!wizard.selected_session.invalid &&
-        wizard.selected_session.archive_path[0] != '\0') {
-        return wizard.selected_session.archive_path.data();
+    if (GameplayLaunchUsesWizardSession(source)) {
+        const WizardLoginState& wizard = wizard_login_state();
+        return !wizard.selected_session.invalid ?
+            existing_file(wizard.selected_session.archive_path.data()) : nullptr;
     }
-
     return nullptr;
+}
+
+u32 resolve_gameplay_launch_resource_theme() {
+    const GameplayLaunchSource source = g_runtime.gameplay_launch_source;
+    if (GameplayLaunchUsesReplay(source)) {
+        // FUN_0049e100 copies the replay header before session import.  Its
+        // metadata begins at 0x63 and contains the Link tribe bytes at +0x50.
+        const ReplayRecordingState& replay = replay_recording_state();
+        return ResolveReplayGameplayTheme(replay.playback_payload.data(),
+            replay.playback_payload.size());
+    }
+    if (GameplayLaunchUsesLinkLobby(source)) {
+        const LinkLobbyState& lobby = link_lobby_state();
+        const int local_index = std::clamp(
+            lobby.local_player_index, 0, kLinkLobbyAvatarCount - 1);
+        const u32 theme = lobby.tribe_choices[local_index];
+        return theme <= 3 ? theme : 0u;
+    }
+    return 0;
 }
 
 MinimapPixelFormat default_gameplay_minimap_pixel_format() {
@@ -8046,14 +8138,7 @@ bool default_gameplay_flow_import_session_bundle(GameplaySessionFlowState& state
     }
 
     g_runtime.gameplay_session_archive_path = archive_path;
-    {
-        const LinkLobbyState& lobby = link_lobby_state();
-        const int local_index = std::clamp(
-            lobby.local_player_index, 0, kLinkLobbyAvatarCount - 1);
-        const u32 theme = lobby.tribe_choices[local_index] <= 3 ?
-            lobby.tribe_choices[local_index] : 0u;
-        SetRuntimeResourceThemeIndex(theme);
-    }
+    SetRuntimeResourceThemeIndex(resolve_gameplay_launch_resource_theme());
     SetReplayControlsEnabled(replay_recording_state().playback_mode);
     const bool bundle_imported = HandleGameplaySessionBundleImport(archive_path, 0);
     if (!bundle_imported) {
@@ -9405,6 +9490,7 @@ u8 normalized_link_lobby_startup_slot_state(u8 value) {
 
 bool link_lobby_startup_parameters_available() {
     return g_runtime.link_lobby_start_parameters_pending &&
+        GameplayLaunchUsesLinkLobby(g_runtime.gameplay_launch_source) &&
         !link_lobby_state().start_parameter_payload.empty();
 }
 
@@ -9601,6 +9687,9 @@ bool apply_pending_link_lobby_start_parameters_to_gameplay_startup() {
     mirror_startup_slots_to_player_runtime(startup, players);
     sync_startup_owner_factions_to_lifecycle(startup);
     sync_link_lobby_startup_resources_to_lifecycle(players, startup.lifecycle);
+    // The original startup packet is consumed by the same synchronous call.
+    // The P2P session state already owns its replay/flight-recorder copy.
+    lobby.start_parameter_payload.clear();
     return true;
 }
 
@@ -11775,8 +11864,21 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
         input.ai_profile_mode = 2;
     }
 
-    const char* player_name = p2p_network_launch_parameters().player_name[0] != '\0' ?
-        p2p_network_launch_parameters().player_name.data() : "Player";
+    std::string player_name_storage;
+    if (GameplayLaunchUsesCommandLineP2P(g_runtime.gameplay_launch_source) &&
+        p2p_network_launch_parameters().player_name[0] != '\0') {
+        player_name_storage = p2p_network_launch_parameters().player_name.data();
+    }
+    else if (link_lobby_start_parameters_available_for_start) {
+        const LinkLobbyState& lobby = link_lobby_state();
+        const u32 local_owner = static_cast<u32>(std::clamp(
+            lobby.local_player_index, 0, kLinkLobbyAvatarCount - 1));
+        player_name_storage = link_lobby_startup_player_name(lobby, local_owner);
+    }
+    if (player_name_storage.empty()) {
+        player_name_storage = default_online_local_player_name();
+    }
+    const char* player_name = player_name_storage.c_str();
     copy_result_text(input.players[0].name, player_name);
     input.players[0].owner_slot = 0;
     if (link_lobby_start_parameters_available_for_start) {
@@ -12856,7 +12958,15 @@ void default_gameplay_flow_process_session_loop(GameplaySessionFlowState& state)
     loop_state.restart_requested = false;
     g_runtime.gameplay_session_loop_reached = true;
     append_startup_log("session-flow: process loop reached");
+    const bool replay_playback_session = replay_recording_state().playback_mode;
     ProcessGameplaySessionLoop(loop_state, state.session_loop_iteration_budget);
+    if (replay_playback_session) {
+        // Every replay exit path converges here, including the ordinary
+        // leave-request branch that does not call handle_replay_session_leave.
+        // The original common replay cleanup block 0x004d9398..0x004d93f2
+        // clears DAT_01242a20 immediately before returning.
+        clear_default_replay_playback_runtime("replay-session-loop-return");
+    }
     GameplayModalUiState& modal = gameplay_modal_ui_state();
     const bool close_application = ShouldCloseApplicationAfterP2PMatch(
         loop_state.process_shutdown_requested, modal.surrender_requested);
@@ -13561,13 +13671,14 @@ void default_gameplay_loop_handle_replay_session_leave(GameplayLoopState&) {
     CloseAllMilesEffectPlaylistStreams();
     OpenGameplayResultTextDialog();
     CloseDirectMilesMusic();
-    render_default_gameplay_result_and_leave_once();
-    // Original replay teardown clears DAT_01242a20 before returning to the
-    // front end. Without this, the next ordinary match can inherit playback
-    // mode and skip creation of Replay.tmp.
-    ClearReplayPlaybackState(replay_recording_state());
-    SetReplayControlsEnabled(false);
-    SetRankerMainWindowScenarioAiProfileOverride(false);
+    // Original ProcessGameplaySessionLoop 0x004c1278 calls FUN_00430c40,
+    // closes DirectMusic, then calls FUN_004d72d0 and returns.  It does not
+    // enter the ordinary score/ranking-screen modal.  That extra modal kept
+    // reconstructed replay teardown inside a post-result UI flow instead of
+    // returning directly to the single-player frontend.
+    prepare_default_gameplay_result_leave_render();
+    run_default_gameplay_leave_reset_once();
+    clear_default_replay_playback_runtime("replay-session-leave");
 }
 
 void default_gameplay_loop_handle_session_abort(GameplayLoopState&) {
@@ -30439,6 +30550,9 @@ void run_default_gameplay_session_transition(HWND owner, u32 mode) {
     g_runtime.gameplay_transition_mode = mode;
     g_runtime.gameplay_transition_active = true;
     g_runtime.gameplay_session_loop_reached = false;
+    // This is a new frontend launch, never the inner restart used by the
+    // in-game Load command.
+    g_runtime.gameplay_in_game_load_resume = GameplayInGameLoadResumeState{};
     append_startup_log("gameplay transition begin mode=%lu",
         static_cast<unsigned long>(mode));
 
@@ -30452,6 +30566,7 @@ void run_default_gameplay_session_transition(HWND owner, u32 mode) {
                     "Gameplay session flow reached, but DirectX is not initialized."));
         }
         g_runtime.gameplay_transition_active = false;
+        clear_consumed_gameplay_launch_state("directx-unavailable");
         resume_worker_after_modal_action();
         return;
     }
@@ -30471,6 +30586,11 @@ void run_default_gameplay_session_transition(HWND owner, u32 mode) {
     RunP2PGameplaySessionAfterModal(state);
     SetDirectPlayMessageDispatchMode(0);
 
+    const GameplayPostSessionFrontendRoute frontend_return =
+        ResolveGameplayPostSessionFrontendRoute(mode,
+            g_runtime.single_player_return_after_gameplay,
+            state.close_requested, state.process_shutdown_requested);
+
     if (state.close_requested || state.process_shutdown_requested) {
         default_gameplay_flow_send_main_close(state);
     }
@@ -30484,10 +30604,11 @@ void run_default_gameplay_session_transition(HWND owner, u32 mode) {
         static_cast<unsigned long>(mode),
         g_runtime.gameplay_session_loop_reached ? "yes" : "no");
     g_runtime.gameplay_transition_active = false;
+    clear_consumed_gameplay_launch_state("session-transition-return");
     resume_worker_after_modal_action();
 
-    if (!state.close_requested && !state.process_shutdown_requested &&
-        mode == 1 && g_runtime.main_window != nullptr &&
+    if (frontend_return == GameplayPostSessionFrontendRoute::direct_p2p &&
+        g_runtime.main_window != nullptr &&
         IsWindow(g_runtime.main_window)) {
         // A completed direct-P2P match returns to JW2_09's
         // "player-to-player direct connection" frontend.  Posting this to
@@ -30497,13 +30618,21 @@ void run_default_gameplay_session_transition(HWND owner, u32 mode) {
         PostMessageA(g_runtime.main_window, WM_USER + 4, 0, 1);
         append_startup_log("gameplay transition queued direct-p2p frontend return");
     }
-    else if (!state.close_requested && !state.process_shutdown_requested &&
-        mode == 0 && g_runtime.main_window != nullptr &&
+    else if (frontend_return == GameplayPostSessionFrontendRoute::wizardnet &&
+        g_runtime.main_window != nullptr &&
         IsWindow(g_runtime.main_window)) {
         // WizardNet matches return to the retained authenticated online lobby
         // only after the gameplay loop has genuinely finished.
         PostMessageA(g_runtime.main_window, WM_USER + 4, 0, 2);
         append_startup_log("gameplay transition queued wizardnet lobby return");
+    }
+    else if (frontend_return ==
+            GameplayPostSessionFrontendRoute::single_player) {
+        // winmain_worker_enter_frontend_flow owns this worker-side return.
+        // Posting WM_USER+4 reason 2 here would make the window thread treat
+        // mode-zero replay as WizardNet and suspend this worker mid-return.
+        append_startup_log(
+            "gameplay transition reserved single-player frontend return");
     }
 }
 
@@ -30551,6 +30680,7 @@ void default_p2p_handle_prompt_result(P2PLobbyState&, UINT) {
 
     resume_default_p2p_command_line_modal(GameplayModalResult::Cancel);
     write_default_p2p_command_line_result(P2PGameEndReason::ConnectCancelFailClient);
+    finish_default_p2p_command_line_flow("connect-prompt-result");
 }
 
 void prepare_default_p2p_command_line_connect_state() {
@@ -30570,6 +30700,7 @@ void open_default_p2p_command_line_join(HWND window, HINSTANCE instance,
     configure_p2p_callbacks(lobby);
     if (!CreateP2PLobbyWindow(lobby, window, instance, 0)) {
         resume_default_p2p_command_line_modal(GameplayModalResult::Cancel);
+        finish_default_p2p_command_line_flow("p2p-lobby-create-failed");
         return;
     }
     activate_frontend_state(lobby);
@@ -30651,6 +30782,7 @@ void open_default_p2p_command_line_host(HWND window, HINSTANCE instance,
         ShowOnlineModalPrompt1(online_modal_prompt_state(), window, text,
             RGB(250, 250, 250));
         resume_default_p2p_command_line_modal(GameplayModalResult::Cancel);
+        finish_default_p2p_command_line_flow("command-line-map-load-failed");
         return;
     }
     append_startup_log("p2p command-line host map load ok players=%lu size=%lux%lu",
@@ -30675,6 +30807,7 @@ void open_default_p2p_command_line_host(HWND window, HINSTANCE instance,
         ShowOnlineModalPrompt1(online_modal_prompt_state(), window, text,
             RGB(250, 250, 250));
         resume_default_p2p_command_line_modal(GameplayModalResult::Cancel);
+        finish_default_p2p_command_line_flow("command-line-network-failed");
         return;
     }
 
@@ -30690,6 +30823,7 @@ void open_default_p2p_command_line_game_flow(HWND window, HINSTANCE instance) {
     SetRankerMainWindowFrontendMode(1);
     SetActiveNetworkTransportMode(1);
     g_runtime.link_lobby_start_parameters_pending = false;
+    ClearLinkLobbySessionLaunchState(link_lobby_state());
 
     if (launch.uses_map_file) {
         open_default_p2p_command_line_host(window, instance, launch);
@@ -30749,6 +30883,7 @@ void default_open_replay_save(HWND window, HINSTANCE instance, void*) {
 
 bool default_start_replay_playback(ReplayDialogState& state,
     const ReplayArchiveDescriptor& descriptor) {
+    clear_consumed_gameplay_launch_state("replay-selection");
     if (!StartReplayPlaybackFromSelection(state, descriptor)) {
         return false;
     }
@@ -30760,6 +30895,7 @@ bool default_start_replay_playback(ReplayDialogState& state,
     g_runtime.gameplay_transition_owner = state.main_window;
     g_runtime.gameplay_transition_mode = 0;
     g_runtime.gameplay_transition_pending = true;
+    g_runtime.gameplay_launch_source = GameplayLaunchSource::replay;
     g_runtime.gameplay_session_flow.modal_result =
         GameplayModalResult::ContinueNetwork;
     g_runtime.gameplay_session_flow.worker_modal_pending = 0;
@@ -30830,6 +30966,10 @@ void open_game_frontend_modal(HWND window, u32 action);
 void open_replay_load_dialog(HWND window);
 
 void reset_default_single_player_route_state() {
+    clear_consumed_gameplay_launch_state("single-player-menu-entry");
+    g_runtime.gameplay_in_game_load_resume = GameplayInGameLoadResumeState{};
+    frontend_stage_flow_state() = FrontendStageFlowState{};
+    g_runtime.frontend_stage_transition_active = false;
     FrontendCreateGameRouteState& route = frontend_create_game_route_state();
     route.network_ai_profile_override = false;
     route.create_game_open_requested = false;
@@ -31991,6 +32131,9 @@ void EnterHostedOrJoinedP2PGameFlow(HWND window, HINSTANCE instance) {
     if (g_runtime.p2p_command_line_flow_pending &&
         p2p_network_launch_parameters().valid) {
         g_runtime.p2p_command_line_flow_pending = false;
+        g_runtime.p2p_command_line_flow_active = true;
+        g_runtime.gameplay_launch_source =
+            GameplayLaunchSource::command_line_p2p;
         append_startup_log("enter p2p command-line flow");
         open_default_p2p_command_line_game_flow(window, instance);
         return;
@@ -32003,6 +32146,11 @@ void EnterHostedOrJoinedP2PGameFlow(HWND window, HINSTANCE instance) {
         resume_worker_after_modal_action();
         append_startup_log("enter p2p resumed pending gameplay modal");
         return;
+    }
+    if (g_runtime.gameplay_launch_source == GameplayLaunchSource::none) {
+        // WM_USER+8 reason 2 is the original Wizard/session handoff.  Link
+        // rooms queue their transition directly from default_link_start_game.
+        g_runtime.gameplay_launch_source = GameplayLaunchSource::wizard_session;
     }
     append_startup_log("enter p2p queue gameplay transition mode=%lu",
         static_cast<unsigned long>(g_runtime.frontend_mode));

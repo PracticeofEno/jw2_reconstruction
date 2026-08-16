@@ -269,6 +269,7 @@ struct LinkLobbyState {
 };
 
 LinkLobbyState& link_lobby_state();
+void ClearLinkLobbySessionLaunchState(LinkLobbyState& state);
 
 int CountLinkLobbySelectedAvatarSlots(const LinkLobbyState& state);
 void InstallLinkLobbyAccelerators(LinkLobbyState& state);
