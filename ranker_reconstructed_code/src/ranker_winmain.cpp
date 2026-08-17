@@ -2175,23 +2175,6 @@ void default_wizard_open_new_account(WizardLoginState& state,
         reinterpret_cast<LPARAM>(account), reinterpret_cast<LPARAM>(password));
 }
 
-const std::string& wizardnet_server_ini_path() {
-    static const std::string path = [] {
-        std::array<char, MAX_PATH> executable{};
-        const DWORD length = GetModuleFileNameA(nullptr, executable.data(),
-            static_cast<DWORD>(executable.size()));
-        if (length == 0 || length >= executable.size()) {
-            return std::string("wizardnet_server.ini");
-        }
-        std::string result(executable.data(), length);
-        const std::size_t separator = result.find_last_of("\\/");
-        result.resize(separator == std::string::npos ? 0 : separator + 1);
-        result += "wizardnet_server.ini";
-        return result;
-    }();
-    return path;
-}
-
 void configure_wizard_callbacks(WizardLoginState& state) {
     state.async_tcp_socket = &FrontendAsyncTcpSocket0();
     state.icon_collection = &GlobalBitmapIconResourceCollection();
@@ -2207,26 +2190,19 @@ void configure_wizard_callbacks(WizardLoginState& state) {
     ConnectFrontendState& connect = connect_frontend_state();
     LoadConnectFrontendConfiguration(connect);
 
-    // Keep the reconstructed WizardNet endpoint beside the executable so a
-    // distributed client can be redirected without rebuilding it or setting
-    // a process environment.  Explicit environment variables remain the
-    // highest-priority override for automated and multi-instance tests.
-    std::array<char, 256> configured_address{};
-    GetPrivateProfileStringA("WizardNet", "Address", "127.0.0.1",
-        configured_address.data(), static_cast<DWORD>(configured_address.size()),
-        wizardnet_server_ini_path().c_str());
+    // Display, remembered account and relay endpoint now share the client
+    // configuration. Explicit environment variables remain the highest-
+    // priority override for automated and multi-instance tests.
+    const RankerClientWizardNetConfig wizardnet_config =
+        LoadRankerClientWizardNetConfig();
     const char* server_address = std::getenv("RANKER_RECONSTRUCTED_SERVER_ADDRESS");
     if (server_address == nullptr || *server_address == '\0') {
-        server_address = configured_address[0] != '\0' ?
-            configured_address.data() : "127.0.0.1";
+        server_address = wizardnet_config.address.c_str();
     }
     std::snprintf(state.server_address.data(), state.server_address.size(), "%s",
         server_address);
 
-    const UINT configured_port = GetPrivateProfileIntA("WizardNet", "Port", 19777,
-        wizardnet_server_ini_path().c_str());
-    unsigned long server_port = configured_port != 0 && configured_port <= 0xffffu ?
-        configured_port : 19777;
+    unsigned long server_port = wizardnet_config.port;
     if (const char* port_text = std::getenv("RANKER_RECONSTRUCTED_SERVER_PORT")) {
         char* end = nullptr;
         const unsigned long parsed = std::strtoul(port_text, &end, 10);

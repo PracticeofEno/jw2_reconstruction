@@ -958,9 +958,8 @@ def client_report(
                 "sha256": "AAAA",
             },
             "ini": {
-                "path": r"C:\Ranker\wizardnet_server.ini",
+                "path": r"C:\Ranker\ranker_client.ini",
                 "exists": True,
-                "text": "[WizardNet]\nAddress=115.22.136.89\nPort=19777\n",
             },
             "ini_values": {
                 "Address": "115.22.136.89",

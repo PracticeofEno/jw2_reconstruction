@@ -35,13 +35,13 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = (Resolve-Path (Join-Path $scriptDir "..\..")).Path
 $installPath = (Resolve-Path $InstallDir).Path
 $exePath = Join-Path $installPath "ranker_rebuild.exe"
-$iniPath = Join-Path $installPath "wizardnet_server.ini"
+$iniPath = Join-Path $installPath "ranker_client.ini"
 
 if (-not (Test-Path -LiteralPath $exePath -PathType Leaf)) {
     throw "ranker_rebuild.exe not found: $exePath"
 }
 if (-not (Test-Path -LiteralPath $iniPath -PathType Leaf)) {
-    throw "wizardnet_server.ini not found: $iniPath"
+    throw "ranker_client.ini not found: $iniPath"
 }
 
 if ([System.IO.Path]::IsPathRooted($OutputDir)) {
@@ -68,7 +68,13 @@ $toolFiles = @(
 )
 
 Copy-Item -LiteralPath $exePath -Destination (Join-Path $payloadDir "ranker_rebuild.exe")
-Copy-Item -LiteralPath $iniPath -Destination (Join-Path $payloadDir "wizardnet_server.ini")
+$payloadIniPath = Join-Path $payloadDir "ranker_client.ini"
+$payloadIniText = [System.IO.File]::ReadAllText($iniPath)
+$payloadIniText = [regex]::Replace(
+    $payloadIniText,
+    '(?im)^(\s*LastAccount\s*=).*$','$1')
+[System.IO.File]::WriteAllText(
+    $payloadIniPath, $payloadIniText, [System.Text.UTF8Encoding]::new($false))
 foreach ($toolFile in $toolFiles) {
     Copy-Item -LiteralPath (Join-Path $scriptDir $toolFile) -Destination (Join-Path $toolsDir $toolFile)
 }
@@ -221,23 +227,41 @@ $ErrorActionPreference = "Stop"
 $kitRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $payloadDir = Join-Path $kitRoot "deployment_payload"
 $sourceExe = Join-Path $payloadDir "ranker_rebuild.exe"
-$sourceIni = Join-Path $payloadDir "wizardnet_server.ini"
+$sourceIni = Join-Path $payloadDir "ranker_client.ini"
 $targetDir = (Resolve-Path $InstallDir).Path
 $targetExe = Join-Path $targetDir "ranker_rebuild.exe"
-$targetIni = Join-Path $targetDir "wizardnet_server.ini"
+$targetIni = Join-Path $targetDir "ranker_client.ini"
 
 if (-not (Test-Path -LiteralPath $sourceExe -PathType Leaf)) {
     throw "payload ranker_rebuild.exe is missing: $sourceExe"
 }
 if (-not (Test-Path -LiteralPath $sourceIni -PathType Leaf)) {
-    throw "payload wizardnet_server.ini is missing: $sourceIni"
+    throw "payload ranker_client.ini is missing: $sourceIni"
 }
 if (-not (Test-Path -LiteralPath (Join-Path $targetDir "ranker.exe") -PathType Leaf)) {
     throw "target folder does not look like RankerOCPV_Win; ranker.exe missing: $targetDir"
 }
 
+$lastAccount = ""
+if (Test-Path -LiteralPath $targetIni -PathType Leaf) {
+    $accountMatch = [regex]::Match(
+        [System.IO.File]::ReadAllText($targetIni),
+        '(?im)^\s*LastAccount\s*=(.*)$')
+    if ($accountMatch.Success) {
+        $lastAccount = $accountMatch.Groups[1].Value.Trim()
+    }
+}
 Copy-Item -LiteralPath $sourceExe -Destination $targetExe -Force
 Copy-Item -LiteralPath $sourceIni -Destination $targetIni -Force
+if ($lastAccount) {
+    $targetIniText = [System.IO.File]::ReadAllText($targetIni)
+    $targetIniText = [regex]::Replace(
+        $targetIniText,
+        '(?im)^(\s*LastAccount\s*=).*$',
+        { param($match) $match.Groups[1].Value + $lastAccount })
+    [System.IO.File]::WriteAllText(
+        $targetIni, $targetIniText, [System.Text.UTF8Encoding]::new($false))
+}
 
 $sourceHash = (Get-FileHash -LiteralPath $sourceExe -Algorithm SHA256).Hash
 $targetHash = (Get-FileHash -LiteralPath $targetExe -Algorithm SHA256).Hash
@@ -248,9 +272,8 @@ if ($sourceHash -ne $targetHash) {
 [pscustomobject]@{
     InstallDir = $targetDir
     RankerRebuild = $targetExe
-    WizardNetIni = $targetIni
+    RankerClientIni = $targetIni
     RankerRebuildSha256 = $targetHash
-    WizardNetIniText = [System.IO.File]::ReadAllText($targetIni)
 } | ConvertTo-Json -Compress
 '@
 Set-Content -LiteralPath (Join-Path $kitRoot "install_payload.ps1") -Value $installWrapper -Encoding UTF8
@@ -265,10 +288,10 @@ $manifest = [ordered]@{
             sha256 = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
             size = (Get-Item -LiteralPath $exePath).Length
         }
-        wizardnet_server_ini = @{
-            path = "deployment_payload\wizardnet_server.ini"
-            sha256 = (Get-FileHash -LiteralPath $iniPath -Algorithm SHA256).Hash
-            text = [System.IO.File]::ReadAllText($iniPath)
+        ranker_client_ini = @{
+            path = "deployment_payload\ranker_client.ini"
+            sha256 = (Get-FileHash -LiteralPath $payloadIniPath -Algorithm SHA256).Hash
+            text = [System.IO.File]::ReadAllText($payloadIniPath)
         }
     }
     tools = $toolFiles
@@ -286,7 +309,7 @@ $readme = @'
 Server: __SERVER_HOST__:__SERVER_PORT__
 
 This kit contains the relay evidence tools plus the exact deployed
-`ranker_rebuild.exe` and `wizardnet_server.ini` under `deployment_payload`.
+`ranker_rebuild.exe` and `ranker_client.ini` under `deployment_payload`.
 
 Install or refresh the tested files in an existing full game folder:
 
@@ -339,7 +362,8 @@ The final gate revalidates exported server evidence against the requested room,
 game ID, member count, relay endpoint count, and bidirectional Mode1 thresholds.
 
 The default final gate requires Radmin/Famatech off, the same
-`ranker_rebuild.exe` SHA256 on both machines, a matching `wizardnet_server.ini`,
+`ranker_rebuild.exe` SHA256 on both machines, a matching WizardNet endpoint in
+`ranker_client.ini`,
 exactly one live `ranker_rebuild.exe` process per machine with one relay server
 TCP connection,
 no VPN/tunnel/virtual-marked interface providing the IPv4 default gateway,

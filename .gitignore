@@ -15,7 +15,6 @@
 
 !ranker_reconstructed_code/config/
 !ranker_reconstructed_code/config/ranker_client.ini
-!ranker_reconstructed_code/config/wizardnet_server.ini
 
 !ranker_reconstructed_code/include/
 !ranker_reconstructed_code/include/**

@@ -10,6 +10,7 @@ constexpr int kMaximumPresentationClientExtent = 0x7fff;
 constexpr int kMinimumConfiguredRenderFramesPerSecond = 30;
 constexpr int kMaximumConfiguredRenderFramesPerSecond = 360;
 constexpr int kDefaultConfiguredRenderFramesPerSecond = 60;
+constexpr unsigned int kDefaultRankerClientWizardNetPort = 19777;
 
 constexpr int NormalizeConfiguredRenderFramesPerSecond(int frames_per_second) {
     return frames_per_second >= kMinimumConfiguredRenderFramesPerSecond &&
@@ -22,6 +23,12 @@ constexpr bool IsSupportedPresentationClientSize(int width, int height) {
         width <= kMaximumPresentationClientExtent &&
         height <= kMaximumPresentationClientExtent &&
         width * kOriginalClientHeight == height * kOriginalClientWidth;
+}
+
+constexpr unsigned int NormalizeRankerClientWizardNetPort(
+    unsigned int port) {
+    return port != 0 && port <= 0xffffu ?
+        port : kDefaultRankerClientWizardNetPort;
 }
 
 struct RankerClientDisplayConfig {
@@ -38,9 +45,15 @@ struct RankerClientDisplayConfig {
     bool position_set = false;
 };
 
+struct RankerClientWizardNetConfig {
+    std::string address = "127.0.0.1";
+    unsigned int port = kDefaultRankerClientWizardNetPort;
+};
+
 #ifdef _WIN32
 const std::string& RankerClientConfigPath();
 RankerClientDisplayConfig LoadRankerClientDisplayConfig();
+RankerClientWizardNetConfig LoadRankerClientWizardNetConfig();
 std::string LoadRankerClientLastWizardAccount();
 bool SaveRankerClientLastWizardAccount(const char* account);
 #endif

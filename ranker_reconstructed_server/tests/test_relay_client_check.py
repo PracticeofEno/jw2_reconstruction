@@ -65,7 +65,7 @@ class RelayClientCheckTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             exe = base / "ranker_rebuild.exe"
-            ini = base / "wizardnet_server.ini"
+            ini = base / "ranker_client.ini"
             exe.write_bytes(b"relay-exe")
             ini.write_text("[WizardNet]\nAddress=203.0.113.7\n", encoding="utf-8")
 
@@ -83,7 +83,7 @@ class RelayClientCheckTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             exe = base / "ranker_rebuild.exe"
-            ini = base / "wizardnet_server.ini"
+            ini = base / "ranker_client.ini"
             exe.write_bytes(b"relay-exe")
             ini.write_text(
                 "[WizardNet]\nAddress=203.0.113.7\nPort=19777\n",
@@ -102,12 +102,13 @@ class RelayClientCheckTests(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertEqual(result["missing_checks"], [])
             self.assertEqual(result["ini_values"]["PortNumber"], 19777)
+            self.assertNotIn("text", result["ini"])
 
     def test_deployment_check_fails_for_alternate_exe_name(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             exe = base / "ranker_rebuild_latest.exe"
-            ini = base / "wizardnet_server.ini"
+            ini = base / "ranker_client.ini"
             exe.write_bytes(b"relay-exe")
             ini.write_text(
                 "[WizardNet]\nAddress=203.0.113.7\nPort=19777\n",
@@ -130,7 +131,7 @@ class RelayClientCheckTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             exe = base / "ranker_rebuild.exe"
-            ini = base / "wizardnet_server.ini"
+            ini = base / "ranker_client.ini"
             exe.write_bytes(b"relay-exe")
             ini.write_text(
                 "[WizardNet]\nAddress=198.51.100.4\nPort=19777\n",

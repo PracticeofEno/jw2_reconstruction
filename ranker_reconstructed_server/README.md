@@ -63,8 +63,9 @@ The JSON config also sets TCP keepalive and `send_timeout_seconds`. A client
 whose outbound relay writes cannot drain before that timeout is closed so one
 stalled peer cannot hold up the room's relay fan-out.
 
-The deployed client reads `wizardnet_server.ini` next to `ranker_rebuild.exe`.
-The current public deployment uses:
+The deployed client reads display, remembered-account, and relay endpoint
+settings from `ranker_client.ini` next to `ranker_rebuild.exe`. The current
+public WizardNet section uses:
 
 ```ini
 [WizardNet]
@@ -182,7 +183,7 @@ same name.
 
 For the release gate, prefer `relay_client_check.py` while the game is still
 running. It checks `Jw2.log`, the live process network table, the deployed
-binary/config hash, the configured relay server in `wizardnet_server.ini`, and
+binary/config hash, the configured relay server in `ranker_client.ini`, and
 optional Radmin/Famatech VPN state:
 
 To package the exact current deployment executable/config plus all release-gate
@@ -193,7 +194,7 @@ tools for a remote tester, create a two-PC test kit from the repository root:
 ```
 
 The kit is written under `debug_artifacts\relay_kit` and includes
-`deployment_payload\ranker_rebuild.exe`, `deployment_payload\wizardnet_server.ini`,
+`deployment_payload\ranker_rebuild.exe`, `deployment_payload\ranker_client.ini`,
 `manifest.json`, `collect_live_report.ps1`, and `run_final_gate.ps1`.
 
 ```powershell
@@ -261,14 +262,15 @@ those relaxations for final NAT proof.
 If a client log contains multiple sessions, add `--game-id GAME_ID` to
 `relay_client_check.py` using the ID from the matching server summary.
 `relay_client_check.py` records the local `ranker_rebuild.exe` SHA256,
-`wizardnet_server.ini` contents, hostname, hashed machine identity fingerprint,
+the `ranker_client.ini` hash and parsed WizardNet endpoint, hostname, hashed
+machine identity fingerprint,
 local IPv4 addresses, matching Radmin/Famatech processes, matching network
 adapters, matching services, and the live network table snapshot. The raw
 MachineGuid/UUID/serial values are not written to the JSON report. The
 collection script passes
 `--require-deployment`, so passing output must show an existing
 `ranker_rebuild.exe`, no alternate deployment executable name, and a
-`wizardnet_server.ini` whose `[WizardNet] Address` and `Port` match the tested
+`ranker_client.ini` whose `[WizardNet] Address` and `Port` match the tested
 server. With `--require-no-radmin`, passing output must show no matching
 process, no active matching adapter, no running matching service, and no
 VPN/tunnel/virtual-marked interface providing the IPv4 default gateway.

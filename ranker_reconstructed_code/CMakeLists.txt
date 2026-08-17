@@ -1288,6 +1288,14 @@ if (RANKER_BUILD_READABILITY_REGRESSION_TESTS)
     target_include_directories(frontend_window_placement_regression PRIVATE
         include
     )
+    add_custom_command(TARGET frontend_window_placement_regression POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/config/ranker_client.ini
+            $<TARGET_FILE_DIR:frontend_window_placement_regression>/ranker_client.ini
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            $<TARGET_FILE_DIR:frontend_window_placement_regression>/wizardnet_server.ini
+        COMMENT "Copying unified client configuration for regression"
+    )
     add_test(NAME frontend_window_placement_regression
         COMMAND frontend_window_placement_regression)
 endif()
@@ -1698,10 +1706,9 @@ add_custom_command(TARGET ranker_rebuild POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_CURRENT_SOURCE_DIR}/config/ranker_client.ini
         $<TARGET_FILE_DIR:ranker_rebuild>/ranker_client.ini
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_CURRENT_SOURCE_DIR}/config/wizardnet_server.ini
+    COMMAND ${CMAKE_COMMAND} -E rm -f
         $<TARGET_FILE_DIR:ranker_rebuild>/wizardnet_server.ini
-    COMMENT "Copying ranker client display configuration"
+    COMMENT "Copying ranker client configuration"
 )
 
 add_custom_command(TARGET ranker_rebuild POST_BUILD

@@ -46,6 +46,11 @@ static_assert(IsSupportedPresentationClientSize(1280, 960));
 static_assert(IsSupportedPresentationClientSize(1024, 768));
 static_assert(!IsSupportedPresentationClientSize(1280, 720));
 static_assert(!IsSupportedPresentationClientSize(0, 960));
+static_assert(NormalizeRankerClientWizardNetPort(19777) == 19777);
+static_assert(NormalizeRankerClientWizardNetPort(0) ==
+    kDefaultRankerClientWizardNetPort);
+static_assert(NormalizeRankerClientWizardNetPort(0x10000u) ==
+    kDefaultRankerClientWizardNetPort);
 static_assert(kScaledControl.x == 160);
 static_assert(kScaledControl.y == 80);
 static_assert(kScaledControl.width == 320);
@@ -119,6 +124,10 @@ int main() {
     assert(!display.position_set);
     assert(display.render_frames_per_second ==
         kDefaultConfiguredRenderFramesPerSecond);
+    const RankerClientWizardNetConfig wizardnet =
+        LoadRankerClientWizardNetConfig();
+    assert(wizardnet.address == "115.22.136.89");
+    assert(wizardnet.port == 19777);
 #endif
     return 0;
 }

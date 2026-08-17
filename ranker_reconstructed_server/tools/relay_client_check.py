@@ -515,6 +515,10 @@ def build_deployment_result(args: argparse.Namespace) -> dict[str, object]:
     ini_error: str | None = None
     if ini.get("exists"):
         ini_values, ini_error = parse_wizardnet_ini(str(ini.get("text", "")))
+        # ranker_client.ini also contains the remembered account and display
+        # preferences.  They are not release evidence, so never publish the
+        # combined file's raw text in a client report.
+        ini.pop("text", None)
     address = str(ini_values.get("Address", ""))
     port = ini_values.get("PortNumber")
     address_matches = bool(address) and server_hosts_match(args.server_host, address)
@@ -692,7 +696,7 @@ def main() -> int:
     parser.add_argument(
         "--ini",
         type=Path,
-        help="Path to wizardnet_server.ini; defaults to the log directory.",
+        help="Path to ranker_client.ini; defaults to the log directory.",
     )
     parser.add_argument("--output", type=Path, help="Optional JSON output path.")
     parser.add_argument("--pid", type=int, action="append", default=[])
@@ -702,7 +706,7 @@ def main() -> int:
         "--require-deployment",
         action="store_true",
         help=(
-            "Fail unless ranker_rebuild.exe exists and wizardnet_server.ini "
+            "Fail unless ranker_rebuild.exe exists and ranker_client.ini "
             "points at the expected relay server."
         ),
     )
@@ -738,7 +742,7 @@ def main() -> int:
     if args.exe is None:
         args.exe = args.log.resolve().parent / "ranker_rebuild.exe"
     if args.ini is None:
-        args.ini = args.log.resolve().parent / "wizardnet_server.ini"
+        args.ini = args.log.resolve().parent / "ranker_client.ini"
 
     result = build_result(args)
     output = json.dumps(result, ensure_ascii=False, indent=2)

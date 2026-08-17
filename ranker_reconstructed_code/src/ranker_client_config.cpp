@@ -19,6 +19,26 @@ constexpr const char* kWizardNetSection = "WizardNet";
 constexpr const char* kLastWizardAccountKey = "LastAccount";
 constexpr std::size_t kMaximumWizardAccountBytes = 0x20;
 
+std::string executable_sibling_path(const char* file_name) {
+    std::array<char, MAX_PATH> executable{};
+    const DWORD length = GetModuleFileNameA(nullptr, executable.data(),
+        static_cast<DWORD>(executable.size()));
+    if (length == 0 || length >= executable.size()) {
+        return std::string(file_name);
+    }
+    std::string result(executable.data(), length);
+    const std::size_t separator = result.find_last_of("\\/");
+    result.resize(separator == std::string::npos ? 0 : separator + 1);
+    result += file_name;
+    return result;
+}
+
+const std::string& legacy_wizardnet_server_config_path() {
+    static const std::string path =
+        executable_sibling_path("wizardnet_server.ini");
+    return path;
+}
+
 bool read_integer(const char* key, int& value) {
     std::array<char, 32> text{};
     if (GetPrivateProfileStringA(kDisplaySection, key, "", text.data(),
@@ -69,19 +89,7 @@ bool read_boolean(const char* key, bool fallback) {
 } // namespace
 
 const std::string& RankerClientConfigPath() {
-    static const std::string path = [] {
-        std::array<char, MAX_PATH> executable{};
-        const DWORD length = GetModuleFileNameA(nullptr, executable.data(),
-            static_cast<DWORD>(executable.size()));
-        if (length == 0 || length >= executable.size()) {
-            return std::string("ranker_client.ini");
-        }
-        std::string result(executable.data(), length);
-        const std::size_t separator = result.find_last_of("\\/");
-        result.resize(separator == std::string::npos ? 0 : separator + 1);
-        result += "ranker_client.ini";
-        return result;
-    }();
+    static const std::string path = executable_sibling_path("ranker_client.ini");
     return path;
 }
 
@@ -106,6 +114,45 @@ RankerClientDisplayConfig LoadRankerClientDisplayConfig() {
         config.render_frames_per_second =
             NormalizeConfiguredRenderFramesPerSecond(
                 render_frames_per_second);
+    }
+    return config;
+}
+
+RankerClientWizardNetConfig LoadRankerClientWizardNetConfig() {
+    RankerClientWizardNetConfig config;
+    const auto read_value = [](const char* key, char* output,
+                                DWORD output_bytes) {
+        if (GetPrivateProfileStringA(kWizardNetSection, key, "", output,
+                output_bytes, RankerClientConfigPath().c_str()) != 0) {
+            return true;
+        }
+        // Older deployments kept only the relay endpoint in a second file.
+        // Read it as a migration fallback, but all new writes and packaged
+        // configuration use ranker_client.ini.
+        return GetPrivateProfileStringA(kWizardNetSection, key, "", output,
+            output_bytes, legacy_wizardnet_server_config_path().c_str()) != 0;
+    };
+
+    std::array<char, 256> address{};
+    if (read_value("Address", address.data(),
+            static_cast<DWORD>(address.size())) && address[0] != '\0') {
+        config.address = address.data();
+    }
+
+    std::array<char, 32> port_text{};
+    if (read_value("Port", port_text.data(),
+            static_cast<DWORD>(port_text.size()))) {
+        char* end = nullptr;
+        const unsigned long parsed = std::strtoul(port_text.data(), &end, 10);
+        while (end != nullptr && *end != '\0' &&
+            std::isspace(static_cast<unsigned char>(*end))) {
+            ++end;
+        }
+        if (end != port_text.data() && end != nullptr && *end == '\0' &&
+            parsed <= std::numeric_limits<unsigned int>::max()) {
+            config.port = NormalizeRankerClientWizardNetPort(
+                static_cast<unsigned int>(parsed));
+        }
     }
     return config;
 }

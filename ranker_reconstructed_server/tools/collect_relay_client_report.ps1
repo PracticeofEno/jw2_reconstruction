@@ -32,7 +32,7 @@ $checkScript = Join-Path $scriptDir "relay_client_check.py"
 $installPath = (Resolve-Path $InstallDir).Path
 $logPath = Join-Path $installPath "Jw2.log"
 $exePath = Join-Path $installPath "ranker_rebuild.exe"
-$iniPath = Join-Path $installPath "wizardnet_server.ini"
+$iniPath = Join-Path $installPath "ranker_client.ini"
 if ([System.IO.Path]::IsPathRooted($OutputDir)) {
     $resolvedOutputDir = $OutputDir
 } else {
