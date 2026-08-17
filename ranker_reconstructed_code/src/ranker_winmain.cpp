@@ -84,8 +84,6 @@
 #include "ranker_unit_string_slots.h"
 #include "ranker_unit_target_helpers.h"
 #include "ranker_unit_targeting.h"
-#include "ranker_visual_animation.h"
-#include "ranker_visual_animation_archive.h"
 #include "ranker_view_rank.h"
 #include "ranker_wizardnet_relay.h"
 #include "ranker_wizard_login.h"
@@ -98,14 +96,12 @@
 #include <cstdlib>
 #include <ctime>
 #include <cstring>
-#include <filesystem>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <numeric>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -1324,18 +1320,6 @@ bool read_ddraw_ini_integer(const char* key, int& value) {
     return true;
 }
 
-bool ensure_main_window_visual_animation_archive_loaded() {
-    if (visual_animation_archive_state().status ==
-        VisualAnimationArchiveStatus::loaded) {
-        return true;
-    }
-    const std::filesystem::path data_directory =
-        std::filesystem::path(RankerClientConfigPath()).parent_path();
-    return LoadVisualAnimationArchive(
-        (data_directory / "Jw2_09_144hz.rfa").string(),
-        (data_directory / "Jw2_09.trc").string());
-}
-
 void load_main_window_presentation_settings() {
     const RankerClientDisplayConfig display = LoadRankerClientDisplayConfig();
     g_runtime.presentation_client_width = display.width;
@@ -1345,15 +1329,6 @@ void load_main_window_presentation_settings() {
     g_runtime.presentation_position_set = display.position_set;
     g_runtime.presentation_resizable = display.resizable;
     g_runtime.presentation_border = display.border;
-    gameplay_loop_state().render_target_fps = static_cast<u32>(
-        display.render_frames_per_second);
-    if (ShouldInterpolateVisualAnimation(
-            gameplay_loop_state().render_target_fps)) {
-        ensure_main_window_visual_animation_archive_loaded();
-    }
-    else {
-        UnloadVisualAnimationArchive();
-    }
     g_runtime.cursor_unlock_key1 = VK_TAB;
     g_runtime.cursor_unlock_key2 = VK_RCONTROL;
 
@@ -5608,31 +5583,6 @@ void default_gameplay_input_handle_keyboard_event(GameplayInputActionState& stat
     const u8 ascii = (raw_code & 0xff00u) != 0 ?
         static_cast<u8>((raw_code >> 8) & 0xffu) : 0;
     const u32 legacy_scan_code = ascii == 0 ? (raw_code & 0xffu) : 0;
-    if (legacy_scan_code == 0x57u) {
-        GameplayLoopState& loop = gameplay_loop_state();
-        const u32 render_fps = ToggleGameplayRenderFramesPerSecond(loop);
-        bool archive_loaded = visual_animation_archive_state().status ==
-            VisualAnimationArchiveStatus::loaded;
-        if (ShouldInterpolateVisualAnimation(render_fps) && !archive_loaded) {
-            archive_loaded = ensure_main_window_visual_animation_archive_loaded();
-        }
-        ResetVisualAnimationTransitionCache();
-
-        const char* status = render_fps ==
-                kGameplayRenderToggleHighFramesPerSecond
-            ? (archive_loaded ? "Rendering: 144 Hz" :
-                "Rendering: 144 Hz (animation archive unavailable)")
-            : "Rendering: 60 Hz";
-        QueueGameplayHudMessage(g_runtime.gameplay_hud_text, status);
-        append_startup_log("gameplay F11 render toggle fps=%lu archive=%s detail=%s",
-            static_cast<unsigned long>(render_fps),
-            archive_loaded ? "ready" : "unavailable",
-            visual_animation_archive_state().detail.empty() ? "(none)" :
-                visual_animation_archive_state().detail.c_str());
-        // ranker_rebuild repurposes the original F11 overlay scan for this
-        // local renderer switch. Do not publish it to gameplay or P2P state.
-        return;
-    }
     if (legacy_scan_code == 1u && !overlay.chat_active &&
         overlay.placement_mode == 0) {
         // The original has already published the current command records
@@ -8418,8 +8368,6 @@ void default_gameplay_startup_reset_runtime_objects() {
     loop.frame_time_anchor = start_tick;
     loop.simulation_frame_counter = 0;
     loop.present_frame_counter = 0;
-    ResetVisualAnimationTransitionCache();
-    ResetResourceSpritePixelMorphCache();
     reset_default_gameplay_terrain_frame_cache();
 
     g_runtime.gameplay_end_condition_state = GameplayEndConditionState{};
@@ -19004,12 +18952,6 @@ UnitRenderItem make_default_unit_render_item(UnitMovementUnit& unit) {
     item.ability_id = unit.ability_id;
     item.x = unit.x;
     item.y = unit.y;
-    item.interpolation_start_x = unit.x;
-    item.interpolation_start_y = unit.y;
-    item.interpolation_target_x = unit.x;
-    item.interpolation_target_y = unit.y;
-    item.interpolated_x = unit.x;
-    item.interpolated_y = unit.y;
     item.visibility_cell_x = unit.current_cell_x;
     item.visibility_cell_y = unit.current_cell_y;
     item.center_offset_x = unit.definition.center_bounds_left;
@@ -19077,27 +19019,6 @@ void configure_default_gameplay_fog_context() {
 void sync_default_gameplay_visibility_and_render_inputs(
     u32 frame_counter, bool refresh_visibility) {
     UnitMovementContext* movement = default_gameplay_movement_context();
-    struct PreviousUnitRenderPosition {
-        u32 type_id = 0;
-        i32 x = 0;
-        i32 y = 0;
-    };
-    std::unordered_map<u32, PreviousUnitRenderPosition>
-        previous_unit_render_positions;
-    previous_unit_render_positions.reserve(
-        g_runtime.gameplay_unit_render_queue.units.size());
-    for (const UnitRenderItem& item :
-            g_runtime.gameplay_unit_render_queue.units) {
-        if (item.runtime_slot_index == 0 ||
-            item.runtime_slot_index == kInvalidUnitRuntimeSlotIndex) {
-            continue;
-        }
-        previous_unit_render_positions[item.runtime_slot_index] = {
-            item.type_id,
-            item.interpolation_target_x,
-            item.interpolation_target_y,
-        };
-    }
     g_runtime.gameplay_unit_render_queue.units.clear();
     g_runtime.gameplay_unit_render_queue.effects.clear();
     g_runtime.gameplay_unit_render_queue.queued_entries.clear();
@@ -19235,27 +19156,8 @@ void sync_default_gameplay_visibility_and_render_inputs(
         if (unit == nullptr || !unit->active) {
             continue;
         }
-        UnitRenderItem item = make_default_unit_render_item(*unit);
-        const auto previous =
-            previous_unit_render_positions.find(item.runtime_slot_index);
-        if (previous != previous_unit_render_positions.end() &&
-            previous->second.type_id == item.type_id) {
-            const i64 delta_x = static_cast<i64>(item.interpolation_target_x) -
-                previous->second.x;
-            const i64 delta_y = static_cast<i64>(item.interpolation_target_y) -
-                previous->second.y;
-            // A normal movement tick advances by only a few pixels.  Large
-            // script relocations, spawns and slot reuse must snap immediately
-            // instead of travelling visibly across the map for one frame.
-            constexpr i64 kMaximumInterpolatedMovementPixels = 0x40;
-            if (std::abs(delta_x) <= kMaximumInterpolatedMovementPixels &&
-                std::abs(delta_y) <= kMaximumInterpolatedMovementPixels) {
-                item.interpolation_start_x = previous->second.x;
-                item.interpolation_start_y = previous->second.y;
-                item.interpolation_enabled = delta_x != 0 || delta_y != 0;
-            }
-        }
-        g_runtime.gameplay_unit_render_queue.units.push_back(std::move(item));
+        g_runtime.gameplay_unit_render_queue.units.push_back(
+            make_default_unit_render_item(*unit));
     }
 
     // DAT_007071dc is rendered by ProcessVisibleEffectRenderQueue
@@ -24322,6 +24224,11 @@ void default_unit_command_dispatch_attack(UnitCommandContext& context,
     UnitMovementUnit* const saved_action_target = unit.target;
     const UnitActionTickResult result =
         ProcessUnitActionCycle(action_context, unit);
+
+    if (HandleExtendedRuntimeTargetValidationActionResult(
+            context, unit, result)) {
+        return;
+    }
 
     if (!extended_runtime_table_unit && command_state == kUnitStateAttackTarget) {
         // Original low-unit state 0x04 (0x004c93d1, table 0x0072d2a8)
@@ -30233,11 +30140,14 @@ void run_default_unit_post_runtime_list_moves(UnitLifecycleContext& lifecycle) {
         return;
     }
 
-    const std::vector<UnitMovementUnit*> active_units = movement->active_units;
-    for (UnitMovementUnit* unit : active_units) {
-        if (unit == nullptr) {
-            continue;
-        }
+    UnitMovementUnit* unit = movement->active_units.empty() ?
+        nullptr : movement->active_units.front();
+    UnitIntrusiveListCursor cursor{&movement->active_units, 0};
+    while (unit != nullptr) {
+        // Original 0x004cebd1 caches raw +0x1cc before moving the current
+        // node.  Keep the same cursor semantics as the dispatch pass.
+        UnitMovementUnit* next =
+            GetUnitIntrusiveListNext(*movement, *unit, cursor);
         if ((unit->runtime_flags & 4u) != 0) {
             // The original second pass at 0x004cebd1 only changes list
             // membership; death side effects already ran during dispatch.
@@ -30246,6 +30156,7 @@ void run_default_unit_post_runtime_list_moves(UnitLifecycleContext& lifecycle) {
         else if ((unit->command_flags & 0x100u) != 0) {
             HandleActiveUnitFreeListMove(*movement, *unit);
         }
+        unit = next;
     }
 }
 
@@ -30614,24 +30525,6 @@ void default_gameplay_loop_present_phase(GameplayLoopState& state) {
     context.viewport_height = surface.height;
     context.render_command_queue = &g_runtime.gameplay_render_command_queue;
     context.unit_render_queue = &g_runtime.gameplay_unit_render_queue;
-    const std::size_t frame_interval_index = std::min<std::size_t>(
-        state.frame_interval_index, state.frame_intervals.size() - 1);
-    const u64 simulation_interval_ns =
-        static_cast<u64>(std::max<u32>(
-            1, state.frame_intervals[frame_interval_index])) * 1000000ull;
-    const bool render_interpolation_enabled = state.render_target_fps != 0;
-    const u32 interpolation_alpha = render_interpolation_enabled &&
-        state.simulation_render_clock_initialized ?
-        GameplayRenderInterpolationAlpha(state.current_render_tick_ns,
-            state.last_simulation_render_tick_ns, simulation_interval_ns) :
-        kGameplayRenderInterpolationOne;
-    g_runtime.gameplay_unit_render_queue.presentation_interpolation_alpha =
-        interpolation_alpha;
-    g_runtime.gameplay_unit_render_queue.
-        presentation_animation_interpolation_enabled =
-            ShouldInterpolateVisualAnimation(state.render_target_fps);
-    ApplyUnitRenderInterpolation(
-        g_runtime.gameplay_unit_render_queue, interpolation_alpha);
     GameplayHudTextState& hud = g_runtime.gameplay_hud_text;
     const u32 hud_viewport_height = ui_overlay_state().world_viewport_height;
     configure_default_gameplay_hud_text_callbacks(hud);
@@ -33004,7 +32897,7 @@ int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_c
         startup_platform_text_count(), startup_message_text_count());
     load_main_window_presentation_settings();
     append_startup_log(
-        "presentation config=%s logical=%dx%d client=%dx%d position=%s,%d,%d resize=%s border=%s render_fps=%lu",
+        "presentation config=%s logical=%dx%d client=%dx%d position=%s,%d,%d resize=%s border=%s",
         RankerClientConfigPath().c_str(),
         kOriginalClientWidth, kOriginalClientHeight,
         g_runtime.presentation_client_width,
@@ -33012,16 +32905,7 @@ int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_c
         g_runtime.presentation_position_set ? "set" : "default",
         g_runtime.presentation_client_x, g_runtime.presentation_client_y,
         g_runtime.presentation_resizable ? "yes" : "no",
-        g_runtime.presentation_border ? "yes" : "no",
-        static_cast<unsigned long>(gameplay_loop_state().render_target_fps));
-    const VisualAnimationArchiveState& animation_archive =
-        visual_animation_archive_state();
-    append_startup_log(
-        "animation archive status=%lu transitions=%lu payload=%llu detail=%s",
-        static_cast<unsigned long>(animation_archive.status),
-        static_cast<unsigned long>(animation_archive.transition_count),
-        static_cast<unsigned long long>(animation_archive.payload_bytes),
-        animation_archive.detail.c_str());
+        g_runtime.presentation_border ? "yes" : "no");
     g_runtime.single_instance_mutex =
         CreateMutexA(nullptr, FALSE, ranker_single_instance_mutex_name());
     if (g_runtime.single_instance_mutex != nullptr && GetLastError() == ERROR_ALREADY_EXISTS) {

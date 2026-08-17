@@ -2723,6 +2723,26 @@ void PopDeferredUnitCommandOrReturnIdle(UnitCommandContext& context,
     }
 }
 
+bool HandleExtendedRuntimeTargetValidationActionResult(
+    UnitCommandContext& context, UnitMovementUnit& unit,
+    const UnitActionTickResult& result) {
+    if (unit.type_id < 0x60u ||
+        (unit.command_state & kUnitCommandStateMask) !=
+            kUnitStateRuntimeTargetValidation ||
+        result.code != UnitActionTickCode::lost_target) {
+        return false;
+    }
+
+    // The high-type state-0x1d table entry at original 0x004cdb66 routes
+    // both carry and the no-carry/EAX=0 result directly to the common pop
+    // path.  EAX=0 includes a still-valid target that moved out of range.
+    // The low-type state-0x1d handler instead replans into state 0x1e; sharing
+    // that behavior made error2's type-147 slot 317 start moving at frame
+    // 26362 while the original cleared the active selector and returned idle.
+    PopDeferredUnitCommandOrReturnIdle(context, unit);
+    return true;
+}
+
 bool FilterPendingUnitCommandInterrupt(UnitMovementUnit& unit) {
     if (unit.distance_check_mode != 0 ||
         (unit.command_state & 0x50000000u) != 0 ||
@@ -2868,6 +2888,18 @@ void HandlePendingUnitCommandDispatch(UnitCommandContext& context,
     }
 
     UnitQueuedCommand command = unit.pending_command;
+    // Subtype-0x02 stores bit 0x01000000 in the pending selector and its
+    // target pool offset in the pending x word.  Original 0x004cfe37 strips
+    // the selector bit when it copies the active tuple, but independently
+    // copies that x word to raw unit +0x68.  Preserve the corresponding typed
+    // target even for selector zero (the error2 replay's slot-172 stop order);
+    // clearing it loses the raw slot-50 reference one frame after delivery.
+    constexpr u32 kOriginalUnitPoolStride = 0x1d0u;
+    const u32 basic_order_value = static_cast<u32>(command.x);
+    const bool mirrors_basic_order_target =
+        (command.state & kUnitCommandMirrorClearFlag) != 0 &&
+        basic_order_value != 0 &&
+        basic_order_value % kOriginalUnitPoolStride == 0;
     command.state &= ~kUnitCommandMirrorClearFlag;
     unit.active_command_payload = command;
     unit.command_value = static_cast<u32>(command.x);
@@ -2876,7 +2908,8 @@ void HandlePendingUnitCommandDispatch(UnitCommandContext& context,
     // pointer, so only target-bearing states may interpret that word as a unit
     // id.  A point move must still clear an idle-acquired target, while a
     // production command (state 0x10) must not mistake its type id for a unit.
-    if (command_payload_carries_target_id(command.state)) {
+    if (mirrors_basic_order_target ||
+        command_payload_carries_target_id(command.state)) {
         resolve_command_payload_target(context, unit);
     }
     else {

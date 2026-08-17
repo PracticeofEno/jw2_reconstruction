@@ -5,6 +5,8 @@ import time
 
 pid = int(sys.argv[1])
 status_wait_seconds = float(sys.argv[2]) if len(sys.argv) > 2 else 0.0
+route_mode = sys.argv[3] if len(sys.argv) > 3 else "synthetic"
+title_only = route_mode in ("title-only", "real-input")
 target = 0x00504B10
 modal_pump_return = 0x00504ADD
 title_modal_return = 0x0042CCFC
@@ -168,6 +170,22 @@ try:
         time.sleep(0.01)
     else:
         raise RuntimeError("original title route did not reach single-player UI")
+
+    if title_only:
+        if route_mode == "real-input":
+            main_window = struct.unpack(
+                "<I", read_process_memory(0x0143FF6C, 4)
+            )[0]
+            user32 = ctypes.WinDLL("user32", use_last_error=True)
+            if not user32.PostMessageW(main_window, 0x0100, 0x52, 0):
+                raise ctypes.WinError(ctypes.get_last_error())
+            if not user32.PostMessageW(main_window, 0x0101, 0x52, 0):
+                raise ctypes.WinError(ctypes.get_last_error())
+            print(
+                f"original replay accelerator posted hwnd=0x{main_window:X}"
+            )
+        print("original replay route stopped at single-player UI")
+        sys.exit(0)
 
     time.sleep(1.0)
     write_process_memory(guard + 12, struct.pack("<I", 1))

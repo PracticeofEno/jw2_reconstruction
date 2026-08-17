@@ -7,7 +7,6 @@
 #include "ranker_ui_screen.h"
 #include "ranker_unit_animation.h"
 #include "ranker_unit_action.h"
-#include "ranker_visual_animation.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -835,8 +834,7 @@ u32 resolve_unit_animation_sprite_entry(const UnitAnimationDrawCommand& command)
     return kInvalidResourceEntry;
 }
 
-bool draw_jw211_direct_sprite_mode(UnitAnimationDrawContext& context,
-    const UnitAnimationDrawCommand& command);
+bool draw_jw211_direct_sprite_mode(const UnitAnimationDrawCommand& command);
 
 bool draw_unit_shadow_attachment_sprites(const UnitAnimationDrawCommand& command) {
     if (command.unit == nullptr) {
@@ -950,84 +948,6 @@ bool draw_unit_low_health_overlay_sprites(const UnitAnimationDrawCommand& comman
     return drew;
 }
 
-SpritePixelMorphDrawOptions unit_animation_pixel_morph_options(
-    const UnitAnimationDrawContext& context,
-    const UnitAnimationDrawCommand& command, bool flipped) {
-    SpritePixelMorphDrawOptions options{};
-    options.flipped = flipped;
-    const SpritePixelMaskConstants& masks = sprite_pixel_mask_constants();
-
-    switch (command.kind) {
-    case UnitAnimationDrawKind::highlight:
-    case UnitAnimationDrawKind::blend_40:
-        options.style = SpritePixelMorphStyle::or_mask_token1_shadow;
-        options.mask = masks.high_green;
-        break;
-    case UnitAnimationDrawKind::blend_20:
-        options.style = SpritePixelMorphStyle::grayscale_token1_shadow;
-        break;
-    case UnitAnimationDrawKind::mode_2:
-        options.style = SpritePixelMorphStyle::or_mask_token1_shadow;
-        options.mask = masks.high_blue;
-        break;
-    case UnitAnimationDrawKind::mode_80:
-        options.style = SpritePixelMorphStyle::or_mask_token1_shadow;
-        options.mask = masks.high_red;
-        break;
-    case UnitAnimationDrawKind::blend_factor_0f:
-        options.style = SpritePixelMorphStyle::blend_factor_token2_plus;
-        options.mode_or_factor = 0x0f;
-        break;
-    case UnitAnimationDrawKind::blend_factor_ramp:
-        options.style = SpritePixelMorphStyle::blend_factor_token2_plus;
-        options.mode_or_factor = context.highlight_level;
-        break;
-    case UnitAnimationDrawKind::neighbor_copy:
-        options.style = SpritePixelMorphStyle::neighbor_copy;
-        break;
-    case UnitAnimationDrawKind::resource_mode:
-        options.style = SpritePixelMorphStyle::resource_mode;
-        options.mode_or_factor = command.resource_draw_mode;
-        options.flipped = false;
-        break;
-    case UnitAnimationDrawKind::ally_or_local:
-        options.style = SpritePixelMorphStyle::unit_ramp_or_mask_token1_shadow;
-        options.mask = masks.low_blue_a;
-        break;
-    case UnitAnimationDrawKind::channel_additive_tint:
-    case UnitAnimationDrawKind::palette_channel_additive_tint:
-    case UnitAnimationDrawKind::timed_channel_additive_tint:
-    case UnitAnimationDrawKind::shadow_probe_additive_tint:
-    {
-        options.style = SpritePixelMorphStyle::channel_add_token1_shadow;
-        u32 ramp = std::min<u32>(context.highlight_level, 31);
-        if (command.kind == UnitAnimationDrawKind::shadow_probe_additive_tint) {
-            ramp = 26;
-        }
-        if (command.kind == UnitAnimationDrawKind::channel_additive_tint ||
-            command.kind == UnitAnimationDrawKind::palette_channel_additive_tint) {
-            options.red_delta =
-                static_cast<u16>(context.color_ramps.x_offsets[ramp]);
-        }
-        if (command.kind == UnitAnimationDrawKind::channel_additive_tint ||
-            command.kind == UnitAnimationDrawKind::timed_channel_additive_tint ||
-            command.kind == UnitAnimationDrawKind::shadow_probe_additive_tint) {
-            options.green_delta =
-                static_cast<u16>(context.color_ramps.y_offsets[ramp]);
-        }
-        options.blue_delta =
-            static_cast<u16>(context.color_ramps.secondary_offsets[ramp]);
-        break;
-    }
-    case UnitAnimationDrawKind::normal:
-    case UnitAnimationDrawKind::flipped:
-    default:
-        options.style = SpritePixelMorphStyle::unit_ramp_token1_shadow;
-        break;
-    }
-    return options;
-}
-
 void draw_unit_animation_sprite(UnitAnimationDrawContext& context,
     const UnitAnimationDrawCommand& command) {
     if (command.sequence == UnitAnimationSequence::direct_sprite &&
@@ -1037,7 +957,7 @@ void draw_unit_animation_sprite(UnitAnimationDrawContext& context,
         // bit-0x10 branch after attempting the JW2_11 blit.  A missing frame
         // in that dedicated resource is therefore an intentionally empty
         // result, not permission to fall through to definition image group 3.
-        (void)draw_jw211_direct_sprite_mode(context, command);
+        (void)draw_jw211_direct_sprite_mode(command);
         return;
     }
     if (command.sequence == UnitAnimationSequence::low_health_overlay) {
@@ -1056,7 +976,7 @@ void draw_unit_animation_sprite(UnitAnimationDrawContext& context,
         return;
     }
 
-    u32 entry = resolve_unit_animation_sprite_entry(command);
+    const u32 entry = resolve_unit_animation_sprite_entry(command);
     if (entry == kInvalidResourceEntry) {
         return;
     }
@@ -1064,59 +984,9 @@ void draw_unit_animation_sprite(UnitAnimationDrawContext& context,
     const bool flipped = command.flipped ||
         command.kind == UnitAnimationDrawKind::flipped;
 
-    if (context.presentation_animation_interpolation_enabled &&
-        command.unit != nullptr) {
-        const VisualAnimationTransitionKey key{
-            command.unit->runtime_slot_index,
-            command.unit->type_id,
-            static_cast<u32>(command.sequence),
-            unit_animation_image_group(command),
-            command.direction_row,
-            static_cast<u32>(command.kind),
-            command.resource_draw_mode,
-            flipped,
-        };
-        const VisualAnimationTransitionSelection selection =
-            ResolveVisualAnimationTransition(key, entry,
-                GetResourceEntryAllocationSerial(entry),
-                context.global_frame_counter,
-                context.presentation_interpolation_alpha);
-        const bool source_valid =
-            GetResourceEntryAllocationSerial(selection.source_entry) ==
-                selection.source_allocation_serial;
-        const bool target_valid =
-            GetResourceEntryAllocationSerial(selection.target_entry) ==
-                selection.target_allocation_serial;
-        if (selection.interpolate && source_valid && target_valid) {
-            const SpritePixelMorphDrawOptions options =
-                unit_animation_pixel_morph_options(context, command, flipped);
-            const u32 image_group = unit_animation_image_group(command);
-            u32 source_frame = 0;
-            u32 target_frame = 0;
-            if (GetUnitDefinitionImageFrameIndex(command.unit->type_id,
-                    image_group, selection.source_entry, source_frame) &&
-                GetUnitDefinitionImageFrameIndex(command.unit->type_id,
-                    image_group, selection.target_entry, target_frame) &&
-                DrawResourceSpritePixelMorphTransition(
-                    command.unit->type_id, image_group,
-                    source_frame, target_frame,
-                    selection.source_entry, selection.target_entry,
-                    command.screen_x, command.screen_y,
-                    selection.subframe_index, options)) {
-                return;
-            }
-        }
-        if (selection.endpoint_entry != kInvalidResourceEntry &&
-            GetResourceEntryAllocationSerial(selection.endpoint_entry) ==
-                selection.target_allocation_serial) {
-            entry = selection.endpoint_entry;
-        }
-    }
-
     switch (command.kind) {
     case UnitAnimationDrawKind::flipped:
     case UnitAnimationDrawKind::normal:
-    {
         if (flipped) {
             DrawResourceSpriteFlippedUnitRampToken1Shadow(
                 entry, command.screen_x, command.screen_y);
@@ -1125,7 +995,6 @@ void draw_unit_animation_sprite(UnitAnimationDrawContext& context,
         DrawResourceSpriteUnitRampToken1Shadow(
             entry, command.screen_x, command.screen_y);
         return;
-    }
     case UnitAnimationDrawKind::highlight:
         if (flipped) {
             DrawResourceSpriteFlippedHighGreenMask(
@@ -1325,8 +1194,7 @@ bool resolve_jw211_unit_overlay_entry(UnitAnimationDrawContext& context,
     return entry != kInvalidResourceEntry;
 }
 
-bool draw_jw211_direct_sprite_mode(UnitAnimationDrawContext& context,
-    const UnitAnimationDrawCommand& command) {
+bool draw_jw211_direct_sprite_mode(const UnitAnimationDrawCommand& command) {
     if (command.unit == nullptr ||
         (command.unit->state_flags & kUnitAnimStateDirectSpriteMode) == 0) {
         return false;
@@ -1351,52 +1219,11 @@ bool draw_jw211_direct_sprite_mode(UnitAnimationDrawContext& context,
     if (frame_index == 0xffffffffu) {
         return false;
     }
-    u32 entry = auxiliary_image_entry(record, frame_index);
+    const u32 entry = auxiliary_image_entry(record, frame_index);
     if (entry == kInvalidResourceEntry) {
         return false;
     }
     const u32 draw_mode = read_auxiliary_record_u32(record, kAuxOverlayDrawModeOffset, 0);
-    if (context.presentation_animation_interpolation_enabled) {
-        const VisualAnimationTransitionKey key{
-            command.unit->runtime_slot_index,
-            command.unit->type_id,
-            static_cast<u32>(command.sequence),
-            0x80000000u | kJw211DirectSpriteRecord,
-            command.direction_row,
-            static_cast<u32>(UnitAnimationDrawKind::resource_mode),
-            draw_mode,
-            false,
-        };
-        const VisualAnimationTransitionSelection selection =
-            ResolveVisualAnimationTransition(key, entry,
-                GetResourceEntryAllocationSerial(entry),
-                context.global_frame_counter,
-                context.presentation_interpolation_alpha);
-        const bool source_valid =
-            GetResourceEntryAllocationSerial(selection.source_entry) ==
-                selection.source_allocation_serial;
-        const bool target_valid =
-            GetResourceEntryAllocationSerial(selection.target_entry) ==
-                selection.target_allocation_serial;
-        if (selection.interpolate && source_valid && target_valid) {
-            SpritePixelMorphDrawOptions options{};
-            options.style = SpritePixelMorphStyle::resource_mode;
-            options.mode_or_factor = draw_mode;
-            if (DrawResourceSpritePixelMorphTransition(
-                    kUnitDefinitionResourceCount, kUnitDefinitionImageGroupCount,
-                    0xffffffffu, 0xffffffffu,
-                    selection.source_entry, selection.target_entry,
-                    command.screen_x, command.screen_y,
-                    selection.subframe_index, options)) {
-                return true;
-            }
-        }
-        if (selection.endpoint_entry != kInvalidResourceEntry &&
-            GetResourceEntryAllocationSerial(selection.endpoint_entry) ==
-                selection.target_allocation_serial) {
-            entry = selection.endpoint_entry;
-        }
-    }
     return DrawResourceSpriteMode(entry, command.screen_x, command.screen_y, draw_mode);
 }
 
@@ -1665,15 +1492,10 @@ UnitAnimationDefinition make_unit_animation_definition(const UnitRenderItem& ite
 UnitAnimationDrawContext make_unit_animation_context(
     const UnitAnimationDefinition& definition, u32 global_frame_counter,
     u32 local_owner_id, bool local_owner_is_observer,
-    const std::array<u32, 8>& owner_relation_masks,
-    u32 presentation_interpolation_alpha,
-    bool presentation_animation_interpolation_enabled) {
+    const std::array<u32, 8>& owner_relation_masks) {
     UnitAnimationDrawContext context{};
     context.definition = &definition;
     context.global_frame_counter = global_frame_counter;
-    context.presentation_interpolation_alpha = presentation_interpolation_alpha;
-    context.presentation_animation_interpolation_enabled =
-        presentation_animation_interpolation_enabled;
     context.local_owner_id = local_owner_id;
     context.local_owner_is_observer = local_owner_is_observer;
     context.owner_relation_masks = owner_relation_masks;
@@ -2338,10 +2160,8 @@ bool QueueGameplayUnitRenderCommand(GameplayRenderCommandQueue& queue,
     command.payload = entry.type_id;
     command.sort_key = entry.sort_key;
     command.sprite_entry_index = sprite_entry;
-    const i32 draw_x = item.interpolation_enabled ? item.interpolated_x : item.x;
-    const i32 draw_y = item.interpolation_enabled ? item.interpolated_y : item.y;
-    command.screen_x = draw_x - camera_x;
-    command.screen_y = draw_y - camera_y;
+    command.screen_x = item.x - camera_x;
+    command.screen_y = item.y - camera_y;
     command.packed_flags = item.type_id & kGameplayRenderPackedTypeMask;
     command.unit_render_context = source_context;
     command.unit_render_item = &item;
@@ -2365,9 +2185,7 @@ void DispatchUnitAnimationRenderQueueItem(UnitRenderQueueContext& render_context
     UnitAnimationDrawContext context = make_unit_animation_context(
         definition, item.global_frame_counter, render_context.local_owner_id,
         render_context.local_owner_is_observer,
-        render_context.owner_relation_masks,
-        render_context.presentation_interpolation_alpha,
-        render_context.presentation_animation_interpolation_enabled);
+        render_context.owner_relation_masks);
     DispatchUnitAnimationDraw(context, unit);
 }
 
@@ -2389,9 +2207,7 @@ void DispatchUnitCellRenderQueueItem(UnitRenderQueueContext& render_context,
     UnitAnimationDrawContext context = make_unit_animation_context(
         definition, item.global_frame_counter, render_context.local_owner_id,
         render_context.local_owner_is_observer,
-        render_context.owner_relation_masks,
-        render_context.presentation_interpolation_alpha,
-        render_context.presentation_animation_interpolation_enabled);
+        render_context.owner_relation_masks);
     DispatchUnitCellResourceDraw(context, unit);
 }
 

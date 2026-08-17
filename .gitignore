@@ -39,8 +39,6 @@
 !ranker_reconstructed_code/tests/unit_death_resource_variant_regression.cpp
 !ranker_reconstructed_code/tests/save_load_cache_regression.cpp
 !ranker_reconstructed_code/tests/gameplay_input_event_order_regression.cpp
-!ranker_reconstructed_code/tests/render_144fps_regression.cpp
-!ranker_reconstructed_code/tests/animation_144hz_generator_regression.py
 !ranker_reconstructed_code/tests/replay_save_controls_regression.cpp
 !ranker_reconstructed_code/tests/replay_resource_lifetime_regression.cpp
 !ranker_reconstructed_code/tests/unit_effect_intrusive_iteration_regression.cpp
@@ -51,8 +49,6 @@
 !ranker_reconstructed_code/tests/wizardnet_relay_regression.cpp
 
 !ranker_reconstructed_code/tools/
-!ranker_reconstructed_code/tools/animation_144hz/
-!ranker_reconstructed_code/tools/animation_144hz/*.py
 !ranker_reconstructed_code/tools/replay_debug/
 !ranker_reconstructed_code/tools/replay_debug/*.cpp
 !ranker_reconstructed_code/tools/replay_debug/*.ps1
@@ -97,10 +93,6 @@ ranker_reconstructed_code/tools/gameplay_parity/reports/gameplay_inventory.json
 !ranker_reconstructed_code/resources/ranker_resources.rc
 !ranker_reconstructed_code/resources/original/
 !ranker_reconstructed_code/resources/original/**
-
-!ranker_reconstructed_code/assets/
-!ranker_reconstructed_code/assets/animation_144hz/
-!ranker_reconstructed_code/assets/animation_144hz/**
 
 !ranker_reconstructed_code/third_party/
 !ranker_reconstructed_code/third_party/zlib113/

@@ -109,12 +109,6 @@ RankerClientDisplayConfig LoadRankerClientDisplayConfig() {
     config.center = read_boolean("Center", config.center);
     config.position_set = !config.center &&
         read_integer("PosX", config.x) && read_integer("PosY", config.y);
-    int render_frames_per_second = 0;
-    if (read_integer("RenderFPS", render_frames_per_second)) {
-        config.render_frames_per_second =
-            NormalizeConfiguredRenderFramesPerSecond(
-                render_frames_per_second);
-    }
     return config;
 }
 

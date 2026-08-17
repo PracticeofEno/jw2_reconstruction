@@ -782,6 +782,15 @@ void StoreMovementFrameDeltaScratch(const UnitMovementUnit& unit, u32 direction,
 void HandleUnitRuntimeDeathState(UnitMovementContext& context, UnitMovementUnit& unit);
 void HandleAttachedUnitParentDeath(UnitMovementContext& context, UnitMovementUnit& parent);
 UnitMovementUnit* HandleFreeUnitActivation(UnitMovementContext& context);
+// Return the raw intrusive-list successor represented by the unit-pool lists.
+// A unit owns one shared next link, so moving it between lists changes the
+// successor observed when a caller later reaches a previously cached node.
+struct UnitIntrusiveListCursor {
+    const std::vector<UnitMovementUnit*>* list = nullptr;
+    std::size_t index = 0;
+};
+UnitMovementUnit* GetUnitIntrusiveListNext(const UnitMovementContext& context,
+    const UnitMovementUnit& unit, UnitIntrusiveListCursor& cursor);
 void HandleActiveUnitFreeListMove(UnitMovementContext& context, UnitMovementUnit& unit);
 void HandleActiveUnitLifecycleListMove(UnitMovementContext& context,
     UnitMovementUnit& unit);

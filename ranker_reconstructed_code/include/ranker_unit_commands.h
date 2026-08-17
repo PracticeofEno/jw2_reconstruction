@@ -8,6 +8,7 @@
 namespace ranker {
 
 struct MapEffectContext;
+struct UnitActionTickResult;
 
 constexpr std::size_t kUnitCommandRuntimeStateTableCount = 138;
 constexpr u32 kUnitStateTravel = 0x02;
@@ -903,6 +904,9 @@ void HandleOwnerUnitProductionCostRefund(UnitCommandContext& context,
 void ResetUnitCommand(UnitCommandContext& context, UnitMovementUnit& unit);
 void PopDeferredUnitCommandOrReturnIdle(UnitCommandContext& context,
     UnitMovementUnit& unit);
+bool HandleExtendedRuntimeTargetValidationActionResult(
+    UnitCommandContext& context, UnitMovementUnit& unit,
+    const UnitActionTickResult& result);
 bool FilterPendingUnitCommandInterrupt(UnitMovementUnit& unit);
 void HandlePendingUnitCommandDispatch(UnitCommandContext& context,
     UnitMovementUnit& unit);

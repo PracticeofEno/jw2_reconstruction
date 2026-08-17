@@ -502,12 +502,15 @@ void HandleUnitLifecycleDispatchListTick(UnitLifecycleContext& context) {
         return;
     }
 
-    const std::vector<UnitMovementUnit*> lifecycle_units =
-        context.movement->lifecycle_units;
-    for (UnitMovementUnit* unit : lifecycle_units) {
-        if (unit == nullptr) {
-            continue;
-        }
+    UnitMovementUnit* unit = context.movement->lifecycle_units.empty() ?
+        nullptr : context.movement->lifecycle_units.front();
+    UnitIntrusiveListCursor cursor{&context.movement->lifecycle_units, 0};
+    while (unit != nullptr) {
+        // Original 0x004ce7e0 saves raw +0x1cc before processing the current
+        // node.  The saved node can meanwhile move to another pool list; once
+        // reached, its now-current raw successor must be used.
+        UnitMovementUnit* next =
+            GetUnitIntrusiveListNext(*context.movement, *unit, cursor);
         if ((unit->command_flags & 0x80) != 0) {
             --unit->work_timer;
             if (unit->work_timer == 0) {
@@ -525,25 +528,24 @@ void HandleUnitLifecycleDispatchListTick(UnitLifecycleContext& context) {
                 }
                 HandleLifecycleUnitFreeListMove(*context.movement, *unit);
             }
-            continue;
         }
-
-        if ((unit->command_flags & 0x200) != 0) {
+        else if ((unit->command_flags & 0x200) != 0) {
             unit->command_flags &= ~0x200u;
             // Lifecycle activation exposes raw +0x64 as an animation frame
             // again; carry over the same physical word's current value.
             unit->animation_frame = unit->work_timer;
             HandleLifecycleUnitActiveListMove(*context.movement, *unit);
-            continue;
-        }
-
-        const UnitMovementDefinition& definition = definition_for(context, *unit);
-        if (definition.lifecycle_class == 2) {
-            HandleUnitLifecycleDecayTimer(context, *unit);
         }
         else {
-            HandleUnitLifecycleGrowthOrDecay(context, *unit);
+            const UnitMovementDefinition& definition = definition_for(context, *unit);
+            if (definition.lifecycle_class == 2) {
+                HandleUnitLifecycleDecayTimer(context, *unit);
+            }
+            else {
+                HandleUnitLifecycleGrowthOrDecay(context, *unit);
+            }
         }
+        unit = next;
     }
 }
 
@@ -703,26 +705,23 @@ void HandleUnitSimulationListTick(UnitLifecycleContext& context) {
         context.callbacks.on_before_active_simulation(context);
     }
 
-    const std::vector<UnitMovementUnit*> active_units = movement.active_units;
-    for (UnitMovementUnit* unit : active_units) {
-        if (unit == nullptr) {
-            continue;
-        }
+    UnitMovementUnit* unit = movement.active_units.empty() ?
+        nullptr : movement.active_units.front();
+    UnitIntrusiveListCursor cursor{&movement.active_units, 0};
+    while (unit != nullptr) {
         // Original 0x004cebb9 pushes raw active-next before dispatch and pops
-        // that saved pointer afterwards.  It does not re-check whether an
-        // earlier unit's handler moved the saved-next node to lifecycle/free.
-        // The frame-start snapshot models that cached pointer, so dispatch
-        // every snapshotted storage slot once even if its membership changed
-        // meanwhile.  Skipping !active here lost one original tick and could
-        // shift command/RNG state permanently.
+        // that saved pointer afterwards.  If an earlier handler moves that
+        // saved node, processing resumes through the node's updated shared
+        // intrusive next link instead of the frame-entry active-list tail.
+        UnitMovementUnit* next =
+            GetUnitIntrusiveListNext(movement, *unit, cursor);
         if (context.callbacks.on_active_unit_runtime_dispatch != nullptr) {
             context.callbacks.on_active_unit_runtime_dispatch(context, *unit);
-            continue;
         }
-        if (unit->type_id >= 0x60) {
-            continue;
+        else if (unit->type_id < 0x60) {
+            ProcessUnitRuntimeStateTick(movement, *unit);
         }
-        ProcessUnitRuntimeStateTick(movement, *unit);
+        unit = next;
     }
 }
 

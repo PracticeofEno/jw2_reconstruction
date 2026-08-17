@@ -122,8 +122,6 @@ int main() {
     assert(display.border);
     assert(display.center);
     assert(!display.position_set);
-    assert(display.render_frames_per_second ==
-        kDefaultConfiguredRenderFramesPerSecond);
     const RankerClientWizardNetConfig wizardnet =
         LoadRankerClientWizardNetConfig();
     assert(wizardnet.address == "115.22.136.89");

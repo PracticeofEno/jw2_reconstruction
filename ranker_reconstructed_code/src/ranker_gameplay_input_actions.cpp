@@ -475,8 +475,7 @@ void DrainGameplayInputEvents(GameplayInputActionState& state) {
         }
 
         const u32 key = event.code & 0xffu;
-        if (!state.keyboard_filter_active || key == 0x44 || key == 0x57 ||
-            key == 1) {
+        if (!state.keyboard_filter_active || key == 0x44 || key == 1) {
             if (state.callbacks.handle_keyboard_event != nullptr) {
                 state.callbacks.handle_keyboard_event(state, event);
             }

@@ -1332,6 +1332,209 @@ void test_effect_raw_image_index_can_cross_catalog_row() {
         "raw attack image index did not continue from the catalog resource base");
 }
 
+void test_basic_stop_order_preserves_target_pool_alias() {
+    constexpr u32 kOriginalUnitPoolStride = 0x1d0u;
+
+    UnitMovementContext movement{};
+    UnitMovementUnit source{};
+    source.id = 172u * kOriginalUnitPoolStride;
+    source.runtime_slot_index = 172;
+    source.active = true;
+    source.command_state = kUnitStateGuardAnchorAction;
+
+    UnitMovementUnit target{};
+    target.id = 50u * kOriginalUnitPoolStride;
+    target.runtime_slot_index = 50;
+    target.active = true;
+
+    movement.active_units = {&source, &target};
+    UnitCommandContext context{};
+    context.movement = &movement;
+
+    // error2 frame 4274 delivers subtype-0x02 selector zero with slot 50 in
+    // packet +0x18. Original 0x004cfe37 strips 0x01000000 from the active
+    // selector while retaining that target offset in raw unit +0x68.
+    source.pending_command.state = kUnitCommandMirrorClearFlag;
+    source.pending_command.x = static_cast<i32>(target.id);
+    source.pending_command.y = 1405;
+    source.pending_command.value = 559;
+
+    HandlePendingUnitCommandDispatch(context, source);
+
+    require(source.command_state == kUnitStateRuntimeIdleAcquire &&
+            source.target == &target,
+        "subtype-0x02 selector zero discarded its raw target pool alias");
+    require(source.active_command_payload.state == 0 &&
+            source.active_command_payload.x == static_cast<i32>(target.id),
+        "subtype-0x02 selector zero did not mirror the original active tuple");
+}
+
+void test_basic_order_scalar_does_not_alias_legacy_slot() {
+    constexpr u32 kOriginalUnitPoolStride = 0x1d0u;
+
+    UnitMovementContext movement{};
+    UnitMovementUnit source{};
+    source.id = 208u * kOriginalUnitPoolStride;
+    source.runtime_slot_index = 208;
+    source.active = true;
+
+    UnitMovementUnit legacy_collision{};
+    legacy_collision.id = 12u * kOriginalUnitPoolStride;
+    legacy_collision.runtime_slot_index = 12;
+    legacy_collision.active = true;
+
+    movement.active_units = {&source, &legacy_collision};
+    UnitCommandContext context{};
+    context.movement = &movement;
+
+    // error2 frame 6566 carries scalar mode 12 in subtype-0x02 packet +0x18.
+    // Raw +0x68 therefore contains 12, not the aligned slot-12 offset 0x15c0.
+    // The runtime legacy slot resolver must not turn that scalar into a target.
+    source.pending_command.state = kUnitCommandMirrorClearFlag | 0x07u;
+    source.pending_command.x = 12;
+    source.pending_command.y = 1334;
+    source.pending_command.value = 130;
+
+    HandlePendingUnitCommandDispatch(context, source);
+
+    require(source.target == nullptr,
+        "subtype-0x02 scalar payload aliased an unaligned legacy slot id");
+}
+
+void test_extended_target_validation_out_of_range_pops_without_pathing() {
+    UnitCommandContext context{};
+    UnitMovementUnit source{};
+    source.type_id = 147;
+    source.active = true;
+    source.command_state = kUnitStateRuntimeTargetValidation;
+    source.active_command_payload.state = 5;
+    source.active_command_payload.x = 50 * 0x1d0;
+    source.path_target_x = 1693;
+    source.path_target_y = 702;
+
+    UnitMovementUnit target{};
+    target.id = 50 * 0x1d0;
+    target.active = true;
+    source.target = &target;
+
+    UnitActionTickResult result{};
+    result.code = UnitActionTickCode::lost_target;
+    result.target = &target;
+    result.valid_target = true;
+    result.carry = false;
+
+    require(HandleExtendedRuntimeTargetValidationActionResult(
+                context, source, result),
+        "extended state-0x1d EAX=0 action result was not consumed");
+    require(source.command_state == kUnitStateRuntimeIdleAcquire &&
+            source.active_command_payload.state == 0,
+        "extended state-0x1d EAX=0 action result did not return idle");
+    require(source.path_target_x == 1693 && source.path_target_y == 702 &&
+            source.target == &target,
+        "extended state-0x1d EAX=0 action result incorrectly replanned");
+}
+
+std::vector<u32> g_unit_list_visited_ids;
+UnitMovementUnit* g_move_on_active_dispatch = nullptr;
+UnitMovementUnit* g_move_on_lifecycle_remove = nullptr;
+
+void record_active_list_dispatch(UnitLifecycleContext& context,
+    UnitMovementUnit& unit) {
+    g_unit_list_visited_ids.push_back(unit.id);
+    if (unit.id == 1 && g_move_on_active_dispatch != nullptr) {
+        HandleActiveUnitLifecycleListMove(*context.movement,
+            *g_move_on_active_dispatch);
+    }
+}
+
+void record_lifecycle_list_remove(UnitLifecycleContext& context,
+    UnitMovementUnit& unit) {
+    g_unit_list_visited_ids.push_back(unit.id);
+    if (unit.id == 1 && g_move_on_lifecycle_remove != nullptr) {
+        HandleLifecycleUnitFreeListMove(*context.movement,
+            *g_move_on_lifecycle_remove);
+    }
+}
+
+void test_active_dispatch_follows_moved_cached_next() {
+    UnitMovementContext movement{};
+    UnitLifecycleContext lifecycle{};
+    lifecycle.movement = &movement;
+    lifecycle.callbacks.on_active_unit_runtime_dispatch =
+        record_active_list_dispatch;
+
+    UnitMovementUnit first{};
+    UnitMovementUnit cached_next{};
+    UnitMovementUnit old_active_tail{};
+    UnitMovementUnit new_lifecycle_tail{};
+    first.id = 1;
+    cached_next.id = 2;
+    old_active_tail.id = 3;
+    new_lifecycle_tail.id = 4;
+    first.active = true;
+    cached_next.active = true;
+    old_active_tail.active = true;
+
+    movement.active_units = {&first, &cached_next, &old_active_tail};
+    movement.lifecycle_units = {&new_lifecycle_tail};
+    g_unit_list_visited_ids.clear();
+    g_move_on_active_dispatch = &cached_next;
+
+    HandleUnitSimulationListTick(lifecycle);
+
+    require(g_unit_list_visited_ids == std::vector<u32>({1, 2, 4}),
+        "active pass did not follow the moved node's updated next link");
+    require(movement.active_units ==
+            std::vector<UnitMovementUnit*>({&first, &old_active_tail}),
+        "active-list topology changed unexpectedly");
+    require(movement.lifecycle_units ==
+            std::vector<UnitMovementUnit*>({&cached_next, &new_lifecycle_tail}),
+        "lifecycle-list topology changed unexpectedly");
+
+    g_move_on_active_dispatch = nullptr;
+}
+
+void test_lifecycle_dispatch_follows_moved_cached_next() {
+    UnitMovementContext movement{};
+    UnitLifecycleContext lifecycle{};
+    lifecycle.movement = &movement;
+    lifecycle.callbacks.on_unit_lifecycle_removed =
+        record_lifecycle_list_remove;
+
+    UnitMovementUnit first{};
+    UnitMovementUnit cached_next{};
+    UnitMovementUnit old_lifecycle_tail{};
+    UnitMovementUnit new_free_tail{};
+    first.id = 1;
+    cached_next.id = 2;
+    old_lifecycle_tail.id = 3;
+    new_free_tail.id = 4;
+    first.command_flags = 0x80;
+    cached_next.command_flags = 0x80;
+    new_free_tail.command_flags = 0x80;
+    first.work_timer = 1;
+    cached_next.work_timer = 1;
+    new_free_tail.work_timer = 1;
+
+    movement.lifecycle_units = {&first, &cached_next, &old_lifecycle_tail};
+    movement.free_units = {&new_free_tail};
+    g_unit_list_visited_ids.clear();
+    g_move_on_lifecycle_remove = &cached_next;
+
+    HandleUnitLifecycleDispatchListTick(lifecycle);
+
+    require(g_unit_list_visited_ids == std::vector<u32>({1, 2, 4}),
+        "lifecycle pass did not follow the moved node's updated next link");
+    require(movement.lifecycle_units ==
+            std::vector<UnitMovementUnit*>({&old_lifecycle_tail}),
+        "lifecycle-list tail changed unexpectedly");
+    require(movement.free_units == std::vector<UnitMovementUnit*>(
+            {&new_free_tail, &cached_next, &first}),
+        "free-list head-to-tail order changed");
+
+    g_move_on_lifecycle_remove = nullptr;
+}
+
 void test_kingdemon_afterimage_uses_half_rate_render_tick() {
     UnitEffectRuntimeState state{};
     UnitEffectDefinition definition{};
@@ -1457,6 +1660,12 @@ int main(int argc, char** argv) {
         std::cout << "KINGDEMON_AFTERIMAGE_RENDER_PASS\n";
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string(argv[1]) == "unit_list_iteration") {
+        test_active_dispatch_follows_moved_cached_next();
+        test_lifecycle_dispatch_follows_moved_cached_next();
+        std::cout << "UNIT_LIST_INTRUSIVE_ITERATION_PASS\n";
+        return EXIT_SUCCESS;
+    }
     test_cached_next_continues_through_free_tail();
     test_unlinked_non_next_node_is_not_visited_from_entry_snapshot();
     test_action9_counts_down_raw_effect_30_accumulator();
@@ -1476,6 +1685,9 @@ int main(int argc, char** argv) {
     test_transient_lifecycle_uses_shared_jw211_period();
     test_in_range_guard_acquisition_preserves_command_path();
     test_transport_unload_command_resolves_carrier_payload();
+    test_basic_stop_order_preserves_target_pool_alias();
+    test_basic_order_scalar_does_not_alias_legacy_slot();
+    test_extended_target_validation_out_of_range_pops_without_pathing();
     test_relative_spatial_box_uses_frame_start_source_anchor();
     test_lifecycle_idle_reset_clamps_shared_raw_frame();
     test_construction_backlink_releases_dead_spawn_worker_raw_state();
@@ -1492,6 +1704,8 @@ int main(int argc, char** argv) {
     test_value_transfer_entry_uses_raw_cargo_union();
     test_effect_resource_entry_zero_is_drawable();
     test_effect_raw_image_index_can_cross_catalog_row();
+    test_active_dispatch_follows_moved_cached_next();
+    test_lifecycle_dispatch_follows_moved_cached_next();
     test_kingdemon_afterimage_uses_half_rate_render_tick();
     test_original_effect_phase_render_precedence();
     test_special_projectile_startup_precedes_impact_route();

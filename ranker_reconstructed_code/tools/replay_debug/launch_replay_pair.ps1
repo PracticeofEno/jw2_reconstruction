@@ -6,7 +6,7 @@ param(
     [string]$RebuildExecutable = 'RankerOCPV_Win\ranker_rebuild.exe',
     [string]$ExpectedRebuildSha256 = '',
     [int]$RouteTimeoutSeconds = 90,
-    [int]$OriginalStartupSeconds = 6,
+    [int]$OriginalStartupSeconds = 0,
     [int]$RebuildStartupSeconds = 6
 )
 
@@ -189,39 +189,42 @@ function Find-ReplayDialog([Diagnostics.Process]$Process, [IntPtr]$MainWindow) {
     return $dialog
 }
 
-function Select-Replay([Diagnostics.Process]$Process) {
+function Select-Replay(
+        [Diagnostics.Process]$Process, [bool]$IsOriginal) {
     $main = Wait-Top $Process.Id 'The Ranker'
+    $originalRouteStatus = ''
     [RecoveredReplayUi]::SetForegroundWindow($main) | Out-Null
-    $startupSeconds = if ($Process.ProcessName -eq 'ranker') {
+    $startupSeconds = if ($IsOriginal) {
         $OriginalStartupSeconds
     } else {
         $RebuildStartupSeconds
     }
     Start-Sleep -Seconds $startupSeconds
     $dialog = [IntPtr]::Zero
-    if ($Process.ProcessName -eq 'ranker') {
-        & python "$PSScriptRoot\route_original_replay.py" $Process.Id |
-            Out-Null
+    if ($IsOriginal) {
+        $originalRouteStatus = ((& python `
+            "$PSScriptRoot\route_original_replay.py" `
+            $Process.Id 0 real-input) -join ' | ')
+    }
+    else {
+        # Follow the actual frontend route: title Single ('S'), then the
+        # single-player Replay entry ('R').  Sending WM_USER+9 directly leaves
+        # the title worker active alongside gameplay and corrupts the probe.
+        [RecoveredReplayUi]::SendMessage(
+            $main, 0x0102, [IntPtr][char]'S', [IntPtr]::Zero) | Out-Null
+        Start-Sleep -Seconds 2
+        [RecoveredReplayUi]::SendMessage(
+            $main, 0x0102, [IntPtr][char]'R', [IntPtr]::Zero) | Out-Null
     }
     $routeDeadline = [DateTime]::UtcNow.AddSeconds($RouteTimeoutSeconds)
     while ($dialog -eq [IntPtr]::Zero -and
            [DateTime]::UtcNow -lt $routeDeadline) {
-        # Title entry 3 from JW2_02 record 94 is [345,472]-[446,559].
-        # Use the real pointer route so the title resources and animation
-        # timer are released before replay playback starts.
-        if ($Process.ProcessName -eq 'ranker') {
-            # The injected one-shot route traverses both original UI screens
-            # and restores the real input tick through a trampoline.
-        }
-        else {
-            [RecoveredReplayUi]::ClickLogical($main, 395, 515, 800, 600)
-        }
         Start-Sleep -Milliseconds 500
         $dialog = Find-ReplayDialog $Process $main
     }
     if ($dialog -eq [IntPtr]::Zero) {
         $windows = [RecoveredReplayUi]::ListTop([uint32]$Process.Id)
-        throw "Timed out routing the title Replay entry for PID $($Process.Id). Windows: $windows"
+        throw "Timed out routing the title Replay entry for PID $($Process.Id). Windows: $windows Route: $originalRouteStatus"
     }
     $list = [RecoveredReplayUi]::FindChild($dialog, 0x70a)
     $ok = [RecoveredReplayUi]::FindChild($dialog, 0x70d)
@@ -275,11 +278,11 @@ $rebuild = $null
 try {
     $original = Start-Process -FilePath $originalPath `
         -WorkingDirectory $working -PassThru
-    $originalWindow = Select-Replay $original
+    $originalWindow = Select-Replay $original $true
     [RecoveredReplayUi]::SuspendProcess($original.Handle)
     $rebuild = Start-Process -FilePath $rebuildPath `
         -WorkingDirectory $working -PassThru
-    $rebuildWindow = Select-Replay $rebuild
+    $rebuildWindow = Select-Replay $rebuild $false
     [RecoveredReplayUi]::SuspendProcess($rebuild.Handle)
     $original.Refresh()
     $rebuild.Refresh()

@@ -4,18 +4,11 @@
 #include "ranker_input.h"
 
 #include <algorithm>
-#include <chrono>
 
 namespace ranker {
 namespace {
 
 GameplayLoopState g_gameplay_loop_state;
-
-u64 read_steady_render_tick_ns() {
-    using clock = std::chrono::steady_clock;
-    return static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-        clock::now().time_since_epoch()).count());
-}
 
 u32 interval_at(const std::array<u32, kGameplayFrameIntervalsMs.size()>& intervals,
     u32 index) {
@@ -158,9 +151,6 @@ void reset_session_transient_loop_state(GameplayLoopState& state) {
     state.catchup_status_counter0 = 0;
     state.catchup_status_counter1 = 0;
     state.catchup_last_present_tick_ms = 0;
-    state.current_render_tick_ns = 0;
-    state.next_present_tick_ns = 0;
-    state.last_simulation_render_tick_ns = 0;
     state.catchup_status_mode = 0;
     state.fixed_step_initialized = false;
     state.external_single_step = false;
@@ -176,8 +166,6 @@ void reset_session_transient_loop_state(GameplayLoopState& state) {
     state.reenter_session_requested = false;
     state.leave_requested = false;
     state.special_exit_mode = false;
-    state.render_schedule_initialized = false;
-    state.simulation_render_clock_initialized = false;
 }
 
 void process_restart_or_leave(GameplayLoopState& state) {
@@ -253,24 +241,10 @@ GameplayLoopState& gameplay_loop_state() {
 void RefreshGameplayLoopTick(GameplayLoopState& state) {
     if (state.callbacks.read_tick_ms != nullptr) {
         state.current_tick_ms = state.callbacks.read_tick_ms(state);
+        return;
     }
 #ifdef _WIN32
-    else {
-        state.current_tick_ms = GetTickCount();
-    }
-#endif
-    if (state.callbacks.read_render_tick_ns != nullptr) {
-        state.current_render_tick_ns =
-            state.callbacks.read_render_tick_ns(state);
-    }
-    else {
-        state.current_render_tick_ns = read_steady_render_tick_ns();
-    }
-#ifndef _WIN32
-    if (state.callbacks.read_tick_ms == nullptr) {
-        state.current_tick_ms = static_cast<u32>(
-            state.current_render_tick_ns / 1000000ull);
-    }
+    state.current_tick_ms = GetTickCount();
 #endif
 }
 
@@ -346,13 +320,6 @@ void UpdateGameplayFramePhaseFlags(GameplayLoopState& state) {
 void ProcessGameplayFrameTick(GameplayLoopState& state) {
     UpdateGameplayFramePhaseFlags(state);
 
-    if (state.phase_flags.present_update &&
-        !ShouldPresentGameplayTargetFrame(state.current_render_tick_ns,
-            state.next_present_tick_ns, state.render_schedule_initialized,
-            state.render_target_fps)) {
-        state.phase_flags.present_update = false;
-    }
-
     if (state.phase_flags.pre_update && state.callbacks.pre_update_phase != nullptr) {
         state.callbacks.pre_update_phase(state);
     }
@@ -370,8 +337,6 @@ void ProcessGameplayFrameTick(GameplayLoopState& state) {
     }
 
     if (state.phase_flags.simulation_update) {
-        state.last_simulation_render_tick_ns = state.current_render_tick_ns;
-        state.simulation_render_clock_initialized = true;
         ++state.simulation_frame_counter;
         for (GameplayLoopCallback callback : state.callbacks.simulation_phases) {
             if (callback != nullptr) {

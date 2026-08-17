@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <limits>
 
 namespace ranker {
@@ -3173,6 +3174,50 @@ UnitMovementUnit* HandleFreeUnitActivation(UnitMovementContext& context) {
     push_unit_front_unique(context.active_units, *unit);
     unit->active = true;
     return unit;
+}
+
+UnitMovementUnit* GetUnitIntrusiveListNext(const UnitMovementContext& context,
+    const UnitMovementUnit& unit, UnitIntrusiveListCursor& cursor) {
+    const auto locate_in_list = [&unit, &cursor](
+            const std::vector<UnitMovementUnit*>& list) -> bool {
+        if (cursor.list == &list && cursor.index < list.size() &&
+            list[cursor.index] == &unit) {
+            return true;
+        }
+        const auto it = std::find(list.begin(), list.end(), &unit);
+        if (it == list.end()) {
+            return false;
+        }
+        cursor.list = &list;
+        cursor.index = static_cast<std::size_t>(std::distance(list.begin(), it));
+        return true;
+    };
+
+    // Start with the list/index where the cached node was expected.  In the
+    // common no-mutation case this is O(1); a list move falls back to locating
+    // the node in the three canonical pool chains.
+    if (cursor.list != nullptr && locate_in_list(*cursor.list)) {
+        const std::size_t next_index = cursor.index + 1;
+        cursor.index = next_index;
+        return next_index < cursor.list->size() ? (*cursor.list)[next_index] : nullptr;
+    }
+
+    const std::vector<UnitMovementUnit*>* lists[] = {
+        &context.active_units,
+        &context.lifecycle_units,
+        &context.free_units,
+    };
+    for (const std::vector<UnitMovementUnit*>* list : lists) {
+        if (list == cursor.list || !locate_in_list(*list)) {
+            continue;
+        }
+        const std::size_t next_index = cursor.index + 1;
+        cursor.index = next_index;
+        return next_index < cursor.list->size() ? (*cursor.list)[next_index] : nullptr;
+    }
+    cursor.list = nullptr;
+    cursor.index = 0;
+    return nullptr;
 }
 
 void HandleActiveUnitFreeListMove(UnitMovementContext& context,
