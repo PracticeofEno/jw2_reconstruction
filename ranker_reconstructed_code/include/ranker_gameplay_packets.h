@@ -93,6 +93,8 @@ using Mode1GameplayCatchupTargetCallback = void (*)(void* user_data,
 using Mode1GameplayModalPauseCallback = void (*)(void* user_data, bool visible);
 using Mode1GameplayPopulationLimitCallback = void (*)(void* user_data,
     u32 owner, u32 limit);
+using Mode1GameplayOwnerPrimaryResourceCallback = void (*)(void* user_data,
+    u32 owner, u32 primary_resource);
 using Mode1GameplayHighClusterTransitionCallback = void (*)(void* user_data,
     i32 transition_index, bool write_transition_index,
     bool local_scene_change);
@@ -120,6 +122,8 @@ struct Mode1GameplayRuntimeCallbacks {
     Mode1GameplayCatchupTargetCallback apply_catchup_target = nullptr;
     Mode1GameplayModalPauseCallback set_modal_pause = nullptr;
     Mode1GameplayPopulationLimitCallback set_owner_population_limit = nullptr;
+    Mode1GameplayOwnerPrimaryResourceCallback set_owner_primary_resource =
+        nullptr;
     Mode1GameplayHighClusterTransitionCallback apply_high_cluster_transition =
         nullptr;
     Mode1GameplayPlayerInactiveNotificationCallback
@@ -233,7 +237,9 @@ struct Mode1GameplayPacketDispatchState {
     u32 transition_timer = 0;
     bool transition_requested = false;
     bool local_scene_change_requested = false;
-    bool local_toggle_state = false;
+    // Original DAT_007334c0 starts at one: ordinary current-visibility fog is
+    // enabled until cheat command 1 XORs it to zero for the first time.
+    bool local_toggle_state = true;
     bool last_fog_promote_requires_current_visible = false;
     bool catchup_target_enabled = false;
     bool modal_pause_visible = false;

@@ -49,6 +49,9 @@ void release_loaded_resources(GameplaySessionFlowState& state) {
         state.loaded_resource_base != kInvalidLoadedResource) {
         ReleaseResourceEntriesFrom(state.loaded_resource_base);
     }
+    if (state.loaded_palette_slot != kInvalidLoadedResource) {
+        ReleasePaletteCacheSlotsFrom(state.loaded_palette_slot);
+    }
     state.loaded_resource_base = kInvalidLoadedResource;
     state.loaded_palette_slot = kInvalidLoadedResource;
     state.loaded_resource_base_owned = false;
@@ -422,6 +425,7 @@ u32 LoadJw202ResourceSequenceFromCurrentBase(GameplaySessionFlowState& state,
 u32 LoadJw202PaletteBoundResourceSequence(GameplaySessionFlowState& state,
     u32 record_count, u32 first_record) {
     const u32 resource_rewind = resource_store_state().next_entry;
+    const u32 palette_rewind = palette_cache_state().next_slot;
     state.loaded_resource_base = kInvalidLoadedResource;
     state.loaded_palette_slot = kInvalidLoadedResource;
     state.loaded_resource_base_owned = false;
@@ -445,6 +449,7 @@ u32 LoadJw202PaletteBoundResourceSequence(GameplaySessionFlowState& state,
     if (!LoadPaletteBoundResourceSequence(kJw202ArchiveName, first_record,
             record_count, &sequence)) {
         ReleaseResourceEntriesFrom(resource_rewind);
+        ReleasePaletteCacheSlotsFrom(palette_rewind);
         return kInvalidLoadedResource;
     }
     state.loaded_resource_base = sequence.resource_start;

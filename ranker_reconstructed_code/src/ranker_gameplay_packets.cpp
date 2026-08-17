@@ -1,4 +1,5 @@
 #include "ranker_gameplay_packets.h"
+#include "ranker_gameplay_cheats.h"
 #include "ranker_gameplay_production_actions.h"
 #include "ranker_player_slots.h"
 
@@ -558,15 +559,26 @@ void refresh_consensus_decision_mask() {
 }
 
 void apply_high_cluster_command(u32 command_index, const Mode1ReliablePacket& packet) {
-    switch (command_index) {
-    case 0x00:
-        if (packet_channel_is_local(packet)) {
-            g_packet_dispatch_state.local_scene_change_requested = true;
-            g_packet_dispatch_state.transition_requested = true;
-            g_packet_dispatch_state.transition_timer = 0;
-            mirror_runtime_high_cluster_transition(-2, false, true);
+    const GameplayCheatTransitionRequest transition =
+        ResolveGameplayCheatTransitionRequest(command_index);
+    if (transition.requested) {
+        if (transition.local_scene_change) {
+            if (packet_channel_is_local(packet)) {
+                g_packet_dispatch_state.local_scene_change_requested = true;
+                g_packet_dispatch_state.transition_requested = true;
+                g_packet_dispatch_state.transition_timer = 0;
+                mirror_runtime_high_cluster_transition(
+                    transition.transition_index,
+                    transition.write_transition_index,
+                    transition.local_scene_change);
+            }
+            return;
         }
+        request_high_cluster_transition(transition.transition_index);
         return;
+    }
+
+    switch (command_index) {
     case 0x01:
         if (packet_channel_is_local(packet)) {
             g_packet_dispatch_state.local_toggle_state =
@@ -575,30 +587,23 @@ void apply_high_cluster_command(u32 command_index, const Mode1ReliablePacket& pa
                 g_packet_dispatch_state.local_toggle_state);
         }
         return;
-    case 0x02:
-        request_high_cluster_transition(-1);
-        return;
     default:
         break;
-    }
-
-    if (command_index >= 0x03 && command_index <= 0x0c) {
-        request_high_cluster_transition(static_cast<i32>(command_index - 0x03));
-        return;
-    }
-    if (command_index == 0x0d) {
-        request_high_cluster_transition(10);
-        return;
-    }
-    if (command_index == 0x0e) {
-        request_high_cluster_transition(7);
-        return;
     }
 
     const u8 channel = packet_channel(packet);
     if (command_index == 0x0f) {
         if (channel < player_slot_state().owner_primary_resources.size()) {
-            player_slot_state().owner_primary_resources[channel] += 10000;
+            u32& primary =
+                player_slot_state().owner_primary_resources[channel];
+            primary = ApplyGameplayCheatPrimaryResourceBonus(primary);
+            if (g_packet_dispatch_state.runtime_callbacks
+                    .set_owner_primary_resource != nullptr) {
+                g_packet_dispatch_state.runtime_callbacks
+                    .set_owner_primary_resource(
+                        g_packet_dispatch_state.runtime_user_data,
+                        channel, primary);
+            }
         }
         return;
     }

@@ -2,6 +2,7 @@
 #include "ranker_cursor.h"
 #include "ranker_gameplay_input_actions.h"
 #include "ranker_screenshot.h"
+#include "ranker_system_ui.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -60,6 +61,11 @@ int main() {
     constexpr u32 kVkProcessKey = 0xe5u;
     constexpr u32 kVkDigit1 = 0x31u;
     constexpr u32 kDigit1Scan = 0x02u;
+
+    require(BuildImeCompositionPresentationText("name_", "xy") == "namexy_",
+        "active IME composition remained one character behind the edit cursor");
+    require(BuildImeCompositionPresentationText("chat", "xy") == "chatxy",
+        "active IME composition was not appended to chat presentation");
 
     input_state() = InputState{};
 

@@ -10,6 +10,7 @@
 #include "ranker_runtime_resources.h"
 #include "ranker_sprite_renderer.h"
 #include "ranker_startup_environment.h"
+#include "ranker_system_ui.h"
 #include "ranker_text_renderer.h"
 #include "ranker_trc.h"
 #include "ranker_winmain.h"
@@ -2206,8 +2207,9 @@ u8 local_player_modal_pause_uses_remaining(const GameplayModalUiState& state) {
 }
 
 bool scenario_modal_uses_default_objective_text(const GameplayModalUiState& state) {
-    return state.generic_ai_profile_mode ||
-        (state.network_ai_profile_override && state.session_mode != 5);
+    return GameplayScenarioObjectiveUsesDefaultText(
+        state.generic_ai_profile_mode, state.network_ai_profile_override,
+        state.session_mode);
 }
 
 std::string scenario_modal_objective_text(const GameplayModalUiState& state) {
@@ -2945,6 +2947,12 @@ void OpenGameplayMessageDialog(const char* message) {
 }
 
 bool OpenGameplayScenarioMessageDialog(GameplayModalUiState& state) {
+    // FUN_0042e9d0 reads DAT_00722870 while it creates record 0x6b.  Refresh
+    // the reconstruction's typed copy at that same boundary rather than
+    // depending on whichever gameplay phase last mirrored the script state.
+    if (state.callbacks.refresh_scenario_objective != nullptr) {
+        state.callbacks.refresh_scenario_objective(state);
+    }
     if (!state.scenario_message_active) {
         if (!load_gameplay_modal_screen(state, kGameplayModalScenarioMessageSlot,
                 selected_faction_record(state, 0x6b),
@@ -4546,6 +4554,17 @@ void HandleUiScreenHoverNoop(const UiScreenEntry&) {
 bool DrawUiScreenTextEntry(const UiScreenDefinition& screen, HDC dc,
     const UiScreenEntry& entry) {
     const char* text = entry_text(entry);
+    std::string composition_display;
+    if (screen.text_edit_active &&
+        screen.text_edit_entry_index < screen.entries.size() &&
+        &entry == &screen.entries[screen.text_edit_entry_index]) {
+        const std::string composition = CurrentImeCompositionText();
+        if (!composition.empty()) {
+            composition_display =
+                BuildImeCompositionPresentationText(text, composition);
+            text = composition_display.c_str();
+        }
+    }
     if (text[0] == '\0') {
         return true;
     }
@@ -4572,8 +4591,27 @@ bool DrawUiScreenTextEntry(const UiScreenDefinition& screen, HDC dc,
     SelectTextDrawFont(draw_font_index);
     SelectTextMetricFont(metric_font_index);
     SetTextCursor(x, y, foreground, 0);
-    return std::strchr(text, '\r') == nullptr ? DrawTextString(text) :
-        DrawTextLineUntilCrLf(text);
+    if (std::strchr(text, '\r') == nullptr) {
+        return DrawTextString(text);
+    }
+
+    // Original DrawUiScreenTextEntry (0x00505ed0) does not stop after the
+    // first CRLF segment.  It restores the initial x coordinate and advances
+    // y by metric-font height + 2 for every remaining line.  P_SCENA mission
+    // objectives begin with CRLF, so drawing only the first segment rendered
+    // an empty line and made the entire objective modal appear blank.
+    const i32 line_advance =
+        static_cast<i32>(text_renderer_state().metric_font.height) + 2;
+    const char* line = text;
+    i32 line_y = y;
+    bool ok = true;
+    do {
+        SetTextCursor(x, line_y, foreground, 0);
+        ok = DrawTextLineUntilCrLf(line) && ok;
+        line = NextUiScreenCrLfTextLine(line);
+        line_y += line_advance;
+    } while (line != nullptr && *line != '\0');
+    return ok;
 }
 #endif
 

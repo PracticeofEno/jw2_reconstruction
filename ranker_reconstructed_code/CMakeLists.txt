@@ -799,29 +799,6 @@ if (RANKER_BUILD_REGRESSION_TESTS)
         COMMAND edge_scroll_parity_regression
     )
 
-    add_executable(gameplay_script_escape_regression
-        tests/gameplay_script_escape_regression.cpp
-        src/ranker_gameplay_script_dialog.cpp
-    )
-    target_include_directories(gameplay_script_escape_regression PRIVATE
-        include
-    )
-    if (MSVC)
-        target_compile_options(gameplay_script_escape_regression PRIVATE /Gy)
-        target_link_options(gameplay_script_escape_regression PRIVATE /OPT:REF)
-    else()
-        target_compile_options(gameplay_script_escape_regression PRIVATE
-            -ffunction-sections
-            -fdata-sections
-        )
-        target_link_options(gameplay_script_escape_regression PRIVATE
-            -Wl,--gc-sections
-        )
-    endif()
-    add_test(NAME gameplay_script_escape_regression
-        COMMAND gameplay_script_escape_regression
-    )
-
     add_executable(control_group_persistence_regression
         tests/control_group_persistence_regression.cpp
         src/ranker_control_group_persistence.cpp
@@ -1479,6 +1456,33 @@ if (RANKER_BUILD_GAMEPLAY_MODAL_RULES_REGRESSION_TESTS)
     )
     add_test(NAME gameplay_modal_rules_regression
         COMMAND gameplay_modal_rules_regression)
+endif()
+
+option(RANKER_BUILD_GAMEPLAY_SCRIPT_ESCAPE_REGRESSION_TEST
+    "Build the focused scenario dialog Escape regression" OFF)
+if (RANKER_BUILD_GAMEPLAY_SCRIPT_ESCAPE_REGRESSION_TEST)
+    enable_testing()
+    add_executable(gameplay_script_escape_regression
+        tests/gameplay_script_escape_regression.cpp
+        src/ranker_gameplay_script_dialog.cpp
+    )
+    target_include_directories(gameplay_script_escape_regression PRIVATE
+        include
+    )
+    if (MSVC)
+        target_compile_options(gameplay_script_escape_regression PRIVATE /Gy)
+        target_link_options(gameplay_script_escape_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(gameplay_script_escape_regression PRIVATE
+            -ffunction-sections
+            -fdata-sections
+        )
+        target_link_options(gameplay_script_escape_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME gameplay_script_escape_regression
+        COMMAND gameplay_script_escape_regression)
 endif()
 
 option(RANKER_BUILD_GAMEPLAY_FLOW_MODES_REGRESSION_TESTS

@@ -515,6 +515,8 @@ void ShutdownSoftwareCursorSurfaces() {
     g_cursor_state.surfaces_initialized = false;
     g_cursor_state.resources_loaded = false;
     g_cursor_state.visible = false;
+    g_cursor_state.application_active = true;
+    g_cursor_state.restore_visible_on_activate = false;
 }
 
 void SetGameCursorHotspot(u32 cursor_index, i32 x, i32 y) {
@@ -534,7 +536,8 @@ void SetGameCursorPointerPosition(i32 x, i32 y) {
         ++g_cursor_state.cursor_change_depth;
         return;
     }
-    if (g_cursor_state.pointer_updates_suppressed) {
+    if (g_cursor_state.pointer_updates_suppressed ||
+        !g_cursor_state.application_active) {
         return;
     }
     // The original receives this path for actual pointer motion.  Reconstructed
@@ -581,6 +584,10 @@ void RestoreSystemCursorPosition() {
 
 void ShowGameCursor() {
     const std::lock_guard<std::recursive_mutex> lock(g_cursor_mutex);
+    if (!g_cursor_state.application_active) {
+        g_cursor_state.restore_visible_on_activate = true;
+        return;
+    }
     if (g_cursor_state.visible || g_cursor_state.pointer_updates_suppressed) {
         return;
     }
@@ -592,6 +599,13 @@ void ShowGameCursor() {
 
 void HideGameCursor() {
     const std::lock_guard<std::recursive_mutex> lock(g_cursor_mutex);
+    if (!g_cursor_state.application_active) {
+        // The primary image was already restored by the deactivation edge.
+        // A real gameplay/UI hide while inactive cancels the pending restore.
+        g_cursor_state.restore_visible_on_activate = false;
+        g_cursor_state.visible = false;
+        return;
+    }
     if (!g_cursor_state.visible) {
         return;
     }
@@ -607,6 +621,40 @@ void SetGameCursorPresentationSuppressed(bool suppressed) {
         HideGameCursor();
     }
     g_cursor_state.pointer_updates_suppressed = suppressed;
+}
+
+void SetGameCursorApplicationActive(bool active) {
+    const std::lock_guard<std::recursive_mutex> lock(g_cursor_mutex);
+    if (g_cursor_state.application_active == active) {
+        return;
+    }
+
+    if (!active) {
+        // ranker.exe loses/acquires its DirectDraw/DirectInput presentation
+        // ownership with WM_ACTIVATEAPP.  Restoring the last cursor once is
+        // required; continuing the software-cursor motion path afterwards
+        // captures pixels from whatever window now covers the primary and
+        // leaves the repeated 32x32 fragments seen around an occluded game.
+        g_cursor_state.restore_visible_on_activate = g_cursor_state.visible;
+        if (g_cursor_state.visible) {
+            g_cursor_state.previous_cursor_x = g_cursor_state.cursor_x;
+            g_cursor_state.previous_cursor_y = g_cursor_state.cursor_y;
+            HandlePrimaryCursorBackgroundRestore();
+            g_cursor_state.visible = false;
+        }
+        g_cursor_state.application_active = false;
+        return;
+    }
+
+    g_cursor_state.application_active = true;
+    const bool restore = g_cursor_state.restore_visible_on_activate;
+    g_cursor_state.restore_visible_on_activate = false;
+    if (restore && !g_cursor_state.pointer_updates_suppressed) {
+        update_cursor_draw_position();
+        g_cursor_state.visible = true;
+        HandlePrimaryCursorBackgroundSave();
+        HandleCurrentCursorDrawOnPrimary();
+    }
 }
 
 void SetGameCursorIndex(u32 cursor_index) {

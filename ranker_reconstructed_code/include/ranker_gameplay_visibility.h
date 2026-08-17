@@ -116,7 +116,12 @@ struct GameplayFogRenderContext {
     i32 camera_x = 0;
     i32 camera_y = 0;
     GameplayFogRenderMetrics metrics{};
+    bool fog_disabled = false;
 };
+
+constexpr bool ShouldRenderGameplayFogOverlay(bool fog_disabled) {
+    return !fog_disabled;
+}
 
 void UpdateGameplayVisibilityMap(GameplayVisibilityContext& context);
 bool ShouldUpdateUnitVisibilityThisFrame(u32 frame_counter, u32 unit_index);

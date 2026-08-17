@@ -135,6 +135,7 @@ void sync_default_gameplay_script_object_from_unit(
 void sync_default_gameplay_script_scenario_record(
     const GameplayScriptTriggerState& script);
 void sync_default_owner_type_count_for_unit(const UnitMovementUnit& unit);
+const std::vector<u8>* default_session_scenario_record();
 
 u32 default_selected_unit_next_experience_threshold(
     const ProductionOrderRuntimeState& production, const UnitMovementUnit& unit) {
@@ -644,6 +645,7 @@ constexpr std::size_t kProductionOrderDurationModeOffset = 0x218;
 constexpr std::size_t kSessionScenarioRecordModeOffset = 0x00;
 constexpr std::size_t kSessionScenarioRecordActiveSlotCountOffset = 0x04;
 // P_SCENA is a byte-for-byte dump of original 0x00722868..0x00725100.
+// DAT_00722870 (+0x08) is the authoritative Menu -> Mission Objective text.
 // FUN_004d56b0 reads the victory mask at 0x00725070 and FUN_004d55f8 reads
 // the defeat mask at 0x007250b8.
 constexpr std::size_t kSessionScenarioRecordVictoryConditionMaskOffset = 0x2808;
@@ -1097,6 +1099,11 @@ void sync_default_gameplay_chat_input_hud() {
     selected.category = static_cast<u8>(std::min<u32>(
         overlay.chat_channel, selected.category_labels.size() - 1u));
     selected.typed_text = overlay.chat_input_text;
+#ifdef _WIN32
+    if (overlay.chat_active) {
+        selected.typed_text += CurrentImeCompositionText();
+    }
+#endif
     selected.extra_text.clear();
     selected.extra_text_active = false;
 }
@@ -3759,8 +3766,15 @@ void default_gameplay_flow_release_loaded_resources(GameplaySessionFlowState& st
         state.loaded_resource_base != kInvalidResourceEntry) {
         ReleaseResourceEntriesFrom(state.loaded_resource_base);
     }
+    if (state.loaded_palette_slot != kInvalidPaletteCacheSlot) {
+        // FUN_0042dc60/FUN_0042e1e0 close the save/load child frame by
+        // rewinding both parallel stack allocators.  Keeping only the image
+        // rewind made each later visit consume another palette slot and could
+        // eventually bind unrelated reused colors to modal sprites.
+        ReleasePaletteCacheSlotsFrom(state.loaded_palette_slot);
+    }
     state.loaded_resource_base = kInvalidResourceEntry;
-    state.loaded_palette_slot = kInvalidResourceEntry;
+    state.loaded_palette_slot = kInvalidPaletteCacheSlot;
     state.loaded_resource_base_owned = false;
 }
 
@@ -4766,6 +4780,28 @@ void default_gameplay_modal_scan_save_slot_headers(GameplayModalUiState& state) 
     sync_default_modal_save_slots_from_session_flow(state, flow);
 }
 
+void default_gameplay_modal_refresh_scenario_objective(
+    GameplayModalUiState& state) {
+    std::string objective;
+    if (const std::vector<u8>* record = default_session_scenario_record();
+        record != nullptr) {
+        objective = ReadGameplayScenarioObjectiveText(*record);
+    }
+    const GameplayScriptTriggerState& script = gameplay_script_trigger_state();
+    if (objective.empty()) {
+        objective = script.opcode_context.scenario_message_text;
+    }
+    if (objective.empty()) {
+        objective = RecoverGameplayScenarioObjectiveText(script);
+    }
+    if (objective.empty()) {
+        return;
+    }
+
+    state.scenario_message_text = objective;
+    state.fallback_scenario_message_text = std::move(objective);
+}
+
 bool default_gameplay_active_session_import() {
     return gameplay_loop_state().session_active &&
         g_runtime.gameplay_startup_slots_started;
@@ -5217,6 +5253,10 @@ void configure_default_gameplay_modal_ui_callbacks(GameplayModalUiState& state) 
         kStartupDefaultObjectiveTextRow, "Destroy all enemy buildings.");
     state.wait_remaining_format = startup_platform_row(
         kStartupWaitRemainingFormatRow, "%s - %d Sec remain.");
+    if (state.callbacks.refresh_scenario_objective == nullptr) {
+        state.callbacks.refresh_scenario_objective =
+            default_gameplay_modal_refresh_scenario_objective;
+    }
     // FUN_0042d440 centers gameplay outcome/modals against DAT_0086358c,
     // the top of the fixed bottom interface, not the full 600-pixel surface.
     // Keep the full surface as the pre-game/fallback extent, while a running
@@ -8519,6 +8559,11 @@ void reset_default_mode1_packet_state_from_player_slots() {
 
     const PlayerSlotRuntimeState& players = g_runtime.gameplay_player_slots;
     Mode1GameplayPacketDispatchState& packets = mode1_gameplay_packet_dispatch_state();
+    // A fresh session starts with DAT_007334c0 == 1.  A loaded session may
+    // already contain the toggled fog state, so keep the next cheat XOR edge
+    // consistent with the visibility gate restored from its JW2 record.
+    packets.local_toggle_state =
+        !g_runtime.gameplay_startup_state.fog_reveal_disabled;
     u32 active_count = 0;
 
     for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
@@ -10403,10 +10448,22 @@ void default_gameplay_session_reset_effect_runtime(
 
 void default_gameplay_session_reset_ui_runtime_flags(
     GameplaySessionRuntimeResetState&) {
-    gameplay_modal_ui_state().quit_to_frontend_requested = false;
-    gameplay_modal_ui_state().surrender_requested = false;
-    gameplay_modal_ui_state().worker_exit_requested = false;
-    gameplay_modal_ui_state().end_session_requested = false;
+    GameplayModalUiState& modal = gameplay_modal_ui_state();
+    modal.quit_to_frontend_requested = false;
+    modal.surrender_requested = false;
+    modal.worker_exit_requested = false;
+    modal.end_session_requested = false;
+    // HandleGameplaySessionBundleImport copies P_SCENA to 0x00722868 in the
+    // original, so DAT_00722870 is already populated before this reset runs.
+    // Read that fixed-record field directly; campaign archives do not need an
+    // opcode-0x0d trigger merely to establish their initial objective text.
+    std::string objective;
+    if (const std::vector<u8>* record = default_session_scenario_record();
+        record != nullptr) {
+        objective = ReadGameplayScenarioObjectiveText(*record);
+    }
+    modal.scenario_message_text = objective;
+    modal.fallback_scenario_message_text = std::move(objective);
 
     UiOverlayState& overlay = ui_overlay_state();
     StopGameplayHudPulse(overlay);
@@ -12098,11 +12155,11 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     append_startup_log("start-slots: import starting unit types ok");
     append_startup_log("start-slots: apply pending link params begin");
     apply_pending_link_lobby_start_parameters_to_gameplay_startup();
-    if (campaign_stage_session) {
+    if (campaign_stage_session || frontend_loaded_save) {
         // Preserve the archive's 0..7 mission ordinal separately from the
-        // gameplay runtime mode.  Frontend progression and the final mission
-        // gate consume this value after the live session has been normalized
-        // to Use Map Setting mode 5 below.
+        // gameplay runtime mode.  Frontend progression, including a transition
+        // cheat issued after loading a campaign save, consumes this value after
+        // the live session has been normalized to Use Map Setting mode 5 below.
         g_runtime.frontend_stage_session_mode =
             g_runtime.gameplay_startup_state.session_mode;
     }
@@ -16644,6 +16701,22 @@ void default_mode1_packet_set_owner_population_limit(
     g_runtime.gameplay_unit_commands.owner_population_limit[owner] = limit;
 }
 
+void default_mode1_packet_set_owner_primary_resource(
+    void*, u32 owner, u32 primary_resource) {
+    if (owner >= kPlayerSlotCount) {
+        return;
+    }
+
+    // DAT_00725244 is a single owner-resource array in ranker.exe.  The
+    // reconstruction has typed lifecycle, production, command and HUD/player
+    // mirrors, so publish the cheat result to all of them in the same packet
+    // dispatch instead of letting the next synchronization pass undo it.
+    const u32 secondary_resource =
+        g_runtime.gameplay_player_slots.owner_secondary_resources[owner];
+    sync_default_owner_resource_runtime_slots(
+        owner, primary_resource, secondary_resource);
+}
+
 void default_mode1_packet_apply_high_cluster_transition(void*,
     i32 transition_index, bool write_transition_index,
     bool local_scene_change) {
@@ -16651,20 +16724,22 @@ void default_mode1_packet_apply_high_cluster_transition(void*,
     if (write_transition_index) {
         const u32 raw_value = static_cast<u32>(transition_index);
         startup.high_cluster_transition_value = raw_value;
-        startup.session_mode = raw_value;
     }
     startup.high_cluster_transition_requested = true;
     startup.high_cluster_transition_timer = 0;
-    if (local_scene_change) {
-        startup.local_scene_change_requested = true;
-    }
+    startup.local_scene_change_requested = local_scene_change;
 }
 
 void default_mode1_packet_promote_fog_visible_tiles(void*,
     bool require_current_visible) {
     g_runtime.gameplay_startup_state.fog_reveal_disabled =
-        !require_current_visible;
-    ExportSetupU32(kSetupVisibilityGateOffset, require_current_visible ? 1u : 0u);
+        GameplayFogRevealDisabledForCheatToggle(require_current_visible);
+    g_runtime.gameplay_visibility_context.fog_disabled =
+        g_runtime.gameplay_startup_state.fog_reveal_disabled;
+    g_runtime.gameplay_fog_context.fog_disabled =
+        g_runtime.gameplay_startup_state.fog_reveal_disabled;
+    ExportSetupU32(kSetupVisibilityGateOffset,
+        GameplayVisibilityGateForFogCheatToggle(require_current_visible));
     GameplayVisibilityGrid& grid = g_runtime.gameplay_visibility_grid;
     PromoteGameplayFogVisibleTiles(grid, require_current_visible);
     mirror_default_gameplay_visibility_to_consumers(grid);
@@ -16938,6 +17013,8 @@ void configure_default_mode1_gameplay_runtime_callbacks() {
     callbacks.set_modal_pause = default_mode1_packet_set_modal_pause;
     callbacks.set_owner_population_limit =
         default_mode1_packet_set_owner_population_limit;
+    callbacks.set_owner_primary_resource =
+        default_mode1_packet_set_owner_primary_resource;
     callbacks.apply_high_cluster_transition =
         default_mode1_packet_apply_high_cluster_transition;
     callbacks.queue_player_inactive_notification =
@@ -18994,6 +19071,7 @@ void configure_default_gameplay_fog_context() {
     fog.fog_mask_table_bytes = g_runtime.gameplay_fog_mask_table.size();
     fog.camera_x = g_runtime.gameplay_frame_render_context.camera_x;
     fog.camera_y = g_runtime.gameplay_frame_render_context.camera_y;
+    fog.fog_disabled = g_runtime.gameplay_startup_state.fog_reveal_disabled;
 }
 
 void sync_default_gameplay_visibility_and_render_inputs(
@@ -19052,7 +19130,8 @@ void sync_default_gameplay_visibility_and_render_inputs(
     }
     context.current_mask_clear = ~current_clear_bits;
     context.owner_mask_clear = ~owner_clear_bits;
-    context.fog_disabled = false;
+    context.fog_disabled =
+        g_runtime.gameplay_startup_state.fog_reveal_disabled;
 
     const std::size_t active_count = movement->active_units.size();
     const std::size_t lifecycle_count = movement->lifecycle_units.size();
@@ -30065,7 +30144,21 @@ void consume_default_gameplay_script_opcode_context(
         opcode.game_clock_ticks;
     g_runtime.gameplay_player_slots.rotation_countdown_decrements =
         opcode.game_clock_decrements;
-    gameplay_modal_ui_state().scenario_message_text = opcode.scenario_message_text;
+    if (opcode.scenario_message_dirty) {
+        GameplayModalUiState& modal = gameplay_modal_ui_state();
+        modal.scenario_message_text = opcode.scenario_message_text;
+        modal.fallback_scenario_message_text = opcode.scenario_message_text;
+        if (std::vector<u8>* record = MutableGameplaySessionLoadedRecord(
+                kGameplaySessionScenarioRecordIndex);
+            record != nullptr) {
+            // Opcode 0x0d writes DAT_00722870, which lies inside the imported
+            // P_SCENA memory block.  Mirror the same write into the typed raw
+            // record so both the menu and later save exports see it.
+            WriteGameplayScenarioObjectiveText(
+                *record, opcode.scenario_message_text);
+        }
+        opcode.scenario_message_dirty = false;
+    }
     consume_default_gameplay_script_owner_mask_tables(script);
     consume_default_gameplay_script_owner_mutations(script);
     consume_default_gameplay_script_camera_request(opcode);
@@ -30156,6 +30249,86 @@ void run_default_unit_post_runtime_list_moves(UnitLifecycleContext& lifecycle) {
     }
 }
 
+bool consume_default_gameplay_cheat_stage_transition(GameplayLoopState& state) {
+    GameplaySessionStartupState& startup = g_runtime.gameplay_startup_state;
+    if (!startup.high_cluster_transition_requested) {
+        return false;
+    }
+
+    const bool local_scene_change = startup.local_scene_change_requested;
+    const i32 transition_index = startup.high_cluster_transition_value ==
+            std::numeric_limits<u32>::max() ?
+        -1 : static_cast<i32>(startup.high_cluster_transition_value);
+
+    // DAT_00725c0b is an edge.  Retaining either typed copy made the result
+    // flow run again after the next session import.
+    startup.high_cluster_transition_requested = false;
+    startup.local_scene_change_requested = false;
+    startup.high_cluster_transition_timer = 0;
+    Mode1GameplayPacketDispatchState& packets =
+        mode1_gameplay_packet_dispatch_state();
+    packets.transition_requested = false;
+    packets.local_scene_change_requested = false;
+    packets.transition_timer = 0;
+
+    if (replay_recording_state().playback_mode) {
+        // Recorded local cheats still have to stop playback at the same frame,
+        // but the replay path never enters the campaign result/reload UI.
+        state.leave_requested = true;
+        return true;
+    }
+
+    const bool frontend_loaded_stage =
+        g_runtime.gameplay_session_flow.loaded_save_session &&
+        !g_runtime.generic_ai_profile_mode &&
+        !g_runtime.network_ai_profile_override;
+    const bool use_frontend_stage_flow =
+        g_runtime.frontend_stage_transition_active ||
+        !local_scene_change || frontend_loaded_stage;
+
+    if (use_frontend_stage_flow) {
+        FrontendStageFlowState& stage = frontend_stage_flow_state();
+        if (!stage.stage_started) {
+            const u32 local_owner = std::min<u32>(
+                startup.local_owner_id, kPlayerSlotCount - 1u);
+            u32 faction = startup.owner_faction_ids[local_owner];
+            if (faction >= static_cast<u32>(kFrontendStageFactionCount)) {
+                faction = startup.owner_slots[local_owner].faction_id;
+            }
+            faction = std::min<u32>(
+                faction, static_cast<u32>(kFrontendStageFactionCount - 1));
+
+            stage.column = static_cast<i32>(faction);
+            stage.row = static_cast<i32>(
+                g_runtime.frontend_stage_session_mode);
+            stage.current_mode = g_runtime.frontend_stage_session_mode;
+            stage.selected_faction_id = faction;
+            stage.active_player_slot_count =
+                g_runtime.gameplay_player_slots.active_slot_count;
+            stage.stage_started = true;
+            stage.frontend_refreshed_after_stage = false;
+        }
+
+        if (!local_scene_change) {
+            // Original commands 2..14 write DAT_00722868 before the common
+            // success path increments it.  In particular, -1 targets mission
+            // zero and 7 reaches the terminal mode 8 gate.
+            stage.row = transition_index;
+            stage.current_mode = static_cast<u32>(transition_index);
+            g_runtime.frontend_stage_session_mode = stage.current_mode;
+        }
+        g_runtime.frontend_stage_selected_faction =
+            stage.selected_faction_id;
+        g_runtime.frontend_stage_transition_active = true;
+    }
+
+    g_runtime.gameplay_end_condition_state.result_code = 0;
+    g_runtime.gameplay_end_condition_state.end_requested = false;
+    complete_default_frontend_stage_result_once(0);
+    state.leave_requested = true;
+    return true;
+}
+
 void run_default_gameplay_end_condition_monitor(GameplayLoopState& state) {
     g_runtime.gameplay_end_condition_state.frame_counter =
         state.simulation_frame_counter;
@@ -30217,6 +30390,9 @@ void run_default_gameplay_end_condition_monitor(GameplayLoopState& state) {
         packets.session_complete_requested = false;
         state.modal_subloop_active = g_runtime.generic_ai_profile_mode;
         state.pause_loop_requested = true;
+    }
+    if (consume_default_gameplay_cheat_stage_transition(state)) {
+        return;
     }
     if (g_runtime.gameplay_end_condition_state.end_requested) {
         if (g_runtime.generic_ai_profile_mode) {
@@ -32039,7 +32215,9 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
         break;
     case WM_ACTIVATEAPP:
         g_runtime.app_active = wparam != 0;
+        SetGameCursorApplicationActive(g_runtime.app_active);
         if (!g_runtime.app_active) {
+            ClearImeCompositionText();
             // A foreground WM_KEYUP is not delivered after focus moves to a
             // different client.  The original DirectInput keyboard device is
             // unacquired at that point, so its directional state reads clear;
@@ -32142,7 +32320,13 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
         }
         break;
     case WM_IME_COMPOSITION:
-        RecordImeCompositionKeyStatus(wparam, lparam);
+        RecordImeCompositionKeyStatus(window, wparam, lparam);
+        break;
+    case WM_IME_ENDCOMPOSITION:
+        ClearImeCompositionText();
+        break;
+    case WM_IME_STARTCOMPOSITION:
+        ClearImeCompositionText();
         break;
     case WM_IME_SETCONTEXT:
         return 0;

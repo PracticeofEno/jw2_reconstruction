@@ -1231,6 +1231,10 @@ bool LoadGameplayScriptTriggersRecord(GameplayScriptTriggerState& state,
 
     state.loaded_byte_count = record_size;
     decode_trigger_state(state);
+    state.opcode_context.scenario_message_text =
+        RecoverGameplayScenarioObjectiveText(state);
+    state.opcode_context.scenario_message_dirty =
+        !state.opcode_context.scenario_message_text.empty();
     return true;
 }
 
@@ -2009,6 +2013,7 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
     }
     case 0x0d:
         state.opcode_context.scenario_message_text = command_string_from(command, 1);
+        state.opcode_context.scenario_message_dirty = true;
         return true;
     case 0x0e: {
         GameplayScriptOwnerConditionState* owner =
@@ -3117,7 +3122,11 @@ void ProcessGameplayScriptTriggers(GameplayScriptTriggerState& state, u32 phase,
 
     if (phase != 0) {
         ++state.post_nonzero_phase_resets;
-        gameplay_script_dialog_state().force_complete = false;
+        GameplayScriptDialogState& dialog = gameplay_script_dialog_state();
+        if (ShouldClearGameplayScriptWaitBreakAfterPhase(
+                phase, dialog.advance_flags[1] != 0)) {
+            dialog.force_complete = false;
+        }
     }
 }
 

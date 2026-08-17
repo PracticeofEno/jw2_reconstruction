@@ -500,6 +500,16 @@ void UpdateGameplayVisibilityMap(GameplayVisibilityContext& context) {
         return;
     }
 
+    if (context.fog_disabled) {
+        // The reveal cheat's DAT_007334c0 == 0 path runs FUN_004d6394 over
+        // all 0x10000 entries, setting both local visibility bits in the live
+        // and previous layers and every owner bit in the owner layer.  Keep
+        // those typed mirrors promoted on subsequent visibility ticks instead
+        // of letting the ordinary transient-bit pass rebuild black fog.
+        PromoteGameplayFogVisibleTiles(*context.grid, false);
+        return;
+    }
+
     if ((context.frame_counter & 0x3f) == 0) {
         ClearGameplayVisibilityTransientBits(
             *context.grid, context.current_mask_clear, context.owner_mask_clear);
@@ -668,7 +678,8 @@ void PromoteGameplayFogVisibleTiles(
 }
 
 void RenderGameplayFogOverlay(GameplayFogRenderContext& context) {
-    if (context.grid == nullptr || !target_valid(context.target)) {
+    if (!ShouldRenderGameplayFogOverlay(context.fog_disabled) ||
+        context.grid == nullptr || !target_valid(context.target)) {
         return;
     }
 

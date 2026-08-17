@@ -25,6 +25,16 @@ constexpr bool GameplayPauseMenuUsesChildSnapshot(bool generic_ai_profile_mode) 
     return !generic_ai_profile_mode;
 }
 
+// FUN_0042e9d0 selects the fixed JW2_17 objective only for the generic/P2P
+// profile, or for the network-AI override before it has entered loaded mode 5.
+// Ordinary campaign/single-player sessions display DAT_00722870 instead.
+constexpr bool GameplayScenarioObjectiveUsesDefaultText(
+    bool generic_ai_profile_mode, bool network_ai_profile_override,
+    u32 session_mode) {
+    return generic_ai_profile_mode ||
+        (network_ai_profile_override && session_mode != 5u);
+}
+
 // The synchronized Pause/Resume command belongs only to the generic/P2P
 // profile, is unavailable during replay playback, and becomes
 // disabled when the local player has exhausted the original pause allowance.

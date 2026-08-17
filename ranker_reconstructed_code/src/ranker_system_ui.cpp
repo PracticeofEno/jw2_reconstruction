@@ -9,11 +9,14 @@
 
 #include <algorithm>
 #include <cstring>
+#include <mutex>
+#include <vector>
 
 namespace ranker {
 namespace {
 
 RankerSystemUiState g_system_ui_state;
+std::mutex g_ime_composition_mutex;
 constexpr int kLegacyBitmapObjectBytes = 0x18;
 
 void record_last_error(bool) {
@@ -354,11 +357,56 @@ bool RestoreImeConversionOpenStatus(HWND window) {
     return ok != FALSE;
 }
 
-void RecordImeCompositionKeyStatus(WPARAM wparam, LPARAM lparam) {
+void RecordImeCompositionKeyStatus(HWND window, WPARAM wparam, LPARAM lparam) {
     auto& ime = g_system_ui_state.ime;
     ime.composition_key_active = (static_cast<u32>(lparam) & 8u) != 0;
     ime.lead_byte = static_cast<BYTE>((static_cast<u32>(wparam) >> 8) & 0xffu);
     ime.trail_byte = static_cast<BYTE>(static_cast<u32>(wparam) & 0xffu);
+
+    const DWORD composition_flags = static_cast<DWORD>(lparam);
+    const bool replace_composition =
+        (composition_flags & (GCS_COMPSTR | GCS_RESULTSTR)) != 0;
+    std::string composition;
+    if ((composition_flags & GCS_COMPSTR) != 0 && window != nullptr) {
+        HIMC context = ImmGetContext(window);
+        if (context != nullptr) {
+            const LONG byte_count = ImmGetCompositionStringW(
+                context, GCS_COMPSTR, nullptr, 0);
+            if (byte_count > 0) {
+                std::vector<wchar_t> wide(
+                    static_cast<std::size_t>(byte_count) / sizeof(wchar_t));
+                const LONG copied = ImmGetCompositionStringW(context,
+                    GCS_COMPSTR, wide.data(), static_cast<DWORD>(byte_count));
+                if (copied > 0) {
+                    const int wide_count = copied / static_cast<LONG>(sizeof(wchar_t));
+                    const int required = WideCharToMultiByte(949, 0,
+                        wide.data(), wide_count, nullptr, 0, nullptr, nullptr);
+                    if (required > 0) {
+                        composition.resize(static_cast<std::size_t>(required));
+                        WideCharToMultiByte(949, 0, wide.data(), wide_count,
+                            composition.data(), required, nullptr, nullptr);
+                    }
+                }
+            }
+            ImmReleaseContext(window, context);
+        }
+    }
+
+    if (replace_composition) {
+        const std::lock_guard<std::mutex> lock(g_ime_composition_mutex);
+        ime.composition_text = std::move(composition);
+    }
+}
+
+std::string CurrentImeCompositionText() {
+    const std::lock_guard<std::mutex> lock(g_ime_composition_mutex);
+    return g_system_ui_state.ime.composition_text;
+}
+
+void ClearImeCompositionText() {
+    const std::lock_guard<std::mutex> lock(g_ime_composition_mutex);
+    g_system_ui_state.ime.composition_text.clear();
+    g_system_ui_state.ime.composition_key_active = false;
 }
 
 bool CheckDbcsLeadByte(UINT code_page, BYTE value) {

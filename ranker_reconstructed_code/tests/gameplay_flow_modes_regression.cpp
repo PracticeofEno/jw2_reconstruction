@@ -1,8 +1,11 @@
 #include "ranker_gameplay_cheats.h"
+#include "ranker_gameplay_packets.h"
 #include "ranker_gameplay_sound.h"
 #include "ranker_gameplay_session_flow.h"
 #include "ranker_gameplay_session_rules.h"
+#include "ranker_gameplay_visibility.h"
 
+#include <array>
 #include <cassert>
 
 int main() {
@@ -27,6 +30,87 @@ int main() {
     match = ResolveLocalGameplayCheatSignature(10u, 0x06d9u, false, true);
     assert(match.recognized && match.command == 16u && match.uses_selected_unit);
     assert(!ResolveLocalGameplayCheatSignature(3u, 123u, false, true).recognized);
+
+    // FUN_004e7b68's complete 34-entry table contains 25 usable signatures
+    // and nine 0xffff sentinels.  Verify both Korean/alternate groups map to
+    // the same nested subtype-0x0d commands.
+    constexpr std::array<u32, 34> kExpectedCommands{{
+        0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u, 9u,
+        kInvalidGameplayCheatCommand, kInvalidGameplayCheatCommand,
+        kInvalidGameplayCheatCommand, kInvalidGameplayCheatCommand,
+        14u, 15u, 16u, 17u, 18u,
+        kInvalidGameplayCheatCommand, kInvalidGameplayCheatCommand,
+        kInvalidGameplayCheatCommand, kInvalidGameplayCheatCommand,
+        0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u, 9u,
+        kInvalidGameplayCheatCommand,
+    }};
+    for (u32 index = 0; index < kGameplayCheatSignatures.size(); ++index) {
+        const GameplayCheatSignature signature = kGameplayCheatSignatures[index];
+        const GameplayCheatMatch table_match =
+            ResolveLocalGameplayCheatSignature(
+                signature.byte_count, signature.checksum, false, true);
+        if (kExpectedCommands[index] == kInvalidGameplayCheatCommand) {
+            assert(!table_match.recognized);
+        }
+        else {
+            assert(table_match.recognized);
+            assert(table_match.command == kExpectedCommands[index]);
+            assert(table_match.uses_selected_unit ==
+                (kExpectedCommands[index] == 16u));
+            const GameplayCheatMatch restricted_match =
+                ResolveLocalGameplayCheatSignature(
+                    signature.byte_count, signature.checksum, true, true);
+            if (2u <= kExpectedCommands[index] &&
+                kExpectedCommands[index] <= 14u) {
+                assert(!restricted_match.recognized);
+            }
+            else {
+                assert(restricted_match.recognized);
+            }
+        }
+    }
+    assert(!ResolveLocalGameplayCheatSignature(
+        0xffffu, 0xffffu, false, true).recognized);
+
+    for (u32 command = 0; command <= 18u; ++command) {
+        const GameplayCheatTransitionRequest transition =
+            ResolveGameplayCheatTransitionRequest(command);
+        const bool expected = command == 0u ||
+            (2u <= command && command <= 14u);
+        assert(transition.requested == expected);
+        if (command == 0u) {
+            assert(transition.local_scene_change);
+            assert(!transition.write_transition_index);
+        }
+        else if (expected) {
+            assert(!transition.local_scene_change);
+            assert(transition.write_transition_index);
+        }
+    }
+    assert(ResolveGameplayCheatTransitionRequest(2u).transition_index == -1);
+    for (u32 command = 3u; command <= 12u; ++command) {
+        assert(ResolveGameplayCheatTransitionRequest(command).transition_index ==
+            static_cast<i32>(command - 3u));
+    }
+    assert(ResolveGameplayCheatTransitionRequest(13u).transition_index == 10);
+    assert(ResolveGameplayCheatTransitionRequest(14u).transition_index == 7);
+    assert(ApplyGameplayCheatPrimaryResourceBonus(250u) == 10250u);
+
+    // CP949 "내 친구의 집은 어디인가?" is signature/command 1.  Its first
+    // toggle disables fog in both the world and minimap; the second restores
+    // the normal visibility gate after promoting every tile as explored.
+    match = ResolveLocalGameplayCheatSignature(24u, 0x1006u, false, false);
+    assert(match.recognized && match.command == 1u);
+    Mode1GameplayPacketDispatchState packet_state{};
+    assert(packet_state.local_toggle_state);
+    packet_state.local_toggle_state = !packet_state.local_toggle_state;
+    assert(!packet_state.local_toggle_state);
+    assert(GameplayFogRevealDisabledForCheatToggle(false));
+    assert(GameplayVisibilityGateForFogCheatToggle(false) == 0u);
+    assert(!GameplayFogRevealDisabledForCheatToggle(true));
+    assert(GameplayVisibilityGateForFogCheatToggle(true) == 1u);
+    assert(!ShouldRenderGameplayFogOverlay(true));
+    assert(ShouldRenderGameplayFogOverlay(false));
 
     assert(ResolveGameplayModalSessionRequest(true, true) ==
         GameplayModalSessionRequest::Restart);

@@ -51,6 +51,11 @@ struct SoftwareCursorState {
     bool pointer_motion_locked = false;
     bool presentation_locked = false;
     bool pointer_updates_suppressed = false;
+    // DirectDraw's primary surface belongs to the foreground application.
+    // Keep the requested cursor visibility while another application owns
+    // the desktop, but do not restore/capture/draw primary pixels there.
+    bool application_active = true;
+    bool restore_visible_on_activate = false;
     bool resources_loaded = false;
 };
 
@@ -66,6 +71,7 @@ void RestoreSystemCursorPosition();
 void ShowGameCursor();
 void HideGameCursor();
 void SetGameCursorPresentationSuppressed(bool suppressed);
+void SetGameCursorApplicationActive(bool active);
 void SetGameCursorIndex(u32 cursor_index);
 HRESULT LockAndUnlockSoftwareCursorSurface(u32 cursor_index);
 HRESULT HandlePrimaryCursorBackgroundRestore();

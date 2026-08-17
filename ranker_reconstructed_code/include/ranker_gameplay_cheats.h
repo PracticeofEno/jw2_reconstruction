@@ -8,6 +8,7 @@
 namespace ranker {
 
 constexpr u32 kInvalidGameplayCheatCommand = 0xffffffffu;
+constexpr u32 kGameplayCheatPrimaryResourceBonus = 10000u;
 
 struct GameplayCheatMatch {
     u32 command = kInvalidGameplayCheatCommand;
@@ -18,6 +19,13 @@ struct GameplayCheatMatch {
 struct GameplayCheatSignature {
     u32 byte_count = 0;
     u32 checksum = 0;
+};
+
+struct GameplayCheatTransitionRequest {
+    i32 transition_index = 0;
+    bool requested = false;
+    bool write_transition_index = false;
+    bool local_scene_change = false;
 };
 
 // FUN_004e7b68 keeps only a byte count and this weighted byte checksum for
@@ -50,6 +58,13 @@ constexpr GameplayCheatMatch ResolveLocalGameplayCheatSignature(
     bool selected_unit_owned_by_local_player) {
     for (u32 index = 0; index < kGameplayCheatSignatures.size(); ++index) {
         const GameplayCheatSignature signature = kGameplayCheatSignatures[index];
+        // Nine table entries are literal sentinels, not hidden 65535-byte
+        // cheat phrases.  The retail chat edit cannot produce them, but
+        // skipping them keeps the typed resolver faithful when called directly
+        // by tests or tools.
+        if (signature.byte_count == 0xffffu && signature.checksum == 0xffffu) {
+            continue;
+        }
         if (signature.byte_count != byte_count || signature.checksum != checksum) {
             continue;
         }
@@ -86,6 +101,48 @@ constexpr GameplayCheatMatch ResolveLocalGameplayCheatText(
     return ResolveLocalGameplayCheatSignature(
         static_cast<u32>(text.size()), GameplayCheatTextChecksum(text),
         transition_commands_restricted, selected_unit_owned_by_local_player);
+}
+
+// FUN_004dd13d..FUN_004dd2e4 consumes the nested subtype-0x0d command index.
+// Command zero completes the current scene, while commands 2..14 write the
+// raw scenario ordinal that the outer gameplay loop increments after showing
+// the result.  Commands 10..13 have handlers in ranker.exe even though their
+// signature-table entries are sentinels.
+constexpr GameplayCheatTransitionRequest ResolveGameplayCheatTransitionRequest(
+    u32 command) {
+    if (command == 0u) {
+        return {-2, true, false, true};
+    }
+    if (command == 2u) {
+        return {-1, true, true, false};
+    }
+    if (3u <= command && command <= 12u) {
+        return {static_cast<i32>(command - 3u), true, true, false};
+    }
+    if (command == 13u) {
+        return {10, true, true, false};
+    }
+    if (command == 14u) {
+        return {7, true, true, false};
+    }
+    return {};
+}
+
+constexpr u32 ApplyGameplayCheatPrimaryResourceBonus(u32 current) {
+    return current + kGameplayCheatPrimaryResourceBonus;
+}
+
+// Nested cheat command 1 first XORs the original DAT_007334c0 visibility
+// gate, then passes that new value to FUN_004d6394.  Zero disables fog and
+// promotes every tile; one restores the ordinary current-visibility gate.
+constexpr bool GameplayFogRevealDisabledForCheatToggle(
+    bool require_current_visible) {
+    return !require_current_visible;
+}
+
+constexpr u32 GameplayVisibilityGateForFogCheatToggle(
+    bool require_current_visible) {
+    return require_current_visible ? 1u : 0u;
 }
 
 } // namespace ranker

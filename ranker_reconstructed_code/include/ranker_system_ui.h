@@ -48,6 +48,9 @@ struct RankerImeState {
     bool composition_key_active = false;
     BYTE lead_byte = 0;
     BYTE trail_byte = 0;
+    // CP949 bytes currently owned by the IME composition window.  They are
+    // presentation-only until Windows emits the corresponding WM_CHAR result.
+    std::string composition_text;
 };
 
 struct RankerSystemUiState {
@@ -84,7 +87,20 @@ void HandleDefaultMessageBeep();
 bool RefreshImeConversionOpenStatus(HWND window);
 void SetImeConversionOpenTarget(bool open);
 bool RestoreImeConversionOpenStatus(HWND window);
-void RecordImeCompositionKeyStatus(WPARAM wparam, LPARAM lparam);
+void RecordImeCompositionKeyStatus(HWND window, WPARAM wparam, LPARAM lparam);
+std::string CurrentImeCompositionText();
+void ClearImeCompositionText();
+
+inline std::string BuildImeCompositionPresentationText(
+    const char* committed_text, const std::string& composition_text) {
+    std::string display = committed_text != nullptr ? committed_text : "";
+    const std::size_t cursor =
+        !display.empty() && display.back() == '_' ?
+        display.size() - 1u : display.size();
+    display.insert(cursor, composition_text);
+    return display;
+}
+
 bool CheckDbcsLeadByte(UINT code_page, BYTE value);
 #endif
 

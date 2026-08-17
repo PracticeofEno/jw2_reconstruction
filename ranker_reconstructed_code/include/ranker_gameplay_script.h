@@ -2,6 +2,7 @@
 
 #include "ranker_types.h"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <string>
@@ -38,6 +39,16 @@ struct GameplayScriptDialogState {
     std::string visible_text;
 };
 
+// The original clears its one-shot Escape flag after the nonzero script
+// phase.  In the reconstruction that phase is also run by presentation
+// passes, which can occur between input and the next simulation-phase dialog
+// command.  Preserve the request while a dialog is visibly blocking so the
+// matching command, rather than an unrelated presentation pass, consumes it.
+constexpr bool ShouldClearGameplayScriptWaitBreakAfterPhase(
+    u32 phase, bool dialog_active) {
+    return phase != 0 && !dialog_active;
+}
+
 struct GameplayScriptTextCueCommand {
     u32 cue_id = 0;
     bool use_custom_position = false;
@@ -61,6 +72,11 @@ constexpr u32 kGameplayScriptTriggerGroupRecordSize = 0x14c;
 constexpr u32 kGameplayScriptAreaOffset = 0x5394;
 constexpr u32 kGameplayScriptTriggerGroupOffset = 0x70;
 constexpr u32 kGameplayScriptTriggerRuntimeOffset = 0x6774;
+// P_SCENA is the original 0x00722868-based scenario block.  The current
+// mission-objective buffer starts at DAT_00722870 (+8).  Opcode 0x0d accepts
+// at most 0x800 payload bytes and writes a trailing NUL at the next byte.
+constexpr std::size_t kGameplayScenarioObjectiveTextOffset = 0x08;
+constexpr std::size_t kGameplayScenarioObjectiveTextCapacity = 0x801;
 constexpr u32 kGameplayScriptOwnerCount = 8;
 constexpr u32 kGameplayScriptOwnerInactiveStatus = 0x14;
 constexpr u32 kGameplayScriptOwnerScriptValueCount = 0xaa;
@@ -285,6 +301,7 @@ struct GameplayScriptOpcodeContext {
     u32 text_counter_owner = 0;
     std::string text_overlay;
     std::string scenario_message_text;
+    bool scenario_message_dirty = false;
     i32 resource_hud_start_x = 10;
     i32 resource_hud_start_y = 10;
     std::array<u32, kGameplayScriptCopiedOwnerTableWords> copied_owner_table_a{};
@@ -369,6 +386,80 @@ struct GameplayScriptTriggerState {
     std::array<GameplayScriptTriggerRuntimeRecord, kGameplayScriptTriggerRuntimeCount>
         triggers{};
 };
+
+inline std::string ReadGameplayScenarioObjectiveText(
+    const std::vector<u8>& scenario_record) {
+    if (scenario_record.size() < kGameplayScenarioObjectiveTextOffset +
+            kGameplayScenarioObjectiveTextCapacity) {
+        return {};
+    }
+
+    const auto begin = scenario_record.begin() +
+        kGameplayScenarioObjectiveTextOffset;
+    const auto end = begin + kGameplayScenarioObjectiveTextCapacity;
+    const auto nul = std::find(begin, end, u8{0});
+    return std::string(reinterpret_cast<const char*>(&*begin),
+        static_cast<std::size_t>(nul - begin));
+}
+
+inline bool WriteGameplayScenarioObjectiveText(
+    std::vector<u8>& scenario_record, const std::string& text) {
+    if (scenario_record.size() < kGameplayScenarioObjectiveTextOffset +
+            kGameplayScenarioObjectiveTextCapacity) {
+        return false;
+    }
+
+    auto begin = scenario_record.begin() + kGameplayScenarioObjectiveTextOffset;
+    std::fill_n(begin, kGameplayScenarioObjectiveTextCapacity, u8{0});
+    const std::size_t copy_bytes = std::min<std::size_t>(
+        text.size(), kGameplayScenarioObjectiveTextCapacity - 1);
+    std::copy_n(text.begin(), copy_bytes, begin);
+    return true;
+}
+
+// DAT_00722870 normally comes directly from P_SCENA.  Keep trigger recovery
+// as a compatibility fallback for partial/test bundles that omit that fixed
+// record, and for a modal opened between opcode dispatch and record mirroring.
+inline std::string RecoverGameplayScenarioObjectiveText(
+    const GameplayScriptTriggerState& state) {
+    const GameplayScriptTriggerRuntimeRecord* selected = nullptr;
+    const GameplayScriptTriggerRuntimeRecord* initial = nullptr;
+    u32 selected_tick = 0;
+    for (const GameplayScriptTriggerRuntimeRecord& trigger : state.triggers) {
+        if (trigger.command_words[0] != 0x0du) {
+            continue;
+        }
+        if (trigger.state != 0 &&
+            (selected == nullptr || trigger.last_fired_tick >= selected_tick)) {
+            selected = &trigger;
+            selected_tick = trigger.last_fired_tick;
+        }
+        else if (trigger.state == 0 && trigger.condition_enabled &&
+            trigger.condition_words[0] == 0u) {
+            // An unconditional objective opcode runs in the first phase-0
+            // script pass.  The menu cannot normally open before that pass,
+            // but reconstructing it here gives the same value while a freshly
+            // loaded session is still between import and its first tick.
+            initial = &trigger;
+        }
+    }
+    if (selected == nullptr) {
+        selected = initial;
+    }
+    if (selected == nullptr) {
+        return {};
+    }
+
+    const char* bytes = reinterpret_cast<const char*>(
+        selected->command_words.data() + 1);
+    const std::size_t capacity =
+        (selected->command_words.size() - 1u) * sizeof(u32);
+    std::size_t length = 0;
+    while (length < capacity && bytes[length] != '\0') {
+        ++length;
+    }
+    return std::string(bytes, length);
+}
 
 using GameplayScriptConditionCallback =
     bool (*)(const GameplayScriptTriggerRuntimeRecord& trigger, void* user);

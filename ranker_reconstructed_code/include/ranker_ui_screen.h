@@ -29,6 +29,22 @@ constexpr u32 Jw204StageScreenRecordIndex(i32 faction, i32 mission) {
         static_cast<u32>(faction) * kJw204StageFactionStride;
 }
 
+// Mission objectives and several original menu labels are CRLF-delimited.
+// Return the next line start without allocating or modifying the serialized
+// UI entry text.  A null result means that the current line is the last one.
+constexpr const char* NextUiScreenCrLfTextLine(const char* text) {
+    if (text == nullptr) {
+        return nullptr;
+    }
+    while (*text != '\0') {
+        if (text[0] == '\r' && text[1] == '\n') {
+            return text + 2;
+        }
+        ++text;
+    }
+    return nullptr;
+}
+
 static_assert(Jw204StageScreenRecordIndex(0, 0) == 0);
 static_assert(Jw204StageScreenRecordIndex(1, 0) == 20);
 static_assert(Jw204StageScreenRecordIndex(2, 0) == 40);
@@ -179,6 +195,7 @@ struct GameplayModalUiCallbacks {
     GameplayModalUiScreenVoidCallback draw_screen = nullptr;
     GameplayModalUiPumpCallback run_modal = nullptr;
     GameplayModalUiPumpCallback poll_modal = nullptr;
+    GameplayModalUiCallback refresh_scenario_objective = nullptr;
     GameplayModalUiCallback scan_save_slot_headers = nullptr;
     GameplayModalUiSlotCallback import_session_bundle = nullptr;
     GameplayModalUiSlotCallback export_session_bundle = nullptr;
