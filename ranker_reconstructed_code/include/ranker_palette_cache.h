@@ -31,6 +31,8 @@ void ResetPaletteCache();
 bool IsPaletteCacheSlotActive(u32 slot_index);
 u64 GetPaletteCacheSlotAllocationSerial(u32 slot_index);
 bool PaletteCacheSlotAllocationMatches(u32 slot_index, u64 allocation_serial);
+bool PaletteCacheRangeAllocationMatches(
+    u32 first_slot, u32 end_slot, u64 tail_allocation_serial);
 
 bool SetPaletteCacheRawSlot(u32 slot_index, const void* data, std::size_t byte_count);
 void ConvertPaletteCacheSlot(u32 slot_index);

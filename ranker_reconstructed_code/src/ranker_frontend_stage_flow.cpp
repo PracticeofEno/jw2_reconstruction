@@ -80,7 +80,8 @@ bool ExtractFrontendStageRecordToTempArchive(FrontendStageFlowState& state,
 }
 
 bool LoadFrontendStageSessionBundle(FrontendStageFlowState& state,
-    i32 column, i32 row, const char* archive_name) {
+    i32 column, i32 row, const char* archive_name,
+    FrontendStageResourceLoadCallback load_session_terrain_resources) {
     if (column < 0 || column >= kFrontendStageFactionCount ||
         row < 0 || row >= kFrontendStageMissionCount) {
         return false;
@@ -101,7 +102,8 @@ bool LoadFrontendStageSessionBundle(FrontendStageFlowState& state,
     }
 
     state.stage_bundle_loaded =
-        HandleGameplaySessionBundleImport(state.active_stage_archive.c_str(), state.record_index);
+        HandleGameplaySessionBundleImport(state.active_stage_archive.c_str(),
+            state.record_index, load_session_terrain_resources);
     return state.stage_bundle_loaded;
 }
 
@@ -111,7 +113,8 @@ bool StartFrontendStageFromMenu(FrontendStageFlowState& state, i32 column, i32 r
     state.saved_cursor_index = software_cursor_state().cursor_index;
     SetGameCursorIndex(0x0d);
 
-    if (!LoadFrontendStageSessionBundle(state, column, row)) {
+    if (!LoadFrontendStageSessionBundle(state, column, row, "JW2_06.TRC",
+            callbacks.load_session_terrain_resources)) {
         SetGameCursorIndex(0);
         return false;
     }

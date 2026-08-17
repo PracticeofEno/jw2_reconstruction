@@ -56,10 +56,13 @@ enum class GameplaySessionLoadStage {
     None,
     Header,
     Record,
+    Terrain,
     CommandTheme,
     Interface,
     Complete,
 };
+
+using GameplaySessionPreThemeResourceLoadCallback = bool (*)();
 
 struct PaletteSlotRef {
     u32 slot = kInvalidPaletteCacheSlot;
@@ -185,6 +188,8 @@ struct UnitDefinitionResourceCatalogState {
     u32 resource_store_end_entry = kInvalidResourceEntry;
     u64 resource_store_tail_allocation_serial = 0;
     u32 palette_rewind_slot = kInvalidPaletteCacheSlot;
+    u32 palette_end_slot = kInvalidPaletteCacheSlot;
+    u64 palette_tail_allocation_serial = 0;
     u32 sound_rewind_slot = 0xffffffffu;
     std::array<u32, kUnitDefinitionResourceCount> definition_offsets{};
     std::array<UnitDefinitionResourceRecord, kUnitDefinitionResourceCount> records{};
@@ -299,7 +304,8 @@ u32 GetUnitDefinitionAnimationRowFrameResourceEntry(
     u32 frame_table_group, u32 row_table_group, u32 row_index);
 bool GetUnitDefinitionGameplaySoundProfile(u32 unit_type,
     GameplayUnitSoundDefinition& definition, GameplayUnitSoundBaseSlots& base_slots);
-bool HandleGameplaySessionBundleImport(const char* archive_name, u32 base_record_index);
+bool HandleGameplaySessionBundleImport(const char* archive_name, u32 base_record_index,
+    GameplaySessionPreThemeResourceLoadCallback pre_theme_resource_load = nullptr);
 const std::vector<GameplaySessionFixedRecordSpec>& gameplay_session_import_specs();
 const std::vector<GameplaySessionExportRecordSpec>& gameplay_session_export_specs();
 bool HandleGameplaySessionBundleExport(const char* archive_name,

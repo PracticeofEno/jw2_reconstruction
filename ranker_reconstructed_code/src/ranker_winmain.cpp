@@ -4882,11 +4882,15 @@ bool default_gameplay_modal_import_session_bundle(
 
     g_runtime.gameplay_session_archive_path = path;
     SetReplayControlsEnabled(replay_recording_state().playback_mode);
-    const bool bundle_imported = HandleGameplaySessionBundleImport(path.c_str(), 0);
+    const bool bundle_imported = HandleGameplaySessionBundleImport(
+        path.c_str(), 0, load_default_gameplay_terrain_tile_sheet_bank);
     if (!bundle_imported) {
         report_gameplay_session_import_resource_failure();
     }
     g_runtime.gameplay_session_bundle_loaded = bundle_imported;
+    g_runtime.gameplay_terrain_tile_sheet_loaded =
+        bundle_imported && TerrainTileSheetBankAllocationsValid(
+            g_runtime.gameplay_terrain_tile_sheet);
     if (g_runtime.gameplay_session_bundle_loaded && active_session_import &&
         !patch_default_in_game_load_player_record(resume)) {
         append_startup_log(
@@ -4898,8 +4902,6 @@ bool default_gameplay_modal_import_session_bundle(
         g_runtime.gameplay_session_bundle_loaded = false;
     }
     if (g_runtime.gameplay_session_bundle_loaded) {
-        g_runtime.gameplay_terrain_tile_sheet_loaded =
-            load_default_gameplay_terrain_tile_sheet_bank();
         if (!default_gameplay_modal_import_materialization_ready(
                 active_session_import,
                 g_runtime.gameplay_session_bundle_loaded,
@@ -8255,21 +8257,22 @@ bool default_gameplay_flow_import_session_bundle(GameplaySessionFlowState& state
     g_runtime.gameplay_session_archive_path = archive_path;
     SetRuntimeResourceThemeIndex(resolve_gameplay_launch_resource_theme());
     SetReplayControlsEnabled(replay_recording_state().playback_mode);
-    const bool bundle_imported = HandleGameplaySessionBundleImport(archive_path, 0);
+    const bool bundle_imported = HandleGameplaySessionBundleImport(
+        archive_path, 0, load_default_gameplay_terrain_tile_sheet_bank);
     if (!bundle_imported) {
         report_gameplay_session_import_resource_failure();
     }
     g_runtime.gameplay_session_bundle_loaded = bundle_imported;
+    g_runtime.gameplay_terrain_tile_sheet_loaded =
+        bundle_imported && TerrainTileSheetBankAllocationsValid(
+            g_runtime.gameplay_terrain_tile_sheet);
     if (g_runtime.gameplay_session_bundle_loaded &&
         !import_default_owner_ai_snapshot_from_session_records()) {
         g_runtime.gameplay_session_bundle_loaded = false;
     }
-    if (g_runtime.gameplay_session_bundle_loaded) {
-        g_runtime.gameplay_terrain_tile_sheet_loaded =
-            load_default_gameplay_terrain_tile_sheet_bank();
-    }
-    else {
+    if (!g_runtime.gameplay_session_bundle_loaded) {
         ReleaseTerrainTileSheetBankResources(g_runtime.gameplay_terrain_tile_sheet);
+        g_runtime.gameplay_terrain_tile_sheet_loaded = false;
     }
 
     char text[512]{};
@@ -11660,6 +11663,8 @@ void default_gameplay_frame_draw_terrain_decorations(
         jw207.berry_start != kInvalidResourceEntry;
     const bool terrain_type3_loaded =
         g_runtime.gameplay_terrain_tile_sheet_loaded &&
+        TerrainTileSheetBankAllocationsValid(
+            g_runtime.gameplay_terrain_tile_sheet) &&
         g_runtime.gameplay_terrain_tile_sheet.resource_start !=
             kInvalidTerrainTileResourceIndex;
     if (!terrain_type1_loaded && !terrain_type3_loaded) {
@@ -11692,9 +11697,12 @@ void default_gameplay_frame_draw_terrain_decorations(
         brush_layer.tile_flags = visibility_grid.previous;
     }
     TerrainDecorationResourceTable brush_resources{};
+    const bool unit_resource_images_valid =
+        UnitDefinitionResourceCatalogImageResourcesValid() ||
+        LoadUnitDefinitionResourceCatalog();
     const UnitDefinitionResourceCatalogState& unit_resources =
         unit_definition_resource_catalog_state();
-    if (unit_resources.loaded) {
+    if (unit_resource_images_valid) {
         brush_resources.resource_base_by_id.resize(unit_resources.records.size(), 0);
         for (std::size_t id = 0; id < unit_resources.records.size(); ++id) {
             const UnitDefinitionResourceRecord& record = unit_resources.records[id];
@@ -12368,8 +12376,6 @@ void default_frontend_stage_reset_runtime(FrontendStageFlowState& state) {
     gameplay_loop_state().simulation_frame_counter = 0;
     gameplay_loop_state().present_frame_counter = 0;
 
-    g_runtime.gameplay_terrain_tile_sheet_loaded =
-        load_default_gameplay_terrain_tile_sheet_bank();
     GameplaySessionFlowState& flow = prepare_default_modal_session_flow();
     flow.generic_ai_profile_mode = 0;
     flow.close_requested = false;
@@ -12398,6 +12404,12 @@ void default_frontend_stage_reset_runtime(FrontendStageFlowState& state) {
     g_runtime.frontend_stage_selected_faction = state.selected_faction_id;
 }
 
+bool default_frontend_stage_load_terrain_resources() {
+    g_runtime.gameplay_terrain_tile_sheet_loaded =
+        load_default_gameplay_terrain_tile_sheet_bank();
+    return g_runtime.gameplay_terrain_tile_sheet_loaded;
+}
+
 void default_frontend_stage_reset_render_state(FrontendStageFlowState& state) {
     default_gameplay_loop_initialize_session_resources(gameplay_loop_state());
     state.render_state_reset = true;
@@ -12411,6 +12423,8 @@ void default_frontend_stage_refresh_after_result(FrontendStageFlowState& state);
 
 FrontendStageFlowCallbacks default_frontend_stage_flow_callbacks() {
     FrontendStageFlowCallbacks callbacks{};
+    callbacks.load_session_terrain_resources =
+        default_frontend_stage_load_terrain_resources;
     callbacks.reset_runtime_before_stage = default_frontend_stage_reset_runtime;
     callbacks.reset_render_state_before_stage = default_frontend_stage_reset_render_state;
     callbacks.handle_stage_result = default_frontend_stage_handle_result;

@@ -308,6 +308,16 @@ u64 GetResourceEntryAllocationSerial(u32 entry_index) {
     return entry != nullptr ? entry->allocation_serial : 0;
 }
 
+bool ResourceEntryRangeAllocationMatches(
+    u32 first_entry, u32 end_entry, u64 tail_allocation_serial) {
+    return tail_allocation_serial != 0 &&
+        first_entry != kInvalidResourceEntry &&
+        end_entry > first_entry &&
+        end_entry <= g_resource_store_state.next_entry &&
+        g_resource_store_state.entries[end_entry - 1u].allocation_serial ==
+            tail_allocation_serial;
+}
+
 bool SetResourceEntryPaletteSlot(u32 entry_index, u32 palette_slot) {
     if (!valid_entry(entry_index)) {
         return false;

@@ -49,8 +49,10 @@ struct FrontendStageFlowState {
 
 using FrontendStageCallback = void (*)(FrontendStageFlowState& state);
 using FrontendStageResultCallback = void (*)(FrontendStageFlowState& state, u32 result);
+using FrontendStageResourceLoadCallback = bool (*)();
 
 struct FrontendStageFlowCallbacks {
+    FrontendStageResourceLoadCallback load_session_terrain_resources = nullptr;
     FrontendStageCallback reset_runtime_before_stage = nullptr;
     FrontendStageCallback reset_render_state_before_stage = nullptr;
     FrontendStageCallback refresh_frontend_after_stage = nullptr;
@@ -61,7 +63,8 @@ FrontendStageFlowState& frontend_stage_flow_state();
 bool ExtractFrontendStageRecordToTempArchive(FrontendStageFlowState& state,
     const char* archive_name = "JW2_06.TRC");
 bool LoadFrontendStageSessionBundle(FrontendStageFlowState& state,
-    i32 column, i32 row, const char* archive_name = "JW2_06.TRC");
+    i32 column, i32 row, const char* archive_name = "JW2_06.TRC",
+    FrontendStageResourceLoadCallback load_session_terrain_resources = nullptr);
 bool StartFrontendStageFromMenu(FrontendStageFlowState& state, i32 column, i32 row,
     const FrontendStageFlowCallbacks& callbacks = {});
 void HandleFrontendStageCompletion(FrontendStageFlowState& state, u32 result,

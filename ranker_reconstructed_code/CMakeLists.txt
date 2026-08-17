@@ -1415,6 +1415,36 @@ if (RANKER_BUILD_REPLAY_SAVE_CONTROLS_REGRESSION_TESTS)
         COMMAND replay_save_controls_regression)
 endif()
 
+option(RANKER_BUILD_REPLAY_RESOURCE_LIFETIME_REGRESSION_TESTS
+    "Build focused replay/terrain resource lifetime regressions" OFF)
+if (RANKER_BUILD_REPLAY_RESOURCE_LIFETIME_REGRESSION_TESTS)
+    enable_testing()
+    add_executable(replay_resource_lifetime_regression
+        tests/replay_resource_lifetime_regression.cpp
+        src/ranker_resource_store.cpp
+        src/ranker_trc.cpp
+    )
+    target_include_directories(replay_resource_lifetime_regression PRIVATE
+        include
+    )
+    target_link_libraries(replay_resource_lifetime_regression PRIVATE
+        zlib113
+    )
+    if (MSVC)
+        target_compile_options(replay_resource_lifetime_regression PRIVATE /Gy)
+        target_link_options(replay_resource_lifetime_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(replay_resource_lifetime_regression PRIVATE
+            -O1 -ffunction-sections -fdata-sections
+        )
+        target_link_options(replay_resource_lifetime_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    add_test(NAME replay_resource_lifetime_regression
+        COMMAND replay_resource_lifetime_regression)
+endif()
+
 option(RANKER_BUILD_GAMEPLAY_LAUNCH_STATE_REGRESSION_TESTS
     "Build focused one-shot gameplay launch-state regressions" OFF)
 if (RANKER_BUILD_GAMEPLAY_LAUNCH_STATE_REGRESSION_TESTS)

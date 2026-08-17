@@ -115,6 +115,15 @@ bool PaletteCacheSlotAllocationMatches(u32 slot_index, u64 allocation_serial) {
         g_palette_cache_state.allocation_serials[slot_index] == allocation_serial;
 }
 
+bool PaletteCacheRangeAllocationMatches(
+    u32 first_slot, u32 end_slot, u64 tail_allocation_serial) {
+    return tail_allocation_serial != 0 &&
+        first_slot != kInvalidPaletteCacheSlot &&
+        end_slot > first_slot && end_slot <= g_palette_cache_state.next_slot &&
+        g_palette_cache_state.allocation_serials[end_slot - 1u] ==
+            tail_allocation_serial;
+}
+
 bool SetPaletteCacheRawSlot(u32 slot_index, const void* data, std::size_t byte_count) {
     if (!valid_slot(slot_index) || data == nullptr || byte_count != kPaletteRawBytesPerSlot) {
         return false;

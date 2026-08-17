@@ -58,6 +58,8 @@ u32 LoadImageResourceTrcRecord(const char* archive_name, u32 record_index);
 const ResourceStoreEntry* GetResourceEntry(u32 entry_index);
 const ResourceStoreState& resource_store_state();
 u64 GetResourceEntryAllocationSerial(u32 entry_index);
+bool ResourceEntryRangeAllocationMatches(
+    u32 first_entry, u32 end_entry, u64 tail_allocation_serial);
 bool SetResourceEntryPaletteSlot(u32 entry_index, u32 palette_slot);
 
 }

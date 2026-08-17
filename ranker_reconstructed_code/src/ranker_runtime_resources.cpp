@@ -291,15 +291,28 @@ void reset_jw207_loaded_state() {
 }
 
 void release_unit_definition_catalog_allocations() {
-    if (g_unit_definition_resources.resource_store_start_entry !=
-            kInvalidResourceEntry) {
+    const u32 resource_start =
+        g_unit_definition_resources.resource_store_start_entry;
+    const u32 resource_end =
+        g_unit_definition_resources.resource_store_end_entry;
+    const bool image_allocations_valid =
+        ResourceEntryRangeAllocationMatches(resource_start, resource_end,
+            g_unit_definition_resources.resource_store_tail_allocation_serial);
+    if (image_allocations_valid) {
         ReleaseResourceEntriesFrom(
-            g_unit_definition_resources.resource_store_start_entry);
+            resource_start);
     }
-    if (g_unit_definition_resources.palette_rewind_slot !=
-            kInvalidPaletteCacheSlot) {
+
+    const u32 palette_start =
+        g_unit_definition_resources.palette_rewind_slot;
+    const u32 palette_end =
+        g_unit_definition_resources.palette_end_slot;
+    const bool palette_allocations_valid =
+        PaletteCacheRangeAllocationMatches(palette_start, palette_end,
+            g_unit_definition_resources.palette_tail_allocation_serial);
+    if (palette_allocations_valid) {
         ReleasePaletteCacheSlotsFrom(
-            g_unit_definition_resources.palette_rewind_slot);
+            palette_start);
     }
 #ifdef _WIN32
     if (g_unit_definition_resources.sound_rewind_slot != 0xffffffffu) {
@@ -307,6 +320,28 @@ void release_unit_definition_catalog_allocations() {
             g_unit_definition_resources.sound_rewind_slot);
     }
 #endif
+}
+
+void capture_unit_definition_catalog_allocation_ranges() {
+    g_unit_definition_resources.resource_store_end_entry =
+        resource_store_state().next_entry;
+    g_unit_definition_resources.resource_store_tail_allocation_serial = 0;
+    if (g_unit_definition_resources.resource_store_end_entry >
+        g_unit_definition_resources.resource_store_start_entry) {
+        g_unit_definition_resources.resource_store_tail_allocation_serial =
+            GetResourceEntryAllocationSerial(
+                g_unit_definition_resources.resource_store_end_entry - 1u);
+    }
+
+    g_unit_definition_resources.palette_end_slot =
+        palette_cache_state().next_slot;
+    g_unit_definition_resources.palette_tail_allocation_serial = 0;
+    if (g_unit_definition_resources.palette_end_slot >
+        g_unit_definition_resources.palette_rewind_slot) {
+        g_unit_definition_resources.palette_tail_allocation_serial =
+            GetPaletteCacheSlotAllocationSerial(
+                g_unit_definition_resources.palette_end_slot - 1u);
+    }
 }
 
 void reset_unit_definition_catalog_state(bool keep_variant_mode) {
@@ -322,6 +357,9 @@ void reset_unit_definition_catalog_state(bool keep_variant_mode) {
     g_unit_definition_resources.resource_store_tail_allocation_serial = 0;
     g_unit_definition_resources.palette_rewind_slot =
         kInvalidPaletteCacheSlot;
+    g_unit_definition_resources.palette_end_slot =
+        kInvalidPaletteCacheSlot;
+    g_unit_definition_resources.palette_tail_allocation_serial = 0;
     g_unit_definition_resources.sound_rewind_slot = 0xffffffffu;
     g_unit_definition_resources.variant_metadata.clear();
     clear_failure(g_unit_definition_resources.last_failure);
@@ -1722,6 +1760,7 @@ bool LoadUnitDefinitionResourceCatalog() {
     for (u32 unit_type = 0; unit_type < kUnitDefinitionResourceCount; ++unit_type) {
         ServeMilesSound();
         if (!LoadUnitDefinitionResourceRecord("JW2_09.TRC", unit_type, unit_type)) {
+            capture_unit_definition_catalog_allocation_ranges();
             append_runtime_resource_log(
                 "unit-def catalog failed record=%lu failure_stage=%lu failure_record=%lu",
                 static_cast<unsigned long>(unit_type),
@@ -1743,14 +1782,7 @@ bool LoadUnitDefinitionResourceCatalog() {
         (void)reload_unit_resource_pack_variant(false);
     }
     g_unit_definition_resources.loaded = true;
-    g_unit_definition_resources.resource_store_end_entry =
-        resource_store_state().next_entry;
-    if (g_unit_definition_resources.resource_store_end_entry >
-        g_unit_definition_resources.resource_store_start_entry) {
-        g_unit_definition_resources.resource_store_tail_allocation_serial =
-            GetResourceEntryAllocationSerial(
-                g_unit_definition_resources.resource_store_end_entry - 1u);
-    }
+    capture_unit_definition_catalog_allocation_ranges();
     append_runtime_resource_log("unit-def catalog ok");
     return true;
 }
@@ -1763,15 +1795,13 @@ bool UnitDefinitionResourceCatalogImageResourcesValid() {
     const u32 start =
         g_unit_definition_resources.resource_store_start_entry;
     const u32 end = g_unit_definition_resources.resource_store_end_entry;
-    if (start == kInvalidResourceEntry || end == kInvalidResourceEntry ||
-        end <= start || resource_store_state().next_entry < end) {
+    if (!ResourceEntryRangeAllocationMatches(start, end,
+            g_unit_definition_resources.resource_store_tail_allocation_serial)) {
         return false;
     }
 
     const ResourceStoreEntry* tail = GetResourceEntry(end - 1u);
-    return tail != nullptr && !tail->payload.empty() &&
-        tail->allocation_serial ==
-            g_unit_definition_resources.resource_store_tail_allocation_serial;
+    return tail != nullptr && !tail->payload.empty();
 }
 
 bool AppendLoadedUnitDefinitionResourceName(u32 unit_type, const char* suffix,
@@ -1965,7 +1995,8 @@ bool PublishJw21xSessionRuntimeTailDefinitionBytes(
     return true;
 }
 
-bool HandleGameplaySessionBundleImport(const char* archive_name, u32 base_record_index) {
+bool HandleGameplaySessionBundleImport(const char* archive_name, u32 base_record_index,
+    GameplaySessionPreThemeResourceLoadCallback pre_theme_resource_load) {
     reset_gameplay_session_load_state(archive_name, base_record_index);
     if (g_gameplay_session_load.archive_name.empty()) {
         return false;
@@ -1997,12 +2028,26 @@ bool HandleGameplaySessionBundleImport(const char* archive_name, u32 base_record
     }
     SetBriefingBinkArchiveName(g_gameplay_session_load.archive_name.c_str());
 
+    // HandleGameplaySessionBundleImport in the original loads JW2_03 before
+    // the command/interface packs, then captures the interface rewind marks.
+    // Keep that order in the real gameplay path so a later interface reload
+    // cannot invalidate a still-cached terrain bank below it.
+    if (pre_theme_resource_load != nullptr) {
+        g_gameplay_session_load.last_stage = GameplaySessionLoadStage::Terrain;
+        if (!pre_theme_resource_load()) {
+            return false;
+        }
+    }
+
     g_gameplay_session_load.last_stage = GameplaySessionLoadStage::CommandTheme;
     if (!LoadCommandThemeResourcePack()) {
         return false;
     }
 
     g_gameplay_session_load.last_stage = GameplaySessionLoadStage::Interface;
+    if (pre_theme_resource_load != nullptr) {
+        MarkInterfaceResourceRewindPoints();
+    }
     if (!LoadInterfaceResourcePack()) {
         return false;
     }

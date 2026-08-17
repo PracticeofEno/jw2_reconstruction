@@ -225,8 +225,10 @@ struct TerrainTileSheetState {
         kTerrainTileDecorationRecordCount> decoration_headers{};
     u32 resource_start = kInvalidTerrainTileResourceIndex;
     u32 resource_count = 0;
+    u64 resource_tail_allocation_serial = 0;
     u32 palette_start = kInvalidTerrainTileResourceIndex;
     u32 palette_count = 0;
+    u64 palette_tail_allocation_serial = 0;
 };
 
 struct MinimapPixelFormat {
@@ -379,6 +381,7 @@ void StartTerrainTilePulse(
 bool LoadTerrainTileSheetBank(TerrainTileSheetState& tile_sheet,
     const char* archive_name, i32 bank_index, const MinimapPixelFormat& pixel_format,
     u32 color_depth_bits = 16);
+bool TerrainTileSheetBankAllocationsValid(const TerrainTileSheetState& tile_sheet);
 void ConvertTerrainTileSheetPixelsForSurface(
     TerrainTileSheetState& tile_sheet, const MinimapPixelFormat& pixel_format);
 bool BuildTerrainTileAverageColors(

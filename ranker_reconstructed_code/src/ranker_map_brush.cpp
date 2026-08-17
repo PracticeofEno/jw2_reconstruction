@@ -1462,16 +1462,27 @@ bool LoadTerrainDecorationResources(
         return false;
     }
 
-    if (tile_sheet.resource_start != kInvalidTerrainTileResourceIndex) {
+    const bool resource_allocations_valid =
+        ResourceEntryRangeAllocationMatches(tile_sheet.resource_start,
+            tile_sheet.resource_start + tile_sheet.resource_count,
+            tile_sheet.resource_tail_allocation_serial);
+    if (resource_allocations_valid) {
         ReleaseResourceEntriesFrom(tile_sheet.resource_start);
     }
     tile_sheet.resource_start = kInvalidTerrainTileResourceIndex;
     tile_sheet.resource_count = 0;
-    if (tile_sheet.palette_start != kInvalidTerrainTileResourceIndex) {
+    tile_sheet.resource_tail_allocation_serial = 0;
+
+    const bool palette_allocations_valid =
+        PaletteCacheRangeAllocationMatches(tile_sheet.palette_start,
+            tile_sheet.palette_start + tile_sheet.palette_count,
+            tile_sheet.palette_tail_allocation_serial);
+    if (palette_allocations_valid) {
         ReleasePaletteCacheSlotsFrom(tile_sheet.palette_start);
     }
     tile_sheet.palette_start = kInvalidTerrainTileResourceIndex;
     tile_sheet.palette_count = 0;
+    tile_sheet.palette_tail_allocation_serial = 0;
 
     const u32 first_record =
         static_cast<u32>(bank_index) * kTerrainTileBankRecordStride + 1;
@@ -1519,6 +1530,8 @@ bool LoadTerrainDecorationResources(
                     tile_sheet.palette_start = slot;
                 }
                 ++tile_sheet.palette_count;
+                tile_sheet.palette_tail_allocation_serial =
+                    GetPaletteCacheSlotAllocationSerial(slot);
                 active_palette_slot = slot;
             } else if (section_type == 1) {
                 std::array<u8, 0x20> header{};
@@ -1548,6 +1561,8 @@ bool LoadTerrainDecorationResources(
                     tile_sheet.resource_start = entry_index;
                 }
                 ++tile_sheet.resource_count;
+                tile_sheet.resource_tail_allocation_serial =
+                    GetResourceEntryAllocationSerial(entry_index);
             } else if (section_type != 0x0a) {
                 return fail_record();
             }
@@ -1557,6 +1572,18 @@ bool LoadTerrainDecorationResources(
     return true;
 }
 
+bool TerrainTileSheetBankAllocationsValid(const TerrainTileSheetState& tile_sheet) {
+    const bool resources_valid =
+        ResourceEntryRangeAllocationMatches(tile_sheet.resource_start,
+            tile_sheet.resource_start + tile_sheet.resource_count,
+            tile_sheet.resource_tail_allocation_serial);
+    const bool palettes_valid =
+        PaletteCacheRangeAllocationMatches(tile_sheet.palette_start,
+            tile_sheet.palette_start + tile_sheet.palette_count,
+            tile_sheet.palette_tail_allocation_serial);
+    return resources_valid && palettes_valid;
+}
+
 void ReleaseTerrainTileSheetBankResources(TerrainTileSheetState& tile_sheet) {
     tile_sheet.tile_pixels.clear();
     tile_sheet.tile_pixels.shrink_to_fit();
@@ -1564,17 +1591,26 @@ void ReleaseTerrainTileSheetBankResources(TerrainTileSheetState& tile_sheet) {
     tile_sheet.average_pixels.shrink_to_fit();
     tile_sheet.tile_count = 0;
 
-    if (tile_sheet.resource_start != kInvalidTerrainTileResourceIndex) {
+    const bool resources_valid =
+        ResourceEntryRangeAllocationMatches(tile_sheet.resource_start,
+            tile_sheet.resource_start + tile_sheet.resource_count,
+            tile_sheet.resource_tail_allocation_serial);
+    if (resources_valid) {
         ReleaseResourceEntriesFrom(tile_sheet.resource_start);
-        tile_sheet.resource_start = kInvalidTerrainTileResourceIndex;
     }
-    tile_sheet.resource_count = 0;
-
-    if (tile_sheet.palette_start != kInvalidTerrainTileResourceIndex) {
+    const bool palettes_valid =
+        PaletteCacheRangeAllocationMatches(tile_sheet.palette_start,
+            tile_sheet.palette_start + tile_sheet.palette_count,
+            tile_sheet.palette_tail_allocation_serial);
+    if (palettes_valid) {
         ReleasePaletteCacheSlotsFrom(tile_sheet.palette_start);
-        tile_sheet.palette_start = kInvalidTerrainTileResourceIndex;
     }
+    tile_sheet.resource_start = kInvalidTerrainTileResourceIndex;
+    tile_sheet.resource_count = 0;
+    tile_sheet.resource_tail_allocation_serial = 0;
+    tile_sheet.palette_start = kInvalidTerrainTileResourceIndex;
     tile_sheet.palette_count = 0;
+    tile_sheet.palette_tail_allocation_serial = 0;
     tile_sheet.active_bank = -1;
 }
 
@@ -1585,7 +1621,8 @@ bool LoadTerrainTileSheetBank(TerrainTileSheetState& tile_sheet,
         return false;
     }
 
-    if (tile_sheet.active_bank == bank_index) {
+    if (tile_sheet.active_bank == bank_index &&
+        TerrainTileSheetBankAllocationsValid(tile_sheet)) {
         if (tile_sheet.resource_start != kInvalidTerrainTileResourceIndex) {
             ReleaseResourceEntriesFrom(tile_sheet.resource_start + tile_sheet.resource_count);
         }
@@ -1593,6 +1630,14 @@ bool LoadTerrainTileSheetBank(TerrainTileSheetState& tile_sheet,
             ReleasePaletteCacheSlotsFrom(tile_sheet.palette_start + tile_sheet.palette_count);
         }
         return true;
+    }
+
+    if (tile_sheet.active_bank == bank_index) {
+        // An outer interface/session rewind can discard these two stack
+        // ranges without changing active_bank.  Keep the decoded 32x32 tile
+        // pixels, but rebuild the stale decorations before their numeric
+        // indices are reused by replay controls or unit images.
+        return LoadTerrainDecorationResources(tile_sheet, archive_name, bank_index);
     }
 
     std::vector<u8> payload;
