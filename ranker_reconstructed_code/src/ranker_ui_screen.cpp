@@ -1986,7 +1986,15 @@ bool run_gameplay_pause_menu_child(
 
 void set_cursor_for_gameplay_modal() {
 #ifdef _WIN32
+    // The reconstructed title uses a native cursor and suppresses software
+    // cursor pointer updates while its custom WndProc handles hover.  The
+    // original single-player modal immediately returns to the ordinary game
+    // cursor path before FUN_0042cd80 starts polling.  Restore that ownership
+    // here so the very first Stage/Practice/Replay menu receives WM_MOUSEMOVE
+    // coordinates instead of remaining frozen until gameplay has run once.
+    SetGameCursorPresentationSuppressed(false);
     SetGameCursorIndex(0);
+    ShowGameCursor();
 #endif
 }
 

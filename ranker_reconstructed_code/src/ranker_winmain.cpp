@@ -12893,11 +12893,69 @@ void default_gameplay_loop_run_stage_exit_fade() {
     ShowGameCursor();
 }
 
+bool restart_default_network_ai_practice_session(GameplayLoopState& state) {
+    LinkLobbyState& lobby = link_lobby_state();
+    const P2PGameSessionStartState& active_start =
+        g_runtime.p2p_session_start_state;
+    if (!GameplayLaunchUsesLinkLobby(g_runtime.gameplay_launch_source) ||
+        !active_start.start_parameter_payload_present ||
+        !LoadLinkLobbyStartParametersPayload(lobby,
+            active_start.start_parameter_payload.data(),
+            active_start.start_parameter_payload.size())) {
+        append_startup_log(
+            "practice-restart: retained Link startup parameters unavailable");
+        return false;
+    }
+    lobby.local_player_index = static_cast<int>(std::min<u32>(
+        active_start.copied_runtime_local_player, kPlayerSlotCount - 1));
+
+    // Original mode-6 practice returns from ProcessGameplaySessionLoop with
+    // DAT_00725c0c still set.  Its outer loop at 0x004d947a reimports the
+    // retained DAT_01244a40 map and then enters the gameplay loop again; it
+    // does not reopen FUN_0042cd80's Stage/Practice/Replay chooser.
+    append_startup_log("practice-restart: reimport begin archive=%s",
+        g_runtime.gameplay_session_archive_path.c_str());
+    HandleBackBufferFadeToBlack();
+    (void)HandleDirectDrawFrameBoundary();
+
+    GameplaySessionFlowState& flow = prepare_default_modal_session_flow();
+    flow.loaded_save_session = false;
+    flow.generic_ai_profile_mode = 1;
+    if (!default_gameplay_flow_import_session_bundle(flow)) {
+        append_startup_log("practice-restart: session reimport failed");
+        return false;
+    }
+
+    // apply_pending_link_lobby_start_parameters_to_gameplay_startup consumes
+    // this edge on each materialization.  Re-publish the same immutable room
+    // seed so Computer slots, tribes, teams and starting resources match the
+    // first run instead of falling back to a one-player default session.
+    g_runtime.link_lobby_start_parameters_pending = true;
+    default_gameplay_flow_start_session_from_slots(flow);
+    InitializeMode1ReliableSyncRuntime(RefreshLegacyTickTime());
+    SetMode1ReliableReplayFrameTick(state.simulation_frame_counter);
+
+    state.generic_ai_profile_mode = g_runtime.generic_ai_profile_mode;
+    state.reenter_session_requested = true;
+    (void)HandleDirectDrawFrameBoundary();
+    append_startup_log(
+        "practice-restart: reimport complete frame=%lu active_units=%zu",
+        static_cast<unsigned long>(state.simulation_frame_counter),
+        g_runtime.gameplay_movement_context.active_units.size());
+    return true;
+}
+
 bool default_gameplay_loop_try_restart_session(GameplayLoopState& state) {
     mode1_reliable_state().corrective_packet_pending = false;
     SetGameCursorIndex(state.current_cursor_index);
     state.session_active = false;
-    if (g_runtime.gameplay_in_game_load_resume.pending) {
+    FrontendStageFlowState& stage = frontend_stage_flow_state();
+    const GameplayRestartMaterialization restart_materialization =
+        ResolveGameplayRestartMaterialization(
+            g_runtime.gameplay_in_game_load_resume.pending,
+            g_runtime.network_ai_profile_override, stage.stage_started);
+    if (restart_materialization ==
+        GameplayRestartMaterialization::LoadedSession) {
         const GameplayInGameLoadResumeState resume =
             g_runtime.gameplay_in_game_load_resume;
 
@@ -12963,12 +13021,15 @@ bool default_gameplay_loop_try_restart_session(GameplayLoopState& state) {
             g_runtime.map_effect_context.active_effect_indices.size());
         return false;
     }
-    if (g_runtime.network_ai_profile_override) {
+
+    if (restart_materialization ==
+        GameplayRestartMaterialization::NetworkAiPractice) {
+        (void)restart_default_network_ai_practice_session(state);
         return false;
     }
 
-    FrontendStageFlowState& stage = frontend_stage_flow_state();
-    if (!stage.stage_started) {
+    if (restart_materialization !=
+        GameplayRestartMaterialization::FrontendStage) {
         return false;
     }
 
@@ -13747,6 +13808,19 @@ void default_play_frontend_intro_sequence(FrontendBootstrapState&) {
         static_cast<unsigned long>(bink.media_foundation_result));
 }
 
+void publish_default_frontend_sound_bank_from_bootstrap() {
+    const GameplaySoundState& bootstrap_sound =
+        frontend_bootstrap_state().gameplay_sound;
+    if (ShouldAdoptFrontendBootstrapSoundBank(
+            g_runtime.gameplay_sound.bank_loaded,
+            bootstrap_sound.bank_loaded)) {
+        g_runtime.gameplay_sound = bootstrap_sound;
+    }
+    g_runtime.gameplay_sound.direct_sound_available =
+        g_runtime.directx_initialized && direct_sound_state().active;
+    SetDefaultFrontendGameplaySoundState(&g_runtime.gameplay_sound);
+}
+
 void default_gameplay_loop_initialize_worker_runtime(GameplayLoopState&) {
     FrontendBootstrapState& bootstrap = frontend_bootstrap_state();
     FrontendBootstrapCallbacks callbacks{};
@@ -13783,6 +13857,12 @@ void default_gameplay_loop_initialize_worker_runtime(GameplayLoopState&) {
         }
         gameplay_loop_state().process_shutdown_requested = true;
     } else {
+        // InitializeGameplaySoundEffectBank loaded the original JW2_05 bank
+        // into process-global DirectSound slots during bootstrap.  Publish
+        // the matching typed state now; waiting for gameplay initialization
+        // made every native frontend click silent on a fresh process and only
+        // start working after the first match.
+        publish_default_frontend_sound_bank_from_bootstrap();
         append_startup_log("frontend bootstrap ok");
     }
 }
@@ -14292,17 +14372,11 @@ void configure_default_ui_overlay_callbacks() {
 }
 
 void initialize_default_gameplay_sound_state() {
-    SetDefaultFrontendGameplaySoundState(&g_runtime.gameplay_sound);
-    const GameplaySoundState& bootstrap_sound = frontend_bootstrap_state().gameplay_sound;
+    publish_default_frontend_sound_bank_from_bootstrap();
     // DAT_007071c4 is one process-global sound-variant seed in the original.
     // It is initialized once and has no session-reset writer.  Copying the
     // pristine bootstrap state on every gameplay entry rewound group 7/8
     // variants (and the response throttles) for a second P2P match.
-    if (bootstrap_sound.bank_loaded && !g_runtime.gameplay_sound.bank_loaded) {
-        g_runtime.gameplay_sound = bootstrap_sound;
-    }
-    g_runtime.gameplay_sound.direct_sound_available =
-        g_runtime.directx_initialized && direct_sound_state().active;
     if (g_runtime.gameplay_sound.attenuation_by_bucket.empty()) {
         InitializeDefaultGameplaySoundAttenuation(g_runtime.gameplay_sound);
     }

@@ -23,6 +23,15 @@ constexpr u32 kGameplayUnitSpecialSoundKind = 2;
 constexpr u32 kGameplayUnitSoundGroupCount = 9;
 constexpr u32 kGameplayUnitAttackSoundFrameSlots = 8;
 
+// The startup bootstrap and live gameplay adapter are separate typed states
+// over the original process-global DirectSound slots.  Publish the bootstrap
+// bank exactly once so native frontend buttons are audible before the first
+// gameplay session without rewinding sound RNG/throttle state later.
+constexpr bool ShouldAdoptFrontendBootstrapSoundBank(
+    bool runtime_bank_loaded, bool bootstrap_bank_loaded) {
+    return bootstrap_bank_loaded && !runtime_bank_loaded;
+}
+
 enum class GameplayUnitSoundGroup : u32 {
     SelectedResponse = 0,
     CommandResponse = 1,

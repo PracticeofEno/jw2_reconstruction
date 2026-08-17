@@ -1,4 +1,5 @@
 #include "ranker_gameplay_cheats.h"
+#include "ranker_gameplay_sound.h"
 #include "ranker_gameplay_session_flow.h"
 #include "ranker_gameplay_session_rules.h"
 
@@ -33,6 +34,19 @@ int main() {
         GameplayModalSessionRequest::Leave);
     assert(ResolveGameplayModalSessionRequest(false, false) ==
         GameplayModalSessionRequest::None);
+
+    assert(ResolveGameplayRestartMaterialization(false, true, false) ==
+        GameplayRestartMaterialization::NetworkAiPractice);
+    assert(ResolveGameplayRestartMaterialization(true, true, true) ==
+        GameplayRestartMaterialization::LoadedSession);
+    assert(ResolveGameplayRestartMaterialization(false, false, true) ==
+        GameplayRestartMaterialization::FrontendStage);
+    assert(ResolveGameplayRestartMaterialization(false, false, false) ==
+        GameplayRestartMaterialization::Unavailable);
+
+    assert(ShouldAdoptFrontendBootstrapSoundBank(false, true));
+    assert(!ShouldAdoptFrontendBootstrapSoundBank(true, true));
+    assert(!ShouldAdoptFrontendBootstrapSoundBank(false, false));
 
     // Scenario Restart publishes the modal's end-session bit, while Quit to
     // Frontend publishes its distinct leave bit.  Restart must win even if a

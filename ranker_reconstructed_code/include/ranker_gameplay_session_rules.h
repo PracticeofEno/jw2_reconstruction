@@ -10,6 +10,13 @@ enum class GameplayModalSessionRequest : u8 {
     Leave,
 };
 
+enum class GameplayRestartMaterialization : u8 {
+    Unavailable = 0,
+    LoadedSession,
+    NetworkAiPractice,
+    FrontendStage,
+};
+
 // ProcessGameplaySessionLoop checks DAT_00725c0c (restart) before
 // DAT_00725c09 (leave).
 constexpr GameplayModalSessionRequest ResolveGameplayModalSessionRequest(
@@ -20,6 +27,24 @@ constexpr GameplayModalSessionRequest ResolveGameplayModalSessionRequest(
     return leave_requested
         ? GameplayModalSessionRequest::Leave
         : GameplayModalSessionRequest::None;
+}
+
+// ProcessGameplaySessionLoop's restart edge has three distinct original
+// continuations.  An active Load replaces the current runtime, mode-6
+// practice returns to the outer loop at 0x004d947a and reimports the retained
+// map, while campaign/scenario play calls FUN_00415ad0 for the current stage.
+constexpr GameplayRestartMaterialization ResolveGameplayRestartMaterialization(
+    bool loaded_session_pending, bool network_ai_profile_override,
+    bool frontend_stage_started) {
+    if (loaded_session_pending) {
+        return GameplayRestartMaterialization::LoadedSession;
+    }
+    if (network_ai_profile_override) {
+        return GameplayRestartMaterialization::NetworkAiPractice;
+    }
+    return frontend_stage_started
+        ? GameplayRestartMaterialization::FrontendStage
+        : GameplayRestartMaterialization::Unavailable;
 }
 
 // Index zero is the 45 ms (fastest) original simulation interval.
