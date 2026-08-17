@@ -520,6 +520,22 @@ u32 effect_sprite_animation_frame(const UnitEffectRuntime& effect) {
     return effect.tick;
 }
 
+bool effect_startup_render_phase(const UnitEffectRuntime& effect) {
+    // The low-ID renderer at 0x004ed947 tests impact before startup.  The
+    // high-ID common tail at 0x004f1dcc does the reverse, except Berry-fly's
+    // direct renderer (effect 0x63, 0x004f1a71), which tests impact first.
+    // Recycled/transient records can carry both bits for one rendered frame,
+    // so this ordering is visible and cannot be reduced to two independent
+    // bit tests in the shared sprite resolver.
+    return ResolveUnitEffectRenderPhase(effect) ==
+        UnitEffectRenderPhase::startup;
+}
+
+bool effect_impact_render_phase(const UnitEffectRuntime& effect) {
+    return ResolveUnitEffectRenderPhase(effect) ==
+        UnitEffectRenderPhase::impact;
+}
+
 u32 effect_resource_entry_for_raw_image_index(
     const UnitEffectDefinition& definition, u32 raw_image_index) {
     if (raw_image_index < definition.image_resource_entries.size()) {
@@ -548,7 +564,9 @@ bool effect_sprite_frame_in_range(const UnitEffectRuntime& effect, std::size_t s
 
 u32 effect_sprite_entry_for_frame(const UnitEffectRuntimeState& state,
     const UnitEffectDefinition& definition, const UnitEffectRuntime& effect) {
-    if ((effect.flags & kUnitEffectFlagImpact) != 0 &&
+    const bool impact_phase = effect_impact_render_phase(effect);
+    const bool startup_phase = effect_startup_render_phase(effect);
+    if (impact_phase &&
         !definition.impact_image_indices.empty() &&
         definition.sprite_entry != kInvalidResourceEntry) {
         std::size_t frame_index = 0;
@@ -571,10 +589,10 @@ u32 effect_sprite_entry_for_frame(const UnitEffectRuntimeState& state,
     }
 
     const std::vector<u32>* sequence = nullptr;
-    if ((effect.flags & kUnitEffectFlagImpact) != 0 &&
+    if (impact_phase &&
         !definition.impact_sprite_entries.empty()) {
         sequence = &definition.impact_sprite_entries;
-    } else if ((effect.flags & 2u) != 0 &&
+    } else if (startup_phase &&
         !definition.startup_sprite_entries.empty()) {
         sequence = &definition.startup_sprite_entries;
     } else if (!definition.active_sprite_entries.empty()) {
@@ -618,10 +636,10 @@ u32 effect_sprite_entry_for_frame(const UnitEffectRuntimeState& state,
 
 u32 effect_draw_mode_for_frame(const UnitEffectDefinition& definition,
     const UnitEffectRuntime& effect) {
-    if ((effect.flags & kUnitEffectFlagImpact) != 0) {
+    if (effect_impact_render_phase(effect)) {
         return definition.impact_draw_mode;
     }
-    if ((effect.flags & 2u) != 0) {
+    if (effect_startup_render_phase(effect)) {
         return definition.startup_draw_mode;
     }
     return definition.active_draw_mode;
@@ -5255,7 +5273,7 @@ bool DispatchUnitEffectProjectileTrailRenderer(UnitEffectRuntimeState& state,
     UnitEffectRuntime& effect, u32 effect_id,
     i32 captured_screen_x, i32 captured_screen_y) {
     const auto generic_impact_sprite_suppressed = [&]() {
-        if ((effect.flags & kUnitEffectFlagImpact) == 0) {
+        if (!effect_impact_render_phase(effect)) {
             return false;
         }
         const UnitMovementUnit* target =
@@ -5281,7 +5299,7 @@ bool DispatchUnitEffectProjectileTrailRenderer(UnitEffectRuntimeState& state,
 
     switch (effect_id) {
     case 0x46:
-        if ((effect.flags & kUnitEffectFlagImpact) == 0) {
+        if (!effect_impact_render_phase(effect)) {
             return generic_tail_suppressed();
         }
         if (effect.accumulator_x != 0) {
@@ -5297,19 +5315,18 @@ bool DispatchUnitEffectProjectileTrailRenderer(UnitEffectRuntimeState& state,
         // FUN_004f1ae0 gives startup precedence over the impact bit.  A
         // transient record carrying both flags must not shake or consume the
         // two shared sound-variant rolls.
-        if ((effect.flags & kUnitEffectFlagStartup) == 0 &&
-            (effect.flags & kUnitEffectFlagImpact) != 0) {
+        if (effect_impact_render_phase(effect)) {
             request_projectile_camera_shake(state, effect);
         }
         return generic_tail_suppressed();
     case 0x56:
-        if ((effect.flags & kUnitEffectFlagImpact) == 0) {
+        if (!effect_impact_render_phase(effect)) {
             return generic_tail_suppressed();
         }
         return draw_projectile_unit_group_impact_sprite(state, effect, 0x31,
             captured_screen_x, captured_screen_y);
     case 0x59:
-        if ((effect.flags & kUnitEffectFlagImpact) == 0) {
+        if (!effect_impact_render_phase(effect)) {
             return generic_tail_suppressed();
         }
         return draw_projectile_unit_group_impact_sprite(state, effect, 0x5a,
@@ -5324,7 +5341,7 @@ bool DispatchUnitEffectProjectileTrailRenderer(UnitEffectRuntimeState& state,
     case 0x61:
         return source_visibility_suppressed();
     case 0x62: {
-        if ((effect.flags & kUnitEffectFlagImpact) != 0) {
+        if (effect_impact_render_phase(effect)) {
             return generic_tail_suppressed();
         }
         const UnitMovementUnit* source =

@@ -75,14 +75,17 @@ class EffectProfile:
     image_count: int
 
 
-def parse_effect_catalog(path: Path) -> tuple[list[EffectProfile], list[EffectImage]]:
+def parse_effect_catalog(path: Path,
+        profile_count: int = ATTACK_PROFILE_COUNT) -> tuple[list[EffectProfile], list[EffectImage]]:
     archive = TrcArchive(path)
-    if len(archive.records) < ATTACK_PROFILE_COUNT:
-        raise ValueError(f"JW2_12 has only {len(archive.records)} records")
+    if len(archive.records) < profile_count:
+        raise ValueError(
+            f"{path.name} has only {len(archive.records)} records; "
+            f"expected at least {profile_count}")
 
     profiles: list[EffectProfile] = []
     images: list[EffectImage] = []
-    for profile_id in range(ATTACK_PROFILE_COUNT):
+    for profile_id in range(profile_count):
         record = archive.record(profile_id)
         # The original loader treats sub-0x14 Null.wpn rows as unloaded,
         # zero-filled catalog entries.  They allocate no resources and do not

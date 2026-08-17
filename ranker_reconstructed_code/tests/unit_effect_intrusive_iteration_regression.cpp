@@ -1,4 +1,6 @@
 #include "ranker_unit_action.h"
+
+#include "ranker_gameplay_tooltips.h"
 #include "ranker_unit_damage.h"
 #include "ranker_unit_lifecycle.h"
 #include "ranker_unit_spatial_index.h"
@@ -1363,6 +1365,89 @@ void test_kingdemon_afterimage_uses_half_rate_render_tick() {
         "KingDemon Fire afterimage used the doubled lifetime as its sprite frame");
 }
 
+UnitEffectDefinition phase_precedence_definition(u32 effect_id) {
+    UnitEffectDefinition definition{};
+    definition.id = effect_id;
+    definition.sprite_entry = 100;
+    definition.startup_ticks = 1;
+    definition.impact_render_ticks = 1;
+    definition.startup_draw_mode = 2;
+    definition.impact_draw_mode = 4;
+    definition.startup_sprite_entries = {110};
+    definition.impact_sprite_entries = {120};
+    return definition;
+}
+
+void require_effect_phase_render(const UnitEffectRuntimeState& state,
+    const UnitEffectRuntime& effect, u32 expected_entry, u32 expected_mode,
+    const char* message) {
+    u32 sprite_entry = kInvalidResourceEntry;
+    u32 draw_mode = 0xffffffffu;
+    require(ResolveUnitEffectGenericSpriteRender(
+                state, effect, sprite_entry, draw_mode) &&
+            sprite_entry == expected_entry && draw_mode == expected_mode,
+        message);
+}
+
+void test_original_effect_phase_render_precedence() {
+    UnitEffectRuntime effect{};
+    effect.active = true;
+    effect.flags = kUnitEffectFlagStartup | kUnitEffectFlagImpact;
+    effect.tick = 0;
+
+    UnitEffectRuntimeState low_state{};
+    low_state.definitions.push_back(phase_precedence_definition(0x01));
+    effect.effect_id = 0x01;
+    require_effect_phase_render(low_state, effect, 120, 4,
+        "low-ID simultaneous startup/impact flags did not prefer impact");
+
+    UnitEffectRuntimeState high_state{};
+    high_state.definitions.push_back(phase_precedence_definition(0x3d));
+    effect.effect_id = 0x3d;
+    require_effect_phase_render(high_state, effect, 110, 2,
+        "high-ID simultaneous startup/impact flags did not prefer startup");
+
+    UnitEffectRuntimeState berry_state{};
+    berry_state.definitions.push_back(phase_precedence_definition(0x63));
+    effect.effect_id = 0x63;
+    require_effect_phase_render(berry_state, effect, 120, 4,
+        "effect 0x63 did not retain its original impact-first exception");
+}
+
+void test_special_projectile_startup_precedes_impact_route() {
+    UnitEffectRuntime effect{};
+    effect.active = true;
+    effect.flags = kUnitEffectFlagStartup | kUnitEffectFlagImpact;
+
+    constexpr u32 special_ids[] = {0x46, 0x4b, 0x56, 0x59};
+    for (u32 effect_id : special_ids) {
+        effect.effect_id = effect_id;
+        require(ResolveUnitEffectRenderPhase(effect) ==
+                UnitEffectRenderPhase::startup,
+            "special high-ID renderer resolved simultaneous flags as impact");
+    }
+}
+
+void test_ground_meat_tooltip_uses_live_map_effect_amount() {
+    require(BuildGameplayMapEffectTooltipText("Small meat", 1, 237) ==
+            "Small meat=237",
+        "ground meat tooltip omitted raw map-effect +0x30");
+    require(BuildGameplayMapEffectTooltipText("Huge meat", 4, 1001) ==
+            "Huge meat=1001",
+        "largest ground meat tier formatted the wrong amount");
+    require(BuildGameplayMapEffectTooltipText("Fire arrow", 5, 99) ==
+            "Fire arrow",
+        "non-resource map effect incorrectly appended a quantity");
+
+    require(GameplayTooltipMeatTierForAmount(100) == 1 &&
+            GameplayTooltipMeatTierForAmount(101) == 2 &&
+            GameplayTooltipMeatTierForAmount(500) == 2 &&
+            GameplayTooltipMeatTierForAmount(501) == 3 &&
+            GameplayTooltipMeatTierForAmount(1000) == 3 &&
+            GameplayTooltipMeatTierForAmount(1001) == 4,
+        "carried-meat tooltip tier boundaries diverged from the original");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1408,6 +1493,9 @@ int main(int argc, char** argv) {
     test_effect_resource_entry_zero_is_drawable();
     test_effect_raw_image_index_can_cross_catalog_row();
     test_kingdemon_afterimage_uses_half_rate_render_tick();
+    test_original_effect_phase_render_precedence();
+    test_special_projectile_startup_precedes_impact_route();
+    test_ground_meat_tooltip_uses_live_map_effect_amount();
     std::cout << "UNIT_EFFECT_INTRUSIVE_ITERATION_PASS\n";
     return EXIT_SUCCESS;
 }

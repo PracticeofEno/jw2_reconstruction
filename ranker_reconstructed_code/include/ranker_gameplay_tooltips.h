@@ -131,6 +131,17 @@ constexpr u32 GameplayTooltipMeatTierForAmount(u32 meat_amount) {
     return 1;
 }
 
+inline std::string BuildGameplayMapEffectTooltipText(
+    std::string name, u32 effect_id, u32 amount) {
+    // FUN_004df316 appends "=" and raw map-effect +0x30 only for IDs 0..4.
+    // That raw word is the remaining meat/resource amount for ground drops.
+    if (effect_id < 5) {
+        name.push_back('=');
+        name += std::to_string(amount);
+    }
+    return name;
+}
+
 struct GameplayTooltipState;
 
 using GameplayTooltipRenderCallback = void (*)(GameplayTooltipState& state);

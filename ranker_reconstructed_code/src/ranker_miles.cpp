@@ -15,12 +15,15 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <new>
 #include <string>
 #include <thread>
@@ -35,7 +38,18 @@ MilesMusicRuntimeState g_music_state;
 BriefingBinkMediaState g_briefing_bink_state;
 MilesEffectPlaylistState g_effect_playlist_state;
 MilesComputedStreamContext g_default_computed_stream_context;
-std::vector<MilesStreamHandle> g_preloaded_effect_streams;
+
+struct AsyncMilesEffectStream {
+    std::mutex mutex;
+    MilesStreamHandle stream = nullptr;
+    std::atomic<bool> active{true};
+    bool cancelled = false;
+    bool paused = false;
+    bool started = false;
+};
+
+std::array<std::shared_ptr<AsyncMilesEffectStream>,
+    kMilesEffectStreamSlots> g_async_effect_streams;
 
 constexpr std::array<u8, 5> kLegacyMilesNullFallback{'N', 'U', 'L', 'L', 0};
 
@@ -188,20 +202,25 @@ bool play_briefing_bink_source(const BriefingBinkSource& source) {
 }
 
 bool close_mci_effect_stream_deferred(MilesStreamHandle stream);
-bool recycle_mci_effect_stream(MilesStreamHandle stream, u32 entry_index);
+bool close_async_effect_slot(u32 slot, bool nonblocking_backend);
+int get_async_effect_slot_status(u32 slot);
 
 void close_effect_slot(u32 slot, bool nonblocking_mci_fallback = false) {
     if (slot >= kMilesEffectStreamSlots) {
         return;
     }
 
+    if (close_async_effect_slot(slot, nonblocking_mci_fallback)) {
+        g_effect_playlist_state.streams[slot] = nullptr;
+        g_effect_playlist_state.active_entry_indices[slot] =
+            kInvalidMilesEffectEntry;
+        return;
+    }
+
     MilesStreamHandle& stream = g_effect_playlist_state.streams[slot];
-    const u32 entry_index =
-        g_effect_playlist_state.active_entry_indices[slot];
     if (stream != nullptr) {
         const bool released_without_wait = nonblocking_mci_fallback &&
-            (recycle_mci_effect_stream(stream, entry_index) ||
-                close_mci_effect_stream_deferred(stream));
+            close_mci_effect_stream_deferred(stream);
         if (!released_without_wait) {
             PauseMilesStream(stream);
             CloseMilesStream(stream);
@@ -213,7 +232,8 @@ void close_effect_slot(u32 slot, bool nonblocking_mci_fallback = false) {
 
 u32 acquire_effect_stream_slot() {
     for (u32 i = 0; i < kMilesEffectStreamSlots; ++i) {
-        if (g_effect_playlist_state.streams[i] == nullptr) {
+        if (g_async_effect_streams[i] == nullptr &&
+            g_effect_playlist_state.streams[i] == nullptr) {
             return i;
         }
     }
@@ -222,7 +242,10 @@ u32 acquire_effect_stream_slot() {
     // slots.  Reclaim one through the same nonblocking reuse path before
     // resorting to the original random active-stream eviction.
     for (u32 i = 0; i < kMilesEffectStreamSlots; ++i) {
-        if (GetMilesStreamStatus(g_effect_playlist_state.streams[i]) == 0) {
+        const int status = g_async_effect_streams[i] != nullptr ?
+            get_async_effect_slot_status(i) :
+            GetMilesStreamStatus(g_effect_playlist_state.streams[i]);
+        if (status == 0) {
             close_effect_slot(i, true);
             return i;
         }
@@ -260,14 +283,33 @@ struct MciMilesStream {
     int remaining_restarts = 0;
     bool active = false;
     bool paused = false;
-    bool restart_from_beginning = false;
 };
 
 std::vector<MciMilesStream*> g_mci_streams;
+std::mutex g_mci_streams_mutex;
 
 MciMilesStream* find_mci_stream(MilesStreamHandle stream) {
+    std::lock_guard<std::mutex> lock(g_mci_streams_mutex);
     const auto found = std::find(g_mci_streams.begin(), g_mci_streams.end(), stream);
     return found != g_mci_streams.end() ? *found : nullptr;
+}
+
+void register_mci_stream(MciMilesStream* stream) {
+    std::lock_guard<std::mutex> lock(g_mci_streams_mutex);
+    g_mci_streams.push_back(stream);
+}
+
+void unregister_mci_stream(MciMilesStream* stream) {
+    std::lock_guard<std::mutex> lock(g_mci_streams_mutex);
+    const auto found = std::find(g_mci_streams.begin(), g_mci_streams.end(), stream);
+    if (found != g_mci_streams.end()) {
+        g_mci_streams.erase(found);
+    }
+}
+
+MciMilesStream* last_mci_stream() {
+    std::lock_guard<std::mutex> lock(g_mci_streams_mutex);
+    return g_mci_streams.empty() ? nullptr : g_mci_streams.back();
 }
 
 bool write_mci_memory_stream_file(const char* path, std::string& temporary_path) {
@@ -373,7 +415,7 @@ MciMilesStream* open_mci_stream(const char* path) {
     mciSendCommandA(stream->device_id, MCI_SET,
         MCI_SET_TIME_FORMAT | MCI_WAIT,
         reinterpret_cast<DWORD_PTR>(&time_format));
-    g_mci_streams.push_back(stream);
+    register_mci_stream(stream);
     return stream;
 }
 
@@ -381,15 +423,12 @@ void close_mci_stream(MciMilesStream* stream) {
     if (stream == nullptr) {
         return;
     }
+    unregister_mci_stream(stream);
     MCI_GENERIC_PARMS close{};
     mciSendCommandA(stream->device_id, MCI_CLOSE, MCI_WAIT,
         reinterpret_cast<DWORD_PTR>(&close));
     if (!stream->temporary_path.empty()) {
         DeleteFileA(stream->temporary_path.c_str());
-    }
-    const auto found = std::find(g_mci_streams.begin(), g_mci_streams.end(), stream);
-    if (found != g_mci_streams.end()) {
-        g_mci_streams.erase(found);
     }
     delete stream;
 }
@@ -406,10 +445,7 @@ bool close_mci_effect_stream_deferred(MilesStreamHandle handle) {
     // skip visibly freeze.  Remove the stream from the live playlist first
     // (so its status is immediately zero), then let the backend release its
     // decoder and temporary archive MP3 away from the gameplay thread.
-    const auto found = std::find(g_mci_streams.begin(), g_mci_streams.end(), stream);
-    if (found != g_mci_streams.end()) {
-        g_mci_streams.erase(found);
-    }
+    unregister_mci_stream(stream);
     try {
         std::thread([stream]() {
             MCI_GENERIC_PARMS command{};
@@ -426,33 +462,9 @@ bool close_mci_effect_stream_deferred(MilesStreamHandle handle) {
     catch (...) {
         // Thread creation is exceptionally rare; restoring the registry lets
         // the established synchronous path perform a complete safe close.
-        g_mci_streams.push_back(stream);
+        register_mci_stream(stream);
         return false;
     }
-    return true;
-}
-
-bool recycle_mci_effect_stream(MilesStreamHandle handle, u32 entry_index) {
-    MciMilesStream* stream = find_mci_stream(handle);
-    if (stream == nullptr || entry_index >= g_preloaded_effect_streams.size() ||
-        g_preloaded_effect_streams[entry_index] != nullptr) {
-        return false;
-    }
-
-    // MCI_WAIT is the compatibility-backend-only hitch that the original
-    // AIL_close_stream path never had.  Stop is asynchronous here: the slot
-    // and script-visible status are released immediately, while the already
-    // opened decoder remains cached for the next use of this dialog entry.
-    MCI_GENERIC_PARMS stop{};
-    if (mciSendCommandA(stream->device_id, MCI_STOP, 0,
-            reinterpret_cast<DWORD_PTR>(&stop)) != 0) {
-        return false;
-    }
-    stream->active = false;
-    stream->paused = true;
-    stream->remaining_restarts = 0;
-    stream->restart_from_beginning = true;
-    g_preloaded_effect_streams[entry_index] = stream;
     return true;
 }
 
@@ -469,23 +481,15 @@ int mci_stream_position(MciMilesStream& stream, DWORD item) {
 
 MCIERROR play_mci_stream(MciMilesStream& stream, bool repeat) {
     MCI_PLAY_PARMS play{};
-    DWORD flags = repeat ? MCI_DGV_PLAY_REPEAT : 0;
-    if (stream.restart_from_beginning) {
-        play.dwFrom = 0;
-        flags |= MCI_FROM;
-    }
-    MCIERROR error = mciSendCommandA(stream.device_id, MCI_PLAY, flags,
+    MCIERROR error = mciSendCommandA(stream.device_id, MCI_PLAY,
+        repeat ? MCI_DGV_PLAY_REPEAT : 0,
         reinterpret_cast<DWORD_PTR>(&play));
     // Some MPEGVideo drivers do not advertise MCI_DGV_PLAY_REPEAT.  The
     // periodic service path below also implements infinite repeat, so retry a
     // plain play and let it restart the device at EOF in that case.
     if (error != 0 && repeat) {
-        flags &= ~MCI_DGV_PLAY_REPEAT;
-        error = mciSendCommandA(stream.device_id, MCI_PLAY, flags,
+        error = mciSendCommandA(stream.device_id, MCI_PLAY, 0,
             reinterpret_cast<DWORD_PTR>(&play));
-    }
-    if (error == 0) {
-        stream.restart_from_beginning = false;
     }
     return error;
 }
@@ -629,9 +633,6 @@ bool close_mci_effect_stream_deferred(MilesStreamHandle) {
     return false;
 }
 
-bool recycle_mci_effect_stream(MilesStreamHandle, u32) {
-    return false;
-}
 #endif
 
 } // namespace
@@ -677,10 +678,12 @@ void ShutdownMilesSoundSubsystem() {
             g_miles_api.shutdown();
         }
     }
-    while (!g_mci_streams.empty()) {
-        close_mci_stream(g_mci_streams.back());
+    for (u32 slot = 0; slot < kMilesEffectStreamSlots; ++slot) {
+        close_effect_slot(slot, true);
     }
-    g_preloaded_effect_streams.clear();
+    while (MciMilesStream* stream = last_mci_stream()) {
+        close_mci_stream(stream);
+    }
     g_effect_playlist_state.streams.fill(nullptr);
     g_effect_playlist_state.active_entry_indices.fill(
         kInvalidMilesEffectEntry);
@@ -1179,6 +1182,7 @@ void ServeMilesSound() {
     if (g_miles_state.digital_driver != nullptr && load_miles_api()) {
         g_miles_api.serve();
     }
+    std::lock_guard<std::mutex> lock(g_mci_streams_mutex);
     for (MciMilesStream* stream : g_mci_streams) {
         if (stream == nullptr || !stream->active || stream->paused) {
             continue;
@@ -1734,54 +1738,176 @@ void ShutdownMilesEffectSoundSubsystem() {
 
 void ResetMilesEffectPlaylist() {
     CloseAllMilesEffectPlaylistStreams();
-    for (MilesStreamHandle stream : g_preloaded_effect_streams) {
-        if (stream != nullptr) {
-            CloseMilesStream(stream);
-        }
-    }
-    g_preloaded_effect_streams.clear();
     std::vector<MilesEffectPlaylistEntry>().swap(g_effect_playlist_state.entries);
 }
 
-void preload_mci_effect_playlist_streams() {
-#ifdef _WIN32
-    g_preloaded_effect_streams.assign(
-        g_effect_playlist_state.entries.size(), nullptr);
-    if (load_miles_api()) {
-        return;
-    }
+namespace {
 
-    for (std::size_t index = 0;
-         index < g_effect_playlist_state.entries.size(); ++index) {
-        const MilesEffectPlaylistEntry& entry =
-            g_effect_playlist_state.entries[index];
-        MilesStreamHandle stream = nullptr;
-        MilesComputedStreamContext context{};
-        InitializeMilesTrcArchiveStreamContext(context);
-        bool opened = false;
-        switch (entry.kind) {
-        case MilesEffectEntryKind::DirectFile:
-            opened = OpenMilesStream(entry.path.c_str(), &stream);
-            break;
-        case MilesEffectEntryKind::ArchiveRecord:
-            opened = OpenComputedMilesMp3Stream(context,
-                entry.path.c_str(), entry.record_index, &stream);
-            break;
-        case MilesEffectEntryKind::Jw204Record:
-            opened = OpenComputedMilesMp3Stream(context,
-                "JW2_04.TRC", entry.record_index, &stream);
-            break;
-        case MilesEffectEntryKind::Empty:
-        default:
-            break;
-        }
-        ReleaseMilesTrcArchiveStreamContext(context);
-        if (opened) {
-            g_preloaded_effect_streams[index] = stream;
-        }
+bool open_miles_effect_entry_stream(const MilesEffectPlaylistEntry& entry,
+    MilesComputedStreamContext& context, MilesStreamHandle* stream) {
+    switch (entry.kind) {
+    case MilesEffectEntryKind::DirectFile:
+        return OpenMilesStream(entry.path.c_str(), stream);
+    case MilesEffectEntryKind::ArchiveRecord:
+        return OpenComputedMilesMp3Stream(context, entry.path.c_str(),
+            entry.record_index, stream);
+    case MilesEffectEntryKind::Jw204Record:
+        return OpenComputedMilesMp3Stream(context, "JW2_04.TRC",
+            entry.record_index, stream);
+    case MilesEffectEntryKind::Empty:
+    default:
+        return false;
     }
+}
+
+bool should_use_async_mci_effect_backend() {
+#ifdef _WIN32
+    return !load_miles_api();
+#else
+    return false;
 #endif
 }
+
+bool start_async_mci_effect_stream(u32 slot, i32 entry_index,
+    const MilesEffectPlaylistEntry& entry) {
+#ifdef _WIN32
+    if (slot >= kMilesEffectStreamSlots) {
+        return false;
+    }
+    std::shared_ptr<AsyncMilesEffectStream> state;
+    try {
+        state = std::make_shared<AsyncMilesEffectStream>();
+        std::thread([state, entry]() {
+            MilesComputedStreamContext context{};
+            InitializeMilesTrcArchiveStreamContext(context);
+            MilesStreamHandle stream = nullptr;
+            const bool opened = open_miles_effect_entry_stream(
+                entry, context, &stream);
+            ReleaseMilesTrcArchiveStreamContext(context);
+            if (!opened || stream == nullptr) {
+                state->active.store(false);
+                return;
+            }
+
+            bool discard = false;
+            {
+                std::lock_guard<std::mutex> lock(state->mutex);
+                if (state->cancelled) {
+                    discard = true;
+                }
+                else {
+                    state->stream = stream;
+                    if (!state->paused) {
+                        StartMilesStreamWithLoopCount(stream, 1);
+                        state->started = true;
+                    }
+                }
+            }
+            if (discard) {
+                CloseMilesStream(stream);
+            }
+        }).detach();
+    }
+    catch (...) {
+        return false;
+    }
+
+    g_async_effect_streams[slot] = state;
+    g_effect_playlist_state.streams[slot] = state.get();
+    g_effect_playlist_state.active_entry_indices[slot] =
+        static_cast<u32>(entry_index);
+    return true;
+#else
+    (void)slot;
+    (void)entry_index;
+    (void)entry;
+    return false;
+#endif
+}
+
+bool close_async_effect_slot(u32 slot, bool nonblocking_backend) {
+    if (slot >= kMilesEffectStreamSlots ||
+        g_async_effect_streams[slot] == nullptr) {
+        return false;
+    }
+
+    const std::shared_ptr<AsyncMilesEffectStream> state =
+        std::move(g_async_effect_streams[slot]);
+    MilesStreamHandle stream = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        state->cancelled = true;
+        state->active.store(false);
+        stream = state->stream;
+        state->stream = nullptr;
+    }
+    if (stream != nullptr) {
+        if (!nonblocking_backend ||
+            !close_mci_effect_stream_deferred(stream)) {
+            PauseMilesStream(stream);
+            CloseMilesStream(stream);
+        }
+    }
+    return true;
+}
+
+int get_async_effect_slot_status(u32 slot) {
+    if (slot >= kMilesEffectStreamSlots) {
+        return 0;
+    }
+    const std::shared_ptr<AsyncMilesEffectStream>& state =
+        g_async_effect_streams[slot];
+    if (state == nullptr || !state->active.load()) {
+        return 0;
+    }
+
+    std::lock_guard<std::mutex> lock(state->mutex);
+    if (state->stream == nullptr || state->paused) {
+        return state->cancelled ? 0 : 1;
+    }
+    const int status = GetMilesStreamStatus(state->stream);
+    if (status == 0) {
+        state->active.store(false);
+    }
+    return status;
+}
+
+void pause_async_effect_slot(u32 slot) {
+    if (slot >= kMilesEffectStreamSlots ||
+        g_async_effect_streams[slot] == nullptr) {
+        return;
+    }
+    const std::shared_ptr<AsyncMilesEffectStream>& state =
+        g_async_effect_streams[slot];
+    std::lock_guard<std::mutex> lock(state->mutex);
+    state->paused = true;
+    if (state->stream != nullptr && state->started) {
+        PauseMilesStream(state->stream);
+    }
+}
+
+void resume_async_effect_slot(u32 slot) {
+    if (slot >= kMilesEffectStreamSlots ||
+        g_async_effect_streams[slot] == nullptr) {
+        return;
+    }
+    const std::shared_ptr<AsyncMilesEffectStream>& state =
+        g_async_effect_streams[slot];
+    std::lock_guard<std::mutex> lock(state->mutex);
+    state->paused = false;
+    if (state->stream == nullptr) {
+        return;
+    }
+    if (state->started) {
+        ResumeMilesStream(state->stream);
+    }
+    else {
+        StartMilesStreamWithLoopCount(state->stream, 1);
+        state->started = true;
+    }
+}
+
+} // namespace
 
 void AddDirectMilesEffectPath(const char* path) {
     add_effect_playlist_entry(MilesEffectEntryKind::DirectFile, path, 0);
@@ -1802,15 +1928,6 @@ bool RemoveMilesEffectPlaylistEntry(i32 entry_index) {
         return false;
     }
 
-    if (static_cast<std::size_t>(entry_index) <
-            g_preloaded_effect_streams.size()) {
-        MilesStreamHandle stream = g_preloaded_effect_streams[entry_index];
-        if (stream != nullptr) {
-            CloseMilesStream(stream);
-        }
-        g_preloaded_effect_streams.erase(
-            g_preloaded_effect_streams.begin() + entry_index);
-    }
     g_effect_playlist_state.entries.erase(
         g_effect_playlist_state.entries.begin() + entry_index);
     return true;
@@ -1853,11 +1970,6 @@ bool LoadMilesEffectPlaylistInfoFromTrc(const char* archive_name, u32 info_recor
         ResetMilesEffectPlaylist();
         return false;
     }
-    // The original 32-bit executable opens these small streams through Miles
-    // without stalling simulation.  The 64-bit MCI fallback has a synchronous
-    // MCI_OPEN path, so pay that cost while the scenario is already loading.
-    // A failed preload remains a safe lazy-open fallback in Play below.
-    preload_mci_effect_playlist_streams();
     return true;
 }
 
@@ -1934,36 +2046,14 @@ void PlayMilesEffectPlaylistEntry(i32 entry_index) {
     }
 
     const u32 slot = acquire_effect_stream_slot();
+    if (should_use_async_mci_effect_backend() &&
+        start_async_mci_effect_stream(slot, entry_index, entry)) {
+        return;
+    }
+
     MilesStreamHandle& stream = g_effect_playlist_state.streams[slot];
-    bool opened = false;
-    if (static_cast<std::size_t>(entry_index) <
-            g_preloaded_effect_streams.size() &&
-        g_preloaded_effect_streams[entry_index] != nullptr) {
-        stream = g_preloaded_effect_streams[entry_index];
-        g_preloaded_effect_streams[entry_index] = nullptr;
-        opened = true;
-    }
-    else {
-        switch (entry.kind) {
-        case MilesEffectEntryKind::DirectFile:
-            opened = OpenMilesStream(entry.path.c_str(), &stream);
-            break;
-        case MilesEffectEntryKind::ArchiveRecord:
-            opened = OpenComputedMilesMp3Stream(
-                g_effect_playlist_state.contexts[slot], entry.path.c_str(),
-                entry.record_index, &stream);
-            break;
-        case MilesEffectEntryKind::Jw204Record:
-            opened = OpenComputedMilesMp3Stream(
-                g_effect_playlist_state.contexts[slot], "JW2_04.TRC",
-                entry.record_index, &stream);
-            break;
-        case MilesEffectEntryKind::Empty:
-        default:
-            opened = false;
-            break;
-        }
-    }
+    const bool opened = open_miles_effect_entry_stream(
+        entry, g_effect_playlist_state.contexts[slot], &stream);
 
     if (!opened) {
         return;
@@ -1994,7 +2084,12 @@ void StopMilesEffectPlaylistEntry(i32 entry_index) {
     for (u32 slot = 0; slot < kMilesEffectStreamSlots; ++slot) {
         if (g_effect_playlist_state.active_entry_indices[slot] == entry_index &&
             g_effect_playlist_state.streams[slot] != nullptr) {
-            StopMilesStream(g_effect_playlist_state.streams[slot]);
+            if (g_async_effect_streams[slot] != nullptr) {
+                pause_async_effect_slot(slot);
+            }
+            else {
+                StopMilesStream(g_effect_playlist_state.streams[slot]);
+            }
         }
     }
 }
@@ -2007,7 +2102,12 @@ void ResumeMilesEffectPlaylistEntry(i32 entry_index) {
     for (u32 slot = 0; slot < kMilesEffectStreamSlots; ++slot) {
         if (g_effect_playlist_state.active_entry_indices[slot] == entry_index &&
             g_effect_playlist_state.streams[slot] != nullptr) {
-            ResumeMilesStream(g_effect_playlist_state.streams[slot]);
+            if (g_async_effect_streams[slot] != nullptr) {
+                resume_async_effect_slot(slot);
+            }
+            else {
+                ResumeMilesStream(g_effect_playlist_state.streams[slot]);
+            }
         }
     }
 }
@@ -2021,7 +2121,9 @@ int GetMilesEffectPlaylistEntryStatus(i32 entry_index) {
     for (u32 slot = 0; slot < kMilesEffectStreamSlots; ++slot) {
         if (g_effect_playlist_state.active_entry_indices[slot] == entry_index &&
             g_effect_playlist_state.streams[slot] != nullptr) {
-            status |= GetMilesStreamStatus(g_effect_playlist_state.streams[slot]) & 0xff;
+            status |= (g_async_effect_streams[slot] != nullptr ?
+                get_async_effect_slot_status(slot) :
+                GetMilesStreamStatus(g_effect_playlist_state.streams[slot])) & 0xff;
         }
     }
     return status;
@@ -2031,7 +2133,10 @@ void CloseAllMilesEffectPlaylistStreams() {
     for (u32 slot = 0; slot < kMilesEffectStreamSlots; ++slot) {
         if (g_effect_playlist_state.active_entry_indices[slot] != kInvalidMilesEffectEntry &&
             g_effect_playlist_state.streams[slot] != nullptr) {
-            close_effect_slot(slot);
+            // Session replacement is itself part of the scenario-loading
+            // path.  Do not reintroduce the MCI_WAIT hitch there while
+            // releasing the previous scenario's dialog streams.
+            close_effect_slot(slot, true);
         }
     }
 }

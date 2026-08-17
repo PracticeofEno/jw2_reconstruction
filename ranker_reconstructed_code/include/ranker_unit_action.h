@@ -244,6 +244,27 @@ struct UnitEffectRuntime {
     bool initial_impact_applied = false;
 };
 
+enum class UnitEffectRenderPhase : u32 {
+    active = 0,
+    startup = 1,
+    impact = 2,
+};
+
+constexpr UnitEffectRenderPhase ResolveUnitEffectRenderPhase(
+    const UnitEffectRuntime& effect) {
+    const bool startup = (effect.flags & kUnitEffectFlagStartup) != 0;
+    const bool impact = (effect.flags & kUnitEffectFlagImpact) != 0;
+    if (startup && effect.effect_id >= 0x3du && effect.effect_id != 0x63u) {
+        return UnitEffectRenderPhase::startup;
+    }
+    if (impact) {
+        return UnitEffectRenderPhase::impact;
+    }
+    return startup
+        ? UnitEffectRenderPhase::startup
+        : UnitEffectRenderPhase::active;
+}
+
 struct UnitEffectEvent {
     UnitEffectEventKind kind = UnitEffectEventKind::started;
     UnitEffectSoundSpatialKind sound_spatial =
