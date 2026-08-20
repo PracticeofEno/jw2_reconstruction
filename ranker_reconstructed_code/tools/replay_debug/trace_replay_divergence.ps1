@@ -11,7 +11,9 @@ param(
     [int]$TimeoutSeconds = 600,
     [string]$AuditScript = 'compare_process_state.py',
     [int]$TraceIntervalMs = 100,
-    [string]$TemporaryReplayName = 'DebugReplay_Audit.ply'
+    [string]$TemporaryReplayName = 'DebugReplay_Audit.ply',
+    [switch]$StabilizeViewport,
+    [switch]$AlignPresentationRng
 )
 
 $ErrorActionPreference = 'Stop'
@@ -78,9 +80,9 @@ try {
         ($pair.rebuild_base -replace '^0x', ''), 16)
     $rebuildFrameAddress = $rebuildBase + $loopRva + $simulationFrameOffset
 
-    & python (Join-Path $toolDirectory 'replay_pair_control.py') pace `
+    & python (Join-Path $toolDirectory 'replay_pair_control.py') fast `
         $original.Id $rebuild.Id ('0x{0:X}' -f $rebuildBase) `
-        ('0x{0:X}' -f $loopRva) 1 0 $layoutPath | Out-Null
+        ('0x{0:X}' -f $loopRva) $layoutPath | Out-Null
 
     $fastTarget = [Math]::Max(1, $StartFrame - 20)
     $drivers = @(
@@ -101,6 +103,14 @@ try {
             -WindowStyle Hidden -PassThru
     )
     Wait-Process -Id $drivers.Id
+    $fastFrames = (& python `
+        (Join-Path $toolDirectory 'replay_pair_control.py') frames `
+        $original.Id $rebuild.Id ('0x{0:X}' -f $rebuildBase) `
+        ('0x{0:X}' -f $loopRva) $layoutPath | ConvertFrom-Json)
+    if ([int]$fastFrames.original -lt $fastTarget -or
+        [int]$fastFrames.rebuild -lt $fastTarget) {
+        throw "Fast-forward target $fastTarget was not reached: original=$($fastFrames.original), rebuild=$($fastFrames.rebuild)"
+    }
 
     & python (Join-Path $toolDirectory 'replay_pair_control.py') pace `
         $original.Id $rebuild.Id ('0x{0:X}' -f $rebuildBase) `
@@ -123,6 +133,37 @@ try {
             -WindowStyle Hidden -PassThru
     )
     Wait-Process -Id $drivers.Id
+    $startFrames = (& python `
+        (Join-Path $toolDirectory 'replay_pair_control.py') frames `
+        $original.Id $rebuild.Id ('0x{0:X}' -f $rebuildBase) `
+        ('0x{0:X}' -f $loopRva) $layoutPath | ConvertFrom-Json)
+    if ([int]$startFrames.original -lt $StartFrame -or
+        [int]$startFrames.rebuild -lt $StartFrame) {
+        throw "Trace start frame $StartFrame was not reached: original=$($startFrames.original), rebuild=$($startFrames.rebuild)"
+    }
+
+    if ($StabilizeViewport) {
+        $viewportState = & python `
+            (Join-Path $toolDirectory 'replay_pair_control.py') stabilize `
+            $original.Id $rebuild.Id ('0x{0:X}' -f $rebuildBase) `
+            ('0x{0:X}' -f $loopRva) $layoutPath
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Failed to stabilize the replay viewport.'
+        }
+        $viewportState | Set-Content -LiteralPath `
+            (Join-Path $out 'viewport-stabilization.json') -Encoding utf8
+    }
+    if ($AlignPresentationRng) {
+        $presentationRngState = & python `
+            (Join-Path $toolDirectory 'replay_pair_control.py') presentation-rng `
+            $original.Id $rebuild.Id ('0x{0:X}' -f $rebuildBase) `
+            ('0x{0:X}' -f $loopRva) $layoutPath
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Failed to align the presentation RNG at trace start.'
+        }
+        $presentationRngState | Set-Content -LiteralPath `
+            (Join-Path $out 'presentation-rng.json') -Encoding utf8
+    }
 
     $resultPath = Join-Path $out 'result.json'
     $journalPath = Join-Path $out 'journal.jsonl'

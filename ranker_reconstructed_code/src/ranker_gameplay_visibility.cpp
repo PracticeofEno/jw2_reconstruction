@@ -167,7 +167,16 @@ u32 current_visibility_mask_for_unit(GameplayVisibilityContext& context,
     const u32 owner_bits = owner_visibility_bits_for_unit(context, unit);
     u32 mask = include_owner_current_bits && unit.current_visibility_enabled ?
         owner_bits << kGameplayVisibilityCurrentOwnerShift : 0;
-    if ((owner_bits & local_player_bit(context)) != 0) {
+    // FUN_004d5ccd keeps these as two distinct operations. EBX contains only
+    // map-owner bits 0..8 and is shifted into the transient owner layer, but
+    // the local-visibility test reads the full DAT_00725384 relation row.
+    // Replay uses local owner 9, so reducing the relation row to the 0x1ff
+    // map mask before this test silently drops its 0x200 observer bit.
+    u32 relation_mask = unit.owner_visibility_mask;
+    if (context.players != nullptr && unit.owner_id < kPlayerSlotCount) {
+        relation_mask = context.players->owner_visibility_masks[unit.owner_id];
+    }
+    if ((relation_mask & local_player_bit(context)) != 0) {
         mask |= kGameplayVisibilityLocalMask;
     }
     return mask;
@@ -175,12 +184,24 @@ u32 current_visibility_mask_for_unit(GameplayVisibilityContext& context,
 
 u32 owner_layer_mask_for_unit(GameplayVisibilityContext& context,
     const GameplayVisibilityUnit& unit) {
-    u32 owner_bits = owner_visibility_bits_from_mask(unit.owner_explore_mask);
-    if (owner_bits == 0) {
-        owner_bits = owner_visibility_bits_for_unit(context, unit);
+    // FUN_004d6db6 loads the complete DAT_00725384 relation row and returns
+    // (row << 16) | row.  Unlike the current-visibility owner field, this
+    // explored-owner layer retains replay observer bit 9 in both halves.
+    // Limiting it to kGameplayVisibilityOwnerLowMask (owners 0..8) made the
+    // typed owner grid differ from DAT_007d8d40 for replay owner 9.
+    u32 relation_bits = unit.owner_explore_mask & 0xffffu;
+    if (context.players != nullptr && unit.owner_id < kPlayerSlotCount) {
+        relation_bits =
+            context.players->owner_visibility_masks[unit.owner_id] & 0xffffu;
     }
-    owner_bits &= kGameplayVisibilityOwnerLowMask;
-    return (owner_bits << kGameplayVisibilityOwnerLayerShift) | owner_bits;
+    if (relation_bits == 0) {
+        relation_bits = unit.owner_visibility_mask & 0xffffu;
+    }
+    if (relation_bits == 0) {
+        relation_bits = owner_visibility_bits_for_unit(context, unit);
+    }
+    return (relation_bits << kGameplayVisibilityOwnerLayerShift) |
+        relation_bits;
 }
 
 bool mark_visibility_tile_at_radius(GameplayVisibilityContext& context,

@@ -84,13 +84,45 @@ $result = [pscustomobject]@{
     overlay_rva = ('0x{0:X}' -f (Symbol-Rva '::g_ui_overlay_state$'))
     loop_rva = ('0x{0:X}' -f (Symbol-Rva '::g_gameplay_loop_state$'))
     cursor_rva = ('0x{0:X}' -f (Symbol-Rva '::g_cursor_state$'))
+    input_state_rva = ('0x{0:X}' -f (Symbol-Rva '::g_input_state$'))
+    programmatic_pointer_motion_pending_rva = ('0x{0:X}' -f
+        (Symbol-Rva '::g_programmatic_pointer_motion_pending$'))
+    programmatic_pointer_motion_target_reached_rva = ('0x{0:X}' -f
+        (Symbol-Rva '::g_programmatic_pointer_motion_target_reached$'))
+    programmatic_pointer_motion_x_rva = ('0x{0:X}' -f
+        (Symbol-Rva '::g_programmatic_pointer_motion_x$'))
+    programmatic_pointer_motion_y_rva = ('0x{0:X}' -f
+        (Symbol-Rva '::g_programmatic_pointer_motion_y$'))
     gameplay_input_rva = ('0x{0:X}' -f
         (Symbol-Rva '::g_gameplay_input_action_state$'))
     tooltip_rva = ('0x{0:X}' -f (Symbol-Rva '::g_gameplay_tooltip_state$'))
     direct_sound_state_rva = ('0x{0:X}' -f
         (Symbol-Rva '::g_direct_sound_state$'))
     palette_rva = ('0x{0:X}' -f (Symbol-Rva '::g_palette_cache_state$'))
+    sprite_render_state_rva = ('0x{0:X}' -f
+        (Symbol-Rva '::g_sprite_render_state$'))
+    render_gameplay_frame_composite_rva = ('0x{0:X}' -f
+        (Symbol-Rva 'ranker::RenderGameplayFrameComposite\(ranker::GameplayFrameRenderContext&\)$'))
+    sync_gameplay_visibility_rva = ('0x{0:X}' -f
+        (Symbol-Rva '::sync_default_gameplay_visibility_and_render_inputs\(unsigned int, bool\)$'))
+    apply_linked_unit_visibility_rva = ('0x{0:X}' -f
+        (Symbol-Rva 'ranker::ApplyLinkedUnitVisibilityFromSource\(ranker::GameplayVisibilityContext&, ranker::GameplayVisibilityUnit const&, ranker::GameplayVisibilityUnit const&\)$'))
+    draw_resource_sprite_mode_rva = ('0x{0:X}' -f
+        (Symbol-Rva 'ranker::DrawResourceSpriteMode\(unsigned int, int, int, unsigned int\)$'))
+    draw_resource_sprite_token1_shadow_rva = ('0x{0:X}' -f
+        (Symbol-Rva 'ranker::DrawResourceSpriteToken1Shadow\(unsigned int, int, int\)$'))
+    draw_resource_sprite_unit_ramp_token1_shadow_rva = ('0x{0:X}' -f
+        (Symbol-Rva 'ranker::DrawResourceSpriteUnitRampToken1Shadow\(unsigned int, int, int\)$'))
+    draw_sprite_render_target_line16_rva = ('0x{0:X}' -f
+        (Symbol-Rva 'ranker::DrawSpriteRenderTargetLine16\(ranker::SpriteRenderTarget const&, int, int, int, int, unsigned short\)$'))
+    world_render_checkpoint_rva = ('0x{0:X}' -f
+        (Symbol-Rva '::default_gameplay_frame_draw_selection_overlay\(ranker::GameplayFrameRenderContext&\)$'))
     frame_random_offset = ('0x{0:X}' -f [int64]$layout.frame_random)
+    gameplay_sound_offset = ('0x{0:X}' -f [int64]$layout.gameplay_sound)
+    gameplay_sound_layout = [ordered]@{
+        variant_seed = ('0x{0:X}' -f
+            [int64]$layout.gameplay_sound_variant_seed)
+    }
     visibility_offset = ('0x{0:X}' -f [int64]$layout.visibility)
     movement_offset = ('0x{0:X}' -f [int64]$layout.movement)
     lifecycle_offset = ('0x{0:X}' -f [int64]$layout.lifecycle)
@@ -110,6 +142,7 @@ $result = [pscustomobject]@{
             [int64]$layout.runtime_definition_record_bytes)
     }
     unit_render_queue_offset = ('0x{0:X}' -f [int64]$layout.unit_render_queue)
+    render_command_queue_offset = ('0x{0:X}' -f [int64]$layout.render_command_queue)
     map_effect_context_offset = ('0x{0:X}' -f [int64]$layout.map_effect_context)
     player_slots_offset = ('0x{0:X}' -f [int64]$layout.player_slots)
     owner_ai_offset = ('0x{0:X}' -f [int64]$layout.owner_ai)
@@ -117,6 +150,8 @@ $result = [pscustomobject]@{
         [int64]$layout.owner_transport_routes)
     owner_strategic_targets_offset = ('0x{0:X}' -f
         [int64]$layout.owner_strategic_targets)
+    owner_ai_reserved_primary_cost_offset = ('0x{0:X}' -f
+        [int64]$layout.owner_ai_reserved_primary_cost)
     unit_effects_offset = ('0x{0:X}' -f [int64]$layout.unit_effects)
     unit_commands_offset = ('0x{0:X}' -f [int64]$layout.unit_commands)
     owner_counters_offset = ('0x{0:X}' -f [int64]$layout.owner_counters)
@@ -215,6 +250,8 @@ $result = [pscustomobject]@{
         y = ('0x{0:X}' -f [int64]$layout.unit_effect_y)
         previous_x = ('0x{0:X}' -f [int64]$layout.unit_effect_previous_x)
         previous_y = ('0x{0:X}' -f [int64]$layout.unit_effect_previous_y)
+        accumulator_x = ('0x{0:X}' -f [int64]$layout.unit_effect_accumulator_x)
+        accumulator_y = ('0x{0:X}' -f [int64]$layout.unit_effect_accumulator_y)
         direction = ('0x{0:X}' -f [int64]$layout.unit_effect_direction)
     }
     production_runtime_layout = [ordered]@{
@@ -246,6 +283,8 @@ $result = [pscustomobject]@{
         current = ('0x{0:X}' -f [int64]$layout.visibility_current)
         previous = ('0x{0:X}' -f [int64]$layout.visibility_previous)
         owner = ('0x{0:X}' -f [int64]$layout.visibility_owner)
+        terrain_class_flags = ('0x{0:X}' -f
+            [int64]$layout.visibility_terrain_class_flags)
         size = ('0x{0:X}' -f [int64]$layout.visibility_size)
     }
     tooltip_layout = [ordered]@{
@@ -293,6 +332,8 @@ $result = [pscustomobject]@{
         selected_unit_ids = ('0x{0:X}' -f [int64]$layout.overlay_selected_unit_ids)
         screen_width = ('0x{0:X}' -f [int64]$layout.overlay_screen_width)
         screen_height = ('0x{0:X}' -f [int64]$layout.overlay_screen_height)
+        world_viewport_height = ('0x{0:X}' -f
+            [int64]$layout.overlay_world_viewport_height)
         interface_theme_index = ('0x{0:X}' -f [int64]$layout.overlay_interface_theme_index)
         minimap = ('0x{0:X}' -f [int64]$layout.overlay_minimap)
         local_player_slot = ('0x{0:X}' -f [int64]$layout.overlay_local_player_slot)
@@ -300,6 +341,13 @@ $result = [pscustomobject]@{
         camera_y = ('0x{0:X}' -f [int64]$layout.overlay_camera_y)
         camera_max_x = ('0x{0:X}' -f [int64]$layout.overlay_camera_max_x)
         camera_max_y = ('0x{0:X}' -f [int64]$layout.overlay_camera_max_y)
+        camera_scroll_dirty = ('0x{0:X}' -f [int64]$layout.overlay_camera_scroll_dirty)
+        camera_edge_pointer_valid = ('0x{0:X}' -f [int64]$layout.overlay_camera_edge_pointer_valid)
+        camera_scroll_ramp = ('0x{0:X}' -f [int64]$layout.overlay_camera_scroll_ramp)
+        camera_scroll_tick_bucket = ('0x{0:X}' -f [int64]$layout.overlay_camera_scroll_tick_bucket)
+        current_tick_ms = ('0x{0:X}' -f [int64]$layout.overlay_current_tick_ms)
+        replay_timing_enabled = ('0x{0:X}' -f [int64]$layout.overlay_replay_timing_enabled)
+        camera_edge_cursor_index = ('0x{0:X}' -f [int64]$layout.overlay_camera_edge_cursor_index)
         placement_mode = ('0x{0:X}' -f [int64]$layout.overlay_placement_mode)
         placement_definition = ('0x{0:X}' -f [int64]$layout.overlay_placement_definition)
         placement_pointer_x = ('0x{0:X}' -f [int64]$layout.overlay_placement_pointer_x)
@@ -416,6 +464,9 @@ $result = [pscustomobject]@{
         id = ('0x{0:X}' -f [int64]$layout.unit_id)
         runtime_slot = ('0x{0:X}' -f [int64]$layout.unit_runtime_slot)
         type = ('0x{0:X}' -f [int64]$layout.unit_type)
+        string_slot = ('0x{0:X}' -f [int64]$layout.unit_string_slot)
+        scenario_string_slot = ('0x{0:X}' -f
+            [int64]$layout.unit_scenario_string_slot)
         owner = ('0x{0:X}' -f [int64]$layout.unit_owner)
         type_flags = ('0x{0:X}' -f [int64]$layout.unit_type_flags)
         command_state = ('0x{0:X}' -f [int64]$layout.unit_command_state)
@@ -480,6 +531,41 @@ $result = [pscustomobject]@{
         progress = ('0x{0:X}' -f [int64]$layout.unit_render_item_progress)
         progress_limit = ('0x{0:X}' -f [int64]$layout.unit_render_item_progress_limit)
         progress_active = ('0x{0:X}' -f [int64]$layout.unit_render_item_progress_active)
+    }
+    input_layout = [ordered]@{
+        mouse_x = ('0x{0:X}' -f [int64]$layout.input_mouse_x)
+        mouse_y = ('0x{0:X}' -f [int64]$layout.input_mouse_y)
+        pointer_motion_seen = ('0x{0:X}' -f
+            [int64]$layout.input_pointer_motion_seen)
+    }
+    unit_render_queue_entry_layout = [ordered]@{
+        vector = ('0x{0:X}' -f [int64]$layout.unit_render_queue_entries)
+        size = ('0x{0:X}' -f [int64]$layout.unit_render_queue_entry_size)
+        type = ('0x{0:X}' -f [int64]$layout.unit_render_queue_entry_type)
+        render_class = ('0x{0:X}' -f [int64]$layout.unit_render_queue_entry_class)
+        layer = ('0x{0:X}' -f [int64]$layout.unit_render_queue_entry_layer)
+        sort_key = ('0x{0:X}' -f [int64]$layout.unit_render_queue_entry_sort_key)
+        runtime_slot = ('0x{0:X}' -f [int64]$layout.unit_render_queue_entry_runtime_slot)
+    }
+    render_command_queue_layout = [ordered]@{
+        sorted = ('0x{0:X}' -f [int64]$layout.render_command_queue_sorted)
+        commands = ('0x{0:X}' -f [int64]$layout.render_command_queue_commands)
+        sorted_indices = ('0x{0:X}' -f [int64]$layout.render_command_queue_sorted_indices)
+        command_size = ('0x{0:X}' -f [int64]$layout.render_command_size)
+        command_class = ('0x{0:X}' -f [int64]$layout.render_command_class)
+        command_payload = ('0x{0:X}' -f [int64]$layout.render_command_payload)
+        command_sort_key = ('0x{0:X}' -f [int64]$layout.render_command_sort_key)
+        command_sprite_entry = ('0x{0:X}' -f [int64]$layout.render_command_sprite_entry)
+        command_sprite_draw_mode = ('0x{0:X}' -f [int64]$layout.render_command_sprite_draw_mode)
+        command_screen_y = ('0x{0:X}' -f [int64]$layout.render_command_screen_y)
+        command_screen_x = ('0x{0:X}' -f [int64]$layout.render_command_screen_x)
+        command_packed_flags = ('0x{0:X}' -f [int64]$layout.render_command_packed_flags)
+        command_sprite_draw_mode_valid = ('0x{0:X}' -f [int64]$layout.render_command_sprite_draw_mode_valid)
+        command_unit_context = ('0x{0:X}' -f [int64]$layout.render_command_unit_context)
+        command_unit_item = ('0x{0:X}' -f [int64]$layout.render_command_unit_item)
+        command_effect_context = ('0x{0:X}' -f [int64]$layout.render_command_effect_context)
+        command_effect = ('0x{0:X}' -f [int64]$layout.render_command_effect)
+        command_draw_variant = ('0x{0:X}' -f [int64]$layout.render_command_draw_variant)
     }
     map_effect_layout = [ordered]@{
         context_size = ('0x{0:X}' -f [int64]$layout.map_effect_context_size)

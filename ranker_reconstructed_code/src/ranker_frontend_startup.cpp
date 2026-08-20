@@ -160,9 +160,44 @@ bool load_misc_startup_catalog(
 
 void advance_loading_progress(FrontendStartupState& startup_state,
     FrontendBootstrapState& bootstrap_state) {
+    if (!bootstrap_state.loading_bar_load_attempted) {
+        bootstrap_state.loading_bar_load_attempted = true;
+        // FUN_004159a0 lazily loads JW2_01 records 12/13 the first time the
+        // startup progress bar advances.  Because this happens immediately
+        // after record 5 becomes palette slot 0, the bar remains resource
+        // entry 0 bound to palette slot 1 for the rest of the process.  Some
+        // original unit-animation handlers intentionally resolve an empty
+        // image group through that global entry-zero alias.
+        PaletteResourceSequenceResult loading_bar{};
+        if (LoadPaletteBoundResourceSequence(
+                "JW2_01.TRC", 12, 2, &loading_bar) &&
+            loading_bar.palette.slot != kInvalidPaletteCacheSlot &&
+            loading_bar.resource_entries.size() == 1) {
+            bootstrap_state.loading_bar_palette_slot = loading_bar.palette.slot;
+            bootstrap_state.loading_bar_resource_entry =
+                loading_bar.resource_entries.front();
+            bootstrap_state.loading_bar_resources_loaded = true;
+            append_frontend_bootstrap_log(
+                "bootstrap loading bar ok palette=%lu resource=%lu",
+                static_cast<unsigned long>(
+                    bootstrap_state.loading_bar_palette_slot),
+                static_cast<unsigned long>(
+                    bootstrap_state.loading_bar_resource_entry));
+        } else {
+            // The original disables progress drawing on a failed lazy load
+            // but continues the remaining bootstrap sequence.
+            startup_state.loading_progress_enabled = false;
+            append_frontend_bootstrap_log("bootstrap loading bar unavailable");
+            ServeMilesSound();
+            return;
+        }
+    }
+    if (!bootstrap_state.loading_bar_resources_loaded) {
+        ServeMilesSound();
+        return;
+    }
     UpdateFrontendLoadingProgress(startup_state, startup_state.loading_step + 1,
         kFrontendStartupLoadingStepCount);
-    (void)bootstrap_state;
     ServeMilesSound();
 }
 

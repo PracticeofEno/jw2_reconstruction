@@ -265,6 +265,17 @@ constexpr UnitEffectRenderPhase ResolveUnitEffectRenderPhase(
         : UnitEffectRenderPhase::active;
 }
 
+constexpr bool ShouldUnitEffect62RawImpactBypassVisibility(u32 flags) {
+    return (flags & kUnitEffectFlagImpact) != 0;
+}
+
+constexpr u32 ResolveUnitEffectSpriteAnimationFrame(
+    const UnitEffectRuntime& effect) {
+    // Both generic sprite selection (FUN_004ed940) and the special high-ID
+    // projectile renderer (FUN_004f1a60) index images with raw effect +0x0c.
+    return effect.tick;
+}
+
 struct UnitEffectEvent {
     UnitEffectEventKind kind = UnitEffectEventKind::started;
     UnitEffectSoundSpatialKind sound_spatial =
@@ -432,6 +443,8 @@ bool DispatchUnitEffectProjectileTrailRenderer(UnitEffectRuntimeState& state,
     i32 captured_screen_x, i32 captured_screen_y);
 bool ResolveUnitEffectGenericSpriteRender(const UnitEffectRuntimeState& state,
     const UnitEffectRuntime& effect, u32& sprite_entry, u32& draw_mode);
+u32 ResolveUnitEffectRenderSortLayer(const UnitEffectRuntimeState& state,
+    const UnitEffectRuntime& effect);
 void PrepareUnitEffectProjectileTrailRender(UnitEffectRuntimeState& state,
     UnitEffectRuntime& effect, i32 screen_x, i32 screen_y, u32 render_kind);
 void DrawUnitEffectWideProjectileTrail(UnitEffectRuntimeState& state,

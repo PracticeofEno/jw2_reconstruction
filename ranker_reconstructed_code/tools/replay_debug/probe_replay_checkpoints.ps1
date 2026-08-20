@@ -100,9 +100,9 @@ try {
         if ($targetFrame -le $lastFrame) {
             continue
         }
-        & python (Join-Path $toolDirectory 'replay_pair_control.py') pace `
+        & python (Join-Path $toolDirectory 'replay_pair_control.py') fast `
             $original.Id $rebuild.Id ('0x{0:X}' -f $rebuildBase) `
-            ('0x{0:X}' -f $loopRva) 1 0 $layoutPath | Out-Null
+            ('0x{0:X}' -f $loopRva) $layoutPath | Out-Null
 
         $fastTarget = [Math]::Max($lastFrame + 1, $targetFrame - 20)
         $drivers = @(

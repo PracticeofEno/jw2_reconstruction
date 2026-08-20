@@ -3176,8 +3176,12 @@ void ConfigureGameplayUiOverlayLayout(UiOverlayState& state) {
     state.world_viewport_height = static_cast<u32>(
         ResolveUiOverlayInterfaceTop(state));
     state.minimap_camera_anchor_x = static_cast<i32>(state.screen_width / 2);
+    // FUN_004e2bb7 copies record +0 to the lower-interface top and record +4
+    // to DAT_0086358c. FUN_004e29d1 uses half of the latter as the camera Y
+    // anchor. At 800x600 every theme uses 329 for that second value, while
+    // the interface top ranges from 421 to 452.
     state.minimap_camera_anchor_y =
-        static_cast<i32>(state.world_viewport_height >> 1);
+        ResolveGameplayCameraAnchorHeight(state.screen_width) >> 1;
 
     // FUN_004e2bb7 selects these records by display-layout bucket first and
     // interface theme second.  Each source record contains an outer anchor,

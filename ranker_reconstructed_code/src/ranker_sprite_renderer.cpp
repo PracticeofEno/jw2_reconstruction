@@ -46,9 +46,9 @@ struct SpriteDrawOptions {
     u32 blend_mode = 0;
     u32 source_weight_31 = 0;
     u16 or_mask = 0;
-    u16 red_delta = 0;
-    u16 green_delta = 0;
-    u16 blue_delta = 0;
+    u32 red_delta = 0;
+    u32 green_delta = 0;
+    u32 blue_delta = 0;
     u8 palette_index_offset = 0;
     u32 row_pixel_limit = 0xffffffffu;
     bool apply_unit_palette_ramp = false;
@@ -214,17 +214,23 @@ u16 grayscale_sprite_pixel(u16 src) {
     return static_cast<u16>((gray << 11) | (gray << 6) | gray);
 }
 
-u16 add_sprite_channel_tint(u16 src, u16 red_delta, u16 green_delta, u16 blue_delta) {
+u16 add_sprite_channel_tint(u16 src, u32 red_delta, u32 green_delta, u32 blue_delta) {
     const u16 red_mask = SurfaceRedMask();
     const u16 green_mask = surface_green_mask();
     constexpr u16 blue_mask = 0x001f;
 
+    // FUN_004d485e/FUN_004d4a24 add the raw DWORD ramp values to each
+    // already-masked palette channel and clamp the sum to that channel's
+    // mask.  The ramp deliberately reaches one step beyond the representable
+    // range at index 15 (for example blue delta 32 and RGB565 red delta
+    // 0x10000).  Masking or narrowing the delta before the addition wraps
+    // those values to zero instead of producing the original saturated color.
     const u16 red = static_cast<u16>(
-        std::min<u32>(red_mask, (src & red_mask) + (red_delta & red_mask)));
+        std::min<u32>(red_mask, (src & red_mask) + red_delta));
     const u16 green = static_cast<u16>(
-        std::min<u32>(green_mask, (src & green_mask) + (green_delta & green_mask)));
+        std::min<u32>(green_mask, (src & green_mask) + green_delta));
     const u16 blue = static_cast<u16>(
-        std::min<u32>(blue_mask, (src & blue_mask) + (blue_delta & blue_mask)));
+        std::min<u32>(blue_mask, (src & blue_mask) + blue_delta));
     return static_cast<u16>(red | green | blue);
 }
 
@@ -989,7 +995,7 @@ bool DrawResourceSpriteFlippedLowBlueMask(u32 entry_index, i32 x, i32 y) {
 }
 
 bool DrawResourceSpriteChannelAdditiveTint(
-    u32 entry_index, i32 x, i32 y, u16 red_delta, u16 green_delta, u16 blue_delta) {
+    u32 entry_index, i32 x, i32 y, u32 red_delta, u32 green_delta, u32 blue_delta) {
     SpriteDrawOptions options{};
     options.offset_pair = OffsetPair::Normal;
     options.pixel_op = SpritePixelOp::ChannelAddToken1Shadow;
@@ -1001,7 +1007,7 @@ bool DrawResourceSpriteChannelAdditiveTint(
 }
 
 bool DrawResourceSpriteFlippedChannelAdditiveTint(
-    u32 entry_index, i32 x, i32 y, u16 red_delta, u16 green_delta, u16 blue_delta) {
+    u32 entry_index, i32 x, i32 y, u32 red_delta, u32 green_delta, u32 blue_delta) {
     SpriteDrawOptions options{};
     options.offset_pair = OffsetPair::Flipped;
     options.pixel_op = SpritePixelOp::ChannelAddToken1Shadow;

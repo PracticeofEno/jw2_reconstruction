@@ -10,6 +10,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from parity_trace_support import verify_missing_exact_frames
 from parity_result_store import atomic_json, record_key
 
 
@@ -52,6 +53,7 @@ def main() -> int:
             "-OutputDirectory", str(artifact),
             "-TimeoutSeconds", str(args.timeout_seconds),
             "-TraceIntervalMs", str(args.trace_interval_ms),
+            "-StabilizeViewport", "-AlignPresentationRng",
         ]
         print(f"[{number:02d}/{len(batches):02d}] {label} "
               f"orders={len(batch['cases'])}", flush=True)
@@ -65,10 +67,17 @@ def main() -> int:
             trace = {"pass": False, "reason": (
                 completed.stderr.strip() or completed.stdout.strip() or
                 f"trace command exited {completed.returncode}")}
+        gap_fallback = verify_missing_exact_frames(
+            root, batch["replay"], artifact, trace,
+            args.start_frame, args.end_frame, args.timeout_seconds,
+            stabilize_viewport=True, align_presentation_rng=True)
+        gaps_verified = bool(gap_fallback and gap_fallback.get("pass"))
         continuous_exact = bool(
             trace.get("pass") and trace.get("first_exact_frame") is not None and
             trace.get("last_exact_frame") is not None and
-            not trace.get("pair_gaps"))
+            ((trace.get("first_exact_frame") <= args.start_frame and
+              trace.get("last_exact_frame") >= args.end_frame - 1 and
+              not trace.get("pair_gaps")) or gaps_verified))
         terminal = trace.get("terminal_exact_state") or {}
         production = terminal.get("production", {})
         variants = {tuple(row) for row in production.get("variants", [])}
@@ -102,6 +111,7 @@ def main() -> int:
                 "first_exact_frame": trace.get("first_exact_frame"),
                 "last_exact_frame": trace.get("last_exact_frame"),
                 "pair_gaps": trace.get("pair_gaps", []),
+                "gap_fallback": gap_fallback,
                 "trace_reason": trace.get("reason"),
                 "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
             }

@@ -192,6 +192,26 @@ void ResetProductionOrderRuntimeState(ProductionOrderRuntimeState& state) {
     state = ProductionOrderRuntimeState{};
 }
 
+void ResetProductionOrderRuntimeStateForFreshSession(
+    ProductionOrderRuntimeState& state) {
+    // FUN_00426770 clears the 0x800 owner/order cells, the order-2b block,
+    // and only the first fourteen 0x1540-byte completion-effect tables.
+    // Slots 14..17 deliberately retain the values imported from the primary
+    // JW2 record.  A full aggregate reset here erased those four tail tables
+    // and changed ordinary/replay gameplay before the first simulation frame.
+    state.variant_counts = {};
+    state.lock_flags = {};
+    state.order_cell_opaque_bytes = {};
+    state.completed_type_counts = {};
+    for (u32 effect = 0; effect < 14; ++effect) {
+        state.completion_effect_totals[effect] = {};
+    }
+    state.owner_primary_resources = {};
+    state.owner_secondary_resources = {};
+    state.order_2b_bonus_totals = {};
+    state.order_2b_refresh_requests = 0;
+}
+
 bool SwapProductionOrderOwnerState(ProductionOrderRuntimeState& state, u32 first_owner,
     u32 second_owner) {
     if (!owner_index_valid(first_owner) || !owner_index_valid(second_owner)) {

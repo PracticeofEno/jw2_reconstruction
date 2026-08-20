@@ -65,6 +65,45 @@ const std::array<i32, 82> kGameplaySpecialOverlayBlendMaskOffsets{
     -1, -1, 47, 48, -1, -1, -1, -1, 22, 68, -1, -1, -1, -1,
     47, 48, 45, 46, 47, 48, 67, 68, 65, 66, 67, 68};
 
+u16 BlendGameplayTerrainPixels(const MinimapPixelFormat& format,
+    u16 primary, u16 secondary, u32 weight31) {
+    const u32 encoded_weight = weight31 & 0x1fu;
+    if (encoded_weight == 0x1fu) {
+        return primary;
+    }
+
+    const u32 primary_weight = encoded_weight + 1u;
+    const u32 secondary_weight = 0x20u - primary_weight;
+    const u32 red_blue_mask = format.red_mask | format.blue_mask;
+
+    const auto weighted_contribution = [&](u16 pixel, u32 weight) {
+        const u32 value = static_cast<u32>(pixel);
+        const u32 green =
+            ((((value & format.green_mask) >> 5) * weight) &
+                format.green_mask);
+        const u32 red_blue =
+            (((value & red_blue_mask) * weight) >> 5) & red_blue_mask;
+        return green | red_blue;
+    };
+
+    return static_cast<u16>(
+        weighted_contribution(primary, primary_weight) +
+        weighted_contribution(secondary, secondary_weight));
+}
+
+u32 ResolveGameplayTerrainBlendMaskSampleColumn(
+    u32 clipped_width, u32 clipped_column) {
+    if (clipped_column >= clipped_width) {
+        return clipped_column;
+    }
+
+    const u32 scalar_prefix = clipped_width & 3u;
+    if (clipped_column < scalar_prefix) {
+        return clipped_column;
+    }
+    return scalar_prefix + ((clipped_column - scalar_prefix) & ~3u);
+}
+
 void ConfigureGameplayMinimapTerrainLayout(
     MinimapTerrainRenderConfig& config) {
     config.terrain_palette_offsets = kGameplayTerrainTileOffsets;

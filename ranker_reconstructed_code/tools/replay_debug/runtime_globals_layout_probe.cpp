@@ -6,10 +6,14 @@
 int main() {
     using ranker::GameplayTooltipDrawCommand;
     using ranker::GameplayTooltipState;
+    using ranker::InputState;
     using ranker::GameplayLoopState;
+    using ranker::GameplayRenderCommand;
+    using ranker::GameplayRenderCommandQueue;
     using ranker::GameplayModalUiState;
     using ranker::GameplayResultAction;
     using ranker::GameplayResultScreenState;
+    using ranker::GameplaySoundState;
     using ranker::Mode1GameplayPacketDispatchState;
     using ranker::GameplayVisibilityGrid;
     using ranker::MinimapRenderState;
@@ -34,6 +38,7 @@ int main() {
     using ranker::UiOverlayState;
     using ranker::UiOverlayTextCommand;
     using ranker::UnitMovementDefinition;
+    using ranker::UnitTypeSessionDefinition;
     using ranker::UnitMovementCell;
     using ranker::UnitMovementContext;
     using ranker::UnitMovementMap;
@@ -41,6 +46,7 @@ int main() {
     using ranker::UnitQueuedCommand;
     using ranker::UnitLifecycleContext;
     using ranker::UnitRenderItem;
+    using ranker::UnitRenderQueueEntry;
     using ranker::UnitRenderQueueContext;
     using ranker::UnitEffectRuntime;
     using ranker::UnitEffectRuntimeState;
@@ -49,8 +55,16 @@ int main() {
         << "{\"pointer_size\":" << sizeof(void*)
         << ",\"bool_size\":" << sizeof(bool)
         << ",\"vector_header_size\":" << sizeof(std::vector<u32>)
+        << ",\"input_mouse_x\":" << offsetof(InputState, mouse_x)
+        << ",\"input_mouse_y\":" << offsetof(InputState, mouse_y)
+        << ",\"input_pointer_motion_seen\":"
+        << offsetof(InputState, pointer_motion_seen)
         << ",\"frame_random\":"
         << offsetof(RuntimeGlobals, gameplay_frame_random_state)
+        << ",\"gameplay_sound\":"
+        << offsetof(RuntimeGlobals, gameplay_sound)
+        << ",\"gameplay_sound_variant_seed\":"
+        << offsetof(GameplaySoundState, variant_seed)
         << ",\"visibility\":"
         << offsetof(RuntimeGlobals, gameplay_visibility_grid)
         << ",\"movement\":"
@@ -63,6 +77,20 @@ int main() {
         << offsetof(RuntimeGlobals, active_session_definitions)
         << ",\"unit_reference_tables\":"
         << offsetof(RuntimeGlobals, unit_reference_tables)
+        << ",\"unit_definition_cache\":"
+        << offsetof(RuntimeGlobals, unit_definition_cache)
+        << ",\"unit_definition_size\":"
+        << sizeof(UnitMovementDefinition)
+        << ",\"unit_reference_definition_size\":"
+        << sizeof(UnitTypeSessionDefinition)
+        << ",\"unit_reference_definition_primary_count\":"
+        << offsetof(UnitTypeSessionDefinition, primary_reference_count)
+        << ",\"unit_reference_definition_alternate_count\":"
+        << offsetof(UnitTypeSessionDefinition, alternate_reference_count)
+        << ",\"unit_reference_definition_primary_references\":"
+        << offsetof(UnitTypeSessionDefinition, primary_references)
+        << ",\"unit_reference_definition_alternate_references\":"
+        << offsetof(UnitTypeSessionDefinition, alternate_references)
         << ",\"session_definition_unit_records\":"
         << offsetof(ranker::SessionRuntimeDefinitionTableSet, unit_records)
         << ",\"runtime_definition_record_size\":"
@@ -73,6 +101,8 @@ int main() {
         << offsetof(ranker::GameSessionUnitReferenceTables, completion_reverse)
         << ",\"unit_render_queue\":"
         << offsetof(RuntimeGlobals, gameplay_unit_render_queue)
+        << ",\"render_command_queue\":"
+        << offsetof(RuntimeGlobals, gameplay_render_command_queue)
         << ",\"map_effect_context\":"
         << offsetof(RuntimeGlobals, map_effect_context)
         << ",\"player_slots\":"
@@ -83,6 +113,8 @@ int main() {
         << offsetof(RuntimeGlobals, gameplay_owner_transport_routes)
         << ",\"owner_strategic_targets\":"
         << offsetof(RuntimeGlobals, gameplay_owner_strategic_targets)
+        << ",\"owner_ai_reserved_primary_cost\":"
+        << offsetof(RuntimeGlobals, gameplay_owner_ai_reserved_primary_cost)
         << ",\"unit_effects\":"
         << offsetof(RuntimeGlobals, gameplay_unit_effect_runtime)
         << ",\"unit_commands\":"
@@ -239,6 +271,10 @@ int main() {
         << offsetof(UnitEffectRuntime, previous_x)
         << ",\"unit_effect_previous_y\":"
         << offsetof(UnitEffectRuntime, previous_y)
+        << ",\"unit_effect_accumulator_x\":"
+        << offsetof(UnitEffectRuntime, accumulator_x)
+        << ",\"unit_effect_accumulator_y\":"
+        << offsetof(UnitEffectRuntime, accumulator_y)
         << ",\"unit_effect_direction\":"
         << offsetof(UnitEffectRuntime, direction)
         << ",\"production_variant_counts\":"
@@ -325,6 +361,8 @@ int main() {
         << offsetof(GameplayVisibilityGrid, previous)
         << ",\"visibility_owner\":"
         << offsetof(GameplayVisibilityGrid, owner)
+        << ",\"visibility_terrain_class_flags\":"
+        << offsetof(GameplayVisibilityGrid, terrain_class_flags)
         << ",\"visibility_size\":" << sizeof(GameplayVisibilityGrid)
         << ",\"tooltip_draw_commands\":"
         << offsetof(GameplayTooltipState, draw_commands)
@@ -369,6 +407,12 @@ int main() {
         << offsetof(UiOverlayState, camera_edge_pointer_valid)
         << ",\"overlay_camera_scroll_ramp\":"
         << offsetof(UiOverlayState, camera_scroll_ramp)
+        << ",\"overlay_camera_scroll_tick_bucket\":"
+        << offsetof(UiOverlayState, camera_scroll_tick_bucket)
+        << ",\"overlay_current_tick_ms\":"
+        << offsetof(UiOverlayState, current_tick_ms)
+        << ",\"overlay_replay_timing_enabled\":"
+        << offsetof(UiOverlayState, replay_timing_enabled)
         << ",\"overlay_camera_edge_cursor_index\":"
         << offsetof(UiOverlayState, camera_edge_cursor_index)
         << ",\"overlay_hover_size\":" << sizeof(UiOverlayHoverContext)
@@ -441,6 +485,8 @@ int main() {
         << offsetof(UiOverlayState, screen_width)
         << ",\"overlay_screen_height\":"
         << offsetof(UiOverlayState, screen_height)
+        << ",\"overlay_world_viewport_height\":"
+        << offsetof(UiOverlayState, world_viewport_height)
         << ",\"overlay_interface_theme_index\":"
         << offsetof(UiOverlayState, interface_theme_index)
         << ",\"overlay_minimap\":" << offsetof(UiOverlayState, minimap)
@@ -623,6 +669,10 @@ int main() {
         << ",\"unit_runtime_slot\":"
         << offsetof(UnitMovementUnit, runtime_slot_index)
         << ",\"unit_type\":" << offsetof(UnitMovementUnit, type_id)
+        << ",\"unit_string_slot\":"
+        << offsetof(UnitMovementUnit, string_slot)
+        << ",\"unit_scenario_string_slot\":"
+        << offsetof(UnitMovementUnit, scenario_string_slot)
         << ",\"unit_owner\":" << offsetof(UnitMovementUnit, owner_id)
         << ",\"unit_type_flags\":" << offsetof(UnitMovementUnit, type_flags)
         << ",\"unit_command_state\":"
@@ -693,6 +743,55 @@ int main() {
         << offsetof(UnitMovementUnit, production_reserved)
         << ",\"unit_render_queue_units\":"
         << offsetof(UnitRenderQueueContext, units)
+        << ",\"unit_render_queue_entries\":"
+        << offsetof(UnitRenderQueueContext, queued_entries)
+        << ",\"unit_render_queue_entry_size\":"
+        << sizeof(UnitRenderQueueEntry)
+        << ",\"unit_render_queue_entry_type\":"
+        << offsetof(UnitRenderQueueEntry, type_id)
+        << ",\"unit_render_queue_entry_class\":"
+        << offsetof(UnitRenderQueueEntry, render_class)
+        << ",\"unit_render_queue_entry_layer\":"
+        << offsetof(UnitRenderQueueEntry, layer)
+        << ",\"unit_render_queue_entry_sort_key\":"
+        << offsetof(UnitRenderQueueEntry, sort_key)
+        << ",\"unit_render_queue_entry_runtime_slot\":"
+        << offsetof(UnitRenderQueueEntry, runtime_slot_index)
+        << ",\"render_command_queue_sorted\":"
+        << offsetof(GameplayRenderCommandQueue, sorted)
+        << ",\"render_command_queue_commands\":"
+        << offsetof(GameplayRenderCommandQueue, commands)
+        << ",\"render_command_queue_sorted_indices\":"
+        << offsetof(GameplayRenderCommandQueue, sorted_indices)
+        << ",\"render_command_size\":" << sizeof(GameplayRenderCommand)
+        << ",\"render_command_class\":"
+        << offsetof(GameplayRenderCommand, class_id)
+        << ",\"render_command_payload\":"
+        << offsetof(GameplayRenderCommand, payload)
+        << ",\"render_command_sort_key\":"
+        << offsetof(GameplayRenderCommand, sort_key)
+        << ",\"render_command_sprite_entry\":"
+        << offsetof(GameplayRenderCommand, sprite_entry_index)
+        << ",\"render_command_sprite_draw_mode\":"
+        << offsetof(GameplayRenderCommand, sprite_draw_mode)
+        << ",\"render_command_screen_y\":"
+        << offsetof(GameplayRenderCommand, screen_y)
+        << ",\"render_command_screen_x\":"
+        << offsetof(GameplayRenderCommand, screen_x)
+        << ",\"render_command_packed_flags\":"
+        << offsetof(GameplayRenderCommand, packed_flags)
+        << ",\"render_command_sprite_draw_mode_valid\":"
+        << offsetof(GameplayRenderCommand, sprite_draw_mode_valid)
+        << ",\"render_command_unit_context\":"
+        << offsetof(GameplayRenderCommand, unit_render_context)
+        << ",\"render_command_unit_item\":"
+        << offsetof(GameplayRenderCommand, unit_render_item)
+        << ",\"render_command_effect_context\":"
+        << offsetof(GameplayRenderCommand, effect_runtime_context)
+        << ",\"render_command_effect\":"
+        << offsetof(GameplayRenderCommand, effect_runtime)
+        << ",\"render_command_draw_variant\":"
+        << offsetof(GameplayRenderCommand, draw_variant)
         << ",\"unit_render_item_size\":" << sizeof(UnitRenderItem)
         << ",\"unit_render_item_type\":"
         << offsetof(UnitRenderItem, type_id)
@@ -760,6 +859,12 @@ int main() {
         << offsetof(UnitMovementDefinition, effect_adjusted_interaction_range_base)
         << ",\"definition_production_spawn_time\":"
         << offsetof(UnitMovementDefinition, production_spawn_time)
+        << ",\"definition_production_resource_cost\":"
+        << offsetof(UnitMovementDefinition, production_resource_cost)
+        << ",\"definition_prerequisite_count\":"
+        << offsetof(UnitMovementDefinition, prerequisite_count)
+        << ",\"definition_prerequisite_type_ids\":"
+        << offsetof(UnitMovementDefinition, prerequisite_type_ids)
         << ",\"definition_footprint_width\":"
         << offsetof(UnitMovementDefinition, footprint_width_tiles)
         << ",\"definition_footprint_height\":"

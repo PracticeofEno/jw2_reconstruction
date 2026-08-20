@@ -8,6 +8,18 @@ namespace ranker {
 
 constexpr u32 kPlayerSlotCount = 8;
 constexpr u32 kPlayerOwnerResourceSlots = 0x14;
+// P_PLAYE uses 9 while replay playback has no player-owned viewpoint.  It is
+// not an array index: preserve it in the local-owner globals so camera,
+// visibility and local-only world feedback follow the original observer path.
+constexpr u32 kNoLocalPlayerSlot = 9;
+
+constexpr bool IsPlayerOrNoLocalSlot(u32 slot) {
+    return slot < kPlayerSlotCount || slot == kNoLocalPlayerSlot;
+}
+
+constexpr u32 NormalizePlayerOrNoLocalSlot(u32 slot) {
+    return IsPlayerOrNoLocalSlot(slot) ? slot : kNoLocalPlayerSlot;
+}
 
 enum class PlayerSlotState : u8 {
     active = 0,
@@ -61,6 +73,31 @@ struct PlayerSlotRuntimeState {
     std::array<u8, kPlayerSlotCount> lobby_slot_states{
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 };
+
+constexpr u32 ResolveLocalOwnerRelationMask(
+    const PlayerSlotRuntimeState& state, u32 local_owner) {
+    // Replay owner 9 indexes the original raw relation table's ninth row,
+    // which remains 0xffffffff. PlayerSlotRuntimeState intentionally stores
+    // only the eight simulation-owner rows, so restore that sentinel row for
+    // presentation/hover/chat consumers instead of treating it as zero.
+    if (local_owner == kNoLocalPlayerSlot) {
+        return 0xffffffffu;
+    }
+    return local_owner < state.owner_relation_masks.size()
+        ? state.owner_relation_masks[local_owner]
+        : 0u;
+}
+
+constexpr void ApplyReplayNoLocalPlayerVisibility(
+    PlayerSlotRuntimeState& state) {
+    // FUN_0044f2c0 changes the replay viewpoint owner to 9, then BTS-sets
+    // that observer bit in the raw visibility rows for owners 0..7.  The
+    // relation masks are deliberately unchanged.
+    constexpr u32 observer_bit = 1u << kNoLocalPlayerSlot;
+    for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+        state.owner_visibility_masks[owner] |= observer_bit;
+    }
+}
 
 PlayerSlotRuntimeState& player_slot_state();
 void BindPlayerSlotRuntimeState(PlayerSlotRuntimeState* state);

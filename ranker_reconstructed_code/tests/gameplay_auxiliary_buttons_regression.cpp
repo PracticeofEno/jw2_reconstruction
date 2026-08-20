@@ -25,6 +25,19 @@ static_assert(ShouldDrawUnitWorldBars(
     SynchronizeUiOverlayUnitSelectionFlag(0u, true)));
 static_assert(!ShouldDrawUnitWorldBars(
     SynchronizeUiOverlayUnitSelectionFlag(0x80u, false)));
+static_assert(!ShouldDrawUnitPaletteRampHighlight(0));
+static_assert(ShouldDrawUnitPaletteRampHighlight(1));
+static_assert(ResolveGameplayCameraAnchorHeight(640) == 258);
+static_assert(ResolveGameplayCameraAnchorHeight(800) == 329);
+static_assert(ResolveGameplayCameraAnchorHeight(1024) == 329);
+static_assert(ResolveUnitOwnerRelationTint(0, 0, false) ==
+    UnitOwnerRelationTint::local);
+static_assert(ResolveUnitOwnerRelationTint(0, 1, false) ==
+    UnitOwnerRelationTint::enemy);
+static_assert(ResolveUnitOwnerRelationTint(0, 1, true) ==
+    UnitOwnerRelationTint::ally);
+static_assert(ResolveUnitOwnerRelationTint(kNoLocalPlayerSlot, 0, false) ==
+    UnitOwnerRelationTint::ally);
 
 // The three fixed HUD buttons (Menu/Alliance/Message) use their alternate
 // sprite only while the corresponding pointer press is still active.

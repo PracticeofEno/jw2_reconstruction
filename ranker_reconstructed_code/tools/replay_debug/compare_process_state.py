@@ -11,8 +11,12 @@ from ctypes import wintypes
 
 IGNORE_COMPLETION_REVERSE_24 = (
     os.environ.get("NEXTDIV_IGNORE_COMPLETION_REVERSE_24") == "1")
+IGNORE_WORLD_VIEW = (
+    os.environ.get("NEXTDIV_IGNORE_WORLD_VIEW") == "1")
 CAPTURE_SUSPENDED_ONCE = (
     os.environ.get("NEXTDIV_CAPTURE_SUSPENDED_ONCE") == "1")
+IGNORE_RENDER_QUEUES = (
+    os.environ.get("NEXTDIV_IGNORE_RENDER_QUEUES") == "1")
 MAP_DEBUG_SLOTS = tuple(
     int(value, 0)
     for value in os.environ.get("NEXTDIV_MAP_DEBUG_SLOTS", "").split(",")
@@ -47,6 +51,11 @@ with open(LAYOUT_PATH, "r", encoding="utf-8-sig") as stream:
 runtime_rva = number(layout["runtime_rva"])
 loop_rva = number(layout["loop_rva"])
 random_offset = number(layout["frame_random_offset"])
+gameplay_sound_offset = number(layout["gameplay_sound_offset"])
+gameplay_sound_layout = {
+    key: number(value)
+    for key, value in layout["gameplay_sound_layout"].items()
+}
 visibility_offset = number(layout["visibility_offset"])
 movement_offset = number(layout["movement_offset"])
 lifecycle_offset = number(layout["lifecycle_offset"])
@@ -56,8 +65,32 @@ unit_reference_tables_offset = number(
     layout["unit_reference_tables_offset"])
 unit_reference_completion_reverse_offset = number(
     layout["unit_reference_completion_reverse_offset"])
+UNIT_REFERENCE_PRIMARY_COUNT = 0xAA
+UNIT_REFERENCE_COMPLETION_COUNT = 0x40
+# The highest small-reference ID in the shipped JW2_09 records is 0x5A.
+# Original storage immediately after index 0x5A belongs to unrelated globals,
+# so compare the 0x5B semantic entries rather than reading an invented tail.
+UNIT_REFERENCE_SMALL_COUNT = 0x5B
+unit_reference_primary_reverse_offset = (
+    unit_reference_completion_reverse_offset -
+    UNIT_REFERENCE_PRIMARY_COUNT * 4)
+unit_reference_small_reverse_offset = (
+    unit_reference_completion_reverse_offset +
+    UNIT_REFERENCE_COMPLETION_COUNT * 4)
+unit_render_queue_offset = number(layout["unit_render_queue_offset"])
+render_command_queue_offset = number(layout["render_command_queue_offset"])
 map_effect_context_offset = number(layout["map_effect_context_offset"])
 unit_effects_offset = number(layout["unit_effects_offset"])
+overlay_rva = number(layout["overlay_rva"])
+input_state_rva = number(layout["input_state_rva"])
+programmatic_pointer_motion_pending_rva = number(
+    layout["programmatic_pointer_motion_pending_rva"])
+programmatic_pointer_motion_target_reached_rva = number(
+    layout["programmatic_pointer_motion_target_reached_rva"])
+programmatic_pointer_motion_x_rva = number(
+    layout["programmatic_pointer_motion_x_rva"])
+programmatic_pointer_motion_y_rva = number(
+    layout["programmatic_pointer_motion_y_rva"])
 player_slots_offset = number(layout["player_slots_offset"])
 owner_ai_offset = number(layout["owner_ai_offset"])
 owner_transport_routes_offset = number(layout["owner_transport_routes_offset"])
@@ -69,6 +102,8 @@ owner_transport_queues_offset = (
     owner_transport_routes_offset - 8 * OWNER_QUEUE_SLOT_COUNT *
     OWNER_QUEUE_SLOT_SIZE)
 owner_strategic_targets_offset = number(layout["owner_strategic_targets_offset"])
+owner_ai_reserved_primary_cost_offset = number(
+    layout["owner_ai_reserved_primary_cost_offset"])
 unit_layout = {key: number(value)
                for key, value in layout["unit_layout"].items()}
 context_layout = {key: number(value)
@@ -88,6 +123,10 @@ map_effect_layout = {key: number(value)
                      for key, value in layout["map_effect_layout"].items()}
 unit_effect_layout = {key: number(value)
                       for key, value in layout["unit_effect_layout"].items()}
+overlay_layout = {key: number(value)
+                  for key, value in layout["overlay_layout"].items()}
+input_layout = {key: number(value)
+                for key, value in layout["input_layout"].items()}
 player_slots_layout = {key: number(value)
                        for key, value in layout["player_slots_layout"].items()}
 owner_ai_layout = {key: number(value)
@@ -103,6 +142,18 @@ owner_strategic_target_layout = {
 production_runtime_layout = {
     key: number(value)
     for key, value in layout["production_runtime_layout"].items()
+}
+unit_render_queue_entry_layout = {
+    key: number(value)
+    for key, value in layout["unit_render_queue_entry_layout"].items()
+}
+unit_render_item_layout = {
+    key: number(value)
+    for key, value in layout["unit_render_item_layout"].items()
+}
+render_command_queue_layout = {
+    key: number(value)
+    for key, value in layout["render_command_queue_layout"].items()
 }
 
 
@@ -227,15 +278,38 @@ def index_vector(memory, address, element_size, limit=4096):
         f"<{count}{code}", memory.read(begin, count * element_size)))
 
 
+def struct_vector(memory, address, element_size, limit=4096):
+    begin, end, capacity = struct.unpack("<QQQ", memory.read(address, 24))
+    if (element_size <= 0 or end < begin or capacity < end or
+            (end - begin) % element_size != 0 or
+            (end - begin) // element_size > limit):
+        return None
+    count = (end - begin) // element_size
+    if count == 0:
+        return []
+    if not begin:
+        return None
+    data = memory.read(begin, count * element_size)
+    return [data[index * element_size:(index + 1) * element_size]
+            for index in range(count)]
+
+
 def normalized_original_unit(data):
     type_id = u32(data, 0x00)
     state = u32(data, 0x60)
     equipment_start = 1 if type_id >= 0x60 else 0
     return {
         "type": type_id,
-        # Raw +0x08 bit 0x80 is the client-local selection highlight.
-        # Only the low control-group nibble is persistent simulation state.
         "control_group": u32(data, 0x08) & 0x0F,
+        # Raw +0x08 bit 0x80 gates the world HP/secondary bars. It is local
+        # render state rather than synchronized simulation state, but omitting
+        # it allowed a visually stale selected-unit bar to pass every aligned
+        # replay comparison as "exact".
+        "world_bar_selection": u32(data, 0x08) & 0x80,
+        # Subtype 0x19 owns raw +0x48.  This slot controls the name rendered
+        # above the unit, so it belongs in gameplay/world-render parity even
+        # though ordinary recorded matches rarely publish that packet type.
+        "string_slot": u32(data, 0x48),
         "owner": u32(data, 0x04),
         "area_marker_flags": u32(data, 0x0C),
         "max_secondary": u32(data, 0x14),
@@ -268,9 +342,10 @@ def normalized_original_unit(data):
                            i32(data, 0x130), i32(data, 0x134)],
         "command_flags": u32(data, 0x9C),
         "runtime_flags": u32(data, 0xA0),
-        # Raw +0xA4 is pointer-action draw feedback.  The local input client
-        # writes it before publishing the synchronized command; remote peers
-        # intentionally do not mirror the transient render countdown.
+        # Raw +0xA4 selects the world-sprite draw mode. Like selection it is
+        # local render state, but original/rebuild replay parity must compare
+        # it so a transient highlight or blend-mode mismatch cannot hide.
+        "world_draw_flags": u32(data, 0xA4),
         "lockout": u32(data, 0xF4),
         "_raw_animation_or_work_timer": u32(data, 0x64),
         "animation_timer": u32(data, 0xEC),
@@ -348,6 +423,9 @@ def normalized_rebuild_unit(data):
     row = {
         "type": type_id,
         "control_group": u32(data, 0x10) & 0x0F,
+        "world_bar_selection": (
+            u32(data, unit_layout["scenario_string_slot"]) & 0x80),
+        "string_slot": u32(data, unit_layout["string_slot"]),
         "owner": u32(data, unit_layout["owner"]),
         "area_marker_flags": u32(data, 0x14),
         "max_secondary": u32(data, 0x15C),
@@ -378,7 +456,7 @@ def normalized_rebuild_unit(data):
         "deferred_first": queued(deferred_offset),
         "command_flags": u32(data, unit_layout["command_flags"]),
         "runtime_flags": u32(data, unit_layout["runtime_flags"]),
-        # Typed draw_flags mirrors the same client-local render feedback.
+        "world_draw_flags": u32(data, unit_layout["draw_flags"]),
         "lockout": u32(data, unit_layout["command_lockout"]),
         "_animation_frame": u32(data, unit_layout["animation_frame"]),
         "_work_timer": u32(data, unit_layout["work_timer"]),
@@ -466,6 +544,250 @@ def rebuild_lists(memory, movement):
     return rows, orders, pointer_slots, id_slots
 
 
+def original_unit_render_queue(memory, rows):
+    # FUN_004d8297 clears the count/sorted flag at the start of a present pass;
+    # its 0x004d8297 store clears count before the 0x004d82a1 sorted-byte
+    # store, so count==0/ready==1 is an in-flight reset rather than a complete
+    # empty queue.
+    # FUN_0042a890 publishes sorted=1 only after every visible unit/effect and
+    # decoration has been queued. Ignore an in-flight queue snapshot.
+    ready = memory.read(0x0083F5F4, 1)[0] != 0
+    count = memory.u32(0x0083F5F0)
+    if count == 0:
+        ready = False
+    if count > 3000:
+        return {"ready": ready, "entries": None}
+    result = []
+    unit_layers = (5, 5, 5, 8, 5)
+    effect_layers = (3, 3, 3, 8, 3, 5)
+    for index in range(count):
+        entry = memory.read(0x012DA850 + index * 0x20, 0x20)
+        raw_unit_offset = u32(entry, 0x04)
+        if raw_unit_offset == 0 or raw_unit_offset % 0x1D0 != 0:
+            continue
+        slot = raw_unit_offset // 0x1D0
+        row = rows.get(slot)
+        if row is None:
+            continue
+        type_id = row["type"]
+        definition = 0x0087C2F8 + type_id * 0x24BC
+        definition_render_class = memory.u32(definition + 0x17C)
+        if row["list"] == "active":
+            render_class = definition_render_class
+            expected_layer = (unit_layers[render_class]
+                if render_class < len(unit_layers) else None)
+        else:
+            # ProcessVisibleEffectRenderQueue forces class 5 unless raw state
+            # +0x60 carries 0x40000000, exactly like the reconstructed queue.
+            render_class = (definition_render_class
+                if (row["state"] & 0x40000000) != 0 else 5)
+            expected_layer = (effect_layers[render_class]
+                if render_class < len(effect_layers) else None)
+        layer = u32(entry, 0x00)
+        # The original queue is shared with terrain/decorations. Their payload
+        # can coincidentally be a valid 0x1d0 unit-slot multiple, so pointer
+        # shape alone produces false unit entries. Require the exact unit or
+        # lifecycle-effect dispatch layer for this row as well.
+        if expected_layer is None or layer != expected_layer:
+            continue
+        result.append({
+            "slot": slot,
+            "type": type_id,
+            "render_class": render_class,
+            "layer": layer,
+            "sort_key": u32(entry, 0x08),
+        })
+    return {"ready": ready, "entries": result}
+
+
+def rebuild_unit_render_queue(memory, runtime):
+    command_queue = runtime + render_command_queue_offset
+    ready = memory.read(
+        command_queue + render_command_queue_layout["sorted"], 1)[0] != 0
+    queue = runtime + unit_render_queue_offset
+    entry_layout = unit_render_queue_entry_layout
+    entries = struct_vector(
+        memory, queue + entry_layout["vector"], entry_layout["size"], 3000)
+    if entries is None:
+        return {"ready": ready, "entries": None}
+    return {"ready": ready, "entries": [{
+        "slot": u32(entry, entry_layout["runtime_slot"]),
+        "type": u32(entry, entry_layout["type"]),
+        "render_class": u32(entry, entry_layout["render_class"]),
+        "layer": u32(entry, entry_layout["layer"]),
+        "sort_key": u32(entry, entry_layout["sort_key"]),
+    } for entry in entries]}
+
+
+def original_world_render_queue(memory, rows):
+    """Capture the complete original sorted world-command queue.
+
+    FUN_004d824d writes seven meaningful dwords into each 0x20-byte entry.
+    FUN_004d8050 later loads payload through ESI, screen Y through EDX, and
+    screen X through EBX before dispatching the class callback.  Keeping the
+    insertion index and published sorted order makes equal-key ordering bugs
+    visible as well as missing commands.  FUN_0042a890 sets DAT_0083f5f4
+    before it enters the recursive quicksort, so that byte alone is not a
+    completion fence: a suspended process can expose a valid but only partly
+    sorted index array.  Reject that in-flight snapshot below by checking the
+    unsigned key order that the original quicksort guarantees on return.
+    """
+    ready = memory.read(0x0083F5F4, 1)[0] != 0
+    count = memory.u32(0x0083F5F0)
+    # FUN_004d8297 writes count=0 at 0x004d8297 before sorted=0 at
+    # 0x004d82a1.  Reject a suspension in that two-instruction reset window.
+    if count == 0:
+        ready = False
+    if count > 3000:
+        return {"ready": ready, "entries": None, "sorted_indices": None}
+    entries = []
+    for index in range(count):
+        entry = memory.read(0x012DA850 + index * 0x20, 0x20)
+        class_id = u32(entry, 0x00)
+        payload = u32(entry, 0x04)
+        unit_slot = None
+        if (class_id in (3, 5, 6, 8) and payload != 0 and
+                payload % 0x1D0 == 0 and payload // 0x1D0 in rows):
+            unit_slot = payload // 0x1D0
+        effect_slot = None
+        if (class_id in (1, 7, 9) and payload != 0 and
+                payload % ORIGINAL_UNIT_EFFECT_STRIDE == 0):
+            effect_slot = payload // ORIGINAL_UNIT_EFFECT_STRIDE - 1
+        map_effect_slot = None
+        if (class_id == 4 and payload % ORIGINAL_MAP_EFFECT_STRIDE == 0):
+            map_effect_slot = payload // ORIGINAL_MAP_EFFECT_STRIDE
+        entries.append({
+            "insertion_index": index,
+            "class": class_id,
+            "payload": payload,
+            "sort_key": u32(entry, 0x08),
+            "sprite_entry": u32(entry, 0x0C),
+            # FUN_004d8050 loads raw +0x10 through EDX and raw +0x14 through
+            # EBX.  The draw callbacks use those registers as X and Y,
+            # respectively (the decompiler's fastcall labels are reversed).
+            "screen_x": i32(entry, 0x10),
+            "screen_y": i32(entry, 0x14),
+            "packed_flags": u32(entry, 0x18),
+            "unit_slot": unit_slot,
+            "effect_slot": effect_slot,
+            "map_effect_slot": map_effect_slot,
+        })
+    sorted_indices = [memory.u32(0x012D7970 + index * 4)
+                      for index in range(count)]
+    if any(index >= count for index in sorted_indices):
+        sorted_indices = None
+    elif any(entries[sorted_indices[index]]["sort_key"] >
+             entries[sorted_indices[index + 1]]["sort_key"]
+             for index in range(count - 1)):
+        ready = False
+        sorted_indices = None
+    return {
+        "ready": ready,
+        "entries": entries,
+        "sorted_indices": sorted_indices,
+    }
+
+
+def rebuild_world_render_queue(memory, runtime):
+    queue = runtime + render_command_queue_offset
+    layout = render_command_queue_layout
+    ready = memory.read(queue + layout["sorted"], 1)[0] != 0
+    commands = struct_vector(
+        memory, queue + layout["commands"], layout["command_size"], 3000)
+    if commands is None:
+        return {"ready": ready, "entries": None, "sorted_indices": None}
+    sorted_indices = index_vector(
+        memory, queue + layout["sorted_indices"], 8, 3000)
+    if len(sorted_indices) != len(commands) or any(
+            index >= len(commands) for index in sorted_indices):
+        sorted_indices = None
+    effect_slots_begin, effect_slots_end, _ = struct.unpack(
+        "<QQQ", memory.read(
+            runtime + unit_effects_offset + unit_effect_layout["slots"], 24))
+    effect_size = unit_effect_layout["effect_size"]
+    entries = []
+    for index, command in enumerate(commands):
+        unit_item_pointer = u64(command, layout["command_unit_item"])
+        unit_slot = (memory.u32(
+            unit_item_pointer + unit_render_item_layout["runtime_slot"])
+            if unit_item_pointer else None)
+        effect_pointer = u64(command, layout["command_effect"])
+        effect_slot = None
+        if (effect_pointer and effect_size > 0 and
+                effect_slots_begin <= effect_pointer < effect_slots_end and
+                (effect_pointer - effect_slots_begin) % effect_size == 0):
+            effect_slot = (effect_pointer - effect_slots_begin) // effect_size
+        class_id = u32(command, layout["command_class"])
+        payload = u32(command, layout["command_payload"])
+        entries.append({
+            "insertion_index": index,
+            "class": class_id,
+            "payload": payload,
+            "sort_key": u32(command, layout["command_sort_key"]),
+            "sprite_entry": u32(command, layout["command_sprite_entry"]),
+            "sprite_draw_mode": u32(
+                command, layout["command_sprite_draw_mode"]),
+            "screen_y": i32(command, layout["command_screen_y"]),
+            "screen_x": i32(command, layout["command_screen_x"]),
+            "packed_flags": u32(command, layout["command_packed_flags"]),
+            "sprite_draw_mode_valid": command[
+                layout["command_sprite_draw_mode_valid"]] != 0,
+            "has_unit_context": u64(
+                command, layout["command_unit_context"]) != 0,
+            "has_unit_item": u64(command, layout["command_unit_item"]) != 0,
+            "has_effect_context": u64(
+                command, layout["command_effect_context"]) != 0,
+            "has_effect": u64(command, layout["command_effect"]) != 0,
+            "draw_variant": u32(command, layout["command_draw_variant"]),
+            "unit_slot": unit_slot,
+            "effect_slot": effect_slot,
+            "map_effect_slot": payload if class_id == 4 else None,
+        })
+    return {
+        "ready": ready,
+        "entries": entries,
+        "sorted_indices": sorted_indices,
+    }
+
+
+def semantic_world_render_entries(queue, camera_x, camera_y, side):
+    entries = queue.get("entries")
+    indices = queue.get("sorted_indices")
+    if entries is None or indices is None:
+        return None
+    result = []
+    for index in indices:
+        entry = entries[index]
+        class_id = entry["class"]
+        semantic = {
+            "sort_key": entry["sort_key"],
+            "world_x": entry["screen_x"] + camera_x,
+            "world_y": entry["screen_y"] + camera_y,
+        }
+        if entry.get("unit_slot") is not None:
+            semantic["kind"] = "unit"
+            semantic["slot"] = entry["unit_slot"]
+        elif class_id in (1, 7, 9):
+            semantic["kind"] = "unit_effect"
+            semantic["slot"] = entry.get("effect_slot")
+        elif class_id == 4:
+            semantic["kind"] = "map_effect"
+            semantic["slot"] = entry.get("map_effect_slot")
+        elif class_id == 2:
+            semantic["kind"] = "terrain_type1" if (
+                (entry["sort_key"] & 0x3FFFF) >= 0x20000
+                if side == "original" else entry["payload"] == 0
+            ) else "terrain_type3"
+            semantic["flags"] = entry["packed_flags"]
+        elif class_id == 10:
+            semantic["kind"] = "brush_edge"
+            semantic["flags"] = entry["packed_flags"]
+        else:
+            semantic["kind"] = f"class_{class_id}"
+        result.append(semantic)
+    return result
+
+
 FOLLOW_POOL_DEBUG_SLOTS = (113, 171, 177, 223, 241)
 
 
@@ -516,7 +838,7 @@ def rebuild_follow_pool_debug(memory, movement):
     return result
 
 
-VISIBILITY_DEBUG_SOURCE_SLOTS = (3, 9, 12, 38, 178, 211)
+VISIBILITY_DEBUG_SOURCE_SLOTS = (3, 9, 12, 38, 39, 178, 211)
 
 
 def visibility_debug_slots(rows):
@@ -577,7 +899,8 @@ def rebuild_visibility_debug(memory, rows):
     return result
 
 
-REACH_DEBUG_SLOTS = (18, 21, 22, 99, 151, 153, 178, 211)
+REACH_DEBUG_SLOTS = tuple(dict.fromkeys(
+    (18, 21, 22, 39, 99, 151, 153, 174, 178, 211) + MAP_DEBUG_SLOTS))
 
 
 def original_reach_debug(memory, rows):
@@ -596,6 +919,10 @@ def original_reach_debug(memory, rows):
         result[str(slot)] = {
             "type": type_id,
             "render_class": memory.u32(definition + 0x17C),
+            "lifecycle_class": memory.u32(definition + 0x14C),
+            "movement_class": memory.u32(definition + 0x17C),
+            "footprint": [memory.u32(definition + 0x330),
+                          memory.u32(definition + 0x334)],
             "profile": profile,
             "range": memory.u32(definition + 0x1B0),
             "range3": memory.u32(definition + 0x1B4),
@@ -627,7 +954,16 @@ def rebuild_reach_debug(memory, rows, pointer_slots):
         definition = pointer + unit_layout["definition"]
         result[str(slot)] = {
             "type": row["type"],
+            "typed_footprint_registered": bool(memory.read(
+                pointer + unit_layout["footprint_registered"], 1)[0]),
             "render_class": memory.u32(definition + 136),
+            "lifecycle_class": memory.u32(
+                definition + unit_layout["definition_lifecycle_class"]),
+            "movement_class": memory.u32(definition),
+            "footprint": [memory.u32(
+                definition + unit_layout["definition_footprint_width"]),
+                          memory.u32(
+                definition + unit_layout["definition_footprint_height"])],
             "profile": memory.u32(definition + 456),
             "range": memory.u32(definition + 440),
             "range3": memory.u32(definition + 444),
@@ -685,6 +1021,13 @@ def original_unit_effects(memory):
             "target_slot": original_reference_slot(target),
             "x": i32(data, 0x20),
             "y": i32(data, 0x24),
+            # Raw +0x30/+0x34 is a mode-dependent union. FUN_004f1ee8 feeds it
+            # to the high-ID projectile-trail renderer as a previous point,
+            # while the ordinary low-ID stepper FUN_004f2dd3 mutates the same
+            # words as its two Bresenham accumulators. Keep the neutral raw
+            # names here; rebuild_unit_effects selects the typed semantic field.
+            "previous_x": i32(data, 0x30),
+            "previous_y": i32(data, 0x34),
         })
         offset = u32(data, 0xA4)
     return rows
@@ -729,6 +1072,17 @@ def rebuild_unit_effects(memory, runtime, id_slots):
         raw10_offset = (unit_effect_layout["direction"] + 4
                         if active_default_path
                         else unit_effect_layout["effect_frame"])
+        # Raw +0x30/+0x34 is the same mode-dependent union for both low- and
+        # high-ID effects. In particular, selected action 1 / effect 0x3e
+        # enters FUN_004f2c04, which seeds these words with the X/Y Bresenham
+        # accumulators; after its first path step they are 0/1, not the prior
+        # world point. The typed runtime keeps that raw union in
+        # accumulator_x/y and stores a reconstruction-only previous point
+        # separately. The one high-ID trail path that reads the raw words as
+        # coordinates (effect 0x69, FUN_004f1ee8) mirrors those coordinates
+        # into accumulator_x/y during initialization as well.
+        raw30_offset = unit_effect_layout["accumulator_x"]
+        raw34_offset = unit_effect_layout["accumulator_y"]
         rows.append({
             "slot": index,
             "effect_id": effect_id,
@@ -741,6 +1095,8 @@ def rebuild_unit_effects(memory, runtime, id_slots):
             "target_slot": id_slots.get(target) if target else None,
             "x": i32(data, unit_effect_layout["x"]),
             "y": i32(data, unit_effect_layout["y"]),
+            "previous_x": i32(data, raw30_offset),
+            "previous_y": i32(data, raw34_offset),
         })
     return rows
 
@@ -800,6 +1156,38 @@ def rebuild_map_effects(memory, runtime, pointer_slots):
                 data, map_effect_layout["instance_repeat_count"]),
         })
     return rows
+
+
+def original_unit_reference_tables(memory):
+    return {
+        "primary": u32_words(memory.read(
+            0x0123CE9C, UNIT_REFERENCE_PRIMARY_COUNT * 4),
+            0, UNIT_REFERENCE_PRIMARY_COUNT),
+        "completion": u32_words(memory.read(
+            0x0123D144, UNIT_REFERENCE_COMPLETION_COUNT * 4),
+            0, UNIT_REFERENCE_COMPLETION_COUNT),
+        "small": u32_words(memory.read(
+            0x0123D244, UNIT_REFERENCE_SMALL_COUNT * 4),
+            0, UNIT_REFERENCE_SMALL_COUNT),
+    }
+
+
+def rebuild_unit_reference_tables(memory, runtime):
+    base = runtime + unit_reference_tables_offset
+    return {
+        "primary": u32_words(memory.read(
+            base + unit_reference_primary_reverse_offset,
+            UNIT_REFERENCE_PRIMARY_COUNT * 4),
+            0, UNIT_REFERENCE_PRIMARY_COUNT),
+        "completion": u32_words(memory.read(
+            base + unit_reference_completion_reverse_offset,
+            UNIT_REFERENCE_COMPLETION_COUNT * 4),
+            0, UNIT_REFERENCE_COMPLETION_COUNT),
+        "small": u32_words(memory.read(
+            base + unit_reference_small_reverse_offset,
+            UNIT_REFERENCE_SMALL_COUNT * 4),
+            0, UNIT_REFERENCE_SMALL_COUNT),
+    }
 
 
 def original_owner_ai(memory, owners):
@@ -912,6 +1300,23 @@ def rebuild_owner_ai(memory, runtime, owners, pointer_slots):
     return result
 
 
+def original_transport_queue_unit_slot(value):
+    if value == 0:
+        return None
+    offset = value - 0x00A03FB8
+    if offset < 0 or offset % 0x1D0 != 0:
+        return f"raw:0x{value:08x}"
+    return offset // 0x1D0
+
+
+def rebuild_transport_queue_unit_slot(value):
+    if value == 0:
+        return None
+    if value % 0x1D0 != 0:
+        return f"id:0x{value:08x}"
+    return value // 0x1D0
+
+
 def original_transport_queues(memory, owners):
     result = {}
     for owner in owners:
@@ -920,9 +1325,15 @@ def original_transport_queues(memory, owners):
         for index in range(OWNER_QUEUE_SLOT_COUNT):
             raw = memory.read(owner_base + index * 0x58, 40)
             words = u32_words(raw, 0, 10)
-            # match_value and linked_group contain raw fixed-pool references
-            # in the 32-bit original but stable IDs in the reconstruction.
-            slots.append(words[0:5] + words[6:9])
+            # match_value and linked_group contain raw fixed-pool pointers in
+            # the 32-bit original.  Normalize both to fixed-pool slots instead
+            # of dropping them: route-helper production consumes match_value,
+            # so a stale/missing binding is synchronized gameplay state.
+            slots.append(words[0:5] + [
+                original_transport_queue_unit_slot(words[5]),
+            ] + words[6:9] + [
+                original_transport_queue_unit_slot(words[9]),
+            ])
         result[str(owner)] = slots
     return result
 
@@ -936,7 +1347,14 @@ def rebuild_transport_queues(memory, runtime, owners):
         result[str(owner)] = []
         for index in range(OWNER_QUEUE_SLOT_COUNT):
             words = u32_words(raw, index * OWNER_QUEUE_SLOT_SIZE, 10)
-            result[str(owner)].append(words[0:5] + words[6:9])
+            # The typed reconstruction stores the corresponding stable unit
+            # IDs (original fixed-pool offsets), which normalize to the same
+            # slot numbers as the original pointers above.
+            result[str(owner)].append(words[0:5] + [
+                rebuild_transport_queue_unit_slot(words[5]),
+            ] + words[6:9] + [
+                rebuild_transport_queue_unit_slot(words[9]),
+            ])
     return result
 
 
@@ -991,10 +1409,15 @@ def original_ai_demand(memory, owners):
         base = memory.read(0x01230A28 + owner * 0x2A8, 0x2A8)
         shadow = memory.read(0x01231F68 + owner * 0x2A8, 0x2A8)
         base_values = u32_words(base, 0, 0xAA)
+        shadow_values = u32_words(shadow, 0, 0xAA)
         result[str(owner)] = {
             "base_00_a9": base_values,
             "base_60_a9": base_values[0x60:0xAA],
-            "shadow_60_a9": u32_words(shadow, 0x60 * 4, 0x4A),
+            # The low-type half is consumed by the same desired-count sum as
+            # the extended half.  Omitting it hid owner-AI production choices
+            # even while all subsequently serialized unit rows still matched.
+            "shadow_00_a9": shadow_values,
+            "shadow_60_a9": shadow_values[0x60:0xAA],
         }
     return result
 
@@ -1008,11 +1431,12 @@ def rebuild_ai_demand(memory, runtime, owners):
         base_offset = owner_ai_layout["unit_demand"]
         shadow_offset = owner_ai_layout["unit_demand_shadow"]
         base_values = u32_words(slot_bytes, base_offset, 0xAA)
+        shadow_values = u32_words(slot_bytes, shadow_offset, 0xAA)
         result[str(owner)] = {
             "base_00_a9": base_values,
             "base_60_a9": base_values[0x60:0xAA],
-            "shadow_60_a9": u32_words(
-                slot_bytes, shadow_offset + 0x60 * 4, 0x4A),
+            "shadow_00_a9": shadow_values,
+            "shadow_60_a9": shadow_values[0x60:0xAA],
         }
     return result
 
@@ -1026,12 +1450,19 @@ def original_planning_debug(memory, owners):
             memory.read(0x01239408 + owner * 0x100, 0x100), 0, 0x40)
         result[str(owner)] = {
             "faction": memory.u32(0x007251A4 + owner * 4),
+            "primary_budget": memory.u32(0x0122FF88 + owner * 4),
+            "route_load_percent": memory.u32(0x01230508 + owner * 4),
             "resource_budget_percent": memory.u32(0x01230628 + owner * 4),
             "profile_counter": memory.u32(0x01230928 + owner * 4),
             "production_pause": memory.u32(0x012393E8 + owner * 4),
+            "reserved_primary_cost": memory.u32(0x01230A08 + owner * 4),
             "strategic_queue_load_percent": memory.u32(
                 0x01238F28 + owner * 4),
             "primary_target_flags": memory.u32(0x01238F48 + owner * 4),
+            "route0_desired_count_base": memory.u32(
+                0x01230208 + owner * 0x18),
+            "route0_priority": memory.u32(0x01230388 + owner * 0x18),
+            "route0_flags": memory.u32(0x01230448 + owner * 0x18),
             "shared_grid": shared_grid,
             "owned_nonzero": {
                 str(unit_type): count for unit_type, count in enumerate(counts)
@@ -1047,6 +1478,8 @@ def rebuild_planning_debug(memory, runtime, owners):
     result = {}
     for owner in owners:
         slot = owner_slots + owner * owner_ai_layout["slot_size"]
+        route = (runtime + owner_transport_routes_offset +
+                 owner * owner_transport_route_layout["size"])
         count_base = (state + owner_ai_layout["owner_unit_type_counts"] +
                       owner * 0xAA * 4)
         counts = u32_words(memory.read(count_base, 0x2A8), 0, 0xAA)
@@ -1056,15 +1489,24 @@ def rebuild_planning_debug(memory, runtime, owners):
         result[str(owner)] = {
             "faction": memory.u32(
                 state + owner_ai_layout["owner_faction_ids"] + owner * 4),
+            "primary_budget": memory.u32(slot + 0x0C),
+            "route_load_percent": memory.u32(slot + 0x14),
             "resource_budget_percent": memory.u32(
                 slot + owner_ai_layout["resource_budget_percent"]),
             "profile_counter": memory.u32(
                 slot + owner_ai_layout["profile_counter"]),
             "production_pause": memory.u32(
                 slot + owner_ai_layout["production_pause_flag"]),
+            "reserved_primary_cost": memory.u32(
+                runtime + owner_ai_reserved_primary_cost_offset + owner * 4),
             "strategic_queue_load_percent": memory.u32(slot + 0x5D8),
             "primary_target_flags": memory.u32(
                 slot + owner_ai_layout["primary_target_flags"]),
+            # OwnerTransportRouteTarget is 0x28 bytes on the 64-bit rebuild;
+            # target 0 stores the scalar maintenance inputs at +0x18..+0x24.
+            "route0_desired_count_base": memory.u32(route + 0x18),
+            "route0_priority": memory.u32(route + 0x20),
+            "route0_flags": memory.u32(route + 0x24),
             "shared_grid": shared_grid,
             "owned_nonzero": {
                 str(unit_type): count for unit_type, count in enumerate(counts)
@@ -1145,7 +1587,32 @@ def capture(name, side):
     if name == "original":
         rng = [memory.u32(0x007071B8), memory.u32(0x007071BC),
                memory.u32(0x007071C0)]
+        presentation_rng = memory.u32(0x007071C4)
+        local_view_owner = memory.u32(0x00725100)
+        world_view_owner = [local_view_owner,
+                            memory.read(0x012448F0 + local_view_owner, 1)[0]
+                            if local_view_owner < 8 else 0xFF]
+        owner_visibility_masks = [
+            memory.u32(0x00725384 + owner * 4) for owner in range(8)]
+        world_view = [memory.i32(0x007071A8), memory.i32(0x007071AC),
+                      memory.u32(0x0143FFF0), memory.u32(0x01440004)]
+        camera_debug = {
+            "presentation_rng": presentation_rng,
+            "mouse": [memory.i32(0x014594A8), memory.i32(0x014594AC)],
+            "message_mouse": [memory.i32(0x014594BC) & 0xffff,
+                              (memory.i32(0x014594BC) >> 16) & 0xffff],
+            "cursor_change_depth": memory.read(0x0086AC70, 1)[0],
+            "pointer_updates_suppressed": memory.read(0x0145965D, 1)[0],
+            "edge_mask": memory.u32(0x00869E2C),
+            "scroll_ramp": memory.u32(0x00868144),
+            "scroll_tick_bucket": memory.u32(0x008678F0),
+            "current_tick_ms": memory.u32(0x0162EA48),
+            "replay_timing_enabled": memory.u32(0x01242A20),
+            "scroll_dirty": memory.u32(0x00868140),
+        }
         rows, orders = original_lists(memory)
+        render_queue = original_unit_render_queue(memory, rows)
+        world_render_queue = original_world_render_queue(memory, rows)
         owners = sorted({row["owner"] for row in rows.values()
                          if row["owner"] < 8})
         economy = original_economy(memory, owners)
@@ -1154,6 +1621,7 @@ def capture(name, side):
         owner_ai = original_owner_ai(memory, owners)
         unit_effects = original_unit_effects(memory)
         map_effects = original_map_effects(memory)
+        unit_reference_tables = original_unit_reference_tables(memory)
         reach_debug = original_reach_debug(memory, rows)
         planning_debug = original_planning_debug(memory, owners)
         transport_queues = original_transport_queues(memory, owners)
@@ -1163,7 +1631,70 @@ def capture(name, side):
     else:
         rng = [memory.u32(random_state), memory.u32(random_state + 4),
                memory.u32(random_state + 8)]
+        presentation_rng = memory.u32(
+            runtime + gameplay_sound_offset +
+            gameplay_sound_layout["variant_seed"])
+        player_slots = runtime + player_slots_offset
+        local_view_owner = memory.u32(
+            player_slots + player_slots_layout["local_player"])
+        world_view_owner = [
+            local_view_owner,
+            memory.read(player_slots + player_slots_layout["slot_states"] +
+                        local_view_owner, 1)[0]
+            if local_view_owner < 8 else 0xFF,
+        ]
+        owner_visibility_masks = [
+            memory.u32(player_slots +
+                       player_slots_layout["visibility_masks"] + owner * 4)
+            for owner in range(8)
+        ]
+        overlay = REBUILD_BASE + overlay_rva
+        input_state = REBUILD_BASE + input_state_rva
+        world_view = [
+            memory.i32(overlay + overlay_layout["camera_x"]),
+            memory.i32(overlay + overlay_layout["camera_y"]),
+            memory.u32(overlay + overlay_layout["screen_width"]),
+            memory.u32(overlay + overlay_layout["screen_height"]),
+        ]
+        camera_debug = {
+            "presentation_rng": presentation_rng,
+            "mouse": [
+                memory.i32(overlay + overlay_layout["mouse_x"]),
+                memory.i32(overlay + overlay_layout["mouse_y"]),
+            ],
+            "edge_mask": memory.u32(
+                overlay + overlay_layout["camera_edge_cursor_index"]),
+            "scroll_ramp": memory.u32(
+                overlay + overlay_layout["camera_scroll_ramp"]),
+            "scroll_tick_bucket": memory.u32(
+                overlay + overlay_layout["camera_scroll_tick_bucket"]),
+            "current_tick_ms": memory.u32(
+                overlay + overlay_layout["current_tick_ms"]),
+            "replay_timing_enabled": memory.read(
+                overlay + overlay_layout["replay_timing_enabled"], 1)[0],
+            "scroll_dirty": memory.read(
+                overlay + overlay_layout["camera_scroll_dirty"], 1)[0],
+            "edge_pointer_valid": memory.read(
+                overlay + overlay_layout["camera_edge_pointer_valid"], 1)[0],
+            "input_mouse": [
+                memory.i32(input_state + input_layout["mouse_x"]),
+                memory.i32(input_state + input_layout["mouse_y"]),
+            ],
+            "input_pointer_motion_seen": memory.read(
+                input_state + input_layout["pointer_motion_seen"], 1)[0],
+            "programmatic_pointer_motion_pending": memory.read(
+                REBUILD_BASE + programmatic_pointer_motion_pending_rva, 1)[0],
+            "programmatic_pointer_motion_target_reached": memory.read(
+                REBUILD_BASE + programmatic_pointer_motion_target_reached_rva,
+                1)[0],
+            "programmatic_pointer_motion_target": [
+                memory.i32(REBUILD_BASE + programmatic_pointer_motion_x_rva),
+                memory.i32(REBUILD_BASE + programmatic_pointer_motion_y_rva),
+            ],
+        }
         rows, orders, pointer_slots, id_slots = rebuild_lists(memory, movement)
+        render_queue = rebuild_unit_render_queue(memory, runtime)
+        world_render_queue = rebuild_world_render_queue(memory, runtime)
         owners = sorted({row["owner"] for row in rows.values()
                          if row["owner"] < 8})
         economy = rebuild_economy(memory, runtime, owners)
@@ -1172,18 +1703,20 @@ def capture(name, side):
         owner_ai = rebuild_owner_ai(memory, runtime, owners, pointer_slots)
         unit_effects = rebuild_unit_effects(memory, runtime, id_slots)
         map_effects = rebuild_map_effects(memory, runtime, pointer_slots)
+        unit_reference_tables = rebuild_unit_reference_tables(memory, runtime)
         reach_debug = rebuild_reach_debug(memory, rows, pointer_slots)
         planning_debug = rebuild_planning_debug(memory, runtime, owners)
         transport_queues = rebuild_transport_queues(memory, runtime, owners)
         visibility_debug = rebuild_visibility_debug(memory, rows)
         movement_map_debug = rebuild_movement_map_debug(memory, rows)
         follow_pool_debug = rebuild_follow_pool_debug(memory, movement)
+    world_render_queue["semantic_entries"] = semantic_world_render_entries(
+        world_render_queue, world_view[0], world_view[1], name)
     # Owner 8+ rows include neutral map placeholders.  The original keeps stale
     # target pointers in some of those slots, while the rebuild clears them.
-    # Type 164 is a stationary resource decoration whose raw animation word is
-    # advanced by presentation timing; neither field participates in the P2P
-    # unit identity/position checksum.  Normalise those non-gameplay fields so
-    # they cannot mask the first combat-state divergence.
+    # Normalise only fields that are neither live simulation nor world-render
+    # state.  In particular, type 164's animation frame must remain visible to
+    # parity checks even though it is absent from the P2P checksum.
     for row in rows.values():
         # Raw queue slots retain old bytes after the live count reaches zero.
         # Only deferred_count entries are semantically active; comparing the
@@ -1201,13 +1734,14 @@ def capture(name, side):
                 row["equipment"][equipment_index] = 0
         if row["owner"] >= 8:
             row["target_slot"] = None
-            if row["type"] == 164:
-                row.pop("animation_frame", None)
     frame_after = memory.u32(side["frame_address"])
     if frame_before != frame_after:
         return None
     state = {
         "rng": rng,
+        "world_view_owner": world_view_owner,
+        "owner_visibility_masks": owner_visibility_masks,
+        "world_view": world_view,
         "rows": {str(slot): rows[slot] for slot in sorted(rows)},
         "active_order": orders["active"],
         "lifecycle_order": orders["lifecycle"],
@@ -1216,6 +1750,7 @@ def capture(name, side):
         "ai_demand": ai_demand,
         "owner_ai": owner_ai,
         "transport_queues": transport_queues,
+        "unit_reference_tables": unit_reference_tables,
         "unit_effects": unit_effects,
         "map_effects": map_effects,
     }
@@ -1229,15 +1764,80 @@ def capture(name, side):
         "movement_map_debug": movement_map_debug,
         "planning_debug": planning_debug,
         "follow_pool_debug": follow_pool_debug,
+        "render_queue_debug": render_queue,
+        "world_render_queue_debug": world_render_queue,
+        # Raw input/camera driver values are diagnostic only. They depend on
+        # wall-clock message delivery and must not make deterministic gameplay
+        # state unequal, but retaining them makes startup/edge-scroll failures
+        # actionable when world_view is the first semantic difference.
+        "camera_debug": camera_debug,
         "capture_ms": round((time.perf_counter() - started) * 1000.0, 3),
         "captured_ns": time.time_ns(),
     }
+
+
+def quake_camera_shake_active(state):
+    """Return whether effect 0x4b can move the presentation camera now."""
+    return any(
+        effect.get("effect_id") == 0x4B and
+        (effect.get("flags", 0) & 0x80) != 0 and
+        (effect.get("flags", 0) & 0x02) == 0
+        for effect in state.get("unit_effects", []))
+
+
+def snapshot_difference(left, right):
+    left_state = left["state"]
+    right_state = right["state"]
+    if IGNORE_WORLD_VIEW:
+        # Camera scrolling is driven by absolute 31-ms buckets, not by the
+        # deterministic simulation frame.  Fresh processes can enter gameplay
+        # in different wall-clock buckets even when their simulation state is
+        # aligned.  Simulation traces may therefore omit only the viewport;
+        # camera_debug remains in the detail artifact and dedicated sequential
+        # camera checkpoints still compare the complete state.
+        left_state = {
+            key: value for key, value in left_state.items()
+            if key != "world_view"
+        }
+        right_state = {
+            key: value for key, value in right_state.items()
+            if key != "world_view"
+        }
+    difference = first_difference(left_state, right_state)
+    compared_render_queue = False
+    compared_world_render_queue = False
+    if difference is None and not IGNORE_RENDER_QUEUES:
+        left_queue = left.get("render_queue_debug", {})
+        right_queue = right.get("render_queue_debug", {})
+        if (left_queue.get("ready") and right_queue.get("ready") and
+                left_queue.get("entries") is not None and
+                right_queue.get("entries") is not None):
+            compared_render_queue = True
+            difference = first_difference(
+                left_queue["entries"], right_queue["entries"],
+                "state.render_queue")
+    if (difference is None and not IGNORE_RENDER_QUEUES and
+            not quake_camera_shake_active(left_state) and
+            not quake_camera_shake_active(right_state)):
+        left_queue = left.get("world_render_queue_debug", {})
+        right_queue = right.get("world_render_queue_debug", {})
+        if (left_queue.get("ready") and right_queue.get("ready") and
+                left_queue.get("semantic_entries") is not None and
+                right_queue.get("semantic_entries") is not None):
+            compared_world_render_queue = True
+            difference = first_difference(
+                left_queue["semantic_entries"],
+                right_queue["semantic_entries"],
+                "state.world_render_queue")
+    return difference, compared_render_queue, compared_world_render_queue
 
 
 started = time.monotonic()
 first_pair = None
 last_pair = None
 exact_pairs = 0
+render_queue_compared_pairs = 0
+world_render_queue_compared_pairs = 0
 pair_gaps = []
 previous_exact = None
 baseline_mismatch = None
@@ -1256,6 +1856,12 @@ coverage = {
     "frames_with_unit_effects": 0,
     "frames_with_map_effects": 0,
     "frames_with_kill_or_loss": 0,
+    "max_world_render_commands": 0,
+    "frames_with_world_render_queue": 0,
+    "frames_with_map_effect_render": 0,
+    "frames_with_brush_edge_render": 0,
+    "world_render_kinds": set(),
+    "world_render_kind_max_counts": {},
     "unit_types": set(),
     "command_states": set(),
     "unit_effect_ids": set(),
@@ -1272,7 +1878,8 @@ pending_detail_path = os.path.splitext(RESULT_PATH)[0] + "-pending-detail.json"
 os.makedirs(os.path.dirname(os.path.abspath(RESULT_PATH)), exist_ok=True)
 
 
-def update_coverage(state):
+def update_coverage(snapshot):
+    state = snapshot["state"]
     active_count = len(state["active_order"])
     lifecycle_count = len(state["lifecycle_order"])
     coverage["min_active_units"] = (
@@ -1296,6 +1903,24 @@ def update_coverage(state):
         any(owner[key] for key in
             ("unit_kills", "building_kills", "unit_lost", "building_lost"))
         for owner in state["economy"].values())
+    world_entries = snapshot.get(
+        "world_render_queue_debug", {}).get("semantic_entries")
+    if world_entries is not None:
+        coverage["frames_with_world_render_queue"] += bool(world_entries)
+        coverage["max_world_render_commands"] = max(
+            coverage["max_world_render_commands"], len(world_entries))
+        frame_kind_counts = {}
+        for entry in world_entries:
+            kind = entry.get("kind", "unknown")
+            coverage["world_render_kinds"].add(kind)
+            frame_kind_counts[kind] = frame_kind_counts.get(kind, 0) + 1
+        coverage["frames_with_map_effect_render"] += bool(
+            frame_kind_counts.get("map_effect"))
+        coverage["frames_with_brush_edge_render"] += bool(
+            frame_kind_counts.get("brush_edge"))
+        for kind, count in frame_kind_counts.items():
+            coverage["world_render_kind_max_counts"][kind] = max(
+                coverage["world_render_kind_max_counts"].get(kind, 0), count)
     for owner, values in state["economy"].items():
         owner_ranges = coverage["economy_ranges"].setdefault(str(owner), {})
         for key, value in values.items():
@@ -1566,6 +2191,7 @@ def terminal_summary():
             key: row.get(key)
             for key in (
                 "type", "owner", "list", "state", "previous_state",
+                "string_slot",
                 "health", "max_health", "max_secondary", "secondary",
                 "runtime_stat_1c", "runtime_stat_20", "runtime_stat_28",
                 "elite_progress", "status_timer", "action_mode",
@@ -1611,8 +2237,12 @@ try:
                     difference = None
                     if (left is not None and right is not None and
                             left["frame"] == right["frame"]):
-                        difference = first_difference(
-                            left["state"], right["state"])
+                        (difference, compared_render_queue,
+                         compared_world_render_queue) = snapshot_difference(
+                             left, right)
+                        render_queue_compared_pairs += int(compared_render_queue)
+                        world_render_queue_compared_pairs += int(
+                            compared_world_render_queue)
                     if (left is not None and right is not None and
                             left["frame"] == right["frame"] and
                             difference is None):
@@ -1621,7 +2251,7 @@ try:
                         first_pair = frame
                         last_pair = frame
                         previous_exact = {"original": left, "rebuild": right}
-                        update_coverage(left["state"])
+                        update_coverage(left)
                     elif difference is not None:
                         baseline_mismatch = {
                             "frame": left["frame"],
@@ -1650,6 +2280,9 @@ try:
                     "first_exact_frame": first_pair,
                     "last_exact_frame": last_pair,
                     "pair_gaps": pair_gaps,
+                    "render_queue_compared_pairs": render_queue_compared_pairs,
+                    "world_render_queue_compared_pairs":
+                        world_render_queue_compared_pairs,
                     "semantic_coverage": coverage_summary(),
                     "terminal_exact_state": terminal_summary(),
                     "journal_path": JOURNAL_PATH,
@@ -1692,7 +2325,9 @@ try:
                 right = sides["rebuild"]["candidate"]
                 if (left is not None and right is not None and
                         left["frame"] == right["frame"]):
-                    difference = first_difference(left["state"], right["state"])
+                    (difference, compared_render_queue,
+                     compared_world_render_queue) = snapshot_difference(
+                         left, right)
                     atomic_json(detail_path, {
                         "probe": "suspended pair one-shot comparison",
                         "sha256": layout.get("sha256"),
@@ -1716,6 +2351,9 @@ try:
                             "suspended pair expanded state differs"),
                         "sha256": layout.get("sha256"),
                         "frame": left["frame"],
+                        "render_queue_compared": compared_render_queue,
+                        "world_render_queue_compared":
+                            compared_world_render_queue,
                         "first_difference": (
                             None if difference is None else {
                                 "field": difference[0],
@@ -1731,7 +2369,12 @@ try:
             for frame in common:
                 left = sides["original"]["snapshots"].pop(frame)
                 right = sides["rebuild"]["snapshots"].pop(frame)
-                difference = first_difference(left["state"], right["state"])
+                (difference, compared_render_queue,
+                 compared_world_render_queue) = snapshot_difference(
+                     left, right)
+                render_queue_compared_pairs += int(compared_render_queue)
+                world_render_queue_compared_pairs += int(
+                    compared_world_render_queue)
                 exact = difference is None
                 rng_aligned = (left["state"]["rng"] == right["state"]["rng"])
                 journal_row = {
@@ -1742,7 +2385,66 @@ try:
                     "rebuild_sha256": right["state_sha256"],
                     "rng": left["state"]["rng"],
                     "rebuild_rng": right["state"]["rng"],
+                    "world_view": left["state"]["world_view"],
+                    "rebuild_world_view": right["state"]["world_view"],
+                    "presentation_rng":
+                        left["camera_debug"]["presentation_rng"],
+                    "rebuild_presentation_rng":
+                        right["camera_debug"]["presentation_rng"],
                     "capture_ms": [left["capture_ms"], right["capture_ms"]],
+                    "render_queue_compared": compared_render_queue,
+                    "world_render_queue_compared":
+                        compared_world_render_queue,
+                    "command_states": sorted({
+                        row["state"]
+                        for row in left["state"].get("rows", {}).values()
+                    }),
+                    # Initial scenario records do not carry the transient
+                    # flags that choose the less common world-sprite paths.
+                    # Retain only units exercising one of those paths so a
+                    # long replay journal stays compact while still exposing
+                    # the exact frame and camera target needed for a pixel
+                    # capture.
+                    "visual_modes": [
+                        {
+                            "slot": slot,
+                            "type": row.get("type"),
+                            "owner": row.get("owner"),
+                            "world": row.get("world"),
+                            "bar": row.get("world_bar_selection"),
+                            "area": row.get("area_marker_flags"),
+                            "command_bits": row.get("command_bits0"),
+                            "command_flags": row.get("command_flags"),
+                            "runtime_flags": row.get("runtime_flags"),
+                            "draw_flags": row.get("world_draw_flags"),
+                        }
+                        for slot, row in sorted(
+                            left["state"].get("rows", {}).items(),
+                            key=lambda item: int(item[0]))
+                        if (
+                            (row.get("world_bar_selection", 0) & 0x80) or
+                            (row.get("area_marker_flags", 0) & 0x80000000) or
+                            (row.get("command_bits0", 0) & 0x80) or
+                            (row.get("command_flags", 0) & 0x003c0040) or
+                            (row.get("runtime_flags", 0) & 0x00041070) or
+                            (row.get("world_draw_flags", 0) & 0x82)
+                        )
+                    ],
+                    "unit_effects": [
+                        {
+                            "slot": effect.get("slot"),
+                            "id": effect.get("effect_id"),
+                            "source": effect.get("source_slot"),
+                            "target": effect.get("target_slot"),
+                            "x": effect.get("x"),
+                            "y": effect.get("y"),
+                        }
+                        for effect in left["state"].get("unit_effects", [])
+                    ],
+                    "map_effect_ids": [
+                        effect.get("effect_id")
+                        for effect in left["state"].get("map_effects", [])
+                    ],
                 }
                 if difference is not None:
                     journal_row["first_difference"] = {
@@ -1980,7 +2682,7 @@ try:
                 first_pair = frame if first_pair is None else first_pair
                 last_pair = frame
                 previous_exact = {"original": left, "rebuild": right}
-                update_coverage(left["state"])
+                update_coverage(left)
 
             # Keep unmatched peer snapshots briefly for wall-time skew, then
             # discard them before they can grow into a large in-memory trace.

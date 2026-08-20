@@ -90,6 +90,10 @@ struct UnitRenderQueueEntry {
     u32 render_class = 0;
     u32 layer = 0;
     u32 sort_key = 0;
+    // Stable fixed-pool identity used by render-order parity diagnostics.
+    // The original queue stores the raw OBC offset in its pointer field;
+    // retaining the typed slot makes the two queues directly comparable.
+    u32 runtime_slot_index = 0xffffffffu;
 };
 
 struct UnitVisibilityGrid {

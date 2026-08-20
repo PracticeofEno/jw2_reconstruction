@@ -12,7 +12,8 @@ from typing import Any
 def verify_missing_exact_frames(
         root: Path, replay: str | Path, artifact: Path,
         trace: dict[str, Any], start_frame: int, end_frame: int,
-        timeout_seconds: int) -> dict[str, Any] | None:
+        timeout_seconds: int, *, stabilize_viewport: bool = False,
+        align_presentation_rng: bool = False) -> dict[str, Any] | None:
     """Prove sampler-skipped frames individually and extend the exact count."""
     first = trace.get("first_exact_frame")
     last = trace.get("last_exact_frame")
@@ -32,12 +33,17 @@ def verify_missing_exact_frames(
     exact_frames: list[int] = []
     for frame in frames:
         output = artifact / f"gap_one_shot_{frame:03d}"
-        completed = subprocess.run([
+        command = [
             "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
             "-File", str(probe_script), "-ReplayPath", str(replay),
             "-TargetFrame", str(frame), "-OutputDirectory", str(output),
             "-TimeoutSeconds", str(timeout_seconds),
-        ], cwd=root, capture_output=True, text=True,
+        ]
+        if stabilize_viewport:
+            command.append("-StabilizeViewport")
+        if align_presentation_rng:
+            command.append("-AlignPresentationRng")
+        completed = subprocess.run(command, cwd=root, capture_output=True, text=True,
             timeout=timeout_seconds + 60)
         result_path = output / "result.json"
         if completed.returncode != 0 or not result_path.exists():

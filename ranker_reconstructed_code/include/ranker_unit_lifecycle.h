@@ -102,6 +102,8 @@ bool CheckUnitProductionPrerequisites(UnitLifecycleContext& context,
     u32 owner_id, u32 type_id);
 bool InitializePlacedUnitFromMapSlot(UnitLifecycleContext& context,
     UnitMovementUnit& unit, u32 type_id, u32 owner_id, i32 x, i32 y);
+bool ResolvePlacedUnitPointFromMapSlot(UnitLifecycleContext& context,
+    UnitMovementUnit& unit, u32 type_id, u32 owner_id, i32& x, i32& y);
 bool FindStrictUnitPlacementPoint(UnitLifecycleContext& context,
     UnitMovementUnit& unit, i32& x, i32& y);
 bool FindMatchingTerrainUnitPlacementPoint(UnitLifecycleContext& context,

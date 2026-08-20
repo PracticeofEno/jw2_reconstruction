@@ -53,6 +53,7 @@ def verify_behavior_trace_gaps(root: Path, replay: Path, artifact: Path,
             "-File", str(probe_script), "-ReplayPath", str(replay),
             "-TargetFrame", str(frame), "-OutputDirectory", str(output),
             "-TimeoutSeconds", str(timeout_seconds),
+            "-StabilizeViewport", "-AlignPresentationRng",
         ], cwd=root, capture_output=True, text=True,
             timeout=timeout_seconds + 60)
         result_path = output / "result.json"
@@ -136,6 +137,7 @@ def main() -> int:
             "-OutputDirectory", str(artifact),
             "-TimeoutSeconds", str(args.timeout_seconds),
             "-TraceIntervalMs", str(args.trace_interval_ms),
+            "-StabilizeViewport", "-AlignPresentationRng",
         ]
         print(
             f"[{number:02d}/{len(bindings):02d}] {label} "

@@ -514,9 +514,12 @@ void ApplyPostInitUnitRequirementToggle(GameSessionUnitReferenceTables& state) {
 }
 
 void RebuildUnitTypeReverseReferenceTables(GameSessionUnitReferenceTables& state) {
-    state.primary_or_alternate_reverse.fill(kInvalidGameSessionUnitType);
-    state.completion_reverse.fill(kInvalidGameSessionUnitType);
-    state.small_reverse.fill(kInvalidGameSessionUnitType);
+    // FUN_0043c370 only writes references that are present in the current
+    // definition records.  It never clears DAT_0123CE9C, DAT_0123D144, or
+    // DAT_0123D244.  Their initial zeroes come from the process BSS, while a
+    // later definition rebuild deliberately leaves mappings for references
+    // that were removed in the meantime.  AI production reads those stale
+    // mappings directly, so clearing here changes simulation state.
 
     for (u32 unit_type = 0; unit_type < state.definitions.size(); ++unit_type) {
         const UnitTypeSessionDefinition& definition = state.definitions[unit_type];

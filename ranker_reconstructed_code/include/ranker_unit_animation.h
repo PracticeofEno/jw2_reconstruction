@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ranker_player_slots.h"
 #include "ranker_types.h"
 
 #include <array>
@@ -11,6 +12,12 @@ constexpr u32 kUnitAnimFlagSelectedOrTargeted = 0x0f;
 constexpr u32 kUnitAnimFlagShowBars = 0x80;
 constexpr bool ShouldDrawUnitWorldBars(u32 animation_flags) {
     return (animation_flags & kUnitAnimFlagShowBars) != 0;
+}
+constexpr bool ShouldDrawUnitPaletteRampHighlight(u32 cargo_amount) {
+    // Command state 0x60 tests original raw unit +0x4c before entering its
+    // palette-ramp draw path.  That state-dependent union is cargo_amount in
+    // the typed runtime; raw +0x68 is the independent target/value word.
+    return cargo_amount != 0;
 }
 constexpr u32 kUnitAnimCommandMoving = 0x1;
 constexpr u32 kUnitAnimCommandConditionalAlternateMask = 0x3;
@@ -81,6 +88,22 @@ enum class UnitOwnerRelationTint : u32 {
     enemy = 1,
     ally = 3,
 };
+
+constexpr UnitOwnerRelationTint ResolveUnitOwnerRelationTint(
+    u32 local_owner_id, u32 unit_owner_id, bool allied) {
+    if (local_owner_id == unit_owner_id) {
+        return UnitOwnerRelationTint::local;
+    }
+    // Replay playback publishes owner 9 and leaves raw relation row 9 at
+    // 0xffffffff. ApplyUnitOwnerRelationTint therefore takes its allied
+    // palette path for every map owner, even though owner 9 is not one of the
+    // eight gameplay-player rows retained by PlayerSlotRuntimeState.
+    if (local_owner_id == kNoLocalPlayerSlot) {
+        return UnitOwnerRelationTint::ally;
+    }
+    return allied ? UnitOwnerRelationTint::ally :
+        UnitOwnerRelationTint::enemy;
+}
 
 struct UnitAnimationBounds {
     i32 x_offset = 0;

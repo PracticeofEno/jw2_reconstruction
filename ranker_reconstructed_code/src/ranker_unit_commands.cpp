@@ -1035,6 +1035,11 @@ UnitMovementUnit* create_legacy_spawned_unit(UnitCommandContext& context,
     // reverse link stores the builder offset in the structure.  Keep the
     // produced type in spawn_type_id and mirror that persistent forward link.
     unit.command_value = spawned->id;
+    // FUN_004c9e8f/FUN_004ca105 tail-jump to FUN_00401979 after linking the
+    // hidden builder.  Clear raw +0x08 bit 0x80 here as part of that command
+    // transition; removing only the UI membership leaves the render flag live
+    // until the later active-list synchronization pass.
+    unit.scenario_string_slot &= ~0x80u;
     if (context.callbacks.on_unit_spawned != nullptr) {
         context.callbacks.on_unit_spawned(context, unit, *spawned);
     }
@@ -1737,10 +1742,19 @@ void handle_spawn_cycle(UnitCommandContext& context, UnitMovementUnit& unit,
         raw_pool_alias.previous_command_state = 1;
         raw_pool_alias.cell_channel_additive_frame = 0;
         if (persistent_alias) {
-            // The original completes this malformed in-pool alias in place.
-            // Do not register a pointer to this temporary typed projection in
-            // movement cells; persist the raw words that the completion path
-            // reaches and finish the builder command.
+            // The original does not special-case this malformed in-pool
+            // alias: 0x004cb803 temporarily loads the raw byte offset into ESI
+            // and calls HandleUnitCreationRegisterFootprint.  In addition to
+            // its raw self/rally writes, that call increments
+            // DAT_00707430[alias.owner][alias.type].  DebugReplay_14 reaches
+            // this with raw offset 0x72, so the zero-filled slot-0 interior is
+            // counted as owner 0/type 0 even though no aligned unit exists.
+            // Keep the builder backlink for the completion feedback callback;
+            // access_spawn_alias deliberately persists only the raw alias
+            // fields, never this temporary typed pointer.
+            raw_pool_alias.target = &unit;
+            complete_spawned_construction(context, raw_pool_alias);
+            raw_pool_alias.target = nullptr;
             context.callbacks.access_spawn_alias(
                 context, unit.command_value, raw_pool_alias, true);
             PopDeferredUnitCommandOrReturnIdle(context, unit);
@@ -1880,16 +1894,20 @@ constexpr u32 kItemSlotUsableItemId = 0x1b;
 constexpr u32 kItemSlotUseActionEffectId = 0x25;
 
 u32* selected_item_slot(UnitMovementUnit& unit) {
-    if (unit.command_value <= 2) {
+    // States 0x87..0x89 keep the selected slot code in original raw +0x4c.
+    // That state-dependent union is cargo_amount in the typed runtime; raw
+    // +0x68 remains the resolved target reference (or zero for an encoded
+    // point command).
+    if (unit.cargo_amount <= 2) {
         return nullptr;
     }
-    if (unit.command_value == 3) {
+    if (unit.cargo_amount == 3) {
         return &unit.item_slots[0];
     }
-    if (unit.command_value == 4) {
+    if (unit.cargo_amount == 4) {
         return &unit.item_slots[1];
     }
-    if (unit.command_value == 5) {
+    if (unit.cargo_amount == 5) {
         return &unit.item_slots[2];
     }
     return &unit.item_slots[3];
@@ -2252,7 +2270,9 @@ void StartUnitItemSlotUseEntry(UnitCommandContext& context, UnitMovementUnit& un
     const bool encoded_point_payload = (payload_target & 0x80000000u) != 0;
     if (!encoded_point_payload) {
         UnitMovementUnit* target = resolve_command_payload_target(context, unit);
-        unit.command_value = static_cast<u32>(unit.path_target_x);
+        // Original 0x004d01a0 copies raw +0x6c into raw +0x4c before
+        // replacing the path coordinates with the resolved target center.
+        unit.cargo_amount = static_cast<u32>(unit.path_target_x);
         if (target != nullptr) {
             unit.path_target_x = target->x;
             unit.path_target_y = target->y;
@@ -2261,7 +2281,12 @@ void StartUnitItemSlotUseEntry(UnitCommandContext& context, UnitMovementUnit& un
         unit.active_command_payload.value = static_cast<u32>(unit.path_target_y);
     }
     else {
-        unit.command_value = payload_target & 0x7fffffffu;
+        // Original 0x004d01e1 masks the encoded selector into raw +0x4c and
+        // clears raw +0x68.  Keeping the selector only in command_value made
+        // item use execute locally but diverge from the original serialized
+        // gameplay/checksum state on the entry frame.
+        unit.cargo_amount = payload_target & 0x7fffffffu;
+        unit.command_value = 0;
         unit.target = nullptr;
         unit.active_command_payload.x = 0;
     }
@@ -2969,6 +2994,10 @@ void HandleUnitRuntimeDispatchTick(UnitCommandContext& context, UnitMovementUnit
         // consumed as the lifecycle work timer.
         unit.work_timer = 0;
         unit.draw_flags = 0;
+        // HandleUnitRuntimeDispatchTick calls FUN_00401979 in the original.
+        // That helper clears raw +0x08 bit 0x80 before refreshing selection;
+        // lifecycle rendering must not inherit the selected world-bar flag.
+        unit.scenario_string_slot &= ~0x80u;
         if (context.callbacks.on_runtime_death_marked != nullptr) {
             context.callbacks.on_runtime_death_marked(context, unit);
         }
@@ -11316,6 +11345,26 @@ void apply_owner_production_generated_demands(
             owner_count_for_type(owner_counts, carrier_type));
     }
 
+    if (input.target_owner_counts != nullptr &&
+        faction < input.faction_secondary_response_unit_types.size() &&
+        faction < input.faction_secondary_response_percents.size()) {
+        u32 target_secondary_resource_count = 0;
+        for (u32 unit_type : input.target_secondary_resource_unit_types) {
+            target_secondary_resource_count +=
+                owner_count_for_type(*input.target_owner_counts, unit_type);
+        }
+        // HandleOwnerProductionDemandAndBuildPlan 0x00443f5b..0x00443fca
+        // sums target types 99/115/131/147 and applies the faction row at
+        // 0x00704fa0 independently of the packed counter-unit rule table.
+        // The original x86 multiplication keeps the low DWORD before /100.
+        const u32 amount =
+            (target_secondary_resource_count *
+                (input.faction_secondary_response_percents[faction] +
+                    input.target_composition_percent_bonus)) / 100u;
+        AddOwnerProductionDemand(result.demand_state.bonus_demand,
+            input.faction_secondary_response_unit_types[faction], amount);
+    }
+
     ApplyOwnerProductionDemandAliases(result.demand_state.bonus_demand);
     ApplyOwnerProductionDemandAliases(result.demand_state.base_demand);
 }
@@ -11352,7 +11401,12 @@ u32 owner_aux_dependency_producer_unit_type(
 }
 
 u32 owner_aux_dependency_resource_cost(
-    const OwnerProductionDemandBuildPlanInput& input, u32 producer_unit_type) {
+    const OwnerProductionDemandBuildPlanInput& input, u32 dependency_slot,
+    u32 producer_unit_type) {
+    if (input.aux_dependency_resource_costs != nullptr &&
+        dependency_slot < input.aux_dependency_resource_costs->size()) {
+        return (*input.aux_dependency_resource_costs)[dependency_slot];
+    }
     const UnitMovementDefinition* definition =
         lookup_owner_production_definition(input, producer_unit_type);
     return definition != nullptr ? definition->production_resource_cost : 0;
@@ -11686,7 +11740,8 @@ void ProcessOwnerProductionAuxDependencyDemand(UnitCommandContext& context,
         u32 guard = 0;
         while (remaining != 0 && guard++ < 64) {
             const u32 resource_cost =
-                owner_aux_dependency_resource_cost(input, producer_unit_type);
+                owner_aux_dependency_resource_cost(input, dependency_slot,
+                    producer_unit_type);
             OwnerProductionBuildActionResult action =
                 SelectOwnerProductionAuxDependencyBuildAction(context, owner_id,
                     owner_unit_counts, producer_unit_type, resource_cost,
@@ -11885,10 +11940,14 @@ bool CheckOwnerProductionRouteWorkerNeedsObject(
         return false;
     }
 
-    return unit.active_command_payload.state == 0 ||
-        unit.active_command_payload.value == 0 ||
-        unit.active_command_payload.x == 0 ||
-        unit.active_command_payload.y == 0;
+    // AssignOwnerProductionRouteObjectTarget (0x00445e8f) tests raw unit
+    // +0x30/+0x34/+0x38/+0x3c.  For the low worker types accepted by this
+    // path those words are equipment slots 0..3, not the command tuple at
+    // raw +0xd8..+0xe4.  Testing active_command_payload made an otherwise
+    // eligible worker look absent and suppressed the auxiliary producer
+    // demand generated when no visible route object exists.
+    return unit.equipment_slots[0] == 0 || unit.equipment_slots[1] == 0 ||
+        unit.equipment_slots[2] == 0 || unit.equipment_slots[3] == 0;
 }
 
 UnitMovementUnit* FindOwnerProductionRouteWorker(

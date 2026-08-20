@@ -9,6 +9,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+from parity_trace_support import verify_missing_exact_frames
 from run_unit_production_parity_suite import atomic_json, record_key
 
 
@@ -63,6 +64,7 @@ def main() -> int:
                 "-OutputDirectory", str(artifact),
                 "-TimeoutSeconds", str(args.timeout_seconds),
                 "-TraceIntervalMs", str(args.trace_interval_ms),
+                "-StabilizeViewport", "-AlignPresentationRng",
             ], cwd=root, capture_output=True, text=True,
                 timeout=args.timeout_seconds + 60)
             trace = (json.loads(result_path.read_text(encoding="utf-8"))
@@ -70,9 +72,17 @@ def main() -> int:
                      else {"pass": False, "reason": (
                          completed.stderr.strip() or completed.stdout.strip() or
                          f"trace command exited {completed.returncode}")})
+        gap_fallback = verify_missing_exact_frames(
+            root, batch["replay"], artifact, trace,
+            args.start_frame, args.end_frame, args.timeout_seconds,
+            stabilize_viewport=True, align_presentation_rng=True)
+        gaps_verified = bool(gap_fallback and gap_fallback.get("pass"))
         continuous = bool(
             trace.get("pass") and trace.get("first_exact_frame") is not None and
-            trace.get("last_exact_frame") is not None and not trace.get("pair_gaps"))
+            trace.get("last_exact_frame") is not None and
+            ((trace.get("first_exact_frame") <= args.start_frame and
+              trace.get("last_exact_frame") >= args.end_frame - 1 and
+              not trace.get("pair_gaps")) or gaps_verified))
         terminal_units = (trace.get("terminal_exact_state") or {}).get(
             "player_units", {})
         batch_failures = 0
@@ -96,17 +106,18 @@ def main() -> int:
                 "first_exact_frame": trace.get("first_exact_frame"),
                 "last_exact_frame": trace.get("last_exact_frame"),
                 "pair_gaps": trace.get("pair_gaps", []),
+                "gap_fallback": gap_fallback,
                 "trace_reason": trace.get("reason"),
                 "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
             }
             records[record_key(row)] = row
             batch_failures += verdict != "exact"
+        recorded["cases"] = sorted(records.values(), key=lambda row: tuple(
+            str(value) for value in record_key(row)))
+        atomic_json(results_path, recorded)
         failures += batch_failures
         print(f"  {'PASS' if not batch_failures else f'FAIL({batch_failures})'}: "
               f"exact_frames={trace.get('exact_pair_count', 0)}", flush=True)
-    recorded["cases"] = sorted(records.values(), key=lambda row: tuple(
-        str(value) for value in record_key(row)))
-    atomic_json(results_path, recorded)
     print(f"completed_batches={len(batches)} failed_cases={failures} "
           f"artifacts={artifact_root}")
     return 1 if failures else 0

@@ -243,8 +243,8 @@ void mirror_owner_slots(GameplaySessionStartupState& state) {
         }
     }
 
-    state.players->local_player_slot = std::min<u32>(state.local_owner_id,
-        kPlayerSlotCount - 1);
+    state.players->local_player_slot =
+        NormalizePlayerOrNoLocalSlot(state.local_owner_id);
     InitializeGameplaySessionPlayerSlotState(
         *state.players, state.session_mode, state.rotation_reset_units);
 }

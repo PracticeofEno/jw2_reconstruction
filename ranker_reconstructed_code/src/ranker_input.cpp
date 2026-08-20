@@ -12,6 +12,10 @@ namespace ranker {
 namespace {
 
 InputState g_input_state;
+bool g_programmatic_pointer_motion_pending = false;
+bool g_programmatic_pointer_motion_target_reached = false;
+i32 g_programmatic_pointer_motion_x = 0;
+i32 g_programmatic_pointer_motion_y = 0;
 std::atomic_flag g_mouse_event_snapshot_gate = ATOMIC_FLAG_INIT;
 
 struct GameplayMouseCommandSnapshotStorage {
@@ -387,6 +391,25 @@ bool HandlePointerMotion(u32 lparam) {
 #endif
     const i32 x = signed_lparam_word(lparam, 0);
     const i32 y = signed_lparam_word(lparam, 16);
+    if (g_programmatic_pointer_motion_pending) {
+        // SetCursorPos can have an older physical-position WM_MOUSEMOVE ahead
+        // of its target message in the queue. cnc-ddraw's lock/placement path
+        // does not publish either message as a DirectInput sample. Drain all
+        // stale moves through the requested target, then keep discarding
+        // duplicate target notifications. The first different position after
+        // the target is the first genuine pointer sample.
+        const bool at_target = x == g_programmatic_pointer_motion_x &&
+            y == g_programmatic_pointer_motion_y;
+        if (!g_programmatic_pointer_motion_target_reached) {
+            g_programmatic_pointer_motion_target_reached = at_target;
+            return true;
+        }
+        if (at_target) {
+            return true;
+        }
+        g_programmatic_pointer_motion_pending = false;
+        g_programmatic_pointer_motion_target_reached = false;
+    }
     // Original 004fcd91 overwrites the X-delta slot with the Y delta.
     g_input_state.mouse_dx = static_cast<i32>(g_input_state.mouse_x) - x;
     g_input_state.mouse_dx = static_cast<i32>(g_input_state.mouse_y) - y;
@@ -402,6 +425,30 @@ bool HandlePointerMotion(u32 lparam) {
     SetGameCursorPointerPosition(x, y);
 #endif
     return true;
+}
+
+void ResetPointerMotionToLegacyStartupState() {
+    // Ranker_WinMain's startup SetCursorPos is independent of the original
+    // DirectInput coordinate globals. Earlier wrapper/window messages may
+    // already have populated our replacement state, so restore the untouched
+    // zero-filled values immediately before that one startup cursor move.
+    g_input_state.mouse_x = 0;
+    g_input_state.mouse_y = 0;
+    g_input_state.mouse_dx = 0;
+    g_input_state.mouse_dy = 0;
+    g_input_state.pointer_motion_seen = false;
+    g_programmatic_pointer_motion_pending = false;
+    g_programmatic_pointer_motion_target_reached = false;
+}
+
+void SuppressNextProgrammaticPointerMotion(i32 x, i32 y) {
+    // SetCursorPos is not a DirectInput device sample in the original. Ignore
+    // the matching window-system message without rewriting the last genuine
+    // device coordinates during later lock/unlock and confinement refreshes.
+    g_programmatic_pointer_motion_x = x;
+    g_programmatic_pointer_motion_y = y;
+    g_programmatic_pointer_motion_pending = true;
+    g_programmatic_pointer_motion_target_reached = false;
 }
 
 bool HandleLeftButtonDown(u32 wparam, u32 lparam) {

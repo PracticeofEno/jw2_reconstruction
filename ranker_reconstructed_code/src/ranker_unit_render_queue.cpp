@@ -73,7 +73,8 @@ u32 effect_sort_key(const UnitRenderQueueContext& context, const UnitRenderItem&
 void push_entry(UnitRenderQueueContext& context, const UnitRenderItem& item,
     u32 render_class, u32 layer, u32 sort_key) {
     context.queued_entries.push_back(
-        UnitRenderQueueEntry{item.unit, item.type_id, render_class, layer, sort_key});
+        UnitRenderQueueEntry{item.unit, item.type_id, render_class, layer, sort_key,
+            item.runtime_slot_index});
     if (context.callbacks.on_queue_entry != nullptr) {
         context.callbacks.on_queue_entry(context, item);
     }
@@ -133,6 +134,10 @@ bool IsMapTileVisible(const UnitVisibilityGrid& grid, u32 tile_x, u32 tile_y) {
 
 bool IsUnitRenderItemIndividuallyVisibleToLocal(
     const UnitRenderQueueContext& context, const UnitRenderItem& item) {
+    // FUN_004d6cca loads 0x00a04070/0x00a04074 with the unit-pool bias in
+    // ESI. Relative to the pool base at 0x00a03fb8 these are raw +0xb8/+0xbc,
+    // the live world position. Do not confuse them with the stored current
+    // cell at raw +0xc0/+0xc4; moving units can legitimately differ here.
     const u32 tile_x = static_cast<u32>(item.x) >> 5;
     const u32 tile_y = static_cast<u32>(item.y) >> 5;
     return unit_individual_visibility_gate(context, item, tile_x, tile_y);

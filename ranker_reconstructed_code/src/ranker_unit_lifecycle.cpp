@@ -66,7 +66,7 @@ void increment_owner_type_count(UnitLifecycleContext& context, u32 owner_id,
     u32 type_id) {
     if (has_owner_type_count_slot(owner_id, type_id)) {
         u32& count = context.owner_unit_type_counts[owner_id][type_id];
-        count = static_cast<u8>(count + 1u);
+        ++count;
     }
 }
 
@@ -74,7 +74,7 @@ void decrement_owner_type_count(UnitLifecycleContext& context, u32 owner_id,
     u32 type_id) {
     if (has_owner_type_count_slot(owner_id, type_id)) {
         u32& count = context.owner_unit_type_counts[owner_id][type_id];
-        count = static_cast<u8>(count - 1u);
+        --count;
     }
 }
 
@@ -965,8 +965,8 @@ bool CheckUnitProductionPrerequisites(UnitLifecycleContext& context,
     return true;
 }
 
-bool InitializePlacedUnitFromMapSlot(UnitLifecycleContext& context,
-    UnitMovementUnit& unit, u32 type_id, u32 owner_id, i32 x, i32 y) {
+bool ResolvePlacedUnitPointFromMapSlot(UnitLifecycleContext& context,
+    UnitMovementUnit& unit, u32 type_id, u32 owner_id, i32& x, i32& y) {
     const UnitMovementDefinition* definition = definition_for_type(context, type_id);
     if (definition == nullptr) {
         return false;
@@ -1011,6 +1011,17 @@ bool InitializePlacedUnitFromMapSlot(UnitLifecycleContext& context,
             return false;
         }
     }
+
+    return true;
+}
+
+bool InitializePlacedUnitFromMapSlot(UnitLifecycleContext& context,
+    UnitMovementUnit& unit, u32 type_id, u32 owner_id, i32 x, i32 y) {
+    if (!ResolvePlacedUnitPointFromMapSlot(
+            context, unit, type_id, owner_id, x, y)) {
+        return false;
+    }
+    const UnitMovementDefinition* definition = &unit.definition;
 
     unit.x = x;
     unit.y = y;
@@ -1219,7 +1230,7 @@ void HandleOwnerUnitTypeCountRebuild(UnitLifecycleContext& context) {
         }
         u32& count =
             context.owner_unit_type_counts[unit->owner_id][counted_type];
-        count = static_cast<u8>(count + 1u);
+        ++count;
     }
 }
 

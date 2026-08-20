@@ -1,7 +1,7 @@
 # Final gameplay parity audit
 
 - Result: PASS
-- Current rebuild SHA-256: `A22E3DD14B5BE706BD7381BD449BAFF206D1E1F5812DF0BDDF7BCCABAE0B7AF2`
+- Current rebuild SHA-256: `2B1A53ADC9DEF276124AD50C5C177F5027971CDC1B28A1DD72B24395BB65B0AB`
 - Expected player-operable cases: 21369
 - Stored canonical result rows: 21369
 

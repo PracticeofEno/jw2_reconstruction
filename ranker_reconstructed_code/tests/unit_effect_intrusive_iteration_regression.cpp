@@ -1,7 +1,9 @@
 #include "ranker_unit_action.h"
 
+#include "ranker_gameplay_visibility.h"
 #include "ranker_gameplay_tooltips.h"
 #include "ranker_unit_damage.h"
+#include "ranker_unit_equipment.h"
 #include "ranker_unit_lifecycle.h"
 #include "ranker_unit_spatial_index.h"
 
@@ -1023,6 +1025,8 @@ void test_spawn_cycle_pops_dead_misaligned_raw_pool_alias() {
 }
 
 UnitMovementUnit g_persistent_spawn_alias;
+UnitLifecycleContext g_persistent_spawn_alias_lifecycle;
+UnitMovementUnit* g_persistent_spawn_alias_builder = nullptr;
 
 bool access_persistent_spawn_alias(UnitCommandContext&, u32 raw_unit_offset,
     UnitMovementUnit& alias, bool write_back) {
@@ -1041,18 +1045,85 @@ bool access_persistent_spawn_alias(UnitCommandContext&, u32 raw_unit_offset,
     return true;
 }
 
+u32 finish_action20_command_flag_window(u32 definition_type_flags,
+    u32 definition_support_source_flags, bool equipment_preserves_flag) {
+    UnitEffectRuntimeState state{};
+    UnitEffectDefinition definition{};
+    definition.id = 0x51;
+    state.definitions.push_back(definition);
+
+    UnitEquipmentCatalog catalog{};
+    if (equipment_preserves_flag) {
+        UnitEquipmentEffectDefinition equipment{};
+        equipment.id = 0x58;
+        equipment.category = UnitEquipmentCategory::Generic;
+        equipment.mode = 0;
+        equipment.generic_modifiers[
+            kUnitEquipmentGenericModifierCommandFlag] = 1;
+        catalog.effects.push_back(equipment);
+        state.equipment_catalog = &catalog;
+    }
+
+    UnitMovementUnit target{};
+    target.id = 0x1234;
+    target.active = true;
+    target.owner_id = 1;
+    target.type_id = 1;
+    target.runtime_flags = 1;
+    target.command_flags = 0x68;
+    target.definition.type_flags = definition_type_flags;
+    target.definition.support_source_flags = definition_support_source_flags;
+    if (equipment_preserves_flag) {
+        target.equipment_slots[0] = 0x58;
+    }
+    state.unit_refs.push_back(&target);
+
+    UnitEffectRuntime effect{};
+    effect.active = true;
+    effect.effect_id = definition.id;
+    effect.linked_unit_id = target.id;
+    effect.frame = 749;
+    effect.amount = 750;
+    DispatchUnitActionEffectCommand(state, effect, 0x14);
+    require(!effect.active,
+        "action 0x14 terminal command-flag window did not release");
+    return target.command_flags;
+}
+
+void test_action20_cleanup_uses_definition_1f8_flag() {
+    require(finish_action20_command_flag_window(0x2u, 0, false) == 0x28u,
+        "action 0x14 tested definition +0x1ec instead of +0x1f8");
+    require(finish_action20_command_flag_window(0, 0x2u, false) == 0x68u,
+        "action 0x14 ignored definition +0x1f8 command-flag capability");
+    require(finish_action20_command_flag_window(0, 0, true) == 0x68u,
+        "action 0x14 ignored active equipment command-flag modifier");
+}
+
+void complete_persistent_spawn_alias(UnitCommandContext&,
+    UnitMovementUnit& alias) {
+    require(alias.target == g_persistent_spawn_alias_builder,
+        "state-0x5b raw alias completion lost its builder backlink");
+    HandleUnitCreationRegisterFootprint(
+        g_persistent_spawn_alias_lifecycle, alias);
+}
+
 void test_spawn_cycle_accumulates_misaligned_raw_pool_alias() {
     g_persistent_spawn_alias = {};
     g_persistent_spawn_alias.definition.production_spawn_time = 2;
+    g_persistent_spawn_alias_lifecycle = {};
+    g_persistent_spawn_alias_builder = nullptr;
 
     UnitCommandContext context{};
     context.callbacks.access_spawn_alias = access_persistent_spawn_alias;
+    context.callbacks.on_construction_completed =
+        complete_persistent_spawn_alias;
 
     UnitMovementUnit builder{};
     builder.command_state = kUnitStateSpawnCreateCycle;
     builder.command_value = 116;
     builder.animation_frame = 4;
     builder.definition.spawn_frame_count = 4;
+    g_persistent_spawn_alias_builder = &builder;
 
     HandleUnitSpawnCreateCycle(context, builder);
     require(builder.command_state == kUnitStateSpawnCreateCycle &&
@@ -1066,6 +1137,18 @@ void test_spawn_cycle_accumulates_misaligned_raw_pool_alias() {
     require(builder.command_state == kUnitStateRuntimeIdleAcquire &&
             g_persistent_spawn_alias.previous_command_state == 1,
         "completed state-0x5b raw alias did not pop the builder command");
+    require(g_persistent_spawn_alias_lifecycle.owner_unit_type_counts[0][0] == 1,
+        "completed state-0x5b raw alias did not increment owner 0/type 0");
+    UnitMovementUnit removed_alias{};
+    removed_alias.owner_id = 0;
+    removed_alias.type_id = 0;
+    HandleUnitDeathOwnerCounters(
+        g_persistent_spawn_alias_lifecycle, removed_alias);
+    HandleUnitDeathOwnerCounters(
+        g_persistent_spawn_alias_lifecycle, removed_alias);
+    require(g_persistent_spawn_alias_lifecycle.owner_unit_type_counts[0][0] ==
+            0xffffffffu,
+        "completed-type decrement truncated the original DWORD underflow");
 }
 
 void test_movement_flag_1000_enters_idle_as_completed_step() {
@@ -1134,6 +1217,136 @@ void test_construction_backlink_releases_dead_spawn_worker_raw_state() {
     HandleUnitRuntimeDispatchTick(context, building);
     require(building.target == &worker,
         "construction backlink rejected a live state-0x5b worker");
+}
+
+bool g_low_type_death_callback_observed_cleared_world_bar = false;
+
+void observe_low_type_death_world_bar_clear(
+    UnitMovementContext&, UnitMovementUnit& unit) {
+    g_low_type_death_callback_observed_cleared_world_bar =
+        (unit.scenario_string_slot & 0x80u) == 0;
+}
+
+bool g_high_type_death_callback_observed_cleared_world_bar = false;
+
+void observe_high_type_death_world_bar_clear(
+    UnitCommandContext&, UnitMovementUnit& unit) {
+    g_high_type_death_callback_observed_cleared_world_bar =
+        (unit.scenario_string_slot & 0x80u) == 0;
+}
+
+void test_death_clears_selected_world_bar_flag_before_selection_callback() {
+    UnitMovementContext movement{};
+    movement.callbacks.on_unit_marked_dead =
+        observe_low_type_death_world_bar_clear;
+
+    UnitMovementUnit mobile{};
+    mobile.scenario_string_slot = 0x8du;
+    g_low_type_death_callback_observed_cleared_world_bar = false;
+    HandleUnitRuntimeDeathState(movement, mobile);
+    require(mobile.scenario_string_slot == 0x0du &&
+            g_low_type_death_callback_observed_cleared_world_bar,
+        "mobile death retained raw +0x08 world-bar bit through selection cleanup");
+
+    UnitCommandContext commands{};
+    commands.callbacks.on_runtime_death_marked =
+        observe_high_type_death_world_bar_clear;
+
+    UnitMovementUnit structure{};
+    structure.type_id = 0x60u;
+    structure.scenario_string_slot = 0x87u;
+    structure.command_state = kUnitCommandDead | kUnitStateRuntimeIdleAcquire;
+    structure.action_mode_gate = 1;
+    g_high_type_death_callback_observed_cleared_world_bar = false;
+    HandleUnitRuntimeDispatchTick(commands, structure);
+    require(structure.scenario_string_slot == 0x07u &&
+            g_high_type_death_callback_observed_cleared_world_bar,
+        "structure death retained raw +0x08 world-bar bit through selection cleanup");
+}
+
+UnitMovementUnit g_legacy_spawn_world_bar_probe;
+bool g_legacy_spawn_callback_observed_cleared_world_bar = false;
+
+UnitMovementUnit* create_legacy_spawn_world_bar_probe(
+    UnitCommandContext&, UnitMovementUnit&, u32 type_id, i32 x, i32 y) {
+    g_legacy_spawn_world_bar_probe = {};
+    g_legacy_spawn_world_bar_probe.type_id = type_id;
+    g_legacy_spawn_world_bar_probe.x = x;
+    g_legacy_spawn_world_bar_probe.y = y;
+    return &g_legacy_spawn_world_bar_probe;
+}
+
+void observe_legacy_spawn_world_bar_clear(UnitCommandContext&,
+    UnitMovementUnit& source, UnitMovementUnit&) {
+    g_legacy_spawn_callback_observed_cleared_world_bar =
+        (source.scenario_string_slot & 0x80u) == 0;
+}
+
+void test_legacy_spawn_link_clears_builder_world_bar_flag() {
+    UnitCommandContext context{};
+    context.callbacks.create_unit = create_legacy_spawn_world_bar_probe;
+    context.callbacks.on_unit_spawned = observe_legacy_spawn_world_bar_clear;
+
+    UnitMovementUnit builder{};
+    builder.owner_id = 8;
+    builder.command_state = kUnitStateLegacySpawnPlacementStart;
+    builder.scenario_string_slot = 0x8bu;
+    builder.x = 320;
+    builder.y = 320;
+    builder.path_target_x = 320;
+    builder.path_target_y = 320;
+    builder.active_command_payload.y = 608;
+    builder.active_command_payload.value = 736;
+
+    g_legacy_spawn_callback_observed_cleared_world_bar = false;
+    StartUnitLegacySpawnPlacementCommand(context, builder);
+
+    require(builder.command_state == kUnitStateLegacySpawnConstruction &&
+            builder.scenario_string_slot == 0x0bu &&
+            g_legacy_spawn_callback_observed_cleared_world_bar,
+        "legacy construction link retained the builder raw +0x08 world-bar bit");
+}
+
+void test_replay_observer_relation_bit_marks_local_visibility() {
+    GameplayVisibilityGrid grid{};
+    grid.width = 4;
+    grid.height = 4;
+
+    PlayerSlotRuntimeState players{};
+    players.owner_visibility_masks[0] =
+        (1u << 0) | (1u << kNoLocalPlayerSlot);
+
+    GameplayVisibilityContext context{};
+    context.grid = &grid;
+    context.players = &players;
+    context.local_player_slot = kNoLocalPlayerSlot;
+
+    GameplayVisibilityUnit unit{};
+    unit.owner_id = 0;
+    unit.owner_visibility_mask = players.owner_visibility_masks[0];
+    unit.owner_explore_mask = unit.owner_visibility_mask;
+    unit.x = 32;
+    unit.y = 32;
+    unit.center_x = unit.x;
+    unit.center_y = unit.y;
+    unit.interaction_range_pixels = 96;
+    unit.current_visibility_enabled = true;
+    unit.terrain_class = 7;
+
+    ApplyActiveUnitVisibility(context, unit);
+    const std::size_t center = 1u * grid.width + 1u;
+    require(center < grid.current.size() &&
+            (grid.current[center] & kGameplayVisibilityLocalMask) ==
+                kGameplayVisibilityLocalMask,
+        "replay observer bit 9 was truncated before local visibility marking");
+    require((grid.current[center] & kGameplayVisibilityCurrentOwnerMask) ==
+            (1u << kGameplayVisibilityCurrentOwnerShift),
+        "observer visibility polluted the map-owner bit layer");
+    const u32 relation_mask = players.owner_visibility_masks[0];
+    require(center < grid.owner.size() && grid.owner[center] ==
+            ((relation_mask << kGameplayVisibilityOwnerLayerShift) |
+                relation_mask),
+        "replay observer bit 9 was truncated from the explored-owner layer");
 }
 
 void test_broken_shield_preserves_negative_raw_overshoot() {
@@ -1631,6 +1844,65 @@ void test_special_projectile_startup_precedes_impact_route() {
     }
 }
 
+void test_effect62_raw_impact_bypasses_hidden_source_gate() {
+    require(!ShouldUnitEffect62RawImpactBypassVisibility(
+                kUnitEffectFlagStartup),
+        "effect 0x62 startup ignored its hidden-source visibility gate");
+    require(ShouldUnitEffect62RawImpactBypassVisibility(
+                kUnitEffectFlagStartup | kUnitEffectFlagImpact),
+        "effect 0x62 raw impact bit did not bypass hidden-source visibility");
+}
+
+void test_special_projectile_impact_uses_raw_tick_frame() {
+    UnitEffectRuntime effect{};
+    effect.active = true;
+    effect.flags = kUnitEffectFlagImpact;
+    effect.tick = 5;
+    effect.frame = 0;
+
+    constexpr u32 special_sprite_ids[] = {0x46, 0x56, 0x59};
+    for (u32 effect_id : special_sprite_ids) {
+        effect.effect_id = effect_id;
+        require(ResolveUnitEffectSpriteAnimationFrame(effect) == 5,
+            "special high-ID projectile renderer used raw +0x10 instead of +0x0c");
+    }
+}
+
+void test_effect_sort_uses_raw_render_class() {
+    UnitEffectRuntimeState state{};
+    UnitEffectDefinition definition{};
+    definition.id = 0x45;
+    definition.render_sort_handler = 3;
+    state.definitions.push_back(definition);
+
+    UnitMovementUnit source{};
+    source.id = 1;
+    source.active = true;
+    source.definition.lifecycle_class = 0;
+    source.definition.movement_class = 3;
+    state.unit_refs.push_back(&source);
+
+    UnitMovementUnit target{};
+    target.id = 2;
+    target.active = true;
+    target.definition.lifecycle_class = 3;
+    target.definition.movement_class = 0;
+    state.unit_refs.push_back(&target);
+
+    UnitEffectRuntime effect{};
+    effect.active = true;
+    effect.effect_id = definition.id;
+    effect.source_unit_id = source.id;
+    effect.target_unit_id = target.id;
+    effect.flags = kUnitEffectFlagStartup;
+    require(ResolveUnitEffectRenderSortLayer(state, effect) == 0x80000000u,
+        "startup effect sort used source lifecycle class instead of raw +0x424");
+
+    effect.flags = kUnitEffectFlagImpact;
+    require(ResolveUnitEffectRenderSortLayer(state, effect) == 0x70000000u,
+        "impact effect sort used target lifecycle class instead of raw +0x424");
+}
+
 void test_ground_meat_tooltip_uses_live_map_effect_amount() {
     require(BuildGameplayMapEffectTooltipText("Small meat", 1, 237) ==
             "Small meat=237",
@@ -1655,6 +1927,28 @@ void test_ground_meat_tooltip_uses_live_map_effect_amount() {
 
 int main(int argc, char** argv) {
     if (argc == 2 &&
+        std::string(argv[1]) == "effect62_raw_impact_visibility") {
+        test_effect62_raw_impact_bypasses_hidden_source_gate();
+        std::cout << "EFFECT62_RAW_IMPACT_VISIBILITY_PASS\n";
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string(argv[1]) == "effect_render_sort_class") {
+        test_effect_sort_uses_raw_render_class();
+        std::cout << "EFFECT_RENDER_SORT_CLASS_PASS\n";
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string(argv[1]) == "action20_command_flag_cleanup") {
+        test_action20_cleanup_uses_definition_1f8_flag();
+        std::cout << "ACTION20_COMMAND_FLAG_CLEANUP_PASS\n";
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 &&
+        std::string(argv[1]) == "special_projectile_render_tick") {
+        test_special_projectile_impact_uses_raw_tick_frame();
+        std::cout << "SPECIAL_PROJECTILE_RENDER_TICK_PASS\n";
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 &&
         std::string(argv[1]) == "kingdemon_afterimage_render") {
         test_kingdemon_afterimage_uses_half_rate_render_tick();
         std::cout << "KINGDEMON_AFTERIMAGE_RENDER_PASS\n";
@@ -1669,6 +1963,7 @@ int main(int argc, char** argv) {
     test_cached_next_continues_through_free_tail();
     test_unlinked_non_next_node_is_not_visited_from_entry_snapshot();
     test_action9_counts_down_raw_effect_30_accumulator();
+    test_action20_cleanup_uses_definition_1f8_flag();
     test_area_stun_preserves_independent_unit_timers();
     test_repeated_thunder_impacts_are_applied_during_list_walk();
     test_missing_thunder_target_keeps_natural_lifetime_and_payload();
@@ -1691,6 +1986,9 @@ int main(int argc, char** argv) {
     test_relative_spatial_box_uses_frame_start_source_anchor();
     test_lifecycle_idle_reset_clamps_shared_raw_frame();
     test_construction_backlink_releases_dead_spawn_worker_raw_state();
+    test_death_clears_selected_world_bar_flag_before_selection_callback();
+    test_legacy_spawn_link_clears_builder_world_bar_flag();
+    test_replay_observer_relation_bit_marks_local_visibility();
     test_broken_shield_preserves_negative_raw_overshoot();
     test_follow_command_preserves_zeroed_free_pool_target();
     test_target_progress_uses_zeroed_free_pool_target_definition();
@@ -1709,6 +2007,9 @@ int main(int argc, char** argv) {
     test_kingdemon_afterimage_uses_half_rate_render_tick();
     test_original_effect_phase_render_precedence();
     test_special_projectile_startup_precedes_impact_route();
+    test_effect62_raw_impact_bypasses_hidden_source_gate();
+    test_special_projectile_impact_uses_raw_tick_frame();
+    test_effect_sort_uses_raw_render_class();
     test_ground_meat_tooltip_uses_live_map_effect_amount();
     std::cout << "UNIT_EFFECT_INTRUSIVE_ITERATION_PASS\n";
     return EXIT_SUCCESS;

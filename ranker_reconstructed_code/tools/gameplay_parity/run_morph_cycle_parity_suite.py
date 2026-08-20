@@ -9,6 +9,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+from parity_trace_support import verify_missing_exact_frames
 from run_unit_production_parity_suite import atomic_json, record_key
 
 
@@ -37,6 +38,7 @@ def main() -> int:
         "-OutputDirectory", str(artifact),
         "-TimeoutSeconds", str(args.timeout_seconds),
         "-TraceIntervalMs", str(args.trace_interval_ms),
+        "-StabilizeViewport", "-AlignPresentationRng",
     ]
     completed = subprocess.run(
         command, cwd=root, capture_output=True, text=True,
@@ -48,9 +50,17 @@ def main() -> int:
         trace = {"pass": False, "reason": (
             completed.stderr.strip() or completed.stdout.strip() or
             f"trace command exited {completed.returncode}")}
+    gap_fallback = verify_missing_exact_frames(
+        root, manifest["replay"], artifact, trace,
+        args.start_frame, args.end_frame, args.timeout_seconds,
+        stabilize_viewport=True, align_presentation_rng=True)
+    gaps_verified = bool(gap_fallback and gap_fallback.get("pass"))
     continuous_exact = bool(
         trace.get("pass") and trace.get("first_exact_frame") is not None and
-        trace.get("last_exact_frame") is not None and not trace.get("pair_gaps"))
+        trace.get("last_exact_frame") is not None and
+        ((trace.get("first_exact_frame") <= args.start_frame and
+          trace.get("last_exact_frame") >= args.end_frame - 1 and
+          not trace.get("pair_gaps")) or gaps_verified))
     observed_types = set(trace.get("semantic_coverage", {}).get("unit_types", []))
     terminal_types = {
         row.get("type") for row in
@@ -79,6 +89,7 @@ def main() -> int:
             "first_exact_frame": trace.get("first_exact_frame"),
             "last_exact_frame": trace.get("last_exact_frame"),
             "pair_gaps": trace.get("pair_gaps", []),
+            "gap_fallback": gap_fallback,
             "trace_reason": trace.get("reason"),
             "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
         }

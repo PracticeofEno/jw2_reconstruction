@@ -111,6 +111,8 @@ def main() -> int:
             "-TraceIntervalMs", str(args.trace_interval_ms),
             "-TemporaryReplayName",
             f"DebugReplay_EquipmentApply_{stamp}_{label}.ply",
+            "-StabilizeViewport",
+            "-AlignPresentationRng",
         ]
         completed = subprocess.run(
             command, cwd=root, capture_output=True, text=True,
@@ -136,16 +138,21 @@ def main() -> int:
               f"effects={len(batch['cases'])}", flush=True)
         behavior_gaps = [gap for gap in trace.get("pair_gaps", [])
                          if gap[1] > manifest["command_frame"]]
-        gap_fallback = (verify_missing_exact_frames(
-            root, batch["replay"], artifact, trace, args.start_frame,
-            args.end_frame, args.timeout_seconds) if behavior_gaps else None)
-        continuous_exact = bool(
-            trace.get("pass") and
+        sampler_complete = bool(
             trace.get("first_exact_frame") is not None and
-            trace.get("first_exact_frame") <= manifest["command_frame"] and
+            trace.get("first_exact_frame") <= args.start_frame and
             trace.get("last_exact_frame") is not None and
             trace.get("last_exact_frame") >= args.end_frame - 1 and
-            (not behavior_gaps or
+            not trace.get("pair_gaps"))
+        gap_fallback = (verify_missing_exact_frames(
+            root, batch["replay"], artifact, trace, args.start_frame,
+            args.end_frame, args.timeout_seconds,
+            stabilize_viewport=True,
+            align_presentation_rng=True)
+            if trace.get("pass") and not sampler_complete else None)
+        continuous_exact = bool(
+            trace.get("pass") and
+            (sampler_complete or
              (gap_fallback is not None and gap_fallback.get("pass"))))
         coverage = trace.get("semantic_coverage") or {}
         ranges = coverage.get("player_unit_state_ranges", {})

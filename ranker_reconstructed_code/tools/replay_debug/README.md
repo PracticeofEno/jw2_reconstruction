@@ -57,6 +57,30 @@ frame, probe output reports `terminal: true` and leaves `pass` unset. Choose an
 earlier target rather than treating replay completion as a synchronization
 difference.
 
+### Compare the completed world render
+
+Add `-CaptureRgb565Pair` to capture both logical RGB565 buffers at the same
+next rendered frame. The original stops at `0x004d781d`, immediately after
+fog rendering and before its first gameplay overlay. The rebuild stops at the
+matching first-overlay callback entry. This excludes selection overlays, HUD
+text, modal UI, and the software cursor without relying on window-capture
+timing. The comparison uses the runtime interface theme's
+`world_viewport_height` and also excludes the fixed top-left and lower-right
+HUD regions. The raw surfaces and `rgb565-comparison.json` remain in the run's
+ignored artifact directory.
+
+When the replay camera does not show the relevant action, combine the capture
+with `-StabilizeViewport -CameraX <x> -CameraY <y>`. Window PNGs are useful for
+visual inspection, but they are not an exact-frame parity gate: suspending on
+the same simulation counter can leave the two windows presenting different
+previous frames.
+
+Use `-ViewOwner 0..7` to switch both suspended replay processes from observer
+slot 9 to the same ordinary player presentation owner. The probe reapplies the
+owner after startup and leaves enough ticks for a 64-frame visibility clear
+before the checkpoint, allowing partial visibility and fog to be compared
+without stale observer-local bits.
+
 ## Evidence retention
 
 Keep the `.ply` and `.sync.csv` pair for every unresolved mismatch. Once a root

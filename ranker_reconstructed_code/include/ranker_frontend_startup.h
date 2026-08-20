@@ -72,6 +72,10 @@ struct FrontendBootstrapState {
     u32 configured_height = 600;
     u32 launch_count = 0;
     u32 startup_palette_slot = 0xffffffffu;
+    u32 loading_bar_palette_slot = 0xffffffffu;
+    u32 loading_bar_resource_entry = 0xffffffffu;
+    bool loading_bar_load_attempted = false;
+    bool loading_bar_resources_loaded = false;
     u32 frontend_palette_slot = 0xffffffffu;
     u32 startup_frame_bits_per_pixel = 0;
     u32 startup_frame_width = 0;

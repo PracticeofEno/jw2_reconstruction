@@ -589,6 +589,8 @@ struct OwnerProductionDemandBuildPlanInput {
         kOwnerUnitTypeCountSlots>* route_object_requirements = nullptr;
     const std::array<u32, kOwnerProductionAuxDependencySlotCount>*
         aux_dependency_producer_unit_types = nullptr;
+    const std::array<u32, kOwnerProductionAuxDependencySlotCount>*
+        aux_dependency_resource_costs = nullptr;
     const std::array<OwnerProductionDemandRule, kOwnerUnitTypeCountSlots>*
         target_composition_rules = nullptr;
     const OwnerTransportRouteState* route_state = nullptr;
@@ -617,6 +619,12 @@ struct OwnerProductionDemandBuildPlanInput {
         0x05, 0x18, 0x29, 0x34};
     std::array<u32, 4> faction_primary_combat_unit_types{
         0x05, 0x16, 0x26, 0x33};
+    std::array<u32, 4> faction_secondary_response_unit_types{
+        0x06, 0x19, 0x2a, 0x35};
+    std::array<u32, 4> faction_secondary_response_percents{
+        35, 35, 35, 60};
+    std::array<u32, 4> target_secondary_resource_unit_types{
+        0x63, 0x73, 0x83, 0x93};
     u32 resource_budget_base = 0;
     u32 resource_budget_percent = 0;
     u32 resource_budget_cap_base = 0;

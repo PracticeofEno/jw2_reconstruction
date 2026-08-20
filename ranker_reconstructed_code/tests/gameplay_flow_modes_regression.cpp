@@ -1,6 +1,8 @@
 #include "ranker_gameplay_cheats.h"
 #include "ranker_gameplay_packets.h"
+#include "ranker_player_slots.h"
 #include "ranker_gameplay_sound.h"
+#include "ranker_gameplay_session_format.h"
 #include "ranker_gameplay_session_flow.h"
 #include "ranker_gameplay_session_rules.h"
 #include "ranker_gameplay_visibility.h"
@@ -10,6 +12,46 @@
 
 int main() {
     using namespace ranker;
+
+    std::array<u8, kSessionPrimaryCameraYOffset + sizeof(u32)>
+        primary_record{};
+    const auto write_u32 = [&primary_record](std::size_t offset, u32 value) {
+        primary_record[offset] = static_cast<u8>(value);
+        primary_record[offset + 1] = static_cast<u8>(value >> 8);
+        primary_record[offset + 2] = static_cast<u8>(value >> 16);
+        primary_record[offset + 3] = static_cast<u8>(value >> 24);
+    };
+    write_u32(kSessionPrimaryCameraXOffset, 1386u);
+    write_u32(kSessionPrimaryCameraYOffset, 418u);
+    GameplaySessionPrimaryCamera primary_camera{};
+    assert(ReadGameplaySessionPrimaryCamera(primary_record.data(),
+        primary_record.size(), primary_camera));
+    assert(primary_camera.x == 1386);
+    assert(primary_camera.y == 418);
+    assert(!ReadGameplaySessionPrimaryCamera(primary_record.data(),
+        kSessionPrimaryCameraYOffset + sizeof(u32) - 1, primary_camera));
+
+    static_assert(NormalizePlayerOrNoLocalSlot(0) == 0);
+    static_assert(NormalizePlayerOrNoLocalSlot(7) == 7);
+    static_assert(NormalizePlayerOrNoLocalSlot(9) == 9);
+    static_assert(NormalizePlayerOrNoLocalSlot(8) == kNoLocalPlayerSlot);
+    static_assert(NormalizePlayerOrNoLocalSlot(10) == kNoLocalPlayerSlot);
+
+    PlayerSlotRuntimeState replay_observer{};
+    for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+        replay_observer.owner_relation_masks[owner] = 1u << owner;
+        replay_observer.owner_visibility_masks[owner] = 1u << owner;
+    }
+    ApplyReplayNoLocalPlayerVisibility(replay_observer);
+    for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+        assert(replay_observer.owner_relation_masks[owner] == (1u << owner));
+        assert(replay_observer.owner_visibility_masks[owner] ==
+            ((1u << owner) | (1u << kNoLocalPlayerSlot)));
+    }
+    assert(ResolveLocalOwnerRelationMask(replay_observer, 0) == 1u);
+    assert(ResolveLocalOwnerRelationMask(
+        replay_observer, kNoLocalPlayerSlot) == 0xffffffffu);
+    assert(ResolveLocalOwnerRelationMask(replay_observer, 10) == 0u);
 
     assert(GameplayCheatTextChecksum("abc") ==
         ((static_cast<u32>('a') ^ 3u) +

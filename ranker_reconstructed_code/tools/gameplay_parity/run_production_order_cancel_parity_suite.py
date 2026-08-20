@@ -10,6 +10,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from parity_trace_support import verify_missing_exact_frames
 from run_unit_production_parity_suite import atomic_json, record_key
 
 
@@ -57,22 +58,28 @@ def main() -> int:
             "-OutputDirectory", str(artifact),
             "-TimeoutSeconds", str(args.timeout_seconds),
             "-TraceIntervalMs", str(args.trace_interval_ms),
+            "-StabilizeViewport", "-AlignPresentationRng",
         ], cwd=root, capture_output=True, text=True,
             timeout=args.timeout_seconds + 60)
         result_path = artifact / "result.json"
         trace = (json.loads(result_path.read_text(encoding="utf-8"))
                  if completed.returncode == 0 and result_path.exists()
                  else {"pass": False, "reason": (
-                     completed.stderr.strip() or completed.stdout.strip() or
+                 completed.stderr.strip() or completed.stdout.strip() or
                      f"trace command exited {completed.returncode}")})
+        gap_fallback = verify_missing_exact_frames(
+            root, batch["replay"], artifact, trace,
+            args.start_frame, args.end_frame, args.timeout_seconds,
+            stabilize_viewport=True, align_presentation_rng=True)
+        gaps_verified = bool(gap_fallback and gap_fallback.get("pass"))
         behavior_gaps = [gap for gap in trace.get("pair_gaps", [])
                          if gap[1] > 30]
         continuous = bool(
             trace.get("pass") and trace.get("first_exact_frame") is not None and
-            trace.get("first_exact_frame") <= 30 and
             trace.get("last_exact_frame") is not None and
-            trace.get("last_exact_frame") >= args.end_frame - 1 and
-            not behavior_gaps)
+            ((trace.get("first_exact_frame") <= args.start_frame and
+              trace.get("last_exact_frame") >= args.end_frame - 1 and
+              not trace.get("pair_gaps")) or gaps_verified))
         terminal = trace.get("terminal_exact_state") or {}
         production = terminal.get("production", {})
         variants = {(row[0], row[1], row[2])
@@ -125,6 +132,7 @@ def main() -> int:
                 "last_exact_frame": trace.get("last_exact_frame"),
                 "pair_gaps": trace.get("pair_gaps", []),
                 "behavior_pair_gaps": behavior_gaps,
+                "gap_fallback": gap_fallback,
                 "trace_reason": trace.get("reason"),
                 "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
             }

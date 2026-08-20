@@ -291,6 +291,11 @@ constexpr bool UsesSelectedUnitDynamicNameSlot(bool movement_available,
 }
 constexpr std::size_t kCameraScrollSpeedCount = 16;
 constexpr std::size_t kCameraScrollRampCount = 8;
+constexpr i32 ResolveGameplayCameraAnchorHeight(u32 screen_width) {
+    // FUN_004e2bb7 table record +4: layout 0 (640 wide) uses 258; the
+    // 800-wide and larger layout buckets both use 329 for every theme.
+    return screen_width == 0x280u ? 258 : 329;
+}
 constexpr std::array<std::array<u32, kCameraScrollRampCount>,
     kCameraScrollSpeedCount>
     kDefaultCameraScrollSteps{{

@@ -130,6 +130,8 @@ u32 CalculateProductionOrderCost(const ProductionOrderCostRule& rule, u32 varian
 u32 CalculateProductionOrderDuration(const ProductionOrderDefinition& definition,
     u32 variant);
 void ResetProductionOrderRuntimeState(ProductionOrderRuntimeState& state);
+void ResetProductionOrderRuntimeStateForFreshSession(
+    ProductionOrderRuntimeState& state);
 bool SwapProductionOrderOwnerState(ProductionOrderRuntimeState& state, u32 first_owner,
     u32 second_owner);
 i32 GetProductionOrderCompletionEffectTotal(const ProductionOrderRuntimeState& state,

@@ -984,6 +984,7 @@ struct RuntimeGlobals {
 
 RuntimeGlobals g_runtime;
 bool g_default_owner_ai_bss_bootstrapped = false;
+bool g_default_unit_reference_base_seeded = false;
 std::mutex g_gameplay_chat_mutex;
 std::vector<Mode1ChatPayload> g_pending_gameplay_chat_messages;
 std::atomic<bool> g_gameplay_chat_hud_active{false};
@@ -1560,7 +1561,20 @@ bool set_main_window_system_cursor_logical_position(
     if (!ClientToScreen(window, &position)) {
         return false;
     }
-    return SetCursorPos(position.x, position.y) != FALSE;
+    POINT previous{};
+    const bool position_changes =
+        !GetCursorPos(&previous) || previous.x != position.x || previous.y != position.y;
+    if (!SetCursorPos(position.x, position.y)) {
+        return false;
+    }
+    // Ranker_WinMain moves the OS cursor here, but the original DirectInput
+    // coordinate globals remain unchanged. If the call actually moved the
+    // cursor, drain any older queued positions as well as its matching target
+    // message before accepting another genuine sample.
+    if (position_changes) {
+        SuppressNextProgrammaticPointerMotion(logical_x, logical_y);
+    }
+    return true;
 }
 
 void set_main_window_system_cursor_for_lock_state() {
@@ -3918,7 +3932,7 @@ void sync_default_gameplay_player_session_record() {
 
     write_default_session_buffer_u32(*record,
         kSessionPlayerRecordLocalOwnerOffset,
-        std::min<u32>(players.local_player_slot, kPlayerSlotCount - 1));
+        NormalizePlayerOrNoLocalSlot(players.local_player_slot));
 
     for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
         const std::size_t name_offset =
@@ -5642,13 +5656,11 @@ void default_gameplay_input_pre_cursor_update(GameplayInputActionState& state) {
     if ((overlay.pointer_state & kUiOverlayPointerMinimapDrag) != 0) {
         UpdateCameraFromMinimapDrag(overlay);
     }
-    // FUN_004ea3c9 runs even while the game window is inactive.  This matters
-    // when original and reconstructed clients are compared side by side.  The
-    // The validity bit prevents both the startup zero-filled InputState and a
-    // captured pointer outside the client from masquerading as an exact edge;
-    // arrow keys remain live in either case.
-    overlay.camera_edge_pointer_valid =
-        input.pointer_motion_seen && input.pointer_inside_client;
+    // FUN_004ea3c9 reads the stored mouse coordinates directly, even before a
+    // motion event and while the game window is inactive. A zero-filled
+    // startup pointer therefore is an exact top-left edge and scrolls the
+    // camera just like any later (0,0) sample.
+    overlay.camera_edge_pointer_valid = true;
     const InputCameraDirectionState camera_keys =
         ResolveSet1CameraDirectionState(input);
     overlay.camera_left_key_down = camera_keys.left;
@@ -7761,37 +7773,6 @@ i32 default_gameplay_terrain_blend_mask_tile_index(
     return base + kGameplayTerrainBlendMaskOffsets[offset_index];
 }
 
-u16 default_gameplay_blend_terrain_pixels(const MinimapPixelFormat& format,
-    u16 primary, u16 secondary, u32 weight31) {
-    const u32 primary_weight = std::min<u32>(weight31 + 1u, 0x20u);
-    const u32 secondary_weight = 0x20u - primary_weight;
-    const u32 red =
-        (default_gameplay_terrain_component(primary, format.red_mask,
-             format.red_shift) *
-             primary_weight +
-            default_gameplay_terrain_component(secondary, format.red_mask,
-                format.red_shift) *
-                secondary_weight) >>
-        5;
-    const u32 green =
-        (default_gameplay_terrain_component(primary, format.green_mask,
-             format.green_shift) *
-             primary_weight +
-            default_gameplay_terrain_component(secondary, format.green_mask,
-                format.green_shift) *
-                secondary_weight) >>
-        5;
-    const u32 blue =
-        (default_gameplay_terrain_component(primary, format.blue_mask,
-             format.blue_shift) *
-             primary_weight +
-            default_gameplay_terrain_component(secondary, format.blue_mask,
-                format.blue_shift) *
-                secondary_weight) >>
-        5;
-    return default_gameplay_pack_terrain_pixel(format, red, green, blue);
-}
-
 void default_gameplay_draw_blended_terrain_tile(
     const TerrainTileSheetState& tile_sheet, const TerrainTileDrawCommand& command,
     SpriteRenderTarget& target, u32 animation_slot) {
@@ -7830,7 +7811,14 @@ void default_gameplay_draw_blended_terrain_tile(
         for (i32 col = 0; col < command.clip.width; ++col) {
             const std::size_t source_pixel = source_row +
                 static_cast<std::size_t>(command.clip.src_x + col);
-            const u16 mask_pixel = mask[source_pixel];
+            const u32 mask_sample_column =
+                ResolveGameplayTerrainBlendMaskSampleColumn(
+                    static_cast<u32>(command.clip.width),
+                    static_cast<u32>(col));
+            const std::size_t mask_pixel_index = source_row +
+                static_cast<std::size_t>(command.clip.src_x) +
+                mask_sample_column;
+            const u16 mask_pixel = mask[mask_pixel_index];
             std::size_t primary_index = 5;
             std::size_t secondary_index = 2;
             u32 weight = mask_pixel & 0x1fu;
@@ -7854,7 +7842,7 @@ void default_gameplay_draw_blended_terrain_tile(
             if (primary == nullptr || secondary == nullptr) {
                 continue;
             }
-            target_row[col] = default_gameplay_blend_terrain_pixels(format,
+            target_row[col] = BlendGameplayTerrainPixels(format,
                 primary[source_pixel], secondary[source_pixel], weight);
         }
     }
@@ -7944,7 +7932,8 @@ void default_gameplay_draw_transparent_overlay_tile(
 
 void default_gameplay_draw_masked_overlay_tile_index(
     const TerrainTileSheetState& tile_sheet, const TerrainTileDrawCommand& command,
-    SpriteRenderTarget& target, i32 overlay_tile_index, u32 animation_slot) {
+    SpriteRenderTarget& target, i32 overlay_tile_index, u32 animation_slot,
+    bool special_overlay_preclipped = false) {
     const i32 fill_tile_index = default_gameplay_terrain_tile_index(
         5, command.tile_x, command.tile_y, animation_slot);
     const u16* overlay =
@@ -7967,14 +7956,24 @@ void default_gameplay_draw_masked_overlay_tile_index(
             static_cast<std::size_t>(command.clip.dst_x);
         const std::size_t source_row =
             static_cast<std::size_t>(command.clip.src_y + row) * 0x20u;
+        // FUN_00422a60 clips the special 0x3f overlay and advances its source
+        // pointer before calling FUN_00422d90.  The latter clips the adjusted
+        // destination again, so its terrain-5 fill source restarts at the
+        // visible rectangle's (0, 0), while the overlay source retains the
+        // first clip offset.  This matters at the left/top viewport edge.
+        const std::size_t fill_row = special_overlay_preclipped ?
+            static_cast<std::size_t>(row) * 0x20u : source_row;
         for (i32 col = 0; col < command.clip.width; ++col) {
             const std::size_t source_pixel = source_row +
                 static_cast<std::size_t>(command.clip.src_x + col);
+            const std::size_t fill_pixel = fill_row +
+                static_cast<std::size_t>(special_overlay_preclipped ?
+                    col : command.clip.src_x + col);
             const u16 pixel = overlay[source_pixel];
             if (pixel == transparent) {
                 continue;
             }
-            target_row[col] = pixel == fill_token ? fill[source_pixel] : pixel;
+            target_row[col] = pixel == fill_token ? fill[fill_pixel] : pixel;
         }
     }
 }
@@ -8020,7 +8019,7 @@ void default_gameplay_draw_blended_overlay_tile_index(
             if (weight == 0) {
                 continue;
             }
-            target_row[col] = default_gameplay_blend_terrain_pixels(format,
+            target_row[col] = BlendGameplayTerrainPixels(format,
                 overlay_pixel, target_row[col], weight);
         }
     }
@@ -8051,7 +8050,8 @@ bool default_gameplay_draw_special_overlay_terrain_tile(
     const i32 mask_offset = kGameplaySpecialOverlayBlendMaskOffsets[index];
     if (mask_offset < 0) {
         default_gameplay_draw_masked_overlay_tile_index(
-            tile_sheet, command, target, overlay_tile_index, animation_slot);
+            tile_sheet, command, target, overlay_tile_index, animation_slot,
+            true);
     }
     else {
         default_gameplay_draw_blended_overlay_tile_index(tile_sheet, command,
@@ -8451,8 +8451,8 @@ void mirror_startup_slots_to_player_runtime(
     const GameplaySessionStartupState& startup, PlayerSlotRuntimeState& players) {
     players.active_slot_count = std::min<u32>(
         std::max<u32>(startup.active_slot_count, 1), kPlayerSlotCount);
-    players.local_player_slot = std::min<u32>(startup.local_owner_id,
-        kPlayerSlotCount - 1);
+    players.local_player_slot =
+        NormalizePlayerOrNoLocalSlot(startup.local_owner_id);
     for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
         const GameplayScenarioOwnerSlot& slot = startup.owner_slots[owner];
         players.slot_states[owner] = slot.slot_state;
@@ -9076,8 +9076,8 @@ void sync_default_production_runtime_to_session_header(
             if (lifecycle != nullptr &&
                 owner < lifecycle->owner_unit_type_counts.size() &&
                 type < lifecycle->owner_unit_type_counts[owner].size()) {
-                // DAT_00707430 is the live unit-lifecycle byte table inside
-                // JW2, rebuilt from the active unit list before export.
+                // DAT_00707430 is the live DWORD unit-lifecycle table inside
+                // JW2.  The session header stores only each entry's low byte.
                 count = lifecycle->owner_unit_type_counts[owner][type];
             }
             const std::size_t count_offset =
@@ -9423,7 +9423,7 @@ bool import_default_session_player_record_startup_state() {
 
     const u32 local_owner = read_default_session_record_u32(
         *record, kSessionPlayerRecordLocalOwnerOffset, startup.local_owner_id);
-    if (local_owner < kPlayerSlotCount) {
+    if (IsPlayerOrNoLocalSlot(local_owner)) {
         startup.local_owner_id = local_owner;
         players.local_player_slot = local_owner;
     }
@@ -11755,12 +11755,43 @@ void sync_default_gameplay_clock_and_random_state_to_session_header(
     write_default_session_buffer_u32(header,
         kGameplayHeaderSimulationFrameOffset,
         loop.simulation_frame_counter);
+    const UiOverlayState& overlay = ui_overlay_state();
+    write_default_session_buffer_u32(header,
+        kSessionPrimaryCameraXOffset,
+        static_cast<u32>(overlay.camera_x));
+    write_default_session_buffer_u32(header,
+        kSessionPrimaryCameraYOffset,
+        static_cast<u32>(overlay.camera_y));
     write_default_session_buffer_u32(header,
         kGameplayHeaderRandomLimitOffset, random.limit);
     write_default_session_buffer_u32(header,
         kGameplayHeaderRandomSeedOffset, random.seed);
     write_default_session_buffer_u32(header,
         kGameplayHeaderRandomCallCountOffset, random.call_count);
+}
+
+bool restore_default_gameplay_camera_from_session_header() {
+    const GameplaySessionLoadState& load = gameplay_session_load_state();
+    if (load.records.empty() || !load.record_loaded[0]) {
+        return false;
+    }
+
+    const std::vector<u8>& header = load.records[0];
+    GameplaySessionPrimaryCamera camera{};
+    if (!ReadGameplaySessionPrimaryCamera(
+            header.data(), header.size(), camera)) {
+        return false;
+    }
+
+    // HandleGameplaySessionBundleImport copies the primary record over the
+    // live camera globals without centering or clamping them.  A normal local
+    // starting unit may replace this value later; mode 5 otherwise retains
+    // the serialized viewport exactly.
+    UiOverlayState& overlay = ui_overlay_state();
+    overlay.camera_x = camera.x;
+    overlay.camera_y = camera.y;
+    publish_default_ui_overlay_camera(overlay);
+    return true;
 }
 
 void restore_default_gameplay_simulation_frame_from_session_header() {
@@ -11854,10 +11885,12 @@ void run_default_gameplay_session_runtime_reset(
     mirror_default_production_variants_to_session_import_state();
     InitializeGameplaySessionRuntimeState(reset);
     if (startup.session_mode != 5) {
-        // FUN_00426770 clears the complete 0x800 order-cell block and all
-        // accumulated production effects only on fresh/normal sessions, after
-        // the definition import.  Mode 5 keeps the primary-record state.
-        ResetProductionOrderRuntimeState(g_runtime.gameplay_production_runtime);
+        // FUN_00426770 clears the complete 0x800 order-cell block and effect
+        // tables 0..13 on fresh/normal sessions after the definition import.
+        // Its four tail tables (14..17) survive; mode 5 keeps all imported
+        // production state.
+        ResetProductionOrderRuntimeStateForFreshSession(
+            g_runtime.gameplay_production_runtime);
         g_runtime.gameplay_pending_order_2b_bonus_snapshots.clear();
         mirror_default_production_variants_to_session_import_state();
     }
@@ -11909,7 +11942,11 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     g_runtime.gameplay_session_runtime_definitions_staged = false;
     ResetGameSessionAvatarRuntime(g_runtime.gameplay_avatar_runtime);
     g_runtime.gameplay_avatar_runtime_loaded = false;
-    g_runtime.unit_reference_tables = GameSessionUnitReferenceTables{};
+    // FUN_00426770 does not clear the three process-global reverse-reference
+    // tables.  Keep their prior contents across matches, but discard the
+    // typed projection of the previous session's mutable definition records.
+    g_runtime.unit_reference_tables.definitions = {};
+    g_runtime.unit_reference_tables.post_init_transition_pending = false;
     g_runtime.unit_definition_cache = {};
     g_runtime.unit_definition_cache_valid = {};
     g_runtime.gameplay_owner_counters = OwnerSessionCounterTables{};
@@ -12168,6 +12205,13 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
             state.generic_ai_profile_mode != 0,
             replay_recording_state().playback_mode,
             g_runtime.gameplay_startup_state.frame_interval_index);
+    const bool primary_camera_restored =
+        restore_default_gameplay_camera_from_session_header();
+    append_startup_log(
+        "start-slots: primary camera restore=%s xy=%ld,%ld",
+        primary_camera_restored ? "yes" : "no",
+        static_cast<long>(ui_overlay_state().camera_x),
+        static_cast<long>(ui_overlay_state().camera_y));
     append_startup_log("start-slots: runtime reset begin");
     run_default_gameplay_session_runtime_reset(
         g_runtime.gameplay_startup_state, player_name);
@@ -12283,6 +12327,36 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
         StartGameplaySessionFromScenarioSlots(
             g_runtime.gameplay_startup_state);
     }
+    {
+        GameplaySessionStartupState& startup =
+            g_runtime.gameplay_startup_state;
+        const u32 local_owner = startup.local_owner_id;
+        if (!startup.local_camera_initialized &&
+            local_owner < startup.owner_slots.size()) {
+            u8 local_slot_state =
+                g_runtime.gameplay_player_slots.lobby_slot_states[local_owner];
+            if (local_slot_state == 0xffu) {
+                local_slot_state = startup.owner_slots[local_owner].slot_state;
+            }
+            if (local_slot_state ==
+                static_cast<u8>(PlayerSlotState::observer)) {
+                // FUN_00426770 centers a local observer on the map midpoint
+                // after importing the primary-record camera.  Unlike the
+                // ordinary starting-unit path, it does not seed F1 or the HUD
+                // alert marker.
+                sync_default_ui_overlay_runtime_from_gameplay_state();
+                UiOverlayState& overlay = ui_overlay_state();
+                ConfigureGameplayUiOverlayLayout(overlay);
+                const i32 center_x = static_cast<i32>(
+                    (default_gameplay_session_map_width_tiles() >> 1) << 5);
+                const i32 center_y = static_cast<i32>(
+                    (default_gameplay_session_map_height_tiles() >> 1) << 5);
+                ClampCameraToMinimapPoint(overlay, center_x, center_y);
+                publish_default_ui_overlay_camera(overlay);
+                startup.local_camera_initialized = true;
+            }
+        }
+    }
     append_startup_log("start-slots: StartGameplaySessionFromScenarioSlots ok placed=%zu active=%zu",
         g_runtime.gameplay_startup_state.placed_units.size(),
         g_runtime.gameplay_movement_context.active_units.size());
@@ -12340,6 +12414,17 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     append_startup_log("start-slots: end condition sync begin");
     sync_default_gameplay_end_condition_state();
     append_startup_log("start-slots: end condition sync ok");
+    if (replay_recording_state().playback_mode) {
+        // FUN_0044f2c0 changes DAT_00725100 to 9 only after the mode-specific
+        // session initializer has used the recorded player to seed the local
+        // camera and F1 bookmark. Keep startup.local_owner_id as that camera
+        // seed, then publish the no-local-player sentinel for all live replay
+        // visibility, feedback and render paths.
+        g_runtime.gameplay_player_slots.local_player_slot =
+            kNoLocalPlayerSlot;
+        ApplyReplayNoLocalPlayerVisibility(
+            g_runtime.gameplay_player_slots);
+    }
     g_runtime.gameplay_damage_context.local_player_owner_id =
         g_runtime.gameplay_player_slots.local_player_slot;
     g_runtime.gameplay_targeting_context.active_units =
@@ -14512,29 +14597,11 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
         overlay.minimap.output_width_pixels = surface.width;
         overlay.minimap.output_height_pixels = surface.height;
         overlay.minimap.output_pixels.clear();
-        const u32 local_owner = g_runtime.gameplay_player_slots.local_player_slot;
-        if (local_owner < g_runtime.gameplay_startup_state.owner_slots.size()) {
-            const GameplayScenarioOwnerSlot& local_slot =
-                g_runtime.gameplay_startup_state.owner_slots[local_owner];
-            i32 camera_anchor_x = local_slot.start_x;
-            i32 camera_anchor_y = local_slot.start_y;
-            for (const UnitMovementUnit& placed :
-                 g_runtime.gameplay_startup_state.placed_units) {
-                if (placed.owner_id == local_owner &&
-                    placed.type_id == local_slot.starting_unit_type) {
-                    camera_anchor_x = placed.x;
-                    camera_anchor_y = placed.y;
-                    break;
-                }
-            }
-            overlay.camera_x = std::clamp(
-                camera_anchor_x - overlay.minimap_camera_anchor_x,
-                0, overlay.camera_max_x);
-            overlay.camera_y = std::clamp(
-                camera_anchor_y - overlay.minimap_camera_anchor_y,
-                0, overlay.camera_max_y);
-            publish_default_ui_overlay_camera(overlay);
-        }
+        // The primary JW2 record already restored the raw camera, and a
+        // normal local starting unit or observer midpoint may have replaced
+        // it during session initialization.  Resource setup only republishes
+        // that established value; it does not synthesize another viewpoint.
+        publish_default_ui_overlay_camera(overlay);
         BuildSelectedUnitCommandPanel(overlay);
     }
     g_runtime.gameplay_unit_render_queue.callbacks.on_queue_entry =
@@ -16748,11 +16815,10 @@ void sync_default_owner_type_counts_from_lifecycle(
          type < g_runtime.gameplay_production_runtime.completed_type_counts[owner].size();
          ++type) {
         const u32 count = lifecycle.owner_unit_type_counts[owner][type];
-        const u8 original_byte_count = static_cast<u8>(count);
         g_runtime.gameplay_owner_ai_state.owner_unit_type_counts[owner][type] =
-            original_byte_count;
+            count;
         g_runtime.gameplay_production_runtime.completed_type_counts[owner][type] =
-            original_byte_count;
+            count;
     }
 }
 
@@ -17478,6 +17544,35 @@ void rebuild_default_unit_reference_tables_from_catalog() {
     const UnitDefinitionResourceCatalogState& catalog =
         unit_definition_resource_catalog_state();
     GameSessionUnitReferenceTables& tables = g_runtime.unit_reference_tables;
+    if (!catalog.loaded) {
+        return;
+    }
+
+    if (!g_default_unit_reference_base_seeded) {
+        // Frontend resource initialization calls FUN_0043c370 once with the
+        // pristine JW2_09 definitions.  Normal sessions later remove the
+        // 0->111, 16->127, and 32->143 requirements and rebuild without a
+        // clear, which is why the original still exposes primary[127] == 16
+        // and primary[143] == 32.  The reconstruction loads this catalog
+        // lazily, so reproduce that process-lifetime seed immediately before
+        // the first live-definition rebuild.
+        tables.definitions = {};
+        for (u32 unit_type = 0;
+             unit_type < catalog.records.size() &&
+             unit_type < tables.definitions.size(); ++unit_type) {
+            const UnitDefinitionResourceRecord& record =
+                catalog.records[unit_type];
+            if (!record.loaded || record.definition_bytes.empty() ||
+                read_runtime_catalog_u32(record.definition_bytes, 0, 0) == 0) {
+                continue;
+            }
+            load_default_unit_reference_definition(
+                tables.definitions[unit_type], record.definition_bytes);
+        }
+        RebuildUnitTypeReverseReferenceTables(tables);
+        g_default_unit_reference_base_seeded = true;
+    }
+
     // FUN_00426770 calls FUN_004abbe0 after the live definition import and
     // before rebuilding its reverse tables.  Apply the exact four static pairs
     // to the complete active records; reading the immutable TRC catalog here
@@ -18977,6 +19072,49 @@ UnitRenderItem make_default_unit_render_item(UnitMovementUnit& unit) {
 
 void mirror_default_gameplay_visibility_to_consumers(
     GameplayVisibilityGrid& grid) {
+    // DAT_00758d40 is both the original current-visibility layer and the
+    // movement map's visibility/occupancy word array.  The reconstruction
+    // stores those views separately, so every immediate visibility mutation
+    // (damage-linked reveal, script clear, fog promotion) must be published
+    // back to the movement map before the next visibility sync imports it.
+    // Otherwise ensure_default_gameplay_visibility_grid() restores stale map
+    // words and erases the mutation one frame later.  The reverse is equally
+    // important: a unit can register a footprint earlier in the same
+    // simulation frame and a later damage-linked reveal can reach this helper
+    // before the next full visibility import.  Copying the stale typed word
+    // wholesale then erases DAT_00758d40 bit 0x20000000 and makes pathfinding
+    // walk through the new structure.  The original has one shared word, so
+    // merge only the fields owned by the typed visibility/render view and
+    // retain footprint, map-effect, and base-cell payload bits from the live
+    // movement word.
+    constexpr u32 kVisibilityOwnedCurrentBits =
+        kGameplayVisibilityCurrentOwnerMask | kGameplayVisibilityLocalMask |
+        kGameplayRenderPackedOverlayMask;
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    if (movement != nullptr && default_movement_map_ready(movement->map)) {
+        const u32 width = std::min(grid.width, movement->map.width);
+        const u32 height = std::min(grid.height, movement->map.height);
+        for (u32 y = 0; y < height; ++y) {
+            for (u32 x = 0; x < width; ++x) {
+                const std::size_t grid_index =
+                    static_cast<std::size_t>(y) * grid.width + x;
+                const std::size_t map_index =
+                    UnitMovementMapTileIndex(movement->map, x, y);
+                if (grid_index < grid.current.size() &&
+                    map_index < movement->map.cells.size()) {
+                    u32& map_word =
+                        movement->map.cells[map_index].visibility_flags;
+                    const u32 merged_word =
+                        (map_word & ~kVisibilityOwnedCurrentBits) |
+                        (grid.current[grid_index] &
+                            kVisibilityOwnedCurrentBits);
+                    map_word = merged_word;
+                    grid.current[grid_index] = merged_word;
+                }
+            }
+        }
+    }
+
     UnitVisibilityGrid& render_visibility =
         g_runtime.gameplay_unit_render_queue.visibility;
     render_visibility.width = grid.width;
@@ -19021,7 +19159,6 @@ void sync_default_gameplay_visibility_and_render_inputs(
     UnitMovementContext* movement = default_gameplay_movement_context();
     g_runtime.gameplay_unit_render_queue.units.clear();
     g_runtime.gameplay_unit_render_queue.effects.clear();
-    g_runtime.gameplay_unit_render_queue.queued_entries.clear();
 
     if (movement == nullptr || !default_movement_map_ready(movement->map)) {
         configure_default_gameplay_visibility_fallback_consumers();
@@ -20352,12 +20489,8 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
     overlay.minimap_composite_cache.enabled = true;
     overlay.current_tick_ms = gameplay_loop_state().current_tick_ms;
     overlay.local_player_slot = g_runtime.gameplay_player_slots.local_player_slot;
-    overlay.local_owner_relation_mask =
-        overlay.local_player_slot <
-            g_runtime.gameplay_player_slots.owner_relation_masks.size()
-        ? g_runtime.gameplay_player_slots
-              .owner_relation_masks[overlay.local_player_slot]
-        : 0u;
+    overlay.local_owner_relation_mask = ResolveLocalOwnerRelationMask(
+        g_runtime.gameplay_player_slots, overlay.local_player_slot);
     if (g_runtime.gameplay_startup_state.lifecycle != nullptr &&
         overlay.local_player_slot < kPlayerSlotCount) {
         const UnitLifecycleContext& lifecycle =
@@ -23039,16 +23172,15 @@ void sync_default_owner_type_count(u32 owner, u32 type) {
     }
 
     const u32 count = lifecycle->owner_unit_type_counts[owner][type];
-    const u8 original_byte_count = static_cast<u8>(count);
     if (owner < g_runtime.gameplay_owner_ai_state.owner_unit_type_counts.size() &&
         type < g_runtime.gameplay_owner_ai_state.owner_unit_type_counts[owner].size()) {
         g_runtime.gameplay_owner_ai_state.owner_unit_type_counts[owner][type] =
-            original_byte_count;
+            count;
     }
     if (owner < g_runtime.gameplay_production_runtime.completed_type_counts.size() &&
         type < g_runtime.gameplay_production_runtime.completed_type_counts[owner].size()) {
         g_runtime.gameplay_production_runtime.completed_type_counts[owner][type] =
-            original_byte_count;
+            count;
     }
 }
 
@@ -23186,8 +23318,7 @@ void default_unit_command_linked_unit_released(UnitCommandContext&,
     if (owner < lifecycle->owner_unit_type_counts.size()) {
         auto& counts = lifecycle->owner_unit_type_counts[owner];
         if (child.type_id < counts.size()) {
-            counts[child.type_id] =
-                static_cast<u8>(counts[child.type_id] - 1u);
+            --counts[child.type_id];
         }
         if (child.type_id < 0x60) {
             if (lifecycle->owner_unit_active_count[owner] != 0) {
@@ -23213,10 +23344,10 @@ void default_unit_command_unit_type_replaced(UnitCommandContext&,
 
     auto& counts = lifecycle->owner_unit_type_counts[owner];
     if (new_type < counts.size()) {
-        counts[new_type] = static_cast<u8>(counts[new_type] + 1u);
+        ++counts[new_type];
     }
     if (old_type < counts.size()) {
-        counts[old_type] = static_cast<u8>(counts[old_type] - 1u);
+        --counts[old_type];
     }
     sync_default_owner_type_count(owner, old_type);
     sync_default_owner_type_count(owner, new_type);
@@ -25126,6 +25257,18 @@ bool default_unit_command_access_spawn_alias(UnitCommandContext& context,
             alias.previous_command_state);
         write(kGameplayScenarioObjectDestinationXOffset,
             alias.cell_channel_additive_frame);
+        // A completed misaligned state-0x5b alias still executes the original
+        // HandleUnitCreationRegisterFootprint raw writes.  Persist the fields
+        // changed by that callback even though the typed projection itself is
+        // intentionally short-lived.
+        write(kGameplayScenarioObjectLinkedObjectOffset,
+            alias.linked_object_id);
+        write(kGameplayScenarioObjectNextPathXOffset,
+            static_cast<u32>(alias.next_path_x));
+        write(kGameplayScenarioObjectNextPathYOffset,
+            static_cast<u32>(alias.next_path_y));
+        write(kGameplayScenarioObjectCommandFlagsOffset,
+            alias.command_flags);
         return true;
     }
 
@@ -25156,6 +25299,16 @@ bool default_unit_command_access_spawn_alias(UnitCommandContext& context,
         read(kGameplayScenarioObjectPreviousCommandStateOffset);
     alias.cell_channel_additive_frame =
         read(kGameplayScenarioObjectDestinationXOffset);
+    alias.linked_object_id =
+        read(kGameplayScenarioObjectLinkedObjectOffset);
+    alias.current_cell_x = WrappedU32ToI32(
+        read(kGameplayScenarioObjectCurrentCellXOffset));
+    alias.current_cell_y = WrappedU32ToI32(
+        read(kGameplayScenarioObjectCurrentCellYOffset));
+    alias.next_path_x = WrappedU32ToI32(
+        read(kGameplayScenarioObjectNextPathXOffset));
+    alias.next_path_y = WrappedU32ToI32(
+        read(kGameplayScenarioObjectNextPathYOffset));
     alias.x = WrappedU32ToI32(read(kGameplayScenarioObjectXOffset));
     alias.y = WrappedU32ToI32(read(kGameplayScenarioObjectYOffset));
     if (context.callbacks.find_definition != nullptr) {
@@ -25902,12 +26055,11 @@ void sync_default_owner_ai_runtime_metadata(GameplayLoopState* loop_state) {
             owner < lifecycle->owner_population_reserved.size() ?
             lifecycle->owner_population_reserved[owner] : 0;
         for (u32 type = 0; type < kOwnerAiUnitTypeCount; ++type) {
-            const u8 original_byte_count = static_cast<u8>(
-                lifecycle->owner_unit_type_counts[owner][type]);
+            const u32 count = lifecycle->owner_unit_type_counts[owner][type];
             owner_ai.owner_unit_type_counts[owner][type] =
-                original_byte_count;
+                count;
             g_runtime.gameplay_production_runtime.completed_type_counts[owner][type] =
-                original_byte_count;
+                count;
         }
         g_runtime.gameplay_production_runtime.owner_primary_resources[owner] =
             lifecycle->owner_primary_resources[owner];
@@ -25973,7 +26125,12 @@ void reset_default_owner_ai_runtime() {
         g_default_owner_ai_bss_bootstrapped = true;
     }
     configure_default_owner_ai_runtime(g_runtime.gameplay_owner_ai_state);
-    ResetProductionOrderRuntimeState(g_runtime.gameplay_production_runtime);
+    // This reconstruction callback runs after the primary-record/runtime-table
+    // reset and before starting units are placed.  Keep the same legacy tail
+    // effect preservation as FUN_00426770; a full reset here would erase
+    // slots 14..17 for a second time.
+    ResetProductionOrderRuntimeStateForFreshSession(
+        g_runtime.gameplay_production_runtime);
 
     if (g_runtime.gameplay_production_catalog.definitions.empty()) {
         LoadProductionOrderCatalogFromJw210Trc(g_runtime.gameplay_production_catalog);
@@ -27486,14 +27643,53 @@ void default_owner_ai_process_production_demand(
         OwnerUnitTypeCounts{};
     std::array<u32, kOwnerProductionAuxDependencySlotCount>
         aux_dependency_producer_types{};
-    aux_dependency_producer_types.fill(kInvalidOwnerTransportQueueSlot);
+    std::array<u32, kOwnerProductionAuxDependencySlotCount>
+        aux_dependency_resource_costs{};
+    // ProcessOwnerProductionAuxDependencyDemand reads DAT_0123D244, the
+    // small-reference reverse table immediately following the 0x40-entry
+    // completion reverse table.  Using completion_reverse here maps route
+    // object slot 5 to no producer instead of the original type 103 and
+    // drops the corresponding prerequisite-building demand.
     for (u32 slot = 0; slot < aux_dependency_producer_types.size() &&
-         slot < g_runtime.unit_reference_tables.completion_reverse.size(); ++slot) {
+         slot < g_runtime.unit_reference_tables.small_reverse.size(); ++slot) {
         aux_dependency_producer_types[slot] =
-            g_runtime.unit_reference_tables.completion_reverse[slot];
+            g_runtime.unit_reference_tables.small_reverse[slot];
+        if (const UnitEquipmentEffectDefinition* effect =
+                FindUnitEquipmentEffect(
+                    frontend_bootstrap_state().equipment_catalog, slot)) {
+            // SelectOwnerProductionAuxDependencyBuildAction reads
+            // DAT_00B6BC04 + slot*0x28c, which is JW2_10 record +0xcc.
+            // This is the route-object/equipment cost, not the production
+            // resource cost of the mapped building type.
+            aux_dependency_resource_costs[slot] =
+                effect->tooltip_primary_cost;
+        }
     }
     std::vector<OwnerProductionRouteObjectCandidate> route_object_candidates =
         build_default_owner_ai_route_object_candidates();
+    std::array<OwnerProductionDemandRule, kOwnerUnitTypeCountSlots>
+        target_composition_rules{};
+    const u32 faction = owner_ai.owner_faction_ids[owner];
+    const OwnerAiCounterRuleTable& counter_rules =
+        DefaultOwnerAiCounterRuleTable();
+    if (faction < counter_rules.size()) {
+        for (u32 target_type = 0;
+             target_type < kOwnerAiCounterRuleUnitTypeCount;
+             ++target_type) {
+            for (u32 rule_index = 0;
+                 rule_index < target_composition_rules[target_type]
+                     .unit_types.size();
+                 ++rule_index) {
+                const OwnerAiCounterUnitRule& source =
+                    counter_rules[faction][target_type][rule_index];
+                target_composition_rules[target_type].unit_types[rule_index] =
+                    source.unit_type < 0 ? kInvalidOwnerTransportQueueSlot :
+                        static_cast<u32>(source.unit_type);
+                target_composition_rules[target_type].percents[rule_index] =
+                    source.percent_bonus;
+            }
+        }
+    }
     DefaultOwnerAiPathProbeContext placement_probe_context;
     placement_probe_context.lifecycle = lifecycle;
     placement_probe_context.owner_id = owner;
@@ -27513,6 +27709,15 @@ void default_owner_ai_process_production_demand(
     input.route_objects = &route_object_candidates;
     input.aux_dependency_producer_unit_types =
         &aux_dependency_producer_types;
+    input.aux_dependency_resource_costs =
+        &aux_dependency_resource_costs;
+    // HandleOwnerProductionDemandAndBuildPlan indexes the original packed
+    // 0x00702778 table by faction and target unit type, adding each rule's
+    // percentage (plus the owner profile counter) to the low-type bonus
+    // demand table.  The same table was already reconstructed for strategic
+    // AI gates, but leaving it disconnected here silently zeroed every
+    // counter-unit production demand.
+    input.target_composition_rules = &target_composition_rules;
     input.definition_lookup = default_owner_ai_definition_lookup;
     input.definition_lookup_user_data = lifecycle;
     input.owner_shared_dependency_flags =
@@ -27536,7 +27741,7 @@ void default_owner_ai_process_production_demand(
             default_owner_ai_placement_producer_path_probe;
         input.placement_producer_user_data = &placement_probe_context;
     }
-    input.owner_faction = owner_ai.owner_faction_ids[owner];
+    input.owner_faction = faction;
     input.resource_budget_base = owner < owner_ai.owner_population_reserved.size() ?
         owner_ai.owner_population_reserved[owner] : 0;
     input.resource_budget_percent = owner_ai.owners[owner].resource_budget_percent;
@@ -28268,10 +28473,26 @@ void instantiate_default_gameplay_script_scenario_units(
         if (owned_unit != nullptr) {
             g_runtime.gameplay_script_spawned_units.push_back(std::move(owned_unit));
         }
-        // A command-dead node can legitimately remain on the serialized
-        // active chain until the next list pass.  Its footprint has already
-        // been cleared and must not be manufactured again during hydration.
-        if ((unit->runtime_flags & 4u) == 0) {
+        // A serialized unit chain is restored together with DAT_00758d40's
+        // saved brush/occupancy layer.  The original does not register every
+        // active footprint again after loading those records.  Doing so here
+        // manufactured 0x20000000 on otherwise unoccupied scripted targets
+        // and made a later guard replan choose an adjacent path cell.  Only
+        // the headerless recovery path has to rebuild occupancy from units.
+        // A command-dead recovery node remains non-occupying as well.
+        if (serialized_unit_roots_available) {
+            // The saved brush already contains any live structure footprint,
+            // so do not write it a second time.  Still restore the typed
+            // registration bit: the original has no equivalent guard and
+            // always clears a structure's raw footprint when it later dies.
+            // Leaving this false made an initially active type-164 object in
+            // Debug_replays/4 retain its 2x2 obstacle after death.
+            unit->footprint_registered =
+                unit->definition.lifecycle_class == 2 &&
+                unit->definition.footprint_width_tiles != 0 &&
+                unit->definition.footprint_height_tiles != 0;
+        }
+        else if ((unit->runtime_flags & 4u) == 0) {
             SetUnitFootprintOccupancyBits(*lifecycle, *unit);
         }
         // Record 0 stores DAT_007071d4 as the head of record 7's serialized
@@ -28324,11 +28545,25 @@ void instantiate_default_gameplay_script_scenario_units(
         remove_default_unit_pointer(movement.active_units, unit);
         remove_default_unit_pointer(movement.free_units, unit);
         remove_default_unit_pointer(movement.lifecycle_units, unit);
-        // A construction/revival node carrying the 0x200 hand-off flag has
-        // already registered its footprint but has not moved back to active
-        // yet.  Recreate that typed registration; ordinary corpses and decay
-        // nodes deliberately remain non-occupying.
-        if ((unit->command_flags & 0x200u) != 0 &&
+        // A map/template brush can still contain the footprint that belonged
+        // to a node before its serialized raw +0xa0 acquired the dead bit.
+        // The original lifecycle-list restore clears that stale footprint;
+        // merely leaving typed footprint_registered false preserves the old
+        // 0x20000000 cells forever.  Debug_replays/4 slot 85 (type 164) then
+        // blocks an unrelated unit's path at frame 15840.  Force only this
+        // saved-layer cleanup for dead lifecycle nodes; live construction or
+        // revival hand-off nodes retain their authoritative saved footprint.
+        if (serialized_unit_roots_available &&
+            (unit->runtime_flags & 4u) != 0) {
+            unit->footprint_registered = true;
+            ClearUnitFootprintOccupancyBits(*lifecycle, *unit);
+        }
+        // Serialized roots already have their corresponding saved occupancy
+        // word.  Recreate a construction/revival hand-off footprint only for
+        // the headerless recovery path; ordinary corpses and decay nodes stay
+        // non-occupying.
+        if (!serialized_unit_roots_available &&
+            (unit->command_flags & 0x200u) != 0 &&
             (unit->runtime_flags & 4u) == 0) {
             SetUnitFootprintOccupancyBits(*lifecycle, *unit);
         }
@@ -33037,13 +33272,12 @@ int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_c
     // Ranker_WinMain 0x00407788..0x004077bc calls SetCursorPos with the
     // logical DirectDraw surface center after worker/priority startup.  The
     // 32-bit wrapper scales that call into the presentation client.
-    if (g_runtime.cursor_confined) {
-        const GameplayLogicalSurfaceSize logical =
-            resolve_active_gameplay_logical_surface_size();
-        set_main_window_system_cursor_logical_position(g_runtime.main_window,
-            static_cast<i32>(logical.width / 2),
-            static_cast<i32>(logical.height / 2));
-    }
+    const GameplayLogicalSurfaceSize logical =
+        resolve_active_gameplay_logical_surface_size();
+    ResetPointerMotionToLegacyStartupState();
+    set_main_window_system_cursor_logical_position(g_runtime.main_window,
+        static_cast<i32>(logical.width / 2),
+        static_cast<i32>(logical.height / 2));
 
     char startup_text[768]{};
     std::snprintf(startup_text, sizeof(startup_text),

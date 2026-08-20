@@ -1534,7 +1534,14 @@ void HandleSubtype1aProductionCostPacket(const Mode1ReliablePacket& packet) {
 }
 
 bool DispatchMode1GameplayPacket(const Mode1ReliablePacket& packet) {
-    g_packet_dispatch_state.local_player_index = mode1_reliable_state().local_player_index;
+    // The original handlers read DAT_00725100, the live gameplay owner, not
+    // the reliable transport channel.  They normally hold the same 0..7
+    // value, but replay playback publishes the no-local-player owner 9 while
+    // its recorded reliable channel remains a real player slot.  Keeping the
+    // transport value here makes subtype 0x15 treat an observer as that
+    // recorded player and incorrectly disable a participant.
+    g_packet_dispatch_state.local_player_index =
+        player_slot_state().local_player_slot;
     const u8 subtype = packet.size > 0x0f ? packet.bytes[0x0f] : packet.subtype;
     g_packet_dispatch_state.last_subtype = subtype;
     ++g_packet_dispatch_state.total_dispatches;

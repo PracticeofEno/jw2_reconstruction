@@ -15,6 +15,7 @@ from run_attack_parity_suite import (
     atomic_json,
     record_key,
 )
+from parity_trace_support import verify_missing_exact_frames
 
 
 def main() -> int:
@@ -25,11 +26,12 @@ def main() -> int:
                         metavar="UxxxC#")
     parser.add_argument("--trace-interval-ms", type=int, default=250)
     parser.add_argument("--timeout-seconds", type=int, default=600)
+    parser.add_argument("--inventory", type=Path)
     args = parser.parse_args()
     root = args.root.resolve()
-    inventory = json.loads(
-        (tool_dir / "reports" / "gameplay_inventory.json")
-        .read_text(encoding="utf-8"))
+    inventory_path = (args.inventory.resolve() if args.inventory else
+                      tool_dir / "reports" / "gameplay_inventory.json")
+    inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
     manifest = json.loads(
         (tool_dir / "attack_fallback_manifest.json")
         .read_text(encoding="utf-8"))
@@ -75,6 +77,8 @@ def main() -> int:
             "-OutputDirectory", str(artifact),
             "-TimeoutSeconds", str(args.timeout_seconds),
             "-TraceIntervalMs", str(args.trace_interval_ms),
+            "-StabilizeViewport",
+            "-AlignPresentationRng",
         ]
         completed = subprocess.run(
             command, cwd=root, capture_output=True, text=True,
@@ -85,6 +89,10 @@ def main() -> int:
                  else {"pass": False, "reason": (
                      completed.stderr.strip() or completed.stdout.strip() or
                      f"trace command exited {completed.returncode}")})
+        gap_fallback = verify_missing_exact_frames(
+            root, case["replay"], artifact, trace, 25,
+            manifest["end_frame"], args.timeout_seconds,
+            stabilize_viewport=True, align_presentation_rng=True)
         coverage = trace.get("semantic_coverage") or {}
         links = {tuple(row) for row in coverage.get("unit_effect_links", [])}
         health = coverage.get("unit_health_ranges", {}).get(
@@ -92,8 +100,11 @@ def main() -> int:
         terminal_units = (trace.get("terminal_exact_state") or {}).get(
             "player_units", {})
         terminal_source = terminal_units.get(str(case["source_slot"]), {})
-        source_action_cycle_seen = bool(
-            terminal_source.get("command_flags", 0) & (0x10 | 0x400))
+        source_ranges = coverage.get("player_unit_state_ranges", {}).get(
+            str(case["source_slot"]), {})
+        source_action_cycle_seen = any(
+            value & (0x10 | 0x400)
+            for value in source_ranges.get("command_flag_values", []))
         primary_id = units[unit_id]["attack_profile"]
         resolved_id = (units[unit_id]["attack_profile_vs_class3"]
                        if render_class == 3 else primary_id)
@@ -107,11 +118,16 @@ def main() -> int:
             source_action_cycle_seen)
         executed = ((damaged or zero_damage_direct_cycle)
                     if direct else effect_link)
-        continuous = bool(
-            trace.get("pass") and
+        sampler_complete = bool(
             trace.get("first_exact_frame") is not None and
             trace.get("last_exact_frame") is not None and
+            trace.get("first_exact_frame") <= 25 and
+            trace.get("last_exact_frame") >= manifest["end_frame"] - 1 and
             not trace.get("pair_gaps"))
+        continuous = bool(
+            trace.get("pass") and
+            (sampler_complete or
+             (gap_fallback and gap_fallback.get("pass"))))
         accepted_original_rejection = bool(
             case.get("accept_original_rejection") and continuous and
             not executed)
@@ -160,6 +176,7 @@ def main() -> int:
             "first_exact_frame": trace.get("first_exact_frame"),
             "last_exact_frame": trace.get("last_exact_frame"),
             "pair_gaps": trace.get("pair_gaps", []),
+            "gap_one_shot": gap_fallback,
             "used_exact_row_template": case["used_exact_row_template"],
             "evidence_source": "isolated_close_range_fallback",
             "superseded_trace_artifact": old.get("trace_artifact"),

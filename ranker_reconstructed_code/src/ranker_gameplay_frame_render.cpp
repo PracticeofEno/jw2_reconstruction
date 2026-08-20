@@ -475,9 +475,15 @@ void update_explored_fog_structure_snapshot(
 
     u32 severity = 0;
     const u32 quarter = item.max_hit_points >> 2;
-    if (item.hit_points < item.max_hit_points - quarter) {
+    // FUN_004c523d enters FUN_004c58b1 with ECX already reduced to the
+    // 75-percent gate.  The callee subtracts another quarter before choosing
+    // +0x15, then another quarter before choosing +0x2a.  Consequently the
+    // visible bands are 50..75 percent => base frame, 25..50 => +0x15, and
+    // below 25 => +0x2a.
+    const u32 half_threshold = item.max_hit_points - quarter - quarter;
+    if (item.hit_points < half_threshold) {
         severity = 0x15;
-        if (item.hit_points < item.max_hit_points - quarter - quarter) {
+        if (item.hit_points < half_threshold - quarter) {
             severity += 0x15;
         }
     }
@@ -805,6 +811,48 @@ bool unit_animation_allows_default_group_fallback(UnitAnimationSequence sequence
         sequence == UnitAnimationSequence::direct_timed;
 }
 
+bool unit_animation_uses_unchecked_group_base(UnitAnimationSequence sequence) {
+    switch (sequence) {
+    case UnitAnimationSequence::cell_base:
+    case UnitAnimationSequence::cell_flag4:
+    case UnitAnimationSequence::cell_flag40:
+    case UnitAnimationSequence::cell_construction:
+    case UnitAnimationSequence::cell_progress:
+    case UnitAnimationSequence::cell_channel_additive:
+    case UnitAnimationSequence::low_health_overlay:
+    case UnitAnimationSequence::shadow_attachment:
+        return false;
+    default:
+        return true;
+    }
+}
+
+u32 original_unit_animation_sprite_entry(
+    u32 type_id, u32 group, u32 frame_index) {
+    const UnitDefinitionResourceRecord* record =
+        loaded_unit_definition_record(type_id);
+    if (record == nullptr || group >= kUnitDefinitionImageGroupCount) {
+        return kInvalidResourceEntry;
+    }
+
+    // The original mobile-animation handlers add their frame/row-table
+    // result directly to DAT_00aebfb8[type * 14 + group].  Empty groups are
+    // zero-initialized, so zero is a real global resource-table base rather
+    // than an "absent" sentinel.  Command 0x11/type 83 depends on this quirk:
+    // its empty group 9 intentionally resolves frame zero to global entry 0.
+    // Bounds-checking against the selected group's image count drops that
+    // sprite and also differs for frame indices that continue into the next
+    // loaded group.
+    u32 base_entry = 0;
+    if (record->image_group_counts[group] != 0) {
+        base_entry = record->first_image_entries[group];
+        if (base_entry == kInvalidResourceEntry) {
+            return kInvalidResourceEntry;
+        }
+    }
+    return base_entry + frame_index;
+}
+
 u32 resolve_unit_animation_sprite_entry(const UnitAnimationDrawCommand& command) {
     if (command.unit == nullptr) {
         return kInvalidResourceEntry;
@@ -815,18 +863,26 @@ u32 resolve_unit_animation_sprite_entry(const UnitAnimationDrawCommand& command)
     const u32 fallback_frame_index = command.resource_frame & 0xffu;
     const u32 frame_index =
         original_unit_animation_frame_index(command, group, fallback_frame_index);
-    u32 entry = GetUnitDefinitionImageFrameResourceEntry(type_id, group, frame_index);
+    const bool unchecked_group_base =
+        unit_animation_uses_unchecked_group_base(command.sequence);
+    u32 entry = unchecked_group_base
+        ? original_unit_animation_sprite_entry(type_id, group, frame_index)
+        : GetUnitDefinitionImageFrameResourceEntry(type_id, group, frame_index);
     if (entry != kInvalidResourceEntry) {
         return entry;
     }
-    entry = GetUnitDefinitionImageResourceEntry(type_id, group);
-    if (entry != kInvalidResourceEntry) {
-        return entry;
+    if (!unchecked_group_base) {
+        entry = GetUnitDefinitionImageResourceEntry(type_id, group);
+        if (entry != kInvalidResourceEntry) {
+            return entry;
+        }
     }
     if (group != 0 &&
         unit_animation_allows_default_group_fallback(command.sequence)) {
-        entry = GetUnitDefinitionImageFrameResourceEntry(type_id, 0, frame_index);
-        if (entry != kInvalidResourceEntry) {
+        entry = unchecked_group_base
+            ? original_unit_animation_sprite_entry(type_id, 0, frame_index)
+            : GetUnitDefinitionImageFrameResourceEntry(type_id, 0, frame_index);
+        if (entry != kInvalidResourceEntry || unchecked_group_base) {
             return entry;
         }
         return GetUnitDefinitionImageResourceEntry(type_id, 0);
@@ -857,8 +913,14 @@ bool draw_unit_shadow_attachment_sprites(const UnitAnimationDrawCommand& command
         if (debris_selector != 0 && debris_selector != 0xffffffffu &&
             jw207.debris_start != kInvalidResourceEntry) {
             const u32 progress = command.unit->command_entry_lockout_ticks != 0
-                ? std::min<u32>((3u * command.unit->animation_timer) /
-                    command.unit->command_entry_lockout_ticks, 2)
+                // 0x004c5a36..0x004c5a47 performs an unchecked 64-bit MUL
+                // followed by DIV and adds the quotient directly to the
+                // three-image debris base. At the terminal tick the quotient
+                // is therefore 3, intentionally selecting the first resource
+                // after that debris triplet. Clamping it to 2 leaves the
+                // preceding debris frame on screen for one extra tick.
+                ? static_cast<u32>((3ull * command.unit->animation_timer) /
+                    command.unit->command_entry_lockout_ticks)
                 : 0;
             const u32 entry = jw207.debris_start + (debris_selector - 1) * 3 + progress;
             drew = DrawResourceSpriteToken1Shadow(
@@ -1079,10 +1141,10 @@ void draw_unit_animation_sprite(UnitAnimationDrawContext& context,
     case UnitAnimationDrawKind::channel_additive_tint:
     {
         const u32 ramp = std::min<u32>(context.highlight_level, 31);
-        const u16 red_delta = static_cast<u16>(context.color_ramps.x_offsets[ramp]);
-        const u16 green_delta = static_cast<u16>(context.color_ramps.y_offsets[ramp]);
-        const u16 blue_delta =
-            static_cast<u16>(context.color_ramps.secondary_offsets[ramp]);
+        const u32 red_delta = static_cast<u32>(context.color_ramps.x_offsets[ramp]);
+        const u32 green_delta = static_cast<u32>(context.color_ramps.y_offsets[ramp]);
+        const u32 blue_delta =
+            static_cast<u32>(context.color_ramps.secondary_offsets[ramp]);
         if (flipped) {
             DrawResourceSpriteFlippedChannelAdditiveTint(
                 entry, command.screen_x, command.screen_y,
@@ -1096,9 +1158,9 @@ void draw_unit_animation_sprite(UnitAnimationDrawContext& context,
     case UnitAnimationDrawKind::palette_channel_additive_tint:
     {
         const u32 ramp = std::min<u32>(context.highlight_level, 31);
-        const u16 red_delta = static_cast<u16>(context.color_ramps.x_offsets[ramp]);
-        const u16 blue_delta =
-            static_cast<u16>(context.color_ramps.secondary_offsets[ramp]);
+        const u32 red_delta = static_cast<u32>(context.color_ramps.x_offsets[ramp]);
+        const u32 blue_delta =
+            static_cast<u32>(context.color_ramps.secondary_offsets[ramp]);
         if (flipped) {
             DrawResourceSpriteFlippedChannelAdditiveTint(
                 entry, command.screen_x, command.screen_y, red_delta, 0, blue_delta);
@@ -1111,10 +1173,10 @@ void draw_unit_animation_sprite(UnitAnimationDrawContext& context,
     case UnitAnimationDrawKind::timed_channel_additive_tint:
     {
         const u32 ramp = std::min<u32>(context.highlight_level, 31);
-        const u16 green_delta =
-            static_cast<u16>(context.color_ramps.y_offsets[ramp]);
-        const u16 blue_delta =
-            static_cast<u16>(context.color_ramps.secondary_offsets[ramp]);
+        const u32 green_delta =
+            static_cast<u32>(context.color_ramps.y_offsets[ramp]);
+        const u32 blue_delta =
+            static_cast<u32>(context.color_ramps.secondary_offsets[ramp]);
         if (flipped) {
             DrawResourceSpriteFlippedChannelAdditiveTint(
                 entry, command.screen_x, command.screen_y, 0, green_delta, blue_delta);
@@ -1127,10 +1189,10 @@ void draw_unit_animation_sprite(UnitAnimationDrawContext& context,
     case UnitAnimationDrawKind::shadow_probe_additive_tint:
     {
         constexpr u32 kProbeRampIndex = 26;
-        const u16 green_delta =
-            static_cast<u16>(context.color_ramps.y_offsets[kProbeRampIndex]);
-        const u16 blue_delta =
-            static_cast<u16>(context.color_ramps.secondary_offsets[kProbeRampIndex]);
+        const u32 green_delta =
+            static_cast<u32>(context.color_ramps.y_offsets[kProbeRampIndex]);
+        const u32 blue_delta =
+            static_cast<u32>(context.color_ramps.secondary_offsets[kProbeRampIndex]);
         if (flipped) {
             DrawResourceSpriteFlippedChannelAdditiveTint(
                 entry, command.screen_x, command.screen_y, 0, green_delta, blue_delta);
@@ -1563,6 +1625,11 @@ void RenderGameplayFrameComposite(GameplayFrameRenderContext& context) {
         context.callbacks.draw_terrain(context, context.camera_x, context.camera_y);
     }
     if (context.unit_render_queue != nullptr) {
+        // FUN_004d8297 resets the original queue at the beginning of the
+        // render pass, not during the preceding simulation update. Preserve
+        // the last completed queue until a new frame actually starts so
+        // render ordering and diagnostic state have the same lifetime.
+        context.unit_render_queue->queued_entries.clear();
         context.unit_render_queue->viewport.left = context.expanded_left;
         context.unit_render_queue->viewport.top = context.expanded_top;
         context.unit_render_queue->viewport.right = context.expanded_right;

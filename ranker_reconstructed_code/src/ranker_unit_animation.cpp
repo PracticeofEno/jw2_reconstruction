@@ -472,12 +472,11 @@ bool IsUnitAnimationDirectionFlipped(const UnitAnimationDrawContext& context,
 
 void ApplyUnitOwnerRelationTint(UnitAnimationDrawContext& context,
     const UnitAnimationUnit& unit) {
-    UnitOwnerRelationTint tint = UnitOwnerRelationTint::local;
-    if (unit.owner_id != context.local_owner_id) {
-        const bool allied = context.callbacks.is_owner_allied != nullptr &&
-            context.callbacks.is_owner_allied(context, context.local_owner_id, unit.owner_id);
-        tint = allied ? UnitOwnerRelationTint::ally : UnitOwnerRelationTint::enemy;
-    }
+    const bool allied = context.callbacks.is_owner_allied != nullptr &&
+        context.callbacks.is_owner_allied(
+            context, context.local_owner_id, unit.owner_id);
+    const UnitOwnerRelationTint tint = ResolveUnitOwnerRelationTint(
+        context.local_owner_id, unit.owner_id, allied);
     context.last_tint = tint;
     if (context.callbacks.apply_owner_tint != nullptr) {
         context.callbacks.apply_owner_tint(context, unit, tint);
@@ -754,7 +753,7 @@ void DrawUnitDirectSpriteAnimationFrame(UnitAnimationDrawContext& context,
 
 void DrawUnitPaletteRampHighlightFrame(UnitAnimationDrawContext& context,
     const UnitAnimationUnit& unit) {
-    if (unit.command_value == 0) {
+    if (!ShouldDrawUnitPaletteRampHighlight(unit.cargo_amount)) {
         return;
     }
     context.highlight_level = unit.animation_frame & 0x1fu;
@@ -1001,9 +1000,13 @@ void DrawUnitLowHealthDamageOverlay(UnitAnimationDrawContext& context,
     }
     u32 frame = unit.low_health_overlay_frame;
     const u32 quarter = unit.max_hit_points >> 2;
-    if (unit.hit_points < unit.max_hit_points - quarter) {
+    // FUN_004c58b1 receives the already-computed 75-percent threshold from
+    // FUN_004c523d.  Its first and second subtractions therefore test 50 and
+    // 25 percent, not 75 and 50 percent.
+    const u32 half_threshold = unit.max_hit_points - quarter - quarter;
+    if (unit.hit_points < half_threshold) {
         frame += 0x15;
-        if (unit.hit_points < unit.max_hit_points - quarter - quarter) {
+        if (unit.hit_points < half_threshold - quarter) {
             frame += 0x15;
         }
     }

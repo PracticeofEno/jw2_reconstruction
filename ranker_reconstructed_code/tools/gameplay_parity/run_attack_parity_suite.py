@@ -29,11 +29,13 @@ def main() -> int:
     parser.add_argument("--trace-interval-ms", type=int, default=100)
     parser.add_argument("--timeout-seconds", type=int, default=300)
     parser.add_argument("--reuse-artifact-root", type=Path)
+    parser.add_argument("--inventory", type=Path)
     args = parser.parse_args()
 
     root = args.root.resolve()
-    report = json.loads((tool_dir / "reports" / "gameplay_inventory.json")
-                        .read_text(encoding="utf-8"))
+    inventory_path = (args.inventory.resolve() if args.inventory else
+                      tool_dir / "reports" / "gameplay_inventory.json")
+    report = json.loads(inventory_path.read_text(encoding="utf-8"))
     manifest = json.loads((tool_dir / "attack_batch_manifest.json")
                           .read_text(encoding="utf-8"))
     results_path = tool_dir / "parity_results.json"
@@ -77,6 +79,8 @@ def main() -> int:
             "-OutputDirectory", str(artifact),
             "-TimeoutSeconds", str(args.timeout_seconds),
             "-TraceIntervalMs", str(args.trace_interval_ms),
+            "-StabilizeViewport",
+            "-AlignPresentationRng",
         ]
         print(f"[{number:02d}/{len(batches):02d}] {label} "
               f"sources={len(batch['cases'])}", flush=True)
@@ -101,7 +105,8 @@ def main() -> int:
                      })
         gap_fallback = verify_missing_exact_frames(
             root, batch["replay"], artifact, trace,
-            args.start_frame, args.end_frame, args.timeout_seconds)
+            args.start_frame, args.end_frame, args.timeout_seconds,
+            stabilize_viewport=True, align_presentation_rng=True)
         coverage = trace.get("semantic_coverage") or {}
         links = {tuple(row) for row in coverage.get("unit_effect_links", [])}
         health_ranges = coverage.get("unit_health_ranges", {})

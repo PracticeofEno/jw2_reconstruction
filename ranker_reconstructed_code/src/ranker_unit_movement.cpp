@@ -3133,6 +3133,11 @@ void HandleUnitRuntimeDeathState(UnitMovementContext& context, UnitMovementUnit&
     unit.command_flags &= 0xfffff7bf;
     unit.command_bits[0] &= static_cast<u8>(~0x80u);
     unit.runtime_flags &= 0xfffdef1d;
+    // FUN_00401979 -> 0x004eb7d5 clears raw unit +0x08 bit 0x80 before
+    // updating the selected-unit count/primary selection.  Corpse nodes are
+    // rendered from the lifecycle list, so leaving this bit set makes their
+    // owner marker and world bars survive until the corpse is released.
+    unit.scenario_string_slot &= ~0x80u;
     if (context.callbacks.on_unit_marked_dead != nullptr) {
         context.callbacks.on_unit_marked_dead(context, unit);
     }

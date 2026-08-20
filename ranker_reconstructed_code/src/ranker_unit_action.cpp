@@ -335,7 +335,7 @@ void reactivate_effect_target(UnitEffectRuntimeState& state,
             target.type_id < kUnitOwnerTypeCountTypes) {
             u32& count =
                 lifecycle->owner_unit_type_counts[target.owner_id][target.type_id];
-            count = static_cast<u8>(count + 1u);
+            ++count;
         }
     }
     else {
@@ -511,15 +511,6 @@ u32 effect_animation_frame(const UnitEffectRuntime& effect) {
     return effect_uses_tick_animation_frame(effect) ? effect.tick : effect.frame;
 }
 
-u32 effect_sprite_animation_frame(const UnitEffectRuntime& effect) {
-    // Original FUN_004ed940 selects the generic effect sprite through raw
-    // +0x0c for every low/high effect id.  The 0x20 afterimage updater stores
-    // (+0x10 >> 1) in that word specifically so each KingDemon Fire frame is
-    // held for two ticks; selecting raw +0x10 here advances twice as fast and
-    // suppresses the second half once its value exceeds the eight-frame row.
-    return effect.tick;
-}
-
 bool effect_startup_render_phase(const UnitEffectRuntime& effect) {
     // The low-ID renderer at 0x004ed947 tests impact before startup.  The
     // high-ID common tail at 0x004f1dcc does the reverse, except Berry-fly's
@@ -554,7 +545,7 @@ u32 effect_resource_entry_for_raw_image_index(
 
 bool effect_sprite_frame_in_range(const UnitEffectRuntime& effect, std::size_t size,
     std::size_t& index) {
-    const u32 frame = effect_sprite_animation_frame(effect);
+    const u32 frame = ResolveUnitEffectSpriteAnimationFrame(effect);
     if (frame == 0xffffffffu || static_cast<std::size_t>(frame) >= size) {
         return false;
     }
@@ -603,7 +594,7 @@ u32 effect_sprite_entry_for_frame(const UnitEffectRuntimeState& state,
                 effect.direction > 8) {
                 return kInvalidResourceEntry;
             }
-            const u32 frame = effect_sprite_animation_frame(effect);
+            const u32 frame = ResolveUnitEffectSpriteAnimationFrame(effect);
             if (frame == 0xffffffffu ||
                 static_cast<std::size_t>(frame) >= frame_stride) {
                 return kInvalidResourceEntry;
@@ -651,8 +642,12 @@ u32 effect_source_sort_bias(
     if (source == nullptr) {
         return 0x10000000u;
     }
+    // Original FUN_004f28c0 at 0x004f29d0..0x004f29e9 resolves the source
+    // definition and reads raw +0x424.  JW2_09 records omit the 0x2a8-byte
+    // runtime prefix, so this is catalog +0x17c (`movement_class`), not
+    // catalog +0x14c (`lifecycle_class`).
     const u32 class_index = std::min<u32>(
-        source->definition.lifecycle_class,
+        source->definition.movement_class,
         static_cast<u32>(kUnitEffectSourceSortBiasByClass.size() - 1));
     return kUnitEffectSourceSortBiasByClass[class_index];
 }
@@ -671,8 +666,10 @@ u32 effect_target_impact_sort_bias(
     if (target == nullptr) {
         return 0x90000000u;
     }
+    // The impact-target branch at 0x004f2a2f..0x004f2a48 resolves the same
+    // raw definition +0x424 class before indexing its 0x70/0x90 bias table.
     const u32 class_index = std::min<u32>(
-        target->definition.lifecycle_class,
+        target->definition.movement_class,
         static_cast<u32>(kUnitEffectTargetImpactSortBiasByClass.size() - 1));
     return kUnitEffectTargetImpactSortBiasByClass[class_index];
 }
@@ -1010,7 +1007,10 @@ u32 projectile_impact_entry_for_raw_image_index(
 bool draw_projectile_parity_impact_sprite(
     const UnitEffectDefinition& definition, const UnitEffectRuntime& effect,
     i32 screen_x, i32 screen_y) {
-    const u32 frame = effect_animation_frame(effect);
+    // The special high-ID projectile renderer at 0x004f1c05 reads raw
+    // effect +0x0c.  That word is `tick` for every effect, including the
+    // selected-action ids whose simulation lifetime may instead use `frame`.
+    const u32 frame = ResolveUnitEffectSpriteAnimationFrame(effect);
     if (frame >= definition.impact_image_indices.size()) {
         return true;
     }
@@ -1038,7 +1038,12 @@ bool draw_projectile_unit_group_impact_sprite(UnitEffectRuntimeState& state,
     }
 
     const u32 sprite_entry = GetUnitDefinitionAnimationRowFrameResourceEntry(
-        unit_type, kProjectileUnitImpactImageGroup, effect_animation_frame(effect),
+        // The Rebirth/Bonefighter entries at 0x004f1d29 and 0x004f1cb9 also
+        // index the unit animation table with raw effect +0x0c.  Their
+        // countdown handlers leave raw +0x10 (`frame`) at zero, so the generic
+        // high-ID simulation-frame selector would permanently draw frame 0.
+        unit_type, kProjectileUnitImpactImageGroup,
+        ResolveUnitEffectSpriteAnimationFrame(effect),
         kProjectileUnitImpactImageGroup, kProjectileUnitImpactImageGroup,
         kProjectileUnitImpactRowIndex);
     if (sprite_entry == kInvalidResourceEntry) {
@@ -1057,7 +1062,7 @@ bool draw_projectile_direct_active_sprite(
     // Berry-fly keeps its Bresenham lifetime sentinel in raw +0x10, so using
     // the simulation-frame helper here selected 0xffffffff and suppressed
     // every resource-carry sprite while the effect was moving.
-    const u32 frame = effect_sprite_animation_frame(effect);
+    const u32 frame = ResolveUnitEffectSpriteAnimationFrame(effect);
     if (frame >= definition.active_sprite_entries.size()) {
         return true;
     }
@@ -1647,6 +1652,11 @@ u32 chain_count_from_source_status(const UnitMovementUnit& source) {
 }
 
 } // namespace
+
+u32 ResolveUnitEffectRenderSortLayer(
+    const UnitEffectRuntimeState& state, const UnitEffectRuntime& effect) {
+    return effect_render_sort_layer(state, effect);
+}
 
 void ApplyUnitActionEffectTargetLockoutIfFlagged(UnitMovementUnit& target,
     u32 lockout_ticks) {
@@ -2905,8 +2915,13 @@ void TickUnitEffectTargetCommandFlag40Window(UnitEffectRuntimeState& state,
         if (effect.frame < effect.amount) {
             return;
         }
+        // Original 0x004ee7b2 resolves the unit-definition row and tests raw
+        // definition +0x1f8 at 0x004ee7bf.  Mutable unit/type flags come from
+        // raw definition +0x1ec and are unrelated here.  Confusing the two
+        // left action 0x14's temporary command flag 0x40 set forever on
+        // ordinary units such as PowerMan.
         if ((target->runtime_flags & 0x10u) != 0 ||
-            (target->definition.type_flags & 0x2u) != 0) {
+            (target->definition.support_source_flags & 0x2u) != 0) {
             ReleaseUnitEffectSlot(state, effect);
             return;
         }
@@ -5341,7 +5356,13 @@ bool DispatchUnitEffectProjectileTrailRenderer(UnitEffectRuntimeState& state,
     case 0x61:
         return source_visibility_suppressed();
     case 0x62: {
-        if (effect_impact_render_phase(effect)) {
+        // The dedicated 0x62 entry tests raw +0x08 bit 0x80 at
+        // 0x004f1d5a before it performs either source-owner or world-point
+        // visibility checks.  That test is deliberately independent of the
+        // common high-ID phase precedence: when a transient/recycled record
+        // carries startup and impact together, the raw impact bit bypasses
+        // this visibility gate and the common tail then renders startup.
+        if (ShouldUnitEffect62RawImpactBypassVisibility(effect.flags)) {
             return generic_tail_suppressed();
         }
         const UnitMovementUnit* source =

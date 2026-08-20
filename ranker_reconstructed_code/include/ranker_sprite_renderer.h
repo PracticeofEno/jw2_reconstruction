@@ -114,9 +114,9 @@ bool DrawResourceSpriteFlippedGrayscale(u32 entry_index, i32 x, i32 y);
 bool DrawResourceSpriteLowBlueMask(u32 entry_index, i32 x, i32 y);
 bool DrawResourceSpriteFlippedLowBlueMask(u32 entry_index, i32 x, i32 y);
 bool DrawResourceSpriteChannelAdditiveTint(
-    u32 entry_index, i32 x, i32 y, u16 red_delta, u16 green_delta, u16 blue_delta);
+    u32 entry_index, i32 x, i32 y, u32 red_delta, u32 green_delta, u32 blue_delta);
 bool DrawResourceSpriteFlippedChannelAdditiveTint(
-    u32 entry_index, i32 x, i32 y, u16 red_delta, u16 green_delta, u16 blue_delta);
+    u32 entry_index, i32 x, i32 y, u32 red_delta, u32 green_delta, u32 blue_delta);
 bool DrawResourceSpriteTableBlend(u32 entry_index, i32 x, i32 y);
 
 const SpriteRenderState& sprite_render_state();
