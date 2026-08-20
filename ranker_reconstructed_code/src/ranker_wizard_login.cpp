@@ -1438,14 +1438,16 @@ void DispatchWizardLoginNetworkMessage(WizardLoginState& state, WPARAM, LPARAM l
         state.server_connected = true;
         queue_locale_handshake(state);
         start_udp_after_server_connect(state);
-        show_status(state,
-            "Connected to local WizardNet. Enter an account or create a new one.");
+        const std::string connected_message = Utf8ToCp949(
+            u8"짭자드넷에 연결되었습니다! 로그인해서 즐기세요 ^오^");
+        show_status(state, connected_message.c_str());
         return;
     }
     if ((event == FD_CLOSE || event == 0x20) && !state.close_after_error) {
+        const std::string disconnected_message =
+            Utf8ToCp949(u8"서버랑 접속이 끊어졌습니다.");
         show_message(state,
-            startup_message_row(5, "Disconnected from the server."),
-            kWizardErrorBlue);
+            startup_message_row(5, disconnected_message.c_str()), kWizardErrorBlue);
         route_to_connect(state);
     }
 }

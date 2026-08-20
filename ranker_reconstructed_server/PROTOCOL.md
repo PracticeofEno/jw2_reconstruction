@@ -51,6 +51,24 @@ online-presence record. Its mark index is at packet offset `0x59`; opcode
 `0x13` paged presence carries the same value at offset `0x5d`. This lets
 already-open lobby lists update the existing nickname row without reconnecting.
 
+## Lobby Activity Extension
+
+Online-presence packets also carry the user's current WizardNet activity. Live
+opcode `0x07` records use status offset `0x61` and a 32-byte room-name field at
+`0x65`. Paged opcode `0x13` records use status offset `0x65` and the room name
+at `0x69`.
+
+| Status | Meaning |
+|---:|---|
+| `0` | in the lobby |
+| `1` | hosting a game room |
+| `2` | joined another user's game room |
+| `3` | playing a game |
+
+The server broadcasts a refreshed presence record when a room is created or
+joined, when the host starts the game, and when each client returns to the
+lobby. Older clients ignore the appended fields.
+
 ## WizardNet Relay Extension
 
 The reconstructed server supports a game-room relay path so clients behind NAT

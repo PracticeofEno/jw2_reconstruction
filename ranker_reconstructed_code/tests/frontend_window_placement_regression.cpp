@@ -92,6 +92,9 @@ static_assert(IsOnlineLobbyTransientChildResponseOpcode(0x27));
 static_assert(IsOnlineLobbyTransientChildResponseOpcode(0x3e));
 static_assert(IsOnlineLobbyTransientChildResponseOpcode(0x46));
 static_assert(IsOnlineLobbyTransientChildResponseOpcode(0x64));
+static_assert(IsOnlineLobbyTransientChildResponseOpcode(0x93));
+static_assert(IsOnlineLobbyTransientChildResponseOpcode(0x94));
+static_assert(IsOnlineLobbyTransientChildResponseOpcode(0x95));
 static_assert(!IsOnlineLobbyTransientChildResponseOpcode(0x07));
 static_assert(!IsOnlineLobbyTransientChildResponseOpcode(0x13));
 static_assert(SelectCreateGameWindowPlacement(true, 6) ==

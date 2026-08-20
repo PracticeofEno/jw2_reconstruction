@@ -89,7 +89,10 @@ constexpr bool IsOnlineLobbyTransientChildResponseOpcode(u32 opcode) {
         opcode == 0x27 ||   // Join Game room added notification.
         opcode == 0x3e ||   // Join Game Top/Bottom counters.
         opcode == 0x46 ||   // Join Game game-type counters.
-        opcode == 0x64;     // Join Game use-map counters.
+        opcode == 0x64 ||   // Join Game use-map counters.
+        opcode == 0x93 ||   // Completed relay join status.
+        opcode == 0x94 ||   // Late gameplay relay frame.
+        opcode == 0x95;     // Late relay member-left notification.
 }
 
 enum class OnlineLobbyTab : int {

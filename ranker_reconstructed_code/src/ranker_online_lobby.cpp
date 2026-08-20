@@ -74,6 +74,13 @@ constexpr int kOnlineLobbyRichEditCutCommandId = 0x9c46;
 constexpr std::size_t kOnlineLobbyChatBufferSize = 0x100;
 constexpr char kOnlineLobbyWrapDelimiter = ' ';
 constexpr std::size_t kOnlineLobbyGamePayloadBytes = 0x19e;
+constexpr std::size_t kOnlineLobbyPresenceStatusPayloadOffset = 0x60;
+constexpr std::size_t kOnlineLobbyPresenceLocationPayloadOffset = 0x64;
+constexpr std::size_t kOnlineLobbyPresenceLocationBytes = 0x20;
+constexpr u32 kOnlineLobbyPresenceLobby = 0;
+constexpr u32 kOnlineLobbyPresenceHosting = 1;
+constexpr u32 kOnlineLobbyPresenceRoomMember = 2;
+constexpr u32 kOnlineLobbyPresencePlaying = 3;
 constexpr DWORD kWindowStyleFullscreen = 0x90000000;
 constexpr DWORD kWindowStyleWindowed =
     WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
@@ -901,9 +908,42 @@ void draw_online_lobby_game_item(OnlineLobbyState& state,
                 state.rank_mark_strip, draw.hDC, destination, source);
         }
     }
+    char display_text[256]{};
+    const u32 presence_status = payload != nullptr &&
+        reinterpret_cast<LPARAM>(payload) != static_cast<LPARAM>(LB_ERR) ?
+        read_le32(payload + kOnlineLobbyPresenceStatusPayloadOffset) :
+        kOnlineLobbyPresenceLobby;
+    const char* status_utf8 = u8"로비";
+    switch (presence_status) {
+    case kOnlineLobbyPresenceHosting:
+        status_utf8 = u8"방 개설";
+        break;
+    case kOnlineLobbyPresenceRoomMember:
+        status_utf8 = u8"방 참가";
+        break;
+    case kOnlineLobbyPresencePlaying:
+        status_utf8 = u8"게임 중";
+        break;
+    default:
+        break;
+    }
+    const std::string status_text = Utf8ToCp949(status_utf8);
+    const char* location = payload != nullptr &&
+        reinterpret_cast<LPARAM>(payload) != static_cast<LPARAM>(LB_ERR) ?
+        reinterpret_cast<const char*>(
+            payload + kOnlineLobbyPresenceLocationPayloadOffset) : "";
+    if (location[0] != '\0' && presence_status != kOnlineLobbyPresenceLobby) {
+        std::snprintf(display_text, sizeof(display_text), "%s  [%s: %s]",
+            text, status_text.c_str(), location);
+    } else {
+        std::snprintf(display_text, sizeof(display_text), "%s  [%s]",
+            text, status_text.c_str());
+    }
+
     rect.left += kOnlineLobbyRankMarkFrameWidth +
         kOnlineLobbyRankMarkTextGap;
-    DrawTextA(draw.hDC, text, -1, &rect, DT_LEFT | DT_SINGLELINE | DT_NOCLIP);
+    DrawTextA(draw.hDC, display_text, -1, &rect,
+        DT_LEFT | DT_SINGLELINE | DT_NOCLIP);
 }
 
 void queue_online_lobby_async_bytes(OnlineLobbyState& state, const void* packet,
@@ -1367,12 +1407,26 @@ void add_online_lobby_game_row(OnlineLobbyState& state, const char* name,
         write_le32(payload + 0x2c, packet_u32(packet, byte_count, 0x5d));
         write_le32(payload + 0x5c, packet_u32(packet, byte_count, 0x61));
         write_le32(payload + 0x18a, packet_u32(packet, byte_count, 0x11));
+        write_le32(payload + kOnlineLobbyPresenceStatusPayloadOffset,
+            packet_u32(packet, byte_count, 0x65));
+        const std::string location = packet_fixed_string(
+            packet, byte_count, 0x69, kOnlineLobbyPresenceLocationBytes);
+        std::snprintf(reinterpret_cast<char*>(
+                payload + kOnlineLobbyPresenceLocationPayloadOffset),
+            kOnlineLobbyPresenceLocationBytes, "%s", location.c_str());
     } else {
         write_le32(payload, packet_u32(packet, byte_count, 0x51));
         write_le32(payload + 4, packet_u32(packet, byte_count, 0x55));
         write_le32(payload + 0x2c, packet_u32(packet, byte_count, 0x59));
         write_le32(payload + 0x5c, packet_u32(packet, byte_count, 0x5d));
         write_le32(payload + 0x18a, packet_u32(packet, byte_count, 0x4d));
+        write_le32(payload + kOnlineLobbyPresenceStatusPayloadOffset,
+            packet_u32(packet, byte_count, 0x61));
+        const std::string location = packet_fixed_string(
+            packet, byte_count, 0x65, kOnlineLobbyPresenceLocationBytes);
+        std::snprintf(reinterpret_cast<char*>(
+                payload + kOnlineLobbyPresenceLocationPayloadOffset),
+            kOnlineLobbyPresenceLocationBytes, "%s", location.c_str());
     }
     const u32 mark_index = read_le32(payload + 0x2c);
     if (!state.local_player_name.empty() &&
@@ -2081,7 +2135,6 @@ bool ResumeOnlineLobbyWindow(OnlineLobbyState& state) {
     // rebuilding the full resource tree during the room's cancel callback.
     // Refresh the advertised-game page after the server retires our room so a
     // stale self-owned entry cannot remain in the browser.
-    clear_online_lobby_game_list(state);
     SetOnlineLobbyTab(state, OnlineLobbyTab::Main);
 
     // A child window may have copied bytes from the kernel into the shared
@@ -2658,6 +2711,10 @@ bool DispatchOnlineLobbyServerPacket(OnlineLobbyState& state, const u8* packet,
         queue_online_lobby_game_list_reset_request(state);
         return true;
     case 0x11:
+        // Keep the previous rows visible until the server confirms that a
+        // fresh authoritative snapshot is ready.  This avoids an empty lobby
+        // if a late relay packet temporarily precedes the reset response.
+        clear_online_lobby_game_list(state);
         queue_online_lobby_game_page_request(state, 0);
         return true;
     case 0x13: {
@@ -2998,6 +3055,9 @@ bool CreateOnlineLobbyWindow(OnlineLobbyState& state, HWND parent,
     if (state.chat_edit != nullptr) {
         SetFocus(state.chat_edit);
     }
+    const std::string welcome_message =
+        Utf8ToCp949(u8"===== 즐겜 ^오^ =====");
+    PostOnlineLobbyColoredTextPayload(state, welcome_message.c_str());
     state.resources_ready = true;
     state.connected = true;
 

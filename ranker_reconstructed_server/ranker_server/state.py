@@ -8,6 +8,12 @@ import secrets
 import time
 
 
+PRESENCE_STATUS_LOBBY = 0
+PRESENCE_STATUS_HOSTING = 1
+PRESENCE_STATUS_ROOM_MEMBER = 2
+PRESENCE_STATUS_PLAYING = 3
+
+
 @dataclass(slots=True)
 class ClientSession:
     client_id: int
@@ -23,6 +29,8 @@ class ClientSession:
     relay_game_id: int | None = None
     relay_member_id: int = 0
     lobby_mark: int = 0
+    presence_status: int = PRESENCE_STATUS_LOBBY
+    presence_location: str = ""
     connected_at: float = field(default_factory=time.monotonic)
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -54,6 +62,7 @@ class AdvertisedGame:
     relay_departed_members: set[int] = field(default_factory=set)
     relay_secret: bytes = field(default_factory=lambda: secrets.token_bytes(32))
     advertised: bool = True
+    started: bool = False
     created_at: float = field(default_factory=time.monotonic)
     relay_link_frames: int = 0
     relay_link_bytes: int = 0

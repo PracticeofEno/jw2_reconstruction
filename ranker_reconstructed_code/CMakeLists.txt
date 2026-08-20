@@ -1245,6 +1245,20 @@ if (RANKER_BUILD_IME_INPUT_REGRESSION_TEST)
         COMMAND ime_process_key_regression)
 endif()
 
+option(RANKER_BUILD_UTF8_CP949_TEXT_REGRESSION_TEST
+    "Build the UTF-8 source-text to CP949 UI conversion regression" OFF)
+if (RANKER_BUILD_UTF8_CP949_TEXT_REGRESSION_TEST)
+    enable_testing()
+    add_executable(utf8_cp949_text_regression
+        tests/utf8_cp949_text_regression.cpp
+    )
+    target_include_directories(utf8_cp949_text_regression PRIVATE
+        include
+    )
+    add_test(NAME utf8_cp949_text_regression
+        COMMAND utf8_cp949_text_regression)
+endif()
+
 option(RANKER_BUILD_READABILITY_REGRESSION_TESTS
     "Build focused regressions for shared readability helpers" OFF)
 if (RANKER_BUILD_READABILITY_REGRESSION_TESTS)
@@ -1522,6 +1536,20 @@ if (RANKER_BUILD_SAVE_LOAD_CACHE_REGRESSION_TESTS)
     )
     add_test(NAME save_load_cache_regression
         COMMAND save_load_cache_regression)
+endif()
+
+option(RANKER_BUILD_CURSOR_PRESENTATION_REGRESSION_TEST
+    "Build the gameplay cursor presentation policy regression" OFF)
+if (RANKER_BUILD_CURSOR_PRESENTATION_REGRESSION_TEST)
+    enable_testing()
+    add_executable(cursor_presentation_regression
+        tests/cursor_presentation_regression.cpp
+    )
+    target_include_directories(cursor_presentation_regression PRIVATE
+        include
+    )
+    add_test(NAME cursor_presentation_regression
+        COMMAND cursor_presentation_regression)
 endif()
 
 add_executable(ranker_rebuild WIN32

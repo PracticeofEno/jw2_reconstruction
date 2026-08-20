@@ -30,7 +30,16 @@ from .protocol import (
     write_i32,
     write_u32,
 )
-from .state import AdvertisedGame, ClientSession, LobbyChannel, ServerState
+from .state import (
+    AdvertisedGame,
+    ClientSession,
+    LobbyChannel,
+    PRESENCE_STATUS_HOSTING,
+    PRESENCE_STATUS_LOBBY,
+    PRESENCE_STATUS_PLAYING,
+    PRESENCE_STATUS_ROOM_MEMBER,
+    ServerState,
+)
 
 
 LOGGER = logging.getLogger("ranker_server")
@@ -379,6 +388,8 @@ class RankerServer:
         elif session.relay_game_id is not None:
             await self._remove_relay_member(session)
         session.view = "online"
+        session.presence_status = PRESENCE_STATUS_LOBBY
+        session.presence_location = ""
         # A WizardNet game keeps the authenticated TCP connection alive while
         # both clients are in the P2P session. They can return in either order,
         # so real-time presence notifications alone are insufficient: the
@@ -404,11 +415,18 @@ class RankerServer:
             await self._send(session, build_packet(0x13, payload))
             return
         member = members[page]
-        payload = bytearray(0x65 - HEADER_BYTES)
+        payload = bytearray(0x89 - HEADER_BYTES)
         write_u32(payload, 0x0D - HEADER_BYTES, page)
         write_u32(payload, 0x11 - HEADER_BYTES, member.client_id)
         write_fixed_text(payload, 0x15 - HEADER_BYTES, 0x20, member.account)
         write_u32(payload, 0x5D - HEADER_BYTES, member.lobby_mark)
+        write_u32(payload, 0x65 - HEADER_BYTES, member.presence_status)
+        write_fixed_text(
+            payload,
+            0x69 - HEADER_BYTES,
+            0x20,
+            member.presence_location,
+        )
         await self._send(session, build_packet(0x13, payload))
 
     async def _handle_lobby_mark_set(
@@ -606,12 +624,17 @@ class RankerServer:
         session.relay_game_id = game_id
         session.relay_member_id = 1
         session.view = "link"
+        session.presence_status = PRESENCE_STATUS_HOSTING
+        session.presence_location = game.name
         await self._send(
             session,
             build_packet(0x1A, struct.pack("<III", 1, game_id, 1) + game.relay_secret),
         )
         LOGGER.info("%s advertised game %s (%d)", session.account, name, game_id)
         await self._broadcast_game_update(game, added=True, exclude=session.client_id)
+        await self._broadcast_online_presence(
+            session, added=True, exclude=session.client_id
+        )
 
     async def _handle_game_list(self, session: ClientSession, packet: Packet) -> None:
         session.view = "free_server"
@@ -662,6 +685,16 @@ class RankerServer:
         game = self.state.games.get(session.hosted_game_id)
         if game is None or game.host_client_id != session.client_id:
             return
+        game.started = True
+        for client_id in game.relay_members:
+            member = self.state.clients.get(client_id)
+            if member is None:
+                continue
+            member.presence_status = PRESENCE_STATUS_PLAYING
+            member.presence_location = game.name
+            await self._broadcast_online_presence(
+                member, added=True, exclude=member.client_id
+            )
         await self._retire_game_advertisement(game)
 
     async def _handle_relay_join(self, session: ClientSession, packet: Packet) -> None:
@@ -725,6 +758,8 @@ class RankerServer:
         session.relay_game_id = game_id
         session.relay_member_id = member_id
         session.view = "link"
+        session.presence_status = PRESENCE_STATUS_ROOM_MEMBER
+        session.presence_location = game.name
         await self._send_relay_join_status(
             session, RELAY_STATUS_OK, game_id, member_id, game.relay_secret
         )
@@ -735,6 +770,9 @@ class RankerServer:
             session.account,
             member_id,
             len(game.relay_members),
+        )
+        await self._broadcast_online_presence(
+            session, added=True, exclude=session.client_id
         )
         if len(packet.raw) > 0x11:
             join_payload = packet.raw[0x11:]
@@ -1298,10 +1336,17 @@ class RankerServer:
 
     @staticmethod
     def _build_online_presence_packet(subject: ClientSession) -> bytes:
-        payload = bytearray(0x61 - HEADER_BYTES)
+        payload = bytearray(0x85 - HEADER_BYTES)
         write_fixed_text(payload, 0, 0x20, subject.account)
         write_u32(payload, 0x4D - HEADER_BYTES, subject.client_id)
         write_u32(payload, 0x59 - HEADER_BYTES, subject.lobby_mark)
+        write_u32(payload, 0x61 - HEADER_BYTES, subject.presence_status)
+        write_fixed_text(
+            payload,
+            0x65 - HEADER_BYTES,
+            0x20,
+            subject.presence_location,
+        )
         return build_packet(7, payload)
 
     async def _send_online_presence_snapshot(self, session: ClientSession) -> None:

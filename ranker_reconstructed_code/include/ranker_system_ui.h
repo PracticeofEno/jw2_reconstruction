@@ -64,6 +64,44 @@ struct RankerSystemUiState {
 
 RankerSystemUiState& system_ui_state();
 
+// Converts an editable UTF-8 source literal (for example, u8"한글") into the
+// CP949 byte string expected by the original game's Win32 ANSI UI controls.
+inline std::string Utf8ToCp949(const char* utf8_text) {
+    if (utf8_text == nullptr || *utf8_text == '\0') {
+        return {};
+    }
+
+    const int wide_chars = MultiByteToWideChar(
+        CP_UTF8, MB_ERR_INVALID_CHARS, utf8_text, -1, nullptr, 0);
+    if (wide_chars <= 0) {
+        return {};
+    }
+
+    std::wstring wide(static_cast<std::size_t>(wide_chars), L'\0');
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8_text, -1,
+            wide.data(), wide_chars) <= 0) {
+        return {};
+    }
+
+    constexpr UINT kCp949 = 949;
+    BOOL used_default_character = FALSE;
+    const int cp949_bytes = WideCharToMultiByte(kCp949, WC_NO_BEST_FIT_CHARS,
+        wide.c_str(), -1, nullptr, 0, nullptr, &used_default_character);
+    if (cp949_bytes <= 0 || used_default_character != FALSE) {
+        return {};
+    }
+
+    std::string result(static_cast<std::size_t>(cp949_bytes), '\0');
+    used_default_character = FALSE;
+    if (WideCharToMultiByte(kCp949, WC_NO_BEST_FIT_CHARS, wide.c_str(), -1,
+            result.data(), cp949_bytes, nullptr, &used_default_character) <= 0 ||
+        used_default_character != FALSE) {
+        return {};
+    }
+    result.pop_back();
+    return result;
+}
+
 void SetDiskFreeSpaceRoot(const char* root_path);
 void SetDiskFreeSpaceRootPointer(const char* root_path);
 bool GetLegacyDiskFreeSpace();

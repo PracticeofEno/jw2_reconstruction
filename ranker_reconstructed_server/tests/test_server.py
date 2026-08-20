@@ -20,7 +20,13 @@ from ranker_server.protocol import (
     read_i32,
     read_u32,
 )
-from ranker_server.state import ClientSession
+from ranker_server.state import (
+    ClientSession,
+    PRESENCE_STATUS_HOSTING,
+    PRESENCE_STATUS_LOBBY,
+    PRESENCE_STATUS_PLAYING,
+    PRESENCE_STATUS_ROOM_MEMBER,
+)
 
 RELAY_SECRET_BYTES = 32
 RELAY_CIPHER_HEADER_BYTES = 28
@@ -75,6 +81,19 @@ async def read_until_opcode(
         if read_u32(packet, 4) == opcode:
             return packet
     raise AssertionError(f"opcode 0x{opcode:02x} was not received")
+
+
+async def read_until_presence(
+    reader: asyncio.StreamReader, account: str, *, limit: int = 40
+) -> bytes:
+    for _ in range(limit):
+        packet = await asyncio.wait_for(read_packet(reader), timeout=2.0)
+        if (
+            read_u32(packet, 4) == 7
+            and read_c_string(packet, 0x0D, 0x20) == account
+        ):
+            return packet
+    raise AssertionError(f"presence for {account!r} was not received")
 
 
 async def wait_until(predicate, *, timeout: float = 1.0) -> None:
@@ -275,6 +294,70 @@ class ServerIntegrationTests(unittest.IsolatedAsyncioTestCase):
         repeated_presence = await read_packet(alice_reader)
         self.assertEqual(read_u32(repeated_presence, 4), 7)
         self.assertEqual(read_c_string(repeated_presence, 0x0D, 0x20), "Bob")
+
+    async def test_online_presence_tracks_room_and_gameplay_status(self) -> None:
+        host_reader, host_writer = await self.connect_and_login("StatusHost")
+        join_reader, join_writer = await self.connect_and_login("StatusJoin")
+        observer_reader, observer_writer = await self.connect_and_login(
+            "StatusObserver"
+        )
+
+        # Drain the initial login notifications from clients that connected
+        # before the observer. The observer remains in the online-lobby view.
+        await read_until_presence(host_reader, "StatusJoin")
+        await read_until_presence(host_reader, "StatusObserver")
+        await read_until_presence(join_reader, "StatusObserver")
+
+        game_id = await self.advertise_relay_game(
+            host_reader, host_writer, "StatusRoom"
+        )
+        hosting = await read_until_presence(observer_reader, "StatusHost")
+        self.assertEqual(read_u32(hosting, 0x61), PRESENCE_STATUS_HOSTING)
+        self.assertEqual(read_c_string(hosting, 0x65, 0x20), "StatusRoom")
+
+        join_writer.write(
+            build_packet(
+                0x90, struct.pack("<I", game_id) + relay_wire_payload(b"join")
+            )
+        )
+        await join_writer.drain()
+        await read_until_opcode(join_reader, 0x93, limit=40)
+        await read_until_opcode(host_reader, 0x94, limit=40)
+        room_member = await read_until_presence(observer_reader, "StatusJoin")
+        self.assertEqual(
+            read_u32(room_member, 0x61), PRESENCE_STATUS_ROOM_MEMBER
+        )
+        self.assertEqual(read_c_string(room_member, 0x65, 0x20), "StatusRoom")
+
+        host_writer.write(build_packet(0x28, b"\0" * 0x20))
+        await host_writer.drain()
+        playing = {
+            read_c_string(packet, 0x0D, 0x20): read_u32(packet, 0x61)
+            for packet in (
+                await read_until_opcode(observer_reader, 7, limit=40),
+                await read_until_opcode(observer_reader, 7, limit=40),
+            )
+        }
+        self.assertEqual(
+            playing,
+            {
+                "StatusHost": PRESENCE_STATUS_PLAYING,
+                "StatusJoin": PRESENCE_STATUS_PLAYING,
+            },
+        )
+
+        join_writer.write(build_packet(0x0E, b"\0" * 8))
+        await join_writer.drain()
+        returned = await read_until_presence(observer_reader, "StatusJoin")
+        self.assertEqual(read_u32(returned, 0x61), PRESENCE_STATUS_LOBBY)
+        self.assertEqual(read_c_string(returned, 0x65, 0x20), "")
+
+        observer_writer.write(build_packet(0x12, struct.pack("<I", 1)))
+        await observer_writer.drain()
+        paged = await read_until_opcode(observer_reader, 0x13, limit=40)
+        self.assertEqual(read_c_string(paged, 0x15, 0x20), "StatusJoin")
+        self.assertEqual(read_u32(paged, 0x65), PRESENCE_STATUS_LOBBY)
+        self.assertEqual(read_c_string(paged, 0x69, 0x20), "")
 
     async def test_host_advertisement_is_returned_to_join_browser(self) -> None:
         host_reader, host_writer = await self.connect_and_login("Host")
