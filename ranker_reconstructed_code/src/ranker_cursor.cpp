@@ -7,6 +7,7 @@
 #include "ranker_trc.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <mutex>
 #include <vector>
@@ -19,6 +20,9 @@ namespace {
 
 SoftwareCursorState g_cursor_state;
 std::recursive_mutex g_cursor_mutex;
+std::atomic<bool> g_continuous_gameplay_cursor_presentation_active{false};
+std::atomic<u64> g_pending_pointer_position{0};
+std::atomic<bool> g_pending_pointer_position_valid{false};
 HCURSOR g_frontend_game_cursor = nullptr;
 bool g_frontend_game_cursor_load_attempted = false;
 
@@ -133,6 +137,16 @@ void release_com(T*& value) {
 
 bool cursor_index_valid(u32 cursor_index) {
     return cursor_index < kSoftwareCursorSurfaceCount;
+}
+
+u64 pack_pointer_position(i32 x, i32 y) {
+    return static_cast<u64>(static_cast<u32>(x)) |
+        (static_cast<u64>(static_cast<u32>(y)) << 32u);
+}
+
+void unpack_pointer_position(u64 packed, i32& x, i32& y) {
+    x = static_cast<i32>(static_cast<u32>(packed));
+    y = static_cast<i32>(static_cast<u32>(packed >> 32u));
 }
 
 void update_cursor_draw_position() {
@@ -360,6 +374,66 @@ u16 normalize_cursor_pixel(u16 pixel) {
         ((pixel >> 1) & green_mask) | (pixel & blue_mask));
 }
 
+bool apply_pointer_position_locked(i32 x, i32 y,
+    bool continuous_gameplay_presentation_active) {
+    if (g_cursor_state.cursor_change_depth != 0) {
+        ++g_cursor_state.cursor_change_depth;
+        return false;
+    }
+    if (g_cursor_state.pointer_updates_suppressed ||
+        !g_cursor_state.application_active) {
+        return false;
+    }
+    // The original receives this path for actual pointer motion. Reconstructed
+    // gameplay input also samples the pointer every frame, so ignore identical
+    // samples instead of repeatedly restoring and recapturing the same pixels.
+    if (g_cursor_state.pointer_x == x && g_cursor_state.pointer_y == y) {
+        return false;
+    }
+
+    g_cursor_state.pointer_x = x;
+    g_cursor_state.pointer_y = y;
+    if (!g_cursor_state.visible) {
+        return false;
+    }
+
+    // ranker.exe sets the motion lock before publishing either the previous or
+    // current draw coordinates. Presentation waits on this flag; updating the
+    // coordinates first lets it pair a new position with the old backup and can
+    // leave a cursor image behind at the previous click location.
+    g_cursor_state.pointer_motion_locked = true;
+    g_cursor_state.previous_cursor_x = g_cursor_state.cursor_x;
+    g_cursor_state.previous_cursor_y = g_cursor_state.cursor_y;
+    update_cursor_draw_position();
+    if (!g_cursor_state.presentation_locked) {
+        HandlePrimaryCursorBackgroundRestore();
+        HandlePrimaryCursorBackgroundSave();
+        HandleCurrentCursorDrawOnPrimary();
+    }
+    g_cursor_state.pointer_motion_locked = false;
+    return ShouldPresentGameCursorImmediatelyForPointerMotion(
+        IsD3D9CubicPresentationActive(),
+        continuous_gameplay_presentation_active);
+}
+
+void publish_pending_pointer_position(i32 x, i32 y) {
+    g_pending_pointer_position.store(
+        pack_pointer_position(x, y), std::memory_order_relaxed);
+    g_pending_pointer_position_valid.store(true, std::memory_order_release);
+}
+
+void consume_pending_pointer_position_locked() {
+    if (!g_pending_pointer_position_valid.exchange(
+            false, std::memory_order_acq_rel)) {
+        return;
+    }
+    i32 x = 0;
+    i32 y = 0;
+    unpack_pointer_position(
+        g_pending_pointer_position.load(std::memory_order_relaxed), x, y);
+    (void)apply_pointer_position_locked(x, y, true);
+}
+
 } // namespace
 
 SoftwareCursorState& software_cursor_state() {
@@ -507,6 +581,9 @@ bool LoadSoftwareCursorResourcesFromJw201Trc() {
 }
 
 void ShutdownSoftwareCursorSurfaces() {
+    g_continuous_gameplay_cursor_presentation_active.store(
+        false, std::memory_order_release);
+    g_pending_pointer_position_valid.store(false, std::memory_order_release);
     release_com(g_cursor_state.primary_backup_surface);
     release_com(g_cursor_state.back_backup_surface);
     for (auto*& surface : g_cursor_state.cursor_surfaces) {
@@ -531,51 +608,45 @@ void SetGameCursorHotspot(u32 cursor_index, i32 x, i32 y) {
 }
 
 void SetGameCursorPointerPosition(i32 x, i32 y) {
-    const std::lock_guard<std::recursive_mutex> lock(g_cursor_mutex);
-    if (g_cursor_state.cursor_change_depth != 0) {
-        ++g_cursor_state.cursor_change_depth;
-        return;
+    const bool continuous_gameplay_presentation_active =
+        g_continuous_gameplay_cursor_presentation_active.load(
+            std::memory_order_acquire);
+    bool present_immediately = false;
+    if (continuous_gameplay_presentation_active) {
+        // The gameplay worker can be inside a D3D9 Present while Windows is
+        // delivering WM_MOUSEMOVE on the window thread. Never make input wait
+        // for that GPU call: publish the newest logical point and let the next
+        // already-scheduled gameplay presentation consume it.
+        std::unique_lock<std::recursive_mutex> lock(
+            g_cursor_mutex, std::try_to_lock);
+        if (!lock.owns_lock()) {
+            publish_pending_pointer_position(x, y);
+            return;
+        }
+        g_pending_pointer_position_valid.store(false, std::memory_order_release);
+        present_immediately = apply_pointer_position_locked(x, y, true);
     }
-    if (g_cursor_state.pointer_updates_suppressed ||
-        !g_cursor_state.application_active) {
-        return;
+    else {
+        const std::lock_guard<std::recursive_mutex> lock(g_cursor_mutex);
+        g_pending_pointer_position_valid.store(false, std::memory_order_release);
+        present_immediately = apply_pointer_position_locked(x, y, false);
     }
-    // The original receives this path for actual pointer motion.  Reconstructed
-    // gameplay input also samples the pointer every frame, so ignore identical
-    // samples instead of repeatedly restoring and recapturing the same pixels.
-    if (g_cursor_state.pointer_x == x && g_cursor_state.pointer_y == y) {
-        return;
-    }
-
-    g_cursor_state.pointer_x = x;
-    g_cursor_state.pointer_y = y;
-    if (!g_cursor_state.visible) {
-        return;
-    }
-
-    // ranker.exe sets the motion lock before publishing either the previous or
-    // current draw coordinates.  Presentation waits on this flag; updating the
-    // coordinates first lets it pair a new position with the old backup and can
-    // leave a cursor image behind at the previous click location.
-    g_cursor_state.pointer_motion_locked = true;
-    g_cursor_state.previous_cursor_x = g_cursor_state.cursor_x;
-    g_cursor_state.previous_cursor_y = g_cursor_state.cursor_y;
-    update_cursor_draw_position();
-    if (!g_cursor_state.presentation_locked) {
-        HandlePrimaryCursorBackgroundRestore();
-        HandlePrimaryCursorBackgroundSave();
-        HandleCurrentCursorDrawOnPrimary();
-    }
-    g_cursor_state.pointer_motion_locked = false;
-    if (IsD3D9CubicPresentationActive()) {
-        // The legacy DirectDraw path updates the primary surface immediately
-        // above.  D3D9 presents from the back buffer instead, so waiting for
-        // the next game/title frame makes pointer motion advance in visible
-        // 33 ms steps.  Present the cursor-composited back buffer for each
-        // actual mouse move, matching the original cursor's independent
-        // motion cadence.
+    if (present_immediately) {
+        // Frontend/title rendering is timer-driven, so retain its independent
+        // cursor-only D3D9 update. Gameplay has a continuous presenter and
+        // deliberately skips this duplicate synchronous Present.
         handle_game_cursor_presentation(true);
     }
+}
+
+void SetContinuousGameplayCursorPresentationActive(bool active) {
+    g_continuous_gameplay_cursor_presentation_active.store(
+        active, std::memory_order_release);
+    if (active) {
+        return;
+    }
+    const std::lock_guard<std::recursive_mutex> lock(g_cursor_mutex);
+    consume_pending_pointer_position_locked();
 }
 
 void RestoreSystemCursorPosition() {
@@ -781,6 +852,7 @@ HRESULT HandlePresentCursorDrawOnBack() {
 
 static HRESULT handle_game_cursor_presentation(bool reuse_uploaded_background) {
     const std::lock_guard<std::recursive_mutex> lock(g_cursor_mutex);
+    consume_pending_pointer_position_locked();
     if (!g_cursor_state.visible) {
         HRESULT result = PresentBackBufferToPrimary();
         if (ShouldCaptureScreenshot()) {

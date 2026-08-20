@@ -35,6 +35,14 @@ constexpr bool GameplayLaunchUsesWizardSession(GameplayLaunchSource source) {
     return source == GameplayLaunchSource::wizard_session;
 }
 
+// Live peer launches spend a comparatively long interval between destroying
+// the native Link room and producing the first gameplay composite. Replays and
+// local frontend stages do not use that network handoff.
+constexpr bool GameplayLaunchUsesLivePeerConnection(GameplayLaunchSource source) {
+    return GameplayLaunchUsesLinkLobby(source) ||
+        GameplayLaunchUsesWizardSession(source);
+}
+
 constexpr u32 ResolveReplayGameplayTheme(const u8* payload,
     std::size_t byte_count, u32 fallback = 0) {
     constexpr std::size_t kReplayLocalPlayerOffset = 0x5f;

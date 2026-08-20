@@ -16,6 +16,11 @@ namespace ranker {
 constexpr u32 kSoftwareCursorSize = 0x20;
 constexpr u32 kSoftwareCursorSurfaceCount = 100;
 
+constexpr bool ShouldPresentGameCursorImmediatelyForPointerMotion(
+    bool d3d9_cubic_active, bool continuous_gameplay_presentation_active) {
+    return d3d9_cubic_active && !continuous_gameplay_presentation_active;
+}
+
 constexpr u32 FrontendCursorArgbFromRgb565(u16 pixel) {
     if (pixel == 0) {
         return 0;
@@ -67,6 +72,7 @@ bool LoadSoftwareCursorResourcesFromJw201Trc();
 void ShutdownSoftwareCursorSurfaces();
 void SetGameCursorHotspot(u32 cursor_index, i32 x, i32 y);
 void SetGameCursorPointerPosition(i32 x, i32 y);
+void SetContinuousGameplayCursorPresentationActive(bool active);
 void RestoreSystemCursorPosition();
 void ShowGameCursor();
 void HideGameCursor();

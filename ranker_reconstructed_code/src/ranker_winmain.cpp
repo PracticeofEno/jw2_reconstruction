@@ -833,6 +833,9 @@ struct RuntimeGlobals {
     bool p2p_command_line_flow_active = false;
     GameplayLaunchSource gameplay_launch_source = GameplayLaunchSource::none;
     bool gameplay_session_loop_reached = false;
+    bool peer_startup_cursor_transition_active = false;
+    bool peer_startup_software_cursor_enabled = false;
+    u32 peer_startup_cursor_presentations_remaining = 0;
     u32 frontend_stage_session_mode = 0;
     u32 frontend_stage_selected_faction = 0;
     bool frontend_stage_transition_active = false;
@@ -3697,6 +3700,16 @@ void default_gameplay_flow_write_p2p_result_file(
 
 void default_gameplay_flow_set_cursor(GameplaySessionFlowState&) {
     g_runtime.hide_cursor = false;
+    if (g_runtime.peer_startup_cursor_transition_active &&
+        !g_runtime.peer_startup_software_cursor_enabled) {
+        // The Link room has gone away, but the worker has not produced a game
+        // frame yet. Keep the native game cursor visible while archive,
+        // definition and unit startup work owns the DirectDraw/D3D resources.
+        SetGameCursorIndex(gameplay_loop_state().current_cursor_index);
+        SetGameCursorPresentationSuppressed(true);
+        SetCursor(GetFrontendGameCursor());
+        return;
+    }
     SetGameCursorPresentationSuppressed(false);
     SetGameCursorIndex(gameplay_loop_state().current_cursor_index);
     ShowGameCursor();
@@ -3709,8 +3722,82 @@ void default_gameplay_flow_hide_cursor(GameplaySessionFlowState&) {
 
 void default_gameplay_flow_show_cursor(GameplaySessionFlowState&) {
     g_runtime.hide_cursor = false;
+    if (g_runtime.peer_startup_cursor_transition_active &&
+        !g_runtime.peer_startup_software_cursor_enabled) {
+        SetGameCursorPresentationSuppressed(true);
+        SetCursor(GetFrontendGameCursor());
+        return;
+    }
     SetGameCursorPresentationSuppressed(false);
     ShowGameCursor();
+}
+
+constexpr u32 kPeerStartupCursorWarmupPresentationCount = 2;
+
+void begin_default_peer_startup_cursor_transition() {
+    g_runtime.peer_startup_cursor_transition_active =
+        GameplayLaunchUsesLivePeerConnection(g_runtime.gameplay_launch_source);
+    g_runtime.peer_startup_software_cursor_enabled = false;
+    g_runtime.peer_startup_cursor_presentations_remaining = 0;
+    if (!g_runtime.peer_startup_cursor_transition_active) {
+        return;
+    }
+
+    // The 25 ms legacy multimedia timer already supplies the original 1 ms
+    // scheduler resolution. The remaining peer-only hitch was a presentation
+    // ownership problem: WM_MOUSEMOVE could synchronously present while the
+    // gameplay worker was materializing the first frame. Keep the native
+    // cursor independent until those resources are ready, and coalesce input
+    // only across the first two D3D warm-up presentations.
+    SetContinuousGameplayCursorPresentationActive(true);
+    SetGameCursorPresentationSuppressed(true);
+    SetCursor(GetFrontendGameCursor());
+    append_startup_log("peer-startup cursor: native transition begin source=%lu",
+        static_cast<unsigned long>(g_runtime.gameplay_launch_source));
+}
+
+void enable_default_peer_startup_software_cursor() {
+    if (!g_runtime.peer_startup_cursor_transition_active ||
+        g_runtime.peer_startup_software_cursor_enabled) {
+        return;
+    }
+
+    g_runtime.peer_startup_software_cursor_enabled = true;
+    g_runtime.peer_startup_cursor_presentations_remaining =
+        kPeerStartupCursorWarmupPresentationCount;
+    SetGameCursorIndex(gameplay_loop_state().current_cursor_index);
+    SetGameCursorPresentationSuppressed(false);
+    const InputState& input = input_state();
+    SetGameCursorPointerPosition(
+        static_cast<i32>(input.mouse_x), static_cast<i32>(input.mouse_y));
+    ShowGameCursor();
+    set_main_window_system_cursor_for_lock_state();
+    append_startup_log("peer-startup cursor: software cursor ready warmup=%lu",
+        static_cast<unsigned long>(
+            g_runtime.peer_startup_cursor_presentations_remaining));
+}
+
+void finish_default_peer_startup_cursor_transition() {
+    if (!g_runtime.peer_startup_cursor_transition_active) {
+        return;
+    }
+    g_runtime.peer_startup_cursor_transition_active = false;
+    g_runtime.peer_startup_software_cursor_enabled = false;
+    g_runtime.peer_startup_cursor_presentations_remaining = 0;
+    SetContinuousGameplayCursorPresentationActive(false);
+    append_startup_log("peer-startup cursor: transition complete");
+}
+
+void advance_default_peer_startup_cursor_presentation() {
+    if (!g_runtime.peer_startup_cursor_transition_active ||
+        !g_runtime.peer_startup_software_cursor_enabled) {
+        return;
+    }
+    if (g_runtime.peer_startup_cursor_presentations_remaining > 1) {
+        --g_runtime.peer_startup_cursor_presentations_remaining;
+        return;
+    }
+    finish_default_peer_startup_cursor_transition();
 }
 
 void default_gameplay_flow_frame_boundary(GameplaySessionFlowState&) {
@@ -13233,6 +13320,7 @@ void default_gameplay_flow_process_session_loop(GameplaySessionFlowState& state)
     append_startup_log("session-flow: process loop reached");
     const bool replay_playback_session = replay_recording_state().playback_mode;
     ProcessGameplaySessionLoop(loop_state, state.session_loop_iteration_budget);
+    finish_default_peer_startup_cursor_transition();
     if (replay_playback_session) {
         // Every replay exit path converges here, including the ordinary
         // leave-request branch that does not call handle_replay_session_leave.
@@ -14677,6 +14765,11 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
     append_startup_log("session-loop: init resources ok active_units=%zu",
         g_runtime.gameplay_movement_context.active_units.size());
     g_gameplay_chat_hud_active.store(true, std::memory_order_release);
+    // A live peer transition deliberately kept the native cursor out of the
+    // D3D back buffer while the session was materialized. All render consumers
+    // are now initialized, so seed the software cursor from the newest logical
+    // input position immediately before the first gameplay composite.
+    enable_default_peer_startup_software_cursor();
 }
 
 bool default_gameplay_loop_frame_gate(GameplayLoopState& state) {
@@ -30864,6 +30957,7 @@ void default_gameplay_loop_present_phase(GameplayLoopState& state) {
             }
             UnlockBackBufferSpriteRenderTarget();
             HandleGameCursorPresentation();
+            advance_default_peer_startup_cursor_presentation();
             return;
         }
     }
@@ -30875,6 +30969,7 @@ void default_gameplay_loop_present_phase(GameplayLoopState& state) {
     }
     sync_default_gameplay_chat_input_hud();
     RenderGameplayFrameComposite(context);
+    advance_default_peer_startup_cursor_presentation();
 }
 
 void default_gameplay_loop_end_frame_phase(GameplayLoopState&) {
@@ -31088,11 +31183,13 @@ void run_default_gameplay_session_transition(HWND owner, u32 mode) {
     g_runtime.gameplay_in_game_load_resume = GameplayInGameLoadResumeState{};
     append_startup_log("gameplay transition begin mode=%lu",
         static_cast<unsigned long>(mode));
+    begin_default_peer_startup_cursor_transition();
 
     GameplaySessionFlowState& state = g_runtime.gameplay_session_flow;
     prepare_default_gameplay_session_state(state);
 
     if (!g_runtime.directx_initialized) {
+        finish_default_peer_startup_cursor_transition();
         if (owner != nullptr && IsWindow(owner)) {
             PostMessageA(owner, WM_USER + 3, 0,
                 reinterpret_cast<LPARAM>(
@@ -31117,6 +31214,7 @@ void run_default_gameplay_session_transition(HWND owner, u32 mode) {
     SetDirectPlayMessageDispatchMode(1);
 
     RunP2PGameplaySessionAfterModal(state);
+    finish_default_peer_startup_cursor_transition();
     SetDirectPlayMessageDispatchMode(0);
 
     const GameplayPostSessionFrontendRoute frontend_return =

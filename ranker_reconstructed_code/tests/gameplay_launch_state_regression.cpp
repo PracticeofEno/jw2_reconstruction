@@ -28,6 +28,16 @@ int main() {
         "command-line joins may receive their map through Link");
     require(!GameplayLaunchUsesCommandLineP2P(GameplayLaunchSource::wizard_session),
         "Wizard route must not inherit command-line parameters");
+    require(GameplayLaunchUsesLivePeerConnection(GameplayLaunchSource::link_lobby),
+        "Link sessions need the peer startup cursor transition");
+    require(GameplayLaunchUsesLivePeerConnection(
+            GameplayLaunchSource::command_line_p2p),
+        "direct P2P joins need the peer startup cursor transition");
+    require(GameplayLaunchUsesLivePeerConnection(
+            GameplayLaunchSource::wizard_session),
+        "Wizard sessions need the peer startup cursor transition");
+    require(!GameplayLaunchUsesLivePeerConnection(GameplayLaunchSource::replay),
+        "replay startup must not inherit peer cursor handling");
 
     std::array<u8, 0x20ff> replay{};
     replay[0x5f] = 2;
