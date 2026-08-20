@@ -14,6 +14,11 @@
 
 namespace ranker {
 
+// Scenario videos must stay above the DirectDraw presentation but must not be
+// desktop-topmost. WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE keeps the compatibility
+// surface out of Alt+Tab and lets its owning Ranker window control z-order.
+constexpr u32 kScenarioUiVideoBackdropExtendedStyle = 0x08000080u;
+
 struct SpriteRenderTarget;
 
 constexpr u32 kUiScreenEntryBytes = 0x2a4;

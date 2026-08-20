@@ -65,6 +65,28 @@ constexpr std::size_t kCreateGamePasswordBytes = 10;
 constexpr std::size_t kCreateGameSeedPayloadBytes = 0x196;
 constexpr std::size_t kCreateGameMapDescriptorBytes = 0x2dc;
 
+inline std::string BuildCreateGameDefaultTitle(const char* nickname) {
+    constexpr const char* kSuffix = "'s Game";
+    constexpr std::size_t kMaximumTitleBytes = kCreateGameNameBytes - 1;
+    constexpr std::size_t kSuffixBytes = 7;
+    const char* source = nickname != nullptr && *nickname != '\0' ?
+        nickname : "Player";
+    std::string title;
+    const std::size_t nickname_limit = kMaximumTitleBytes - kSuffixBytes;
+    while (*source != '\0' && title.size() < nickname_limit) {
+        const unsigned char lead = static_cast<unsigned char>(*source);
+        const std::size_t character_bytes =
+            lead >= 0x81 && lead <= 0xfe && source[1] != '\0' ? 2 : 1;
+        if (title.size() + character_bytes > nickname_limit) {
+            break;
+        }
+        title.append(source, character_bytes);
+        source += character_bytes;
+    }
+    title += kSuffix;
+    return title;
+}
+
 enum class CreateGameWindowPlacement {
     fullscreen_popup,
     contained_child,

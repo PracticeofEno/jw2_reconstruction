@@ -3,8 +3,10 @@
 #include "ranker_cursor.h"
 #include "ranker_display_constants.h"
 #include "ranker_frontend_layout.h"
+#include "ranker_link_lobby.h"
 #include "ranker_map_brush.h"
 #include "ranker_online_lobby.h"
+#include "ranker_ui_screen.h"
 #include "ranker_winmain.h"
 
 #include <cassert>
@@ -97,6 +99,9 @@ static_assert(IsOnlineLobbyTransientChildResponseOpcode(0x94));
 static_assert(IsOnlineLobbyTransientChildResponseOpcode(0x95));
 static_assert(!IsOnlineLobbyTransientChildResponseOpcode(0x07));
 static_assert(!IsOnlineLobbyTransientChildResponseOpcode(0x13));
+static_assert(ShouldShowLinkLobbyStartButton(true));
+static_assert(!ShouldShowLinkLobbyStartButton(false));
+static_assert((kScenarioUiVideoBackdropExtendedStyle & 0x00000008u) == 0);
 static_assert(SelectCreateGameWindowPlacement(true, 6) ==
     CreateGameWindowPlacement::contained_child);
 static_assert(SelectCreateGameWindowPlacement(true, 1) ==
@@ -112,6 +117,10 @@ static_assert(FrontendCursorArgbFromRgb565(0xffff) == 0xffffffffu);
 } // namespace
 
 int main() {
+    assert(BuildCreateGameDefaultTitle("Wizard") == "Wizard's Game");
+    assert(BuildCreateGameDefaultTitle("") == "Player's Game");
+    assert(BuildCreateGameDefaultTitle("12345678901234567890") ==
+        "123456789012's Game");
     assert(ScalePresentationCoordinateToLogical(0, 1280, 800) == 0);
     assert(ScalePresentationCoordinateToLogical(640, 1280, 800) == 400);
     assert(ScalePresentationCoordinateToLogical(1279, 1280, 800) == 799);

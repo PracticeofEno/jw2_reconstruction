@@ -343,7 +343,7 @@ BinkApi& bink_api() {
     return api;
 }
 
-WORD embedded_jw208_resource_id(const BinkVideoRuntimeState& state) {
+WORD jw208_fallback_media_id(const BinkVideoRuntimeState& state) {
     if (state.record_index > 16 || state.archive_name.empty()) {
         return 0;
     }
@@ -357,57 +357,46 @@ WORD embedded_jw208_resource_id(const BinkVideoRuntimeState& state) {
     return static_cast<WORD>(kJw208FallbackResourceBase + state.record_index);
 }
 
-bool write_embedded_jw208_video_to_temp_file(
-    WORD resource_id, std::wstring& temp_path) {
-    temp_path.clear();
-    HMODULE module = GetModuleHandleW(nullptr);
-    HRSRC resource = FindResourceW(module, MAKEINTRESOURCEW(resource_id),
-        MAKEINTRESOURCEW(10));
-    if (resource == nullptr) {
-        return false;
-    }
-    HGLOBAL loaded = LoadResource(module, resource);
-    const DWORD byte_count = SizeofResource(module, resource);
-    const void* bytes = loaded == nullptr ? nullptr : LockResource(loaded);
-    if (bytes == nullptr || byte_count == 0) {
+bool resolve_external_jw208_video_path(
+    const BinkVideoRuntimeState& state, std::wstring& media_path) {
+    media_path.clear();
+    if (jw208_fallback_media_id(state) == 0) {
+        SetLastError(ERROR_INVALID_PARAMETER);
         return false;
     }
 
-    wchar_t temp_directory[MAX_PATH]{};
-    const DWORD directory_length = GetTempPathW(MAX_PATH, temp_directory);
-    if (directory_length == 0 || directory_length >= MAX_PATH) {
+    wchar_t module_path[MAX_PATH]{};
+    const DWORD module_path_length =
+        GetModuleFileNameW(nullptr, module_path, static_cast<DWORD>(std::size(module_path)));
+    if (module_path_length == 0 || module_path_length >= std::size(module_path)) {
         return false;
     }
 
-    static LONG serial = 0;
-    HANDLE file = INVALID_HANDLE_VALUE;
-    for (u32 attempt = 0; attempt < 32 && file == INVALID_HANDLE_VALUE; ++attempt) {
-        const LONG suffix = InterlockedIncrement(&serial);
-        wchar_t file_name[96]{};
-        std::swprintf(file_name, sizeof(file_name) / sizeof(file_name[0]),
-            L"ranker_jw208_%lu_%lu_%ld.mp4",
-            static_cast<unsigned long>(GetCurrentProcessId()),
-            static_cast<unsigned long>(GetCurrentThreadId()),
-            static_cast<long>(suffix));
-        temp_path.assign(temp_directory);
-        temp_path.append(file_name);
-        file = CreateFileW(temp_path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
-            FILE_ATTRIBUTE_TEMPORARY, nullptr);
-    }
-    if (file == INVALID_HANDLE_VALUE) {
-        temp_path.clear();
+    media_path.assign(module_path, module_path_length);
+    const std::size_t separator = media_path.find_last_of(L"\\/");
+    if (separator == std::wstring::npos) {
+        media_path.clear();
+        SetLastError(ERROR_PATH_NOT_FOUND);
         return false;
     }
+    media_path.resize(separator);
 
-    DWORD written = 0;
-    const bool ok = WriteFile(file, bytes, byte_count, &written, nullptr) != FALSE &&
-        written == byte_count;
-    CloseHandle(file);
-    if (!ok) {
-        DeleteFileW(temp_path.c_str());
-        temp_path.clear();
+    wchar_t file_name[64]{};
+    std::swprintf(file_name, std::size(file_name),
+        L"\\media\\opening\\jw208_record%lu.mp4",
+        static_cast<unsigned long>(state.record_index));
+    media_path.append(file_name);
+
+    const DWORD attributes = GetFileAttributesW(media_path.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES ||
+        (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+        media_path.clear();
+        if (attributes != INVALID_FILE_ATTRIBUTES) {
+            SetLastError(ERROR_FILE_NOT_FOUND);
+        }
+        return false;
     }
-    return ok;
+    return true;
 }
 
 bool embedded_video_input_down() {
@@ -593,17 +582,24 @@ EmbeddedVideoWindows create_embedded_video_windows(HWND owner,
     return windows;
 }
 
-bool play_embedded_jw208_video(const BinkVideoRuntimeState& state) {
+bool play_external_jw208_video(const BinkVideoRuntimeState& state) {
     g_bink_video_state.media_foundation_stage = 1;
-    const WORD resource_id = embedded_jw208_resource_id(state);
-    if (resource_id == 0) {
+    const WORD media_id = jw208_fallback_media_id(state);
+    if (media_id == 0) {
         g_bink_video_state.media_foundation_result = E_INVALIDARG;
+        return false;
+    }
+    std::wstring media_path;
+    if (!resolve_external_jw208_video_path(state, media_path)) {
+        g_bink_video_state.media_foundation_result = HRESULT_FROM_WIN32(GetLastError());
         return false;
     }
     HWND owner = resolve_embedded_video_window();
     const EmbeddedVideoWindows windows =
         create_embedded_video_windows(owner, state);
-    g_bink_video_state.media_foundation_resource_id = resource_id;
+    // Keep the former resource id in diagnostics so existing startup-log
+    // tooling can still identify the JW2_08 record being played.
+    g_bink_video_state.media_foundation_resource_id = media_id;
     g_bink_video_state.media_foundation_window_valid =
         windows.backdrop != nullptr && IsWindow(windows.backdrop) &&
         windows.surface != nullptr && IsWindow(windows.surface);
@@ -615,12 +611,6 @@ bool play_embedded_jw208_video(const BinkVideoRuntimeState& state) {
         return false;
     }
 
-    std::wstring temp_path;
-    if (!write_embedded_jw208_video_to_temp_file(resource_id, temp_path)) {
-        g_bink_video_state.media_foundation_result = HRESULT_FROM_WIN32(GetLastError());
-        DestroyWindow(windows.backdrop);
-        return false;
-    }
     g_bink_video_state.media_foundation_stage = 2;
 
     const HRESULT com_result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
@@ -637,7 +627,7 @@ bool play_embedded_jw208_video(const BinkVideoRuntimeState& state) {
         callback = new (std::nothrow) EmbeddedMediaPlayerCallback();
         g_bink_video_state.media_foundation_stage = 5;
         if (callback != nullptr && callback->completed_event() != nullptr) {
-            result = MFPCreateMediaPlayer(temp_path.c_str(), TRUE, MFP_OPTION_NONE,
+            result = MFPCreateMediaPlayer(media_path.c_str(), TRUE, MFP_OPTION_NONE,
                 callback, windows.surface, &player);
             g_bink_video_state.media_foundation_stage = 6;
         }
@@ -754,7 +744,6 @@ bool play_embedded_jw208_video(const BinkVideoRuntimeState& state) {
     if (owner != nullptr && IsWindow(owner)) {
         SetForegroundWindow(owner);
     }
-    DeleteFileW(temp_path.c_str());
     g_bink_video_state.media_foundation_stage = 8;
     g_bink_video_state.media_foundation_result = result;
     return ok;
@@ -2737,7 +2726,7 @@ bool PlayBinkTrcRecord(const char* archive_name, u32 record_index, i32 x, i32 y)
     }
     if (!ok) {
         g_bink_video_state.active = true;
-        ok = play_embedded_jw208_video(g_bink_video_state);
+        ok = play_external_jw208_video(g_bink_video_state);
         g_bink_video_state.active = false;
         g_bink_video_state.played_with_media_foundation = ok;
     }

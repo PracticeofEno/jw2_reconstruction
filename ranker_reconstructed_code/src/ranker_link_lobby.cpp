@@ -3376,6 +3376,8 @@ bool CreateLinkLobbyPlayerRoleControls(LinkLobbyState& state) {
             y += row_step;
         }
     }
+    ShowWindow(state.start_button.window,
+        ShouldShowLinkLobbyStartButton(state.host_mode) ? SW_SHOW : SW_HIDE);
     return true;
 }
 
@@ -7712,7 +7714,7 @@ LRESULT HandleLinkLobbyWindowMessage(LinkLobbyState& state, HWND hwnd, UINT mess
         }
         if (id == kLinkLobbyStartButtonId) {
             HandleDefaultFrontendUiClickSound();
-            if (link_lobby_directplay_ready() || state.host_mode) {
+            if (ShouldShowLinkLobbyStartButton(state.host_mode)) {
                 SubmitLinkLobbyStartRequest(state);
             }
             return 0;

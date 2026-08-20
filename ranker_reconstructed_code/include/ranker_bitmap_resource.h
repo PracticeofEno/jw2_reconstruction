@@ -50,6 +50,10 @@ bool LoadBitmapMemoryResourceFromOwnedBytes(BitmapMemoryResource& resource,
 bool LoadBitmapMemoryResourceFromMemory(BitmapMemoryResource& resource, const void* data,
     std::size_t size);
 bool LoadBitmapMemoryResourceFromFile(BitmapMemoryResource& resource, const char* path);
+#ifdef _WIN32
+bool LoadBitmapMemoryResourceFromExecutableRelativeFile(
+    BitmapMemoryResource& resource, const char* relative_path);
+#endif
 bool LoadBitmapMemoryResourceFromTrcRecord(BitmapMemoryResource& resource,
     const char* archive_name, u32 record_index);
 

@@ -23,38 +23,6 @@ LANGUAGE 0x12, 0x01
 850 9 "resources/original/rt_accelerator_850_lang1042.bin"
 1000 9 "resources/original/rt_accelerator_1000_lang1042.bin"
 
-// x64 builds cannot load the original 32-bit Bink decoder.  Keep an exact
-// decoded title cycle plus a single-frame emergency fallback in RCDATA.
-2000 10 "resources/main_menu_bink_fallback_565.bin"
-2001 10 "resources/main_menu_bink_fallback_anim.z"
-
-// Keep the reconstructed WizardNet frontend instead of falling back to the
-// original Jw2_19 lobby art.  The server, relay, and packet paths are
-// independent of these UI-only resources.
-2002 10 "resources/lobby_base.bmp"
-2003 10 "resources/view_rank_base.bmp"
-// Five unique 42x18 nickname marks: LEAGUE, WIZARD, USER, RANKER, RANK.
-2004 10 "resources/wizardnet_rank_marks.bmp"
-
-// Original JW2_08.TRC Bink records transcoded at visually transparent quality for the x64
-// Media Foundation fallback.  The 32-bit build continues to prefer binkw32.
-2010 10 "resources/jw208_record0.mp4"
-2011 10 "resources/jw208_record1.mp4"
-2012 10 "resources/jw208_record2.mp4"
-2013 10 "resources/jw208_record3.mp4"
-2014 10 "resources/jw208_record4.mp4"
-2015 10 "resources/jw208_record5.mp4"
-2016 10 "resources/jw208_record6.mp4"
-2017 10 "resources/jw208_record7.mp4"
-2018 10 "resources/jw208_record8.mp4"
-2019 10 "resources/jw208_record9.mp4"
-2020 10 "resources/jw208_record10.mp4"
-2021 10 "resources/jw208_record11.mp4"
-2022 10 "resources/jw208_record12.mp4"
-2023 10 "resources/jw208_record13.mp4"
-2024 10 "resources/jw208_record14.mp4"
-2025 10 "resources/jw208_record15.mp4"
-2026 10 "resources/jw208_record16.mp4"
-
-// 64 transcoded embedded briefing movies: 8 missions x 4 factions x 2 panes.
-2030 10 "resources/scenario_ui_bink_mp4.pack"
+// Large x64 video fallbacks are deployed beside ranker_rebuild.exe under
+// media/opening, media/scenario, and media/menu instead of being embedded.
+// Reconstructed WizardNet lobby art is similarly deployed under media/lobby.

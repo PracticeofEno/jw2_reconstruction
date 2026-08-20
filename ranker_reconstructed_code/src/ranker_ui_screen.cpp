@@ -478,27 +478,6 @@ bool read_binary_file(const char* path, std::vector<u8>& out) {
 }
 
 #ifdef _WIN32
-bool read_embedded_binary_resource(WORD resource_id, std::vector<u8>& out) {
-    HMODULE module = GetModuleHandleA(nullptr);
-    HRSRC resource = FindResourceA(module,
-        MAKEINTRESOURCEA(resource_id), RT_RCDATA);
-    if (resource == nullptr) {
-        return false;
-    }
-
-    HGLOBAL loaded = LoadResource(module, resource);
-    const DWORD byte_count = SizeofResource(module, resource);
-    const void* data = loaded == nullptr ? nullptr : LockResource(loaded);
-    if (data == nullptr || byte_count == 0) {
-        return false;
-    }
-
-    const auto* first = static_cast<const u8*>(data);
-    out.assign(first, first + byte_count);
-    return true;
-}
-
-constexpr WORD kScenarioUiBinkPackResourceId = 2030;
 constexpr std::array<u8, 8> kScenarioUiBinkPackMagic{
     'R', 'M', 'P', '4', 'P', 'A', 'C', 'K'};
 constexpr u32 kScenarioUiBinkPackVersion = 1;
@@ -581,50 +560,76 @@ bool scenario_ui_archive_name(const std::string& archive_name) {
 }
 
 bool find_scenario_ui_bink_mp4(const UiScreenDefinition& screen, u32 blob_index,
-    const u8*& bytes, u32& byte_count) {
-    bytes = nullptr;
-    byte_count = 0;
+    std::vector<u8>& bytes) {
+    bytes.clear();
     if (!scenario_ui_archive_name(screen.source_archive_name) ||
         screen.source_record_index == kInvalidUiScreenIndex) {
         return false;
     }
 
-    HMODULE module = GetModuleHandleW(nullptr);
-    HRSRC resource = FindResourceW(module,
-        MAKEINTRESOURCEW(kScenarioUiBinkPackResourceId), MAKEINTRESOURCEW(10));
-    HGLOBAL loaded = resource != nullptr ? LoadResource(module, resource) : nullptr;
-    const DWORD pack_size = resource != nullptr ? SizeofResource(module, resource) : 0;
-    const auto* pack = loaded != nullptr ? static_cast<const u8*>(LockResource(loaded)) : nullptr;
-    if (pack == nullptr || pack_size < 16 ||
+    const std::string module_dir = module_directory();
+    if (module_dir.empty()) {
+        return false;
+    }
+    const std::string pack_path =
+        module_dir + "\\media\\scenario\\scenario_ui_bink_mp4.pack";
+    FILE* file = std::fopen(pack_path.c_str(), "rb");
+    if (file == nullptr || std::fseek(file, 0, SEEK_END) != 0) {
+        if (file != nullptr) {
+            std::fclose(file);
+        }
+        return false;
+    }
+    const long pack_size_long = std::ftell(file);
+    if (pack_size_long < 16 || std::fseek(file, 0, SEEK_SET) != 0) {
+        std::fclose(file);
+        return false;
+    }
+    const u32 pack_size = static_cast<u32>(pack_size_long);
+    std::array<u8, 16> header{};
+    if (std::fread(header.data(), 1, header.size(), file) != header.size() ||
         !std::equal(kScenarioUiBinkPackMagic.begin(),
-            kScenarioUiBinkPackMagic.end(), pack) ||
-        read_le_u32(pack + 8) != kScenarioUiBinkPackVersion) {
+            kScenarioUiBinkPackMagic.end(), header.data()) ||
+        read_le_u32(header.data() + 8) != kScenarioUiBinkPackVersion) {
+        std::fclose(file);
         return false;
     }
 
-    const u32 entry_count = read_le_u32(pack + 12);
-    const std::size_t directory_end = 16u +
-        static_cast<std::size_t>(entry_count) * 16u;
+    const u32 entry_count = read_le_u32(header.data() + 12);
+    const u64 directory_end = 16u + static_cast<u64>(entry_count) * 16u;
     if (directory_end > pack_size) {
+        std::fclose(file);
         return false;
     }
     for (u32 index = 0; index < entry_count; ++index) {
-        const u8* entry = pack + 16u + static_cast<std::size_t>(index) * 16u;
-        if (read_le_u32(entry) != screen.source_record_index ||
-            read_le_u32(entry + 4) != blob_index) {
+        std::array<u8, 16> entry{};
+        if (std::fread(entry.data(), 1, entry.size(), file) != entry.size()) {
+            std::fclose(file);
+            return false;
+        }
+        if (read_le_u32(entry.data()) != screen.source_record_index ||
+            read_le_u32(entry.data() + 4) != blob_index) {
             continue;
         }
         const ScenarioUiBinkPackEntry found{
-            read_le_u32(entry), read_le_u32(entry + 4),
-            read_le_u32(entry + 8), read_le_u32(entry + 12)};
+            read_le_u32(entry.data()), read_le_u32(entry.data() + 4),
+            read_le_u32(entry.data() + 8), read_le_u32(entry.data() + 12)};
         if (found.offset < directory_end || found.offset > pack_size ||
             found.byte_count > pack_size - found.offset) {
+            std::fclose(file);
             return false;
         }
-        bytes = pack + found.offset;
-        byte_count = found.byte_count;
-        return byte_count != 0;
+        bytes.resize(found.byte_count);
+        const bool read_ok = found.byte_count != 0 &&
+            std::fseek(file, static_cast<long>(found.offset), SEEK_SET) == 0 &&
+            std::fread(bytes.data(), 1, bytes.size(), file) == bytes.size();
+        std::fclose(file);
+        if (!read_ok) {
+            bytes.clear();
+        }
+        return read_ok;
     }
+    std::fclose(file);
     return false;
 }
 
@@ -692,12 +697,16 @@ ScenarioUiBinkWindows create_scenario_ui_bink_windows(
     const UiScreenEntry& entry) {
     ScenarioUiBinkWindows windows{};
     const DirectDrawRuntimeState& dd = direct_draw_state();
-    HWND owner = dd.presentation_window;
-    if (owner == nullptr || !IsWindow(owner)) {
-        owner = RankerMainWindowState().main_window;
+    HWND layout_host = dd.presentation_window;
+    if (layout_host == nullptr || !IsWindow(layout_host)) {
+        layout_host = RankerMainWindowState().main_window;
     }
-    if (owner == nullptr || !IsWindow(owner)) {
+    if (layout_host == nullptr || !IsWindow(layout_host)) {
         return windows;
+    }
+    HWND popup_owner = GetAncestor(layout_host, GA_ROOT);
+    if (popup_owner == nullptr || !IsWindow(popup_owner)) {
+        popup_owner = layout_host;
     }
 
     constexpr wchar_t kWindowClass[] = L"RankerScenarioUiBink";
@@ -717,7 +726,7 @@ ScenarioUiBinkWindows create_scenario_ui_bink_windows(
     }
 
     RECT client{};
-    if (!GetClientRect(owner, &client)) {
+    if (!GetClientRect(layout_host, &client)) {
         return windows;
     }
     const LONG client_width = client.right - client.left;
@@ -743,21 +752,20 @@ ScenarioUiBinkWindows create_scenario_ui_bink_windows(
 
     POINT top_left{left, top};
     POINT bottom_right{right, bottom};
-    if (!ClientToScreen(owner, &top_left) ||
-        !ClientToScreen(owner, &bottom_right)) {
+    if (!ClientToScreen(layout_host, &top_left) ||
+        !ClientToScreen(layout_host, &bottom_right)) {
         return windows;
     }
 
-    // DirectDraw presents directly over ordinary child HWNDs.  Match the
-    // full-screen MF fallback and use an owned, no-activate popup so the two
-    // movies stay above the legacy primary-surface blit while remaining part
-    // of the modal screen's lifetime.
+    // DirectDraw presents directly over ordinary child HWNDs, so retain an
+    // owned popup. It must not be desktop-topmost: ownership keeps it above
+    // Ranker's presentation and also hides/reorders it with Ranker on Alt+Tab.
     windows.backdrop = CreateWindowExW(
-        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+        static_cast<DWORD>(kScenarioUiVideoBackdropExtendedStyle),
         kWindowClass, L"", WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN,
         top_left.x, top_left.y,
         bottom_right.x - top_left.x, bottom_right.y - top_left.y,
-        nullptr, nullptr, instance, nullptr);
+        popup_owner, nullptr, instance, nullptr);
     if (windows.backdrop == nullptr) {
         return windows;
     }
@@ -773,7 +781,7 @@ ScenarioUiBinkWindows create_scenario_ui_bink_windows(
         return windows;
     }
 
-    SetWindowPos(windows.backdrop, HWND_TOPMOST, top_left.x, top_left.y,
+    SetWindowPos(windows.backdrop, HWND_TOP, top_left.x, top_left.y,
         width, height, SWP_SHOWWINDOW | SWP_NOACTIVATE);
     UpdateWindow(windows.backdrop);
     UpdateWindow(windows.surface);
@@ -868,12 +876,10 @@ bool start_ui_bink_media_fallback(const UiScreenDefinition& screen,
     if (blob_index < 0) {
         return false;
     }
-    const u8* bytes = nullptr;
-    u32 byte_count = 0;
-    if (!find_scenario_ui_bink_mp4(screen, static_cast<u32>(blob_index),
-            bytes, byte_count) ||
+    std::vector<u8> bytes;
+    if (!find_scenario_ui_bink_mp4(screen, static_cast<u32>(blob_index), bytes) ||
         !write_scenario_ui_bink_temp_file(
-            bytes, byte_count, state.fallback_temp_path)) {
+            bytes.data(), static_cast<u32>(bytes.size()), state.fallback_temp_path)) {
         append_startup_log(
             "scenario-ui-video: materialize failed record=%lu blob=%ld",
             static_cast<unsigned long>(screen.source_record_index),
@@ -883,7 +889,7 @@ bool start_ui_bink_media_fallback(const UiScreenDefinition& screen,
     append_startup_log(
         "scenario-ui-video: materialized record=%lu blob=%ld bytes=%lu",
         static_cast<unsigned long>(screen.source_record_index),
-        static_cast<long>(blob_index), static_cast<unsigned long>(byte_count));
+        static_cast<long>(blob_index), static_cast<unsigned long>(bytes.size()));
 
     const ScenarioUiBinkWindows windows =
         create_scenario_ui_bink_windows(entry);
@@ -990,19 +996,13 @@ const std::vector<u8>& main_menu_bink_fallback_565() {
     }
 
     attempted = true;
-#ifdef _WIN32
-    constexpr WORD kMainMenuBinkFallbackResourceId = 2000;
-    if (read_embedded_binary_resource(kMainMenuBinkFallbackResourceId, bytes)) {
-        return bytes;
-    }
-#endif
-
     const std::string module_dir = module_directory();
-    std::array<std::string, 5> candidates{
+    std::array<std::string, 6> candidates{
+        module_dir.empty() ? std::string{} :
+            module_dir + "\\media\\menu\\main_menu_bink_fallback_565.bin",
+        "media\\menu\\main_menu_bink_fallback_565.bin",
         "main_menu_bink_fallback_565.bin",
         "resources\\main_menu_bink_fallback_565.bin",
-        module_dir.empty() ? std::string{} :
-            module_dir + "\\main_menu_bink_fallback_565.bin",
         module_dir.empty() ? std::string{} :
             module_dir + "\\..\\resources\\main_menu_bink_fallback_565.bin",
         module_dir.empty() ? std::string{} :
@@ -1030,26 +1030,21 @@ const std::vector<u8>& main_menu_bink_fallback_animation_565() {
     attempted = true;
 
     std::vector<u8> packed;
-#ifdef _WIN32
-    constexpr WORD kMainMenuBinkAnimationResourceId = 2001;
-    (void)read_embedded_binary_resource(kMainMenuBinkAnimationResourceId, packed);
-#endif
-    if (packed.empty()) {
-        const std::string module_dir = module_directory();
-        std::array<std::string, 5> candidates{
-            "main_menu_bink_fallback_anim.z",
-            "resources\\main_menu_bink_fallback_anim.z",
-            module_dir.empty() ? std::string{} :
-                module_dir + "\\main_menu_bink_fallback_anim.z",
-            module_dir.empty() ? std::string{} :
-                module_dir + "\\..\\resources\\main_menu_bink_fallback_anim.z",
-            module_dir.empty() ? std::string{} :
-                module_dir + "\\resources\\main_menu_bink_fallback_anim.z",
-        };
-        for (const std::string& candidate : candidates) {
-            if (!candidate.empty() && read_binary_file(candidate.c_str(), packed)) {
-                break;
-            }
+    const std::string module_dir = module_directory();
+    std::array<std::string, 6> candidates{
+        module_dir.empty() ? std::string{} :
+            module_dir + "\\media\\menu\\main_menu_bink_fallback_anim.z",
+        "media\\menu\\main_menu_bink_fallback_anim.z",
+        "main_menu_bink_fallback_anim.z",
+        "resources\\main_menu_bink_fallback_anim.z",
+        module_dir.empty() ? std::string{} :
+            module_dir + "\\..\\resources\\main_menu_bink_fallback_anim.z",
+        module_dir.empty() ? std::string{} :
+            module_dir + "\\resources\\main_menu_bink_fallback_anim.z",
+    };
+    for (const std::string& candidate : candidates) {
+        if (!candidate.empty() && read_binary_file(candidate.c_str(), packed)) {
+            break;
         }
     }
     if (packed.empty()) {

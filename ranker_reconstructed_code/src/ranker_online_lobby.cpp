@@ -86,8 +86,6 @@ constexpr DWORD kWindowStyleWindowed =
     WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
 constexpr std::size_t kStartupFriendAddTargetPromptRow = 209;
 constexpr std::size_t kStartupFriendRemoveTargetPromptRow = 210;
-constexpr int kOnlineLobbyReconstructedBackgroundResourceId = 2002;
-constexpr int kOnlineLobbyRankMarksResourceId = 2004;
 constexpr u32 kOnlineLobbyChatFontIndex = 3;
 constexpr int kOnlineLobbyRankMarkPickerColumns = 5;
 constexpr int kOnlineLobbyRankMarkChoiceWidth = 46;
@@ -173,36 +171,14 @@ struct FrontendLayoutTableOwner {
 };
 
 bool load_reconstructed_lobby_background(OnlineLobbyState& state) {
-    HMODULE module = state.instance != nullptr ? state.instance :
-        GetModuleHandleA(nullptr);
-    HRSRC info = FindResourceA(module,
-        MAKEINTRESOURCEA(kOnlineLobbyReconstructedBackgroundResourceId),
-        RT_RCDATA);
-    if (info == nullptr) {
-        return false;
-    }
-    HGLOBAL loaded = LoadResource(module, info);
-    const DWORD byte_count = SizeofResource(module, info);
-    const void* bytes = loaded != nullptr ? LockResource(loaded) : nullptr;
-    return bytes != nullptr && byte_count != 0 &&
-        LoadBitmapMemoryResourceFromMemory(
-            state.background, bytes, static_cast<std::size_t>(byte_count));
+    return LoadBitmapMemoryResourceFromExecutableRelativeFile(
+        state.background, "media\\lobby\\lobby_base.bmp");
 }
 
 bool load_reconstructed_rank_marks(OnlineLobbyState& state) {
-    HMODULE module = state.instance != nullptr ? state.instance :
-        GetModuleHandleA(nullptr);
-    HRSRC info = FindResourceA(module,
-        MAKEINTRESOURCEA(kOnlineLobbyRankMarksResourceId), RT_RCDATA);
-    if (info == nullptr) {
-        return false;
-    }
-    HGLOBAL loaded = LoadResource(module, info);
-    const DWORD byte_count = SizeofResource(module, info);
-    const void* bytes = loaded != nullptr ? LockResource(loaded) : nullptr;
-    if (bytes == nullptr || byte_count == 0 ||
-        !LoadBitmapMemoryResourceFromMemory(state.rank_mark_strip, bytes,
-            static_cast<std::size_t>(byte_count))) {
+    if (!LoadBitmapMemoryResourceFromExecutableRelativeFile(
+            state.rank_mark_strip,
+            "media\\lobby\\wizardnet_rank_marks.bmp")) {
         return false;
     }
     return GetBitmapMemoryResourceWidth(state.rank_mark_strip) ==
@@ -933,11 +909,11 @@ void draw_online_lobby_game_item(OnlineLobbyState& state,
         reinterpret_cast<const char*>(
             payload + kOnlineLobbyPresenceLocationPayloadOffset) : "";
     if (location[0] != '\0' && presence_status != kOnlineLobbyPresenceLobby) {
-        std::snprintf(display_text, sizeof(display_text), "%s  [%s: %s]",
-            text, status_text.c_str(), location);
+        std::snprintf(display_text, sizeof(display_text), "[%s] %s - %s",
+            status_text.c_str(), text, location);
     } else {
-        std::snprintf(display_text, sizeof(display_text), "%s  [%s]",
-            text, status_text.c_str());
+        std::snprintf(display_text, sizeof(display_text), "[%s] %s",
+            status_text.c_str(), text);
     }
 
     rect.left += kOnlineLobbyRankMarkFrameWidth +

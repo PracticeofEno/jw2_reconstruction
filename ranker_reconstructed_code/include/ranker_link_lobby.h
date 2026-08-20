@@ -58,6 +58,10 @@ constexpr UINT kLinkLobbyDownloadProgressMessage = 0x508;
 constexpr UINT kLinkLobbyOwnerSyncMessage = 0x50e;
 constexpr UINT kLinkLobbySocketMessage = 0x50f;
 constexpr UINT kLinkLobbyStartSyncPumpMessage = 0x510;
+
+constexpr bool ShouldShowLinkLobbyStartButton(bool host_mode) {
+    return host_mode;
+}
 constexpr std::size_t kLinkLobbyPlayerPayloadBytes = 0x3f4;
 constexpr std::size_t kLinkLobbyPlayerPayloadBodyBytes = 0x3a0;
 constexpr std::size_t kLinkLobbyPlayerPayloadBodyOffset = 0x10;

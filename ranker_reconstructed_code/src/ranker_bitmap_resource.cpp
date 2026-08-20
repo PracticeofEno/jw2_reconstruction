@@ -4,6 +4,7 @@
 #include "ranker_trc.h"
 
 #include <cstring>
+#include <string>
 
 namespace ranker {
 namespace {
@@ -246,6 +247,31 @@ bool LoadBitmapMemoryResourceFromFile(BitmapMemoryResource& resource, const char
     // Original 00509a20 omits CrtFclose on the successful read/load path.
     return loaded;
 }
+
+#ifdef _WIN32
+bool LoadBitmapMemoryResourceFromExecutableRelativeFile(
+    BitmapMemoryResource& resource, const char* relative_path) {
+    if (relative_path == nullptr || relative_path[0] == '\0') {
+        return false;
+    }
+
+    char module_path[MAX_PATH]{};
+    const DWORD module_path_length = GetModuleFileNameA(
+        nullptr, module_path, static_cast<DWORD>(sizeof(module_path)));
+    if (module_path_length == 0 || module_path_length >= sizeof(module_path)) {
+        return false;
+    }
+
+    std::string path(module_path, module_path_length);
+    const std::size_t separator = path.find_last_of("\\/");
+    if (separator == std::string::npos) {
+        return false;
+    }
+    path.resize(separator + 1);
+    path.append(relative_path);
+    return LoadBitmapMemoryResourceFromFile(resource, path.c_str());
+}
+#endif
 
 bool LoadBitmapMemoryResourceFromTrcRecord(BitmapMemoryResource& resource,
     const char* archive_name, u32 record_index) {

@@ -1754,10 +1754,37 @@ if (WIN32)
         )
     endif()
 
+    set(RANKER_EXTERNAL_OPENING_MEDIA)
+    foreach(RANKER_OPENING_INDEX RANGE 0 16)
+        list(APPEND RANKER_EXTERNAL_OPENING_MEDIA
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/jw208_record${RANKER_OPENING_INDEX}.mp4")
+    endforeach()
+
     add_custom_command(TARGET ranker_rebuild POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:ranker_rebuild>/media/opening"
+            "$<TARGET_FILE_DIR:ranker_rebuild>/media/scenario"
+            "$<TARGET_FILE_DIR:ranker_rebuild>/media/menu"
+            "$<TARGET_FILE_DIR:ranker_rebuild>/media/lobby"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${RANKER_EXTERNAL_OPENING_MEDIA}
+            "$<TARGET_FILE_DIR:ranker_rebuild>/media/opening"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/scenario_ui_bink_mp4.pack"
+            "$<TARGET_FILE_DIR:ranker_rebuild>/media/scenario"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/main_menu_bink_fallback_565.bin"
-            "$<TARGET_FILE_DIR:ranker_rebuild>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/main_menu_bink_fallback_anim.z"
+            "$<TARGET_FILE_DIR:ranker_rebuild>/media/menu"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/lobby_base.bmp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/view_rank_base.bmp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/wizardnet_rank_marks.bmp"
+            "$<TARGET_FILE_DIR:ranker_rebuild>/media/lobby"
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            "$<TARGET_FILE_DIR:ranker_rebuild>/main_menu_bink_fallback_565.bin"
+            "$<TARGET_FILE_DIR:ranker_rebuild>/main_menu_bink_fallback_anim.z"
+        COMMENT "Copying external Ranker video media"
         VERBATIM
     )
 endif()

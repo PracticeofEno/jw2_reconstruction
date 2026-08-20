@@ -1719,6 +1719,10 @@ bool CreateCreateGameWindow(CreateGameState& state, HWND parent, HINSTANCE insta
     RefreshCreateGameScenarioList(state);
     if (state.mode == 6) {
         SetWindowTextA(state.name_edit.window, "Custom");
+    } else if (state.mode == 0) {
+        const std::string default_title =
+            BuildCreateGameDefaultTitle(state.local_player_name.data());
+        SetWindowTextA(state.name_edit.window, default_title.c_str());
     } else {
         SetWindowTextA(state.name_edit.window, "Player's Game");
     }

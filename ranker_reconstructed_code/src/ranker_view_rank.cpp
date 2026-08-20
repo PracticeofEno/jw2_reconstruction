@@ -32,8 +32,6 @@ constexpr COLORREF kViewRankSoftWhite = RGB(250, 250, 250);
 constexpr COLORREF kViewRankGray = RGB(200, 200, 200);
 constexpr COLORREF kViewRankBlack = RGB(0, 0, 0);
 constexpr COLORREF kViewRankSelectedBlue = RGB(0, 0, 255);
-constexpr int kViewRankReconstructedBackgroundResourceId = 2003;
-
 ViewRankState g_view_rank_state;
 bool g_background_destructor_registered = false;
 std::array<bool, 8> g_button_destructor_registered{};
@@ -120,20 +118,8 @@ void assign_layout(ViewRankState& state, const FrontendLayoutRectTable& table) {
 }
 
 bool load_reconstructed_view_rank_background(ViewRankState& state) {
-    HMODULE module = state.instance != nullptr ? state.instance :
-        GetModuleHandleA(nullptr);
-    HRSRC info = FindResourceA(module,
-        MAKEINTRESOURCEA(kViewRankReconstructedBackgroundResourceId),
-        RT_RCDATA);
-    if (info == nullptr) {
-        return false;
-    }
-    HGLOBAL loaded = LoadResource(module, info);
-    const DWORD byte_count = SizeofResource(module, info);
-    const void* bytes = loaded != nullptr ? LockResource(loaded) : nullptr;
-    return bytes != nullptr && byte_count != 0 &&
-        LoadBitmapMemoryResourceFromMemory(
-            state.background, bytes, static_cast<std::size_t>(byte_count));
+    return LoadBitmapMemoryResourceFromExecutableRelativeFile(
+        state.background, "media\\lobby\\view_rank_base.bmp");
 }
 
 void write_le32(std::vector<u8>& buffer, std::size_t offset, u32 value) {
