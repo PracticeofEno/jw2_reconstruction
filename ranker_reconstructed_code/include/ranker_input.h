@@ -214,7 +214,8 @@ bool PushKeyboardInputEvent(u32 key_or_char);
 bool PushMouseInputEvent(u32 message, u32 code, u32 wparam, u32 lparam);
 bool HandlePointerMotion(u32 lparam);
 void ResetPointerMotionToLegacyStartupState();
-void SuppressNextProgrammaticPointerMotion(i32 x, i32 y);
+void SuppressNextProgrammaticPointerMotion(
+    i32 x, i32 y, i32 screen_x, i32 screen_y);
 bool HandleLeftButtonDown(u32 wparam, u32 lparam);
 bool HandleLeftButtonUp(u32 wparam, u32 lparam);
 bool HandleRightButtonDown(u32 wparam, u32 lparam);

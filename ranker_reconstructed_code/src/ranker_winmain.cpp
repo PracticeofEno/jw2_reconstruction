@@ -1520,16 +1520,8 @@ bool main_window_client_screen_rect(HWND window, RECT& client,
 
 i32 scale_logical_cursor_to_presentation(
     i32 coordinate, i32 logical_extent, i32 presentation_extent) {
-    if (logical_extent <= 1 || presentation_extent <= 1) {
-        return 0;
-    }
-    const i32 clamped = std::clamp(coordinate, 0, logical_extent - 1);
-    // cnc-ddraw mouse_lock/mouse_unlock multiply by the endpoint-preserving
-    // float scale and truncate when they place the real OS cursor.
-    volatile float scale = static_cast<float>(presentation_extent - 1) /
-        static_cast<float>(logical_extent - 1);
-    volatile float scaled = static_cast<float>(clamped) * scale;
-    return std::clamp(static_cast<i32>(scaled), 0, presentation_extent - 1);
+    return ScaleLogicalCursorCoordinateToPresentation(
+        coordinate, logical_extent, presentation_extent);
 }
 
 i32 scale_unlocked_cursor_to_logical(
@@ -1556,11 +1548,18 @@ bool set_main_window_system_cursor_logical_position(
 
     const GameplayLogicalSurfaceSize logical =
         resolve_active_gameplay_logical_surface_size();
-    POINT position{
+    POINT client_position{
         scale_logical_cursor_to_presentation(logical_x,
             static_cast<i32>(logical.width), client.right - client.left),
         scale_logical_cursor_to_presentation(logical_y,
             static_cast<i32>(logical.height), client.bottom - client.top)};
+    const i32 generated_logical_x =
+        ResolveProgrammaticPointerMotionLogicalTarget(logical_x,
+            static_cast<i32>(logical.width), client.right - client.left);
+    const i32 generated_logical_y =
+        ResolveProgrammaticPointerMotionLogicalTarget(logical_y,
+            static_cast<i32>(logical.height), client.bottom - client.top);
+    POINT position = client_position;
     if (!ClientToScreen(window, &position)) {
         return false;
     }
@@ -1575,7 +1574,15 @@ bool set_main_window_system_cursor_logical_position(
     // cursor, drain any older queued positions as well as its matching target
     // message before accepting another genuine sample.
     if (position_changes) {
-        SuppressNextProgrammaticPointerMotion(logical_x, logical_y);
+        // Store the logical coordinates that the generated WM_MOUSEMOVE will
+        // actually contain. Placement truncates during logical->presentation
+        // scaling, while message input rounds on the inverse conversion. For
+        // many 1280x960 positions that round trip is one pixel below the
+        // requested coordinate; waiting for the unrounded request would keep
+        // every later physical WM_MOUSEMOVE suppressed until a button event.
+        SuppressNextProgrammaticPointerMotion(
+            generated_logical_x, generated_logical_y,
+            position.x, position.y);
     }
     return true;
 }

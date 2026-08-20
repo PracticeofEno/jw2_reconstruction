@@ -114,6 +114,11 @@ int main() {
     assert(ScalePresentationCoordinateToLogical(1279, 1280, 800) == 799);
     assert(ScalePresentationCoordinateToLogical(480, 960, 600) == 300);
     assert(ScalePresentationCoordinateToLogical(959, 960, 600) == 599);
+    assert(ScaleLogicalCursorCoordinateToPresentation(3, 800, 1280) == 4);
+    assert(ResolveProgrammaticPointerMotionLogicalTarget(3, 800, 1280) == 2);
+    assert(ResolveProgrammaticPointerMotionLogicalTarget(400, 800, 1280) == 400);
+    assert(ResolveProgrammaticPointerMotionLogicalTarget(799, 800, 1280) == 799);
+    assert(ResolveProgrammaticPointerMotionLogicalTarget(3, 600, 960) == 2);
 #ifdef _WIN32
     const RankerClientDisplayConfig display = LoadRankerClientDisplayConfig();
     assert(display.width == 1280);

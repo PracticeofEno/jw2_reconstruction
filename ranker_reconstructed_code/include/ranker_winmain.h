@@ -51,6 +51,32 @@ inline i32 ScalePresentationCoordinateToLogical(
     return rounded >= logical_extent ? logical_extent - 1 : rounded;
 }
 
+inline i32 ScaleLogicalCursorCoordinateToPresentation(
+    i32 coordinate, i32 logical_extent, i32 presentation_extent) {
+    if (logical_extent <= 1 || presentation_extent <= 1) {
+        return 0;
+    }
+    const i32 clamped = coordinate < 0 ? 0 :
+        (coordinate >= logical_extent ? logical_extent - 1 : coordinate);
+    // cnc-ddraw's mouse_lock/mouse_unlock placement uses truncation, unlike
+    // the roundf used when the resulting WM_MOUSEMOVE is unscaled above.
+    volatile float scale = static_cast<float>(presentation_extent - 1) /
+        static_cast<float>(logical_extent - 1);
+    volatile float scaled = static_cast<float>(clamped) * scale;
+    const i32 truncated = static_cast<i32>(scaled);
+    return truncated >= presentation_extent ?
+        presentation_extent - 1 : truncated;
+}
+
+inline i32 ResolveProgrammaticPointerMotionLogicalTarget(
+    i32 requested_logical_coordinate, i32 logical_extent,
+    i32 presentation_extent) {
+    return ScalePresentationCoordinateToLogical(
+        ScaleLogicalCursorCoordinateToPresentation(requested_logical_coordinate,
+            logical_extent, presentation_extent),
+        presentation_extent, logical_extent);
+}
+
 const OriginalRoutineRef* winmain_routine_map(std::size_t& count);
 
 #ifdef _WIN32

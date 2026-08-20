@@ -16,6 +16,8 @@ bool g_programmatic_pointer_motion_pending = false;
 bool g_programmatic_pointer_motion_target_reached = false;
 i32 g_programmatic_pointer_motion_x = 0;
 i32 g_programmatic_pointer_motion_y = 0;
+i32 g_programmatic_pointer_motion_screen_x = 0;
+i32 g_programmatic_pointer_motion_screen_y = 0;
 std::atomic_flag g_mouse_event_snapshot_gate = ATOMIC_FLAG_INIT;
 
 struct GameplayMouseCommandSnapshotStorage {
@@ -401,14 +403,37 @@ bool HandlePointerMotion(u32 lparam) {
         const bool at_target = x == g_programmatic_pointer_motion_x &&
             y == g_programmatic_pointer_motion_y;
         if (!g_programmatic_pointer_motion_target_reached) {
-            g_programmatic_pointer_motion_target_reached = at_target;
+            if (at_target) {
+                g_programmatic_pointer_motion_target_reached = true;
+                return true;
+            }
+#ifdef _WIN32
+            POINT current_system_position{};
+            if (GetCursorPos(&current_system_position) &&
+                current_system_position.x ==
+                    g_programmatic_pointer_motion_screen_x &&
+                current_system_position.y ==
+                    g_programmatic_pointer_motion_screen_y) {
+                // An older queued move can precede SetCursorPos's generated
+                // target. It is safe to keep draining only while the physical
+                // cursor is still at that programmatic screen position.
+                return true;
+            }
+#endif
+            // USER32 may coalesce the generated target with the user's next
+            // movement. Once the physical cursor has left the target, waiting
+            // for an exact message that no longer exists would suppress every
+            // WM_MOUSEMOVE indefinitely; accept this first genuine sample.
+            g_programmatic_pointer_motion_pending = false;
+            g_programmatic_pointer_motion_target_reached = false;
+        }
+        else if (at_target) {
             return true;
         }
-        if (at_target) {
-            return true;
+        else {
+            g_programmatic_pointer_motion_pending = false;
+            g_programmatic_pointer_motion_target_reached = false;
         }
-        g_programmatic_pointer_motion_pending = false;
-        g_programmatic_pointer_motion_target_reached = false;
     }
     // Original 004fcd91 overwrites the X-delta slot with the Y delta.
     g_input_state.mouse_dx = static_cast<i32>(g_input_state.mouse_x) - x;
@@ -441,12 +466,15 @@ void ResetPointerMotionToLegacyStartupState() {
     g_programmatic_pointer_motion_target_reached = false;
 }
 
-void SuppressNextProgrammaticPointerMotion(i32 x, i32 y) {
+void SuppressNextProgrammaticPointerMotion(
+    i32 x, i32 y, i32 screen_x, i32 screen_y) {
     // SetCursorPos is not a DirectInput device sample in the original. Ignore
     // the matching window-system message without rewriting the last genuine
     // device coordinates during later lock/unlock and confinement refreshes.
     g_programmatic_pointer_motion_x = x;
     g_programmatic_pointer_motion_y = y;
+    g_programmatic_pointer_motion_screen_x = screen_x;
+    g_programmatic_pointer_motion_screen_y = screen_y;
     g_programmatic_pointer_motion_pending = true;
     g_programmatic_pointer_motion_target_reached = false;
 }
