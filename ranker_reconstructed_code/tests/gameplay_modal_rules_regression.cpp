@@ -13,6 +13,12 @@ int main() {
     assert(!GameplayPauseMenuSaveLoadEnabled(true));
     assert(GameplayMenuEntryFlagsForEnabledState(0x1004u, false) == 0x1004u);
     assert(GameplayMenuEntryFlagsForEnabledState(0x1004u, true) == 0x1004u);
+    assert(GameplayRosterInteractiveEntryState(true, false) == 0);
+    assert(GameplayRosterInteractiveEntryState(true, true) == -1);
+    assert(GameplayRosterInteractiveEntryState(false, false) == -1);
+    assert(GameplayRosterEntryDrawFlags(true, false) == 4u);
+    assert(GameplayRosterEntryDrawFlags(true, true) == 0x1000u);
+    assert(GameplayRosterEntryDrawFlags(false, true) == 0u);
     assert(GameplayPauseMenuUsesChildSnapshot(false));
     assert(!GameplayPauseMenuUsesChildSnapshot(true));
 

@@ -1718,6 +1718,42 @@ bool reacquire_main_window_cursor_from_button_up(
         logical_y = scale_unlocked_cursor_to_logical(presentation_y,
             presentation_height, static_cast<i32>(logical.height));
     }
+
+    InputState& input = input_state();
+    input.mouse_x = static_cast<u32>(logical_x);
+    input.mouse_y = static_cast<u32>(logical_y);
+    input.pointer_motion_seen = true;
+    SetGameCursorPointerPosition(logical_x, logical_y);
+    return lock_main_window_cursor_confinement(window, logical_x, logical_y);
+}
+
+bool reacquire_main_window_cursor_from_current_position(HWND window) {
+    RECT client{};
+    RECT screen_client{};
+    POINT position{};
+    if (!main_window_client_screen_rect(window, client, screen_client) ||
+        !GetCursorPos(&position) || !ScreenToClient(window, &position)) {
+        return false;
+    }
+
+    const i32 presentation_width = client.right - client.left;
+    const i32 presentation_height = client.bottom - client.top;
+    if (position.x < 0 || position.x > presentation_width ||
+        position.y < 0 || position.y > presentation_height) {
+        return false;
+    }
+
+    const GameplayLogicalSurfaceSize logical =
+        resolve_active_gameplay_logical_surface_size();
+    const i32 logical_x = scale_unlocked_cursor_to_logical(position.x,
+        presentation_width, static_cast<i32>(logical.width));
+    const i32 logical_y = scale_unlocked_cursor_to_logical(position.y,
+        presentation_height, static_cast<i32>(logical.height));
+    InputState& input = input_state();
+    input.mouse_x = static_cast<u32>(logical_x);
+    input.mouse_y = static_cast<u32>(logical_y);
+    input.pointer_motion_seen = true;
+    SetGameCursorPointerPosition(logical_x, logical_y);
     return lock_main_window_cursor_confinement(window, logical_x, logical_y);
 }
 
@@ -2982,7 +3018,17 @@ void default_link_resume_single_player(LinkLobbyState&) {
 void clear_default_replay_playback_runtime(const char* reason) {
     ReplayRecordingState& replay = replay_recording_state();
     const bool playback_was_active = replay.playback_mode;
+    if (playback_was_active) {
+        // Original ProcessGameplaySessionLoop closes DirectMusic in its common
+        // replay exit block. Some reconstructed ordinary leave requests did
+        // not visit the specialized replay callback, so the stream survived
+        // all the way into the single-player menu.
+        CloseDirectMilesMusic();
+    }
     ClearReplayPlaybackState(replay);
+    P2PGameSessionStartState& p2p = g_runtime.p2p_session_start_state;
+    p2p.direct_music_started = false;
+    p2p.direct_music_paused = false;
     SetReplayControlsEnabled(false);
     SetRankerMainWindowScenarioAiProfileOverride(false);
     if (playback_was_active) {
@@ -31785,7 +31831,14 @@ void configure_title_main_menu_version(UiScreenDefinition& screen) {
 }
 
 void close_title_main_menu_frontend() {
+    const bool was_active = g_runtime.title_menu_active;
     g_runtime.title_menu_active = false;
+    if (was_active) {
+        // Original single-player transition 0x00415ad0 selects music policy
+        // mode 1 before leaving the title. Apply the same edge to every title
+        // command so its startup BGM cannot leak into the next frontend.
+        set_default_primary_miles_music_policy_mode(1);
+    }
     if (g_runtime.main_window != nullptr && IsWindow(g_runtime.main_window)) {
         KillTimer(g_runtime.main_window, kTitleMenuAnimationTimerId);
     }
@@ -31886,6 +31939,9 @@ bool open_title_main_menu_frontend(HWND window) {
         static_cast<unsigned long>(screen.resource_mark));
     g_runtime.title_menu_active = presented;
     if (presented) {
+        // Opening/Credits return here after their own audio has completed.
+        // Re-entering the title starts the ordinary menu policy again.
+        set_default_primary_miles_music_policy_mode(2);
         SetTimer(window, kTitleMenuAnimationTimerId,
             kTitleMenuAnimationTimerIntervalMs, nullptr);
     }
@@ -32468,7 +32524,16 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
         }
         if (g_runtime.app_active) {
             refresh_window_rects(window);
-            refresh_main_window_cursor_confinement(window);
+            if (g_runtime.cursor_confined) {
+                refresh_main_window_cursor_confinement(window);
+            }
+            else if (g_runtime.input_enabled) {
+                // Focus loss intentionally releases cnc-ddraw's lock. Merely
+                // refreshing an already-unlocked cursor can never reacquire
+                // it; seed logical/software state from the physical focus
+                // point before clipping the pointer again.
+                reacquire_main_window_cursor_from_current_position(window);
+            }
         }
         break;
     case WM_ACTIVATE:
@@ -32486,7 +32551,12 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
         break;
     case WM_SETFOCUS:
         refresh_window_rects(window);
-        refresh_main_window_cursor_confinement(window);
+        if (g_runtime.cursor_confined) {
+            refresh_main_window_cursor_confinement(window);
+        }
+        else if (g_runtime.app_active && g_runtime.input_enabled) {
+            reacquire_main_window_cursor_from_current_position(window);
+        }
         break;
     case WM_DISPLAYCHANGE:
         refresh_window_rects(window);

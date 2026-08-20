@@ -680,10 +680,59 @@ bool write_scenario_ui_bink_temp_file(const void* bytes, u32 byte_count,
 LRESULT CALLBACK scenario_ui_bink_window_proc(HWND window, UINT message,
     WPARAM wparam, LPARAM lparam) {
     if (message == WM_NCHITTEST) {
-        return HTTRANSPARENT;
+        // HTTRANSPARENT only walks windows owned by the calling thread.  The
+        // MF compatibility surface lives on the synchronous frontend worker,
+        // while Ranker's real input window is pumped by the UI thread, so the
+        // old return value silently discarded every click over a campaign
+        // video and made the first race screen appear frozen.
+        return HTCLIENT;
+    }
+    if (message == WM_MOUSEACTIVATE) {
+        return MA_NOACTIVATE;
     }
     if (message == WM_SETCURSOR) {
         return TRUE;
+    }
+
+    switch (message) {
+    case WM_MOUSEMOVE:
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONUP:
+    case WM_LBUTTONDBLCLK:
+    case WM_RBUTTONDOWN:
+    case WM_RBUTTONUP:
+    case WM_RBUTTONDBLCLK:
+    case WM_MBUTTONDOWN:
+    case WM_MBUTTONUP:
+    case WM_MBUTTONDBLCLK:
+    case WM_XBUTTONDOWN:
+    case WM_XBUTTONUP:
+    case WM_XBUTTONDBLCLK:
+    case WM_MOUSEWHEEL:
+    case WM_MOUSEHWHEEL:
+    {
+        HWND input_window = RankerMainWindowState().main_window;
+        if (input_window == nullptr || !IsWindow(input_window)) {
+            break;
+        }
+
+        POINT point{
+            static_cast<i16>(static_cast<u32>(lparam) & 0xffffu),
+            static_cast<i16>((static_cast<u32>(lparam) >> 16) & 0xffffu)};
+        if (message != WM_MOUSEWHEEL && message != WM_MOUSEHWHEEL &&
+            !ClientToScreen(window, &point)) {
+            break;
+        }
+        if (!ScreenToClient(input_window, &point)) {
+            break;
+        }
+        const LPARAM forwarded = static_cast<LPARAM>(MAKELPARAM(
+            static_cast<WORD>(point.x), static_cast<WORD>(point.y)));
+        PostMessageA(input_window, message, wparam, forwarded);
+        return 0;
+    }
+    default:
+        break;
     }
     return DefWindowProcW(window, message, wparam, lparam);
 }
@@ -3103,7 +3152,8 @@ void RefreshGameplayRelationMaskDialogControls(GameplayModalUiState& state,
         const bool local = player == state.local_player_index;
         const u32 relation_entry = 3 + player;
         const u32 visibility_entry = 0x0b + player;
-        const u32 both_entry = 0x13 + player;
+        const u32 name_entry = 0x13 + player;
+        const u32 icon_entry = 0x1b + player;
 
         GameplayModalUiControlState relation_control{};
         relation_control.entry_index = relation_entry;
@@ -3112,25 +3162,62 @@ void RefreshGameplayRelationMaskDialogControls(GameplayModalUiState& state,
         relation_control.text = state.players[player].display_name;
         state.relation_controls.push_back(relation_control);
 
+        if (disabled) {
+            for (u32 entry_index :
+                {relation_entry, visibility_entry, name_entry, icon_entry}) {
+                if (entry_index < screen.entries.size()) {
+                    SetUiScreenEntryI32(screen.entries[entry_index], 0, -1);
+                    SetUiScreenEntryI32(screen.entries[entry_index], 4, 0);
+                }
+            }
+            continue;
+        }
+
         if (relation_entry < screen.entries.size()) {
-            set_entry_enabled(screen, relation_entry, relation_control.enabled);
+            SetUiScreenEntryI32(screen.entries[relation_entry], 0,
+                GameplayRosterInteractiveEntryState(true, local));
+            SetUiScreenEntryI32(screen.entries[relation_entry], 4,
+                static_cast<i32>(GameplayRosterEntryDrawFlags(true, false)));
+            if (local) {
+                SetUiScreenEntryI32(screen.entries[relation_entry], 0x3c, 6);
+            }
             set_entry_button_triplet(screen, relation_entry,
                 relation_control.state ? 6 : 5, relation_control.state ? 5 : 6);
         }
         if (visibility_entry < screen.entries.size()) {
-            set_entry_enabled(screen, visibility_entry, !disabled && !local);
+            SetUiScreenEntryI32(screen.entries[visibility_entry], 0,
+                GameplayRosterInteractiveEntryState(true, local));
+            SetUiScreenEntryI32(screen.entries[visibility_entry], 4,
+                static_cast<i32>(GameplayRosterEntryDrawFlags(true, false)));
+            if (local) {
+                SetUiScreenEntryI32(screen.entries[visibility_entry], 0x3c, 6);
+            }
             const bool on = (visibility_mask & (1u << player)) != 0;
             set_entry_button_triplet(screen, visibility_entry, on ? 6 : 5, on ? 5 : 6);
         }
-        if (both_entry < screen.entries.size()) {
-            set_entry_enabled(screen, both_entry, !disabled && !local);
-            set_entry_text_safe(screen, both_entry, state.players[player].display_name);
+        if (name_entry < screen.entries.size()) {
+            UiScreenEntry& name = screen.entries[name_entry];
+            SetUiScreenEntryI32(name, 0,
+                GameplayRosterInteractiveEntryState(true, local));
+            SetUiScreenEntryI32(name, 4,
+                static_cast<i32>(GameplayRosterEntryDrawFlags(true, true)));
+            SetUiScreenEntryI32(name, 8, 4);
+            SetUiScreenEntryI32(name, 0x0c, 4);
+            set_entry_text_safe(screen, name_entry,
+                state.players[player].display_name);
+        }
+        if (icon_entry < screen.entries.size()) {
+            SetUiScreenEntryI32(screen.entries[icon_entry], 4, 4);
         }
     }
     if (screen.entries.size() > 0x23) {
+        const bool local_disabled =
+            state.local_player_index >= kGameplayModalPlayerSlots ||
+            player_slot_disabled_for_relation(
+                state.players[state.local_player_index]);
         set_entry_button_triplet(screen, 0x23, observer_flag ? 6 : 5, observer_flag ? 5 : 6);
-        if (player_slot_disabled_for_relation(state.players[state.local_player_index])) {
-            set_entry_enabled(screen, 0x23, false);
+        if (local_disabled) {
+            SetUiScreenEntryI32(screen.entries[0x23], 0, -1);
         }
     }
 }
@@ -3247,13 +3334,17 @@ void RefreshGameplayObserverMaskDialogControls(GameplayModalUiState& state, u32 
         state.observer_controls.push_back(control);
 
         if (control.entry_index < screen.entries.size()) {
-            set_entry_enabled(screen, control.entry_index, true);
+            SetUiScreenEntryI32(screen.entries[control.entry_index], 0, 0);
+            SetUiScreenEntryI32(screen.entries[control.entry_index], 4, 4);
             set_entry_button_triplet(screen, control.entry_index,
                 control.state ? 6 : 5, control.state ? 5 : 6);
         }
         const u32 text_entry = 0x0e + compact_row;
         if (text_entry < screen.entries.size()) {
-            set_entry_enabled(screen, text_entry, true);
+            SetUiScreenEntryI32(screen.entries[text_entry], 0, 0);
+            SetUiScreenEntryI32(screen.entries[text_entry], 4, 0x1000);
+            SetUiScreenEntryI32(screen.entries[text_entry], 8, 4);
+            SetUiScreenEntryI32(screen.entries[text_entry], 0x0c, 4);
             set_entry_text_safe(screen, text_entry, control.text);
         }
         const u32 icon_entry = 0x15 + compact_row;
@@ -3265,9 +3356,13 @@ void RefreshGameplayObserverMaskDialogControls(GameplayModalUiState& state, u32 
         ++compact_row;
     }
     for (; compact_row < 7; ++compact_row) {
-        set_entry_enabled(screen, 7 + compact_row, false);
-        set_entry_enabled(screen, 0x0e + compact_row, false);
-        set_entry_enabled(screen, 0x15 + compact_row, false);
+        for (u32 entry_index :
+            {7 + compact_row, 0x0e + compact_row, 0x15 + compact_row}) {
+            if (entry_index < screen.entries.size()) {
+                SetUiScreenEntryI32(screen.entries[entry_index], 0, -1);
+                SetUiScreenEntryI32(screen.entries[entry_index], 4, 0);
+            }
+        }
     }
 }
 
