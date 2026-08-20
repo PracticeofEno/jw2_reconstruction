@@ -17,11 +17,12 @@ class ServerConfigTests(unittest.TestCase):
                 json.dumps(
                     {
                         "listen": {},
-                        "server": {},
+                        "server": {"max_replay_bytes": 1048576},
                         "logging": {},
                         "data": {
                             "account_file": "data/accounts.json",
                             "relay_evidence_dir": "../debug_artifacts/relay_evidence",
+                            "replay_dir": "data/replays",
                         },
                     }
                 ),
@@ -35,6 +36,8 @@ class ServerConfigTests(unittest.TestCase):
                 config.relay_evidence_dir,
                 base.parent / "debug_artifacts/relay_evidence",
             )
+            self.assertEqual(config.replay_dir, base / "data/replays")
+            self.assertEqual(config.max_replay_bytes, 1048576)
 
 
 if __name__ == "__main__":

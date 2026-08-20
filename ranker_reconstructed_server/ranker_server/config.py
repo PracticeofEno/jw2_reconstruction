@@ -29,6 +29,8 @@ class ServerConfig:
     log_level: str = "INFO"
     account_file: Path | None = None
     relay_evidence_dir: Path | None = None
+    replay_dir: Path | None = None
+    max_replay_bytes: int = 64 * 1024 * 1024
 
     def validate(self) -> None:
         if not self.host:
@@ -57,6 +59,8 @@ class ServerConfig:
             raise ValueError("server.send_timeout_seconds must be between 0.1 and 3600")
         if self.rank_game_count < 0:
             raise ValueError("server.rank_game_count must not be negative")
+        if not 1024 <= self.max_replay_bytes <= 1024 * 1024 * 1024:
+            raise ValueError("server.max_replay_bytes is outside the supported range")
         if self.public_address:
             try:
                 public_address = ipaddress.ip_address(self.public_address)
@@ -140,6 +144,9 @@ def load_config(path: str | Path | None = None) -> ServerConfig:
     config.rank_game_count = int(
         server.get("rank_game_count", config.rank_game_count)
     )
+    config.max_replay_bytes = int(
+        server.get("max_replay_bytes", config.max_replay_bytes)
+    )
     config.log_level = str(logging.get("level", config.log_level)).upper()
     account_file = str(data.get("account_file", "")).strip()
     if account_file:
@@ -151,6 +158,14 @@ def load_config(path: str | Path | None = None) -> ServerConfig:
     if relay_evidence_dir:
         candidate = Path(relay_evidence_dir)
         config.relay_evidence_dir = (
+            candidate
+            if candidate.is_absolute()
+            else (config_path.parent / candidate).resolve()
+        )
+    replay_dir = str(data.get("replay_dir", "")).strip()
+    if replay_dir:
+        candidate = Path(replay_dir)
+        config.replay_dir = (
             candidate
             if candidate.is_absolute()
             else (config_path.parent / candidate).resolve()

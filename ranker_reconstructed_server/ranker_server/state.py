@@ -60,6 +60,7 @@ class AdvertisedGame:
     relay_members: dict[int, int] = field(default_factory=dict)
     relay_member_peers: dict[int, tuple[str, int]] = field(default_factory=dict)
     relay_departed_members: set[int] = field(default_factory=set)
+    participant_accounts: set[str] = field(default_factory=set)
     relay_secret: bytes = field(default_factory=lambda: secrets.token_bytes(32))
     advertised: bool = True
     started: bool = False
@@ -78,6 +79,16 @@ class AdvertisedGame:
     relay_member_mode1_rx: dict[int, int] = field(default_factory=dict)
 
 
+@dataclass(slots=True)
+class CompletedGame:
+    game_id: int
+    game_type: int
+    match_token: bytes
+    host_account: str
+    participant_accounts: set[str]
+    completed_at: float = field(default_factory=time.monotonic)
+
+
 class ServerState:
     def __init__(self, default_lobby_name: str) -> None:
         self.clients: dict[int, ClientSession] = {}
@@ -85,6 +96,7 @@ class ServerState:
             1: LobbyChannel(1, default_lobby_name)
         }
         self.games: dict[int, AdvertisedGame] = {}
+        self.completed_games: dict[bytes, CompletedGame] = {}
         self.next_client_id = 1
         self.next_lobby_id = 2
         self.next_game_id = 1

@@ -16,13 +16,15 @@
     "client_keepalive_interval_seconds": 5,
     "client_keepalive_probe_count": 5,
     "send_timeout_seconds": 10,
-    "rank_game_count": 10
+    "rank_game_count": 10,
+    "max_replay_bytes": 67108864
   },
   "logging": {
     "level": "INFO"
   },
   "data": {
     "account_file": "data/accounts.json",
-    "relay_evidence_dir": "../debug_artifacts/relay_server_evidence"
+    "relay_evidence_dir": "../debug_artifacts/relay_server_evidence",
+    "replay_dir": "data/replays"
   }
 }

@@ -1566,6 +1566,7 @@ add_executable(ranker_rebuild WIN32
     src/ranker_reliable_packets.cpp
     src/ranker_network.cpp
     src/ranker_wizardnet_relay.cpp
+    src/ranker_wizardnet_services.cpp
     src/ranker_screenshot.cpp
     src/ranker_miles.cpp
     src/ranker_mixer.cpp

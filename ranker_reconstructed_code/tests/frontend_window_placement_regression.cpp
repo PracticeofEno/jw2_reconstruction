@@ -8,6 +8,7 @@
 #include "ranker_online_lobby.h"
 #include "ranker_ui_screen.h"
 #include "ranker_winmain.h"
+#include "ranker_wizardnet_services.h"
 
 #include <cassert>
 
@@ -99,6 +100,19 @@ static_assert(IsOnlineLobbyTransientChildResponseOpcode(0x94));
 static_assert(IsOnlineLobbyTransientChildResponseOpcode(0x95));
 static_assert(!IsOnlineLobbyTransientChildResponseOpcode(0x07));
 static_assert(!IsOnlineLobbyTransientChildResponseOpcode(0x13));
+static_assert(UsesWizardNetNormalGameStatistics(0));
+static_assert(UsesWizardNetNormalGameStatistics(1));
+static_assert(!UsesWizardNetNormalGameStatistics(2));
+static_assert(UsesWizardNetRankingStatistics(2));
+static_assert(ShouldAutoUploadWizardNetReplay(1));
+static_assert(ShouldAutoUploadWizardNetReplay(2));
+static_assert(!ShouldAutoUploadWizardNetReplay(0));
+static_assert(WizardNetOutcomeFromGameplayResult(0) ==
+    WizardNetMatchOutcome::Win);
+static_assert(WizardNetOutcomeFromGameplayResult(1) ==
+    WizardNetMatchOutcome::Loss);
+static_assert(WizardNetOutcomeFromGameplayResult(2) ==
+    WizardNetMatchOutcome::Draw);
 static_assert(ShouldShowLinkLobbyStartButton(true));
 static_assert(!ShouldShowLinkLobbyStartButton(false));
 static_assert((kScenarioUiVideoBackdropExtendedStyle & 0x00000008u) == 0);

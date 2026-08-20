@@ -91,6 +91,70 @@ class AccountStore:
         self.save()
         return True
 
+    def account_names(self) -> list[str]:
+        return [
+            str(record.get("account", key))
+            for key, record in self._records.items()
+        ]
+
+    @staticmethod
+    def _empty_statistics() -> dict[str, int]:
+        return {"wins": 0, "losses": 0, "draws": 0}
+
+    def statistics(self, account: str, bucket: str) -> dict[str, int]:
+        if bucket not in ("normal", "rank"):
+            raise ValueError("unknown statistics bucket")
+        record = self._records.get(account.casefold())
+        if record is None:
+            return self._empty_statistics()
+        profile = record.get("profile")
+        if not isinstance(profile, dict):
+            return self._empty_statistics()
+        raw = profile.get(f"{bucket}_statistics")
+        if not isinstance(raw, dict):
+            return self._empty_statistics()
+        return {
+            key: max(0, int(raw.get(key, 0)))
+            for key in ("wins", "losses", "draws")
+        }
+
+    def record_match(
+        self, account: str, bucket: str, outcome: str, match_token: str
+    ) -> bool:
+        if bucket not in ("normal", "rank"):
+            raise ValueError("unknown statistics bucket")
+        if outcome not in ("wins", "losses", "draws"):
+            raise ValueError("unknown match outcome")
+        record = self._records.get(account.casefold())
+        if record is None or not match_token:
+            return False
+
+        reported = record.get("reported_matches")
+        if not isinstance(reported, list):
+            reported = []
+        if match_token in reported:
+            return False
+
+        profile = record.get("profile")
+        if not isinstance(profile, dict):
+            profile = {}
+            record["profile"] = profile
+        statistics = self.statistics(account, bucket)
+        statistics[outcome] += 1
+        profile[f"{bucket}_statistics"] = statistics
+
+        # Room secrets are random across server restarts. Keeping a bounded
+        # history makes a client retry idempotent without growing accounts.json
+        # forever.
+        reported.append(match_token)
+        record["reported_matches"] = reported[-256:]
+        self.save()
+        return True
+
+    def rank_points(self, account: str) -> int:
+        statistics = self.statistics(account, "rank")
+        return statistics["wins"] * 3 + statistics["draws"]
+
     def save(self) -> None:
         if self.path is None:
             return

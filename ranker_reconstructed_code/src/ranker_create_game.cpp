@@ -18,6 +18,7 @@
 #include "ranker_trc.h"
 #include "ranker_winmain.h"
 #include "ranker_wizardnet_relay.h"
+#include "ranker_wizardnet_services.h"
 
 #include <algorithm>
 #include <cctype>
@@ -645,6 +646,40 @@ std::string resolve_maps_directory() {
         }
     }
     return full_path("Maps");
+}
+
+std::string resolve_rank_maps_directory(const std::string& maps_directory) {
+    namespace fs = std::filesystem;
+    std::error_code error;
+    const fs::path root(maps_directory);
+    for (const char* name : {"rank", "Rank Maps"}) {
+        const fs::path candidate = root / name;
+        if (fs::is_directory(candidate, error) && !error) {
+            return full_path(candidate.string());
+        }
+        error.clear();
+    }
+
+    // Accept an existing case variant while retaining the deployed legacy
+    // name ("Rank Maps") as the deterministic fallback.
+    for (fs::directory_iterator iterator(root, error), end;
+         !error && iterator != end; iterator.increment(error)) {
+        if (!iterator->is_directory(error)) {
+            error.clear();
+            continue;
+        }
+        const std::string leaf = iterator->path().filename().string();
+        if (equals_ignore_case(leaf, "rank") ||
+            equals_ignore_case(leaf, "Rank Maps")) {
+            return full_path(iterator->path().string());
+        }
+    }
+    return full_path((root / "Rank Maps").string());
+}
+
+std::string create_game_browse_root(const CreateGameState& state) {
+    return IsWizardNetRankGameType(static_cast<u32>(std::max(0, state.game_type))) ?
+        state.rank_maps_directory : state.base_maps_directory;
 }
 
 bool is_trk_file(const char* name) {
@@ -1593,7 +1628,9 @@ bool CreateCreateGameWindow(CreateGameState& state, HWND parent, HINSTANCE insta
     }
     state.layout = copy_layout_record(layout.table);
     state.base_maps_directory = resolve_maps_directory();
-    state.current_directory = state.base_maps_directory;
+    state.rank_maps_directory =
+        resolve_rank_maps_directory(state.base_maps_directory);
+    state.current_directory = create_game_browse_root(state);
     state.selected_session_valid = false;
     state.session_seed_payload = {};
     state.map_descriptor_payload = {};
@@ -1761,8 +1798,11 @@ void PopulateCreateGameScenarioList(CreateGameState& state) {
     }
     ClearCreateGameScenarioListData(state);
 
-    const std::string current = full_path(state.current_directory);
-    const std::string root = full_path(state.base_maps_directory);
+    std::string current = full_path(state.current_directory);
+    const std::string root = full_path(create_game_browse_root(state));
+    if (!IsCreateGamePathWithinRoot(current, root)) {
+        current = root;
+    }
     state.current_directory = current;
     if (!equals_ignore_case(current, root)) {
         add_scenario_entry(state, "..", full_path(append_path(current, "..")),
@@ -1805,6 +1845,34 @@ void PopulateCreateGameScenarioList(CreateGameState& state) {
 
 void RefreshCreateGameScenarioList(CreateGameState& state) {
     PopulateCreateGameScenarioList(state);
+}
+
+bool IsCreateGamePathWithinRoot(const std::string& path,
+    const std::string& root) {
+    std::string candidate = full_path(path);
+    std::string normalized_root = full_path(root);
+    std::replace(candidate.begin(), candidate.end(), '/', '\\');
+    std::replace(normalized_root.begin(), normalized_root.end(), '/', '\\');
+    if (equals_ignore_case(candidate, normalized_root)) {
+        return true;
+    }
+    if (normalized_root.empty()) {
+        return false;
+    }
+    if (normalized_root.back() != '\\') {
+        normalized_root.push_back('\\');
+    }
+    if (candidate.size() < normalized_root.size()) {
+        return false;
+    }
+    return equals_ignore_case(candidate.substr(0, normalized_root.size()),
+        normalized_root);
+}
+
+void ApplyCreateGameTypeMapRoot(CreateGameState& state) {
+    state.current_directory = create_game_browse_root(state);
+    ClearCreateGameScenarioListData(state);
+    RefreshCreateGameScenarioList(state);
 }
 
 bool BrowseCreateGameSelectedDirectory(CreateGameState& state) {
@@ -2099,6 +2167,20 @@ bool SubmitCreateGameSelection(CreateGameState& state) {
         return false;
     }
 
+    if (IsWizardNetRankGameType(
+            static_cast<u32>(std::max(0, state.game_type)))) {
+        CreateGameScenarioEntry* entry = selected_entry(state);
+        if (entry == nullptr || entry->directory ||
+            !IsCreateGamePathWithinRoot(entry->path.data(),
+                state.rank_maps_directory)) {
+            set_message(state,
+                "Rank games can only use maps from the Rank Maps folder.",
+                kCreateGameWarning);
+            SetFocus(state.scenario_list.window);
+            return false;
+        }
+    }
+
     BuildCreateGameSessionSeed(state);
     if (state.game_name[0] == '\0') {
         set_startup_message(state, 58, "Enter a game name.",
@@ -2306,9 +2388,17 @@ LRESULT HandleCreateGameWindowMessage(CreateGameState& state, HWND hwnd,
                 const int selection = static_cast<int>(
                     SendMessageA(state.game_type_combo.window, CB_GETCURSEL, 0, 0));
                 if (selection != CB_ERR) {
+                    const bool root_changed =
+                        IsWizardNetRankGameType(static_cast<u32>(
+                            std::max(0, state.game_type))) !=
+                        IsWizardNetRankGameType(static_cast<u32>(
+                            std::max(0, selection)));
                     state.game_type = selection;
                     UpdateCreateGameAvatarLevelVisibility(state,
                         selection >= 3 && selection <= 4);
+                    if (root_changed) {
+                        ApplyCreateGameTypeMapRoot(state);
+                    }
                 }
             }
             break;

@@ -35,6 +35,32 @@ class AccountStoreTests(unittest.TestCase):
             self.assertEqual(reloaded.profile_value("Marker", "lobby_mark"), 4)
             self.assertEqual(reloaded.profile_value("Marker", "unknown", 3), 3)
 
+    def test_normal_and_rank_statistics_are_separate_and_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "accounts.json"
+            store = AccountStore(path)
+            self.assertTrue(store.create("Player", "secret12", {}))
+
+            self.assertTrue(store.record_match("player", "normal", "wins", "match-a"))
+            self.assertFalse(store.record_match("PLAYER", "normal", "wins", "match-a"))
+            self.assertTrue(store.record_match("Player", "rank", "draws", "match-b"))
+            self.assertEqual(
+                store.statistics("Player", "normal"),
+                {"wins": 1, "losses": 0, "draws": 0},
+            )
+            self.assertEqual(
+                store.statistics("Player", "rank"),
+                {"wins": 0, "losses": 0, "draws": 1},
+            )
+            self.assertEqual(store.rank_points("Player"), 1)
+
+            reloaded = AccountStore(path)
+            self.assertEqual(reloaded.statistics("Player", "normal")["wins"], 1)
+            self.assertEqual(reloaded.statistics("Player", "rank")["draws"], 1)
+            self.assertFalse(
+                reloaded.record_match("Player", "normal", "losses", "match-a")
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

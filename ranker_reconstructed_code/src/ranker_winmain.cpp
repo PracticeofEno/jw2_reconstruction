@@ -86,6 +86,7 @@
 #include "ranker_unit_targeting.h"
 #include "ranker_view_rank.h"
 #include "ranker_wizardnet_relay.h"
+#include "ranker_wizardnet_services.h"
 #include "ranker_wizard_login.h"
 
 #include <algorithm>
@@ -982,6 +983,10 @@ struct RuntimeGlobals {
     u32 gameplay_script_trigger_record_index = 0xffffffffu;
     u32 gameplay_script_next_unit_id = 0x80000000u;
     u32 gameplay_session_start_tick_ms = 0;
+    u32 wizardnet_match_game_id = 0;
+    bool wizardnet_match_host = false;
+    bool wizardnet_postgame_submission_attempted = false;
+    std::array<u8, kWizardNetMatchTokenBytes> wizardnet_match_token{};
     std::array<u32, kGameplaySimulationPhaseCount> gameplay_simulation_phase_counts{};
 };
 
@@ -3001,6 +3006,18 @@ void default_link_start_game(LinkLobbyState& state) {
     }
     const u32 mode = state.mode >= 0 ?
         static_cast<u32>(state.mode) : g_runtime.frontend_mode;
+    g_runtime.wizardnet_match_game_id = 0;
+    g_runtime.wizardnet_match_host = false;
+    g_runtime.wizardnet_match_token = {};
+    g_runtime.wizardnet_postgame_submission_attempted = false;
+    if (mode == 0 && WizardNetRelayEnabled()) {
+        const WizardNetRelayState& relay = wizardnet_relay_state();
+        g_runtime.wizardnet_match_game_id = relay.game_id;
+        g_runtime.wizardnet_match_host = relay.host_mode;
+        std::copy_n(relay.relay_secret.begin(),
+            g_runtime.wizardnet_match_token.size(),
+            g_runtime.wizardnet_match_token.begin());
+    }
     g_runtime.frontend_mode = mode;
     g_runtime.gameplay_launch_source =
         g_runtime.p2p_command_line_flow_active ?
@@ -12890,6 +12907,32 @@ u32 seed_default_gameplay_result_screen(u32 result_mode) {
                 result.scenario_ai_profile_override ? "yes" : "no");
         }
     }
+    if (!g_runtime.wizardnet_postgame_submission_attempted) {
+        g_runtime.wizardnet_postgame_submission_attempted = true;
+        const u32 game_type = g_runtime.gameplay_startup_state.session_mode;
+        if (g_runtime.frontend_mode == 0 &&
+            GameplayLaunchUsesLinkLobby(g_runtime.gameplay_launch_source) &&
+            g_runtime.wizardnet_match_game_id != 0 &&
+            (UsesWizardNetNormalGameStatistics(game_type) ||
+                UsesWizardNetRankingStatistics(game_type))) {
+            const char* replay_path =
+                mutable_replay_state.automatic_save_succeeded &&
+                    !mutable_replay_state.automatic_output_path.empty() ?
+                mutable_replay_state.automatic_output_path.c_str() : nullptr;
+            const bool queued = BeginWizardNetPostGameSubmission(
+                FrontendAsyncTcpSocket0(), game_type, result_mode,
+                g_runtime.wizardnet_match_game_id,
+                g_runtime.wizardnet_match_token,
+                g_runtime.wizardnet_match_host, replay_path);
+            append_startup_log(
+                "wizardnet-postgame: queued=%s game=%lu type=%lu host=%s replay=%s",
+                queued ? "yes" : "no",
+                static_cast<unsigned long>(g_runtime.wizardnet_match_game_id),
+                static_cast<unsigned long>(game_type),
+                g_runtime.wizardnet_match_host ? "yes" : "no",
+                replay_path != nullptr ? replay_path : "(none)");
+        }
+    }
     const u32 elapsed_ticks =
         RefreshLegacyTickTime() - g_runtime.gameplay_session_start_tick_ms;
     result.elapsed_seconds = (elapsed_ticks >> 10) % 60;
@@ -19214,7 +19257,6 @@ void mirror_default_gameplay_visibility_to_consumers(
             }
         }
     }
-
     UnitVisibilityGrid& render_visibility =
         g_runtime.gameplay_unit_render_queue.visibility;
     render_visibility.width = grid.width;

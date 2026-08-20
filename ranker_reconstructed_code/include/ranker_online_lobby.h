@@ -61,6 +61,10 @@ constexpr int kOnlineLobbyTabBackgroundButtonId = 0xbd8;
 constexpr int kOnlineLobbyRankMarkChoiceFirstId = 0xbd9;
 constexpr int kOnlineLobbyRankMarkChoiceLastId =
     kOnlineLobbyRankMarkChoiceFirstId + kOnlineLobbyRankMarkFrameCount - 1;
+constexpr int kOnlineLobbyReplayButtonId = 0xbde;
+constexpr int kOnlineLobbyReplayListId = 0xbdf;
+constexpr int kOnlineLobbyReplayDownloadButtonId = 0xbe0;
+constexpr int kOnlineLobbyReplayCloseButtonId = 0xbe1;
 constexpr u32 kOnlineLobbySetRankMarkRequestOpcode = 0x96;
 constexpr u32 kOnlineLobbySetRankMarkResponseOpcode = 0x97;
 constexpr int kOnlineLobbyAcceleratorResourceId = 0x12c;
@@ -172,6 +176,15 @@ struct OnlineLobbyCallbacks {
     void* user_data = nullptr;
 };
 
+struct WizardNetReplayListEntry {
+    u32 replay_id = 0;
+    u32 byte_count = 0;
+    u64 uploaded_at = 0;
+    u32 game_type = 0;
+    std::string uploader;
+    std::string filename;
+};
+
 struct OnlineLobbyState {
     HWND window = nullptr;
     HWND parent_window = nullptr;
@@ -182,6 +195,12 @@ struct OnlineLobbyState {
     HWND game_list = nullptr;
     HWND chat_list = nullptr;
     HWND chat_edit = nullptr;
+    HWND replay_button = nullptr;
+    HWND replay_browser_window = nullptr;
+    HWND replay_list = nullptr;
+    HWND replay_status = nullptr;
+    HWND replay_download_button = nullptr;
+    HWND replay_close_button = nullptr;
     std::array<HWND, kOnlineLobbyRankMarkFrameCount> rank_mark_choices{};
     WNDPROC game_list_original_proc = nullptr;
     WNDPROC chat_list_original_proc = nullptr;
@@ -217,6 +236,11 @@ struct OnlineLobbyState {
     std::string last_chat_line;
     std::array<u8, 0x40> pending_barter_summary{};
     std::array<char, 0x20> pending_prompt_name{};
+    std::vector<WizardNetReplayListEntry> replay_entries;
+    std::vector<u8> replay_download_bytes;
+    u32 replay_download_id = 0;
+    u32 replay_download_total = 0;
+    std::string replay_download_filename;
     OnlineLobbyCallbacks callbacks{};
 };
 

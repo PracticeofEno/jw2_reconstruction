@@ -20,6 +20,7 @@ from ranker_server.protocol import (
     read_i32,
     read_u32,
 )
+from ranker_server.replays import fnv1a64
 from ranker_server.state import (
     ClientSession,
     PRESENCE_STATUS_HOSTING,
@@ -105,7 +106,11 @@ async def wait_until(predicate, *, timeout: float = 1.0) -> None:
 
 
 def host_game_packet(
-    name: str = "RelayRoom", *, port: int = 23010, map_name: str = "RelayMap"
+    name: str = "RelayRoom",
+    *,
+    port: int = 23010,
+    map_name: str = "RelayMap",
+    game_type: int = 0,
 ) -> bytes:
     request = bytearray(0x409 - HEADER_BYTES)
     request[0 : len(name)] = name.encode("ascii")[:0x80]
@@ -116,6 +121,7 @@ def host_game_packet(
         + b"\0" * 8
     )
     request[0x10D - HEADER_BYTES : 0x11D - HEADER_BYTES] = sockaddr
+    struct.pack_into("<I", request, 0x11D - HEADER_BYTES, game_type)
     encoded_map = map_name.encode("ascii")[:0x20]
     map_offset = 0x12D - HEADER_BYTES + 8
     request[map_offset : map_offset + len(encoded_map)] = encoded_map
@@ -182,8 +188,9 @@ class ServerIntegrationTests(unittest.IsolatedAsyncioTestCase):
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
         name: str = "RelayRoom",
+        game_type: int = 0,
     ) -> int:
-        writer.write(host_game_packet(name))
+        writer.write(host_game_packet(name, game_type=game_type))
         await writer.drain()
         hosted = await read_until_opcode(reader, 0x1A)
         self.assertEqual(read_u32(hosted, 0x0D), 1)
@@ -1617,6 +1624,221 @@ class ServerIntegrationTests(unittest.IsolatedAsyncioTestCase):
         received = await observer_reader.readexactly(len(raw_chat))
         self.assertEqual(read_u32(received, 0), 0)
         self.assertIn(b"hello lobby\0", received)
+
+    async def test_rank_results_and_replay_round_trip_require_match_token(self) -> None:
+        host_reader, host_writer = await self.connect_and_login("RankHost")
+        join_reader, join_writer = await self.connect_and_login("RankJoin")
+        await read_until_presence(host_reader, "RankJoin")
+
+        game_id = await self.advertise_relay_game(
+            host_reader, host_writer, "RankRoom", game_type=2
+        )
+        game = self.server.state.games[game_id]
+        token = game.relay_secret[:16]
+
+        join_writer.write(
+            build_packet(
+                0x90, struct.pack("<I", game_id) + relay_wire_payload(b"join")
+            )
+        )
+        await join_writer.drain()
+        joined = await read_until_opcode(join_reader, 0x93, limit=40)
+        self.assertEqual(read_u32(joined, 0x0D), 0)
+        await read_until_opcode(host_reader, 0x94, limit=40)
+
+        host_writer.write(build_packet(0x28, b"\0" * 0x20))
+        await host_writer.drain()
+        await wait_until(lambda: self.server.state.games[game_id].started)
+
+        host_writer.write(build_packet(0x98, struct.pack("<III", 2, 0, game_id) + token))
+        join_writer.write(build_packet(0x98, struct.pack("<III", 2, 1, game_id) + token))
+        await host_writer.drain()
+        await join_writer.drain()
+        host_result = await read_until_opcode(host_reader, 0x99, limit=40)
+        join_result = await read_until_opcode(join_reader, 0x99, limit=40)
+        self.assertEqual(read_u32(host_result, 0x0D), 0)
+        self.assertEqual(read_u32(join_result, 0x0D), 0)
+        self.assertEqual(self.server.accounts.statistics("RankHost", "rank")["wins"], 1)
+        self.assertEqual(self.server.accounts.statistics("RankJoin", "rank")["losses"], 1)
+        self.assertEqual(
+            self.server.accounts.statistics("RankHost", "normal"),
+            {"wins": 0, "losses": 0, "draws": 0},
+        )
+
+        host_writer.write(build_packet(0x37, b"RankHost\0" + b"\0" * 23))
+        await host_writer.drain()
+        profile = await read_until_opcode(host_reader, 0x38, limit=40)
+        self.assertEqual(read_u32(profile, 0x16F), 3)
+        self.assertEqual(read_u32(profile, 0x173), 1)
+        self.assertEqual(read_u32(profile, 0x177), 0)
+        self.assertEqual(read_u32(profile, 0x17B), 0)
+
+        host_writer.write(build_packet(0x2F, struct.pack("<I", 0)))
+        await host_writer.drain()
+        rank_list = await read_until_opcode(host_reader, 0x30, limit=40)
+        self.assertEqual(read_c_string(rank_list, 0x11, 0x20), "RankHost")
+        self.assertEqual(read_u32(rank_list, 0x31), 3)
+
+        host_writer.write(build_packet(0x98, struct.pack("<III", 2, 0, game_id) + token))
+        await host_writer.drain()
+        duplicate = await read_until_opcode(host_reader, 0x99, limit=40)
+        self.assertEqual(read_u32(duplicate, 0x0D), 1)
+        self.assertEqual(self.server.accounts.statistics("RankHost", "rank")["wins"], 1)
+
+        join_writer.write(
+            build_packet(0x98, struct.pack("<III", 2, 0, game_id) + b"X" * 16)
+        )
+        await join_writer.drain()
+        forged = await read_until_opcode(join_reader, 0x99, limit=40)
+        self.assertEqual(read_u32(forged, 0x0D), 2)
+
+        melee_id = await self.advertise_relay_game(
+            host_reader, host_writer, "MeleeRoom", game_type=1
+        )
+        melee_token = self.server.state.games[melee_id].relay_secret[:16]
+        join_writer.write(
+            build_packet(
+                0x90, struct.pack("<I", melee_id) + relay_wire_payload(b"melee")
+            )
+        )
+        await join_writer.drain()
+        self.assertEqual(
+            read_u32(await read_until_opcode(join_reader, 0x93, limit=60), 0x0D), 0
+        )
+        await read_until_opcode(host_reader, 0x94, limit=60)
+        host_writer.write(build_packet(0x28, b"\0" * 0x20))
+        await host_writer.drain()
+        await wait_until(lambda: self.server.state.games[melee_id].started)
+        host_writer.write(
+            build_packet(0x98, struct.pack("<III", 1, 0, melee_id) + melee_token)
+        )
+        join_writer.write(
+            build_packet(0x98, struct.pack("<III", 1, 1, melee_id) + melee_token)
+        )
+        await host_writer.drain()
+        await join_writer.drain()
+        self.assertEqual(
+            read_u32(await read_until_opcode(host_reader, 0x99, limit=60), 0x0D), 0
+        )
+        self.assertEqual(
+            read_u32(await read_until_opcode(join_reader, 0x99, limit=60), 0x0D), 0
+        )
+
+        top_bottom_id = await self.advertise_relay_game(
+            host_reader, host_writer, "TopBottomRoom", game_type=0
+        )
+        top_bottom_token = self.server.state.games[top_bottom_id].relay_secret[:16]
+        join_writer.write(
+            build_packet(
+                0x90,
+                struct.pack("<I", top_bottom_id) + relay_wire_payload(b"top-bottom"),
+            )
+        )
+        await join_writer.drain()
+        self.assertEqual(
+            read_u32(await read_until_opcode(join_reader, 0x93, limit=60), 0x0D), 0
+        )
+        await read_until_opcode(host_reader, 0x94, limit=60)
+        host_writer.write(build_packet(0x28, b"\0" * 0x20))
+        await host_writer.drain()
+        await wait_until(lambda: self.server.state.games[top_bottom_id].started)
+        for writer in (host_writer, join_writer):
+            writer.write(
+                build_packet(
+                    0x98,
+                    struct.pack("<III", 0, 2, top_bottom_id) + top_bottom_token,
+                )
+            )
+        await host_writer.drain()
+        await join_writer.drain()
+        self.assertEqual(
+            read_u32(await read_until_opcode(host_reader, 0x99, limit=60), 0x0D), 0
+        )
+        self.assertEqual(
+            read_u32(await read_until_opcode(join_reader, 0x99, limit=60), 0x0D), 0
+        )
+        self.assertEqual(
+            self.server.accounts.statistics("RankHost", "normal"),
+            {"wins": 1, "losses": 0, "draws": 1},
+        )
+        self.assertEqual(
+            self.server.accounts.statistics("RankJoin", "normal"),
+            {"wins": 0, "losses": 1, "draws": 1},
+        )
+        host_writer.write(build_packet(0x37, b"RankHost\0" + b"\0" * 23))
+        await host_writer.drain()
+        normal_profile = await read_until_opcode(host_reader, 0x38, limit=60)
+        self.assertEqual(read_u32(normal_profile, 0x15F), 1)
+        self.assertEqual(read_u32(normal_profile, 0x163), 0)
+        self.assertEqual(read_u32(normal_profile, 0x167), 1)
+
+        rejected_begin = bytearray(0xB1 - HEADER_BYTES)
+        struct.pack_into(
+            "<IIIII", rejected_begin, 0, 91, 4, 0, 2, top_bottom_id
+        )
+        rejected_begin[20:36] = top_bottom_token
+        rejected_begin[36:49] = b"NoUpload.ply\0"
+        host_writer.write(build_packet(0x9A, rejected_begin))
+        await host_writer.drain()
+        top_upload = await read_until_opcode(host_reader, 0x9D, limit=60)
+        self.assertEqual(read_u32(top_upload, 0x0D), 2)
+
+        replay_bytes = bytes(range(256)) * 150
+        upload_id = 77
+        begin = bytearray(0xB1 - HEADER_BYTES)
+        struct.pack_into("<IIIII", begin, 0, upload_id, len(replay_bytes), 2, 0, game_id)
+        begin[20:36] = token
+        begin[36 : 36 + len(b"RankMatch.ply")] = b"RankMatch.ply"
+        host_writer.write(build_packet(0x9A, begin))
+        await host_writer.drain()
+        accepted = await read_until_opcode(host_reader, 0x9D, limit=40)
+        self.assertEqual(read_u32(accepted, 0x0D), 0)
+        self.assertEqual(read_u32(accepted, 0x11), upload_id)
+
+        offset = 0
+        while offset < len(replay_bytes):
+            chunk = replay_bytes[offset : offset + 32 * 1024]
+            host_writer.write(
+                build_packet(0x9B, struct.pack("<II", upload_id, offset) + chunk)
+            )
+            offset += len(chunk)
+        host_writer.write(
+            build_packet(
+                0x9C,
+                struct.pack("<IIQ", upload_id, len(replay_bytes), fnv1a64(replay_bytes)),
+            )
+        )
+        await host_writer.drain()
+        uploaded = await read_until_opcode(host_reader, 0x9D, limit=40)
+        self.assertEqual(read_u32(uploaded, 0x0D), 0)
+        replay_id = read_u32(uploaded, 0x15)
+        self.assertNotEqual(replay_id, 0)
+
+        join_writer.write(build_packet(0x9E, struct.pack("<I", 0)))
+        await join_writer.drain()
+        listing = await read_until_opcode(join_reader, 0x9F, limit=40)
+        self.assertEqual(read_u32(listing, 0x11), 1)
+        self.assertEqual(read_u32(listing, 0x15), replay_id)
+        self.assertEqual(read_u32(listing, 0x19), len(replay_bytes))
+        self.assertEqual(read_c_string(listing, 0x49, 0x7C), "RankMatch.ply")
+
+        join_writer.write(build_packet(0xA0, struct.pack("<I", replay_id)))
+        await join_writer.drain()
+        downloaded = bytearray()
+        while True:
+            packet = await read_packet(join_reader)
+            opcode = read_u32(packet, 4)
+            if opcode == 0xA1:
+                self.assertEqual(read_u32(packet, 0x0D), replay_id)
+                self.assertEqual(read_u32(packet, 0x11), len(replay_bytes))
+                self.assertEqual(read_u32(packet, 0x15), len(downloaded))
+                downloaded.extend(packet[0x19:])
+            elif opcode == 0xA2:
+                self.assertEqual(read_u32(packet, 0x0D), replay_id)
+                self.assertEqual(read_u32(packet, 0x11), 0)
+                self.assertEqual(read_u32(packet, 0x15), len(replay_bytes))
+                break
+        self.assertEqual(bytes(downloaded), replay_bytes)
 
 
 if __name__ == "__main__":

@@ -34,6 +34,25 @@ length field; one `recv` is not assumed to contain exactly one packet.
 | `0x1b` | `0x26` | remove public game advertisement |
 | `0x28` | `0x26` | start game and hide public advertisement |
 | `0x96` | `0x97` | save the authenticated user's lobby mark |
+| `0x98` | `0x99` | submit an authenticated per-user match result |
+| `0x9a`/`0x9b`/`0x9c` | `0x9d` | begin/chunk/finish replay upload |
+| `0x9e` | `0x9f` | list uploaded replays |
+| `0xa0` | `0xa1`/`0xa2` | download replay chunks and completion status |
+
+## Match records and replay transfer
+
+Game types `0` (Top Vs Bottom) and `1` (Melee) update the normal-game
+win/loss/draw record. Type `2` (Rank) updates the ranking record and ranking
+points (`win * 3 + draw`). A result is accepted only for an authenticated
+participant in a started two-or-more-user room. The first 16 bytes of the
+room's random relay secret are the match token, and each account/token pair is
+persistently idempotent.
+
+Only the room host may upload a replay, and uploads are accepted only for
+Melee or Rank. Replay bytes use ordered 32 KiB chunks plus an FNV-1a-64 final
+digest. Completed files and a JSON catalog are stored below `data.replay_dir`.
+The lobby browser pages that catalog and downloads the selected file in 32 KiB
+server chunks.
 
 ## Lobby Mark Extension
 

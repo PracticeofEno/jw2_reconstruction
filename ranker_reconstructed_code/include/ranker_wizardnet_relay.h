@@ -12,6 +12,8 @@
 
 namespace ranker {
 
+struct LegacyAsyncTcpSocket;
+
 constexpr u32 kWizardNetRelayJoinRequestOpcode = 0x90;
 constexpr u32 kWizardNetRelayLeaveRequestOpcode = 0x91;
 constexpr u32 kWizardNetRelayFrameRequestOpcode = 0x92;
@@ -60,6 +62,8 @@ bool QueueWizardNetRelayFrame(u32 target_member_id, u32 stream_id,
 bool WizardNetRelayPayloadIsEncrypted(const void* payload, u32 byte_count);
 bool DecodeWizardNetRelayPayload(u32 game_id, const void* payload,
     u32 byte_count, std::vector<u8>& decoded);
+bool QueueWizardNetAsyncTcpPacket(LegacyAsyncTcpSocket& socket,
+    void* packet, u32 byte_count);
 bool FlushWizardNetRelayAsyncSendQueue();
 bool QueueWizardNetRelayLeaveForGame(u32 game_id);
 bool QueueWizardNetRelayLeave();

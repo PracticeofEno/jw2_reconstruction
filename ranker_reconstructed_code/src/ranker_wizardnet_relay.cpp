@@ -413,18 +413,9 @@ bool queue_server_packet(u32 opcode, const void* payload, u32 byte_count) {
         std::memcpy(packet.data() + kLegacyTcpHeaderBytes, payload, byte_count);
     }
 
-    const std::lock_guard<std::mutex> lock(g_relay_async_tcp_send_mutex);
     LegacyAsyncTcpSocket& socket = FrontendAsyncTcpSocket0();
-    if (socket.send_length < 0 ||
-        socket.send_length > static_cast<i32>(kLegacyAsyncTcpQueueBytes)) {
-        return false;
-    }
-    if (!flush_relay_async_send_queue_unlocked(socket, packet.size())) {
-        return false;
-    }
-    PrepareAndQueueLegacyAsyncTcpSend(socket, packet.data(),
-        static_cast<i32>(packet.size()));
-    return true;
+    return QueueWizardNetAsyncTcpPacket(socket, packet.data(),
+        static_cast<u32>(packet.size()));
 }
 
 void queue_member_left(u32 game_id, u32 member_id) {
@@ -766,6 +757,21 @@ bool QueueWizardNetRelayFrame(u32 target_member_id, u32 stream_id,
             relay_crypto_key_source_name(key_source),
             static_cast<unsigned long>(counter));
     }
+    return true;
+}
+
+bool QueueWizardNetAsyncTcpPacket(LegacyAsyncTcpSocket& socket,
+    void* packet, u32 byte_count) {
+    if (packet == nullptr || byte_count < kLegacyTcpHeaderBytes ||
+        byte_count > kLegacyAsyncTcpQueueBytes) {
+        return false;
+    }
+    const std::lock_guard<std::mutex> lock(g_relay_async_tcp_send_mutex);
+    if (!flush_relay_async_send_queue_unlocked(socket, byte_count)) {
+        return false;
+    }
+    PrepareAndQueueLegacyAsyncTcpSend(socket, packet,
+        static_cast<i32>(byte_count));
     return true;
 }
 

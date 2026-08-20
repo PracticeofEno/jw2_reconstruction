@@ -187,6 +187,7 @@ struct CreateGameState {
     std::array<u32, 5> server_game_type_counts{};
     std::array<u32, 10> server_use_map_counts{};
     std::string base_maps_directory;
+    std::string rank_maps_directory;
     std::string current_directory;
     std::string last_message;
     int visible_rows = 12;
@@ -280,6 +281,9 @@ bool CreateCreateGameWindow(CreateGameState& state, HWND parent, HINSTANCE insta
 void ClearCreateGameScenarioListData(CreateGameState& state);
 void PopulateCreateGameScenarioList(CreateGameState& state);
 void RefreshCreateGameScenarioList(CreateGameState& state);
+bool IsCreateGamePathWithinRoot(const std::string& path,
+    const std::string& root);
+void ApplyCreateGameTypeMapRoot(CreateGameState& state);
 bool BrowseCreateGameSelectedDirectory(CreateGameState& state);
 bool SubmitCreateGameSelection(CreateGameState& state);
 void BuildCreateGameMapDescriptorPayload(CreateGameState& state);

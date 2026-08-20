@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import ipaddress
+import hmac
 import json
 import logging
 from pathlib import Path
 import socket
 import struct
+import tempfile
 import time
 from typing import Iterable
 
@@ -30,9 +33,11 @@ from .protocol import (
     write_i32,
     write_u32,
 )
+from .replays import ReplayCatalog, fnv1a64, sanitize_replay_filename
 from .state import (
     AdvertisedGame,
     ClientSession,
+    CompletedGame,
     LobbyChannel,
     PRESENCE_STATUS_HOSTING,
     PRESENCE_STATUS_LOBBY,
@@ -52,6 +57,17 @@ RELAY_FRAME_OPCODE = 0x94
 RELAY_MEMBER_LEFT_OPCODE = 0x95
 LOBBY_MARK_SET_REQUEST_OPCODE = 0x96
 LOBBY_MARK_SET_RESPONSE_OPCODE = 0x97
+MATCH_RESULT_REQUEST_OPCODE = 0x98
+MATCH_RESULT_RESPONSE_OPCODE = 0x99
+REPLAY_UPLOAD_BEGIN_OPCODE = 0x9A
+REPLAY_UPLOAD_CHUNK_OPCODE = 0x9B
+REPLAY_UPLOAD_END_OPCODE = 0x9C
+REPLAY_UPLOAD_STATUS_OPCODE = 0x9D
+REPLAY_LIST_REQUEST_OPCODE = 0x9E
+REPLAY_LIST_RESPONSE_OPCODE = 0x9F
+REPLAY_DOWNLOAD_REQUEST_OPCODE = 0xA0
+REPLAY_DOWNLOAD_CHUNK_OPCODE = 0xA1
+REPLAY_DOWNLOAD_FINISH_OPCODE = 0xA2
 LOBBY_MARK_COUNT = 5
 RELAY_MAX_MEMBERS = 8
 RELAY_STREAM_LINK = 0
@@ -65,12 +81,39 @@ RELAY_STATUS_FULL = 2
 RELAY_STATUS_NOT_MEMBER = 3
 RELAY_STATUS_HOST_MISSING = 4
 
+REPLAY_TRANSFER_CHUNK_BYTES = 32 * 1024
+REPLAY_LIST_PAGE_COUNT = 64
+REPLAY_LIST_RECORD_BYTES = 0xB0
+MATCH_TOKEN_BYTES = 16
+
+
+@dataclass(slots=True)
+class ActiveReplayUpload:
+    upload_id: int
+    temporary_path: Path
+    display_name: str
+    expected_bytes: int
+    received_bytes: int
+    hash_value: int
+    game_type: int
+    game_id: int
+
 
 class RankerServer:
     def __init__(self, config: ServerConfig) -> None:
         self.config = config
         self.state = ServerState(config.default_lobby_name)
         self.accounts = AccountStore(config.account_file)
+        self._temporary_replay_directory: tempfile.TemporaryDirectory[str] | None = None
+        if config.replay_dir is None:
+            self._temporary_replay_directory = tempfile.TemporaryDirectory(
+                prefix="ranker_replays_"
+            )
+            replay_directory = Path(self._temporary_replay_directory.name)
+        else:
+            replay_directory = config.replay_dir
+        self.replays = ReplayCatalog(replay_directory)
+        self._replay_uploads: dict[int, ActiveReplayUpload] = {}
         self._server: asyncio.Server | None = None
         self._cleanup_task: asyncio.Task[None] | None = None
 
@@ -114,7 +157,14 @@ class RankerServer:
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
-            self._server = None
+        self._server = None
+        for upload in self._replay_uploads.values():
+            with contextlib.suppress(OSError):
+                upload.temporary_path.unlink()
+        self._replay_uploads.clear()
+        if self._temporary_replay_directory is not None:
+            self._temporary_replay_directory.cleanup()
+            self._temporary_replay_directory = None
 
     async def _accept_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -279,7 +329,16 @@ class RankerServer:
             RELAY_LEAVE_REQUEST_OPCODE: self._handle_relay_leave,
             RELAY_FRAME_REQUEST_OPCODE: self._handle_relay_frame,
             LOBBY_MARK_SET_REQUEST_OPCODE: self._handle_lobby_mark_set,
+            MATCH_RESULT_REQUEST_OPCODE: self._handle_match_result,
+            REPLAY_UPLOAD_BEGIN_OPCODE: self._handle_replay_upload_begin,
+            REPLAY_UPLOAD_CHUNK_OPCODE: self._handle_replay_upload_chunk,
+            REPLAY_UPLOAD_END_OPCODE: self._handle_replay_upload_end,
+            REPLAY_LIST_REQUEST_OPCODE: self._handle_replay_list,
+            REPLAY_DOWNLOAD_REQUEST_OPCODE: self._handle_replay_download,
             0x2A: self._handle_chat,
+            0x2F: self._handle_rank_list,
+            0x33: self._handle_rank_search,
+            0x35: self._handle_profile_update,
             0x37: self._handle_profile,
             0x3D: self._handle_top_bottom_counts,
             0x45: self._handle_game_type_counts,
@@ -465,6 +524,308 @@ class RankerServer:
         )
         await self._broadcast_online_presence(session, added=True)
 
+    @staticmethod
+    def _statistics_bucket(game_type: int) -> str | None:
+        if game_type in (0, 1):
+            return "normal"
+        if game_type == 2:
+            return "rank"
+        return None
+
+    @staticmethod
+    def _outcome_name(outcome: int) -> str | None:
+        return {0: "wins", 1: "losses", 2: "draws"}.get(outcome)
+
+    def _validated_match(
+        self,
+        session: ClientSession,
+        game_id: int,
+        game_type: int,
+        match_token: bytes,
+        *,
+        require_host: bool,
+    ) -> bool:
+        game = self.state.games.get(game_id)
+        if game is not None:
+            host = self.state.clients.get(game.host_client_id)
+            host_account = host.account if host is not None else ""
+            is_participant = session.account.casefold() in {
+                account.casefold() for account in game.participant_accounts
+            }
+            return (
+                game.started
+                and game.game_type == game_type
+                and len(game.participant_accounts) >= 2
+                and is_participant
+                and (not require_host or session.account.casefold() == host_account.casefold())
+                and hmac.compare_digest(game.relay_secret[:MATCH_TOKEN_BYTES], match_token)
+            )
+
+        completed = self.state.completed_games.get(match_token)
+        if completed is None:
+            return False
+        is_participant = session.account.casefold() in {
+            account.casefold() for account in completed.participant_accounts
+        }
+        return (
+            completed.game_id == game_id
+            and completed.game_type == game_type
+            and len(completed.participant_accounts) >= 2
+            and is_participant
+            and (
+                not require_host
+                or session.account.casefold() == completed.host_account.casefold()
+            )
+        )
+
+    async def _handle_match_result(
+        self, session: ClientSession, packet: Packet
+    ) -> None:
+        if len(packet.raw) < 0x29:
+            await self._send(
+                session, build_packet(MATCH_RESULT_RESPONSE_OPCODE, struct.pack("<II", 2, 0))
+            )
+            return
+        game_type = read_u32(packet.raw, 0x0D)
+        outcome = read_u32(packet.raw, 0x11)
+        game_id = read_u32(packet.raw, 0x15)
+        match_token = bytes(packet.raw[0x19:0x29])
+        bucket = self._statistics_bucket(game_type)
+        outcome_name = self._outcome_name(outcome)
+        status = 0
+        if bucket is None or outcome_name is None:
+            status = 3
+        elif not self._validated_match(
+            session, game_id, game_type, match_token, require_host=False
+        ):
+            status = 2
+        elif not self.accounts.record_match(
+            session.account, bucket, outcome_name, match_token.hex()
+        ):
+            status = 1
+        LOGGER.info(
+            "match result account=%s game=%d type=%d outcome=%d status=%d",
+            session.account,
+            game_id,
+            game_type,
+            outcome,
+            status,
+        )
+        await self._send(
+            session,
+            build_packet(MATCH_RESULT_RESPONSE_OPCODE, struct.pack("<II", status, game_id)),
+        )
+
+    async def _send_replay_upload_status(
+        self, session: ClientSession, status: int, upload_id: int, replay_id: int = 0
+    ) -> None:
+        await self._send(
+            session,
+            build_packet(
+                REPLAY_UPLOAD_STATUS_OPCODE,
+                struct.pack("<III", status, upload_id, replay_id),
+            ),
+        )
+
+    def _discard_replay_upload(self, client_id: int) -> None:
+        upload = self._replay_uploads.pop(client_id, None)
+        if upload is not None:
+            with contextlib.suppress(OSError):
+                upload.temporary_path.unlink()
+
+    async def _handle_replay_upload_begin(
+        self, session: ClientSession, packet: Packet
+    ) -> None:
+        if len(packet.raw) < 0xB1:
+            await self._send_replay_upload_status(session, 2, 0)
+            return
+        upload_id = read_u32(packet.raw, 0x0D)
+        expected_bytes = read_u32(packet.raw, 0x11)
+        game_type = read_u32(packet.raw, 0x15)
+        game_id = read_u32(packet.raw, 0x1D)
+        match_token = bytes(packet.raw[0x21:0x31])
+        display_name = sanitize_replay_filename(
+            read_c_string(packet.raw, 0x31, 0x80)
+        )
+        if (
+            upload_id == 0
+            or expected_bytes == 0
+            or expected_bytes > self.config.max_replay_bytes
+            or game_type not in (1, 2)
+            or not self._validated_match(
+                session, game_id, game_type, match_token, require_host=True
+            )
+        ):
+            await self._send_replay_upload_status(session, 2, upload_id)
+            return
+
+        self._discard_replay_upload(session.client_id)
+        temporary_path = self.replays.directory / (
+            f".upload_{session.client_id}_{upload_id}.part"
+        )
+        try:
+            temporary_path.write_bytes(b"")
+        except OSError:
+            await self._send_replay_upload_status(session, 4, upload_id)
+            return
+        self._replay_uploads[session.client_id] = ActiveReplayUpload(
+            upload_id=upload_id,
+            temporary_path=temporary_path,
+            display_name=display_name,
+            expected_bytes=expected_bytes,
+            received_bytes=0,
+            hash_value=0xCBF29CE484222325,
+            game_type=game_type,
+            game_id=game_id,
+        )
+        await self._send_replay_upload_status(session, 0, upload_id)
+
+    async def _handle_replay_upload_chunk(
+        self, session: ClientSession, packet: Packet
+    ) -> None:
+        upload_id = read_u32(packet.raw, 0x0D)
+        offset = read_u32(packet.raw, 0x11)
+        data = packet.raw[0x15:]
+        upload = self._replay_uploads.get(session.client_id)
+        if (
+            upload is None
+            or upload.upload_id != upload_id
+            or offset != upload.received_bytes
+            or not data
+            or len(data) > REPLAY_TRANSFER_CHUNK_BYTES
+            or upload.received_bytes + len(data) > upload.expected_bytes
+        ):
+            self._discard_replay_upload(session.client_id)
+            await self._send_replay_upload_status(session, 3, upload_id)
+            return
+        try:
+            with upload.temporary_path.open("ab") as stream:
+                stream.write(data)
+        except OSError:
+            self._discard_replay_upload(session.client_id)
+            await self._send_replay_upload_status(session, 4, upload_id)
+            return
+        upload.received_bytes += len(data)
+        upload.hash_value = fnv1a64(data, upload.hash_value)
+
+    async def _handle_replay_upload_end(
+        self, session: ClientSession, packet: Packet
+    ) -> None:
+        upload_id = read_u32(packet.raw, 0x0D)
+        declared_bytes = read_u32(packet.raw, 0x11)
+        declared_hash = (
+            struct.unpack_from("<Q", packet.raw, 0x15)[0]
+            if len(packet.raw) >= 0x1D
+            else -1
+        )
+        upload = self._replay_uploads.pop(session.client_id, None)
+        if (
+            upload is None
+            or upload.upload_id != upload_id
+            or declared_bytes != upload.expected_bytes
+            or upload.received_bytes != upload.expected_bytes
+            or declared_hash != upload.hash_value
+        ):
+            if upload is not None:
+                with contextlib.suppress(OSError):
+                    upload.temporary_path.unlink()
+            await self._send_replay_upload_status(session, 3, upload_id)
+            return
+        try:
+            entry = self.replays.commit_upload(
+                upload.temporary_path,
+                display_name=upload.display_name,
+                uploader=session.account,
+                byte_count=upload.received_bytes,
+                game_type=upload.game_type,
+                game_id=upload.game_id,
+            )
+        except OSError:
+            with contextlib.suppress(OSError):
+                upload.temporary_path.unlink()
+            await self._send_replay_upload_status(session, 4, upload_id)
+            return
+        LOGGER.info(
+            "replay uploaded id=%d account=%s game=%d bytes=%d name=%s",
+            entry.replay_id,
+            session.account,
+            entry.game_id,
+            entry.byte_count,
+            entry.display_name,
+        )
+        await self._send_replay_upload_status(
+            session, 0, upload_id, entry.replay_id
+        )
+
+    async def _handle_replay_list(
+        self, session: ClientSession, packet: Packet
+    ) -> None:
+        offset = read_u32(packet.raw, 0x0D)
+        entries = self.replays.entries()
+        selected = entries[offset : offset + REPLAY_LIST_PAGE_COUNT]
+        next_offset = (
+            offset + len(selected)
+            if offset + len(selected) < len(entries)
+            else 0xFFFFFFFF
+        )
+        payload = bytearray(8 + len(selected) * REPLAY_LIST_RECORD_BYTES)
+        write_u32(payload, 0, next_offset)
+        write_u32(payload, 4, len(selected))
+        for index, entry in enumerate(selected):
+            base = 8 + index * REPLAY_LIST_RECORD_BYTES
+            write_u32(payload, base, entry.replay_id)
+            write_u32(payload, base + 4, entry.byte_count)
+            struct.pack_into("<Q", payload, base + 8, entry.uploaded_at)
+            write_u32(payload, base + 16, entry.game_type)
+            write_fixed_text(payload, base + 20, 0x20, entry.uploader)
+            write_fixed_text(payload, base + 52, 0x7C, entry.display_name)
+        await self._send(session, build_packet(REPLAY_LIST_RESPONSE_OPCODE, payload))
+
+    async def _handle_replay_download(
+        self, session: ClientSession, packet: Packet
+    ) -> None:
+        replay_id = read_u32(packet.raw, 0x0D)
+        entry = self.replays.get(replay_id)
+        if entry is None:
+            await self._send(
+                session,
+                build_packet(
+                    REPLAY_DOWNLOAD_FINISH_OPCODE,
+                    struct.pack("<III", replay_id, 1, 0),
+                ),
+            )
+            return
+        path = self.replays.path_for(entry)
+        try:
+            with path.open("rb") as stream:
+                offset = 0
+                while data := stream.read(REPLAY_TRANSFER_CHUNK_BYTES):
+                    await self._send(
+                        session,
+                        build_packet(
+                            REPLAY_DOWNLOAD_CHUNK_OPCODE,
+                            struct.pack("<III", replay_id, entry.byte_count, offset)
+                            + data,
+                        ),
+                    )
+                    offset += len(data)
+        except OSError:
+            await self._send(
+                session,
+                build_packet(
+                    REPLAY_DOWNLOAD_FINISH_OPCODE,
+                    struct.pack("<III", replay_id, 2, 0),
+                ),
+            )
+            return
+        await self._send(
+            session,
+            build_packet(
+                REPLAY_DOWNLOAD_FINISH_OPCODE,
+                struct.pack("<III", replay_id, 0, entry.byte_count),
+            ),
+        )
+
     async def _handle_chat(self, session: ClientSession, packet: Packet) -> None:
         if len(packet.raw) <= HEADER_BYTES + 8:
             return
@@ -560,10 +921,109 @@ class RankerServer:
         await self._send(session, build_packet(0x84, payload))
 
     async def _handle_profile(self, session: ClientSession, packet: Packet) -> None:
-        target = read_c_string(packet.raw, 0x0D, 0x20)
+        target = read_c_string(packet.raw, 0x0D, 0x20).strip() or session.account
+        await self._send(session, self._build_profile_packet(0x38, target))
+
+    async def _handle_rank_search(
+        self, session: ClientSession, packet: Packet
+    ) -> None:
+        target = read_c_string(packet.raw, 0x11, 0x20).strip() or session.account
+        await self._send(session, self._build_profile_packet(0x34, target))
+
+    async def _handle_profile_update(
+        self, session: ClientSession, packet: Packet
+    ) -> None:
+        location = read_u32(packet.raw, 0x35)
+        description = read_c_string(packet.raw, 0x39, 0xFA)
+        self.accounts.set_profile_value(session.account, "location", location)
+        self.accounts.set_profile_value(session.account, "description", description)
+        await self._send(session, build_status_packet(0x36, 0))
+
+    def _ranked_accounts(self) -> list[str]:
+        names = [
+            name
+            for name in self.accounts.account_names()
+            if sum(self.accounts.statistics(name, "rank").values()) != 0
+        ]
+        return sorted(
+            names,
+            key=lambda name: (-self.accounts.rank_points(name), name.casefold()),
+        )
+
+    def _rank_position(self, account: str) -> int:
+        statistics = self.accounts.statistics(account, "rank")
+        if sum(statistics.values()) == 0:
+            return -1
+        folded = account.casefold()
+        for index, name in enumerate(self._ranked_accounts(), start=1):
+            if name.casefold() == folded:
+                return index
+        return -1
+
+    def _build_profile_packet(self, opcode: int, target: str) -> bytes:
+        if not self.accounts.exists(target):
+            target = ""
         payload = bytearray(0x200 - HEADER_BYTES)
-        write_fixed_text(payload, 0, 0x20, target)
-        await self._send(session, build_packet(0x38, payload))
+        if not target:
+            return build_packet(opcode, payload)
+
+        def absolute(offset: int) -> int:
+            return offset - HEADER_BYTES
+
+        write_fixed_text(payload, absolute(0x0D), 0x20, target)
+        write_i32(payload, absolute(0x2D), -1)
+        write_fixed_text(payload, absolute(0x31), 0x20,
+            str(self.accounts.profile_value(target, "guild_name", "")))
+        write_i32(payload, absolute(0x51),
+            int(self.accounts.profile_value(target, "birth_year", 0)))
+        write_i32(payload, absolute(0x55),
+            int(self.accounts.profile_value(target, "sex", -1)))
+        write_i32(payload, absolute(0x59),
+            int(self.accounts.profile_value(target, "location", -1)))
+        description = self.accounts.profile_value(
+            target,
+            "description",
+            self.accounts.profile_value(target, "intro", ""),
+        )
+        write_fixed_text(payload, absolute(0x5D), 0x100, str(description))
+
+        normal = self.accounts.statistics(target, "normal")
+        ranked = self.accounts.statistics(target, "rank")
+        for index, key in enumerate(("wins", "losses", "draws")):
+            write_i32(payload, absolute(0x15F + index * 4), normal[key])
+            write_i32(payload, absolute(0x173 + index * 4), ranked[key])
+            write_i32(payload, absolute(0x187 + index * 4), 0)
+            write_i32(payload, absolute(0x19B + index * 4), 0)
+        write_i32(payload, absolute(0x16B), self._rank_position(target))
+        write_i32(payload, absolute(0x16F), self.accounts.rank_points(target))
+        write_i32(payload, absolute(0x193), -1)
+        write_i32(payload, absolute(0x197), 0)
+        for index in range(8):
+            write_i32(payload, absolute(0x1A7 + index * 4), -1)
+            write_i32(payload, absolute(0x1C7 + index * 4), 0)
+        return build_packet(opcode, payload)
+
+    async def _handle_rank_list(
+        self, session: ClientSession, packet: Packet
+    ) -> None:
+        top = read_u32(packet.raw, 0x0D)
+        names = self._ranked_accounts()
+        selected = names[top : top + 16]
+        payload = bytearray(4 + 16 * 0x38)
+        write_u32(payload, 0, top)
+        for index, name in enumerate(selected):
+            offset = 4 + index * 0x38
+            statistics = self.accounts.statistics(name, "rank")
+            write_fixed_text(payload, offset, 0x20, name)
+            write_u32(payload, offset + 0x20, self.accounts.rank_points(name))
+            write_fixed_text(
+                payload,
+                offset + 0x24,
+                0x10,
+                f"{statistics['wins']}-{statistics['losses']}-{statistics['draws']}",
+            )
+            write_u32(payload, offset + 0x34, self.accounts.rank_points(name))
+        await self._send(session, build_packet(0x30, payload))
 
     def _public_sockaddr(self, session: ClientSession, source: bytes) -> bytes:
         if len(source) < 16:
@@ -619,6 +1079,7 @@ class RankerServer:
         )
         game.relay_members[session.client_id] = 1
         game.relay_member_peers[1] = (session.peer_host, session.peer_port)
+        game.participant_accounts.add(session.account)
         self.state.games[game_id] = game
         session.hosted_game_id = game_id
         session.relay_game_id = game_id
@@ -685,6 +1146,21 @@ class RankerServer:
         game = self.state.games.get(session.hosted_game_id)
         if game is None or game.host_client_id != session.client_id:
             return
+        started_participants = {
+            member.account
+            for client_id in game.relay_members
+            if (member := self.state.clients.get(client_id)) is not None
+            and member.authenticated
+        }
+        if len(started_participants) < 2:
+            LOGGER.warning(
+                "client %d (%s) attempted to start game %d with fewer than two participants",
+                session.client_id,
+                session.account,
+                game.game_id,
+            )
+            return
+        game.participant_accounts = started_participants
         game.started = True
         for client_id in game.relay_members:
             member = self.state.clients.get(client_id)
@@ -754,6 +1230,7 @@ class RankerServer:
                 return
             game.relay_members[session.client_id] = member_id
         game.relay_member_peers[member_id] = (session.peer_host, session.peer_port)
+        game.participant_accounts.add(session.account)
         game.relay_departed_members.discard(member_id)
         session.relay_game_id = game_id
         session.relay_member_id = member_id
@@ -1373,6 +1850,18 @@ class RankerServer:
         game = self.state.games.pop(game_id, None)
         if game is None:
             return
+        if game.started:
+            host = self.state.clients.get(game.host_client_id)
+            host_account = host.account if host is not None else ""
+            self.state.completed_games[game.relay_secret[:MATCH_TOKEN_BYTES]] = (
+                CompletedGame(
+                    game_id=game.game_id,
+                    game_type=game.game_type,
+                    match_token=game.relay_secret[:MATCH_TOKEN_BYTES],
+                    host_account=host_account,
+                    participant_accounts=set(game.participant_accounts),
+                )
+            )
         relay_members = list(game.relay_members.items())
         for client_id, member_id in relay_members:
             member = self.state.clients.get(client_id)
@@ -1424,6 +1913,7 @@ class RankerServer:
         elif session.relay_game_id is not None:
             await self._remove_relay_member(session)
         self.state.clients.pop(session.client_id, None)
+        self._discard_replay_upload(session.client_id)
         session.writer.close()
         with contextlib.suppress(Exception):
             await session.writer.wait_closed()
@@ -1446,6 +1936,12 @@ class RankerServer:
                 await self._retire_game_advertisement(game)
             else:
                 await self._remove_game(game.game_id)
+        completed_cutoff = time.monotonic() - self.config.room_ttl_seconds
+        self.state.completed_games = {
+            token: game
+            for token, game in self.state.completed_games.items()
+            if game.completed_at >= completed_cutoff
+        }
 
     async def _remove_relay_member(self, session: ClientSession) -> None:
         game_id = session.relay_game_id

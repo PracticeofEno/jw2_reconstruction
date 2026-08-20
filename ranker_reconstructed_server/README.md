@@ -88,6 +88,12 @@ $env:RANKER_RECONSTRUCTED_SERVER_PORT = "19777"
   replies.
 - Lobby list, lobby movement, online presence paging, lobby chat, and persistent
   per-account selection of the five unique lobby nickname marks.
+- Separate persistent normal-game (Top Vs Bottom/Melee) and ranking-game
+  win/loss/draw records, including the existing rank list and player-profile
+  replies.
+- Match-token-validated replay uploads for Rank and Melee rooms, a persistent
+  replay catalog, and authenticated replay listing/download. The client saves
+  downloaded files under `Replays\download`.
 - Game advertisement, duplicate-name handling, game browser paging, and removal
   notices.
 - Room-scoped relay join, leave, member-left notification, targeted frame
@@ -140,8 +146,12 @@ bidirectional Mode1 traffic.
 Run the unit tests with:
 
 ```powershell
-python -m unittest tests.test_server
+python -m unittest tests.test_server tests.test_accounts tests.test_config tests.test_replays
 ```
+
+Replay files and their catalog index are stored in the configured
+`data.replay_dir` (by default `data/replays`). `server.max_replay_bytes` limits
+each upload and defaults to 64 MiB.
 
 ## Two-PC NAT Release Gate
 

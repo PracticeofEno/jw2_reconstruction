@@ -16,12 +16,15 @@
 #include "ranker_system_ui.h"
 #include "ranker_text_tables.h"
 #include "ranker_winmain.h"
+#include "ranker_wizardnet_relay.h"
+#include "ranker_wizardnet_services.h"
 
 #include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <string>
 
 #include <shellapi.h>
@@ -92,6 +95,7 @@ constexpr int kOnlineLobbyRankMarkChoiceWidth = 46;
 constexpr int kOnlineLobbyRankMarkChoiceHeight = 22;
 constexpr int kOnlineLobbyRankMarkChoiceGap = 2;
 constexpr int kOnlineLobbyRankMarkTextGap = 6;
+constexpr std::size_t kWizardNetReplayListRecordBytes = 0xb0;
 
 constexpr OnlineLobbyButtonSpec kButtonSpecs[kOnlineLobbyButtonCount] = {
     {kOnlineLobbyNameButtonId, "Lobby Name", 0, 0, false},
@@ -222,11 +226,10 @@ OnlineLobbyLayoutRect simplified_main_panel_rect(
         std::max<i32>(1, root.width));
 
     // The old content background extended under all four legacy tabs.  Its
-    // reconstructed Main page contains only three actions, so terminate the
-    // panel immediately after Rank instead of leaving three empty tab cells'
-    // worth of framed space on the right.
+    // reconstructed Main page contains the three original actions plus the
+    // replay browser, so terminate the panel immediately after Replay.
     const i32 content_width = inset + create.width + gap + join.width + gap +
-        rank.width + inset;
+        rank.width + gap + rank.width + inset;
     panel.width = std::clamp<i32>(content_width, 1,
         std::max<i32>(1, panel.width));
     return panel;
@@ -236,7 +239,8 @@ OnlineLobbyLayoutRect arrange_simplified_main_action(
     const OnlineLobbyState& state, int control_id, OnlineLobbyLayoutRect rect) {
     if (control_id != kOnlineLobbyCreateGameButtonId &&
         control_id != kOnlineLobbyJoinGameButtonId &&
-        control_id != kOnlineLobbyViewRankButtonId) {
+        control_id != kOnlineLobbyViewRankButtonId &&
+        control_id != kOnlineLobbyReplayButtonId) {
         return rect;
     }
 
@@ -254,7 +258,7 @@ OnlineLobbyLayoutRect arrange_simplified_main_action(
     const i32 first_x = std::max<i32>(0, action_panel.x + panel_inset);
 
     // The reconstructed background has a compact framed group for these
-    // three actions.  Center their live windows inside that frame so the
+    // four actions.  Center their live windows inside that frame so the
     // painted buttons and their hit targets stay aligned.
     rect.y = std::max<i32>(0, action_panel.y + vertical_inset);
 
@@ -262,8 +266,11 @@ OnlineLobbyLayoutRect arrange_simplified_main_action(
         rect.x = first_x;
     } else if (control_id == kOnlineLobbyJoinGameButtonId) {
         rect.x = first_x + create.width + gap;
-    } else {
+    } else if (control_id == kOnlineLobbyViewRankButtonId) {
         rect.x = first_x + create.width + gap + join.width + gap;
+    } else {
+        rect.x = first_x + create.width + gap + join.width + gap +
+            rank.width + gap;
     }
     return rect;
 }
@@ -574,6 +581,14 @@ u32 packet_u32(const u8* packet, std::size_t byte_count, std::size_t offset) {
         return 0;
     }
     return read_le32(packet + offset);
+}
+
+u64 packet_u64(const u8* packet, std::size_t byte_count, std::size_t offset) {
+    if (packet == nullptr || offset + sizeof(u64) > byte_count) {
+        return 0;
+    }
+    return static_cast<u64>(read_le32(packet + offset)) |
+        (static_cast<u64>(read_le32(packet + offset + 4)) << 32);
 }
 
 std::string packet_string(const u8* packet, std::size_t byte_count,
@@ -1461,6 +1476,202 @@ LRESULT CALLBACK online_lobby_control_proc(HWND hwnd, UINT message, WPARAM wpara
         wparam, lparam);
 }
 
+std::wstring cp949_to_wide(const std::string& text) {
+    if (text.empty()) {
+        return {};
+    }
+    const int count = MultiByteToWideChar(949, 0, text.data(),
+        static_cast<int>(text.size()), nullptr, 0);
+    if (count <= 0) {
+        return std::wstring(text.begin(), text.end());
+    }
+    std::wstring result(static_cast<std::size_t>(count), L'\0');
+    MultiByteToWideChar(949, 0, text.data(), static_cast<int>(text.size()),
+        result.data(), count);
+    return result;
+}
+
+void set_replay_browser_status(OnlineLobbyState& state, const wchar_t* text) {
+    if (state.replay_status != nullptr) {
+        SetWindowTextW(state.replay_status, text != nullptr ? text : L"");
+    }
+}
+
+void queue_replay_list_request(OnlineLobbyState& state, u32 offset) {
+    std::vector<u8> packet = BuildWizardNetReplayListRequestPacket(offset);
+    queue_online_lobby_async_bytes(state, packet.data(), packet.size());
+}
+
+void queue_replay_download_request(OnlineLobbyState& state, u32 replay_id) {
+    std::vector<u8> packet = BuildWizardNetReplayDownloadRequestPacket(replay_id);
+    queue_online_lobby_async_bytes(state, packet.data(), packet.size());
+}
+
+void begin_selected_replay_download(OnlineLobbyState& state) {
+    if (state.replay_list == nullptr || state.replay_download_id != 0) {
+        return;
+    }
+    const LRESULT selected = SendMessageW(state.replay_list, LB_GETCURSEL, 0, 0);
+    if (selected == LB_ERR || static_cast<std::size_t>(selected) >=
+            state.replay_entries.size()) {
+        set_replay_browser_status(state, L"다운로드할 리플레이를 선택하세요.");
+        return;
+    }
+    const WizardNetReplayListEntry& entry =
+        state.replay_entries[static_cast<std::size_t>(selected)];
+    if (entry.replay_id == 0 || entry.byte_count == 0 ||
+        entry.byte_count > kWizardNetMaximumReplayBytes) {
+        set_replay_browser_status(state, L"선택한 리플레이 정보가 올바르지 않습니다.");
+        return;
+    }
+    state.replay_download_id = entry.replay_id;
+    state.replay_download_total = entry.byte_count;
+    state.replay_download_filename = entry.filename;
+    state.replay_download_bytes.clear();
+    state.replay_download_bytes.reserve(entry.byte_count);
+    if (state.replay_download_button != nullptr) {
+        EnableWindow(state.replay_download_button, FALSE);
+    }
+    set_replay_browser_status(state, L"리플레이를 다운로드하는 중입니다...");
+    queue_replay_download_request(state, entry.replay_id);
+}
+
+LRESULT CALLBACK replay_browser_window_proc(HWND hwnd, UINT message,
+    WPARAM wparam, LPARAM lparam) {
+    auto* state = reinterpret_cast<OnlineLobbyState*>(
+        GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    if (message == WM_NCCREATE) {
+        const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lparam);
+        state = create != nullptr ?
+            static_cast<OnlineLobbyState*>(create->lpCreateParams) : nullptr;
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA,
+            reinterpret_cast<LONG_PTR>(state));
+    }
+    if (state == nullptr) {
+        return DefWindowProcW(hwnd, message, wparam, lparam);
+    }
+    switch (message) {
+    case WM_COMMAND:
+        if (LOWORD(wparam) == kOnlineLobbyReplayDownloadButtonId &&
+            HIWORD(wparam) == BN_CLICKED) {
+            begin_selected_replay_download(*state);
+            return 0;
+        }
+        if (LOWORD(wparam) == kOnlineLobbyReplayListId &&
+            HIWORD(wparam) == LBN_DBLCLK) {
+            begin_selected_replay_download(*state);
+            return 0;
+        }
+        if (LOWORD(wparam) == kOnlineLobbyReplayCloseButtonId &&
+            HIWORD(wparam) == BN_CLICKED) {
+            DestroyWindow(hwnd);
+            return 0;
+        }
+        break;
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
+    case WM_DESTROY:
+        state->replay_browser_window = nullptr;
+        state->replay_list = nullptr;
+        state->replay_status = nullptr;
+        state->replay_download_button = nullptr;
+        state->replay_close_button = nullptr;
+        state->replay_download_id = 0;
+        state->replay_download_total = 0;
+        state->replay_download_bytes.clear();
+        state->replay_download_filename.clear();
+        return 0;
+    default:
+        break;
+    }
+    return DefWindowProcW(hwnd, message, wparam, lparam);
+}
+
+bool register_replay_browser_class(HINSTANCE instance) {
+    static bool registered = false;
+    if (registered) {
+        return true;
+    }
+    WNDCLASSEXW window_class{};
+    window_class.cbSize = sizeof(window_class);
+    window_class.style = CS_HREDRAW | CS_VREDRAW;
+    window_class.lpfnWndProc = replay_browser_window_proc;
+    window_class.hInstance = instance;
+    window_class.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
+    window_class.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
+    window_class.lpszClassName = L"RankerWizardNetReplayBrowser";
+    registered = RegisterClassExW(&window_class) != 0 ||
+        GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+    return registered;
+}
+
+bool open_replay_browser(OnlineLobbyState& state) {
+    if (state.replay_browser_window != nullptr &&
+        IsWindow(state.replay_browser_window)) {
+        ShowWindow(state.replay_browser_window, SW_SHOW);
+        SetForegroundWindow(state.replay_browser_window);
+        return true;
+    }
+    HINSTANCE instance = state.instance != nullptr ? state.instance :
+        GetModuleHandleW(nullptr);
+    if (!register_replay_browser_class(instance)) {
+        return false;
+    }
+    constexpr int width = 680;
+    constexpr int height = 440;
+    RECT owner{};
+    GetWindowRect(state.window, &owner);
+    const int x = static_cast<int>(owner.left) + std::max(0,
+        (static_cast<int>(owner.right - owner.left) - width) / 2);
+    const int y = static_cast<int>(owner.top) + std::max(0,
+        (static_cast<int>(owner.bottom - owner.top) - height) / 2);
+    HWND window = CreateWindowExW(WS_EX_DLGMODALFRAME,
+        L"RankerWizardNetReplayBrowser", L"위자드넷 리플레이",
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+        x, y, width, height, state.window, nullptr, instance, &state);
+    if (window == nullptr) {
+        return false;
+    }
+    state.replay_browser_window = window;
+    HFONT font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+    state.replay_list = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", L"",
+        WS_CHILD | WS_VISIBLE | WS_VSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT,
+        12, 12, 642, 330, window,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(kOnlineLobbyReplayListId)),
+        instance, nullptr);
+    state.replay_status = CreateWindowExW(0, L"STATIC", L"목록을 불러오는 중입니다...",
+        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        12, 352, 450, 24, window, nullptr, instance, nullptr);
+    state.replay_download_button = CreateWindowExW(0, L"BUTTON", L"다운로드",
+        WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
+        474, 350, 86, 28, window,
+        reinterpret_cast<HMENU>(
+            static_cast<INT_PTR>(kOnlineLobbyReplayDownloadButtonId)),
+        instance, nullptr);
+    state.replay_close_button = CreateWindowExW(0, L"BUTTON", L"닫기",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        568, 350, 86, 28, window,
+        reinterpret_cast<HMENU>(
+            static_cast<INT_PTR>(kOnlineLobbyReplayCloseButtonId)),
+        instance, nullptr);
+    for (HWND control : {state.replay_list, state.replay_status,
+            state.replay_download_button, state.replay_close_button}) {
+        if (control != nullptr) {
+            SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+        }
+    }
+    state.replay_entries.clear();
+    state.replay_download_bytes.clear();
+    state.replay_download_id = 0;
+    state.replay_download_total = 0;
+    state.replay_download_filename.clear();
+    ShowWindow(window, SW_SHOW);
+    UpdateWindow(window);
+    queue_replay_list_request(state, 0);
+    return true;
+}
+
 void register_atexit_once(bool& registered, void (*callback)()) {
     if (!registered) {
         std::atexit(callback);
@@ -1706,6 +1917,14 @@ void open_memo_from_lobby(OnlineLobbyState& state, HWND owner, int recipient_tab
 }
 
 void destroy_child_windows(OnlineLobbyState& state) {
+    if (state.replay_browser_window != nullptr) {
+        DestroyWindow(state.replay_browser_window);
+        state.replay_browser_window = nullptr;
+    }
+    if (state.replay_button != nullptr) {
+        DestroyWindow(state.replay_button);
+        state.replay_button = nullptr;
+    }
     if (state.rich_edit_ole != nullptr) {
         state.rich_edit_ole->Release();
         state.rich_edit_ole = nullptr;
@@ -2080,6 +2299,7 @@ void SetOnlineLobbyTab(OnlineLobbyState& state, OnlineLobbyTab tab) {
     show_group(state, kGuildTabControls, SW_HIDE);
     show_group(state, kPersonalTabControls, SW_HIDE);
     show_group(state, kSimplifiedMainTabControls, SW_SHOW);
+    ShowOnlineLobbyControl(state.replay_button);
     // The original bottom-right Cancel control is the WizardNet exit action.
     // Keep it visible in the simplified one-tab lobby as the explicit Exit
     // button instead of requiring Escape or a window close gesture.
@@ -2125,6 +2345,10 @@ bool ResumeOnlineLobbyWindow(OnlineLobbyState& state) {
     // preserves command ordering and avoids relying on stale pre-game list
     // state when the two P2P clients return at different times.
     queue_online_lobby_game_list_reset_request(state);
+    if (state.async_tcp_socket != nullptr) {
+        FlushWizardNetRelayAsyncSendQueue();
+        PumpWizardNetReplayUpload(*state.async_tcp_socket);
+    }
     ShowWindow(state.window, SW_SHOW);
     RedrawWindow(state.window, nullptr, nullptr,
         RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
@@ -2715,6 +2939,143 @@ bool DispatchOnlineLobbyServerPacket(OnlineLobbyState& state, const u8* packet,
         }
         return true;
     }
+    case kWizardNetMatchResultResponseOpcode: {
+        const u32 status = packet_u32(packet, byte_count, 0x0d);
+        if (status > 1) {
+            PostOnlineLobbyColoredTextPayload(state,
+                "WizardNet could not record this match result.");
+        }
+        return true;
+    }
+    case kWizardNetReplayUploadStatusOpcode: {
+        const u32 status = packet_u32(packet, byte_count, 0x0d);
+        const u32 upload_id = packet_u32(packet, byte_count, 0x11);
+        const u32 replay_id = packet_u32(packet, byte_count, 0x15);
+        HandleWizardNetReplayUploadStatus(status, upload_id);
+        if (status != 0) {
+            PostOnlineLobbyColoredTextPayload(state,
+                "WizardNet replay upload failed.");
+        } else if (replay_id != 0) {
+            PostOnlineLobbyColoredTextPayload(state,
+                "WizardNet replay upload completed.");
+        }
+        return true;
+    }
+    case kWizardNetReplayListResponseOpcode: {
+        const u32 next_offset = packet_u32(packet, byte_count, 0x0d);
+        const u32 count = packet_u32(packet, byte_count, 0x11);
+        const std::size_t records_offset = 0x15;
+        if (count > (byte_count >= records_offset ?
+                (byte_count - records_offset) / kWizardNetReplayListRecordBytes :
+                0)) {
+            set_replay_browser_status(state, L"리플레이 목록 응답이 손상되었습니다.");
+            return true;
+        }
+        for (u32 index = 0; index < count; ++index) {
+            const std::size_t base = records_offset +
+                static_cast<std::size_t>(index) *
+                    kWizardNetReplayListRecordBytes;
+            WizardNetReplayListEntry entry{};
+            entry.replay_id = packet_u32(packet, byte_count, base);
+            entry.byte_count = packet_u32(packet, byte_count, base + 4);
+            entry.uploaded_at = packet_u64(packet, byte_count, base + 8);
+            entry.game_type = packet_u32(packet, byte_count, base + 16);
+            entry.uploader = packet_fixed_string(packet, byte_count,
+                base + 20, 0x20);
+            entry.filename = packet_fixed_string(packet, byte_count,
+                base + 52, 0x7c);
+            if (entry.replay_id == 0 || entry.filename.empty()) {
+                continue;
+            }
+            const bool duplicate = std::any_of(state.replay_entries.begin(),
+                state.replay_entries.end(), [&](const auto& existing) {
+                    return existing.replay_id == entry.replay_id;
+                });
+            if (duplicate) {
+                continue;
+            }
+            state.replay_entries.push_back(entry);
+            if (state.replay_list != nullptr) {
+                const std::wstring name = cp949_to_wide(entry.filename);
+                const std::wstring uploader = cp949_to_wide(entry.uploader);
+                const wchar_t* type = entry.game_type ==
+                        kWizardNetGameTypeRank ? L"Rank" : L"Melee";
+                wchar_t row[512]{};
+                _snwprintf_s(row, _countof(row), _TRUNCATE,
+                    L"%ls  |  %ls  |  %ls  |  %.1f KB",
+                    name.c_str(), uploader.c_str(), type,
+                    static_cast<double>(entry.byte_count) / 1024.0);
+                SendMessageW(state.replay_list, LB_ADDSTRING, 0,
+                    reinterpret_cast<LPARAM>(row));
+            }
+        }
+        if (next_offset != std::numeric_limits<u32>::max()) {
+            queue_replay_list_request(state, next_offset);
+        } else if (state.replay_entries.empty()) {
+            set_replay_browser_status(state, L"업로드된 리플레이가 없습니다.");
+        } else {
+            set_replay_browser_status(state, L"리플레이를 선택해 다운로드하세요.");
+        }
+        return true;
+    }
+    case kWizardNetReplayDownloadChunkOpcode: {
+        const u32 replay_id = packet_u32(packet, byte_count, 0x0d);
+        const u32 total = packet_u32(packet, byte_count, 0x11);
+        const u32 offset = packet_u32(packet, byte_count, 0x15);
+        constexpr std::size_t data_offset = 0x19;
+        const std::size_t data_size = byte_count >= data_offset ?
+            byte_count - data_offset : 0;
+        const bool valid = replay_id != 0 &&
+            replay_id == state.replay_download_id &&
+            total == state.replay_download_total &&
+            total <= kWizardNetMaximumReplayBytes &&
+            offset == state.replay_download_bytes.size() &&
+            data_size != 0 &&
+            data_size <= kWizardNetReplayTransferChunkBytes &&
+            state.replay_download_bytes.size() + data_size <= total;
+        if (!valid) {
+            state.replay_download_id = 0;
+            state.replay_download_total = 0;
+            state.replay_download_bytes.clear();
+            if (state.replay_download_button != nullptr) {
+                EnableWindow(state.replay_download_button, TRUE);
+            }
+            set_replay_browser_status(state,
+                L"리플레이 다운로드 데이터가 손상되었습니다.");
+            return true;
+        }
+        state.replay_download_bytes.insert(state.replay_download_bytes.end(),
+            packet + data_offset, packet + byte_count);
+        return true;
+    }
+    case kWizardNetReplayDownloadFinishOpcode: {
+        const u32 replay_id = packet_u32(packet, byte_count, 0x0d);
+        const u32 status = packet_u32(packet, byte_count, 0x11);
+        const u32 total = packet_u32(packet, byte_count, 0x15);
+        std::string saved_path;
+        const bool complete = status == 0 &&
+            replay_id == state.replay_download_id &&
+            total == state.replay_download_total &&
+            state.replay_download_bytes.size() == total &&
+            SaveWizardNetDownloadedReplay(state.replay_download_filename,
+                state.replay_download_bytes, saved_path);
+        if (complete) {
+            const std::wstring wide_path = cp949_to_wide(saved_path);
+            std::wstring message = L"저장 완료: ";
+            message += wide_path;
+            set_replay_browser_status(state, message.c_str());
+        } else {
+            set_replay_browser_status(state, L"리플레이 다운로드에 실패했습니다.");
+        }
+        state.replay_download_id = 0;
+        state.replay_download_total = 0;
+        state.replay_download_bytes.clear();
+        state.replay_download_filename.clear();
+        if (state.replay_download_button != nullptr) {
+            EnableWindow(state.replay_download_button, TRUE);
+        }
+        return true;
+    }
     case 0x23:
         remove_online_lobby_game_by_id(state, packet_u32(packet, byte_count, 0x0d));
         return true;
@@ -2799,6 +3160,13 @@ void DispatchOnlineLobbyNetworkMessage(OnlineLobbyState& state, LPARAM event) {
         }
         return;
     }
+    if (network_event == FD_WRITE) {
+        if (state.async_tcp_socket != nullptr) {
+            FlushWizardNetRelayAsyncSendQueue();
+            PumpWizardNetReplayUpload(*state.async_tcp_socket);
+        }
+        return;
+    }
     if (network_event != FD_READ || state.async_tcp_socket == nullptr) {
         return;
     }
@@ -2852,6 +3220,7 @@ void DispatchOnlineLobbyNetworkMessage(OnlineLobbyState& state, LPARAM event) {
         payload = GetLegacyAsyncTcpReceiveBuffer(*state.async_tcp_socket);
         byte_count = GetLegacyAsyncTcpReceiveLength(*state.async_tcp_socket);
     }
+    PumpWizardNetReplayUpload(*state.async_tcp_socket);
 }
 
 bool CreateOnlineLobbyWindow(OnlineLobbyState& state, HWND parent,
@@ -2912,6 +3281,22 @@ bool CreateOnlineLobbyWindow(OnlineLobbyState& state, HWND parent,
             return false;
         }
     }
+    OnlineLobbyLayoutRect replay_rect = arrange_simplified_main_action(
+        state, kOnlineLobbyReplayButtonId, layout_at(state, 19));
+    state.replay_button = CreateWindowExW(0, L"BUTTON", L"리플레이",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+        replay_rect.x, replay_rect.y, replay_rect.width, replay_rect.height,
+        state.window,
+        reinterpret_cast<HMENU>(
+            static_cast<INT_PTR>(kOnlineLobbyReplayButtonId)),
+        instance, nullptr);
+    if (state.replay_button == nullptr) {
+        DestroyWindow(state.window);
+        state.window = nullptr;
+        return false;
+    }
+    SendMessageW(state.replay_button, WM_SETFONT,
+        reinterpret_cast<WPARAM>(online_lobby_chat_font()), TRUE);
 
     OnlineLobbyLayoutRect game_rect = layout_at(state, 2);
     state.game_list = CreateWindowExA(0, "listbox", "", kListBoxGameStyle,
@@ -3234,6 +3619,14 @@ LRESULT HandleOnlineLobbyWindowMessage(OnlineLobbyState& state, HWND hwnd,
             } else if (state.callbacks.open_view_rank != nullptr) {
                 state.callbacks.open_view_rank(hwnd, state.instance,
                     state.callbacks.user_data);
+            }
+            return 0;
+        case kOnlineLobbyReplayButtonId:
+            play_online_lobby_click_sound();
+            if (!open_replay_browser(state)) {
+                show_online_lobby_modal_message(state,
+                    "Unable to open the replay browser.",
+                    RGB(0xfa, 0x0a, 0x0a));
             }
             return 0;
         case kOnlineLobbyMyAvatarButtonId:
