@@ -37,6 +37,35 @@ constexpr u32 kUiOverlayCommandActionPlacement = 4;
 constexpr u32 kUiOverlayCommandActionSelection = 5;
 constexpr u32 kUiOverlayCommandActionContextual = 6;
 
+constexpr u32 kUiOverlayProductionRallyAction = 0x1fu;
+
+// Intentional reconstruction extension: the original exposes action 0x1f
+// through the producer's 0xc9 command button but gives a structure no normal
+// contextual right-click action.  Rebuild additionally maps a completed,
+// live, locally owned producer's world right-click to that same original
+// action.  The action must still travel through the ordered subtype-0x08 P2P
+// packet; this policy never authorizes a process-local rally-state mutation.
+constexpr u32 ResolveUiOverlayProductionRallyRightClickAction(
+    u32 contextual_action, u32 selected_unit_count, u32 selected_unit_type,
+    u32 selected_unit_owner, u32 local_player_slot,
+    u32 selected_unit_action_mode_gate, u32 selected_unit_command_state,
+    u32 selected_unit_raw_production_reference_count,
+    bool selected_unit_uses_avatar_production_slots) {
+    constexpr u32 kStructureTypeBase = 0x60u;
+    constexpr u32 kDeadCommandFlag = 0x10000000u;
+    const bool is_completed_live_local_producer =
+        selected_unit_count == 1u &&
+        selected_unit_type >= kStructureTypeBase &&
+        selected_unit_owner == local_player_slot &&
+        selected_unit_action_mode_gate != 1u &&
+        (selected_unit_command_state & kDeadCommandFlag) == 0u &&
+        (selected_unit_raw_production_reference_count != 0u ||
+            selected_unit_uses_avatar_production_slots);
+    return is_completed_live_local_producer
+        ? kUiOverlayProductionRallyAction
+        : contextual_action;
+}
+
 // FUN_004e127b/FUN_004e12a0/FUN_004e12c5 and the ordinary command-record
 // renderers compare only the live press globals written by FUN_004ea47f.
 // FUN_004ea512 clears those globals before dispatching the click, so a command

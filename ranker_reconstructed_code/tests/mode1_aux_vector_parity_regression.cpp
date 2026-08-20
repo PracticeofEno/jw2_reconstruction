@@ -1,4 +1,22 @@
+#include "ranker_ui_overlay.h"
 #include "ranker_unit_movement.h"
+
+static_assert(ranker::ResolveUiOverlayProductionRallyRightClickAction(
+    0u, 1u, 0x60u, 2u, 2u, 0u, 0u, 1u, false) ==
+    ranker::kUiOverlayProductionRallyAction);
+static_assert(ranker::ResolveUiOverlayProductionRallyRightClickAction(
+    4u, 1u, 0x6fu, 2u, 2u, 0u, 0u, 0u, true) ==
+    ranker::kUiOverlayProductionRallyAction);
+static_assert(ranker::ResolveUiOverlayProductionRallyRightClickAction(
+    4u, 1u, 0x22u, 2u, 2u, 0u, 0u, 1u, false) == 4u);
+static_assert(ranker::ResolveUiOverlayProductionRallyRightClickAction(
+    0u, 1u, 0x60u, 3u, 2u, 0u, 0u, 1u, false) == 0u);
+static_assert(ranker::ResolveUiOverlayProductionRallyRightClickAction(
+    0u, 1u, 0x60u, 2u, 2u, 1u, 0u, 1u, false) == 0u);
+static_assert(ranker::ResolveUiOverlayProductionRallyRightClickAction(
+    0u, 1u, 0x60u, 2u, 2u, 0u, 0x10000000u, 1u, false) == 0u);
+static_assert(ranker::ResolveUiOverlayProductionRallyRightClickAction(
+    0u, 1u, 0x60u, 2u, 2u, 0u, 0u, 0u, false) == 0u);
 
 int main() {
     ranker::UnitMovementUnit source{};

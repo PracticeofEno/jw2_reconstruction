@@ -5197,10 +5197,23 @@ void HandleGameplayPointerActionFrame(UiOverlayState& state) {
             const bool minimap_action = CheckPointerInsideMinimapForAction(state);
             if (!minimap_action &&
                 !CheckUiOverlayIconMaskPixel(state, state.mouse_x, state.mouse_y)) {
-                // RBUTTONDOWN forwards the resolved contextual cursor mode
-                // verbatim: pickup 1, repair 3, move 4, attack 5, harvest 7,
-                // special 8, boarding 10, and the preserved/stale table cases.
-                const u32 action_id = pointer_event_contextual_action(state);
+                // RBUTTONDOWN normally forwards the resolved contextual cursor
+                // mode verbatim: pickup 1, repair 3, move 4, attack 5,
+                // harvest 7, special 8, boarding 10, and preserved/stale table
+                // cases.  Rebuild intentionally differs from the original for
+                // a completed local producer: a normal world right-click uses
+                // its existing action-0x1f/subtype-0x08 rally command.  Keep
+                // that command in the ordered P2P stream; do not write rally
+                // fields directly from this UI-only convenience path.
+                const u32 action_id =
+                    ResolveUiOverlayProductionRallyRightClickAction(
+                        pointer_event_contextual_action(state),
+                        state.selected_unit_count, state.selected_unit_type,
+                        state.selected_unit_owner, state.local_player_slot,
+                        state.selected_unit_action_mode_gate,
+                        state.selected_unit_command_state,
+                        state.selected_unit_raw_production_reference_count,
+                        state.selected_unit_uses_avatar_production_slots);
                 if (action_id == 0u) {
                     return;
                 }
