@@ -24,7 +24,9 @@
 #include <cstdlib>
 #include <cwchar>
 #include <initializer_list>
+#include <mutex>
 #include <new>
+#include <thread>
 
 #ifdef _WIN32
 #include <mmsystem.h>
@@ -680,10 +682,59 @@ bool write_scenario_ui_bink_temp_file(const void* bytes, u32 byte_count,
 LRESULT CALLBACK scenario_ui_bink_window_proc(HWND window, UINT message,
     WPARAM wparam, LPARAM lparam) {
     if (message == WM_NCHITTEST) {
-        return HTTRANSPARENT;
+        // HTTRANSPARENT only walks windows owned by the calling thread.  The
+        // MF compatibility surface lives on the synchronous frontend worker,
+        // while Ranker's real input window is pumped by the UI thread, so the
+        // old return value silently discarded every click over a campaign
+        // video and made the first race screen appear frozen.
+        return HTCLIENT;
+    }
+    if (message == WM_MOUSEACTIVATE) {
+        return MA_NOACTIVATE;
     }
     if (message == WM_SETCURSOR) {
         return TRUE;
+    }
+
+    switch (message) {
+    case WM_MOUSEMOVE:
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONUP:
+    case WM_LBUTTONDBLCLK:
+    case WM_RBUTTONDOWN:
+    case WM_RBUTTONUP:
+    case WM_RBUTTONDBLCLK:
+    case WM_MBUTTONDOWN:
+    case WM_MBUTTONUP:
+    case WM_MBUTTONDBLCLK:
+    case WM_XBUTTONDOWN:
+    case WM_XBUTTONUP:
+    case WM_XBUTTONDBLCLK:
+    case WM_MOUSEWHEEL:
+    case WM_MOUSEHWHEEL:
+    {
+        HWND input_window = RankerMainWindowState().main_window;
+        if (input_window == nullptr || !IsWindow(input_window)) {
+            break;
+        }
+
+        POINT point{
+            static_cast<i16>(static_cast<u32>(lparam) & 0xffffu),
+            static_cast<i16>((static_cast<u32>(lparam) >> 16) & 0xffffu)};
+        if (message != WM_MOUSEWHEEL && message != WM_MOUSEHWHEEL &&
+            !ClientToScreen(window, &point)) {
+            break;
+        }
+        if (!ScreenToClient(input_window, &point)) {
+            break;
+        }
+        const LPARAM forwarded = static_cast<LPARAM>(MAKELPARAM(
+            static_cast<WORD>(point.x), static_cast<WORD>(point.y)));
+        PostMessageA(input_window, message, wparam, forwarded);
+        return 0;
+    }
+    default:
+        break;
     }
     return DefWindowProcW(window, message, wparam, lparam);
 }
@@ -693,20 +744,133 @@ struct ScenarioUiBinkWindows {
     HWND surface = nullptr;
 };
 
-ScenarioUiBinkWindows create_scenario_ui_bink_windows(
-    const UiScreenEntry& entry) {
-    ScenarioUiBinkWindows windows{};
+struct ScenarioUiBinkLayout {
+    HWND popup_owner = nullptr;
+    RECT screen_rect{};
+    bool visible = false;
+};
+
+bool query_scenario_ui_bink_layout(const UiScreenEntry& entry,
+    ScenarioUiBinkLayout& layout) {
+    layout = ScenarioUiBinkLayout{};
     const DirectDrawRuntimeState& dd = direct_draw_state();
     HWND layout_host = dd.presentation_window;
     if (layout_host == nullptr || !IsWindow(layout_host)) {
         layout_host = RankerMainWindowState().main_window;
     }
     if (layout_host == nullptr || !IsWindow(layout_host)) {
-        return windows;
+        return false;
     }
     HWND popup_owner = GetAncestor(layout_host, GA_ROOT);
     if (popup_owner == nullptr || !IsWindow(popup_owner)) {
         popup_owner = layout_host;
+    }
+
+    RECT client{};
+    if (!GetClientRect(layout_host, &client)) {
+        return false;
+    }
+    const LONG client_width = client.right - client.left;
+    const LONG client_height = client.bottom - client.top;
+    const LONG logical_width = static_cast<LONG>(dd.width != 0 ? dd.width : 800);
+    const LONG logical_height = static_cast<LONG>(dd.height != 0 ? dd.height : 600);
+    if (client_width <= 0 || client_height <= 0 ||
+        logical_width <= 0 || logical_height <= 0) {
+        return false;
+    }
+
+    const LONG left = MulDiv(UiScreenEntryI32(entry, 0x20),
+        client_width, logical_width);
+    const LONG top = MulDiv(UiScreenEntryI32(entry, 0x24),
+        client_height, logical_height);
+    const LONG right = MulDiv(UiScreenEntryI32(entry, 0x28),
+        client_width, logical_width);
+    const LONG bottom = MulDiv(UiScreenEntryI32(entry, 0x2c),
+        client_height, logical_height);
+    if (right <= left || bottom <= top) {
+        return false;
+    }
+
+    POINT top_left{left, top};
+    POINT bottom_right{right, bottom};
+    if (!ClientToScreen(layout_host, &top_left) ||
+        !ClientToScreen(layout_host, &bottom_right)) {
+        return false;
+    }
+
+    layout.popup_owner = popup_owner;
+    layout.screen_rect = RECT{
+        top_left.x, top_left.y, bottom_right.x, bottom_right.y};
+    layout.visible = IsWindowVisible(layout_host) != FALSE &&
+        IsWindowVisible(popup_owner) != FALSE && IsIconic(popup_owner) == FALSE;
+    return true;
+}
+
+bool update_scenario_ui_bink_windows(const UiScreenEntry& entry,
+    const ScenarioUiBinkWindows& windows, bool* layout_changed_out = nullptr) {
+    if (layout_changed_out != nullptr) {
+        *layout_changed_out = false;
+    }
+    if (windows.backdrop == nullptr || windows.surface == nullptr ||
+        !IsWindow(windows.backdrop) || !IsWindow(windows.surface)) {
+        return false;
+    }
+
+    ScenarioUiBinkLayout layout{};
+    if (!query_scenario_ui_bink_layout(entry, layout)) {
+        ShowWindow(windows.backdrop, SW_HIDE);
+        return false;
+    }
+    if (!layout.visible) {
+        if (IsWindowVisible(windows.backdrop)) {
+            ShowWindow(windows.backdrop, SW_HIDE);
+            if (layout_changed_out != nullptr) {
+                *layout_changed_out = true;
+            }
+        }
+        return true;
+    }
+
+    const LONG width = layout.screen_rect.right - layout.screen_rect.left;
+    const LONG height = layout.screen_rect.bottom - layout.screen_rect.top;
+    RECT current{};
+    const bool current_valid = GetWindowRect(windows.backdrop, &current) != FALSE;
+    const bool backdrop_visible = IsWindowVisible(windows.backdrop) != FALSE;
+    const bool layout_changed = !current_valid || !backdrop_visible ||
+        current.left != layout.screen_rect.left ||
+        current.top != layout.screen_rect.top ||
+        current.right - current.left != width ||
+        current.bottom - current.top != height;
+    if (!layout_changed) {
+        return true;
+    }
+
+    const HWND insert_after = backdrop_visible ? nullptr : HWND_TOP;
+    UINT flags = SWP_NOACTIVATE | SWP_SHOWWINDOW;
+    if (backdrop_visible) {
+        flags |= SWP_NOZORDER;
+    }
+    if (!SetWindowPos(windows.backdrop, insert_after,
+            layout.screen_rect.left, layout.screen_rect.top,
+            width, height, flags)) {
+        return false;
+    }
+    if (!SetWindowPos(windows.surface, nullptr, 0, 0, width, height,
+            SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW)) {
+        return false;
+    }
+    if (layout_changed_out != nullptr) {
+        *layout_changed_out = true;
+    }
+    return true;
+}
+
+ScenarioUiBinkWindows create_scenario_ui_bink_windows(
+    const UiScreenEntry& entry) {
+    ScenarioUiBinkWindows windows{};
+    ScenarioUiBinkLayout layout{};
+    if (!query_scenario_ui_bink_layout(entry, layout)) {
+        return windows;
     }
 
     constexpr wchar_t kWindowClass[] = L"RankerScenarioUiBink";
@@ -725,53 +889,21 @@ ScenarioUiBinkWindows create_scenario_ui_bink_windows(
         }
     }
 
-    RECT client{};
-    if (!GetClientRect(layout_host, &client)) {
-        return windows;
-    }
-    const LONG client_width = client.right - client.left;
-    const LONG client_height = client.bottom - client.top;
-    const LONG logical_width = static_cast<LONG>(dd.width != 0 ? dd.width : 800);
-    const LONG logical_height = static_cast<LONG>(dd.height != 0 ? dd.height : 600);
-    if (client_width <= 0 || client_height <= 0 ||
-        logical_width <= 0 || logical_height <= 0) {
-        return windows;
-    }
-
-    const LONG left = MulDiv(UiScreenEntryI32(entry, 0x20),
-        client_width, logical_width);
-    const LONG top = MulDiv(UiScreenEntryI32(entry, 0x24),
-        client_height, logical_height);
-    const LONG right = MulDiv(UiScreenEntryI32(entry, 0x28),
-        client_width, logical_width);
-    const LONG bottom = MulDiv(UiScreenEntryI32(entry, 0x2c),
-        client_height, logical_height);
-    if (right <= left || bottom <= top) {
-        return windows;
-    }
-
-    POINT top_left{left, top};
-    POINT bottom_right{right, bottom};
-    if (!ClientToScreen(layout_host, &top_left) ||
-        !ClientToScreen(layout_host, &bottom_right)) {
-        return windows;
-    }
+    const LONG width = layout.screen_rect.right - layout.screen_rect.left;
+    const LONG height = layout.screen_rect.bottom - layout.screen_rect.top;
 
     // DirectDraw presents directly over ordinary child HWNDs, so retain an
     // owned popup. It must not be desktop-topmost: ownership keeps it above
     // Ranker's presentation and also hides/reorders it with Ranker on Alt+Tab.
     windows.backdrop = CreateWindowExW(
         static_cast<DWORD>(kScenarioUiVideoBackdropExtendedStyle),
-        kWindowClass, L"", WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN,
-        top_left.x, top_left.y,
-        bottom_right.x - top_left.x, bottom_right.y - top_left.y,
-        popup_owner, nullptr, instance, nullptr);
+        kWindowClass, L"", WS_POPUP | WS_CLIPCHILDREN,
+        layout.screen_rect.left, layout.screen_rect.top, width, height,
+        layout.popup_owner, nullptr, instance, nullptr);
     if (windows.backdrop == nullptr) {
         return windows;
     }
 
-    const LONG width = bottom_right.x - top_left.x;
-    const LONG height = bottom_right.y - top_left.y;
     windows.surface = CreateWindowExW(0, kWindowClass, L"",
         WS_CHILD | WS_VISIBLE, 0, 0, width, height,
         windows.backdrop, nullptr, instance, nullptr);
@@ -781,8 +913,11 @@ ScenarioUiBinkWindows create_scenario_ui_bink_windows(
         return windows;
     }
 
-    SetWindowPos(windows.backdrop, HWND_TOP, top_left.x, top_left.y,
-        width, height, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+    if (!update_scenario_ui_bink_windows(entry, windows)) {
+        DestroyWindow(windows.backdrop);
+        windows = ScenarioUiBinkWindows{};
+        return windows;
+    }
     UpdateWindow(windows.backdrop);
     UpdateWindow(windows.surface);
     return windows;
@@ -801,11 +936,10 @@ float scenario_ui_bink_balance() {
 }
 
 void dispatch_scenario_ui_bink_window_messages() {
-    // These compatibility video HWNDs are created by the synchronous
-    // frontend worker, while the ordinary Ranker window is pumped by the UI
-    // thread.  MFPlay's video host and event window therefore need their own
-    // worker-thread message dispatch, just like the full-screen JW2_08
-    // compatibility player.
+    // These compatibility video HWNDs are created by a dedicated MTA media
+    // thread, while the ordinary Ranker window is pumped by the UI thread.
+    // MFPlay's video host and event window therefore need dispatch on their
+    // owning thread, just like the full-screen JW2_08 compatibility player.
     MSG message{};
     while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE) != 0) {
         if (message.message == WM_QUIT) {
@@ -817,44 +951,36 @@ void dispatch_scenario_ui_bink_window_messages() {
     }
 }
 
-void close_ui_bink_media_fallback(UiScreenBinkEntryState& state) {
-    if (state.fallback_player != nullptr) {
-        auto* player = static_cast<IMFPMediaPlayer*>(state.fallback_player);
-        player->Shutdown();
-        player->Release();
-    }
-    state.fallback_player = nullptr;
-    if (state.fallback_callback != nullptr) {
-        static_cast<UiBinkMediaPlayerCallback*>(state.fallback_callback)->Release();
-    }
-    state.fallback_callback = nullptr;
-    if (state.fallback_window != nullptr && IsWindow(state.fallback_window)) {
-        DestroyWindow(state.fallback_window);
-    }
-    state.fallback_window = nullptr;
-    state.fallback_surface_window = nullptr;
-    if (!state.fallback_temp_path.empty()) {
-        DeleteFileW(state.fallback_temp_path.c_str());
-        state.fallback_temp_path.clear();
-    }
-    if (state.fallback_media_foundation_started) {
-        MFShutdown();
-        state.fallback_media_foundation_started = false;
-    }
-    if (state.fallback_com_initialized) {
-        CoUninitialize();
-        state.fallback_com_initialized = false;
-    }
+struct UiBinkAsyncMediaContext {
+    std::thread thread;
+    std::atomic<bool> stop_requested{false};
+    std::atomic<bool> restart_requested{false};
+    std::atomic<bool> ready{false};
+    std::atomic<bool> ended{false};
+    std::atomic<bool> failed{false};
+    std::wstring temp_path;
+    UiScreenEntry entry{};
+    u32 record_index = 0;
+    i32 blob_index = -1;
+    bool loop = false;
+    float volume = 1.0f;
+    float balance = 0.0f;
+};
+
+std::mutex& ui_bink_media_player_creation_mutex() {
+    // MFPlay may activate the same H.264 decoder for both scenario panes.
+    // Concurrent activation occasionally leaves one MFPCreateMediaPlayer call
+    // waiting indefinitely.  Keep the potentially slow creation off the
+    // frontend worker, but serialize decoder activation between media threads.
+    static std::mutex mutex;
+    return mutex;
 }
 
-bool restart_ui_bink_media_fallback(UiScreenBinkEntryState& state) {
-    auto* player = static_cast<IMFPMediaPlayer*>(state.fallback_player);
-    auto* callback =
-        static_cast<UiBinkMediaPlayerCallback*>(state.fallback_callback);
+bool restart_ui_bink_media_player(IMFPMediaPlayer* player,
+    UiBinkMediaPlayerCallback* callback) {
     if (player == nullptr || callback == nullptr) {
         return false;
     }
-
     callback->reset();
     PROPVARIANT position{};
     position.vt = VT_I8;
@@ -866,8 +992,158 @@ bool restart_ui_bink_media_fallback(UiScreenBinkEntryState& state) {
     if (SUCCEEDED(result)) {
         result = player->Play();
     }
-    state.paused = false;
     return SUCCEEDED(result);
+}
+
+void run_ui_bink_media_fallback(UiBinkAsyncMediaContext* context) {
+    if (context == nullptr) {
+        return;
+    }
+
+    const HRESULT com_result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool com_initialized = SUCCEEDED(com_result);
+    append_startup_log(
+        "scenario-ui-video: async com record=%lu blob=%ld hr=0x%08lx",
+        static_cast<unsigned long>(context->record_index),
+        static_cast<long>(context->blob_index),
+        static_cast<unsigned long>(com_result));
+
+    const HRESULT mf_result = com_initialized ?
+        MFStartup(MF_VERSION, MFSTARTUP_FULL) : com_result;
+    const bool media_foundation_started = SUCCEEDED(mf_result);
+    append_startup_log(
+        "scenario-ui-video: async mf-startup record=%lu blob=%ld hr=0x%08lx",
+        static_cast<unsigned long>(context->record_index),
+        static_cast<long>(context->blob_index),
+        static_cast<unsigned long>(mf_result));
+
+    ScenarioUiBinkWindows windows{};
+    UiBinkMediaPlayerCallback* callback = nullptr;
+    IMFPMediaPlayer* player = nullptr;
+    HRESULT player_result = mf_result;
+    if (media_foundation_started && !context->stop_requested.load()) {
+        windows = create_scenario_ui_bink_windows(context->entry);
+        if (windows.backdrop == nullptr || windows.surface == nullptr) {
+            const DWORD error = GetLastError();
+            player_result = error != ERROR_SUCCESS ?
+                HRESULT_FROM_WIN32(error) : E_FAIL;
+        }
+    }
+    if (SUCCEEDED(player_result) && !context->stop_requested.load()) {
+        callback = new (std::nothrow) UiBinkMediaPlayerCallback();
+        if (callback == nullptr) {
+            player_result = E_OUTOFMEMORY;
+        }
+    }
+    if (SUCCEEDED(player_result) && !context->stop_requested.load()) {
+        std::unique_lock<std::mutex> creation_lock(
+            ui_bink_media_player_creation_mutex());
+        if (context->stop_requested.load()) {
+            player_result = E_ABORT;
+        }
+        else {
+            append_startup_log(
+                "scenario-ui-video: async player-create begin record=%lu blob=%ld",
+                static_cast<unsigned long>(context->record_index),
+                static_cast<long>(context->blob_index));
+            player_result = MFPCreateMediaPlayer(context->temp_path.c_str(), TRUE,
+                MFP_OPTION_NONE, callback, windows.surface, &player);
+            if (SUCCEEDED(player_result) && player == nullptr) {
+                player_result = E_POINTER;
+            }
+            append_startup_log(
+                "scenario-ui-video: async player-create end record=%lu blob=%ld hr=0x%08lx player=%p",
+                static_cast<unsigned long>(context->record_index),
+                static_cast<long>(context->blob_index),
+                static_cast<unsigned long>(player_result), player);
+        }
+    }
+
+    if (SUCCEEDED(player_result) && player != nullptr) {
+        player->SetBorderColor(RGB(0, 0, 0));
+        player->SetAspectRatioMode(MFVideoARMode_None);
+        player->SetVolume(context->volume);
+        player->SetBalance(context->balance);
+        player->UpdateVideo();
+        context->ready.store(true);
+    }
+    else if (!context->stop_requested.load()) {
+        context->failed.store(true);
+    }
+
+    while (!context->stop_requested.load() && !context->failed.load()) {
+        bool video_layout_changed = false;
+        if (update_scenario_ui_bink_windows(
+                context->entry, windows, &video_layout_changed) &&
+            video_layout_changed && player != nullptr) {
+            player->UpdateVideo();
+        }
+        dispatch_scenario_ui_bink_window_messages();
+        if (callback != nullptr && callback->failed()) {
+            context->failed.store(true);
+            break;
+        }
+
+        const bool restart = context->restart_requested.exchange(false) ||
+            (callback != nullptr && callback->ended() && context->loop);
+        if (restart) {
+            if (!restart_ui_bink_media_player(player, callback)) {
+                context->failed.store(true);
+                break;
+            }
+            context->ended.store(false);
+        }
+        else if (callback != nullptr && callback->ended()) {
+            context->ended.store(true);
+        }
+        Sleep(10);
+    }
+
+    if (player != nullptr) {
+        player->Shutdown();
+        player->Release();
+    }
+    if (callback != nullptr) {
+        callback->Release();
+    }
+    if (windows.backdrop != nullptr && IsWindow(windows.backdrop)) {
+        DestroyWindow(windows.backdrop);
+    }
+    if (media_foundation_started) {
+        MFShutdown();
+    }
+    if (com_initialized) {
+        CoUninitialize();
+    }
+    if (!context->temp_path.empty()) {
+        DeleteFileW(context->temp_path.c_str());
+    }
+}
+
+void close_ui_bink_media_fallback(UiScreenBinkEntryState& state) {
+    auto* context =
+        static_cast<UiBinkAsyncMediaContext*>(state.fallback_async_context);
+    if (context != nullptr) {
+        context->stop_requested.store(true);
+        if (context->thread.joinable()) {
+            context->thread.join();
+        }
+        delete context;
+        state.fallback_async_context = nullptr;
+    }
+    state.paused = false;
+}
+
+bool restart_ui_bink_media_fallback(UiScreenBinkEntryState& state) {
+    auto* context =
+        static_cast<UiBinkAsyncMediaContext*>(state.fallback_async_context);
+    if (context == nullptr || context->failed.load()) {
+        return false;
+    }
+    context->ended.store(false);
+    context->restart_requested.store(true);
+    state.paused = false;
+    return true;
 }
 
 bool start_ui_bink_media_fallback(const UiScreenDefinition& screen,
@@ -876,14 +1152,19 @@ bool start_ui_bink_media_fallback(const UiScreenDefinition& screen,
     if (blob_index < 0) {
         return false;
     }
+    auto* context = new (std::nothrow) UiBinkAsyncMediaContext();
+    if (context == nullptr) {
+        return false;
+    }
     std::vector<u8> bytes;
     if (!find_scenario_ui_bink_mp4(screen, static_cast<u32>(blob_index), bytes) ||
         !write_scenario_ui_bink_temp_file(
-            bytes.data(), static_cast<u32>(bytes.size()), state.fallback_temp_path)) {
+            bytes.data(), static_cast<u32>(bytes.size()), context->temp_path)) {
         append_startup_log(
             "scenario-ui-video: materialize failed record=%lu blob=%ld",
             static_cast<unsigned long>(screen.source_record_index),
             static_cast<long>(blob_index));
+        delete context;
         return false;
     }
     append_startup_log(
@@ -891,99 +1172,38 @@ bool start_ui_bink_media_fallback(const UiScreenDefinition& screen,
         static_cast<unsigned long>(screen.source_record_index),
         static_cast<long>(blob_index), static_cast<unsigned long>(bytes.size()));
 
-    const ScenarioUiBinkWindows windows =
-        create_scenario_ui_bink_windows(entry);
-    state.fallback_window = windows.backdrop;
-    state.fallback_surface_window = windows.surface;
-    if (state.fallback_window == nullptr ||
-        state.fallback_surface_window == nullptr) {
-        append_startup_log(
-            "scenario-ui-video: windows failed record=%lu blob=%ld error=%lu",
-            static_cast<unsigned long>(screen.source_record_index),
-            static_cast<long>(blob_index),
-            static_cast<unsigned long>(GetLastError()));
-        close_ui_bink_media_fallback(state);
+    context->entry = entry;
+    context->record_index = screen.source_record_index;
+    context->blob_index = blob_index;
+    context->loop = UiScreenEntryI32(entry, 0x94) == 0;
+    context->volume = scenario_ui_bink_volume();
+    context->balance = scenario_ui_bink_balance();
+    try {
+        context->thread = std::thread(run_ui_bink_media_fallback, context);
+    }
+    catch (...) {
+        DeleteFileW(context->temp_path.c_str());
+        delete context;
         return false;
     }
-    append_startup_log(
-        "scenario-ui-video: windows ok record=%lu blob=%ld backdrop=%p surface=%p",
-        static_cast<unsigned long>(screen.source_record_index),
-        static_cast<long>(blob_index), state.fallback_window,
-        state.fallback_surface_window);
-
-    const HRESULT com_result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    state.fallback_com_initialized = SUCCEEDED(com_result);
-    append_startup_log(
-        "scenario-ui-video: com record=%lu blob=%ld hr=0x%08lx",
-        static_cast<unsigned long>(screen.source_record_index),
-        static_cast<long>(blob_index), static_cast<unsigned long>(com_result));
-    HRESULT result = MFStartup(MF_VERSION, MFSTARTUP_FULL);
-    state.fallback_media_foundation_started = SUCCEEDED(result);
-    append_startup_log(
-        "scenario-ui-video: mf-startup record=%lu blob=%ld hr=0x%08lx",
-        static_cast<unsigned long>(screen.source_record_index),
-        static_cast<long>(blob_index), static_cast<unsigned long>(result));
-    if (FAILED(result)) {
-        close_ui_bink_media_fallback(state);
-        return false;
-    }
-
-    auto* callback = new (std::nothrow) UiBinkMediaPlayerCallback();
-    IMFPMediaPlayer* player = nullptr;
-    if (callback == nullptr) {
-        close_ui_bink_media_fallback(state);
-        return false;
-    }
-    state.fallback_callback = callback;
-    append_startup_log(
-        "scenario-ui-video: player-create begin record=%lu blob=%ld",
-        static_cast<unsigned long>(screen.source_record_index),
-        static_cast<long>(blob_index));
-    result = MFPCreateMediaPlayer(state.fallback_temp_path.c_str(), TRUE,
-        MFP_OPTION_NONE, callback, state.fallback_surface_window, &player);
-    append_startup_log(
-        "scenario-ui-video: player-create end record=%lu blob=%ld hr=0x%08lx player=%p",
-        static_cast<unsigned long>(screen.source_record_index),
-        static_cast<long>(blob_index), static_cast<unsigned long>(result), player);
-    if (SUCCEEDED(result) && player == nullptr) {
-        result = E_POINTER;
-    }
-    if (FAILED(result)) {
-        close_ui_bink_media_fallback(state);
-        return false;
-    }
-
-    state.fallback_player = player;
-    player->SetBorderColor(RGB(0, 0, 0));
-    player->SetAspectRatioMode(MFVideoARMode_None);
-    player->SetVolume(scenario_ui_bink_volume());
-    player->SetBalance(scenario_ui_bink_balance());
-    player->UpdateVideo();
+    state.fallback_async_context = context;
     state.paused = false;
     return true;
 }
 
 bool render_ui_bink_media_fallback(const UiScreenDefinition& screen,
     const UiScreenEntry& entry, UiScreenBinkEntryState& state) {
-    dispatch_scenario_ui_bink_window_messages();
-    if (state.fallback_player == nullptr &&
+    if (state.fallback_async_context == nullptr &&
         !start_ui_bink_media_fallback(screen, entry, state)) {
         return false;
     }
-
-    auto* callback =
-        static_cast<UiBinkMediaPlayerCallback*>(state.fallback_callback);
-    if (callback == nullptr || callback->failed()) {
+    auto* context =
+        static_cast<UiBinkAsyncMediaContext*>(state.fallback_async_context);
+    if (context == nullptr || context->failed.load()) {
         close_ui_bink_media_fallback(state);
         return false;
     }
-    if (callback->ended() && !state.paused) {
-        if (UiScreenEntryI32(entry, 0x94) == 0) {
-            return restart_ui_bink_media_fallback(state);
-        }
-        state.paused = true;
-    }
-    dispatch_scenario_ui_bink_window_messages();
+    state.paused = context->ended.load() && !context->loop;
     return true;
 }
 #endif
@@ -3103,7 +3323,8 @@ void RefreshGameplayRelationMaskDialogControls(GameplayModalUiState& state,
         const bool local = player == state.local_player_index;
         const u32 relation_entry = 3 + player;
         const u32 visibility_entry = 0x0b + player;
-        const u32 both_entry = 0x13 + player;
+        const u32 name_entry = 0x13 + player;
+        const u32 icon_entry = 0x1b + player;
 
         GameplayModalUiControlState relation_control{};
         relation_control.entry_index = relation_entry;
@@ -3112,25 +3333,62 @@ void RefreshGameplayRelationMaskDialogControls(GameplayModalUiState& state,
         relation_control.text = state.players[player].display_name;
         state.relation_controls.push_back(relation_control);
 
+        if (disabled) {
+            for (u32 entry_index :
+                {relation_entry, visibility_entry, name_entry, icon_entry}) {
+                if (entry_index < screen.entries.size()) {
+                    SetUiScreenEntryI32(screen.entries[entry_index], 0, -1);
+                    SetUiScreenEntryI32(screen.entries[entry_index], 4, 0);
+                }
+            }
+            continue;
+        }
+
         if (relation_entry < screen.entries.size()) {
-            set_entry_enabled(screen, relation_entry, relation_control.enabled);
+            SetUiScreenEntryI32(screen.entries[relation_entry], 0,
+                GameplayRosterInteractiveEntryState(true, local));
+            SetUiScreenEntryI32(screen.entries[relation_entry], 4,
+                static_cast<i32>(GameplayRosterEntryDrawFlags(true, false)));
+            if (local) {
+                SetUiScreenEntryI32(screen.entries[relation_entry], 0x3c, 6);
+            }
             set_entry_button_triplet(screen, relation_entry,
                 relation_control.state ? 6 : 5, relation_control.state ? 5 : 6);
         }
         if (visibility_entry < screen.entries.size()) {
-            set_entry_enabled(screen, visibility_entry, !disabled && !local);
+            SetUiScreenEntryI32(screen.entries[visibility_entry], 0,
+                GameplayRosterInteractiveEntryState(true, local));
+            SetUiScreenEntryI32(screen.entries[visibility_entry], 4,
+                static_cast<i32>(GameplayRosterEntryDrawFlags(true, false)));
+            if (local) {
+                SetUiScreenEntryI32(screen.entries[visibility_entry], 0x3c, 6);
+            }
             const bool on = (visibility_mask & (1u << player)) != 0;
             set_entry_button_triplet(screen, visibility_entry, on ? 6 : 5, on ? 5 : 6);
         }
-        if (both_entry < screen.entries.size()) {
-            set_entry_enabled(screen, both_entry, !disabled && !local);
-            set_entry_text_safe(screen, both_entry, state.players[player].display_name);
+        if (name_entry < screen.entries.size()) {
+            UiScreenEntry& name = screen.entries[name_entry];
+            SetUiScreenEntryI32(name, 0,
+                GameplayRosterInteractiveEntryState(true, local));
+            SetUiScreenEntryI32(name, 4,
+                static_cast<i32>(GameplayRosterEntryDrawFlags(true, true)));
+            SetUiScreenEntryI32(name, 8, 4);
+            SetUiScreenEntryI32(name, 0x0c, 4);
+            set_entry_text_safe(screen, name_entry,
+                state.players[player].display_name);
+        }
+        if (icon_entry < screen.entries.size()) {
+            SetUiScreenEntryI32(screen.entries[icon_entry], 4, 4);
         }
     }
     if (screen.entries.size() > 0x23) {
+        const bool local_disabled =
+            state.local_player_index >= kGameplayModalPlayerSlots ||
+            player_slot_disabled_for_relation(
+                state.players[state.local_player_index]);
         set_entry_button_triplet(screen, 0x23, observer_flag ? 6 : 5, observer_flag ? 5 : 6);
-        if (player_slot_disabled_for_relation(state.players[state.local_player_index])) {
-            set_entry_enabled(screen, 0x23, false);
+        if (local_disabled) {
+            SetUiScreenEntryI32(screen.entries[0x23], 0, -1);
         }
     }
 }
@@ -3247,13 +3505,17 @@ void RefreshGameplayObserverMaskDialogControls(GameplayModalUiState& state, u32 
         state.observer_controls.push_back(control);
 
         if (control.entry_index < screen.entries.size()) {
-            set_entry_enabled(screen, control.entry_index, true);
+            SetUiScreenEntryI32(screen.entries[control.entry_index], 0, 0);
+            SetUiScreenEntryI32(screen.entries[control.entry_index], 4, 4);
             set_entry_button_triplet(screen, control.entry_index,
                 control.state ? 6 : 5, control.state ? 5 : 6);
         }
         const u32 text_entry = 0x0e + compact_row;
         if (text_entry < screen.entries.size()) {
-            set_entry_enabled(screen, text_entry, true);
+            SetUiScreenEntryI32(screen.entries[text_entry], 0, 0);
+            SetUiScreenEntryI32(screen.entries[text_entry], 4, 0x1000);
+            SetUiScreenEntryI32(screen.entries[text_entry], 8, 4);
+            SetUiScreenEntryI32(screen.entries[text_entry], 0x0c, 4);
             set_entry_text_safe(screen, text_entry, control.text);
         }
         const u32 icon_entry = 0x15 + compact_row;
@@ -3265,9 +3527,13 @@ void RefreshGameplayObserverMaskDialogControls(GameplayModalUiState& state, u32 
         ++compact_row;
     }
     for (; compact_row < 7; ++compact_row) {
-        set_entry_enabled(screen, 7 + compact_row, false);
-        set_entry_enabled(screen, 0x0e + compact_row, false);
-        set_entry_enabled(screen, 0x15 + compact_row, false);
+        for (u32 entry_index :
+            {7 + compact_row, 0x0e + compact_row, 0x15 + compact_row}) {
+            if (entry_index < screen.entries.size()) {
+                SetUiScreenEntryI32(screen.entries[entry_index], 0, -1);
+                SetUiScreenEntryI32(screen.entries[entry_index], 4, 0);
+            }
+        }
     }
 }
 
@@ -4181,7 +4447,8 @@ bool RestartUiScreenFlaggedBinkEntries(UiScreenDefinition& screen) {
             UiScreenEntry& entry = screen.entries[index];
             UiScreenBinkEntryState& state = screen.bink_entries[index];
             const u32 flags = static_cast<u32>(UiScreenEntryI32(entry, 4));
-            if ((flags & 0x30000u) == 0 || state.fallback_player == nullptr) {
+            if ((flags & 0x30000u) == 0 ||
+                state.fallback_async_context == nullptr) {
                 continue;
             }
             found = true;

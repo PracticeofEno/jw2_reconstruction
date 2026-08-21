@@ -49,6 +49,7 @@
 !ranker_reconstructed_code/tests/wizardnet_relay_regression.cpp
 !ranker_reconstructed_code/tests/utf8_cp949_text_regression.cpp
 !ranker_reconstructed_code/tests/cursor_presentation_regression.cpp
+!ranker_reconstructed_code/tests/programmatic_pointer_motion_regression.cpp
 
 !ranker_reconstructed_code/tools/
 !ranker_reconstructed_code/tools/replay_debug/

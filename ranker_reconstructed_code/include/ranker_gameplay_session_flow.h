@@ -10,13 +10,13 @@
 
 namespace ranker {
 
-// A local surrender is a match/session exit request, not a Win32 process
-// shutdown request. Only the gameplay loop's explicit shutdown edge (window
-// close, fatal startup failure, or worker termination) may close ranker.
+// FUN_0042e510 keeps the P2P "Quit Program" selection in DAT_00725c0a after
+// publishing the local inactive vote.  The outer network flow consumes that
+// intent only after the synchronized match loop has ended, then closes ranker
+// instead of restoring a frontend.
 constexpr bool ShouldCloseApplicationAfterP2PMatch(
-    bool loop_process_shutdown_requested, bool surrender_requested) {
-    (void)surrender_requested;
-    return loop_process_shutdown_requested;
+    bool loop_process_shutdown_requested, bool program_exit_requested) {
+    return loop_process_shutdown_requested || program_exit_requested;
 }
 
 // Frontend transitions are posted across the window/worker-thread boundary.

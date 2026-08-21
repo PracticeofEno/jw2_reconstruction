@@ -17,6 +17,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -41,11 +42,13 @@ MilesComputedStreamContext g_default_computed_stream_context;
 
 struct AsyncMilesEffectStream {
     std::mutex mutex;
+    std::condition_variable close_condition;
     MilesStreamHandle stream = nullptr;
     std::atomic<bool> active{true};
     bool cancelled = false;
     bool paused = false;
     bool started = false;
+    bool closed = false;
 };
 
 std::array<std::shared_ptr<AsyncMilesEffectStream>,
@@ -424,7 +427,15 @@ void close_mci_stream(MciMilesStream* stream) {
         return;
     }
     unregister_mci_stream(stream);
+    // MCI_CLOSE normally stops playback as a side effect, but the MPEGVideo
+    // fallback can leave the decoder audible when a paused device is closed
+    // from the frontend thread that did not open it.  The reconstruction
+    // opens title music on the worker and closes it from the window thread,
+    // so issue the explicit stop required to make the transition synchronous
+    // before releasing the device and its temporary archive MP3.
     MCI_GENERIC_PARMS close{};
+    mciSendCommandA(stream->device_id, MCI_STOP, MCI_WAIT,
+        reinterpret_cast<DWORD_PTR>(&close));
     mciSendCommandA(stream->device_id, MCI_CLOSE, MCI_WAIT,
         reinterpret_cast<DWORD_PTR>(&close));
     if (!stream->temporary_path.empty()) {
@@ -449,7 +460,11 @@ bool close_mci_effect_stream_deferred(MilesStreamHandle handle) {
     try {
         std::thread([stream]() {
             MCI_GENERIC_PARMS command{};
-            mciSendCommandA(stream->device_id, MCI_PAUSE, MCI_WAIT,
+            // MPEGVideo can keep a decoder audible when CLOSE follows PAUSE
+            // from a different thread.  STOP is the synchronous ownership
+            // boundary used by the ordinary music close path and prevents a
+            // replay's scenario BGM from leaking into the frontend.
+            mciSendCommandA(stream->device_id, MCI_STOP, MCI_WAIT,
                 reinterpret_cast<DWORD_PTR>(&command));
             mciSendCommandA(stream->device_id, MCI_CLOSE, MCI_WAIT,
                 reinterpret_cast<DWORD_PTR>(&command));
@@ -679,7 +694,11 @@ void ShutdownMilesSoundSubsystem() {
         }
     }
     for (u32 slot = 0; slot < kMilesEffectStreamSlots; ++slot) {
-        close_effect_slot(slot, true);
+        // Original AIL shutdown owns every stream until AIL_close_stream has
+        // returned.  Do the same for the MCI fallback: detaching decoder
+        // cleanup here lets the game window disappear while music is still
+        // audible from the live process.
+        close_effect_slot(slot);
     }
     while (MciMilesStream* stream = last_mci_stream()) {
         close_mci_stream(stream);
@@ -1318,6 +1337,14 @@ void ShutdownPrimaryMilesMusicPolicy() {
 }
 
 void SetPrimaryMilesMusicPolicyMode(u32 mode) {
+    // A completed gameplay flow shuts the Miles runtime down before the
+    // frontend is shown again.  The title immediately selects an active
+    // policy (mode 2), so restore the runtime here before that policy tries
+    // to open its stream.  Mode 0/1 remain shutdown-safe and must not revive
+    // audio while a frontend is being left or the process is closing.
+    if (mode >= 2u && !g_music_state.enabled) {
+        InitMilesMusicRuntime();
+    }
     g_music_state.primary_policy_mode = mode;
     g_music_state.primary_policy_last_tick = current_miles_policy_time_ms() - 2000u;
     UpdatePrimaryMilesMusicPolicy();
@@ -1346,7 +1373,13 @@ void UpdatePrimaryMilesMusicPolicy() {
     case 0:
         break;
     case 1:
-        if (primary_is_playing()) {
+        // AIL_stream_status is only a policy hint.  The 64-bit MCI fallback
+        // can report a stale stopped state while its decoder is still owned
+        // by the previous frontend.  Mode 1 means "no primary stream" in the
+        // original transition, so close an existing handle unconditionally.
+        // Otherwise returning to mode 2 can open a second title track while
+        // the orphaned first device remains audible.
+        if (g_music_state.primary_stream != nullptr) {
             ClosePrimaryMilesMusic();
         }
         break;
@@ -1785,7 +1818,12 @@ bool start_async_mci_effect_stream(u32 slot, i32 entry_index,
                 entry, context, &stream);
             ReleaseMilesTrcArchiveStreamContext(context);
             if (!opened || stream == nullptr) {
-                state->active.store(false);
+                {
+                    std::lock_guard<std::mutex> lock(state->mutex);
+                    state->active.store(false);
+                    state->closed = true;
+                }
+                state->close_condition.notify_all();
                 return;
             }
 
@@ -1803,9 +1841,31 @@ bool start_async_mci_effect_stream(u32 slot, i32 entry_index,
                     }
                 }
             }
-            if (discard) {
+
+            if (!discard) {
+                // The 64-bit fallback opens MPEGVideo on this worker. Keep
+                // the owner alive until the session asks it to close: issuing
+                // MCI_STOP/MCI_CLOSE from the gameplay thread can return while
+                // the decoder opened here remains audible in the next loaded
+                // scenario.
+                std::unique_lock<std::mutex> lock(state->mutex);
+                state->close_condition.wait(lock, [&state]() {
+                    return state->cancelled;
+                });
+                stream = state->stream;
+                state->stream = nullptr;
+            }
+
+            if (stream != nullptr) {
+                PauseMilesStream(stream);
                 CloseMilesStream(stream);
             }
+            {
+                std::lock_guard<std::mutex> lock(state->mutex);
+                state->active.store(false);
+                state->closed = true;
+            }
+            state->close_condition.notify_all();
         }).detach();
     }
     catch (...) {
@@ -1833,20 +1893,20 @@ bool close_async_effect_slot(u32 slot, bool nonblocking_backend) {
 
     const std::shared_ptr<AsyncMilesEffectStream> state =
         std::move(g_async_effect_streams[slot]);
-    MilesStreamHandle stream = nullptr;
     {
         std::lock_guard<std::mutex> lock(state->mutex);
         state->cancelled = true;
         state->active.store(false);
-        stream = state->stream;
-        state->stream = nullptr;
     }
-    if (stream != nullptr) {
-        if (!nonblocking_backend ||
-            !close_mci_effect_stream_deferred(stream)) {
-            PauseMilesStream(stream);
-            CloseMilesStream(stream);
-        }
+    state->close_condition.notify_all();
+    if (!nonblocking_backend) {
+        // ResetMilesEffectPlaylist is a session ownership boundary. Do not
+        // return to the new session until the worker that opened the fallback
+        // MP3 has stopped and closed it on that same thread.
+        std::unique_lock<std::mutex> lock(state->mutex);
+        state->close_condition.wait(lock, [&state]() {
+            return state->closed;
+        });
     }
     return true;
 }
@@ -2071,7 +2131,10 @@ void CloseMilesEffectPlaylistEntry(i32 entry_index) {
     for (u32 slot = 0; slot < kMilesEffectStreamSlots; ++slot) {
         if (g_effect_playlist_state.active_entry_indices[slot] == entry_index &&
             g_effect_playlist_state.streams[slot] != nullptr) {
-            close_effect_slot(slot, true);
+            // FUN_00414550 pauses and closes matching slots synchronously.
+            // A scenario close opcode is an audible ownership boundary, not
+            // merely a request to release the decoder later.
+            close_effect_slot(slot);
         }
     }
 }
@@ -2131,12 +2194,13 @@ int GetMilesEffectPlaylistEntryStatus(i32 entry_index) {
 
 void CloseAllMilesEffectPlaylistStreams() {
     for (u32 slot = 0; slot < kMilesEffectStreamSlots; ++slot) {
-        if (g_effect_playlist_state.active_entry_indices[slot] != kInvalidMilesEffectEntry &&
+        if (g_async_effect_streams[slot] != nullptr ||
             g_effect_playlist_state.streams[slot] != nullptr) {
-            // Session replacement is itself part of the scenario-loading
-            // path.  Do not reintroduce the MCI_WAIT hitch there while
-            // releasing the previous scenario's dialog streams.
-            close_effect_slot(slot, true);
+            // Match original FUN_00414860 exactly: PauseMilesStream followed
+            // by CloseMilesStream completes before the slot is cleared.  A
+            // stale entry index must not let an asynchronous fallback decoder
+            // survive a session replacement.
+            close_effect_slot(slot);
         }
     }
 }

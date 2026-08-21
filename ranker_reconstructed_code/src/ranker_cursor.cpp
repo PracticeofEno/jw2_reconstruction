@@ -717,15 +717,31 @@ void SetGameCursorApplicationActive(bool active) {
         return;
     }
 
+    // WM_ACTIVATEAPP arrives before cnc-ddraw's mouse lock has necessarily
+    // been reacquired.  Keep the requested visibility pending until the OS
+    // cursor is clipped and hidden; drawing here exposes both the restored
+    // software cursor and USER32's unlocked arrow after an RDP/task-manager
+    // foreground transition.
     g_cursor_state.application_active = true;
+}
+
+bool RestoreGameCursorAfterApplicationActivation() {
+    const std::lock_guard<std::recursive_mutex> lock(g_cursor_mutex);
+    if (!g_cursor_state.application_active) {
+        return false;
+    }
+
     const bool restore = g_cursor_state.restore_visible_on_activate;
     g_cursor_state.restore_visible_on_activate = false;
-    if (restore && !g_cursor_state.pointer_updates_suppressed) {
-        update_cursor_draw_position();
-        g_cursor_state.visible = true;
-        HandlePrimaryCursorBackgroundSave();
-        HandleCurrentCursorDrawOnPrimary();
+    if (!restore || g_cursor_state.pointer_updates_suppressed) {
+        return false;
     }
+
+    update_cursor_draw_position();
+    g_cursor_state.visible = true;
+    HandlePrimaryCursorBackgroundSave();
+    HandleCurrentCursorDrawOnPrimary();
+    return true;
 }
 
 void SetGameCursorIndex(u32 cursor_index) {

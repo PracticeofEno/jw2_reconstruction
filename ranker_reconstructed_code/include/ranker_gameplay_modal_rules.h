@@ -19,6 +19,19 @@ constexpr u32 GameplayMenuEntryFlagsForEnabledState(
     return original_flags;
 }
 
+// FUN_0042f2b0/FUN_0042fb80 explicitly rebuild multiplayer roster rows after
+// loading their TRC templates.  Text entries need the 0x1000 text renderer
+// bit while toggles/icons need bit 4; absent players clear all draw flags.
+constexpr i32 GameplayRosterInteractiveEntryState(
+    bool player_present, bool local_player) {
+    return player_present && !local_player ? 0 : -1;
+}
+
+constexpr u32 GameplayRosterEntryDrawFlags(
+    bool player_present, bool text_entry) {
+    return player_present ? (text_entry ? 0x1000u : 4u) : 0u;
+}
+
 // FUN_0042d5f0 brackets every blocking local submenu with a back-surface
 // snapshot.  The generic/P2P path polls its menus and must not use that stack.
 constexpr bool GameplayPauseMenuUsesChildSnapshot(bool generic_ai_profile_mode) {
