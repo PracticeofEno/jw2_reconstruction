@@ -8638,6 +8638,22 @@ void sync_startup_owner_factions_to_lifecycle(
 
 void set_default_primary_miles_music_policy_mode(u32 mode) {
     sync_default_primary_miles_music_policy_faction();
+    const DWORD caller_thread = GetCurrentThreadId();
+    const DWORD window_thread = g_runtime.main_window != nullptr ?
+        GetWindowThreadProcessId(g_runtime.main_window, nullptr) : 0;
+    const bool defer_title_music =
+        mode == 2u && window_thread != 0 && caller_thread != window_thread;
+    if (defer_title_music) {
+        // Gameplay/session cleanup reaches title policy on the background
+        // worker before the actual title HWND is presented.  Opening MCI
+        // music there gives it worker-thread ownership; open_title_main_menu_
+        // frontend then observes that device from the window thread and can
+        // open a second copy.  Retire the worker-owned stream now and let the
+        // title presentation edge below start exactly one stream on its UI
+        // owner thread.
+        SetPrimaryMilesMusicPolicyMode(1);
+        return;
+    }
     SetPrimaryMilesMusicPolicyMode(mode);
 }
 
@@ -13992,12 +14008,6 @@ const char* frontend_bootstrap_failure_detail(FrontendBootstrapFailureStage stag
     }
 }
 
-bool default_defer_startup_unit_definition_catalog(FrontendBootstrapState& state) {
-    state.unit_definition_catalog_loaded = false;
-    append_startup_log("bootstrap unit catalog deferred");
-    return true;
-}
-
 void default_play_frontend_intro_sequence(FrontendBootstrapState&) {
     HandleJw208IntroVideoSequence(g_runtime.main_window);
     const BinkVideoRuntimeState& bink = bink_video_state();
@@ -14031,8 +14041,6 @@ void publish_default_frontend_sound_bank_from_bootstrap() {
 void default_gameplay_loop_initialize_worker_runtime(GameplayLoopState&) {
     FrontendBootstrapState& bootstrap = frontend_bootstrap_state();
     FrontendBootstrapCallbacks callbacks{};
-    callbacks.load_unit_definition_catalog =
-        default_defer_startup_unit_definition_catalog;
     callbacks.play_intro_sequence = default_play_frontend_intro_sequence;
     append_startup_log("frontend bootstrap begin");
     if (!RunFrontendStartupBootstrap(frontend_startup_state(), bootstrap, callbacks)) {
@@ -14070,6 +14078,15 @@ void default_gameplay_loop_initialize_worker_runtime(GameplayLoopState&) {
         // made every native frontend click silent on a fresh process and only
         // start working after the first match.
         publish_default_frontend_sound_bank_from_bootstrap();
+        // Frontend bootstrap runs on the reconstruction's worker thread, but
+        // title commands run on the window thread.  MCI's MPEGVideo fallback
+        // keeps the decoder window bound to the thread that opened it; closing
+        // that device from the title thread left the old title track alive and
+        // every return to the title opened another one.  Retire the bootstrap
+        // stream on its owning thread.  open_title_main_menu_frontend then
+        // applies mode 2 on the window thread, which owns every later title
+        // start/stop transition.
+        SetPrimaryMilesMusicPolicyMode(1);
         append_startup_log("frontend bootstrap ok");
     }
 }
@@ -31707,6 +31724,12 @@ void run_default_single_player_frontend_flow() {
         append_startup_log("single-player activate entry=%lu",
             static_cast<unsigned long>(action));
         if (action == 0 || action == 4) {
+            // A campaign briefing runs policy mode 4 on this worker thread.
+            // Close that worker-owned MCI device before posting the title
+            // transition; the title HWND will start mode 2 on its UI thread.
+            // Otherwise the UI-thread close fails and leaves the old track
+            // audible beneath a newly opened title BGM.
+            set_default_primary_miles_music_policy_mode(1);
             CloseStageAvailabilityDialog(modal);
             modal.centered_for_replay = previous_centering;
             if (g_runtime.main_window != nullptr && IsWindow(g_runtime.main_window)) {

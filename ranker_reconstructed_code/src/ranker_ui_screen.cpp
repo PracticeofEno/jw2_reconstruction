@@ -24,7 +24,9 @@
 #include <cstdlib>
 #include <cwchar>
 #include <initializer_list>
+#include <mutex>
 #include <new>
+#include <thread>
 
 #ifdef _WIN32
 #include <mmsystem.h>
@@ -850,11 +852,10 @@ float scenario_ui_bink_balance() {
 }
 
 void dispatch_scenario_ui_bink_window_messages() {
-    // These compatibility video HWNDs are created by the synchronous
-    // frontend worker, while the ordinary Ranker window is pumped by the UI
-    // thread.  MFPlay's video host and event window therefore need their own
-    // worker-thread message dispatch, just like the full-screen JW2_08
-    // compatibility player.
+    // These compatibility video HWNDs are created by a dedicated MTA media
+    // thread, while the ordinary Ranker window is pumped by the UI thread.
+    // MFPlay's video host and event window therefore need dispatch on their
+    // owning thread, just like the full-screen JW2_08 compatibility player.
     MSG message{};
     while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE) != 0) {
         if (message.message == WM_QUIT) {
@@ -866,44 +867,36 @@ void dispatch_scenario_ui_bink_window_messages() {
     }
 }
 
-void close_ui_bink_media_fallback(UiScreenBinkEntryState& state) {
-    if (state.fallback_player != nullptr) {
-        auto* player = static_cast<IMFPMediaPlayer*>(state.fallback_player);
-        player->Shutdown();
-        player->Release();
-    }
-    state.fallback_player = nullptr;
-    if (state.fallback_callback != nullptr) {
-        static_cast<UiBinkMediaPlayerCallback*>(state.fallback_callback)->Release();
-    }
-    state.fallback_callback = nullptr;
-    if (state.fallback_window != nullptr && IsWindow(state.fallback_window)) {
-        DestroyWindow(state.fallback_window);
-    }
-    state.fallback_window = nullptr;
-    state.fallback_surface_window = nullptr;
-    if (!state.fallback_temp_path.empty()) {
-        DeleteFileW(state.fallback_temp_path.c_str());
-        state.fallback_temp_path.clear();
-    }
-    if (state.fallback_media_foundation_started) {
-        MFShutdown();
-        state.fallback_media_foundation_started = false;
-    }
-    if (state.fallback_com_initialized) {
-        CoUninitialize();
-        state.fallback_com_initialized = false;
-    }
+struct UiBinkAsyncMediaContext {
+    std::thread thread;
+    std::atomic<bool> stop_requested{false};
+    std::atomic<bool> restart_requested{false};
+    std::atomic<bool> ready{false};
+    std::atomic<bool> ended{false};
+    std::atomic<bool> failed{false};
+    std::wstring temp_path;
+    UiScreenEntry entry{};
+    u32 record_index = 0;
+    i32 blob_index = -1;
+    bool loop = false;
+    float volume = 1.0f;
+    float balance = 0.0f;
+};
+
+std::mutex& ui_bink_media_player_creation_mutex() {
+    // MFPlay may activate the same H.264 decoder for both scenario panes.
+    // Concurrent activation occasionally leaves one MFPCreateMediaPlayer call
+    // waiting indefinitely.  Keep the potentially slow creation off the
+    // frontend worker, but serialize decoder activation between media threads.
+    static std::mutex mutex;
+    return mutex;
 }
 
-bool restart_ui_bink_media_fallback(UiScreenBinkEntryState& state) {
-    auto* player = static_cast<IMFPMediaPlayer*>(state.fallback_player);
-    auto* callback =
-        static_cast<UiBinkMediaPlayerCallback*>(state.fallback_callback);
+bool restart_ui_bink_media_player(IMFPMediaPlayer* player,
+    UiBinkMediaPlayerCallback* callback) {
     if (player == nullptr || callback == nullptr) {
         return false;
     }
-
     callback->reset();
     PROPVARIANT position{};
     position.vt = VT_I8;
@@ -915,8 +908,152 @@ bool restart_ui_bink_media_fallback(UiScreenBinkEntryState& state) {
     if (SUCCEEDED(result)) {
         result = player->Play();
     }
-    state.paused = false;
     return SUCCEEDED(result);
+}
+
+void run_ui_bink_media_fallback(UiBinkAsyncMediaContext* context) {
+    if (context == nullptr) {
+        return;
+    }
+
+    const HRESULT com_result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool com_initialized = SUCCEEDED(com_result);
+    append_startup_log(
+        "scenario-ui-video: async com record=%lu blob=%ld hr=0x%08lx",
+        static_cast<unsigned long>(context->record_index),
+        static_cast<long>(context->blob_index),
+        static_cast<unsigned long>(com_result));
+
+    const HRESULT mf_result = com_initialized ?
+        MFStartup(MF_VERSION, MFSTARTUP_FULL) : com_result;
+    const bool media_foundation_started = SUCCEEDED(mf_result);
+    append_startup_log(
+        "scenario-ui-video: async mf-startup record=%lu blob=%ld hr=0x%08lx",
+        static_cast<unsigned long>(context->record_index),
+        static_cast<long>(context->blob_index),
+        static_cast<unsigned long>(mf_result));
+
+    ScenarioUiBinkWindows windows{};
+    UiBinkMediaPlayerCallback* callback = nullptr;
+    IMFPMediaPlayer* player = nullptr;
+    HRESULT player_result = mf_result;
+    if (media_foundation_started && !context->stop_requested.load()) {
+        windows = create_scenario_ui_bink_windows(context->entry);
+        if (windows.backdrop == nullptr || windows.surface == nullptr) {
+            const DWORD error = GetLastError();
+            player_result = error != ERROR_SUCCESS ?
+                HRESULT_FROM_WIN32(error) : E_FAIL;
+        }
+    }
+    if (SUCCEEDED(player_result) && !context->stop_requested.load()) {
+        callback = new (std::nothrow) UiBinkMediaPlayerCallback();
+        if (callback == nullptr) {
+            player_result = E_OUTOFMEMORY;
+        }
+    }
+    if (SUCCEEDED(player_result) && !context->stop_requested.load()) {
+        std::unique_lock<std::mutex> creation_lock(
+            ui_bink_media_player_creation_mutex());
+        if (context->stop_requested.load()) {
+            player_result = E_ABORT;
+        }
+        else {
+            append_startup_log(
+                "scenario-ui-video: async player-create begin record=%lu blob=%ld",
+                static_cast<unsigned long>(context->record_index),
+                static_cast<long>(context->blob_index));
+            player_result = MFPCreateMediaPlayer(context->temp_path.c_str(), TRUE,
+                MFP_OPTION_NONE, callback, windows.surface, &player);
+            if (SUCCEEDED(player_result) && player == nullptr) {
+                player_result = E_POINTER;
+            }
+            append_startup_log(
+                "scenario-ui-video: async player-create end record=%lu blob=%ld hr=0x%08lx player=%p",
+                static_cast<unsigned long>(context->record_index),
+                static_cast<long>(context->blob_index),
+                static_cast<unsigned long>(player_result), player);
+        }
+    }
+
+    if (SUCCEEDED(player_result) && player != nullptr) {
+        player->SetBorderColor(RGB(0, 0, 0));
+        player->SetAspectRatioMode(MFVideoARMode_None);
+        player->SetVolume(context->volume);
+        player->SetBalance(context->balance);
+        player->UpdateVideo();
+        context->ready.store(true);
+    }
+    else if (!context->stop_requested.load()) {
+        context->failed.store(true);
+    }
+
+    while (!context->stop_requested.load() && !context->failed.load()) {
+        dispatch_scenario_ui_bink_window_messages();
+        if (callback != nullptr && callback->failed()) {
+            context->failed.store(true);
+            break;
+        }
+
+        const bool restart = context->restart_requested.exchange(false) ||
+            (callback != nullptr && callback->ended() && context->loop);
+        if (restart) {
+            if (!restart_ui_bink_media_player(player, callback)) {
+                context->failed.store(true);
+                break;
+            }
+            context->ended.store(false);
+        }
+        else if (callback != nullptr && callback->ended()) {
+            context->ended.store(true);
+        }
+        Sleep(10);
+    }
+
+    if (player != nullptr) {
+        player->Shutdown();
+        player->Release();
+    }
+    if (callback != nullptr) {
+        callback->Release();
+    }
+    if (windows.backdrop != nullptr && IsWindow(windows.backdrop)) {
+        DestroyWindow(windows.backdrop);
+    }
+    if (media_foundation_started) {
+        MFShutdown();
+    }
+    if (com_initialized) {
+        CoUninitialize();
+    }
+    if (!context->temp_path.empty()) {
+        DeleteFileW(context->temp_path.c_str());
+    }
+}
+
+void close_ui_bink_media_fallback(UiScreenBinkEntryState& state) {
+    auto* context =
+        static_cast<UiBinkAsyncMediaContext*>(state.fallback_async_context);
+    if (context != nullptr) {
+        context->stop_requested.store(true);
+        if (context->thread.joinable()) {
+            context->thread.join();
+        }
+        delete context;
+        state.fallback_async_context = nullptr;
+    }
+    state.paused = false;
+}
+
+bool restart_ui_bink_media_fallback(UiScreenBinkEntryState& state) {
+    auto* context =
+        static_cast<UiBinkAsyncMediaContext*>(state.fallback_async_context);
+    if (context == nullptr || context->failed.load()) {
+        return false;
+    }
+    context->ended.store(false);
+    context->restart_requested.store(true);
+    state.paused = false;
+    return true;
 }
 
 bool start_ui_bink_media_fallback(const UiScreenDefinition& screen,
@@ -925,14 +1062,19 @@ bool start_ui_bink_media_fallback(const UiScreenDefinition& screen,
     if (blob_index < 0) {
         return false;
     }
+    auto* context = new (std::nothrow) UiBinkAsyncMediaContext();
+    if (context == nullptr) {
+        return false;
+    }
     std::vector<u8> bytes;
     if (!find_scenario_ui_bink_mp4(screen, static_cast<u32>(blob_index), bytes) ||
         !write_scenario_ui_bink_temp_file(
-            bytes.data(), static_cast<u32>(bytes.size()), state.fallback_temp_path)) {
+            bytes.data(), static_cast<u32>(bytes.size()), context->temp_path)) {
         append_startup_log(
             "scenario-ui-video: materialize failed record=%lu blob=%ld",
             static_cast<unsigned long>(screen.source_record_index),
             static_cast<long>(blob_index));
+        delete context;
         return false;
     }
     append_startup_log(
@@ -940,99 +1082,38 @@ bool start_ui_bink_media_fallback(const UiScreenDefinition& screen,
         static_cast<unsigned long>(screen.source_record_index),
         static_cast<long>(blob_index), static_cast<unsigned long>(bytes.size()));
 
-    const ScenarioUiBinkWindows windows =
-        create_scenario_ui_bink_windows(entry);
-    state.fallback_window = windows.backdrop;
-    state.fallback_surface_window = windows.surface;
-    if (state.fallback_window == nullptr ||
-        state.fallback_surface_window == nullptr) {
-        append_startup_log(
-            "scenario-ui-video: windows failed record=%lu blob=%ld error=%lu",
-            static_cast<unsigned long>(screen.source_record_index),
-            static_cast<long>(blob_index),
-            static_cast<unsigned long>(GetLastError()));
-        close_ui_bink_media_fallback(state);
+    context->entry = entry;
+    context->record_index = screen.source_record_index;
+    context->blob_index = blob_index;
+    context->loop = UiScreenEntryI32(entry, 0x94) == 0;
+    context->volume = scenario_ui_bink_volume();
+    context->balance = scenario_ui_bink_balance();
+    try {
+        context->thread = std::thread(run_ui_bink_media_fallback, context);
+    }
+    catch (...) {
+        DeleteFileW(context->temp_path.c_str());
+        delete context;
         return false;
     }
-    append_startup_log(
-        "scenario-ui-video: windows ok record=%lu blob=%ld backdrop=%p surface=%p",
-        static_cast<unsigned long>(screen.source_record_index),
-        static_cast<long>(blob_index), state.fallback_window,
-        state.fallback_surface_window);
-
-    const HRESULT com_result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    state.fallback_com_initialized = SUCCEEDED(com_result);
-    append_startup_log(
-        "scenario-ui-video: com record=%lu blob=%ld hr=0x%08lx",
-        static_cast<unsigned long>(screen.source_record_index),
-        static_cast<long>(blob_index), static_cast<unsigned long>(com_result));
-    HRESULT result = MFStartup(MF_VERSION, MFSTARTUP_FULL);
-    state.fallback_media_foundation_started = SUCCEEDED(result);
-    append_startup_log(
-        "scenario-ui-video: mf-startup record=%lu blob=%ld hr=0x%08lx",
-        static_cast<unsigned long>(screen.source_record_index),
-        static_cast<long>(blob_index), static_cast<unsigned long>(result));
-    if (FAILED(result)) {
-        close_ui_bink_media_fallback(state);
-        return false;
-    }
-
-    auto* callback = new (std::nothrow) UiBinkMediaPlayerCallback();
-    IMFPMediaPlayer* player = nullptr;
-    if (callback == nullptr) {
-        close_ui_bink_media_fallback(state);
-        return false;
-    }
-    state.fallback_callback = callback;
-    append_startup_log(
-        "scenario-ui-video: player-create begin record=%lu blob=%ld",
-        static_cast<unsigned long>(screen.source_record_index),
-        static_cast<long>(blob_index));
-    result = MFPCreateMediaPlayer(state.fallback_temp_path.c_str(), TRUE,
-        MFP_OPTION_NONE, callback, state.fallback_surface_window, &player);
-    append_startup_log(
-        "scenario-ui-video: player-create end record=%lu blob=%ld hr=0x%08lx player=%p",
-        static_cast<unsigned long>(screen.source_record_index),
-        static_cast<long>(blob_index), static_cast<unsigned long>(result), player);
-    if (SUCCEEDED(result) && player == nullptr) {
-        result = E_POINTER;
-    }
-    if (FAILED(result)) {
-        close_ui_bink_media_fallback(state);
-        return false;
-    }
-
-    state.fallback_player = player;
-    player->SetBorderColor(RGB(0, 0, 0));
-    player->SetAspectRatioMode(MFVideoARMode_None);
-    player->SetVolume(scenario_ui_bink_volume());
-    player->SetBalance(scenario_ui_bink_balance());
-    player->UpdateVideo();
+    state.fallback_async_context = context;
     state.paused = false;
     return true;
 }
 
 bool render_ui_bink_media_fallback(const UiScreenDefinition& screen,
     const UiScreenEntry& entry, UiScreenBinkEntryState& state) {
-    dispatch_scenario_ui_bink_window_messages();
-    if (state.fallback_player == nullptr &&
+    if (state.fallback_async_context == nullptr &&
         !start_ui_bink_media_fallback(screen, entry, state)) {
         return false;
     }
-
-    auto* callback =
-        static_cast<UiBinkMediaPlayerCallback*>(state.fallback_callback);
-    if (callback == nullptr || callback->failed()) {
+    auto* context =
+        static_cast<UiBinkAsyncMediaContext*>(state.fallback_async_context);
+    if (context == nullptr || context->failed.load()) {
         close_ui_bink_media_fallback(state);
         return false;
     }
-    if (callback->ended() && !state.paused) {
-        if (UiScreenEntryI32(entry, 0x94) == 0) {
-            return restart_ui_bink_media_fallback(state);
-        }
-        state.paused = true;
-    }
-    dispatch_scenario_ui_bink_window_messages();
+    state.paused = context->ended.load() && !context->loop;
     return true;
 }
 #endif
@@ -4276,7 +4357,8 @@ bool RestartUiScreenFlaggedBinkEntries(UiScreenDefinition& screen) {
             UiScreenEntry& entry = screen.entries[index];
             UiScreenBinkEntryState& state = screen.bink_entries[index];
             const u32 flags = static_cast<u32>(UiScreenEntryI32(entry, 4));
-            if ((flags & 0x30000u) == 0 || state.fallback_player == nullptr) {
+            if ((flags & 0x30000u) == 0 ||
+                state.fallback_async_context == nullptr) {
                 continue;
             }
             found = true;

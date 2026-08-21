@@ -424,7 +424,15 @@ void close_mci_stream(MciMilesStream* stream) {
         return;
     }
     unregister_mci_stream(stream);
+    // MCI_CLOSE normally stops playback as a side effect, but the MPEGVideo
+    // fallback can leave the decoder audible when a paused device is closed
+    // from the frontend thread that did not open it.  The reconstruction
+    // opens title music on the worker and closes it from the window thread,
+    // so issue the explicit stop required to make the transition synchronous
+    // before releasing the device and its temporary archive MP3.
     MCI_GENERIC_PARMS close{};
+    mciSendCommandA(stream->device_id, MCI_STOP, MCI_WAIT,
+        reinterpret_cast<DWORD_PTR>(&close));
     mciSendCommandA(stream->device_id, MCI_CLOSE, MCI_WAIT,
         reinterpret_cast<DWORD_PTR>(&close));
     if (!stream->temporary_path.empty()) {
@@ -1318,6 +1326,14 @@ void ShutdownPrimaryMilesMusicPolicy() {
 }
 
 void SetPrimaryMilesMusicPolicyMode(u32 mode) {
+    // A completed gameplay flow shuts the Miles runtime down before the
+    // frontend is shown again.  The title immediately selects an active
+    // policy (mode 2), so restore the runtime here before that policy tries
+    // to open its stream.  Mode 0/1 remain shutdown-safe and must not revive
+    // audio while a frontend is being left or the process is closing.
+    if (mode >= 2u && !g_music_state.enabled) {
+        InitMilesMusicRuntime();
+    }
     g_music_state.primary_policy_mode = mode;
     g_music_state.primary_policy_last_tick = current_miles_policy_time_ms() - 2000u;
     UpdatePrimaryMilesMusicPolicy();
@@ -1346,7 +1362,13 @@ void UpdatePrimaryMilesMusicPolicy() {
     case 0:
         break;
     case 1:
-        if (primary_is_playing()) {
+        // AIL_stream_status is only a policy hint.  The 64-bit MCI fallback
+        // can report a stale stopped state while its decoder is still owned
+        // by the previous frontend.  Mode 1 means "no primary stream" in the
+        // original transition, so close an existing handle unconditionally.
+        // Otherwise returning to mode 2 can open a second title track while
+        // the orphaned first device remains audible.
+        if (g_music_state.primary_stream != nullptr) {
             ClosePrimaryMilesMusic();
         }
         break;
