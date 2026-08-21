@@ -72,7 +72,7 @@ int main(int argc, char** argv) {
         ranker::UiOverlayClickSelectionPolicy::additive);
 
     require(!ranker::ShouldCloseApplicationAfterP2PMatch(false, false));
-    require(!ranker::ShouldCloseApplicationAfterP2PMatch(false, true));
+    require(ranker::ShouldCloseApplicationAfterP2PMatch(false, true));
     require(ranker::ShouldCloseApplicationAfterP2PMatch(true, false));
 
     // FUN_004eb063 reads the live Shift/Ctrl key bytes when the gameplay

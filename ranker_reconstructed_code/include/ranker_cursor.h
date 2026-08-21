@@ -78,6 +78,7 @@ void ShowGameCursor();
 void HideGameCursor();
 void SetGameCursorPresentationSuppressed(bool suppressed);
 void SetGameCursorApplicationActive(bool active);
+bool RestoreGameCursorAfterApplicationActivation();
 void SetGameCursorIndex(u32 cursor_index);
 HRESULT LockAndUnlockSoftwareCursorSurface(u32 cursor_index);
 HRESULT HandlePrimaryCursorBackgroundRestore();

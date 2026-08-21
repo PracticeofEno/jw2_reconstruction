@@ -1552,6 +1552,21 @@ if (RANKER_BUILD_CURSOR_PRESENTATION_REGRESSION_TEST)
         COMMAND cursor_presentation_regression)
 endif()
 
+option(RANKER_BUILD_PROGRAMMATIC_POINTER_MOTION_REGRESSION_TEST
+    "Build the focused programmatic/native cursor transition regression" OFF)
+if (RANKER_BUILD_PROGRAMMATIC_POINTER_MOTION_REGRESSION_TEST)
+    enable_testing()
+    add_executable(programmatic_pointer_motion_regression
+        tests/programmatic_pointer_motion_regression.cpp
+        src/ranker_input.cpp
+    )
+    target_include_directories(programmatic_pointer_motion_regression PRIVATE
+        include
+    )
+    add_test(NAME programmatic_pointer_motion_regression
+        COMMAND programmatic_pointer_motion_regression)
+endif()
+
 add_executable(ranker_rebuild WIN32
     resources/ranker_resources.rc
     src/main.cpp

@@ -758,7 +758,6 @@ struct GameplayDamageRecordLink {
 struct GameplayInGameLoadResumeState {
     P2PGameSessionStartState p2p_session_start;
     u32 frontend_mode = 0;
-    u32 session_mode = 0;
     u32 local_player_index = 0;
     u32 local_faction_id = 0;
     i32 network_transport_mode = 0;
@@ -1643,6 +1642,10 @@ bool lock_main_window_cursor_confinement(
     }
     g_runtime.cursor_confined = true;
     set_main_window_system_cursor_for_lock_state();
+    // The native cursor must be hidden before the saved software cursor is
+    // restored.  In particular WM_ACTIVATEAPP can precede WM_SETFOCUS after
+    // an RDP/task-manager interruption, leaving a short unlocked interval.
+    RestoreGameCursorAfterApplicationActivation();
     return true;
 }
 
@@ -1723,6 +1726,42 @@ bool reacquire_main_window_cursor_from_button_up(
         logical_y = scale_unlocked_cursor_to_logical(presentation_y,
             presentation_height, static_cast<i32>(logical.height));
     }
+
+    InputState& input = input_state();
+    input.mouse_x = static_cast<u32>(logical_x);
+    input.mouse_y = static_cast<u32>(logical_y);
+    input.pointer_motion_seen = true;
+    SetGameCursorPointerPosition(logical_x, logical_y);
+    return lock_main_window_cursor_confinement(window, logical_x, logical_y);
+}
+
+bool reacquire_main_window_cursor_from_current_position(HWND window) {
+    RECT client{};
+    RECT screen_client{};
+    POINT position{};
+    if (!main_window_client_screen_rect(window, client, screen_client) ||
+        !GetCursorPos(&position) || !ScreenToClient(window, &position)) {
+        return false;
+    }
+
+    const i32 presentation_width = client.right - client.left;
+    const i32 presentation_height = client.bottom - client.top;
+    if (position.x < 0 || position.x > presentation_width ||
+        position.y < 0 || position.y > presentation_height) {
+        return false;
+    }
+
+    const GameplayLogicalSurfaceSize logical =
+        resolve_active_gameplay_logical_surface_size();
+    const i32 logical_x = scale_unlocked_cursor_to_logical(position.x,
+        presentation_width, static_cast<i32>(logical.width));
+    const i32 logical_y = scale_unlocked_cursor_to_logical(position.y,
+        presentation_height, static_cast<i32>(logical.height));
+    InputState& input = input_state();
+    input.mouse_x = static_cast<u32>(logical_x);
+    input.mouse_y = static_cast<u32>(logical_y);
+    input.pointer_motion_seen = true;
+    SetGameCursorPointerPosition(logical_x, logical_y);
     return lock_main_window_cursor_confinement(window, logical_x, logical_y);
 }
 
@@ -2987,7 +3026,17 @@ void default_link_resume_single_player(LinkLobbyState&) {
 void clear_default_replay_playback_runtime(const char* reason) {
     ReplayRecordingState& replay = replay_recording_state();
     const bool playback_was_active = replay.playback_mode;
+    // A replay can own both its sibling MP3 and scenario-triggered playlist
+    // streams.  Ordinary leave requests return through the session wrapper
+    // without visiting handle_replay_session_leave, and another teardown can
+    // clear playback_mode before this final boundary.  Close both backends
+    // unconditionally while this call still identifies a replay boundary.
+    CloseAllMilesEffectPlaylistStreams();
+    CloseDirectMilesMusic();
     ClearReplayPlaybackState(replay);
+    P2PGameSessionStartState& p2p = g_runtime.p2p_session_start_state;
+    p2p.direct_music_started = false;
+    p2p.direct_music_paused = false;
     SetReplayControlsEnabled(false);
     SetRankerMainWindowScenarioAiProfileOverride(false);
     if (playback_was_active) {
@@ -4967,7 +5016,6 @@ bool default_gameplay_modal_import_session_bundle(
     if (active_session_import) {
         resume.p2p_session_start = g_runtime.p2p_session_start_state;
         resume.frontend_mode = g_runtime.frontend_mode;
-        resume.session_mode = g_runtime.gameplay_startup_state.session_mode;
         resume.local_player_index = mode1_reliable_state().local_player_index;
         const u32 local_player = std::min<u32>(
             resume.local_player_index, kPlayerSlotCount - 1);
@@ -8609,6 +8657,22 @@ void sync_startup_owner_factions_to_lifecycle(
 
 void set_default_primary_miles_music_policy_mode(u32 mode) {
     sync_default_primary_miles_music_policy_faction();
+    const DWORD caller_thread = GetCurrentThreadId();
+    const DWORD window_thread = g_runtime.main_window != nullptr ?
+        GetWindowThreadProcessId(g_runtime.main_window, nullptr) : 0;
+    const bool defer_title_music =
+        mode == 2u && window_thread != 0 && caller_thread != window_thread;
+    if (defer_title_music) {
+        // Gameplay/session cleanup reaches title policy on the background
+        // worker before the actual title HWND is presented.  Opening MCI
+        // music there gives it worker-thread ownership; open_title_main_menu_
+        // frontend then observes that device from the window thread and can
+        // open a second copy.  Retire the worker-owned stream now and let the
+        // title presentation edge below start exactly one stream on its UI
+        // owner thread.
+        SetPrimaryMilesMusicPolicyMode(1);
+        return;
+    }
     SetPrimaryMilesMusicPolicyMode(mode);
 }
 
@@ -12883,56 +12947,6 @@ u32 seed_default_gameplay_result_screen(u32 result_mode) {
         ReplayRecordingHasSaveControls(replay_state);
     result.replay_record_index_is_zero =
         session_load.loaded && session_load.base_record_index == 0;
-    ReplayRecordingState& mutable_replay_state = replay_recording_state();
-    if (!mutable_replay_state.automatic_save_attempted) {
-        mutable_replay_state.automatic_save_attempted = true;
-        if (result.replay_controls_available &&
-            result.replay_record_index_is_zero &&
-            !result.scenario_ai_profile_override) {
-            const auto player_names = RankerMainWindowReplayPlayerNames();
-            mutable_replay_state.automatic_save_succeeded =
-                AutoSaveReplayRecordingArchive(mutable_replay_state,
-                    player_names,
-                    mutable_replay_state.automatic_output_path);
-            append_startup_log("replay-auto-save: saved=%s path=%s",
-                mutable_replay_state.automatic_save_succeeded ? "yes" : "no",
-                mutable_replay_state.automatic_output_path.empty() ? "(none)" :
-                    mutable_replay_state.automatic_output_path.c_str());
-        }
-        else {
-            append_startup_log(
-                "replay-auto-save: skipped controls=%s base0=%s scenario=%s",
-                result.replay_controls_available ? "yes" : "no",
-                result.replay_record_index_is_zero ? "yes" : "no",
-                result.scenario_ai_profile_override ? "yes" : "no");
-        }
-    }
-    if (!g_runtime.wizardnet_postgame_submission_attempted) {
-        g_runtime.wizardnet_postgame_submission_attempted = true;
-        const u32 game_type = g_runtime.gameplay_startup_state.session_mode;
-        if (g_runtime.frontend_mode == 0 &&
-            GameplayLaunchUsesLinkLobby(g_runtime.gameplay_launch_source) &&
-            g_runtime.wizardnet_match_game_id != 0 &&
-            (UsesWizardNetNormalGameStatistics(game_type) ||
-                UsesWizardNetRankingStatistics(game_type))) {
-            const char* replay_path =
-                mutable_replay_state.automatic_save_succeeded &&
-                    !mutable_replay_state.automatic_output_path.empty() ?
-                mutable_replay_state.automatic_output_path.c_str() : nullptr;
-            const bool queued = BeginWizardNetPostGameSubmission(
-                FrontendAsyncTcpSocket0(), game_type, result_mode,
-                g_runtime.wizardnet_match_game_id,
-                g_runtime.wizardnet_match_token,
-                g_runtime.wizardnet_match_host, replay_path);
-            append_startup_log(
-                "wizardnet-postgame: queued=%s game=%lu type=%lu host=%s replay=%s",
-                queued ? "yes" : "no",
-                static_cast<unsigned long>(g_runtime.wizardnet_match_game_id),
-                static_cast<unsigned long>(game_type),
-                g_runtime.wizardnet_match_host ? "yes" : "no",
-                replay_path != nullptr ? replay_path : "(none)");
-        }
-    }
     const u32 elapsed_ticks =
         RefreshLegacyTickTime() - g_runtime.gameplay_session_start_tick_ms;
     result.elapsed_seconds = (elapsed_ticks >> 10) % 60;
@@ -12994,6 +13008,84 @@ u32 seed_default_gameplay_result_screen(u32 result_mode) {
     return player_count;
 }
 
+void auto_save_default_gameplay_replay_after_result_dialog() {
+    ReplayRecordingState& replay = replay_recording_state();
+    if (replay.automatic_save_attempted) {
+        return;
+    }
+
+    replay.automatic_save_attempted = true;
+    const GameplayResultScreenState& result = gameplay_result_screen_state();
+    const bool live_save_controls = ReplayRecordingHasSaveControls(replay);
+    if (result.replay_controls_available &&
+        result.replay_record_index_is_zero &&
+        !result.scenario_ai_profile_override &&
+        live_save_controls) {
+        const auto player_names = RankerMainWindowReplayPlayerNames();
+        replay.automatic_save_succeeded =
+            AutoSaveReplayRecordingArchive(replay, player_names,
+                replay.automatic_output_path);
+        append_startup_log("replay-auto-save: saved=%s path=%s",
+            replay.automatic_save_succeeded ? "yes" : "no",
+            replay.automatic_output_path.empty() ? "(none)" :
+                replay.automatic_output_path.c_str());
+        return;
+    }
+
+    // The result/replay modal is opened before automatic compression and disk
+    // I/O, matching FUN_00430e20's visible ordering. If the player used the
+    // modal's manual Save action, its successful save has already closed the
+    // live recorder and no duplicate automatic archive is needed.
+    append_startup_log(
+        "replay-auto-save: skipped controls=%s live=%s base0=%s scenario=%s manual=%s",
+        result.replay_controls_available ? "yes" : "no",
+        live_save_controls ? "yes" : "no",
+        result.replay_record_index_is_zero ? "yes" : "no",
+        result.scenario_ai_profile_override ? "yes" : "no",
+        !live_save_controls && !replay.last_output_path.empty() ? "yes" : "no");
+}
+
+void submit_default_wizardnet_postgame_after_replay_save() {
+    if (g_runtime.wizardnet_postgame_submission_attempted) {
+        return;
+    }
+
+    g_runtime.wizardnet_postgame_submission_attempted = true;
+    const u32 game_type = g_runtime.gameplay_startup_state.session_mode;
+    if (g_runtime.frontend_mode != 0 ||
+        !GameplayLaunchUsesLinkLobby(g_runtime.gameplay_launch_source) ||
+        g_runtime.wizardnet_match_game_id == 0 ||
+        (!UsesWizardNetNormalGameStatistics(game_type) &&
+            !UsesWizardNetRankingStatistics(game_type))) {
+        return;
+    }
+
+    const ReplayRecordingState& replay = replay_recording_state();
+    const char* replay_path = nullptr;
+    if (replay.automatic_save_succeeded &&
+        !replay.automatic_output_path.empty()) {
+        replay_path = replay.automatic_output_path.c_str();
+    }
+    else if (!replay.last_output_path.empty()) {
+        // The result dialog is visible before automatic compression. If the
+        // player saved there, upload that completed archive instead.
+        replay_path = replay.last_output_path.c_str();
+    }
+
+    const GameplayResultScreenState& result = gameplay_result_screen_state();
+    const bool queued = BeginWizardNetPostGameSubmission(
+        FrontendAsyncTcpSocket0(), game_type, result.result_mode,
+        g_runtime.wizardnet_match_game_id, g_runtime.wizardnet_match_token,
+        g_runtime.wizardnet_match_host, replay_path);
+    append_startup_log(
+        "wizardnet-postgame: queued=%s game=%lu type=%lu host=%s replay=%s",
+        queued ? "yes" : "no",
+        static_cast<unsigned long>(g_runtime.wizardnet_match_game_id),
+        static_cast<unsigned long>(game_type),
+        g_runtime.wizardnet_match_host ? "yes" : "no",
+        replay_path != nullptr ? replay_path : "(none)");
+}
+
 void render_default_gameplay_result_screen_once() {
     if (g_runtime.gameplay_result_screen_rendered) {
         return;
@@ -13006,6 +13098,8 @@ void render_default_gameplay_result_screen_once() {
     prepare_default_gameplay_result_leave_render();
     RenderGameplayResultRankingScreen(gameplay_result_screen_state(),
         g_runtime.gameplay_end_condition_state.result_code, player_count);
+    auto_save_default_gameplay_replay_after_result_dialog();
+    submit_default_wizardnet_postgame_after_replay_save();
     const GameplayResultScreenState& rendered_result = gameplay_result_screen_state();
     append_startup_log(
         "gameplay-result: mode=%lu tribe=%lu players=%lu rows=%zu replay=%s base0=%s packet_open=%s packets=%lu vpos_open=%s playback=%s actions=%zu",
@@ -13040,6 +13134,8 @@ void render_default_gameplay_result_and_leave_once() {
     prepare_default_gameplay_result_leave_render();
     RenderGameplayResultRankingScreen(gameplay_result_screen_state(),
         g_runtime.gameplay_end_condition_state.result_code, player_count);
+    auto_save_default_gameplay_replay_after_result_dialog();
+    submit_default_wizardnet_postgame_after_replay_save();
     run_default_gameplay_leave_reset_once();
     g_runtime.gameplay_result_screen_rendered = true;
 }
@@ -13078,6 +13174,8 @@ void default_frontend_stage_refresh_after_result(FrontendStageFlowState& state) 
         prepare_default_gameplay_result_leave_render();
         RenderGameplayResultRankingScreen(gameplay_result_screen_state(),
             state.selected_stage_result, player_count);
+        auto_save_default_gameplay_replay_after_result_dialog();
+        submit_default_wizardnet_postgame_after_replay_save();
         g_runtime.gameplay_result_screen_rendered = true;
     }
 
@@ -13174,12 +13272,14 @@ bool default_gameplay_loop_try_restart_session(GameplayLoopState& state) {
             g_runtime.gameplay_session_archive_path.c_str());
         default_gameplay_flow_start_session_from_slots(flow);
 
-        // Mode 5 is only the load/reset policy.  Resume the active game mode
-        // afterwards so relation masks, owner-AI metadata and victory rules
-        // keep their pre-load P2P/local semantics.
+        // HandleSessionBundleImportMirror replaces the live original session
+        // in place.  It does not restore the match type that happened to be
+        // active before Load.  Keep the mode-5 materialization and the saved
+        // scenario masks; restoring the prior Practice melee mode rewrites
+        // those masks to elite-elimination and ends many loaded scenarios on
+        // their first 64-frame condition check.
         const u32 local_player = std::min<u32>(
             resume.local_player_index, kPlayerSlotCount - 1);
-        g_runtime.gameplay_startup_state.session_mode = resume.session_mode;
         g_runtime.gameplay_startup_state.local_owner_id = local_player;
         g_runtime.gameplay_player_slots.local_player_slot = local_player;
         g_runtime.gameplay_display_state.local_owner_id = local_player;
@@ -13195,9 +13295,11 @@ bool default_gameplay_loop_try_restart_session(GameplayLoopState& state) {
         gameplay_modal_ui_state().local_player_index = local_player;
         ui_overlay_state().local_player_slot = local_player;
         SetMode1ReliableLocalPlayerIndex(local_player);
-        gameplay_modal_ui_state().session_mode = resume.session_mode;
+        gameplay_modal_ui_state().session_mode =
+            g_runtime.gameplay_startup_state.session_mode;
         BuildGameplaySessionPlayerRelationMasks(
-            g_runtime.gameplay_player_slots, resume.session_mode);
+            g_runtime.gameplay_player_slots,
+            g_runtime.gameplay_startup_state.session_mode);
         SelectNearestHostilePlayerSlots(g_runtime.gameplay_player_slots);
         sync_default_gameplay_modal_players(gameplay_modal_ui_state());
         sync_default_owner_ai_runtime_metadata(&state);
@@ -13370,6 +13472,26 @@ void default_gameplay_flow_process_session_loop(GameplaySessionFlowState& state)
     append_startup_log("session-flow: process loop reached");
     const bool replay_playback_session = replay_recording_state().playback_mode;
     ProcessGameplaySessionLoop(loop_state, state.session_loop_iteration_budget);
+
+    // The original single-player owner returns from ProcessGameplaySessionLoop
+    // into FUN_004d94c7's mode-1 music edge, while its consensus exit closes
+    // all five scenario streams synchronously inside the loop.  Some rebuilt
+    // direct-stage/replay routes bypass that outer owner, so converge every
+    // completed session here before any frontend or result owner can appear.
+    // This is intentionally synchronous: the game and its BGM must cross the
+    // lifetime boundary together.
+    set_default_primary_miles_music_policy_mode(1);
+    CloseAllMilesEffectPlaylistStreams();
+    CloseDirectMilesMusic();
+    const MilesEffectPlaylistState& effect_music = miles_effect_playlist_state();
+    const std::size_t live_effect_streams = static_cast<std::size_t>(
+        std::count_if(effect_music.streams.begin(), effect_music.streams.end(),
+            [](MilesStreamHandle stream) { return stream != nullptr; }));
+    append_startup_log(
+        "session-flow: music boundary closed primary=%d direct=%d effects=%zu",
+        GetPrimaryMilesMusicStatus(), GetDirectMilesMusicStatus(),
+        live_effect_streams);
+
     finish_default_peer_startup_cursor_transition();
     if (replay_playback_session) {
         // Every replay exit path converges here, including the ordinary
@@ -13385,9 +13507,9 @@ void default_gameplay_flow_process_session_loop(GameplaySessionFlowState& state)
     state.close_requested = close_application;
     if (!loop_state.session_active && modal.surrender_requested) {
         // FUN_0042e510 sets DAT_00725c0a after publishing the local inactive
-        // vote. Original direct-P2P flow 0x004d94c7..0x004d9561 leaves the
-        // match loop on that edge and returns to its outer frontend; it does
-        // not stop the worker or post WM_CLOSE to the application.
+        // vote. Original direct-P2P flow 0x004d94c7..0x004d9561 consumes that
+        // edge after the match loop, shuts down its remaining runtime, and
+        // returns through the application-close path rather than a frontend.
         modal.surrender_requested = false;
     }
     state.p2p_win_result = g_runtime.gameplay_end_condition_state.result_code;
@@ -13989,12 +14111,6 @@ const char* frontend_bootstrap_failure_detail(FrontendBootstrapFailureStage stag
     }
 }
 
-bool default_defer_startup_unit_definition_catalog(FrontendBootstrapState& state) {
-    state.unit_definition_catalog_loaded = false;
-    append_startup_log("bootstrap unit catalog deferred");
-    return true;
-}
-
 void default_play_frontend_intro_sequence(FrontendBootstrapState&) {
     HandleJw208IntroVideoSequence(g_runtime.main_window);
     const BinkVideoRuntimeState& bink = bink_video_state();
@@ -14028,8 +14144,6 @@ void publish_default_frontend_sound_bank_from_bootstrap() {
 void default_gameplay_loop_initialize_worker_runtime(GameplayLoopState&) {
     FrontendBootstrapState& bootstrap = frontend_bootstrap_state();
     FrontendBootstrapCallbacks callbacks{};
-    callbacks.load_unit_definition_catalog =
-        default_defer_startup_unit_definition_catalog;
     callbacks.play_intro_sequence = default_play_frontend_intro_sequence;
     append_startup_log("frontend bootstrap begin");
     if (!RunFrontendStartupBootstrap(frontend_startup_state(), bootstrap, callbacks)) {
@@ -14067,6 +14181,15 @@ void default_gameplay_loop_initialize_worker_runtime(GameplayLoopState&) {
         // made every native frontend click silent on a fresh process and only
         // start working after the first match.
         publish_default_frontend_sound_bank_from_bootstrap();
+        // Frontend bootstrap runs on the reconstruction's worker thread, but
+        // title commands run on the window thread.  MCI's MPEGVideo fallback
+        // keeps the decoder window bound to the thread that opened it; closing
+        // that device from the title thread left the old title track alive and
+        // every return to the title opened another one.  Retire the bootstrap
+        // stream on its owning thread.  open_title_main_menu_frontend then
+        // applies mode 2 on the window thread, which owns every later title
+        // start/stop transition.
+        SetPrimaryMilesMusicPolicyMode(1);
         append_startup_log("frontend bootstrap ok");
     }
 }
@@ -31703,6 +31826,12 @@ void run_default_single_player_frontend_flow() {
         append_startup_log("single-player activate entry=%lu",
             static_cast<unsigned long>(action));
         if (action == 0 || action == 4) {
+            // A campaign briefing runs policy mode 4 on this worker thread.
+            // Close that worker-owned MCI device before posting the title
+            // transition; the title HWND will start mode 2 on its UI thread.
+            // Otherwise the UI-thread close fails and leaves the old track
+            // audible beneath a newly opened title BGM.
+            set_default_primary_miles_music_policy_mode(1);
             CloseStageAvailabilityDialog(modal);
             modal.centered_for_replay = previous_centering;
             if (g_runtime.main_window != nullptr && IsWindow(g_runtime.main_window)) {
@@ -31827,7 +31956,14 @@ void configure_title_main_menu_version(UiScreenDefinition& screen) {
 }
 
 void close_title_main_menu_frontend() {
+    const bool was_active = g_runtime.title_menu_active;
     g_runtime.title_menu_active = false;
+    if (was_active) {
+        // Original single-player transition 0x00415ad0 selects music policy
+        // mode 1 before leaving the title. Apply the same edge to every title
+        // command so its startup BGM cannot leak into the next frontend.
+        set_default_primary_miles_music_policy_mode(1);
+    }
     if (g_runtime.main_window != nullptr && IsWindow(g_runtime.main_window)) {
         KillTimer(g_runtime.main_window, kTitleMenuAnimationTimerId);
     }
@@ -31928,6 +32064,9 @@ bool open_title_main_menu_frontend(HWND window) {
         static_cast<unsigned long>(screen.resource_mark));
     g_runtime.title_menu_active = presented;
     if (presented) {
+        // Opening/Credits return here after their own audio has completed.
+        // Re-entering the title starts the ordinary menu policy again.
+        set_default_primary_miles_music_policy_mode(2);
         SetTimer(window, kTitleMenuAnimationTimerId,
             kTitleMenuAnimationTimerIntervalMs, nullptr);
     }
@@ -32510,7 +32649,16 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
         }
         if (g_runtime.app_active) {
             refresh_window_rects(window);
-            refresh_main_window_cursor_confinement(window);
+            if (g_runtime.cursor_confined) {
+                refresh_main_window_cursor_confinement(window);
+            }
+            else if (g_runtime.input_enabled) {
+                // Focus loss intentionally releases cnc-ddraw's lock. Merely
+                // refreshing an already-unlocked cursor can never reacquire
+                // it; seed logical/software state from the physical focus
+                // point before clipping the pointer again.
+                reacquire_main_window_cursor_from_current_position(window);
+            }
         }
         break;
     case WM_ACTIVATE:
@@ -32528,7 +32676,12 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
         break;
     case WM_SETFOCUS:
         refresh_window_rects(window);
-        refresh_main_window_cursor_confinement(window);
+        if (g_runtime.cursor_confined) {
+            refresh_main_window_cursor_confinement(window);
+        }
+        else if (g_runtime.app_active && g_runtime.input_enabled) {
+            reacquire_main_window_cursor_from_current_position(window);
+        }
         break;
     case WM_DISPLAYCHANGE:
         refresh_window_rects(window);

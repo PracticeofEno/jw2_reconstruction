@@ -438,14 +438,19 @@ bool HandlePointerMotion(u32 lparam) {
     // Original 004fcd91 overwrites the X-delta slot with the Y delta.
     g_input_state.mouse_dx = static_cast<i32>(g_input_state.mouse_x) - x;
     g_input_state.mouse_dx = static_cast<i32>(g_input_state.mouse_y) - y;
+    // Native-cursor ownership during live-peer startup suppresses only the
+    // software cursor presentation.  The logical input device must continue
+    // sampling every real move; otherwise enabling the software cursor seeds
+    // it from the pre-loading coordinate and leaves a second, stale pointer
+    // visible until the user moves again.
+    g_input_state.mouse_x = static_cast<u32>(x);
+    g_input_state.mouse_y = static_cast<u32>(y);
+    g_input_state.pointer_motion_seen = true;
 #ifdef _WIN32
     if (cursor.pointer_updates_suppressed) {
         return true;
     }
 #endif
-    g_input_state.mouse_x = static_cast<u32>(x);
-    g_input_state.mouse_y = static_cast<u32>(y);
-    g_input_state.pointer_motion_seen = true;
 #ifdef _WIN32
     SetGameCursorPointerPosition(x, y);
 #endif

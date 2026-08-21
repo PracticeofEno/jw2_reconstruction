@@ -66,13 +66,7 @@ struct UiScreenBinkEntryState {
     const void* source = nullptr;
     u64 fallback_started_tick_ms = 0;
 #ifdef _WIN32
-    HWND fallback_window = nullptr;
-    HWND fallback_surface_window = nullptr;
-    void* fallback_player = nullptr;
-    void* fallback_callback = nullptr;
-    std::wstring fallback_temp_path;
-    bool fallback_com_initialized = false;
-    bool fallback_media_foundation_started = false;
+    void* fallback_async_context = nullptr;
 #endif
     bool paused = false;
 };
