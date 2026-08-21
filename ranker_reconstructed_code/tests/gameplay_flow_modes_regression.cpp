@@ -198,9 +198,13 @@ int main() {
     assert(!ResolveGameplayPauseOverlayVisible(false));
     assert(ResolveGameplayPauseOverlayVisible(true));
 
-    // Generic/P2P "Quit Program" exits the current match flow; only the
-    // local worker shutdown edge closes the application window.
-    assert(!ShouldCloseApplicationAfterP2PMatch(false, true));
+    // Generic/P2P "Quit Program" is retained until the synchronized match
+    // loop ends, then closes the application instead of restoring WizardNet.
+    assert(ShouldCloseApplicationAfterP2PMatch(false, true));
     assert(ShouldCloseApplicationAfterP2PMatch(true, false));
+    assert(ResolveGameplayPostSessionFrontendRoute(0, false, false, false) ==
+        GameplayPostSessionFrontendRoute::wizardnet);
+    assert(ResolveGameplayPostSessionFrontendRoute(0, false, true, true) ==
+        GameplayPostSessionFrontendRoute::none);
     return 0;
 }

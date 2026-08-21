@@ -12930,30 +12930,6 @@ u32 seed_default_gameplay_result_screen(u32 result_mode) {
         ReplayRecordingHasSaveControls(replay_state);
     result.replay_record_index_is_zero =
         session_load.loaded && session_load.base_record_index == 0;
-    ReplayRecordingState& mutable_replay_state = replay_recording_state();
-    if (!mutable_replay_state.automatic_save_attempted) {
-        mutable_replay_state.automatic_save_attempted = true;
-        if (result.replay_controls_available &&
-            result.replay_record_index_is_zero &&
-            !result.scenario_ai_profile_override) {
-            const auto player_names = RankerMainWindowReplayPlayerNames();
-            mutable_replay_state.automatic_save_succeeded =
-                AutoSaveReplayRecordingArchive(mutable_replay_state,
-                    player_names,
-                    mutable_replay_state.automatic_output_path);
-            append_startup_log("replay-auto-save: saved=%s path=%s",
-                mutable_replay_state.automatic_save_succeeded ? "yes" : "no",
-                mutable_replay_state.automatic_output_path.empty() ? "(none)" :
-                    mutable_replay_state.automatic_output_path.c_str());
-        }
-        else {
-            append_startup_log(
-                "replay-auto-save: skipped controls=%s base0=%s scenario=%s",
-                result.replay_controls_available ? "yes" : "no",
-                result.replay_record_index_is_zero ? "yes" : "no",
-                result.scenario_ai_profile_override ? "yes" : "no");
-        }
-    }
     const u32 elapsed_ticks =
         RefreshLegacyTickTime() - g_runtime.gameplay_session_start_tick_ms;
     result.elapsed_seconds = (elapsed_ticks >> 10) % 60;
@@ -13015,6 +12991,43 @@ u32 seed_default_gameplay_result_screen(u32 result_mode) {
     return player_count;
 }
 
+void auto_save_default_gameplay_replay_after_result_dialog() {
+    ReplayRecordingState& replay = replay_recording_state();
+    if (replay.automatic_save_attempted) {
+        return;
+    }
+
+    replay.automatic_save_attempted = true;
+    const GameplayResultScreenState& result = gameplay_result_screen_state();
+    const bool live_save_controls = ReplayRecordingHasSaveControls(replay);
+    if (result.replay_controls_available &&
+        result.replay_record_index_is_zero &&
+        !result.scenario_ai_profile_override &&
+        live_save_controls) {
+        const auto player_names = RankerMainWindowReplayPlayerNames();
+        replay.automatic_save_succeeded =
+            AutoSaveReplayRecordingArchive(replay, player_names,
+                replay.automatic_output_path);
+        append_startup_log("replay-auto-save: saved=%s path=%s",
+            replay.automatic_save_succeeded ? "yes" : "no",
+            replay.automatic_output_path.empty() ? "(none)" :
+                replay.automatic_output_path.c_str());
+        return;
+    }
+
+    // The result/replay modal is opened before automatic compression and disk
+    // I/O, matching FUN_00430e20's visible ordering. If the player used the
+    // modal's manual Save action, its successful save has already closed the
+    // live recorder and no duplicate automatic archive is needed.
+    append_startup_log(
+        "replay-auto-save: skipped controls=%s live=%s base0=%s scenario=%s manual=%s",
+        result.replay_controls_available ? "yes" : "no",
+        live_save_controls ? "yes" : "no",
+        result.replay_record_index_is_zero ? "yes" : "no",
+        result.scenario_ai_profile_override ? "yes" : "no",
+        !live_save_controls && !replay.last_output_path.empty() ? "yes" : "no");
+}
+
 void render_default_gameplay_result_screen_once() {
     if (g_runtime.gameplay_result_screen_rendered) {
         return;
@@ -13027,6 +13040,7 @@ void render_default_gameplay_result_screen_once() {
     prepare_default_gameplay_result_leave_render();
     RenderGameplayResultRankingScreen(gameplay_result_screen_state(),
         g_runtime.gameplay_end_condition_state.result_code, player_count);
+    auto_save_default_gameplay_replay_after_result_dialog();
     const GameplayResultScreenState& rendered_result = gameplay_result_screen_state();
     append_startup_log(
         "gameplay-result: mode=%lu tribe=%lu players=%lu rows=%zu replay=%s base0=%s packet_open=%s packets=%lu vpos_open=%s playback=%s actions=%zu",
@@ -13061,6 +13075,7 @@ void render_default_gameplay_result_and_leave_once() {
     prepare_default_gameplay_result_leave_render();
     RenderGameplayResultRankingScreen(gameplay_result_screen_state(),
         g_runtime.gameplay_end_condition_state.result_code, player_count);
+    auto_save_default_gameplay_replay_after_result_dialog();
     run_default_gameplay_leave_reset_once();
     g_runtime.gameplay_result_screen_rendered = true;
 }
@@ -13099,6 +13114,7 @@ void default_frontend_stage_refresh_after_result(FrontendStageFlowState& state) 
         prepare_default_gameplay_result_leave_render();
         RenderGameplayResultRankingScreen(gameplay_result_screen_state(),
             state.selected_stage_result, player_count);
+        auto_save_default_gameplay_replay_after_result_dialog();
         g_runtime.gameplay_result_screen_rendered = true;
     }
 
@@ -13430,9 +13446,9 @@ void default_gameplay_flow_process_session_loop(GameplaySessionFlowState& state)
     state.close_requested = close_application;
     if (!loop_state.session_active && modal.surrender_requested) {
         // FUN_0042e510 sets DAT_00725c0a after publishing the local inactive
-        // vote. Original direct-P2P flow 0x004d94c7..0x004d9561 leaves the
-        // match loop on that edge and returns to its outer frontend; it does
-        // not stop the worker or post WM_CLOSE to the application.
+        // vote. Original direct-P2P flow 0x004d94c7..0x004d9561 consumes that
+        // edge after the match loop, shuts down its remaining runtime, and
+        // returns through the application-close path rather than a frontend.
         modal.surrender_requested = false;
     }
     state.p2p_win_result = g_runtime.gameplay_end_condition_state.result_code;
