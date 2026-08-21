@@ -13395,6 +13395,26 @@ void default_gameplay_flow_process_session_loop(GameplaySessionFlowState& state)
     append_startup_log("session-flow: process loop reached");
     const bool replay_playback_session = replay_recording_state().playback_mode;
     ProcessGameplaySessionLoop(loop_state, state.session_loop_iteration_budget);
+
+    // The original single-player owner returns from ProcessGameplaySessionLoop
+    // into FUN_004d94c7's mode-1 music edge, while its consensus exit closes
+    // all five scenario streams synchronously inside the loop.  Some rebuilt
+    // direct-stage/replay routes bypass that outer owner, so converge every
+    // completed session here before any frontend or result owner can appear.
+    // This is intentionally synchronous: the game and its BGM must cross the
+    // lifetime boundary together.
+    set_default_primary_miles_music_policy_mode(1);
+    CloseAllMilesEffectPlaylistStreams();
+    CloseDirectMilesMusic();
+    const MilesEffectPlaylistState& effect_music = miles_effect_playlist_state();
+    const std::size_t live_effect_streams = static_cast<std::size_t>(
+        std::count_if(effect_music.streams.begin(), effect_music.streams.end(),
+            [](MilesStreamHandle stream) { return stream != nullptr; }));
+    append_startup_log(
+        "session-flow: music boundary closed primary=%d direct=%d effects=%zu",
+        GetPrimaryMilesMusicStatus(), GetDirectMilesMusicStatus(),
+        live_effect_streams);
+
     finish_default_peer_startup_cursor_transition();
     if (replay_playback_session) {
         // Every replay exit path converges here, including the ordinary

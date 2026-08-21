@@ -691,7 +691,11 @@ void ShutdownMilesSoundSubsystem() {
         }
     }
     for (u32 slot = 0; slot < kMilesEffectStreamSlots; ++slot) {
-        close_effect_slot(slot, true);
+        // Original AIL shutdown owns every stream until AIL_close_stream has
+        // returned.  Do the same for the MCI fallback: detaching decoder
+        // cleanup here lets the game window disappear while music is still
+        // audible from the live process.
+        close_effect_slot(slot);
     }
     while (MciMilesStream* stream = last_mci_stream()) {
         close_mci_stream(stream);
@@ -2097,7 +2101,10 @@ void CloseMilesEffectPlaylistEntry(i32 entry_index) {
     for (u32 slot = 0; slot < kMilesEffectStreamSlots; ++slot) {
         if (g_effect_playlist_state.active_entry_indices[slot] == entry_index &&
             g_effect_playlist_state.streams[slot] != nullptr) {
-            close_effect_slot(slot, true);
+            // FUN_00414550 pauses and closes matching slots synchronously.
+            // A scenario close opcode is an audible ownership boundary, not
+            // merely a request to release the decoder later.
+            close_effect_slot(slot);
         }
     }
 }
@@ -2159,10 +2166,11 @@ void CloseAllMilesEffectPlaylistStreams() {
     for (u32 slot = 0; slot < kMilesEffectStreamSlots; ++slot) {
         if (g_effect_playlist_state.active_entry_indices[slot] != kInvalidMilesEffectEntry &&
             g_effect_playlist_state.streams[slot] != nullptr) {
-            // Session replacement is itself part of the scenario-loading
-            // path.  Do not reintroduce the MCI_WAIT hitch there while
-            // releasing the previous scenario's dialog streams.
-            close_effect_slot(slot, true);
+            // Match original FUN_00414860 exactly: PauseMilesStream followed
+            // by CloseMilesStream completes before the slot is cleared.  A
+            // deferred close allowed gameplay to end while the decoder kept
+            // emitting the previous session's BGM.
+            close_effect_slot(slot);
         }
     }
 }
