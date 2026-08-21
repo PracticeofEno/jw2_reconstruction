@@ -744,20 +744,133 @@ struct ScenarioUiBinkWindows {
     HWND surface = nullptr;
 };
 
-ScenarioUiBinkWindows create_scenario_ui_bink_windows(
-    const UiScreenEntry& entry) {
-    ScenarioUiBinkWindows windows{};
+struct ScenarioUiBinkLayout {
+    HWND popup_owner = nullptr;
+    RECT screen_rect{};
+    bool visible = false;
+};
+
+bool query_scenario_ui_bink_layout(const UiScreenEntry& entry,
+    ScenarioUiBinkLayout& layout) {
+    layout = ScenarioUiBinkLayout{};
     const DirectDrawRuntimeState& dd = direct_draw_state();
     HWND layout_host = dd.presentation_window;
     if (layout_host == nullptr || !IsWindow(layout_host)) {
         layout_host = RankerMainWindowState().main_window;
     }
     if (layout_host == nullptr || !IsWindow(layout_host)) {
-        return windows;
+        return false;
     }
     HWND popup_owner = GetAncestor(layout_host, GA_ROOT);
     if (popup_owner == nullptr || !IsWindow(popup_owner)) {
         popup_owner = layout_host;
+    }
+
+    RECT client{};
+    if (!GetClientRect(layout_host, &client)) {
+        return false;
+    }
+    const LONG client_width = client.right - client.left;
+    const LONG client_height = client.bottom - client.top;
+    const LONG logical_width = static_cast<LONG>(dd.width != 0 ? dd.width : 800);
+    const LONG logical_height = static_cast<LONG>(dd.height != 0 ? dd.height : 600);
+    if (client_width <= 0 || client_height <= 0 ||
+        logical_width <= 0 || logical_height <= 0) {
+        return false;
+    }
+
+    const LONG left = MulDiv(UiScreenEntryI32(entry, 0x20),
+        client_width, logical_width);
+    const LONG top = MulDiv(UiScreenEntryI32(entry, 0x24),
+        client_height, logical_height);
+    const LONG right = MulDiv(UiScreenEntryI32(entry, 0x28),
+        client_width, logical_width);
+    const LONG bottom = MulDiv(UiScreenEntryI32(entry, 0x2c),
+        client_height, logical_height);
+    if (right <= left || bottom <= top) {
+        return false;
+    }
+
+    POINT top_left{left, top};
+    POINT bottom_right{right, bottom};
+    if (!ClientToScreen(layout_host, &top_left) ||
+        !ClientToScreen(layout_host, &bottom_right)) {
+        return false;
+    }
+
+    layout.popup_owner = popup_owner;
+    layout.screen_rect = RECT{
+        top_left.x, top_left.y, bottom_right.x, bottom_right.y};
+    layout.visible = IsWindowVisible(layout_host) != FALSE &&
+        IsWindowVisible(popup_owner) != FALSE && IsIconic(popup_owner) == FALSE;
+    return true;
+}
+
+bool update_scenario_ui_bink_windows(const UiScreenEntry& entry,
+    const ScenarioUiBinkWindows& windows, bool* layout_changed_out = nullptr) {
+    if (layout_changed_out != nullptr) {
+        *layout_changed_out = false;
+    }
+    if (windows.backdrop == nullptr || windows.surface == nullptr ||
+        !IsWindow(windows.backdrop) || !IsWindow(windows.surface)) {
+        return false;
+    }
+
+    ScenarioUiBinkLayout layout{};
+    if (!query_scenario_ui_bink_layout(entry, layout)) {
+        ShowWindow(windows.backdrop, SW_HIDE);
+        return false;
+    }
+    if (!layout.visible) {
+        if (IsWindowVisible(windows.backdrop)) {
+            ShowWindow(windows.backdrop, SW_HIDE);
+            if (layout_changed_out != nullptr) {
+                *layout_changed_out = true;
+            }
+        }
+        return true;
+    }
+
+    const LONG width = layout.screen_rect.right - layout.screen_rect.left;
+    const LONG height = layout.screen_rect.bottom - layout.screen_rect.top;
+    RECT current{};
+    const bool current_valid = GetWindowRect(windows.backdrop, &current) != FALSE;
+    const bool backdrop_visible = IsWindowVisible(windows.backdrop) != FALSE;
+    const bool layout_changed = !current_valid || !backdrop_visible ||
+        current.left != layout.screen_rect.left ||
+        current.top != layout.screen_rect.top ||
+        current.right - current.left != width ||
+        current.bottom - current.top != height;
+    if (!layout_changed) {
+        return true;
+    }
+
+    const HWND insert_after = backdrop_visible ? nullptr : HWND_TOP;
+    UINT flags = SWP_NOACTIVATE | SWP_SHOWWINDOW;
+    if (backdrop_visible) {
+        flags |= SWP_NOZORDER;
+    }
+    if (!SetWindowPos(windows.backdrop, insert_after,
+            layout.screen_rect.left, layout.screen_rect.top,
+            width, height, flags)) {
+        return false;
+    }
+    if (!SetWindowPos(windows.surface, nullptr, 0, 0, width, height,
+            SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW)) {
+        return false;
+    }
+    if (layout_changed_out != nullptr) {
+        *layout_changed_out = true;
+    }
+    return true;
+}
+
+ScenarioUiBinkWindows create_scenario_ui_bink_windows(
+    const UiScreenEntry& entry) {
+    ScenarioUiBinkWindows windows{};
+    ScenarioUiBinkLayout layout{};
+    if (!query_scenario_ui_bink_layout(entry, layout)) {
+        return windows;
     }
 
     constexpr wchar_t kWindowClass[] = L"RankerScenarioUiBink";
@@ -776,53 +889,21 @@ ScenarioUiBinkWindows create_scenario_ui_bink_windows(
         }
     }
 
-    RECT client{};
-    if (!GetClientRect(layout_host, &client)) {
-        return windows;
-    }
-    const LONG client_width = client.right - client.left;
-    const LONG client_height = client.bottom - client.top;
-    const LONG logical_width = static_cast<LONG>(dd.width != 0 ? dd.width : 800);
-    const LONG logical_height = static_cast<LONG>(dd.height != 0 ? dd.height : 600);
-    if (client_width <= 0 || client_height <= 0 ||
-        logical_width <= 0 || logical_height <= 0) {
-        return windows;
-    }
-
-    const LONG left = MulDiv(UiScreenEntryI32(entry, 0x20),
-        client_width, logical_width);
-    const LONG top = MulDiv(UiScreenEntryI32(entry, 0x24),
-        client_height, logical_height);
-    const LONG right = MulDiv(UiScreenEntryI32(entry, 0x28),
-        client_width, logical_width);
-    const LONG bottom = MulDiv(UiScreenEntryI32(entry, 0x2c),
-        client_height, logical_height);
-    if (right <= left || bottom <= top) {
-        return windows;
-    }
-
-    POINT top_left{left, top};
-    POINT bottom_right{right, bottom};
-    if (!ClientToScreen(layout_host, &top_left) ||
-        !ClientToScreen(layout_host, &bottom_right)) {
-        return windows;
-    }
+    const LONG width = layout.screen_rect.right - layout.screen_rect.left;
+    const LONG height = layout.screen_rect.bottom - layout.screen_rect.top;
 
     // DirectDraw presents directly over ordinary child HWNDs, so retain an
     // owned popup. It must not be desktop-topmost: ownership keeps it above
     // Ranker's presentation and also hides/reorders it with Ranker on Alt+Tab.
     windows.backdrop = CreateWindowExW(
         static_cast<DWORD>(kScenarioUiVideoBackdropExtendedStyle),
-        kWindowClass, L"", WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN,
-        top_left.x, top_left.y,
-        bottom_right.x - top_left.x, bottom_right.y - top_left.y,
-        popup_owner, nullptr, instance, nullptr);
+        kWindowClass, L"", WS_POPUP | WS_CLIPCHILDREN,
+        layout.screen_rect.left, layout.screen_rect.top, width, height,
+        layout.popup_owner, nullptr, instance, nullptr);
     if (windows.backdrop == nullptr) {
         return windows;
     }
 
-    const LONG width = bottom_right.x - top_left.x;
-    const LONG height = bottom_right.y - top_left.y;
     windows.surface = CreateWindowExW(0, kWindowClass, L"",
         WS_CHILD | WS_VISIBLE, 0, 0, width, height,
         windows.backdrop, nullptr, instance, nullptr);
@@ -832,8 +913,11 @@ ScenarioUiBinkWindows create_scenario_ui_bink_windows(
         return windows;
     }
 
-    SetWindowPos(windows.backdrop, HWND_TOP, top_left.x, top_left.y,
-        width, height, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+    if (!update_scenario_ui_bink_windows(entry, windows)) {
+        DestroyWindow(windows.backdrop);
+        windows = ScenarioUiBinkWindows{};
+        return windows;
+    }
     UpdateWindow(windows.backdrop);
     UpdateWindow(windows.surface);
     return windows;
@@ -988,6 +1072,12 @@ void run_ui_bink_media_fallback(UiBinkAsyncMediaContext* context) {
     }
 
     while (!context->stop_requested.load() && !context->failed.load()) {
+        bool video_layout_changed = false;
+        if (update_scenario_ui_bink_windows(
+                context->entry, windows, &video_layout_changed) &&
+            video_layout_changed && player != nullptr) {
+            player->UpdateVideo();
+        }
         dispatch_scenario_ui_bink_window_messages();
         if (callback != nullptr && callback->failed()) {
             context->failed.store(true);
