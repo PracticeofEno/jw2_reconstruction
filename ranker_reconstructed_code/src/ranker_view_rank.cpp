@@ -780,6 +780,9 @@ bool CreateViewRankWindow(ViewRankState& state, HWND parent, HINSTANCE instance,
     SendMessageA(state.search_edit.window, EM_LIMITTEXT, 0x1f, 0);
 
     for (const ViewRankButtonSpec& spec : kButtonSpecs) {
+        if (IsViewRankRemovedButtonId(spec.id)) {
+            continue;
+        }
         if (!create_image_button(state, spec)) {
             DestroyWindow(state.window);
             return false;
@@ -966,10 +969,6 @@ LRESULT HandleViewRankWindowMessage(ViewRankState& state, HWND hwnd, UINT messag
             // The callback falls back to the Connect frontend when this rank
             // window was opened outside WizardNet.
             open_connect_frontend(state);
-            break;
-        case kViewRankGoSiteButtonId:
-            play_click_sound(state);
-            QueueViewRankSiteRequest(state);
             break;
         case kViewRankNormalTabButtonId:
             play_click_sound(state);

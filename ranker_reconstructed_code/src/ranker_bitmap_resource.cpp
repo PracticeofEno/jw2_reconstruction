@@ -3,7 +3,13 @@
 #include "ranker_crt_runtime.h"
 #include "ranker_trc.h"
 
+#ifdef _WIN32
+#include <wtypes.h>
+#include <gdiplus.h>
+#endif
+
 #include <cstring>
+#include <limits>
 #include <string>
 
 namespace ranker {
@@ -24,6 +30,18 @@ u32 read_le_u32(const u8* p) {
         (static_cast<u32>(p[3]) << 24);
 }
 
+void write_le_u16(u8* p, u16 value) {
+    p[0] = static_cast<u8>(value & 0xffu);
+    p[1] = static_cast<u8>((value >> 8) & 0xffu);
+}
+
+void write_le_u32(u8* p, u32 value) {
+    p[0] = static_cast<u8>(value & 0xffu);
+    p[1] = static_cast<u8>((value >> 8) & 0xffu);
+    p[2] = static_cast<u8>((value >> 16) & 0xffu);
+    p[3] = static_cast<u8>((value >> 24) & 0xffu);
+}
+
 i32 read_le_i32(const u8* p) {
     return WrappedU32ToI32(read_le_u32(p));
 }
@@ -41,6 +59,118 @@ const u8* pointer_at(const BitmapMemoryResource& resource, u32 offset) {
 }
 
 #ifdef _WIN32
+bool ensure_bitmap_resource_gdiplus() {
+    static const ULONG_PTR token = [] {
+        Gdiplus::GdiplusStartupInput input;
+        ULONG_PTR next_token = 0;
+        return Gdiplus::GdiplusStartup(&next_token, &input, nullptr) == Gdiplus::Ok ?
+            next_token : 0;
+    }();
+    return token != 0;
+}
+
+std::wstring widen_bitmap_resource_path(const char* path) {
+    if (path == nullptr) {
+        return {};
+    }
+
+    const int required = MultiByteToWideChar(CP_ACP, 0, path, -1, nullptr, 0);
+    if (required <= 1) {
+        return {};
+    }
+
+    std::wstring wide_path(static_cast<std::size_t>(required), L'\0');
+    if (MultiByteToWideChar(CP_ACP, 0, path, -1, wide_path.data(), required) <= 0) {
+        return {};
+    }
+    wide_path.resize(static_cast<std::size_t>(required - 1));
+    return wide_path;
+}
+
+bool decode_png_file_to_bmp_bytes(const char* path, std::vector<u8>& bytes) {
+    if (!ensure_bitmap_resource_gdiplus()) {
+        return false;
+    }
+
+    const std::wstring wide_path = widen_bitmap_resource_path(path);
+    if (wide_path.empty()) {
+        return false;
+    }
+
+    Gdiplus::Bitmap bitmap(wide_path.c_str());
+    GUID raw_format{};
+    if (bitmap.GetLastStatus() != Gdiplus::Ok ||
+        bitmap.GetRawFormat(&raw_format) != Gdiplus::Ok ||
+        !IsEqualGUID(raw_format, Gdiplus::ImageFormatPNG)) {
+        return false;
+    }
+
+    const UINT width = bitmap.GetWidth();
+    const UINT height = bitmap.GetHeight();
+    if (width == 0 || height == 0 ||
+        width > static_cast<UINT>(std::numeric_limits<i32>::max()) ||
+        height > static_cast<UINT>(std::numeric_limits<i32>::max())) {
+        return false;
+    }
+
+    constexpr std::size_t kDecodedBmpHeaderSize =
+        kBmpFileHeaderSize + kBmpInfoHeaderSize;
+    if (width > (std::numeric_limits<std::size_t>::max() - 3u) / 3u) {
+        return false;
+    }
+    const std::size_t row_bytes = static_cast<std::size_t>(width) * 3u;
+    const std::size_t row_stride = (row_bytes + 3u) & ~std::size_t{3u};
+    if (row_stride > std::numeric_limits<u32>::max() / height) {
+        return false;
+    }
+    const std::size_t pixel_bytes = row_stride * height;
+    if (pixel_bytes > std::numeric_limits<u32>::max() - kDecodedBmpHeaderSize) {
+        return false;
+    }
+
+    Gdiplus::Rect rect(0, 0, static_cast<INT>(width), static_cast<INT>(height));
+    Gdiplus::BitmapData bitmap_data{};
+    if (bitmap.LockBits(&rect, Gdiplus::ImageLockModeRead,
+            PixelFormat24bppRGB, &bitmap_data) != Gdiplus::Ok) {
+        return false;
+    }
+
+    bytes.assign(kDecodedBmpHeaderSize + pixel_bytes, 0);
+    write_le_u16(bytes.data(), kBmpMagic);
+    write_le_u32(bytes.data() + 0x02, static_cast<u32>(bytes.size()));
+    write_le_u32(bytes.data() + 0x0a, static_cast<u32>(kDecodedBmpHeaderSize));
+
+    u8* info_header = bytes.data() + kBmpFileHeaderSize;
+    write_le_u32(info_header, static_cast<u32>(kBmpInfoHeaderSize));
+    write_le_u32(info_header + 0x04, width);
+    write_le_u32(info_header + 0x08, height);
+    write_le_u16(info_header + 0x0c, 1);
+    write_le_u16(info_header + 0x0e, 24);
+    write_le_u32(info_header + 0x14, static_cast<u32>(pixel_bytes));
+    write_le_u32(info_header + 0x18, 2835);
+    write_le_u32(info_header + 0x1c, 2835);
+
+    const auto* source_base = static_cast<const u8*>(bitmap_data.Scan0);
+    const LONG source_stride = bitmap_data.Stride;
+    u8* destination_base = bytes.data() + kDecodedBmpHeaderSize;
+    for (UINT y = 0; y < height; ++y) {
+        const u8* source = source_stride >= 0 ?
+            source_base + static_cast<std::size_t>(y) *
+                static_cast<std::size_t>(source_stride) :
+            source_base + static_cast<std::size_t>(height - 1u - y) *
+                static_cast<std::size_t>(-source_stride);
+        u8* destination = destination_base +
+            static_cast<std::size_t>(height - 1u - y) * row_stride;
+        std::memcpy(destination, source, row_bytes);
+    }
+
+    if (bitmap.UnlockBits(&bitmap_data) != Gdiplus::Ok) {
+        bytes.clear();
+        return false;
+    }
+    return true;
+}
+
 bool create_indexed_palette(BitmapMemoryResource& resource, const u8* info_header,
     u16 bit_count, u32 colors_used) {
     if (bit_count >= 9) {
@@ -249,6 +379,19 @@ bool LoadBitmapMemoryResourceFromFile(BitmapMemoryResource& resource, const char
 }
 
 #ifdef _WIN32
+bool LoadPngBitmapMemoryResourceFromFile(
+    BitmapMemoryResource& resource, const char* path) {
+    if (path == nullptr) {
+        return false;
+    }
+
+    std::vector<u8> bytes;
+    if (!decode_png_file_to_bmp_bytes(path, bytes)) {
+        return false;
+    }
+    return LoadBitmapMemoryResourceFromOwnedBytes(resource, std::move(bytes));
+}
+
 bool LoadBitmapMemoryResourceFromExecutableRelativeFile(
     BitmapMemoryResource& resource, const char* relative_path) {
     if (relative_path == nullptr || relative_path[0] == '\0') {
@@ -270,6 +413,29 @@ bool LoadBitmapMemoryResourceFromExecutableRelativeFile(
     path.resize(separator + 1);
     path.append(relative_path);
     return LoadBitmapMemoryResourceFromFile(resource, path.c_str());
+}
+
+bool LoadPngBitmapMemoryResourceFromExecutableRelativeFile(
+    BitmapMemoryResource& resource, const char* relative_path) {
+    if (relative_path == nullptr || relative_path[0] == '\0') {
+        return false;
+    }
+
+    char module_path[MAX_PATH]{};
+    const DWORD module_path_length = GetModuleFileNameA(
+        nullptr, module_path, static_cast<DWORD>(sizeof(module_path)));
+    if (module_path_length == 0 || module_path_length >= sizeof(module_path)) {
+        return false;
+    }
+
+    std::string path(module_path, module_path_length);
+    const std::size_t separator = path.find_last_of("\\/");
+    if (separator == std::string::npos) {
+        return false;
+    }
+    path.resize(separator + 1);
+    path.append(relative_path);
+    return LoadPngBitmapMemoryResourceFromFile(resource, path.c_str());
 }
 #endif
 

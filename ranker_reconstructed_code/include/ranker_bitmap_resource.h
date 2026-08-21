@@ -51,7 +51,11 @@ bool LoadBitmapMemoryResourceFromMemory(BitmapMemoryResource& resource, const vo
     std::size_t size);
 bool LoadBitmapMemoryResourceFromFile(BitmapMemoryResource& resource, const char* path);
 #ifdef _WIN32
+bool LoadPngBitmapMemoryResourceFromFile(
+    BitmapMemoryResource& resource, const char* path);
 bool LoadBitmapMemoryResourceFromExecutableRelativeFile(
+    BitmapMemoryResource& resource, const char* relative_path);
+bool LoadPngBitmapMemoryResourceFromExecutableRelativeFile(
     BitmapMemoryResource& resource, const char* relative_path);
 #endif
 bool LoadBitmapMemoryResourceFromTrcRecord(BitmapMemoryResource& resource,

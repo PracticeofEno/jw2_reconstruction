@@ -101,6 +101,7 @@ constexpr int kOnlineLobbyRankMarkTextGap = 6;
 constexpr std::size_t kWizardNetReplayListRecordBytes = 0xb0;
 constexpr int kWizardNetReplayThemeWidth = 800;
 constexpr int kWizardNetReplayThemeHeight = 600;
+constexpr OnlineLobbyLayoutRect kWizardNetReplayListHeaderRect{64, 150, 279, 23};
 constexpr OnlineLobbyLayoutRect kWizardNetReplayListRect{64, 181, 259, 320};
 constexpr OnlineLobbyLayoutRect kWizardNetReplayScrollRect{328, 181, 15, 320};
 constexpr OnlineLobbyLayoutRect kWizardNetReplayInfoRect{380, 88, 355, 412};
@@ -186,8 +187,8 @@ struct FrontendLayoutTableOwner {
 };
 
 bool load_reconstructed_lobby_background(OnlineLobbyState& state) {
-    return LoadBitmapMemoryResourceFromExecutableRelativeFile(
-        state.background, "media\\lobby\\lobby_base.bmp");
+    return LoadPngBitmapMemoryResourceFromExecutableRelativeFile(
+        state.background, "media\\lobby\\lobby_base.png");
 }
 
 bool load_reconstructed_rank_marks(OnlineLobbyState& state) {
@@ -235,12 +236,15 @@ OnlineLobbyLayoutRect simplified_main_panel_rect(
         std::max<i32>(1, root.width));
     const i32 inset = ScaleFrontendLayoutValue(12, 1024,
         std::max<i32>(1, root.width));
+    const i32 replay_nudge = ScaleFrontendLayoutValue(
+        kOnlineLobbyReplayButtonRightNudge, 1024,
+        std::max<i32>(1, root.width));
 
     // The old content background extended under all four legacy tabs.  Its
     // reconstructed Main page contains the three original actions plus the
     // replay browser, so terminate the panel immediately after Replay.
     const i32 content_width = inset + create.width + gap + join.width + gap +
-        rank.width + gap + rank.width + inset;
+        rank.width + gap + replay_nudge + rank.width + inset;
     panel.width = std::clamp<i32>(content_width, 1,
         std::max<i32>(1, panel.width));
     return panel;
@@ -266,6 +270,9 @@ OnlineLobbyLayoutRect arrange_simplified_main_action(
         std::max<i32>(1, root.width));
     const i32 vertical_inset = ScaleFrontendLayoutValue(12, 600,
         std::max<i32>(1, root.height));
+    const i32 replay_nudge = ScaleFrontendLayoutValue(
+        kOnlineLobbyReplayButtonRightNudge, 1024,
+        std::max<i32>(1, root.width));
     const i32 first_x = std::max<i32>(0, action_panel.x + panel_inset);
 
     // The reconstructed background has a compact framed group for these
@@ -282,6 +289,7 @@ OnlineLobbyLayoutRect arrange_simplified_main_action(
     } else {
         rect.x = first_x + create.width + gap + join.width + gap +
             rank.width + gap;
+        rect = ShiftOnlineLobbyReplayButtonRight(rect, replay_nudge);
     }
     return rect;
 }
@@ -358,10 +366,18 @@ void draw_online_lobby_replay_button(OnlineLobbyState& state,
 
     const bool pressed = (draw.itemState & ODS_SELECTED) != 0;
     RECT label = draw.rcItem;
-    label.left += 10;
-    label.top += 9;
-    label.right -= 10;
-    label.bottom -= 9;
+    const int button_width = std::max<int>(1, label.right - label.left);
+    const int button_height = std::max<int>(1, label.bottom - label.top);
+    const int horizontal_inset = ScaleFrontendLayoutValue(
+        kOnlineLobbyReplayInnerFrameHorizontalInset,
+        kOnlineLobbyReplayButtonBaseWidth, button_width);
+    const int vertical_inset = ScaleFrontendLayoutValue(
+        kOnlineLobbyReplayInnerFrameVerticalInset,
+        kOnlineLobbyReplayButtonBaseHeight, button_height);
+    label.left += horizontal_inset;
+    label.top += vertical_inset;
+    label.right -= horizontal_inset;
+    label.bottom -= vertical_inset;
     if (pressed) {
         OffsetRect(&label, 1, 1);
     }
@@ -1692,33 +1708,98 @@ void draw_replay_browser_status(OnlineLobbyState& state, HDC dc) {
     }
 }
 
+void draw_replay_browser_list_header(OnlineLobbyState& state, HDC dc) {
+    if (dc == nullptr || state.replay_browser_window == nullptr) {
+        return;
+    }
+
+    RECT bounds = replay_theme_rect(state.replay_browser_window,
+        kWizardNetReplayListHeaderRect);
+    const int inset = std::max<int>(6, (bounds.right - bounds.left) * 3 / 100);
+    bounds.left += inset;
+    bounds.right -= inset;
+
+    HFONT font = state.replay_browser_font != nullptr ?
+        state.replay_browser_font : online_lobby_chat_font();
+    HGDIOBJ old_font = font != nullptr ? SelectObject(dc, font) : nullptr;
+    SetBkMode(dc, TRANSPARENT);
+
+    RECT title = bounds;
+    title.right -= std::max<LONG>(48, (bounds.right - bounds.left) / 4);
+    SetTextColor(dc, RGB(230, 225, 205));
+    DrawTextW(dc, L"\uc11c\ubc84 \ub9ac\ud50c\ub808\uc774", -1, &title,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS |
+            DT_NOPREFIX);
+
+    const std::wstring count = std::to_wstring(state.replay_entries.size()) +
+        L"\uac1c";
+    RECT count_rect = bounds;
+    SetTextColor(dc, RGB(214, 168, 78));
+    DrawTextW(dc, count.c_str(), -1, &count_rect,
+        DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+    if (old_font != nullptr) {
+        SelectObject(dc, old_font);
+    }
+}
+
 void draw_replay_browser_list_item(OnlineLobbyState& state,
     const DRAWITEMSTRUCT& draw) {
     RECT rect = draw.rcItem;
     const bool selected = (draw.itemState & ODS_SELECTED) != 0;
-    fill_online_lobby_rect(draw.hDC, rect,
-        selected ? RGB(48, 35, 19) : RGB(0, 0, 0));
+    const bool alternate = draw.itemID != static_cast<UINT>(-1) &&
+        (draw.itemID & 1u) != 0;
+    fill_online_lobby_rect(draw.hDC, rect, selected ? RGB(49, 36, 20) :
+        (alternate ? RGB(10, 8, 5) : RGB(0, 0, 0)));
     if (draw.itemID == static_cast<UINT>(-1) ||
         draw.itemID >= state.replay_entries.size()) {
         return;
     }
 
     const WizardNetReplayListEntry& entry = state.replay_entries[draw.itemID];
+    const std::wstring filename = cp949_to_wide(entry.filename);
     const std::wstring uploader = cp949_to_wide(entry.uploader);
-    wchar_t text[192]{};
-    _snwprintf_s(text, std::size(text), _TRUNCATE, L"[%ls] %ls",
-        entry.game_type == kWizardNetGameTypeRank ? L"랭킹" : L"밀리",
-        uploader.empty() ? L"-" : uploader.c_str());
+    wchar_t metadata[256]{};
+    _snwprintf_s(metadata, std::size(metadata), _TRUNCATE,
+        L"%ls  \u00b7  %ls  \u00b7  %.1f KB",
+        replay_game_type_text(entry.game_type),
+        uploader.empty() ? L"-" : uploader.c_str(),
+        static_cast<double>(entry.byte_count) / 1024.0);
 
     HFONT font = state.replay_browser_font != nullptr ?
         state.replay_browser_font : online_lobby_chat_font();
     HGDIOBJ old_font = font != nullptr ? SelectObject(draw.hDC, font) : nullptr;
-    rect.left += 6;
-    rect.right -= 4;
+    const int row_height = std::max<int>(1, rect.bottom - rect.top);
+    const int accent_width = std::max(3, row_height / 12);
+    const int horizontal_inset = std::max(8, row_height / 5);
+    const int vertical_inset = std::max(2, row_height / 16);
+    if (selected) {
+        RECT accent = rect;
+        accent.right = accent.left + accent_width;
+        fill_online_lobby_rect(draw.hDC, accent, RGB(221, 168, 61));
+        frame_online_lobby_rect(draw.hDC, rect, RGB(128, 91, 38));
+    }
+
+    RECT separator = rect;
+    separator.top = std::max(separator.top, separator.bottom - 1);
+    fill_online_lobby_rect(draw.hDC, separator,
+        selected ? RGB(112, 77, 31) : RGB(37, 29, 17));
+
+    const int text_left = rect.left + accent_width + horizontal_inset;
+    const int text_right = rect.right - horizontal_inset;
+    RECT primary{text_left, rect.top + vertical_inset, text_right,
+        rect.top + row_height * 55 / 100};
+    RECT secondary{text_left, primary.bottom - 1, text_right,
+        rect.bottom - vertical_inset};
     SetBkMode(draw.hDC, TRANSPARENT);
-    SetTextColor(draw.hDC,
-        selected ? RGB(255, 215, 83) : RGB(230, 230, 218));
-    DrawTextW(draw.hDC, text, -1, &rect,
+    SetTextColor(draw.hDC, selected ? RGB(255, 220, 109) :
+        RGB(235, 232, 216));
+    DrawTextW(draw.hDC, filename.c_str(), -1, &primary,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS |
+            DT_NOPREFIX);
+    SetTextColor(draw.hDC, selected ? RGB(222, 198, 142) :
+        RGB(154, 145, 121));
+    DrawTextW(draw.hDC, metadata, -1, &secondary,
         DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS |
             DT_NOPREFIX);
     if (old_font != nullptr) {
@@ -1897,6 +1978,7 @@ LRESULT CALLBACK replay_browser_window_proc(HWND hwnd, UINT message,
         HDC dc = BeginPaint(hwnd, &paint);
         StretchBitmapMemoryResourceToClient(state->replay_browser_background,
             dc, hwnd);
+        draw_replay_browser_list_header(*state, dc);
         draw_replay_browser_info(*state, dc);
         draw_replay_browser_status(*state, dc);
         EndPaint(hwnd, &paint);
@@ -2115,7 +2197,8 @@ bool open_replay_browser(OnlineLobbyState& state) {
         reinterpret_cast<WPARAM>(font), TRUE);
     SendMessageW(state.replay_list, LB_SETITEMHEIGHT, 0,
         static_cast<LPARAM>(std::max(18,
-            ScaleFrontendLayoutValue(22, kWizardNetReplayThemeHeight,
+            ScaleFrontendLayoutValue(kOnlineLobbyReplayListRowHeight,
+                kWizardNetReplayThemeHeight,
                 height))));
     state.replay_entries.clear();
     state.replay_download_bytes.clear();

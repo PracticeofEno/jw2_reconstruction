@@ -1306,6 +1306,30 @@ if (RANKER_BUILD_READABILITY_REGRESSION_TESTS)
         COMMAND frontend_window_placement_regression)
 endif()
 
+option(RANKER_BUILD_BITMAP_PNG_RESOURCE_REGRESSION_TEST
+    "Build the PNG-backed bitmap resource regression" OFF)
+if (RANKER_BUILD_BITMAP_PNG_RESOURCE_REGRESSION_TEST AND WIN32)
+    enable_testing()
+    add_executable(bitmap_png_resource_regression
+        tests/bitmap_png_resource_regression.cpp
+        src/ranker_bitmap_resource.cpp
+    )
+    target_include_directories(bitmap_png_resource_regression PRIVATE include)
+    if (MSVC)
+        target_compile_options(bitmap_png_resource_regression PRIVATE /Gy)
+        target_link_options(bitmap_png_resource_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(bitmap_png_resource_regression PRIVATE
+            -O1 -ffunction-sections -fdata-sections)
+        target_link_options(bitmap_png_resource_regression PRIVATE
+            -Wl,--gc-sections)
+    endif()
+    target_link_libraries(bitmap_png_resource_regression PRIVATE gdi32 gdiplus)
+    add_test(NAME bitmap_png_resource_regression
+        COMMAND bitmap_png_resource_regression
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/lobby_base.png")
+endif()
+
 option(RANKER_BUILD_END_CONDITION_REGRESSION_TESTS
     "Build focused gameplay end-condition regressions" OFF)
 if (RANKER_BUILD_END_CONDITION_REGRESSION_TESTS)
@@ -1808,7 +1832,7 @@ if (WIN32)
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/main_menu_bink_fallback_anim.z"
             "$<TARGET_FILE_DIR:ranker_rebuild>/media/menu"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/resources/lobby_base.bmp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/lobby_base.png"
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/view_rank_base.bmp"
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/wizardnet_rank_marks.bmp"
             "$<TARGET_FILE_DIR:ranker_rebuild>/media/lobby"

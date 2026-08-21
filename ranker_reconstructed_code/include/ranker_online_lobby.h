@@ -65,6 +65,12 @@ constexpr int kOnlineLobbyReplayButtonId = 0xbde;
 constexpr int kOnlineLobbyReplayListId = 0xbdf;
 constexpr int kOnlineLobbyReplayDownloadButtonId = 0xbe0;
 constexpr int kOnlineLobbyReplayCloseButtonId = 0xbe1;
+constexpr int kOnlineLobbyReplayButtonRightNudge = 8;
+constexpr int kOnlineLobbyReplayListRowHeight = 40;
+constexpr int kOnlineLobbyReplayButtonBaseWidth = 117;
+constexpr int kOnlineLobbyReplayButtonBaseHeight = 38;
+constexpr int kOnlineLobbyReplayInnerFrameHorizontalInset = 12;
+constexpr int kOnlineLobbyReplayInnerFrameVerticalInset = 10;
 constexpr u32 kOnlineLobbySetRankMarkRequestOpcode = 0x96;
 constexpr u32 kOnlineLobbySetRankMarkResponseOpcode = 0x97;
 constexpr int kOnlineLobbyAcceleratorResourceId = 0x12c;
@@ -114,6 +120,12 @@ struct OnlineLobbyLayoutRect {
     int width = 0;
     int height = 0;
 };
+
+constexpr OnlineLobbyLayoutRect ShiftOnlineLobbyReplayButtonRight(
+    OnlineLobbyLayoutRect button, int right_nudge) {
+    button.x += right_nudge > 0 ? right_nudge : 0;
+    return button;
+}
 
 constexpr OnlineLobbyLayoutRect RightAlignOnlineLobbyComposerButton(
     OnlineLobbyLayoutRect button, const OnlineLobbyLayoutRect& rightmost_slot) {

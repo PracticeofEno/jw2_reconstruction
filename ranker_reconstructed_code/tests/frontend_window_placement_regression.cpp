@@ -6,7 +6,9 @@
 #include "ranker_link_lobby.h"
 #include "ranker_map_brush.h"
 #include "ranker_online_lobby.h"
+#include "ranker_player_profile.h"
 #include "ranker_ui_screen.h"
+#include "ranker_view_rank.h"
 #include "ranker_winmain.h"
 #include "ranker_wizardnet_services.h"
 
@@ -122,6 +124,40 @@ static_assert(SelectCreateGameWindowPlacement(true, 1) ==
     CreateGameWindowPlacement::contained_child);
 static_assert(SelectCreateGameWindowPlacement(false, 6) ==
     CreateGameWindowPlacement::fullscreen_popup);
+static_assert(SelectPlayerProfileWindowPlacement(true) ==
+    PlayerProfileWindowPlacement::owned_modal_overlay);
+static_assert(SelectPlayerProfileWindowPlacement(false) ==
+    PlayerProfileWindowPlacement::fullscreen_popup);
+static_assert(IsPlayerProfileRemovedControlId(kPlayerProfileNameEditId));
+static_assert(IsPlayerProfileRemovedControlId(kPlayerProfileGuildNameEditId));
+static_assert(IsPlayerProfileRemovedControlId(kPlayerProfileMemoButtonId));
+static_assert(IsPlayerProfileRemovedControlId(
+    kPlayerProfileAvatarFirstButtonId));
+static_assert(IsPlayerProfileRemovedControlId(
+    kPlayerProfileAvatarMeleeEditId));
+static_assert(IsPlayerProfileRemovedControlId(
+    kPlayerProfileAvatarRankEditId));
+static_assert(!IsPlayerProfileRemovedControlId(
+    kPlayerProfileNormalRankEditId));
+static_assert(!IsPlayerProfileRemovedControlId(
+    kPlayerProfileDescriptionEditId));
+constexpr OnlineLobbyLayoutRect kReplayButtonBeforeNudge{453, 540, 117, 38};
+constexpr OnlineLobbyLayoutRect kReplayButtonAfterNudge =
+    ShiftOnlineLobbyReplayButtonRight(kReplayButtonBeforeNudge,
+        kOnlineLobbyReplayButtonRightNudge);
+static_assert(kReplayButtonAfterNudge.x == 461);
+static_assert(kReplayButtonAfterNudge.width == 117);
+static_assert(kOnlineLobbyReplayListRowHeight == 40);
+static_assert(ScaleFrontendLayoutValue(kOnlineLobbyReplayListRowHeight,
+    600, 960) == 64);
+static_assert(ScaleFrontendLayoutValue(
+    kOnlineLobbyReplayInnerFrameHorizontalInset,
+    kOnlineLobbyReplayButtonBaseWidth, 187) == 19);
+static_assert(ScaleFrontendLayoutValue(
+    kOnlineLobbyReplayInnerFrameVerticalInset,
+    kOnlineLobbyReplayButtonBaseHeight, 61) == 16);
+static_assert(IsViewRankRemovedButtonId(kViewRankGoSiteButtonId));
+static_assert(!IsViewRankRemovedButtonId(kViewRankCloseButtonId));
 static_assert(FrontendCursorArgbFromRgb565(0x0000) == 0x00000000u);
 static_assert(FrontendCursorArgbFromRgb565(0xf800) == 0xffff0000u);
 static_assert(FrontendCursorArgbFromRgb565(0x07e0) == 0xff00ff00u);

@@ -36,6 +36,10 @@ constexpr int kViewRankAvatarTabButtonId = 0x1d53;
 constexpr int kViewRankGuildTabButtonId = 0x1d54;
 constexpr int kViewRankAcceleratorResourceId = 0x2ee;
 
+constexpr bool IsViewRankRemovedButtonId(int control_id) {
+    return control_id == kViewRankGoSiteButtonId;
+}
+
 constexpr u32 kViewRankLayoutTrcRecord = 0x16c;
 constexpr u32 kViewRankBackgroundBitmapRecord = 0xd0;
 constexpr std::size_t kViewRankVisibleRows = 16;

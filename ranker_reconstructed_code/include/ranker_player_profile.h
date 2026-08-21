@@ -38,6 +38,36 @@ constexpr int kPlayerProfileAvatarButtonCount = 8;
 constexpr int kPlayerProfileOkButtonId = IDOK;
 constexpr int kPlayerProfileCancelButtonId = IDCANCEL;
 
+enum class PlayerProfileWindowPlacement : u8 {
+    fullscreen_popup = 0,
+    owned_modal_overlay = 1,
+};
+
+constexpr PlayerProfileWindowPlacement SelectPlayerProfileWindowPlacement(
+    bool has_parent_window) {
+    return has_parent_window ? PlayerProfileWindowPlacement::owned_modal_overlay :
+        PlayerProfileWindowPlacement::fullscreen_popup;
+}
+
+// The simplified profile keeps the normal match records and introduction,
+// while the legacy identity, avatar match records, and owned-avatar panels are
+// painted back into the stone theme. Keep this classification shared with the
+// focused layout regression so removed controls cannot accidentally reappear.
+constexpr bool IsPlayerProfileRemovedControlId(int control_id) {
+    return control_id == kPlayerProfileNameEditId ||
+        control_id == kPlayerProfileSexEditId ||
+        control_id == kPlayerProfileAgeEditId ||
+        control_id == kPlayerProfileMemoButtonId ||
+        control_id == kPlayerProfileGuildIconButtonId ||
+        control_id == kPlayerProfileGuildNameEditId ||
+        control_id == kPlayerProfileLocationSelectorId ||
+        control_id == kPlayerProfileAvatarMeleeEditId ||
+        control_id == kPlayerProfileAvatarRankEditId ||
+        (control_id >= kPlayerProfileAvatarFirstButtonId &&
+            control_id < kPlayerProfileAvatarFirstButtonId +
+                kPlayerProfileAvatarButtonCount);
+}
+
 constexpr u32 kPlayerProfileLayoutTrcRecord = 0x16d;
 constexpr u32 kPlayerProfileAvatarIdTextTrcRecord = 0x15c;
 constexpr u32 kPlayerProfileLocationTextTrcRecord = 0x15d;
@@ -150,6 +180,8 @@ struct PlayerProfileState {
     PlayerProfilePayload profile;
     std::array<char, 0x20> requested_name{};
     std::array<char, 0x20> local_account_name{};
+    HFONT ui_font = nullptr;
+    bool parent_disabled_for_modal = false;
     bool own_profile = false;
     bool visible = false;
     PlayerProfileCallbacks callbacks{};

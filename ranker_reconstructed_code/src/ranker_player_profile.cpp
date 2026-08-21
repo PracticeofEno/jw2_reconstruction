@@ -7,6 +7,7 @@
 #include "ranker_gameplay_sound.h"
 #include "ranker_icon_strips.h"
 #include "ranker_online_lobby.h"
+#include "ranker_system_ui.h"
 #include "ranker_trc.h"
 #include "ranker_winmain.h"
 
@@ -25,7 +26,8 @@ namespace ranker {
 namespace {
 
 constexpr DWORD kWindowStyleFullscreen = 0x90000000;
-constexpr DWORD kWindowStyleWindowed = 0x10cf0000;
+constexpr DWORD kWindowStyleOwnedOverlay =
+    WS_POPUP | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
 constexpr DWORD kEditStyle = WS_CHILD;
 constexpr DWORD kMultilineEditStyle = WS_CHILD | ES_MULTILINE | ES_WANTRETURN;
 constexpr COLORREF kProfileWhite = RGB(255, 255, 255);
@@ -35,6 +37,15 @@ constexpr int kSelectorButtonWidth = 0x0f;
 constexpr int kAvatarFrameWidth = 0x26;
 constexpr int kAvatarFrameHeight = 0x26;
 constexpr int kAvatarFrameCount = 64;
+constexpr int kProfileThemeWidth = 528;
+constexpr int kProfileThemeHeight = 557;
+constexpr BitmapDrawRect kProfileThemeTextureSource{
+    180, kProfileThemeHeight - 366, 168, 51};
+constexpr std::array<BitmapDrawRect, 3> kProfileRemovedPanels{{
+    {18, 57, 141, 311},
+    {180, 204, 168, 164},
+    {359, 57, 142, 311},
+}};
 
 constexpr std::size_t kPayloadNameOffset = 0x0d;
 constexpr std::size_t kPayloadGuildIconOffset = 0x2d;
@@ -585,6 +596,13 @@ void enable_window_style(HWND window, bool enabled) {
     EnableWindow(window, enabled ? TRUE : FALSE);
 }
 
+bool profile_is_own(const PlayerProfileState& state) {
+    const char* profile_name = state.requested_name[0] != '\0' ?
+        state.requested_name.data() : state.profile.name.data();
+    return upper_ascii(profile_name) ==
+        upper_ascii(state.local_account_name.data());
+}
+
 void apply_profile_to_controls(PlayerProfileState& state) {
     const PlayerProfilePayload& profile = state.profile;
     set_text(state.name_edit.window, profile.name.data());
@@ -621,12 +639,7 @@ void apply_profile_to_controls(PlayerProfileState& state) {
     SetLegacyStringSelectorSelectedIndex(state.location_selector,
         profile.location_index + 1);
 
-    state.own_profile =
-        upper_ascii(state.requested_name.data()) == upper_ascii(state.local_account_name.data());
-    if (state.requested_name[0] == '\0') {
-        state.own_profile =
-            upper_ascii(profile.name.data()) == upper_ascii(state.local_account_name.data());
-    }
+    state.own_profile = profile_is_own(state);
 
     SetLegacyStringSelectorButtonsHidden(state.location_selector, !state.own_profile);
     ShowWindow(GetLegacyImageButtonWindow(state.item_deal_button),
@@ -644,10 +657,8 @@ void apply_profile_to_controls(PlayerProfileState& state) {
     enable_window_style(state.avatar_melee_edit.window, false);
     enable_window_style(state.avatar_rank_edit.window, false);
 
-    for (int i = 0; i < kPlayerProfileAvatarButtonCount; ++i) {
-        const bool visible = profile.avatar_ids[static_cast<std::size_t>(i)] >= 0;
-        ShowWindow(GetLegacyImageButtonWindow(state.avatar_buttons[static_cast<std::size_t>(i)]),
-            visible ? SW_SHOW : SW_HIDE);
+    for (LegacyImageButtonControl& button : state.avatar_buttons) {
+        ShowWindow(GetLegacyImageButtonWindow(button), SW_HIDE);
     }
 }
 
@@ -662,12 +673,18 @@ void show_child_controls(PlayerProfileState& state) {
              kPlayerProfileGuildNameEditId,
              kPlayerProfileAvatarMeleeEditId,
              kPlayerProfileAvatarRankEditId,
-         }) {
+        }) {
         if (PlayerProfileTextControl* control = text_control_for_id(state, id)) {
-            ShowWindow(control->window, SW_SHOW);
+            ShowWindow(control->window,
+                IsPlayerProfileRemovedControlId(id) ? SW_HIDE : SW_SHOW);
         }
     }
-    ShowWindow(GetLegacyStringSelectorWindow(state.location_selector), SW_SHOW);
+    ShowWindow(GetLegacyStringSelectorWindow(state.location_selector), SW_HIDE);
+    ShowWindow(GetLegacyImageButtonWindow(state.memo_button), SW_HIDE);
+    ShowWindow(GetLegacyImageButtonWindow(state.guild_icon_button), SW_HIDE);
+    for (LegacyImageButtonControl& button : state.avatar_buttons) {
+        ShowWindow(GetLegacyImageButtonWindow(button), SW_HIDE);
+    }
 }
 
 void destroy_buttons(PlayerProfileState& state) {
@@ -680,6 +697,9 @@ void destroy_buttons(PlayerProfileState& state) {
 }
 
 void release_window_resources(PlayerProfileState& state) {
+    HWND modal_parent = state.parent_window;
+    const bool restore_parent = state.parent_disabled_for_modal;
+    state.parent_disabled_for_modal = false;
     RestorePlayerProfileAccelerators(state);
     DestroyPlayerProfileBackgroundBitmap(state);
     destroy_buttons(state);
@@ -696,8 +716,15 @@ void release_window_resources(PlayerProfileState& state) {
     DestroyPlayerProfileTextRecordParser0(state);
     DestroyPlayerProfileTextRecordParser1(state);
     DestroyPlayerProfileAvatarStrip(state);
+    if (state.ui_font != nullptr) {
+        DeleteObject(state.ui_font);
+        state.ui_font = nullptr;
+    }
     state.window = nullptr;
     state.visible = false;
+    if (restore_parent && IsWindow(modal_parent)) {
+        EnableWindow(modal_parent, TRUE);
+    }
 }
 
 void submit_profile_update(PlayerProfileState& state) {
@@ -762,6 +789,36 @@ bool paint_background_if_current(PlayerProfileState& state, HWND hwnd) {
     PAINTSTRUCT paint{};
     BeginPaint(hwnd, &paint);
     StretchBitmapMemoryResourceToClient(state.background, paint.hdc, state.window);
+
+    RECT client{};
+    if (state.background.loaded && GetClientRect(state.window, &client)) {
+        const int client_width = std::max(1L, client.right - client.left);
+        const int client_height = std::max(1L, client.bottom - client.top);
+        for (const BitmapDrawRect& panel : kProfileRemovedPanels) {
+            for (int base_y = panel.y; base_y < panel.y + panel.height;
+                 base_y += kProfileThemeTextureSource.height) {
+                const int tile_height = std::min(
+                    kProfileThemeTextureSource.height,
+                    panel.y + panel.height - base_y);
+                const BitmapDrawRect destination{
+                    ScaleFrontendLayoutValue(panel.x, kProfileThemeWidth,
+                        client_width),
+                    ScaleFrontendLayoutValue(base_y, kProfileThemeHeight,
+                        client_height),
+                    ScaleFrontendLayoutValue(panel.width, kProfileThemeWidth,
+                        client_width),
+                    ScaleFrontendLayoutValue(tile_height, kProfileThemeHeight,
+                        client_height),
+                };
+                BitmapDrawRect source = kProfileThemeTextureSource;
+                source.x += state.background.source_x;
+                source.y += state.background.source_y;
+                source.height = tile_height;
+                StretchBitmapMemoryResourceRectToDc(state.background, paint.hdc,
+                    destination, source);
+            }
+        }
+    }
     EndPaint(hwnd, &paint);
     return true;
 }
@@ -1016,12 +1073,19 @@ bool CreatePlayerProfileWindow(PlayerProfileState& state, HWND parent,
     parse_payload(state);
     load_avatar_strip(state);
 
+    const PlayerProfileWindowPlacement placement =
+        SelectPlayerProfileWindowPlacement(IsWindow(parent));
     const DWORD style =
-        IsWindow(parent) && GetWindowLongPtrA(parent, GWL_STYLE) != 0 ?
-        kWindowStyleWindowed : kWindowStyleFullscreen;
+        placement == PlayerProfileWindowPlacement::owned_modal_overlay ?
+        kWindowStyleOwnedOverlay : kWindowStyleFullscreen;
     const PlayerProfileLayoutRect window_rect = layout_at(state, 0);
-    const POINT origin =
-        RankerCenteredFrontendWindowOrigin(window_rect.width, window_rect.height);
+    POINT origin = placement == PlayerProfileWindowPlacement::owned_modal_overlay ?
+        RankerCenteredChildFrontendWindowOrigin(
+            parent, window_rect.width, window_rect.height) :
+        RankerFrontendWindowOrigin();
+    if (placement == PlayerProfileWindowPlacement::owned_modal_overlay) {
+        ClientToScreen(parent, &origin);
+    }
     state.window = CreateWindowExA(WS_EX_CONTROLPARENT, "Player Profile",
         "Player Profile", style, origin.x, origin.y, window_rect.width,
         window_rect.height, parent, nullptr, instance, nullptr);
@@ -1068,6 +1132,26 @@ bool CreatePlayerProfileWindow(PlayerProfileState& state, HWND parent,
     SendMessageA(state.avatar_melee_edit.window, EM_LIMITTEXT, 0x10, 0);
     SendMessageA(state.avatar_rank_edit.window, EM_LIMITTEXT, 0x10, 0);
 
+    state.ui_font = CreateScaledFrontendUiFont(1);
+    HFONT ui_font = state.ui_font != nullptr ? state.ui_font :
+        static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+    for (int id : {
+             kPlayerProfileNameEditId,
+             kPlayerProfileSexEditId,
+             kPlayerProfileAgeEditId,
+             kPlayerProfileNormalMeleeEditId,
+             kPlayerProfileNormalRankEditId,
+             kPlayerProfileDescriptionEditId,
+             kPlayerProfileGuildNameEditId,
+             kPlayerProfileAvatarMeleeEditId,
+             kPlayerProfileAvatarRankEditId,
+         }) {
+        if (PlayerProfileTextControl* control = text_control_for_id(state, id)) {
+            SendMessageA(control->window, WM_SETFONT,
+                reinterpret_cast<WPARAM>(ui_font), TRUE);
+        }
+    }
+
     if (!create_image_button(state.ok_button, state.window, "OK",
             kPlayerProfileOkButtonId, layout_at(state, 7),
             kPlayerProfileOkNormalBitmapRecord, kPlayerProfileOkPressedBitmapRecord) ||
@@ -1104,8 +1188,16 @@ bool CreatePlayerProfileWindow(PlayerProfileState& state, HWND parent,
     InstallPlayerProfileAccelerators(state);
     apply_profile_to_controls(state);
     show_child_controls(state);
-    ShowWindow(state.window, SW_SHOW);
-    SetFocus(state.name_edit.window);
+    if (placement == PlayerProfileWindowPlacement::owned_modal_overlay &&
+        IsWindowEnabled(parent)) {
+        EnableWindow(parent, FALSE);
+        state.parent_disabled_for_modal = true;
+    }
+    SetWindowPos(state.window, HWND_TOP, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+    SetForegroundWindow(state.window);
+    SetFocus(state.own_profile ? state.description_edit.window :
+        GetLegacyImageButtonWindow(state.ok_button));
     state.visible = true;
     return true;
 }
