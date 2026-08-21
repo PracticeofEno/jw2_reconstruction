@@ -29,6 +29,9 @@ class ReplayCatalogTests(unittest.TestCase):
                 byte_count=len(replay_bytes),
                 game_type=2,
                 game_id=17,
+                winner="Player",
+                loser="Opponent",
+                duration_seconds=3723,
             )
             entry = commit.entry
             self.assertTrue(commit.stored)
@@ -46,6 +49,9 @@ class ReplayCatalogTests(unittest.TestCase):
             self.assertEqual(restored.game_type, 2)
             self.assertEqual(restored.game_id, 17)
             self.assertEqual(len(restored.content_sha256), 64)
+            self.assertEqual(restored.winner, "Player")
+            self.assertEqual(restored.loser, "Opponent")
+            self.assertEqual(restored.duration_seconds, 3723)
 
     def test_sanitize_replay_filename_never_returns_a_path(self) -> None:
         self.assertEqual(sanitize_replay_filename(r"..\..\Replay"), "Replay.ply")
@@ -92,9 +98,15 @@ class ReplayCatalogTests(unittest.TestCase):
                 game_type=2,
                 game_id=7,
                 match_key="match-seven",
+                winner="Host",
+                loser="Join",
+                duration_seconds=615,
             )
             self.assertFalse(same_match.stored)
             self.assertEqual(same_match.entry.replay_id, first.entry.replay_id)
+            self.assertEqual(same_match.entry.winner, "Host")
+            self.assertEqual(same_match.entry.loser, "Join")
+            self.assertEqual(same_match.entry.duration_seconds, 615)
             self.assertFalse(viewpoint_upload.exists())
 
             content_upload = root / ".content.part"

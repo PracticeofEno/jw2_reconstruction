@@ -1649,7 +1649,8 @@ bool lock_main_window_cursor_confinement(
     return true;
 }
 
-void refresh_main_window_cursor_confinement(HWND window) {
+void refresh_main_window_cursor_confinement(
+    HWND window, bool restore_logical_position = true) {
     if (!g_runtime.cursor_confined) {
         return;
     }
@@ -1665,9 +1666,11 @@ void refresh_main_window_cursor_confinement(HWND window) {
         return;
     }
 
-    const InputState& input = input_state();
-    set_main_window_system_cursor_logical_position(window,
-        static_cast<i32>(input.mouse_x), static_cast<i32>(input.mouse_y));
+    if (restore_logical_position) {
+        const InputState& input = input_state();
+        set_main_window_system_cursor_logical_position(window,
+            static_cast<i32>(input.mouse_x), static_cast<i32>(input.mouse_y));
+    }
     if (!ClipCursor(&screen_client)) {
         release_main_window_cursor_confinement(false);
         return;
@@ -1735,7 +1738,8 @@ bool reacquire_main_window_cursor_from_button_up(
     return lock_main_window_cursor_confinement(window, logical_x, logical_y);
 }
 
-bool reacquire_main_window_cursor_from_current_position(HWND window) {
+bool seed_main_window_cursor_from_current_position(
+    HWND window, i32& logical_x, i32& logical_y) {
     RECT client{};
     RECT screen_client{};
     POINT position{};
@@ -1753,15 +1757,25 @@ bool reacquire_main_window_cursor_from_current_position(HWND window) {
 
     const GameplayLogicalSurfaceSize logical =
         resolve_active_gameplay_logical_surface_size();
-    const i32 logical_x = scale_unlocked_cursor_to_logical(position.x,
+    logical_x = scale_unlocked_cursor_to_logical(position.x,
         presentation_width, static_cast<i32>(logical.width));
-    const i32 logical_y = scale_unlocked_cursor_to_logical(position.y,
+    logical_y = scale_unlocked_cursor_to_logical(position.y,
         presentation_height, static_cast<i32>(logical.height));
     InputState& input = input_state();
     input.mouse_x = static_cast<u32>(logical_x);
     input.mouse_y = static_cast<u32>(logical_y);
     input.pointer_motion_seen = true;
     SetGameCursorPointerPosition(logical_x, logical_y);
+    return true;
+}
+
+bool reacquire_main_window_cursor_from_current_position(HWND window) {
+    i32 logical_x = 0;
+    i32 logical_y = 0;
+    if (!seed_main_window_cursor_from_current_position(
+            window, logical_x, logical_y)) {
+        return false;
+    }
     return lock_main_window_cursor_confinement(window, logical_x, logical_y);
 }
 
@@ -13106,10 +13120,15 @@ void submit_default_wizardnet_postgame_after_replay_save() {
     }
 
     const GameplayResultScreenState& result = gameplay_result_screen_state();
+    const u64 duration_seconds =
+        static_cast<u64>(result.elapsed_hours) * 60u * 60u +
+        static_cast<u64>(result.elapsed_minutes) * 60u +
+        result.elapsed_seconds;
     const bool queued = BeginWizardNetPostGameSubmission(
         FrontendAsyncTcpSocket0(), game_type, result.result_mode,
         g_runtime.wizardnet_match_game_id, g_runtime.wizardnet_match_token,
-        replay_path);
+        replay_path, static_cast<u32>(std::min<u64>(
+            duration_seconds, std::numeric_limits<u32>::max())));
     append_startup_log(
         "wizardnet-postgame: queued=%s game=%lu type=%lu host=%s replay=%s",
         queued ? "yes" : "no",
@@ -32710,7 +32729,30 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
     case WM_SETFOCUS:
         refresh_window_rects(window);
         if (g_runtime.cursor_confined) {
-            refresh_main_window_cursor_confinement(window);
+            const bool active_child_frontend =
+                g_runtime.frontend_route_window != nullptr &&
+                g_runtime.frontend_route_window != window &&
+                IsWindow(g_runtime.frontend_route_window);
+            if (ShouldPreserveNativeFrontendCursorOnMainFocus(
+                    g_runtime.cursor_confined, active_child_frontend)) {
+                // Native popup controls move the OS cursor without sending a
+                // WM_MOUSEMOVE through this main WndProc.  When such a popup
+                // closes, restoring the old logical position would visibly
+                // warp the cursor back to the control used to open it.  Adopt
+                // the current physical position and only refresh the clip.
+                i32 logical_x = 0;
+                i32 logical_y = 0;
+                if (seed_main_window_cursor_from_current_position(
+                        window, logical_x, logical_y)) {
+                    refresh_main_window_cursor_confinement(window, false);
+                }
+                else {
+                    refresh_main_window_cursor_confinement(window);
+                }
+            }
+            else {
+                refresh_main_window_cursor_confinement(window);
+            }
         }
         else if (g_runtime.app_active && g_runtime.input_enabled) {
             reacquire_main_window_cursor_from_current_position(window);

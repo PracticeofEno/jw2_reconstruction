@@ -3,17 +3,38 @@
 #ifdef _WIN32
 
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 int main(int argc, char** argv) {
-    if (argc != 2) {
-        std::fprintf(stderr, "expected one extracted UI PNG path\n");
+    const bool executable_relative =
+        argc == 5 && std::strcmp(argv[1], "--executable-relative") == 0;
+    if (argc != 2 && argc != 4 && !executable_relative) {
+        std::fprintf(stderr,
+            "expected one extracted UI PNG path and optional dimensions, or "
+            "--executable-relative path width height\n");
+        return 1;
+    }
+    const char* png_path = executable_relative ? argv[2] : argv[1];
+    const int dimension_offset = executable_relative ? 1 : 0;
+    const bool dimensions_provided = argc == 4 || executable_relative;
+    const int expected_width = dimensions_provided ?
+        std::atoi(argv[2 + dimension_offset]) : 336;
+    const int expected_height = dimensions_provided ?
+        std::atoi(argv[3 + dimension_offset]) : 103;
+    if (expected_width <= 0 || expected_height <= 0) {
+        std::fprintf(stderr, "invalid expected UI PNG dimensions\n");
         return 1;
     }
 
     ranker::UiPngResource resource;
     ranker::InitializeUiPngResource(resource);
-    if (!ranker::LoadUiPngResourceFromFile(resource, argv[1]) ||
-        resource.width != 336 || resource.height != 103) {
+    const bool loaded = executable_relative ?
+        ranker::LoadUiPngResourceFromExecutableRelativeFile(
+            resource, png_path) :
+        ranker::LoadUiPngResourceFromFile(resource, png_path);
+    if (!loaded ||
+        resource.width != expected_width || resource.height != expected_height) {
         std::fprintf(stderr, "failed to load extracted ARGB UI PNG\n");
         return 1;
     }
@@ -47,6 +68,10 @@ int main(int argc, char** argv) {
 
     const bool drawn = ranker::DrawUiPngResourceToDc(resource, dc,
         ranker::UiPngRect{0, 0, resource.width, resource.height});
+    const bool vertically_flipped =
+        ranker::DrawUiPngResourceRectToDcVerticallyFlipped(resource, dc,
+            ranker::UiPngRect{0, 0, resource.width, resource.height},
+            ranker::UiPngRect{0, 0, resource.width, resource.height});
     std::size_t changed = 0;
     std::size_t unchanged = 0;
     for (std::size_t i = 0; i < pixel_count; ++i) {
@@ -61,7 +86,7 @@ int main(int argc, char** argv) {
     DeleteObject(target);
     DeleteDC(dc);
     ranker::ReleaseUiPngResource(resource);
-    if (!drawn || changed == 0 || unchanged == 0) {
+    if (!drawn || !vertically_flipped || changed == 0 || unchanged == 0) {
         std::fprintf(stderr, "ARGB sprite did not compose over the target\n");
         return 1;
     }

@@ -3,6 +3,7 @@
 #include "ranker_bitmap_resource.h"
 #include "ranker_image_controls.h"
 #include "ranker_network.h"
+#include "ranker_ui_png_resource.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -37,7 +38,10 @@ constexpr int kViewRankGuildTabButtonId = 0x1d54;
 constexpr int kViewRankAcceleratorResourceId = 0x2ee;
 
 constexpr bool IsViewRankRemovedButtonId(int control_id) {
-    return control_id == kViewRankGoSiteButtonId;
+    return control_id == kViewRankGoSiteButtonId ||
+        control_id == kViewRankNormalTabButtonId ||
+        control_id == kViewRankAvatarTabButtonId ||
+        control_id == kViewRankGuildTabButtonId;
 }
 
 constexpr u32 kViewRankLayoutTrcRecord = 0x16c;
@@ -45,6 +49,33 @@ constexpr u32 kViewRankBackgroundBitmapRecord = 0xd0;
 constexpr std::size_t kViewRankVisibleRows = 16;
 constexpr std::size_t kViewRankEntryBytes = 0x38;
 constexpr std::size_t kViewRankSearchNameBytes = 0x20;
+constexpr std::size_t kViewRankThemeButtonVisualCount = 4;
+
+enum class ViewRankThemeButtonVisual : std::size_t {
+    Normal = 0,
+    Hot = 1,
+    Pressed = 2,
+    Disabled = 3,
+};
+
+constexpr bool IsViewRankThemedButtonId(int control_id) {
+    return control_id == kViewRankUpButtonId ||
+        control_id == kViewRankDownButtonId ||
+        control_id == kViewRankSearchButtonId ||
+        control_id == kViewRankCloseButtonId;
+}
+
+constexpr ViewRankThemeButtonVisual ResolveViewRankThemeButtonVisual(
+    bool enabled, bool pressed, bool hovered) {
+    if (!enabled) {
+        return ViewRankThemeButtonVisual::Disabled;
+    }
+    if (pressed) {
+        return ViewRankThemeButtonVisual::Pressed;
+    }
+    return hovered ? ViewRankThemeButtonVisual::Hot :
+        ViewRankThemeButtonVisual::Normal;
+}
 
 enum class ViewRankListType : u32 {
     Normal = 0,
@@ -60,6 +91,21 @@ struct ViewRankLayoutRect {
     int width = 0;
     int height = 0;
 };
+
+constexpr ViewRankLayoutRect ResolveViewRankPngButtonRect(int control_id) {
+    switch (control_id) {
+    case kViewRankSearchButtonId:
+        return {294, 528, 84, 27};
+    case kViewRankUpButtonId:
+        return {414, 528, 84, 27};
+    case kViewRankDownButtonId:
+        return {504, 528, 84, 27};
+    case kViewRankCloseButtonId:
+        return {648, 528, 84, 27};
+    default:
+        return {};
+    }
+}
 
 struct ViewRankColumn {
     int left = 0;
@@ -114,6 +160,8 @@ struct ViewRankState {
     ViewRankTextControl search_edit;
     ViewRankTextControl list_box;
     std::array<LegacyImageButtonControl, 8> buttons{};
+    std::array<UiPngResource,
+        kViewRankThemeButtonVisualCount> theme_button_images{};
     std::vector<ViewRankLayoutRect> layout;
     std::array<ViewRankColumn, 5> columns{};
     std::array<ViewRankEntry, kViewRankVisibleRows> entries{};
@@ -129,6 +177,11 @@ struct ViewRankState {
     std::string last_message;
     u32 top_rank_offset = 0;
     ViewRankListType selected_type = ViewRankListType::Normal;
+    HFONT theme_font = nullptr;
+    HFONT theme_search_font = nullptr;
+    HFONT theme_title_font = nullptr;
+    HWND theme_hot_button = nullptr;
+    bool theme_button_images_loaded = false;
     bool has_next_page = false;
     bool visible = false;
     ViewRankCallbacks callbacks{};

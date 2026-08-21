@@ -84,8 +84,11 @@ constexpr std::size_t kOnlineLobbyButtonCount = 28;
 constexpr std::size_t kOnlineLobbyTabCount = 1;
 constexpr std::size_t kOnlineLobbyChatRowLimit = 300;
 constexpr std::size_t kOnlineLobbyThemeButtonVisualCount = 4;
+constexpr std::size_t kOnlineLobbyReplayScrollbarVisualCount = 3;
 constexpr int kOnlineLobbySimplifiedActionCount = 5;
 constexpr int kOnlineLobbySimplifiedActionGap = 10;
+constexpr int kOnlineLobbySimplifiedActionHorizontalInset = 6;
+constexpr int kOnlineLobbySimplifiedActionVerticalInset = 3;
 
 enum class OnlineLobbyThemeButtonVisual : std::size_t {
     Normal = 0,
@@ -94,11 +97,19 @@ enum class OnlineLobbyThemeButtonVisual : std::size_t {
     Disabled = 3,
 };
 
+enum class OnlineLobbyReplayScrollbarVisual : std::size_t {
+    Normal = 0,
+    Active = 1,
+    Disabled = 2,
+};
+
 constexpr bool IsOnlineLobbyThemedButtonId(int id) {
     return id == kOnlineLobbyCreateGameButtonId ||
         id == kOnlineLobbyJoinGameButtonId ||
         id == kOnlineLobbyViewRankButtonId ||
-        id == kOnlineLobbyReplayButtonId || id == IDCANCEL;
+        id == kOnlineLobbyReplayButtonId ||
+        id == kOnlineLobbyReplayDownloadButtonId ||
+        id == kOnlineLobbyReplayCloseButtonId || id == IDCANCEL;
 }
 
 constexpr int OnlineLobbySimplifiedActionIndex(int id) {
@@ -121,6 +132,15 @@ constexpr OnlineLobbyThemeButtonVisual ResolveOnlineLobbyThemeButtonVisual(
         return OnlineLobbyThemeButtonVisual::Hot;
     }
     return OnlineLobbyThemeButtonVisual::Normal;
+}
+
+constexpr OnlineLobbyReplayScrollbarVisual
+ResolveOnlineLobbyReplayScrollbarVisual(bool enabled, bool dragging) {
+    if (!enabled) {
+        return OnlineLobbyReplayScrollbarVisual::Disabled;
+    }
+    return dragging ? OnlineLobbyReplayScrollbarVisual::Active :
+        OnlineLobbyReplayScrollbarVisual::Normal;
 }
 
 constexpr int OnlineLobbyButtonLayoutIndex(int button_spec_index) {
@@ -159,6 +179,19 @@ struct OnlineLobbyLayoutRect {
     int width = 0;
     int height = 0;
 };
+
+constexpr OnlineLobbyLayoutRect InsetOnlineLobbyButton(
+    OnlineLobbyLayoutRect button, int horizontal_inset, int vertical_inset) {
+    const int safe_horizontal = horizontal_inset > 0 &&
+        button.width > horizontal_inset * 2 ? horizontal_inset : 0;
+    const int safe_vertical = vertical_inset > 0 &&
+        button.height > vertical_inset * 2 ? vertical_inset : 0;
+    button.x += safe_horizontal;
+    button.y += safe_vertical;
+    button.width -= safe_horizontal * 2;
+    button.height -= safe_vertical * 2;
+    return button;
+}
 
 constexpr OnlineLobbyLayoutRect ArrangeOnlineLobbySimplifiedAction(
     const OnlineLobbyLayoutRect& row, int action_index, int gap) {
@@ -255,6 +288,9 @@ struct WizardNetReplayListEntry {
     u32 game_type = 0;
     std::string uploader;
     std::string filename;
+    std::string winner;
+    std::string loser;
+    u32 duration_seconds = 0;
 };
 
 struct OnlineLobbyState {
@@ -289,6 +325,8 @@ struct OnlineLobbyState {
     LegacyCustomScrollControl replay_browser_scroll;
     std::array<UiPngResource,
         kOnlineLobbyThemeButtonVisualCount> theme_button_images{};
+    std::array<UiPngResource,
+        kOnlineLobbyReplayScrollbarVisualCount> replay_scrollbar_images{};
     HFONT replay_lobby_font = nullptr;
     HFONT replay_browser_font = nullptr;
     std::array<LegacyImageButtonControl, kOnlineLobbyButtonCount> buttons{};
@@ -313,6 +351,7 @@ struct OnlineLobbyState {
     bool resources_ready = false;
     bool rank_mark_picker_visible = false;
     bool theme_button_images_loaded = false;
+    bool replay_scrollbar_images_loaded = false;
     HWND themed_hot_button = nullptr;
     u32 selected_rank_mark = 0;
     std::string lobby_name;

@@ -32,6 +32,9 @@ bool LoadUiPngResourceFromExecutableRelativeFile(
     UiPngResource& resource, const char* relative_path);
 bool DrawUiPngResourceRectToDc(const UiPngResource& resource, HDC dc,
     const UiPngRect& destination, const UiPngRect& source);
+bool DrawUiPngResourceRectToDcVerticallyFlipped(
+    const UiPngResource& resource, HDC dc,
+    const UiPngRect& destination, const UiPngRect& source);
 bool DrawUiPngResourceToDc(const UiPngResource& resource, HDC dc,
     const UiPngRect& destination);
 #endif

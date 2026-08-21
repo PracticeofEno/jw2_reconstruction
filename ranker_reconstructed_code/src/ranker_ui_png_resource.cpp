@@ -155,6 +155,34 @@ bool DrawUiPngResourceRectToDc(const UiPngResource& resource, HDC dc,
         Gdiplus::UnitPixel) == Gdiplus::Ok;
 }
 
+bool DrawUiPngResourceRectToDcVerticallyFlipped(
+    const UiPngResource& resource, HDC dc,
+    const UiPngRect& destination, const UiPngRect& source) {
+    Gdiplus::Bitmap* bitmap = native_bitmap(resource);
+    if (!resource.loaded || bitmap == nullptr || dc == nullptr ||
+        !valid_rect(destination) || !valid_rect(source) ||
+        source.x < 0 || source.y < 0 ||
+        source.width > resource.width - source.x ||
+        source.height > resource.height - source.y) {
+        return false;
+    }
+
+    Gdiplus::Graphics graphics(dc);
+    graphics.SetCompositingMode(Gdiplus::CompositingModeSourceOver);
+    graphics.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
+    graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+    graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+    const Gdiplus::Point destination_points[3] = {
+        {destination.x, destination.y + destination.height},
+        {destination.x + destination.width,
+            destination.y + destination.height},
+        {destination.x, destination.y},
+    };
+    return graphics.DrawImage(bitmap, destination_points, 3,
+        source.x, source.y, source.width, source.height,
+        Gdiplus::UnitPixel) == Gdiplus::Ok;
+}
+
 bool DrawUiPngResourceToDc(const UiPngResource& resource, HDC dc,
     const UiPngRect& destination) {
     const UiPngRect source{0, 0, resource.width, resource.height};

@@ -31,6 +31,11 @@ constexpr bool PresentationCoordinateInsideClient(
         coordinate >= 0 && coordinate < presentation_extent;
 }
 
+constexpr bool ShouldPreserveNativeFrontendCursorOnMainFocus(
+    bool cursor_confined, bool active_child_frontend) {
+    return cursor_confined && active_child_frontend;
+}
+
 inline i32 ScalePresentationCoordinateToLogical(
     i32 coordinate, i32 presentation_extent, i32 logical_extent) {
     if (presentation_extent <= 0 || logical_extent <= 0) {

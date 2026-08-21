@@ -1785,10 +1785,11 @@ class ServerIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         replay_bytes = bytes(range(256)) * 150
         upload_id = 77
-        begin = bytearray(0xB1 - HEADER_BYTES)
+        begin = bytearray(0xB5 - HEADER_BYTES)
         struct.pack_into("<IIIII", begin, 0, upload_id, len(replay_bytes), 2, 0, game_id)
         begin[20:36] = token
         begin[36 : 36 + len(b"RankMatch.ply")] = b"RankMatch.ply"
+        struct.pack_into("<I", begin, 0xB1 - HEADER_BYTES, 367)
         host_writer.write(build_packet(0x9A, begin))
         await host_writer.drain()
         accepted = await read_until_opcode(host_reader, 0x9D, limit=40)
@@ -1816,7 +1817,7 @@ class ServerIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         participant_replay = replay_bytes + b"participant camera data"
         participant_upload_id = 78
-        participant_begin = bytearray(0xB1 - HEADER_BYTES)
+        participant_begin = bytearray(0xB5 - HEADER_BYTES)
         struct.pack_into(
             "<IIIII",
             participant_begin,
@@ -1829,6 +1830,7 @@ class ServerIntegrationTests(unittest.IsolatedAsyncioTestCase):
         )
         participant_begin[20:36] = token
         participant_begin[36 : 36 + len(b"Participant.ply")] = b"Participant.ply"
+        struct.pack_into("<I", participant_begin, 0xB1 - HEADER_BYTES, 365)
         join_writer.write(build_packet(0x9A, participant_begin))
         await join_writer.drain()
         participant_accepted = await read_until_opcode(join_reader, 0x9D, limit=40)
@@ -1870,6 +1872,16 @@ class ServerIntegrationTests(unittest.IsolatedAsyncioTestCase):
             read_c_string(listing, 0x49, 0x7C),
             r"^\[RelayMap\]_RankHostvsRankJoin_\d{4}_\d{2}_\d{2}_\d{2}-\d{2}-\d{2}\.ply$",
         )
+
+        join_writer.write(build_packet(0x9E, struct.pack("<II", 0, 1)))
+        await join_writer.drain()
+        metadata_listing = await read_until_opcode(join_reader, 0x9F, limit=40)
+        self.assertEqual(len(metadata_listing), 0x15 + 0xF4)
+        self.assertEqual(read_u32(metadata_listing, 0x11), 1)
+        self.assertEqual(read_u32(metadata_listing, 0x15), replay_id)
+        self.assertEqual(read_c_string(metadata_listing, 0xC5, 0x20), "RankHost")
+        self.assertEqual(read_c_string(metadata_listing, 0xE5, 0x20), "RankJoin")
+        self.assertEqual(read_u32(metadata_listing, 0x105), 367)
 
         join_writer.write(build_packet(0xA0, struct.pack("<I", replay_id)))
         await join_writer.drain()

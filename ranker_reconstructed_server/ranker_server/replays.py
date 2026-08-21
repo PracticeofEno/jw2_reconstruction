@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
 import os
@@ -102,6 +102,9 @@ class ReplayCatalogEntry:
     uploaded_at: int
     content_sha256: str = ""
     match_key: str = ""
+    winner: str = ""
+    loser: str = ""
+    duration_seconds: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +149,9 @@ class ReplayCatalog:
                     uploaded_at=int(row["uploaded_at"]),
                     content_sha256=str(row.get("content_sha256", "")),
                     match_key=str(row.get("match_key", "")),
+                    winner=str(row.get("winner", "")),
+                    loser=str(row.get("loser", "")),
+                    duration_seconds=max(0, int(row.get("duration_seconds", 0))),
                 )
             except (KeyError, TypeError, ValueError):
                 continue
@@ -159,7 +165,7 @@ class ReplayCatalog:
     def save(self) -> None:
         temporary = self.index_path.with_suffix(".json.tmp")
         payload = {
-            "version": 2,
+            "version": 3,
             "next_id": self._next_id,
             "replays": [asdict(entry) for entry in self.entries()],
         }
@@ -220,13 +226,29 @@ class ReplayCatalog:
         game_type: int,
         game_id: int,
         match_key: str = "",
+        winner: str = "",
+        loser: str = "",
+        duration_seconds: int = 0,
     ) -> ReplayCommitResult:
         duplicate, content_sha256 = self.find_duplicate(
             temporary_path, match_key=match_key
         )
         if duplicate is not None:
             temporary_path.unlink(missing_ok=True)
-            return ReplayCommitResult(duplicate, False)
+            enriched = replace(
+                duplicate,
+                winner=duplicate.winner or winner,
+                loser=duplicate.loser or loser,
+                duration_seconds=(
+                    duplicate.duration_seconds
+                    if duplicate.duration_seconds > 0
+                    else max(0, duration_seconds)
+                ),
+            )
+            if enriched != duplicate:
+                self._entries[duplicate.replay_id] = enriched
+                self.save()
+            return ReplayCommitResult(enriched, False)
 
         replay_id = self._next_id
         self._next_id += 1
@@ -251,6 +273,9 @@ class ReplayCatalog:
             uploaded_at=int(time.time()),
             content_sha256=content_sha256,
             match_key=match_key,
+            winner=winner,
+            loser=loser,
+            duration_seconds=max(0, duration_seconds),
         )
         self._entries[replay_id] = entry
         self.save()

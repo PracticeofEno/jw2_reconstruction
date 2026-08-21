@@ -28,6 +28,9 @@ constexpr u32 kWizardNetReplayDownloadFinishOpcode = 0xa2;
 constexpr std::size_t kWizardNetMatchTokenBytes = 16;
 constexpr std::size_t kWizardNetReplayTransferChunkBytes = 32 * 1024;
 constexpr std::size_t kWizardNetMaximumReplayBytes = 64 * 1024 * 1024;
+constexpr u32 kWizardNetReplayListProtocolVersion = 1;
+constexpr std::size_t kWizardNetReplayListLegacyRecordBytes = 0xb0;
+constexpr std::size_t kWizardNetReplayListMetadataRecordBytes = 0xf4;
 
 enum class WizardNetMatchOutcome : u32 {
     Win = 0,
@@ -66,6 +69,7 @@ struct WizardNetReplayUploadState {
     u32 upload_id = 0;
     u32 game_type = 0;
     u32 game_id = 0;
+    u32 duration_seconds = 0;
     WizardNetMatchOutcome outcome = WizardNetMatchOutcome::Draw;
     std::array<u8, kWizardNetMatchTokenBytes> match_token{};
     std::string display_name;
@@ -85,7 +89,7 @@ std::vector<u8> BuildWizardNetReplayDownloadRequestPacket(u32 replay_id);
 bool BeginWizardNetPostGameSubmission(LegacyAsyncTcpSocket& socket,
     u32 game_type, u32 gameplay_result, u32 game_id,
     const std::array<u8, kWizardNetMatchTokenBytes>& match_token,
-    const char* replay_path);
+    const char* replay_path, u32 duration_seconds);
 bool PumpWizardNetReplayUpload(LegacyAsyncTcpSocket& socket);
 void HandleWizardNetReplayUploadStatus(u32 status, u32 upload_id);
 void ResetWizardNetReplayUploadState();

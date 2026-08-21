@@ -90,6 +90,9 @@ RELAY_STATUS_HOST_MISSING = 4
 REPLAY_TRANSFER_CHUNK_BYTES = 32 * 1024
 REPLAY_LIST_PAGE_COUNT = 64
 REPLAY_LIST_RECORD_BYTES = 0xB0
+REPLAY_LIST_METADATA_VERSION = 1
+REPLAY_LIST_METADATA_RECORD_BYTES = 0xF4
+MAX_REPLAY_DURATION_SECONDS = 7 * 24 * 60 * 60
 MATCH_TOKEN_BYTES = 16
 MAP_DESCRIPTOR_TITLE_OFFSET = 0x08
 MAP_DESCRIPTOR_TITLE_BYTES = 0x20
@@ -106,8 +109,10 @@ class ActiveReplayUpload:
     received_bytes: int
     hash_value: int
     game_type: int
+    outcome: int
     game_id: int
     match_token: bytes
+    duration_seconds: int
 
 
 class RankerServer:
@@ -580,6 +585,29 @@ class RankerServer:
             return completed.map_name, completed.participant_accounts_ordered
         return "Map", ()
 
+    @staticmethod
+    def _replay_result_players(
+        uploader: str, players: tuple[str, ...], outcome: int
+    ) -> tuple[str, str]:
+        # A local win/loss identifies both sides only for the two-player
+        # matches represented by the replay browser's Player1-vs-Player2 name.
+        # Do not invent a single winner or loser for draws or larger games.
+        distinct = tuple(dict.fromkeys(player for player in players if player))
+        if len(distinct) != 2 or outcome == 2:
+            return "", ""
+        uploader_index = next(
+            (
+                index
+                for index, player in enumerate(distinct)
+                if player.casefold() == uploader.casefold()
+            ),
+            -1,
+        )
+        if uploader_index < 0:
+            return "", ""
+        opponent = distinct[1 - uploader_index]
+        return (uploader, opponent) if outcome == 0 else (opponent, uploader)
+
     def _validated_match(
         self,
         session: ClientSession,
@@ -686,8 +714,12 @@ class RankerServer:
         upload_id = read_u32(packet.raw, 0x0D)
         expected_bytes = read_u32(packet.raw, 0x11)
         game_type = read_u32(packet.raw, 0x15)
+        outcome = read_u32(packet.raw, 0x19)
         game_id = read_u32(packet.raw, 0x1D)
         match_token = bytes(packet.raw[0x21:0x31])
+        duration_seconds = (
+            read_u32(packet.raw, 0xB1) if len(packet.raw) >= 0xB5 else 0
+        )
         display_name = sanitize_replay_filename(
             read_c_string(packet.raw, 0x31, 0x80)
         )
@@ -696,6 +728,8 @@ class RankerServer:
             or expected_bytes == 0
             or expected_bytes > self.config.max_replay_bytes
             or game_type not in (1, 2)
+            or outcome not in (0, 1, 2)
+            or duration_seconds > MAX_REPLAY_DURATION_SECONDS
             or not self._validated_match(
                 session, game_id, game_type, match_token, require_host=False
             )
@@ -720,8 +754,10 @@ class RankerServer:
             received_bytes=0,
             hash_value=0xCBF29CE484222325,
             game_type=game_type,
+            outcome=outcome,
             game_id=game_id,
             match_token=match_token,
+            duration_seconds=duration_seconds,
         )
         await self._send_replay_upload_status(session, 0, upload_id)
 
@@ -780,6 +816,9 @@ class RankerServer:
             map_name, players = self._replay_match_metadata(
                 upload.game_id, upload.match_token
             )
+            winner, loser = self._replay_result_players(
+                session.account, players, upload.outcome
+            )
             display_name = build_replay_filename(map_name, players)
             match_key = hashlib.sha256(upload.match_token).hexdigest()
             commit = self.replays.commit_upload(
@@ -790,6 +829,9 @@ class RankerServer:
                 game_type=upload.game_type,
                 game_id=upload.game_id,
                 match_key=match_key,
+                winner=winner,
+                loser=loser,
+                duration_seconds=upload.duration_seconds,
             )
         except OSError:
             with contextlib.suppress(OSError):
@@ -822,6 +864,14 @@ class RankerServer:
         self, session: ClientSession, packet: Packet
     ) -> None:
         offset = read_u32(packet.raw, 0x0D)
+        metadata_version = (
+            read_u32(packet.raw, 0x11) if len(packet.raw) >= 0x15 else 0
+        )
+        record_bytes = (
+            REPLAY_LIST_METADATA_RECORD_BYTES
+            if metadata_version >= REPLAY_LIST_METADATA_VERSION
+            else REPLAY_LIST_RECORD_BYTES
+        )
         entries = self.replays.entries()
         selected = entries[offset : offset + REPLAY_LIST_PAGE_COUNT]
         next_offset = (
@@ -829,17 +879,21 @@ class RankerServer:
             if offset + len(selected) < len(entries)
             else 0xFFFFFFFF
         )
-        payload = bytearray(8 + len(selected) * REPLAY_LIST_RECORD_BYTES)
+        payload = bytearray(8 + len(selected) * record_bytes)
         write_u32(payload, 0, next_offset)
         write_u32(payload, 4, len(selected))
         for index, entry in enumerate(selected):
-            base = 8 + index * REPLAY_LIST_RECORD_BYTES
+            base = 8 + index * record_bytes
             write_u32(payload, base, entry.replay_id)
             write_u32(payload, base + 4, entry.byte_count)
             struct.pack_into("<Q", payload, base + 8, entry.uploaded_at)
             write_u32(payload, base + 16, entry.game_type)
             write_fixed_text(payload, base + 20, 0x20, entry.uploader)
             write_fixed_text(payload, base + 52, 0x7C, entry.display_name)
+            if record_bytes >= REPLAY_LIST_METADATA_RECORD_BYTES:
+                write_fixed_text(payload, base + 0xB0, 0x20, entry.winner)
+                write_fixed_text(payload, base + 0xD0, 0x20, entry.loser)
+                write_u32(payload, base + 0xF0, entry.duration_seconds)
         await self._send(session, build_packet(REPLAY_LIST_RESPONSE_OPCODE, payload))
 
     async def _handle_replay_download(

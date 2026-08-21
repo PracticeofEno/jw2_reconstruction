@@ -7,6 +7,7 @@
 #include "ranker_gameplay_sound.h"
 #include "ranker_online_dialogs.h"
 #include "ranker_player_profile.h"
+#include "ranker_system_ui.h"
 #include "ranker_text_tables.h"
 #include "ranker_trc.h"
 #include "ranker_winmain.h"
@@ -31,7 +32,32 @@ constexpr COLORREF kViewRankWhite = RGB(255, 255, 255);
 constexpr COLORREF kViewRankSoftWhite = RGB(250, 250, 250);
 constexpr COLORREF kViewRankGray = RGB(200, 200, 200);
 constexpr COLORREF kViewRankBlack = RGB(0, 0, 0);
-constexpr COLORREF kViewRankSelectedBlue = RGB(0, 0, 255);
+constexpr COLORREF kViewRankSelectedBackground = RGB(49, 36, 20);
+constexpr COLORREF kViewRankPanelBackground = RGB(12, 11, 9);
+constexpr COLORREF kViewRankPageBackground = RGB(8, 8, 7);
+constexpr COLORREF kViewRankBronze = RGB(151, 116, 66);
+constexpr COLORREF kViewRankDarkBronze = RGB(47, 37, 24);
+constexpr COLORREF kViewRankGold = RGB(221, 168, 61);
+constexpr ViewRankLayoutRect kViewRankTitlePanel{270, 24, 260, 64};
+constexpr ViewRankLayoutRect kViewRankCategoryPanel{48, 102, 704, 62};
+constexpr ViewRankLayoutRect kViewRankHeaderPanel{70, 180, 665, 42};
+constexpr ViewRankLayoutRect kViewRankBottomPanel{48, 510, 704, 70};
+constexpr ViewRankLayoutRect kViewRankPngListRect{68, 138, 665, 366};
+constexpr ViewRankLayoutRect kViewRankPngSearchRect{74, 528, 212, 25};
+constexpr std::array<ViewRankLayoutRect, 5> kViewRankPngColumns = {{
+    {68, 138, 127, 366},
+    {195, 138, 143, 366},
+    {338, 138, 145, 366},
+    {483, 138, 134, 366},
+    {617, 138, 116, 366},
+}};
+constexpr std::array<const char*, kViewRankThemeButtonVisualCount>
+    kViewRankThemeButtonImagePaths = {
+        "media\\ui\\tools\\button_medium_bronze.png",
+        "media\\ui\\tools\\button_medium_gold.png",
+        "media\\ui\\tools\\button_medium_pressed.png",
+        "media\\ui\\tools\\button_medium_gray.png",
+    };
 ViewRankState g_view_rank_state;
 bool g_background_destructor_registered = false;
 std::array<bool, 8> g_button_destructor_registered{};
@@ -117,9 +143,149 @@ void assign_layout(ViewRankState& state, const FrontendLayoutRectTable& table) {
     }
 }
 
+void fill_view_rank_rect(HDC dc, const RECT& rect, COLORREF color) {
+    if (dc == nullptr) {
+        return;
+    }
+    HBRUSH brush = CreateSolidBrush(color);
+    if (brush != nullptr) {
+        FillRect(dc, &rect, brush);
+        DeleteObject(brush);
+    }
+}
+
+void frame_view_rank_rect(HDC dc, const RECT& rect, COLORREF color) {
+    if (dc == nullptr) {
+        return;
+    }
+    HBRUSH brush = CreateSolidBrush(color);
+    if (brush != nullptr) {
+        FrameRect(dc, &rect, brush);
+        DeleteObject(brush);
+    }
+}
+
+ViewRankLayoutRect scale_view_rank_theme_rect(const ViewRankState& state,
+    const ViewRankLayoutRect& source) {
+    const ViewRankLayoutRect root = layout_at(state, 0);
+    return {
+        ScaleFrontendLayoutValue(source.x, 800, std::max(1, root.width)),
+        ScaleFrontendLayoutValue(source.y, 600, std::max(1, root.height)),
+        ScaleFrontendLayoutValue(source.width, 800, std::max(1, root.width)),
+        ScaleFrontendLayoutValue(source.height, 600, std::max(1, root.height)),
+    };
+}
+
+void apply_view_rank_png_layout(ViewRankState& state) {
+    if (state.layout.size() < 16) {
+        return;
+    }
+    state.layout[1] = scale_view_rank_theme_rect(state,
+        kViewRankPngListRect);
+    state.layout[2] = scale_view_rank_theme_rect(state,
+        kViewRankPngSearchRect);
+    state.layout[3] = scale_view_rank_theme_rect(state,
+        ResolveViewRankPngButtonRect(kViewRankUpButtonId));
+    state.layout[4] = scale_view_rank_theme_rect(state,
+        ResolveViewRankPngButtonRect(kViewRankDownButtonId));
+    state.layout[5] = scale_view_rank_theme_rect(state,
+        ResolveViewRankPngButtonRect(kViewRankSearchButtonId));
+    state.layout[6] = scale_view_rank_theme_rect(state,
+        ResolveViewRankPngButtonRect(kViewRankCloseButtonId));
+    for (std::size_t i = 0; i < kViewRankPngColumns.size(); ++i) {
+        state.layout[11 + i] = scale_view_rank_theme_rect(state,
+            kViewRankPngColumns[i]);
+    }
+}
+
+RECT view_rank_theme_rect(const ViewRankState& state,
+    const ViewRankLayoutRect& source) {
+    const ViewRankLayoutRect scaled = scale_view_rank_theme_rect(state, source);
+    return {scaled.x, scaled.y, scaled.x + scaled.width,
+        scaled.y + scaled.height};
+}
+
+void draw_view_rank_panel(HDC dc, RECT rect, COLORREF fill) {
+    fill_view_rank_rect(dc, rect, fill);
+    frame_view_rank_rect(dc, rect, RGB(10, 8, 5));
+    InflateRect(&rect, -1, -1);
+    frame_view_rank_rect(dc, rect, kViewRankBronze);
+    InflateRect(&rect, -1, -1);
+    frame_view_rank_rect(dc, rect, kViewRankDarkBronze);
+}
+
+void draw_view_rank_centered_text(HDC dc, HFONT font, const wchar_t* text,
+    RECT rect, COLORREF color) {
+    HGDIOBJ old_font = font != nullptr ? SelectObject(dc, font) : nullptr;
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, color);
+    DrawTextW(dc, text, -1, &rect,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS |
+            DT_NOPREFIX);
+    if (old_font != nullptr) {
+        SelectObject(dc, old_font);
+    }
+}
+
+void paint_view_rank_theme(ViewRankState& state, HWND hwnd, HDC dc) {
+    if (hwnd == nullptr || dc == nullptr) {
+        return;
+    }
+    if (state.background.loaded) {
+        StretchBitmapMemoryResourceToClient(state.background, dc, hwnd);
+        return;
+    }
+    RECT client{};
+    GetClientRect(hwnd, &client);
+    fill_view_rank_rect(dc, client, kViewRankPageBackground);
+    frame_view_rank_rect(dc, client, RGB(10, 8, 5));
+    InflateRect(&client, -2, -2);
+    frame_view_rank_rect(dc, client, kViewRankBronze);
+    InflateRect(&client, -2, -2);
+    frame_view_rank_rect(dc, client, kViewRankDarkBronze);
+
+    draw_view_rank_panel(dc, view_rank_theme_rect(state, kViewRankTitlePanel),
+        RGB(17, 16, 13));
+    draw_view_rank_panel(dc, view_rank_theme_rect(state, kViewRankCategoryPanel),
+        kViewRankPanelBackground);
+    draw_view_rank_panel(dc, view_rank_theme_rect(state, kViewRankHeaderPanel),
+        RGB(17, 16, 13));
+    draw_view_rank_panel(dc, view_rank_theme_rect(state, kViewRankBottomPanel),
+        kViewRankPanelBackground);
+
+    const ViewRankLayoutRect list = layout_at(state, 1);
+    RECT list_frame{list.x - 3, list.y - 3,
+        list.x + list.width + 3, list.y + list.height + 3};
+    draw_view_rank_panel(dc, list_frame, kViewRankBlack);
+    const ViewRankLayoutRect search = layout_at(state, 2);
+    RECT search_frame{search.x - 3, search.y - 3,
+        search.x + search.width + 3, search.y + search.height + 3};
+    draw_view_rank_panel(dc, search_frame, kViewRankBlack);
+
+    RECT title = view_rank_theme_rect(state, kViewRankTitlePanel);
+    RECT shadow = title;
+    OffsetRect(&shadow, 1, 2);
+    draw_view_rank_centered_text(dc, state.theme_title_font,
+        L"\ub7ad\ud0b9 \ubcf4\uae30", shadow, RGB(0, 0, 0));
+    draw_view_rank_centered_text(dc, state.theme_title_font,
+        L"\ub7ad\ud0b9 \ubcf4\uae30", title, RGB(238, 224, 190));
+
+    constexpr std::array<const wchar_t*, 5> headings = {
+        L"\uc21c\uc704", L"\uc774\ub984", L"\uc810\uc218",
+        L"\uc804\uc801", L"\uc2b9\ub960"};
+    RECT header = view_rank_theme_rect(state, kViewRankHeaderPanel);
+    for (std::size_t i = 0; i < headings.size(); ++i) {
+        const ViewRankLayoutRect column = layout_at(state, 11 + i);
+        RECT heading{column.x, header.top, column.x + column.width,
+            header.bottom};
+        draw_view_rank_centered_text(dc, state.theme_font, headings[i], heading,
+            RGB(214, 196, 158));
+    }
+}
+
 bool load_reconstructed_view_rank_background(ViewRankState& state) {
-    return LoadBitmapMemoryResourceFromExecutableRelativeFile(
-        state.background, "media\\lobby\\view_rank_base.bmp");
+    return LoadPngBitmapMemoryResourceFromExecutableRelativeFile(
+        state.background, "media\\lobby\\view_rank_base.png");
 }
 
 void write_le32(std::vector<u8>& buffer, std::size_t offset, u32 value) {
@@ -334,6 +500,67 @@ bool is_tab_id(int id) {
         id == kViewRankGuildTabButtonId;
 }
 
+const wchar_t* view_rank_theme_button_label(int id) {
+    switch (id) {
+    case kViewRankUpButtonId:
+        return L"\uc774\uc804";
+    case kViewRankDownButtonId:
+        return L"\ub2e4\uc74c";
+    case kViewRankSearchButtonId:
+        return L"\ucc3e\uae30";
+    case kViewRankCloseButtonId:
+        return L"\ub2eb\uae30";
+    default:
+        return nullptr;
+    }
+}
+
+bool draw_view_rank_themed_button(ViewRankState& state,
+    const DRAWITEMSTRUCT& draw) {
+    const int id = static_cast<int>(draw.CtlID);
+    const wchar_t* label = view_rank_theme_button_label(id);
+    if (!state.theme_button_images_loaded || draw.hDC == nullptr ||
+        label == nullptr || !IsViewRankThemedButtonId(id)) {
+        return false;
+    }
+
+    const bool enabled = (draw.itemState & ODS_DISABLED) == 0 &&
+        (draw.hwndItem == nullptr || IsWindowEnabled(draw.hwndItem));
+    const bool pressed = (draw.itemState & ODS_SELECTED) != 0;
+    const bool hovered = state.theme_hot_button == draw.hwndItem;
+    const ViewRankThemeButtonVisual visual =
+        ResolveViewRankThemeButtonVisual(enabled, pressed, hovered);
+    UiPngResource& image = state.theme_button_images[
+        static_cast<std::size_t>(visual)];
+
+    fill_view_rank_rect(draw.hDC, draw.rcItem, kViewRankPanelBackground);
+    const UiPngRect destination{
+        draw.rcItem.left, draw.rcItem.top,
+        draw.rcItem.right - draw.rcItem.left,
+        draw.rcItem.bottom - draw.rcItem.top};
+    if (!DrawUiPngResourceToDc(image, draw.hDC, destination)) {
+        return false;
+    }
+
+    RECT text = draw.rcItem;
+    const int width = std::max<int>(1, text.right - text.left);
+    const int height = std::max<int>(1, text.bottom - text.top);
+    InflateRect(&text, -std::max(4, width / 14),
+        -std::max(2, height / 9));
+    if (pressed) {
+        OffsetRect(&text, 1, 1);
+    }
+    RECT shadow = text;
+    OffsetRect(&shadow, 1, 2);
+    draw_view_rank_centered_text(draw.hDC, state.theme_font, label, shadow,
+        RGB(0, 0, 0));
+    const COLORREF color = !enabled ? RGB(142, 142, 136) :
+        (pressed ? RGB(230, 187, 83) :
+            (hovered ? RGB(255, 231, 151) : RGB(235, 224, 194)));
+    draw_view_rank_centered_text(draw.hDC, state.theme_font, label, text, color);
+    return true;
+}
+
 void compute_columns(ViewRankState& state) {
     const int list_left = layout_at(state, 1).x;
     for (std::size_t i = 0; i < state.columns.size(); ++i) {
@@ -376,7 +603,9 @@ bool draw_rank_entry(ViewRankState& state, const DRAWITEMSTRUCT& draw) {
     const ViewRankEntry& entry = state.entries[draw.itemID];
     RECT rect = draw.rcItem;
     const bool selected = (draw.itemState & ODS_SELECTED) != 0;
-    HBRUSH brush = CreateSolidBrush(selected ? kViewRankSelectedBlue : kViewRankBlack);
+    const bool alternate = (draw.itemID & 1u) != 0;
+    HBRUSH brush = CreateSolidBrush(selected ? kViewRankSelectedBackground :
+        (alternate ? RGB(10, 8, 5) : kViewRankBlack));
     if (brush != nullptr) {
         FillRect(draw.hDC, &rect, brush);
         DeleteObject(brush);
@@ -385,9 +614,20 @@ bool draw_rank_entry(ViewRankState& state, const DRAWITEMSTRUCT& draw) {
         return false;
     }
 
-    SetTextColor(draw.hDC, kViewRankGray);
-    SetBkColor(draw.hDC, selected ? kViewRankSelectedBlue : kViewRankBlack);
-    SetBkMode(draw.hDC, OPAQUE);
+    if (selected) {
+        RECT accent = rect;
+        accent.right = accent.left + std::max<LONG>(3,
+            (rect.bottom - rect.top) / 10);
+        fill_view_rank_rect(draw.hDC, accent, kViewRankGold);
+        frame_view_rank_rect(draw.hDC, rect, RGB(128, 91, 38));
+    }
+    RECT separator = rect;
+    separator.top = std::max(separator.top, separator.bottom - 1);
+    fill_view_rank_rect(draw.hDC, separator,
+        selected ? RGB(112, 77, 31) : RGB(37, 29, 17));
+
+    SetTextColor(draw.hDC, selected ? RGB(255, 220, 109) : kViewRankGray);
+    SetBkMode(draw.hDC, TRANSPARENT);
 
     char text[128]{};
     std::snprintf(text, sizeof(text), "%u",
@@ -465,7 +705,7 @@ bool paint_background_if_current(ViewRankState& state, HWND hwnd) {
     }
     PAINTSTRUCT paint{};
     HDC dc = BeginPaint(hwnd, &paint);
-    StretchBitmapMemoryResourceToClient(state.background, dc, state.window);
+    paint_view_rank_theme(state, hwnd, dc);
     EndPaint(hwnd, &paint);
     return true;
 }
@@ -614,6 +854,27 @@ void InitializeViewRankImageButtons(ViewRankState& state) {
     InitializeViewRankNormalTabButtonStatic(state);
     InitializeViewRankAvatarTabButtonStatic(state);
     InitializeViewRankGuildTabButtonStatic(state);
+    for (UiPngResource& image : state.theme_button_images) {
+        InitializeUiPngResource(image);
+    }
+    state.theme_button_images_loaded = true;
+    for (std::size_t i = 0; i < state.theme_button_images.size(); ++i) {
+        if (!LoadUiPngResourceFromExecutableRelativeFile(
+                state.theme_button_images[i],
+                kViewRankThemeButtonImagePaths[i])) {
+            state.theme_button_images_loaded = false;
+            break;
+        }
+    }
+    if (!state.theme_button_images_loaded) {
+        for (UiPngResource& image : state.theme_button_images) {
+            ReleaseUiPngResource(image);
+        }
+    }
+    state.theme_font = CreateScaledFrontendUiFont(2);
+    state.theme_search_font = CreateScaledFrontendUiFont(3);
+    state.theme_title_font = CreateScaledFrontendUiFont(4);
+    state.theme_hot_button = nullptr;
 }
 
 void DestroyViewRankImageButtons(ViewRankState& state) {
@@ -625,6 +886,23 @@ void DestroyViewRankImageButtons(ViewRankState& state) {
     DestroyViewRankNormalTabButton(state);
     DestroyViewRankAvatarTabButton(state);
     DestroyViewRankGuildTabButton(state);
+    state.theme_hot_button = nullptr;
+    state.theme_button_images_loaded = false;
+    for (UiPngResource& image : state.theme_button_images) {
+        ReleaseUiPngResource(image);
+    }
+    if (state.theme_font != nullptr) {
+        DeleteObject(state.theme_font);
+        state.theme_font = nullptr;
+    }
+    if (state.theme_search_font != nullptr) {
+        DeleteObject(state.theme_search_font);
+        state.theme_search_font = nullptr;
+    }
+    if (state.theme_title_font != nullptr) {
+        DeleteObject(state.theme_title_font);
+        state.theme_title_font = nullptr;
+    }
 }
 
 void InstallViewRankAccelerators(ViewRankState& state) {
@@ -675,8 +953,10 @@ void QueueViewRankListRequest(ViewRankState& state, ViewRankListType type,
 
     if (LegacyImageButtonControl* button =
             button_for_id(state, kViewRankNormalTabButtonId)) {
-        RedrawWindow(button->window, nullptr, nullptr,
-            RDW_INVALIDATE | RDW_UPDATENOW);
+        if (button->window != nullptr) {
+            RedrawWindow(button->window, nullptr, nullptr,
+                RDW_INVALIDATE | RDW_UPDATENOW);
+        }
     }
     RedrawViewRankList(state);
 }
@@ -745,6 +1025,9 @@ bool CreateViewRankWindow(ViewRankState& state, HWND parent, HINSTANCE instance,
         return false;
     }
     assign_layout(state, layout.table);
+    if (load_reconstructed_view_rank_background(state)) {
+        apply_view_rank_png_layout(state);
+    }
     compute_columns(state);
 
     const ViewRankLayoutRect window_rect = layout_at(state, 0);
@@ -789,32 +1072,18 @@ bool CreateViewRankWindow(ViewRankState& state, HWND parent, HINSTANCE instance,
         }
     }
 
-    if (LegacyImageButtonControl* normal =
-            button_for_id(state, kViewRankNormalTabButtonId)) {
-        SetWindowTextW(normal->window, L"\ub7ad\ud0b9");
-    }
-    for (int removed_tab_id : {
-             kViewRankAvatarTabButtonId, kViewRankGuildTabButtonId}) {
-        if (LegacyImageButtonControl* removed =
-                button_for_id(state, removed_tab_id)) {
-            ShowWindow(removed->window, SW_HIDE);
-        }
-    }
-
+    HFONT theme_font = state.theme_font != nullptr ? state.theme_font :
+        reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
     SendMessageA(state.window, WM_SETFONT,
-        reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+        reinterpret_cast<WPARAM>(theme_font), TRUE);
     SendMessageA(state.list_box.window, WM_SETFONT,
-        reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+        reinterpret_cast<WPARAM>(theme_font), TRUE);
+    HFONT search_font = state.theme_search_font != nullptr ?
+        state.theme_search_font : theme_font;
     SendMessageA(state.search_edit.window, WM_SETFONT,
-        reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+        reinterpret_cast<WPARAM>(search_font), TRUE);
 
     InstallViewRankAccelerators(state);
-    if (!load_reconstructed_view_rank_background(state) &&
-        !LoadBitmapMemoryResourceFromTrcRecord(state.background, "Jw2_19.trc",
-            kViewRankBackgroundBitmapRecord)) {
-        DestroyWindow(state.window);
-        return false;
-    }
     ShowWindow(state.list_box.window, SW_SHOW);
     if (state.search_name[0] != '\0') {
         SetWindowTextA(state.search_edit.window, state.search_name.data());
@@ -910,6 +1179,12 @@ LRESULT HandleViewRankWindowMessage(ViewRankState& state, HWND hwnd, UINT messag
     case WM_DESTROY:
         release_window_resources(state);
         return 0;
+    case WM_ERASEBKGND:
+        if (hwnd == state.window) {
+            paint_view_rank_theme(state, hwnd, reinterpret_cast<HDC>(wparam));
+            return TRUE;
+        }
+        break;
     case WM_PAINT:
         if (paint_background_if_current(state, hwnd)) {
             return 0;
@@ -925,6 +1200,10 @@ LRESULT HandleViewRankWindowMessage(ViewRankState& state, HWND hwnd, UINT messag
                 return TRUE;
             }
             break;
+        }
+        if (IsViewRankThemedButtonId(static_cast<int>(draw->CtlID)) &&
+            draw_view_rank_themed_button(state, *draw)) {
+            return TRUE;
         }
         if (is_tab_id(static_cast<int>(draw->CtlID))) {
             draw_tab_button(state, static_cast<int>(draw->CtlID), *draw);
@@ -1046,6 +1325,47 @@ LRESULT HandleViewRankControlMessage(ViewRankState& state, HWND hwnd, UINT messa
     }
 
     const int id = static_cast<int>(GetWindowLongPtrA(hwnd, GWLP_ID));
+    if (IsViewRankThemedButtonId(id)) {
+        switch (message) {
+        case WM_MOUSEMOVE: {
+            if (state.theme_hot_button != hwnd) {
+                HWND previous = state.theme_hot_button;
+                state.theme_hot_button = hwnd;
+                if (previous != nullptr && IsWindow(previous)) {
+                    RedrawWindow(previous, nullptr, nullptr,
+                        RDW_INVALIDATE | RDW_NOERASE);
+                }
+                RedrawWindow(hwnd, nullptr, nullptr,
+                    RDW_INVALIDATE | RDW_NOERASE);
+            }
+            TRACKMOUSEEVENT tracking{};
+            tracking.cbSize = sizeof(tracking);
+            tracking.dwFlags = TME_LEAVE;
+            tracking.hwndTrack = hwnd;
+            TrackMouseEvent(&tracking);
+            break;
+        }
+        case WM_MOUSELEAVE:
+            if (state.theme_hot_button == hwnd) {
+                state.theme_hot_button = nullptr;
+                RedrawWindow(hwnd, nullptr, nullptr,
+                    RDW_INVALIDATE | RDW_NOERASE);
+            }
+            break;
+        case WM_ENABLE:
+        case WM_CAPTURECHANGED:
+            RedrawWindow(hwnd, nullptr, nullptr,
+                RDW_INVALIDATE | RDW_NOERASE);
+            break;
+        case WM_NCDESTROY:
+            if (state.theme_hot_button == hwnd) {
+                state.theme_hot_button = nullptr;
+            }
+            break;
+        default:
+            break;
+        }
+    }
     switch (id) {
     case kViewRankSearchEditId:
     case kViewRankListBoxId:

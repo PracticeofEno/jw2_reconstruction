@@ -81,6 +81,9 @@ static_assert(IsOnlineLobbyThemedButtonId(kOnlineLobbyCreateGameButtonId));
 static_assert(IsOnlineLobbyThemedButtonId(kOnlineLobbyJoinGameButtonId));
 static_assert(IsOnlineLobbyThemedButtonId(kOnlineLobbyViewRankButtonId));
 static_assert(IsOnlineLobbyThemedButtonId(kOnlineLobbyReplayButtonId));
+static_assert(IsOnlineLobbyThemedButtonId(
+    kOnlineLobbyReplayDownloadButtonId));
+static_assert(IsOnlineLobbyThemedButtonId(kOnlineLobbyReplayCloseButtonId));
 static_assert(IsOnlineLobbyThemedButtonId(IDCANCEL));
 static_assert(!IsOnlineLobbyThemedButtonId(kOnlineLobbyEmoticonButtonId));
 static_assert(OnlineLobbySimplifiedActionIndex(
@@ -116,6 +119,20 @@ static_assert(kSimplifiedReplayAction.x == 476 &&
 static_assert(kSimplifiedExitAction.x == 619 &&
     kSimplifiedExitAction.width == 133 &&
     kSimplifiedExitAction.x + kSimplifiedExitAction.width == 752);
+constexpr OnlineLobbyLayoutRect kCompactSimplifiedCreateAction =
+    InsetOnlineLobbyButton(kSimplifiedCreateAction,
+        kOnlineLobbySimplifiedActionHorizontalInset,
+        kOnlineLobbySimplifiedActionVerticalInset);
+constexpr OnlineLobbyLayoutRect kCompactReplayDownloadAction =
+    InsetOnlineLobbyButton({202, 533, 144, 54}, 18, 10);
+static_assert(kCompactSimplifiedCreateAction.x == 53 &&
+    kCompactSimplifiedCreateAction.y == 543 &&
+    kCompactSimplifiedCreateAction.width == 121 &&
+    kCompactSimplifiedCreateAction.height == 32);
+static_assert(kCompactReplayDownloadAction.x == 220 &&
+    kCompactReplayDownloadAction.y == 543 &&
+    kCompactReplayDownloadAction.width == 108 &&
+    kCompactReplayDownloadAction.height == 34);
 static_assert(ResolveOnlineLobbyThemeButtonVisual(true, false, false, false) ==
     OnlineLobbyThemeButtonVisual::Normal);
 static_assert(ResolveOnlineLobbyThemeButtonVisual(true, false, true, false) ==
@@ -126,6 +143,12 @@ static_assert(ResolveOnlineLobbyThemeButtonVisual(true, true, true, true) ==
     OnlineLobbyThemeButtonVisual::Pressed);
 static_assert(ResolveOnlineLobbyThemeButtonVisual(false, true, true, true) ==
     OnlineLobbyThemeButtonVisual::Disabled);
+static_assert(ResolveOnlineLobbyReplayScrollbarVisual(true, false) ==
+    OnlineLobbyReplayScrollbarVisual::Normal);
+static_assert(ResolveOnlineLobbyReplayScrollbarVisual(true, true) ==
+    OnlineLobbyReplayScrollbarVisual::Active);
+static_assert(ResolveOnlineLobbyReplayScrollbarVisual(false, true) ==
+    OnlineLobbyReplayScrollbarVisual::Disabled);
 constexpr OnlineLobbyLayoutRect kLegacyChatEdit{469, 578, 409, 22};
 constexpr OnlineLobbyLayoutRect kLegacySendSlot{960, 578, 17, 22};
 constexpr OnlineLobbyLayoutRect kLegacyEmoticonButton{888, 578, 27, 22};
@@ -207,12 +230,55 @@ static_assert(ScaleFrontendLayoutValue(
     kOnlineLobbyReplayInnerFrameVerticalInset,
     kOnlineLobbyReplayButtonBaseHeight, 61) == 16);
 static_assert(IsViewRankRemovedButtonId(kViewRankGoSiteButtonId));
+static_assert(IsViewRankRemovedButtonId(kViewRankNormalTabButtonId));
+static_assert(IsViewRankRemovedButtonId(kViewRankAvatarTabButtonId));
+static_assert(IsViewRankRemovedButtonId(kViewRankGuildTabButtonId));
 static_assert(!IsViewRankRemovedButtonId(kViewRankCloseButtonId));
+static_assert(IsViewRankThemedButtonId(kViewRankUpButtonId));
+static_assert(IsViewRankThemedButtonId(kViewRankDownButtonId));
+static_assert(IsViewRankThemedButtonId(kViewRankSearchButtonId));
+static_assert(IsViewRankThemedButtonId(kViewRankCloseButtonId));
+static_assert(!IsViewRankThemedButtonId(kViewRankNormalTabButtonId));
+static_assert(!IsViewRankThemedButtonId(kViewRankGoSiteButtonId));
+static_assert(ResolveViewRankThemeButtonVisual(true, false, false) ==
+    ViewRankThemeButtonVisual::Normal);
+static_assert(ResolveViewRankThemeButtonVisual(true, false, true) ==
+    ViewRankThemeButtonVisual::Hot);
+static_assert(ResolveViewRankThemeButtonVisual(true, true, true) ==
+    ViewRankThemeButtonVisual::Pressed);
+static_assert(ResolveViewRankThemeButtonVisual(false, true, true) ==
+    ViewRankThemeButtonVisual::Disabled);
+constexpr ViewRankLayoutRect kViewRankCompactSearchButton =
+    ResolveViewRankPngButtonRect(kViewRankSearchButtonId);
+constexpr ViewRankLayoutRect kViewRankCompactPreviousButton =
+    ResolveViewRankPngButtonRect(kViewRankUpButtonId);
+constexpr ViewRankLayoutRect kViewRankCompactNextButton =
+    ResolveViewRankPngButtonRect(kViewRankDownButtonId);
+constexpr ViewRankLayoutRect kViewRankCompactCloseButton =
+    ResolveViewRankPngButtonRect(kViewRankCloseButtonId);
+static_assert(kViewRankCompactSearchButton.width == 84 &&
+    kViewRankCompactSearchButton.height == 27);
+static_assert(kViewRankCompactPreviousButton.width == 84 &&
+    kViewRankCompactPreviousButton.height == 27);
+static_assert(kViewRankCompactNextButton.width == 84 &&
+    kViewRankCompactNextButton.height == 27);
+static_assert(kViewRankCompactCloseButton.width == 84 &&
+    kViewRankCompactCloseButton.height == 27);
+static_assert(kViewRankCompactSearchButton.x +
+    kViewRankCompactSearchButton.width < kViewRankCompactPreviousButton.x);
+static_assert(kViewRankCompactPreviousButton.x +
+    kViewRankCompactPreviousButton.width < kViewRankCompactNextButton.x);
 static_assert(FrontendCursorArgbFromRgb565(0x0000) == 0x00000000u);
 static_assert(FrontendCursorArgbFromRgb565(0xf800) == 0xffff0000u);
 static_assert(FrontendCursorArgbFromRgb565(0x07e0) == 0xff00ff00u);
 static_assert(FrontendCursorArgbFromRgb565(0x001f) == 0xff0000ffu);
 static_assert(FrontendCursorArgbFromRgb565(0xffff) == 0xffffffffu);
+static_assert(ShouldPreserveNativeFrontendCursorOnMainFocus(true, true));
+static_assert(!ShouldPreserveNativeFrontendCursorOnMainFocus(true, false));
+static_assert(!ShouldPreserveNativeFrontendCursorOnMainFocus(false, true));
+static_assert(kWizardNetReplayListProtocolVersion == 1);
+static_assert(kWizardNetReplayListLegacyRecordBytes == 0xb0);
+static_assert(kWizardNetReplayListMetadataRecordBytes == 0xf4);
 
 } // namespace
 

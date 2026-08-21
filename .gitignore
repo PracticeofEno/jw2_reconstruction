@@ -92,9 +92,9 @@ ranker_reconstructed_code/tools/gameplay_parity/reports/gameplay_inventory.json
 !ranker_reconstructed_code/resources/jw208_record15.mp4
 !ranker_reconstructed_code/resources/jw208_record16.mp4
 !ranker_reconstructed_code/resources/scenario_ui_bink_mp4.pack
-!ranker_reconstructed_code/resources/lobby_base.bmp
 !ranker_reconstructed_code/resources/lobby_base.png
-!ranker_reconstructed_code/resources/view_rank_base.bmp
+!ranker_reconstructed_code/resources/view_rank_base.png
+!ranker_reconstructed_code/resources/replay_download_base.png
 !ranker_reconstructed_code/resources/wizardnet_rank_marks.png
 !ranker_reconstructed_code/resources/wizardnet_rank_marks.bmp
 !ranker_reconstructed_code/resources/README_wizardnet_rank_marks.txt

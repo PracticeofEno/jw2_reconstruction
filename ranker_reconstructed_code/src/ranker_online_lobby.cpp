@@ -98,16 +98,21 @@ constexpr int kOnlineLobbyRankMarkChoiceWidth = 46;
 constexpr int kOnlineLobbyRankMarkChoiceHeight = 22;
 constexpr int kOnlineLobbyRankMarkChoiceGap = 2;
 constexpr int kOnlineLobbyRankMarkTextGap = 6;
-constexpr std::size_t kWizardNetReplayListRecordBytes = 0xb0;
 constexpr int kWizardNetReplayThemeWidth = 800;
 constexpr int kWizardNetReplayThemeHeight = 600;
+constexpr OnlineLobbyLayoutRect kWizardNetReplayTitleRect{210, 18, 380, 48};
+constexpr OnlineLobbyLayoutRect kWizardNetReplayListPanelRect{48, 118, 312, 400};
+constexpr OnlineLobbyLayoutRect kWizardNetReplayInfoPanelRect{365, 72, 385, 446};
+constexpr OnlineLobbyLayoutRect kWizardNetReplayActionPanelRect{48, 520, 704, 72};
 constexpr OnlineLobbyLayoutRect kWizardNetReplayListHeaderRect{64, 150, 279, 23};
 constexpr OnlineLobbyLayoutRect kWizardNetReplayListRect{64, 181, 259, 320};
 constexpr OnlineLobbyLayoutRect kWizardNetReplayScrollRect{328, 181, 15, 320};
 constexpr OnlineLobbyLayoutRect kWizardNetReplayInfoRect{380, 88, 355, 412};
 constexpr OnlineLobbyLayoutRect kWizardNetReplayStatusRect{394, 438, 327, 52};
-constexpr OnlineLobbyLayoutRect kWizardNetReplayDownloadRect{202, 533, 144, 54};
-constexpr OnlineLobbyLayoutRect kWizardNetReplayCloseRect{462, 533, 144, 54};
+constexpr OnlineLobbyLayoutRect kWizardNetReplayDownloadRect =
+    InsetOnlineLobbyButton({202, 533, 144, 54}, 18, 10);
+constexpr OnlineLobbyLayoutRect kWizardNetReplayCloseRect =
+    InsetOnlineLobbyButton({462, 533, 144, 54}, 18, 10);
 constexpr std::array<const char*, kOnlineLobbyThemeButtonVisualCount>
     kOnlineLobbyThemeButtonImagePaths = {
         "media\\ui\\tools\\button_medium_bronze.png",
@@ -115,6 +120,17 @@ constexpr std::array<const char*, kOnlineLobbyThemeButtonVisualCount>
         "media\\ui\\tools\\button_medium_pressed.png",
         "media\\ui\\tools\\button_medium_gray.png",
     };
+constexpr std::array<const char*, kOnlineLobbyReplayScrollbarVisualCount>
+    kOnlineLobbyReplayScrollbarImagePaths = {
+        "media\\ui\\tools\\scrollbar_bronze.png",
+        "media\\ui\\tools\\scrollbar_gold.png",
+        "media\\ui\\tools\\scrollbar_gray.png",
+    };
+constexpr int kReplayScrollbarCanonicalWidth = 61;
+constexpr int kReplayScrollbarCanonicalHeight = 391;
+constexpr int kReplayScrollbarTopEnd = 58;
+constexpr int kReplayScrollbarTrackEnd = 106;
+constexpr int kReplayScrollbarThumbEnd = 184;
 
 constexpr OnlineLobbyButtonSpec kButtonSpecs[kOnlineLobbyButtonCount] = {
     {kOnlineLobbyNameButtonId, "Lobby Name", 0, 0, false},
@@ -198,6 +214,12 @@ bool load_reconstructed_lobby_background(OnlineLobbyState& state) {
         state.background, "media\\lobby\\lobby_base.png");
 }
 
+bool load_reconstructed_replay_browser_background(OnlineLobbyState& state) {
+    return LoadPngBitmapMemoryResourceFromExecutableRelativeFile(
+        state.replay_browser_background,
+        "media\\lobby\\replay_download_base.png");
+}
+
 bool load_reconstructed_rank_marks(OnlineLobbyState& state) {
     if (!LoadBitmapMemoryResourceFromExecutableRelativeFile(
             state.rank_mark_strip,
@@ -252,7 +274,16 @@ OnlineLobbyLayoutRect arrange_simplified_main_action(
     const i32 gap = ScaleFrontendLayoutValue(
         kOnlineLobbySimplifiedActionGap, 800,
         std::max<i32>(1, root.width));
-    return ArrangeOnlineLobbySimplifiedAction(row, action_index, gap);
+    const OnlineLobbyLayoutRect arranged =
+        ArrangeOnlineLobbySimplifiedAction(row, action_index, gap);
+    const i32 horizontal_inset = ScaleFrontendLayoutValue(
+        kOnlineLobbySimplifiedActionHorizontalInset, 800,
+        std::max<i32>(1, root.width));
+    const i32 vertical_inset = ScaleFrontendLayoutValue(
+        kOnlineLobbySimplifiedActionVerticalInset, 600,
+        std::max<i32>(1, root.height));
+    return InsetOnlineLobbyButton(
+        arranged, horizontal_inset, vertical_inset);
 }
 
 OnlineLobbyLayoutRect arrange_chat_composer_control(
@@ -331,6 +362,10 @@ const wchar_t* online_lobby_theme_button_label(int id) {
         return L"\ub7ad\ud0b9 \ubcf4\uae30";
     case kOnlineLobbyReplayButtonId:
         return L"\ub9ac\ud50c\ub808\uc774";
+    case kOnlineLobbyReplayDownloadButtonId:
+        return L"\ub2e4\uc6b4\ub85c\ub4dc";
+    case kOnlineLobbyReplayCloseButtonId:
+        return L"\ub2eb\uae30";
     case IDCANCEL:
         return L"\ub098\uac00\uae30";
     default:
@@ -340,8 +375,11 @@ const wchar_t* online_lobby_theme_button_label(int id) {
 
 void paint_online_lobby_background_under_button(
     OnlineLobbyState& state, const DRAWITEMSTRUCT& draw) {
+    if (draw.hDC == nullptr) {
+        return;
+    }
     if (!state.background.loaded || state.window == nullptr ||
-        draw.hwndItem == nullptr || draw.hDC == nullptr) {
+        draw.hwndItem == nullptr) {
         fill_online_lobby_rect(draw.hDC, draw.rcItem, RGB(0, 0, 0));
         return;
     }
@@ -365,16 +403,10 @@ void paint_online_lobby_background_under_button(
     RestoreDC(draw.hDC, saved_dc);
 }
 
-bool draw_online_lobby_themed_button(OnlineLobbyState& state,
-    const DRAWITEMSTRUCT& draw) {
-    if (!state.theme_button_images_loaded ||
-        !IsOnlineLobbyThemedButtonId(static_cast<int>(draw.CtlID))) {
-        return false;
-    }
-
-    const wchar_t* label = online_lobby_theme_button_label(
-        static_cast<int>(draw.CtlID));
-    if (label == nullptr) {
+bool draw_online_lobby_theme_button_content(OnlineLobbyState& state,
+    const DRAWITEMSTRUCT& draw, const wchar_t* label) {
+    if (!state.theme_button_images_loaded || draw.hDC == nullptr ||
+        label == nullptr) {
         return false;
     }
 
@@ -388,7 +420,6 @@ bool draw_online_lobby_themed_button(OnlineLobbyState& state,
     UiPngResource& image = state.theme_button_images[
         static_cast<std::size_t>(visual)];
 
-    paint_online_lobby_background_under_button(state, draw);
     const UiPngRect destination{
         draw.rcItem.left, draw.rcItem.top,
         draw.rcItem.right - draw.rcItem.left,
@@ -427,6 +458,20 @@ bool draw_online_lobby_themed_button(OnlineLobbyState& state,
         SelectObject(draw.hDC, old_font);
     }
     return true;
+}
+
+bool draw_online_lobby_themed_button(OnlineLobbyState& state,
+    const DRAWITEMSTRUCT& draw) {
+    if (!IsOnlineLobbyThemedButtonId(static_cast<int>(draw.CtlID))) {
+        return false;
+    }
+    const wchar_t* label = online_lobby_theme_button_label(
+        static_cast<int>(draw.CtlID));
+    if (label == nullptr) {
+        return false;
+    }
+    paint_online_lobby_background_under_button(state, draw);
+    return draw_online_lobby_theme_button_content(state, draw, label);
 }
 
 void draw_online_lobby_replay_button(OnlineLobbyState& state,
@@ -1610,6 +1655,8 @@ LRESULT CALLBACK online_lobby_control_proc(HWND hwnd, UINT message, WPARAM wpara
         wparam, lparam);
 }
 
+void subclass_control(HWND window);
+
 std::wstring cp949_to_wide(const std::string& text) {
     if (text.empty()) {
         return {};
@@ -1647,6 +1694,61 @@ RECT replay_theme_rect(HWND window, const OnlineLobbyLayoutRect& source) {
         scaled.y + scaled.height};
 }
 
+void draw_replay_browser_panel(HDC dc, RECT rect, COLORREF fill) {
+    fill_online_lobby_rect(dc, rect, fill);
+    frame_online_lobby_rect(dc, rect, RGB(10, 8, 5));
+    InflateRect(&rect, -1, -1);
+    frame_online_lobby_rect(dc, rect, RGB(151, 116, 66));
+    InflateRect(&rect, -1, -1);
+    frame_online_lobby_rect(dc, rect, RGB(47, 37, 24));
+}
+
+void paint_replay_browser_theme(OnlineLobbyState& state, HWND window, HDC dc) {
+    if (window == nullptr || dc == nullptr) {
+        return;
+    }
+    if (state.replay_browser_background.loaded) {
+        StretchBitmapMemoryResourceToClient(
+            state.replay_browser_background, dc, window);
+        return;
+    }
+    RECT client{};
+    GetClientRect(window, &client);
+    fill_online_lobby_rect(dc, client, RGB(8, 8, 7));
+    frame_online_lobby_rect(dc, client, RGB(10, 8, 5));
+    InflateRect(&client, -2, -2);
+    frame_online_lobby_rect(dc, client, RGB(151, 116, 66));
+    InflateRect(&client, -2, -2);
+    frame_online_lobby_rect(dc, client, RGB(47, 37, 24));
+
+    draw_replay_browser_panel(dc,
+        replay_theme_rect(window, kWizardNetReplayTitleRect), RGB(17, 16, 13));
+    draw_replay_browser_panel(dc,
+        replay_theme_rect(window, kWizardNetReplayListPanelRect), RGB(12, 11, 9));
+    draw_replay_browser_panel(dc,
+        replay_theme_rect(window, kWizardNetReplayInfoPanelRect), RGB(12, 11, 9));
+    draw_replay_browser_panel(dc,
+        replay_theme_rect(window, kWizardNetReplayActionPanelRect), RGB(12, 11, 9));
+
+    RECT title = replay_theme_rect(window, kWizardNetReplayTitleRect);
+    InflateRect(&title, -8, -6);
+    const HFONT font = state.replay_lobby_font != nullptr ?
+        state.replay_lobby_font : GetUiFontHandle(4);
+    HGDIOBJ old_font = font != nullptr ? SelectObject(dc, font) : nullptr;
+    SetBkMode(dc, TRANSPARENT);
+    RECT shadow = title;
+    OffsetRect(&shadow, 1, 2);
+    SetTextColor(dc, RGB(0, 0, 0));
+    DrawTextW(dc, L"\ub9ac\ud50c\ub808\uc774 \ub2e4\uc6b4\ub85c\ub4dc", -1,
+        &shadow, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    SetTextColor(dc, RGB(238, 224, 190));
+    DrawTextW(dc, L"\ub9ac\ud50c\ub808\uc774 \ub2e4\uc6b4\ub85c\ub4dc", -1,
+        &title, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    if (old_font != nullptr) {
+        SelectObject(dc, old_font);
+    }
+}
+
 const wchar_t* replay_game_type_text(u32 game_type) {
     if (game_type == kWizardNetGameTypeRank) {
         return L"랭킹 게임";
@@ -1655,6 +1757,28 @@ const wchar_t* replay_game_type_text(u32 game_type) {
         return L"밀리 게임";
     }
     return L"일반 게임";
+}
+
+std::wstring replay_game_duration_text(u32 duration_seconds) {
+    if (duration_seconds == 0) {
+        return L"-";
+    }
+    const u32 hours = duration_seconds / 3600u;
+    const u32 minutes = (duration_seconds / 60u) % 60u;
+    const u32 seconds = duration_seconds % 60u;
+    wchar_t text[32]{};
+    if (hours != 0) {
+        _snwprintf_s(text, std::size(text), _TRUNCATE, L"%02lu:%02lu:%02lu",
+            static_cast<unsigned long>(hours),
+            static_cast<unsigned long>(minutes),
+            static_cast<unsigned long>(seconds));
+    }
+    else {
+        _snwprintf_s(text, std::size(text), _TRUNCATE, L"%02lu:%02lu",
+            static_cast<unsigned long>(minutes),
+            static_cast<unsigned long>(seconds));
+    }
+    return text;
 }
 
 const WizardNetReplayListEntry* selected_replay_browser_entry(
@@ -1704,6 +1828,8 @@ void draw_replay_browser_info(OnlineLobbyState& state, HDC dc) {
 
     const std::wstring filename = cp949_to_wide(entry->filename);
     const std::wstring uploader = cp949_to_wide(entry->uploader);
+    const std::wstring winner = cp949_to_wide(entry->winner);
+    const std::wstring loser = cp949_to_wide(entry->loser);
     wchar_t uploaded[64] = L"-";
     if (entry->uploaded_at != 0 &&
         entry->uploaded_at <= static_cast<u64>(
@@ -1740,6 +1866,10 @@ void draw_replay_browser_info(OnlineLobbyState& state, HDC dc) {
     y += line_height * 2 + line_height / 2;
 
     draw_label_value(L"게임 유형", replay_game_type_text(entry->game_type));
+    draw_label_value(L"\uc2b9\uc790", winner.empty() ? L"-" : winner);
+    draw_label_value(L"\ud328\uc790", loser.empty() ? L"-" : loser);
+    draw_label_value(L"\uac8c\uc784 \uc2dc\uac04",
+        replay_game_duration_text(entry->duration_seconds));
     draw_label_value(L"등록자", uploader.empty() ? L"-" : uploader);
     wchar_t size_text[64]{};
     _snwprintf_s(size_text, std::size(size_text), _TRUNCATE,
@@ -1879,6 +2009,94 @@ void draw_replay_browser_list_item(OnlineLobbyState& state,
     }
 }
 
+bool draw_replay_browser_themed_button(OnlineLobbyState& state,
+    const DRAWITEMSTRUCT& draw) {
+    if (draw.CtlID != kOnlineLobbyReplayDownloadButtonId &&
+        draw.CtlID != kOnlineLobbyReplayCloseButtonId) {
+        return false;
+    }
+    const wchar_t* label = online_lobby_theme_button_label(
+        static_cast<int>(draw.CtlID));
+    if (label == nullptr) {
+        return false;
+    }
+    fill_online_lobby_rect(draw.hDC, draw.rcItem, RGB(12, 11, 9));
+    return draw_online_lobby_theme_button_content(state, draw, label);
+}
+
+UiPngRect replay_scrollbar_source_rect(const UiPngResource& image,
+    int canonical_top, int canonical_bottom) {
+    const int top = ScaleFrontendLayoutValue(canonical_top,
+        kReplayScrollbarCanonicalHeight, image.height);
+    const int bottom = ScaleFrontendLayoutValue(canonical_bottom,
+        kReplayScrollbarCanonicalHeight, image.height);
+    return {0, std::clamp(top, 0, image.height - 1), image.width,
+        std::max(1, std::min(image.height, bottom) -
+            std::clamp(top, 0, image.height - 1))};
+}
+
+bool draw_replay_browser_png_scrollbar(OnlineLobbyState& state, HDC dc) {
+    LegacyCustomScrollControl& control = state.replay_browser_scroll;
+    if (!state.replay_scrollbar_images_loaded || !control.visible ||
+        control.window == nullptr || dc == nullptr) {
+        return false;
+    }
+
+    RECT client{};
+    GetClientRect(control.window, &client);
+    const int width = std::max<int>(1, client.right - client.left);
+    const int height = std::max<int>(1, client.bottom - client.top);
+    const int arrow_extent = std::min(width, height / 2);
+    const int thumb_extent = std::max(arrow_extent,
+        ScaleFrontendLayoutValue(kReplayScrollbarThumbEnd -
+            kReplayScrollbarTrackEnd, kReplayScrollbarCanonicalWidth, width));
+    const int track_extent = height - arrow_extent * 2;
+    if (arrow_extent <= 0 || track_extent < thumb_extent) {
+        return false;
+    }
+
+    const bool enabled = control.max_value > control.min_value;
+    const OnlineLobbyReplayScrollbarVisual visual =
+        ResolveOnlineLobbyReplayScrollbarVisual(enabled, control.dragging);
+    const UiPngResource& image = state.replay_scrollbar_images[
+        static_cast<std::size_t>(visual)];
+    if (!image.loaded || image.width <= 0 || image.height <= 0) {
+        return false;
+    }
+
+    control.width = width;
+    control.height = height;
+    SetLegacyCustomScrollControlMetrics(
+        control, width, arrow_extent, width, thumb_extent);
+    const int range = std::max(1, control.max_value - control.min_value);
+    const int relative_value = std::clamp(
+        control.value - control.min_value, 0, range);
+    const int thumb_travel = std::max(0, track_extent - thumb_extent);
+    control.thumb_position = arrow_extent +
+        (thumb_travel * relative_value) / range;
+
+    FillRect(dc, &client,
+        reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+    const UiPngRect top_source = replay_scrollbar_source_rect(
+        image, 0, kReplayScrollbarTopEnd);
+    const UiPngRect track_source = replay_scrollbar_source_rect(
+        image, kReplayScrollbarTopEnd, kReplayScrollbarTrackEnd);
+    const UiPngRect thumb_source = replay_scrollbar_source_rect(
+        image, kReplayScrollbarTrackEnd, kReplayScrollbarThumbEnd);
+    const bool top_drawn = DrawUiPngResourceRectToDc(image, dc,
+        {0, 0, width, arrow_extent}, top_source);
+    const bool track_drawn = DrawUiPngResourceRectToDc(image, dc,
+        {0, arrow_extent, width, track_extent}, track_source);
+    // The extracted sheet's lower cap uses different bevel and padding pixels.
+    // Mirror the upper cap instead so both ends share identical chrome while
+    // the up arrow naturally becomes the required down arrow.
+    const bool bottom_drawn = DrawUiPngResourceRectToDcVerticallyFlipped(
+        image, dc, {0, height - arrow_extent, width, arrow_extent}, top_source);
+    const bool thumb_drawn = DrawUiPngResourceRectToDc(image, dc,
+        {0, control.thumb_position, width, thumb_extent}, thumb_source);
+    return top_drawn && track_drawn && bottom_drawn && thumb_drawn;
+}
+
 void update_replay_browser_scroll(OnlineLobbyState& state) {
     if (state.replay_list == nullptr ||
         state.replay_browser_scroll.window == nullptr) {
@@ -2008,7 +2226,9 @@ LRESULT CALLBACK replay_browser_scroll_proc(HWND hwnd, UINT message,
     if (message == WM_PAINT) {
         PAINTSTRUCT paint{};
         HDC dc = BeginPaint(hwnd, &paint);
-        DrawLegacyCustomScrollControl(state->replay_browser_scroll, dc);
+        if (!draw_replay_browser_png_scrollbar(*state, dc)) {
+            DrawLegacyCustomScrollControl(state->replay_browser_scroll, dc);
+        }
         EndPaint(hwnd, &paint);
         return 0;
     }
@@ -2039,17 +2259,12 @@ LRESULT CALLBACK replay_browser_window_proc(HWND hwnd, UINT message,
     }
     switch (message) {
     case WM_ERASEBKGND:
-        if (state->replay_browser_background.loaded) {
-            StretchBitmapMemoryResourceToClient(state->replay_browser_background,
-                reinterpret_cast<HDC>(wparam), hwnd);
-            return TRUE;
-        }
-        break;
+        paint_replay_browser_theme(*state, hwnd, reinterpret_cast<HDC>(wparam));
+        return TRUE;
     case WM_PAINT: {
         PAINTSTRUCT paint{};
         HDC dc = BeginPaint(hwnd, &paint);
-        StretchBitmapMemoryResourceToClient(state->replay_browser_background,
-            dc, hwnd);
+        paint_replay_browser_theme(*state, hwnd, dc);
         draw_replay_browser_list_header(*state, dc);
         draw_replay_browser_info(*state, dc);
         draw_replay_browser_status(*state, dc);
@@ -2066,11 +2281,15 @@ LRESULT CALLBACK replay_browser_window_proc(HWND hwnd, UINT message,
             return TRUE;
         }
         if (draw->CtlID == kOnlineLobbyReplayDownloadButtonId) {
-            DrawLegacyImageButtonItem(state->replay_download_control, *draw);
+            if (!draw_replay_browser_themed_button(*state, *draw)) {
+                DrawLegacyImageButtonItem(state->replay_download_control, *draw);
+            }
             return TRUE;
         }
         if (draw->CtlID == kOnlineLobbyReplayCloseButtonId) {
-            DrawLegacyImageButtonItem(state->replay_close_control, *draw);
+            if (!draw_replay_browser_themed_button(*state, *draw)) {
+                DrawLegacyImageButtonItem(state->replay_close_control, *draw);
+            }
             return TRUE;
         }
         break;
@@ -2125,7 +2344,18 @@ LRESULT CALLBACK replay_browser_window_proc(HWND hwnd, UINT message,
         state->replay_download_filename.clear();
         if (state->window != nullptr && IsWindow(state->window)) {
             EnableWindow(state->window, TRUE);
-            SetForegroundWindow(state->window);
+            // Destroying the active owned popup already returns activation to
+            // its root owner.  Forcing a child window through
+            // SetForegroundWindow sends an extra main-window focus transition,
+            // which can restore a stale locked-game cursor position.  Return
+            // keyboard focus directly to the lobby control instead.
+            SetCursor(GetFrontendGameCursor());
+            if (state->chat_edit != nullptr && IsWindow(state->chat_edit)) {
+                SetFocus(state->chat_edit);
+            }
+            else {
+                SetFocus(state->window);
+            }
         }
         return 0;
     default:
@@ -2166,11 +2396,7 @@ bool open_replay_browser(OnlineLobbyState& state) {
         return false;
     }
     release_replay_browser_theme(state);
-    if (!LoadBitmapMemoryResourceFromTrcRecord(
-            state.replay_browser_background, "Jw2_19.trc",
-            kReplayLoadBackgroundBitmapRecord)) {
-        return false;
-    }
+    load_reconstructed_replay_browser_background(state);
 
     RECT owner_client{};
     GetClientRect(state.window, &owner_client);
@@ -2225,6 +2451,13 @@ bool open_replay_browser(OnlineLobbyState& state) {
         kReplayLoadScrollUpBitmapRecord, kReplayLoadScrollUpBitmapRecord,
         kReplayLoadScrollDownBitmapRecord, kReplayLoadScrollDownBitmapRecord,
         kReplayLoadScrollThumbBitmapRecord, kReplayLoadScrollTrackBitmapRecord);
+    const int replay_scroll_thumb_height = std::max(scroll.width,
+        ScaleFrontendLayoutValue(kReplayScrollbarThumbEnd -
+            kReplayScrollbarTrackEnd, kReplayScrollbarCanonicalWidth,
+            scroll.width));
+    SetLegacyCustomScrollControlMetrics(state.replay_browser_scroll,
+        scroll.width, scroll.width, scroll.width,
+        replay_scroll_thumb_height);
     SetLegacyCustomScrollControlVisible(state.replay_browser_scroll, true);
 
     state.replay_status = CreateWindowExW(0, L"STATIC",
@@ -2241,6 +2474,7 @@ bool open_replay_browser(OnlineLobbyState& state) {
     }
     LoadLegacyImageButtonBitmaps(state.replay_download_control,
         kReplayLoadOkNormalBitmapRecord, kReplayLoadOkPressedBitmapRecord);
+    subclass_control(state.replay_download_control.window);
     state.replay_download_button = state.replay_download_control.window;
     if (!CreateLegacyImageButtonWindow(state.replay_close_control, window,
             "Cancel", reinterpret_cast<HMENU>(static_cast<INT_PTR>(
@@ -2252,6 +2486,7 @@ bool open_replay_browser(OnlineLobbyState& state) {
     LoadLegacyImageButtonBitmaps(state.replay_close_control,
         kReplayLoadCancelNormalBitmapRecord,
         kReplayLoadCancelPressedBitmapRecord);
+    subclass_control(state.replay_close_control.window);
     state.replay_close_button = state.replay_close_control.window;
 
     if (state.replay_list == nullptr || state.replay_status == nullptr) {
@@ -2359,6 +2594,12 @@ LegacyImageButtonControl* button_by_id(OnlineLobbyState& state, int id) {
     if (id == kOnlineLobbyReplayButtonId) {
         return &state.replay_lobby_button;
     }
+    if (id == kOnlineLobbyReplayDownloadButtonId) {
+        return &state.replay_download_control;
+    }
+    if (id == kOnlineLobbyReplayCloseButtonId) {
+        return &state.replay_close_control;
+    }
     const int index = button_index_by_id(id);
     return index >= 0 ? &state.buttons[static_cast<std::size_t>(index)] : nullptr;
 }
@@ -2381,6 +2622,8 @@ bool has_original_proc_for_id(int id) {
     case kOnlineLobbyChatListScrollId:
     case kOnlineLobbyChatEditId:
     case kOnlineLobbyReplayButtonId:
+    case kOnlineLobbyReplayDownloadButtonId:
+    case kOnlineLobbyReplayCloseButtonId:
         return true;
     default:
         return button_index_by_id(id) >= 0;
@@ -2798,10 +3041,24 @@ void initialize_online_lobby_theme_buttons(OnlineLobbyState& state) {
     state.themed_hot_button = nullptr;
 }
 
+void initialize_replay_scrollbar_images(OnlineLobbyState& state) {
+    for (UiPngResource& image : state.replay_scrollbar_images) {
+        InitializeUiPngResource(image);
+    }
+    state.replay_scrollbar_images_loaded = false;
+}
+
 void release_online_lobby_theme_buttons(OnlineLobbyState& state) {
     state.themed_hot_button = nullptr;
     state.theme_button_images_loaded = false;
     for (UiPngResource& image : state.theme_button_images) {
+        ReleaseUiPngResource(image);
+    }
+}
+
+void release_replay_scrollbar_images(OnlineLobbyState& state) {
+    state.replay_scrollbar_images_loaded = false;
+    for (UiPngResource& image : state.replay_scrollbar_images) {
         ReleaseUiPngResource(image);
     }
 }
@@ -2824,6 +3081,24 @@ bool load_online_lobby_theme_buttons(OnlineLobbyState& state) {
     return true;
 }
 
+bool load_replay_scrollbar_images(OnlineLobbyState& state) {
+    bool loaded = true;
+    for (std::size_t i = 0; i < state.replay_scrollbar_images.size(); ++i) {
+        if (!LoadUiPngResourceFromExecutableRelativeFile(
+                state.replay_scrollbar_images[i],
+                kOnlineLobbyReplayScrollbarImagePaths[i])) {
+            loaded = false;
+            break;
+        }
+    }
+    if (!loaded) {
+        release_replay_scrollbar_images(state);
+        return false;
+    }
+    state.replay_scrollbar_images_loaded = true;
+    return true;
+}
+
 void InitializeOnlineLobbyImageButtons(OnlineLobbyState& state) {
     InitializeBitmapMemoryResource(state.replay_browser_background);
     InitializeLegacyImageButtonControl(state.replay_lobby_button);
@@ -2831,6 +3106,7 @@ void InitializeOnlineLobbyImageButtons(OnlineLobbyState& state) {
     InitializeLegacyImageButtonControl(state.replay_close_control);
     InitializeLegacyCustomScrollControl(state.replay_browser_scroll);
     initialize_online_lobby_theme_buttons(state);
+    initialize_replay_scrollbar_images(state);
     state.replay_lobby_font = CreateScaledFrontendUiFont(2);
     state.replay_browser_font = CreateScaledFrontendUiFont(1);
     InitializeOnlineLobbyLobbyNameButtonStatic(state);
@@ -2865,6 +3141,7 @@ void InitializeOnlineLobbyImageButtons(OnlineLobbyState& state) {
 
 void DestroyOnlineLobbyImageButtons(OnlineLobbyState& state) {
     release_online_lobby_theme_buttons(state);
+    release_replay_scrollbar_images(state);
     DestroyLegacyImageButtonControl(state.replay_lobby_button);
     state.replay_button = nullptr;
     DestroyLegacyImageButtonControl(state.replay_download_control);
@@ -3634,16 +3911,21 @@ bool DispatchOnlineLobbyServerPacket(OnlineLobbyState& state, const u8* packet,
         const u32 next_offset = packet_u32(packet, byte_count, 0x0d);
         const u32 count = packet_u32(packet, byte_count, 0x11);
         const std::size_t records_offset = 0x15;
-        if (count > (byte_count >= records_offset ?
-                (byte_count - records_offset) / kWizardNetReplayListRecordBytes :
-                0)) {
+        const std::size_t available_records_bytes =
+            byte_count >= records_offset ? byte_count - records_offset : 0;
+        const std::size_t record_bytes =
+            count != 0 && count <= available_records_bytes /
+                    kWizardNetReplayListMetadataRecordBytes ?
+                kWizardNetReplayListMetadataRecordBytes :
+                kWizardNetReplayListLegacyRecordBytes;
+        if (count > available_records_bytes / record_bytes) {
             set_replay_browser_status(state, L"리플레이 목록 응답이 손상되었습니다.");
             return true;
         }
         for (u32 index = 0; index < count; ++index) {
             const std::size_t base = records_offset +
                 static_cast<std::size_t>(index) *
-                    kWizardNetReplayListRecordBytes;
+                    record_bytes;
             WizardNetReplayListEntry entry{};
             entry.replay_id = packet_u32(packet, byte_count, base);
             entry.byte_count = packet_u32(packet, byte_count, base + 4);
@@ -3653,6 +3935,14 @@ bool DispatchOnlineLobbyServerPacket(OnlineLobbyState& state, const u8* packet,
                 base + 20, 0x20);
             entry.filename = packet_fixed_string(packet, byte_count,
                 base + 52, 0x7c);
+            if (record_bytes >= kWizardNetReplayListMetadataRecordBytes) {
+                entry.winner = packet_fixed_string(packet, byte_count,
+                    base + 0xb0, 0x20);
+                entry.loser = packet_fixed_string(packet, byte_count,
+                    base + 0xd0, 0x20);
+                entry.duration_seconds = packet_u32(
+                    packet, byte_count, base + 0xf0);
+            }
             if (entry.replay_id == 0 || entry.filename.empty()) {
                 continue;
             }
@@ -3911,6 +4201,7 @@ bool CreateOnlineLobbyWindow(OnlineLobbyState& state, HWND parent,
     InitializeOnlineLobbyScrollControls(state);
     InitializeOnlineLobbyImageButtons(state);
     load_online_lobby_theme_buttons(state);
+    load_replay_scrollbar_images(state);
 
     state.layout_rects.clear();
     FrontendLayoutTableOwner layout;

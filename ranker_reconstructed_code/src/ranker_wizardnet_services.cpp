@@ -95,7 +95,7 @@ bool load_replay_file(const char* path, std::vector<u8>& bytes) {
 
 std::vector<u8> build_upload_begin_packet(
     const WizardNetReplayUploadState& state) {
-    std::vector<u8> packet = build_packet(kWizardNetReplayUploadBeginOpcode, 0xb1);
+    std::vector<u8> packet = build_packet(kWizardNetReplayUploadBeginOpcode, 0xb5);
     write_u32(packet, 0x0d, state.upload_id);
     write_u32(packet, 0x11, static_cast<u32>(state.replay_bytes.size()));
     write_u32(packet, 0x15, state.game_type);
@@ -104,6 +104,7 @@ std::vector<u8> build_upload_begin_packet(
     std::memcpy(packet.data() + 0x21, state.match_token.data(),
         state.match_token.size());
     copy_fixed(packet, 0x31, 0x80, state.display_name.c_str());
+    write_u32(packet, 0xb1, state.duration_seconds);
     return packet;
 }
 
@@ -186,8 +187,9 @@ std::vector<u8> BuildWizardNetMatchResultPacket(u32 game_type,
 }
 
 std::vector<u8> BuildWizardNetReplayListRequestPacket(u32 offset) {
-    std::vector<u8> packet = build_packet(kWizardNetReplayListRequestOpcode, 0x11);
+    std::vector<u8> packet = build_packet(kWizardNetReplayListRequestOpcode, 0x15);
     write_u32(packet, 0x0d, offset);
+    write_u32(packet, 0x11, kWizardNetReplayListProtocolVersion);
     return packet;
 }
 
@@ -200,7 +202,7 @@ std::vector<u8> BuildWizardNetReplayDownloadRequestPacket(u32 replay_id) {
 bool BeginWizardNetPostGameSubmission(LegacyAsyncTcpSocket& socket,
     u32 game_type, u32 gameplay_result, u32 game_id,
     const std::array<u8, kWizardNetMatchTokenBytes>& match_token,
-    const char* replay_path) {
+    const char* replay_path, u32 duration_seconds) {
     if ((!UsesWizardNetNormalGameStatistics(game_type) &&
             !UsesWizardNetRankingStatistics(game_type)) || game_id == 0) {
         return false;
@@ -229,6 +231,7 @@ bool BeginWizardNetPostGameSubmission(LegacyAsyncTcpSocket& socket,
     }
     pending.game_type = game_type;
     pending.game_id = game_id;
+    pending.duration_seconds = duration_seconds;
     pending.outcome = outcome;
     pending.match_token = match_token;
     pending.display_name = replay_leaf_name(replay_path);

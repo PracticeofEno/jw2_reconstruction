@@ -1325,9 +1325,31 @@ if (RANKER_BUILD_BITMAP_PNG_RESOURCE_REGRESSION_TEST AND WIN32)
             -Wl,--gc-sections)
     endif()
     target_link_libraries(bitmap_png_resource_regression PRIVATE gdi32 gdiplus)
+    add_custom_command(TARGET bitmap_png_resource_regression POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            $<TARGET_FILE_DIR:bitmap_png_resource_regression>/media/lobby
+            $<TARGET_FILE_DIR:bitmap_png_resource_regression>/media
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/view_rank_base.png"
+            $<TARGET_FILE_DIR:bitmap_png_resource_regression>/media/lobby/view_rank_base.png
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/replay_download_base.png"
+            $<TARGET_FILE_DIR:bitmap_png_resource_regression>/media/lobby/replay_download_base.png
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            $<TARGET_FILE_DIR:bitmap_png_resource_regression>/media/replay_download_base.png
+        COMMENT "Copying frontend PNGs for executable-relative regressions"
+    )
     add_test(NAME bitmap_png_resource_regression
         COMMAND bitmap_png_resource_regression
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/lobby_base.png")
+    add_test(NAME view_rank_bitmap_png_resource_regression
+        COMMAND bitmap_png_resource_regression
+            --executable-relative "media\\lobby\\view_rank_base.png"
+            1445 1088)
+    add_test(NAME replay_download_bitmap_png_resource_regression
+        COMMAND bitmap_png_resource_regression
+            --executable-relative "media\\lobby\\replay_download_base.png"
+            1448 1086)
 endif()
 
 option(RANKER_BUILD_UI_PNG_RESOURCE_REGRESSION_TEST
@@ -1340,9 +1362,21 @@ if (RANKER_BUILD_UI_PNG_RESOURCE_REGRESSION_TEST AND WIN32)
     )
     target_include_directories(ui_png_resource_regression PRIVATE include)
     target_link_libraries(ui_png_resource_regression PRIVATE gdi32 gdiplus)
+    add_custom_command(TARGET ui_png_resource_regression POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            $<TARGET_FILE_DIR:ui_png_resource_regression>/media/ui/tools
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/ui/tools/scrollbar_bronze.png"
+            $<TARGET_FILE_DIR:ui_png_resource_regression>/media/ui/tools/scrollbar_bronze.png
+        COMMENT "Copying scrollbar PNG for executable-relative regression"
+    )
     add_test(NAME ui_png_resource_regression
         COMMAND ui_png_resource_regression
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/ui/tools/button_medium_gold.png")
+    add_test(NAME replay_scrollbar_ui_png_resource_regression
+        COMMAND ui_png_resource_regression
+            --executable-relative "media\\ui\\tools\\scrollbar_bronze.png"
+            61 391)
 endif()
 
 option(RANKER_BUILD_END_CONDITION_REGRESSION_TESTS
@@ -1850,9 +1884,12 @@ if (WIN32)
             "$<TARGET_FILE_DIR:ranker_rebuild>/media/menu"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/lobby_base.png"
-            "${CMAKE_CURRENT_SOURCE_DIR}/resources/view_rank_base.bmp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/view_rank_base.png"
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/replay_download_base.png"
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/wizardnet_rank_marks.bmp"
             "$<TARGET_FILE_DIR:ranker_rebuild>/media/lobby"
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            "$<TARGET_FILE_DIR:ranker_rebuild>/media/replay_download_base.png"
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/ui/tools"
             "$<TARGET_FILE_DIR:ranker_rebuild>/media/ui/tools"
