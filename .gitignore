@@ -52,11 +52,13 @@
 !ranker_reconstructed_code/tests/cursor_presentation_regression.cpp
 !ranker_reconstructed_code/tests/programmatic_pointer_motion_regression.cpp
 !ranker_reconstructed_code/tests/bitmap_png_resource_regression.cpp
+!ranker_reconstructed_code/tests/ui_png_resource_regression.cpp
 
 !ranker_reconstructed_code/tools/
 !ranker_reconstructed_code/tools/replay_debug/
 !ranker_reconstructed_code/tools/replay_debug/*.cpp
 !ranker_reconstructed_code/tools/replay_debug/*.ps1
+!ranker_reconstructed_code/tools/extract_ui_tools.ps1
 !ranker_reconstructed_code/tools/replay_debug/*.py
 !ranker_reconstructed_code/tools/replay_debug/README.md
 !ranker_reconstructed_code/tools/gameplay_parity/
@@ -99,6 +101,8 @@ ranker_reconstructed_code/tools/gameplay_parity/reports/gameplay_inventory.json
 !ranker_reconstructed_code/resources/ranker_resources.rc
 !ranker_reconstructed_code/resources/original/
 !ranker_reconstructed_code/resources/original/**
+!ranker_reconstructed_code/resources/ui/
+!ranker_reconstructed_code/resources/ui/**
 
 !ranker_reconstructed_code/third_party/
 !ranker_reconstructed_code/third_party/zlib113/

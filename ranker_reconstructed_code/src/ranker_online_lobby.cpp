@@ -108,6 +108,13 @@ constexpr OnlineLobbyLayoutRect kWizardNetReplayInfoRect{380, 88, 355, 412};
 constexpr OnlineLobbyLayoutRect kWizardNetReplayStatusRect{394, 438, 327, 52};
 constexpr OnlineLobbyLayoutRect kWizardNetReplayDownloadRect{202, 533, 144, 54};
 constexpr OnlineLobbyLayoutRect kWizardNetReplayCloseRect{462, 533, 144, 54};
+constexpr std::array<const char*, kOnlineLobbyThemeButtonVisualCount>
+    kOnlineLobbyThemeButtonImagePaths = {
+        "media\\ui\\tools\\button_medium_bronze.png",
+        "media\\ui\\tools\\button_medium_gold.png",
+        "media\\ui\\tools\\button_medium_pressed.png",
+        "media\\ui\\tools\\button_medium_gray.png",
+    };
 
 constexpr OnlineLobbyButtonSpec kButtonSpecs[kOnlineLobbyButtonCount] = {
     {kOnlineLobbyNameButtonId, "Lobby Name", 0, 0, false},
@@ -225,73 +232,27 @@ OnlineLobbyLayoutRect layout_at(const OnlineLobbyState& state,
     return OnlineLobbyLayoutRect{};
 }
 
-OnlineLobbyLayoutRect simplified_main_panel_rect(
-    const OnlineLobbyState& state) {
-    OnlineLobbyLayoutRect panel = layout_at(state, 14);
-    const OnlineLobbyLayoutRect root = layout_at(state, 0);
-    const OnlineLobbyLayoutRect create = layout_at(state, 16);
-    const OnlineLobbyLayoutRect join = layout_at(state, 17);
-    const OnlineLobbyLayoutRect rank = layout_at(state, 19);
-    const i32 gap = ScaleFrontendLayoutValue(12, 1024,
-        std::max<i32>(1, root.width));
-    const i32 inset = ScaleFrontendLayoutValue(12, 1024,
-        std::max<i32>(1, root.width));
-    const i32 replay_nudge = ScaleFrontendLayoutValue(
-        kOnlineLobbyReplayButtonRightNudge, 1024,
-        std::max<i32>(1, root.width));
-
-    // The old content background extended under all four legacy tabs.  Its
-    // reconstructed Main page contains the three original actions plus the
-    // replay browser, so terminate the panel immediately after Replay.
-    const i32 content_width = inset + create.width + gap + join.width + gap +
-        rank.width + gap + replay_nudge + rank.width + inset;
-    panel.width = std::clamp<i32>(content_width, 1,
-        std::max<i32>(1, panel.width));
-    return panel;
-}
-
 OnlineLobbyLayoutRect arrange_simplified_main_action(
     const OnlineLobbyState& state, int control_id, OnlineLobbyLayoutRect rect) {
-    if (control_id != kOnlineLobbyCreateGameButtonId &&
-        control_id != kOnlineLobbyJoinGameButtonId &&
-        control_id != kOnlineLobbyViewRankButtonId &&
-        control_id != kOnlineLobbyReplayButtonId) {
+    const int action_index = OnlineLobbySimplifiedActionIndex(control_id);
+    if (action_index < 0) {
         return rect;
     }
 
     const OnlineLobbyLayoutRect root = layout_at(state, 0);
+    const OnlineLobbyLayoutRect first_legacy_action = layout_at(state, 15);
     const OnlineLobbyLayoutRect create = layout_at(state, 16);
-    const OnlineLobbyLayoutRect join = layout_at(state, 17);
-    const OnlineLobbyLayoutRect rank = layout_at(state, 19);
-    const OnlineLobbyLayoutRect action_panel = simplified_main_panel_rect(state);
-    const i32 gap = ScaleFrontendLayoutValue(12, 1024,
+    const OnlineLobbyLayoutRect last_legacy_action = layout_at(state, 20);
+    const i32 row_right = last_legacy_action.x + last_legacy_action.width;
+    const OnlineLobbyLayoutRect row{
+        first_legacy_action.x,
+        create.y,
+        std::max<i32>(1, row_right - first_legacy_action.x),
+        create.height};
+    const i32 gap = ScaleFrontendLayoutValue(
+        kOnlineLobbySimplifiedActionGap, 800,
         std::max<i32>(1, root.width));
-    const i32 panel_inset = ScaleFrontendLayoutValue(12, 1024,
-        std::max<i32>(1, root.width));
-    const i32 vertical_inset = ScaleFrontendLayoutValue(12, 600,
-        std::max<i32>(1, root.height));
-    const i32 replay_nudge = ScaleFrontendLayoutValue(
-        kOnlineLobbyReplayButtonRightNudge, 1024,
-        std::max<i32>(1, root.width));
-    const i32 first_x = std::max<i32>(0, action_panel.x + panel_inset);
-
-    // The reconstructed background has a compact framed group for these
-    // four actions.  Center their live windows inside that frame so the
-    // painted buttons and their hit targets stay aligned.
-    rect.y = std::max<i32>(0, action_panel.y + vertical_inset);
-
-    if (control_id == kOnlineLobbyCreateGameButtonId) {
-        rect.x = first_x;
-    } else if (control_id == kOnlineLobbyJoinGameButtonId) {
-        rect.x = first_x + create.width + gap;
-    } else if (control_id == kOnlineLobbyViewRankButtonId) {
-        rect.x = first_x + create.width + gap + join.width + gap;
-    } else {
-        rect.x = first_x + create.width + gap + join.width + gap +
-            rank.width + gap;
-        rect = ShiftOnlineLobbyReplayButtonRight(rect, replay_nudge);
-    }
-    return rect;
+    return ArrangeOnlineLobbySimplifiedAction(row, action_index, gap);
 }
 
 OnlineLobbyLayoutRect arrange_chat_composer_control(
@@ -360,8 +321,119 @@ void fill_online_lobby_rect(HDC dc, const RECT& rect, COLORREF color) {
     }
 }
 
+const wchar_t* online_lobby_theme_button_label(int id) {
+    switch (id) {
+    case kOnlineLobbyCreateGameButtonId:
+        return L"\ubc29 \ub9cc\ub4e4\uae30";
+    case kOnlineLobbyJoinGameButtonId:
+        return L"\ucc38\uac00\ud558\uae30";
+    case kOnlineLobbyViewRankButtonId:
+        return L"\ub7ad\ud0b9 \ubcf4\uae30";
+    case kOnlineLobbyReplayButtonId:
+        return L"\ub9ac\ud50c\ub808\uc774";
+    case IDCANCEL:
+        return L"\ub098\uac00\uae30";
+    default:
+        return nullptr;
+    }
+}
+
+void paint_online_lobby_background_under_button(
+    OnlineLobbyState& state, const DRAWITEMSTRUCT& draw) {
+    if (!state.background.loaded || state.window == nullptr ||
+        draw.hwndItem == nullptr || draw.hDC == nullptr) {
+        fill_online_lobby_rect(draw.hDC, draw.rcItem, RGB(0, 0, 0));
+        return;
+    }
+
+    POINT child_origin{};
+    SetLastError(ERROR_SUCCESS);
+    if (MapWindowPoints(draw.hwndItem, state.window, &child_origin, 1) == 0 &&
+        GetLastError() != ERROR_SUCCESS) {
+        fill_online_lobby_rect(draw.hDC, draw.rcItem, RGB(0, 0, 0));
+        return;
+    }
+
+    const int saved_dc = SaveDC(draw.hDC);
+    if (saved_dc == 0) {
+        fill_online_lobby_rect(draw.hDC, draw.rcItem, RGB(0, 0, 0));
+        return;
+    }
+    SetViewportOrgEx(draw.hDC, -child_origin.x, -child_origin.y, nullptr);
+    StretchBitmapMemoryResourceToClient(
+        state.background, draw.hDC, state.window);
+    RestoreDC(draw.hDC, saved_dc);
+}
+
+bool draw_online_lobby_themed_button(OnlineLobbyState& state,
+    const DRAWITEMSTRUCT& draw) {
+    if (!state.theme_button_images_loaded ||
+        !IsOnlineLobbyThemedButtonId(static_cast<int>(draw.CtlID))) {
+        return false;
+    }
+
+    const wchar_t* label = online_lobby_theme_button_label(
+        static_cast<int>(draw.CtlID));
+    if (label == nullptr) {
+        return false;
+    }
+
+    const bool enabled = (draw.itemState & ODS_DISABLED) == 0 &&
+        (draw.hwndItem == nullptr || IsWindowEnabled(draw.hwndItem));
+    const bool pressed = (draw.itemState & ODS_SELECTED) != 0;
+    const bool hovered = state.themed_hot_button == draw.hwndItem;
+    const OnlineLobbyThemeButtonVisual visual =
+        ResolveOnlineLobbyThemeButtonVisual(
+            enabled, pressed, hovered, false);
+    UiPngResource& image = state.theme_button_images[
+        static_cast<std::size_t>(visual)];
+
+    paint_online_lobby_background_under_button(state, draw);
+    const UiPngRect destination{
+        draw.rcItem.left, draw.rcItem.top,
+        draw.rcItem.right - draw.rcItem.left,
+        draw.rcItem.bottom - draw.rcItem.top};
+    if (!DrawUiPngResourceToDc(image, draw.hDC, destination)) {
+        return false;
+    }
+
+    RECT text_rect = draw.rcItem;
+    const int width = std::max<int>(1, text_rect.right - text_rect.left);
+    const int height = std::max<int>(1, text_rect.bottom - text_rect.top);
+    InflateRect(&text_rect, -std::max(4, width / 14),
+        -std::max(2, height / 9));
+    if (pressed) {
+        OffsetRect(&text_rect, 1, 1);
+    }
+
+    const HFONT font = state.replay_lobby_font != nullptr ?
+        state.replay_lobby_font : GetUiFontHandle(4);
+    HGDIOBJ old_font = font != nullptr ? SelectObject(draw.hDC, font) : nullptr;
+    SetBkMode(draw.hDC, TRANSPARENT);
+    RECT shadow = text_rect;
+    OffsetRect(&shadow, 1, 2);
+    SetTextColor(draw.hDC, RGB(0, 0, 0));
+    DrawTextW(draw.hDC, label, -1, &shadow,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS |
+            DT_NOPREFIX);
+    const COLORREF text_color = !enabled ? RGB(142, 142, 136) :
+        (pressed ? RGB(230, 187, 83) :
+            (hovered ? RGB(255, 231, 151) : RGB(235, 224, 194)));
+    SetTextColor(draw.hDC, text_color);
+    DrawTextW(draw.hDC, label, -1, &text_rect,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS |
+            DT_NOPREFIX);
+    if (old_font != nullptr) {
+        SelectObject(draw.hDC, old_font);
+    }
+    return true;
+}
+
 void draw_online_lobby_replay_button(OnlineLobbyState& state,
     const DRAWITEMSTRUCT& draw) {
+    if (draw_online_lobby_themed_button(state, draw)) {
+        return;
+    }
     DrawLegacyImageButtonItem(state.replay_lobby_button, draw);
 
     const bool pressed = (draw.itemState & ODS_SELECTED) != 0;
@@ -2284,6 +2356,9 @@ int button_index_by_id(int id) {
 }
 
 LegacyImageButtonControl* button_by_id(OnlineLobbyState& state, int id) {
+    if (id == kOnlineLobbyReplayButtonId) {
+        return &state.replay_lobby_button;
+    }
     const int index = button_index_by_id(id);
     return index >= 0 ? &state.buttons[static_cast<std::size_t>(index)] : nullptr;
 }
@@ -2305,6 +2380,7 @@ bool has_original_proc_for_id(int id) {
     case kOnlineLobbyChatListId:
     case kOnlineLobbyChatListScrollId:
     case kOnlineLobbyChatEditId:
+    case kOnlineLobbyReplayButtonId:
         return true;
     default:
         return button_index_by_id(id) >= 0;
@@ -2360,10 +2436,12 @@ void subclass_control(HWND window) {
 bool create_button_from_spec(OnlineLobbyState& state, int spec_index,
     int layout_index) {
     OnlineLobbyButtonSpec spec = kButtonSpecs[spec_index];
-    if (spec.id == kOnlineLobbySendButtonId ||
+    if (spec.id == kOnlineLobbyMainTabButtonId ||
+        spec.id == kOnlineLobbySendButtonId ||
         spec.id == kOnlineLobbyWhisperButtonId) {
-        // The simplified lobby sends normal chat with Enter and no longer
-        // exposes the redundant Send or Whisper buttons.
+        // Main is the lobby page, not an actionable tab.  The simplified
+        // lobby also sends normal chat with Enter and no longer exposes the
+        // redundant Send or Whisper buttons.
         return true;
     }
     OnlineLobbyLayoutRect rect = layout_at(state,
@@ -2390,6 +2468,9 @@ bool create_button_from_spec(OnlineLobbyState& state, int spec_index,
     } else {
         LoadLegacyImageButtonBitmaps(button, spec.normal_record,
             spec.pressed_record);
+    }
+    if (IsOnlineLobbyThemedButtonId(spec.id)) {
+        subclass_control(button.window);
     }
     return true;
 }
@@ -2709,12 +2790,47 @@ DEFINE_ONLINE_LOBBY_BUTTON_LIFETIME(InitializeOnlineLobbyGuildSubSendMemoButtonS
 
 #undef DEFINE_ONLINE_LOBBY_BUTTON_LIFETIME
 
+void initialize_online_lobby_theme_buttons(OnlineLobbyState& state) {
+    for (UiPngResource& image : state.theme_button_images) {
+        InitializeUiPngResource(image);
+    }
+    state.theme_button_images_loaded = false;
+    state.themed_hot_button = nullptr;
+}
+
+void release_online_lobby_theme_buttons(OnlineLobbyState& state) {
+    state.themed_hot_button = nullptr;
+    state.theme_button_images_loaded = false;
+    for (UiPngResource& image : state.theme_button_images) {
+        ReleaseUiPngResource(image);
+    }
+}
+
+bool load_online_lobby_theme_buttons(OnlineLobbyState& state) {
+    bool loaded = true;
+    for (std::size_t i = 0; i < state.theme_button_images.size(); ++i) {
+        if (!LoadUiPngResourceFromExecutableRelativeFile(
+                state.theme_button_images[i],
+                kOnlineLobbyThemeButtonImagePaths[i])) {
+            loaded = false;
+            break;
+        }
+    }
+    if (!loaded) {
+        release_online_lobby_theme_buttons(state);
+        return false;
+    }
+    state.theme_button_images_loaded = true;
+    return true;
+}
+
 void InitializeOnlineLobbyImageButtons(OnlineLobbyState& state) {
     InitializeBitmapMemoryResource(state.replay_browser_background);
     InitializeLegacyImageButtonControl(state.replay_lobby_button);
     InitializeLegacyImageButtonControl(state.replay_download_control);
     InitializeLegacyImageButtonControl(state.replay_close_control);
     InitializeLegacyCustomScrollControl(state.replay_browser_scroll);
+    initialize_online_lobby_theme_buttons(state);
     state.replay_lobby_font = CreateScaledFrontendUiFont(2);
     state.replay_browser_font = CreateScaledFrontendUiFont(1);
     InitializeOnlineLobbyLobbyNameButtonStatic(state);
@@ -2748,6 +2864,7 @@ void InitializeOnlineLobbyImageButtons(OnlineLobbyState& state) {
 }
 
 void DestroyOnlineLobbyImageButtons(OnlineLobbyState& state) {
+    release_online_lobby_theme_buttons(state);
     DestroyLegacyImageButtonControl(state.replay_lobby_button);
     state.replay_button = nullptr;
     DestroyLegacyImageButtonControl(state.replay_download_control);
@@ -2848,7 +2965,7 @@ void SetOnlineLobbyTab(OnlineLobbyState& state, OnlineLobbyTab tab) {
     (void)tab;
     state.active_tab = static_cast<int>(OnlineLobbyTab::Main);
 
-    show_id(state, kOnlineLobbyMainTabButtonId, SW_SHOW);
+    show_id(state, kOnlineLobbyMainTabButtonId, SW_HIDE);
     show_id(state, kOnlineLobbyFriendsTabButtonId, SW_HIDE);
     show_id(state, kOnlineLobbyGuildTabButtonId, SW_HIDE);
     show_id(state, kOnlineLobbyPersonalTabButtonId, SW_HIDE);
@@ -2865,14 +2982,6 @@ void SetOnlineLobbyTab(OnlineLobbyState& state, OnlineLobbyTab tab) {
     // button instead of requiring Escape or a window close gesture.
     show_id(state, IDCANCEL, SW_SHOW);
 
-    for (int tab_id : {kOnlineLobbyMainTabButtonId}) {
-        if (LegacyImageButtonControl* button = button_by_id(state, tab_id)) {
-            if (button->window != nullptr) {
-                RedrawWindow(button->window, nullptr, nullptr,
-                    RDW_INVALIDATE | RDW_UPDATENOW);
-            }
-        }
-    }
 }
 
 bool ResumeOnlineLobbyWindow(OnlineLobbyState& state) {
@@ -3801,6 +3910,7 @@ bool CreateOnlineLobbyWindow(OnlineLobbyState& state, HWND parent,
     InitializeOnlineLobbyIconTileSheetStatic(state);
     InitializeOnlineLobbyScrollControls(state);
     InitializeOnlineLobbyImageButtons(state);
+    load_online_lobby_theme_buttons(state);
 
     state.layout_rects.clear();
     FrontendLayoutTableOwner layout;
@@ -3862,6 +3972,7 @@ bool CreateOnlineLobbyWindow(OnlineLobbyState& state, HWND parent,
     LoadLegacyImageButtonBitmaps(state.replay_lobby_button, 0x2f, 0x30);
     SetWindowLongPtrA(state.replay_lobby_button.window, GWL_STYLE,
         kOwnerDrawStyle | WS_TABSTOP);
+    subclass_control(state.replay_lobby_button.window);
     state.replay_button = state.replay_lobby_button.window;
 
     OnlineLobbyLayoutRect game_rect = layout_at(state, 2);
@@ -4063,6 +4174,10 @@ LRESULT HandleOnlineLobbyWindowMessage(OnlineLobbyState& state, HWND hwnd,
         }
         if (draw->CtlID == kOnlineLobbyReplayButtonId) {
             draw_online_lobby_replay_button(state, *draw);
+            return TRUE;
+        }
+        if (IsOnlineLobbyThemedButtonId(static_cast<int>(draw->CtlID)) &&
+            draw_online_lobby_themed_button(state, *draw)) {
             return TRUE;
         }
         if (draw->CtlID >= kOnlineLobbyMainTabButtonId &&
@@ -4341,6 +4456,47 @@ LRESULT HandleOnlineLobbyWindowMessage(OnlineLobbyState& state, HWND hwnd,
 LRESULT HandleOnlineLobbyControlMessage(OnlineLobbyState& state, HWND hwnd,
     UINT message, WPARAM wparam, LPARAM lparam) {
     const int id = static_cast<int>(GetWindowLongPtrA(hwnd, GWLP_ID));
+    if (IsOnlineLobbyThemedButtonId(id)) {
+        switch (message) {
+        case WM_MOUSEMOVE: {
+            if (state.themed_hot_button != hwnd) {
+                HWND previous = state.themed_hot_button;
+                state.themed_hot_button = hwnd;
+                if (previous != nullptr && IsWindow(previous)) {
+                    RedrawWindow(previous, nullptr, nullptr,
+                        RDW_INVALIDATE | RDW_NOERASE);
+                }
+                RedrawWindow(hwnd, nullptr, nullptr,
+                    RDW_INVALIDATE | RDW_NOERASE);
+            }
+            TRACKMOUSEEVENT tracking{};
+            tracking.cbSize = sizeof(tracking);
+            tracking.dwFlags = TME_LEAVE;
+            tracking.hwndTrack = hwnd;
+            TrackMouseEvent(&tracking);
+            break;
+        }
+        case WM_MOUSELEAVE:
+            if (state.themed_hot_button == hwnd) {
+                state.themed_hot_button = nullptr;
+                RedrawWindow(hwnd, nullptr, nullptr,
+                    RDW_INVALIDATE | RDW_NOERASE);
+            }
+            break;
+        case WM_ENABLE:
+        case WM_CAPTURECHANGED:
+            RedrawWindow(hwnd, nullptr, nullptr,
+                RDW_INVALIDATE | RDW_NOERASE);
+            break;
+        case WM_NCDESTROY:
+            if (state.themed_hot_button == hwnd) {
+                state.themed_hot_button = nullptr;
+            }
+            break;
+        default:
+            break;
+        }
+    }
     if (message == WM_PAINT) {
         OnlineLobbyScrollControl* scroll = scroll_by_window(state, hwnd);
         if (scroll != nullptr) {

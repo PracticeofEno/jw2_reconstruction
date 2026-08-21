@@ -5,6 +5,7 @@
 #include "ranker_custom_scroll.h"
 #include "ranker_image_controls.h"
 #include "ranker_types.h"
+#include "ranker_ui_png_resource.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -78,11 +79,49 @@ constexpr UINT kOnlineLobbyNetworkMessage = 0x465;
 constexpr UINT kOnlineLobbyCopiedTextMessage = 0x501;
 constexpr UINT kOnlineLobbyMakeSelectedIconBitmapMessage = 0x517;
 constexpr std::size_t kOnlineLobbyButtonCount = 28;
-// The reconstructed lobby exposes only the Main tab.  Keep the legacy button
-// slots in the state layout for wire/UI compatibility, but present a real
-// single-tab interface instead of reserving four visible tab cells.
+// The reconstructed lobby has one page and no visible tab controls.  Keep the
+// legacy button slots in the state layout for wire/UI compatibility.
 constexpr std::size_t kOnlineLobbyTabCount = 1;
 constexpr std::size_t kOnlineLobbyChatRowLimit = 300;
+constexpr std::size_t kOnlineLobbyThemeButtonVisualCount = 4;
+constexpr int kOnlineLobbySimplifiedActionCount = 5;
+constexpr int kOnlineLobbySimplifiedActionGap = 10;
+
+enum class OnlineLobbyThemeButtonVisual : std::size_t {
+    Normal = 0,
+    Hot = 1,
+    Pressed = 2,
+    Disabled = 3,
+};
+
+constexpr bool IsOnlineLobbyThemedButtonId(int id) {
+    return id == kOnlineLobbyCreateGameButtonId ||
+        id == kOnlineLobbyJoinGameButtonId ||
+        id == kOnlineLobbyViewRankButtonId ||
+        id == kOnlineLobbyReplayButtonId || id == IDCANCEL;
+}
+
+constexpr int OnlineLobbySimplifiedActionIndex(int id) {
+    return id == kOnlineLobbyCreateGameButtonId ? 0 :
+        id == kOnlineLobbyJoinGameButtonId ? 1 :
+        id == kOnlineLobbyViewRankButtonId ? 2 :
+        id == kOnlineLobbyReplayButtonId ? 3 :
+        id == IDCANCEL ? 4 : -1;
+}
+
+constexpr OnlineLobbyThemeButtonVisual ResolveOnlineLobbyThemeButtonVisual(
+    bool enabled, bool pressed, bool hovered, bool active) {
+    if (!enabled) {
+        return OnlineLobbyThemeButtonVisual::Disabled;
+    }
+    if (pressed) {
+        return OnlineLobbyThemeButtonVisual::Pressed;
+    }
+    if (hovered || active) {
+        return OnlineLobbyThemeButtonVisual::Hot;
+    }
+    return OnlineLobbyThemeButtonVisual::Normal;
+}
 
 constexpr int OnlineLobbyButtonLayoutIndex(int button_spec_index) {
     return button_spec_index == 0 ? 1 : button_spec_index + 6;
@@ -120,6 +159,27 @@ struct OnlineLobbyLayoutRect {
     int width = 0;
     int height = 0;
 };
+
+constexpr OnlineLobbyLayoutRect ArrangeOnlineLobbySimplifiedAction(
+    const OnlineLobbyLayoutRect& row, int action_index, int gap) {
+    if (action_index < 0 ||
+        action_index >= kOnlineLobbySimplifiedActionCount || row.width <= 0) {
+        return row;
+    }
+    const int safe_gap = gap > 0 ? gap : 0;
+    const int total_gap = safe_gap * (kOnlineLobbySimplifiedActionCount - 1);
+    const int available_width = row.width > total_gap ?
+        row.width - total_gap : kOnlineLobbySimplifiedActionCount;
+    const int button_width = available_width /
+        kOnlineLobbySimplifiedActionCount;
+    const int remainder = available_width % kOnlineLobbySimplifiedActionCount;
+    const int extra_before = action_index < remainder ?
+        action_index : remainder;
+    OnlineLobbyLayoutRect button = row;
+    button.x += action_index * (button_width + safe_gap) + extra_before;
+    button.width = button_width + (action_index < remainder ? 1 : 0);
+    return button;
+}
 
 constexpr OnlineLobbyLayoutRect ShiftOnlineLobbyReplayButtonRight(
     OnlineLobbyLayoutRect button, int right_nudge) {
@@ -227,6 +287,8 @@ struct OnlineLobbyState {
     LegacyImageButtonControl replay_download_control;
     LegacyImageButtonControl replay_close_control;
     LegacyCustomScrollControl replay_browser_scroll;
+    std::array<UiPngResource,
+        kOnlineLobbyThemeButtonVisualCount> theme_button_images{};
     HFONT replay_lobby_font = nullptr;
     HFONT replay_browser_font = nullptr;
     std::array<LegacyImageButtonControl, kOnlineLobbyButtonCount> buttons{};
@@ -250,6 +312,8 @@ struct OnlineLobbyState {
     bool create_join_disabled = false;
     bool resources_ready = false;
     bool rank_mark_picker_visible = false;
+    bool theme_button_images_loaded = false;
+    HWND themed_hot_button = nullptr;
     u32 selected_rank_mark = 0;
     std::string lobby_name;
     std::string local_player_name;

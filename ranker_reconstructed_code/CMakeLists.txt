@@ -1330,6 +1330,21 @@ if (RANKER_BUILD_BITMAP_PNG_RESOURCE_REGRESSION_TEST AND WIN32)
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/lobby_base.png")
 endif()
 
+option(RANKER_BUILD_UI_PNG_RESOURCE_REGRESSION_TEST
+    "Build the extracted ARGB UI PNG resource regression" OFF)
+if (RANKER_BUILD_UI_PNG_RESOURCE_REGRESSION_TEST AND WIN32)
+    enable_testing()
+    add_executable(ui_png_resource_regression
+        tests/ui_png_resource_regression.cpp
+        src/ranker_ui_png_resource.cpp
+    )
+    target_include_directories(ui_png_resource_regression PRIVATE include)
+    target_link_libraries(ui_png_resource_regression PRIVATE gdi32 gdiplus)
+    add_test(NAME ui_png_resource_regression
+        COMMAND ui_png_resource_regression
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/ui/tools/button_medium_gold.png")
+endif()
+
 option(RANKER_BUILD_END_CONDITION_REGRESSION_TESTS
     "Build focused gameplay end-condition regressions" OFF)
 if (RANKER_BUILD_END_CONDITION_REGRESSION_TESTS)
@@ -1642,6 +1657,7 @@ add_executable(ranker_rebuild WIN32
     src/ranker_startup_environment.cpp
     src/ranker_legacy_environment.cpp
     src/ranker_bitmap_resource.cpp
+    src/ranker_ui_png_resource.cpp
     src/ranker_bitmap_icon_collection.cpp
     src/ranker_raw_indexed_bitmap.cpp
     src/ranker_icon_strips.cpp
@@ -1821,6 +1837,7 @@ if (WIN32)
             "$<TARGET_FILE_DIR:ranker_rebuild>/media/scenario"
             "$<TARGET_FILE_DIR:ranker_rebuild>/media/menu"
             "$<TARGET_FILE_DIR:ranker_rebuild>/media/lobby"
+            "$<TARGET_FILE_DIR:ranker_rebuild>/media/ui/tools"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${RANKER_EXTERNAL_OPENING_MEDIA}
             "$<TARGET_FILE_DIR:ranker_rebuild>/media/opening"
@@ -1836,6 +1853,9 @@ if (WIN32)
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/view_rank_base.bmp"
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/wizardnet_rank_marks.bmp"
             "$<TARGET_FILE_DIR:ranker_rebuild>/media/lobby"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/ui/tools"
+            "$<TARGET_FILE_DIR:ranker_rebuild>/media/ui/tools"
         COMMAND ${CMAKE_COMMAND} -E rm -f
             "$<TARGET_FILE_DIR:ranker_rebuild>/main_menu_bink_fallback_565.bin"
             "$<TARGET_FILE_DIR:ranker_rebuild>/main_menu_bink_fallback_anim.z"

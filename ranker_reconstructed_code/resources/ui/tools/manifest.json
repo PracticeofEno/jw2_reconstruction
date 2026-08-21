@@ -1,0 +1,1066 @@
+{
+    "schema_version":  1,
+    "source_original_name":  "tools.png",
+    "source_distributed":  false,
+    "source_sha256":  "39FBA4529F6AC86C47CA95AD33D8920EE69AD88A6F40FE077484E5195D1D0828",
+    "atlas":  {
+                  "width":  1470,
+                  "height":  1070,
+                  "pixel_format":  "32bpp ARGB",
+                  "component_alpha_threshold":  32,
+                  "extraction_padding":  5
+              },
+    "sprite_count":  42,
+    "sprites":  [
+                    {
+                        "name":  "logo",
+                        "file":  "logo.png",
+                        "family":  "logo",
+                        "tone":  "bronze",
+                        "state":  "default",
+                        "source_bounds":  {
+                                              "x":  21,
+                                              "y":  39,
+                                              "width":  750,
+                                              "height":  179
+                                          },
+                        "crop":  {
+                                     "x":  16,
+                                     "y":  34,
+                                     "width":  760,
+                                     "height":  189
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "97C359471C87740B002306E4CD37CB0FADEFFB3DAA48E331A023AF8C3B54856C",
+                        "pixel_sha256":  "AA7C53A85B683D320D0DEC0FB97E6760149394E0D694E3DC68B6422F65A0BBF6"
+                    },
+                    {
+                        "name":  "frame_wide_bronze",
+                        "file":  "frame_wide_bronze.png",
+                        "family":  "wide_frame",
+                        "tone":  "bronze",
+                        "state":  "normal",
+                        "source_bounds":  {
+                                              "x":  807,
+                                              "y":  26,
+                                              "width":  607,
+                                              "height":  101
+                                          },
+                        "crop":  {
+                                     "x":  802,
+                                     "y":  21,
+                                     "width":  617,
+                                     "height":  111
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "BFFAF34DB77F53FF854E2B5A5E82B2ABFEE6DC4AF0A7E111E805410327756FE3",
+                        "pixel_sha256":  "7F809C7449EED9E05D447FC4D700FB2C7612EBD566DC23E15B9CB8BF3750C77F"
+                    },
+                    {
+                        "name":  "frame_wide_gold",
+                        "file":  "frame_wide_gold.png",
+                        "family":  "wide_frame",
+                        "tone":  "gold",
+                        "state":  "hot",
+                        "source_bounds":  {
+                                              "x":  802,
+                                              "y":  139,
+                                              "width":  619,
+                                              "height":  104
+                                          },
+                        "crop":  {
+                                     "x":  797,
+                                     "y":  134,
+                                     "width":  629,
+                                     "height":  114
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "BD2468B2F3EC7ECF6BEE3BA97E24767F82C83236FAB01B47D78D52C526FDEA18",
+                        "pixel_sha256":  "85B7F980E5F0EB075958F09FFFFC98242A862640FA7445876395B68B5509DCAF"
+                    },
+                    {
+                        "name":  "button_large_bronze",
+                        "file":  "button_large_bronze.png",
+                        "family":  "large_button",
+                        "tone":  "bronze",
+                        "state":  "normal",
+                        "source_bounds":  {
+                                              "x":  27,
+                                              "y":  267,
+                                              "width":  432,
+                                              "height":  110
+                                          },
+                        "crop":  {
+                                     "x":  22,
+                                     "y":  262,
+                                     "width":  442,
+                                     "height":  120
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "A62D1A0D60C702F86C32F8E34880D489BE7C39401213C92C32D98842331B5666",
+                        "pixel_sha256":  "171BF6665E3ED913CE67D31ABF194CC329DE4FD81A2240D11A3A85746324B54E"
+                    },
+                    {
+                        "name":  "button_large_gold",
+                        "file":  "button_large_gold.png",
+                        "family":  "large_button",
+                        "tone":  "gold",
+                        "state":  "hot",
+                        "source_bounds":  {
+                                              "x":  496,
+                                              "y":  263,
+                                              "width":  455,
+                                              "height":  120
+                                          },
+                        "crop":  {
+                                     "x":  491,
+                                     "y":  258,
+                                     "width":  465,
+                                     "height":  130
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "F64823B095FF0DF42E44F10313F14C9100DCFA7B41E003B28FC407CDE5984BBC",
+                        "pixel_sha256":  "347C284DA00533E564F73480D003CF88B7564CCFE214331FEEEEB6584AEF0BDE"
+                    },
+                    {
+                        "name":  "button_large_gray",
+                        "file":  "button_large_gray.png",
+                        "family":  "large_button",
+                        "tone":  "gray",
+                        "state":  "disabled",
+                        "source_bounds":  {
+                                              "x":  981,
+                                              "y":  268,
+                                              "width":  440,
+                                              "height":  109
+                                          },
+                        "crop":  {
+                                     "x":  976,
+                                     "y":  263,
+                                     "width":  450,
+                                     "height":  119
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "498F4C4633CDBF50C4F100A3F830E65676A14E83113DC13EDE0106F106613AB8",
+                        "pixel_sha256":  "0F0987025601BD3488E219BEE9CF4CB6203ADC88DB914B4DCD80C8DA91058EE0"
+                    },
+                    {
+                        "name":  "button_medium_bronze",
+                        "file":  "button_medium_bronze.png",
+                        "family":  "medium_button",
+                        "tone":  "bronze",
+                        "state":  "normal",
+                        "source_bounds":  {
+                                              "x":  26,
+                                              "y":  410,
+                                              "width":  300,
+                                              "height":  86
+                                          },
+                        "crop":  {
+                                     "x":  21,
+                                     "y":  405,
+                                     "width":  310,
+                                     "height":  96
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "905DD9CBDB4CD25B3438B9B4E519BCAFDFB79CBB744DF30F0B2EA54ED8252606",
+                        "pixel_sha256":  "0A3784FD93855EE6F7412A749480AD8928F25419606A40CDF91E7C84835ECA7C"
+                    },
+                    {
+                        "name":  "button_medium_gold",
+                        "file":  "button_medium_gold.png",
+                        "family":  "medium_button",
+                        "tone":  "gold",
+                        "state":  "hot",
+                        "source_bounds":  {
+                                              "x":  367,
+                                              "y":  407,
+                                              "width":  326,
+                                              "height":  93
+                                          },
+                        "crop":  {
+                                     "x":  362,
+                                     "y":  402,
+                                     "width":  336,
+                                     "height":  103
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "67A374FD17406688F0D0285A41B2FE4D9572CF4C3A103C572660E874FD9C3B0F",
+                        "pixel_sha256":  "8340950ED3A434D2A4D17037FD1FB106037E63DE1F419B9B35A6478111D5458E"
+                    },
+                    {
+                        "name":  "button_medium_pressed",
+                        "file":  "button_medium_pressed.png",
+                        "family":  "medium_button",
+                        "tone":  "pressed",
+                        "state":  "pressed",
+                        "source_bounds":  {
+                                              "x":  732,
+                                              "y":  410,
+                                              "width":  327,
+                                              "height":  86
+                                          },
+                        "crop":  {
+                                     "x":  727,
+                                     "y":  405,
+                                     "width":  337,
+                                     "height":  96
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "00C68B0BD9F3E7D8F6C1B5F4BC20A67371F27F57125EC83171CB597AAFAEA53B",
+                        "pixel_sha256":  "4D120641C934BB1E68ACBCF4592994122149462E6B475AE07E1AC8DEFA373DFC"
+                    },
+                    {
+                        "name":  "button_medium_gray",
+                        "file":  "button_medium_gray.png",
+                        "family":  "medium_button",
+                        "tone":  "gray",
+                        "state":  "disabled",
+                        "source_bounds":  {
+                                              "x":  1106,
+                                              "y":  410,
+                                              "width":  312,
+                                              "height":  86
+                                          },
+                        "crop":  {
+                                     "x":  1101,
+                                     "y":  405,
+                                     "width":  322,
+                                     "height":  96
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "6CA8A5263C1736CF74422C289CBADCF42EA6FBE9D79659CD488E000B4358C063",
+                        "pixel_sha256":  "7B93397700B14945BFF948DCE5674F840621F5B5FE66085D62729FC619C832C2"
+                    },
+                    {
+                        "name":  "button_small_bronze",
+                        "file":  "button_small_bronze.png",
+                        "family":  "small_button",
+                        "tone":  "bronze",
+                        "state":  "normal",
+                        "source_bounds":  {
+                                              "x":  28,
+                                              "y":  529,
+                                              "width":  130,
+                                              "height":  71
+                                          },
+                        "crop":  {
+                                     "x":  23,
+                                     "y":  524,
+                                     "width":  140,
+                                     "height":  81
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "D37A938BB3DC318919923F6D363E8E07D93A684B9EA59EA44BBDFBA35D45B4B8",
+                        "pixel_sha256":  "2AC8D1712BC3575A808763C8164BF3C768F3F02BF0F3A0F329E1C87042BC9C5E"
+                    },
+                    {
+                        "name":  "button_small_gold",
+                        "file":  "button_small_gold.png",
+                        "family":  "small_button",
+                        "tone":  "gold",
+                        "state":  "hot",
+                        "source_bounds":  {
+                                              "x":  177,
+                                              "y":  528,
+                                              "width":  130,
+                                              "height":  73
+                                          },
+                        "crop":  {
+                                     "x":  172,
+                                     "y":  523,
+                                     "width":  140,
+                                     "height":  83
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "25AF2B204A2BFC56B85042667C3E33C9C790AB6B99D4ED6922061FD78C2B36E5",
+                        "pixel_sha256":  "A9622385D2E814188023D2659A633E2F2D85C2247B82CF0F9B467978EF695403"
+                    },
+                    {
+                        "name":  "button_small_pressed",
+                        "file":  "button_small_pressed.png",
+                        "family":  "small_button",
+                        "tone":  "pressed",
+                        "state":  "pressed",
+                        "source_bounds":  {
+                                              "x":  324,
+                                              "y":  529,
+                                              "width":  126,
+                                              "height":  71
+                                          },
+                        "crop":  {
+                                     "x":  319,
+                                     "y":  524,
+                                     "width":  136,
+                                     "height":  81
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "3A82F3C6DBD20F93B3635389581253559F78FCF7AC554E9710565B3D4E262EF8",
+                        "pixel_sha256":  "3EB91C7DA4D397618C0DAA2B42EAC8F44CE6457069FD07FABB6495A274E1148E"
+                    },
+                    {
+                        "name":  "button_small_gray",
+                        "file":  "button_small_gray.png",
+                        "family":  "small_button",
+                        "tone":  "gray",
+                        "state":  "disabled",
+                        "source_bounds":  {
+                                              "x":  469,
+                                              "y":  529,
+                                              "width":  126,
+                                              "height":  71
+                                          },
+                        "crop":  {
+                                     "x":  464,
+                                     "y":  524,
+                                     "width":  136,
+                                     "height":  81
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "BF5949C74540916062F4F433222DB9AC6DFEE24AFDA2CDD4756C1C43BE379560",
+                        "pixel_sha256":  "9CBDB5B7CE6B69D6FE6FDF59EC7BB45A80FEE811A66B95742C315EFAD957E0D9"
+                    },
+                    {
+                        "name":  "arrow_right_bronze",
+                        "file":  "arrow_right_bronze.png",
+                        "family":  "arrow_right",
+                        "tone":  "bronze",
+                        "state":  "normal",
+                        "source_bounds":  {
+                                              "x":  625,
+                                              "y":  529,
+                                              "width":  79,
+                                              "height":  79
+                                          },
+                        "crop":  {
+                                     "x":  620,
+                                     "y":  524,
+                                     "width":  89,
+                                     "height":  89
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "8AE6F48A67B07C9F856937493C4E3FE4519BA3BEA9ACCADB120DC58C5A500DD6",
+                        "pixel_sha256":  "CBE43EF1E3E431C0043732672715569B25856B31B27B35486C65F22BA3A4426F"
+                    },
+                    {
+                        "name":  "arrow_right_gold",
+                        "file":  "arrow_right_gold.png",
+                        "family":  "arrow_right",
+                        "tone":  "gold",
+                        "state":  "hot",
+                        "source_bounds":  {
+                                              "x":  726,
+                                              "y":  526,
+                                              "width":  82,
+                                              "height":  86
+                                          },
+                        "crop":  {
+                                     "x":  721,
+                                     "y":  521,
+                                     "width":  92,
+                                     "height":  96
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "F60028DE0DB4D98EF6EC61F603216F38F40234499E67DC06BC7DE969D67E2660",
+                        "pixel_sha256":  "01587D12C2CC377F994CDAE491E054ED51C3023734815A985E22C21ABDEC4D51"
+                    },
+                    {
+                        "name":  "arrow_right_pressed",
+                        "file":  "arrow_right_pressed.png",
+                        "family":  "arrow_right",
+                        "tone":  "pressed",
+                        "state":  "pressed",
+                        "source_bounds":  {
+                                              "x":  829,
+                                              "y":  529,
+                                              "width":  78,
+                                              "height":  79
+                                          },
+                        "crop":  {
+                                     "x":  824,
+                                     "y":  524,
+                                     "width":  88,
+                                     "height":  89
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "E6CA704EA525595B03D88D3EC844AB73B040E45805DD98524D254E7062DCAA44",
+                        "pixel_sha256":  "FE7AF89758D5A494884F7D6159906B77C4A33B2ADB569388D69C19390D72F501"
+                    },
+                    {
+                        "name":  "arrow_right_gray",
+                        "file":  "arrow_right_gray.png",
+                        "family":  "arrow_right",
+                        "tone":  "gray",
+                        "state":  "disabled",
+                        "source_bounds":  {
+                                              "x":  931,
+                                              "y":  529,
+                                              "width":  78,
+                                              "height":  79
+                                          },
+                        "crop":  {
+                                     "x":  926,
+                                     "y":  524,
+                                     "width":  88,
+                                     "height":  89
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "8DA798A201F01ED6DEFC29ACB158D5ABF1E3FAAA522BD059D9D5393614D9CCC6",
+                        "pixel_sha256":  "42088D6798F4A80780355C713A31CDDC4A5E691854120A7B2C3E29715AA68425"
+                    },
+                    {
+                        "name":  "arrow_up_bronze",
+                        "file":  "arrow_up_bronze.png",
+                        "family":  "arrow_up",
+                        "tone":  "bronze",
+                        "state":  "normal",
+                        "source_bounds":  {
+                                              "x":  1053,
+                                              "y":  531,
+                                              "width":  77,
+                                              "height":  73
+                                          },
+                        "crop":  {
+                                     "x":  1048,
+                                     "y":  526,
+                                     "width":  87,
+                                     "height":  83
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "AA28A03560B327455CB6C0EC63976E933B1276B5F7D1EC3A1D1CE62459493610",
+                        "pixel_sha256":  "DE23FF289523E304F70BDCB30B3E9EF3E522EF69F27869AC846252F0E156D464"
+                    },
+                    {
+                        "name":  "arrow_up_gold",
+                        "file":  "arrow_up_gold.png",
+                        "family":  "arrow_up",
+                        "tone":  "gold",
+                        "state":  "hot",
+                        "source_bounds":  {
+                                              "x":  1152,
+                                              "y":  529,
+                                              "width":  84,
+                                              "height":  79
+                                          },
+                        "crop":  {
+                                     "x":  1147,
+                                     "y":  524,
+                                     "width":  94,
+                                     "height":  89
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "EA2588EE5992CD030ED0151A717DAFAE2EE195BC48630F9B7998EE98B39C13D4",
+                        "pixel_sha256":  "320C14F476FAEE9FE8B41EC3BCCE769C3DE61A14F5653187CA7E77F422688A64"
+                    },
+                    {
+                        "name":  "arrow_down_bronze",
+                        "file":  "arrow_down_bronze.png",
+                        "family":  "arrow_down",
+                        "tone":  "bronze",
+                        "state":  "normal",
+                        "source_bounds":  {
+                                              "x":  1260,
+                                              "y":  531,
+                                              "width":  77,
+                                              "height":  73
+                                          },
+                        "crop":  {
+                                     "x":  1255,
+                                     "y":  526,
+                                     "width":  87,
+                                     "height":  83
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "9F01E6F47F5B3206ECAF7300C166E394B93414A23552FADAC9A537F411AEAC26",
+                        "pixel_sha256":  "1B5C5643960C76AF93D1DAC0A83FB19DBCEA6FDCDA9910084D931537983A3C1D"
+                    },
+                    {
+                        "name":  "arrow_down_gray",
+                        "file":  "arrow_down_gray.png",
+                        "family":  "arrow_down",
+                        "tone":  "gray",
+                        "state":  "disabled",
+                        "source_bounds":  {
+                                              "x":  1362,
+                                              "y":  531,
+                                              "width":  76,
+                                              "height":  73
+                                          },
+                        "crop":  {
+                                     "x":  1357,
+                                     "y":  526,
+                                     "width":  86,
+                                     "height":  83
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "B3E8D96E73D7ADF96F7510D844F1EE6866F86D83CEF2CCCEDC8EF982B4DAAFBB",
+                        "pixel_sha256":  "2138E7A6B1E6AB926FD6F86203238BE288944B3A287947FE1EAC47E9DB014A0A"
+                    },
+                    {
+                        "name":  "checkbox_bronze_unchecked",
+                        "file":  "checkbox_bronze_unchecked.png",
+                        "family":  "checkbox",
+                        "tone":  "bronze",
+                        "state":  "unchecked",
+                        "source_bounds":  {
+                                              "x":  30,
+                                              "y":  645,
+                                              "width":  64,
+                                              "height":  64
+                                          },
+                        "crop":  {
+                                     "x":  25,
+                                     "y":  640,
+                                     "width":  74,
+                                     "height":  74
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "1BB4F3E34B42ABB9B5D2105EC2CB3A754C951F9E6CDD47665C1206F9334698C4",
+                        "pixel_sha256":  "C07D690C563F1DDDE6C415AE8716BA6A294EDE94CFC3668B9DB86B96B978FE6E"
+                    },
+                    {
+                        "name":  "checkbox_bronze_checked",
+                        "file":  "checkbox_bronze_checked.png",
+                        "family":  "checkbox",
+                        "tone":  "bronze",
+                        "state":  "checked",
+                        "source_bounds":  {
+                                              "x":  115,
+                                              "y":  645,
+                                              "width":  63,
+                                              "height":  65
+                                          },
+                        "crop":  {
+                                     "x":  110,
+                                     "y":  640,
+                                     "width":  73,
+                                     "height":  75
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "9906F53E735F68EEC30CD9E741EE3C844C0BC50BB90D334000F9E2F96E1DB60C",
+                        "pixel_sha256":  "78220B5F921C5F363247C1217F8B2DB4769E5D67398804C75A85B168AF1A6E90"
+                    },
+                    {
+                        "name":  "checkbox_gray_unchecked",
+                        "file":  "checkbox_gray_unchecked.png",
+                        "family":  "checkbox",
+                        "tone":  "gray",
+                        "state":  "unchecked_disabled",
+                        "source_bounds":  {
+                                              "x":  201,
+                                              "y":  645,
+                                              "width":  62,
+                                              "height":  65
+                                          },
+                        "crop":  {
+                                     "x":  196,
+                                     "y":  640,
+                                     "width":  72,
+                                     "height":  75
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "12D66E8F19D075C1BBEF7BECCAF6A2F8103ACA72F38CF5F9968898AF0CA99925",
+                        "pixel_sha256":  "CF4700BDD8A1C80D0F3FED6EED084882B9409A1DEDA016769AC9A63529D566BF"
+                    },
+                    {
+                        "name":  "checkbox_gray_checked",
+                        "file":  "checkbox_gray_checked.png",
+                        "family":  "checkbox",
+                        "tone":  "gray",
+                        "state":  "checked_disabled",
+                        "source_bounds":  {
+                                              "x":  285,
+                                              "y":  645,
+                                              "width":  63,
+                                              "height":  64
+                                          },
+                        "crop":  {
+                                     "x":  280,
+                                     "y":  640,
+                                     "width":  73,
+                                     "height":  74
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "9BBBB745F0B48B5A868A69B90CAD69A31B0C15BE6B64711A3505DAB2CDFF15B2",
+                        "pixel_sha256":  "D273EF4607876ABFBCC0581F54FE89D7F1E76578F092333CDEA0461D7D21B843"
+                    },
+                    {
+                        "name":  "radio_bronze_unselected",
+                        "file":  "radio_bronze_unselected.png",
+                        "family":  "radio",
+                        "tone":  "bronze",
+                        "state":  "unselected",
+                        "source_bounds":  {
+                                              "x":  380,
+                                              "y":  648,
+                                              "width":  55,
+                                              "height":  57
+                                          },
+                        "crop":  {
+                                     "x":  375,
+                                     "y":  643,
+                                     "width":  65,
+                                     "height":  67
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "7CE40DD4CEE81CBB3A414BD5D11A812C52E8FFAE2C0DC33EF88C1F4AFE075536",
+                        "pixel_sha256":  "6BB741CC7156F9E232D35AA07D70BACD82EE6AD562D83189935C16F3D9B756DF"
+                    },
+                    {
+                        "name":  "radio_bronze_selected",
+                        "file":  "radio_bronze_selected.png",
+                        "family":  "radio",
+                        "tone":  "bronze",
+                        "state":  "selected",
+                        "source_bounds":  {
+                                              "x":  456,
+                                              "y":  648,
+                                              "width":  56,
+                                              "height":  57
+                                          },
+                        "crop":  {
+                                     "x":  451,
+                                     "y":  643,
+                                     "width":  66,
+                                     "height":  67
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "A07003E39D31996D78F0D735009B341E8C31D13FB2299D2B191C1BF31C5E4AB6",
+                        "pixel_sha256":  "B0177DAE9AD360E52D759C78920F50411DA34BCCB4BAE352E285D4CD556475C4"
+                    },
+                    {
+                        "name":  "radio_gray_unselected",
+                        "file":  "radio_gray_unselected.png",
+                        "family":  "radio",
+                        "tone":  "gray",
+                        "state":  "unselected_disabled",
+                        "source_bounds":  {
+                                              "x":  535,
+                                              "y":  647,
+                                              "width":  58,
+                                              "height":  58
+                                          },
+                        "crop":  {
+                                     "x":  530,
+                                     "y":  642,
+                                     "width":  68,
+                                     "height":  68
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "670A866DDDF03546E116099A648C449CB2084F4BC85E01E3C4916CE65CB7D5FE",
+                        "pixel_sha256":  "1AA32CC79B5F741C88676AF4EE1767CA722ECF68192FEC67BAF70A0E8D277E75"
+                    },
+                    {
+                        "name":  "radio_gray_selected",
+                        "file":  "radio_gray_selected.png",
+                        "family":  "radio",
+                        "tone":  "gray",
+                        "state":  "selected_disabled",
+                        "source_bounds":  {
+                                              "x":  615,
+                                              "y":  647,
+                                              "width":  57,
+                                              "height":  58
+                                          },
+                        "crop":  {
+                                     "x":  610,
+                                     "y":  642,
+                                     "width":  67,
+                                     "height":  68
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "5031A79A933271625F214788643DD217BD9B662D36396B2EA5A214F76EFFC6D4",
+                        "pixel_sha256":  "FA736440AD0616444B8EA39501BB62B34AF642D6A48CFEF8540987382FF048A9"
+                    },
+                    {
+                        "name":  "combo_left_bronze",
+                        "file":  "combo_left_bronze.png",
+                        "family":  "combo",
+                        "tone":  "bronze",
+                        "state":  "left_variant",
+                        "source_bounds":  {
+                                              "x":  30,
+                                              "y":  749,
+                                              "width":  376,
+                                              "height":  71
+                                          },
+                        "crop":  {
+                                     "x":  25,
+                                     "y":  744,
+                                     "width":  386,
+                                     "height":  81
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "074ACB1DA2D4244AC645CABDAF3A8EBF1B790639FA5AA154CF2E885BB3F53EE8",
+                        "pixel_sha256":  "AD1B9780A6A1A064BF6A5391F1CFFA56844F02C38904EA018FC1D3F0D16ADF53"
+                    },
+                    {
+                        "name":  "combo_right_bronze",
+                        "file":  "combo_right_bronze.png",
+                        "family":  "combo",
+                        "tone":  "bronze",
+                        "state":  "right_variant",
+                        "source_bounds":  {
+                                              "x":  444,
+                                              "y":  749,
+                                              "width":  367,
+                                              "height":  71
+                                          },
+                        "crop":  {
+                                     "x":  439,
+                                     "y":  744,
+                                     "width":  377,
+                                     "height":  81
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "0778BFB1EE735DB7676EB88C0227FB0FF3FF7FDCBFC57479A972F888623A1C2D",
+                        "pixel_sha256":  "300094A2AEC9B366174542BFD35FE46E01DC385E5FC8C4829DFDD6B6BEA03B45"
+                    },
+                    {
+                        "name":  "combo_left_gold",
+                        "file":  "combo_left_gold.png",
+                        "family":  "combo",
+                        "tone":  "gold",
+                        "state":  "left_variant_hot",
+                        "source_bounds":  {
+                                              "x":  30,
+                                              "y":  839,
+                                              "width":  378,
+                                              "height":  69
+                                          },
+                        "crop":  {
+                                     "x":  25,
+                                     "y":  834,
+                                     "width":  388,
+                                     "height":  79
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "2261CEA2DD796AA3415584815E2C0C2BB85F49E19E146E6C040F191C7FC79B02",
+                        "pixel_sha256":  "A7863762ECE309419396613DD7E04C453E823C1E9D0559BC9275BDB0D0715424"
+                    },
+                    {
+                        "name":  "combo_right_gold",
+                        "file":  "combo_right_gold.png",
+                        "family":  "combo",
+                        "tone":  "gold",
+                        "state":  "right_variant_hot",
+                        "source_bounds":  {
+                                              "x":  439,
+                                              "y":  838,
+                                              "width":  377,
+                                              "height":  72
+                                          },
+                        "crop":  {
+                                     "x":  434,
+                                     "y":  833,
+                                     "width":  387,
+                                     "height":  82
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "BE61943EF4B2C15B5F91DCD5FF700F83B69E3361802B3DD09A27D97D7FD5335C",
+                        "pixel_sha256":  "191D70A33027DADBB7F1FD5F7861765BAD646B87303349490CC97BD99516AF29"
+                    },
+                    {
+                        "name":  "combo_left_gray",
+                        "file":  "combo_left_gray.png",
+                        "family":  "combo",
+                        "tone":  "gray",
+                        "state":  "left_variant_disabled",
+                        "source_bounds":  {
+                                              "x":  30,
+                                              "y":  933,
+                                              "width":  376,
+                                              "height":  69
+                                          },
+                        "crop":  {
+                                     "x":  25,
+                                     "y":  928,
+                                     "width":  386,
+                                     "height":  79
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "7A2CEBAF7A9BC329FF72069A1878BA4CFEC871ADFAAE0845F18B389EC2A8E699",
+                        "pixel_sha256":  "D09114E20D1630A163744E99280B6B20DC251F49032091579D331B792A8B3842"
+                    },
+                    {
+                        "name":  "combo_right_gray",
+                        "file":  "combo_right_gray.png",
+                        "family":  "combo",
+                        "tone":  "gray",
+                        "state":  "right_variant_disabled",
+                        "source_bounds":  {
+                                              "x":  444,
+                                              "y":  933,
+                                              "width":  367,
+                                              "height":  70
+                                          },
+                        "crop":  {
+                                     "x":  439,
+                                     "y":  928,
+                                     "width":  377,
+                                     "height":  80
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "8FE711D17C067657BD849F8C82CB2134F9F0DFCE37363500BF945502EE917F0E",
+                        "pixel_sha256":  "377716F7891D4B08F9F160BE44A9BA9B0914DAB4EE02534FAFE8FEC3E443B2DA"
+                    },
+                    {
+                        "name":  "scrollbar_bronze",
+                        "file":  "scrollbar_bronze.png",
+                        "family":  "scrollbar",
+                        "tone":  "bronze",
+                        "state":  "normal",
+                        "source_bounds":  {
+                                              "x":  887,
+                                              "y":  644,
+                                              "width":  51,
+                                              "height":  381
+                                          },
+                        "crop":  {
+                                     "x":  882,
+                                     "y":  639,
+                                     "width":  61,
+                                     "height":  391
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "3C373D0F0D556AC1DF387E836527B100162139C25ACD605A243C041EAD801F32",
+                        "pixel_sha256":  "6019BA2D6688BCDCFDD271D85531B98FA19B67874319FE8420442F4004951464"
+                    },
+                    {
+                        "name":  "scrollbar_gold",
+                        "file":  "scrollbar_gold.png",
+                        "family":  "scrollbar",
+                        "tone":  "gold",
+                        "state":  "hot",
+                        "source_bounds":  {
+                                              "x":  1000,
+                                              "y":  644,
+                                              "width":  56,
+                                              "height":  383
+                                          },
+                        "crop":  {
+                                     "x":  995,
+                                     "y":  639,
+                                     "width":  66,
+                                     "height":  393
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "B853818B2CE1F393F30E457ECFBB46C096C8B3F632A59DCBA22187CD21CDEBFF",
+                        "pixel_sha256":  "B004C2D6D9296264458D014D58F45FBD3916C3C830536823A5B24DFE74FF66BA"
+                    },
+                    {
+                        "name":  "scrollbar_gray",
+                        "file":  "scrollbar_gray.png",
+                        "family":  "scrollbar",
+                        "tone":  "gray",
+                        "state":  "disabled",
+                        "source_bounds":  {
+                                              "x":  1113,
+                                              "y":  644,
+                                              "width":  51,
+                                              "height":  380
+                                          },
+                        "crop":  {
+                                     "x":  1108,
+                                     "y":  639,
+                                     "width":  61,
+                                     "height":  390
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "2A6E596901628249A3CE3F8669A5CB943F3B8C862502D8D65D34191507411450",
+                        "pixel_sha256":  "B14C30A977F9796ADB085BA61A7A609920FC1B58E9D7E5F5987B7BD4F0C489B8"
+                    },
+                    {
+                        "name":  "vertical_slider_bronze",
+                        "file":  "vertical_slider_bronze.png",
+                        "family":  "vertical_slider",
+                        "tone":  "bronze",
+                        "state":  "normal",
+                        "source_bounds":  {
+                                              "x":  1243,
+                                              "y":  643,
+                                              "width":  33,
+                                              "height":  381
+                                          },
+                        "crop":  {
+                                     "x":  1238,
+                                     "y":  638,
+                                     "width":  43,
+                                     "height":  391
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "CD0518D63ED86A56687E774958371208A5DB39C3225D57F860E9ABBC92DA5875",
+                        "pixel_sha256":  "357A44054178CACA1B480DB7DF051A34D2B5802C9B26433585281F1131A8DD88"
+                    },
+                    {
+                        "name":  "vertical_slider_gold",
+                        "file":  "vertical_slider_gold.png",
+                        "family":  "vertical_slider",
+                        "tone":  "gold",
+                        "state":  "hot",
+                        "source_bounds":  {
+                                              "x":  1308,
+                                              "y":  642,
+                                              "width":  34,
+                                              "height":  383
+                                          },
+                        "crop":  {
+                                     "x":  1303,
+                                     "y":  637,
+                                     "width":  44,
+                                     "height":  393
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "633423B59055F8C80EB0F49D75E5ACBCCF87568CEDB608A8B9FE0E7FF101F96A",
+                        "pixel_sha256":  "8094AF2902AA5AAD7175AC4B34112BE84D90E665A40DDCEC19E4819C5D028D3E"
+                    },
+                    {
+                        "name":  "vertical_slider_gray",
+                        "file":  "vertical_slider_gray.png",
+                        "family":  "vertical_slider",
+                        "tone":  "gray",
+                        "state":  "disabled",
+                        "source_bounds":  {
+                                              "x":  1382,
+                                              "y":  643,
+                                              "width":  32,
+                                              "height":  382
+                                          },
+                        "crop":  {
+                                     "x":  1377,
+                                     "y":  638,
+                                     "width":  42,
+                                     "height":  392
+                                 },
+                        "content_offset":  {
+                                               "x":  5,
+                                               "y":  5
+                                           },
+                        "sha256":  "280C54A8D9E4B8FDAE912D24197DEC37D2C18F9003941F8CA73BD808EE52FEDE",
+                        "pixel_sha256":  "37FF61DD3861F5CFE3ECA19FFDC693F67CB703C40F676C4162CABCBB7EBA2E44"
+                    }
+                ]
+}

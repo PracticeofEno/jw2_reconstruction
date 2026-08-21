@@ -76,6 +76,56 @@ static_assert(OnlineLobbyButtonLayoutIndex(0) == 1);
 static_assert(OnlineLobbyButtonLayoutIndex(1) == 7);
 static_assert(OnlineLobbyButtonLayoutIndex(8) == 14);
 static_assert(OnlineLobbyButtonLayoutIndex(27) == 33);
+static_assert(!IsOnlineLobbyThemedButtonId(kOnlineLobbyMainTabButtonId));
+static_assert(IsOnlineLobbyThemedButtonId(kOnlineLobbyCreateGameButtonId));
+static_assert(IsOnlineLobbyThemedButtonId(kOnlineLobbyJoinGameButtonId));
+static_assert(IsOnlineLobbyThemedButtonId(kOnlineLobbyViewRankButtonId));
+static_assert(IsOnlineLobbyThemedButtonId(kOnlineLobbyReplayButtonId));
+static_assert(IsOnlineLobbyThemedButtonId(IDCANCEL));
+static_assert(!IsOnlineLobbyThemedButtonId(kOnlineLobbyEmoticonButtonId));
+static_assert(OnlineLobbySimplifiedActionIndex(
+    kOnlineLobbyCreateGameButtonId) == 0);
+static_assert(OnlineLobbySimplifiedActionIndex(
+    kOnlineLobbyJoinGameButtonId) == 1);
+static_assert(OnlineLobbySimplifiedActionIndex(
+    kOnlineLobbyViewRankButtonId) == 2);
+static_assert(OnlineLobbySimplifiedActionIndex(
+    kOnlineLobbyReplayButtonId) == 3);
+static_assert(OnlineLobbySimplifiedActionIndex(IDCANCEL) == 4);
+static_assert(OnlineLobbySimplifiedActionIndex(
+    kOnlineLobbyMainTabButtonId) == -1);
+constexpr OnlineLobbyLayoutRect kSimplifiedActionRow{47, 540, 705, 38};
+constexpr OnlineLobbyLayoutRect kSimplifiedCreateAction =
+    ArrangeOnlineLobbySimplifiedAction(kSimplifiedActionRow, 0, 10);
+constexpr OnlineLobbyLayoutRect kSimplifiedJoinAction =
+    ArrangeOnlineLobbySimplifiedAction(kSimplifiedActionRow, 1, 10);
+constexpr OnlineLobbyLayoutRect kSimplifiedRankAction =
+    ArrangeOnlineLobbySimplifiedAction(kSimplifiedActionRow, 2, 10);
+constexpr OnlineLobbyLayoutRect kSimplifiedReplayAction =
+    ArrangeOnlineLobbySimplifiedAction(kSimplifiedActionRow, 3, 10);
+constexpr OnlineLobbyLayoutRect kSimplifiedExitAction =
+    ArrangeOnlineLobbySimplifiedAction(kSimplifiedActionRow, 4, 10);
+static_assert(kSimplifiedCreateAction.x == 47 &&
+    kSimplifiedCreateAction.width == 133);
+static_assert(kSimplifiedJoinAction.x == 190 &&
+    kSimplifiedJoinAction.width == 133);
+static_assert(kSimplifiedRankAction.x == 333 &&
+    kSimplifiedRankAction.width == 133);
+static_assert(kSimplifiedReplayAction.x == 476 &&
+    kSimplifiedReplayAction.width == 133);
+static_assert(kSimplifiedExitAction.x == 619 &&
+    kSimplifiedExitAction.width == 133 &&
+    kSimplifiedExitAction.x + kSimplifiedExitAction.width == 752);
+static_assert(ResolveOnlineLobbyThemeButtonVisual(true, false, false, false) ==
+    OnlineLobbyThemeButtonVisual::Normal);
+static_assert(ResolveOnlineLobbyThemeButtonVisual(true, false, true, false) ==
+    OnlineLobbyThemeButtonVisual::Hot);
+static_assert(ResolveOnlineLobbyThemeButtonVisual(true, false, false, true) ==
+    OnlineLobbyThemeButtonVisual::Hot);
+static_assert(ResolveOnlineLobbyThemeButtonVisual(true, true, true, true) ==
+    OnlineLobbyThemeButtonVisual::Pressed);
+static_assert(ResolveOnlineLobbyThemeButtonVisual(false, true, true, true) ==
+    OnlineLobbyThemeButtonVisual::Disabled);
 constexpr OnlineLobbyLayoutRect kLegacyChatEdit{469, 578, 409, 22};
 constexpr OnlineLobbyLayoutRect kLegacySendSlot{960, 578, 17, 22};
 constexpr OnlineLobbyLayoutRect kLegacyEmoticonButton{888, 578, 27, 22};
