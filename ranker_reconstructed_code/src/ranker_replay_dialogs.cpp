@@ -1489,6 +1489,7 @@ bool SaveReplayRecordingArchiveSnapshot(const char* output_path,
 }
 
 bool AutoSaveReplayRecordingArchive(const ReplayRecordingState& recording,
+    const std::string& map_name,
     const std::array<std::string, kReplayChannelCount>& player_names,
     std::string& output_path) {
     output_path.clear();
@@ -1500,7 +1501,7 @@ bool AutoSaveReplayRecordingArchive(const ReplayRecordingState& recording,
     std::tm local{};
     localtime_s(&local, &now);
     const std::string leaf = BuildAutomaticReplayFilename(
-        local.tm_year + 1900, local.tm_mon + 1, local.tm_mday,
+        map_name, local.tm_year + 1900, local.tm_mon + 1, local.tm_mday,
         local.tm_hour, local.tm_min, local.tm_sec, player_names);
 
     namespace fs = std::filesystem;

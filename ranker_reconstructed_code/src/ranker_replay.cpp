@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <utility>
 
 namespace ranker {
 namespace {
@@ -249,17 +250,62 @@ std::string SanitizeReplayFilenameComponent(const std::string& value) {
     return sanitized;
 }
 
-std::string BuildAutomaticReplayFilename(int year, int month, int day,
-    int hour, int minute, int second,
+std::string BuildAutomaticReplayFilename(const std::string& map_name,
+    int year, int month, int day, int hour, int minute, int second,
     const std::array<std::string, kReplayChannelCount>& player_names) {
+    const auto trim_cp949_bytes = [](std::string value,
+                                      std::size_t maximum) {
+        std::size_t offset = 0;
+        std::size_t accepted = 0;
+        while (offset < value.size()) {
+            const unsigned char first =
+                static_cast<unsigned char>(value[offset]);
+            const std::size_t character_bytes = first >= 0x81 ? 2u : 1u;
+            if (offset + character_bytes > value.size() ||
+                accepted + character_bytes > maximum) {
+                break;
+            }
+            offset += character_bytes;
+            accepted += character_bytes;
+        }
+        value.resize(accepted);
+        return value;
+    };
+    const auto component = [&](const std::string& value,
+                               const char* fallback,
+                               std::size_t maximum) {
+        std::string sanitized = value.empty() ? fallback :
+            SanitizeReplayFilenameComponent(value);
+        sanitized = trim_cp949_bytes(std::move(sanitized), maximum);
+        return sanitized.empty() ? std::string(fallback) : sanitized;
+    };
+
+    std::string map_leaf = map_name;
+    const std::size_t slash = map_leaf.find_last_of("/\\");
+    if (slash != std::string::npos) {
+        map_leaf.erase(0, slash + 1);
+    }
+    const std::size_t extension = map_leaf.find_last_of('.');
+    if (extension != std::string::npos && extension != 0) {
+        std::string suffix = map_leaf.substr(extension);
+        std::transform(suffix.begin(), suffix.end(), suffix.begin(),
+            [](unsigned char character) {
+                return static_cast<char>(std::tolower(character));
+            });
+        if (suffix == ".map" || suffix == ".scn" || suffix == ".trc" ||
+            suffix == ".trk") {
+            map_leaf.resize(extension);
+        }
+    }
+    map_leaf = component(map_leaf, "Map", 44);
+
     std::array<std::string, 2> selected_names{{"Player", "Player"}};
     std::size_t selected_count = 0;
     for (const std::string& name : player_names) {
         if (name.empty()) {
             continue;
         }
-        selected_names[selected_count++] =
-            SanitizeReplayFilenameComponent(name);
+        selected_names[selected_count++] = component(name, "Player", 22);
         if (selected_count == selected_names.size()) {
             break;
         }
@@ -267,10 +313,10 @@ std::string BuildAutomaticReplayFilename(int year, int month, int day,
 
     char timestamp[32]{};
     std::snprintf(timestamp, sizeof(timestamp),
-        "%04d-%02d-%02d-%02d-%02d-%02d",
+        "%04d_%02d_%02d_%02d-%02d-%02d",
         year, month, day, hour, minute, second);
-    return std::string(timestamp) + "_" + selected_names[0] + "vs" +
-        selected_names[1] + ".ply";
+    return "[" + map_leaf + "]_" + selected_names[0] + "vs" +
+        selected_names[1] + "_" + timestamp + ".ply";
 }
 
 } // namespace ranker

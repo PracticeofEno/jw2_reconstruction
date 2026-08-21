@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,16 +13,74 @@ from typing import Any
 
 
 _UNSAFE_FILENAME = re.compile(r'[\x00-\x1f<>:"/\\|?*]+')
+_MAP_FILE_EXTENSIONS = {".map", ".scn", ".trc", ".trk"}
+
+
+def _truncate_cp949(value: str, maximum_bytes: int) -> str:
+    output: list[str] = []
+    used = 0
+    for character in value:
+        encoded = character.encode("cp949", errors="replace")
+        if used + len(encoded) > maximum_bytes:
+            break
+        output.append(character)
+        used += len(encoded)
+    return "".join(output)
+
+
+def _sanitize_filename_component(
+    value: str, *, fallback: str, maximum_bytes: int
+) -> str:
+    component = _UNSAFE_FILENAME.sub("_", value).strip(" .")
+    if not component:
+        component = fallback
+    device = component.split(".", 1)[0].upper()
+    if device in {"CON", "PRN", "AUX", "NUL"} or (
+        len(device) == 4
+        and device[:3] in {"COM", "LPT"}
+        and device[3] in "123456789"
+    ):
+        component = "_" + component
+    component = _truncate_cp949(component, maximum_bytes).rstrip(" .")
+    return component or fallback
 
 
 def sanitize_replay_filename(value: str) -> str:
     name = Path(value.replace("\\", "/")).name
-    name = _UNSAFE_FILENAME.sub("_", name).strip(" .")
-    if not name:
-        name = "Replay.ply"
     stem = name[:-4] if name.lower().endswith(".ply") else name
-    stem = stem[:123].rstrip(" .") or "Replay"
+    stem = _sanitize_filename_component(
+        stem, fallback="Replay", maximum_bytes=119
+    )
     return stem + ".ply"
+
+
+def build_replay_filename(
+    map_name: str,
+    player_names: list[str] | tuple[str, ...],
+    timestamp: time.struct_time | None = None,
+) -> str:
+    map_leaf = Path(map_name.replace("\\", "/")).name
+    map_path = Path(map_leaf)
+    map_stem = (
+        map_path.stem
+        if map_path.suffix.casefold() in _MAP_FILE_EXTENSIONS
+        else map_leaf
+    )
+    safe_map = _sanitize_filename_component(
+        map_stem, fallback="Map", maximum_bytes=44
+    )
+    selected = [
+        _sanitize_filename_component(name, fallback="Player", maximum_bytes=22)
+        for name in player_names
+        if name
+    ][:2]
+    while len(selected) < 2:
+        selected.append("Player")
+    local = timestamp if timestamp is not None else time.localtime()
+    stamp = time.strftime("%Y_%m_%d_%H-%M-%S", local)
+    return sanitize_replay_filename(
+        f"[{safe_map}]_{selected[0]}vs{selected[1]}_{stamp}.ply"
+    )
 
 
 def fnv1a64(data: bytes, value: int = 0xCBF29CE484222325) -> int:
@@ -41,6 +100,14 @@ class ReplayCatalogEntry:
     game_type: int
     game_id: int
     uploaded_at: int
+    content_sha256: str = ""
+    match_key: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayCommitResult:
+    entry: ReplayCatalogEntry
+    stored: bool
 
 
 class ReplayCatalog:
@@ -77,6 +144,8 @@ class ReplayCatalog:
                     game_type=int(row["game_type"]),
                     game_id=int(row.get("game_id", 0)),
                     uploaded_at=int(row["uploaded_at"]),
+                    content_sha256=str(row.get("content_sha256", "")),
+                    match_key=str(row.get("match_key", "")),
                 )
             except (KeyError, TypeError, ValueError):
                 continue
@@ -90,7 +159,7 @@ class ReplayCatalog:
     def save(self) -> None:
         temporary = self.index_path.with_suffix(".json.tmp")
         payload = {
-            "version": 1,
+            "version": 2,
             "next_id": self._next_id,
             "replays": [asdict(entry) for entry in self.entries()],
         }
@@ -112,6 +181,35 @@ class ReplayCatalog:
     def path_for(self, entry: ReplayCatalogEntry) -> Path:
         return self.directory / entry.stored_name
 
+    @staticmethod
+    def _content_sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def find_duplicate(
+        self, path: Path, *, match_key: str = ""
+    ) -> tuple[ReplayCatalogEntry | None, str]:
+        content_sha256 = self._content_sha256(path)
+        byte_count = path.stat().st_size
+        for entry in self.entries():
+            if match_key and entry.match_key == match_key:
+                return entry, content_sha256
+        for entry in self.entries():
+            if entry.byte_count != byte_count:
+                continue
+            existing_hash = entry.content_sha256
+            if not existing_hash:
+                try:
+                    existing_hash = self._content_sha256(self.path_for(entry))
+                except OSError:
+                    continue
+            if existing_hash == content_sha256:
+                return entry, content_sha256
+        return None, content_sha256
+
     def commit_upload(
         self,
         temporary_path: Path,
@@ -121,11 +219,25 @@ class ReplayCatalog:
         byte_count: int,
         game_type: int,
         game_id: int,
-    ) -> ReplayCatalogEntry:
+        match_key: str = "",
+    ) -> ReplayCommitResult:
+        duplicate, content_sha256 = self.find_duplicate(
+            temporary_path, match_key=match_key
+        )
+        if duplicate is not None:
+            temporary_path.unlink(missing_ok=True)
+            return ReplayCommitResult(duplicate, False)
+
         replay_id = self._next_id
         self._next_id += 1
         safe_name = sanitize_replay_filename(display_name)
-        stored_name = f"{replay_id:08d}_{safe_name}"
+        stored_name = safe_name
+        collision_index = 2
+        while (self.directory / stored_name).exists():
+            suffix = f"_{collision_index}"
+            stem = _truncate_cp949(safe_name[:-4], 119 - len(suffix)).rstrip(" .")
+            stored_name = f"{stem}{suffix}.ply"
+            collision_index += 1
         destination = self.directory / stored_name
         os.replace(temporary_path, destination)
         entry = ReplayCatalogEntry(
@@ -137,7 +249,9 @@ class ReplayCatalog:
             game_type=game_type,
             game_id=game_id,
             uploaded_at=int(time.time()),
+            content_sha256=content_sha256,
+            match_key=match_key,
         )
         self._entries[replay_id] = entry
         self.save()
-        return entry
+        return ReplayCommitResult(entry, True)

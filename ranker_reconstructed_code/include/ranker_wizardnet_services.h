@@ -85,7 +85,7 @@ std::vector<u8> BuildWizardNetReplayDownloadRequestPacket(u32 replay_id);
 bool BeginWizardNetPostGameSubmission(LegacyAsyncTcpSocket& socket,
     u32 game_type, u32 gameplay_result, u32 game_id,
     const std::array<u8, kWizardNetMatchTokenBytes>& match_token,
-    bool room_host, const char* replay_path);
+    const char* replay_path);
 bool PumpWizardNetReplayUpload(LegacyAsyncTcpSocket& socket);
 void HandleWizardNetReplayUploadStatus(u32 status, u32 upload_id);
 void ResetWizardNetReplayUploadState();

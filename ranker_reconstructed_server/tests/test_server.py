@@ -1814,13 +1814,62 @@ class ServerIntegrationTests(unittest.IsolatedAsyncioTestCase):
         replay_id = read_u32(uploaded, 0x15)
         self.assertNotEqual(replay_id, 0)
 
+        participant_replay = replay_bytes + b"participant camera data"
+        participant_upload_id = 78
+        participant_begin = bytearray(0xB1 - HEADER_BYTES)
+        struct.pack_into(
+            "<IIIII",
+            participant_begin,
+            0,
+            participant_upload_id,
+            len(participant_replay),
+            2,
+            1,
+            game_id,
+        )
+        participant_begin[20:36] = token
+        participant_begin[36 : 36 + len(b"Participant.ply")] = b"Participant.ply"
+        join_writer.write(build_packet(0x9A, participant_begin))
+        await join_writer.drain()
+        participant_accepted = await read_until_opcode(join_reader, 0x9D, limit=40)
+        self.assertEqual(read_u32(participant_accepted, 0x0D), 0)
+
+        offset = 0
+        while offset < len(participant_replay):
+            chunk = participant_replay[offset : offset + 32 * 1024]
+            join_writer.write(
+                build_packet(
+                    0x9B,
+                    struct.pack("<II", participant_upload_id, offset) + chunk,
+                )
+            )
+            offset += len(chunk)
+        join_writer.write(
+            build_packet(
+                0x9C,
+                struct.pack(
+                    "<IIQ",
+                    participant_upload_id,
+                    len(participant_replay),
+                    fnv1a64(participant_replay),
+                ),
+            )
+        )
+        await join_writer.drain()
+        participant_duplicate = await read_until_opcode(join_reader, 0x9D, limit=40)
+        self.assertEqual(read_u32(participant_duplicate, 0x0D), 0)
+        self.assertEqual(read_u32(participant_duplicate, 0x15), replay_id)
+
         join_writer.write(build_packet(0x9E, struct.pack("<I", 0)))
         await join_writer.drain()
         listing = await read_until_opcode(join_reader, 0x9F, limit=40)
         self.assertEqual(read_u32(listing, 0x11), 1)
         self.assertEqual(read_u32(listing, 0x15), replay_id)
         self.assertEqual(read_u32(listing, 0x19), len(replay_bytes))
-        self.assertEqual(read_c_string(listing, 0x49, 0x7C), "RankMatch.ply")
+        self.assertRegex(
+            read_c_string(listing, 0x49, 0x7C),
+            r"^\[RelayMap\]_RankHostvsRankJoin_\d{4}_\d{2}_\d{2}_\d{2}-\d{2}-\d{2}\.ply$",
+        )
 
         join_writer.write(build_packet(0xA0, struct.pack("<I", replay_id)))
         await join_writer.drain()

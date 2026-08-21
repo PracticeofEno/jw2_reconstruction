@@ -80,8 +80,8 @@ bool AppendReplayViewportRecord(ReplayRecordingState& state, u32 frame_tick,
     i32 camera_x, i32 camera_y);
 void ClearReplayPlaybackState(ReplayRecordingState& state);
 std::string SanitizeReplayFilenameComponent(const std::string& value);
-std::string BuildAutomaticReplayFilename(int year, int month, int day,
-    int hour, int minute, int second,
+std::string BuildAutomaticReplayFilename(const std::string& map_name,
+    int year, int month, int day, int hour, int minute, int second,
     const std::array<std::string, kReplayChannelCount>& player_names);
 
 } // namespace ranker

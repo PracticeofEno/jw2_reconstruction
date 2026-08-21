@@ -200,7 +200,7 @@ std::vector<u8> BuildWizardNetReplayDownloadRequestPacket(u32 replay_id) {
 bool BeginWizardNetPostGameSubmission(LegacyAsyncTcpSocket& socket,
     u32 game_type, u32 gameplay_result, u32 game_id,
     const std::array<u8, kWizardNetMatchTokenBytes>& match_token,
-    bool room_host, const char* replay_path) {
+    const char* replay_path) {
     if ((!UsesWizardNetNormalGameStatistics(game_type) &&
             !UsesWizardNetRankingStatistics(game_type)) || game_id == 0) {
         return false;
@@ -214,7 +214,7 @@ bool BeginWizardNetPostGameSubmission(LegacyAsyncTcpSocket& socket,
         return false;
     }
 
-    if (!room_host || !ShouldAutoUploadWizardNetReplay(game_type)) {
+    if (!ShouldAutoUploadWizardNetReplay(game_type)) {
         return true;
     }
 

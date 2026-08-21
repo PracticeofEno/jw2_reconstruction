@@ -102,25 +102,32 @@ int main(int argc, char** argv) {
     static_assert(std::is_same_v<
         decltype(&AutoSaveReplayRecordingArchive),
         bool (*)(const ReplayRecordingState&,
+            const std::string&,
             const std::array<std::string, kReplayChannelCount>&,
             std::string&)>);
 
     std::array<std::string, kReplayChannelCount> names{};
     names[0] = "Alice";
     names[1] = "Bob";
-    require(BuildAutomaticReplayFilename(2026, 8, 12, 3, 4, 5, names) ==
-            "2026-08-12-03-04-05_AlicevsBob.ply",
-        "automatic replay names must use timestamp_player-vs-player format");
+    require(BuildAutomaticReplayFilename("Maps/rank/Crossroads.trc",
+            2026, 8, 12, 3, 4, 5, names) ==
+            "[Crossroads]_AlicevsBob_2026_08_12_03-04-05.ply",
+        "automatic replay names must use map_player-vs-player_timestamp format");
+    require(BuildAutomaticReplayFilename("Arena v1.2",
+            2026, 8, 12, 3, 4, 5, names) ==
+            "[Arena v1.2]_AlicevsBob_2026_08_12_03-04-05.ply",
+        "automatic replay names must preserve dotted map titles");
     names[0] = "A:li/ce. ";
     names[1] = "B*ob?";
     names[2] = "Ignored";
-    require(BuildAutomaticReplayFilename(2026, 12, 31, 23, 59, 58, names) ==
-            "2026-12-31-23-59-58_A_li_cevsB_ob_.ply",
+    require(BuildAutomaticReplayFilename("Maps/rank/Bad:Map.trc",
+            2026, 12, 31, 23, 59, 58, names) ==
+            "[Bad_Map]_A_li_cevsB_ob__2026_12_31_23-59-58.ply",
         "automatic replay names must sanitize Windows filename characters");
     names = {};
     names[0] = "CON";
-    require(BuildAutomaticReplayFilename(2026, 1, 2, 0, 0, 0, names) ==
-            "2026-01-02-00-00-00__CONvsPlayer.ply",
+    require(BuildAutomaticReplayFilename("", 2026, 1, 2, 0, 0, 0, names) ==
+            "[Map]__CONvsPlayer_2026_01_02_00-00-00.ply",
         "automatic replay names must avoid reserved Windows device names");
 
     ReplayRecordingState recording{};

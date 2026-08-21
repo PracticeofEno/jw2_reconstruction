@@ -271,6 +271,7 @@ bool SaveReplayRecordingArchive(const char* output_path,
 bool SaveReplayRecordingArchiveSnapshot(const char* output_path,
     const ReplayRecordingState& recording);
 bool AutoSaveReplayRecordingArchive(const ReplayRecordingState& recording,
+    const std::string& map_name,
     const std::array<std::string, kReplayChannelCount>& player_names,
     std::string& output_path);
 bool SaveReplayArchiveFromRecording(const char* output_path,

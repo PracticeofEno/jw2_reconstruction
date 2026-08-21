@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 import ipaddress
 import hmac
 import json
@@ -33,7 +34,12 @@ from .protocol import (
     write_i32,
     write_u32,
 )
-from .replays import ReplayCatalog, fnv1a64, sanitize_replay_filename
+from .replays import (
+    ReplayCatalog,
+    build_replay_filename,
+    fnv1a64,
+    sanitize_replay_filename,
+)
 from .state import (
     AdvertisedGame,
     ClientSession,
@@ -85,6 +91,10 @@ REPLAY_TRANSFER_CHUNK_BYTES = 32 * 1024
 REPLAY_LIST_PAGE_COUNT = 64
 REPLAY_LIST_RECORD_BYTES = 0xB0
 MATCH_TOKEN_BYTES = 16
+MAP_DESCRIPTOR_TITLE_OFFSET = 0x08
+MAP_DESCRIPTOR_TITLE_BYTES = 0x20
+MAP_DESCRIPTOR_FILENAME_OFFSET = 0x19C
+MAP_DESCRIPTOR_FILENAME_BYTES = 0x100
 
 
 @dataclass(slots=True)
@@ -97,6 +107,7 @@ class ActiveReplayUpload:
     hash_value: int
     game_type: int
     game_id: int
+    match_token: bytes
 
 
 class RankerServer:
@@ -536,6 +547,39 @@ class RankerServer:
     def _outcome_name(outcome: int) -> str | None:
         return {0: "wins", 1: "losses", 2: "draws"}.get(outcome)
 
+    @staticmethod
+    def _replay_map_name(map_descriptor: bytes) -> str:
+        title = read_c_string(
+            map_descriptor, MAP_DESCRIPTOR_TITLE_OFFSET, MAP_DESCRIPTOR_TITLE_BYTES
+        ).strip()
+        if title:
+            return title
+        filename = read_c_string(
+            map_descriptor,
+            MAP_DESCRIPTOR_FILENAME_OFFSET,
+            MAP_DESCRIPTOR_FILENAME_BYTES,
+        ).strip()
+        if filename:
+            return Path(filename.replace("\\", "/")).stem
+        return "Map"
+
+    def _replay_match_metadata(
+        self, game_id: int, match_token: bytes
+    ) -> tuple[str, tuple[str, ...]]:
+        game = self.state.games.get(game_id)
+        if game is not None and hmac.compare_digest(
+            game.relay_secret[:MATCH_TOKEN_BYTES], match_token
+        ):
+            players = game.participant_accounts_ordered or tuple(
+                sorted(game.participant_accounts, key=str.casefold)
+            )
+            return self._replay_map_name(game.map_descriptor), players
+
+        completed = self.state.completed_games.get(match_token)
+        if completed is not None and completed.game_id == game_id:
+            return completed.map_name, completed.participant_accounts_ordered
+        return "Map", ()
+
     def _validated_match(
         self,
         session: ClientSession,
@@ -653,7 +697,7 @@ class RankerServer:
             or expected_bytes > self.config.max_replay_bytes
             or game_type not in (1, 2)
             or not self._validated_match(
-                session, game_id, game_type, match_token, require_host=True
+                session, game_id, game_type, match_token, require_host=False
             )
         ):
             await self._send_replay_upload_status(session, 2, upload_id)
@@ -677,6 +721,7 @@ class RankerServer:
             hash_value=0xCBF29CE484222325,
             game_type=game_type,
             game_id=game_id,
+            match_token=match_token,
         )
         await self._send_replay_upload_status(session, 0, upload_id)
 
@@ -732,27 +777,43 @@ class RankerServer:
             await self._send_replay_upload_status(session, 3, upload_id)
             return
         try:
-            entry = self.replays.commit_upload(
+            map_name, players = self._replay_match_metadata(
+                upload.game_id, upload.match_token
+            )
+            display_name = build_replay_filename(map_name, players)
+            match_key = hashlib.sha256(upload.match_token).hexdigest()
+            commit = self.replays.commit_upload(
                 upload.temporary_path,
-                display_name=upload.display_name,
+                display_name=display_name,
                 uploader=session.account,
                 byte_count=upload.received_bytes,
                 game_type=upload.game_type,
                 game_id=upload.game_id,
+                match_key=match_key,
             )
         except OSError:
             with contextlib.suppress(OSError):
                 upload.temporary_path.unlink()
             await self._send_replay_upload_status(session, 4, upload_id)
             return
-        LOGGER.info(
-            "replay uploaded id=%d account=%s game=%d bytes=%d name=%s",
-            entry.replay_id,
-            session.account,
-            entry.game_id,
-            entry.byte_count,
-            entry.display_name,
-        )
+        entry = commit.entry
+        if commit.stored:
+            LOGGER.info(
+                "replay uploaded id=%d account=%s game=%d bytes=%d name=%s",
+                entry.replay_id,
+                session.account,
+                entry.game_id,
+                entry.byte_count,
+                entry.display_name,
+            )
+        else:
+            LOGGER.info(
+                "replay duplicate discarded id=%d account=%s game=%d bytes=%d",
+                entry.replay_id,
+                session.account,
+                upload.game_id,
+                upload.received_bytes,
+            )
         await self._send_replay_upload_status(
             session, 0, upload_id, entry.replay_id
         )
@@ -1146,12 +1207,15 @@ class RankerServer:
         game = self.state.games.get(session.hosted_game_id)
         if game is None or game.host_client_id != session.client_id:
             return
-        started_participants = {
+        started_participants_ordered = tuple(
             member.account
-            for client_id in game.relay_members
+            for client_id, _member_id in sorted(
+                game.relay_members.items(), key=lambda item: item[1]
+            )
             if (member := self.state.clients.get(client_id)) is not None
             and member.authenticated
-        }
+        )
+        started_participants = set(started_participants_ordered)
         if len(started_participants) < 2:
             LOGGER.warning(
                 "client %d (%s) attempted to start game %d with fewer than two participants",
@@ -1161,6 +1225,7 @@ class RankerServer:
             )
             return
         game.participant_accounts = started_participants
+        game.participant_accounts_ordered = started_participants_ordered
         game.started = True
         for client_id in game.relay_members:
             member = self.state.clients.get(client_id)
@@ -1860,6 +1925,12 @@ class RankerServer:
                     match_token=game.relay_secret[:MATCH_TOKEN_BYTES],
                     host_account=host_account,
                     participant_accounts=set(game.participant_accounts),
+                    participant_accounts_ordered=(
+                        game.participant_accounts_ordered or tuple(
+                            sorted(game.participant_accounts, key=str.casefold)
+                        )
+                    ),
+                    map_name=self._replay_map_name(game.map_descriptor),
                 )
             )
         relay_members = list(game.relay_members.items())

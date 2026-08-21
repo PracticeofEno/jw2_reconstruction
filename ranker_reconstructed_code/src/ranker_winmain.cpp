@@ -13008,6 +13008,38 @@ u32 seed_default_gameplay_result_screen(u32 result_mode) {
     return player_count;
 }
 
+std::string current_gameplay_replay_map_name() {
+    if (GameplayLaunchUsesLinkLobby(g_runtime.gameplay_launch_source)) {
+        constexpr std::size_t kMapTitleOffset = 0x08;
+        constexpr std::size_t kMapTitleBytes = 0x20;
+        const auto& descriptor = link_lobby_state().map_descriptor;
+        if (kMapTitleOffset < descriptor.size()) {
+            const std::size_t available = std::min<std::size_t>(
+                kMapTitleBytes, descriptor.size() - kMapTitleOffset);
+            std::size_t length = 0;
+            while (length < available &&
+                descriptor[kMapTitleOffset + length] != 0) {
+                ++length;
+            }
+            if (length != 0) {
+                return std::string(reinterpret_cast<const char*>(
+                    descriptor.data() + kMapTitleOffset), length);
+            }
+        }
+    }
+
+    std::string name = g_runtime.gameplay_session_archive_path;
+    const std::size_t slash = name.find_last_of("/\\");
+    if (slash != std::string::npos) {
+        name.erase(0, slash + 1);
+    }
+    const std::size_t extension = name.find_last_of('.');
+    if (extension != std::string::npos && extension != 0) {
+        name.resize(extension);
+    }
+    return name.empty() ? "Map" : name;
+}
+
 void auto_save_default_gameplay_replay_after_result_dialog() {
     ReplayRecordingState& replay = replay_recording_state();
     if (replay.automatic_save_attempted) {
@@ -13023,7 +13055,8 @@ void auto_save_default_gameplay_replay_after_result_dialog() {
         live_save_controls) {
         const auto player_names = RankerMainWindowReplayPlayerNames();
         replay.automatic_save_succeeded =
-            AutoSaveReplayRecordingArchive(replay, player_names,
+            AutoSaveReplayRecordingArchive(replay,
+                current_gameplay_replay_map_name(), player_names,
                 replay.automatic_output_path);
         append_startup_log("replay-auto-save: saved=%s path=%s",
             replay.automatic_save_succeeded ? "yes" : "no",
@@ -13076,7 +13109,7 @@ void submit_default_wizardnet_postgame_after_replay_save() {
     const bool queued = BeginWizardNetPostGameSubmission(
         FrontendAsyncTcpSocket0(), game_type, result.result_mode,
         g_runtime.wizardnet_match_game_id, g_runtime.wizardnet_match_token,
-        g_runtime.wizardnet_match_host, replay_path);
+        replay_path);
     append_startup_log(
         "wizardnet-postgame: queued=%s game=%lu type=%lu host=%s replay=%s",
         queued ? "yes" : "no",

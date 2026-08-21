@@ -61,6 +61,7 @@ class AdvertisedGame:
     relay_member_peers: dict[int, tuple[str, int]] = field(default_factory=dict)
     relay_departed_members: set[int] = field(default_factory=set)
     participant_accounts: set[str] = field(default_factory=set)
+    participant_accounts_ordered: tuple[str, ...] = ()
     relay_secret: bytes = field(default_factory=lambda: secrets.token_bytes(32))
     advertised: bool = True
     started: bool = False
@@ -86,6 +87,8 @@ class CompletedGame:
     match_token: bytes
     host_account: str
     participant_accounts: set[str]
+    participant_accounts_ordered: tuple[str, ...]
+    map_name: str
     completed_at: float = field(default_factory=time.monotonic)
 
 
