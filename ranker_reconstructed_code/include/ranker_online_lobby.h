@@ -205,10 +205,18 @@ struct OnlineLobbyState {
     WNDPROC game_list_original_proc = nullptr;
     WNDPROC chat_list_original_proc = nullptr;
     WNDPROC chat_edit_original_proc = nullptr;
+    WNDPROC replay_list_original_proc = nullptr;
 
     BitmapMemoryResource background;
     BitmapMemoryResource rank_mark_strip;
+    BitmapMemoryResource replay_browser_background;
     BitmapTileSheetSelector icon_sheet;
+    LegacyImageButtonControl replay_lobby_button;
+    LegacyImageButtonControl replay_download_control;
+    LegacyImageButtonControl replay_close_control;
+    LegacyCustomScrollControl replay_browser_scroll;
+    HFONT replay_lobby_font = nullptr;
+    HFONT replay_browser_font = nullptr;
     std::array<LegacyImageButtonControl, kOnlineLobbyButtonCount> buttons{};
     std::array<OnlineLobbyScrollControl, 2> scroll_controls{};
     std::vector<OnlineLobbyLayoutRect> layout_rects;

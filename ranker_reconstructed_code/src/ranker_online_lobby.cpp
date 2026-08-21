@@ -4,6 +4,7 @@
 
 #include "ranker_avatar_window.h"
 #include "ranker_barter_window.h"
+#include "ranker_cursor.h"
 #include "ranker_free_server_lobby.h"
 #include "ranker_frontend_layout.h"
 #include "ranker_gameplay_sound.h"
@@ -13,6 +14,7 @@
 #include "ranker_ole_image_data.h"
 #include "ranker_online_dialogs.h"
 #include "ranker_player_profile.h"
+#include "ranker_replay_dialogs.h"
 #include "ranker_system_ui.h"
 #include "ranker_text_tables.h"
 #include "ranker_winmain.h"
@@ -24,6 +26,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <limits>
 #include <string>
 
@@ -96,6 +99,14 @@ constexpr int kOnlineLobbyRankMarkChoiceHeight = 22;
 constexpr int kOnlineLobbyRankMarkChoiceGap = 2;
 constexpr int kOnlineLobbyRankMarkTextGap = 6;
 constexpr std::size_t kWizardNetReplayListRecordBytes = 0xb0;
+constexpr int kWizardNetReplayThemeWidth = 800;
+constexpr int kWizardNetReplayThemeHeight = 600;
+constexpr OnlineLobbyLayoutRect kWizardNetReplayListRect{64, 181, 259, 320};
+constexpr OnlineLobbyLayoutRect kWizardNetReplayScrollRect{328, 181, 15, 320};
+constexpr OnlineLobbyLayoutRect kWizardNetReplayInfoRect{380, 88, 355, 412};
+constexpr OnlineLobbyLayoutRect kWizardNetReplayStatusRect{394, 438, 327, 52};
+constexpr OnlineLobbyLayoutRect kWizardNetReplayDownloadRect{202, 533, 144, 54};
+constexpr OnlineLobbyLayoutRect kWizardNetReplayCloseRect{462, 533, 144, 54};
 
 constexpr OnlineLobbyButtonSpec kButtonSpecs[kOnlineLobbyButtonCount] = {
     {kOnlineLobbyNameButtonId, "Lobby Name", 0, 0, false},
@@ -338,6 +349,41 @@ void fill_online_lobby_rect(HDC dc, const RECT& rect, COLORREF color) {
     if (brush != nullptr) {
         FillRect(dc, &rect, brush);
         DeleteObject(brush);
+    }
+}
+
+void draw_online_lobby_replay_button(OnlineLobbyState& state,
+    const DRAWITEMSTRUCT& draw) {
+    DrawLegacyImageButtonItem(state.replay_lobby_button, draw);
+
+    const bool pressed = (draw.itemState & ODS_SELECTED) != 0;
+    RECT label = draw.rcItem;
+    label.left += 10;
+    label.top += 9;
+    label.right -= 10;
+    label.bottom -= 9;
+    if (pressed) {
+        OffsetRect(&label, 1, 1);
+    }
+    fill_online_lobby_rect(draw.hDC, label,
+        pressed ? RGB(29, 21, 12) : RGB(5, 5, 4));
+    frame_online_lobby_rect(draw.hDC, label,
+        pressed ? RGB(119, 82, 36) : RGB(153, 110, 49));
+
+    const HFONT font = state.replay_lobby_font != nullptr ?
+        state.replay_lobby_font : GetUiFontHandle(4);
+    HGDIOBJ old_font = font != nullptr ? SelectObject(draw.hDC, font) : nullptr;
+    SetBkMode(draw.hDC, TRANSPARENT);
+    RECT shadow = label;
+    OffsetRect(&shadow, 1, 2);
+    SetTextColor(draw.hDC, RGB(0, 0, 0));
+    DrawTextW(draw.hDC, L"리플레이", -1, &shadow,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    SetTextColor(draw.hDC, pressed ? RGB(255, 204, 72) : RGB(245, 245, 232));
+    DrawTextW(draw.hDC, L"리플레이", -1, &label,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    if (old_font != nullptr) {
+        SelectObject(draw.hDC, old_font);
     }
 }
 
@@ -1491,9 +1537,243 @@ std::wstring cp949_to_wide(const std::string& text) {
     return result;
 }
 
+OnlineLobbyLayoutRect scale_replay_theme_rect(HWND window,
+    const OnlineLobbyLayoutRect& source) {
+    RECT client{};
+    if (window == nullptr || !GetClientRect(window, &client)) {
+        return source;
+    }
+    const int width = std::max<int>(1, client.right - client.left);
+    const int height = std::max<int>(1, client.bottom - client.top);
+    return {
+        ScaleFrontendLayoutValue(source.x, kWizardNetReplayThemeWidth, width),
+        ScaleFrontendLayoutValue(source.y, kWizardNetReplayThemeHeight, height),
+        ScaleFrontendLayoutValue(source.width, kWizardNetReplayThemeWidth, width),
+        ScaleFrontendLayoutValue(source.height, kWizardNetReplayThemeHeight, height),
+    };
+}
+
+RECT replay_theme_rect(HWND window, const OnlineLobbyLayoutRect& source) {
+    const OnlineLobbyLayoutRect scaled = scale_replay_theme_rect(window, source);
+    return {scaled.x, scaled.y, scaled.x + scaled.width,
+        scaled.y + scaled.height};
+}
+
+const wchar_t* replay_game_type_text(u32 game_type) {
+    if (game_type == kWizardNetGameTypeRank) {
+        return L"랭킹 게임";
+    }
+    if (game_type == kWizardNetGameTypeMelee) {
+        return L"밀리 게임";
+    }
+    return L"일반 게임";
+}
+
+const WizardNetReplayListEntry* selected_replay_browser_entry(
+    const OnlineLobbyState& state) {
+    if (state.replay_list == nullptr) {
+        return nullptr;
+    }
+    const LRESULT selected = SendMessageW(state.replay_list, LB_GETCURSEL, 0, 0);
+    if (selected == LB_ERR || selected < 0 ||
+        static_cast<std::size_t>(selected) >= state.replay_entries.size()) {
+        return nullptr;
+    }
+    return &state.replay_entries[static_cast<std::size_t>(selected)];
+}
+
+void draw_replay_browser_info(OnlineLobbyState& state, HDC dc) {
+    if (dc == nullptr || state.replay_browser_window == nullptr) {
+        return;
+    }
+    RECT panel = replay_theme_rect(state.replay_browser_window,
+        kWizardNetReplayInfoRect);
+    const int panel_width = std::max<int>(1, panel.right - panel.left);
+    const int panel_height = std::max<int>(1, panel.bottom - panel.top);
+    const int horizontal_inset = std::max(8, panel_width * 4 / 100);
+    const int vertical_inset = std::max(14, panel_height * 5 / 100);
+    panel.left += horizontal_inset;
+    panel.right -= horizontal_inset;
+    panel.top += vertical_inset;
+    panel.bottom -= vertical_inset;
+
+    HFONT font = state.replay_browser_font != nullptr ?
+        state.replay_browser_font : online_lobby_chat_font();
+    HGDIOBJ old_font = font != nullptr ? SelectObject(dc, font) : nullptr;
+    SetBkMode(dc, TRANSPARENT);
+
+    const WizardNetReplayListEntry* entry =
+        selected_replay_browser_entry(state);
+    if (entry == nullptr) {
+        SetTextColor(dc, RGB(205, 185, 135));
+        DrawTextW(dc, L"왼쪽 목록에서 리플레이를 선택하세요.", -1, &panel,
+            DT_CENTER | DT_VCENTER | DT_WORDBREAK | DT_NOPREFIX);
+        if (old_font != nullptr) {
+            SelectObject(dc, old_font);
+        }
+        return;
+    }
+
+    const std::wstring filename = cp949_to_wide(entry->filename);
+    const std::wstring uploader = cp949_to_wide(entry->uploader);
+    wchar_t uploaded[64] = L"-";
+    if (entry->uploaded_at != 0 &&
+        entry->uploaded_at <= static_cast<u64>(
+            std::numeric_limits<__time64_t>::max())) {
+        const __time64_t stamp = static_cast<__time64_t>(entry->uploaded_at);
+        std::tm local{};
+        if (_localtime64_s(&local, &stamp) == 0) {
+            wcsftime(uploaded, std::size(uploaded), L"%Y-%m-%d  %H:%M", &local);
+        }
+    }
+
+    const int line_height = std::max(20, panel_height * 6 / 100);
+    int y = panel.top;
+    auto draw_label_value = [&](const wchar_t* label,
+                                const std::wstring& value) {
+        RECT label_rect{panel.left, y, panel.right, y + line_height};
+        SetTextColor(dc, RGB(198, 157, 79));
+        DrawTextW(dc, label, -1, &label_rect,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        label_rect.left += std::max<LONG>(92,
+            (panel.right - panel.left) * 30 / 100);
+        SetTextColor(dc, RGB(240, 240, 226));
+        DrawTextW(dc, value.c_str(), -1, &label_rect,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS |
+                DT_NOPREFIX);
+        y += line_height;
+    };
+
+    RECT filename_rect{panel.left, y, panel.right, y + line_height * 2};
+    SetTextColor(dc, RGB(255, 216, 92));
+    DrawTextW(dc, filename.c_str(), -1, &filename_rect,
+        DT_CENTER | DT_VCENTER | DT_WORDBREAK | DT_END_ELLIPSIS |
+            DT_NOPREFIX);
+    y += line_height * 2 + line_height / 2;
+
+    draw_label_value(L"게임 유형", replay_game_type_text(entry->game_type));
+    draw_label_value(L"등록자", uploader.empty() ? L"-" : uploader);
+    wchar_t size_text[64]{};
+    _snwprintf_s(size_text, std::size(size_text), _TRUNCATE,
+        entry->byte_count >= 1024 * 1024 ? L"%.2f MB" : L"%.1f KB",
+        entry->byte_count >= 1024 * 1024 ?
+            static_cast<double>(entry->byte_count) / (1024.0 * 1024.0) :
+            static_cast<double>(entry->byte_count) / 1024.0);
+    draw_label_value(L"파일 크기", size_text);
+    draw_label_value(L"등록 시각", uploaded);
+    draw_label_value(L"저장 위치", L"Replays\\download");
+
+    if (old_font != nullptr) {
+        SelectObject(dc, old_font);
+    }
+}
+
+void draw_replay_browser_status(OnlineLobbyState& state, HDC dc) {
+    if (dc == nullptr || state.replay_browser_window == nullptr ||
+        state.replay_status == nullptr) {
+        return;
+    }
+    wchar_t text[256]{};
+    GetWindowTextW(state.replay_status, text, static_cast<int>(std::size(text)));
+    if (text[0] == L'\0') {
+        return;
+    }
+    RECT bounds = replay_theme_rect(state.replay_browser_window,
+        kWizardNetReplayStatusRect);
+    HFONT font = state.replay_browser_font != nullptr ?
+        state.replay_browser_font : online_lobby_chat_font();
+    HGDIOBJ old_font = font != nullptr ? SelectObject(dc, font) : nullptr;
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(255, 216, 92));
+    DrawTextW(dc, text, -1, &bounds,
+        DT_LEFT | DT_VCENTER | DT_WORDBREAK | DT_NOPREFIX);
+    if (old_font != nullptr) {
+        SelectObject(dc, old_font);
+    }
+}
+
+void draw_replay_browser_list_item(OnlineLobbyState& state,
+    const DRAWITEMSTRUCT& draw) {
+    RECT rect = draw.rcItem;
+    const bool selected = (draw.itemState & ODS_SELECTED) != 0;
+    fill_online_lobby_rect(draw.hDC, rect,
+        selected ? RGB(48, 35, 19) : RGB(0, 0, 0));
+    if (draw.itemID == static_cast<UINT>(-1) ||
+        draw.itemID >= state.replay_entries.size()) {
+        return;
+    }
+
+    const WizardNetReplayListEntry& entry = state.replay_entries[draw.itemID];
+    const std::wstring uploader = cp949_to_wide(entry.uploader);
+    wchar_t text[192]{};
+    _snwprintf_s(text, std::size(text), _TRUNCATE, L"[%ls] %ls",
+        entry.game_type == kWizardNetGameTypeRank ? L"랭킹" : L"밀리",
+        uploader.empty() ? L"-" : uploader.c_str());
+
+    HFONT font = state.replay_browser_font != nullptr ?
+        state.replay_browser_font : online_lobby_chat_font();
+    HGDIOBJ old_font = font != nullptr ? SelectObject(draw.hDC, font) : nullptr;
+    rect.left += 6;
+    rect.right -= 4;
+    SetBkMode(draw.hDC, TRANSPARENT);
+    SetTextColor(draw.hDC,
+        selected ? RGB(255, 215, 83) : RGB(230, 230, 218));
+    DrawTextW(draw.hDC, text, -1, &rect,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS |
+            DT_NOPREFIX);
+    if (old_font != nullptr) {
+        SelectObject(draw.hDC, old_font);
+    }
+}
+
+void update_replay_browser_scroll(OnlineLobbyState& state) {
+    if (state.replay_list == nullptr ||
+        state.replay_browser_scroll.window == nullptr) {
+        return;
+    }
+    RECT list{};
+    GetClientRect(state.replay_list, &list);
+    const int row_height = std::max<int>(1, static_cast<int>(
+        SendMessageW(state.replay_list, LB_GETITEMHEIGHT, 0, 0)));
+    const int visible_rows = std::max<int>(1,
+        (list.bottom - list.top) / row_height);
+    const int max_top = std::max<int>(0,
+        static_cast<int>(state.replay_entries.size()) - visible_rows);
+    SetLegacyCustomScrollControlPageStep(
+        state.replay_browser_scroll, visible_rows);
+    SetLegacyCustomScrollControlRange(
+        state.replay_browser_scroll, 0, max_top, true);
+    const int top = static_cast<int>(
+        SendMessageW(state.replay_list, LB_GETTOPINDEX, 0, 0));
+    SetLegacyCustomScrollControlValue(state.replay_browser_scroll,
+        std::clamp(top, 0, max_top), true);
+}
+
+void sync_replay_browser_list_to_scroll(OnlineLobbyState& state) {
+    if (state.replay_list == nullptr) {
+        return;
+    }
+    SendMessageW(state.replay_list, LB_SETTOPINDEX,
+        static_cast<WPARAM>(GetLegacyCustomScrollControlValue(
+            state.replay_browser_scroll)), 0);
+}
+
+void release_replay_browser_theme(OnlineLobbyState& state) {
+    ReleaseLegacyImageButtonControlWindow(state.replay_download_control);
+    ReleaseLegacyImageButtonControlWindow(state.replay_close_control);
+    DestroyLegacyCustomScrollControl(state.replay_browser_scroll);
+    InitializeLegacyCustomScrollControl(state.replay_browser_scroll);
+    ReleaseBitmapMemoryResource(state.replay_browser_background);
+}
+
 void set_replay_browser_status(OnlineLobbyState& state, const wchar_t* text) {
     if (state.replay_status != nullptr) {
         SetWindowTextW(state.replay_status, text != nullptr ? text : L"");
+        if (state.replay_browser_window != nullptr) {
+            const RECT bounds = replay_theme_rect(state.replay_browser_window,
+                kWizardNetReplayStatusRect);
+            InvalidateRect(state.replay_browser_window, &bounds, FALSE);
+        }
     }
 }
 
@@ -1536,6 +1816,60 @@ void begin_selected_replay_download(OnlineLobbyState& state) {
     queue_replay_download_request(state, entry.replay_id);
 }
 
+LRESULT CALLBACK replay_browser_list_proc(HWND hwnd, UINT message,
+    WPARAM wparam, LPARAM lparam) {
+    HWND parent = GetParent(hwnd);
+    auto* state = parent != nullptr ? reinterpret_cast<OnlineLobbyState*>(
+        GetWindowLongPtrW(parent, GWLP_USERDATA)) : nullptr;
+    if (state == nullptr || state->replay_list_original_proc == nullptr) {
+        return DefWindowProcW(hwnd, message, wparam, lparam);
+    }
+    if (message == WM_KEYDOWN && wparam == VK_ESCAPE) {
+        DestroyWindow(parent);
+        return 0;
+    }
+    if (message == WM_KEYDOWN && wparam == VK_RETURN) {
+        play_online_lobby_click_sound();
+        begin_selected_replay_download(*state);
+        return 0;
+    }
+
+    const LRESULT result = CallWindowProcW(state->replay_list_original_proc,
+        hwnd, message, wparam, lparam);
+    if (message == WM_MOUSEWHEEL || message == WM_VSCROLL ||
+        message == WM_KEYDOWN) {
+        update_replay_browser_scroll(*state);
+        InvalidateRect(parent, nullptr, FALSE);
+    }
+    return result;
+}
+
+LRESULT CALLBACK replay_browser_scroll_proc(HWND hwnd, UINT message,
+    WPARAM wparam, LPARAM lparam) {
+    HWND parent = GetParent(hwnd);
+    auto* state = parent != nullptr ? reinterpret_cast<OnlineLobbyState*>(
+        GetWindowLongPtrW(parent, GWLP_USERDATA)) : nullptr;
+    if (state == nullptr) {
+        return DefWindowProcW(hwnd, message, wparam, lparam);
+    }
+    if (message == WM_PAINT) {
+        PAINTSTRUCT paint{};
+        HDC dc = BeginPaint(hwnd, &paint);
+        DrawLegacyCustomScrollControl(state->replay_browser_scroll, dc);
+        EndPaint(hwnd, &paint);
+        return 0;
+    }
+    if (HandleLegacyCustomScrollControlMouseMessage(
+            state->replay_browser_scroll, message, wparam, lparam)) {
+        sync_replay_browser_list_to_scroll(*state);
+        return 0;
+    }
+    WNDPROC original = state->replay_browser_scroll.original_window_proc;
+    return original != nullptr ?
+        CallWindowProcW(original, hwnd, message, wparam, lparam) :
+        DefWindowProcW(hwnd, message, wparam, lparam);
+}
+
 LRESULT CALLBACK replay_browser_window_proc(HWND hwnd, UINT message,
     WPARAM wparam, LPARAM lparam) {
     auto* state = reinterpret_cast<OnlineLobbyState*>(
@@ -1551,19 +1885,71 @@ LRESULT CALLBACK replay_browser_window_proc(HWND hwnd, UINT message,
         return DefWindowProcW(hwnd, message, wparam, lparam);
     }
     switch (message) {
+    case WM_ERASEBKGND:
+        if (state->replay_browser_background.loaded) {
+            StretchBitmapMemoryResourceToClient(state->replay_browser_background,
+                reinterpret_cast<HDC>(wparam), hwnd);
+            return TRUE;
+        }
+        break;
+    case WM_PAINT: {
+        PAINTSTRUCT paint{};
+        HDC dc = BeginPaint(hwnd, &paint);
+        StretchBitmapMemoryResourceToClient(state->replay_browser_background,
+            dc, hwnd);
+        draw_replay_browser_info(*state, dc);
+        draw_replay_browser_status(*state, dc);
+        EndPaint(hwnd, &paint);
+        return 0;
+    }
+    case WM_DRAWITEM: {
+        const auto* draw = reinterpret_cast<const DRAWITEMSTRUCT*>(lparam);
+        if (draw == nullptr) {
+            break;
+        }
+        if (draw->CtlID == kOnlineLobbyReplayListId) {
+            draw_replay_browser_list_item(*state, *draw);
+            return TRUE;
+        }
+        if (draw->CtlID == kOnlineLobbyReplayDownloadButtonId) {
+            DrawLegacyImageButtonItem(state->replay_download_control, *draw);
+            return TRUE;
+        }
+        if (draw->CtlID == kOnlineLobbyReplayCloseButtonId) {
+            DrawLegacyImageButtonItem(state->replay_close_control, *draw);
+            return TRUE;
+        }
+        break;
+    }
+    case WM_CTLCOLORLISTBOX: {
+        HDC dc = reinterpret_cast<HDC>(wparam);
+        SetTextColor(dc, RGB(235, 235, 220));
+        SetBkColor(dc, RGB(0, 0, 0));
+        SetBkMode(dc, OPAQUE);
+        return reinterpret_cast<LRESULT>(GetStockObject(BLACK_BRUSH));
+    }
     case WM_COMMAND:
         if (LOWORD(wparam) == kOnlineLobbyReplayDownloadButtonId &&
             HIWORD(wparam) == BN_CLICKED) {
+            play_online_lobby_click_sound();
             begin_selected_replay_download(*state);
             return 0;
         }
         if (LOWORD(wparam) == kOnlineLobbyReplayListId &&
+            HIWORD(wparam) == LBN_SELCHANGE) {
+            update_replay_browser_scroll(*state);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        if (LOWORD(wparam) == kOnlineLobbyReplayListId &&
             HIWORD(wparam) == LBN_DBLCLK) {
+            play_online_lobby_click_sound();
             begin_selected_replay_download(*state);
             return 0;
         }
         if (LOWORD(wparam) == kOnlineLobbyReplayCloseButtonId &&
             HIWORD(wparam) == BN_CLICKED) {
+            play_online_lobby_click_sound();
             DestroyWindow(hwnd);
             return 0;
         }
@@ -1572,8 +1958,10 @@ LRESULT CALLBACK replay_browser_window_proc(HWND hwnd, UINT message,
         DestroyWindow(hwnd);
         return 0;
     case WM_DESTROY:
+        release_replay_browser_theme(*state);
         state->replay_browser_window = nullptr;
         state->replay_list = nullptr;
+        state->replay_list_original_proc = nullptr;
         state->replay_status = nullptr;
         state->replay_download_button = nullptr;
         state->replay_close_button = nullptr;
@@ -1581,6 +1969,10 @@ LRESULT CALLBACK replay_browser_window_proc(HWND hwnd, UINT message,
         state->replay_download_total = 0;
         state->replay_download_bytes.clear();
         state->replay_download_filename.clear();
+        if (state->window != nullptr && IsWindow(state->window)) {
+            EnableWindow(state->window, TRUE);
+            SetForegroundWindow(state->window);
+        }
         return 0;
     default:
         break;
@@ -1598,8 +1990,9 @@ bool register_replay_browser_class(HINSTANCE instance) {
     window_class.style = CS_HREDRAW | CS_VREDRAW;
     window_class.lpfnWndProc = replay_browser_window_proc;
     window_class.hInstance = instance;
-    window_class.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
-    window_class.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
+    window_class.hCursor = GetFrontendGameCursor();
+    window_class.hbrBackground =
+        reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
     window_class.lpszClassName = L"RankerWizardNetReplayBrowser";
     registered = RegisterClassExW(&window_class) != 0 ||
         GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
@@ -1618,49 +2011,112 @@ bool open_replay_browser(OnlineLobbyState& state) {
     if (!register_replay_browser_class(instance)) {
         return false;
     }
-    constexpr int width = 680;
-    constexpr int height = 440;
-    RECT owner{};
-    GetWindowRect(state.window, &owner);
-    const int x = static_cast<int>(owner.left) + std::max(0,
-        (static_cast<int>(owner.right - owner.left) - width) / 2);
-    const int y = static_cast<int>(owner.top) + std::max(0,
-        (static_cast<int>(owner.bottom - owner.top) - height) / 2);
-    HWND window = CreateWindowExW(WS_EX_DLGMODALFRAME,
+    release_replay_browser_theme(state);
+    if (!LoadBitmapMemoryResourceFromTrcRecord(
+            state.replay_browser_background, "Jw2_19.trc",
+            kReplayLoadBackgroundBitmapRecord)) {
+        return false;
+    }
+
+    RECT owner_client{};
+    GetClientRect(state.window, &owner_client);
+    POINT origin{owner_client.left, owner_client.top};
+    ClientToScreen(state.window, &origin);
+    const int width = std::max<int>(1, owner_client.right - owner_client.left);
+    const int height = std::max<int>(1, owner_client.bottom - owner_client.top);
+    HWND window = CreateWindowExW(WS_EX_CONTROLPARENT,
         L"RankerWizardNetReplayBrowser", L"위자드넷 리플레이",
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
-        x, y, width, height, state.window, nullptr, instance, &state);
+        WS_POPUP | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+        origin.x, origin.y, width, height, state.window, nullptr, instance,
+        &state);
     if (window == nullptr) {
+        ReleaseBitmapMemoryResource(state.replay_browser_background);
         return false;
     }
     state.replay_browser_window = window;
-    HFONT font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
-    state.replay_list = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", L"",
-        WS_CHILD | WS_VISIBLE | WS_VSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT,
-        12, 12, 642, 330, window,
+
+    const OnlineLobbyLayoutRect list = scale_replay_theme_rect(
+        window, kWizardNetReplayListRect);
+    const OnlineLobbyLayoutRect scroll = scale_replay_theme_rect(
+        window, kWizardNetReplayScrollRect);
+    const OnlineLobbyLayoutRect download = scale_replay_theme_rect(
+        window, kWizardNetReplayDownloadRect);
+    const OnlineLobbyLayoutRect close = scale_replay_theme_rect(
+        window, kWizardNetReplayCloseRect);
+    const OnlineLobbyLayoutRect status = scale_replay_theme_rect(window,
+        kWizardNetReplayStatusRect);
+
+    state.replay_list = CreateWindowExW(0, L"LISTBOX", L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT |
+            LBS_OWNERDRAWFIXED | LBS_HASSTRINGS,
+        list.x, list.y, list.width, list.height, window,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kOnlineLobbyReplayListId)),
         instance, nullptr);
-    state.replay_status = CreateWindowExW(0, L"STATIC", L"목록을 불러오는 중입니다...",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        12, 352, 450, 24, window, nullptr, instance, nullptr);
-    state.replay_download_button = CreateWindowExW(0, L"BUTTON", L"다운로드",
-        WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
-        474, 350, 86, 28, window,
-        reinterpret_cast<HMENU>(
-            static_cast<INT_PTR>(kOnlineLobbyReplayDownloadButtonId)),
-        instance, nullptr);
-    state.replay_close_button = CreateWindowExW(0, L"BUTTON", L"닫기",
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        568, 350, 86, 28, window,
-        reinterpret_cast<HMENU>(
-            static_cast<INT_PTR>(kOnlineLobbyReplayCloseButtonId)),
-        instance, nullptr);
-    for (HWND control : {state.replay_list, state.replay_status,
-            state.replay_download_button, state.replay_close_button}) {
-        if (control != nullptr) {
-            SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
-        }
+    if (state.replay_list != nullptr) {
+        state.replay_list_original_proc = reinterpret_cast<WNDPROC>(
+            GetWindowLongPtrW(state.replay_list, GWLP_WNDPROC));
+        SetWindowLongPtrW(state.replay_list, GWLP_WNDPROC,
+            reinterpret_cast<LONG_PTR>(replay_browser_list_proc));
     }
+    if (!CreateLegacyCustomScrollControlWindow(state.replay_browser_scroll,
+            window, "Replay", reinterpret_cast<HMENU>(static_cast<INT_PTR>(
+                kOnlineLobbyReplayListId + 0x100)), false,
+            scroll.x, scroll.y, scroll.width, scroll.height)) {
+        DestroyWindow(window);
+        return false;
+    }
+    SetWindowLongPtrW(state.replay_browser_scroll.window, GWLP_WNDPROC,
+        reinterpret_cast<LONG_PTR>(replay_browser_scroll_proc));
+    LoadLegacyCustomScrollControlBitmaps(state.replay_browser_scroll,
+        kReplayLoadScrollUpBitmapRecord, kReplayLoadScrollUpBitmapRecord,
+        kReplayLoadScrollDownBitmapRecord, kReplayLoadScrollDownBitmapRecord,
+        kReplayLoadScrollThumbBitmapRecord, kReplayLoadScrollTrackBitmapRecord);
+    SetLegacyCustomScrollControlVisible(state.replay_browser_scroll, true);
+
+    state.replay_status = CreateWindowExW(0, L"STATIC",
+        L"목록을 불러오는 중입니다...",
+        WS_CHILD | SS_LEFT | SS_NOPREFIX,
+        status.x, status.y, status.width, status.height,
+        window, nullptr, instance, nullptr);
+    if (!CreateLegacyImageButtonWindow(state.replay_download_control, window,
+            "Download", reinterpret_cast<HMENU>(static_cast<INT_PTR>(
+                kOnlineLobbyReplayDownloadButtonId)),
+            download.x, download.y, download.width, download.height)) {
+        DestroyWindow(window);
+        return false;
+    }
+    LoadLegacyImageButtonBitmaps(state.replay_download_control,
+        kReplayLoadOkNormalBitmapRecord, kReplayLoadOkPressedBitmapRecord);
+    state.replay_download_button = state.replay_download_control.window;
+    if (!CreateLegacyImageButtonWindow(state.replay_close_control, window,
+            "Cancel", reinterpret_cast<HMENU>(static_cast<INT_PTR>(
+                kOnlineLobbyReplayCloseButtonId)),
+            close.x, close.y, close.width, close.height)) {
+        DestroyWindow(window);
+        return false;
+    }
+    LoadLegacyImageButtonBitmaps(state.replay_close_control,
+        kReplayLoadCancelNormalBitmapRecord,
+        kReplayLoadCancelPressedBitmapRecord);
+    state.replay_close_button = state.replay_close_control.window;
+
+    if (state.replay_list == nullptr || state.replay_status == nullptr) {
+        DestroyWindow(window);
+        return false;
+    }
+    HFONT font = state.replay_browser_font != nullptr ?
+        state.replay_browser_font : online_lobby_chat_font();
+    if (font == nullptr) {
+        font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+    }
+    SendMessageW(state.replay_list, WM_SETFONT,
+        reinterpret_cast<WPARAM>(font), TRUE);
+    SendMessageW(state.replay_status, WM_SETFONT,
+        reinterpret_cast<WPARAM>(font), TRUE);
+    SendMessageW(state.replay_list, LB_SETITEMHEIGHT, 0,
+        static_cast<LPARAM>(std::max(18,
+            ScaleFrontendLayoutValue(22, kWizardNetReplayThemeHeight,
+                height))));
     state.replay_entries.clear();
     state.replay_download_bytes.clear();
     state.replay_download_id = 0;
@@ -1668,6 +2124,10 @@ bool open_replay_browser(OnlineLobbyState& state) {
     state.replay_download_filename.clear();
     ShowWindow(window, SW_SHOW);
     UpdateWindow(window);
+    EnableWindow(state.window, FALSE);
+    SetForegroundWindow(window);
+    SetFocus(state.replay_list);
+    update_replay_browser_scroll(state);
     queue_replay_list_request(state, 0);
     return true;
 }
@@ -1921,10 +2381,6 @@ void destroy_child_windows(OnlineLobbyState& state) {
         DestroyWindow(state.replay_browser_window);
         state.replay_browser_window = nullptr;
     }
-    if (state.replay_button != nullptr) {
-        DestroyWindow(state.replay_button);
-        state.replay_button = nullptr;
-    }
     if (state.rich_edit_ole != nullptr) {
         state.rich_edit_ole->Release();
         state.rich_edit_ole = nullptr;
@@ -2171,6 +2627,13 @@ DEFINE_ONLINE_LOBBY_BUTTON_LIFETIME(InitializeOnlineLobbyGuildSubSendMemoButtonS
 #undef DEFINE_ONLINE_LOBBY_BUTTON_LIFETIME
 
 void InitializeOnlineLobbyImageButtons(OnlineLobbyState& state) {
+    InitializeBitmapMemoryResource(state.replay_browser_background);
+    InitializeLegacyImageButtonControl(state.replay_lobby_button);
+    InitializeLegacyImageButtonControl(state.replay_download_control);
+    InitializeLegacyImageButtonControl(state.replay_close_control);
+    InitializeLegacyCustomScrollControl(state.replay_browser_scroll);
+    state.replay_lobby_font = CreateScaledFrontendUiFont(2);
+    state.replay_browser_font = CreateScaledFrontendUiFont(1);
     InitializeOnlineLobbyLobbyNameButtonStatic(state);
     InitializeOnlineLobbySendButtonStatic(state);
     InitializeOnlineLobbyWhisperButtonStatic(state);
@@ -2202,6 +2665,20 @@ void InitializeOnlineLobbyImageButtons(OnlineLobbyState& state) {
 }
 
 void DestroyOnlineLobbyImageButtons(OnlineLobbyState& state) {
+    DestroyLegacyImageButtonControl(state.replay_lobby_button);
+    state.replay_button = nullptr;
+    DestroyLegacyImageButtonControl(state.replay_download_control);
+    DestroyLegacyImageButtonControl(state.replay_close_control);
+    DestroyLegacyCustomScrollControl(state.replay_browser_scroll);
+    HandleBitmapMemoryResourceDestructor(state.replay_browser_background);
+    if (state.replay_lobby_font != nullptr) {
+        DeleteObject(state.replay_lobby_font);
+        state.replay_lobby_font = nullptr;
+    }
+    if (state.replay_browser_font != nullptr) {
+        DeleteObject(state.replay_browser_font);
+        state.replay_browser_font = nullptr;
+    }
     DestroyOnlineLobbyLobbyNameButton(state);
     DestroyOnlineLobbySendButton(state);
     DestroyOnlineLobbyWhisperButton(state);
@@ -3005,9 +3482,16 @@ bool DispatchOnlineLobbyServerPacket(OnlineLobbyState& state, const u8* packet,
                     L"%ls  |  %ls  |  %ls  |  %.1f KB",
                     name.c_str(), uploader.c_str(), type,
                     static_cast<double>(entry.byte_count) / 1024.0);
-                SendMessageW(state.replay_list, LB_ADDSTRING, 0,
-                    reinterpret_cast<LPARAM>(row));
+                const LRESULT added = SendMessageW(state.replay_list,
+                    LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(row));
+                if (added != LB_ERR && state.replay_entries.size() == 1) {
+                    SendMessageW(state.replay_list, LB_SETCURSEL, 0, 0);
+                }
             }
+        }
+        update_replay_browser_scroll(state);
+        if (state.replay_browser_window != nullptr) {
+            InvalidateRect(state.replay_browser_window, nullptr, FALSE);
         }
         if (next_offset != std::numeric_limits<u32>::max()) {
             queue_replay_list_request(state, next_offset);
@@ -3283,20 +3767,19 @@ bool CreateOnlineLobbyWindow(OnlineLobbyState& state, HWND parent,
     }
     OnlineLobbyLayoutRect replay_rect = arrange_simplified_main_action(
         state, kOnlineLobbyReplayButtonId, layout_at(state, 19));
-    state.replay_button = CreateWindowExW(0, L"BUTTON", L"리플레이",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-        replay_rect.x, replay_rect.y, replay_rect.width, replay_rect.height,
-        state.window,
-        reinterpret_cast<HMENU>(
-            static_cast<INT_PTR>(kOnlineLobbyReplayButtonId)),
-        instance, nullptr);
-    if (state.replay_button == nullptr) {
+    if (!CreateLegacyImageButtonWindow(state.replay_lobby_button, state.window,
+            "Replay", reinterpret_cast<HMENU>(static_cast<INT_PTR>(
+                kOnlineLobbyReplayButtonId)),
+            replay_rect.x, replay_rect.y, replay_rect.width,
+            replay_rect.height)) {
         DestroyWindow(state.window);
         state.window = nullptr;
         return false;
     }
-    SendMessageW(state.replay_button, WM_SETFONT,
-        reinterpret_cast<WPARAM>(online_lobby_chat_font()), TRUE);
+    LoadLegacyImageButtonBitmaps(state.replay_lobby_button, 0x2f, 0x30);
+    SetWindowLongPtrA(state.replay_lobby_button.window, GWL_STYLE,
+        kOwnerDrawStyle | WS_TABSTOP);
+    state.replay_button = state.replay_lobby_button.window;
 
     OnlineLobbyLayoutRect game_rect = layout_at(state, 2);
     state.game_list = CreateWindowExA(0, "listbox", "", kListBoxGameStyle,
@@ -3493,6 +3976,10 @@ LRESULT HandleOnlineLobbyWindowMessage(OnlineLobbyState& state, HWND hwnd,
         }
         if (draw->CtlID == kOnlineLobbyChatListId) {
             draw_online_lobby_chat_item(state, *draw);
+            return TRUE;
+        }
+        if (draw->CtlID == kOnlineLobbyReplayButtonId) {
+            draw_online_lobby_replay_button(state, *draw);
             return TRUE;
         }
         if (draw->CtlID >= kOnlineLobbyMainTabButtonId &&
