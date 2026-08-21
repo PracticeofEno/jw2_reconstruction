@@ -25,8 +25,6 @@ constexpr u32 kSimpleBoxXPadding = 10;
 constexpr u32 kSimpleBoxYPadding = 3;
 constexpr u32 kTextInsetX = 5;
 constexpr u32 kTextInsetY = 3;
-constexpr u32 kCostIconSpacing = 0x14;
-constexpr u32 kCostIconTextOffset = 0x10;
 
 bool has_text(const std::string& text) {
     return !text.empty();
@@ -148,7 +146,8 @@ void emit_icon_value(
     emit_icon(state, icon, icon_x, y - 3);
     GameplayTooltipDrawCommand value_command{};
     value_command.kind = GameplayTooltipDrawCommandKind::icon_value;
-    value_command.left = icon_x + static_cast<i32>(kCostIconTextOffset);
+    value_command.left = icon_x +
+        static_cast<i32>(kGameplayTooltipCostIconTextOffset);
     value_command.top = y;
     value_command.icon = icon;
     value_command.value = value;
@@ -675,10 +674,13 @@ void DrawGameplayTooltipCostBox(GameplayTooltipState& state) {
         u32 row_width = row_extent.width;
         for (u32 cost : state.current_costs.values) {
             if (cost != 0) {
-                // The original box extent reserves a fixed 0x14 pixels for
-                // each nonzero cost token.  Numeric width only affects the
-                // subsequent draw cursor below, not the enclosing box width.
-                row_width += 0x14;
+                // The original reserves a fixed 0x14 pixels per token, but
+                // then advances by the rendered digit width as well.  That
+                // clips the final population token on multi-cost units.  Keep
+                // the box extent aligned with the actual draw cursor.
+                const std::string value_text = unsigned_text(cost);
+                row_width += GameplayTooltipCostTokenAdvance(
+                    measure_text(state, value_text.c_str()).width);
             }
         }
         width = std::max(width, row_width);
@@ -708,8 +710,8 @@ void DrawGameplayTooltipCostBox(GameplayTooltipState& state) {
             }
             const std::string value_text = unsigned_text(value);
             emit_icon_value(state, state.cost_icons[i], value, x, y);
-            x += static_cast<i32>(kCostIconTextOffset +
-                measure_text(state, value_text.c_str()).width + 4);
+            x += static_cast<i32>(GameplayTooltipCostTokenAdvance(
+                measure_text(state, value_text.c_str()).width));
         }
     }
 }

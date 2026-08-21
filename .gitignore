@@ -39,6 +39,7 @@
 !ranker_reconstructed_code/tests/unit_death_resource_variant_regression.cpp
 !ranker_reconstructed_code/tests/save_load_cache_regression.cpp
 !ranker_reconstructed_code/tests/gameplay_input_event_order_regression.cpp
+!ranker_reconstructed_code/tests/gameplay_tooltip_extent_regression.cpp
 !ranker_reconstructed_code/tests/replay_save_controls_regression.cpp
 !ranker_reconstructed_code/tests/replay_resource_lifetime_regression.cpp
 !ranker_reconstructed_code/tests/unit_effect_intrusive_iteration_regression.cpp

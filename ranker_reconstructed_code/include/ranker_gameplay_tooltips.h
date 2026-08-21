@@ -19,6 +19,13 @@ constexpr u32 kGameplayTooltipOwnerUnitTypeCount = 0xaa;
 constexpr u32 kGameplayTooltipProductionOrderCount = 0x40;
 constexpr u32 kGameplayTooltipInvalidId = 0xffffffffu;
 constexpr u32 kGameplayTooltipHoverDelayMs = 1000;
+constexpr u32 kGameplayTooltipCostIconTextOffset = 0x10;
+constexpr u32 kGameplayTooltipCostTokenTrailingPadding = 4;
+
+constexpr u32 GameplayTooltipCostTokenAdvance(u32 numeric_text_width) {
+    return kGameplayTooltipCostIconTextOffset + numeric_text_width +
+        kGameplayTooltipCostTokenTrailingPadding;
+}
 
 struct GameplayTooltipTextExtent {
     u32 width = 0;

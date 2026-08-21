@@ -907,6 +907,21 @@ if (RANKER_BUILD_REGRESSION_TESTS)
 
 endif()
 
+option(RANKER_BUILD_GAMEPLAY_TOOLTIP_EXTENT_REGRESSION_TEST
+    "Build the production tooltip cost-row extent regression" OFF)
+if (RANKER_BUILD_GAMEPLAY_TOOLTIP_EXTENT_REGRESSION_TEST)
+    enable_testing()
+    add_executable(gameplay_tooltip_extent_regression
+        tests/gameplay_tooltip_extent_regression.cpp
+    )
+    target_include_directories(gameplay_tooltip_extent_regression PRIVATE
+        include
+    )
+    add_test(NAME gameplay_tooltip_extent_regression
+        COMMAND gameplay_tooltip_extent_regression
+    )
+endif()
+
 option(RANKER_BUILD_GAMEPLAY_INPUT_EVENT_ORDER_TEST
     "Build the per-input-event gameplay command ordering regression" OFF)
 if (RANKER_BUILD_GAMEPLAY_INPUT_EVENT_ORDER_TEST)
