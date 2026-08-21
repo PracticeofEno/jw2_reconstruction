@@ -17,6 +17,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -41,11 +42,13 @@ MilesComputedStreamContext g_default_computed_stream_context;
 
 struct AsyncMilesEffectStream {
     std::mutex mutex;
+    std::condition_variable close_condition;
     MilesStreamHandle stream = nullptr;
     std::atomic<bool> active{true};
     bool cancelled = false;
     bool paused = false;
     bool started = false;
+    bool closed = false;
 };
 
 std::array<std::shared_ptr<AsyncMilesEffectStream>,
@@ -1815,7 +1818,12 @@ bool start_async_mci_effect_stream(u32 slot, i32 entry_index,
                 entry, context, &stream);
             ReleaseMilesTrcArchiveStreamContext(context);
             if (!opened || stream == nullptr) {
-                state->active.store(false);
+                {
+                    std::lock_guard<std::mutex> lock(state->mutex);
+                    state->active.store(false);
+                    state->closed = true;
+                }
+                state->close_condition.notify_all();
                 return;
             }
 
@@ -1833,9 +1841,31 @@ bool start_async_mci_effect_stream(u32 slot, i32 entry_index,
                     }
                 }
             }
-            if (discard) {
+
+            if (!discard) {
+                // The 64-bit fallback opens MPEGVideo on this worker. Keep
+                // the owner alive until the session asks it to close: issuing
+                // MCI_STOP/MCI_CLOSE from the gameplay thread can return while
+                // the decoder opened here remains audible in the next loaded
+                // scenario.
+                std::unique_lock<std::mutex> lock(state->mutex);
+                state->close_condition.wait(lock, [&state]() {
+                    return state->cancelled;
+                });
+                stream = state->stream;
+                state->stream = nullptr;
+            }
+
+            if (stream != nullptr) {
+                PauseMilesStream(stream);
                 CloseMilesStream(stream);
             }
+            {
+                std::lock_guard<std::mutex> lock(state->mutex);
+                state->active.store(false);
+                state->closed = true;
+            }
+            state->close_condition.notify_all();
         }).detach();
     }
     catch (...) {
@@ -1863,20 +1893,20 @@ bool close_async_effect_slot(u32 slot, bool nonblocking_backend) {
 
     const std::shared_ptr<AsyncMilesEffectStream> state =
         std::move(g_async_effect_streams[slot]);
-    MilesStreamHandle stream = nullptr;
     {
         std::lock_guard<std::mutex> lock(state->mutex);
         state->cancelled = true;
         state->active.store(false);
-        stream = state->stream;
-        state->stream = nullptr;
     }
-    if (stream != nullptr) {
-        if (!nonblocking_backend ||
-            !close_mci_effect_stream_deferred(stream)) {
-            PauseMilesStream(stream);
-            CloseMilesStream(stream);
-        }
+    state->close_condition.notify_all();
+    if (!nonblocking_backend) {
+        // ResetMilesEffectPlaylist is a session ownership boundary. Do not
+        // return to the new session until the worker that opened the fallback
+        // MP3 has stopped and closed it on that same thread.
+        std::unique_lock<std::mutex> lock(state->mutex);
+        state->close_condition.wait(lock, [&state]() {
+            return state->closed;
+        });
     }
     return true;
 }
@@ -2164,12 +2194,12 @@ int GetMilesEffectPlaylistEntryStatus(i32 entry_index) {
 
 void CloseAllMilesEffectPlaylistStreams() {
     for (u32 slot = 0; slot < kMilesEffectStreamSlots; ++slot) {
-        if (g_effect_playlist_state.active_entry_indices[slot] != kInvalidMilesEffectEntry &&
+        if (g_async_effect_streams[slot] != nullptr ||
             g_effect_playlist_state.streams[slot] != nullptr) {
             // Match original FUN_00414860 exactly: PauseMilesStream followed
             // by CloseMilesStream completes before the slot is cleared.  A
-            // deferred close allowed gameplay to end while the decoder kept
-            // emitting the previous session's BGM.
+            // stale entry index must not let an asynchronous fallback decoder
+            // survive a session replacement.
             close_effect_slot(slot);
         }
     }
