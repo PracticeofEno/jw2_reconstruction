@@ -457,7 +457,11 @@ bool close_mci_effect_stream_deferred(MilesStreamHandle handle) {
     try {
         std::thread([stream]() {
             MCI_GENERIC_PARMS command{};
-            mciSendCommandA(stream->device_id, MCI_PAUSE, MCI_WAIT,
+            // MPEGVideo can keep a decoder audible when CLOSE follows PAUSE
+            // from a different thread.  STOP is the synchronous ownership
+            // boundary used by the ordinary music close path and prevents a
+            // replay's scenario BGM from leaking into the frontend.
+            mciSendCommandA(stream->device_id, MCI_STOP, MCI_WAIT,
                 reinterpret_cast<DWORD_PTR>(&command));
             mciSendCommandA(stream->device_id, MCI_CLOSE, MCI_WAIT,
                 reinterpret_cast<DWORD_PTR>(&command));

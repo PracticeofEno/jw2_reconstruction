@@ -757,7 +757,6 @@ struct GameplayDamageRecordLink {
 struct GameplayInGameLoadResumeState {
     P2PGameSessionStartState p2p_session_start;
     u32 frontend_mode = 0;
-    u32 session_mode = 0;
     u32 local_player_index = 0;
     u32 local_faction_id = 0;
     i32 network_transport_mode = 0;
@@ -1638,6 +1637,10 @@ bool lock_main_window_cursor_confinement(
     }
     g_runtime.cursor_confined = true;
     set_main_window_system_cursor_for_lock_state();
+    // The native cursor must be hidden before the saved software cursor is
+    // restored.  In particular WM_ACTIVATEAPP can precede WM_SETFOCUS after
+    // an RDP/task-manager interruption, leaving a short unlocked interval.
+    RestoreGameCursorAfterApplicationActivation();
     return true;
 }
 
@@ -3018,13 +3021,13 @@ void default_link_resume_single_player(LinkLobbyState&) {
 void clear_default_replay_playback_runtime(const char* reason) {
     ReplayRecordingState& replay = replay_recording_state();
     const bool playback_was_active = replay.playback_mode;
-    if (playback_was_active) {
-        // Original ProcessGameplaySessionLoop closes DirectMusic in its common
-        // replay exit block. Some reconstructed ordinary leave requests did
-        // not visit the specialized replay callback, so the stream survived
-        // all the way into the single-player menu.
-        CloseDirectMilesMusic();
-    }
+    // A replay can own both its sibling MP3 and scenario-triggered playlist
+    // streams.  Ordinary leave requests return through the session wrapper
+    // without visiting handle_replay_session_leave, and another teardown can
+    // clear playback_mode before this final boundary.  Close both backends
+    // unconditionally while this call still identifies a replay boundary.
+    CloseAllMilesEffectPlaylistStreams();
+    CloseDirectMilesMusic();
     ClearReplayPlaybackState(replay);
     P2PGameSessionStartState& p2p = g_runtime.p2p_session_start_state;
     p2p.direct_music_started = false;
@@ -4996,7 +4999,6 @@ bool default_gameplay_modal_import_session_bundle(
     if (active_session_import) {
         resume.p2p_session_start = g_runtime.p2p_session_start_state;
         resume.frontend_mode = g_runtime.frontend_mode;
-        resume.session_mode = g_runtime.gameplay_startup_state.session_mode;
         resume.local_player_index = mode1_reliable_state().local_player_index;
         const u32 local_player = std::min<u32>(
             resume.local_player_index, kPlayerSlotCount - 1);
@@ -13193,12 +13195,14 @@ bool default_gameplay_loop_try_restart_session(GameplayLoopState& state) {
             g_runtime.gameplay_session_archive_path.c_str());
         default_gameplay_flow_start_session_from_slots(flow);
 
-        // Mode 5 is only the load/reset policy.  Resume the active game mode
-        // afterwards so relation masks, owner-AI metadata and victory rules
-        // keep their pre-load P2P/local semantics.
+        // HandleSessionBundleImportMirror replaces the live original session
+        // in place.  It does not restore the match type that happened to be
+        // active before Load.  Keep the mode-5 materialization and the saved
+        // scenario masks; restoring the prior Practice melee mode rewrites
+        // those masks to elite-elimination and ends many loaded scenarios on
+        // their first 64-frame condition check.
         const u32 local_player = std::min<u32>(
             resume.local_player_index, kPlayerSlotCount - 1);
-        g_runtime.gameplay_startup_state.session_mode = resume.session_mode;
         g_runtime.gameplay_startup_state.local_owner_id = local_player;
         g_runtime.gameplay_player_slots.local_player_slot = local_player;
         g_runtime.gameplay_display_state.local_owner_id = local_player;
@@ -13214,9 +13218,11 @@ bool default_gameplay_loop_try_restart_session(GameplayLoopState& state) {
         gameplay_modal_ui_state().local_player_index = local_player;
         ui_overlay_state().local_player_slot = local_player;
         SetMode1ReliableLocalPlayerIndex(local_player);
-        gameplay_modal_ui_state().session_mode = resume.session_mode;
+        gameplay_modal_ui_state().session_mode =
+            g_runtime.gameplay_startup_state.session_mode;
         BuildGameplaySessionPlayerRelationMasks(
-            g_runtime.gameplay_player_slots, resume.session_mode);
+            g_runtime.gameplay_player_slots,
+            g_runtime.gameplay_startup_state.session_mode);
         SelectNearestHostilePlayerSlots(g_runtime.gameplay_player_slots);
         sync_default_gameplay_modal_players(gameplay_modal_ui_state());
         sync_default_owner_ai_runtime_metadata(&state);
