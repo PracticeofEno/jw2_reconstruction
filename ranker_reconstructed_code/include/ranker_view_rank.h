@@ -51,6 +51,12 @@ constexpr std::size_t kViewRankEntryBytes = 0x38;
 constexpr std::size_t kViewRankSearchNameBytes = 0x20;
 constexpr std::size_t kViewRankThemeButtonVisualCount = 4;
 
+constexpr u32 CalculateViewRankWinRate(u32 wins, u32 losses, u32 draws) {
+    const u64 total = static_cast<u64>(wins) + losses + draws;
+    return total == 0 ? 0 : static_cast<u32>(
+        (static_cast<u64>(wins) * 100u) / total);
+}
+
 enum class ViewRankThemeButtonVisual : std::size_t {
     Normal = 0,
     Hot = 1,

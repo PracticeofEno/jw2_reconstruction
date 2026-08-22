@@ -48,6 +48,7 @@ from .state import (
     PRESENCE_STATUS_HOSTING,
     PRESENCE_STATUS_LOBBY,
     PRESENCE_STATUS_PLAYING,
+    PRESENCE_STATUS_REPLAY,
     PRESENCE_STATUS_ROOM_MEMBER,
     ServerState,
 )
@@ -74,6 +75,7 @@ REPLAY_LIST_RESPONSE_OPCODE = 0x9F
 REPLAY_DOWNLOAD_REQUEST_OPCODE = 0xA0
 REPLAY_DOWNLOAD_CHUNK_OPCODE = 0xA1
 REPLAY_DOWNLOAD_FINISH_OPCODE = 0xA2
+REPLAY_PRESENCE_REQUEST_OPCODE = 0xA3
 LOBBY_MARK_COUNT = 5
 RELAY_MAX_MEMBERS = 8
 RELAY_STREAM_LINK = 0
@@ -351,6 +353,7 @@ class RankerServer:
             REPLAY_UPLOAD_END_OPCODE: self._handle_replay_upload_end,
             REPLAY_LIST_REQUEST_OPCODE: self._handle_replay_list,
             REPLAY_DOWNLOAD_REQUEST_OPCODE: self._handle_replay_download,
+            REPLAY_PRESENCE_REQUEST_OPCODE: self._handle_replay_presence,
             0x2A: self._handle_chat,
             0x2F: self._handle_rank_list,
             0x33: self._handle_rank_search,
@@ -479,6 +482,29 @@ class RankerServer:
     async def _handle_online_reset(self, session: ClientSession, packet: Packet) -> None:
         session.view = "online"
         await self._send(session, build_packet(0x11))
+
+    async def _handle_replay_presence(
+        self, session: ClientSession, packet: Packet
+    ) -> None:
+        active = read_u32(packet.raw, 0x0D) != 0
+        if active:
+            if session.hosted_game_id is not None or session.relay_game_id is not None:
+                return
+            session.presence_status = PRESENCE_STATUS_REPLAY
+            session.presence_location = ""
+            await self._broadcast_online_presence(
+                session, added=True, exclude=session.client_id
+            )
+            session.view = "replay"
+            return
+
+        session.view = "online"
+        session.presence_status = PRESENCE_STATUS_LOBBY
+        session.presence_location = ""
+        await self._send_online_presence_snapshot(session)
+        await self._broadcast_online_presence(
+            session, added=True, exclude=session.client_id
+        )
 
     async def _handle_online_page(self, session: ClientSession, packet: Packet) -> None:
         session.view = "online"
@@ -1137,7 +1163,15 @@ class RankerServer:
                 0x10,
                 f"{statistics['wins']}-{statistics['losses']}-{statistics['draws']}",
             )
-            write_u32(payload, offset + 0x34, self.accounts.rank_points(name))
+            total_games = (
+                statistics["wins"] + statistics["losses"] + statistics["draws"]
+            )
+            win_rate = (
+                statistics["wins"] * 100 // total_games
+                if total_games > 0
+                else 0
+            )
+            write_u32(payload, offset + 0x34, win_rate)
         await self._send(session, build_packet(0x30, payload))
 
     def _public_sockaddr(self, session: ClientSession, source: bytes) -> bytes:

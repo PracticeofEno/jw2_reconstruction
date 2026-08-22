@@ -29,6 +29,7 @@
 #include <ctime>
 #include <limits>
 #include <string>
+#include <utility>
 
 #include <shellapi.h>
 
@@ -87,6 +88,7 @@ constexpr u32 kOnlineLobbyPresenceLobby = 0;
 constexpr u32 kOnlineLobbyPresenceHosting = 1;
 constexpr u32 kOnlineLobbyPresenceRoomMember = 2;
 constexpr u32 kOnlineLobbyPresencePlaying = 3;
+constexpr u32 kOnlineLobbyPresenceReplay = 4;
 constexpr DWORD kWindowStyleFullscreen = 0x90000000;
 constexpr DWORD kWindowStyleWindowed =
     WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
@@ -133,10 +135,7 @@ constexpr std::array<const char*, kOnlineLobbyReplayScrollbarVisualCount>
         "media\\ui\\tools\\scrollbar_gray.png",
     };
 constexpr int kReplayScrollbarCanonicalWidth = 61;
-constexpr int kReplayScrollbarCanonicalHeight = 391;
-constexpr int kReplayScrollbarTopEnd = 58;
-constexpr int kReplayScrollbarTrackEnd = 106;
-constexpr int kReplayScrollbarThumbEnd = 184;
+constexpr int kReplayScrollbarDestinationThumbHeight = 78;
 
 constexpr OnlineLobbyButtonSpec kButtonSpecs[kOnlineLobbyButtonCount] = {
     {kOnlineLobbyNameButtonId, "Lobby Name", 0, 0, false},
@@ -1106,6 +1105,9 @@ void draw_online_lobby_game_item(OnlineLobbyState& state,
     case kOnlineLobbyPresencePlaying:
         status_utf8 = u8"게임 중";
         break;
+    case kOnlineLobbyPresenceReplay:
+        status_utf8 = u8"리플레이";
+        break;
     default:
         break;
     }
@@ -2038,11 +2040,11 @@ bool draw_replay_browser_themed_button(OnlineLobbyState& state,
 }
 
 UiPngRect replay_scrollbar_source_rect(const UiPngResource& image,
-    int canonical_top, int canonical_bottom) {
+    int source_height, int canonical_top, int canonical_bottom) {
     const int top = ScaleFrontendLayoutValue(canonical_top,
-        kReplayScrollbarCanonicalHeight, image.height);
+        source_height, image.height);
     const int bottom = ScaleFrontendLayoutValue(canonical_bottom,
-        kReplayScrollbarCanonicalHeight, image.height);
+        source_height, image.height);
     return {0, std::clamp(top, 0, image.height - 1), image.width,
         std::max(1, std::min(image.height, bottom) -
             std::clamp(top, 0, image.height - 1))};
@@ -2061,8 +2063,8 @@ bool draw_replay_browser_png_scrollbar(OnlineLobbyState& state, HDC dc) {
     const int height = std::max<int>(1, client.bottom - client.top);
     const int arrow_extent = std::min(width, height / 2);
     const int thumb_extent = std::max(arrow_extent,
-        ScaleFrontendLayoutValue(kReplayScrollbarThumbEnd -
-            kReplayScrollbarTrackEnd, kReplayScrollbarCanonicalWidth, width));
+        ScaleFrontendLayoutValue(kReplayScrollbarDestinationThumbHeight,
+            kReplayScrollbarCanonicalWidth, width));
     const int track_extent = height - arrow_extent * 2;
     if (arrow_extent <= 0 || track_extent < thumb_extent) {
         return false;
@@ -2090,12 +2092,15 @@ bool draw_replay_browser_png_scrollbar(OnlineLobbyState& state, HDC dc) {
 
     FillRect(dc, &client,
         reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+    const OnlineLobbyReplayScrollbarSourceGeometry geometry =
+        ResolveOnlineLobbyReplayScrollbarSourceGeometry(visual);
     const UiPngRect top_source = replay_scrollbar_source_rect(
-        image, 0, kReplayScrollbarTopEnd);
+        image, geometry.source_height, 0, geometry.top_end);
     const UiPngRect track_source = replay_scrollbar_source_rect(
-        image, kReplayScrollbarTopEnd, kReplayScrollbarTrackEnd);
+        image, geometry.source_height, geometry.top_end, geometry.thumb_top);
     const UiPngRect thumb_source = replay_scrollbar_source_rect(
-        image, kReplayScrollbarTrackEnd, kReplayScrollbarThumbEnd);
+        image, geometry.source_height, geometry.thumb_top,
+        geometry.thumb_bottom);
     const bool top_drawn = DrawUiPngResourceRectToDc(image, dc,
         {0, 0, width, arrow_extent}, top_source);
     const bool track_drawn = DrawUiPngResourceRectToDc(image, dc,
@@ -2171,7 +2176,9 @@ void queue_replay_download_request(OnlineLobbyState& state, u32 replay_id) {
     queue_online_lobby_async_bytes(state, packet.data(), packet.size());
 }
 
-void begin_selected_replay_download(OnlineLobbyState& state) {
+void begin_selected_replay_download(OnlineLobbyState& state,
+    OnlineLobbyReplayDownloadAction action =
+        OnlineLobbyReplayDownloadAction::DownloadOnly) {
     if (state.replay_list == nullptr || state.replay_download_id != 0) {
         return;
     }
@@ -2191,6 +2198,8 @@ void begin_selected_replay_download(OnlineLobbyState& state) {
     state.replay_download_id = entry.replay_id;
     state.replay_download_total = entry.byte_count;
     state.replay_download_filename = entry.filename;
+    state.replay_download_saved_path.clear();
+    state.replay_download_action = action;
     state.replay_download_bytes.clear();
     state.replay_download_bytes.reserve(entry.byte_count);
     if (state.replay_download_button != nullptr) {
@@ -2330,7 +2339,8 @@ LRESULT CALLBACK replay_browser_window_proc(HWND hwnd, UINT message,
         if (LOWORD(wparam) == kOnlineLobbyReplayListId &&
             HIWORD(wparam) == LBN_DBLCLK) {
             play_online_lobby_click_sound();
-            begin_selected_replay_download(*state);
+            begin_selected_replay_download(*state,
+                OnlineLobbyReplayDownloadAction::DownloadAndPlay);
             return 0;
         }
         if (LOWORD(wparam) == kOnlineLobbyReplayCloseButtonId &&
@@ -2340,6 +2350,27 @@ LRESULT CALLBACK replay_browser_window_proc(HWND hwnd, UINT message,
             return 0;
         }
         break;
+    case kOnlineLobbyPlayDownloadedReplayMessage: {
+        std::string saved_path = std::move(state->replay_download_saved_path);
+        if (!saved_path.empty() &&
+            state->callbacks.play_downloaded_replay != nullptr &&
+            state->callbacks.play_downloaded_replay(*state,
+                saved_path.c_str(), state->callbacks.user_data)) {
+            HWND lobby_window = state->window;
+            // Finish this popup's callback before the posted main-window
+            // resume can wake the gameplay worker.  Starting the worker while
+            // recursively destroying the popup/lobby races their Win32
+            // resource teardown and previously ended in std::terminate.
+            DestroyWindow(hwnd);
+            if (lobby_window != nullptr && IsWindow(lobby_window)) {
+                ShowWindow(lobby_window, SW_HIDE);
+            }
+            return 0;
+        }
+        set_replay_browser_status(*state,
+            L"다운로드한 리플레이를 재생할 수 없습니다.");
+        return 0;
+    }
     case WM_CLOSE:
         DestroyWindow(hwnd);
         return 0;
@@ -2355,6 +2386,9 @@ LRESULT CALLBACK replay_browser_window_proc(HWND hwnd, UINT message,
         state->replay_download_total = 0;
         state->replay_download_bytes.clear();
         state->replay_download_filename.clear();
+        state->replay_download_saved_path.clear();
+        state->replay_download_action =
+            OnlineLobbyReplayDownloadAction::DownloadOnly;
         if (state->window != nullptr && IsWindow(state->window)) {
             EnableWindow(state->window, TRUE);
             // Destroying the active owned popup already returns activation to
@@ -2465,9 +2499,8 @@ bool open_replay_browser(OnlineLobbyState& state) {
         kReplayLoadScrollDownBitmapRecord, kReplayLoadScrollDownBitmapRecord,
         kReplayLoadScrollThumbBitmapRecord, kReplayLoadScrollTrackBitmapRecord);
     const int replay_scroll_thumb_height = std::max(scroll.width,
-        ScaleFrontendLayoutValue(kReplayScrollbarThumbEnd -
-            kReplayScrollbarTrackEnd, kReplayScrollbarCanonicalWidth,
-            scroll.width));
+        ScaleFrontendLayoutValue(kReplayScrollbarDestinationThumbHeight,
+            kReplayScrollbarCanonicalWidth, scroll.width));
     SetLegacyCustomScrollControlMetrics(state.replay_browser_scroll,
         scroll.width, scroll.width, scroll.width,
         replay_scroll_thumb_height);
@@ -2525,6 +2558,9 @@ bool open_replay_browser(OnlineLobbyState& state) {
     state.replay_download_id = 0;
     state.replay_download_total = 0;
     state.replay_download_filename.clear();
+    state.replay_download_saved_path.clear();
+    state.replay_download_action =
+        OnlineLobbyReplayDownloadAction::DownloadOnly;
     ShowWindow(window, SW_SHOW);
     UpdateWindow(window);
     EnableWindow(state.window, FALSE);
@@ -4016,6 +4052,10 @@ bool DispatchOnlineLobbyServerPacket(OnlineLobbyState& state, const u8* packet,
             state.replay_download_id = 0;
             state.replay_download_total = 0;
             state.replay_download_bytes.clear();
+            state.replay_download_filename.clear();
+            state.replay_download_saved_path.clear();
+            state.replay_download_action =
+                OnlineLobbyReplayDownloadAction::DownloadOnly;
             if (state.replay_download_button != nullptr) {
                 EnableWindow(state.replay_download_button, TRUE);
             }
@@ -4038,6 +4078,9 @@ bool DispatchOnlineLobbyServerPacket(OnlineLobbyState& state, const u8* packet,
             state.replay_download_bytes.size() == total &&
             SaveWizardNetDownloadedReplay(state.replay_download_filename,
                 state.replay_download_bytes, saved_path);
+        const bool play_after_download =
+            ShouldPlayWizardNetDownloadedReplay(
+                state.replay_download_action, complete);
         if (complete) {
             const std::wstring wide_path = cp949_to_wide(saved_path);
             std::wstring message = L"저장 완료: ";
@@ -4050,8 +4093,19 @@ bool DispatchOnlineLobbyServerPacket(OnlineLobbyState& state, const u8* packet,
         state.replay_download_total = 0;
         state.replay_download_bytes.clear();
         state.replay_download_filename.clear();
+        state.replay_download_action =
+            OnlineLobbyReplayDownloadAction::DownloadOnly;
         if (state.replay_download_button != nullptr) {
             EnableWindow(state.replay_download_button, TRUE);
+        }
+        if (play_after_download && state.replay_browser_window != nullptr) {
+            state.replay_download_saved_path = std::move(saved_path);
+            if (!PostMessageW(state.replay_browser_window,
+                    kOnlineLobbyPlayDownloadedReplayMessage, 0, 0)) {
+                state.replay_download_saved_path.clear();
+                set_replay_browser_status(state,
+                    L"다운로드한 리플레이를 재생할 수 없습니다.");
+            }
         }
         return true;
     }

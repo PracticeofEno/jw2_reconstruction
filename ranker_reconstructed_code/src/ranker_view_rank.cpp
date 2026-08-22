@@ -515,6 +515,23 @@ const wchar_t* view_rank_theme_button_label(int id) {
     }
 }
 
+bool calculate_record_win_rate(const std::array<char, 0x10>& record,
+    u32& win_rate) {
+    unsigned int wins = 0;
+    unsigned int losses = 0;
+    unsigned int draws = 0;
+    int consumed = 0;
+    if (std::sscanf(record.data(), "%u-%u-%u%n", &wins, &losses, &draws,
+            &consumed) != 3 || consumed <= 0 ||
+        record[static_cast<std::size_t>(consumed)] != '\0') {
+        return false;
+    }
+    win_rate = CalculateViewRankWinRate(
+        static_cast<u32>(wins), static_cast<u32>(losses),
+        static_cast<u32>(draws));
+    return true;
+}
+
 bool draw_view_rank_themed_button(ViewRankState& state,
     const DRAWITEMSTRUCT& draw) {
     const int id = static_cast<int>(draw.CtlID);
@@ -641,7 +658,8 @@ bool draw_rank_entry(ViewRankState& state, const DRAWITEMSTRUCT& draw) {
         DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     draw_column_text(draw.hDC, rect, state.columns[3], entry.record.data(),
         DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    std::snprintf(text, sizeof(text), "%u", static_cast<unsigned>(entry.rating));
+    std::snprintf(text, sizeof(text), "%u%%",
+        static_cast<unsigned>(entry.rating));
     draw_column_text(draw.hDC, rect, state.columns[4], text,
         DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     return true;
@@ -758,7 +776,12 @@ void apply_rank_payload(ViewRankState& state, const u8* payload, i32 byte_count)
                 reinterpret_cast<const char*>(payload + offset + 0x24));
         }
         if (offset + 0x38 <= static_cast<std::size_t>(byte_count)) {
-            state.entries[i].rating = read_le32(payload, byte_count, offset + 0x34);
+            const u32 wire_rating = read_le32(
+                payload, byte_count, offset + 0x34);
+            if (!calculate_record_win_rate(
+                    state.entries[i].record, state.entries[i].rating)) {
+                state.entries[i].rating = std::min<u32>(wire_rating, 100u);
+            }
         }
     }
     state.has_next_page = state.entries.back().name[0] != '\0';

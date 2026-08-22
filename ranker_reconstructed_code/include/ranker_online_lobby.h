@@ -78,6 +78,7 @@ constexpr int kOnlineLobbyAcceleratorResourceId = 0x12c;
 constexpr UINT kOnlineLobbyNetworkMessage = 0x465;
 constexpr UINT kOnlineLobbyCopiedTextMessage = 0x501;
 constexpr UINT kOnlineLobbyMakeSelectedIconBitmapMessage = 0x517;
+constexpr UINT kOnlineLobbyPlayDownloadedReplayMessage = WM_APP + 0x2e;
 constexpr std::size_t kOnlineLobbyButtonCount = 28;
 // The reconstructed lobby has one page and no visible tab controls.  Keep the
 // legacy button slots in the state layout for wire/UI compatibility.
@@ -106,6 +107,42 @@ enum class OnlineLobbyReplayScrollbarVisual : std::size_t {
     Active = 1,
     Disabled = 2,
 };
+
+struct OnlineLobbyReplayScrollbarSourceGeometry {
+    int source_height = 0;
+    int top_end = 0;
+    int thumb_top = 0;
+    int thumb_bottom = 0;
+};
+
+// The extracted scrollbar sheets are complete control-state captures.  Their
+// embedded thumb is not at the same Y coordinate in every state, so each state
+// needs its own track/thumb crop to avoid stretching thumb pixels into the
+// track while the control is dragged or disabled.
+constexpr OnlineLobbyReplayScrollbarSourceGeometry
+ResolveOnlineLobbyReplayScrollbarSourceGeometry(
+    OnlineLobbyReplayScrollbarVisual visual) {
+    switch (visual) {
+    case OnlineLobbyReplayScrollbarVisual::Active:
+        return {393, 58, 89, 176};
+    case OnlineLobbyReplayScrollbarVisual::Disabled:
+        return {390, 58, 89, 176};
+    case OnlineLobbyReplayScrollbarVisual::Normal:
+    default:
+        return {391, 58, 106, 184};
+    }
+}
+
+enum class OnlineLobbyReplayDownloadAction : u32 {
+    DownloadOnly = 0,
+    DownloadAndPlay = 1,
+};
+
+constexpr bool ShouldPlayWizardNetDownloadedReplay(
+    OnlineLobbyReplayDownloadAction action, bool download_complete) {
+    return download_complete &&
+        action == OnlineLobbyReplayDownloadAction::DownloadAndPlay;
+}
 
 constexpr bool IsOnlineLobbyThemedButtonId(int id) {
     return id == kOnlineLobbyCreateGameButtonId ||
@@ -265,6 +302,8 @@ struct OnlineLobbyScrollControl {
     int id = 0;
 };
 
+struct OnlineLobbyState;
+
 struct OnlineLobbyCallbacks {
     void (*return_to_connect_frontend)(HWND parent, HINSTANCE instance,
         LPARAM return_context, void* user_data) = nullptr;
@@ -284,6 +323,8 @@ struct OnlineLobbyCallbacks {
         void* user_data) = nullptr;
     void (*open_emoticon_popup)(HWND parent, HINSTANCE instance,
         POINT screen_point, void* user_data) = nullptr;
+    bool (*play_downloaded_replay)(OnlineLobbyState& state,
+        const char* replay_path, void* user_data) = nullptr;
     void (*send_async_packet)(const void* packet, std::size_t byte_count,
         void* user_data) = nullptr;
     void (*show_message)(HWND owner, const char* text, COLORREF color,
@@ -374,6 +415,9 @@ struct OnlineLobbyState {
     u32 replay_download_id = 0;
     u32 replay_download_total = 0;
     std::string replay_download_filename;
+    std::string replay_download_saved_path;
+    OnlineLobbyReplayDownloadAction replay_download_action =
+        OnlineLobbyReplayDownloadAction::DownloadOnly;
     OnlineLobbyCallbacks callbacks{};
 };
 

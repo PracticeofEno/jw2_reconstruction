@@ -161,6 +161,33 @@ static_assert(ResolveOnlineLobbyReplayScrollbarVisual(true, true) ==
     OnlineLobbyReplayScrollbarVisual::Active);
 static_assert(ResolveOnlineLobbyReplayScrollbarVisual(false, true) ==
     OnlineLobbyReplayScrollbarVisual::Disabled);
+constexpr OnlineLobbyReplayScrollbarSourceGeometry kNormalReplayScrollSource =
+    ResolveOnlineLobbyReplayScrollbarSourceGeometry(
+        OnlineLobbyReplayScrollbarVisual::Normal);
+constexpr OnlineLobbyReplayScrollbarSourceGeometry kActiveReplayScrollSource =
+    ResolveOnlineLobbyReplayScrollbarSourceGeometry(
+        OnlineLobbyReplayScrollbarVisual::Active);
+constexpr OnlineLobbyReplayScrollbarSourceGeometry kDisabledReplayScrollSource =
+    ResolveOnlineLobbyReplayScrollbarSourceGeometry(
+        OnlineLobbyReplayScrollbarVisual::Disabled);
+static_assert(kNormalReplayScrollSource.source_height == 391 &&
+    kNormalReplayScrollSource.top_end == 58 &&
+    kNormalReplayScrollSource.thumb_top == 106 &&
+    kNormalReplayScrollSource.thumb_bottom == 184);
+static_assert(kActiveReplayScrollSource.source_height == 393 &&
+    kActiveReplayScrollSource.top_end == 58 &&
+    kActiveReplayScrollSource.thumb_top == 89 &&
+    kActiveReplayScrollSource.thumb_bottom == 176);
+static_assert(kDisabledReplayScrollSource.source_height == 390 &&
+    kDisabledReplayScrollSource.top_end == 58 &&
+    kDisabledReplayScrollSource.thumb_top == 89 &&
+    kDisabledReplayScrollSource.thumb_bottom == 176);
+static_assert(!ShouldPlayWizardNetDownloadedReplay(
+    OnlineLobbyReplayDownloadAction::DownloadOnly, true));
+static_assert(!ShouldPlayWizardNetDownloadedReplay(
+    OnlineLobbyReplayDownloadAction::DownloadAndPlay, false));
+static_assert(ShouldPlayWizardNetDownloadedReplay(
+    OnlineLobbyReplayDownloadAction::DownloadAndPlay, true));
 constexpr OnlineLobbyLayoutRect kLegacyChatEdit{469, 578, 409, 22};
 constexpr OnlineLobbyLayoutRect kPaddedChatEdit =
     OffsetOnlineLobbyChatComposer(kLegacyChatEdit,
@@ -259,6 +286,11 @@ static_assert(IsViewRankRemovedButtonId(kViewRankNormalTabButtonId));
 static_assert(IsViewRankRemovedButtonId(kViewRankAvatarTabButtonId));
 static_assert(IsViewRankRemovedButtonId(kViewRankGuildTabButtonId));
 static_assert(!IsViewRankRemovedButtonId(kViewRankCloseButtonId));
+static_assert(CalculateViewRankWinRate(0, 0, 0) == 0);
+static_assert(CalculateViewRankWinRate(7, 2, 1) == 70);
+static_assert(CalculateViewRankWinRate(1, 1, 1) == 33);
+static_assert(CalculateViewRankWinRate(0xffffffffu, 0xffffffffu,
+    0xffffffffu) == 33);
 static_assert(IsViewRankThemedButtonId(kViewRankUpButtonId));
 static_assert(IsViewRankThemedButtonId(kViewRankDownButtonId));
 static_assert(IsViewRankThemedButtonId(kViewRankSearchButtonId));
@@ -304,6 +336,7 @@ static_assert(!ShouldPreserveNativeFrontendCursorOnMainFocus(false, true));
 static_assert(kWizardNetReplayListProtocolVersion == 1);
 static_assert(kWizardNetReplayListLegacyRecordBytes == 0xb0);
 static_assert(kWizardNetReplayListMetadataRecordBytes == 0xf4);
+static_assert(kWizardNetReplayPresenceRequestOpcode == 0xa3);
 
 } // namespace
 

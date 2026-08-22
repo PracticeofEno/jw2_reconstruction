@@ -218,6 +218,32 @@ class ServerIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(read_c_string(page, 0x15, 0x20), "Alice")
         bob_writer.close()
 
+    async def test_replay_presence_is_broadcast_and_reconnect_restores_lobby(
+        self,
+    ) -> None:
+        viewer_reader, viewer_writer = await self.connect_and_login("ReplayViewer")
+        observer_reader, _ = await self.connect_and_login("ReplayObserver")
+        await read_until_presence(viewer_reader, "ReplayObserver")
+
+        viewer_writer.write(build_packet(0xA3, struct.pack("<I", 1)))
+        await viewer_writer.drain()
+        replay_presence = await read_until_presence(
+            observer_reader, "ReplayViewer"
+        )
+        self.assertEqual(read_u32(replay_presence, 0x61), 4)
+        self.assertEqual(read_c_string(replay_presence, 0x65, 0x20), "")
+        viewer_session = self.server.state.find_client_by_account("ReplayViewer")
+        self.assertIsNotNone(viewer_session)
+        self.assertEqual(viewer_session.view, "replay")
+
+        viewer_writer.write(build_packet(0x0E, b"\0" * 8))
+        await viewer_writer.drain()
+        lobby_presence = await read_until_presence(
+            observer_reader, "ReplayViewer"
+        )
+        self.assertEqual(read_u32(lobby_presence, 0x61), 0)
+        self.assertEqual(viewer_session.view, "online")
+
     async def test_lobby_mark_is_saved_and_broadcast_in_presence(self) -> None:
         alice_reader, alice_writer = await self.connect_and_login("Alice")
         bob_reader, bob_writer = await self.connect_and_login("Bob")
@@ -1678,6 +1704,8 @@ class ServerIntegrationTests(unittest.IsolatedAsyncioTestCase):
         rank_list = await read_until_opcode(host_reader, 0x30, limit=40)
         self.assertEqual(read_c_string(rank_list, 0x11, 0x20), "RankHost")
         self.assertEqual(read_u32(rank_list, 0x31), 3)
+        self.assertEqual(read_c_string(rank_list, 0x35, 0x10), "1-0-0")
+        self.assertEqual(read_u32(rank_list, 0x45), 100)
 
         host_writer.write(build_packet(0x98, struct.pack("<III", 2, 0, game_id) + token))
         await host_writer.drain()

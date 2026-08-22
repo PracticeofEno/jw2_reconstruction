@@ -209,6 +209,13 @@ std::vector<u8> BuildWizardNetReplayDownloadRequestPacket(u32 replay_id) {
     return packet;
 }
 
+std::vector<u8> BuildWizardNetReplayPresenceRequestPacket(bool active) {
+    std::vector<u8> packet = build_packet(
+        kWizardNetReplayPresenceRequestOpcode, 0x11);
+    write_u32(packet, 0x0d, active ? 1u : 0u);
+    return packet;
+}
+
 bool BeginWizardNetPostGameSubmission(LegacyAsyncTcpSocket& socket,
     u32 game_type, u32 gameplay_result, u32 game_id,
     const std::array<u8, kWizardNetMatchTokenBytes>& match_token,

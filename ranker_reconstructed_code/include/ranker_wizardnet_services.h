@@ -25,6 +25,7 @@ constexpr u32 kWizardNetReplayListResponseOpcode = 0x9f;
 constexpr u32 kWizardNetReplayDownloadRequestOpcode = 0xa0;
 constexpr u32 kWizardNetReplayDownloadChunkOpcode = 0xa1;
 constexpr u32 kWizardNetReplayDownloadFinishOpcode = 0xa2;
+constexpr u32 kWizardNetReplayPresenceRequestOpcode = 0xa3;
 constexpr std::size_t kWizardNetMatchTokenBytes = 16;
 constexpr std::size_t kWizardNetReplayTransferChunkBytes = 32 * 1024;
 constexpr std::size_t kWizardNetMaximumReplayBytes = 64 * 1024 * 1024;
@@ -86,6 +87,7 @@ std::vector<u8> BuildWizardNetMatchResultPacket(u32 game_type,
     const std::array<u8, kWizardNetMatchTokenBytes>& match_token);
 std::vector<u8> BuildWizardNetReplayListRequestPacket(u32 offset);
 std::vector<u8> BuildWizardNetReplayDownloadRequestPacket(u32 replay_id);
+std::vector<u8> BuildWizardNetReplayPresenceRequestPacket(bool active);
 bool BeginWizardNetPostGameSubmission(LegacyAsyncTcpSocket& socket,
     u32 game_type, u32 gameplay_result, u32 game_id,
     const std::array<u8, kWizardNetMatchTokenBytes>& match_token,

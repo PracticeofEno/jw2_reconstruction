@@ -2439,6 +2439,9 @@ void default_online_show_message(HWND owner, const char* text, COLORREF color,
     show_window_status_message(owner, text, color);
 }
 
+bool default_online_play_downloaded_replay(OnlineLobbyState& state,
+    const char* replay_path, void*);
+
 void default_lobby_show_message(HWND owner, const char* text, COLORREF color) {
     OnlineModelessPromptState& prompt = online_modeless_prompt_state();
     if (prompt.window != nullptr && IsWindow(prompt.window)) {
@@ -2749,6 +2752,8 @@ void configure_online_lobby_callbacks(OnlineLobbyState& state) {
     state.callbacks.open_avatar = default_online_open_avatar;
     state.callbacks.open_memo = default_online_open_memo;
     state.callbacks.open_emoticon_popup = default_online_open_emoticon_popup;
+    state.callbacks.play_downloaded_replay =
+        default_online_play_downloaded_replay;
     state.callbacks.send_async_packet = default_online_send_async_packet;
     state.callbacks.show_message = default_online_show_message;
     state.callbacks.user_data = nullptr;
@@ -31843,6 +31848,53 @@ bool default_start_replay_playback(ReplayDialogState& state,
     append_startup_log("replay load queued gameplay transition archive=%s packets=%lu",
         descriptor.source_path.c_str(),
         static_cast<unsigned long>(descriptor.packet_count));
+    return true;
+}
+
+bool default_online_play_downloaded_replay(OnlineLobbyState& state,
+    const char* replay_path, void*) {
+    if (replay_path == nullptr || replay_path[0] == '\0' ||
+        g_runtime.main_window == nullptr ||
+        !IsWindow(g_runtime.main_window)) {
+        return false;
+    }
+
+    ReplayArchiveDescriptor descriptor;
+    if (!LoadReplayArchiveDescriptor(
+            replay_path, descriptor, LoadTrcRecord9Value()) ||
+        descriptor.status != ReplayValidationStatus::Valid) {
+        append_startup_log(
+            "wizardnet replay immediate play rejected path=%s status=%lu",
+            replay_path, static_cast<unsigned long>(descriptor.status));
+        return false;
+    }
+
+    ReplayDialogState& replay_dialog = replay_load_dialog_state();
+    replay_dialog.main_window = g_runtime.main_window;
+    if (!default_start_replay_playback(replay_dialog, descriptor)) {
+        return false;
+    }
+
+    // Resume asynchronously.  The replay browser owns the current Win32
+    // callback and must return after closing/hiding its frontend before the
+    // gameplay worker starts touching presentation and input state.
+    if (!PostMessageA(g_runtime.main_window, WM_USER + 9, 0, 3)) {
+        g_runtime.gameplay_transition_pending = false;
+        clear_default_replay_playback_runtime(
+            "wizardnet-replay-resume-post-failed");
+        return false;
+    }
+
+    const std::vector<u8> presence =
+        BuildWizardNetReplayPresenceRequestPacket(true);
+    if (state.callbacks.send_async_packet != nullptr) {
+        state.callbacks.send_async_packet(presence.data(), presence.size(),
+            state.callbacks.user_data);
+    }
+
+    append_startup_log(
+        "wizardnet replay immediate play queued path=%s packets=%lu",
+        replay_path, static_cast<unsigned long>(descriptor.packet_count));
     return true;
 }
 
