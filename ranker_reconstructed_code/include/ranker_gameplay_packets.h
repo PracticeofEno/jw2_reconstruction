@@ -271,6 +271,25 @@ constexpr bool CanSynthesizeMode1SessionCompletion(
         (!remote_network_player_seen || all_remote_network_players_inactive);
 }
 
+// DirectPlay raises the common session-complete edge on the surviving peer
+// when the final remote player departs.  The socket-backed WizardNet bridge
+// has no separate DPSYS_DESTROYPLAYER message, so accept the ordered remote
+// inactive transition as that edge even when the survivor never opened its
+// own terminal vote.  A peer which did open a vote still has to consume its
+// local subtype-0x13 packet before leaving so Replay.tmp retains the terminal
+// command boundary.
+constexpr bool CanSynthesizeMode1SessionCompletion(
+    bool local_terminal_vote_open, bool local_inactive_packet_consumed,
+    bool remote_network_player_seen,
+    bool all_remote_network_players_inactive) {
+    if (local_terminal_vote_open) {
+        return CanSynthesizeMode1SessionCompletion(
+            local_inactive_packet_consumed, remote_network_player_seen,
+            all_remote_network_players_inactive);
+    }
+    return remote_network_player_seen && all_remote_network_players_inactive;
+}
+
 Mode1GameplayPacketDispatchState& mode1_gameplay_packet_dispatch_state();
 
 void ResetMode1GameplayPacketDispatch();

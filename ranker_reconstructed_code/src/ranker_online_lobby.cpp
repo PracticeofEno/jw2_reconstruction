@@ -110,9 +110,15 @@ constexpr OnlineLobbyLayoutRect kWizardNetReplayScrollRect{328, 181, 15, 320};
 constexpr OnlineLobbyLayoutRect kWizardNetReplayInfoRect{380, 88, 355, 412};
 constexpr OnlineLobbyLayoutRect kWizardNetReplayStatusRect{394, 438, 327, 52};
 constexpr OnlineLobbyLayoutRect kWizardNetReplayDownloadRect =
-    InsetOnlineLobbyButton({202, 533, 144, 54}, 18, 10);
+    InsetOnlineLobbyButton({202,
+        533 + kOnlineLobbyReplayActionDownwardOffset, 144, 54},
+        kOnlineLobbyReplayActionHorizontalInset,
+        kOnlineLobbyReplayActionVerticalInset);
 constexpr OnlineLobbyLayoutRect kWizardNetReplayCloseRect =
-    InsetOnlineLobbyButton({462, 533, 144, 54}, 18, 10);
+    InsetOnlineLobbyButton({462,
+        533 + kOnlineLobbyReplayActionDownwardOffset, 144, 54},
+        kOnlineLobbyReplayActionHorizontalInset,
+        kOnlineLobbyReplayActionVerticalInset);
 constexpr std::array<const char*, kOnlineLobbyThemeButtonVisualCount>
     kOnlineLobbyThemeButtonImagePaths = {
         "media\\ui\\tools\\button_medium_bronze.png",
@@ -289,10 +295,10 @@ OnlineLobbyLayoutRect arrange_simplified_main_action(
 OnlineLobbyLayoutRect arrange_chat_composer_control(
     const OnlineLobbyState& state, OnlineLobbyLayoutRect rect) {
     const OnlineLobbyLayoutRect root = layout_at(state, 0);
-    const i32 separation = ScaleFrontendLayoutValue(8, 768,
+    const i32 separation = ScaleFrontendLayoutValue(
+        kOnlineLobbyChatComposerVerticalPadding, 768,
         std::max<i32>(1, root.height));
-    rect.y += separation;
-    return rect;
+    return OffsetOnlineLobbyChatComposer(rect, separation);
 }
 
 int online_lobby_chat_composer_gap(const OnlineLobbyState& state) {
@@ -373,34 +379,40 @@ const wchar_t* online_lobby_theme_button_label(int id) {
     }
 }
 
-void paint_online_lobby_background_under_button(
-    OnlineLobbyState& state, const DRAWITEMSTRUCT& draw) {
+void paint_bitmap_background_under_button(
+    const BitmapMemoryResource& background, HWND background_window,
+    const DRAWITEMSTRUCT& draw, COLORREF fallback_color) {
     if (draw.hDC == nullptr) {
         return;
     }
-    if (!state.background.loaded || state.window == nullptr ||
+    if (!background.loaded || background_window == nullptr ||
         draw.hwndItem == nullptr) {
-        fill_online_lobby_rect(draw.hDC, draw.rcItem, RGB(0, 0, 0));
+        fill_online_lobby_rect(draw.hDC, draw.rcItem, fallback_color);
         return;
     }
 
     POINT child_origin{};
     SetLastError(ERROR_SUCCESS);
-    if (MapWindowPoints(draw.hwndItem, state.window, &child_origin, 1) == 0 &&
+    if (MapWindowPoints(draw.hwndItem, background_window, &child_origin, 1) == 0 &&
         GetLastError() != ERROR_SUCCESS) {
-        fill_online_lobby_rect(draw.hDC, draw.rcItem, RGB(0, 0, 0));
+        fill_online_lobby_rect(draw.hDC, draw.rcItem, fallback_color);
         return;
     }
 
     const int saved_dc = SaveDC(draw.hDC);
     if (saved_dc == 0) {
-        fill_online_lobby_rect(draw.hDC, draw.rcItem, RGB(0, 0, 0));
+        fill_online_lobby_rect(draw.hDC, draw.rcItem, fallback_color);
         return;
     }
     SetViewportOrgEx(draw.hDC, -child_origin.x, -child_origin.y, nullptr);
-    StretchBitmapMemoryResourceToClient(
-        state.background, draw.hDC, state.window);
+    StretchBitmapMemoryResourceToClient(background, draw.hDC, background_window);
     RestoreDC(draw.hDC, saved_dc);
+}
+
+void paint_online_lobby_background_under_button(
+    OnlineLobbyState& state, const DRAWITEMSTRUCT& draw) {
+    paint_bitmap_background_under_button(
+        state.background, state.window, draw, RGB(0, 0, 0));
 }
 
 bool draw_online_lobby_theme_button_content(OnlineLobbyState& state,
@@ -2020,7 +2032,8 @@ bool draw_replay_browser_themed_button(OnlineLobbyState& state,
     if (label == nullptr) {
         return false;
     }
-    fill_online_lobby_rect(draw.hDC, draw.rcItem, RGB(12, 11, 9));
+    paint_bitmap_background_under_button(state.replay_browser_background,
+        state.replay_browser_window, draw, RGB(12, 11, 9));
     return draw_online_lobby_theme_button_content(state, draw, label);
 }
 

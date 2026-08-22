@@ -30803,14 +30803,17 @@ void run_default_gameplay_end_condition_monitor(GameplayLoopState& state) {
     }
     Mode1GameplayPacketDispatchState& packets = mode1_gameplay_packet_dispatch_state();
     if (g_runtime.generic_ai_profile_mode &&
-        gameplay_input_action_state().player_reset_gate &&
         !packets.session_complete_requested) {
         // DirectPlay's DPSYS_DESTROYPLAYER path clears the departed runtime
         // slot before the legacy loop raises DAT_00725c09.  The reconstruction
         // already mirrors that slot transition, but its socket-backed bridge
         // has no separate DAT_00725c09 byte.  Synthesize the consensus edge
-        // once the local terminal vote is published and every originally
-        // active remote network participant has become inactive.
+        // once every originally active remote network participant has become
+        // inactive.  A locally ending peer still waits until its own terminal
+        // packet has passed through ordered dispatch; the surviving peer did
+        // not open that gate in the original and exits on the departure edge.
+        const bool local_terminal_vote_open =
+            gameplay_input_action_state().player_reset_gate;
         const u32 local_slot = std::min<u32>(
             g_runtime.gameplay_player_slots.local_player_slot,
             kPlayerSlotCount - 1);
@@ -30839,9 +30842,23 @@ void run_default_gameplay_end_condition_monitor(GameplayLoopState& state) {
             }
         }
         packets.session_complete_requested = CanSynthesizeMode1SessionCompletion(
+            local_terminal_vote_open,
             packets.local_inactive_packet_consumed,
             remote_network_player_seen,
             all_remote_network_players_inactive);
+        if (packets.session_complete_requested && !local_terminal_vote_open) {
+            // FUN_004d71d7 converts a final remote departure into an ordinary
+            // survivor result after frame 0x707, while observers and very
+            // early matches retain the neutral/early-result code.
+            const bool local_observer =
+                g_runtime.gameplay_player_slots.slot_states[local_slot] ==
+                static_cast<u8>(PlayerSlotState::observer);
+            g_runtime.gameplay_end_condition_state.result_code =
+                state.simulation_frame_counter > 0x707 && !local_observer ?
+                kGameplayEndResultVictory :
+                kGameplayEndResultAlliedOrEarlyVictory;
+            g_runtime.gameplay_end_condition_state.end_requested = false;
+        }
     }
     if (packets.session_complete_requested) {
         // DAT_00725c09 is the P2P consensus/leave flag in the original

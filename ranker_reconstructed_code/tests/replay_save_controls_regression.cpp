@@ -53,6 +53,21 @@ void verify_terminal_packet_replay_boundary() {
         "a live remote player must keep P2P consensus open");
     require(CanSynthesizeMode1SessionCompletion(true, true, true),
         "a consumed local vote plus departed remotes must complete the match");
+    require(!CanSynthesizeMode1SessionCompletion(
+            false, false, false, true),
+        "a session with no remote participant must not synthesize a departure");
+    require(!CanSynthesizeMode1SessionCompletion(
+            false, false, true, false),
+        "a surviving peer must wait while any remote network player is active");
+    require(CanSynthesizeMode1SessionCompletion(
+            false, false, true, true),
+        "the final ordered remote departure must complete the surviving peer");
+    require(!CanSynthesizeMode1SessionCompletion(
+            true, false, true, true),
+        "a locally ending peer must still consume its own terminal packet");
+    require(CanSynthesizeMode1SessionCompletion(
+            true, true, true, true),
+        "a consumed local terminal packet plus departed remotes must complete");
 }
 
 void verify_replay_live_game_boundary() {

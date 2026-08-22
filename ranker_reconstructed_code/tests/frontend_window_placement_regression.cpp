@@ -124,15 +124,27 @@ constexpr OnlineLobbyLayoutRect kCompactSimplifiedCreateAction =
         kOnlineLobbySimplifiedActionHorizontalInset,
         kOnlineLobbySimplifiedActionVerticalInset);
 constexpr OnlineLobbyLayoutRect kCompactReplayDownloadAction =
-    InsetOnlineLobbyButton({202, 533, 144, 54}, 18, 10);
-static_assert(kCompactSimplifiedCreateAction.x == 53 &&
-    kCompactSimplifiedCreateAction.y == 543 &&
-    kCompactSimplifiedCreateAction.width == 121 &&
-    kCompactSimplifiedCreateAction.height == 32);
-static_assert(kCompactReplayDownloadAction.x == 220 &&
-    kCompactReplayDownloadAction.y == 543 &&
-    kCompactReplayDownloadAction.width == 108 &&
-    kCompactReplayDownloadAction.height == 34);
+    InsetOnlineLobbyButton({202,
+        533 + kOnlineLobbyReplayActionDownwardOffset, 144, 54},
+        kOnlineLobbyReplayActionHorizontalInset,
+        kOnlineLobbyReplayActionVerticalInset);
+constexpr OnlineLobbyLayoutRect kCompactReplayCloseAction =
+    InsetOnlineLobbyButton({462,
+        533 + kOnlineLobbyReplayActionDownwardOffset, 144, 54},
+        kOnlineLobbyReplayActionHorizontalInset,
+        kOnlineLobbyReplayActionVerticalInset);
+static_assert(kCompactSimplifiedCreateAction.x == 57 &&
+    kCompactSimplifiedCreateAction.y == 545 &&
+    kCompactSimplifiedCreateAction.width == 113 &&
+    kCompactSimplifiedCreateAction.height == 28);
+static_assert(kCompactReplayDownloadAction.x == 226 &&
+    kCompactReplayDownloadAction.y == 555 &&
+    kCompactReplayDownloadAction.width == 96 &&
+    kCompactReplayDownloadAction.height == 30);
+static_assert(kCompactReplayCloseAction.x == 486 &&
+    kCompactReplayCloseAction.y == 555 &&
+    kCompactReplayCloseAction.width == 96 &&
+    kCompactReplayCloseAction.height == 30);
 static_assert(ResolveOnlineLobbyThemeButtonVisual(true, false, false, false) ==
     OnlineLobbyThemeButtonVisual::Normal);
 static_assert(ResolveOnlineLobbyThemeButtonVisual(true, false, true, false) ==
@@ -150,6 +162,9 @@ static_assert(ResolveOnlineLobbyReplayScrollbarVisual(true, true) ==
 static_assert(ResolveOnlineLobbyReplayScrollbarVisual(false, true) ==
     OnlineLobbyReplayScrollbarVisual::Disabled);
 constexpr OnlineLobbyLayoutRect kLegacyChatEdit{469, 578, 409, 22};
+constexpr OnlineLobbyLayoutRect kPaddedChatEdit =
+    OffsetOnlineLobbyChatComposer(kLegacyChatEdit,
+        kOnlineLobbyChatComposerVerticalPadding);
 constexpr OnlineLobbyLayoutRect kLegacySendSlot{960, 578, 17, 22};
 constexpr OnlineLobbyLayoutRect kLegacyEmoticonButton{888, 578, 27, 22};
 constexpr OnlineLobbyLayoutRect kSingleEmoticonButton =
@@ -163,6 +178,8 @@ static_assert(kSingleEmoticonButton.x == 944);
 static_assert(kSingleEmoticonButton.width == 27);
 static_assert(kExpandedChatEdit.x == 469);
 static_assert(kExpandedChatEdit.width == 467);
+static_assert(kPaddedChatEdit.y == 590);
+static_assert(kPaddedChatEdit.height == kLegacyChatEdit.height);
 static_assert(IsOnlineLobbyTransientChildResponseOpcode(0x1a));
 static_assert(IsOnlineLobbyTransientChildResponseOpcode(0x1e));
 static_assert(IsOnlineLobbyTransientChildResponseOpcode(0x26));

@@ -87,8 +87,12 @@ constexpr std::size_t kOnlineLobbyThemeButtonVisualCount = 4;
 constexpr std::size_t kOnlineLobbyReplayScrollbarVisualCount = 3;
 constexpr int kOnlineLobbySimplifiedActionCount = 5;
 constexpr int kOnlineLobbySimplifiedActionGap = 10;
-constexpr int kOnlineLobbySimplifiedActionHorizontalInset = 6;
-constexpr int kOnlineLobbySimplifiedActionVerticalInset = 3;
+constexpr int kOnlineLobbySimplifiedActionHorizontalInset = 10;
+constexpr int kOnlineLobbySimplifiedActionVerticalInset = 5;
+constexpr int kOnlineLobbyReplayActionHorizontalInset = 24;
+constexpr int kOnlineLobbyReplayActionVerticalInset = 12;
+constexpr int kOnlineLobbyReplayActionDownwardOffset = 10;
+constexpr int kOnlineLobbyChatComposerVerticalPadding = 12;
 
 enum class OnlineLobbyThemeButtonVisual : std::size_t {
     Normal = 0,
@@ -191,6 +195,12 @@ constexpr OnlineLobbyLayoutRect InsetOnlineLobbyButton(
     button.width -= safe_horizontal * 2;
     button.height -= safe_vertical * 2;
     return button;
+}
+
+constexpr OnlineLobbyLayoutRect OffsetOnlineLobbyChatComposer(
+    OnlineLobbyLayoutRect composer, int vertical_padding) {
+    composer.y += vertical_padding > 0 ? vertical_padding : 0;
+    return composer;
 }
 
 constexpr OnlineLobbyLayoutRect ArrangeOnlineLobbySimplifiedAction(
