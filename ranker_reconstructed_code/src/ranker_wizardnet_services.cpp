@@ -10,7 +10,6 @@
 
 #include <algorithm>
 #include <cstring>
-#include <filesystem>
 #include <fstream>
 #include <limits>
 
@@ -138,33 +137,87 @@ std::vector<u8> build_upload_end_packet(
     return packet;
 }
 
-std::filesystem::path resolve_replays_directory() {
-    namespace fs = std::filesystem;
-    std::vector<fs::path> roots;
+std::string ansi_path_parent(std::string path) {
+    while (path.size() > 3 &&
+        (path.back() == '\\' || path.back() == '/')) {
+        path.pop_back();
+    }
+    const std::size_t separator = path.find_last_of("\\/");
+    if (separator == std::string::npos) {
+        return {};
+    }
+    if (separator == 2 && path.size() >= 2 && path[1] == ':') {
+        return path.substr(0, 3);
+    }
+    return path.substr(0, separator);
+}
+
+std::string append_ansi_path(const std::string& directory,
+    const std::string& leaf) {
+    if (directory.empty()) {
+        return leaf;
+    }
+    if (directory.back() == '\\' || directory.back() == '/') {
+        return directory + leaf;
+    }
+    return directory + "\\" + leaf;
+}
+
+bool ansi_directory_exists(const std::string& path) {
+    const DWORD attributes = GetFileAttributesA(path.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES &&
+        (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+
+std::string current_directory_ansi() {
+    const DWORD required = GetCurrentDirectoryA(0, nullptr);
+    if (required == 0) {
+        return {};
+    }
+    std::vector<char> buffer(static_cast<std::size_t>(required) + 1, 0);
+    const DWORD written = GetCurrentDirectoryA(
+        static_cast<DWORD>(buffer.size()), buffer.data());
+    return written != 0 && written < buffer.size() ?
+        std::string(buffer.data(), written) : std::string{};
+}
+
+std::string resolve_replays_directory() {
+    std::vector<std::string> roots;
     std::array<char, MAX_PATH> module_path{};
     const DWORD module_length = GetModuleFileNameA(nullptr, module_path.data(),
         static_cast<DWORD>(module_path.size()));
     if (module_length != 0 && module_length < module_path.size()) {
-        roots.push_back(fs::path(module_path.data()).parent_path());
+        roots.push_back(ansi_path_parent(
+            std::string(module_path.data(), module_length)));
     }
-    std::error_code error;
-    fs::path current = fs::current_path(error);
-    for (int index = 0; !error && index < 7 && !current.empty(); ++index) {
-        if (std::find(roots.begin(), roots.end(), current) == roots.end()) {
+    const std::string initial_current = current_directory_ansi();
+    std::string current = initial_current;
+    for (int index = 0; index < 7 && !current.empty(); ++index) {
+        const auto duplicate = std::find_if(roots.begin(), roots.end(),
+            [&](const std::string& root) {
+                return _stricmp(root.c_str(), current.c_str()) == 0;
+            });
+        if (duplicate == roots.end()) {
             roots.push_back(current);
         }
-        current = current.parent_path();
+        const std::string parent = ansi_path_parent(current);
+        if (parent.empty() || parent == current) {
+            break;
+        }
+        current = parent;
     }
-    for (const fs::path& root : roots) {
-        for (const fs::path& candidate : {
-                 root / "Replays", root / "ranker" / "Replays"}) {
-            if (fs::is_directory(candidate, error) && !error) {
+    for (const std::string& root : roots) {
+        for (const std::string& candidate : {
+                 append_ansi_path(root, "Replays"),
+                 append_ansi_path(append_ansi_path(root, "ranker"),
+                     "Replays")}) {
+            if (ansi_directory_exists(candidate)) {
                 return candidate;
             }
-            error.clear();
         }
     }
-    return fs::current_path() / "Replays";
+    return append_ansi_path(initial_current.empty() ? "." : initial_current,
+        "Replays");
 }
 
 } // namespace
@@ -314,50 +367,97 @@ bool SaveWizardNetDownloadedReplay(const std::string& filename,
     if (bytes.empty() || bytes.size() > kWizardNetMaximumReplayBytes) {
         return false;
     }
-    namespace fs = std::filesystem;
-    std::error_code error;
-    fs::path directory = resolve_replays_directory() / "download";
-    fs::create_directories(directory, error);
-    if (error) {
-        return false;
-    }
+    try {
+        // WizardNet names are legacy ANSI/CP949 bytes.  MinGW's
+        // std::filesystem path conversion uses the C++ locale and throws for
+        // those names.  The original game stays on Win32 ANSI file APIs, so
+        // preserve the wire bytes unchanged at this boundary as well.
+        const std::string directory = append_ansi_path(
+            resolve_replays_directory(), "download");
+        if (!CreateDirectoryA(directory.c_str(), nullptr)) {
+            const DWORD create_error = GetLastError();
+            if (create_error != ERROR_ALREADY_EXISTS ||
+                !ansi_directory_exists(directory)) {
+                return false;
+            }
+        }
 
-    const std::string safe_name = SanitizeReplayFilenameComponent(filename);
-    fs::path candidate = directory / safe_name;
-    if (candidate.extension().string() != ".ply" &&
-        candidate.extension().string() != ".PLY") {
-        candidate += ".ply";
-    }
-    const fs::path requested = candidate;
-    for (u32 suffix = 2; fs::exists(candidate, error) && !error; ++suffix) {
-        candidate = directory /
-            (requested.stem().string() + "_" + std::to_string(suffix) +
-                requested.extension().string());
-    }
-    if (error) {
-        return false;
-    }
+        std::string leaf = SanitizeReplayFilenameComponent(filename);
+        const bool ply_extension = leaf.size() >= 4 &&
+            _stricmp(leaf.c_str() + leaf.size() - 4, ".ply") == 0;
+        if (!ply_extension) {
+            leaf += ".ply";
+        }
+        const std::size_t extension_offset = leaf.size() - 4;
+        const std::string stem = leaf.substr(0, extension_offset);
+        const std::string extension = leaf.substr(extension_offset);
+        std::string candidate = append_ansi_path(directory, leaf);
+        for (u32 suffix = 2;; ++suffix) {
+            const DWORD attributes = GetFileAttributesA(candidate.c_str());
+            if (attributes == INVALID_FILE_ATTRIBUTES) {
+                const DWORD query_error = GetLastError();
+                if (query_error == ERROR_FILE_NOT_FOUND ||
+                    query_error == ERROR_PATH_NOT_FOUND) {
+                    break;
+                }
+                return false;
+            }
+            candidate = append_ansi_path(directory,
+                stem + "_" + std::to_string(suffix) + extension);
+        }
 
-    fs::path temporary = candidate;
-    temporary += ".part";
-    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-    if (!output.is_open()) {
+        const std::string temporary = candidate + ".part";
+        HANDLE output = CreateFileA(temporary.c_str(), GENERIC_WRITE, 0,
+            nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (output == INVALID_HANDLE_VALUE) {
+            return false;
+        }
+        bool write_ok = true;
+        std::size_t offset = 0;
+        while (offset < bytes.size()) {
+            const DWORD requested = static_cast<DWORD>(std::min<std::size_t>(
+                bytes.size() - offset, std::numeric_limits<DWORD>::max()));
+            DWORD written = 0;
+            if (!WriteFile(output, bytes.data() + offset, requested,
+                    &written, nullptr) || written == 0) {
+                write_ok = false;
+                break;
+            }
+            offset += written;
+        }
+        if (!CloseHandle(output)) {
+            write_ok = false;
+        }
+        if (!write_ok) {
+            DeleteFileA(temporary.c_str());
+            return false;
+        }
+        if (!MoveFileExA(temporary.c_str(), candidate.c_str(),
+                MOVEFILE_WRITE_THROUGH)) {
+            DeleteFileA(temporary.c_str());
+            return false;
+        }
+
+        const DWORD absolute_bytes = GetFullPathNameA(
+            candidate.c_str(), 0, nullptr, nullptr);
+        if (absolute_bytes != 0) {
+            std::vector<char> absolute(
+                static_cast<std::size_t>(absolute_bytes) + 1, 0);
+            const DWORD written = GetFullPathNameA(candidate.c_str(),
+                static_cast<DWORD>(absolute.size()), absolute.data(), nullptr);
+            if (written != 0 && written < absolute.size()) {
+                output_path.assign(absolute.data(), written);
+            }
+        }
+        if (output_path.empty()) {
+            output_path = candidate;
+        }
+        return true;
+    }
+    catch (...) {
+        output_path.clear();
         return false;
     }
-    output.write(reinterpret_cast<const char*>(bytes.data()),
-        static_cast<std::streamsize>(bytes.size()));
-    output.close();
-    if (!output) {
-        fs::remove(temporary, error);
-        return false;
-    }
-    fs::rename(temporary, candidate, error);
-    if (error) {
-        fs::remove(temporary, error);
-        return false;
-    }
-    output_path = fs::absolute(candidate, error).string();
-    return !error;
 }
 
 } // namespace ranker

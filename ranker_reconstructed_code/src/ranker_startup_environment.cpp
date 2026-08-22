@@ -60,6 +60,15 @@ LONG CALLBACK log_startup_vectored_exception(EXCEPTION_POINTERS* pointers) {
         record.ExceptionAddress, ip, image_base,
         static_cast<unsigned long>(record.NumberParameters),
         reinterpret_cast<void*>(info0), reinterpret_cast<void*>(info1));
+    if (record.ExceptionCode == 0x20474343UL) {
+        void* frames[32]{};
+        const USHORT frame_count = CaptureStackBackTrace(
+            0, 32, frames, nullptr);
+        for (USHORT index = 0; index < frame_count; ++index) {
+            append_startup_log("SEH cxx stack[%u]=%p",
+                static_cast<unsigned>(index), frames[index]);
+        }
+    }
     return EXCEPTION_CONTINUE_SEARCH;
 }
 #endif
