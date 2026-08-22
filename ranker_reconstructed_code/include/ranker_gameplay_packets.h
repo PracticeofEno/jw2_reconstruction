@@ -250,6 +250,10 @@ struct Mode1GameplayPacketDispatchState {
     bool vote_collection_active = false;
     bool all_votes_received = false;
     bool player_inactive_notification_pending = false;
+    // True only when the most recent inactive notification was synthesized
+    // from subtype 0x15 (for example, an unexpected transport departure).
+    // A normal subtype-0x13 surrender must not be classified as a P2P drop.
+    bool last_inactive_notification_synthetic = false;
     bool missing_handler_seen = false;
     bool corrective_mismatch_detected = false;
     bool generic_ai_profile_mode = false;
@@ -258,6 +262,47 @@ struct Mode1GameplayPacketDispatchState {
     void* user_data = nullptr;
     void* runtime_user_data = nullptr;
 };
+
+// A socket relay member-left can arrive after this client has already consumed
+// its own ordered surrender/quit packet.  The remaining peer commonly leaves
+// the relay first while both clients are transitioning to results; that is a
+// normal terminal departure, not a dropped player.
+constexpr bool ShouldSuppressMode1TerminalPeerDepartureNotification(
+    bool synthetic_notification, bool local_terminal_vote_open,
+    bool local_inactive_packet_consumed, bool session_complete_requested) {
+    return synthetic_notification && local_terminal_vote_open &&
+        (local_inactive_packet_consumed || session_complete_requested);
+}
+
+// The reliable timeout screen is useful while an active match is genuinely
+// waiting for a peer. Once this client deliberately opened its terminal vote
+// (surrender, defeat, or quit), showing that screen before the result scene
+// falsely presents the expected consensus delay as a network drop.
+constexpr bool ShouldOpenMode1ReliableWaitDialog(
+    bool local_terminal_vote_open) {
+    return !local_terminal_vote_open;
+}
+
+// WizardNet normally flushes a newly published ordered range while more than
+// one gameplay participant remains active.  Terminal subtype 0x13/0x1d is the
+// exception: local/remote inactive bookkeeping can reduce the cached count
+// before the surrender handshake is fully on the wire.  Always flush those
+// two ordered packets on the relay transport; their sequence and dispatch
+// order are still enforced by the reliable ring on both peers.
+constexpr bool ShouldFlushMode1PublishedRange(bool auto_broadcast,
+    i32 network_transport_mode, u32 active_player_count, u8 subtype) {
+    return auto_broadcast ||
+        (network_transport_mode == 3 &&
+            (active_player_count > 1 || subtype == 0x13 || subtype == 0x1d));
+}
+
+constexpr bool ShouldCaptureMode1RemoteInactiveDrop(u32 inactive_packet_count,
+    bool synthetic_notification, u32 target_slot, u32 local_slot,
+    bool expected_terminal_peer_departure) {
+    return inactive_packet_count != 0 && synthetic_notification &&
+        !expected_terminal_peer_departure &&
+        target_slot < kMode1ReliableChannelCount && target_slot != local_slot;
+}
 
 // The original live-P2P loop cannot raise its terminal consensus byte until
 // the local subtype-0x13 packet has passed through the ordered packet pump.
@@ -272,16 +317,23 @@ constexpr bool CanSynthesizeMode1SessionCompletion(
 }
 
 // DirectPlay raises the common session-complete edge on the surviving peer
-// when the final remote player departs.  The socket-backed WizardNet bridge
-// has no separate DPSYS_DESTROYPLAYER message, so accept the ordered remote
-// inactive transition as that edge even when the survivor never opened its
-// own terminal vote.  A peer which did open a vote still has to consume its
-// local subtype-0x13 packet before leaving so Replay.tmp retains the terminal
-// command boundary.
+// when the final remote transport player departs.  The socket-backed
+// WizardNet bridge synthesizes that edge from member-left.  A peer which did
+// open a vote still has to consume its local subtype-0x13 packet before
+// leaving so Replay.tmp retains the terminal command boundary.
 constexpr bool CanSynthesizeMode1SessionCompletion(
     bool local_terminal_vote_open, bool local_inactive_packet_consumed,
-    bool remote_network_player_seen,
+    bool transport_departure_seen, bool remote_network_player_seen,
     bool all_remote_network_players_inactive) {
+    // Ordered subtype-0x13 is not a transport departure.  Its handler has
+    // already published subtype-0x1d, and the original keeps both peers in
+    // the reliable pump until that vote completes.  Treating the resulting
+    // disabled slot as a DPSYS_DESTROYPLAYER edge lets the survivor leave the
+    // relay before the surrendering peer consumes its vote, so that peer can
+    // only finish after a much later member-left notification.
+    if (!transport_departure_seen) {
+        return false;
+    }
     if (local_terminal_vote_open) {
         return CanSynthesizeMode1SessionCompletion(
             local_inactive_packet_consumed, remote_network_player_seen,

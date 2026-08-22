@@ -18,6 +18,7 @@ from typing import Callable
 import relay_server_summary_check
 
 try:
+    import win32api
     import win32con
     import win32gui
     import win32process
@@ -34,6 +35,8 @@ LB_GETTEXT = 0x0189
 LB_GETTEXTLEN = 0x018A
 LB_GETCOUNT = 0x018B
 LBN_SELCHANGE = 1
+CB_SETCURSEL = 0x014E
+CBN_SELENDOK = 9
 
 CONNECT_WIZARD_BUTTON_ID = 2000
 LOBBY_CREATE_GAME_ID = 3015
@@ -41,6 +44,7 @@ LOBBY_JOIN_GAME_ID = 3017
 LOGIN_ACCOUNT_EDIT_ID = 5002
 LOGIN_PASSWORD_EDIT_ID = 5003
 CREATE_GAME_NAME_EDIT_ID = 0x1770
+CREATE_GAME_TYPE_COMBO_ID = 0x1772
 CREATE_GAME_SCENARIO_LIST_ID = 0x1775
 CREATE_GAME_CREATE_BUTTON_ID = 0x177C
 JOIN_GAME_LIST_ID = 0x1B5C
@@ -88,6 +92,14 @@ def make_wparam(low: int, high: int = 0) -> int:
 
 
 def send_command(hwnd: int, command_id: int, notify: int = 0, control: int = 0) -> None:
+    # The rebuilt frontend can enter COM-backed modal/audio work from a
+    # WM_COMMAND handler.  A cross-process SendMessage makes that work execute
+    # inside an input-synchronous callback and can fail with
+    # RPC_E_CANTCALLOUT_ININPUTSYNCCALL.  Real mouse/keyboard commands are
+    # queued, so make the smoke driver follow that boundary too.
+    if notify != 0:
+        win32gui.PostMessage(hwnd, WM_COMMAND, make_wparam(command_id, notify), control)
+        return
     win32gui.SendMessage(hwnd, WM_COMMAND, make_wparam(command_id, notify), control)
 
 
@@ -222,7 +234,15 @@ def wait_connect_window(client: Client, timeout: float) -> int:
         if last_hwnd:
             client.windows["connect"] = last_hwnd
             return last_hwnd
-        win32gui.SendMessage(client.main_window, WM_CHAR, ord("M"), 0)
+        # Deliver this as ordinary keyboard input.  The title transition does
+        # DirectShow/COM work and must not run inside an inter-thread
+        # input-synchronous SendMessage callback.
+        try:
+            win32gui.SetForegroundWindow(client.main_window)
+        except win32gui.error:
+            pass
+        win32api.keybd_event(ord("M"), 0, 0, 0)
+        win32api.keybd_event(ord("M"), 0, win32con.KEYEVENTF_KEYUP, 0)
         time.sleep(0.5)
     raise TimeoutError(
         f"timed out waiting for {client.label} Connect window; last={last_hwnd!r}"
@@ -286,7 +306,7 @@ def select_scenario_index(items: list[str], min_players: int) -> int:
 
 
 def select_listbox(parent: int, listbox: int, control_id: int, index: int) -> None:
-    win32gui.SendMessage(listbox, LB_SETCURSEL, index, 0)
+    win32gui.PostMessage(listbox, LB_SETCURSEL, index, 0)
     send_command(parent, control_id, LBN_SELCHANGE, listbox)
 
 
@@ -367,12 +387,27 @@ def open_wizard_lobby(client: Client, timeout: float) -> int:
 
 
 def create_room(
-    client: Client, room_name: str, timeout: float, min_players: int
+    client: Client,
+    room_name: str,
+    timeout: float,
+    min_players: int,
+    game_type_index: int | None = None,
+    scenario_index_override: int | None = None,
 ) -> dict[str, object]:
     lobby = client.windows["lobby"]
     send_command(lobby, LOBBY_CREATE_GAME_ID)
     create = wait_child(client, "create_game", "Create Game", timeout)
     set_text(create, CREATE_GAME_NAME_EDIT_ID, room_name)
+    if game_type_index is not None:
+        game_type_combo = child_by_id(create, CREATE_GAME_TYPE_COMBO_ID)
+        win32gui.PostMessage(game_type_combo, CB_SETCURSEL, game_type_index, 0)
+        send_command(
+            create,
+            CREATE_GAME_TYPE_COMBO_ID,
+            CBN_SELENDOK,
+            game_type_combo,
+        )
+        time.sleep(0.5)
     scenario_list = child_by_id(create, CREATE_GAME_SCENARIO_LIST_ID)
     wait_for(
         f"{client.label} scenario list",
@@ -380,7 +415,15 @@ def create_room(
         timeout,
     )
     scenario_items = listbox_items(scenario_list)
-    scenario_index = select_scenario_index(scenario_items, min_players)
+    scenario_index = (
+        scenario_index_override
+        if scenario_index_override is not None
+        else select_scenario_index(scenario_items, min_players)
+    )
+    if scenario_index < 0 or scenario_index >= len(scenario_items):
+        raise ValueError(
+            f"scenario index {scenario_index} is outside {len(scenario_items)} items"
+        )
     select_listbox(create, scenario_list, CREATE_GAME_SCENARIO_LIST_ID, scenario_index)
     send_command(create, CREATE_GAME_CREATE_BUTTON_ID)
     link = wait_child(client, "link", "Link", timeout)
@@ -388,6 +431,8 @@ def create_room(
         "scenario_index": scenario_index,
         "scenario": scenario_items[scenario_index] if scenario_items else "",
         "min_players": min_players,
+        "game_type_index": game_type_index,
+        "scenario_index_override": scenario_index_override,
         "link_hwnd": f"0x{link:08x}",
     }
 
@@ -828,7 +873,12 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     try:
         open_wizard_lobby(host, args.timeout)
         result["host_create"] = create_room(
-            host, room_name, args.timeout, args.joiner_count + 1
+            host,
+            room_name,
+            args.timeout,
+            args.joiner_count + 1,
+            args.game_type_index,
+            args.scenario_index,
         )
 
         for index in range(args.joiner_count):
@@ -939,6 +989,8 @@ def main() -> int:
     parser.add_argument("--password", default="pw")
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--post-wait", type=float, default=1.0)
+    parser.add_argument("--game-type-index", type=int)
+    parser.add_argument("--scenario-index", type=int)
     parser.add_argument("--start-game", action="store_true")
     parser.add_argument("--start-delay", type=float, default=1.0)
     parser.add_argument("--assert-relay-only", action="store_true")

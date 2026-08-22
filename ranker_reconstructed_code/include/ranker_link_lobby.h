@@ -59,8 +59,17 @@ constexpr UINT kLinkLobbyOwnerSyncMessage = 0x50e;
 constexpr UINT kLinkLobbySocketMessage = 0x50f;
 constexpr UINT kLinkLobbyStartSyncPumpMessage = 0x510;
 
-constexpr bool ShouldShowLinkLobbyStartButton(bool host_mode) {
-    return host_mode;
+constexpr bool ShouldShowLinkLobbyStartButton(bool host_mode,
+    bool wizardnet_relay_session = false,
+    bool wizardnet_relay_host = false) {
+    return host_mode &&
+        (!wizardnet_relay_session || wizardnet_relay_host);
+}
+constexpr bool ShouldMaskLinkLobbyStartButtonBackground(bool host_mode,
+    bool wizardnet_relay_session = false,
+    bool wizardnet_relay_host = false) {
+    return !ShouldShowLinkLobbyStartButton(
+        host_mode, wizardnet_relay_session, wizardnet_relay_host);
 }
 constexpr std::size_t kLinkLobbyPlayerPayloadBytes = 0x3f4;
 constexpr std::size_t kLinkLobbyPlayerPayloadBodyBytes = 0x3a0;

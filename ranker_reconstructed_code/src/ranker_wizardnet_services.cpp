@@ -61,11 +61,21 @@ bool queue_packet(LegacyAsyncTcpSocket& socket, std::vector<u8>& packet) {
 }
 
 std::string replay_leaf_name(const char* path) {
-    namespace fs = std::filesystem;
     if (path == nullptr || *path == '\0') {
         return "Replay.ply";
     }
-    std::string result = fs::path(path).filename().string();
+
+    // Replay paths come from the original ANSI/CP_ACP game UI.  Constructing
+    // a std::filesystem::path here makes MinGW try to transcode those bytes
+    // through the C locale, which throws for Korean map names during the
+    // post-game upload and prevents the client from returning to WizardNet.
+    // The relay protocol also expects the original legacy bytes, so extract
+    // the leaf name without changing its encoding.
+    std::string result(path);
+    const std::size_t separator = result.find_last_of("\\/");
+    if (separator != std::string::npos) {
+        result.erase(0, separator + 1);
+    }
     return result.empty() ? "Replay.ply" : result;
 }
 

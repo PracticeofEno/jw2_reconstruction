@@ -5214,7 +5214,19 @@ void default_gameplay_modal_reset_and_publish_inactive(GameplayModalUiState&) {
         ResolveGameplayManualLeaveResult(
             gameplay_loop_state().simulation_frame_counter,
             local_forces_early_result);
-    ResetAndPublishPlayerInactiveState(input);
+    const bool published = ResetAndPublishPlayerInactiveState(input);
+    append_startup_log(
+        "p2p terminal: local inactive published=%s frame=%lu result=%lu "
+        "active_players=%lu range=%lu..%lu",
+        published ? "yes" : "no",
+        static_cast<unsigned long>(
+            gameplay_loop_state().simulation_frame_counter),
+        static_cast<unsigned long>(
+            g_runtime.gameplay_end_condition_state.result_code),
+        static_cast<unsigned long>(
+            mode1_gameplay_packet_dispatch_state().active_player_count),
+        static_cast<unsigned long>(mode1_reliable_state().local_broadcast_start),
+        static_cast<unsigned long>(mode1_reliable_state().local_broadcast_end));
 }
 
 void default_gameplay_modal_publish_relation_mask(
@@ -5430,6 +5442,8 @@ void configure_default_gameplay_modal_ui_callbacks(GameplayModalUiState& state) 
     state.center_height = overlay.world_viewport_height != 0 ?
         overlay.world_viewport_height : state.fallback_center_height;
     state.catchup_enabled = gameplay_loop_state().catchup_enabled;
+    state.gameplay_frame_counter =
+        gameplay_loop_state().simulation_frame_counter;
     state.local_player_index = mode1_reliable_state().local_player_index;
     state.transport_mode = static_cast<u32>(
         std::max<i32>(async_com_state().active_network_transport_mode, 0));
@@ -15035,14 +15049,30 @@ bool default_gameplay_loop_frame_gate(GameplayLoopState& state) {
         PumpMode1ReliablePackets(
             g_runtime.generic_ai_profile_mode, scenario_ai_profile_override,
             state.current_tick_ms);
+    // The relay preserves TCP order, but its transport pump queues mode-1
+    // payloads and member-left notifications separately. The reliable pump
+    // has now advanced all available ordered gameplay packets, so only now is
+    // it safe to translate a still-active peer's member-left into the original
+    // DirectPlay departure decision. A subtype-0x13 surrender from the same
+    // TCP batch must disable the peer first.
     Mode1GameplayPacketDispatchState& packet_dispatch =
         mode1_gameplay_packet_dispatch_state();
+    if (WizardNetRelayEnabled()) {
+        ProcessWizardNetRelayMemberLeftEvents();
+    }
+    const bool expected_terminal_peer_departure =
+        ShouldSuppressMode1TerminalPeerDepartureNotification(
+            packet_dispatch.last_inactive_notification_synthetic,
+            gameplay_input_action_state().player_reset_gate,
+            packet_dispatch.local_inactive_packet_consumed,
+            packet_dispatch.session_complete_requested);
     const bool corrective_drop = packet_dispatch.corrective_mismatch_detected;
-    const bool remote_inactive_drop =
-        packet_dispatch.player_inactive_packets != 0 &&
-        packet_dispatch.last_inactive_notification_target < kPlayerSlotCount &&
-        packet_dispatch.last_inactive_notification_target !=
-            packet_dispatch.local_player_index;
+    const bool remote_inactive_drop = ShouldCaptureMode1RemoteInactiveDrop(
+        packet_dispatch.player_inactive_packets,
+        packet_dispatch.last_inactive_notification_synthetic,
+        packet_dispatch.last_inactive_notification_target,
+        packet_dispatch.local_player_index,
+        expected_terminal_peer_departure);
     if ((corrective_drop || remote_inactive_drop) &&
         !p2p_flight_recorder_state().drop_capture_attempted) {
         P2PSyncMismatchCaptureInfo mismatch{};
@@ -17095,6 +17125,21 @@ const char* inactive_player_notification_suffix_fallback(u32 code) {
 
 void default_mode1_packet_queue_player_inactive_notification(void*,
     u32 target_slot, u32, u32 lobby_code) {
+    const Mode1GameplayPacketDispatchState& packet_dispatch =
+        mode1_gameplay_packet_dispatch_state();
+    if (ShouldSuppressMode1TerminalPeerDepartureNotification(
+            packet_dispatch.last_inactive_notification_synthetic,
+            gameplay_input_action_state().player_reset_gate,
+            packet_dispatch.local_inactive_packet_consumed,
+            packet_dispatch.session_complete_requested)) {
+        append_startup_log(
+            "player-inactive: suppressed expected terminal peer departure "
+            "target=%lu code=%lu",
+            static_cast<unsigned long>(target_slot),
+            static_cast<unsigned long>(lobby_code));
+        return;
+    }
+
     std::string name;
     if (target_slot < g_runtime.gameplay_startup_state.owner_display_names.size()) {
         name = g_runtime.gameplay_startup_state.owner_display_names[target_slot];
@@ -17295,8 +17340,16 @@ void default_mode1_reliable_sync_ready(void*) {
 }
 
 void default_mode1_reliable_sync_timeout(void*) {
-    sync_default_gameplay_modal_players(gameplay_modal_ui_state());
-    OpenGameplayWaitDialog(gameplay_modal_ui_state());
+    GameplayModalUiState& modal = gameplay_modal_ui_state();
+    if (!ShouldOpenMode1ReliableWaitDialog(
+            gameplay_input_action_state().player_reset_gate)) {
+        // Keep the ordered terminal protocol running in the background, but
+        // do not cover its pending result scene with the network wait/drop UI.
+        CloseGameplayWaitDialog(modal);
+        return;
+    }
+    sync_default_gameplay_modal_players(modal);
+    OpenGameplayWaitDialog(modal);
 }
 
 void default_mode1_wrapped_packet_published(
@@ -30844,6 +30897,7 @@ void run_default_gameplay_end_condition_monitor(GameplayLoopState& state) {
         packets.session_complete_requested = CanSynthesizeMode1SessionCompletion(
             local_terminal_vote_open,
             packets.local_inactive_packet_consumed,
+            packets.last_inactive_notification_synthetic,
             remote_network_player_seen,
             all_remote_network_players_inactive);
         if (packets.session_complete_requested && !local_terminal_vote_open) {
@@ -30866,6 +30920,20 @@ void run_default_gameplay_end_condition_monitor(GameplayLoopState& state) {
         // per-player win/loss detection flag: the latter publishes subtype
         // 0x13 and keeps simulating, while the former enters the common
         // post-result path after every peer has acknowledged the outcome.
+        u32 vote_mask = 0;
+        for (u32 player = 0; player < packets.vote_completion_seen.size(); ++player) {
+            if (packets.vote_completion_seen[player] != 0) {
+                vote_mask |= 1u << player;
+            }
+        }
+        append_startup_log(
+            "p2p terminal: consensus frame=%lu local_consumed=%s "
+            "subtype13=%lu subtype1d=%lu votes=0x%02lx",
+            static_cast<unsigned long>(state.simulation_frame_counter),
+            packets.local_inactive_packet_consumed ? "yes" : "no",
+            static_cast<unsigned long>(packets.dispatch_counts[0x13]),
+            static_cast<unsigned long>(packets.dispatch_counts[0x1d]),
+            static_cast<unsigned long>(vote_mask));
         CloseAllMilesEffectPlaylistStreams();
         packets.session_complete_requested = false;
         state.modal_subloop_active = g_runtime.generic_ai_profile_mode;

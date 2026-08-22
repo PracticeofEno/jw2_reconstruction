@@ -308,32 +308,40 @@ void CaptureP2PFlightFrame(u32 simulation_frame, u32 gameplay_rng_seed,
 }
 
 bool PersistP2PDropCapture(const P2PSyncMismatchCaptureInfo& mismatch,
-    const ReplayRecordingState& replay) {
+    const ReplayRecordingState& replay) noexcept {
     P2PFlightRecorderState& state = g_p2p_flight_recorder;
     if (state.drop_capture_attempted || replay.playback_mode) {
         return state.replay_saved || state.trace_saved;
     }
     state.drop_capture_attempted = true;
 
-    const std::string stem = "P2PDrop_" + capture_timestamp() + "_" +
-        capture_trigger_name(mismatch.trigger) + "_f" +
-        std::to_string(mismatch.detected_frame) + "_s" +
-        std::to_string(mismatch.sequence);
-    const std::filesystem::path directory = capture_directory();
-    const std::filesystem::path replay_path = directory / (stem + ".ply");
-    const std::filesystem::path trace_path = directory / (stem + ".sync.csv");
+    try {
+        const std::string stem = "P2PDrop_" + capture_timestamp() + "_" +
+            capture_trigger_name(mismatch.trigger) + "_f" +
+            std::to_string(mismatch.detected_frame) + "_s" +
+            std::to_string(mismatch.sequence);
+        const std::filesystem::path directory = capture_directory();
+        const std::filesystem::path replay_path = directory / (stem + ".ply");
+        const std::filesystem::path trace_path =
+            directory / (stem + ".sync.csv");
 
-    state.trace_saved = write_trace_csv(trace_path, state, mismatch);
-    if (state.trace_saved) {
-        state.last_trace_path = trace_path.string();
+        state.trace_saved = write_trace_csv(trace_path, state, mismatch);
+        if (state.trace_saved) {
+            state.last_trace_path = trace_path.string();
+        }
+        // A synchronization capture occurs before the normal result flow.
+        // Save a snapshot so appending the diagnostic end packet and closing
+        // its writer cannot consume the live recording or hide the result
+        // screen's save button.
+        state.replay_saved = SaveReplayRecordingArchiveSnapshot(
+            replay_path.string().c_str(), replay);
+        if (state.replay_saved) {
+            state.last_replay_path = replay_path.string();
+        }
     }
-    // A synchronization capture occurs before the normal result flow. Save a
-    // snapshot so appending the diagnostic end packet and closing its writer
-    // cannot consume the live recording or hide the result-screen save button.
-    state.replay_saved = SaveReplayRecordingArchiveSnapshot(
-        replay_path.string().c_str(), replay);
-    if (state.replay_saved) {
-        state.last_replay_path = replay_path.string();
+    catch (...) {
+        // Flight recording is diagnostic-only. An allocation, filesystem, or
+        // archive exception must never terminate the synchronized game loop.
     }
     return state.replay_saved || state.trace_saved;
 }

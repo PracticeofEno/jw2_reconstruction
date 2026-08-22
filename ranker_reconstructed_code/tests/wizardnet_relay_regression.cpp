@@ -16,16 +16,25 @@
 
 namespace ranker {
 
+PlayerSlotRuntimeState g_test_player_slot_state{};
+u32 g_test_inactive_broadcast_count = 0;
+u32 g_test_inactive_source_slot = 0xffffffffu;
+u32 g_test_inactive_target_slot = 0xffffffffu;
+
 bool DispatchMode1GameplayPacket(const Mode1ReliablePacket&) {
     return false;
 }
 
 PlayerSlotRuntimeState& player_slot_state() {
-    static PlayerSlotRuntimeState state{};
-    return state;
+    return g_test_player_slot_state;
 }
 
-void MarkPlayerInactiveAndBroadcastIfLocal(PlayerSlotRuntimeState&, u32, u32) {}
+void MarkPlayerInactiveAndBroadcastIfLocal(PlayerSlotRuntimeState&, u32 source_slot,
+    u32 target_slot) {
+    ++g_test_inactive_broadcast_count;
+    g_test_inactive_source_slot = source_slot;
+    g_test_inactive_target_slot = target_slot;
+}
 
 }
 
@@ -755,6 +764,46 @@ int main() {
     }
     if (ranker::TakeWizardNetRelayMemberLeft(left_game, left_member)) {
         return fail("relay member-left event was queued more than once");
+    }
+
+    // A subtype-0x13 surrender is dispatched by the reliable gameplay pump
+    // before member-left cleanup. Once that packet has disabled the peer, the
+    // transport notification must only clear its relay/player mapping.
+    ranker::g_test_player_slot_state = ranker::PlayerSlotRuntimeState{};
+    ranker::g_test_player_slot_state.local_player_slot = 0;
+    ranker::g_test_player_slot_state.slot_states.fill(
+        static_cast<unsigned char>(ranker::PlayerSlotState::disabled));
+    ranker::g_test_inactive_broadcast_count = 0;
+    ranker::ConfigureWizardNetRelayState(game_id, 2, false);
+    ranker::SetWizardNetRelayPlayerMember(3, 5);
+    std::memcpy(socket.receive_buffer.data(), member_left.data(),
+        member_left.size());
+    socket.receive_length = static_cast<i32>(member_left.size());
+    if (!ranker::PumpWizardNetRelayMode1Frames()) {
+        return fail("graceful relay member-left was not queued");
+    }
+    ranker::ProcessWizardNetRelayMemberLeftEvents();
+    if (ranker::g_test_inactive_broadcast_count != 0) {
+        return fail("graceful surrender synthesized a transport drop");
+    }
+
+    // A member-left for a still-active protocol slot remains a real transport
+    // departure and must retain the diagnostic/consensus synthesis path.
+    ranker::g_test_player_slot_state.slot_states[3] =
+        static_cast<unsigned char>(ranker::PlayerSlotState::active);
+    ranker::ConfigureWizardNetRelayState(game_id, 2, false);
+    ranker::SetWizardNetRelayPlayerMember(3, 5);
+    std::memcpy(socket.receive_buffer.data(), member_left.data(),
+        member_left.size());
+    socket.receive_length = static_cast<i32>(member_left.size());
+    if (!ranker::PumpWizardNetRelayMode1Frames()) {
+        return fail("unexpected relay member-left was not queued");
+    }
+    ranker::ProcessWizardNetRelayMemberLeftEvents();
+    if (ranker::g_test_inactive_broadcast_count != 1 ||
+        ranker::g_test_inactive_source_slot != 3 ||
+        ranker::g_test_inactive_target_slot != 0) {
+        return fail("unexpected relay member-left was not synthesized");
     }
 
     ranker::ResetLegacyAsyncTcpSocketQueues(socket);

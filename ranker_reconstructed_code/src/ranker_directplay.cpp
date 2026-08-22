@@ -1635,8 +1635,11 @@ void ProcessWizardNetRelayMemberLeftEvents() {
             player_slot = 0;
         }
         if (player_slot < kPlayerSlotCount) {
+            const bool synthesize_departure =
+                ShouldSynthesizeTransportPlayerDeparture(
+                    player_slot_state().slot_states[player_slot]);
             SetWizardNetRelayPlayerMember(player_slot, 0);
-            ClearDirectPlayPlayerSlotId(player_slot, true);
+            ClearDirectPlayPlayerSlotId(player_slot, synthesize_departure);
         }
         if (member_id == 1 && !relay.host_mode &&
             WizardNetRelayReadyForGame(game_id)) {
@@ -1654,7 +1657,6 @@ void PumpLegacyUdpMode1Messages(AsyncComContext* context) {
             network.udp_receive_queue.size();
         if (relay_enabled) {
             PumpWizardNetRelayMode1Frames();
-            ProcessWizardNetRelayMemberLeftEvents();
         } else {
             ReceiveLegacyUdpPacket();
         }

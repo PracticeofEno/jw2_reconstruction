@@ -112,6 +112,16 @@ void append_link_lobby_log(const char* format, ...) {
     std::fputc('\n', file);
     std::fclose(file);
 }
+
+bool link_lobby_has_start_authority(const LinkLobbyState& state) {
+    const bool wizardnet_relay_session =
+        state.mode == 0 && WizardNetRelayEnabled();
+    const bool wizardnet_relay_host =
+        wizardnet_relay_session && wizardnet_relay_state().host_mode;
+    return ShouldShowLinkLobbyStartButton(state.host_mode,
+        wizardnet_relay_session, wizardnet_relay_host);
+}
+
 constexpr std::size_t kLinkLobbyMapDescriptorFileNameOffset = 0x19c;
 constexpr std::size_t kLinkLobbyMapDescriptorFileNameBytes = 0x100;
 constexpr std::size_t kLinkLobbyMapDescriptorFileSizeOffset = 0x29c;
@@ -814,6 +824,38 @@ void draw_scaled_link_lobby_bitmap_at(const BitmapMemoryResource& bitmap,
     const BitmapDrawRect source{
         bitmap.source_x, bitmap.source_y, bitmap.width, bitmap.height};
     StretchBitmapMemoryResourceRectToDc(bitmap, dc, destination, source);
+}
+
+void draw_link_lobby_background(LinkLobbyState& state, HDC dc) {
+    StretchBitmapMemoryResourceToClient(state.background, dc, state.window);
+
+    // LinkBG.bmp already contains the normal Start Game button artwork.  A
+    // non-host therefore still appears to have a start button even when its
+    // child control is correctly omitted.  Restore a same-row piece of the
+    // bare lower panel over that baked artwork for clients without authority.
+    if (ShouldMaskLinkLobbyStartButtonBackground(state.host_mode,
+            state.game_type == 8, wizardnet_relay_state().host_mode)) {
+        constexpr int kBarePanelSourceX = 42;
+        constexpr int kBarePanelSourceTopY = 533;
+        constexpr int kStartButtonLegacyWidth = 170;
+        constexpr int kStartButtonLegacyHeight = 52;
+        const LinkLobbyLayoutRect destination_layout = layout_at(state, 5);
+        const BitmapDrawRect destination{
+            destination_layout.x, destination_layout.y,
+            destination_layout.width, destination_layout.height};
+        const BitmapDrawRect source{
+            kBarePanelSourceX,
+            std::abs(state.background.height) - kBarePanelSourceTopY -
+                kStartButtonLegacyHeight,
+            kStartButtonLegacyWidth, kStartButtonLegacyHeight};
+        StretchBitmapMemoryResourceRectToDc(
+            state.background, dc, destination, source);
+    }
+
+    if (state.game_type == 8) {
+        draw_scaled_link_lobby_bitmap_at(
+            state.download_background, dc, 600, 277);
+    }
 }
 
 int link_lobby_active_start_slot_count(const LinkLobbyState& state) {
@@ -3283,11 +3325,13 @@ void DisableLinkLobbyPlayerRoleComboBox(LinkLobbyState& state, int player_index)
 }
 
 bool CreateLinkLobbyPlayerRoleControls(LinkLobbyState& state) {
-    // The image button is created WS_VISIBLE while the parent is still hidden.
-    // Apply ownership before any layout-specific early return so joined peers
-    // never inherit that default visibility in seedless or single-group rooms.
-    ShowWindow(state.start_button.window,
-        ShouldShowLinkLobbyStartButton(state.host_mode) ? SW_SHOW : SW_HIDE);
+    // Non-host rooms do not create this control at all. Merely hiding a
+    // WS_VISIBLE owner-draw child was not durable across the reconstructed
+    // frontend's popup reparent/show sequence.
+    if (state.start_button.window != nullptr) {
+        ShowWindow(state.start_button.window,
+            link_lobby_has_start_authority(state) ? SW_SHOW : SW_HIDE);
+    }
 
     if (!link_lobby_session_seed_present(state)) {
         if (!CreateLinkLobbyTabButtons(state)) {
@@ -6805,6 +6849,16 @@ bool ClearLinkLobbyDirectPlayJoinDisabled(LinkLobbyState& state) {
 }
 
 bool SubmitLinkLobbyStartRequest(LinkLobbyState& state) {
+    if (!link_lobby_has_start_authority(state)) {
+        append_link_lobby_log(
+            "link submit start rejected without host authority "
+            "state_host=%s relay_host=%s mode=%ld",
+            state.host_mode ? "yes" : "no",
+            wizardnet_relay_state().host_mode ? "yes" : "no",
+            static_cast<long>(state.mode));
+        return false;
+    }
+
     append_link_lobby_log(
         "link submit start begin host=%s mode=%ld game_type=%ld max_players=%lu local=%ld",
         state.host_mode ? "yes" : "no",
@@ -7348,8 +7402,9 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
             kChatEditStyle, kLinkLobbyChatEditId, layout_at(state, 3)) ||
         !create_button(state.game_info_button, state.window, "Game infos",
             kLinkLobbyInfoPanelId, layout_at(state, 4), 0, 0) ||
-        !create_button(state.start_button, state.window, "Start &Game",
-            kLinkLobbyStartButtonId, layout_at(state, 5), 0x87, 0x88) ||
+        (link_lobby_has_start_authority(state) &&
+            !create_button(state.start_button, state.window, "Start &Game",
+                kLinkLobbyStartButtonId, layout_at(state, 5), 0x87, 0x88)) ||
         !create_button(state.cancel_button, state.window, "&Cancel",
             kLinkLobbyCancelButtonId, layout_at(state, 6), 0x8a, 0x8b) ||
         !create_combo(state.start_resource_combo, state.window, "Start resource",
@@ -7403,6 +7458,13 @@ bool CreateLinkLobbyWindow(LinkLobbyState& state, HWND parent, HINSTANCE instanc
         release_resources(state);
         return false;
     }
+    append_link_lobby_log(
+        "link start control state_host=%s relay_host=%s created=%s visible=%s",
+        state.host_mode ? "yes" : "no",
+        wizardnet_relay_state().host_mode ? "yes" : "no",
+        state.start_button.window != nullptr ? "yes" : "no",
+        state.start_button.window != nullptr &&
+            IsWindowVisible(state.start_button.window) ? "yes" : "no");
     for (int i = 0; i < kLinkLobbyAvatarCount; ++i) {
         if (!create_button(state.avatar_buttons[i], state.window, "AvataSlot",
                 kLinkLobbyAvatarFirstId + i, layout_at(state, 14 + i), 0, 0)) {
@@ -7552,11 +7614,7 @@ LRESULT HandleLinkLobbyWindowMessage(LinkLobbyState& state, HWND hwnd, UINT mess
         if (hwnd == state.window) {
             PAINTSTRUCT paint{};
             HDC dc = BeginPaint(hwnd, &paint);
-            StretchBitmapMemoryResourceToClient(state.background, dc, state.window);
-            if (state.game_type == 8) {
-                draw_scaled_link_lobby_bitmap_at(
-                    state.download_background, dc, 600, 277);
-            }
+            draw_link_lobby_background(state, dc);
             EndPaint(hwnd, &paint);
             return 0;
         }
@@ -7564,11 +7622,7 @@ LRESULT HandleLinkLobbyWindowMessage(LinkLobbyState& state, HWND hwnd, UINT mess
     case WM_ERASEBKGND:
         if (hwnd == state.window) {
             HDC dc = reinterpret_cast<HDC>(wparam);
-            StretchBitmapMemoryResourceToClient(state.background, dc, state.window);
-            if (state.game_type == 8) {
-                draw_scaled_link_lobby_bitmap_at(
-                    state.download_background, dc, 600, 277);
-            }
+            draw_link_lobby_background(state, dc);
             return 1;
         }
         break;
@@ -7718,7 +7772,7 @@ LRESULT HandleLinkLobbyWindowMessage(LinkLobbyState& state, HWND hwnd, UINT mess
         }
         if (id == kLinkLobbyStartButtonId) {
             HandleDefaultFrontendUiClickSound();
-            if (ShouldShowLinkLobbyStartButton(state.host_mode)) {
+            if (link_lobby_has_start_authority(state)) {
                 SubmitLinkLobbyStartRequest(state);
             }
             return 0;

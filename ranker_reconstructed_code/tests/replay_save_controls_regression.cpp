@@ -54,20 +54,37 @@ void verify_terminal_packet_replay_boundary() {
     require(CanSynthesizeMode1SessionCompletion(true, true, true),
         "a consumed local vote plus departed remotes must complete the match");
     require(!CanSynthesizeMode1SessionCompletion(
-            false, false, false, true),
+            false, false, false, false, true),
         "a session with no remote participant must not synthesize a departure");
     require(!CanSynthesizeMode1SessionCompletion(
-            false, false, true, false),
+            false, false, true, true, false),
         "a surviving peer must wait while any remote network player is active");
-    require(CanSynthesizeMode1SessionCompletion(
-            false, false, true, true),
-        "the final ordered remote departure must complete the surviving peer");
     require(!CanSynthesizeMode1SessionCompletion(
-            true, false, true, true),
-        "a locally ending peer must still consume its own terminal packet");
+            false, false, false, true, true),
+        "an ordered remote surrender must finish through subtype-0x1d consensus");
     require(CanSynthesizeMode1SessionCompletion(
-            true, true, true, true),
+            false, false, true, true, true),
+        "the final transport departure must complete the surviving peer");
+    require(!CanSynthesizeMode1SessionCompletion(
+            true, false, true, true, true),
+        "a locally ending peer must still consume its own terminal packet");
+    require(!CanSynthesizeMode1SessionCompletion(
+            true, true, false, true, true),
+        "ordered terminal packets must not bypass reliable vote consensus");
+    require(CanSynthesizeMode1SessionCompletion(
+            true, true, true, true, true),
         "a consumed local terminal packet plus departed remotes must complete");
+
+    require(!ShouldFlushMode1PublishedRange(false, 3, 1, 0x02),
+        "ordinary gameplay must not bypass the one-participant relay flush gate");
+    require(ShouldFlushMode1PublishedRange(false, 3, 1, 0x13),
+        "a terminal inactive packet must flush after the active count shrinks");
+    require(ShouldFlushMode1PublishedRange(false, 3, 1, 0x1d),
+        "a terminal completion vote must flush after the active count shrinks");
+    require(!ShouldFlushMode1PublishedRange(false, 1, 1, 0x13),
+        "the WizardNet terminal flush exception must not alter direct P2P");
+    require(ShouldFlushMode1PublishedRange(true, 0, 1, 0x02),
+        "explicit test auto-broadcast must retain precedence");
 }
 
 void verify_replay_live_game_boundary() {

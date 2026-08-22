@@ -1504,21 +1504,25 @@ bool AutoSaveReplayRecordingArchive(const ReplayRecordingState& recording,
         map_name, local.tm_year + 1900, local.tm_mon + 1, local.tm_mday,
         local.tm_hour, local.tm_min, local.tm_sec, player_names);
 
-    namespace fs = std::filesystem;
-    const fs::path directory(resolve_replays_directory());
-    fs::path candidate = directory / leaf;
-    std::error_code error;
-    for (u32 suffix = 2; fs::exists(candidate, error) && !error; ++suffix) {
-        const fs::path base(leaf);
-        candidate = directory /
-            (base.stem().string() + "_" + std::to_string(suffix) +
-                base.extension().string());
-    }
-    if (error) {
-        return false;
+    // Map and player labels are legacy CP_ACP bytes.  Constructing a MinGW
+    // std::filesystem::path directly from those bytes asks the C++ locale to
+    // decode them and throws for Korean replay names.  Keep the original
+    // ANSI/Win32 path boundary here, as the original executable did.
+    const std::string directory = resolve_replays_directory();
+    std::string candidate = append_path(directory, leaf.c_str());
+    const std::size_t slash = leaf.find_last_of("\\/");
+    const std::size_t dot = leaf.find_last_of('.');
+    const bool has_extension = dot != std::string::npos &&
+        (slash == std::string::npos || dot > slash);
+    const std::string stem = has_extension ? leaf.substr(0, dot) : leaf;
+    const std::string extension = has_extension ? leaf.substr(dot) : std::string{};
+    for (u32 suffix = 2; file_exists(candidate); ++suffix) {
+        const std::string suffixed_leaf = stem + "_" +
+            std::to_string(suffix) + extension;
+        candidate = append_path(directory, suffixed_leaf.c_str());
     }
 
-    output_path = full_path(candidate.string());
+    output_path = full_path(candidate);
     return SaveReplayRecordingArchiveSnapshot(
         output_path.c_str(), recording);
 }

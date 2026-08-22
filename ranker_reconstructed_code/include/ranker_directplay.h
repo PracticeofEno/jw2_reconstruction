@@ -201,6 +201,7 @@ i32 SendMode1ReliablePayloadToPlayerDefault(const void* payload, u32 byte_count,
     u32 target_player);
 i32 BroadcastMode1ReliablePayloadDefault(const void* payload, u32 byte_count);
 void InstallDefaultMode1ReliableTransportCallbacks();
+void ProcessWizardNetRelayMemberLeftEvents();
 void PollLegacyUdpMode1MessagesForActiveTransport();
 void PumpLegacyUdpMode1Messages(AsyncComContext* context);
 DWORD WINAPI LegacyUdpMode1ReceiveThreadProc(LPVOID parameter);

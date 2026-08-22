@@ -3079,6 +3079,27 @@ bool OpenGameplayExitSurrenderDialog(GameplayModalUiState& state) {
         }
         set_entry_enabled(modal_screen(kGameplayModalExitSurrenderSlot), 1,
             !state.generic_ai_profile_mode);
+        if (state.generic_ai_profile_mode) {
+            UiScreenDefinition& screen =
+                modal_screen(kGameplayModalExitSurrenderSlot);
+            if (ShouldUseGameplaySurrenderEntry(
+                    state.generic_ai_profile_mode,
+                    state.gameplay_frame_counter,
+                    local_player_slot_state(state))) {
+                // Original FUN_0042e510 replaces entry two with the surrender
+                // sprites and accelerator once the early/draw window closes.
+                set_entry_button_triplet(screen, 2, 0x0f, 0x10);
+                if (screen.entries.size() > 2) {
+                    SetUiScreenEntryI32(screen.entries[2], 0x10, 'S');
+                }
+            }
+            else {
+                set_entry_button_triplet(screen, 2, 0x0d, 0x0e);
+                if (screen.entries.size() > 2) {
+                    SetUiScreenEntryI32(screen.entries[2], 0x10, 'D');
+                }
+            }
+        }
     }
 
     set_cursor_for_gameplay_modal();

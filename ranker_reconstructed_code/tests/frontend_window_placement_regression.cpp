@@ -207,6 +207,14 @@ static_assert(WizardNetOutcomeFromGameplayResult(2) ==
     WizardNetMatchOutcome::Draw);
 static_assert(ShouldShowLinkLobbyStartButton(true));
 static_assert(!ShouldShowLinkLobbyStartButton(false));
+static_assert(ShouldShowLinkLobbyStartButton(true, true, true));
+static_assert(!ShouldShowLinkLobbyStartButton(true, true, false));
+static_assert(!ShouldShowLinkLobbyStartButton(false, true, true));
+static_assert(!ShouldMaskLinkLobbyStartButtonBackground(true));
+static_assert(ShouldMaskLinkLobbyStartButtonBackground(false));
+static_assert(!ShouldMaskLinkLobbyStartButtonBackground(true, true, true));
+static_assert(ShouldMaskLinkLobbyStartButtonBackground(true, true, false));
+static_assert(ShouldMaskLinkLobbyStartButtonBackground(false, true, true));
 static_assert((kScenarioUiVideoBackdropExtendedStyle & 0x00000008u) == 0);
 static_assert(SelectCreateGameWindowPlacement(true, 6) ==
     CreateGameWindowPlacement::contained_child);

@@ -416,11 +416,12 @@ void apply_inactive_player_slot_side_effects(u32 player, u8 lobby_code) {
 }
 
 void record_player_inactive_notification(u32 target_slot, u32 source_slot,
-    u8 lobby_code) {
+    u8 lobby_code, bool synthetic) {
     ++g_packet_dispatch_state.player_inactive_notifications;
     g_packet_dispatch_state.last_inactive_notification_target = target_slot;
     g_packet_dispatch_state.last_inactive_notification_source = source_slot;
     g_packet_dispatch_state.last_inactive_notification_code = lobby_code;
+    g_packet_dispatch_state.last_inactive_notification_synthetic = synthetic;
     g_packet_dispatch_state.player_inactive_notification_pending = true;
     if (g_packet_dispatch_state.runtime_callbacks
             .queue_player_inactive_notification != nullptr) {
@@ -474,7 +475,7 @@ bool apply_subtype15_inactive_marker(PlayerSlotRuntimeState& slots,
     const bool accepted = AcceptMode1OrderedPacket(marker.bytes.data(),
         kMode1ReliablePacketBytes);
     record_player_inactive_notification(target_slot, source_slot,
-        player.ready_flag);
+        player.ready_flag, true);
     return accepted;
 }
 
@@ -1166,7 +1167,7 @@ void handle_player_inactive_packet(const Mode1ReliablePacket& packet, void*) {
         // slot's lobby/ready code.  The notification suffix is selected by
         // packet +0x10 (0=left, 1=defeated, 2=dropped); 3 suppresses it.
         record_player_inactive_notification(player, player,
-            static_cast<u8>(fields.command));
+            static_cast<u8>(fields.command), false);
     }
 
 #ifdef _WIN32
@@ -1262,15 +1263,16 @@ void handle_vote_completion_packet(const Mode1ReliablePacket& packet, void*) {
     HandleSubtype1dVoteCompletionPacket(packet);
 }
 
-bool should_flush_published_packet_range() {
-    if (g_packet_dispatch_state.auto_broadcast_published_packets) {
-        return true;
-    }
+bool should_flush_published_packet_range(u8 subtype) {
 #ifdef _WIN32
-    return async_com_state().active_network_transport_mode == 3 &&
-        g_packet_dispatch_state.active_player_count > 1;
+    return ShouldFlushMode1PublishedRange(
+        g_packet_dispatch_state.auto_broadcast_published_packets,
+        async_com_state().active_network_transport_mode,
+        g_packet_dispatch_state.active_player_count, subtype);
 #else
-    return false;
+    return ShouldFlushMode1PublishedRange(
+        g_packet_dispatch_state.auto_broadcast_published_packets,
+        0, g_packet_dispatch_state.active_player_count, subtype);
 #endif
 }
 
@@ -1705,7 +1707,7 @@ bool PublishLocalMode1GameplayPacket(u32 packed_opcode, u32 arg0,
         MarkMode1ReliableLocalBroadcastEnd(packet.sequence + 1);
     }
     ++g_packet_dispatch_state.published_local_packets;
-    if (accepted && should_flush_published_packet_range() &&
+    if (accepted && should_flush_published_packet_range(packet.subtype) &&
         mode1_reliable_state().local_broadcast_start <
             mode1_reliable_state().local_broadcast_end) {
         BroadcastMode1PacketRange(mode1_reliable_state().local_broadcast_start,

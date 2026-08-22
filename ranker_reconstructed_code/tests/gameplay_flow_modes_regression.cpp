@@ -6,6 +6,7 @@
 #include "ranker_gameplay_session_flow.h"
 #include "ranker_gameplay_session_rules.h"
 #include "ranker_gameplay_visibility.h"
+#include "ranker_ui_screen.h"
 
 #include <array>
 #include <cassert>
@@ -195,8 +196,38 @@ int main() {
     assert(ResolveGameplayManualLeaveResult(0x707u, false) == 2u);
     assert(ResolveGameplayManualLeaveResult(0x708u, false) == 1u);
     assert(ResolveGameplayManualLeaveResult(0x708u, true) == 2u);
+    assert(!ShouldUseGameplaySurrenderEntry(true, 0x707u, 3u));
+    assert(ShouldUseGameplaySurrenderEntry(true, 0x708u, 3u));
+    assert(!ShouldUseGameplaySurrenderEntry(true, 0x708u, 2u));
+    assert(!ShouldUseGameplaySurrenderEntry(false, 0x708u, 3u));
     assert(!ResolveGameplayPauseOverlayVisible(false));
     assert(ResolveGameplayPauseOverlayVisible(true));
+    static_assert(!ShouldSynthesizeTransportPlayerDeparture(
+        static_cast<u8>(PlayerSlotState::disabled)));
+    static_assert(ShouldSynthesizeTransportPlayerDeparture(
+        static_cast<u8>(PlayerSlotState::active)));
+    assert(!Mode1GameplayPacketDispatchState{}
+        .last_inactive_notification_synthetic);
+    static_assert(!ShouldSuppressMode1TerminalPeerDepartureNotification(
+        false, true, true, false));
+    static_assert(!ShouldSuppressMode1TerminalPeerDepartureNotification(
+        true, false, true, false));
+    static_assert(!ShouldSuppressMode1TerminalPeerDepartureNotification(
+        true, true, false, false));
+    static_assert(ShouldSuppressMode1TerminalPeerDepartureNotification(
+        true, true, true, false));
+    static_assert(ShouldSuppressMode1TerminalPeerDepartureNotification(
+        true, true, false, true));
+    static_assert(ShouldOpenMode1ReliableWaitDialog(false));
+    static_assert(!ShouldOpenMode1ReliableWaitDialog(true));
+    static_assert(!ShouldCaptureMode1RemoteInactiveDrop(
+        1, false, 1, 0, false));
+    static_assert(ShouldCaptureMode1RemoteInactiveDrop(
+        1, true, 1, 0, false));
+    static_assert(!ShouldCaptureMode1RemoteInactiveDrop(
+        1, true, 0, 0, false));
+    static_assert(!ShouldCaptureMode1RemoteInactiveDrop(
+        1, true, 1, 0, true));
 
     // Generic/P2P "Quit Program" is retained until the synchronized match
     // loop ends, then closes the application instead of restoring WizardNet.

@@ -252,6 +252,12 @@ struct GameplayModalUiControlState {
     bool enabled = true;
 };
 
+constexpr bool ShouldUseGameplaySurrenderEntry(bool generic_ai_profile_mode,
+    u32 gameplay_frame_counter, u8 local_player_slot_state) {
+    return generic_ai_profile_mode && gameplay_frame_counter >= 0x708u &&
+        local_player_slot_state != 2u;
+}
+
 struct GameplayModalUiState {
     GameplayModalUiCallbacks callbacks;
     std::array<GameplayModalSaveSlot, kGameplayModalSaveSlotCount> save_slots;

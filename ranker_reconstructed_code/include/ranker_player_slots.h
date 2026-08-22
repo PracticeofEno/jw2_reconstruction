@@ -122,4 +122,12 @@ void SelectNearestHostilePlayerSlots(PlayerSlotRuntimeState& state);
 void MarkPlayerInactiveAndBroadcastIfLocal(PlayerSlotRuntimeState& state,
     u32 source_slot, u32 target_slot);
 
+// A relay member-left can arrive in the same TCP batch as the peer's ordered
+// subtype-0x13 surrender. Once that protocol packet has disabled the slot,
+// the later transport notification is cleanup only and must not synthesize a
+// second inactive/consensus decision.
+constexpr bool ShouldSynthesizeTransportPlayerDeparture(u8 slot_state) {
+    return slot_state != static_cast<u8>(PlayerSlotState::disabled);
+}
+
 }

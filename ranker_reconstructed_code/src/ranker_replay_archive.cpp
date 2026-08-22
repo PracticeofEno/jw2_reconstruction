@@ -2,6 +2,13 @@
 
 #include "ranker_trc.h"
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
@@ -32,9 +39,12 @@ void write_le_u16(std::vector<u8>& bytes, std::size_t offset, u16 value) {
 }
 
 std::string replace_extension(const std::string& path, const char* extension) {
-    std::filesystem::path value(path);
-    value.replace_extension(extension == nullptr ? "" : extension);
-    return value.string();
+    const std::size_t slash = path.find_last_of("\\/");
+    const std::size_t dot = path.find_last_of('.');
+    const bool has_extension = dot != std::string::npos &&
+        (slash == std::string::npos || dot > slash);
+    const std::size_t end = has_extension ? dot : path.size();
+    return path.substr(0, end) + (extension == nullptr ? "" : extension);
 }
 
 bool write_binary_file(const std::string& path, const std::vector<u8>& bytes) {
@@ -79,6 +89,18 @@ bool copy_source_archive_for_save(const ReplayRecordingState& recording,
     if (recording.source_archive_path.empty()) {
         return false;
     }
+#ifdef _WIN32
+    // Session/map paths retain the original executable's CP_ACP byte format.
+    // Avoid the locale-dependent narrow std::filesystem conversion here for
+    // the same reason as automatic replay filename generation.
+    const DWORD attributes = GetFileAttributesA(
+        recording.source_archive_path.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES ||
+        (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+        return false;
+    }
+    return CopyFileA(recording.source_archive_path.c_str(), output_path, FALSE) != FALSE;
+#else
     std::error_code error;
     if (!std::filesystem::is_regular_file(recording.source_archive_path, error)) {
         return false;
@@ -86,6 +108,7 @@ bool copy_source_archive_for_save(const ReplayRecordingState& recording,
     std::filesystem::copy_file(recording.source_archive_path, output_path,
         std::filesystem::copy_options::overwrite_existing, error);
     return !error;
+#endif
 }
 
 } // namespace
