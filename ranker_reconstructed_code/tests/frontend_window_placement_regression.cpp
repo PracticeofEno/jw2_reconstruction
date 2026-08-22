@@ -178,7 +178,7 @@ static_assert(kSingleEmoticonButton.x == 944);
 static_assert(kSingleEmoticonButton.width == 27);
 static_assert(kExpandedChatEdit.x == 469);
 static_assert(kExpandedChatEdit.width == 467);
-static_assert(kPaddedChatEdit.y == 590);
+static_assert(kPaddedChatEdit.y == 594);
 static_assert(kPaddedChatEdit.height == kLegacyChatEdit.height);
 static_assert(IsOnlineLobbyTransientChildResponseOpcode(0x1a));
 static_assert(IsOnlineLobbyTransientChildResponseOpcode(0x1e));

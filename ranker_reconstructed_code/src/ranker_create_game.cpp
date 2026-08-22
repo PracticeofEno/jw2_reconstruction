@@ -857,39 +857,14 @@ bool validate_selected_online_rank_map_type(CreateGameState& state) {
     return false;
 }
 
-bool validate_online_server_counts(CreateGameState& state) {
+bool validate_online_rank_map_compatibility(CreateGameState& state) {
     if (state.mode != 0 && state.mode != 2) {
         return true;
     }
 
-    if (state.game_type == kGameTypeTopVsBottom) {
-        const u32 count =
-            state.server_top_bottom_counts[0] + state.server_top_bottom_counts[1];
-        if (count < 10) {
-            set_startup_message(state, 0,
-                "Rank games require at least ten normal games of this type.",
-                kCreateGameSoftWhite);
-            SetFocus(state.name_edit.window);
-            return false;
-        }
-        if (!validate_selected_online_rank_map_type(state)) {
-            return false;
-        }
-    }
-
-    if (state.game_type == kGameTypeUseMapSetting) {
-        const u32 count =
-            state.server_use_map_counts[0] + state.server_use_map_counts[1];
-        if (count < 10) {
-            set_startup_message(state, 0,
-                "Rank games require at least ten normal games of this type.",
-                kCreateGameSoftWhite);
-            SetFocus(state.name_edit.window);
-            return false;
-        }
-        if (!validate_selected_online_rank_map_type(state)) {
-            return false;
-        }
+    if (state.game_type == kGameTypeTopVsBottom ||
+        state.game_type == kGameTypeUseMapSetting) {
+        return validate_selected_online_rank_map_type(state);
     }
 
     return true;
@@ -2205,7 +2180,7 @@ bool SubmitCreateGameSelection(CreateGameState& state) {
         SetFocus(state.name_edit.window);
         return false;
     }
-    if (!validate_online_server_counts(state)) {
+    if (!validate_online_rank_map_compatibility(state)) {
         return false;
     }
 

@@ -517,16 +517,6 @@ std::string format_version_status(FreeServerLobbyState& state, const void* packe
     return buffer;
 }
 
-bool free_server_rank_count_available(const FreeServerLobbyState& state, int game_type) {
-    if (game_type == 2) {
-        return state.server_top_bottom_counts[0] + state.server_top_bottom_counts[1] >= 10;
-    }
-    if (game_type == 4) {
-        return state.server_use_map_counts[0] + state.server_use_map_counts[1] >= 10;
-    }
-    return true;
-}
-
 void queue_server_packet(FreeServerLobbyState& state, const void* packet,
     i32 byte_count) {
     if (state.callbacks.queue_server_packet != nullptr) {
@@ -871,12 +861,6 @@ bool SubmitFreeServerJoinRequest(FreeServerLobbyState& state) {
         return false;
     }
     const FreeServerGameEntry& entry = state.games[index];
-    if (!free_server_rank_count_available(state, entry.game_type)) {
-        show_startup_status(state, 1,
-            "Rank games require at least ten normal games of this type.",
-            kFreeSoftWhite);
-        return false;
-    }
     const OnlineLobbyState& online = online_lobby_state();
     const bool joined_from_wizardnet =
         online.window != nullptr && state.parent_window == online.window;

@@ -3283,6 +3283,12 @@ void DisableLinkLobbyPlayerRoleComboBox(LinkLobbyState& state, int player_index)
 }
 
 bool CreateLinkLobbyPlayerRoleControls(LinkLobbyState& state) {
+    // The image button is created WS_VISIBLE while the parent is still hidden.
+    // Apply ownership before any layout-specific early return so joined peers
+    // never inherit that default visibility in seedless or single-group rooms.
+    ShowWindow(state.start_button.window,
+        ShouldShowLinkLobbyStartButton(state.host_mode) ? SW_SHOW : SW_HIDE);
+
     if (!link_lobby_session_seed_present(state)) {
         if (!CreateLinkLobbyTabButtons(state)) {
             return false;
@@ -3376,8 +3382,6 @@ bool CreateLinkLobbyPlayerRoleControls(LinkLobbyState& state) {
             y += row_step;
         }
     }
-    ShowWindow(state.start_button.window,
-        ShouldShowLinkLobbyStartButton(state.host_mode) ? SW_SHOW : SW_HIDE);
     return true;
 }
 

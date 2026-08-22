@@ -92,7 +92,7 @@ constexpr int kOnlineLobbySimplifiedActionVerticalInset = 5;
 constexpr int kOnlineLobbyReplayActionHorizontalInset = 24;
 constexpr int kOnlineLobbyReplayActionVerticalInset = 12;
 constexpr int kOnlineLobbyReplayActionDownwardOffset = 10;
-constexpr int kOnlineLobbyChatComposerVerticalPadding = 12;
+constexpr int kOnlineLobbyChatComposerVerticalPadding = 16;
 
 enum class OnlineLobbyThemeButtonVisual : std::size_t {
     Normal = 0,
