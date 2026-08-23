@@ -530,6 +530,9 @@ public:
         if (event->eEventType == MFP_EVENT_TYPE_PLAYBACK_ENDED) {
             ended_.store(true);
         }
+        else if (event->eEventType == MFP_EVENT_TYPE_PLAY) {
+            playing_.store(true);
+        }
     }
 
     bool ended() const {
@@ -540,15 +543,21 @@ public:
         return failed_.load();
     }
 
+    bool playing() const {
+        return playing_.load();
+    }
+
     void reset() {
         ended_.store(false);
         failed_.store(false);
+        playing_.store(false);
     }
 
 private:
     LONG reference_count_ = 1;
     std::atomic<bool> ended_{false};
     std::atomic<bool> failed_{false};
+    std::atomic<bool> playing_{false};
 };
 
 bool scenario_ui_archive_name(const std::string& archive_name) {
@@ -1072,7 +1081,6 @@ void run_ui_bink_media_fallback(UiBinkAsyncMediaContext* context) {
         player->SetVolume(context->volume);
         player->SetBalance(context->balance);
         player->UpdateVideo();
-        context->ready.store(true);
     }
     else if (!context->stop_requested.load()) {
         context->failed.store(true);
@@ -1086,6 +1094,9 @@ void run_ui_bink_media_fallback(UiBinkAsyncMediaContext* context) {
             player->UpdateVideo();
         }
         dispatch_scenario_ui_bink_window_messages();
+        if (callback != nullptr && callback->playing()) {
+            context->ready.store(true);
+        }
         if (callback != nullptr && callback->failed()) {
             context->failed.store(true);
             break;
@@ -3975,13 +3986,10 @@ bool HandleUiScreenEmbeddedBlobRead(UiScreenDefinition& screen, HANDLE file, u32
 }
 #endif
 
-bool HandleUiScreenDefinitionTrcImport(UiScreenDefinition& screen, const char* archive_name,
-    u32 record_index) {
-    std::vector<u8> record;
-    if (!LoadTrcRecordAlloc(archive_name, record_index, record)) {
-        return false;
-    }
+namespace {
 
+bool import_ui_screen_definition_trc_record(UiScreenDefinition& screen,
+    const char* archive_name, u32 record_index, const std::vector<u8>& record) {
     screen.source_archive_name = archive_name != nullptr ? archive_name : "";
     screen.source_record_index = record_index;
     capture_resource_marks(screen);
@@ -4014,6 +4022,16 @@ bool HandleUiScreenDefinitionTrcImport(UiScreenDefinition& screen, const char* a
 
     screen.loaded = true;
     return true;
+}
+
+} // namespace
+
+bool HandleUiScreenDefinitionTrcImport(UiScreenDefinition& screen, const char* archive_name,
+    u32 record_index) {
+    std::vector<u8> record;
+    return LoadTrcRecordAlloc(archive_name, record_index, record) &&
+        import_ui_screen_definition_trc_record(
+            screen, archive_name, record_index, record);
 }
 
 void HandleUiScreenDefinitionResourceRelease(UiScreenDefinition& screen) {
@@ -4328,39 +4346,88 @@ bool HandleUiScreenInputTick(UiScreenDefinition& screen, u32& activated_entry_in
     return false;
 }
 
+namespace {
+
+constexpr DWORD kScenarioUiVideoReadyTimeoutMilliseconds = 5000;
+constexpr DWORD kScenarioUiFirstFrameSettleMilliseconds = 100;
+
+void wait_for_scenario_ui_video_transition(UiScreenDefinition& screen) {
+#ifdef _WIN32
+    const DWORD started_at = GetTickCount();
+    bool found_fallback = false;
+    while (GetTickCount() - started_at <
+        kScenarioUiVideoReadyTimeoutMilliseconds) {
+        found_fallback = false;
+        bool pending = false;
+        for (UiScreenBinkEntryState& state : screen.bink_entries) {
+            auto* context = static_cast<UiBinkAsyncMediaContext*>(
+                state.fallback_async_context);
+            if (context == nullptr) {
+                continue;
+            }
+            found_fallback = true;
+            if (!context->ready.load() && !context->failed.load()) {
+                pending = true;
+            }
+        }
+        if (!found_fallback || !pending) {
+            break;
+        }
+        PumpDeferredBinkVideoTransitionMessages();
+        Sleep(5);
+    }
+    if (found_fallback) {
+        const DWORD settle_started_at = GetTickCount();
+        while (GetTickCount() - settle_started_at <
+            kScenarioUiFirstFrameSettleMilliseconds) {
+            PumpDeferredBinkVideoTransitionMessages();
+            Sleep(5);
+        }
+    }
+#else
+    (void)screen;
+#endif
+}
+
+void draw_ui_screen_modal_frame(UiScreenDefinition& screen) {
+#ifdef _WIN32
+    // Synchronous gameplay/result modals run after the ordinary frame
+    // renderer has unlocked its surface.  sprite_render_state can still
+    // contain that previous (now invalid) pointer, so treating a non-null
+    // target as writable silently draws the dialog into stale memory.
+    // The original modal pump locks the back surface for every draw.
+    SpriteRenderTarget target{};
+    if (SUCCEEDED(LockBackBufferSpriteRenderTarget(target))) {
+        const SpriteRenderTarget previous_target = sprite_render_state().target;
+        const bool previous_active = sprite_render_state().active;
+        SetSpriteRenderTarget(
+            target.pixels, target.width, target.height, target.stride_words);
+        HandleUiScreenDefinitionDraw(screen);
+        if (previous_active) {
+            SetSpriteRenderTarget(previous_target.pixels,
+                previous_target.width, previous_target.height,
+                previous_target.stride_words);
+        }
+        else {
+            ClearSpriteRenderTarget();
+        }
+        UnlockBackBufferSpriteRenderTarget();
+    }
+    else {
+        HandleUiScreenDefinitionDraw(screen);
+    }
+    HandleGameCursorPresentation();
+#else
+    HandleUiScreenDefinitionDraw(screen);
+#endif
+}
+
+} // namespace
+
 bool RunUiScreenModalPump(UiScreenDefinition& screen, u32& activated_entry_index,
     int& entry_state) {
     while (!HandleUiScreenInputTick(screen, activated_entry_index, entry_state)) {
-#ifdef _WIN32
-        // Synchronous gameplay/result modals run after the ordinary frame
-        // renderer has unlocked its surface.  sprite_render_state can still
-        // contain that previous (now invalid) pointer, so treating a non-null
-        // target as writable silently draws the dialog into stale memory.
-        // The original modal pump locks the back surface for every draw.
-        SpriteRenderTarget target{};
-        if (SUCCEEDED(LockBackBufferSpriteRenderTarget(target))) {
-            const SpriteRenderTarget previous_target = sprite_render_state().target;
-            const bool previous_active = sprite_render_state().active;
-            SetSpriteRenderTarget(
-                target.pixels, target.width, target.height, target.stride_words);
-            HandleUiScreenDefinitionDraw(screen);
-            if (previous_active) {
-                SetSpriteRenderTarget(previous_target.pixels,
-                    previous_target.width, previous_target.height,
-                    previous_target.stride_words);
-            }
-            else {
-                ClearSpriteRenderTarget();
-            }
-            UnlockBackBufferSpriteRenderTarget();
-        }
-        else {
-            HandleUiScreenDefinitionDraw(screen);
-        }
-        HandleGameCursorPresentation();
-#else
-        HandleUiScreenDefinitionDraw(screen);
-#endif
+        draw_ui_screen_modal_frame(screen);
     }
     return true;
 }
@@ -4514,19 +4581,51 @@ bool RestartUiScreenFlaggedBinkEntries(UiScreenDefinition& screen) {
 #endif
 }
 
+bool PreloadJw204BinkMenuScreen(Jw204BinkMenuPreload& preload,
+    i32 column, i32 row) {
+    preload = Jw204BinkMenuPreload{};
+    preload.record_index = Jw204StageScreenRecordIndex(column, row);
+    preload.ready = LoadTrcRecordAlloc(
+        "JW2_04.TRC", preload.record_index, preload.screen_record);
+    if (!preload.ready) {
+        preload.screen_record.clear();
+    }
+    return preload.ready;
+}
+
 bool PlayJw204BinkMenuScreen(i32 column, i32 row,
-    UiScreenModalPumpCallback pump_callback, void* user_data) {
+    UiScreenModalPumpCallback pump_callback, void* user_data,
+    const Jw204BinkMenuPreload* preload) {
     UiScreenDefinition screen;
     InitializeUiScreenDefinition(screen);
     SetGameCursorIndex(0);
 
     const u32 record_index = Jw204StageScreenRecordIndex(column, row);
-    if (!HandleUiScreenDefinitionTrcImport(screen, "JW2_04.TRC", record_index)) {
+    bool screen_loaded = false;
+    if (preload != nullptr && Jw204BinkMenuPreloadMatches(
+            preload->ready, preload->record_index, column, row)) {
+        screen_loaded = import_ui_screen_definition_trc_record(
+            screen, "JW2_04.TRC", record_index, preload->screen_record);
+    }
+    if (!screen_loaded) {
+        screen_loaded = HandleUiScreenDefinitionTrcImport(
+            screen, "JW2_04.TRC", record_index);
+    }
+    if (!screen_loaded) {
+        ReleaseDeferredBinkVideoTransition();
         HandleUiScreenDefinitionReleaseWrapper(screen);
         return false;
     }
 
     SetPrimaryMilesMusicPolicyMode(4);
+
+    // The first hidden draw starts the asynchronous portrait/text players.
+    // Keep the story card above them until both players reach their PLAY event,
+    // then present the complete briefing before removing the retained window.
+    draw_ui_screen_modal_frame(screen);
+    wait_for_scenario_ui_video_transition(screen);
+    draw_ui_screen_modal_frame(screen);
+    ReleaseDeferredBinkVideoTransition();
 
     u32 activated_entry_index = 0;
     int entry_state = 0;
@@ -4549,6 +4648,12 @@ bool PlayJw204BinkMenuScreen(i32 column, i32 row,
         switch (ResolveJw204BriefingActivation(activated_entry_index)) {
         case Jw204BriefingActivation::StartMission:
             start_mission = true;
+            // Remove the static mission-objective frame before waiting for the
+            // compatibility portrait/video threads to shut down. Otherwise
+            // that shutdown interval exposes the old objective panel after the
+            // player has already pressed Game Start.
+            (void)HandleDirectDrawFrameBoundary();
+            (void)PresentBackBufferToPrimary();
             pumping = false;
             break;
         case Jw204BriefingActivation::ReplayBriefing:

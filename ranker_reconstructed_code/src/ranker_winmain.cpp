@@ -30417,18 +30417,8 @@ void publish_default_gameplay_script_hud_text(
 }
 
 void publish_default_gameplay_script_dialog_text(GameplayLoopState& state) {
-    GameplayScriptDialogState& dialog = gameplay_script_dialog_state();
-    if (dialog.advance_flags[1] == 0 || dialog.visible_text.empty()) {
-        return;
-    }
-
-    GameplayHudTextState& hud = g_runtime.gameplay_hud_text;
-    hud.current_tick_ms = state.current_tick_ms;
-    hud.current_message.text = dialog.visible_text.c_str();
-    hud.current_message.x = dialog.text_x;
-    hud.current_message.y = dialog.text_y;
-    hud.current_message.tick_ms = state.current_tick_ms;
-    hud.queued_message = GameplayHudMessage{};
+    PublishGameplayScriptDialogFrame(gameplay_script_dialog_state(),
+        g_runtime.gameplay_hud_text, state.current_tick_ms);
 }
 
 void release_default_map_effects_near_request(
@@ -32857,12 +32847,11 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
         window, message, lparam);
     if (HandleWindowInputMessage(message, static_cast<u32>(wparam),
             static_cast<u32>(input_lparam))) {
+        const BinkVideoRuntimeState& bink = bink_video_state();
         const bool deliberate_bink_skip =
-            message == WM_KEYDOWN || message == WM_SYSKEYDOWN ||
-            message == WM_LBUTTONDOWN || message == WM_LBUTTONDBLCLK ||
-            message == WM_RBUTTONDOWN || message == WM_RBUTTONDBLCLK ||
-            message == WM_MBUTTONDOWN || message == WM_MBUTTONDBLCLK;
-        if (g_runtime.suppress_paint && bink_video_state().active &&
+            ShouldCancelBinkVideoForWindowInput(
+                bink.skip_input_policy, message, wparam);
+        if (g_runtime.suppress_paint && bink.active &&
             deliberate_bink_skip) {
             CancelBinkVideoPlayback();
         }
@@ -33434,6 +33423,13 @@ bool StartRankerFrontendStageFromMenu(i32 column, i32 row) {
     state.selected_faction_id = g_runtime.frontend_stage_selected_faction;
     const bool started = StartFrontendStageFromMenu(
         state, column, row, default_frontend_stage_flow_callbacks());
+    append_startup_log(
+        "frontend-stage: briefing preload screen=%s music=%s mission-started=%s policy=%lu stream=%s",
+        state.briefing_screen_preloaded ? "yes" : "no",
+        state.briefing_music_preloaded ? "yes" : "no",
+        started ? "yes" : "no",
+        static_cast<unsigned long>(miles_music_state().primary_policy_mode),
+        miles_music_state().primary_stream != nullptr ? "open" : "closed");
     if (!started) {
         g_runtime.frontend_stage_transition_active = false;
     }

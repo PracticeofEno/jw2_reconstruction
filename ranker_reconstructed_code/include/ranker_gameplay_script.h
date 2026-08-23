@@ -14,6 +14,7 @@ struct UnitMovementUnit;
 struct UnitMovementContext;
 struct UnitLifecycleContext;
 struct ProductionOrderRuntimeState;
+struct GameplayHudTextState;
 
 struct GameplayScriptCommandPayload {
     u32 state = 0;
@@ -491,6 +492,8 @@ u32 CalculateGameplayScriptTextDurationFrames(const char* text);
 void ResetGameplayScriptDialogRuntimeState(GameplayScriptDialogState& state);
 void HandleGameplayScriptTextEffectCue(GameplayScriptDialogState& state,
     const GameplayScriptTextCueCommand& command, u32 frame_tick);
+void PublishGameplayScriptDialogFrame(const GameplayScriptDialogState& dialog,
+    GameplayHudTextState& hud, u32 current_tick_ms);
 void HandleGameplayScriptImmediateEffectCue(GameplayScriptDialogState& state,
     bool trigger_enabled, u32 effect_entry_index);
 void InitializeGameplayScriptTriggerState(GameplayScriptTriggerState& state,

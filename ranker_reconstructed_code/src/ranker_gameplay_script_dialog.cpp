@@ -1,5 +1,6 @@
 #include "ranker_gameplay_script.h"
 
+#include "ranker_gameplay_frame_render.h"
 #include "ranker_miles.h"
 
 #include <cstring>
@@ -70,6 +71,17 @@ void HandleGameplayScriptTextEffectCue(GameplayScriptDialogState& state,
         state.advance_flags[2] = 0;
         state.active_cue_id = 0;
     }
+}
+
+void PublishGameplayScriptDialogFrame(const GameplayScriptDialogState& dialog,
+    GameplayHudTextState& hud, u32 current_tick_ms) {
+    // Opcode 0x01 draws its CRLF-delimited text directly while the trigger is
+    // blocking (0x004168e5..0x00416932). It does not enqueue the text in the
+    // ordinary five-second HUD notification slot. Keeping it frame-scoped also
+    // removes the last narration frame as soon as the cue completes.
+    PublishGameplayFrameMessage(hud, dialog.advance_flags[1] != 0,
+        dialog.visible_text.c_str(), dialog.text_x, dialog.text_y,
+        current_tick_ms);
 }
 
 } // namespace ranker

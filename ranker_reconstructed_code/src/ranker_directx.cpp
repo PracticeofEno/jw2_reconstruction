@@ -399,7 +399,10 @@ bool resolve_external_jw208_video_path(
     return true;
 }
 
-bool embedded_video_input_down() {
+bool embedded_video_input_down(BinkVideoSkipInputPolicy policy) {
+    if (policy == BinkVideoSkipInputPolicy::EscapeOnly) {
+        return (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
+    }
     for (int key = 1; key < 0xff; ++key) {
         if ((GetAsyncKeyState(key) & 0x8000) != 0) {
             return true;
@@ -432,9 +435,9 @@ void dispatch_embedded_video_thread_messages() {
     }
 }
 
-void settle_embedded_video_skip_input() {
+void settle_embedded_video_skip_input(BinkVideoSkipInputPolicy policy) {
     const DWORD deadline = GetTickCount() + 500;
-    while (embedded_video_input_down() &&
+    while (embedded_video_input_down(policy) &&
         static_cast<i32>(deadline - GetTickCount()) > 0) {
         dispatch_embedded_video_thread_messages();
         Sleep(5);
@@ -481,6 +484,31 @@ struct EmbeddedVideoWindows {
     HWND backdrop = nullptr;
     HWND surface = nullptr;
 };
+
+HWND g_deferred_embedded_video_backdrop = nullptr;
+HWND g_deferred_embedded_video_owner = nullptr;
+
+void release_deferred_embedded_video_transition() {
+    if (g_deferred_embedded_video_backdrop != nullptr &&
+        IsWindow(g_deferred_embedded_video_backdrop)) {
+        DestroyWindow(g_deferred_embedded_video_backdrop);
+    }
+    g_deferred_embedded_video_backdrop = nullptr;
+
+    if (g_deferred_embedded_video_owner != nullptr &&
+        IsWindow(g_deferred_embedded_video_owner)) {
+        SetForegroundWindow(g_deferred_embedded_video_owner);
+    }
+    g_deferred_embedded_video_owner = nullptr;
+}
+
+LRESULT CALLBACK embedded_video_window_proc(
+    HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+    if (HandleNativeCursorForOwnedOverlayMessage(message, nullptr)) {
+        return TRUE;
+    }
+    return DefWindowProcW(window, message, wparam, lparam);
+}
 
 bool resolve_embedded_video_bounds(HWND owner, RECT& rect) {
     if (owner != nullptr && IsWindow(owner)) {
@@ -536,7 +564,7 @@ EmbeddedVideoWindows create_embedded_video_windows(HWND owner,
     HINSTANCE instance = GetModuleHandleW(nullptr);
     WNDCLASSW window_class{};
     if (GetClassInfoW(instance, kVideoWindowClass, &window_class) == 0) {
-        window_class.lpfnWndProc = DefWindowProcW;
+        window_class.lpfnWndProc = embedded_video_window_proc;
         window_class.hInstance = instance;
         window_class.hCursor = nullptr;
         window_class.hbrBackground =
@@ -579,10 +607,15 @@ EmbeddedVideoWindows create_embedded_video_windows(HWND owner,
         width, height, SWP_SHOWWINDOW | SWP_NOACTIVATE);
     UpdateWindow(windows.backdrop);
     UpdateWindow(windows.surface);
+    // The original Bink path hides the software cursor over story cards. The
+    // compatibility HWND must also clear USER32's current cursor explicitly;
+    // a null class cursor alone can leave Windows' blue busy cursor visible.
+    SetCursor(nullptr);
     return windows;
 }
 
 bool play_external_jw208_video(const BinkVideoRuntimeState& state) {
+    release_deferred_embedded_video_transition();
     g_bink_video_state.media_foundation_stage = 1;
     const WORD media_id = jw208_fallback_media_id(state);
     if (media_id == 0) {
@@ -595,7 +628,7 @@ bool play_external_jw208_video(const BinkVideoRuntimeState& state) {
         return false;
     }
     HWND owner = resolve_embedded_video_window();
-    const EmbeddedVideoWindows windows =
+    EmbeddedVideoWindows windows =
         create_embedded_video_windows(owner, state);
     // Keep the former resource id in diagnostics so existing startup-log
     // tooling can still identify the JW2_08 record being played.
@@ -697,7 +730,8 @@ bool play_external_jw208_video(const BinkVideoRuntimeState& state) {
                 break;
             }
 
-            const bool input_down = embedded_video_input_down();
+            const bool input_down = embedded_video_input_down(
+                state.skip_input_policy);
             const DWORD now = GetTickCount();
             if (!input_armed) {
                 if (input_down) {
@@ -725,7 +759,7 @@ bool play_external_jw208_video(const BinkVideoRuntimeState& state) {
             g_bink_video_state.decoded_frames = g_bink_video_state.frame_count;
         }
         if (g_bink_video_state.cancelled) {
-            settle_embedded_video_skip_input();
+            settle_embedded_video_skip_input(state.skip_input_policy);
         }
         player->Shutdown();
         player->Release();
@@ -740,9 +774,21 @@ bool play_external_jw208_video(const BinkVideoRuntimeState& state) {
     if (uninitialize_com) {
         CoUninitialize();
     }
-    DestroyWindow(windows.backdrop);
-    if (owner != nullptr && IsWindow(owner)) {
-        SetForegroundWindow(owner);
+    if (ShouldDeferBinkVideoWindowRelease(
+            state.skip_input_policy, state.frame_count,
+            g_bink_video_state.cancelled, ok)) {
+        // Media Foundation renders above DirectDraw rather than into it. Keep
+        // its last story-card surface alive while JW2_04 briefing resources
+        // load, otherwise the old faction-selection frame is briefly exposed.
+        g_deferred_embedded_video_backdrop = windows.backdrop;
+        g_deferred_embedded_video_owner = owner;
+        windows.backdrop = nullptr;
+    }
+    else {
+        DestroyWindow(windows.backdrop);
+        if (owner != nullptr && IsWindow(owner)) {
+            SetForegroundWindow(owner);
+        }
     }
     g_bink_video_state.media_foundation_stage = 8;
     g_bink_video_state.media_foundation_result = result;
@@ -763,7 +809,8 @@ bool parse_bink_file_header(const std::vector<u8>& payload, BinkFileHeaderInfo& 
         info.height < 10000;
 }
 
-void prepare_bink_video_state(const char* archive_name, u32 record_index, i32 x, i32 y) {
+void prepare_bink_video_state(const char* archive_name, u32 record_index,
+    i32 x, i32 y, BinkVideoSkipInputPolicy skip_input_policy) {
     const u32 preserved_fade_steps = g_bink_video_state.fade_steps;
     const u32 preserved_clear_count = g_bink_video_state.surface_clear_count;
     g_bink_video_state = BinkVideoRuntimeState{};
@@ -771,6 +818,7 @@ void prepare_bink_video_state(const char* archive_name, u32 record_index, i32 x,
     g_bink_video_state.record_index = record_index;
     g_bink_video_state.requested_x = x;
     g_bink_video_state.requested_y = y;
+    g_bink_video_state.skip_input_policy = skip_input_policy;
     g_bink_video_state.fade_steps = preserved_fade_steps;
     g_bink_video_state.surface_clear_count = preserved_clear_count;
 }
@@ -925,16 +973,13 @@ bool render_bink_frame_with_api(BinkApi& api, BinkMovieHeaderPrefix* handle) {
     }
 
     ++g_bink_video_state.decoded_frames;
-    if (handle->frame_count != 1) {
+    if (!ShouldHoldSingleFrameBinkUntilCancelled(handle->frame_count)) {
         if (handle->frame_number == handle->frame_count) {
             g_bink_video_state.cancelled = true;
         }
         else {
             api.next_frame(handle);
         }
-    }
-    else {
-        g_bink_video_state.cancelled = true;
     }
     return true;
 }
@@ -956,8 +1001,11 @@ bool play_open_bink_handle_with_api(BinkApi& api, BinkMovieHeaderPrefix* handle,
 
     g_bink_video_state.active = true;
     bool ok = true;
+    const bool hold_single_frame =
+        ShouldHoldSingleFrameBinkUntilCancelled(handle->frame_count);
     const u32 max_frames = std::max<u32>(1, handle->frame_count + 1);
-    while (!g_bink_video_state.cancelled && g_bink_video_state.decoded_frames < max_frames &&
+    while (!g_bink_video_state.cancelled &&
+        (hold_single_frame || g_bink_video_state.decoded_frames < max_frames) &&
         handle->frame_number <= handle->frame_count) {
         ReleaseStoppedReservedDirectSoundBuffers();
         if (api.wait(handle) == 0 && !render_bink_frame_with_api(api, handle)) {
@@ -2667,8 +2715,10 @@ void SetBinkVideoPlaybackCallback(BinkVideoPlaybackCallback callback, void* user
     g_bink_video_callback_user_data = user_data;
 }
 
-bool PlayBinkTrcRecord(const char* archive_name, u32 record_index, i32 x, i32 y) {
-    prepare_bink_video_state(archive_name, record_index, x, y);
+bool PlayBinkTrcRecord(const char* archive_name, u32 record_index,
+    i32 x, i32 y, BinkVideoSkipInputPolicy skip_input_policy) {
+    prepare_bink_video_state(
+        archive_name, record_index, x, y, skip_input_policy);
 
     TrcRecordReader reader;
     if (!OpenTrcRecordDirectoryEntry(reader, archive_name, record_index) ||
@@ -2736,8 +2786,9 @@ bool PlayBinkTrcRecord(const char* archive_name, u32 record_index, i32 x, i32 y)
     return ok;
 }
 
-bool PlayBinkSource(const void* source, u32 open_flags, i32 x, i32 y) {
-    prepare_bink_video_state(nullptr, 0, x, y);
+bool PlayBinkSource(const void* source, u32 open_flags,
+    i32 x, i32 y, BinkVideoSkipInputPolicy skip_input_policy) {
+    prepare_bink_video_state(nullptr, 0, x, y, skip_input_policy);
     if (source == nullptr) {
         g_bink_video_state.failed = true;
         return false;
@@ -2780,6 +2831,14 @@ bool RenderBinkFrameToBackBuffer(void* bink_handle) {
 
 void CancelBinkVideoPlayback() {
     g_bink_video_state.cancelled = true;
+}
+
+void PumpDeferredBinkVideoTransitionMessages() {
+    dispatch_embedded_video_thread_messages();
+}
+
+void ReleaseDeferredBinkVideoTransition() {
+    release_deferred_embedded_video_transition();
 }
 
 bool ConfigureBinkFrameSurface() {

@@ -1,4 +1,6 @@
 #include "ranker_gameplay_cheats.h"
+#include "ranker_directx.h"
+#include "ranker_gameplay_frame_render.h"
 #include "ranker_gameplay_packets.h"
 #include "ranker_player_slots.h"
 #include "ranker_gameplay_script.h"
@@ -7,6 +9,8 @@
 #include "ranker_gameplay_session_flow.h"
 #include "ranker_gameplay_session_rules.h"
 #include "ranker_gameplay_visibility.h"
+#include "ranker_frontend_stage_flow.h"
+#include "ranker_miles.h"
 #include "ranker_ui_screen.h"
 
 #include <array>
@@ -14,6 +18,34 @@
 
 int main() {
     using namespace ranker;
+
+    // Cancelling a campaign briefing returns to the silent stage-selection
+    // frontend. Original FUN_004d94c7 applies policy 1 before opening it.
+    static_assert(kFrontendStageSelectionMusicPolicyMode == 1u);
+    static_assert(ShouldRestoreFrontendStageSelectionMusic(false));
+    static_assert(!ShouldRestoreFrontendStageSelectionMusic(true));
+    static_assert(PrimaryMilesBriefingMusicRecordForFaction(0u) == 0x0eu);
+    static_assert(PrimaryMilesBriefingMusicRecordForFaction(3u) == 0x11u);
+    static_assert(Jw204BinkMenuPreloadMatches(true, 0u, 0, 0));
+    static_assert(Jw204BinkMenuPreloadMatches(true, 620u, 3, 7));
+    static_assert(!Jw204BinkMenuPreloadMatches(false, 0u, 0, 0));
+    static_assert(!Jw204BinkMenuPreloadMatches(true, 20u, 0, 0));
+
+    // Script opcode 0x01 is an immediate draw in the original dispatcher. It
+    // must use the frame slot, never the five-second notification slot. An
+    // inactive dialog must also leave another immediate script draw intact.
+    GameplayHudTextState script_hud{};
+    const char script_text[] = "active dialog";
+    PublishGameplayFrameMessage(
+        script_hud, true, script_text, 100, 300, 1234);
+    assert(script_hud.current_message.text == nullptr);
+    assert(script_hud.frame_message.text == script_text);
+    assert(script_hud.frame_message.x == 100);
+    assert(script_hud.frame_message.y == 300);
+    assert(script_hud.frame_message.tick_ms == 1234);
+    PublishGameplayFrameMessage(
+        script_hud, false, script_text, 100, 300, 1250);
+    assert(script_hud.frame_message.text == script_text);
 
     std::array<u8, kSessionPrimaryCameraYOffset + sizeof(u32)>
         primary_record{};
@@ -209,6 +241,30 @@ int main() {
         Jw204BriefingActivation::Cancel);
     assert(ResolveJw204BriefingActivation(9u) ==
         Jw204BriefingActivation::Continue);
+
+#ifdef _WIN32
+    // Campaign story cards retain the original wait cursor and may only be
+    // dismissed with Escape. Mouse buttons and other keys remain ignored.
+    static_assert(ShouldHoldSingleFrameBinkUntilCancelled(1u));
+    static_assert(!ShouldHoldSingleFrameBinkUntilCancelled(0u));
+    static_assert(!ShouldHoldSingleFrameBinkUntilCancelled(2u));
+    static_assert(ShouldDeferBinkVideoWindowRelease(
+        BinkVideoSkipInputPolicy::EscapeOnly, 1u, true, true));
+    static_assert(!ShouldDeferBinkVideoWindowRelease(
+        BinkVideoSkipInputPolicy::EscapeOnly, 1u, false, true));
+    static_assert(!ShouldDeferBinkVideoWindowRelease(
+        BinkVideoSkipInputPolicy::AnyKeyOrMouse, 1u, true, true));
+    static_assert(!ShouldDeferBinkVideoWindowRelease(
+        BinkVideoSkipInputPolicy::EscapeOnly, 2u, true, true));
+    assert(ShouldCancelBinkVideoForWindowInput(
+        BinkVideoSkipInputPolicy::EscapeOnly, WM_KEYDOWN, VK_ESCAPE));
+    assert(!ShouldCancelBinkVideoForWindowInput(
+        BinkVideoSkipInputPolicy::EscapeOnly, WM_KEYDOWN, VK_RETURN));
+    assert(!ShouldCancelBinkVideoForWindowInput(
+        BinkVideoSkipInputPolicy::EscapeOnly, WM_LBUTTONDOWN, 0));
+    assert(ShouldCancelBinkVideoForWindowInput(
+        BinkVideoSkipInputPolicy::AnyKeyOrMouse, WM_LBUTTONDOWN, 0));
+#endif
 
     // A two-human UMS lobby must retain the archive-authored Computer owners.
     // Super Elf uses owner 4 in trigger group 62; disabling that slot makes

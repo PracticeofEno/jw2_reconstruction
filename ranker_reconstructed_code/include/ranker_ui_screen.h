@@ -258,6 +258,18 @@ constexpr bool ShouldUseGameplaySurrenderEntry(bool generic_ai_profile_mode,
         local_player_slot_state != 2u;
 }
 
+struct Jw204BinkMenuPreload {
+    std::vector<u8> screen_record;
+    u32 record_index = kInvalidUiScreenIndex;
+    bool ready = false;
+};
+
+constexpr bool Jw204BinkMenuPreloadMatches(bool ready, u32 preloaded_record_index,
+    i32 faction, i32 mission) {
+    return ready && preloaded_record_index ==
+        Jw204StageScreenRecordIndex(faction, mission);
+}
+
 enum class Jw204BriefingActivation : u8 {
     Continue,
     StartMission,
@@ -538,8 +550,11 @@ bool DrawUiScreenResourceSprite(
     const UiScreenDefinition& screen, u32 resource_index, i32 x, i32 y);
 bool HandleUiScreenBinkEntryRender(UiScreenDefinition& screen, u32 entry_index);
 bool RestartUiScreenFlaggedBinkEntries(UiScreenDefinition& screen);
+bool PreloadJw204BinkMenuScreen(Jw204BinkMenuPreload& preload,
+    i32 column, i32 row);
 bool PlayJw204BinkMenuScreen(i32 column, i32 row,
-    UiScreenModalPumpCallback pump_callback = nullptr, void* user_data = nullptr);
+    UiScreenModalPumpCallback pump_callback = nullptr, void* user_data = nullptr,
+    const Jw204BinkMenuPreload* preload = nullptr);
 bool DrawBackBufferRectangleOutline16(i32 left, i32 top, i32 width, i32 height,
     u16 color = 0xffffu);
 bool PutBackBufferPixel16Clipped(i32 x, i32 y, u16 color);

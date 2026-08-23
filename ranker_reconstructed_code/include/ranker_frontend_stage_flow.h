@@ -9,6 +9,13 @@ namespace ranker {
 constexpr u32 kFrontendStageArchiveStride = 0x0c;
 constexpr i32 kFrontendStageFactionCount = 4;
 constexpr i32 kFrontendStageMissionCount = 8;
+// Original FUN_004d94c7 selects policy 1 immediately before showing the
+// campaign faction/stage picker. Policy 1 owns no primary music stream.
+constexpr u32 kFrontendStageSelectionMusicPolicyMode = 1;
+
+constexpr bool ShouldRestoreFrontendStageSelectionMusic(bool mission_started) {
+    return !mission_started;
+}
 
 constexpr u32 FrontendStageArchiveRecordIndex(i32 column, i32 row) {
     return static_cast<u32>(column) * kFrontendStageArchiveStride +
@@ -35,6 +42,8 @@ struct FrontendStageFlowState {
     bool stage_bundle_loaded = false;
     bool stage_started = false;
     bool start_briefing_played = false;
+    bool briefing_screen_preloaded = false;
+    bool briefing_music_preloaded = false;
     bool end_briefing_played = false;
     bool stage_transition_latched = false;
     bool runtime_tables_imported = false;

@@ -269,15 +269,27 @@ struct GameplayHudTextState {
     GameplayHudSelectedStatus selected_status;
     GameplayHudMessage current_message;
     GameplayHudMessage queued_message;
-    // Script opcode 0x59 draws directly during the current frame.  Keep it
-    // separate from the timed HUD message queue so it neither scrolls nor
-    // replaces a player-facing notification.
+    // Script text opcodes 0x01 and 0x59 draw directly during the current frame.
+    // Keep them separate from the timed HUD message queue so they neither
+    // linger after a cue nor replace a player-facing notification.
     GameplayHudMessage frame_message;
     std::array<GameplayTimedHudNotification, kGameplayTimedHudNotificationCount>
         timed_notifications{};
     GameplayDebugCounterState debug_counter;
     GameplayHudAlertMarkerState* alert_markers = nullptr;
 };
+
+inline void PublishGameplayFrameMessage(GameplayHudTextState& state,
+    bool active, const char* text, i32 x, i32 y, u32 current_tick_ms) {
+    if (!active || text == nullptr || text[0] == '\0') {
+        return;
+    }
+    state.current_tick_ms = current_tick_ms;
+    state.frame_message.text = text;
+    state.frame_message.x = x;
+    state.frame_message.y = y;
+    state.frame_message.tick_ms = current_tick_ms;
+}
 
 inline void QueueGameplayTimedChatNotification(GameplayHudTextState& state,
     std::string primary_text, std::string secondary_text,

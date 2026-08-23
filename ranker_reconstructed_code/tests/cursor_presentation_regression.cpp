@@ -27,6 +27,8 @@ int main() {
     assert(HandleNativeCursorForOwnedOverlayMessage(WM_SETCURSOR, arrow));
     assert(GetCursor() == arrow);
     assert(!HandleNativeCursorForOwnedOverlayMessage(WM_MOUSEMOVE, arrow));
+    assert(HandleNativeCursorForOwnedOverlayMessage(WM_SETCURSOR, nullptr));
+    assert(GetCursor() == nullptr);
     SetCursor(nullptr);
 #endif
     return 0;

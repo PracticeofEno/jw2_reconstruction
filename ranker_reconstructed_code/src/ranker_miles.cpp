@@ -39,6 +39,7 @@ MilesMusicRuntimeState g_music_state;
 BriefingBinkMediaState g_briefing_bink_state;
 MilesEffectPlaylistState g_effect_playlist_state;
 MilesComputedStreamContext g_default_computed_stream_context;
+PreparedPrimaryMilesMusicRecord g_prepared_primary_music_record;
 
 struct AsyncMilesEffectStream {
     std::mutex mutex;
@@ -189,12 +190,16 @@ bool materialize_briefing_bink_source(BriefingBinkSource& source) {
 
 bool play_briefing_bink_source(const BriefingBinkSource& source) {
 #ifdef _WIN32
+    constexpr BinkVideoSkipInputPolicy kBriefingSkipPolicy =
+        BinkVideoSkipInputPolicy::EscapeOnly;
     switch (source.kind) {
     case BriefingBinkSourceKind::DirectFile:
-        return PlayBinkSource(source.path.c_str(), 0, -1, -1);
+        return PlayBinkSource(
+            source.path.c_str(), 0, -1, -1, kBriefingSkipPolicy);
     case BriefingBinkSourceKind::ArchiveRecord:
     case BriefingBinkSourceKind::Jw208RecordPointer:
-        return PlayBinkTrcRecord(source.path.c_str(), source.record_index, -1, -1);
+        return PlayBinkTrcRecord(source.path.c_str(), source.record_index,
+            -1, -1, kBriefingSkipPolicy);
     case BriefingBinkSourceKind::Empty:
     default:
         return false;
@@ -762,6 +767,7 @@ void ShutdownMilesMusicRuntime() {
         return;
     }
 
+    ReleasePreparedPrimaryMilesMusicRecord(g_prepared_primary_music_record);
     ClosePrimaryMilesMusic();
     CloseSecondaryMilesMusic();
     CloseDirectMilesMusic();
@@ -1426,7 +1432,8 @@ void UpdatePrimaryMilesMusicPolicy() {
         break;
     case 4:
         if (g_music_state.primary_policy_raw_volume != 0) {
-            const u32 record = current_faction_id() + 0x0eu;
+            const u32 record = PrimaryMilesBriefingMusicRecordForFaction(
+                current_faction_id());
             if (g_music_state.primary_policy_record != record || !primary_is_playing()) {
                 play_primary_record(record);
             }
@@ -1489,13 +1496,82 @@ void SetPrimaryMilesMusicPolicyFactionBase(u32 faction_index, u32 record_base) {
     }
 }
 
+void ReleasePreparedPrimaryMilesMusicRecord(
+    PreparedPrimaryMilesMusicRecord& prepared) {
+    if (prepared.stream != nullptr) {
+        CloseMilesStream(prepared.stream);
+        prepared.stream = nullptr;
+    }
+    ResetMilesStreamArchiveState(prepared.context);
+    prepared.archive_name.clear();
+    prepared.record_index = kPrimaryMilesMusicStoppedRecord;
+}
+
+bool PreparePrimaryMilesMusicRecord(PreparedPrimaryMilesMusicRecord& prepared,
+    u32 record_index, const char* archive_name) {
+    ReleasePreparedPrimaryMilesMusicRecord(prepared);
+    if (!g_music_state.enabled || g_music_state.primary_policy_raw_volume == 0 ||
+        archive_name == nullptr || archive_name[0] == '\0') {
+        return false;
+    }
+
+    if (!OpenComputedMilesMp3Stream(prepared.context, archive_name,
+            record_index, &prepared.stream)) {
+        ReleasePreparedPrimaryMilesMusicRecord(prepared);
+        return false;
+    }
+
+    prepared.archive_name = archive_name;
+    prepared.record_index = record_index;
+    return true;
+}
+
+void InstallPreparedPrimaryMilesMusicRecord(
+    PreparedPrimaryMilesMusicRecord& prepared) {
+    if (&prepared == &g_prepared_primary_music_record) {
+        return;
+    }
+
+    ReleasePreparedPrimaryMilesMusicRecord(g_prepared_primary_music_record);
+    g_prepared_primary_music_record.stream = prepared.stream;
+    g_prepared_primary_music_record.context = std::move(prepared.context);
+    g_prepared_primary_music_record.archive_name = std::move(prepared.archive_name);
+    g_prepared_primary_music_record.record_index = prepared.record_index;
+
+    prepared.stream = nullptr;
+    InitializeMilesTrcArchiveStreamContext(prepared.context);
+    prepared.archive_name.clear();
+    prepared.record_index = kPrimaryMilesMusicStoppedRecord;
+}
+
 void PlayPrimaryMilesMusicRecord(u32 record_index, const char* archive_name) {
     if (!g_music_state.enabled) {
         return;
     }
 
     ClosePrimaryMilesMusic();
-    if (!OpenComputedMilesMp3Stream(g_music_state.primary_context, archive_name,
+    const std::string requested_archive = archive_name != nullptr ? archive_name : "";
+    const bool prepared_matches =
+        g_prepared_primary_music_record.stream != nullptr &&
+        g_prepared_primary_music_record.record_index == record_index &&
+        g_prepared_primary_music_record.archive_name == requested_archive;
+    if (prepared_matches) {
+        g_music_state.primary_stream = g_prepared_primary_music_record.stream;
+        g_music_state.primary_context =
+            std::move(g_prepared_primary_music_record.context);
+        g_prepared_primary_music_record.stream = nullptr;
+        InitializeMilesTrcArchiveStreamContext(
+            g_prepared_primary_music_record.context);
+        g_prepared_primary_music_record.archive_name.clear();
+        g_prepared_primary_music_record.record_index =
+            kPrimaryMilesMusicStoppedRecord;
+    }
+    else {
+        ReleasePreparedPrimaryMilesMusicRecord(g_prepared_primary_music_record);
+    }
+
+    if (g_music_state.primary_stream == nullptr &&
+        !OpenComputedMilesMp3Stream(g_music_state.primary_context, archive_name,
             record_index, &g_music_state.primary_stream)) {
         return;
     }

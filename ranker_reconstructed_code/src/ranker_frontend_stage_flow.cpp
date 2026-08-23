@@ -13,6 +13,7 @@
 #endif
 
 #include <cstdio>
+#include <thread>
 #include <utility>
 
 namespace ranker {
@@ -111,6 +112,8 @@ bool StartFrontendStageFromMenu(FrontendStageFlowState& state, i32 column, i32 r
     const FrontendStageFlowCallbacks& callbacks) {
     state.previous_mode = state.current_mode;
     state.saved_cursor_index = software_cursor_state().cursor_index;
+    state.briefing_screen_preloaded = false;
+    state.briefing_music_preloaded = false;
     SetGameCursorIndex(0x0d);
 
     if (!LoadFrontendStageSessionBundle(state, column, row, "JW2_06.TRC",
@@ -129,23 +132,73 @@ bool StartFrontendStageFromMenu(FrontendStageFlowState& state, i32 column, i32 r
 
     SetBriefingBinkActiveGameMode(state.current_mode);
     SetPrimaryMilesMusicPolicyMode(1);
+
+    // The story card remains on screen until Escape, so use that otherwise
+    // idle interval to load the large JW2_04 briefing record and open the
+    // faction music decoder without starting playback. Both objects stay
+    // local to their worker until the threads have joined below.
+    Jw204BinkMenuPreload screen_preload;
+    PreparedPrimaryMilesMusicRecord music_preload;
+    bool music_preload_ready = false;
+    std::thread screen_preload_thread;
+    std::thread music_preload_thread;
+    try {
+        screen_preload_thread = std::thread([&screen_preload, column, row]() {
+            (void)PreloadJw204BinkMenuScreen(screen_preload, column, row);
+        });
+    }
+    catch (...) {
+        screen_preload = Jw204BinkMenuPreload{};
+    }
+    const u32 briefing_music_record = PrimaryMilesBriefingMusicRecordForFaction(
+        miles_music_state().primary_policy_faction_index);
+    try {
+        music_preload_thread = std::thread(
+            [&music_preload, &music_preload_ready, briefing_music_record]() {
+                music_preload_ready = PreparePrimaryMilesMusicRecord(
+                    music_preload, briefing_music_record);
+            });
+    }
+    catch (...) {
+        music_preload_ready = false;
+    }
+
     PlayBriefingStartBinkSource();
     state.start_briefing_played = true;
 
-    // The story-card player advances on an asynchronous keyboard or mouse
-    // state.  Do not let that same physical transition activate a button in
-    // the mission briefing screen opened immediately below.  The original
-    // establishes a fresh input edge at this modal boundary.
+    if (screen_preload_thread.joinable()) {
+        screen_preload_thread.join();
+    }
+    if (music_preload_thread.joinable()) {
+        music_preload_thread.join();
+    }
+    state.briefing_screen_preloaded = screen_preload.ready;
+    state.briefing_music_preloaded = music_preload_ready;
+    if (music_preload_ready) {
+        InstallPreparedPrimaryMilesMusicRecord(music_preload);
+    }
+    else {
+        ReleasePreparedPrimaryMilesMusicRecord(music_preload);
+    }
+
+    // The story-card player advances on Escape. Establish a fresh input edge
+    // before opening the mission briefing screen immediately below.
     WaitForPressedMouseButtonsReleasedThenResetInput();
 
     SetGameCursorIndex(0);
-    if (!PlayJw204BinkMenuScreen(column, row)) {
+    const bool mission_started = PlayJw204BinkMenuScreen(
+        column, row, nullptr, nullptr, &screen_preload);
+    if (ShouldRestoreFrontendStageSelectionMusic(mission_started)) {
+        // Unlike the original outer-loop return, this reconstructed path keeps
+        // the existing campaign-selection screen alive. Restore its silent
+        // policy explicitly so no briefing or title music leaks into it.
+        SetPrimaryMilesMusicPolicyMode(kFrontendStageSelectionMusicPolicyMode);
         state.stage_started = false;
         state.stage_transition_latched = false;
         state.current_mode = state.previous_mode;
         return false;
     }
-    return true;
+    return mission_started;
 }
 
 void HandleFrontendStageCompletion(FrontendStageFlowState& state, u32 result,

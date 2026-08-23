@@ -16,6 +16,7 @@ constexpr u32 kMilesEffectPlaylistPathBytes = 0x104;
 constexpr u32 kMilesEffectPlaylistRecordBytes = 0x10c;
 constexpr u32 kInvalidMilesEffectEntry = 0xffffffffu;
 constexpr u32 kPrimaryMilesMusicStoppedRecord = 0x13;
+constexpr u32 kPrimaryMilesBriefingMusicRecordBase = 0x0e;
 constexpr u32 kBriefingStartBinkRecord = 0x1b;
 constexpr u32 kBriefingEndBinkRecord = 0x1c;
 constexpr u32 kBriefingEffectPlaylistInfoRecord = 0x1d;
@@ -34,6 +35,17 @@ struct MilesComputedStreamContext {
     u16 check_value = 0;
     u16 method = 0;
     bool open = false;
+};
+
+constexpr u32 PrimaryMilesBriefingMusicRecordForFaction(u32 faction_index) {
+    return faction_index + kPrimaryMilesBriefingMusicRecordBase;
+}
+
+struct PreparedPrimaryMilesMusicRecord {
+    MilesStreamHandle stream = nullptr;
+    MilesComputedStreamContext context;
+    std::string archive_name;
+    u32 record_index = kPrimaryMilesMusicStoppedRecord;
 };
 
 enum class MilesEffectEntryKind : u32 {
@@ -176,6 +188,12 @@ void SetPrimaryMilesMusicPolicyRawVolume(u32 raw_volume);
 void SetPrimaryMilesMusicPolicyFactionIndex(u32 faction_index);
 void SetPrimaryMilesMusicPolicyFactionBase(u32 faction_index, u32 record_base);
 
+bool PreparePrimaryMilesMusicRecord(PreparedPrimaryMilesMusicRecord& prepared,
+    u32 record_index, const char* archive_name = "JW2_15.TRC");
+void InstallPreparedPrimaryMilesMusicRecord(
+    PreparedPrimaryMilesMusicRecord& prepared);
+void ReleasePreparedPrimaryMilesMusicRecord(
+    PreparedPrimaryMilesMusicRecord& prepared);
 void PlayPrimaryMilesMusicRecord(u32 record_index, const char* archive_name = "JW2_15.TRC");
 void ClosePrimaryMilesMusic();
 void StopPrimaryMilesMusic();

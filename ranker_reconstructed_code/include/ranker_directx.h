@@ -24,6 +24,37 @@ constexpr DWORD kGameplayBackSurfaceCaps =
 struct SpriteRenderTarget;
 struct TrcRecordReader;
 
+enum class BinkVideoSkipInputPolicy : u8 {
+    AnyKeyOrMouse = 0,
+    EscapeOnly,
+};
+
+constexpr bool ShouldHoldSingleFrameBinkUntilCancelled(u32 frame_count) {
+    return frame_count == 1u;
+}
+
+constexpr bool ShouldDeferBinkVideoWindowRelease(
+    BinkVideoSkipInputPolicy policy, u32 frame_count,
+    bool cancelled, bool playback_succeeded) {
+    return policy == BinkVideoSkipInputPolicy::EscapeOnly &&
+        ShouldHoldSingleFrameBinkUntilCancelled(frame_count) &&
+        cancelled && playback_succeeded;
+}
+
+constexpr bool ShouldCancelBinkVideoForWindowInput(
+    BinkVideoSkipInputPolicy policy, UINT message, WPARAM wparam) {
+    if (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) {
+        return policy == BinkVideoSkipInputPolicy::AnyKeyOrMouse ||
+            wparam == VK_ESCAPE;
+    }
+    if (policy == BinkVideoSkipInputPolicy::EscapeOnly) {
+        return false;
+    }
+    return message == WM_LBUTTONDOWN || message == WM_LBUTTONDBLCLK ||
+        message == WM_RBUTTONDOWN || message == WM_RBUTTONDBLCLK ||
+        message == WM_MBUTTONDOWN || message == WM_MBUTTONDBLCLK;
+}
+
 struct DirectDrawRuntimeState {
     HWND presentation_window = nullptr;
     LPDIRECTDRAW7 direct_draw = nullptr;
@@ -97,6 +128,8 @@ struct BinkVideoRuntimeState {
     u32 media_foundation_resource_id = 0;
     bool media_foundation_window_valid = false;
     HRESULT media_foundation_result = S_OK;
+    BinkVideoSkipInputPolicy skip_input_policy =
+        BinkVideoSkipInputPolicy::AnyKeyOrMouse;
     bool centered = false;
     bool active = false;
     bool completed = false;
@@ -215,10 +248,18 @@ u32 LoadTrcWaveRecordIntoDirectSoundBufferSlot(const char* archive_name, u32 rec
 u32 LoadMemoryWaveIntoSoundBufferSlot(const void* wave_data, u32* total_wave_bytes);
 u32 LoadMemoryWaveIntoDirectSoundBufferSlot(const void* wave_data, u32* total_wave_bytes);
 void SetBinkVideoPlaybackCallback(BinkVideoPlaybackCallback callback, void* user_data);
-bool PlayBinkTrcRecord(const char* archive_name, u32 record_index, i32 x = -1, i32 y = -1);
-bool PlayBinkSource(const void* source, u32 open_flags, i32 x = -1, i32 y = -1);
+bool PlayBinkTrcRecord(const char* archive_name, u32 record_index,
+    i32 x = -1, i32 y = -1,
+    BinkVideoSkipInputPolicy skip_input_policy =
+        BinkVideoSkipInputPolicy::AnyKeyOrMouse);
+bool PlayBinkSource(const void* source, u32 open_flags,
+    i32 x = -1, i32 y = -1,
+    BinkVideoSkipInputPolicy skip_input_policy =
+        BinkVideoSkipInputPolicy::AnyKeyOrMouse);
 bool RenderBinkFrameToBackBuffer(void* bink_handle);
 void CancelBinkVideoPlayback();
+void PumpDeferredBinkVideoTransitionMessages();
+void ReleaseDeferredBinkVideoTransition();
 bool ConfigureBinkFrameSurface();
 void HandleJw208IntroVideoSequence(HWND window);
 void HandleJw208Record3VideoTransition(HWND window);
