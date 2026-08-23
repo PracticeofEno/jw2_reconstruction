@@ -31,20 +31,6 @@ int main() {
     static_assert(!Jw204BinkMenuPreloadMatches(false, 0u, 0, 0));
     static_assert(!Jw204BinkMenuPreloadMatches(true, 20u, 0, 0));
 
-    assert(IsGameplayScriptMissionObjectiveCue(
-        "< Mission Objective >\r\n\r\n1. objective"));
-    assert(IsGameplayScriptMissionObjectiveCue(
-        "  \r\n<Mission Objective >") == false);
-    assert(!IsGameplayScriptMissionObjectiveCue(
-        "Character: ordinary opening dialog"));
-    GameplayScriptDialogState objective_cue{};
-    objective_cue.advance_flags[1] = 1;
-    objective_cue.visible_text =
-        "< Mission Objective >\r\n\r\n1. objective";
-    assert(!ShouldPublishGameplayScriptDialogFrame(objective_cue));
-    objective_cue.visible_text = "Character: ordinary opening dialog";
-    assert(ShouldPublishGameplayScriptDialogFrame(objective_cue));
-
     // Script opcode 0x01 is an immediate draw in the original dispatcher. It
     // must use the frame slot, never the five-second notification slot. An
     // inactive dialog must also leave another immediate script draw intact.

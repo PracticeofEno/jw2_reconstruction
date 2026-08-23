@@ -40,32 +40,6 @@ struct GameplayScriptDialogState {
     std::string visible_text;
 };
 
-inline bool IsGameplayScriptMissionObjectiveCue(const char* text) {
-    if (text == nullptr) {
-        return false;
-    }
-    while (*text == ' ' || *text == '\t' || *text == '\r' || *text == '\n') {
-        ++text;
-    }
-
-    constexpr char kMissionObjectiveHeader[] = "< Mission Objective >";
-    for (std::size_t index = 0;
-         index + 1 < sizeof(kMissionObjectiveHeader); ++index) {
-        if (text[index] != kMissionObjectiveHeader[index]) {
-            return false;
-        }
-    }
-    const char suffix = text[sizeof(kMissionObjectiveHeader) - 1];
-    return suffix == '\0' || suffix == ' ' || suffix == '\t' ||
-        suffix == '\r' || suffix == '\n';
-}
-
-inline bool ShouldPublishGameplayScriptDialogFrame(
-    const GameplayScriptDialogState& dialog) {
-    return dialog.advance_flags[1] != 0 &&
-        !IsGameplayScriptMissionObjectiveCue(dialog.visible_text.c_str());
-}
-
 // The original clears its one-shot Escape flag after the nonzero script
 // phase.  In the reconstruction that phase is also run by presentation
 // passes, which can occur between input and the next simulation-phase dialog
