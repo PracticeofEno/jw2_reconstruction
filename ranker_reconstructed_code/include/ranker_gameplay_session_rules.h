@@ -47,6 +47,15 @@ constexpr GameplayRestartMaterialization ResolveGameplayRestartMaterialization(
         : GameplayRestartMaterialization::Unavailable;
 }
 
+// The replay packet pump sets the original session-leave edge
+// DAT_00725c09 when every recorded owner cursor reaches EOF.  It must not be
+// translated into DAT_00725c0b, which is the ordinary victory/defeat edge and
+// opens the ranking result screen.
+constexpr bool ShouldRouteReplayCompletionToSessionLeave(
+    bool replay_playback_mode, bool replay_game_end_requested) {
+    return replay_playback_mode && replay_game_end_requested;
+}
+
 // Index zero is the 45 ms (fastest) original simulation interval.
 constexpr u32 ResolveGameplayInitialSpeedIndex(bool generic_ai_profile_mode,
     bool replay_mode, u32 requested_index) {

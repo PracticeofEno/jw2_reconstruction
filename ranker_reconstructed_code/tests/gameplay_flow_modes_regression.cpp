@@ -163,6 +163,12 @@ int main() {
     assert(ResolveGameplayModalSessionRequest(false, false) ==
         GameplayModalSessionRequest::None);
 
+    // Replay EOF is the common session-leave edge, not a gameplay outcome.
+    // Only an active playback may consume the replay pump's completion flag.
+    assert(ShouldRouteReplayCompletionToSessionLeave(true, true));
+    assert(!ShouldRouteReplayCompletionToSessionLeave(true, false));
+    assert(!ShouldRouteReplayCompletionToSessionLeave(false, true));
+
     assert(ResolveGameplayRestartMaterialization(false, true, false) ==
         GameplayRestartMaterialization::NetworkAiPractice);
     assert(ResolveGameplayRestartMaterialization(true, true, true) ==

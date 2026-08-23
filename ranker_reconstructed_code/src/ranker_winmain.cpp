@@ -15216,10 +15216,20 @@ bool default_gameplay_loop_sync_replay_direct_music(GameplayLoopState& state) {
     if (!state.replay_timing_enabled || !p2p.direct_music_started) {
         return false;
     }
-    return TickP2PDirectMusicSync(p2p, state.simulation_frame_counter,
+    const bool hold_frame = TickP2PDirectMusicSync(
+        p2p, state.simulation_frame_counter,
         p2p.replay_target_frame_count,
         static_cast<u32>(std::max(0, GetDirectMilesMusicLengthMs())),
         static_cast<u32>(GetDirectMilesMusicStatus()));
+    if (ShouldRouteReplayCompletionToSessionLeave(
+            replay_recording_state().playback_mode,
+            p2p.game_end_requested)) {
+        // FUN_0044fb20 publishes DAT_00725c09 at replay EOF.  Preserve that
+        // session-leave edge even when DirectMusic pacing reaches EOF during
+        // the timing phase and therefore suppresses the packet gate.
+        state.pause_loop_requested = true;
+    }
+    return hold_frame;
 }
 
 bool default_gameplay_loop_external_turn_wait(GameplayLoopState&) {
@@ -31075,8 +31085,13 @@ u32 pump_default_p2p_replay_frame_gate(GameplayLoopState& state) {
         p2p, state.simulation_frame_counter,
         default_p2p_delayed_gameplay_packet_dispatch);
     apply_default_p2p_replay_vpos_camera(p2p);
-    if (p2p.game_end_requested) {
-        g_runtime.gameplay_end_condition_state.end_requested = true;
+    if (ShouldRouteReplayCompletionToSessionLeave(
+            replay_recording_state().playback_mode,
+            p2p.game_end_requested)) {
+        // Original FUN_0044fb20 sets DAT_00725c09 here.  Mapping EOF to the
+        // gameplay end-condition flag instead sent playback through the
+        // ordinary victory result/ranking screen.
+        state.pause_loop_requested = true;
     }
     return gate_result;
 }

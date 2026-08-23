@@ -17,6 +17,17 @@ int main() {
     // The legacy DirectDraw cursor path updates its primary surface directly.
     assert(!ShouldPresentGameCursorImmediatelyForPointerMotion(false, false));
     assert(!ShouldPresentGameCursorImmediatelyForPointerMotion(false, true));
+
+    // Mission-briefing portrait/text videos are owned HWNDs above the
+    // DirectDraw primary surface.  Their WM_SETCURSOR path must select a
+    // native cursor because the software cursor is physically underneath.
+    HCURSOR arrow = LoadCursorA(nullptr, IDC_ARROW);
+    assert(arrow != nullptr);
+    SetCursor(nullptr);
+    assert(HandleNativeCursorForOwnedOverlayMessage(WM_SETCURSOR, arrow));
+    assert(GetCursor() == arrow);
+    assert(!HandleNativeCursorForOwnedOverlayMessage(WM_MOUSEMOVE, arrow));
+    SetCursor(nullptr);
 #endif
     return 0;
 }

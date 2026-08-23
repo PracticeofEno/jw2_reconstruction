@@ -692,7 +692,14 @@ LRESULT CALLBACK scenario_ui_bink_window_proc(HWND window, UINT message,
     if (message == WM_MOUSEACTIVATE) {
         return MA_NOACTIVATE;
     }
-    if (message == WM_SETCURSOR) {
+    if (HandleNativeCursorForOwnedOverlayMessage(
+            message, GetFrontendGameCursor())) {
+        // Media Foundation presents this owned popup above the DirectDraw
+        // primary surface, so the software cursor remains underneath it.  The
+        // main game window deliberately leaves the native cursor NULL while
+        // that software cursor owns the rest of the screen; explicitly show
+        // the matching native game cursor while the pointer is over either
+        // campaign-video HWND.
         return TRUE;
     }
 

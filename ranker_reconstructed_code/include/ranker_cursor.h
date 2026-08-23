@@ -21,6 +21,15 @@ constexpr bool ShouldPresentGameCursorImmediatelyForPointerMotion(
     return d3d9_cubic_active && !continuous_gameplay_presentation_active;
 }
 
+inline bool HandleNativeCursorForOwnedOverlayMessage(
+    UINT message, HCURSOR cursor) {
+    if (message != WM_SETCURSOR) {
+        return false;
+    }
+    SetCursor(cursor);
+    return true;
+}
+
 constexpr u32 FrontendCursorArgbFromRgb565(u16 pixel) {
     if (pixel == 0) {
         return 0;
