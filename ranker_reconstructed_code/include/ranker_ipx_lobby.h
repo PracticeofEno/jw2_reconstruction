@@ -1,7 +1,6 @@
 #pragma once
 
 #include "ranker_bitmap_resource.h"
-#include "ranker_connect_frontend.h"
 #include "ranker_custom_scroll.h"
 #include "ranker_directplay.h"
 #include "ranker_image_controls.h"
@@ -23,6 +22,8 @@ constexpr UINT kIpxLobbyDirectPlayPayloadMessage = 0x509;
 constexpr UINT kIpxLobbyStartGameMessage = 0x50b;
 constexpr UINT kIpxLobbyJoinErrorMessage = 0x50c;
 constexpr UINT kIpxLobbyJoinStatusMessage = 0x50d;
+constexpr UINT kIpxLobbyConnectionLostMessage = 0x502;
+constexpr UINT kIpxLobbySessionLostMessage = 0x503;
 
 constexpr int kIpxLobbySessionNameEditId = 0x0dac;
 constexpr int kIpxLobbyPasswordEditId = 0x0dad;
@@ -51,6 +52,10 @@ constexpr u32 kIpxLobbyIconRecord2 = 0x0ab;
 constexpr u32 kIpxLobbyIconRecord3 = 0x0ac;
 constexpr UINT_PTR kIpxLobbyRefreshTimerId = 1;
 constexpr UINT kIpxLobbyRefreshTimerMs = 2000;
+constexpr std::size_t kIpxLobbyPlayerDataBytes = 0x18a;
+constexpr std::size_t kIpxLobbyPlayerNameOffset = 0x60;
+constexpr std::size_t kIpxLobbyPlayerNameBytes = 0x20;
+constexpr std::size_t kIpxLobbyHostPlayerDataBytes = 0x2dc;
 
 enum class IpxLobbyJoinPhase : u32 {
     Idle = 0,
@@ -85,10 +90,11 @@ struct IpxLobbyControl {
 struct IpxLobbySessionListItem {
     std::string name;
     GUID instance{};
+    GUID application{};
     u32 flags = 0;
     u32 magic = 0;
     u32 version = 0;
-    u32 password_hint = 0;
+    DPID host_player_id = 0;
     bool password_required = false;
     bool joinable = false;
 };
@@ -138,7 +144,9 @@ struct IpxLobbyState {
 
     std::array<char, 0x14> session_name{};
     std::array<char, 10> password{};
-    std::array<u8, kConnectFrontendPlayerSlotBytes> local_player_data{};
+    std::array<char, kIpxLobbyPlayerNameBytes> local_player_name{};
+    std::array<u8, kIpxLobbyPlayerDataBytes> local_player_data{};
+    std::array<u8, kIpxLobbyHostPlayerDataBytes> selected_game_data{};
     std::vector<IpxLobbySessionListItem> sessions;
     std::string info_text;
     std::string last_message;
@@ -152,6 +160,7 @@ struct IpxLobbyState {
     IpxLobbySessionStatus selected_status = IpxLobbySessionStatus::None;
     bool refresh_in_progress = false;
     bool start_game_requested = false;
+    bool selected_game_data_valid = false;
     bool visible = false;
     IpxLobbyCallbacks callbacks{};
 };

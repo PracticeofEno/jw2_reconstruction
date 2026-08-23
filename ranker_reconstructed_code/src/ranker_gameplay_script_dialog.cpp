@@ -11,6 +11,11 @@ u32 CalculateGameplayScriptTextDurationFrames(const char* text) {
     return static_cast<u32>((length >> 1) + 0x50);
 }
 
+void HandleGameplayScriptEscapeRequest(GameplayScriptDialogState& state) {
+    state.force_complete =
+        state.active_cue_id != 0 && state.advance_flags[1] != 0;
+}
+
 void HandleGameplayScriptTextEffectCue(GameplayScriptDialogState& state,
     const GameplayScriptTextCueCommand& command, u32 frame_tick) {
     state.visible_text = command.text != nullptr ? command.text : "";
@@ -53,7 +58,7 @@ void HandleGameplayScriptTextEffectCue(GameplayScriptDialogState& state,
         if (command.extended_text_effect_opcode &&
             state.effect_playback_enabled &&
             GetMilesEffectPlaylistEntryStatus(command.effect_entry_index) != 0) {
-            CloseMilesEffectPlaylistEntry(command.effect_entry_index);
+            CloseMilesEffectPlaylistEntryDeferred(command.effect_entry_index);
         }
         state.force_complete = false;
     }

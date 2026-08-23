@@ -177,6 +177,9 @@ HRESULT HostDirectPlayJwarSessionRecord(const char* session_name,
 HRESULT JoinDirectPlaySessionWithPlayer(const GUID& session_guid, const char* session_name,
     const char* player_name, const void* player_data, DWORD player_data_size, DWORD flags,
     AsyncComContext* context);
+HRESULT JoinDirectPlaySessionWithPlayer(const GUID& session_guid, const char* session_name,
+    const char* password, const char* player_name, const void* player_data,
+    DWORD player_data_size, DWORD flags, AsyncComContext* context);
 HRESULT JoinDirectPlaySessionRecord(DirectPlaySessionRecord& session_record,
     const char* player_name, const void* player_data, DWORD player_data_size, DWORD flags,
     AsyncComContext* context);

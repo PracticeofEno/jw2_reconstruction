@@ -153,8 +153,8 @@ python -m unittest tests.test_server tests.test_accounts tests.test_config tests
 Replay files and their catalog index are stored in the configured
 `data.replay_dir` (by default `data/replays`). `server.max_replay_bytes` limits
 each upload and defaults to 64 MiB. Stored display names use
-`[map]_player1vsplayer2_YYYY_MM_DD_HH-MM-SS.ply`; hyphens replace time colons
-because the downloaded file must remain valid on Windows.
+`[map]_player1_vs_player2.ply`. If that filename already exists, only the
+server-side stored filename receives a numeric collision suffix.
 
 ## Two-PC NAT Release Gate
 

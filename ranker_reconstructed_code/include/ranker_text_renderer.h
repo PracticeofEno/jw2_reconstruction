@@ -102,6 +102,7 @@ void SetTextCursor(i32 x, i32 y, u8 foreground, u8 background = 0);
 bool SelectTextDrawFont(u8 index);
 bool SelectTextMetricFont(u8 index);
 bool MeasureTextExtent(const char* text);
+bool MeasureAsciiOnlyTextExtent(const char* text);
 bool MeasureAsciiGlyphMetrics(u8 ch);
 bool DrawTextGlyph(u8 ch);
 bool RenderPackedBitmapGlyph(u8 ch);

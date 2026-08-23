@@ -4536,16 +4536,31 @@ bool PlayJw204BinkMenuScreen(i32 column, i32 row,
         return true;
     };
 
-    while (pump_once() && activated_entry_index == 2) {
-        if (screen.embedded_blob_count == 0) {
+    bool start_mission = false;
+    bool pumping = true;
+    while (pumping && pump_once()) {
+        switch (ResolveJw204BriefingActivation(activated_entry_index)) {
+        case Jw204BriefingActivation::StartMission:
+            start_mission = true;
+            pumping = false;
+            break;
+        case Jw204BriefingActivation::ReplayBriefing:
+            if (screen.embedded_blob_count != 0) {
+                (void)RestartUiScreenFlaggedBinkEntries(screen);
+            }
+            break;
+        case Jw204BriefingActivation::Cancel:
+            pumping = false;
+            break;
+        case Jw204BriefingActivation::Continue:
+        default:
             break;
         }
-        (void)RestartUiScreenFlaggedBinkEntries(screen);
     }
 
     HandleUiScreenDefinitionResourceRelease(screen);
     HandleUiScreenDefinitionReleaseWrapper(screen);
-    return activated_entry_index != 3;
+    return start_mission;
 }
 
 bool DrawBackBufferRectangleOutline16(i32 left, i32 top, i32 width, i32 height,

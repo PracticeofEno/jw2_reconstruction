@@ -49,6 +49,11 @@ constexpr bool ShouldClearGameplayScriptWaitBreakAfterPhase(
     return phase != 0 && !dialog_active;
 }
 
+// Escape completes only the narration that is currently blocking.  A stale
+// key press outside an active cue must not carry over and skip the next cue in
+// the scenario chain.
+void HandleGameplayScriptEscapeRequest(GameplayScriptDialogState& state);
+
 struct GameplayScriptTextCueCommand {
     u32 cue_id = 0;
     bool use_custom_position = false;
@@ -84,6 +89,14 @@ constexpr u32 kGameplayScriptOwnerUnitTypeCount = 0xaa;
 constexpr u32 kGameplayScriptObjectEquipmentSlots = 6;
 constexpr u32 kGameplayScriptCopiedOwnerTableWords = 8;
 constexpr u32 kGameplayScriptSelectionGroupLimit = 0x0e;
+
+// FUN_00416440 removes a scenario-group reference only after raw unit +0xa0
+// acquires the death bit.  Moving a live pool node to the free/lifecycle list
+// is not enough: authored UMS groups intentionally keep those fixed-pool
+// references for later activation and all-dead conditions.
+constexpr bool ShouldRemoveGameplayScriptGroupReference(u32 runtime_flags) {
+    return (runtime_flags & 4u) != 0;
+}
 
 struct GameplayScriptArea {
     i32 left = 0;

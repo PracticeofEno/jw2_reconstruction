@@ -980,6 +980,33 @@ bool MeasureTextExtent(const char* text) {
     return true;
 }
 
+bool MeasureAsciiOnlyTextExtent(const char* text) {
+    if (text == nullptr) {
+        return false;
+    }
+
+    // Match RenderAsciiOnlyTextLine (original 0x00502269): this path is
+    // selected solely by the draw font.  A leaked Win32 metric font must not
+    // change either the glyphs or the population-counter cursor advance.
+    if ((g_text_renderer_state.draw_font.flags & 8u) != 0) {
+#ifdef _WIN32
+        return measure_win32_text_run(text, std::strlen(text));
+#else
+        return false;
+#endif
+    }
+
+    g_text_renderer_state.measured_width = 0;
+    g_text_renderer_state.measured_height = 0;
+    const TextFontDefinition& font = g_text_renderer_state.draw_font;
+    for (const u8* p = reinterpret_cast<const u8*>(text); *p != 0; ++p) {
+        g_text_renderer_state.measured_width += glyph_width(font, *p);
+        g_text_renderer_state.measured_height =
+            std::max(g_text_renderer_state.measured_height, font.height);
+    }
+    return true;
+}
+
 bool MeasureAsciiGlyphMetrics(u8 ch) {
     // Original 0x0050222e reads DAT_0086ad9c/ada0/ada4 (draw-font state).
     const auto& font = g_text_renderer_state.draw_font;

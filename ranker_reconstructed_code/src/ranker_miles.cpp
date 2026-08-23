@@ -48,6 +48,7 @@ struct AsyncMilesEffectStream {
     bool cancelled = false;
     bool paused = false;
     bool started = false;
+    bool backend_paused = false;
     bool closed = false;
 };
 
@@ -286,6 +287,7 @@ struct MciMilesStream {
     int remaining_restarts = 0;
     bool active = false;
     bool paused = false;
+    bool serviced_by_owner_thread = false;
 };
 
 std::vector<MciMilesStream*> g_mci_streams;
@@ -514,6 +516,42 @@ bool seek_mci_stream_to_start(MciMilesStream& stream) {
     return mciSendCommandA(stream.device_id, MCI_SEEK,
         MCI_SEEK_TO_START | MCI_WAIT,
         reinterpret_cast<DWORD_PTR>(&seek)) == 0;
+}
+
+bool service_mci_stream_playback(MciMilesStream& stream) {
+    if (!stream.active || stream.paused) {
+        return stream.active;
+    }
+
+    MCI_STATUS_PARMS status{};
+    status.dwItem = MCI_STATUS_MODE;
+    if (mciSendCommandA(stream.device_id, MCI_STATUS,
+            MCI_STATUS_ITEM | MCI_WAIT,
+            reinterpret_cast<DWORD_PTR>(&status)) != 0 ||
+        status.dwReturn != MCI_MODE_STOP) {
+        return stream.active;
+    }
+    if (stream.remaining_restarts == 0) {
+        stream.active = false;
+        return false;
+    }
+    if (stream.remaining_restarts > 0) {
+        --stream.remaining_restarts;
+    }
+    stream.active = seek_mci_stream_to_start(stream) &&
+        play_mci_stream(stream, stream.remaining_restarts < 0) == 0;
+    return stream.active;
+}
+
+void mark_mci_stream_owner_serviced(MilesStreamHandle handle) {
+    if (MciMilesStream* stream = find_mci_stream(handle)) {
+        stream->serviced_by_owner_thread = true;
+    }
+}
+
+bool service_owner_mci_stream(MilesStreamHandle handle) {
+    MciMilesStream* stream = find_mci_stream(handle);
+    return stream != nullptr && service_mci_stream_playback(*stream);
 }
 
 struct MilesApi {
@@ -1203,26 +1241,11 @@ void ServeMilesSound() {
     }
     std::lock_guard<std::mutex> lock(g_mci_streams_mutex);
     for (MciMilesStream* stream : g_mci_streams) {
-        if (stream == nullptr || !stream->active || stream->paused) {
+        if (stream == nullptr || stream->serviced_by_owner_thread ||
+            !stream->active || stream->paused) {
             continue;
         }
-        MCI_STATUS_PARMS status{};
-        status.dwItem = MCI_STATUS_MODE;
-        if (mciSendCommandA(stream->device_id, MCI_STATUS,
-                MCI_STATUS_ITEM | MCI_WAIT,
-                reinterpret_cast<DWORD_PTR>(&status)) != 0 ||
-            status.dwReturn != MCI_MODE_STOP) {
-            continue;
-        }
-        if (stream->remaining_restarts == 0) {
-            stream->active = false;
-            continue;
-        }
-        if (stream->remaining_restarts > 0) {
-            --stream->remaining_restarts;
-        }
-        stream->active = seek_mci_stream_to_start(*stream) &&
-            play_mci_stream(*stream, stream->remaining_restarts < 0) == 0;
+        (void)service_mci_stream_playback(*stream);
     }
     g_miles_state.last_serve_time = now;
 #endif
@@ -1826,6 +1849,7 @@ bool start_async_mci_effect_stream(u32 slot, i32 entry_index,
                 state->close_condition.notify_all();
                 return;
             }
+            mark_mci_stream_owner_serviced(stream);
 
             bool discard = false;
             {
@@ -1838,6 +1862,7 @@ bool start_async_mci_effect_stream(u32 slot, i32 entry_index,
                     if (!state->paused) {
                         StartMilesStreamWithLoopCount(stream, 1);
                         state->started = true;
+                        state->active.store(GetMilesStreamStatus(stream) != 0);
                     }
                 }
             }
@@ -1849,9 +1874,44 @@ bool start_async_mci_effect_stream(u32 slot, i32 entry_index,
                 // the decoder opened here remains audible in the next loaded
                 // scenario.
                 std::unique_lock<std::mutex> lock(state->mutex);
-                state->close_condition.wait(lock, [&state]() {
-                    return state->cancelled;
-                });
+                while (!state->cancelled) {
+                    state->close_condition.wait_for(lock,
+                        std::chrono::milliseconds(50), [&state]() {
+                            return state->cancelled;
+                        });
+                    if (state->cancelled) {
+                        break;
+                    }
+                    bool backend_started_this_tick = false;
+                    if (state->paused) {
+                        if (state->started && !state->backend_paused) {
+                            PauseMilesStream(state->stream);
+                            state->backend_paused = true;
+                        }
+                    }
+                    else {
+                        if (!state->started) {
+                            StartMilesStreamWithLoopCount(state->stream, 1);
+                            state->started = true;
+                            state->backend_paused = false;
+                            state->active.store(
+                                GetMilesStreamStatus(state->stream) != 0);
+                            backend_started_this_tick = true;
+                        }
+                        else if (state->backend_paused) {
+                            ResumeMilesStream(state->stream);
+                            state->backend_paused = false;
+                            state->active.store(
+                                GetMilesStreamStatus(state->stream) != 0);
+                            backend_started_this_tick = true;
+                        }
+                        if (state->active.load() &&
+                            !backend_started_this_tick) {
+                            state->active.store(
+                                service_owner_mci_stream(state->stream));
+                        }
+                    }
+                }
                 stream = state->stream;
                 state->stream = nullptr;
             }
@@ -1921,15 +1981,7 @@ int get_async_effect_slot_status(u32 slot) {
         return 0;
     }
 
-    std::lock_guard<std::mutex> lock(state->mutex);
-    if (state->stream == nullptr || state->paused) {
-        return state->cancelled ? 0 : 1;
-    }
-    const int status = GetMilesStreamStatus(state->stream);
-    if (status == 0) {
-        state->active.store(false);
-    }
-    return status;
+    return 1;
 }
 
 void pause_async_effect_slot(u32 slot) {
@@ -1939,11 +1991,14 @@ void pause_async_effect_slot(u32 slot) {
     }
     const std::shared_ptr<AsyncMilesEffectStream>& state =
         g_async_effect_streams[slot];
-    std::lock_guard<std::mutex> lock(state->mutex);
-    state->paused = true;
-    if (state->stream != nullptr && state->started) {
-        PauseMilesStream(state->stream);
+    if (!state->active.load()) {
+        return;
     }
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        state->paused = true;
+    }
+    state->close_condition.notify_all();
 }
 
 void resume_async_effect_slot(u32 slot) {
@@ -1953,18 +2008,14 @@ void resume_async_effect_slot(u32 slot) {
     }
     const std::shared_ptr<AsyncMilesEffectStream>& state =
         g_async_effect_streams[slot];
-    std::lock_guard<std::mutex> lock(state->mutex);
-    state->paused = false;
-    if (state->stream == nullptr) {
+    if (!state->active.load()) {
         return;
     }
-    if (state->started) {
-        ResumeMilesStream(state->stream);
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        state->paused = false;
     }
-    else {
-        StartMilesStreamWithLoopCount(state->stream, 1);
-        state->started = true;
-    }
+    state->close_condition.notify_all();
 }
 
 } // namespace
@@ -2135,6 +2186,23 @@ void CloseMilesEffectPlaylistEntry(i32 entry_index) {
             // A scenario close opcode is an audible ownership boundary, not
             // merely a request to release the decoder later.
             close_effect_slot(slot);
+        }
+    }
+}
+
+void CloseMilesEffectPlaylistEntryDeferred(i32 entry_index) {
+    if (static_cast<i32>(g_effect_playlist_state.entries.size()) <= entry_index) {
+        return;
+    }
+
+    for (u32 slot = 0; slot < kMilesEffectStreamSlots; ++slot) {
+        if (g_effect_playlist_state.active_entry_indices[slot] == entry_index &&
+            g_effect_playlist_state.streams[slot] != nullptr) {
+            // Escape completes the script cue immediately.  Detach its live
+            // slot first and let the stream-owning worker perform MCI STOP and
+            // CLOSE so decoder shutdown cannot stall the gameplay frame that
+            // advances to the next cue.
+            close_effect_slot(slot, true);
         }
     }
 }

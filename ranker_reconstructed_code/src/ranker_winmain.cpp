@@ -2097,6 +2097,7 @@ void open_memo_window(HWND parent, HINSTANCE instance);
 void open_view_rank_window(HWND parent, HINSTANCE instance, LPARAM return_context);
 void open_p2p_lobby_window(HWND parent, HINSTANCE instance, LPARAM return_context);
 void open_free_server_lobby_window(HWND parent, HINSTANCE instance, LPARAM return_context);
+void open_ipx_frontend_window(HWND parent, HINSTANCE instance, LPARAM return_context);
 void open_ipx_lobby_window(HWND parent, HINSTANCE instance, LPARAM return_context);
 void open_figs_window(HWND parent, HINSTANCE instance, LPARAM return_context);
 void open_create_game_window(HWND parent, HINSTANCE instance, LPARAM return_context,
@@ -2172,7 +2173,10 @@ void default_connect_open_free_server(ConnectFrontendState& state) {
     HINSTANCE instance = state.instance;
     LPARAM context = state.return_context;
     destroy_existing_window(state.window);
-    open_free_server_lobby_window(parent, instance, context);
+    // Original Connect mode 2 dispatches to FUN_00494ee0, the FIGS server
+    // address book.  The free-server game browser is reached only after the
+    // selected server has accepted the Wizard login.
+    open_figs_window(parent, instance, context);
 }
 
 void default_connect_open_ipx(ConnectFrontendState& state) {
@@ -2180,7 +2184,7 @@ void default_connect_open_ipx(ConnectFrontendState& state) {
     HINSTANCE instance = state.instance;
     LPARAM context = state.return_context;
     destroy_existing_window(state.window);
-    open_ipx_lobby_window(parent, instance, context);
+    open_ipx_frontend_window(parent, instance, context);
 }
 
 void configure_connect_callbacks(ConnectFrontendState& state) {
@@ -2997,10 +3001,21 @@ void default_ipx_start_game(IpxLobbyState& state) {
         state.return_context, 3);
 }
 
+bool default_ipx_initialize_browser_connection(IpxLobbyState& state,
+    AsyncComContext& browser_context) {
+    const DirectPlayConnectionRecord* connection = state.async_context != nullptr ?
+        state.async_context->selected_connection : nullptr;
+    return connection != nullptr && SUCCEEDED(
+        InitializeDirectPlayConnection(*connection, &browser_context));
+}
+
 void configure_ipx_callbacks(IpxLobbyState& state) {
+    state.callbacks.initialize_browser_connection =
+        default_ipx_initialize_browser_connection;
     state.callbacks.open_create_game = default_ipx_open_create_game;
     state.callbacks.open_connect_frontend = default_ipx_open_connect;
     state.callbacks.start_game = default_ipx_start_game;
+    state.callbacks.show_message = default_lobby_show_message;
 }
 
 void default_link_open_connect(LinkLobbyState& state) {
@@ -3251,8 +3266,9 @@ bool default_create_game_prepare_ipx_host_session(CreateGameState& state) {
     const auto& ipx_frontend = ipx_frontend_state();
     const char* player_name = ipx_frontend.player_name[0] != '\0' ?
         ipx_frontend.player_name.data() : state.local_player_name.data();
+    const char* password = state.password[0] != '\0' ? state.password.data() : nullptr;
     const HRESULT result = HostDirectPlayJwarSessionRecord(state.game_name.data(),
-        state.password.data(),
+        password,
         state.map_descriptor_payload[kCreateGameDirectPlayMapPlayerCountOffset],
         LoadTrcRecord9Value(), player_name, state.map_descriptor_payload.data(),
         static_cast<DWORD>(state.map_descriptor_payload.size()), 0, &context);
@@ -3358,6 +3374,8 @@ bool default_ipx_frontend_open_lobby(IpxFrontendState& state) {
     IpxLobbyState& lobby = ipx_lobby_state();
     destroy_existing_window(lobby.window);
     configure_ipx_callbacks(lobby);
+    std::snprintf(lobby.local_player_name.data(), lobby.local_player_name.size(),
+        "%s", state.player_name.data());
     if (!CreateIpxLobbyWindow(lobby, state.main_window, state.instance,
             state.return_context, state.async_context)) {
         return false;
@@ -3371,12 +3389,28 @@ void default_ipx_frontend_open_connect(IpxFrontendState& state) {
         state.return_context);
 }
 
+void default_ipx_frontend_shutdown_connection(IpxFrontendState&,
+    AsyncComContext& context) {
+    if (context.direct_play != nullptr) {
+        if (context.local_player != 0) {
+            context.direct_play->DestroyPlayer(context.local_player);
+        }
+        context.direct_play->Close();
+    }
+    context.local_player = 0;
+    context.session_descriptor_data.clear();
+    context.session_descriptor = nullptr;
+    context.is_host = false;
+}
+
 void open_ipx_frontend_window(HWND parent, HINSTANCE instance, LPARAM return_context) {
     IpxFrontendState& state = ipx_frontend_state();
     destroy_existing_window(state.window);
     state.callbacks = {};
     state.callbacks.open_ipx_lobby = default_ipx_frontend_open_lobby;
     state.callbacks.open_connect_frontend = default_ipx_frontend_open_connect;
+    state.callbacks.shutdown_ipx_connection =
+        default_ipx_frontend_shutdown_connection;
     state.callbacks.show_message = default_lobby_show_message;
     state.main_window = parent;
     state.parent_window = parent;
@@ -3669,6 +3703,11 @@ void open_ipx_lobby_window(HWND parent, HINSTANCE instance, LPARAM return_contex
     IpxLobbyState& state = ipx_lobby_state();
     destroy_existing_window(state.window);
     configure_ipx_callbacks(state);
+    const IpxFrontendState& frontend = ipx_frontend_state();
+    if (frontend.player_name[0] != '\0') {
+        std::snprintf(state.local_player_name.data(), state.local_player_name.size(),
+            "%s", frontend.player_name.data());
+    }
     if (CreateIpxLobbyWindow(state, parent, instance, return_context,
             &g_runtime.async_com)) {
         activate_frontend_state(state);
@@ -9917,15 +9956,21 @@ bool apply_pending_link_lobby_start_parameters_to_gameplay_startup() {
 
     std::array<i32, kPlayerSlotCount> imported_start_x{};
     std::array<i32, kPlayerSlotCount> imported_start_y{};
+    std::array<u8, kPlayerSlotCount> imported_slot_states{};
     for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
         imported_start_x[owner] = startup.owner_slots[owner].start_x;
         imported_start_y[owner] = startup.owner_slots[owner].start_y;
+        imported_slot_states[owner] = startup.owner_slots[owner].slot_state;
     }
 
     startup.local_owner_id = static_cast<u32>(
         std::clamp(lobby.local_player_index, 0, static_cast<int>(kPlayerSlotCount - 1)));
     startup.session_mode = static_cast<u32>(std::max(0, lobby.game_type));
-    startup.active_slot_count = link_lobby_startup_active_slot_count(lobby);
+    const u32 lobby_active_slot_count =
+        link_lobby_startup_active_slot_count(lobby);
+    startup.active_slot_count = ResolveGameplayStartupActiveSlotCount(
+        startup.active_slot_count, lobby_active_slot_count,
+        startup.session_mode);
     startup.frame_interval_index = static_cast<u32>(
         std::clamp(lobby.map_selection_index, 0,
             static_cast<int>(kGameplayFrameIntervalsMs.size() - 1)));
@@ -9938,11 +9983,11 @@ bool apply_pending_link_lobby_start_parameters_to_gameplay_startup() {
 
     for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
         GameplayScenarioOwnerSlot& slot = startup.owner_slots[owner];
-        u8 slot_state = normalized_link_lobby_startup_slot_state(
+        const u8 lobby_slot_state = normalized_link_lobby_startup_slot_state(
             lobby.start_states[owner]);
-        if (owner >= startup.active_slot_count) {
-            slot_state = static_cast<u8>(PlayerSlotState::disabled);
-        }
+        const u8 slot_state = ResolveGameplayStartupSlotState(
+            imported_slot_states[owner], lobby_slot_state, owner,
+            lobby_active_slot_count, startup.session_mode);
 
         const u32 map_slot = std::min<u32>(lobby.randomized_slots[owner],
             kPlayerSlotCount - 1);
@@ -13745,7 +13790,7 @@ void default_gameplay_resource_hud_select_name_font(
 
 GameplayTextExtent default_gameplay_resource_hud_measure_text(
     GameplayPlayerResourceHudState&, const char* text) {
-    if (text != nullptr && MeasureTextExtent(text)) {
+    if (text != nullptr && MeasureAsciiOnlyTextExtent(text)) {
         const TextRendererState& renderer = text_renderer_state();
         return {renderer.measured_width, renderer.measured_height};
     }
@@ -13772,10 +13817,28 @@ void default_gameplay_resource_hud_draw_text(
     // glyph widths and the second population token's cursor position.
     SetTextCursor(x, y, color);
     if (centered) {
+#ifdef _WIN32
+        // FUN_0042a110 always draws the rotation countdown with
+        // DAT_0162ec44 (the -18 UI font), independently of the current text
+        // draw/metric slots.  It also emits the one-pixel shadow explicitly.
+        HFONT countdown_font = GetUiFontHandle(4);
+        if (countdown_font == nullptr) {
+            InitializeUiFontHandles();
+            countdown_font = GetUiFontHandle(4);
+        }
+        DrawCenteredWin32FontTextAt(
+            x + 1, y + 1, countdown_font, 0xe9, 0, text);
+        DrawCenteredWin32FontTextAt(
+            x, y, countdown_font, color, 0, text);
+#else
         DrawCenterAlignedText(text);
+#endif
     }
     else {
-        DrawTextString(text);
+        // FUN_0042a040 reaches original 0x00502269, whose font-path decision
+        // ignores the metric font.  This keeps UMS resource rows on bitmap
+        // slot 1 even after a named world unit selected metric slot 4.
+        RenderAsciiOnlyTextLine(text);
     }
 }
 
@@ -14555,7 +14618,7 @@ bool default_ui_overlay_submit_chat(
 }
 
 void default_ui_overlay_request_script_wait_break(UiOverlayState&) {
-    gameplay_script_dialog_state().force_complete = true;
+    HandleGameplayScriptEscapeRequest(gameplay_script_dialog_state());
 }
 
 void default_ui_overlay_frame_noop(UiOverlayState&) {}
@@ -17946,6 +18009,16 @@ void rebuild_default_unit_reference_tables_from_catalog() {
                 tables.definitions[unit_type], record.definition_bytes);
         }
         RebuildUnitTypeReverseReferenceTables(tables);
+
+        // The original frontend runs a transition-enabled FUN_004abbe0 /
+        // FUN_0043c370 pass before a normal UMS session.  That pass records
+        // 159 -> 48 in DAT_0123CE9C.  Later normal-session passes remove 159
+        // from type 48's definition, but FUN_0043c370 never clears the reverse
+        // table, so the mapping deliberately survives.  Lazy catalog setup in
+        // the reconstruction skips that frontend pass; seed its persistent
+        // result along with the pristine-definition reverse mappings.
+        tables.primary_or_alternate_reverse[kPostInitRequiredTypes.back()] =
+            kPostInitUnitTypes.back();
         g_default_unit_reference_base_seeded = true;
     }
 
@@ -32969,7 +33042,12 @@ LRESULT CALLBACK RankerRebuildWndProc(HWND window, UINT message, WPARAM wparam, 
         ClearImeCompositionText();
         break;
     case WM_IME_SETCONTEXT:
-        return 0;
+        // We draw the live composition string in the active game/UI field.
+        // A zero display mask suppresses every native composition, reading
+        // and candidate window, including IME UI positioned at screen (0,0),
+        // while DefWindowProc still preserves committed WM_CHAR delivery.
+        return DefWindowProcA(window, message, wparam,
+            SuppressAllDefaultImeUi(lparam));
     case WM_PAINT:
         if (g_runtime.directx_initialized && !g_runtime.suppress_paint) {
             PAINTSTRUCT paint{};

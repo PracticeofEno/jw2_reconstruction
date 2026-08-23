@@ -2,6 +2,7 @@
 
 #ifdef _WIN32
 
+#include "ranker_bitmap_icon_collection.h"
 #include "ranker_frontend_layout.h"
 #include "ranker_gameplay_sound.h"
 #include "ranker_link_lobby.h"
@@ -13,6 +14,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 
 namespace ranker {
 namespace {
@@ -31,6 +33,33 @@ constexpr COLORREF kIpxBlack = RGB(0, 0, 0);
 constexpr COLORREF kIpxStartFailureRed = RGB(255, 20, 20);
 constexpr COLORREF kIpxNetworkFailureRed = RGB(250, 10, 10);
 constexpr COLORREF kIpxWaitYellow = RGB(250, 250, 10);
+constexpr std::size_t kIpxGameTitleOffset = 0x08;
+constexpr std::size_t kIpxGameTitleBytes = 0x20;
+constexpr std::size_t kIpxGameTypeOffset = 0x2a8;
+constexpr std::size_t kIpxScreenSizeOffset = 0x2ac;
+constexpr std::size_t kIpxHostNameOffset = 0x2b0;
+constexpr std::size_t kIpxHostNameBytes = 0x20;
+constexpr std::size_t kIpxTimeTextOffset = 0x2d0;
+constexpr std::size_t kIpxTimeTextBytes = 0x0c;
+
+const char* const kIpxGameTypeFallbacks[] = {
+    "Top Vs Bottom",
+    "Melee",
+    "Rank",
+    "Avatar Melee",
+    "Avatar Rank",
+    "Use Map Setting",
+    "Melee Observer",
+    "Avatar Observer",
+    "Relay",
+};
+
+const char* const kIpxScreenSizeFallbacks[] = {
+    "Free Size",
+    "640x480",
+    "800x600",
+    "1024x768",
+};
 
 IpxLobbyState g_ipx_lobby_state;
 bool g_ipx_background_shutdown_registered = false;
@@ -206,6 +235,66 @@ u32 read_packet_u32(const void* packet, std::size_t packet_size, std::size_t off
     return value;
 }
 
+u32 read_game_data_u32(const IpxLobbyState& state, std::size_t offset) {
+    if (offset > state.selected_game_data.size() ||
+        state.selected_game_data.size() - offset < sizeof(u32)) {
+        return 0;
+    }
+    u32 value = 0;
+    std::memcpy(&value, state.selected_game_data.data() + offset, sizeof(value));
+    return value;
+}
+
+std::string read_game_data_text(const IpxLobbyState& state, std::size_t offset,
+    std::size_t byte_count) {
+    if (offset >= state.selected_game_data.size()) {
+        return {};
+    }
+    byte_count = std::min(byte_count, state.selected_game_data.size() - offset);
+    const char* first = reinterpret_cast<const char*>(
+        state.selected_game_data.data() + offset);
+    std::size_t length = 0;
+    while (length < byte_count && first[length] != '\0') {
+        ++length;
+    }
+    return std::string(first, length);
+}
+
+const char* ipx_game_type_label(u32 game_type) {
+    if (game_type < std::size(kIpxGameTypeFallbacks)) {
+        return kIpxGameTypeFallbacks[game_type];
+    }
+    return "Unknown";
+}
+
+const char* ipx_screen_size_label(u32 screen_size) {
+    if (screen_size < std::size(kIpxScreenSizeFallbacks)) {
+        return kIpxScreenSizeFallbacks[screen_size];
+    }
+    return "Unknown";
+}
+
+void release_browser_connection(IpxLobbyState& state) {
+    ReleaseDirectPlay4AComObject(state.browser_context.direct_play);
+    state.browser_context.selected_connection = nullptr;
+    state.browser_context.session_descriptor_data.clear();
+    state.browser_context.session_descriptor = nullptr;
+    state.browser_context.local_player = 0;
+    state.browser_context.is_host = false;
+}
+
+bool initialize_browser_connection(IpxLobbyState& state) {
+    release_browser_connection(state);
+    if (state.callbacks.initialize_browser_connection != nullptr) {
+        return state.callbacks.initialize_browser_connection(
+            state, state.browser_context);
+    }
+    const DirectPlayConnectionRecord* connection = state.async_context != nullptr ?
+        state.async_context->selected_connection : nullptr;
+    return connection != nullptr && SUCCEEDED(
+        InitializeDirectPlayConnection(*connection, &state.browser_context));
+}
+
 void show_startup_status(IpxLobbyState& state, std::size_t index,
     const char* fallback, COLORREF color) {
     ShowIpxLobbyStatusMessage(state, startup_message_row(index, fallback), color);
@@ -259,8 +348,7 @@ std::string session_display_name(const DirectPlaySessionRecord& session,
 }
 
 bool session_password_required(const DPSESSIONDESC2& descriptor) {
-    return (descriptor.dwFlags & DPSESSION_PASSWORDREQUIRED) != 0 ||
-        descriptor.dwUser4 != 0;
+    return (descriptor.dwFlags & DPSESSION_PASSWORDREQUIRED) != 0;
 }
 
 IpxLobbySessionListItem item_from_session(const DirectPlaySessionRecord& session,
@@ -268,13 +356,54 @@ IpxLobbySessionListItem item_from_session(const DirectPlaySessionRecord& session
     IpxLobbySessionListItem item;
     item.name = session_display_name(session, index);
     item.instance = session.descriptor.guidInstance;
+    item.application = session.descriptor.guidApplication;
     item.flags = session.descriptor.dwFlags;
-    item.magic = session.descriptor.dwUser1;
-    item.version = session.descriptor.dwUser2;
-    item.password_hint = session.descriptor.dwUser4;
+    item.magic = session.descriptor.dwUser2;
+    item.version = session.descriptor.dwUser3;
+    item.host_player_id = session.descriptor.dwUser4;
     item.password_required = session_password_required(session.descriptor);
     item.joinable = true;
     return item;
+}
+
+bool load_selected_game_data(IpxLobbyState& state,
+    const IpxLobbySessionListItem& item) {
+    state.selected_game_data.fill(0);
+    state.selected_game_data_valid = false;
+    if (state.browser_context.direct_play == nullptr || item.host_player_id == 0) {
+        return false;
+    }
+
+    DPSESSIONDESC2 descriptor{};
+    descriptor.dwSize = sizeof(descriptor);
+    descriptor.dwFlags = item.flags;
+    descriptor.guidInstance = item.instance;
+    descriptor.guidApplication = item.application;
+    descriptor.lpszSessionNameA = const_cast<char*>(item.name.c_str());
+    descriptor.dwUser2 = item.magic;
+    descriptor.dwUser3 = item.version;
+    descriptor.dwUser4 = item.host_player_id;
+
+    HRESULT result = state.browser_context.direct_play->Open(&descriptor, DPOPEN_JOIN);
+    if (FAILED(result)) {
+        return false;
+    }
+
+    DWORD byte_count = 0;
+    result = state.browser_context.direct_play->GetPlayerData(
+        item.host_player_id, nullptr, &byte_count, 0);
+    if (byte_count == state.selected_game_data.size() &&
+        (result == DPERR_BUFFERTOOSMALL || SUCCEEDED(result))) {
+        result = state.browser_context.direct_play->GetPlayerData(
+            item.host_player_id, state.selected_game_data.data(), &byte_count, 0);
+    }
+    else {
+        result = DPERR_INVALIDPARAMS;
+    }
+    state.browser_context.direct_play->Close();
+    state.selected_game_data_valid = SUCCEEDED(result) &&
+        byte_count == state.selected_game_data.size();
+    return state.selected_game_data_valid;
 }
 
 void sync_session_listbox(IpxLobbyState& state) {
@@ -322,8 +451,20 @@ void draw_session_list_item(IpxLobbyState& state, const DRAWITEMSTRUCT& draw) {
     if ((draw.itemState & ODS_SELECTED) != 0) {
         SetBkColor(draw.hDC, RGB(0, 0, 255));
     }
-    rect.left += 8;
-    DrawTextA(draw.hDC, text, -1, &rect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    BitmapIconResourceCollection& icons = GlobalBitmapIconResourceCollection();
+    const BitmapMemoryResource& icon = GetBitmapIconSlotOrDefault(
+        icons, kBitmapIconDefaultSlot);
+    if (icon.loaded) {
+        StretchBitmapMemoryResourceToDc(icon, draw.hDC,
+            rect.left + 4, rect.top + 2);
+        rect.left += 0x2d;
+    }
+    else {
+        rect.left += 8;
+    }
+    rect.right -= 4;
+    DrawTextA(draw.hDC, text, -1, &rect,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     (void)state;
 }
 
@@ -353,9 +494,27 @@ void draw_info_panel(IpxLobbyState& state, const DRAWITEMSTRUCT& draw) {
     std::string text;
     switch (state.selected_status) {
     case IpxLobbySessionStatus::Joinable: {
-        const IpxLobbySessionListItem* item = selected_session_item(state);
-        text = std::string(startup_message_row(140, "Title: ")) +
-            (item != nullptr ? item->name : "");
+        if (!state.selected_game_data_valid) {
+            text = startup_message_row(39,
+                "This game cannot provide game information.");
+            break;
+        }
+        const std::string title = read_game_data_text(
+            state, kIpxGameTitleOffset, kIpxGameTitleBytes);
+        const std::string host = read_game_data_text(
+            state, kIpxHostNameOffset, kIpxHostNameBytes);
+        const std::string time = read_game_data_text(
+            state, kIpxTimeTextOffset, kIpxTimeTextBytes);
+        char buffer[768]{};
+        std::snprintf(buffer, sizeof(buffer), "%s%s\n%s%s\n%s%s\n%s%s\n%s%s",
+            startup_message_row(140, "Title: "), title.c_str(),
+            startup_message_row(134, "Creator: "), host.c_str(),
+            startup_message_row(141, "Game type: "),
+            ipx_game_type_label(read_game_data_u32(state, kIpxGameTypeOffset)),
+            startup_message_row(135, "Screen size: "),
+            ipx_screen_size_label(read_game_data_u32(state, kIpxScreenSizeOffset)),
+            startup_message_row(136, "Time: "), time.c_str());
+        text = buffer;
         break;
     }
     case IpxLobbySessionStatus::Blocked:
@@ -396,6 +555,7 @@ void release_window_resources(IpxLobbyState& state) {
 
     SetDirectPlayMode7DispatchEnabled(false);
     ConfigureDirectPlayMode7WindowDispatch(nullptr);
+    release_browser_connection(state);
     RestoreIpxLobbyAccelerators(state);
     ReleaseBitmapMemoryResource(state.background);
     ShutdownIpxLobbyInfoButton(state);
@@ -466,6 +626,44 @@ void dispatch_join_result(IpxLobbyState& state, HRESULT result) {
     SetDirectPlayMessageDispatchMode(7);
     SetDirectPlayMode7DispatchEnabled(true);
     PostMessageA(state.window, kIpxLobbyJoinStatusMessage, 0, 0);
+}
+
+void recover_ipx_lobby_connection(IpxLobbyState& state) {
+    if (state.join_phase == IpxLobbyJoinPhase::JoinRequested) {
+        state.join_phase = IpxLobbyJoinPhase::Idle;
+        return;
+    }
+    if (state.join_phase != IpxLobbyJoinPhase::WaitingForStart &&
+        state.join_phase != IpxLobbyJoinPhase::Busy) {
+        return;
+    }
+
+    if (state.async_context != nullptr && state.async_context->direct_play != nullptr) {
+        if (state.async_context->local_player != 0) {
+            state.async_context->direct_play->DestroyPlayer(
+                state.async_context->local_player);
+        }
+        state.async_context->local_player = 0;
+        state.async_context->direct_play->Close();
+        state.async_context->session_descriptor_data.clear();
+        state.async_context->session_descriptor = nullptr;
+        state.async_context->is_host = false;
+    }
+
+    state.join_phase = IpxLobbyJoinPhase::Idle;
+    state.selected_session = -1;
+    state.selected_status = IpxLobbySessionStatus::None;
+    state.selected_game_data.fill(0);
+    state.selected_game_data_valid = false;
+    if (state.callbacks.set_busy != nullptr) {
+        state.callbacks.set_busy(FALSE);
+    }
+    if (!initialize_browser_connection(state)) {
+        show_startup_status(state, 42,
+            "Connection failed - general error.", kIpxStartFailureRed);
+        return;
+    }
+    RefreshIpxLobbySessionList(state);
 }
 
 } // namespace
@@ -684,8 +882,10 @@ bool SubmitIpxLobbySelectedSession(IpxLobbyState& state) {
     }
     else if (state.async_context != nullptr) {
         const IpxLobbySessionListItem& session = state.sessions[session_index];
+        const char* password = state.password[0] != '\0' ?
+            state.password.data() : nullptr;
         result = JoinDirectPlaySessionWithPlayer(session.instance, session.name.c_str(),
-            state.session_name.data(), state.local_player_data.data(),
+            password, state.local_player_name.data(), state.local_player_data.data(),
             static_cast<DWORD>(state.local_player_data.size()), 0, state.async_context);
     }
     else {
@@ -708,6 +908,15 @@ bool CreateIpxLobbyWindow(IpxLobbyState& state, HWND parent, HINSTANCE instance,
     state.session_name.fill(0);
     state.password.fill(0);
     state.local_player_data.fill(0);
+    if (kIpxLobbyPlayerNameOffset < state.local_player_data.size()) {
+        const std::size_t available =
+            state.local_player_data.size() - kIpxLobbyPlayerNameOffset;
+        std::memcpy(state.local_player_data.data() + kIpxLobbyPlayerNameOffset,
+            state.local_player_name.data(),
+            std::min(available, state.local_player_name.size()));
+    }
+    state.selected_game_data.fill(0);
+    state.selected_game_data_valid = false;
     state.selected_session = -1;
     state.selected_status = IpxLobbySessionStatus::None;
     state.join_phase = IpxLobbyJoinPhase::Idle;
@@ -763,7 +972,7 @@ bool CreateIpxLobbyWindow(IpxLobbyState& state, HWND parent, HINSTANCE instance,
         !create_image_button(state.cancel_button, state.window, "&Cancel",
             kIpxLobbyCancelButtonId, layout_at(layout.table, 8),
             kIpxLobbyCancelNormalBitmapRecord, kIpxLobbyCancelPressedBitmapRecord)) {
-        release_window_resources(state);
+        DestroyWindow(state.window);
         return false;
     }
     SetWindowLongPtrA(GetLegacyImageButtonWindow(state.info_button), GWL_STYLE,
@@ -788,9 +997,8 @@ bool CreateIpxLobbyWindow(IpxLobbyState& state, HWND parent, HINSTANCE instance,
         reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
 
     InstallIpxLobbyAccelerators(state);
-    if (state.callbacks.initialize_browser_connection != nullptr &&
-        !state.callbacks.initialize_browser_connection(state, state.browser_context)) {
-        release_window_resources(state);
+    if (!initialize_browser_connection(state)) {
+        DestroyWindow(state.window);
         return false;
     }
 
@@ -908,6 +1116,10 @@ LRESULT HandleIpxLobbyWindowMessage(IpxLobbyState& state, HWND hwnd, UINT messag
             return 0;
         }
         break;
+    case kIpxLobbyConnectionLostMessage:
+    case kIpxLobbySessionLostMessage:
+        recover_ipx_lobby_connection(state);
+        return 0;
     case kIpxLobbyDirectPlayPayloadMessage:
         DispatchIpxLobbyDirectPlayPayload(state, wparam, lparam);
         break;
@@ -1000,8 +1212,8 @@ void RefreshIpxLobbySessionList(IpxLobbyState& state) {
         }
     }
 
-    if (state.async_context != nullptr) {
-        RefreshDirectPlaySessionRecords(state.async_context);
+    if (state.browser_context.direct_play != nullptr) {
+        RefreshDirectPlaySessionRecords(&state.browser_context);
     }
 
     state.sessions.clear();
@@ -1038,6 +1250,8 @@ IpxLobbySessionStatus ValidateIpxLobbySelectedSession(IpxLobbyState& state,
     int list_index) {
     state.selected_session = -1;
     state.remote_version = 0;
+    state.selected_game_data.fill(0);
+    state.selected_game_data_valid = false;
     if (list_index < 0 || static_cast<std::size_t>(list_index) >= state.sessions.size()) {
         return IpxLobbySessionStatus::None;
     }
@@ -1045,15 +1259,17 @@ IpxLobbySessionStatus ValidateIpxLobbySelectedSession(IpxLobbyState& state,
     state.selected_session = list_index;
     const IpxLobbySessionListItem& item =
         state.sessions[static_cast<std::size_t>(list_index)];
-    if (item.magic != 0 && item.magic != kIpxLobbySessionMagic) {
+    if (item.magic != kIpxLobbySessionMagic) {
         return IpxLobbySessionStatus::BadMagic;
     }
     state.remote_version = item.version;
-    if (state.expected_version != 0 && item.version != 0 &&
-        item.version != state.expected_version) {
+    if (item.version != state.expected_version) {
         return IpxLobbySessionStatus::VersionMismatch;
     }
     if (item.password_required || !item.joinable) {
+        return IpxLobbySessionStatus::Blocked;
+    }
+    if (!load_selected_game_data(state, item)) {
         return IpxLobbySessionStatus::Blocked;
     }
     return IpxLobbySessionStatus::Joinable;

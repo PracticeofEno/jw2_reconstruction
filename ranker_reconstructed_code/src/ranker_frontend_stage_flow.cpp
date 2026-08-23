@@ -136,7 +136,7 @@ bool StartFrontendStageFromMenu(FrontendStageFlowState& state, i32 column, i32 r
     // state.  Do not let that same physical transition activate a button in
     // the mission briefing screen opened immediately below.  The original
     // establishes a fresh input edge at this modal boundary.
-    ResetInputState();
+    WaitForPressedMouseButtonsReleasedThenResetInput();
 
     SetGameCursorIndex(0);
     if (!PlayJw204BinkMenuScreen(column, row)) {

@@ -258,6 +258,24 @@ constexpr bool ShouldUseGameplaySurrenderEntry(bool generic_ai_profile_mode,
         local_player_slot_state != 2u;
 }
 
+enum class Jw204BriefingActivation : u8 {
+    Continue,
+    StartMission,
+    ReplayBriefing,
+    Cancel,
+};
+
+// Entry zero is the full-screen briefing artwork.  It can be hit by an
+// ordinary mouse click but is not a command.  Only entry one (Game Start)
+// may advance into the mission.
+constexpr Jw204BriefingActivation ResolveJw204BriefingActivation(
+    u32 entry_index) {
+    return entry_index == 1u ? Jw204BriefingActivation::StartMission :
+        entry_index == 2u ? Jw204BriefingActivation::ReplayBriefing :
+        entry_index == 3u ? Jw204BriefingActivation::Cancel :
+        Jw204BriefingActivation::Continue;
+}
+
 struct GameplayModalUiState {
     GameplayModalUiCallbacks callbacks;
     std::array<GameplayModalSaveSlot, kGameplayModalSaveSlotCount> save_slots;

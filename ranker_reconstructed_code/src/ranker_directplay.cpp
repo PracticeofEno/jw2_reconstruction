@@ -1255,8 +1255,8 @@ HRESULT HostDirectPlayJwarSessionRecord(const char* session_name,
 }
 
 HRESULT JoinDirectPlaySessionWithPlayer(const GUID& session_guid, const char* session_name,
-    const char* player_name, const void* player_data, DWORD player_data_size, DWORD flags,
-    AsyncComContext* context) {
+    const char* password, const char* player_name, const void* player_data,
+    DWORD player_data_size, DWORD flags, AsyncComContext* context) {
     if (context == nullptr || context->direct_play == nullptr) {
         g_async_com_state.last_result = DPERR_UNINITIALIZED;
         return g_async_com_state.last_result;
@@ -1269,6 +1269,7 @@ HRESULT JoinDirectPlaySessionWithPlayer(const GUID& session_guid, const char* se
     }
     descriptor.guidInstance = session_guid;
     descriptor.lpszSessionNameA = const_cast<char*>(session_name);
+    descriptor.lpszPasswordA = const_cast<char*>(password);
 
     HRESULT result = context->direct_play->Open(&descriptor, DPOPEN_JOIN);
     g_async_com_state.last_result = result;
@@ -1288,6 +1289,13 @@ HRESULT JoinDirectPlaySessionWithPlayer(const GUID& session_guid, const char* se
         context->direct_play->Close();
     }
     return result;
+}
+
+HRESULT JoinDirectPlaySessionWithPlayer(const GUID& session_guid, const char* session_name,
+    const char* player_name, const void* player_data, DWORD player_data_size, DWORD flags,
+    AsyncComContext* context) {
+    return JoinDirectPlaySessionWithPlayer(session_guid, session_name, nullptr,
+        player_name, player_data, player_data_size, flags, context);
 }
 
 HRESULT JoinDirectPlaySessionRecord(DirectPlaySessionRecord& session_record,

@@ -65,6 +65,31 @@ constexpr u32 ResolveGameplayMaterializationMode(u32 archive_mode,
         : archive_mode;
 }
 
+// Use Map Setting archives own their Computer slots.  The network participant
+// count describes connected humans, not the highest authored simulation owner.
+// Collapsing the archive to that count removes scripted Computer units before
+// the first trigger pass (FUN_00426770 only removes raw state 0x14 owners).
+constexpr u32 ResolveGameplayStartupActiveSlotCount(
+    u32 archive_count, u32 lobby_count, u32 session_mode) {
+    return session_mode == 5u
+        ? (archive_count > lobby_count ? archive_count : lobby_count)
+        : lobby_count;
+}
+
+constexpr bool IsAuthoredUseMapComputerSlot(
+    u8 archive_state, u32 session_mode) {
+    return session_mode == 5u && archive_state == 1u;
+}
+
+constexpr u8 ResolveGameplayStartupSlotState(u8 archive_state,
+    u8 lobby_state, u32 owner, u32 lobby_count, u32 session_mode) {
+    if (IsAuthoredUseMapComputerSlot(archive_state, session_mode) &&
+        (owner >= lobby_count || lobby_state == 0x14u)) {
+        return archive_state;
+    }
+    return owner < lobby_count ? lobby_state : 0x14u;
+}
+
 // FUN_004d71d7 maps a manual generic/P2P leave to result 2 before frame
 // 0x708 (or while the local ready/status byte is 2), otherwise to result 1.
 // It never leaves the initial victory result zero active.

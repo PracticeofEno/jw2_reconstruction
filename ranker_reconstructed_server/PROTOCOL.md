@@ -54,9 +54,9 @@ The server stores only the first replay for a match: a SHA-256 fingerprint of
 the match token suppresses participant-view duplicates, while a content
 SHA-256 suppresses byte-identical files from any later upload. Completed files
 and a JSON catalog are stored below `data.replay_dir`. Display names use
-`[map]_player1vsplayer2_YYYY_MM_DD_HH-MM-SS.ply`; Windows-forbidden time colons
-are represented as hyphens. The lobby browser pages that catalog and downloads
-the selected file in 32 KiB server chunks.
+`[map]_player1_vs_player2.ply`. If the same filename already exists, only the
+server-side stored filename receives a numeric suffix. The lobby browser pages
+that catalog and downloads the selected file in 32 KiB server chunks.
 
 ## Lobby Mark Extension
 

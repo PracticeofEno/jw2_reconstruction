@@ -22,7 +22,7 @@ constexpr DWORD kWindowStyleFullscreen = 0x90000000;
 constexpr DWORD kWindowStyleWindowed =
     WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
 constexpr DWORD kListBoxStyle =
-    WS_CHILD | WS_VISIBLE | LBS_NOTIFY | LBS_OWNERDRAWFIXED;
+    WS_CHILD | WS_VISIBLE | LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS;
 constexpr DWORD kEditStyle = WS_CHILD | ES_AUTOHSCROLL;
 constexpr COLORREF kFigsWhite = RGB(255, 255, 255);
 constexpr COLORREF kFigsGray = RGB(200, 200, 200);
@@ -341,9 +341,9 @@ void draw_list_item(FigsState& state, const DRAWITEMSTRUCT& item) {
         (item.itemState & ODS_SELECTED) != 0 ? kFigsSelectedBlue : kFigsBlack);
     ExtTextOutA(item.hDC, rect.left, rect.top, ETO_OPAQUE, &item.rcItem, nullptr, 0,
         nullptr);
-    DrawTextA(item.hDC, entry->name.data(), -1, &rect, DT_SINGLELINE);
+    DrawTextA(item.hDC, entry->name.data(), -1, &rect, DT_END_ELLIPSIS);
     rect.left = item.rcItem.left + 0x100;
-    DrawTextA(item.hDC, entry->address.data(), -1, &rect, DT_SINGLELINE);
+    DrawTextA(item.hDC, entry->address.data(), -1, &rect, DT_END_ELLIPSIS);
 }
 
 void release_window_resources(FigsState& state) {
@@ -578,7 +578,7 @@ void DeleteFigsListBoxEntry(FigsState& state, i32 list_index) {
     }
     SendMessageA(state.list_box.window, LB_DELETESTRING,
         static_cast<WPARAM>(list_index), 0);
-    update_scroll(state, list_index);
+    update_scroll(state);
 }
 
 bool AddFigsAddressEntry(FigsState& state, const char* name, const char* address) {

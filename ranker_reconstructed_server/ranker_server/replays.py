@@ -57,7 +57,6 @@ def sanitize_replay_filename(value: str) -> str:
 def build_replay_filename(
     map_name: str,
     player_names: list[str] | tuple[str, ...],
-    timestamp: time.struct_time | None = None,
 ) -> str:
     map_leaf = Path(map_name.replace("\\", "/")).name
     map_path = Path(map_leaf)
@@ -76,10 +75,8 @@ def build_replay_filename(
     ][:2]
     while len(selected) < 2:
         selected.append("Player")
-    local = timestamp if timestamp is not None else time.localtime()
-    stamp = time.strftime("%Y_%m_%d_%H-%M-%S", local)
     return sanitize_replay_filename(
-        f"[{safe_map}]_{selected[0]}vs{selected[1]}_{stamp}.ply"
+        f"[{safe_map}]_{selected[0]}_vs_{selected[1]}.ply"
     )
 
 

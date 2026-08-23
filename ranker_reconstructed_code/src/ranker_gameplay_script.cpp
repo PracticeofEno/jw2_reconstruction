@@ -41,8 +41,13 @@ void write_le_u32(std::vector<u8>& bytes, std::size_t offset, u32 value) {
 }
 
 bool object_removed_by_state(const GameplayScriptTriggerState& state, u32 object_index) {
-    return object_index < state.objects.size() &&
-        state.objects[object_index].remove_from_triggers;
+    if (object_index >= state.objects.size()) {
+        return false;
+    }
+    const GameplayScriptTriggerObjectState& object = state.objects[object_index];
+    const u32 runtime_flags = object.unit != nullptr ?
+        object.unit->runtime_flags : object.flags;
+    return ShouldRemoveGameplayScriptGroupReference(runtime_flags);
 }
 
 bool object_removed_by_callback(const GameplayScriptTriggerCallbacks& callbacks,

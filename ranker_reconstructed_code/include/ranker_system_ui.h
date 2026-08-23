@@ -5,6 +5,7 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <imm.h>
 #endif
 
 #include <array>
@@ -128,6 +129,14 @@ bool RestoreImeConversionOpenStatus(HWND window);
 void RecordImeCompositionKeyStatus(HWND window, WPARAM wparam, LPARAM lparam);
 std::string CurrentImeCompositionText();
 void ClearImeCompositionText();
+
+inline LPARAM SuppressAllDefaultImeUi(LPARAM) {
+    // Full-screen games must pass WM_IME_SETCONTEXT to DefWindowProc with a
+    // zero display mask when every native composition/reading/candidate
+    // window is unwanted.  The game retains the IME input context and handles
+    // the composition text itself.
+    return 0;
+}
 
 inline std::string BuildImeCompositionPresentationText(
     const char* committed_text, const std::string& composition_text) {

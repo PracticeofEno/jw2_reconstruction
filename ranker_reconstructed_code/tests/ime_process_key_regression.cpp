@@ -62,6 +62,14 @@ int main() {
     constexpr u32 kVkDigit1 = 0x31u;
     constexpr u32 kDigit1Scan = 0x02u;
 
+    const LPARAM ime_ui_flags = static_cast<LPARAM>(
+        static_cast<DWORD>(ISC_SHOWUICOMPOSITIONWINDOW |
+            ISC_SHOWUICANDIDATEWINDOW | ISC_SHOWUIGUIDELINE));
+    const LPARAM filtered_ime_ui_flags =
+        SuppressAllDefaultImeUi(ime_ui_flags);
+    require(filtered_ime_ui_flags == 0,
+        "native IME composition/reading/candidate UI remained enabled");
+
     require(BuildImeCompositionPresentationText("name_", "xy") == "namexy_",
         "active IME composition remained one character behind the edit cursor");
     require(BuildImeCompositionPresentationText("chat", "xy") == "chatxy",

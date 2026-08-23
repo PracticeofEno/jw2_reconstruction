@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 import tempfile
-import time
 import unittest
 
 from ranker_server.replays import (
@@ -57,17 +56,16 @@ class ReplayCatalogTests(unittest.TestCase):
         self.assertEqual(sanitize_replay_filename(r"..\..\Replay"), "Replay.ply")
         self.assertEqual(sanitize_replay_filename(""), "Replay.ply")
 
-    def test_filename_uses_map_players_and_windows_safe_timestamp(self) -> None:
-        timestamp = time.struct_time((2026, 8, 21, 14, 5, 6, 4, 233, -1))
+    def test_display_name_uses_map_and_two_players(self) -> None:
         self.assertEqual(
             build_replay_filename(
-                r"Maps\rank\Cross:Roads.trc", ("Alice", "Bob"), timestamp
+                r"Maps\rank\Cross:Roads.trc", ("Alice", "Bob")
             ),
-            "[Cross_Roads]_AlicevsBob_2026_08_21_14-05-06.ply",
+            "[Cross_Roads]_Alice_vs_Bob.ply",
         )
         self.assertEqual(
-            build_replay_filename("Arena v1.2", ("Alice", "Bob"), timestamp),
-            "[Arena v1.2]_AlicevsBob_2026_08_21_14-05-06.ply",
+            build_replay_filename("Arena v1.2", ("Alice", "Bob")),
+            "[Arena v1.2]_Alice_vs_Bob.ply",
         )
 
     def test_catalog_deduplicates_match_and_content_hashes(self) -> None:

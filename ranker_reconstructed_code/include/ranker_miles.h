@@ -232,6 +232,7 @@ bool LoadMilesEffectPlaylistInfoFromTrc(const char* archive_name,
 bool SaveMilesEffectPlaylistToTrc(const char* archive_name);
 void PlayMilesEffectPlaylistEntry(i32 entry_index);
 void CloseMilesEffectPlaylistEntry(i32 entry_index);
+void CloseMilesEffectPlaylistEntryDeferred(i32 entry_index);
 void StopMilesEffectPlaylistEntry(i32 entry_index);
 void ResumeMilesEffectPlaylistEntry(i32 entry_index);
 int GetMilesEffectPlaylistEntryStatus(i32 entry_index);

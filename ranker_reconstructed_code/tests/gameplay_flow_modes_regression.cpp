@@ -1,6 +1,7 @@
 #include "ranker_gameplay_cheats.h"
 #include "ranker_gameplay_packets.h"
 #include "ranker_player_slots.h"
+#include "ranker_gameplay_script.h"
 #include "ranker_gameplay_sound.h"
 #include "ranker_gameplay_session_format.h"
 #include "ranker_gameplay_session_flow.h"
@@ -191,6 +192,34 @@ int main() {
     assert(ResolveGameplayMaterializationMode(2u, false, true, false) == 5u);
     assert(ResolveGameplayMaterializationMode(1u, false, false, true) == 5u);
     assert(ResolveGameplayMaterializationMode(3u, false, false, false) == 3u);
+
+    assert(ResolveJw204BriefingActivation(0u) ==
+        Jw204BriefingActivation::Continue);
+    assert(ResolveJw204BriefingActivation(1u) ==
+        Jw204BriefingActivation::StartMission);
+    assert(ResolveJw204BriefingActivation(2u) ==
+        Jw204BriefingActivation::ReplayBriefing);
+    assert(ResolveJw204BriefingActivation(3u) ==
+        Jw204BriefingActivation::Cancel);
+    assert(ResolveJw204BriefingActivation(9u) ==
+        Jw204BriefingActivation::Continue);
+
+    // A two-human UMS lobby must retain the archive-authored Computer owners.
+    // Super Elf uses owner 4 in trigger group 62; disabling that slot makes
+    // the group appear dead and opens the victory modal at frame 67.
+    assert(ResolveGameplayStartupActiveSlotCount(8u, 2u, 5u) == 8u);
+    assert(ResolveGameplayStartupActiveSlotCount(8u, 2u, 0u) == 2u);
+    assert(ResolveGameplayStartupSlotState(1u, 0x14u, 4u, 2u, 5u) == 1u);
+    assert(ResolveGameplayStartupSlotState(0u, 0x14u, 6u, 2u, 5u) == 0x14u);
+    assert(ResolveGameplayStartupSlotState(1u, 0x14u, 4u, 2u, 0u) == 0x14u);
+
+    // Super Elf retains inactive fixed-pool nodes in groups 50..63.  Original
+    // FUN_00416440 clears a group slot only for raw +0xa0 bit 4, not merely
+    // because the node was moved off the active list during UMS startup.
+    assert(!ShouldRemoveGameplayScriptGroupReference(0u));
+    assert(!ShouldRemoveGameplayScriptGroupReference(1u));
+    assert(ShouldRemoveGameplayScriptGroupReference(4u));
+    assert(ShouldRemoveGameplayScriptGroupReference(5u));
 
     assert(ResolveGameplayManualLeaveResult(0u, false) == 2u);
     assert(ResolveGameplayManualLeaveResult(0x707u, false) == 2u);

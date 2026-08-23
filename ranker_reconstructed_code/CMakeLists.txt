@@ -1260,6 +1260,38 @@ if (RANKER_BUILD_IME_INPUT_REGRESSION_TEST)
         COMMAND ime_process_key_regression)
 endif()
 
+option(RANKER_BUILD_RESOURCE_HUD_FONT_REGRESSION_TEST
+    "Build the UMS resource HUD bitmap-font regression" OFF)
+if (RANKER_BUILD_RESOURCE_HUD_FONT_REGRESSION_TEST AND WIN32)
+    enable_testing()
+    add_executable(resource_hud_ascii_font_regression
+        tests/resource_hud_ascii_font_regression.cpp
+        src/ranker_text_renderer.cpp
+    )
+    target_include_directories(resource_hud_ascii_font_regression PRIVATE
+        include
+    )
+    if (MSVC)
+        target_compile_options(resource_hud_ascii_font_regression PRIVATE /Gy)
+        target_link_options(resource_hud_ascii_font_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(resource_hud_ascii_font_regression PRIVATE
+            -O1
+            -ffunction-sections
+            -fdata-sections
+        )
+        target_link_options(resource_hud_ascii_font_regression PRIVATE
+            -Wl,--gc-sections
+        )
+    endif()
+    target_link_libraries(resource_hud_ascii_font_regression PRIVATE
+        gdi32
+        winmm
+    )
+    add_test(NAME resource_hud_ascii_font_regression
+        COMMAND resource_hud_ascii_font_regression)
+endif()
+
 option(RANKER_BUILD_UTF8_CP949_TEXT_REGRESSION_TEST
     "Build the UTF-8 source-text to CP949 UI conversion regression" OFF)
 if (RANKER_BUILD_UTF8_CP949_TEXT_REGRESSION_TEST)

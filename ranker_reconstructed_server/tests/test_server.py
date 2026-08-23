@@ -1896,9 +1896,9 @@ class ServerIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(read_u32(listing, 0x11), 1)
         self.assertEqual(read_u32(listing, 0x15), replay_id)
         self.assertEqual(read_u32(listing, 0x19), len(replay_bytes))
-        self.assertRegex(
+        self.assertEqual(
             read_c_string(listing, 0x49, 0x7C),
-            r"^\[RelayMap\]_RankHostvsRankJoin_\d{4}_\d{2}_\d{2}_\d{2}-\d{2}-\d{2}\.ply$",
+            "[RelayMap]_RankHost_vs_RankJoin.ply",
         )
 
         join_writer.write(build_packet(0x9E, struct.pack("<II", 0, 1)))
