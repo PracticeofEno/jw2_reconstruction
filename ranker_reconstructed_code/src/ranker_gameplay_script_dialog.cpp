@@ -79,7 +79,12 @@ void PublishGameplayScriptDialogFrame(const GameplayScriptDialogState& dialog,
     // blocking (0x004168e5..0x00416932). It does not enqueue the text in the
     // ordinary five-second HUD notification slot. Keeping it frame-scoped also
     // removes the last narration frame as soon as the cue completes.
-    PublishGameplayFrameMessage(hud, dialog.advance_flags[1] != 0,
+    // A small subset of shipped campaign maps repeats the briefing objective
+    // as a tagged opcode-0x01 cue after their opening dialogue. Keep executing
+    // the cue so trigger timing stays deterministic, but do not duplicate the
+    // already-presented mission objective over live gameplay.
+    PublishGameplayFrameMessage(hud,
+        ShouldPublishGameplayScriptDialogFrame(dialog),
         dialog.visible_text.c_str(), dialog.text_x, dialog.text_y,
         current_tick_ms);
 }
