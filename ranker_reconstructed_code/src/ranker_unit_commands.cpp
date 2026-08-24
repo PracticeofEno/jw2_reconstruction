@@ -2207,7 +2207,12 @@ void StartUnitCommandState08Entry(UnitCommandContext&, UnitMovementUnit& unit) {
 
 void StartUnitTargetOrPointCommandEntry(UnitCommandContext& context,
     UnitMovementUnit& unit) {
-    const u32 payload_target = active_payload_target_id(unit);
+    // Original 0x004d00be tests and clears raw +0x68 for an encoded point
+    // selector, but leaves the retained active tuple at raw +0xd8..+0xe0
+    // untouched.  command_value is the typed raw +0x68 mirror; clearing the
+    // active tuple instead loses the selector needed for deterministic state
+    // capture and conflates the command record with its resolved target.
+    const u32 payload_target = unit.command_value;
     const bool encoded_point_payload = (payload_target & 0x80000000u) != 0;
     if (!encoded_point_payload) {
         UnitMovementUnit* target = resolve_command_payload_target(context, unit);
@@ -2225,7 +2230,8 @@ void StartUnitTargetOrPointCommandEntry(UnitCommandContext& context,
     }
     else {
         unit.cargo_amount = payload_target & 0x7fffffffu;
-        unit.active_command_payload.x = 0;
+        unit.command_value = 0;
+        unit.target = nullptr;
     }
     unit.command_state = kUnitStateTargetOrPointCommand;
 }
@@ -4078,11 +4084,17 @@ void HandleUnitPointActionTravel(UnitCommandContext& context,
 
 void StartUnitTargetInteractionCommand(UnitCommandContext& context,
     UnitMovementUnit& unit) {
-    UnitMovementUnit* target = resolve_active_payload_target_or_clear(context, unit);
-    if (target != nullptr && CheckTargetInteractionNeedsApproach(unit,
+    resolve_active_payload_target_or_clear(context, unit);
+    // Original state 0x0c (0x004c9592) calls the interaction-distance helper
+    // even when raw +0x68 contains no object target.  In that case the helper
+    // compares the unit with the command point.  Skipping the check executes a
+    // point equipment action immediately instead of walking to its location.
+    if (CheckTargetInteractionNeedsApproach(unit,
             &command_production_state_or_empty(context),
             command_equipment_catalog(context))) {
-        path_to_target_without_command_flag(context, unit, *target);
+        if (has_movement(context)) {
+            ProcessUnitPathToDestination(movement(context), unit);
+        }
         unit.command_state = kUnitStateTargetInteractionApproach;
         return;
     }
@@ -4116,13 +4128,9 @@ void HandleUnitTargetInteractionCycle(UnitCommandContext& context,
 void HandleUnitTargetInteractionApproach(UnitCommandContext& context,
     UnitMovementUnit& unit) {
     UnitMovementUnit* target = resolve_active_payload_target_or_clear(context, unit);
-    // State 0x0e follows the raw target pointer through command-dead, hidden
-    // and lifecycle transitions.  It changes to the transfer cycle only when
-    // the pointer is absent or the interaction footprints meet.
-    if (target == nullptr) {
-        unit.command_state = kUnitStateTargetInteractionCycle;
-        return;
-    }
+    // Original state 0x0e (0x004c9652) repeats the same target-or-point
+    // distance check.  A null target is therefore a valid point approach, not
+    // a reason to execute the equipment action immediately.
     if (!CheckTargetInteractionNeedsApproach(unit,
             &command_production_state_or_empty(context),
             command_equipment_catalog(context))) {
@@ -4130,6 +4138,10 @@ void HandleUnitTargetInteractionApproach(UnitCommandContext& context,
         return;
     }
     if (movement_step(context, unit)) {
+        return;
+    }
+    if (target == nullptr) {
+        anchor_and_pop_deferred(context, unit);
         return;
     }
     // Original state 0x0e compares and overwrites raw +0xdc/+0xe0.  Those

@@ -5482,7 +5482,18 @@ bool CheckPointerInsideMinimapForAction(UiOverlayState& state) {
     state.hover_context.kind = 1;
     state.hover_context.x = minimap_input_screen_to_world_x(state, local_x);
     state.hover_context.y = minimap_command_screen_to_world_y(state, local_y);
-    append_command_action_at_world(state, 0xaeu, 0,
+    // Keep the ordinary minimap move item (0xae) for every other selection,
+    // but route an eligible producer through its existing 0xc9/action-0x1f
+    // rally command.  Dispatching the item preserves the ordered subtype-0x08
+    // packet path used by the command button and world right-click extension.
+    const u32 item_id = ResolveUiOverlayMinimapRightClickItemId(
+        state.selected_unit_count, state.selected_unit_type,
+        state.selected_unit_owner, state.local_player_slot,
+        state.selected_unit_action_mode_gate,
+        state.selected_unit_command_state,
+        state.selected_unit_raw_production_reference_count,
+        state.selected_unit_uses_avatar_production_slots);
+    append_command_action_at_world(state, item_id, 0,
         kCommandActionContextual, 1,
         state.hover_context.x, state.hover_context.y);
     return true;

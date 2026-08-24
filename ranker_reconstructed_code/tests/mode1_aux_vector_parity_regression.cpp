@@ -17,6 +17,12 @@ static_assert(ranker::ResolveUiOverlayProductionRallyRightClickAction(
     0u, 1u, 0x60u, 2u, 2u, 0u, 0x10000000u, 1u, false) == 0u);
 static_assert(ranker::ResolveUiOverlayProductionRallyRightClickAction(
     0u, 1u, 0x60u, 2u, 2u, 0u, 0u, 0u, false) == 0u);
+static_assert(ranker::ResolveUiOverlayMinimapRightClickItemId(
+    1u, 0x60u, 2u, 2u, 0u, 0u, 1u, false) == 0xc9u);
+static_assert(ranker::ResolveUiOverlayMinimapRightClickItemId(
+    1u, 0x22u, 2u, 2u, 0u, 0u, 1u, false) == 0xaeu);
+static_assert(ranker::ResolveUiOverlayMinimapRightClickItemId(
+    2u, 0x60u, 2u, 2u, 0u, 0u, 1u, false) == 0xaeu);
 
 int main() {
     ranker::UnitMovementUnit source{};

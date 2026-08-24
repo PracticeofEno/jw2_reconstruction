@@ -42,9 +42,10 @@ constexpr u32 kUiOverlayProductionRallyAction = 0x1fu;
 // Intentional reconstruction extension: the original exposes action 0x1f
 // through the producer's 0xc9 command button but gives a structure no normal
 // contextual right-click action.  Rebuild additionally maps a completed,
-// live, locally owned producer's world right-click to that same original
-// action.  The action must still travel through the ordered subtype-0x08 P2P
-// packet; this policy never authorizes a process-local rally-state mutation.
+// live, locally owned producer's world or minimap right-click to that same
+// original action.  The action must still travel through the ordered
+// subtype-0x08 P2P packet; this policy never authorizes a process-local
+// rally-state mutation.
 constexpr u32 ResolveUiOverlayProductionRallyRightClickAction(
     u32 contextual_action, u32 selected_unit_count, u32 selected_unit_type,
     u32 selected_unit_owner, u32 local_player_slot,
@@ -64,6 +65,23 @@ constexpr u32 ResolveUiOverlayProductionRallyRightClickAction(
     return is_completed_live_local_producer
         ? kUiOverlayProductionRallyAction
         : contextual_action;
+}
+
+constexpr u32 ResolveUiOverlayMinimapRightClickItemId(
+    u32 selected_unit_count, u32 selected_unit_type,
+    u32 selected_unit_owner, u32 local_player_slot,
+    u32 selected_unit_action_mode_gate, u32 selected_unit_command_state,
+    u32 selected_unit_raw_production_reference_count,
+    bool selected_unit_uses_avatar_production_slots) {
+    constexpr u32 kContextualCommandItemBase = 0xaau;
+    constexpr u32 kMinimapMoveAction = 4u;
+    return kContextualCommandItemBase +
+        ResolveUiOverlayProductionRallyRightClickAction(kMinimapMoveAction,
+            selected_unit_count, selected_unit_type, selected_unit_owner,
+            local_player_slot, selected_unit_action_mode_gate,
+            selected_unit_command_state,
+            selected_unit_raw_production_reference_count,
+            selected_unit_uses_avatar_production_slots);
 }
 
 // FUN_004e127b/FUN_004e12a0/FUN_004e12c5 and the ordinary command-record

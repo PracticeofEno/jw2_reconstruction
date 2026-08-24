@@ -216,6 +216,48 @@ void test_target_interaction_preserves_original_payload_unions() {
         "target interaction did not resolve the synchronized target point");
 }
 
+void test_encoded_point_interaction_preserves_command_and_approaches() {
+    UnitMovementUnit source{};
+    source.id = 0x1a0e0u;
+    source.type_id = 15;
+    source.owner_id = 1;
+    source.x = 3375;
+    source.y = 339;
+    source.path_target_x = 3318;
+    source.path_target_y = 346;
+    source.command_value = 0x80000003u;
+    source.active_command_payload.state = 2;
+    source.active_command_payload.x = static_cast<i32>(0x80000003u);
+    source.active_command_payload.y = 3318;
+    source.active_command_payload.value = 346;
+
+    UnitCommandContext context{};
+    StartUnitTargetOrPointCommandEntry(context, source);
+
+    require(source.command_value == 0,
+        "encoded point interaction did not clear raw +0x68");
+    require(static_cast<u32>(source.active_command_payload.x) == 0x80000003u,
+        "encoded point interaction cleared the retained active payload");
+    require(source.cargo_amount == 3,
+        "encoded point interaction did not decode its slot selector");
+    require(source.target == nullptr,
+        "encoded point interaction retained an object target");
+    require(source.command_state == kUnitStateTargetOrPointCommand,
+        "encoded point interaction did not enter state 0x0c");
+
+    StartUnitTargetInteractionCommand(context, source);
+    require(source.command_state == kUnitStateTargetInteractionApproach,
+        "distant encoded point interaction skipped state 0x0e");
+    require(static_cast<u32>(source.active_command_payload.x) == 0x80000003u,
+        "point approach changed the retained active payload");
+
+    source.x = 3318;
+    source.y = 346;
+    HandleUnitTargetInteractionApproach(context, source);
+    require(source.command_state == kUnitStateTargetInteractionCycle,
+        "in-range encoded point interaction did not enter state 0x0d");
+}
+
 void test_special_target_interaction_uses_effect_adjusted_range() {
     UnitMovementUnit source{};
     source.type_id = kUnitTargetHelperSpecialSpawnType;
@@ -309,6 +351,7 @@ int main() {
     test_linked_release_count_rebuild_keeps_source_bucket_during_cycle();
     test_unfinished_building_death_preserves_completed_type_count();
     test_target_interaction_preserves_original_payload_unions();
+    test_encoded_point_interaction_preserves_command_and_approaches();
     test_special_target_interaction_uses_effect_adjusted_range();
     test_target_interaction_approach_updates_payload_point_union();
     test_equipment_remove_uses_definition_command_flag_gate();
