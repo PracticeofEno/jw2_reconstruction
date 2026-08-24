@@ -29,6 +29,9 @@ enum class BinkVideoSkipInputPolicy : u8 {
     EscapeOnly,
 };
 
+constexpr BinkVideoSkipInputPolicy kTitleMenuBinkVideoSkipInputPolicy =
+    BinkVideoSkipInputPolicy::EscapeOnly;
+
 constexpr bool ShouldHoldSingleFrameBinkUntilCancelled(u32 frame_count) {
     return frame_count == 1u;
 }
@@ -53,6 +56,10 @@ constexpr bool ShouldCancelBinkVideoForWindowInput(
     return message == WM_LBUTTONDOWN || message == WM_LBUTTONDBLCLK ||
         message == WM_RBUTTONDOWN || message == WM_RBUTTONDBLCLK ||
         message == WM_MBUTTONDOWN || message == WM_MBUTTONDBLCLK;
+}
+
+constexpr bool ShouldContinueBinkVideoSequence(bool cancelled_by_input) {
+    return !cancelled_by_input;
 }
 
 struct DirectDrawRuntimeState {
@@ -135,6 +142,7 @@ struct BinkVideoRuntimeState {
     bool completed = false;
     bool failed = false;
     bool cancelled = false;
+    bool cancelled_by_input = false;
     bool bink_api_ready = false;
     bool played_with_bink = false;
     bool played_with_callback = false;
@@ -261,8 +269,12 @@ void CancelBinkVideoPlayback();
 void PumpDeferredBinkVideoTransitionMessages();
 void ReleaseDeferredBinkVideoTransition();
 bool ConfigureBinkFrameSurface();
-void HandleJw208IntroVideoSequence(HWND window);
-void HandleJw208Record3VideoTransition(HWND window);
+void HandleJw208IntroVideoSequence(HWND window,
+    BinkVideoSkipInputPolicy skip_input_policy =
+        BinkVideoSkipInputPolicy::AnyKeyOrMouse);
+void HandleJw208Record3VideoTransition(HWND window,
+    BinkVideoSkipInputPolicy skip_input_policy =
+        BinkVideoSkipInputPolicy::AnyKeyOrMouse);
 
 const DirectDrawRuntimeState& direct_draw_state();
 const DirectSoundRuntimeState& direct_sound_state();

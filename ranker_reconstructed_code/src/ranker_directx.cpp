@@ -746,6 +746,9 @@ bool play_external_jw208_video(const BinkVideoRuntimeState& state) {
                 }
             }
             else if (input_down || g_bink_video_state.cancelled) {
+                if (input_down) {
+                    g_bink_video_state.cancelled_by_input = true;
+                }
                 g_bink_video_state.cancelled = true;
                 player->Stop();
                 ok = true;
@@ -1007,6 +1010,13 @@ bool play_open_bink_handle_with_api(BinkApi& api, BinkMovieHeaderPrefix* handle,
     while (!g_bink_video_state.cancelled &&
         (hold_single_frame || g_bink_video_state.decoded_frames < max_frames) &&
         handle->frame_number <= handle->frame_count) {
+        // Native Bink playback runs synchronously on the window thread. Pump
+        // its queue so the main window can apply the active skip policy while
+        // the movie is playing instead of waiting until natural completion.
+        dispatch_embedded_video_thread_messages();
+        if (g_bink_video_state.cancelled) {
+            break;
+        }
         ReleaseStoppedReservedDirectSoundBuffers();
         if (api.wait(handle) == 0 && !render_bink_frame_with_api(api, handle)) {
             ok = false;
@@ -1015,6 +1025,9 @@ bool play_open_bink_handle_with_api(BinkApi& api, BinkMovieHeaderPrefix* handle,
     }
 
     g_bink_video_state.active = false;
+    if (g_bink_video_state.cancelled_by_input) {
+        settle_embedded_video_skip_input(g_bink_video_state.skip_input_policy);
+    }
     g_bink_video_state.played_with_bink = ok;
     return ok;
 }
@@ -2831,6 +2844,7 @@ bool RenderBinkFrameToBackBuffer(void* bink_handle) {
 
 void CancelBinkVideoPlayback() {
     g_bink_video_state.cancelled = true;
+    g_bink_video_state.cancelled_by_input = true;
 }
 
 void PumpDeferredBinkVideoTransitionMessages() {
@@ -2857,7 +2871,8 @@ bool ConfigureBinkFrameSurface() {
     return true;
 }
 
-void HandleJw208IntroVideoSequence(HWND window) {
+void HandleJw208IntroVideoSequence(HWND window,
+    BinkVideoSkipInputPolicy skip_input_policy) {
     HandleDirectDrawFrameBoundary();
 
     const u32 previous_color_depth = g_direct_draw_state.color_depth;
@@ -2871,11 +2886,17 @@ void HandleJw208IntroVideoSequence(HWND window) {
     HandleDirectDrawFrameBoundary();
 
     SetPrimaryMilesMusicPolicyMode(1);
-    PlayBinkTrcRecord("JW2_08.TRC", 0, -1, -1);
+    PlayBinkTrcRecord("JW2_08.TRC", 0, -1, -1, skip_input_policy);
     HandleDirectDrawFrameBoundary();
-    PlayBinkTrcRecord("JW2_08.TRC", 1, -1, -1);
-    HandleDirectDrawFrameBoundary();
-    PlayBinkTrcRecord("JW2_08.TRC", 2, -1, -1);
+    if (ShouldContinueBinkVideoSequence(
+            g_bink_video_state.cancelled_by_input)) {
+        PlayBinkTrcRecord("JW2_08.TRC", 1, -1, -1, skip_input_policy);
+        HandleDirectDrawFrameBoundary();
+    }
+    if (ShouldContinueBinkVideoSequence(
+            g_bink_video_state.cancelled_by_input)) {
+        PlayBinkTrcRecord("JW2_08.TRC", 2, -1, -1, skip_input_policy);
+    }
     HandleBackBufferFadeToBlack();
     HandleDirectDrawFrameBoundary();
 
@@ -2883,11 +2904,12 @@ void HandleJw208IntroVideoSequence(HWND window) {
     HandleDirectDrawFrameBoundary();
 }
 
-void HandleJw208Record3VideoTransition(HWND window) {
+void HandleJw208Record3VideoTransition(HWND window,
+    BinkVideoSkipInputPolicy skip_input_policy) {
     g_direct_draw_state.presentation_window = window;
     HandleDirectDrawFrameBoundary();
     SetPrimaryMilesMusicPolicyMode(1);
-    PlayBinkTrcRecord("JW2_08.TRC", 3, -1, -1);
+    PlayBinkTrcRecord("JW2_08.TRC", 3, -1, -1, skip_input_policy);
     HandleBackBufferFadeToBlack();
     HandleDirectDrawFrameBoundary();
 }

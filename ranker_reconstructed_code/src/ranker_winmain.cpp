@@ -32508,7 +32508,8 @@ bool route_title_main_menu_entry(HWND window, u32 entry_index) {
     case kTitleMenuOpeningEntry:
         close_title_main_menu_frontend();
         pause_worker_for_modal_action();
-        HandleJw208IntroVideoSequence(window);
+        HandleJw208IntroVideoSequence(
+            window, kTitleMenuBinkVideoSkipInputPolicy);
         if (bink_video_state().failed) {
             const BinkVideoRuntimeState& bink = bink_video_state();
             append_startup_log(
@@ -32526,7 +32527,8 @@ bool route_title_main_menu_entry(HWND window, u32 entry_index) {
     case kTitleMenuCreditEntry:
         close_title_main_menu_frontend();
         pause_worker_for_modal_action();
-        HandleJw208Record3VideoTransition(window);
+        HandleJw208Record3VideoTransition(
+            window, kTitleMenuBinkVideoSkipInputPolicy);
         if (bink_video_state().failed) {
             const BinkVideoRuntimeState& bink = bink_video_state();
             append_startup_log(

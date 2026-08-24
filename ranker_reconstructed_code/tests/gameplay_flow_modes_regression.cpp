@@ -7,6 +7,7 @@
 #include "ranker_gameplay_sound.h"
 #include "ranker_gameplay_session_format.h"
 #include "ranker_gameplay_session_flow.h"
+#include "ranker_gameplay_session_runtime.h"
 #include "ranker_gameplay_session_rules.h"
 #include "ranker_gameplay_visibility.h"
 #include "ranker_frontend_stage_flow.h"
@@ -15,6 +16,7 @@
 
 #include <array>
 #include <cassert>
+#include <string_view>
 
 int main() {
     using namespace ranker;
@@ -243,6 +245,8 @@ int main() {
         Jw204BriefingActivation::Continue);
 
 #ifdef _WIN32
+    static_assert(kTitleMenuBinkVideoSkipInputPolicy ==
+        BinkVideoSkipInputPolicy::EscapeOnly);
     // Campaign story cards retain the original wait cursor and may only be
     // dismissed with Escape. Mouse buttons and other keys remain ignored.
     static_assert(ShouldHoldSingleFrameBinkUntilCancelled(1u));
@@ -257,14 +261,27 @@ int main() {
     static_assert(!ShouldDeferBinkVideoWindowRelease(
         BinkVideoSkipInputPolicy::EscapeOnly, 2u, true, true));
     assert(ShouldCancelBinkVideoForWindowInput(
-        BinkVideoSkipInputPolicy::EscapeOnly, WM_KEYDOWN, VK_ESCAPE));
+        kTitleMenuBinkVideoSkipInputPolicy, WM_KEYDOWN, VK_ESCAPE));
     assert(!ShouldCancelBinkVideoForWindowInput(
-        BinkVideoSkipInputPolicy::EscapeOnly, WM_KEYDOWN, VK_RETURN));
+        kTitleMenuBinkVideoSkipInputPolicy, WM_KEYDOWN, VK_RETURN));
     assert(!ShouldCancelBinkVideoForWindowInput(
-        BinkVideoSkipInputPolicy::EscapeOnly, WM_LBUTTONDOWN, 0));
+        kTitleMenuBinkVideoSkipInputPolicy, WM_LBUTTONDOWN, 0));
     assert(ShouldCancelBinkVideoForWindowInput(
         BinkVideoSkipInputPolicy::AnyKeyOrMouse, WM_LBUTTONDOWN, 0));
+    static_assert(!ShouldContinueBinkVideoSequence(true));
+    static_assert(ShouldContinueBinkVideoSequence(false));
 #endif
+
+    static_assert(ResolveGameplayOwnerDisplayNamePolicy(
+        static_cast<u8>(PlayerSlotState::player_controlled), true) ==
+        GameplayOwnerDisplayNamePolicy::Computer);
+    static_assert(ResolveGameplayOwnerDisplayNamePolicy(
+        static_cast<u8>(PlayerSlotState::active), true) ==
+        GameplayOwnerDisplayNamePolicy::Preserve);
+    static_assert(ResolveGameplayOwnerDisplayNamePolicy(
+        static_cast<u8>(PlayerSlotState::active), false) ==
+        GameplayOwnerDisplayNamePolicy::DefaultPlayer);
+    static_assert(std::string_view(kGameplayComputerDisplayName) == "Computer");
 
     // A two-human UMS lobby must retain the archive-authored Computer owners.
     // Super Elf uses owner 4 in trigger group 62; disabling that slot makes

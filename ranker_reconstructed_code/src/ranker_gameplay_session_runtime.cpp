@@ -147,15 +147,19 @@ void reset_script_runtime(GameplaySessionRuntimeResetState& state) {
 
 void refresh_owner_display_names(GameplaySessionRuntimeResetState& state) {
     for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
-        if (state.players != nullptr &&
-            state.players->slot_states[owner] ==
-                static_cast<u8>(PlayerSlotState::player_controlled)) {
-            char buffer[32]{};
-            std::snprintf(buffer, sizeof(buffer), "%s %u",
-                state.default_player_name.c_str(), owner);
-            state.owner_display_names[owner] = buffer;
+        const u8 slot_state = state.players != nullptr ?
+            state.players->slot_states[owner] :
+            static_cast<u8>(PlayerSlotState::active);
+        const GameplayOwnerDisplayNamePolicy policy =
+            ResolveGameplayOwnerDisplayNamePolicy(
+                slot_state, !state.owner_display_names[owner].empty());
+        if (policy == GameplayOwnerDisplayNamePolicy::Computer) {
+            // Lobby Computer slots use player-controlled(1), while live human
+            // slots use active(0). Preserve that identity in gameplay UI
+            // instead of deriving a fake name from the local player's nick.
+            state.owner_display_names[owner] = kGameplayComputerDisplayName;
         }
-        else if (state.owner_display_names[owner].empty()) {
+        else if (policy == GameplayOwnerDisplayNamePolicy::DefaultPlayer) {
             state.owner_display_names[owner] = state.default_player_name;
         }
 

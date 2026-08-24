@@ -23,6 +23,22 @@ constexpr u32 kGameplayDefaultScreenHeight = 600;
 constexpr u32 kGameplaySessionSnapshotBytes = 0x374;
 constexpr u32 kGameplayStartupUnitsPerSlot = 6;
 constexpr u32 kGameplayOnlineAutoTransitionFrame = 0x708;
+constexpr char kGameplayComputerDisplayName[] = "Computer";
+
+enum class GameplayOwnerDisplayNamePolicy : u8 {
+    Preserve = 0,
+    DefaultPlayer,
+    Computer,
+};
+
+constexpr GameplayOwnerDisplayNamePolicy ResolveGameplayOwnerDisplayNamePolicy(
+    u8 slot_state, bool has_existing_name) {
+    if (slot_state == static_cast<u8>(PlayerSlotState::player_controlled)) {
+        return GameplayOwnerDisplayNamePolicy::Computer;
+    }
+    return has_existing_name ? GameplayOwnerDisplayNamePolicy::Preserve :
+        GameplayOwnerDisplayNamePolicy::DefaultPlayer;
+}
 
 // Record 0's serialized unit-list roots are authoritative. Spatial duplicate
 // suppression exists only for the headerless recovery scan, where membership
