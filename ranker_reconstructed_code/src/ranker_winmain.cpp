@@ -9689,17 +9689,17 @@ bool import_default_session_player_record_startup_state() {
             startup.owner_display_names[owner] = std::move(display_name);
         }
 
-        if (owner >= active_slot_count) {
-            slot.slot_state = static_cast<u8>(PlayerSlotState::disabled);
+        const u32 slot_state = read_default_session_record_u32(
+            *record,
+            kSessionPlayerRecordSlotStateBaseOffset + owner * sizeof(u32),
+            slot.slot_state);
+        if (default_session_player_slot_state_valid(slot_state) &&
+            ShouldImportGameplayStartupSlotState(
+                static_cast<u8>(slot_state), owner, active_slot_count)) {
+            slot.slot_state = static_cast<u8>(slot_state);
         }
-        else {
-            const u32 slot_state = read_default_session_record_u32(
-                *record,
-                kSessionPlayerRecordSlotStateBaseOffset + owner * sizeof(u32),
-                slot.slot_state);
-            if (default_session_player_slot_state_valid(slot_state)) {
-                slot.slot_state = static_cast<u8>(slot_state);
-            }
+        else if (owner >= active_slot_count) {
+            slot.slot_state = static_cast<u8>(PlayerSlotState::disabled);
         }
 
         const u32 faction = read_default_session_record_u32(
@@ -12558,8 +12558,15 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
                     lifecycle.owner_building_score[unit->owner_id] += score;
                 }
             }
-            HandleOwnerPopulationReservationTotals(lifecycle);
         }
+        // HandleGameplaySessionBundleImport calls
+        // HandleOwnerPopulationReservationTotals (0x004d214e) after restoring
+        // record 7 and before FUN_00426770 starts the session.  This is not a
+        // campaign-only step: Use Map Setting triggers can inspect the totals
+        // on their very first frame.  Leaving the imported roster at 0/0 made
+        // condition 0x1d fire spuriously before the ordinary simulation pass
+        // got a chance to rebuild it.
+        HandleOwnerPopulationReservationTotals(lifecycle);
         for (u32 owner = 0; owner < kProductionOrderOwnerCount; ++owner) {
             sync_default_owner_type_counts_from_lifecycle(
                 lifecycle, owner);

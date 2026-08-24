@@ -288,6 +288,10 @@ int main() {
     // the group appear dead and opens the victory modal at frame 67.
     assert(ResolveGameplayStartupActiveSlotCount(8u, 2u, 5u) == 8u);
     assert(ResolveGameplayStartupActiveSlotCount(8u, 2u, 0u) == 2u);
+    assert(ShouldImportGameplayStartupSlotState(0u, 2u, 3u));
+    assert(ShouldImportGameplayStartupSlotState(1u, 3u, 3u));
+    assert(!ShouldImportGameplayStartupSlotState(0u, 3u, 3u));
+    assert(!ShouldImportGameplayStartupSlotState(0x14u, 3u, 3u));
     assert(ResolveGameplayStartupSlotState(1u, 0x14u, 4u, 2u, 5u) == 1u);
     assert(ResolveGameplayStartupSlotState(0u, 0x14u, 6u, 2u, 5u) == 0x14u);
     assert(ResolveGameplayStartupSlotState(1u, 0x14u, 4u, 2u, 0u) == 0x14u);

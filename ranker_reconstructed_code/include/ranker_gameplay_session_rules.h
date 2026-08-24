@@ -85,6 +85,16 @@ constexpr u32 ResolveGameplayStartupActiveSlotCount(
         : lobby_count;
 }
 
+// HandleGameplaySessionBundleImport copies the complete player record before
+// FUN_00426770 examines all eight raw owner-state entries.  In particular, an
+// authored Computer may legally sit just beyond the scenario's player-count
+// field.  Keep that state available for the later mode-5 lobby merge instead
+// of pre-emptively replacing it with 0x14.
+constexpr bool ShouldImportGameplayStartupSlotState(
+    u8 archive_state, u32 owner, u32 archive_count) {
+    return owner < archive_count || archive_state == 1u;
+}
+
 constexpr bool IsAuthoredUseMapComputerSlot(
     u8 archive_state, u32 session_mode) {
     return session_mode == 5u && archive_state == 1u;
