@@ -13985,6 +13985,10 @@ void sync_default_gameplay_tooltip_context(
     GameplayTooltipState& tooltip, const GameplayFrameRenderContext& context) {
     tooltip.current_tick_ms = context.current_tick_ms;
     tooltip.screen_width = context.viewport_width;
+    tooltip.screen_height = context.viewport_height;
+    const UiOverlayState& overlay = ui_overlay_state();
+    tooltip.world_view_width = overlay.world_render_width;
+    tooltip.world_view_height = overlay.world_render_height;
     tooltip.emit_backbuffer_draws = true;
     tooltip.camera_x = context.camera_x;
     tooltip.camera_y = context.camera_y;

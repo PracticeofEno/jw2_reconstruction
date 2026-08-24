@@ -1487,6 +1487,9 @@ void set_tooltip_payload_for_hover(UiOverlayState& state) {
     const bool command_record_hover =
         hover_context_is_command_record(state.hover_context);
     tooltip.screen_width = state.screen_width;
+    tooltip.screen_height = state.screen_height;
+    tooltip.world_view_width = state.world_render_width;
+    tooltip.world_view_height = state.world_render_height;
     tooltip.local_owner = state.local_player_slot;
     tooltip.current_unit_type =
         command_record_hover && state.hover_context.item_id == 0xb5 ?
@@ -5013,7 +5016,11 @@ void ResolveGameplayHoverContext(UiOverlayState& state) {
         constexpr std::array<i32, 3> kTerrainHoverYNudges{{0, -0x0f, 0x0f}};
         const u32 tile_x = static_cast<u32>(world_x >> 5);
         for (i32 y_nudge : kTerrainHoverYNudges) {
-            const i32 candidate_world_y = world_y + y_nudge;
+            // The original probes three screen points.  Convert each resolved
+            // point independently so the tooltip's later screen-to-world
+            // conversion lands on the same tile in a widened view.
+            const i32 candidate_world_y = UiOverlayWorldYFromScreen(
+                state, state.mouse_y + y_nudge);
             if (candidate_world_y < 0) {
                 continue;
             }

@@ -19,6 +19,12 @@ int main() {
 
     static_assert(GameplayTooltipCostTokenAdvance(0) == 20);
     static_assert(GameplayTooltipCostTokenAdvance(8) == 28);
+    static_assert(GameplayTooltipWorldCoordinateFromScreen(
+        320, 400, 800, 800) == 720);
+    static_assert(GameplayTooltipWorldCoordinateFromScreen(
+        320, 400, 800, 1000) == 820);
+    static_assert(GameplayTooltipWorldCoordinateFromScreen(
+        640, 300, 600, 750) == 1015);
 
     constexpr u32 food_digits = 16;
     constexpr u32 wood_digits = 16;
@@ -33,6 +39,27 @@ int main() {
         "cost row width must include every rendered numeric extent");
     require(rendered_row_width > legacy_fixed_width,
         "population cost regression must expose the legacy clipping gap");
+
+    GameplayTooltipState wider_view{};
+    wider_view.screen_width = 800;
+    wider_view.screen_height = 600;
+    wider_view.world_view_width = 1000;
+    wider_view.world_view_height = 750;
+    wider_view.camera_x = 320;
+    wider_view.camera_y = 640;
+    wider_view.cursor_x = 400;
+    wider_view.cursor_y = 300;
+    wider_view.map_width_tiles = 64;
+    wider_view.map_height_tiles = 64;
+    wider_view.terrain_flags.assign(64u * 64u, 0);
+    constexpr u32 expected_berry_amount = 321;
+    constexpr u32 berry_tile_x = 820u >> 5;
+    constexpr u32 berry_tile_y = 1015u >> 5;
+    wider_view.terrain_flags[berry_tile_y * 64u + berry_tile_x] =
+        (expected_berry_amount << 12) | 0x100u;
+    require(GameplayTooltipTerrainResourceAmount(wider_view) ==
+            expected_berry_amount,
+        "wider-view Berry tooltip read the unscaled screen-coordinate tile");
 
     std::cout << "gameplay tooltip extent regression: PASS\n";
     return EXIT_SUCCESS;

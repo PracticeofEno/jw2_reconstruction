@@ -366,41 +366,6 @@ u32 local_production_order_variant(
     return state.production_order_variants[state.local_owner][order_id];
 }
 
-u32 numbered_tooltip_tile_value(const GameplayTooltipState& state) {
-    if (state.map_width_tiles == 0 || state.map_height_tiles == 0 ||
-        state.terrain_flags.empty()) {
-        return state.current_payload;
-    }
-
-    const i32 world_x = state.camera_x + state.cursor_x;
-    const i32 world_y = state.camera_y + state.cursor_y;
-    if (world_x < 0 || world_y < 0) {
-        return state.current_payload;
-    }
-
-    u32 tile_x = static_cast<u32>(world_x) >> 5;
-    const u32 tile_y = static_cast<u32>(world_y) >> 5;
-    if (tile_x >= state.map_width_tiles || tile_y >= state.map_height_tiles) {
-        return state.current_payload;
-    }
-
-    std::size_t index =
-        static_cast<std::size_t>(tile_y) * state.map_width_tiles + tile_x;
-    if (index >= state.terrain_flags.size()) {
-        return state.current_payload;
-    }
-
-    if ((state.terrain_flags[index] & 0x800u) != 0 && tile_x != 0) {
-        --tile_x;
-        index = static_cast<std::size_t>(tile_y) * state.map_width_tiles + tile_x;
-        if (index >= state.terrain_flags.size()) {
-            return state.current_payload;
-        }
-    }
-
-    return (state.terrain_flags[index] & 0x0ffff000u) >> 12;
-}
-
 GameplayTooltipCostValues production_order_costs(
     GameplayTooltipState& state, u32 order_id, u32 variant) {
     if (state.callbacks.production_order_costs != nullptr) {
@@ -1078,7 +1043,10 @@ void BuildSimpleEquipmentTooltip(GameplayTooltipState& state) {
 void BuildNumberedSimpleTooltip(GameplayTooltipState& state) {
     state.current_text =
         platform_text_or_fallback(state, 76, state.current_text);
-    const u32 value = numbered_tooltip_tile_value(state);
+    // The tooltip remains anchored in final HUD pixels, while widened gameplay
+    // renders more world pixels behind that fixed-size HUD.  The terrain amount
+    // resolver converts only the lookup point before reading the Berry tile.
+    const u32 value = GameplayTooltipTerrainResourceAmount(state);
     std::ostringstream text;
     text << state.current_text << value;
     state.current_text = text.str();

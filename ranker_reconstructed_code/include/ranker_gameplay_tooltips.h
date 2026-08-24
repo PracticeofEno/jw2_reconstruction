@@ -27,6 +27,16 @@ constexpr u32 GameplayTooltipCostTokenAdvance(u32 numeric_text_width) {
         kGameplayTooltipCostTokenTrailingPadding;
 }
 
+constexpr i32 GameplayTooltipWorldCoordinateFromScreen(i32 camera_coordinate,
+    i32 screen_coordinate, u32 screen_extent, u32 world_view_extent) {
+    if (screen_extent == 0 || world_view_extent == 0) {
+        return camera_coordinate + screen_coordinate;
+    }
+    return camera_coordinate + static_cast<i32>(
+        (static_cast<i64>(screen_coordinate) * world_view_extent) /
+        screen_extent);
+}
+
 struct GameplayTooltipTextExtent {
     u32 width = 0;
     u32 height = 0;
@@ -178,6 +188,9 @@ struct GameplayTooltipState {
     std::vector<GameplayTooltipDrawCommand> draw_commands;
 
     u32 screen_width = 800;
+    u32 screen_height = 600;
+    u32 world_view_width = 800;
+    u32 world_view_height = 600;
     u32 current_tick_ms = 0;
     u32 hover_start_tick_ms = 0;
     u32 scheduled_mode = 0;
@@ -229,6 +242,46 @@ struct GameplayTooltipState {
     std::array<std::array<u8, kGameplayTooltipProductionOrderCount>,
         kGameplayTooltipOwnerCount> production_order_variants{};
 };
+
+inline u32 GameplayTooltipTerrainResourceAmount(
+    const GameplayTooltipState& state) {
+    if (state.map_width_tiles == 0 || state.map_height_tiles == 0 ||
+        state.terrain_flags.empty()) {
+        return state.current_payload;
+    }
+
+    const i32 world_x = GameplayTooltipWorldCoordinateFromScreen(
+        state.camera_x, state.cursor_x, state.screen_width,
+        state.world_view_width);
+    const i32 world_y = GameplayTooltipWorldCoordinateFromScreen(
+        state.camera_y, state.cursor_y, state.screen_height,
+        state.world_view_height);
+    if (world_x < 0 || world_y < 0) {
+        return state.current_payload;
+    }
+
+    u32 tile_x = static_cast<u32>(world_x) >> 5;
+    const u32 tile_y = static_cast<u32>(world_y) >> 5;
+    if (tile_x >= state.map_width_tiles || tile_y >= state.map_height_tiles) {
+        return state.current_payload;
+    }
+
+    std::size_t index =
+        static_cast<std::size_t>(tile_y) * state.map_width_tiles + tile_x;
+    if (index >= state.terrain_flags.size()) {
+        return state.current_payload;
+    }
+
+    if ((state.terrain_flags[index] & 0x800u) != 0 && tile_x != 0) {
+        --tile_x;
+        index = static_cast<std::size_t>(tile_y) * state.map_width_tiles + tile_x;
+        if (index >= state.terrain_flags.size()) {
+            return state.current_payload;
+        }
+    }
+
+    return (state.terrain_flags[index] & 0x0ffff000u) >> 12;
+}
 
 GameplayTooltipState& gameplay_tooltip_state();
 void InstallDefaultGameplayTooltipHandlers(GameplayTooltipState& state);
