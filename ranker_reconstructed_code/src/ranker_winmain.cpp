@@ -14131,7 +14131,13 @@ void default_gameplay_frame_draw_world_overlay(GameplayFrameRenderContext&) {
 }
 
 void default_gameplay_frame_draw_ui_overlay(GameplayFrameRenderContext&) {
-    RenderGameplayUiOverlay(ui_overlay_state());
+    UiOverlayState& overlay = ui_overlay_state();
+    // The wider-view compositor draws the world and fixed-size HUD in two
+    // passes.  Keep the minimap terrain preparation in the HUD pass as well;
+    // otherwise only the unit markers and viewport outline are composited
+    // over an uninitialized black minimap surface.
+    prepare_default_ui_overlay_minimap_base(overlay);
+    RenderGameplayUiOverlay(overlay);
 }
 
 void default_gameplay_frame_noop(GameplayFrameRenderContext&) {
