@@ -1,5 +1,6 @@
 #include "ranker_ui_overlay.h"
 #include "ranker_ui_screen.h"
+#include "ranker_gameplay_frame_render.h"
 #include "ranker_unit_animation.h"
 
 using namespace ranker;
@@ -25,6 +26,11 @@ static_assert(ShouldDrawUnitWorldBars(
     SynchronizeUiOverlayUnitSelectionFlag(0u, true)));
 static_assert(!ShouldDrawUnitWorldBars(
     SynchronizeUiOverlayUnitSelectionFlag(0x80u, false)));
+static_assert(ScaleGameplayWorldOverlayCoordinate(500, 1000, 800) == 400);
+static_assert(ScaleGameplayWorldOverlayCoordinate(-31, 1000, 800) == -25);
+static_assert(ScaleGameplayWorldOverlayExtent(31, 1000, 800) == 25);
+static_assert(ResolveDeferredGameplayWorldBarY(104, false, 750, 600) == 83);
+static_assert(ResolveDeferredGameplayWorldBarY(108, true, 750, 600) == 87);
 static_assert(!ShouldDrawUnitPaletteRampHighlight(0));
 static_assert(ShouldDrawUnitPaletteRampHighlight(1));
 static_assert(ResolveGameplayCameraAnchorHeight(640) == 258);

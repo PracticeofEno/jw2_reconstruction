@@ -68,6 +68,26 @@ constexpr std::size_t kAuxOverlayFrameCycleCountOffset = 0x228;
 constexpr std::size_t kAuxOverlayClassFrameCountOffset = 0x22c;
 constexpr std::size_t kAuxOverlayFrameTableBase = 0x630;
 
+struct DeferredGameplayUnitWorldBar {
+    i32 source_x = 0;
+    i32 source_y = 0;
+    i32 source_width = 0;
+    u32 value = 0;
+    u32 maximum = 0;
+    u16 shell_color = 0;
+    u16 value_color = 0;
+    bool stacked_after_health = false;
+};
+
+struct DeferredGameplayUnitWorldBarState {
+    bool active = false;
+    u32 source_width = 0;
+    u32 source_height = 0;
+    std::vector<DeferredGameplayUnitWorldBar> bars;
+};
+
+DeferredGameplayUnitWorldBarState g_deferred_unit_world_bars;
+
 GameplayTextExtent default_measure_text(const char* text) {
     GameplayTextExtent extent{};
     if (text == nullptr) {
@@ -1342,14 +1362,18 @@ u16 unit_health_bar_color(const UnitAnimationDrawContext& context,
     return context.color_ramps.colors[4];
 }
 
-void draw_unit_bar_shell(const UnitAnimationDrawContext& context,
-    i32 x, i32 y, i32 width) {
+void draw_unit_bar_shell_color(i32 x, i32 y, i32 width, u16 shell_color) {
     if (width <= 0) {
         return;
     }
     DrawBackBufferFilledRectangle16(x, y, x + width - 1, y + 4, 0);
     DrawBackBufferStippledRectangle16(x + 1, y + 1, x + width - 2, y + 3,
-        context.color_ramps.colors[0]);
+        shell_color);
+}
+
+void draw_unit_bar_shell(const UnitAnimationDrawContext& context,
+    i32 x, i32 y, i32 width) {
+    draw_unit_bar_shell_color(x, y, width, context.color_ramps.colors[0]);
 }
 
 void draw_unit_bar_value(i32 x, i32 y, u32 fill_width, u16 color) {
@@ -1362,6 +1386,13 @@ void draw_unit_bar_value(i32 x, i32 y, u32 fill_width, u16 color) {
 
 void draw_unit_health_bar(UnitAnimationDrawContext& context,
     const UnitAnimationUnit& unit, i32 x, i32 y, i32 width) {
+    if (g_deferred_unit_world_bars.active) {
+        g_deferred_unit_world_bars.bars.push_back(DeferredGameplayUnitWorldBar{
+            x, y, width, unit.hit_points, unit.max_hit_points,
+            context.color_ramps.colors[0], unit_health_bar_color(context, unit),
+            false});
+        return;
+    }
     draw_unit_bar_shell(context, x, y, width);
     if (unit.max_hit_points == 0) {
         return;
@@ -1373,6 +1404,13 @@ void draw_unit_health_bar(UnitAnimationDrawContext& context,
 
 void draw_unit_secondary_bar(UnitAnimationDrawContext& context,
     const UnitAnimationUnit& unit, i32 x, i32 y, i32 width) {
+    if (g_deferred_unit_world_bars.active) {
+        g_deferred_unit_world_bars.bars.push_back(DeferredGameplayUnitWorldBar{
+            x, y, width, unit.secondary_value, unit.max_secondary_value,
+            context.color_ramps.colors[0], context.color_ramps.colors[5],
+            unit.max_hit_points != 0});
+        return;
+    }
     draw_unit_bar_shell(context, x, y, width);
     draw_unit_bar_value(x, y,
         unit_bar_fill_width(width, unit.secondary_value, unit.max_secondary_value),
@@ -1599,6 +1637,49 @@ UnitAnimationDrawContext make_unit_animation_context(
 }
 
 } // namespace
+
+void BeginDeferredGameplayUnitWorldBars(u32 source_width, u32 source_height) {
+    g_deferred_unit_world_bars.active = true;
+    g_deferred_unit_world_bars.source_width = source_width;
+    g_deferred_unit_world_bars.source_height = source_height;
+    g_deferred_unit_world_bars.bars.clear();
+}
+
+void RenderDeferredGameplayUnitWorldBars(
+    u32 destination_width, u32 destination_height) {
+    DeferredGameplayUnitWorldBarState& state = g_deferred_unit_world_bars;
+    state.active = false;
+    if (state.source_width == 0 || state.source_height == 0 ||
+        destination_width == 0 || destination_height == 0) {
+        state.bars.clear();
+        return;
+    }
+
+    for (const DeferredGameplayUnitWorldBar& bar : state.bars) {
+        const i32 x = ScaleGameplayWorldOverlayCoordinate(
+            bar.source_x, state.source_width, destination_width);
+        const i32 y = ResolveDeferredGameplayWorldBarY(
+            bar.source_y, bar.stacked_after_health,
+            state.source_height, destination_height);
+        const i32 width = std::max<i32>(4,
+            ScaleGameplayWorldOverlayExtent(
+                bar.source_width, state.source_width, destination_width));
+        draw_unit_bar_shell_color(x, y, width, bar.shell_color);
+        if (bar.maximum != 0) {
+            draw_unit_bar_value(x, y,
+                unit_bar_fill_width(width, bar.value, bar.maximum),
+                bar.value_color);
+        }
+    }
+    state.bars.clear();
+}
+
+void CancelDeferredGameplayUnitWorldBars() {
+    g_deferred_unit_world_bars.active = false;
+    g_deferred_unit_world_bars.source_width = 0;
+    g_deferred_unit_world_bars.source_height = 0;
+    g_deferred_unit_world_bars.bars.clear();
+}
 
 u32 UpdateGameplayFrameAnimationSlot(GameplayFrameRenderContext& context) {
     const u32 table_index =

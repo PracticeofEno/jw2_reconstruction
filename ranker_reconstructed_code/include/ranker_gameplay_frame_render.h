@@ -449,8 +449,49 @@ struct GameplayFrameRenderContext {
     GameplayFogRenderContext* fog = nullptr;
 };
 
+constexpr i32 ScaleGameplayWorldOverlayCoordinate(i32 value,
+    u32 source_extent, u32 destination_extent) {
+    if (source_extent == 0 || destination_extent == 0 ||
+        source_extent == destination_extent) {
+        return value;
+    }
+    const i64 numerator = static_cast<i64>(value) * destination_extent;
+    if (numerator >= 0) {
+        return static_cast<i32>(numerator / source_extent);
+    }
+    const i64 magnitude = -numerator;
+    return -static_cast<i32>(magnitude / source_extent +
+        (magnitude % source_extent != 0 ? 1 : 0));
+}
+
+constexpr i32 ScaleGameplayWorldOverlayExtent(i32 value,
+    u32 source_extent, u32 destination_extent) {
+    if (value <= 0 || source_extent == 0 || destination_extent == 0 ||
+        source_extent == destination_extent) {
+        return value;
+    }
+    const i32 scaled = static_cast<i32>((
+        static_cast<i64>(value) * destination_extent + source_extent / 2u) /
+        source_extent);
+    return scaled != 0 ? scaled : 1;
+}
+
+constexpr i32 ResolveDeferredGameplayWorldBarY(i32 source_y,
+    bool stacked_after_health, u32 source_extent, u32 destination_extent) {
+    constexpr i32 kHealthBarStackAdvance = 4;
+    const i32 source_base_y = source_y -
+        (stacked_after_health ? kHealthBarStackAdvance : 0);
+    return ScaleGameplayWorldOverlayCoordinate(source_base_y,
+        source_extent, destination_extent) +
+        (stacked_after_health ? kHealthBarStackAdvance : 0);
+}
+
 u32 UpdateGameplayFrameAnimationSlot(GameplayFrameRenderContext& context);
 void RenderGameplayFrameComposite(GameplayFrameRenderContext& context);
+void BeginDeferredGameplayUnitWorldBars(u32 source_width, u32 source_height);
+void RenderDeferredGameplayUnitWorldBars(
+    u32 destination_width, u32 destination_height);
+void CancelDeferredGameplayUnitWorldBars();
 
 void ResetGameplayHudTextLayout(GameplayHudTextState& state);
 void RenderGameplayHudAsciiTextLine(const char* text, i32 x, i32 y, u8 color = 1);

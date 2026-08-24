@@ -31358,6 +31358,10 @@ bool render_zoomed_gameplay_frame(GameplayFrameRenderContext& context,
     world_context.callbacks.show_pause_overlay = nullptr;
     world_context.callbacks.present_cursor = nullptr;
 
+    // Unit bars are only five source pixels tall. Scaling those pixels with
+    // the world drops rows and breaks their stipple pattern, so retain their
+    // draw data until the fixed-resolution presentation surface is restored.
+    BeginDeferredGameplayUnitWorldBars(world_target.width, world_target.height);
     BindGameplayRenderTarget(world_context, world_target);
     RenderGameplayFrameComposite(world_context);
     context.animation_frame_slot = world_context.animation_frame_slot;
@@ -31365,6 +31369,7 @@ bool render_zoomed_gameplay_frame(GameplayFrameRenderContext& context,
     scale_gameplay_world_view_nearest(world_target, back_target);
 
     BindGameplayRenderTarget(context, back_target);
+    RenderDeferredGameplayUnitWorldBars(back_target.width, back_target.height);
     render_default_gameplay_ui_tail(context);
     return true;
 }
