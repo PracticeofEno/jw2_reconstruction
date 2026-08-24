@@ -45,6 +45,15 @@ constexpr u32 kGameSessionAvatarPrimaryEquipmentOffset = 0x34;
 constexpr u32 kGameSessionAvatarSecondaryEquipmentOffset = 0x38;
 constexpr u32 kGameSessionAvatarPickupEffectOffset = 0x3c;
 constexpr u32 kInvalidGameSessionUnitType = 0xffffffffu;
+
+// A fresh Use Map Setting entry follows the original frontend transition
+// pass, whose uncleared reverse table retains SummonDen (159) -> Insect (48).
+// Other fresh session modes start from the process BSS zero unless an earlier
+// transition or UMS session in the same process has already written it.
+constexpr bool ShouldSeedUseMapPersistentUnitReference(u32 session_mode) {
+    return session_mode == 5u;
+}
+
 constexpr u32 kSessionRuntimeBufferPairCount = 5;
 constexpr u32 kSessionRuntimeForcesRecordIndex = 0;
 constexpr u32 kSessionRuntimeForcesArchiveRecordIndex = 0x1a;

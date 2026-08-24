@@ -18058,16 +18058,19 @@ void rebuild_default_unit_reference_tables_from_catalog() {
         }
         RebuildUnitTypeReverseReferenceTables(tables);
 
-        // The original frontend runs a transition-enabled FUN_004abbe0 /
-        // FUN_0043c370 pass before a normal UMS session.  That pass records
-        // 159 -> 48 in DAT_0123CE9C.  Later normal-session passes remove 159
-        // from type 48's definition, but FUN_0043c370 never clears the reverse
-        // table, so the mapping deliberately survives.  Lazy catalog setup in
-        // the reconstruction skips that frontend pass; seed its persistent
-        // result along with the pristine-definition reverse mappings.
+        g_default_unit_reference_base_seeded = true;
+    }
+
+    // A fresh mode-5 entry has already passed through the original frontend's
+    // transition-enabled FUN_004abbe0 / FUN_0043c370 path.  It therefore keeps
+    // 159 -> 48 even though the mode-5 reset removes 159 from type 48's live
+    // definition.  A fresh normal/replay process has no such write and must
+    // retain the BSS zero observed by error11.ply.  Do not clear this slot in
+    // other modes: FUN_0043c370 deliberately preserves process-history writes.
+    if (ShouldSeedUseMapPersistentUnitReference(
+            g_runtime.gameplay_startup_state.session_mode)) {
         tables.primary_or_alternate_reverse[kPostInitRequiredTypes.back()] =
             kPostInitUnitTypes.back();
-        g_default_unit_reference_base_seeded = true;
     }
 
     // FUN_00426770 calls FUN_004abbe0 after the live definition import and

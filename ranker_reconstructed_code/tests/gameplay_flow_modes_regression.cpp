@@ -5,6 +5,7 @@
 #include "ranker_player_slots.h"
 #include "ranker_gameplay_script.h"
 #include "ranker_gameplay_sound.h"
+#include "ranker_game_session_tables.h"
 #include "ranker_gameplay_session_format.h"
 #include "ranker_gameplay_session_flow.h"
 #include "ranker_gameplay_session_runtime.h"
@@ -232,6 +233,18 @@ int main() {
     assert(ResolveGameplayMaterializationMode(2u, false, true, false) == 5u);
     assert(ResolveGameplayMaterializationMode(1u, false, false, true) == 5u);
     assert(ResolveGameplayMaterializationMode(3u, false, false, false) == 3u);
+
+    // A fresh normal replay must retain primary[159] == 0. Mode 5 alone needs
+    // the persistent 159 -> 48 seed left by the original frontend transition;
+    // modes 3/4/7 add the live reference through their ordinary toggle pass.
+    static_assert(!ShouldSeedUseMapPersistentUnitReference(0u));
+    static_assert(!ShouldSeedUseMapPersistentUnitReference(1u));
+    static_assert(!ShouldSeedUseMapPersistentUnitReference(3u));
+    static_assert(!ShouldSeedUseMapPersistentUnitReference(4u));
+    static_assert(ShouldSeedUseMapPersistentUnitReference(5u));
+    static_assert(!ShouldSeedUseMapPersistentUnitReference(6u));
+    static_assert(!ShouldSeedUseMapPersistentUnitReference(7u));
+    static_assert(!ShouldSeedUseMapPersistentUnitReference(8u));
 
     assert(ResolveJw204BriefingActivation(0u) ==
         Jw204BriefingActivation::Continue);
