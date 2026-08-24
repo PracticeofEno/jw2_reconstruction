@@ -16,6 +16,10 @@ constexpr bool IsSupportedPresentationClientSize(int width, int height) {
         width * kOriginalClientHeight == height * kOriginalClientWidth;
 }
 
+constexpr bool IsSupportedGameplayViewPercent(int percent) {
+    return percent >= 60 && percent <= 100;
+}
+
 constexpr unsigned int NormalizeRankerClientWizardNetPort(
     unsigned int port) {
     return port != 0 && port <= 0xffffu ?
@@ -25,6 +29,7 @@ constexpr unsigned int NormalizeRankerClientWizardNetPort(
 struct RankerClientDisplayConfig {
     int width = kDefaultPresentationClientWidth;
     int height = kDefaultPresentationClientHeight;
+    int gameplay_view_percent = 80;
     int x = 0;
     int y = 0;
     bool resizable = false;

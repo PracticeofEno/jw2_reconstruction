@@ -8,6 +8,7 @@
 #include "ranker_online_lobby.h"
 #include "ranker_player_profile.h"
 #include "ranker_ui_screen.h"
+#include "ranker_ui_overlay.h"
 #include "ranker_view_rank.h"
 #include "ranker_winmain.h"
 #include "ranker_wizardnet_services.h"
@@ -51,6 +52,11 @@ static_assert(IsSupportedPresentationClientSize(1280, 960));
 static_assert(IsSupportedPresentationClientSize(1024, 768));
 static_assert(!IsSupportedPresentationClientSize(1280, 720));
 static_assert(!IsSupportedPresentationClientSize(0, 960));
+static_assert(IsSupportedGameplayViewPercent(60));
+static_assert(IsSupportedGameplayViewPercent(80));
+static_assert(IsSupportedGameplayViewPercent(100));
+static_assert(!IsSupportedGameplayViewPercent(59));
+static_assert(!IsSupportedGameplayViewPercent(101));
 static_assert(NormalizeRankerClientWizardNetPort(19777) == 19777);
 static_assert(NormalizeRankerClientWizardNetPort(0) ==
     kDefaultRankerClientWizardNetPort);
@@ -355,10 +361,24 @@ int main() {
     assert(ResolveProgrammaticPointerMotionLogicalTarget(400, 800, 1280) == 400);
     assert(ResolveProgrammaticPointerMotionLogicalTarget(799, 800, 1280) == 799);
     assert(ResolveProgrammaticPointerMotionLogicalTarget(3, 600, 960) == 2);
+    UiOverlayState wider_view{};
+    wider_view.screen_width = 800;
+    wider_view.screen_height = 600;
+    wider_view.world_render_width = 1000;
+    wider_view.world_render_height = 750;
+    wider_view.camera_x = 320;
+    wider_view.camera_y = 640;
+    assert(UiOverlayWorldViewXFromScreen(wider_view, 400) == 500);
+    assert(UiOverlayWorldViewYFromScreen(wider_view, 300) == 375);
+    assert(UiOverlayScreenXFromWorldView(wider_view, 500) == 400);
+    assert(UiOverlayScreenYFromWorldView(wider_view, 375) == 300);
+    assert(UiOverlayWorldXFromScreen(wider_view, 400) == 820);
+    assert(UiOverlayWorldYFromScreen(wider_view, 300) == 1015);
 #ifdef _WIN32
     const RankerClientDisplayConfig display = LoadRankerClientDisplayConfig();
     assert(display.width == 1280);
     assert(display.height == 960);
+    assert(display.gameplay_view_percent == 80);
     assert(!display.resizable);
     assert(display.border);
     assert(display.center);

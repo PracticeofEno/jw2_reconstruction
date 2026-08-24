@@ -1367,7 +1367,8 @@ void append_command_action_at_world(UiOverlayState& state, u32 item_id, u32 aux,
 void append_command_action(
     UiOverlayState& state, u32 item_id, u32 aux, u32 action, u32 flags = 0) {
     append_command_action_at_world(state, item_id, aux, action, flags,
-        state.camera_x + state.mouse_x, state.camera_y + state.mouse_y);
+        UiOverlayWorldXFromScreen(state, state.mouse_x),
+        UiOverlayWorldYFromScreen(state, state.mouse_y));
 }
 
 u32 hover_kind_for_command_item(u32 item_id) {
@@ -1571,8 +1572,8 @@ void set_tooltip_payload_for_hover(UiOverlayState& state) {
 
 const UiOverlayMinimapUnit* unit_at_screen_point(
     const UiOverlayState& state, i32 screen_x, i32 screen_y, bool free_unit_only) {
-    const i32 world_x = state.camera_x + screen_x;
-    const i32 world_y = state.camera_y + screen_y;
+    const i32 world_x = UiOverlayWorldXFromScreen(state, screen_x);
+    const i32 world_y = UiOverlayWorldYFromScreen(state, screen_y);
     const UiOverlayMinimapUnit* enemy_unit = nullptr;
     const UiOverlayMinimapUnit* local_object = nullptr;
     const UiOverlayMinimapUnit* enemy_object = nullptr;
@@ -1623,8 +1624,8 @@ void set_hover_from_unit(
     UiOverlayState& state, const UiOverlayMinimapUnit& unit, i32 screen_x, i32 screen_y) {
     state.hover_context.item_id = unit.type_id;
     state.hover_context.unit_id = unit.unit_id;
-    state.hover_context.x = state.camera_x + screen_x;
-    state.hover_context.y = state.camera_y + screen_y;
+    state.hover_context.x = UiOverlayWorldXFromScreen(state, screen_x);
+    state.hover_context.y = UiOverlayWorldYFromScreen(state, screen_y);
     // FUN_004e9458: local owner -> 6, directed relation bit -> 7, otherwise
     // 8.  Replay/scenario mode is unrelated to this classification.
     state.hover_context.kind = ResolveGameplayUnitHoverKind(
@@ -1660,10 +1661,14 @@ bool point_inside_minimap_rect(UiOverlayState& state, bool use_height_for_y) {
 }
 
 UiOverlayRect normalized_selection_rect(const UiOverlayState& state) {
-    const i32 left = std::min(state.selection_left, state.selection_right) + state.camera_x;
-    const i32 right = std::max(state.selection_left, state.selection_right) + state.camera_x;
-    const i32 top = std::min(state.selection_top, state.selection_bottom) + state.camera_y;
-    const i32 bottom = std::max(state.selection_top, state.selection_bottom) + state.camera_y;
+    const i32 left = UiOverlayWorldXFromScreen(state,
+        std::min(state.selection_left, state.selection_right));
+    const i32 right = UiOverlayWorldXFromScreen(state,
+        std::max(state.selection_left, state.selection_right));
+    const i32 top = UiOverlayWorldYFromScreen(state,
+        std::min(state.selection_top, state.selection_bottom));
+    const i32 bottom = UiOverlayWorldYFromScreen(state,
+        std::max(state.selection_top, state.selection_bottom));
     return {left, top, static_cast<u32>(std::max(0, right - left + 1)),
         static_cast<u32>(std::max(0, bottom - top + 1))};
 }
@@ -1743,8 +1748,10 @@ bool double_click_unit_intersects_viewport(
     const UiOverlayState& state, const UiOverlayMinimapUnit& unit) {
     const i64 viewport_left = state.camera_x;
     const i64 viewport_top = state.camera_y;
-    const i64 viewport_right = viewport_left + state.screen_width;
-    const i64 viewport_bottom = viewport_top + state.world_viewport_height;
+    const i64 viewport_right = viewport_left + state.world_render_width;
+    const i64 viewport_bottom = viewport_top +
+        UiOverlayWorldViewYFromScreen(state,
+            static_cast<i32>(state.world_viewport_height));
     const i64 unit_left = static_cast<i64>(unit.world_x) + unit.bounds_left;
     const i64 unit_top = static_cast<i64>(unit.world_y) + unit.bounds_top;
     const i64 unit_right = unit_left + unit.bounds_width;
@@ -1757,8 +1764,8 @@ bool double_click_unit_intersects_viewport(
 
 const UiOverlayMinimapUnit* double_click_unit_at_screen_point(
     const UiOverlayState& state) {
-    const i32 world_x = state.camera_x + state.mouse_x;
-    const i32 world_y = state.camera_y + state.mouse_y;
+    const i32 world_x = UiOverlayWorldXFromScreen(state, state.mouse_x);
+    const i32 world_y = UiOverlayWorldYFromScreen(state, state.mouse_y);
     const UiOverlayMinimapUnit* enemy_unit = nullptr;
     const UiOverlayMinimapUnit* local_object = nullptr;
     const UiOverlayMinimapUnit* enemy_object = nullptr;
@@ -2060,10 +2067,13 @@ void InstallDefaultUiOverlayDispatchHandlers(UiOverlayState& state) {
     }
 }
 
-void RenderGameplayWorldAndUiOverlay(UiOverlayState& state) {
+void BeginGameplayWorldOverlay(UiOverlayState& state) {
     reset_frame_output_commands(state);
     RenderProductionPlacementPreviewOverlay(state);
     flush_placement_preview_markers_to_backbuffer(state);
+}
+
+void RenderGameplayUiOverlay(UiOverlayState& state) {
     frame_callback(state, state.callbacks.draw_world_surface);
     RenderGameplayMinimapOverlay(state);
     FlushUiOverlayDrawQueue(state);
@@ -2071,6 +2081,11 @@ void RenderGameplayWorldAndUiOverlay(UiOverlayState& state) {
     flush_ui_overlay_progress_commands(state);
     flush_ui_overlay_text_commands(state);
     frame_callback(state, state.callbacks.draw_after_overlay);
+}
+
+void RenderGameplayWorldAndUiOverlay(UiOverlayState& state) {
+    BeginGameplayWorldOverlay(state);
+    RenderGameplayUiOverlay(state);
 }
 
 void DrawGameplaySelectionRectangleOverlay(UiOverlayState& state) {
@@ -2850,10 +2865,10 @@ void RenderGameplayMinimapOverlay(UiOverlayState& state) {
         state.minimap.map_height_tiles = minimap_height_tiles(state);
     }
     if (state.minimap.viewport_width_pixels == 0) {
-        state.minimap.viewport_width_pixels = state.screen_width;
+        state.minimap.viewport_width_pixels = state.world_render_width;
     }
     if (state.minimap.viewport_height_pixels == 0) {
-        state.minimap.viewport_height_pixels = state.screen_height;
+        state.minimap.viewport_height_pixels = state.world_render_height;
     }
     if (state.minimap.output_pitch_pixels == 0) {
         state.minimap.output_pitch_pixels = state.screen_width;
@@ -3151,6 +3166,15 @@ i32 ResolveUiOverlayInterfaceTop(const UiOverlayState& state) {
 }
 
 void ConfigureGameplayUiOverlayLayout(UiOverlayState& state) {
+    state.gameplay_view_percent = std::clamp<u32>(
+        state.gameplay_view_percent != 0 ? state.gameplay_view_percent : 100u,
+        60u, 100u);
+    const auto scale_world_extent = [&state](u32 extent) {
+        return static_cast<u32>((static_cast<u64>(extent) * 100u +
+            state.gameplay_view_percent - 1u) / state.gameplay_view_percent);
+    };
+    state.world_render_width = scale_world_extent(state.screen_width);
+    state.world_render_height = scale_world_extent(state.screen_height);
     state.screen_layout_bucket = 0;
     if (state.screen_width != 0x280) {
         state.screen_layout_bucket = state.screen_width == 800 ? 1 : 2;
@@ -3175,13 +3199,15 @@ void ConfigureGameplayUiOverlayLayout(UiOverlayState& state) {
     const u32 camera_theme = std::min<u32>(state.interface_theme_index, 3);
     state.world_viewport_height = static_cast<u32>(
         ResolveUiOverlayInterfaceTop(state));
-    state.minimap_camera_anchor_x = static_cast<i32>(state.screen_width / 2);
+    state.minimap_camera_anchor_x = static_cast<i32>(
+        scale_world_extent(state.screen_width / 2));
     // FUN_004e2bb7 copies record +0 to the lower-interface top and record +4
     // to DAT_0086358c. FUN_004e29d1 uses half of the latter as the camera Y
     // anchor. At 800x600 every theme uses 329 for that second value, while
     // the interface top ranges from 421 to 452.
-    state.minimap_camera_anchor_y =
-        ResolveGameplayCameraAnchorHeight(state.screen_width) >> 1;
+    state.minimap_camera_anchor_y = static_cast<i32>(scale_world_extent(
+        static_cast<u32>(ResolveGameplayCameraAnchorHeight(
+            state.screen_width) >> 1)));
 
     // FUN_004e2bb7 selects these records by display-layout bucket first and
     // interface theme second.  Each source record contains an outer anchor,
@@ -3408,8 +3434,8 @@ void ConfigureGameplayUiOverlayLayout(UiOverlayState& state) {
     // DAT_008635c0/c4 are recomputed from the physical client dimensions on
     // every original call.  These are the equivalent inputs used by
     // DrawMinimapViewportBorder in the reconstruction.
-    state.minimap.viewport_width_pixels = state.screen_width;
-    state.minimap.viewport_height_pixels = state.screen_height;
+    state.minimap.viewport_width_pixels = state.world_render_width;
+    state.minimap.viewport_height_pixels = state.world_render_height;
     if (state.minimap.scale_percent == 0) {
         const u32 map_width = std::max<u32>(1, state.minimap.map_width_tiles);
         state.minimap.scale_percent =
@@ -3417,7 +3443,7 @@ void ConfigureGameplayUiOverlayLayout(UiOverlayState& state) {
     }
     state.camera_max_x = state.map_width_tiles != 0 ? static_cast<i32>(
         std::max<i32>(0, static_cast<i32>(state.map_width_tiles * 0x20) -
-            static_cast<i32>(state.screen_width))) : 0;
+            static_cast<i32>(state.world_render_width))) : 0;
     // FUN_004e2bb7 writes DAT_0086359c from the map height minus the
     // interface-theme table at DAT_008635a0, not minus the physical display
     // height.  Both camera bounds are unconditional original outputs.
@@ -3425,7 +3451,8 @@ void ConfigureGameplayUiOverlayLayout(UiOverlayState& state) {
         {496, 487, 487, 480}};
     state.camera_max_y = state.map_height_tiles != 0 ? static_cast<i32>(
         std::max<i32>(0, static_cast<i32>(state.map_height_tiles * 0x20) -
-            kCameraEffectiveHeight[theme])) : 0;
+            static_cast<i32>(scale_world_extent(
+                static_cast<u32>(kCameraEffectiveHeight[theme]))))) : 0;
     // FUN_004e2bb7 rewrites all four counter anchors whenever the gameplay
     // layout is configured.  Reusing this state after a resolution change
     // must not retain the previous screen's coordinates.
@@ -4979,8 +5006,8 @@ void ResolveGameplayHoverContext(UiOverlayState& state) {
     // (terrain class 1), probing y, y-15, then y+15.  Treating every map point
     // as kind 0x0c caused the spurious "Berry 0" UI while placing buildings.
     const GameplayTooltipState& tooltip = gameplay_tooltip_state();
-    const i32 world_x = state.camera_x + state.mouse_x;
-    const i32 world_y = state.camera_y + state.mouse_y;
+    const i32 world_x = UiOverlayWorldXFromScreen(state, state.mouse_x);
+    const i32 world_y = UiOverlayWorldYFromScreen(state, state.mouse_y);
     if (world_x >= 0 && world_y >= 0 &&
         tooltip.map_width_tiles != 0 && tooltip.map_height_tiles != 0) {
         constexpr std::array<i32, 3> kTerrainHoverYNudges{{0, -0x0f, 0x0f}};
@@ -5025,8 +5052,8 @@ bool FindUnitUnderMousePointer(UiOverlayState& state, i32 screen_x, i32 screen_y
 }
 
 bool FindMapEffectUnderMousePointer(UiOverlayState& state, i32 screen_x, i32 screen_y) {
-    const i32 world_x = state.camera_x + screen_x;
-    const i32 world_y = state.camera_y + screen_y;
+    const i32 world_x = UiOverlayWorldXFromScreen(state, screen_x);
+    const i32 world_y = UiOverlayWorldYFromScreen(state, screen_y);
     if (world_x < 0 || world_y < 0) {
         return false;
     }
@@ -5264,8 +5291,8 @@ void DispatchGameplayPointerUnitCommand(UiOverlayState& state, u32 command_id) {
 
 void DispatchGameplayPointerTerrainCommand(UiOverlayState& state, u32 command_id) {
     state.pressed_command_id = command_id;
-    const i32 world_x = state.camera_x + state.mouse_x;
-    const i32 world_y = state.camera_y + state.mouse_y;
+    const i32 world_x = UiOverlayWorldXFromScreen(state, state.mouse_x);
+    const i32 world_y = UiOverlayWorldYFromScreen(state, state.mouse_y);
     if (world_x < 0 || world_y < 0) {
         StopGameplayHudPulse(state);
         return;
@@ -6046,8 +6073,11 @@ bool FindSelectableUnitInDragRectangle(UiOverlayState& state) {
     for (const UiOverlayMinimapUnit& unit : state.minimap_units) {
         if (unit_selectable_for_local_player(state, unit) &&
             rects_intersect(selection, unit_world_rect(unit))) {
-            set_hover_from_unit(state, unit, unit.world_x - state.camera_x,
-                unit.world_y - state.camera_y);
+            set_hover_from_unit(state, unit,
+                UiOverlayScreenXFromWorldView(
+                    state, unit.world_x - state.camera_x),
+                UiOverlayScreenYFromWorldView(
+                    state, unit.world_y - state.camera_y));
             return true;
         }
     }

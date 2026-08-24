@@ -835,6 +835,11 @@ struct UiOverlayState {
 
     u32 screen_width = 800;
     u32 screen_height = 600;
+    // World rendering may use a larger off-screen surface which is reduced
+    // into the legacy screen before the fixed-size HUD is composited.
+    u32 gameplay_view_percent = 100;
+    u32 world_render_width = 800;
+    u32 world_render_height = 600;
     u32 interface_theme_index = 0;
     u32 dynamic_icon_index = 0;
     u32 side_slot_index = 0;
@@ -1088,6 +1093,50 @@ struct UiOverlayState {
     bool clear_queue_after_flush = false;
 };
 
+inline i32 ScaleUiOverlayCoordinate(i32 value, u32 source_extent,
+    u32 destination_extent) {
+    if (source_extent == 0 || destination_extent == 0 ||
+        source_extent == destination_extent) {
+        return value;
+    }
+    return static_cast<i32>((static_cast<i64>(value) * destination_extent) /
+        source_extent);
+}
+
+inline i32 UiOverlayWorldViewXFromScreen(
+    const UiOverlayState& state, i32 screen_x) {
+    return ScaleUiOverlayCoordinate(screen_x, state.screen_width,
+        state.world_render_width);
+}
+
+inline i32 UiOverlayWorldViewYFromScreen(
+    const UiOverlayState& state, i32 screen_y) {
+    return ScaleUiOverlayCoordinate(screen_y, state.screen_height,
+        state.world_render_height);
+}
+
+inline i32 UiOverlayScreenXFromWorldView(
+    const UiOverlayState& state, i32 view_x) {
+    return ScaleUiOverlayCoordinate(view_x, state.world_render_width,
+        state.screen_width);
+}
+
+inline i32 UiOverlayScreenYFromWorldView(
+    const UiOverlayState& state, i32 view_y) {
+    return ScaleUiOverlayCoordinate(view_y, state.world_render_height,
+        state.screen_height);
+}
+
+inline i32 UiOverlayWorldXFromScreen(
+    const UiOverlayState& state, i32 screen_x) {
+    return state.camera_x + UiOverlayWorldViewXFromScreen(state, screen_x);
+}
+
+inline i32 UiOverlayWorldYFromScreen(
+    const UiOverlayState& state, i32 screen_y) {
+    return state.camera_y + UiOverlayWorldViewYFromScreen(state, screen_y);
+}
+
 inline void ResetUiOverlayProductionCategoryForSelectionChange(
     UiOverlayState& state) {
     state.selected_production_category = 0;
@@ -1201,6 +1250,8 @@ void ResetUiOverlayDrawQueue(UiOverlayState& state);
 void InstallDefaultUiOverlayDispatchHandlers(UiOverlayState& state);
 
 void RenderGameplayWorldAndUiOverlay(UiOverlayState& state);
+void BeginGameplayWorldOverlay(UiOverlayState& state);
+void RenderGameplayUiOverlay(UiOverlayState& state);
 void DrawGameplaySelectionRectangleOverlay(UiOverlayState& state);
 void FlushUiOverlayDrawQueue(UiOverlayState& state);
 bool DispatchUiOverlayDrawRecord(UiOverlayState& state, const UiOverlayDrawRecord& record);

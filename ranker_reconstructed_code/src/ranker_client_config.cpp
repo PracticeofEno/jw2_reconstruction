@@ -104,6 +104,12 @@ RankerClientDisplayConfig LoadRankerClientDisplayConfig() {
         config.height = height;
     }
 
+    int gameplay_view_percent = 0;
+    if (read_integer("GameplayViewPercent", gameplay_view_percent) &&
+        IsSupportedGameplayViewPercent(gameplay_view_percent)) {
+        config.gameplay_view_percent = gameplay_view_percent;
+    }
+
     config.resizable = read_boolean("Resizable", config.resizable);
     config.border = read_boolean("Border", config.border);
     config.center = read_boolean("Center", config.center);

@@ -790,6 +790,7 @@ struct RuntimeGlobals {
     bool windowed_mode = true;
     int presentation_client_width = kDefaultPresentationClientWidth;
     int presentation_client_height = kDefaultPresentationClientHeight;
+    int gameplay_view_percent = 80;
     int presentation_client_x = 0;
     int presentation_client_y = 0;
     bool presentation_position_set = false;
@@ -878,6 +879,7 @@ struct RuntimeGlobals {
     std::vector<GameplayVisibilityUnit> gameplay_visibility_units;
     GameplayFogRenderContext gameplay_fog_context;
     std::vector<u8> gameplay_fog_mask_table;
+    std::vector<u16> gameplay_world_view_pixels;
     GameplaySoundState gameplay_sound;
     MapBrushViewportState gameplay_map_brush_viewport;
     UnitMovementContext gameplay_movement_context;
@@ -1242,6 +1244,10 @@ void default_gameplay_frame_draw_selection_overlay(
 void default_gameplay_frame_draw_hud_pulse(GameplayFrameRenderContext& context);
 void default_gameplay_frame_draw_world_ui_overlay(
     GameplayFrameRenderContext& context);
+void default_gameplay_frame_draw_world_overlay(
+    GameplayFrameRenderContext& context);
+void default_gameplay_frame_draw_ui_overlay(
+    GameplayFrameRenderContext& context);
 void default_gameplay_frame_noop(GameplayFrameRenderContext& context);
 void default_gameplay_frame_draw_player_resource_hud(
     GameplayFrameRenderContext& context);
@@ -1332,6 +1338,7 @@ void load_main_window_presentation_settings() {
     const RankerClientDisplayConfig display = LoadRankerClientDisplayConfig();
     g_runtime.presentation_client_width = display.width;
     g_runtime.presentation_client_height = display.height;
+    g_runtime.gameplay_view_percent = display.gameplay_view_percent;
     g_runtime.presentation_client_x = display.x;
     g_runtime.presentation_client_y = display.y;
     g_runtime.presentation_position_set = display.position_set;
@@ -14117,6 +14124,16 @@ void default_gameplay_frame_draw_world_ui_overlay(GameplayFrameRenderContext&) {
     RenderGameplayWorldAndUiOverlay(overlay);
 }
 
+void default_gameplay_frame_draw_world_overlay(GameplayFrameRenderContext&) {
+    UiOverlayState& overlay = ui_overlay_state();
+    BuildSelectedUnitCommandPanel(overlay);
+    BeginGameplayWorldOverlay(overlay);
+}
+
+void default_gameplay_frame_draw_ui_overlay(GameplayFrameRenderContext&) {
+    RenderGameplayUiOverlay(ui_overlay_state());
+}
+
 void default_gameplay_frame_noop(GameplayFrameRenderContext&) {
 }
 
@@ -14673,8 +14690,10 @@ void default_ui_overlay_draw_selection_rectangle(
 }
 
 void default_ui_overlay_draw_placement_preview(UiOverlayState& state) {
-    state.placement_pointer_x = state.mouse_x;
-    state.placement_pointer_y = state.mouse_y;
+    state.placement_pointer_x =
+        UiOverlayWorldViewXFromScreen(state, state.mouse_x);
+    state.placement_pointer_y =
+        UiOverlayWorldViewYFromScreen(state, state.mouse_y);
     state.placement_footprint_width_tiles = 1;
     state.placement_footprint_height_tiles = 1;
     state.placement_preview_valid = false;
@@ -14981,6 +15000,8 @@ void default_gameplay_loop_initialize_session_resources(GameplayLoopState&) {
         const u32 theme = std::min<u32>(interface_resource_state().theme_index, 3);
         overlay.screen_width = surface.width;
         overlay.screen_height = surface.height;
+        overlay.gameplay_view_percent = static_cast<u32>(
+            g_runtime.gameplay_view_percent);
         overlay.interface_theme_index = theme;
         overlay.map_width_tiles = g_runtime.gameplay_movement_context.map.width;
         overlay.map_height_tiles = g_runtime.gameplay_movement_context.map.height;
@@ -19127,8 +19148,10 @@ void default_unit_effect_camera_shake(
 
     effects.viewport_left = overlay.camera_x;
     effects.viewport_top = overlay.camera_y;
-    effects.viewport_right = overlay.camera_x + static_cast<i32>(overlay.screen_width);
-    effects.viewport_bottom = overlay.camera_y + static_cast<i32>(overlay.screen_height);
+    effects.viewport_right = overlay.camera_x +
+        static_cast<i32>(overlay.world_render_width);
+    effects.viewport_bottom = overlay.camera_y +
+        static_cast<i32>(overlay.world_render_height);
 }
 
 u32 default_unit_effect_impact_damage(UnitEffectRuntimeState&,
@@ -20771,6 +20794,7 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
     UiOverlayState& overlay = ui_overlay_state();
     const u32 previous_screen_width = overlay.screen_width;
     const u32 previous_screen_height = overlay.screen_height;
+    const u32 previous_gameplay_view_percent = overlay.gameplay_view_percent;
     const u32 previous_theme = overlay.interface_theme_index;
     const u32 previous_map_width = overlay.map_width_tiles;
     const u32 previous_map_height = overlay.map_height_tiles;
@@ -20785,6 +20809,8 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
         resolve_active_gameplay_logical_surface_size();
     overlay.screen_width = surface.width;
     overlay.screen_height = surface.height;
+    overlay.gameplay_view_percent = static_cast<u32>(
+        g_runtime.gameplay_view_percent);
     overlay.reveal_minimap_fog =
         g_runtime.gameplay_startup_state.fog_reveal_disabled;
     // Scan 0x57 toggles DAT_0083f498, which gates both the simulation-tick
@@ -20997,6 +21023,7 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
 
     const bool layout_changed = previous_screen_width != overlay.screen_width ||
         previous_screen_height != overlay.screen_height ||
+        previous_gameplay_view_percent != overlay.gameplay_view_percent ||
         previous_theme != overlay.interface_theme_index ||
         previous_map_width != overlay.map_width_tiles ||
         previous_map_height != overlay.map_height_tiles ||
@@ -21020,10 +21047,14 @@ void sync_default_ui_overlay_runtime_from_gameplay_state() {
     overlay.camera_y = std::clamp(overlay.camera_y, 0, overlay.camera_max_y);
     g_runtime.gameplay_frame_render_context.camera_x = overlay.camera_x;
     g_runtime.gameplay_frame_render_context.camera_y = overlay.camera_y;
-    g_runtime.gameplay_frame_render_context.viewport_width = surface.width;
-    g_runtime.gameplay_frame_render_context.viewport_height = surface.height;
-    g_runtime.gameplay_unit_render_queue.viewport.right = surface.width;
-    g_runtime.gameplay_unit_render_queue.viewport.bottom = surface.height;
+    g_runtime.gameplay_frame_render_context.viewport_width =
+        overlay.world_render_width;
+    g_runtime.gameplay_frame_render_context.viewport_height =
+        overlay.world_render_height;
+    g_runtime.gameplay_unit_render_queue.viewport.right =
+        overlay.world_render_width;
+    g_runtime.gameplay_unit_render_queue.viewport.bottom =
+        overlay.world_render_height;
 
     const std::size_t tile_count =
         static_cast<std::size_t>(overlay.map_width_tiles) *
@@ -31229,6 +31260,105 @@ void default_gameplay_loop_simulation_phase(GameplayLoopState& state) {
     }
 }
 
+void scale_gameplay_world_view_nearest(const SpriteRenderTarget& source,
+    const SpriteRenderTarget& destination) {
+    if (source.pixels == nullptr || destination.pixels == nullptr ||
+        source.width == 0 || source.height == 0 ||
+        destination.width == 0 || destination.height == 0) {
+        return;
+    }
+    const u32 source_stride = source.stride_words != 0 ?
+        source.stride_words : source.width;
+    const u32 destination_stride = destination.stride_words != 0 ?
+        destination.stride_words : destination.width;
+    for (u32 y = 0; y < destination.height; ++y) {
+        const u32 source_y = static_cast<u32>(
+            (static_cast<u64>(y) * source.height) / destination.height);
+        const u16* source_row = source.pixels +
+            static_cast<std::size_t>(source_y) * source_stride;
+        u16* destination_row = destination.pixels +
+            static_cast<std::size_t>(y) * destination_stride;
+        for (u32 x = 0; x < destination.width; ++x) {
+            const u32 source_x = static_cast<u32>(
+                (static_cast<u64>(x) * source.width) / destination.width);
+            destination_row[x] = source_row[source_x];
+        }
+    }
+}
+
+void render_default_gameplay_ui_tail(GameplayFrameRenderContext& context) {
+    const auto call = [&context](GameplayFrameCallback callback) {
+        if (callback != nullptr) {
+            callback(context);
+        }
+    };
+    call(context.callbacks.draw_first_overlay);
+    default_gameplay_frame_draw_ui_overlay(context);
+    if (context.hud != nullptr) {
+        context.hud->frame_counter = context.frame_counter;
+        context.hud->current_tick_ms = context.current_tick_ms;
+        RenderGameplayHudText(*context.hud);
+    }
+    call(context.callbacks.draw_system_hud);
+    call(context.callbacks.draw_resource_hud);
+    call(context.callbacks.publish_present_flag);
+    call(context.callbacks.draw_ui_overlay);
+    if (context.hud != nullptr) {
+        RenderGameplayDebugFpsCounter(*context.hud);
+    }
+    if (context.pause_overlay_active) {
+        call(context.callbacks.show_pause_overlay);
+    }
+    call(context.callbacks.present_cursor);
+}
+
+bool render_zoomed_gameplay_frame(GameplayFrameRenderContext& context,
+    const SpriteRenderTarget& back_target) {
+    UiOverlayState& overlay = ui_overlay_state();
+    if (overlay.gameplay_view_percent >= 100 ||
+        overlay.world_render_width <= back_target.width ||
+        overlay.world_render_height <= back_target.height) {
+        return false;
+    }
+
+    const std::size_t pixel_count =
+        static_cast<std::size_t>(overlay.world_render_width) *
+        overlay.world_render_height;
+    g_runtime.gameplay_world_view_pixels.resize(pixel_count);
+    std::fill(g_runtime.gameplay_world_view_pixels.begin(),
+        g_runtime.gameplay_world_view_pixels.end(), 0);
+    SpriteRenderTarget world_target{
+        g_runtime.gameplay_world_view_pixels.data(),
+        overlay.world_render_width,
+        overlay.world_render_height,
+        overlay.world_render_width};
+
+    GameplayFrameRenderContext world_context = context;
+    world_context.viewport_width = world_target.width;
+    world_context.viewport_height = world_target.height;
+    world_context.hud = nullptr;
+    world_context.pause_overlay_active = false;
+    world_context.callbacks.draw_first_overlay = nullptr;
+    world_context.callbacks.draw_third_overlay =
+        default_gameplay_frame_draw_world_overlay;
+    world_context.callbacks.draw_system_hud = nullptr;
+    world_context.callbacks.draw_resource_hud = nullptr;
+    world_context.callbacks.publish_present_flag = nullptr;
+    world_context.callbacks.draw_ui_overlay = nullptr;
+    world_context.callbacks.show_pause_overlay = nullptr;
+    world_context.callbacks.present_cursor = nullptr;
+
+    BindGameplayRenderTarget(world_context, world_target);
+    RenderGameplayFrameComposite(world_context);
+    context.animation_frame_slot = world_context.animation_frame_slot;
+    context.animation_cycle = world_context.animation_cycle;
+    scale_gameplay_world_view_nearest(world_target, back_target);
+
+    BindGameplayRenderTarget(context, back_target);
+    render_default_gameplay_ui_tail(context);
+    return true;
+}
+
 void default_gameplay_loop_present_phase(GameplayLoopState& state) {
     // Publish the active logical surface before capturing HUD and viewport
     // metrics.  The original layout pass precedes the frame composite; doing
@@ -31341,7 +31471,9 @@ void default_gameplay_loop_present_phase(GameplayLoopState& state) {
             sync_default_gameplay_chat_input_hud();
 
             context.callbacks.present_cursor = nullptr;
-            RenderGameplayFrameComposite(context);
+            if (!render_zoomed_gameplay_frame(context, target)) {
+                RenderGameplayFrameComposite(context);
+            }
             if (previous_sprite_active) {
                 SetSpriteRenderTarget(previous_sprite_target.pixels,
                     previous_sprite_target.width, previous_sprite_target.height,
@@ -33742,9 +33874,10 @@ int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_c
         startup_platform_text_count(), startup_message_text_count());
     load_main_window_presentation_settings();
     append_startup_log(
-        "presentation config=%s logical=%dx%d client=%dx%d position=%s,%d,%d resize=%s border=%s",
+        "presentation config=%s logical=%dx%d gameplay-view=%d%% client=%dx%d position=%s,%d,%d resize=%s border=%s",
         RankerClientConfigPath().c_str(),
         kOriginalClientWidth, kOriginalClientHeight,
+        g_runtime.gameplay_view_percent,
         g_runtime.presentation_client_width,
         g_runtime.presentation_client_height,
         g_runtime.presentation_position_set ? "set" : "default",
