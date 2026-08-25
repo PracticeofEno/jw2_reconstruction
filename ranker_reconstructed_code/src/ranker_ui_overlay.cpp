@@ -5853,8 +5853,11 @@ bool select_visible_local_units_matching_type(
     UiOverlayState& state, const UiOverlayMinimapUnit& target) {
     // FUN_004ead82 is shared by world double-click and Ctrl+single-click.
     // Shift preserves a compatible local-mobile party; an ordinary invocation
-    // replaces it before expanding the clicked unit's type/flag class.
-    if (!state.shift_modifier_down ||
+    // replaces it before expanding the clicked unit's type/flag class.  The
+    // reconstructed structure extension always replaces the previous party:
+    // ordinary Shift selection never mixes structures into a mobile party.
+    const bool structure_group = target.type_id >= 0x60u;
+    if (structure_group || !state.shift_modifier_down ||
         primary_selection_has_remote_owner(state)) {
         ResetGameplaySelectionState(state);
     }
@@ -5904,7 +5907,8 @@ bool select_visible_local_units_matching_type(
             if (unit.unit_id == target.unit_id ||
                 unit.owner_id != target.owner_id ||
                 unit.type_id != reference_type ||
-                (unit.runtime_flags & 0x31u) != reference_flags ||
+                !UiOverlayDoubleClickRuntimeClassMatches(reference_type,
+                    reference_flags, unit.runtime_flags) ||
                 !double_click_unit_visibility_passes(state, unit, true) ||
                 !double_click_unit_intersects_viewport(state, unit)) {
                 continue;
@@ -6033,7 +6037,8 @@ UiOverlayDoubleClickSelectionResult ResolveGameplayDoubleClickSelection(
         // not rewrite code 0x20 into the release fallback.
         return UiOverlayDoubleClickSelectionResult::ignored;
     }
-    if (target->owner_id != state.local_player_slot || target->type_id >= 0x60u) {
+    if (!UiOverlayDoubleClickTargetAllowsGroupSelection(
+            target->owner_id, state.local_player_slot)) {
         return UiOverlayDoubleClickSelectionResult::fallback_release;
     }
 

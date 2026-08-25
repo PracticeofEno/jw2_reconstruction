@@ -6536,13 +6536,9 @@ bool default_gameplay_input_dispatch_action(
         if (primary == state.units.end()) {
             return reject_with_common_feedback();
         }
-        if (primary->action_mode_gate != 1 &&
-            (primary->command_state & kUnitCommandDead) == 0) {
-            PublishLocalMode1GameplayPacket(
-                (0x08u << 24) | (state.local_player_index & 0xffu), 0x1fu,
-                primary->offset, state.last_validation_unit_offset,
-                state.last_action_world_x, state.last_action_world_y);
-        }
+        PublishSelectedStructureGroupRallyAction(state,
+            state.last_validation_unit_offset, state.last_action_world_x,
+            state.last_action_world_y);
         return true;
     }
 
@@ -21440,12 +21436,13 @@ bool publish_default_ui_overlay_input_command(
         if (click) {
             if (action.aux == 0) {
                 ensure_default_selected_input_command_capability(input, action.item_id);
-                PublishSelectedUnitCapabilityAction(input, action.item_id);
+                PublishSelectedStructureGroupCapabilityAction(
+                    input, action.item_id);
             }
             else {
                 const u32 index = action.aux & 0xffffu;
                 ensure_default_indexed_input_payload(input, index, action.item_id);
-                PublishSelectedUnitIndexedPayloadAction(input, index);
+                PublishSelectedStructureGroupIndexedPayloadAction(input, index);
             }
         }
         return true;
@@ -21536,7 +21533,8 @@ bool publish_default_ui_overlay_input_command(
     }
     if (action.item_id >= 0xf4u && action.item_id < 0x134u) {
         if (click) {
-            PublishSelectedUnitProductionAction(input, action.item_id - 0xf4u);
+            PublishSelectedStructureGroupProductionAction(
+                input, action.item_id - 0xf4u);
         }
         return true;
     }
@@ -22442,7 +22440,8 @@ bool publish_default_ui_overlay_production_command(
     if (action.item_id >= 0x24au) {
         if (click) {
             const u32 production_id = action.item_id - 0x24au;
-            PublishSelectedUnitProductionCostAction(production, production_id);
+            PublishSelectedStructureGroupProductionCostAction(
+                production, production_id);
         }
         return true;
     }

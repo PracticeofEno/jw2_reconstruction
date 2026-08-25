@@ -22,7 +22,13 @@ static_assert(ranker::ResolveUiOverlayMinimapRightClickItemId(
 static_assert(ranker::ResolveUiOverlayMinimapRightClickItemId(
     1u, 0x22u, 2u, 2u, 0u, 0u, 1u, false) == 0xaeu);
 static_assert(ranker::ResolveUiOverlayMinimapRightClickItemId(
-    2u, 0x60u, 2u, 2u, 0u, 0u, 1u, false) == 0xaeu);
+    2u, 0x60u, 2u, 2u, 0u, 0u, 1u, false) == 0xc9u);
+static_assert(ranker::UiOverlayDoubleClickTargetAllowsGroupSelection(2u, 2u));
+static_assert(!ranker::UiOverlayDoubleClickTargetAllowsGroupSelection(1u, 2u));
+static_assert(ranker::UiOverlayDoubleClickRuntimeClassMatches(
+    0x60u, 0x01u, 0x31u));
+static_assert(!ranker::UiOverlayDoubleClickRuntimeClassMatches(
+    0x20u, 0x01u, 0x31u));
 
 int main() {
     ranker::UnitMovementUnit source{};

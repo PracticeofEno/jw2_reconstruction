@@ -1103,6 +1103,34 @@ bool PublishSelectedUnitProductionCostAction(GameplayProductionActionState& stat
         unit->offset, production, 0, remaining_count, list_index));
 }
 
+bool PublishSelectedStructureGroupProductionCostAction(
+    GameplayProductionActionState& state, u32 production) {
+    GameplayProductionUnitState* primary = selected_unit(state);
+    if (primary == nullptr) {
+        return false;
+    }
+    if (state.selected_count <= 1u || primary->type < 0x60u) {
+        return PublishSelectedUnitProductionCostAction(state, production);
+    }
+
+    const u32 saved_current = state.current_unit_offset;
+    const u32 primary_type = primary->type;
+    bool published = false;
+    for (GameplayProductionUnitState& unit : state.units) {
+        const bool selected = unit.selected ||
+            (unit.status_flags & kSelectedUnitMarkerFlag) != 0;
+        if (!selected || unit.type != primary_type ||
+            !unit_is_local_active(state, unit)) {
+            continue;
+        }
+        state.current_unit_offset = unit.offset;
+        published = PublishSelectedUnitProductionCostAction(
+            state, production) || published;
+    }
+    state.current_unit_offset = saved_current;
+    return published;
+}
+
 bool PublishSelectedUnitProductionCostCancel(GameplayProductionActionState& state) {
     const u32 command =
         state.last_action_index != 0 ? state.last_action_index :

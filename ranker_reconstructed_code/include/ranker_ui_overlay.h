@@ -55,7 +55,7 @@ constexpr u32 ResolveUiOverlayProductionRallyRightClickAction(
     constexpr u32 kStructureTypeBase = 0x60u;
     constexpr u32 kDeadCommandFlag = 0x10000000u;
     const bool is_completed_live_local_producer =
-        selected_unit_count == 1u &&
+        selected_unit_count != 0u &&
         selected_unit_type >= kStructureTypeBase &&
         selected_unit_owner == local_player_slot &&
         selected_unit_action_mode_gate != 1u &&
@@ -65,6 +65,24 @@ constexpr u32 ResolveUiOverlayProductionRallyRightClickAction(
     return is_completed_live_local_producer
         ? kUiOverlayProductionRallyAction
         : contextual_action;
+}
+
+// Intentional reconstruction extension: the original double-click expansion
+// accepts only local mobile units.  Rebuild also accepts a local structure so
+// all currently visible structures of the same type can become one selection.
+constexpr bool UiOverlayDoubleClickTargetAllowsGroupSelection(
+    u32 target_owner, u32 local_owner) {
+    return target_owner == local_owner;
+}
+
+// The original mobile expansion additionally matches raw runtime class bits.
+// Structure grouping is a UI convenience and intentionally groups the same
+// building type even when transient runtime bits differ (for example, because
+// one producer is currently busy).
+constexpr bool UiOverlayDoubleClickRuntimeClassMatches(
+    u32 target_type, u32 target_runtime_flags, u32 candidate_runtime_flags) {
+    return target_type >= 0x60u ||
+        (candidate_runtime_flags & 0x31u) == (target_runtime_flags & 0x31u);
 }
 
 constexpr u32 ResolveUiOverlayMinimapRightClickItemId(

@@ -907,6 +907,31 @@ if (RANKER_BUILD_REGRESSION_TESTS)
 
 endif()
 
+option(RANKER_BUILD_MULTI_STRUCTURE_COMMAND_REGRESSION_TEST
+    "Build the multi-structure selection and command regression" OFF)
+if (RANKER_BUILD_MULTI_STRUCTURE_COMMAND_REGRESSION_TEST)
+    enable_testing()
+    add_executable(multi_structure_command_regression
+        tests/multi_structure_command_regression.cpp
+        src/ranker_gameplay_input_actions.cpp
+        src/ranker_gameplay_production_actions.cpp
+    )
+    target_include_directories(multi_structure_command_regression PRIVATE
+        include
+    )
+    if (MSVC)
+        target_compile_options(multi_structure_command_regression PRIVATE /Gy)
+        target_link_options(multi_structure_command_regression PRIVATE /OPT:REF)
+    else()
+        target_compile_options(multi_structure_command_regression PRIVATE
+            -ffunction-sections -fdata-sections)
+        target_link_options(multi_structure_command_regression PRIVATE
+            -Wl,--gc-sections)
+    endif()
+    add_test(NAME multi_structure_command_regression
+        COMMAND multi_structure_command_regression)
+endif()
+
 option(RANKER_BUILD_GAMEPLAY_TOOLTIP_EXTENT_REGRESSION_TEST
     "Build the production tooltip cost-row extent regression" OFF)
 if (RANKER_BUILD_GAMEPLAY_TOOLTIP_EXTENT_REGRESSION_TEST)

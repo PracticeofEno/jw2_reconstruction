@@ -283,6 +283,8 @@ bool PublishSelectedUnitEquipmentSlotToggle(GameplayProductionActionState& state
     u32 slot);
 bool PublishSelectedUnitProductionCostAction(GameplayProductionActionState& state,
     u32 production);
+bool PublishSelectedStructureGroupProductionCostAction(
+    GameplayProductionActionState& state, u32 production);
 bool PublishSelectedUnitProductionCostCancel(GameplayProductionActionState& state);
 bool PublishSelectedUnitProductionCostCancel(GameplayProductionActionState& state,
     u32 command, u32 logical_index);

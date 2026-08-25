@@ -11,6 +11,7 @@ GameplayInputActionState g_gameplay_input_action_state;
 
 constexpr u32 kSubtypePrimaryCommand = 0x01;
 constexpr u32 kSubtypeBuildResourceCommand = 0x05;
+constexpr u32 kSubtypeAuxVector = 0x08;
 constexpr u32 kSubtypePlacementCommand = 0x0c;
 constexpr u32 kSubtypeNestedCommand = 0x0d;
 constexpr u32 kSubtypeCatchupTarget = 0x0f;
@@ -484,6 +485,32 @@ void DrainGameplayInputEvents(GameplayInputActionState& state) {
     }
 }
 
+template <typename Publisher>
+bool publish_selected_structure_group_or_primary(
+    GameplayInputActionState& state, Publisher&& publisher) {
+    GameplayActionUnitState* primary = selected_unit(state);
+    if (primary == nullptr) {
+        return false;
+    }
+    if (state.multi_select_count <= 1u || primary->type < 0x60u) {
+        return publisher(*primary);
+    }
+
+    const u32 saved_current = state.current_unit_offset;
+    const u32 primary_type = primary->type;
+    bool published = false;
+    for (GameplayActionUnitState& unit : state.units) {
+        if (!unit.selected || unit.type != primary_type ||
+            !unit_is_local_and_live(state, unit)) {
+            continue;
+        }
+        state.current_unit_offset = unit.offset;
+        published = publisher(unit) || published;
+    }
+    state.current_unit_offset = saved_current;
+    return published;
+}
+
 void ResetGameplayInputSnapshotRing(GameplayInputActionState& state) {
     const u32 published_write =
         state.snapshot_write_offset.load(std::memory_order_acquire);
@@ -655,6 +682,14 @@ bool PublishSelectedUnitCapabilityAction(GameplayInputActionState& state, u32 ca
     return true;
 }
 
+bool PublishSelectedStructureGroupCapabilityAction(
+    GameplayInputActionState& state, u32 capability) {
+    return publish_selected_structure_group_or_primary(state,
+        [&state, capability](GameplayActionUnitState&) {
+            return PublishSelectedUnitCapabilityAction(state, capability);
+        });
+}
+
 bool PublishSelectedUnitIndexedPayloadAction(GameplayInputActionState& state, u32 index) {
     GameplayActionUnitState* unit = selected_unit(state);
     if (unit == nullptr || !unit_is_local_and_live(state, *unit) ||
@@ -672,6 +707,14 @@ bool PublishSelectedUnitIndexedPayloadAction(GameplayInputActionState& state, u3
     publish(state, make_action(state, kSubtypeBuildResourceCommand,
         unit->offset, payload, 0, 0, index));
     return true;
+}
+
+bool PublishSelectedStructureGroupIndexedPayloadAction(
+    GameplayInputActionState& state, u32 index) {
+    return publish_selected_structure_group_or_primary(state,
+        [&state, index](GameplayActionUnitState&) {
+            return PublishSelectedUnitIndexedPayloadAction(state, index);
+        });
 }
 
 bool PublishSelectedUnitPrimaryAction(GameplayInputActionState& state) {
@@ -719,6 +762,34 @@ bool PublishSelectedUnitProductionAction(GameplayInputActionState& state, u32 pr
     publish(state, make_action(state, kSubtypePlacementCommand, unit->offset,
         production, availability.secondary_cost, 0, 0));
     return true;
+}
+
+bool PublishSelectedStructureGroupProductionAction(
+    GameplayInputActionState& state, u32 production) {
+    return publish_selected_structure_group_or_primary(state,
+        [&state, production](GameplayActionUnitState&) {
+            return PublishSelectedUnitProductionAction(state, production);
+        });
+}
+
+bool PublishSelectedStructureGroupRallyAction(GameplayInputActionState& state,
+    u32 target_unit_offset, u32 world_x, u32 world_y) {
+    constexpr u32 kRallyAction = 0x1fu;
+    constexpr u32 kDeadCommandFlag = 0x10000000u;
+    return publish_selected_structure_group_or_primary(state,
+        [&state, target_unit_offset, world_x, world_y](
+            GameplayActionUnitState& unit) {
+            // Match the original action-0x1f suppression gates for every
+            // producer.  The UI extension changes only how many existing
+            // subtype-08 commands are placed in the ordered P2P stream.
+            if (unit.action_mode_gate != 1u &&
+                (unit.command_state & kDeadCommandFlag) == 0u) {
+                publish(state, make_action(state, kSubtypeAuxVector,
+                    unit.offset, kRallyAction, target_unit_offset,
+                    world_x, world_y));
+            }
+            return true;
+        });
 }
 
 bool PublishNestedSelectedCommandAction(GameplayInputActionState& state) {

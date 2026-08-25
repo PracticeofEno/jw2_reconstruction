@@ -283,10 +283,18 @@ bool PublishSelectedUnitsPendingAction(GameplayInputActionState& state, u32 text
 bool PublishMode1NoOp11Action(GameplayInputActionState& state);
 bool PublishSelectedUnitCapabilityAction(GameplayInputActionState& state, u32 capability);
 bool PublishSelectedUnitIndexedPayloadAction(GameplayInputActionState& state, u32 index);
+bool PublishSelectedStructureGroupCapabilityAction(
+    GameplayInputActionState& state, u32 capability);
+bool PublishSelectedStructureGroupIndexedPayloadAction(
+    GameplayInputActionState& state, u32 index);
 bool PublishSelectedUnitPrimaryAction(GameplayInputActionState& state);
 bool PublishSelectedUnitPrimaryAction(GameplayInputActionState& state,
     u32 command, u32 logical_index);
 bool PublishSelectedUnitProductionAction(GameplayInputActionState& state, u32 production);
+bool PublishSelectedStructureGroupProductionAction(
+    GameplayInputActionState& state, u32 production);
+bool PublishSelectedStructureGroupRallyAction(GameplayInputActionState& state,
+    u32 target_unit_offset, u32 world_x, u32 world_y);
 bool PublishNestedSelectedCommandAction(GameplayInputActionState& state);
 bool PublishSelectedUnitPlacementAction(GameplayInputActionState& state);
 bool PublishSelectedUnitPlacementAction(GameplayInputActionState& state,
