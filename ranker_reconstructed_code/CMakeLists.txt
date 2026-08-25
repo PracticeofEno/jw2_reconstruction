@@ -1712,11 +1712,33 @@ if (RANKER_BUILD_PROGRAMMATIC_POINTER_MOTION_REGRESSION_TEST)
         COMMAND programmatic_pointer_motion_regression)
 endif()
 
+option(RANKER_BUILD_AI_PLAY_INTERFACE_REGRESSION_TEST
+    "Build the focused AI observation and semantic-action regression" OFF)
+if (RANKER_BUILD_AI_PLAY_INTERFACE_REGRESSION_TEST)
+    enable_testing()
+    add_executable(ai_play_interface_regression
+        tests/ai_play_interface_regression.cpp
+        src/ranker_ai_observation.cpp
+        src/ranker_ai_actions.cpp
+        src/ranker_ai_live_validator.cpp
+        src/ranker_ai_scripted_bot.cpp
+    )
+    target_include_directories(ai_play_interface_regression PRIVATE
+        include
+    )
+    add_test(NAME ai_play_interface_regression
+        COMMAND ai_play_interface_regression)
+endif()
+
 add_executable(ranker_rebuild WIN32
     resources/ranker_resources.rc
     src/main.cpp
     src/imports.cpp
     src/ranker_client_config.cpp
+    src/ranker_ai_observation.cpp
+    src/ranker_ai_actions.cpp
+    src/ranker_ai_live_validator.cpp
+    src/ranker_ai_scripted_bot.cpp
     src/ranker_winmain.cpp
     src/ranker_cd_audio.cpp
     src/ranker_directx.cpp

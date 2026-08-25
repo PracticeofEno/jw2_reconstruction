@@ -15,6 +15,8 @@
 
 원본 `ranker.exe`는 분석과 호환성 검증 대상으로만 사용한다. 봇 기능이나 계측 코드는 `ranker.exe`에 추가하지 않는다.
 
+현재 확정된 첫 구현 범위와 기준 리플레이 분석은 [AI Play 봇 MVP: 티라노 / Python](AI_PLAY_BOT_MVP_TYRANO_PYTHON.md)에 기록한다.
+
 ## 2. 먼저 알아야 할 점
 
 AlphaStar 같은 봇은 하나의 신경망만 만들어서 완성되는 기능이 아니다. 최소한 다음 네 부분이 먼저 필요하다.
@@ -137,8 +139,12 @@ NoOp
 Move(unit_ids, world_x, world_y)
 AttackUnit(unit_ids, target_id)
 AttackMove(unit_ids, world_x, world_y)
-Produce(structure_id, production_id)
+Harvest(unit_ids, resource_or_point)
+ProduceUnit(structure_id, unit_type)
+Research(structure_id, research_order)
 Build(builder_id, structure_type, world_x, world_y)
+SetRally(structure_ids, target_or_point)
+CancelProduction(structure_id, latest)
 UseAbility(unit_ids, ability_id, target_or_point)
 ```
 
@@ -305,3 +311,20 @@ ranker_reconstructed_code/
 
 이 이터레이션이 통과하면 AI 학습에 필요한 토대가 생긴다. 그 다음 `ScriptedBot`, episode dataset, 모방학습 순서로 확장하는 것이 가장 안전하다.
 
+## 9. 현재 진행 위치 (2026-08-25)
+
+전체 `Debug_replays` 33개 command inventory를 기준으로 첫 기반 코드를 추가했다.
+
+- `AiObservation` schema v1, snapshot builder와 deterministic hash: 완료
+- 봇 제어 owner 관점의 fog gate와 적 private-state redaction: 완료
+- 현재 visible인 map cell의 harvest 잔량 관찰과 hidden-resource redaction: 완료
+- `NoOp`, `Move`, `AttackMove`, `AttackUnit`, `Harvest` 검증 및 subtype `0x02` packet 계획: 완료
+- 전용 `ai_play_interface_regression`: 통과
+- 로비 `Computer(AI)` 슬롯과 티라노 `ScriptedBot`, ordered gameplay packet 발행 연결: 첫 버전 완료
+- 티라노 `ProduceUnit`, `Research`, `Build`, `SetRally`, `CancelProduction(latest)`: replay와 handler/catalog 대조 및 packet planner 완료
+- live production/placement validator callback 연결: 완료
+- `gameplay_1.ply`의 건설·생산·연구 순서를 완료 조건 기반 macro와 실패 backoff로 변환: 첫 버전 완료
+
+현재 controller는 게임 방의 빈 슬롯을 `Computer(AI)`로 지정하면 활성화된다. 해당 슬롯은 티라노로 고정되며, 기존 Computer와 같은 세션 상태값을 사용하되 그 owner의 내장 Owner AI만 중지한다. 새 AI의 별도 ordered packet 채널은 로컬 시뮬레이션 pump가 처리한다. replay와 다중 P2P 세션에서는 새 controller를 실행하지 않는다. 현재 정책은 Nest 복구, rally 지정, visible 베리 탐지, 최대 4기 Dinos의 지속 채집, Dinos 생산, replay 기반 Nest·EggNest·LandNest 확장, Masos·Dilophos 생산, 세 연구, 보이는 적 공격과 맵 탐색까지 지원한다. 채집·복귀 중인 Dinos는 공격 부대에서 제외한다. 구조물 완성 및 생산 queue를 확인해 다음 목표로 진행하며, 실패한 macro action은 deterministic backoff 후 다시 시도한다.
+
+따라서 다음 순서는 Python 맵 한 경기 자동 완주와 저장 replay 재생을 검증하고, 실제 경기에서 드러난 막힘·배치·종료 조건을 보완하는 작업이다.

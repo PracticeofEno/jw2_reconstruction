@@ -2,6 +2,7 @@
 
 #ifdef _WIN32
 
+#include "ranker_ai_slot_role.h"
 #include "ranker_cursor.h"
 #include "ranker_directplay.h"
 #include "ranker_frontend_layout.h"
@@ -268,9 +269,10 @@ const char* kFallbackPlayerRoleLabels[] = {
     "Open",
     "Closed",
     "Computer",
+    "Computer(AI)",
 };
 
-constexpr std::array<int, 3> kEmptyPlayerSlotRoleOrder{{1, 2, 3}};
+constexpr std::array<int, 4> kEmptyPlayerSlotRoleOrder{{1, 2, 3, 4}};
 
 const char* kFallbackTribeLabels[] = {
     "Primitive",
@@ -865,7 +867,7 @@ int link_lobby_active_start_slot_count(const LinkLobbyState& state) {
     int count = 0;
     for (int slot = 0; slot < max_players; ++slot) {
         const int role = state.player_role_values[slot];
-        if (role == 0 || role == 3) {
+        if (role == 0 || IsComputerLikeLinkLobbyRole(role)) {
             ++count;
         }
     }
@@ -984,7 +986,7 @@ bool link_lobby_start_team_requirements_met(const LinkLobbyState& state) {
         const int team = std::clamp(state.player_team_values[slot], 0,
             kLinkLobbyAvatarCount - 1);
         const int role = state.player_role_values[slot];
-        if (role == 0 || role == 3) {
+        if (role == 0 || IsComputerLikeLinkLobbyRole(role)) {
             ++team_slots[team];
         }
         if (role == 0) {
@@ -1217,8 +1219,11 @@ std::vector<int> player_role_option_values(const LinkLobbyState& state,
     if (!player_index_valid(player_index)) {
         return values;
     }
-    const u32 mask = state.player_role_option_masks[player_index] == 0 ?
+    u32 mask = state.player_role_option_masks[player_index] == 0 ?
         0x0fu : state.player_role_option_masks[player_index];
+    if (state.host_mode && player_index != state.local_player_index) {
+        mask |= 1u << kAiPlayLinkLobbyRoleValue;
+    }
     if ((mask & 1) != 0 && state.player_role_values[player_index] == 0) {
         values.push_back(0);
     }
@@ -1452,7 +1457,8 @@ bool send_player_role_packet(LinkLobbyState& state, int player_index,
     int role_value) {
     std::array<u8, 0x10> packet{};
     write_le32(packet, 0, kLinkLobbyTransportPacketType);
-    write_le32(packet, 4, static_cast<u32>(role_value));
+    write_le32(packet, 4,
+        static_cast<u32>(SerializeAiPlayLinkLobbyRole(role_value)));
     write_le32(packet, 8, static_cast<u32>(packet.size()));
     write_le32(packet, 0x0c, static_cast<u32>(player_index));
     return send_lobby_transport_payload(state, packet.data(),
@@ -1981,6 +1987,8 @@ const char* link_lobby_role_label(int role_value) {
         return startup_message_row(180, kFallbackPlayerRoleLabels[2]);
     case 3:
         return startup_message_row(181, kFallbackPlayerRoleLabels[3]);
+    case kAiPlayLinkLobbyRoleValue:
+        return kFallbackPlayerRoleLabels[4];
     default:
         return kFallbackPlayerRoleLabels[0];
     }
@@ -2872,7 +2880,8 @@ int CountLinkLobbySelectedAvatarSlots(const LinkLobbyState& state) {
         return count;
     }
     for (int i = 0; i < kLinkLobbyAvatarCount; ++i) {
-        if (state.player_role_values[i] == 0 || state.player_role_values[i] == 3) {
+        if (state.player_role_values[i] == 0 ||
+            IsComputerLikeLinkLobbyRole(state.player_role_values[i])) {
             ++count;
         }
     }
@@ -2946,7 +2955,7 @@ void PrepareLinkLobbyStartParameters(LinkLobbyState& state) {
                 state.player_team_values[i] == 1) {
                 state.start_states[i] = 2;
             }
-        } else if (state.player_role_values[i] == 3) {
+        } else if (IsComputerLikeLinkLobbyRole(state.player_role_values[i])) {
             state.start_states[i] = 1;
         } else {
             state.start_states[i] = 0x14;
@@ -3261,8 +3270,11 @@ void PopulateLinkLobbyPlayerRoleComboBox(LinkLobbyState& state, int player_index
     }
 
     state.player_role_values[player_index] = role_value;
-    const u32 mask = state.player_role_option_masks[player_index] == 0 ?
+    u32 mask = state.player_role_option_masks[player_index] == 0 ?
         0x0fu : state.player_role_option_masks[player_index];
+    if (state.host_mode && player_index != state.local_player_index) {
+        mask |= 1u << kAiPlayLinkLobbyRoleValue;
+    }
     SendMessageA(combo, CB_RESETCONTENT, 0, 0);
 
     int item_count = 0;
@@ -3666,13 +3678,14 @@ void UpdateLinkLobbyTribeComboBoxState(LinkLobbyState& state, int player_index) 
         return;
     }
     const int role = state.player_role_values[player_index];
-    if (role == 0 || role == 3) {
+    if (role == 0 || IsComputerLikeLinkLobbyRole(role)) {
         ShowLinkLobbyTribeComboBox(state, player_index);
     } else {
         HideLinkLobbyTribeComboBox(state, player_index);
     }
     const bool random_enabled = (state.tribe_option_masks[player_index] & 0x10) != 0;
-    const bool host_random_ai_slot = state.host_mode && role == 3;
+    const bool host_random_ai_slot = state.host_mode &&
+        role == kOriginalComputerLinkLobbyRoleValue;
     const bool can_edit = random_enabled &&
         (player_index == state.local_player_index || host_random_ai_slot);
     if (can_edit) {
@@ -4013,11 +4026,19 @@ void ApplyLinkLobbyPlayerRolePacket(LinkLobbyState& state, u32 player_index,
         return;
     }
     const int index = static_cast<int>(player_index);
-    state.player_role_values[index] = std::clamp(role_value, 0, 3);
+    state.player_role_values[index] = std::clamp(role_value, 0,
+        kAiPlayLinkLobbyRoleValue);
     state.players[index].human = state.player_role_values[index] == 0;
     state.players[index].occupied =
-        state.player_role_values[index] == 0 || state.player_role_values[index] == 3;
+        state.player_role_values[index] == 0 ||
+        IsComputerLikeLinkLobbyRole(state.player_role_values[index]);
     state.players[index].ready = state.players[index].occupied;
+    if (IsAiPlayLinkLobbyRole(state.player_role_values[index])) {
+        constexpr u8 kTyranoTribe = 2;
+        state.tribe_choices[index] = kTyranoTribe;
+        state.players[index].tribe = kTyranoTribe;
+        set_combo_selection(state.tribe_combos[index], kTyranoTribe);
+    }
     PopulateLinkLobbyPlayerRoleComboBox(state, index, state.player_role_values[index]);
     UpdateLinkLobbyTribeComboBoxState(state, index);
     UpdateLinkLobbyMapDownloadButtonVisibility(state, index);
@@ -5334,6 +5355,11 @@ void SendLinkLobbyCurrentRoleStatePackets(LinkLobbyState& state) {
         case 3:
             SendLinkLobbyClosedRolePacket(state, i);
             break;
+        case kAiPlayLinkLobbyRoleValue:
+            // Protocol role 3 is the occupied Computer slot despite the
+            // legacy wrapper's historical Closed name.
+            SendLinkLobbyClosedRolePacket(state, i);
+            break;
         default:
             break;
         }
@@ -5794,7 +5820,7 @@ void UpdateLinkLobbyLatencyButtonVisibility(LinkLobbyState& state, int player_in
     if (role == 0) {
         ShowLinkLobbyLatencyButton(state, player_index);
     }
-    else if (role > 0 && role < 4) {
+    else if (role != 0) {
         HideLinkLobbyLatencyButton(state, player_index);
     }
 }
@@ -6007,7 +6033,7 @@ void UpdateLinkLobbyMapDownloadButtonVisibility(LinkLobbyState& state,
         } else {
             ShowLinkLobbyMapDownloadButton(state, player_index);
         }
-    } else if (role > 0 && role < 4) {
+    } else if (role != 0) {
         HideLinkLobbyMapDownloadButton(state, player_index);
     }
 }

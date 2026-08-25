@@ -1718,6 +1718,16 @@ bool PublishLocalMode1GameplayPacket(u32 packed_opcode, u32 arg0,
     return accepted;
 }
 
+bool PublishLocallySimulatedMode1GameplayPacket(u32 packed_opcode, u32 arg0,
+    u32 unit_offset, u32 arg1, u32 arg2, u32 arg3) {
+    Mode1ReliablePacket packet =
+        BuildMode1GameplayPacket(packed_opcode, arg0, unit_offset, arg1, arg2, arg3);
+    const bool accepted =
+        AcceptMode1OrderedPacket(packet.bytes.data(), kMode1ReliablePacketBytes);
+    ++g_packet_dispatch_state.published_local_packets;
+    return accepted;
+}
+
 bool PublishLocalMode1GameplayPacketPreserveResult(u32 packed_opcode, u32 arg0,
     u32 unit_offset, u32 arg1, u32 arg2, u32 arg3) {
     return PublishLocalMode1GameplayPacket(packed_opcode, arg0, unit_offset,

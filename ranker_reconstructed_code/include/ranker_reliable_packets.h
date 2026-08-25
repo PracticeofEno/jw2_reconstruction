@@ -205,6 +205,7 @@ struct Mode1ReliableRuntimeState {
     // that becomes active midway joins the following round instead.
     u32 sync_round_required_mask = 0;
     u32 local_player_index = 0;
+    u32 locally_simulated_channel_mask = 0;
     u32 initial_sequence_count = 6;
     u32 local_broadcast_start = 6;
     u32 local_broadcast_end = 6;
@@ -243,6 +244,7 @@ void ResetMode1ReliablePacketState(u32 initial_sequence_count = 6);
 void SetMode1ReliableCallbacks(const Mode1ReliableCallbacks& callbacks,
     void* user_data = nullptr);
 void SetMode1ReliableLocalPlayerIndex(u32 local_player_index);
+void SetMode1ReliableLocallySimulatedChannelMask(u32 channel_mask);
 void SetMode1ReliableSubtype10CollectionEnabled(bool enabled);
 void SetMode1ReliablePlayerStatus(u32 player, u8 status);
 void SetMode1ReliableReplayFrameTick(u32 frame_tick);

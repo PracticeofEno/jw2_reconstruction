@@ -2335,7 +2335,9 @@ void TickOwnerAiMaintenance(OwnerAiRuntimeState& state,
         state.owner_population_used.fill(0);
         state.owner_population_reserved.fill(0);
         for (u32 owner_slot = 0; owner_slot < kOwnerAiOwnerCount; ++owner_slot) {
-            if (!owner_is_player_controlled(player_slots, owner_slot)) {
+            if (!owner_is_player_controlled(player_slots, owner_slot) ||
+                (callbacks.owner_enabled != nullptr &&
+                    !callbacks.owner_enabled(state, owner_slot, user_data))) {
                 continue;
             }
 
@@ -2354,6 +2356,8 @@ void TickOwnerAiMaintenance(OwnerAiRuntimeState& state,
 
     const u32 owner_slot = (state.frame_counter >> 4) & 7u;
     if (!owner_is_player_controlled(player_slots, owner_slot) ||
+        (callbacks.owner_enabled != nullptr &&
+            !callbacks.owner_enabled(state, owner_slot, user_data)) ||
         state.owners[owner_slot].script_halted != 0) {
         return;
     }

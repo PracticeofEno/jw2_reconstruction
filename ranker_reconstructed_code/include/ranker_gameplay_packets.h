@@ -390,6 +390,8 @@ Mode1ReliablePacket BuildMode1GameplayPacket(u32 packed_opcode, u32 arg0 = 0,
     u32 unit_offset = 0, u32 arg1 = 0, u32 arg2 = 0, u32 arg3 = 0);
 bool PublishLocalMode1GameplayPacket(u32 packed_opcode, u32 arg0 = 0,
     u32 unit_offset = 0, u32 arg1 = 0, u32 arg2 = 0, u32 arg3 = 0);
+bool PublishLocallySimulatedMode1GameplayPacket(u32 packed_opcode, u32 arg0 = 0,
+    u32 unit_offset = 0, u32 arg1 = 0, u32 arg2 = 0, u32 arg3 = 0);
 bool PublishLocalMode1GameplayPacketPreserveResult(u32 packed_opcode, u32 arg0 = 0,
     u32 unit_offset = 0, u32 arg1 = 0, u32 arg2 = 0, u32 arg3 = 0);
 bool BroadcastMode1GameplayPacket(u32 packed_opcode, u32 arg0 = 0,

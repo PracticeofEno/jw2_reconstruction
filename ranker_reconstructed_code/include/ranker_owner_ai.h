@@ -163,8 +163,11 @@ struct OwnerAiRuntimeState;
 
 using OwnerAiMaintenanceCallback = void (*)(
     OwnerAiRuntimeState& state, u32 owner_slot, void* user_data);
+using OwnerAiMaintenanceOwnerGateCallback = bool (*)(
+    OwnerAiRuntimeState& state, u32 owner_slot, void* user_data);
 
 struct OwnerAiMaintenanceCallbacks {
+    OwnerAiMaintenanceOwnerGateCallback owner_enabled = nullptr;
     OwnerAiMaintenanceCallback rebuild_route_targets = nullptr;
     OwnerAiMaintenanceCallback refresh_placement_anchors = nullptr;
     OwnerAiMaintenanceCallback maintain_transport_route_targets = nullptr;

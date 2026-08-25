@@ -12,6 +12,7 @@ namespace {
 
 ReplayRecordingState g_test_replay;
 u32 g_poll_count = 0;
+std::array<u32, kMode1ReliableChannelCount> g_dispatch_counts{};
 
 void write_u32(std::array<u8, kMode1ReliablePacketBytes>& bytes,
     std::size_t offset, u32 value) {
@@ -49,6 +50,9 @@ bool AppendReplayPacketRecord(ReplayRecordingState&, const void*, u32, u32) {
 }
 
 bool DispatchMode1GameplayPacket(const Mode1ReliablePacket& packet) {
+    if (packet.channel < g_dispatch_counts.size()) {
+        ++g_dispatch_counts[packet.channel];
+    }
     if (packet.subtype == 0x10 && packet.channel < kMode1ReliableChannelCount) {
         mode1_reliable_state().sync_consumed_flags[packet.channel] = 1;
     }
@@ -87,6 +91,36 @@ int main() {
             static_cast<unsigned long>(reliable.read_sequences[1]),
             static_cast<unsigned long>(reliable.sync_processed_mask),
             static_cast<unsigned long>(reliable.sync_round_required_mask));
+        return 1;
+    }
+
+    reliable = Mode1ReliableRuntimeState{};
+    reliable.player_status.fill(0x14);
+    reliable.player_status[0] = 0;
+    reliable.local_player_index = 0;
+    reliable.initialized = true;
+    reliable.channels[0].expected_sequence = 6;
+    reliable.read_sequences[0] = 6;
+    reliable.channels[1].expected_sequence = 6;
+    reliable.read_sequences[1] = 6;
+    g_dispatch_counts = {};
+    SetMode1ReliableCallbacks(Mode1ReliableCallbacks{});
+    SetMode1ReliableLocallySimulatedChannelMask(1u << 1);
+
+    std::array<u8, kMode1ReliablePacketBytes> ai_packet{};
+    write_u32(ai_packet, 0x00, 1);
+    write_u32(ai_packet, 0x04, kMode1ReliablePacketBytes);
+    write_u32(ai_packet, 0x08, 6);
+    ai_packet[0x0c] = 1;
+    ai_packet[0x0f] = 0x02;
+    if (!AcceptMode1OrderedPacket(ai_packet.data(), kMode1ReliablePacketBytes) ||
+        PumpMode1ReliablePackets(false, false, 1001) != 1 ||
+        reliable.read_sequences[1] != 7 || g_dispatch_counts[1] != 1) {
+        std::fprintf(stderr,
+            "locally simulated Computer(AI) channel was not consumed: "
+            "read=%lu dispatches=%lu\n",
+            static_cast<unsigned long>(reliable.read_sequences[1]),
+            static_cast<unsigned long>(g_dispatch_counts[1]));
         return 1;
     }
 

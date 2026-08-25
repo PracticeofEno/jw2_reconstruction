@@ -4,6 +4,9 @@
 #include "ranker_change_password.h"
 #include "ranker_change_lobby.h"
 #include "ranker_client_config.h"
+#include "ranker_ai_live_validator.h"
+#include "ranker_ai_scripted_bot.h"
+#include "ranker_ai_slot_role.h"
 #include "ranker_connect_frontend.h"
 #include "ranker_control_group_persistence.h"
 #include "ranker_crt_runtime.h"
@@ -822,6 +825,10 @@ struct RuntimeGlobals {
     bool generic_ai_profile_mode = false;
     bool network_ai_profile_override = false;
     bool generic_ai_scenario_active = false;
+    bool ai_play_enabled = false;
+    std::array<bool, kPlayerSlotCount> ai_play_owner_slots{};
+    std::array<TyranoScriptedBotState, kPlayerSlotCount> ai_play_bots{};
+    u32 ai_play_log_budget = 0;
     AsyncComContext async_com;
     GameplaySessionFlowState gameplay_session_flow;
     u32 gameplay_transition_mode = 0;
@@ -1191,6 +1198,7 @@ void sync_default_gameplay_production_action_definitions(
     GameplayProductionActionState& production);
 void sync_default_gameplay_production_action_units(
     GameplayProductionActionState& production, const UiOverlayState& overlay);
+void run_default_ai_play_bot(GameplayLoopState& state);
 const GameplayProductionActionDefinition* default_jw211_production_action_definition(
     u32 action_id);
 void sync_default_gameplay_end_condition_state();
@@ -9807,6 +9815,9 @@ std::string link_lobby_startup_player_name(
     if (owner >= kPlayerSlotCount) {
         return {};
     }
+    if (IsAiPlayLinkLobbyRole(lobby.player_role_values[owner])) {
+        return "Computer(AI)";
+    }
 
     std::string name = fixed_packet_string_raw(
         reinterpret_cast<const u8*>(lobby.players[owner].name.data()),
@@ -12235,6 +12246,11 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     g_runtime.gameplay_online_transition_state = GameplayOnlineTransitionState{};
     g_runtime.gameplay_result_screen_rendered = false;
     g_runtime.gameplay_leave_reset_processed = false;
+    g_runtime.ai_play_owner_slots.fill(false);
+    for (TyranoScriptedBotState& bot : g_runtime.ai_play_bots) {
+        ResetTyranoScriptedBot(bot);
+    }
+    g_runtime.ai_play_log_budget = 64;
     reset_default_gameplay_input_action_state();
     reset_default_gameplay_production_action_state();
     configure_default_mode1_gameplay_runtime_callbacks();
@@ -12396,6 +12412,33 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     append_startup_log("start-slots: import starting unit types ok");
     append_startup_log("start-slots: apply pending link params begin");
     apply_pending_link_lobby_start_parameters_to_gameplay_startup();
+    if (link_lobby_start_parameters_available_for_start &&
+        !replay_recording_state().playback_mode) {
+        const LinkLobbyState& lobby = link_lobby_state();
+        if (g_runtime.p2p_session_start_state.network_player_count <= 1) {
+            for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+                g_runtime.ai_play_owner_slots[owner] =
+                    IsAiPlayLinkLobbyRole(lobby.player_role_values[owner]);
+                if (g_runtime.ai_play_owner_slots[owner]) {
+                    append_startup_log(
+                        "ai-play: Computer(AI) owner=%lu armed",
+                        static_cast<unsigned long>(owner));
+                }
+            }
+        }
+        else if (std::any_of(lobby.player_role_values.begin(),
+                     lobby.player_role_values.end(),
+                     [](int role) { return IsAiPlayLinkLobbyRole(role); })) {
+            append_startup_log(
+                "ai-play: Computer(AI) falls back to built-in Computer in multiplayer");
+        }
+    }
+    u32 locally_simulated_ai_mask = 0;
+    for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+        if (g_runtime.ai_play_owner_slots[owner]) {
+            locally_simulated_ai_mask |= 1u << owner;
+        }
+    }
     if (campaign_stage_session || frontend_loaded_save) {
         // Preserve the archive's 0..7 mission ordinal separately from the
         // gameplay runtime mode.  Frontend progression, including a transition
@@ -12663,6 +12706,7 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     append_startup_log("start-slots: fixed slot masks ok");
     append_startup_log("start-slots: packet reset begin");
     reset_default_mode1_packet_state_from_player_slots();
+    SetMode1ReliableLocallySimulatedChannelMask(locally_simulated_ai_mask);
     if (g_runtime.gameplay_startup_state.session_mode == 5) {
         // ResetMode1ReliablePacketState clears the replay tick.  Restore the
         // loaded lockstep frame only after that reset so the first packet gate
@@ -15308,6 +15352,7 @@ void default_gameplay_loop_pre_update_phase(GameplayLoopState& state) {
     }
     PumpGameplayInputAndCursorFrame(input);
     apply_default_ui_overlay_runtime_mutations();
+    run_default_ai_play_bot(state);
     GameplayModalUiState& modal = gameplay_modal_ui_state();
     PumpActiveGameplayModalUiFlow(modal);
 
@@ -22190,6 +22235,215 @@ void sync_default_gameplay_production_action_units(
     }
 }
 
+AiProductionAvailability default_ai_play_check_unit_requirements(
+    u32 owner, u32 unit_type, void*) {
+    AiProductionAvailability availability{};
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (lifecycle == nullptr) {
+        lifecycle = &g_runtime.gameplay_lifecycle_context;
+    }
+    configure_default_unit_lifecycle_callbacks(*lifecycle);
+    const UnitMovementDefinition* definition =
+        default_unit_lifecycle_find_definition(*lifecycle, unit_type);
+    if (definition == nullptr) {
+        availability.code = kAiLiveValidationMissingContext;
+        return availability;
+    }
+    availability.primary_cost = definition->production_resource_cost;
+    availability.secondary_cost = definition->production_secondary_cost;
+    const UnitProductionRequirementCode requirement =
+        CheckUnitProductionRequirements(*lifecycle, owner, unit_type);
+    availability.code = static_cast<u32>(requirement);
+    availability.available = requirement == UnitProductionRequirementCode::ok;
+    return availability;
+}
+
+AiProductionAvailability default_ai_play_check_research_requirements(
+    u32 owner, u32 order_id, void*) {
+    AiProductionAvailability availability{};
+    const ProductionOrderDefinition* definition =
+        default_production_order_definition(order_id);
+    if (definition == nullptr) {
+        availability.code = kAiLiveValidationMissingContext;
+        return availability;
+    }
+    const ProductionOrderCheckResult check = CheckProductionOrderAvailability(
+        g_runtime.gameplay_production_runtime, *definition, owner);
+    availability.available = check.available;
+    availability.code = check.code;
+    availability.primary_cost = check.primary_cost;
+    availability.secondary_cost = check.secondary_cost;
+    return availability;
+}
+
+bool default_ai_play_check_placement(const UnitMovementUnit& source,
+    u32 building_type, i32 world_x, i32 world_y, u32 owner, void*) {
+    if (!source.active || source.owner_id != owner) {
+        return false;
+    }
+    GameplayProductionActionState& production =
+        gameplay_production_action_state();
+    const u32 owner_mask = owner < 32u ? (1u << owner) : 0u;
+    return CheckPreviewProductionPlacementFootprintGateCellsForOwnerMask(
+        production, building_type, world_x, world_y, source.id, owner_mask);
+}
+
+bool default_ai_play_unit_visible(const UnitMovementUnit& unit,
+    u32 local_owner, void*) {
+    const GameplayVisibilityGrid& grid = g_runtime.gameplay_visibility_grid;
+    const std::size_t tile_count =
+        static_cast<std::size_t>(grid.width) * grid.height;
+    if (grid.width == 0 || grid.height == 0 ||
+        grid.current.size() < tile_count || grid.owner.size() < tile_count) {
+        return false;
+    }
+    const GameplayVisibilityUnit visibility =
+        make_default_gameplay_visibility_unit(unit);
+    return CheckUnitFullActionTargetVisibility(
+        g_runtime.gameplay_player_slots, grid, visibility, local_owner);
+}
+
+void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    if (movement == nullptr || lifecycle == nullptr) {
+        return;
+    }
+    if (local_owner >= kPlayerSlotCount ||
+        local_owner >= g_runtime.gameplay_startup_state.owner_faction_ids.size()) {
+        return;
+    }
+
+    const GameplayVisibilityGrid& visibility =
+        g_runtime.gameplay_visibility_grid;
+    if (visibility.width != movement->map.width ||
+        visibility.height != movement->map.height) {
+        return;
+    }
+    const std::size_t tile_count =
+        static_cast<std::size_t>(movement->map.width) * movement->map.height;
+    if (visibility.current.size() < tile_count ||
+        visibility.owner.size() < tile_count) {
+        return;
+    }
+    std::vector<u8> explored(tile_count, 0);
+    std::vector<u8> visible(tile_count, 0);
+    const u32 explored_bit = 1u << local_owner;
+    const u32 visible_bit =
+        1u << (local_owner + kGameplayVisibilityCurrentOwnerShift);
+    for (std::size_t index = 0; index < tile_count; ++index) {
+        explored[index] =
+            (visibility.owner[index] & explored_bit) != 0 ? 1u : 0u;
+        visible[index] =
+            (visibility.current[index] & visible_bit) != 0 ? 1u : 0u;
+    }
+
+    AiObservationBuildInput observation_input{};
+    observation_input.simulation_frame = state.simulation_frame_counter;
+    observation_input.map_relative_path =
+        g_runtime.gameplay_session_archive_path;
+    observation_input.local_owner = local_owner;
+    observation_input.local_faction =
+        g_runtime.gameplay_startup_state.owner_faction_ids[local_owner];
+    observation_input.population_used =
+        lifecycle->owner_population_used[local_owner];
+    observation_input.population_reserved =
+        lifecycle->owner_population_reserved[local_owner];
+    observation_input.population_limit =
+        lifecycle->owner_population_limit[local_owner];
+    observation_input.game_ended =
+        g_runtime.gameplay_end_condition_state.end_requested;
+    observation_input.game_end_reason =
+        g_runtime.gameplay_end_condition_state.result_code;
+    observation_input.players = &g_runtime.gameplay_player_slots;
+    observation_input.movement = movement;
+    observation_input.explored_tiles = &explored;
+    observation_input.visible_tiles = &visible;
+    observation_input.unit_visible = default_ai_play_unit_visible;
+
+    const AiObservationBuildResult observation =
+        BuildAiObservationV1(observation_input);
+    if (!observation) {
+        return;
+    }
+    const TyranoScriptedBotDecision decision =
+        DecideTyranoScriptedBotAction(g_runtime.ai_play_bots[local_owner],
+            observation.observation);
+    if (!decision) {
+        return;
+    }
+
+    GameplayProductionActionState& production =
+        gameplay_production_action_state();
+    sync_default_gameplay_production_action_units(production,
+        ui_overlay_state());
+    AiLiveProductionValidationContext live_validation{};
+    live_validation.unit_references = &g_runtime.unit_reference_tables;
+    live_validation.check_unit_requirements =
+        default_ai_play_check_unit_requirements;
+    live_validation.check_research_requirements =
+        default_ai_play_check_research_requirements;
+    live_validation.check_placement = default_ai_play_check_placement;
+
+    AiActionPlanInput plan_input{};
+    plan_input.local_owner = local_owner;
+    plan_input.players = &g_runtime.gameplay_player_slots;
+    plan_input.movement = movement;
+    plan_input.unit_visible = default_ai_play_unit_visible;
+    plan_input.visible_tiles = &visible;
+    plan_input.production_available = CheckAiLiveProductionAvailability;
+    plan_input.production_availability_user_data = &live_validation;
+    const AiActionPlanResult plan =
+        PlanAiSemanticActionV1(plan_input, decision.action);
+
+    bool published = static_cast<bool>(plan);
+    if (published) {
+        for (const GameplayPublishedAction& packet : plan.packets) {
+            const bool packet_published =
+                g_runtime.ai_play_owner_slots[local_owner] ?
+                PublishLocallySimulatedMode1GameplayPacket(
+                    packet.packed_opcode, packet.arg0, packet.unit_offset,
+                    packet.arg1, packet.arg2, packet.arg3) :
+                PublishLocalMode1GameplayPacket(packet.packed_opcode,
+                    packet.arg0, packet.unit_offset, packet.arg1, packet.arg2,
+                    packet.arg3);
+            published = packet_published && published;
+        }
+    }
+    CommitTyranoScriptedBotDecision(g_runtime.ai_play_bots[local_owner],
+        decision, published, plan.code);
+    if (g_runtime.ai_play_log_budget != 0) {
+        --g_runtime.ai_play_log_budget;
+        append_startup_log(
+            "ai-play: owner=%lu frame=%lu intent=%lu plan=%lu packets=%zu published=%s",
+            static_cast<unsigned long>(local_owner),
+            static_cast<unsigned long>(state.simulation_frame_counter),
+            static_cast<unsigned long>(decision.intent),
+            static_cast<unsigned long>(plan.code), plan.packets.size(),
+            published ? "yes" : "no");
+    }
+}
+
+void run_default_ai_play_bot(GameplayLoopState& state) {
+    if (replay_recording_state().playback_mode ||
+        g_runtime.p2p_session_start_state.network_player_count > 1 ||
+        gameplay_modal_ui_is_active(gameplay_modal_ui_state()) ||
+        gameplay_input_action_state().player_reset_gate) {
+        return;
+    }
+
+    const u32 command_line_owner =
+        g_runtime.gameplay_player_slots.local_player_slot;
+    for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+        const bool selected_in_lobby = g_runtime.ai_play_owner_slots[owner];
+        const bool selected_by_command_line = g_runtime.ai_play_enabled &&
+            owner == command_line_owner;
+        if (selected_in_lobby || selected_by_command_line) {
+            run_default_ai_play_owner(state, owner);
+        }
+    }
+}
+
 u32 default_equipment_storage_index_from_original_slot_code(u32 slot_code) {
     if (slot_code == kUnitEquipmentOriginalPrimarySlotCode) {
         return kUnitEquipmentPrimarySlot;
@@ -28636,6 +28890,12 @@ void default_owner_ai_maintain_transport_queue(
     owner_ai.owners[owner].transport_phase_state = scratch.owner_phase_state;
 }
 
+bool default_owner_ai_owner_enabled(
+    OwnerAiRuntimeState&, u32 owner, void*) {
+    return owner >= g_runtime.ai_play_owner_slots.size() ||
+        !g_runtime.ai_play_owner_slots[owner];
+}
+
 void run_default_owner_ai_maintenance(GameplayLoopState& state) {
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
     if (lifecycle == nullptr) {
@@ -28663,6 +28923,7 @@ void run_default_owner_ai_maintenance(GameplayLoopState& state) {
     sync_default_owner_ai_runtime_metadata(&state);
 
     OwnerAiMaintenanceCallbacks callbacks{};
+    callbacks.owner_enabled = default_owner_ai_owner_enabled;
     callbacks.rebuild_route_targets = default_owner_ai_rebuild_route_targets;
     callbacks.refresh_placement_anchors =
         default_owner_ai_refresh_placement_anchors;
@@ -33873,6 +34134,12 @@ int run_reconstructed_winmain(HINSTANCE instance, LPSTR command_line, int show_c
     InitializeFrontendAsyncTcpSocket0Static();
     InstallDefaultMode1ReliableTransportCallbacks();
     install_default_directplay_message_callbacks();
+    g_runtime.ai_play_enabled = IsAiPlayCommandLineEnabled(
+        command_line != nullptr ? command_line : "");
+    if (g_runtime.ai_play_enabled) {
+        append_startup_log(
+            "ai-play: enabled for local Tyrano single-player sessions");
+    }
     if (ParseP2PNetworkCommandLine(command_line != nullptr ? command_line : "")) {
         g_runtime.frontend_mode = 1;
         g_runtime.p2p_command_line_flow_pending = true;

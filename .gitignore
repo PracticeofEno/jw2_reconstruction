@@ -12,6 +12,9 @@
 !ranker_reconstructed_code/docs/SCENARIO_MISSION_RESTORATION_REPORT.md
 !ranker_reconstructed_code/docs/ATTACK_EFFECT_MINIMAP_60HZ_REPORT_2026-08-16.md
 !ranker_reconstructed_code/docs/AI_PLAY_BOT_DEVELOPMENT_ROADMAP.md
+!ranker_reconstructed_code/docs/AI_PLAY_BOT_MVP_TYRANO_PYTHON.md
+!ranker_reconstructed_code/docs/AI_PLAY_BOT_COMMAND_CATALOG.md
+!ranker_reconstructed_code/docs/AI_PLAY_BOT_GAMEPLAY1_SEMANTIC_MAPPING.md
 
 !ranker_reconstructed_code/config/
 !ranker_reconstructed_code/config/ranker_client.ini
@@ -55,6 +58,7 @@
 !ranker_reconstructed_code/tests/programmatic_pointer_motion_regression.cpp
 !ranker_reconstructed_code/tests/bitmap_png_resource_regression.cpp
 !ranker_reconstructed_code/tests/ui_png_resource_regression.cpp
+!ranker_reconstructed_code/tests/ai_play_interface_regression.cpp
 
 !ranker_reconstructed_code/tools/
 !ranker_reconstructed_code/tools/replay_debug/

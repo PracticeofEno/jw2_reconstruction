@@ -238,6 +238,8 @@ void preserve_mode1_runtime_configuration(Mode1ReliableRuntimeState& target,
     target.subtype10_collection_enabled = source.subtype10_collection_enabled;
     if (preserve_player_status) {
         target.player_status = source.player_status;
+        target.locally_simulated_channel_mask =
+            source.locally_simulated_channel_mask;
     }
 }
 
@@ -394,6 +396,12 @@ void SetMode1ReliableLocalPlayerIndex(u32 local_player_index) {
     if (local_player_index < kMode1ReliableChannelCount) {
         g_mode1_reliable_state.local_player_index = local_player_index;
     }
+}
+
+void SetMode1ReliableLocallySimulatedChannelMask(u32 channel_mask) {
+    const std::lock_guard<std::recursive_mutex> lock(g_mode1_reliable_mutex);
+    g_mode1_reliable_state.locally_simulated_channel_mask =
+        channel_mask & ((1u << kMode1ReliableChannelCount) - 1u);
 }
 
 void SetMode1ReliableSubtype10CollectionEnabled(bool enabled) {
@@ -775,6 +783,28 @@ u32 PumpMode1ReliablePackets(
             }
             DispatchMode1GameplayPacket(packet);
             invoke_packet_hook(g_mode1_reliable_state.callbacks.packet_consumed, packet);
+        }
+        u32 locally_simulated_mask = 0;
+        {
+            const std::lock_guard<std::recursive_mutex> lock(
+                g_mode1_reliable_mutex);
+            locally_simulated_mask =
+                g_mode1_reliable_state.locally_simulated_channel_mask &
+                ~(1u << local_player);
+        }
+        for (u32 channel = 0; channel < kMode1ReliableChannelCount; ++channel) {
+            if ((locally_simulated_mask & (1u << channel)) == 0) {
+                continue;
+            }
+            for (;;) {
+                Mode1ReliablePacket packet{};
+                if (!PopMode1OrderedPacket(channel, packet)) {
+                    break;
+                }
+                DispatchMode1GameplayPacket(packet);
+                invoke_packet_hook(
+                    g_mode1_reliable_state.callbacks.packet_consumed, packet);
+            }
         }
         return 1;
     }

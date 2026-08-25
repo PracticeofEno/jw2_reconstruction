@@ -1,10 +1,10 @@
 {
   "format": "ranker-debug-replay-command-inventory-v1",
-  "replay_count": 31,
-  "packet_count": 356255,
+  "replay_count": 33,
+  "packet_count": 366551,
   "first_frame": 10,
   "last_frame": 51918,
-  "unique_subtype_command_queue_combinations": 154,
+  "unique_subtype_command_queue_combinations": 160,
   "subtypes": [
     {
       "subtype": "0x00",
@@ -33,41 +33,41 @@
       "subtype": "0x01",
       "label": "unit production/refund",
       "original_handler": "0x004dca58",
-      "packets": 9658,
-      "replay_count": 31,
+      "packets": 10024,
+      "replay_count": 33,
       "unit_offset_zero": 0,
-      "arg1_zero": 9453,
-      "arg2_zero": 9658,
+      "arg1_zero": 9812,
+      "arg2_zero": 10024,
       "modes": [
         {
           "value": "0x00000000",
-          "count": 9450
+          "count": 9809
         },
         {
           "value": "0x00000001",
-          "count": 208
+          "count": 215
         }
       ],
       "commands": [
         {
           "command": "0x00000000",
           "queued": false,
-          "count": 932
+          "count": 1002
         },
         {
           "command": "0x00000001",
           "queued": false,
-          "count": 361
+          "count": 378
         },
         {
           "command": "0x00000002",
           "queued": false,
-          "count": 167
+          "count": 178
         },
         {
           "command": "0x00000003",
           "queued": false,
-          "count": 248
+          "count": 292
         },
         {
           "command": "0x00000004",
@@ -82,12 +82,12 @@
         {
           "command": "0x00000006",
           "queued": false,
-          "count": 53
+          "count": 77
         },
         {
           "command": "0x00000007",
           "queued": false,
-          "count": 24
+          "count": 37
         },
         {
           "command": "0x00000008",
@@ -102,7 +102,7 @@
         {
           "command": "0x0000000f",
           "queued": false,
-          "count": 332
+          "count": 340
         },
         {
           "command": "0x00000010",
@@ -172,12 +172,12 @@
         {
           "command": "0x00000020",
           "queued": false,
-          "count": 1353
+          "count": 1381
         },
         {
           "command": "0x00000021",
           "queued": false,
-          "count": 624
+          "count": 664
         },
         {
           "command": "0x00000022",
@@ -187,7 +187,7 @@
         {
           "command": "0x00000024",
           "queued": false,
-          "count": 368
+          "count": 374
         },
         {
           "command": "0x00000025",
@@ -227,12 +227,12 @@
         {
           "command": "0x00000030",
           "queued": false,
-          "count": 260
+          "count": 307
         },
         {
           "command": "0x00000031",
           "queued": false,
-          "count": 418
+          "count": 425
         },
         {
           "command": "0x00000032",
@@ -242,7 +242,17 @@
         {
           "command": "0x00000033",
           "queued": false,
-          "count": 13
+          "count": 20
+        },
+        {
+          "command": "0x00000034",
+          "queued": false,
+          "count": 4
+        },
+        {
+          "command": "0x00000035",
+          "queued": false,
+          "count": 12
         },
         {
           "command": "0x00000036",
@@ -252,7 +262,7 @@
         {
           "command": "0x00000037",
           "queued": false,
-          "count": 3
+          "count": 19
         },
         {
           "command": "0x00000038",
@@ -262,7 +272,12 @@
         {
           "command": "0x00000039",
           "queued": false,
-          "count": 3
+          "count": 4
+        },
+        {
+          "command": "0x0000003a",
+          "queued": false,
+          "count": 1
         },
         {
           "command": "0x0000003e",
@@ -277,12 +292,12 @@
         {
           "command": "0x0000005a",
           "queued": false,
-          "count": 21
+          "count": 25
         },
         {
           "command": "0x0000005c",
           "queued": false,
-          "count": 7
+          "count": 13
         }
       ]
     },
@@ -290,47 +305,47 @@
       "subtype": "0x02",
       "label": "basic unit order",
       "original_handler": "0x004dd55f",
-      "packets": 330625,
-      "replay_count": 31,
+      "packets": 339977,
+      "replay_count": 33,
       "unit_offset_zero": 0,
-      "arg1_zero": 327,
-      "arg2_zero": 1473,
+      "arg1_zero": 331,
+      "arg2_zero": 1483,
       "modes": [
         {
           "value": "0x00000000",
-          "count": 285273
+          "count": 293337
         },
         {
           "value": "0x00000001",
-          "count": 246
+          "count": 249
         },
         {
           "value": "0x00000002",
-          "count": 184
+          "count": 194
         },
         {
           "value": "0x00000003",
-          "count": 90
+          "count": 99
         },
         {
           "value": "0x00000004",
-          "count": 19
-        },
-        {
-          "value": "0x00000005",
-          "count": 68
-        },
-        {
-          "value": "0x00000006",
           "count": 22
         },
         {
+          "value": "0x00000005",
+          "count": 74
+        },
+        {
+          "value": "0x00000006",
+          "count": 24
+        },
+        {
           "value": "0x00000007",
-          "count": 15
+          "count": 16
         },
         {
           "value": "0x00000008",
-          "count": 17
+          "count": 18
         },
         {
           "value": "0x00000009",
@@ -338,7 +353,7 @@
         },
         {
           "value": "0x0000000a",
-          "count": 43
+          "count": 48
         },
         {
           "value": "0x0000000b",
@@ -346,7 +361,7 @@
         },
         {
           "value": "0x0000000c",
-          "count": 7
+          "count": 136
         },
         {
           "value": "0x00000010",
@@ -394,11 +409,11 @@
         },
         {
           "value": "0x00000020",
-          "count": 74
+          "count": 75
         },
         {
           "value": "0x00000022",
-          "count": 283
+          "count": 289
         },
         {
           "value": "0x00000023",
@@ -406,11 +421,11 @@
         },
         {
           "value": "0x00000024",
-          "count": 176
+          "count": 179
         },
         {
           "value": "0x00000025",
-          "count": 27
+          "count": 28
         },
         {
           "value": "0x00000026",
@@ -434,23 +449,27 @@
         },
         {
           "value": "0x00000030",
-          "count": 17
+          "count": 19
         },
         {
           "value": "0x00000032",
-          "count": 64
+          "count": 75
         },
         {
           "value": "0x00000033",
-          "count": 35
+          "count": 60
         },
         {
           "value": "0x00000034",
-          "count": 47
+          "count": 51
+        },
+        {
+          "value": "0x00000035",
+          "count": 1
         },
         {
           "value": "0x00000036",
-          "count": 7
+          "count": 11
         },
         {
           "value": "0x00000037",
@@ -458,15 +477,19 @@
         },
         {
           "value": "0x00000038",
-          "count": 5
+          "count": 6
+        },
+        {
+          "value": "0x00000039",
+          "count": 1
         },
         {
           "value": "0x0000003a",
-          "count": 3
+          "count": 6
         },
         {
           "value": "0x0000003b",
-          "count": 11
+          "count": 13
         },
         {
           "value": "0x00000074",
@@ -478,23 +501,23 @@
         },
         {
           "value": "0x000003a0",
-          "count": 66
+          "count": 67
         },
         {
           "value": "0x00000570",
-          "count": 53
+          "count": 57
         },
         {
           "value": "0x00000740",
-          "count": 127
+          "count": 132
         },
         {
           "value": "0x00000910",
-          "count": 44
+          "count": 47
         },
         {
           "value": "0x00000ae0",
-          "count": 78
+          "count": 80
         },
         {
           "value": "0x00000cb0",
@@ -502,19 +525,19 @@
         },
         {
           "value": "0x00000e80",
-          "count": 70
+          "count": 72
         },
         {
           "value": "0x00001000",
-          "count": 10578
+          "count": 10778
         },
         {
           "value": "0x00001050",
-          "count": 181
+          "count": 182
         },
         {
           "value": "0x00001220",
-          "count": 249
+          "count": 254
         },
         {
           "value": "0x000013f0",
@@ -542,15 +565,15 @@
         },
         {
           "value": "0x00001d00",
-          "count": 41
+          "count": 43
         },
         {
           "value": "0x00001ed0",
-          "count": 24
+          "count": 25
         },
         {
           "value": "0x000020a0",
-          "count": 62
+          "count": 64
         },
         {
           "value": "0x00002270",
@@ -574,11 +597,11 @@
         },
         {
           "value": "0x00002b80",
-          "count": 93
+          "count": 95
         },
         {
           "value": "0x00002d50",
-          "count": 26
+          "count": 28
         },
         {
           "value": "0x00002f20",
@@ -586,7 +609,7 @@
         },
         {
           "value": "0x000030f0",
-          "count": 36
+          "count": 38
         },
         {
           "value": "0x000032c0",
@@ -594,7 +617,7 @@
         },
         {
           "value": "0x00003490",
-          "count": 59
+          "count": 70
         },
         {
           "value": "0x00003660",
@@ -606,7 +629,7 @@
         },
         {
           "value": "0x00003a00",
-          "count": 50
+          "count": 55
         },
         {
           "value": "0x00003bd0",
@@ -614,7 +637,7 @@
         },
         {
           "value": "0x00003da0",
-          "count": 51
+          "count": 55
         },
         {
           "value": "0x00003f70",
@@ -626,15 +649,15 @@
         },
         {
           "value": "0x00004310",
-          "count": 33
+          "count": 61
         },
         {
           "value": "0x000044e0",
-          "count": 29
+          "count": 41
         },
         {
           "value": "0x000046b0",
-          "count": 96
+          "count": 102
         },
         {
           "value": "0x00004880",
@@ -654,19 +677,19 @@
         },
         {
           "value": "0x00004fc0",
-          "count": 46
+          "count": 53
         },
         {
           "value": "0x00005190",
-          "count": 14
+          "count": 17
         },
         {
           "value": "0x00005360",
-          "count": 52
+          "count": 53
         },
         {
           "value": "0x00005530",
-          "count": 113
+          "count": 114
         },
         {
           "value": "0x00005700",
@@ -678,11 +701,11 @@
         },
         {
           "value": "0x00005aa0",
-          "count": 369
+          "count": 428
         },
         {
           "value": "0x00005c70",
-          "count": 229
+          "count": 231
         },
         {
           "value": "0x00005e40",
@@ -706,11 +729,11 @@
         },
         {
           "value": "0x00006750",
-          "count": 27
+          "count": 28
         },
         {
           "value": "0x00006920",
-          "count": 108
+          "count": 109
         },
         {
           "value": "0x00006af0",
@@ -730,11 +753,11 @@
         },
         {
           "value": "0x00007230",
-          "count": 94
+          "count": 96
         },
         {
           "value": "0x00007400",
-          "count": 54
+          "count": 58
         },
         {
           "value": "0x000075d0",
@@ -746,7 +769,7 @@
         },
         {
           "value": "0x00007970",
-          "count": 100
+          "count": 101
         },
         {
           "value": "0x00007b40",
@@ -810,7 +833,7 @@
         },
         {
           "value": "0x00009670",
-          "count": 163
+          "count": 169
         },
         {
           "value": "0x00009840",
@@ -842,15 +865,15 @@
         },
         {
           "value": "0x0000a4f0",
-          "count": 30
+          "count": 31
         },
         {
           "value": "0x0000a6c0",
-          "count": 80
+          "count": 81
         },
         {
           "value": "0x0000a890",
-          "count": 71
+          "count": 72
         },
         {
           "value": "0x0000aa60",
@@ -878,7 +901,7 @@
         },
         {
           "value": "0x0000b540",
-          "count": 93
+          "count": 94
         },
         {
           "value": "0x0000b710",
@@ -886,15 +909,15 @@
         },
         {
           "value": "0x0000b8e0",
-          "count": 141
+          "count": 146
         },
         {
           "value": "0x0000bab0",
-          "count": 60
+          "count": 63
         },
         {
           "value": "0x0000bc80",
-          "count": 11
+          "count": 13
         },
         {
           "value": "0x0000be50",
@@ -902,7 +925,7 @@
         },
         {
           "value": "0x0000c020",
-          "count": 104
+          "count": 105
         },
         {
           "value": "0x0000c1f0",
@@ -914,7 +937,7 @@
         },
         {
           "value": "0x0000c590",
-          "count": 80
+          "count": 83
         },
         {
           "value": "0x0000c760",
@@ -978,7 +1001,7 @@
         },
         {
           "value": "0x0000e290",
-          "count": 92
+          "count": 93
         },
         {
           "value": "0x0000e460",
@@ -1034,11 +1057,11 @@
         },
         {
           "value": "0x0000fbf0",
-          "count": 186
+          "count": 187
         },
         {
           "value": "0x0000fdc0",
-          "count": 89
+          "count": 92
         },
         {
           "value": "0x0000ff90",
@@ -1058,7 +1081,7 @@
         },
         {
           "value": "0x000106d0",
-          "count": 130
+          "count": 166
         },
         {
           "value": "0x000108a0",
@@ -1066,7 +1089,7 @@
         },
         {
           "value": "0x00010a70",
-          "count": 269
+          "count": 271
         },
         {
           "value": "0x00010c40",
@@ -1078,7 +1101,7 @@
         },
         {
           "value": "0x00010fe0",
-          "count": 72
+          "count": 79
         },
         {
           "value": "0x000111b0",
@@ -1086,11 +1109,11 @@
         },
         {
           "value": "0x00011380",
-          "count": 101
+          "count": 113
         },
         {
           "value": "0x00011550",
-          "count": 83
+          "count": 86
         },
         {
           "value": "0x00011720",
@@ -1098,11 +1121,11 @@
         },
         {
           "value": "0x000118f0",
-          "count": 165
+          "count": 174
         },
         {
           "value": "0x00011ac0",
-          "count": 21
+          "count": 27
         },
         {
           "value": "0x00011c90",
@@ -1110,7 +1133,7 @@
         },
         {
           "value": "0x00011e60",
-          "count": 148
+          "count": 163
         },
         {
           "value": "0x00012030",
@@ -1118,11 +1141,11 @@
         },
         {
           "value": "0x00012200",
-          "count": 80
+          "count": 84
         },
         {
           "value": "0x000123d0",
-          "count": 66
+          "count": 77
         },
         {
           "value": "0x000125a0",
@@ -1130,7 +1153,7 @@
         },
         {
           "value": "0x00012770",
-          "count": 194
+          "count": 202
         },
         {
           "value": "0x00012940",
@@ -1138,11 +1161,11 @@
         },
         {
           "value": "0x00012b10",
-          "count": 52
+          "count": 66
         },
         {
           "value": "0x00012ce0",
-          "count": 152
+          "count": 170
         },
         {
           "value": "0x00012eb0",
@@ -1154,23 +1177,23 @@
         },
         {
           "value": "0x00013250",
-          "count": 97
+          "count": 99
         },
         {
           "value": "0x00013420",
-          "count": 47
+          "count": 51
         },
         {
           "value": "0x000135f0",
-          "count": 77
+          "count": 80
         },
         {
           "value": "0x000137c0",
-          "count": 136
+          "count": 145
         },
         {
           "value": "0x00013990",
-          "count": 129
+          "count": 149
         },
         {
           "value": "0x00013b60",
@@ -1178,15 +1201,15 @@
         },
         {
           "value": "0x00013d30",
-          "count": 122
+          "count": 131
         },
         {
           "value": "0x00013f00",
-          "count": 55
+          "count": 82
         },
         {
           "value": "0x000140d0",
-          "count": 112
+          "count": 122
         },
         {
           "value": "0x000142a0",
@@ -1202,7 +1225,7 @@
         },
         {
           "value": "0x00014810",
-          "count": 44
+          "count": 45
         },
         {
           "value": "0x000149e0",
@@ -1210,7 +1233,7 @@
         },
         {
           "value": "0x00014bb0",
-          "count": 78
+          "count": 92
         },
         {
           "value": "0x00014d80",
@@ -1226,7 +1249,7 @@
         },
         {
           "value": "0x000152f0",
-          "count": 96
+          "count": 100
         },
         {
           "value": "0x000154c0",
@@ -1234,11 +1257,11 @@
         },
         {
           "value": "0x00015690",
-          "count": 49
+          "count": 62
         },
         {
           "value": "0x00015860",
-          "count": 56
+          "count": 76
         },
         {
           "value": "0x00015a30",
@@ -1246,11 +1269,11 @@
         },
         {
           "value": "0x00015c00",
-          "count": 89
+          "count": 153
         },
         {
           "value": "0x00015dd0",
-          "count": 118
+          "count": 122
         },
         {
           "value": "0x00015fa0",
@@ -1262,15 +1285,15 @@
         },
         {
           "value": "0x00016340",
-          "count": 108
+          "count": 114
         },
         {
           "value": "0x00016510",
-          "count": 54
+          "count": 66
         },
         {
           "value": "0x000166e0",
-          "count": 113
+          "count": 115
         },
         {
           "value": "0x000168b0",
@@ -1278,15 +1301,15 @@
         },
         {
           "value": "0x00016a80",
-          "count": 67
+          "count": 71
         },
         {
           "value": "0x00016c50",
-          "count": 47
+          "count": 49
         },
         {
           "value": "0x00016e20",
-          "count": 59
+          "count": 63
         },
         {
           "value": "0x00016ff0",
@@ -1306,15 +1329,15 @@
         },
         {
           "value": "0x00017730",
-          "count": 159
+          "count": 171
         },
         {
           "value": "0x00017900",
-          "count": 128
+          "count": 129
         },
         {
           "value": "0x00017ad0",
-          "count": 105
+          "count": 106
         },
         {
           "value": "0x00017ca0",
@@ -1330,11 +1353,11 @@
         },
         {
           "value": "0x00018210",
-          "count": 118
+          "count": 130
         },
         {
           "value": "0x000183e0",
-          "count": 62
+          "count": 68
         },
         {
           "value": "0x000185b0",
@@ -1358,7 +1381,7 @@
         },
         {
           "value": "0x00018ec0",
-          "count": 204
+          "count": 210
         },
         {
           "value": "0x00019090",
@@ -1366,7 +1389,7 @@
         },
         {
           "value": "0x00019260",
-          "count": 80
+          "count": 84
         },
         {
           "value": "0x00019430",
@@ -1382,7 +1405,7 @@
         },
         {
           "value": "0x000199a0",
-          "count": 167
+          "count": 171
         },
         {
           "value": "0x00019b70",
@@ -1398,11 +1421,11 @@
         },
         {
           "value": "0x0001a0e0",
-          "count": 33
+          "count": 37
         },
         {
           "value": "0x0001a2b0",
-          "count": 94
+          "count": 103
         },
         {
           "value": "0x0001a480",
@@ -1410,11 +1433,11 @@
         },
         {
           "value": "0x0001a650",
-          "count": 30
+          "count": 33
         },
         {
           "value": "0x0001a820",
-          "count": 170
+          "count": 171
         },
         {
           "value": "0x0001a9f0",
@@ -1422,7 +1445,7 @@
         },
         {
           "value": "0x0001abc0",
-          "count": 77
+          "count": 84
         },
         {
           "value": "0x0001ad90",
@@ -1438,7 +1461,7 @@
         },
         {
           "value": "0x0001b300",
-          "count": 94
+          "count": 95
         },
         {
           "value": "0x0001b4d0",
@@ -1450,7 +1473,7 @@
         },
         {
           "value": "0x0001b870",
-          "count": 61
+          "count": 103
         },
         {
           "value": "0x0001ba40",
@@ -1522,11 +1545,11 @@
         },
         {
           "value": "0x0001d910",
-          "count": 152
+          "count": 154
         },
         {
           "value": "0x0001dae0",
-          "count": 27
+          "count": 28
         },
         {
           "value": "0x0001dcb0",
@@ -1538,7 +1561,7 @@
         },
         {
           "value": "0x0001e050",
-          "count": 15
+          "count": 17
         },
         {
           "value": "0x0001e220",
@@ -1554,7 +1577,7 @@
         },
         {
           "value": "0x0001e790",
-          "count": 66
+          "count": 68
         },
         {
           "value": "0x0001e960",
@@ -1570,7 +1593,7 @@
         },
         {
           "value": "0x0001eed0",
-          "count": 50
+          "count": 56
         },
         {
           "value": "0x0001f0a0",
@@ -1578,7 +1601,7 @@
         },
         {
           "value": "0x0001f270",
-          "count": 16
+          "count": 22
         },
         {
           "value": "0x0001f440",
@@ -1586,7 +1609,7 @@
         },
         {
           "value": "0x0001f610",
-          "count": 119
+          "count": 123
         },
         {
           "value": "0x0001f7e0",
@@ -1594,7 +1617,7 @@
         },
         {
           "value": "0x0001f9b0",
-          "count": 31
+          "count": 46
         },
         {
           "value": "0x0001fb80",
@@ -1610,11 +1633,11 @@
         },
         {
           "value": "0x000200f0",
-          "count": 45
+          "count": 53
         },
         {
           "value": "0x000202c0",
-          "count": 53
+          "count": 71
         },
         {
           "value": "0x00020490",
@@ -1622,7 +1645,7 @@
         },
         {
           "value": "0x00020660",
-          "count": 333
+          "count": 339
         },
         {
           "value": "0x00020830",
@@ -1642,11 +1665,11 @@
         },
         {
           "value": "0x00020f70",
-          "count": 174
+          "count": 177
         },
         {
           "value": "0x00021140",
-          "count": 141
+          "count": 145
         },
         {
           "value": "0x00021310",
@@ -1682,7 +1705,7 @@
         },
         {
           "value": "0x00022190",
-          "count": 50
+          "count": 61
         },
         {
           "value": "0x00022360",
@@ -1702,7 +1725,7 @@
         },
         {
           "value": "0x00022aa0",
-          "count": 1
+          "count": 2
         },
         {
           "value": "0x00022c70",
@@ -1710,11 +1733,11 @@
         },
         {
           "value": "0x00022e40",
-          "count": 121
+          "count": 127
         },
         {
           "value": "0x00023010",
-          "count": 30
+          "count": 58
         },
         {
           "value": "0x000233b0",
@@ -1722,7 +1745,7 @@
         },
         {
           "value": "0x00023580",
-          "count": 245
+          "count": 246
         },
         {
           "value": "0x00023750",
@@ -1730,11 +1753,11 @@
         },
         {
           "value": "0x00023920",
-          "count": 40
+          "count": 52
         },
         {
           "value": "0x00023af0",
-          "count": 36
+          "count": 48
         },
         {
           "value": "0x00023cc0",
@@ -1754,7 +1777,7 @@
         },
         {
           "value": "0x00024400",
-          "count": 5
+          "count": 6
         },
         {
           "value": "0x000245d0",
@@ -2281,6 +2304,10 @@
           "count": 2
         },
         {
+          "value": "0x0e6e6a40",
+          "count": 2
+        },
+        {
           "value": "0x0ec18800",
           "count": 7
         },
@@ -2305,12 +2332,12 @@
         {
           "command": "0x00000000",
           "queued": false,
-          "count": 93
+          "count": 96
         },
         {
           "command": "0x00000001",
           "queued": false,
-          "count": 301
+          "count": 334
         },
         {
           "command": "0x00000001",
@@ -2320,7 +2347,7 @@
         {
           "command": "0x00000003",
           "queued": false,
-          "count": 478
+          "count": 490
         },
         {
           "command": "0x00000003",
@@ -2330,17 +2357,17 @@
         {
           "command": "0x00000004",
           "queued": false,
-          "count": 224519
+          "count": 231779
         },
         {
           "command": "0x00000004",
           "queued": true,
-          "count": 1334
+          "count": 1346
         },
         {
           "command": "0x00000005",
           "queued": false,
-          "count": 84460
+          "count": 85982
         },
         {
           "command": "0x00000005",
@@ -2350,17 +2377,17 @@
         {
           "command": "0x00000006",
           "queued": false,
-          "count": 2128
+          "count": 2233
         },
         {
           "command": "0x00000007",
           "queued": false,
-          "count": 8626
+          "count": 8917
         },
         {
           "command": "0x00000007",
           "queued": true,
-          "count": 1863
+          "count": 1891
         },
         {
           "command": "0x00000009",
@@ -2370,7 +2397,7 @@
         {
           "command": "0x0000000a",
           "queued": false,
-          "count": 137
+          "count": 160
         },
         {
           "command": "0x0000000b",
@@ -2390,7 +2417,7 @@
         {
           "command": "0x00000012",
           "queued": false,
-          "count": 437
+          "count": 449
         },
         {
           "command": "0x00000013",
@@ -2415,12 +2442,12 @@
         {
           "command": "0x00000023",
           "queued": false,
-          "count": 3944
+          "count": 3988
         },
         {
           "command": "0x00000024",
           "queued": false,
-          "count": 10
+          "count": 17
         }
       ]
     },
@@ -2428,12 +2455,16 @@
       "subtype": "0x07",
       "label": "unit death mark",
       "original_handler": "0x004ddab6",
-      "packets": 37,
-      "replay_count": 15,
+      "packets": 38,
+      "replay_count": 16,
       "unit_offset_zero": 0,
       "arg1_zero": 8,
       "arg2_zero": 3,
       "modes": [
+        {
+          "value": "0x00000000",
+          "count": 1
+        },
         {
           "value": "0x000dc680",
           "count": 1
@@ -2507,7 +2538,7 @@
         {
           "command": "0x0000001c",
           "queued": false,
-          "count": 37
+          "count": 38
         }
       ]
     },
@@ -2515,15 +2546,15 @@
       "subtype": "0x08",
       "label": "unit auxiliary vector",
       "original_handler": "0x004ddad3",
-      "packets": 4984,
-      "replay_count": 31,
+      "packets": 5222,
+      "replay_count": 33,
       "unit_offset_zero": 0,
       "arg1_zero": 0,
       "arg2_zero": 0,
       "modes": [
         {
           "value": "0x00000000",
-          "count": 4863
+          "count": 5101
         },
         {
           "value": "0x00000910",
@@ -2818,7 +2849,7 @@
         {
           "command": "0x0000001f",
           "queued": false,
-          "count": 4984
+          "count": 5222
         }
       ]
     },
@@ -2826,15 +2857,15 @@
       "subtype": "0x09",
       "label": "extended unit order",
       "original_handler": "0x004dd75e",
-      "packets": 792,
-      "replay_count": 16,
+      "packets": 812,
+      "replay_count": 17,
       "unit_offset_zero": 0,
       "arg1_zero": 0,
       "arg2_zero": 0,
       "modes": [
         {
           "value": "0x00000000",
-          "count": 114
+          "count": 134
         },
         {
           "value": "0x000001d0",
@@ -3590,17 +3621,22 @@
         {
           "command": "0x0000000c",
           "queued": false,
-          "count": 3
+          "count": 7
         },
         {
           "command": "0x0000000d",
           "queued": false,
-          "count": 5
+          "count": 20
         },
         {
           "command": "0x0000000f",
           "queued": false,
           "count": 2
+        },
+        {
+          "command": "0x00000012",
+          "queued": false,
+          "count": 1
         },
         {
           "command": "0x00000013",
@@ -3695,22 +3731,22 @@
       "subtype": "0x0b",
       "label": "unit status mask",
       "original_handler": "0x004dd83d",
-      "packets": 8795,
-      "replay_count": 30,
+      "packets": 9039,
+      "replay_count": 32,
       "unit_offset_zero": 0,
       "arg1_zero": 744,
       "arg2_zero": 413,
       "modes": [
         {
           "value": "0x80000000",
-          "count": 8795
+          "count": 9039
         }
       ],
       "commands": [
         {
           "command": "0x0000000d",
           "queued": false,
-          "count": 8795
+          "count": 9039
         }
       ]
     },
@@ -3718,46 +3754,46 @@
       "subtype": "0x0c",
       "label": "placement resource/refund",
       "original_handler": "0x004dcf81",
-      "packets": 621,
-      "replay_count": 30,
+      "packets": 638,
+      "replay_count": 32,
       "unit_offset_zero": 0,
-      "arg1_zero": 621,
-      "arg2_zero": 621,
+      "arg1_zero": 637,
+      "arg2_zero": 638,
       "modes": [
         {
           "value": "0x00000000",
-          "count": 619
+          "count": 635
         },
         {
           "value": "0x00000001",
-          "count": 2
+          "count": 3
         }
       ],
       "commands": [
         {
           "command": "0x00000000",
           "queued": false,
-          "count": 23
+          "count": 25
         },
         {
           "command": "0x00000001",
           "queued": false,
-          "count": 2
+          "count": 4
         },
         {
           "command": "0x00000002",
           "queued": false,
-          "count": 10
+          "count": 11
         },
         {
           "command": "0x00000003",
           "queued": false,
-          "count": 24
+          "count": 25
         },
         {
           "command": "0x00000004",
           "queued": false,
-          "count": 18
+          "count": 19
         },
         {
           "command": "0x00000006",
@@ -3827,12 +3863,12 @@
         {
           "command": "0x00000014",
           "queued": false,
-          "count": 37
+          "count": 38
         },
         {
           "command": "0x00000016",
           "queued": false,
-          "count": 18
+          "count": 19
         },
         {
           "command": "0x00000018",
@@ -3842,7 +3878,7 @@
         {
           "command": "0x00000019",
           "queued": false,
-          "count": 60
+          "count": 61
         },
         {
           "command": "0x0000001a",
@@ -3872,17 +3908,17 @@
         {
           "command": "0x0000001f",
           "queued": false,
-          "count": 10
+          "count": 11
         },
         {
           "command": "0x00000020",
           "queued": false,
-          "count": 1
+          "count": 2
         },
         {
           "command": "0x00000021",
           "queued": false,
-          "count": 13
+          "count": 14
         },
         {
           "command": "0x00000022",
@@ -3895,6 +3931,11 @@
           "count": 10
         },
         {
+          "command": "0x00000027",
+          "queued": false,
+          "count": 1
+        },
+        {
           "command": "0x0000002a",
           "queued": false,
           "count": 5
@@ -3902,7 +3943,7 @@
         {
           "command": "0x0000002b",
           "queued": false,
-          "count": 47
+          "count": 48
         },
         {
           "command": "0x0000002c",
@@ -3937,12 +3978,12 @@
         {
           "command": "0x00000034",
           "queued": false,
-          "count": 2
+          "count": 3
         },
         {
           "command": "0x00000037",
           "queued": false,
-          "count": 12
+          "count": 13
         },
         {
           "command": "0x00000038",
@@ -3965,12 +4006,16 @@
       "subtype": "0x0f",
       "label": "catch-up target",
       "original_handler": "0x004dde72",
-      "packets": 4,
-      "replay_count": 4,
-      "unit_offset_zero": 0,
-      "arg1_zero": 4,
-      "arg2_zero": 4,
+      "packets": 7,
+      "replay_count": 6,
+      "unit_offset_zero": 2,
+      "arg1_zero": 7,
+      "arg2_zero": 7,
       "modes": [
+        {
+          "value": "0x00000000",
+          "count": 2
+        },
         {
           "value": "0x05a8fee4",
           "count": 1
@@ -3982,13 +4027,22 @@
         {
           "value": "0x0ec4fee0",
           "count": 2
+        },
+        {
+          "value": "0x0f0dfee4",
+          "count": 1
         }
       ],
       "commands": [
         {
+          "command": "0x00000000",
+          "queued": false,
+          "count": 1
+        },
+        {
           "command": "0x00000001",
           "queued": false,
-          "count": 4
+          "count": 6
         }
       ]
     },
@@ -3996,15 +4050,15 @@
       "subtype": "0x13",
       "label": "player inactive",
       "original_handler": "0x004ddaf3",
-      "packets": 66,
-      "replay_count": 31,
-      "unit_offset_zero": 28,
-      "arg1_zero": 35,
-      "arg2_zero": 27,
+      "packets": 70,
+      "replay_count": 33,
+      "unit_offset_zero": 31,
+      "arg1_zero": 38,
+      "arg2_zero": 30,
       "modes": [
         {
           "value": "0x00000000",
-          "count": 27
+          "count": 30
         },
         {
           "value": "0x00027150",
@@ -4079,6 +4133,10 @@
           "count": 1
         },
         {
+          "value": "0x0f0dfee4",
+          "count": 1
+        },
+        {
           "value": "0x0f6cfee4",
           "count": 1
         },
@@ -4123,7 +4181,7 @@
         {
           "command": "0x00000000",
           "queued": false,
-          "count": 66
+          "count": 70
         }
       ]
     },
@@ -4159,27 +4217,31 @@
       "subtype": "0x1a",
       "label": "production-cost order/refund",
       "original_handler": "0x004dd3b7",
-      "packets": 507,
-      "replay_count": 16,
+      "packets": 557,
+      "replay_count": 17,
       "unit_offset_zero": 0,
-      "arg1_zero": 0,
-      "arg2_zero": 234,
+      "arg1_zero": 1,
+      "arg2_zero": 251,
       "modes": [
         {
           "value": "0x00000000",
-          "count": 507
+          "count": 555
+        },
+        {
+          "value": "0x00000001",
+          "count": 2
         }
       ],
       "commands": [
         {
           "command": "0x00000005",
           "queued": false,
-          "count": 40
+          "count": 60
         },
         {
           "command": "0x00000006",
           "queued": false,
-          "count": 80
+          "count": 95
         },
         {
           "command": "0x00000007",
@@ -4189,7 +4251,7 @@
         {
           "command": "0x00000008",
           "queued": false,
-          "count": 132
+          "count": 147
         },
         {
           "command": "0x00000009",
@@ -4222,8 +4284,8 @@
       "subtype": "0x1d",
       "label": "vote completion",
       "original_handler": "0x004ddbe1",
-      "packets": 49,
-      "replay_count": 30,
+      "packets": 50,
+      "replay_count": 31,
       "unit_offset_zero": 0,
       "arg1_zero": 0,
       "arg2_zero": 3,
@@ -4305,6 +4367,10 @@
           "count": 3
         },
         {
+          "value": "0x0f0dff40",
+          "count": 1
+        },
+        {
           "value": "0x0f6cff40",
           "count": 4
         },
@@ -4333,7 +4399,7 @@
         {
           "command": "0x00000000",
           "queued": false,
-          "count": 19
+          "count": 20
         },
         {
           "command": "0x00000001",
@@ -4906,6 +4972,42 @@
         "0x0a": 22,
         "0x0b": 28,
         "0x0c": 9,
+        "0x13": 2,
+        "0x1d": 1
+      }
+    },
+    {
+      "file": "error2.ply",
+      "packets": 8684,
+      "first_frame": 25,
+      "last_frame": 26438,
+      "trailing_bytes": 0,
+      "subtypes": {
+        "0x01": 288,
+        "0x02": 7939,
+        "0x07": 1,
+        "0x08": 180,
+        "0x09": 20,
+        "0x0b": 188,
+        "0x0c": 14,
+        "0x0f": 2,
+        "0x13": 2,
+        "0x1a": 50
+      }
+    },
+    {
+      "file": "gameplay_1.ply",
+      "packets": 1612,
+      "first_frame": 77,
+      "last_frame": 8607,
+      "trailing_bytes": 0,
+      "subtypes": {
+        "0x01": 78,
+        "0x02": 1413,
+        "0x08": 58,
+        "0x0b": 56,
+        "0x0c": 3,
+        "0x0f": 1,
         "0x13": 2,
         "0x1d": 1
       }
