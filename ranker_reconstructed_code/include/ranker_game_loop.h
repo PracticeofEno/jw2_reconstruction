@@ -101,6 +101,11 @@ struct GameplayLoopState {
 
     bool catchup_enabled = false;
     bool fixed_step_initialized = false;
+    // Uncapped headless self-play: advance one simulation frame every loop
+    // iteration instead of pacing to wall-clock, and present only occasionally.
+    // Simulation and packet ordering are unchanged; only the frame timing is.
+    bool fast_uncapped = false;
+    u32 fast_present_counter = 0;
     bool external_timing_enabled = false;
     bool external_turn_wait_enabled = false;
     bool external_single_step = false;

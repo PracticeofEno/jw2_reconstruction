@@ -71,6 +71,54 @@ struct P2PNetworkLaunchParameters {
     std::array<char, kP2PNetworkLaunchRemoteAddressBytes> remote_address{};
     bool uses_map_file = false;
     bool valid = false;
+    // Local AI self-play autostart requested via -AISELF.  When set, the
+    // command-line host flow fills the opponent slot with Computer(AI)
+    // (Link role 4) and auto-starts the lobby without waiting for a peer so a
+    // headless harness can run unattended matches.
+    bool self_play = false;
+    // Optional -MAXFRAMES:N cap for a self-play match; 0 means use the default.
+    u32 self_play_max_frames = 0;
+    // -AIOUT:DIR — redirect the self-play output files (result / reward trace /
+    // episode / observation JSON) into this directory instead of the CWD, so
+    // many parallel rollout workers sharing one game-data CWD do not collide on
+    // them.  Empty = write to CWD (default).  Must be whitespace-free.
+    std::array<char, kP2PNetworkLaunchMapPathBytes> self_play_output_dir{};
+    // -AINET:N — shift this instance's P2P TCP/UDP ports by N so parallel
+    // self-play workers do not collide on the host listen port.  0 = default.
+    u16 self_play_net_offset = 0;
+    // -AIVS — policy-vs-policy self-play: owner 2 becomes a second Computer(AI)
+    // (packet-controlled) instead of a built-in Computer, so two RL policies
+    // play each other head-to-head (the self-play league building block).
+    bool self_play_versus = false;
+    // -AISCRIPT: drive the Computer(AI) owner with the scripted packet policy
+    // instead of the built-in Owner AI baseline (for A/B strength comparison).
+    bool self_play_scripted = false;
+    // -AIRANDOM: RL plumbing validation.  The owner is handed to the packet
+    // controller (implies self_play_scripted) but instead of the scripted
+    // policy's decision it samples a uniformly-random *legal* high-level action
+    // each cycle and translates it through the hierarchical micro executor.
+    bool self_play_random = false;
+    // -AIIMITATE: keep the Computer(AI) owner on the built-in Owner AI but log
+    // its per-decision observations to ai_rl_observe.jsonl for imitation
+    // learning (behavior-cloning the built-in AI into the high-level policy).
+    bool self_play_imitate = false;
+    // -AIIPC:PORT — online policy-in-the-loop: the Computer(AI) owner asks a
+    // Python policy server on 127.0.0.1:PORT for each high-level action instead
+    // of sampling randomly.  0 = disabled.
+    u16 self_play_ipc_port = 0;
+    // -AI1V1: clean 1v1 evaluation.  The local owner (0) runs the scripted
+    // policy against a single built-in Computer (owner 1) with all other starts
+    // closed, so the match result is a direct scripted-vs-built-in win/loss.
+    bool self_play_1v1 = false;
+    // -SEED:N deterministic RNG seed for self-play (reproducible matches; the
+    // normal path seeds from wall-clock time).  0 means use the default.
+    u32 self_play_seed = 0;
+    // -AITRIBE:N — tribe of the built-in Computer opponent in self-play/1v1
+    // (0=Primitive 1=Elf 2=Tyrano 3=Demon; 4=derive from -SEED so a seed sweep
+    // rotates opponents).  Default 2 (Tyrano mirror, the historic behavior).
+    // The Computer(AI) owners themselves stay Tyrano — the executor only
+    // speaks that tech tree.
+    u32 self_play_opponent_tribe = 2;
 };
 
 enum class P2PGameWinResult : u32 {

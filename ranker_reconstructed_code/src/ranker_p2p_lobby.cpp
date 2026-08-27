@@ -659,6 +659,77 @@ bool ParseP2PNetworkCommandLine(P2PNetworkLaunchParameters& parameters,
 
     const std::string uppercase = uppercase_ascii_copy(command_line);
     const char* upper = uppercase.c_str();
+
+    // Local AI self-play autostart.  This deliberately bypasses the -NET/-ID
+    // requirements and the whitespace-truncating -MAP parser: the MVP is fixed
+    // to a single map whose path contains spaces, so it is resolved internally
+    // instead of read from the command line.  The command-line host flow then
+    // fills slot 1 with Computer(AI) and auto-starts the lobby.
+    if (std::strstr(upper, "-AISELF") != nullptr ||
+        std::strstr(upper, "-AI1V1") != nullptr) {
+        parameters.self_play = true;
+        parameters.self_play_1v1 = std::strstr(upper, "-AI1V1") != nullptr;
+        parameters.uses_map_file = true;
+        std::snprintf(parameters.map_path.data(), parameters.map_path.size(),
+            "%s", "Maps\\Rank Maps\\(4) Python Jurassic v0.1.trk");
+        std::snprintf(parameters.player_name.data(),
+            parameters.player_name.size(), "%s", "AIHost");
+        const char* max_frames = std::strstr(upper, "-MAXFRAMES:");
+        if (max_frames != nullptr) {
+            parameters.self_play_max_frames = static_cast<u32>(
+                std::strtoul(max_frames + std::strlen("-MAXFRAMES:"), nullptr, 10));
+        }
+        parameters.self_play_random =
+            std::strstr(upper, "-AIRANDOM") != nullptr;
+        parameters.self_play_imitate =
+            std::strstr(upper, "-AIIMITATE") != nullptr;
+        // -AIOUT:DIR — copy the whitespace-free directory token from the
+        // ORIGINAL (case-preserving) command line, since paths are case- and
+        // slash-sensitive.
+        const char* out_upper = std::strstr(upper, "-AIOUT:");
+        if (out_upper != nullptr && command_line != nullptr) {
+            const char* out = std::strstr(command_line, "-AIOUT:");
+            if (out == nullptr) {
+                out = command_line +
+                    (out_upper - upper);  // fallback: same offset
+            }
+            out += std::strlen("-AIOUT:");
+            std::size_t i = 0;
+            while (out[i] != '\0' && out[i] != ' ' && out[i] != '\t' &&
+                   i + 1 < parameters.self_play_output_dir.size()) {
+                parameters.self_play_output_dir[i] = out[i];
+                ++i;
+            }
+            parameters.self_play_output_dir[i] = '\0';
+        }
+        const char* ipc = std::strstr(upper, "-AIIPC:");
+        parameters.self_play_ipc_port = ipc != nullptr ?
+            static_cast<u16>(std::strtoul(ipc + std::strlen("-AIIPC:"),
+                nullptr, 10)) : 0u;
+        const char* net = std::strstr(upper, "-AINET:");
+        parameters.self_play_net_offset = net != nullptr ?
+            static_cast<u16>(std::strtoul(net + std::strlen("-AINET:"),
+                nullptr, 10)) : 0u;
+        const char* tribe = std::strstr(upper, "-AITRIBE:");
+        parameters.self_play_opponent_tribe = tribe != nullptr ?
+            static_cast<u32>(std::strtoul(tribe + std::strlen("-AITRIBE:"),
+                nullptr, 10)) : 2u;
+        parameters.self_play_versus = std::strstr(upper, "-AIVS") != nullptr;
+        // The random-legal / IPC policies run inside the packet-controller path,
+        // so they imply the scripted-owner handover too.
+        parameters.self_play_scripted =
+            parameters.self_play_1v1 ||
+            parameters.self_play_random ||
+            parameters.self_play_ipc_port != 0 ||
+            std::strstr(upper, "-AISCRIPT") != nullptr;
+        const char* seed = std::strstr(upper, "-SEED:");
+        parameters.self_play_seed = seed != nullptr ?
+            static_cast<u32>(std::strtoul(seed + std::strlen("-SEED:"),
+                nullptr, 10)) : 0u;
+        parameters.valid = true;
+        return true;
+    }
+
     if (std::strstr(upper, "-NET") == nullptr) {
         return false;
     }

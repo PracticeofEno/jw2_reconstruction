@@ -735,6 +735,37 @@ bool IsMode1ReliableSyncRoundPending() {
         kMode1SyncRoundActive) != 0;
 }
 
+// Locally-simulated AI owner channels (Computer(AI) driven by the scripted
+// policy) are not network participants and are not the local player, so the
+// synchronized multiplayer/generic-AI round never lists them and would leave
+// their ordered gameplay packets stuck.  Pump and dispatch them directly.  The
+// locally-simulated mask is only populated for local self-play (multiplayer
+// Computer(AI) falls back to the built-in Computer), so this is inert for real
+// P2P sessions.
+void dispatch_locally_simulated_ai_channels(u32 local_player) {
+    u32 locally_simulated_mask = 0;
+    {
+        const std::lock_guard<std::recursive_mutex> lock(g_mode1_reliable_mutex);
+        locally_simulated_mask =
+            g_mode1_reliable_state.locally_simulated_channel_mask &
+            ~(1u << local_player);
+    }
+    for (u32 channel = 0; channel < kMode1ReliableChannelCount; ++channel) {
+        if ((locally_simulated_mask & (1u << channel)) == 0) {
+            continue;
+        }
+        for (;;) {
+            Mode1ReliablePacket packet{};
+            if (!PopMode1OrderedPacket(channel, packet)) {
+                break;
+            }
+            DispatchMode1GameplayPacket(packet);
+            invoke_packet_hook(
+                g_mode1_reliable_state.callbacks.packet_consumed, packet);
+        }
+    }
+}
+
 u32 PumpMode1ReliablePackets(
     bool generic_ai_profile_mode, bool scenario_ai_profile_override, u32 now_ms) {
     {
@@ -784,29 +815,23 @@ u32 PumpMode1ReliablePackets(
             DispatchMode1GameplayPacket(packet);
             invoke_packet_hook(g_mode1_reliable_state.callbacks.packet_consumed, packet);
         }
-        u32 locally_simulated_mask = 0;
-        {
-            const std::lock_guard<std::recursive_mutex> lock(
-                g_mode1_reliable_mutex);
-            locally_simulated_mask =
-                g_mode1_reliable_state.locally_simulated_channel_mask &
-                ~(1u << local_player);
-        }
-        for (u32 channel = 0; channel < kMode1ReliableChannelCount; ++channel) {
-            if ((locally_simulated_mask & (1u << channel)) == 0) {
-                continue;
-            }
-            for (;;) {
-                Mode1ReliablePacket packet{};
-                if (!PopMode1OrderedPacket(channel, packet)) {
-                    break;
-                }
-                DispatchMode1GameplayPacket(packet);
-                invoke_packet_hook(
-                    g_mode1_reliable_state.callbacks.packet_consumed, packet);
-            }
-        }
+        dispatch_locally_simulated_ai_channels(local_player);
         return 1;
+    }
+
+    // Generic-AI / synchronized-multiplayer path.  The per-channel sync round
+    // below only lists network participants, so locally-simulated Computer(AI)
+    // channels must be pumped here too or their scripted-policy packets never
+    // execute (no production, movement, or attacks for that owner).
+    {
+        u32 local_player = 0;
+        {
+            const std::lock_guard<std::recursive_mutex> lock(g_mode1_reliable_mutex);
+            local_player = g_mode1_reliable_state.local_player_index;
+        }
+        if (local_player < kMode1ReliableChannelCount) {
+            dispatch_locally_simulated_ai_channels(local_player);
+        }
     }
 
     bool round_active = false;

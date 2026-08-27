@@ -1722,6 +1722,8 @@ if (RANKER_BUILD_AI_PLAY_INTERFACE_REGRESSION_TEST)
         src/ranker_ai_actions.cpp
         src/ranker_ai_live_validator.cpp
         src/ranker_ai_scripted_bot.cpp
+        src/ranker_ai_rl_features.cpp
+        src/ranker_ai_rl_reward.cpp
     )
     target_include_directories(ai_play_interface_regression PRIVATE
         include
@@ -1739,6 +1741,9 @@ add_executable(ranker_rebuild WIN32
     src/ranker_ai_actions.cpp
     src/ranker_ai_live_validator.cpp
     src/ranker_ai_scripted_bot.cpp
+    src/ranker_ai_rl_features.cpp
+    src/ranker_ai_rl_reward.cpp
+    src/ranker_ai_ipc.cpp
     src/ranker_winmain.cpp
     src/ranker_cd_audio.cpp
     src/ranker_directx.cpp

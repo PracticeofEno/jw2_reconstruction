@@ -4,12 +4,19 @@
 #include "ranker_types.h"
 #include "ranker_unit_movement.h"
 
+#include <array>
 #include <string>
 #include <vector>
 
 namespace ranker {
 
 constexpr u32 kAiObservationSchemaVersion = 1;
+
+// Number of research/upgrade orders whose completion level is surfaced in the
+// observation (Tyrano MVP: harvest, movement, ground-attack upgrades).
+constexpr std::size_t kAiObservationTrackedResearchCount = 3;
+// Full production-order level table (order ids are < 0x40 in the catalog).
+constexpr std::size_t kAiObservationResearchOrderCount = 64;
 
 using AiUnitVisibilityCallback = bool (*)(const UnitMovementUnit& unit,
     u32 local_owner, void* user_data);
@@ -91,6 +98,14 @@ struct AiObservation {
     i32 start_y = 0;
     bool game_ended = false;
     u32 game_end_reason = 0;
+    // Completed research/upgrade level for a small set of tracked orders (the
+    // caller fills these from the per-owner order-upgrade table).  0 = not
+    // researched.  Exposes tech progress the unit/building counts cannot.
+    std::array<u8, kAiObservationTrackedResearchCount> research_levels{};
+    // Completed level for EVERY production order id < 64 (the full per-owner
+    // variant_counts row).  The executor's research cycle consults this so it
+    // can run the whole audited research tree, not just the tracked trio.
+    std::array<u8, kAiObservationResearchOrderCount> research_order_levels{};
     std::vector<AiObservedMapTile> tiles;
     std::vector<AiObservedUnit> units;
 };
@@ -106,6 +121,10 @@ struct AiObservationBuildInput {
     u32 population_limit = 0;
     bool game_ended = false;
     u32 game_end_reason = 0;
+    // Completed research/upgrade level per tracked order (see AiObservation).
+    std::array<u8, kAiObservationTrackedResearchCount> research_levels{};
+    // Full per-order level row (see AiObservation::research_order_levels).
+    std::array<u8, kAiObservationResearchOrderCount> research_order_levels{};
     const PlayerSlotRuntimeState* players = nullptr;
     const UnitMovementContext* movement = nullptr;
 

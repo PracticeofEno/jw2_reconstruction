@@ -139,6 +139,8 @@ AiObservationBuildResult BuildAiObservationV1(
     observation.start_y = input.players->owner_start_y[input.local_owner];
     observation.game_ended = input.game_ended;
     observation.game_end_reason = input.game_end_reason;
+    observation.research_levels = input.research_levels;
+    observation.research_order_levels = input.research_order_levels;
 
     observation.tiles.reserve(tile_count);
     for (u32 y = 0; y < map.height; ++y) {
@@ -149,16 +151,25 @@ AiObservationBuildResult BuildAiObservationV1(
                 static_cast<std::size_t>(y) * stride + x;
             const UnitMovementCell& source = map.cells[map_index];
             const bool visible = (*input.visible_tiles)[compact_index] != 0;
+            const bool explored =
+                (*input.explored_tiles)[compact_index] != 0 || visible;
+            // Harvestable-terrain amounts are revealed for any explored tile,
+            // not only currently-visible ones.  The engine only maintains the
+            // "currently lit" fog grid for the local viewing player, so an
+            // AI-controlled owner has an empty current-visibility layer and
+            // would otherwise never see a single resource tile.  Exposing the
+            // last-known amount on explored terrain is legitimate AI memory and
+            // does not leak an opponent's private unit/production state.
             observation.tiles.push_back(AiObservedMapTile{
                 source.flags & kAiStaticTerrainMask,
-                visible ?
+                explored ?
                     (source.flags & kMapCellHarvestAmountMask) >>
                         kMapCellHarvestAmountShift :
                     0u,
                 (source.flags & kMapCellTerrainMask) ==
                         kMapCellPassableTerrain &&
                     (source.flags & kMapCellBlockedTerrain) == 0,
-                (*input.explored_tiles)[compact_index] != 0 || visible,
+                explored,
                 visible,
             });
         }

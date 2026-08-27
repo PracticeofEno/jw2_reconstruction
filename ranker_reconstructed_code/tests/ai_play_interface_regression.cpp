@@ -1,11 +1,13 @@
 #include "ranker_ai_actions.h"
 #include "ranker_ai_live_validator.h"
 #include "ranker_ai_observation.h"
+#include "ranker_ai_rl_reward.h"
 #include "ranker_ai_scripted_bot.h"
 #include "ranker_ai_slot_role.h"
 #include "ranker_unit_commands.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <vector>
@@ -878,6 +880,268 @@ void test_tyrano_replay_derived_build_order() {
         "build order did not transition from upgrades to Dilophos production");
 }
 
+void test_ai_rl_reward() {
+    AiRlRewardConfig config{};
+
+    // Base state: economy + one nest, no army, no visible enemy.
+    AiObservation base = tyrano_build_order_observation();
+    const float phi_base = AiRlPotential(base, config);
+    require(phi_base > 0.0f,
+        "RL potential of a developed base was not positive");
+
+    // Adding own army must raise the potential.
+    AiObservation with_army = base;
+    u32 next_id = 0x7000;
+    add_observed_type(with_army, kTyranoMasosType, 5, next_id);
+    const float phi_army = AiRlPotential(with_army, config);
+    require(phi_army > phi_base, "own army did not increase the RL potential");
+
+    // A visible enemy army must lower the potential relative to no enemy.
+    AiObservation with_enemy = base;
+    with_enemy.units.push_back(
+        observed_unit(0x9001, 1, kTyranoMasosType, 0, 900, 900, false));
+    const float phi_enemy = AiRlPotential(with_enemy, config);
+    require(phi_enemy < phi_base,
+        "visible enemy army did not decrease the RL potential");
+
+    // Potential-based shaping telescopes exactly to Phi(cur) - Phi(prev) at
+    // gamma = 1 for a non-terminal step.
+    AiRlRewardConfig undisc = config;
+    undisc.discount = 1.0f;
+    AiRlStepReward grow = ComputeAiRlStepReward(base, with_army, undisc);
+    require(grow.outcome == AiRlTerminalOutcome::ongoing &&
+        grow.terminal == 0.0f,
+        "non-terminal step produced a terminal reward");
+    require(std::fabs(grow.shaping - (phi_army - phi_base)) < 1e-5f &&
+        grow.total == grow.shaping,
+        "shaping did not equal gamma*Phi(cur) - Phi(prev) at gamma=1");
+    require(grow.shaping > 0.0f,
+        "developing an army yielded non-positive shaping");
+
+    // Terminal win: own units survive, no hostile visible -> +win, Phi_next = 0
+    // so the shaping telescopes to -Phi(prev).
+    AiObservation win = with_army;
+    win.game_ended = true;
+    require(ClassifyAiRlTerminal(win) == AiRlTerminalOutcome::win,
+        "surviving-with-no-enemy end state was not classified a win");
+    AiRlStepReward win_step = ComputeAiRlStepReward(base, win, config);
+    require(win_step.outcome == AiRlTerminalOutcome::win &&
+        win_step.terminal == config.win_reward,
+        "terminal win did not yield the win reward");
+    require(std::fabs(win_step.shaping + phi_base) < 1e-5f,
+        "terminal shaping did not drop Phi(next) to zero");
+
+    // Terminal loss: no controlled units remain.
+    AiObservation loss{};
+    loss.local_faction = kTyranoFactionId;
+    loss.game_ended = true;
+    require(ClassifyAiRlTerminal(loss) == AiRlTerminalOutcome::loss,
+        "eliminated end state was not classified a loss");
+    AiRlStepReward loss_step = ComputeAiRlStepReward(base, loss, config);
+    require(loss_step.terminal == config.loss_reward,
+        "terminal loss did not yield the loss reward");
+
+    // Determinism: identical inputs -> byte-identical reward.
+    AiRlStepReward again = ComputeAiRlStepReward(base, with_army, undisc);
+    require(again.total == grow.total && again.shaping == grow.shaping &&
+        again.potential_cur == grow.potential_cur,
+        "reward computation was not deterministic");
+}
+
+void test_ai_rl_trace() {
+    AiRlRewardConfig config{};
+
+    AiObservation base = tyrano_build_order_observation();
+    AiObservation with_army = base;
+    u32 next_id = 0x8000;
+    add_observed_type(with_army, kTyranoMasosType, 5, next_id);
+
+    const AiRlStepEncoding enc_base = EncodeAiObservationForRl(base);
+    const AiRlStepEncoding enc_army = EncodeAiObservationForRl(with_army);
+
+    AiRlOwnerTrace trace;
+    // First decision: no reward emitted yet (nothing precedes it).
+    AiRlTraceRecordDecision(trace, 0, 3 /*produce_dilophos*/, enc_base, config);
+    require(trace.steps.empty() && trace.has_prev,
+        "first decision should buffer, not emit a reward step");
+
+    // Second decision: emits the reward for the first action, carrying the first
+    // state's features (aligned s_t, a_t, r_t).
+    AiRlTraceRecordDecision(trace, 8, 2 /*produce_masos*/, enc_army, config);
+    require(trace.steps.size() == 1, "second decision did not emit one step");
+    const AiRlTraceStep& first = trace.steps[0];
+    require(first.frame == 0 && first.action == 3 && !first.done,
+        "emitted step did not describe the first action");
+    require(first.features == enc_base.features &&
+        first.legal_mask == enc_base.legal_mask,
+        "emitted step did not carry the decision state s_t");
+    const float expected_shaping =
+        config.discount * AiRlPotentialFromFeatures(enc_army.features, config) -
+        AiRlPotentialFromFeatures(enc_base.features, config);
+    require(std::fabs(first.shaping - expected_shaping) < 1e-5f &&
+        first.terminal == 0.0f,
+        "emitted step reward did not match gamma*Phi(s')-Phi(s)");
+
+    // Terminal: flush the last pending action as a win, done=true.
+    AiRlTraceFinalize(trace, AiRlTerminalOutcome::win, config);
+    require(trace.steps.size() == 2 && trace.steps[1].done &&
+        trace.steps[1].action == 2 &&
+        trace.steps[1].terminal == config.win_reward &&
+        trace.steps[1].features == enc_army.features,
+        "terminal flush did not emit the final win transition");
+    require(!trace.has_prev &&
+        trace.final_outcome == AiRlTerminalOutcome::win,
+        "trace was not marked finalized");
+
+    float sum = 0.0f;
+    for (const AiRlTraceStep& step : trace.steps) {
+        sum += step.total;
+    }
+    require(std::fabs(sum - trace.return_sum) < 1e-5f,
+        "return_sum did not equal the sum of per-step rewards");
+}
+
+void test_ai_rl_hunt_and_research() {
+    AiObservation obs = tyrano_build_order_observation();
+    // A completed Masos that can attack (command bit 5).
+    obs.units.push_back(observed_unit(0x3000, 0, kTyranoMasosType,
+        (1u << 5), 400, 400, true));
+    // A neutral monster (owner 8, mobile) in view.
+    obs.units.push_back(observed_unit(0x9100, kNeutralMonsterOwnerId,
+        0x30, 0, 500, 500, false));
+    // Research: harvest upgrade level 2, ground-attack level 1, movement none.
+    obs.research_levels = {2, 0, 1};
+
+    // The encoding surfaces research + neutral state and legalizes hunting.
+    const AiRlStepEncoding enc = EncodeAiObservationForRl(obs);
+    require(enc.legal_mask[static_cast<std::size_t>(
+        AiRlHighLevelAction::hunt_neutral_monster)] == 1,
+        "hunt was not legal with an army and a visible neutral monster");
+    require(enc.features[41] > 0.5f && enc.features[39] > 0.0f,
+        "neutral-monster features (count/has) were not encoded");
+    require(enc.features[36] > 0.6f && enc.features[37] == 0.0f &&
+        enc.features[38] > 0.3f,
+        "research-level features did not reflect research_levels");
+
+    // The translator turns hunt into an attack on the nearest neutral monster.
+    TyranoScriptedBotState state{};
+    state.rally_configured = true;
+    TyranoScriptedBotConfig config{};
+    config.decision_interval_frames = 1;
+    const TyranoScriptedBotDecision decision =
+        DecideTyranoScriptedBotForHighLevelAction(state, obs,
+            AiRlHighLevelAction::hunt_neutral_monster, config);
+    require(decision &&
+        decision.action.kind == AiSemanticActionKind::attack_unit &&
+        decision.action.target_unit_id == 0x9100 &&
+        !decision.action.unit_ids.empty(),
+        "hunt did not translate into an attack on the neutral monster");
+}
+
+void test_ai_rl_research_tree_walk() {
+    // The research cycle must (a) walk past completed orders, (b) only target
+    // an IDLE researcher (re-enqueueing onto a busy one re-debits the cost and
+    // resets progress — the restart-drain bug), and (c) use the audited
+    // order->building map (0x16 belongs to the land nest, not the base).
+    AiObservation obs = tyrano_build_order_observation();
+    TyranoScriptedBotConfig config{};
+    config.decision_interval_frames = 1;
+
+    // Fresh state: first incomplete order is 0x14 at the (idle) base nest.
+    {
+        TyranoScriptedBotState state{};
+        const TyranoScriptedBotDecision decision =
+            DecideTyranoScriptedBotForHighLevelAction(state, obs,
+                AiRlHighLevelAction::research_next, config);
+        require(decision &&
+            decision.action.kind == AiSemanticActionKind::research &&
+            decision.action.production_id == kTyranoHarvestUpgradeOrder,
+            "research_next did not pick 0x14 first from the idle base");
+    }
+
+    // 0x14 done and no land/86 nest: base orders (0x2a) come next; a BUSY base
+    // (queued production) must yield no research decision at all.
+    obs.research_order_levels[kTyranoHarvestUpgradeOrder] = 1;
+    {
+        TyranoScriptedBotState state{};
+        const TyranoScriptedBotDecision next =
+            DecideTyranoScriptedBotForHighLevelAction(state, obs,
+                AiRlHighLevelAction::research_next, config);
+        require(next && next.action.production_id == 0x2au,
+            "research_next did not advance to the next base order (0x2a)");
+        for (AiObservedUnit& unit : obs.units) {
+            if (unit.type_id == kTyranoNestType) {
+                unit.queued_production_type_id = kTyranoWorkerType;
+            }
+        }
+        TyranoScriptedBotState busy_state{};
+        const TyranoScriptedBotDecision busy =
+            DecideTyranoScriptedBotForHighLevelAction(busy_state, obs,
+                AiRlHighLevelAction::research_next, config);
+        require(!busy,
+            "research_next targeted a BUSY researcher (restart-drain risk)");
+    }
+
+    // With an idle completed land nest, the land orders (0x19) take priority
+    // over the remaining base orders even while the base stays busy.
+    obs.units.push_back(observed_unit(0x4100, 0, kTyranoLandNestType, 0,
+        600, 600, true));
+    {
+        TyranoScriptedBotState state{};
+        const TyranoScriptedBotDecision decision =
+            DecideTyranoScriptedBotForHighLevelAction(state, obs,
+                AiRlHighLevelAction::research_next, config);
+        require(decision &&
+            decision.action.production_id == kTyranoGroundAttackUpgradeOrder &&
+            decision.action.unit_ids == std::vector<u32>{0x4100},
+            "research_next did not route the land order to the idle land nest");
+    }
+}
+
+void test_ai_rl_defense_autopilot() {
+    AiObservation obs = tyrano_build_order_observation();
+    // A fighter (attack bit 5) and a worker; the worker must NOT be drafted.
+    obs.units.push_back(observed_unit(0x3100, 0, kTyranoMasosType,
+        (1u << 5), 400, 400, true));
+
+    TyranoScriptedBotState state{};
+    // No hostile in range -> no defense action.
+    require(PlanTyranoDefenseAutopilot(state, obs).empty(),
+        "defense autopilot engaged without an intruder");
+
+    // Hostile inside the base perimeter -> everyone (except workers) attacks it.
+    obs.units.push_back(observed_unit(0x9200, 1, kTyranoMasosType, 0,
+        obs.start_x + 200, obs.start_y, false));
+    obs.simulation_frame = 100;
+    std::vector<AiSemanticAction> defense =
+        PlanTyranoDefenseAutopilot(state, obs);
+    require(defense.size() == 1 &&
+        defense[0].kind == AiSemanticActionKind::attack_unit &&
+        defense[0].target_unit_id == 0x9200 &&
+        defense[0].unit_ids == std::vector<u32>{0x3100},
+        "defense autopilot did not send the fighter at the intruder");
+
+    // Same target within the dwell window -> throttled (no re-spam).
+    obs.simulation_frame = 108;
+    require(PlanTyranoDefenseAutopilot(state, obs).empty(),
+        "defense order was re-spammed inside the dwell window");
+
+    // After the dwell window the order is refreshed.
+    obs.simulation_frame = 100 + 64;
+    require(PlanTyranoDefenseAutopilot(state, obs).size() == 1,
+        "defense order was not refreshed after the dwell window");
+
+    // A hostile far from every building stays ignored.
+    TyranoScriptedBotState fresh{};
+    AiObservation far_obs = tyrano_build_order_observation();
+    far_obs.units.push_back(observed_unit(0x3100, 0, kTyranoMasosType,
+        (1u << 5), 400, 400, true));
+    far_obs.units.push_back(observed_unit(0x9300, 1, kTyranoMasosType, 0,
+        1800, 1800, false));
+    require(PlanTyranoDefenseAutopilot(fresh, far_obs).empty(),
+        "defense autopilot chased a hostile far outside the perimeter");
+}
+
 void test_ai_play_lobby_role_compatibility() {
     require(IsAiPlayLinkLobbyRole(kAiPlayLinkLobbyRoleValue) &&
         IsComputerLikeLinkLobbyRole(kOriginalComputerLinkLobbyRoleValue) &&
@@ -897,6 +1161,11 @@ int main() {
     test_live_validation_adapter();
     test_tyrano_scripted_bot();
     test_tyrano_replay_derived_build_order();
+    test_ai_rl_reward();
+    test_ai_rl_trace();
+    test_ai_rl_hunt_and_research();
+    test_ai_rl_research_tree_walk();
+    test_ai_rl_defense_autopilot();
     test_ai_play_lobby_role_compatibility();
     std::cout << "ai_play_interface_regression: passed\n";
     return 0;

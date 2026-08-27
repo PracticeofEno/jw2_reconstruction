@@ -207,7 +207,11 @@ HarvestAssignment nearest_visible_resource_assignment(
         for (u32 tile_index = 0; tile_index < observation.tiles.size();
              ++tile_index) {
             const AiObservedMapTile& tile = observation.tiles[tile_index];
-            if (!tile.visible || !tile.passable || tile.resource_amount == 0) {
+            // Resource amounts are exposed for explored terrain (the current
+            // visibility layer is local-viewer only), so a non-zero amount on a
+            // passable tile is a valid harvest candidate whether or not it is
+            // lit right now.
+            if (!tile.passable || tile.resource_amount == 0) {
                 continue;
             }
             const u32 tile_x = tile_index % observation.map_width_tiles;
@@ -262,6 +266,27 @@ const AiObservedUnit* select_completed_type(const AiObservation& observation,
             unit.deferred_command_count < selected->deferred_command_count ||
             (unit.deferred_command_count == selected->deferred_command_count &&
                 unit.id < selected->id)) {
+            selected = &unit;
+        }
+    }
+    return selected;
+}
+
+// A completed, fully idle producer of the given type (no queued production,
+// no deferred commands).  Research must only target such a building: enqueueing
+// an order onto a busy researcher re-debits its cost and resets its progress
+// (the restart-drain failure observed live).
+const AiObservedUnit* select_idle_completed_type(
+    const AiObservation& observation, u32 type_id) {
+    const AiObservedUnit* selected = nullptr;
+    for (const AiObservedUnit& unit : observation.units) {
+        if (!unit.controlled || !unit.alive || unit.under_construction ||
+            unit.type_id != type_id ||
+            unit.queued_production_type_id != 0 ||
+            unit.deferred_command_count != 0) {
+            continue;
+        }
+        if (selected == nullptr || unit.id < selected->id) {
             selected = &unit;
         }
     }
@@ -590,6 +615,38 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotAction(
         return ready(goal.intent, std::move(action));
     }
 
+    // Army fallback: once the rigid replay build order has run (or stalled on an
+    // unaffordable/backed-off goal) keep pumping Masos from any idle egg nest
+    // while population and money allow.  Placed AFTER the build order so the
+    // replay-derived opening (starting with a population Nest) is unchanged, but
+    // a resource surplus is always converted into military instead of hoarded.
+    {
+        constexpr u32 kMasosPrimaryCost = 100u;
+        const bool has_population_room =
+            observation.population_limit == 0 ||
+            observation.population_used < observation.population_limit;
+        if (has_population_room &&
+            observation.primary_resources >= kMasosPrimaryCost) {
+            for (const AiObservedUnit& unit : observation.units) {
+                if (!unit.controlled || !unit.alive ||
+                    unit.type_id != kTyranoEggNestType ||
+                    unit.under_construction) {
+                    continue;
+                }
+                if (pending_unit_count(unit, kTyranoMasosType) != 0) {
+                    continue;
+                }
+                AiSemanticAction action{};
+                action.kind = AiSemanticActionKind::produce_unit;
+                action.unit_ids = {unit.id};
+                action.production_id = kTyranoMasosType;
+                ++state.decisions_emitted;
+                return ready(TyranoScriptedBotIntent::produce_masos,
+                    std::move(action));
+            }
+        }
+    }
+
     if (!combat_units.empty() && nearest_enemy != nullptr) {
         AiSemanticAction action{};
         action.kind = AiSemanticActionKind::attack_unit;
@@ -601,6 +658,17 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotAction(
     }
 
     if (!combat_units.empty()) {
+        // Hold the current attack-move objective for a dwell window.  Without
+        // this the whole army was re-issued a fresh objective every decision
+        // cycle and cycled through the map's start corners so quickly that it
+        // never stayed anywhere long enough to destroy an enemy base.
+        constexpr u32 kArmyObjectiveDwellFrames = 160u;
+        if (state.last_army_objective_frame != 0xffffffffu &&
+            observation.simulation_frame - state.last_army_objective_frame <
+                kArmyObjectiveDwellFrames) {
+            decision.code = TyranoScriptedBotDecisionCode::no_action;
+            return decision;
+        }
         const UnitMovementPoint point = exploration_point(state, observation);
         AiSemanticAction action{};
         action.kind = AiSemanticActionKind::attack_move;
@@ -613,6 +681,426 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotAction(
 
     decision.code = TyranoScriptedBotDecisionCode::no_action;
     return decision;
+}
+
+TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
+    TyranoScriptedBotState& state, const AiObservation& observation,
+    AiRlHighLevelAction action, const TyranoScriptedBotConfig& config) {
+    TyranoScriptedBotDecision decision{};
+    if (observation.game_ended) {
+        decision.code = TyranoScriptedBotDecisionCode::game_ended;
+        return decision;
+    }
+    if (observation.local_faction != kTyranoFactionId) {
+        decision.code = TyranoScriptedBotDecisionCode::wrong_faction;
+        return decision;
+    }
+    if (state.last_decision_frame != 0xffffffffu &&
+        observation.simulation_frame - state.last_decision_frame <
+            std::max<u32>(config.decision_interval_frames, 1u)) {
+        decision.code = TyranoScriptedBotDecisionCode::not_due;
+        return decision;
+    }
+    state.last_decision_frame = observation.simulation_frame;
+
+    // Scan the observation once, mirroring DecideTyranoScriptedBotAction.
+    std::vector<u32> combat_units;
+    std::vector<const AiObservedUnit*> workers;
+    const AiObservedUnit* nest = nullptr;
+    const AiObservedUnit* nearest_enemy = nullptr;
+    const AiObservedUnit* nearest_neutral = nullptr;
+    const AiObservedUnit* any_own = nullptr;
+    i64 nearest_enemy_distance = 0;
+    i64 nearest_neutral_distance = 0;
+    for (const AiObservedUnit& unit : observation.units) {
+        if (unit.controlled && unit.alive) {
+            if (any_own == nullptr) {
+                any_own = &unit;
+            }
+            if (unit.type_id == kTyranoWorkerType) {
+                workers.push_back(&unit);
+            }
+            if (unit.type_id == kTyranoNestType &&
+                (nest == nullptr || unit.id < nest->id)) {
+                nest = &unit;
+            }
+            if (unit_can_attack(unit) && !unit_is_harvesting(unit) &&
+                !unit_is_constructing(unit)) {
+                combat_units.push_back(unit.id);
+            }
+        }
+        if (is_hostile_visible_unit(observation, unit)) {
+            const i64 distance = squared_distance(observation.start_x,
+                observation.start_y, unit.x, unit.y);
+            if (nearest_enemy == nullptr || distance < nearest_enemy_distance ||
+                (distance == nearest_enemy_distance &&
+                    unit.id < nearest_enemy->id)) {
+                nearest_enemy = &unit;
+                nearest_enemy_distance = distance;
+            }
+        }
+        // Neutral monster (owner 8, mobile): huntable for resources.
+        if (unit.visible && unit.alive && !unit.controlled &&
+            unit.owner_id == kNeutralMonsterOwnerId &&
+            unit.type_id < kTyranoMobileTypeLimit) {
+            const i64 distance = squared_distance(observation.start_x,
+                observation.start_y, unit.x, unit.y);
+            if (nearest_neutral == nullptr ||
+                distance < nearest_neutral_distance ||
+                (distance == nearest_neutral_distance &&
+                    unit.id < nearest_neutral->id)) {
+                nearest_neutral = &unit;
+                nearest_neutral_distance = distance;
+            }
+        }
+    }
+
+    const auto produce_from = [&](u32 producer_type, u32 unit_type,
+                                  TyranoScriptedBotIntent intent) {
+        // Prefer a completed producer with an EMPTY queue so repeated produce
+        // actions spread across all buildings of the type (parallel production)
+        // instead of stacking the first one's queue.
+        const AiObservedUnit* producer = nullptr;
+        for (const AiObservedUnit& unit : observation.units) {
+            if (unit.controlled && unit.alive && !unit.under_construction &&
+                unit.type_id == producer_type &&
+                unit.queued_production_type_id == 0 &&
+                unit.deferred_command_count == 0 &&
+                (producer == nullptr || unit.id < producer->id)) {
+                producer = &unit;
+            }
+        }
+        if (producer == nullptr) {
+            producer = select_completed_type(observation, producer_type);
+        }
+        if (producer == nullptr) {
+            return decision;
+        }
+        AiSemanticAction act{};
+        act.kind = AiSemanticActionKind::produce_unit;
+        act.unit_ids = {producer->id};
+        act.production_id = unit_type;
+        ++state.decisions_emitted;
+        return ready(intent, std::move(act));
+    };
+    const auto build_structure = [&](u32 structure_type,
+                                     TyranoScriptedBotIntent intent) {
+        const AiObservedUnit* builder = select_builder(workers);
+        if (builder == nullptr) {
+            return decision;
+        }
+        const UnitMovementPoint point = next_build_point(state, observation);
+        AiSemanticAction act{};
+        act.kind = AiSemanticActionKind::build;
+        act.unit_ids = {builder->id};
+        act.production_id = structure_type;
+        act.target_x = point.x;
+        act.target_y = point.y;
+        ++state.decisions_emitted;
+        return ready(intent, std::move(act));
+    };
+    const auto move_army_to = [&](i32 x, i32 y, TyranoScriptedBotIntent intent) {
+        if (combat_units.empty()) {
+            return decision;
+        }
+        AiSemanticAction act{};
+        act.kind = AiSemanticActionKind::attack_move;
+        act.unit_ids = std::move(combat_units);
+        act.target_x = x;
+        act.target_y = y;
+        ++state.decisions_emitted;
+        return ready(intent, std::move(act));
+    };
+
+    switch (action) {
+    case AiRlHighLevelAction::no_op:
+        decision.code = TyranoScriptedBotDecisionCode::no_action;
+        return decision;
+    case AiRlHighLevelAction::produce_worker:
+        return produce_from(kTyranoNestType, kTyranoWorkerType,
+            TyranoScriptedBotIntent::produce_worker);
+    case AiRlHighLevelAction::produce_masos:
+        return produce_from(kTyranoEggNestType, kTyranoMasosType,
+            TyranoScriptedBotIntent::produce_masos);
+    case AiRlHighLevelAction::produce_dilophos:
+        return produce_from(kTyranoEggNestType, kTyranoDilophosType,
+            TyranoScriptedBotIntent::produce_dilophos);
+    case AiRlHighLevelAction::build_population_nest:
+        return build_structure(kTyranoPopulationNestType,
+            TyranoScriptedBotIntent::build_population_nest);
+    case AiRlHighLevelAction::build_egg_nest:
+        return build_structure(kTyranoEggNestType,
+            TyranoScriptedBotIntent::build_egg_nest);
+    case AiRlHighLevelAction::build_land_nest:
+        return build_structure(kTyranoLandNestType,
+            TyranoScriptedBotIntent::build_land_nest);
+    case AiRlHighLevelAction::expand_base_nest:
+        return build_structure(kTyranoNestType,
+            TyranoScriptedBotIntent::build_second_tyrano_nest);
+    case AiRlHighLevelAction::research_next: {
+        // Walk the full audited Tyrano research tree (ai_techtree_audit.txt):
+        // request the first order below its max level whose researcher building
+        // exists.  The order->building mapping is the session reference table's
+        // completion_references; a wrong building made the live validator
+        // reject every request after the first completed order.
+        struct ResearchStep {
+            u32 order;
+            u32 researcher_type;
+            u8 max_levels;
+        };
+        static constexpr ResearchStep kSteps[] = {
+            {kTyranoHarvestUpgradeOrder, kTyranoNestType, 1},        // 0x14
+            {kTyranoGroundAttackUpgradeOrder, kTyranoLandNestType, 5},  // 0x19
+            {0x1au, kTyranoLandNestType, 5},   // ground defense up
+            {kTyranoMovementUpgradeOrder, kTyranoLandNestType, 1},   // 0x16
+            {0x1cu, kTyranoNest86Type, 5},     // air attack up
+            {0x1du, kTyranoNest86Type, 5},     // air defense up
+            {0x18u, kTyranoNest86Type, 1},     // mutant merge
+            {0x2au, kTyranoNestType, 1},       // dino morph
+            {0x38u, kTyranoNestType, 1},       // haste
+            {0x2bu, kTyranoNestType, 1},       // level-up exp down
+            {0x1bu, 0x89u, 1},                 // melee reinforce (land nisdos)
+            {0x2du, 0x89u, 1},                 // triceps speed
+            {0x1eu, 0x8au, 1},                 // air reinforce (sky nisdos)
+        };
+        for (const ResearchStep& step : kSteps) {
+            if (step.order < observation.research_order_levels.size() &&
+                observation.research_order_levels[step.order] >=
+                    step.max_levels) {
+                continue;
+            }
+            // Idle producers only: re-enqueueing onto a busy researcher
+            // re-debits and resets the in-progress order (restart-drain).
+            // Skipping a busy building also spreads research across nests.
+            const AiObservedUnit* producer = select_idle_completed_type(
+                observation, step.researcher_type);
+            if (producer == nullptr) {
+                continue;
+            }
+            AiSemanticAction act{};
+            act.kind = AiSemanticActionKind::research;
+            act.unit_ids = {producer->id};
+            act.production_id = step.order;
+            ++state.decisions_emitted;
+            return ready(TyranoScriptedBotIntent::research_harvest_upgrade,
+                std::move(act));
+        }
+        return decision;
+    }
+    case AiRlHighLevelAction::harvest_saturate: {
+        const HarvestAssignment assignment =
+            nearest_visible_resource_assignment(observation, workers);
+        if (assignment.worker == nullptr) {
+            return decision;
+        }
+        AiSemanticAction act{};
+        act.kind = AiSemanticActionKind::harvest;
+        act.unit_ids = {assignment.worker->id};
+        act.target_x = assignment.point.x;
+        act.target_y = assignment.point.y;
+        ++state.decisions_emitted;
+        return ready(TyranoScriptedBotIntent::harvest_visible_resource,
+            std::move(act));
+    }
+    case AiRlHighLevelAction::scout_map: {
+        // Send one idle-ish unit (prefer a worker, else any) to an exploration
+        // point.  Uses a plain move so it does not commit the army.
+        const UnitMovementPoint point = exploration_point(state, observation);
+        const AiObservedUnit* scout = workers.empty() ? any_own : workers.front();
+        if (scout == nullptr) {
+            return decision;
+        }
+        AiSemanticAction act{};
+        act.kind = AiSemanticActionKind::move;
+        act.unit_ids = {scout->id};
+        act.target_x = point.x;
+        act.target_y = point.y;
+        ++state.decisions_emitted;
+        return ready(TyranoScriptedBotIntent::explore, std::move(act));
+    }
+    case AiRlHighLevelAction::attack_nearest_enemy:
+        if (!combat_units.empty() && nearest_enemy != nullptr) {
+            AiSemanticAction act{};
+            act.kind = AiSemanticActionKind::attack_unit;
+            act.unit_ids = std::move(combat_units);
+            act.target_unit_id = nearest_enemy->id;
+            ++state.decisions_emitted;
+            return ready(TyranoScriptedBotIntent::attack_visible_enemy,
+                std::move(act));
+        }
+        return decision;
+    case AiRlHighLevelAction::attack_enemy_base: {
+        const UnitMovementPoint point = exploration_point(state, observation);
+        return move_army_to(point.x, point.y,
+            TyranoScriptedBotIntent::explore);
+    }
+    case AiRlHighLevelAction::defend_base:
+    case AiRlHighLevelAction::retreat:
+        return move_army_to(std::max(observation.start_x, 0),
+            std::max(observation.start_y, 0),
+            TyranoScriptedBotIntent::explore);
+    case AiRlHighLevelAction::hunt_neutral_monster:
+        if (!combat_units.empty() && nearest_neutral != nullptr) {
+            AiSemanticAction act{};
+            act.kind = AiSemanticActionKind::attack_unit;
+            act.unit_ids = std::move(combat_units);
+            act.target_unit_id = nearest_neutral->id;
+            ++state.decisions_emitted;
+            return ready(TyranoScriptedBotIntent::attack_visible_enemy,
+                std::move(act));
+        }
+        return decision;
+    // Producer map from the session reference tables: egg 0x84 produces the
+    // fighter roster, base 0x80 produces 0x2c, 0x87 produces 0x29/0x2a.
+    case AiRlHighLevelAction::produce_unit_x22:
+        return produce_from(kTyranoEggNestType, kTyranoUnit22Type,
+            TyranoScriptedBotIntent::produce_masos);
+    case AiRlHighLevelAction::produce_unit_x25:
+        return produce_from(kTyranoEggNestType, 0x25u,
+            TyranoScriptedBotIntent::produce_masos);
+    case AiRlHighLevelAction::produce_unit_x27:
+        return produce_from(kTyranoEggNestType, 0x27u,
+            TyranoScriptedBotIntent::produce_masos);
+    case AiRlHighLevelAction::produce_unit_x28:
+        return produce_from(kTyranoEggNestType, 0x28u,
+            TyranoScriptedBotIntent::produce_masos);
+    case AiRlHighLevelAction::produce_unit_x2e:
+        return produce_from(kTyranoEggNestType, 0x2eu,
+            TyranoScriptedBotIntent::produce_masos);
+    case AiRlHighLevelAction::produce_unit_x2c:
+        return produce_from(kTyranoNestType, 0x2cu,
+            TyranoScriptedBotIntent::produce_worker);
+    case AiRlHighLevelAction::produce_unit_x29:
+        return produce_from(kTyranoNest87Type, 0x29u,
+            TyranoScriptedBotIntent::produce_masos);
+    case AiRlHighLevelAction::produce_unit_x2a:
+        return produce_from(kTyranoNest87Type, 0x2au,
+            TyranoScriptedBotIntent::produce_masos);
+    case AiRlHighLevelAction::build_nest_x86:
+        return build_structure(kTyranoNest86Type,
+            TyranoScriptedBotIntent::build_land_nest);
+    case AiRlHighLevelAction::build_nest_x87:
+        return build_structure(kTyranoNest87Type,
+            TyranoScriptedBotIntent::build_land_nest);
+    case AiRlHighLevelAction::build_nest_x83:
+        return build_structure(0x83u,
+            TyranoScriptedBotIntent::build_land_nest);
+    case AiRlHighLevelAction::build_nest_x88:
+        return build_structure(0x88u,
+            TyranoScriptedBotIntent::build_land_nest);
+    case AiRlHighLevelAction::build_nest_x89:
+        return build_structure(0x89u,
+            TyranoScriptedBotIntent::build_land_nest);
+    case AiRlHighLevelAction::build_nest_x8a:
+        return build_structure(0x8au,
+            TyranoScriptedBotIntent::build_land_nest);
+    }
+
+    decision.code = TyranoScriptedBotDecisionCode::no_action;
+    return decision;
+}
+
+UnitMovementPoint TyranoScriptedBotNextBuildPoint(TyranoScriptedBotState& state,
+    const AiObservation& observation) {
+    return next_build_point(state, observation);
+}
+
+std::vector<AiSemanticAction> PlanTyranoIdleWorkerHarvest(
+    const AiObservation& observation, std::size_t max_actions,
+    const std::vector<u32>& exclude_unit_ids) {
+    std::vector<AiSemanticAction> actions;
+    std::vector<const AiObservedUnit*> idle;
+    for (const AiObservedUnit& unit : observation.units) {
+        if (unit.controlled && unit.alive && unit_can_harvest(unit) &&
+            !unit_is_harvesting(unit) && !unit_is_constructing(unit) &&
+            std::find(exclude_unit_ids.begin(), exclude_unit_ids.end(),
+                unit.id) == exclude_unit_ids.end()) {
+            idle.push_back(&unit);
+        }
+    }
+    while (actions.size() < max_actions && !idle.empty()) {
+        const HarvestAssignment assignment =
+            nearest_visible_resource_assignment(observation, idle);
+        if (assignment.worker == nullptr) {
+            break;
+        }
+        AiSemanticAction action{};
+        action.kind = AiSemanticActionKind::harvest;
+        action.unit_ids = {assignment.worker->id};
+        action.target_x = assignment.point.x;
+        action.target_y = assignment.point.y;
+        actions.push_back(std::move(action));
+        idle.erase(std::find(idle.begin(), idle.end(), assignment.worker));
+    }
+    return actions;
+}
+
+std::vector<AiSemanticAction> PlanTyranoDefenseAutopilot(
+    TyranoScriptedBotState& state, const AiObservation& observation) {
+    // ~12 tiles: raids inside this ring around a building are a base threat.
+    constexpr i64 kDefenseRadiusSq = 384ll * 384ll;
+    constexpr u32 kDefenseReorderFrames = 64u;
+
+    std::vector<AiSemanticAction> actions;
+    std::vector<UnitMovementPoint> base_points;
+    std::vector<u32> defenders;
+    for (const AiObservedUnit& unit : observation.units) {
+        if (unit.controlled && unit.alive) {
+            if (unit.type_id >= 0x80u) {
+                base_points.push_back({unit.x, unit.y});
+            } else if (unit.type_id != kTyranoWorkerType &&
+                       unit_can_attack(unit) && !unit_is_constructing(unit)) {
+                defenders.push_back(unit.id);
+            }
+        }
+    }
+    if (base_points.empty()) {
+        base_points.push_back({std::max(observation.start_x, 0),
+            std::max(observation.start_y, 0)});
+    }
+    if (defenders.empty()) {
+        return actions;
+    }
+
+    const AiObservedUnit* intruder = nullptr;
+    i64 intruder_distance = 0;
+    for (const AiObservedUnit& unit : observation.units) {
+        if (!is_hostile_visible_unit(observation, unit)) {
+            continue;
+        }
+        for (const UnitMovementPoint& base : base_points) {
+            const i64 distance =
+                squared_distance(base.x, base.y, unit.x, unit.y);
+            if (distance > kDefenseRadiusSq) {
+                continue;
+            }
+            if (intruder == nullptr || distance < intruder_distance ||
+                (distance == intruder_distance && unit.id < intruder->id)) {
+                intruder = &unit;
+                intruder_distance = distance;
+            }
+        }
+    }
+    if (intruder == nullptr) {
+        return actions;
+    }
+    // Re-issue only on a new target or after the dwell window; spamming the
+    // same attack order every cycle resets unit pathing.
+    if (intruder->id == state.last_defense_target_id &&
+        state.last_defense_order_frame != 0xffffffffu &&
+        observation.simulation_frame - state.last_defense_order_frame <
+            kDefenseReorderFrames) {
+        return actions;
+    }
+    state.last_defense_target_id = intruder->id;
+    state.last_defense_order_frame = observation.simulation_frame;
+
+    AiSemanticAction action{};
+    action.kind = AiSemanticActionKind::attack_unit;
+    action.unit_ids = std::move(defenders);
+    action.target_unit_id = intruder->id;
+    actions.push_back(std::move(action));
+    return actions;
 }
 
 void CommitTyranoScriptedBotDecision(TyranoScriptedBotState& state,
@@ -642,6 +1130,7 @@ void CommitTyranoScriptedBotDecision(TyranoScriptedBotState& state,
     }
     if (decision.intent == TyranoScriptedBotIntent::explore) {
         ++state.exploration_index;
+        state.last_army_objective_frame = state.last_decision_frame;
     }
     if (decision.intent ==
             TyranoScriptedBotIntent::research_harvest_upgrade) {

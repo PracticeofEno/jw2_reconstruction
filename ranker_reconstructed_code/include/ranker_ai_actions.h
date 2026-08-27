@@ -62,10 +62,14 @@ struct AiActionPlanInput {
     const UnitMovementContext* movement = nullptr;
     AiUnitVisibilityCallback unit_visible = nullptr;
     void* unit_visibility_user_data = nullptr;
-    // Harvest(point) fails closed without the local owner's current-vision
-    // projection. This prevents action validation from becoming an oracle
-    // for resources hidden by fog of war.
+    // Harvest(point) fails closed without the local owner's vision projection.
+    // This prevents action validation from becoming an oracle for resources
+    // hidden by fog of war.  The current-visibility layer is only maintained
+    // for the local viewing player, so an AI owner authorizes harvest against
+    // explored terrain when that projection is supplied (falling back to the
+    // current-visibility layer otherwise).
     const std::vector<u8>* visible_tiles = nullptr;
+    const std::vector<u8>* explored_tiles = nullptr;
     // Produce/research/build fail closed unless the live session supplies a
     // validator that applies the authoritative catalog, resource,
     // prerequisite, population, queue and placement rules.

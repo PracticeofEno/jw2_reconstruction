@@ -1414,7 +1414,11 @@ bool CheckPreviewProductionPlacementGateCell(GameplayProductionActionState& stat
             (cell->visibility_owner_flags &
                 (1u << state.preview_placement_authority_player)) != 0;
     }
-    if (!authority_route_visible) {
+    // A locally-simulated AI owner has neither a maintained route layer nor a
+    // current-visibility projection on its own territory, so this authority
+    // gate would reject every build.  It legitimately builds on ground it
+    // controls; the terrain/footprint/collision gates below still apply.
+    if (!authority_route_visible && !state.ai_relaxed_placement) {
         return false;
     }
 

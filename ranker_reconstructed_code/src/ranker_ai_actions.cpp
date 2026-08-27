@@ -411,8 +411,11 @@ AiActionPlanResult PlanAiSemanticActionV1(const AiActionPlanInput& input,
     if (action.kind == AiSemanticActionKind::harvest && target == nullptr) {
         const u64 tile_count = static_cast<u64>(input.movement->map.width) *
             input.movement->map.height;
-        if (input.visible_tiles == nullptr ||
-            tile_count != input.visible_tiles->size()) {
+        // Prefer the explored projection (AI owners have no current-visibility
+        // layer); fall back to current visibility when explored is absent.
+        const std::vector<u8>* vision = input.explored_tiles != nullptr ?
+            input.explored_tiles : input.visible_tiles;
+        if (vision == nullptr || tile_count != vision->size()) {
             return reject(AiActionPlanCode::invalid_visible_tile_count);
         }
         std::size_t compact_index = 0;
@@ -421,7 +424,7 @@ AiActionPlanResult PlanAiSemanticActionV1(const AiActionPlanInput& input,
         if (cell == nullptr) {
             return reject(AiActionPlanCode::point_out_of_bounds);
         }
-        if ((*input.visible_tiles)[compact_index] == 0) {
+        if ((*vision)[compact_index] == 0) {
             return reject(AiActionPlanCode::target_not_visible);
         }
         const bool passable =

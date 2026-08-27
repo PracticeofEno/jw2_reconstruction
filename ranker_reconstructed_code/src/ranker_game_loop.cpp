@@ -256,6 +256,16 @@ void UpdateGameplayFramePhaseFlags(GameplayLoopState& state) {
         return;
     }
 
+    if (state.fast_uncapped) {
+        // Simulate every iteration with no wall-clock wait; present sparsely so
+        // the headless window keeps pumping messages without paying the D3D
+        // present cost each frame.
+        ++state.fast_present_counter;
+        const bool present = (state.fast_present_counter & 0x3fu) == 0u;
+        set_phase_flags(state, true, true, true, present);
+        return;
+    }
+
     const u32 frame_interval = interval_at(state.frame_intervals, state.frame_interval_index);
     if (!state.external_timing_enabled) {
         if (state.catchup_enabled) {

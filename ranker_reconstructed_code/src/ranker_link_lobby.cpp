@@ -2934,7 +2934,16 @@ void PrepareLinkLobbyStartParameters(LinkLobbyState& state) {
         kLinkLobbyAvatarCount);
     state.selected_avatar_count = std::clamp(
         CountLinkLobbySelectedAvatarSlots(state), 0, kLinkLobbyAvatarCount);
-    std::srand(static_cast<unsigned>(std::time(nullptr)));
+    // Self-play seeds the RNG deterministically so matches are reproducible
+    // (essential for a learning/evaluation environment); the normal interactive
+    // path keeps the wall-clock seed.
+    if (p2p_network_launch_parameters().self_play) {
+        const u32 seed = p2p_network_launch_parameters().self_play_seed != 0 ?
+            p2p_network_launch_parameters().self_play_seed : 1u;
+        std::srand(static_cast<unsigned>(seed));
+    } else {
+        std::srand(static_cast<unsigned>(std::time(nullptr)));
+    }
     for (int i = 0; i < kLinkLobbyAvatarCount; ++i) {
         state.randomized_slots[i] = static_cast<u8>(i);
     }

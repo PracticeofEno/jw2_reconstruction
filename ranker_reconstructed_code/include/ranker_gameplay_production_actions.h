@@ -231,6 +231,12 @@ struct GameplayProductionActionState {
     u32 preview_placement_terrain_class = 3;
     u32 preview_placement_authority_player = 0xffffffffu;
     u32 preview_placement_required_owner_mask = 0;
+    // Relax the placement gate's route/visibility authority projection for a
+    // locally-simulated AI owner, whose per-owner route and current-visibility
+    // cell state the engine does not maintain (it only tracks those for the
+    // local viewer / real P2P peers).  Terrain, footprint and collision gates
+    // still apply.
+    bool ai_relaxed_placement = false;
     u32 last_action_index = 0;
     u32 last_world_x = 0;
     u32 last_world_y = 0;
