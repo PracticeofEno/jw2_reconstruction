@@ -2986,6 +2986,47 @@ void PrepareLinkLobbyStartParameters(LinkLobbyState& state) {
         UpdateLinkLobbyLatencyButtonVisibility(state, i);
         UpdateLinkLobbyMapDownloadButtonVisibility(state, i);
     }
+    // Self-play (non-1v1): the host slot only OBSERVES, and the start-slot
+    // permutation must cover every competing slot (the stock shuffle above
+    // only spans the human avatars — one in self-play — so starts never
+    // varied).  Both transforms happen HERE, before the payload snapshot, so
+    // replays record and faithfully reproduce them; the earlier launch-flag
+    // startup transform desynced playback (the host spawned units the
+    // recording never had, shifting every packet's unit references).
+    if (p2p_network_launch_parameters().self_play &&
+        !p2p_network_launch_parameters().self_play_1v1) {
+        if (state.start_states[0] == 0) {
+            state.start_states[0] = 2;  // observer, as game types 6/7 encode it
+            state.active_human_count =
+                std::max(0, state.active_human_count - 1);
+        }
+        // Deal the map's start positions (0..max_players-1) to the competing
+        // slots in std::rand() order (std::rand is -SEED-seeded above, so the
+        // layout is deterministic per match and varies across seeds).
+        int positions[kLinkLobbyAvatarCount];
+        for (int i = 0; i < max_players; ++i) {
+            positions[i] = i;
+        }
+        for (int i = max_players; i > 1; --i) {
+            const int j = std::rand() % i;
+            std::swap(positions[i - 1], positions[j]);
+        }
+        int next_position = 0;
+        for (int i = 0; i < max_players && i < kLinkLobbyAvatarCount; ++i) {
+            if (state.start_states[i] == 0 || state.start_states[i] == 1) {
+                state.randomized_slots[i] =
+                    static_cast<u8>(positions[next_position++]);
+            }
+        }
+        // Non-competing slots take the leftover positions.
+        for (int i = 0; i < max_players && i < kLinkLobbyAvatarCount; ++i) {
+            if (state.start_states[i] != 0 && state.start_states[i] != 1 &&
+                next_position < max_players) {
+                state.randomized_slots[i] =
+                    static_cast<u8>(positions[next_position++]);
+            }
+        }
+    }
     if (state.game_type == 8 && max_players > 1) {
         const int split = max_players >> 1;
         auto normalize_half_tribe = [&](int first, int last) {

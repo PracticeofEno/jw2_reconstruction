@@ -122,11 +122,65 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
     u32 neutral_count = 0;
     bool have_neutral = false;
     i64 neutral_nearest_sq = 0;
+    // v2 aggregates (docs/AI_PLAY_TYRANO_FULL_CAPABILITY_DESIGN.md §3).
+    // COMPLETED-only per-type counts for the extended roster 0x20..0x2f.
+    std::array<u32, 16> roster_counts{};
+    u32 nest83 = 0, nest88 = 0, nest89 = 0, nest8a = 0;
+    u32 stance_active = 0, stance_ready = 0;
+    u32 morphed = 0, morph_ready = 0;
+    u32 attached_passengers = 0;
+    u32 raid_enemies = 0;
+    u32 queue_depth = 0;
+    u32 cargo_workers = 0;
+    u64 army_health = 0, army_max_health = 0;
+    i64 army_centroid_x = 0, army_centroid_y = 0;
+    constexpr u32 kStanceCommandBit = 1u << 0x14;
+    constexpr u32 kStanceActiveFlag = 0x10000u;
+    constexpr u32 kMorphCommandBit = 1u << 0x11;
+    constexpr u32 kMorphedTypeFlag = 0x08000000u;
+    constexpr u32 kAttachedState = 0x45u;
+    constexpr i64 kRaidRadiusSquared = 384 * 384;
 
     for (const AiObservedUnit& u : observation.units) {
         if (u.controlled && u.alive) {
             ++own_total;
             const bool uc = u.under_construction;
+            if (!uc && u.type_id >= 0x20u && u.type_id < 0x30u) {
+                ++roster_counts[u.type_id - 0x20u];
+            }
+            if (!uc) {
+                switch (u.type_id) {
+                case 0x83u: ++nest83; break;
+                case 0x88u: ++nest88; break;
+                case 0x89u: ++nest89; break;
+                case 0x8au: ++nest8a; break;
+                default: break;
+                }
+            }
+            if (u.type_id >= kMobileTypeLimit) {
+                queue_depth += u.deferred_command_count;
+            }
+            if (u.type_id == kTypeWorker &&
+                ((u.command_flags & 4u) != 0 || u.cargo_amount != 0)) {
+                ++cargo_workers;
+            }
+            if (!uc && u.type_id < kMobileTypeLimit) {
+                if ((u.command_flags & kStanceActiveFlag) != 0) {
+                    ++stance_active;
+                } else if ((u.type_flags & kStanceCommandBit) != 0 &&
+                    u.action_mode != 0) {
+                    ++stance_ready;
+                }
+                if ((u.type_flags & kMorphedTypeFlag) != 0) {
+                    ++morphed;
+                } else if ((u.type_flags & kMorphCommandBit) != 0) {
+                    ++morph_ready;
+                }
+                if ((u.command_state & kUnitCommandStateMask) ==
+                    kAttachedState) {
+                    ++attached_passengers;
+                }
+            }
             switch (u.type_id) {
             case kTypeWorker:
                 ++workers;
@@ -148,6 +202,10 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
             if (u.type_id < kMobileTypeLimit && u.type_id != kTypeWorker &&
                 !uc) {
                 ++own_army;
+                army_health += u.health;
+                army_max_health += u.max_health;
+                army_centroid_x += u.x;
+                army_centroid_y += u.y;
             }
             if (!uc && (u.type_id == kTypeBaseNest ||
                     u.type_id == kTypeLandNest || u.type_id == kTypeNest86) &&
@@ -169,6 +227,9 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
                 have_nearest = true;
                 nearest_sq = d;
             }
+            if (d <= kRaidRadiusSquared) {
+                ++raid_enemies;
+            }
         }
         if (is_neutral_monster(u)) {
             ++neutral_count;
@@ -181,8 +242,18 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
         }
     }
 
-    const u32 pop_free = observation.population_limit > observation.population_used
-        ? observation.population_limit - observation.population_used
+    // Population semantics (CheckUnitProductionRequirements, unit_lifecycle
+    // :924-934): population_used is the SUPPLY provided by class-2 buildings
+    // (audit "pop=" column: base nest 9, pop nest 8, egg nest 1 ...),
+    // population_reserved is the live demand incl. queued production, and the
+    // validator requires reserved + cost <= min(supply, hard limit).  The v1
+    // encoder computed limit - used, which is not a resource at all — the
+    // produce mask was optimistic and every over-pop pick was wasted.
+    const u32 pop_supply = observation.population_limit == 0
+        ? observation.population_used
+        : std::min(observation.population_used, observation.population_limit);
+    const u32 pop_free = pop_supply > observation.population_reserved
+        ? pop_supply - observation.population_reserved
         : 0u;
 
     // --- Feature vector (fixed layout; keep in sync with kAiRlFeatureCount) ---
@@ -251,6 +322,79 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
     put(norm(nest86, 5.0f));     // 44 late-tech buildings
     put(norm(nest87, 5.0f));     // 45
 
+    // --- v2 features [46..79] ---
+    // Research levels [46..55] for the remaining audited orders (per-order max
+    // from ai_techtree_audit.txt).
+    struct ResearchFeature {
+        u32 order;
+        float max_levels;
+    };
+    static constexpr ResearchFeature kResearchFeatures[] = {
+        {0x1au, 5.0f}, {0x1cu, 5.0f}, {0x1du, 5.0f}, {0x18u, 1.0f},
+        {0x2au, 1.0f}, {0x38u, 1.0f}, {0x2bu, 1.0f}, {0x1bu, 1.0f},
+        {0x2du, 1.0f}, {0x1eu, 1.0f},
+    };
+    for (const ResearchFeature& r : kResearchFeatures) {
+        put(std::min(static_cast<float>(
+            observation.research_order_levels[r.order]) / r.max_levels, 1.0f));
+    }
+    // Completed roster counts [56..66]: 0x23,0x25,0x26,0x27,0x28,0x29,0x2a,
+    // 0x2b,0x2c,0x2d,0x2e.
+    static constexpr u32 kRosterFeatureTypes[] = {
+        0x23u, 0x25u, 0x26u, 0x27u, 0x28u, 0x29u, 0x2au, 0x2bu, 0x2cu, 0x2du,
+        0x2eu,
+    };
+    for (const u32 type : kRosterFeatureTypes) {
+        const float scale = (type == 0x2bu || type == 0x2cu) ? 10.0f : 50.0f;
+        put(norm(roster_counts[type - 0x20u], scale));
+    }
+    // Completed extra-building counts [67..70].
+    put(norm(nest83, 5.0f));
+    put(norm(nest88, 5.0f));
+    put(norm(nest89, 5.0f));
+    put(norm(nest8a, 5.0f));
+    // Mechanic aggregates [71..79].
+    put(norm(stance_active, 20.0f));       // 71
+    put(norm(stance_ready, 20.0f));        // 72
+    put(norm(morphed, 20.0f));             // 73
+    put(norm(attached_passengers, 14.0f)); // 74
+    put(army_max_health != 0 ? static_cast<float>(army_health) /
+        static_cast<float>(army_max_health) : 0.0f);  // 75 army HP ratio
+    put(norm(raid_enemies, 20.0f));        // 76 enemies inside base perimeter
+    // 77: army centroid distance to the nearest competitor start (march
+    // progress; 1.0 = no army or no known start).
+    float march_distance = 1.0f;
+    if (own_army != 0 && observation.competitor_start_mask != 0) {
+        const i32 centroid_x =
+            static_cast<i32>(army_centroid_x / static_cast<i64>(own_army));
+        const i32 centroid_y =
+            static_cast<i32>(army_centroid_y / static_cast<i64>(own_army));
+        bool have_start = false;
+        i64 best = 0;
+        for (u32 owner = 0; owner < 8u; ++owner) {
+            if ((observation.competitor_start_mask & (1u << owner)) == 0) {
+                continue;
+            }
+            const i64 d = sq_dist(centroid_x, centroid_y,
+                observation.owner_start_x[owner],
+                observation.owner_start_y[owner]);
+            if (d == 0) {
+                continue;  // our own start
+            }
+            if (!have_start || d < best) {
+                have_start = true;
+                best = d;
+            }
+        }
+        if (have_start) {
+            march_distance = std::min(
+                std::sqrt(static_cast<float>(best)) / 32.0f / 128.0f, 1.0f);
+        }
+    }
+    put(march_distance);                   // 77
+    put(norm(queue_depth, 20.0f));         // 78 total production queue depth
+    put(norm(cargo_workers, 50.0f));       // 79
+
     // --- Legal-action mask ---
     auto set_legal = [&](AiRlHighLevelAction a, bool legal) {
         out.legal_mask[static_cast<std::size_t>(a)] = legal ? 1u : 0u;
@@ -285,9 +429,9 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
     set_legal(AiRlHighLevelAction::build_population_nest,
         has_builder && prim >= kPopulationNestCost);
     set_legal(AiRlHighLevelAction::build_egg_nest,
-        has_builder && prim >= kEggNestCost);
+        has_builder && completed_base && prim >= kEggNestCost);
     set_legal(AiRlHighLevelAction::build_land_nest,
-        has_builder && prim >= kLandNestCost);
+        has_builder && completed_egg && prim >= kLandNestCost);
     set_legal(AiRlHighLevelAction::expand_base_nest,
         has_builder && prim >= kBaseNestCost);
     // Research costs 500 primary (order 0x14 level 1).  Requires an idle
@@ -312,38 +456,75 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
     // Producer map (session reference tables): egg 0x84 makes the fighter
     // roster, base 0x80 makes 0x2c, 0x87 makes 0x29/0x2a; workers build all
     // 0x8x structures.
+    // Audited prerequisite tree (ai_techtree_audit prereq=[] rows): 딜로포스/
+    // 에그스로워 need the land nest, 람포스/트윈람포스/둥가리 the sky nest,
+    // 프테라스 sky+upgrade, 트리세스 land nisdos, 켄트로스 land+upgrade,
+    // 티라노스 every advanced building; the upgrade nest itself needs
+    // land+sky, the nisdos pair land/sky + upgrade.
     const bool completed_87 = nest87 > nest87_uc;
+    const bool completed_86 = nest86 > nest86_uc;
     set_legal(AiRlHighLevelAction::produce_unit_x22,
         completed_egg && has_pop_room && prim >= kUnit22Cost);
     set_legal(AiRlHighLevelAction::produce_unit_x25,
-        completed_egg && has_pop_room && prim >= kUnit25Cost);
+        completed_egg && completed_86 && has_pop_room && prim >= kUnit25Cost);
     set_legal(AiRlHighLevelAction::produce_unit_x27,
-        completed_egg && has_pop_room && prim >= kUnit27Cost);
+        completed_egg && completed_86 && nest88 >= 1 && has_pop_room &&
+        prim >= kUnit27Cost);
     set_legal(AiRlHighLevelAction::produce_unit_x28,
-        completed_egg && has_pop_room && prim >= kUnit28Cost);
+        completed_egg && nest89 >= 1 && has_pop_room && prim >= kUnit28Cost);
     set_legal(AiRlHighLevelAction::produce_unit_x2e,
-        completed_egg && has_pop_room && prim >= kUnit2eCost);
+        completed_egg && completed_land && nest88 >= 1 && has_pop_room &&
+        prim >= kUnit2eCost);
     // 티라노스 reserves 25 population, so the generic one-slot headroom check
     // is not enough.
     set_legal(AiRlHighLevelAction::produce_unit_x2c,
-        completed_base && prim >= kUnit2cCost &&
+        completed_base && completed_land && completed_86 && nest88 >= 1 &&
+        nest89 >= 1 && nest8a >= 1 && prim >= kUnit2cCost &&
         (observation.population_limit == 0 || pop_free >= kUnit2cPopulation));
     set_legal(AiRlHighLevelAction::produce_unit_x29,
-        completed_87 && has_pop_room && prim >= kUnit29Cost);
+        completed_87 && completed_86 && has_pop_room && prim >= kUnit29Cost);
     set_legal(AiRlHighLevelAction::produce_unit_x2a,
-        completed_87 && has_pop_room && prim >= kUnit2aCost);
+        completed_87 && completed_land && has_pop_room &&
+        prim >= kUnit2aCost);
     set_legal(AiRlHighLevelAction::build_nest_x86,
-        has_builder && prim >= kNest86Cost);
+        has_builder && completed_egg && prim >= kNest86Cost);
     set_legal(AiRlHighLevelAction::build_nest_x87,
-        has_builder && prim >= kNest87Cost);
+        has_builder && completed_egg && prim >= kNest87Cost);
     set_legal(AiRlHighLevelAction::build_nest_x83,
-        has_builder && prim >= kNest83Cost);
+        has_builder && completed_egg && prim >= kNest83Cost);
     set_legal(AiRlHighLevelAction::build_nest_x88,
-        has_builder && prim >= kNest88Cost);
+        has_builder && completed_land && completed_86 && prim >= kNest88Cost);
     set_legal(AiRlHighLevelAction::build_nest_x89,
-        has_builder && prim >= kNest89Cost);
+        has_builder && completed_land && nest88 >= 1 && prim >= kNest89Cost);
     set_legal(AiRlHighLevelAction::build_nest_x8a,
-        has_builder && prim >= kNest8aCost);
+        has_builder && completed_86 && nest88 >= 1 && prim >= kNest8aCost);
+
+    // --- v2 actions (audited mechanics) ---
+    // Merges need two completed units of the base type (pair) or the exact
+    // mutant trio plus its research gate; the planner re-validates capability
+    // bits and merge states at execution.
+    set_legal(AiRlHighLevelAction::merge_twin_velocis,
+        roster_counts[0x22u - 0x20u] >= 2);
+    set_legal(AiRlHighLevelAction::merge_twin_rhampos,
+        roster_counts[0x25u - 0x20u] >= 2);
+    set_legal(AiRlHighLevelAction::merge_twin_pteras,
+        roster_counts[0x27u - 0x20u] >= 2);
+    set_legal(AiRlHighLevelAction::merge_mutant,
+        observation.research_order_levels[0x18u] != 0 &&
+        roster_counts[0x24u - 0x20u] >= 1 &&
+        roster_counts[0x27u - 0x20u] >= 1 &&
+        roster_counts[0x28u - 0x20u] >= 1);
+    // Wild-dino morph is UI-gated on research 0x2a; exit needs a morphed unit.
+    set_legal(AiRlHighLevelAction::morph_enter_army,
+        observation.research_order_levels[0x2au] != 0 && morph_ready > 0);
+    set_legal(AiRlHighLevelAction::morph_exit_army, morphed > 0);
+    set_legal(AiRlHighLevelAction::stance_on_army, stance_ready > 0);
+    set_legal(AiRlHighLevelAction::stance_off_army, stance_active > 0);
+    set_legal(AiRlHighLevelAction::hold_army, has_army);
+    set_legal(AiRlHighLevelAction::patrol_defense, has_army);
+    // Drop attack needs the 둥가리 carrier plus a fighting squad to load.
+    set_legal(AiRlHighLevelAction::drop_attack,
+        roster_counts[0x29u - 0x20u] >= 1 && has_army);
 
     return out;
 }

@@ -14,8 +14,11 @@ namespace ranker {
 // Determinism holds on the C++ side conditional on the policy's returns, so a
 // deterministic (argmax) policy + fixed -SEED reproduces a match exactly.
 //
-// Wire format is newline-delimited JSON, one message per line:
-//   request : {"t":"act","owner":O,"frame":F,"feat":[..36..],"mask":[..15..]}
+// Wire format is newline-delimited JSON, one message per line (array sizes
+// follow kAiRlFeatureCount / kAiRlActionCount on both ends):
+//   request : {"t":"act","owner":O,"frame":F,
+//              "feat":[kAiRlFeatureCount floats],
+//              "mask":[kAiRlActionCount ints]}
 //   reply   : {"action":N}
 //   end     : {"t":"end","reason":"...","frame":F}   (no reply expected)
 

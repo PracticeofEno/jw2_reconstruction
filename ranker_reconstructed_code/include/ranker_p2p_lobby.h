@@ -113,6 +113,11 @@ struct P2PNetworkLaunchParameters {
     // -SEED:N deterministic RNG seed for self-play (reproducible matches; the
     // normal path seeds from wall-clock time).  0 means use the default.
     u32 self_play_seed = 0;
+    // -AIREPLAY:PATH — headless replay playback verification: load this .ply
+    // and play it back under the self-play harness (fast_uncapped, result
+    // JSON at the end) so recorded games can be machine-checked for playback
+    // fidelity instead of eyeballing them in the client.
+    std::array<char, kP2PNetworkLaunchMapPathBytes> self_play_replay_path{};
     // -AITRIBE:N — tribe of the built-in Computer opponent in self-play/1v1
     // (0=Primitive 1=Elf 2=Tyrano 3=Demon; 4=derive from -SEED so a seed sweep
     // rotates opponents).  Default 2 (Tyrano mirror, the historic behavior).

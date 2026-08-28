@@ -708,9 +708,11 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
     std::vector<const AiObservedUnit*> workers;
     const AiObservedUnit* nest = nullptr;
     const AiObservedUnit* nearest_enemy = nullptr;
+    const AiObservedUnit* nearest_enemy_building = nullptr;
     const AiObservedUnit* nearest_neutral = nullptr;
     const AiObservedUnit* any_own = nullptr;
     i64 nearest_enemy_distance = 0;
+    i64 nearest_enemy_building_distance = 0;
     i64 nearest_neutral_distance = 0;
     for (const AiObservedUnit& unit : observation.units) {
         if (unit.controlled && unit.alive) {
@@ -724,7 +726,12 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
                 (nest == nullptr || unit.id < nest->id)) {
                 nest = &unit;
             }
-            if (unit_can_attack(unit) && !unit_is_harvesting(unit) &&
+            // Workers are excluded from the army: drafting them into attack /
+            // hunt orders sent the whole worker line to war in the opening
+            // (they can technically attack, but they are harvesters).
+            if (unit.type_id != kTyranoWorkerType &&
+                unit.type_id < kTyranoMobileTypeLimit &&
+                unit_can_attack(unit) && !unit_is_harvesting(unit) &&
                 !unit_is_constructing(unit)) {
                 combat_units.push_back(unit.id);
             }
@@ -737,6 +744,16 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
                     unit.id < nearest_enemy->id)) {
                 nearest_enemy = &unit;
                 nearest_enemy_distance = distance;
+            }
+            // Buildings (>= 0x60 in every tribe) are the elimination
+            // objective, so the siege action tracks them separately.
+            if (unit.type_id >= kTyranoMobileTypeLimit &&
+                (nearest_enemy_building == nullptr ||
+                    distance < nearest_enemy_building_distance ||
+                    (distance == nearest_enemy_building_distance &&
+                        unit.id < nearest_enemy_building->id))) {
+                nearest_enemy_building = &unit;
+                nearest_enemy_building_distance = distance;
             }
         }
         // Neutral monster (owner 8, mobile): huntable for resources.
@@ -810,6 +827,68 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
         act.target_y = y;
         ++state.decisions_emitted;
         return ready(intent, std::move(act));
+    };
+    // Mergeable = alive controlled mobile unit of the type with the audited
+    // 0x0b capability bit that is not already inside a linked-release cycle
+    // (states 0x5f..0x61).
+    const auto is_mergeable = [](const AiObservedUnit& unit, u32 type) {
+        const u32 command_state = unit.command_state & 0x00ffffffu;
+        return unit.controlled && unit.alive && !unit.under_construction &&
+            unit.type_id == type &&
+            (unit.type_flags & kTyranoMergeCommandBit) != 0 &&
+            (command_state < 0x5fu || command_state > 0x61u);
+    };
+    const auto nearest_mergeable_of_type = [&](u32 type,
+        const AiObservedUnit* anchor) -> const AiObservedUnit* {
+        const AiObservedUnit* best = nullptr;
+        i64 best_distance = 0;
+        for (const AiObservedUnit& unit : observation.units) {
+            if (!is_mergeable(unit, type) ||
+                (anchor != nullptr && unit.id == anchor->id)) {
+                continue;
+            }
+            const i64 distance = anchor != nullptr ?
+                squared_distance(anchor->x, anchor->y, unit.x, unit.y) : 0;
+            if (best == nullptr || distance < best_distance ||
+                (distance == best_distance && unit.id < best->id)) {
+                best = &unit;
+                best_distance = distance;
+            }
+        }
+        return best;
+    };
+    const auto merge_pair_of_type = [&](u32 type) {
+        // Nearest same-type pair, so newly produced units merge without long
+        // walks.  O(n^2) over the type's roster is fine at RTS scales.
+        const AiObservedUnit* best_a = nullptr;
+        const AiObservedUnit* best_b = nullptr;
+        i64 best_distance = 0;
+        for (const AiObservedUnit& lhs : observation.units) {
+            if (!is_mergeable(lhs, type)) {
+                continue;
+            }
+            for (const AiObservedUnit& rhs : observation.units) {
+                if (&rhs == &lhs || !is_mergeable(rhs, type) ||
+                    rhs.id <= lhs.id) {
+                    continue;
+                }
+                const i64 distance =
+                    squared_distance(lhs.x, lhs.y, rhs.x, rhs.y);
+                if (best_a == nullptr || distance < best_distance) {
+                    best_a = &lhs;
+                    best_b = &rhs;
+                    best_distance = distance;
+                }
+            }
+        }
+        if (best_a == nullptr || best_b == nullptr) {
+            return decision;
+        }
+        AiSemanticAction act{};
+        act.kind = AiSemanticActionKind::merge_units;
+        act.unit_ids = {best_a->id, best_b->id};
+        ++state.decisions_emitted;
+        return ready(TyranoScriptedBotIntent::merge_pair, std::move(act));
     };
 
     switch (action) {
@@ -903,18 +982,59 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
             std::move(act));
     }
     case AiRlHighLevelAction::scout_map: {
-        // Send one idle-ish unit (prefer a worker, else any) to an exploration
-        // point.  Uses a plain move so it does not commit the army.
-        const UnitMovementPoint point = exploration_point(state, observation);
+        // Send one idle-ish unit (prefer a worker, else any) on a plain move
+        // so scouting never commits the army.  Destination priority:
+        //   1. the nearest competitor start whose tile is still UNEXPLORED —
+        //      that is where an enemy base can actually be; and
+        //   2. once every start is explored, the generic center/corner sweep
+        //      (advancing the cursor each pick so coverage progresses).
         const AiObservedUnit* scout = workers.empty() ? any_own : workers.front();
         if (scout == nullptr) {
             return decision;
         }
+        i32 scout_x = -1;
+        i32 scout_y = -1;
+        i64 scout_distance = 0;
+        for (u32 owner = 0; owner < 8u; ++owner) {
+            if ((observation.competitor_start_mask & (1u << owner)) == 0) {
+                continue;
+            }
+            const i32 sx = observation.owner_start_x[owner];
+            const i32 sy = observation.owner_start_y[owner];
+            const i64 distance = squared_distance(observation.start_x,
+                observation.start_y, sx, sy);
+            if (distance == 0) {
+                continue;  // our own start
+            }
+            const u32 tile_x = static_cast<u32>(std::max(sx, 0)) >> 5;
+            const u32 tile_y = static_cast<u32>(std::max(sy, 0)) >> 5;
+            const std::size_t tile_index =
+                static_cast<std::size_t>(tile_y) * observation.map_width_tiles +
+                tile_x;
+            if (tile_x >= observation.map_width_tiles ||
+                tile_y >= observation.map_height_tiles ||
+                tile_index >= observation.tiles.size() ||
+                observation.tiles[tile_index].explored) {
+                continue;
+            }
+            if (scout_x < 0 || distance < scout_distance) {
+                scout_x = sx;
+                scout_y = sy;
+                scout_distance = distance;
+            }
+        }
+        if (scout_x < 0) {
+            ++state.exploration_index;
+            const UnitMovementPoint point =
+                exploration_point(state, observation);
+            scout_x = point.x;
+            scout_y = point.y;
+        }
         AiSemanticAction act{};
         act.kind = AiSemanticActionKind::move;
         act.unit_ids = {scout->id};
-        act.target_x = point.x;
-        act.target_y = point.y;
+        act.target_x = scout_x;
+        act.target_y = scout_y;
         ++state.decisions_emitted;
         return ready(TyranoScriptedBotIntent::explore, std::move(act));
     }
@@ -930,15 +1050,93 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
         }
         return decision;
     case AiRlHighLevelAction::attack_enemy_base: {
+        // Siege: the elimination objective is the enemy's BUILDINGS, so send
+        // the whole army at the nearest visible one (previously this was a
+        // plain exploration move that never razed anything — armies of 200+
+        // units stalemated for 100k frames).  Fall back to the nearest enemy
+        // unit; with nothing visible, MARCH ON THE NEAREST ENEMY START —
+        // corner-sweeping never found the base, so sieges never engaged.
+        const AiObservedUnit* target = nearest_enemy_building != nullptr ?
+            nearest_enemy_building : nearest_enemy;
+        if (!combat_units.empty() && target != nullptr) {
+            AiSemanticAction act{};
+            act.kind = AiSemanticActionKind::attack_unit;
+            act.unit_ids = std::move(combat_units);
+            act.target_unit_id = target->id;
+            ++state.decisions_emitted;
+            return ready(TyranoScriptedBotIntent::attack_visible_enemy,
+                std::move(act));
+        }
+        i64 best_distance = 0;
+        i32 march_x = 0;
+        i32 march_y = 0;
+        bool have_march = false;
+        for (u32 owner = 0; owner < 8u; ++owner) {
+            if ((observation.competitor_start_mask & (1u << owner)) == 0) {
+                continue;
+            }
+            const i64 distance = squared_distance(observation.start_x,
+                observation.start_y, observation.owner_start_x[owner],
+                observation.owner_start_y[owner]);
+            if (distance == 0) {
+                continue;  // our own start
+            }
+            if (!have_march || distance < best_distance) {
+                have_march = true;
+                best_distance = distance;
+                march_x = observation.owner_start_x[owner];
+                march_y = observation.owner_start_y[owner];
+            }
+        }
+        if (have_march) {
+            return move_army_to(march_x, march_y,
+                TyranoScriptedBotIntent::attack_visible_enemy);
+        }
+        ++state.exploration_index;
         const UnitMovementPoint point = exploration_point(state, observation);
         return move_army_to(point.x, point.y,
             TyranoScriptedBotIntent::explore);
     }
     case AiRlHighLevelAction::defend_base:
-    case AiRlHighLevelAction::retreat:
+    case AiRlHighLevelAction::retreat: {
+        // With the army already home, HOLD instead of re-pathing: a plain
+        // move let defenders chase whatever crossed their acquisition radius
+        // and scatter off the base again.
+        if (!combat_units.empty()) {
+            constexpr i64 kHomeRadiusSquared = 96 * 96;
+            i64 centroid_x = 0;
+            i64 centroid_y = 0;
+            std::size_t counted = 0;
+            for (const AiObservedUnit& unit : observation.units) {
+                if (unit.controlled && unit.alive &&
+                    std::find(combat_units.begin(), combat_units.end(),
+                        unit.id) != combat_units.end()) {
+                    centroid_x += unit.x;
+                    centroid_y += unit.y;
+                    ++counted;
+                }
+            }
+            if (counted != 0) {
+                centroid_x /= static_cast<i64>(counted);
+                centroid_y /= static_cast<i64>(counted);
+                const i64 home_distance = squared_distance(
+                    static_cast<i32>(centroid_x), static_cast<i32>(centroid_y),
+                    std::max(observation.start_x, 0),
+                    std::max(observation.start_y, 0));
+                if (home_distance <= kHomeRadiusSquared) {
+                    AiSemanticAction act{};
+                    act.kind = AiSemanticActionKind::hold_position;
+                    act.unit_ids = std::move(combat_units);
+                    ++state.decisions_emitted;
+                    return ready(TyranoScriptedBotIntent::hold_army,
+                        std::move(act));
+                }
+            }
+        }
         return move_army_to(std::max(observation.start_x, 0),
             std::max(observation.start_y, 0),
             TyranoScriptedBotIntent::explore);
+    }
     case AiRlHighLevelAction::hunt_neutral_monster:
         if (!combat_units.empty() && nearest_neutral != nullptr) {
             AiSemanticAction act{};
@@ -994,6 +1192,251 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
     case AiRlHighLevelAction::build_nest_x8a:
         return build_structure(0x8au,
             TyranoScriptedBotIntent::build_land_nest);
+    case AiRlHighLevelAction::merge_twin_velocis:
+        return merge_pair_of_type(kTyranoUnit22Type);
+    case AiRlHighLevelAction::merge_twin_rhampos:
+        return merge_pair_of_type(kTyranoRhamposType);
+    case AiRlHighLevelAction::merge_twin_pteras:
+        return merge_pair_of_type(kTyranoPterasType);
+    case AiRlHighLevelAction::merge_mutant: {
+        // 뮤턴트 triad (딜로포스+프테라스+트리세스) is gated on research 0x18.
+        if (observation.research_order_levels[
+                kTyranoMutantMergeResearchOrder] == 0) {
+            return decision;
+        }
+        const AiObservedUnit* dilophos =
+            nearest_mergeable_of_type(kTyranoDilophosType, nullptr);
+        if (dilophos == nullptr) {
+            return decision;
+        }
+        const AiObservedUnit* pteras =
+            nearest_mergeable_of_type(kTyranoPterasType, dilophos);
+        const AiObservedUnit* triceps =
+            nearest_mergeable_of_type(kTyranoTricepsType, dilophos);
+        if (pteras == nullptr || triceps == nullptr) {
+            return decision;
+        }
+        AiSemanticAction act{};
+        act.kind = AiSemanticActionKind::merge_units;
+        act.unit_ids = {dilophos->id, pteras->id, triceps->id};
+        ++state.decisions_emitted;
+        return ready(TyranoScriptedBotIntent::merge_mutant, std::move(act));
+    }
+    case AiRlHighLevelAction::morph_enter_army: {
+        // Wild-dino morph is human-reachable only after research 0x2a (the UI
+        // gates the selector on the owner variant count).
+        if (observation.research_order_levels[kTyranoMorphResearchOrder] == 0) {
+            return decision;
+        }
+        AiSemanticAction act{};
+        act.kind = AiSemanticActionKind::morph_enter;
+        for (const AiObservedUnit& unit : observation.units) {
+            if (act.unit_ids.size() >= kAiMaximumUnitsPerAction) {
+                break;
+            }
+            if (unit.controlled && unit.alive && !unit.under_construction &&
+                unit.type_id < kTyranoMobileTypeLimit &&
+                (unit.type_flags & kTyranoMorphCommandBit) != 0 &&
+                (unit.type_flags & kTyranoMorphedTypeFlag) == 0) {
+                act.unit_ids.push_back(unit.id);
+            }
+        }
+        if (act.unit_ids.empty()) {
+            return decision;
+        }
+        ++state.decisions_emitted;
+        return ready(TyranoScriptedBotIntent::morph_shift, std::move(act));
+    }
+    case AiRlHighLevelAction::morph_exit_army: {
+        AiSemanticAction act{};
+        act.kind = AiSemanticActionKind::morph_exit;
+        for (const AiObservedUnit& unit : observation.units) {
+            if (act.unit_ids.size() >= kAiMaximumUnitsPerAction) {
+                break;
+            }
+            if (unit.controlled && unit.alive &&
+                unit.type_id < kTyranoMobileTypeLimit &&
+                (unit.type_flags & kTyranoMorphedTypeFlag) != 0) {
+                act.unit_ids.push_back(unit.id);
+            }
+        }
+        if (act.unit_ids.empty()) {
+            return decision;
+        }
+        ++state.decisions_emitted;
+        return ready(TyranoScriptedBotIntent::morph_shift, std::move(act));
+    }
+    case AiRlHighLevelAction::stance_on_army:
+    case AiRlHighLevelAction::stance_off_army: {
+        const bool on = action == AiRlHighLevelAction::stance_on_army;
+        AiSemanticAction act{};
+        act.kind = AiSemanticActionKind::set_stance;
+        act.stance_id = kTyranoStanceId;
+        act.stance_on = on;
+        for (const AiObservedUnit& unit : observation.units) {
+            if (act.unit_ids.size() >= kAiMaximumUnitsPerAction) {
+                break;
+            }
+            if (!unit.controlled || !unit.alive ||
+                unit.type_id >= kTyranoMobileTypeLimit ||
+                (unit.type_flags & kTyranoStanceCommandBit) == 0) {
+                continue;
+            }
+            const bool active =
+                (unit.command_flags & kTyranoStanceActiveFlag) != 0;
+            if (on ? (unit.action_mode != 0 && !active) : active) {
+                act.unit_ids.push_back(unit.id);
+            }
+        }
+        if (act.unit_ids.empty()) {
+            return decision;
+        }
+        ++state.decisions_emitted;
+        return ready(TyranoScriptedBotIntent::stance_toggle, std::move(act));
+    }
+    case AiRlHighLevelAction::hold_army: {
+        if (combat_units.empty()) {
+            return decision;
+        }
+        AiSemanticAction act{};
+        act.kind = AiSemanticActionKind::hold_position;
+        act.unit_ids = std::move(combat_units);
+        ++state.decisions_emitted;
+        return ready(TyranoScriptedBotIntent::hold_army, std::move(act));
+    }
+    case AiRlHighLevelAction::patrol_defense: {
+        if (combat_units.empty()) {
+            return decision;
+        }
+        // Patrol leg: current position <-> the nearest explored resource
+        // cluster (the harvest line is what raids hit first).
+        i32 patrol_x = -1;
+        i32 patrol_y = -1;
+        i64 patrol_distance = 0;
+        for (u32 tile_y = 0; tile_y < observation.map_height_tiles; ++tile_y) {
+            for (u32 tile_x = 0; tile_x < observation.map_width_tiles;
+                 ++tile_x) {
+                const std::size_t index = static_cast<std::size_t>(tile_y) *
+                    observation.map_width_tiles + tile_x;
+                if (index >= observation.tiles.size()) {
+                    continue;
+                }
+                const AiObservedMapTile& tile = observation.tiles[index];
+                if (!tile.explored || tile.resource_amount == 0) {
+                    continue;
+                }
+                const i32 world_x = static_cast<i32>(tile_x << 5) + 16;
+                const i32 world_y = static_cast<i32>(tile_y << 5) + 16;
+                const i64 distance = squared_distance(observation.start_x,
+                    observation.start_y, world_x, world_y);
+                if (patrol_x < 0 || distance < patrol_distance) {
+                    patrol_x = world_x;
+                    patrol_y = world_y;
+                    patrol_distance = distance;
+                }
+            }
+        }
+        if (patrol_x < 0) {
+            patrol_x = std::max(observation.start_x, 0);
+            patrol_y = std::max(observation.start_y, 0);
+        }
+        AiSemanticAction act{};
+        act.kind = AiSemanticActionKind::patrol;
+        act.unit_ids = std::move(combat_units);
+        act.target_x = patrol_x;
+        act.target_y = patrol_y;
+        ++state.decisions_emitted;
+        return ready(TyranoScriptedBotIntent::patrol_defense, std::move(act));
+    }
+    case AiRlHighLevelAction::drop_attack: {
+        // Initiate only; PlanTyranoDropAttackAutopilot advances the composite
+        // on subsequent decision cycles regardless of later policy picks.
+        if (state.drop_stage != 0) {
+            return decision;
+        }
+        const AiObservedUnit* carrier = nullptr;
+        for (const AiObservedUnit& unit : observation.units) {
+            if (unit.controlled && unit.alive && !unit.under_construction &&
+                unit.type_id == kTyranoCarrierType &&
+                (carrier == nullptr || unit.id < carrier->id)) {
+                carrier = &unit;
+            }
+        }
+        if (carrier == nullptr) {
+            return decision;
+        }
+        // Boardable fighter set per the audited transport_flags rows (air and
+        // composite units cannot board).
+        AiSemanticAction act{};
+        act.kind = AiSemanticActionKind::board_transport;
+        act.target_unit_id = carrier->id;
+        struct Candidate {
+            u32 id;
+            i64 distance;
+        };
+        std::vector<Candidate> candidates;
+        for (const AiObservedUnit& unit : observation.units) {
+            if (!unit.controlled || !unit.alive || unit.under_construction ||
+                unit.type_id == kTyranoWorkerType ||
+                unit.type_id >= kTyranoMobileTypeLimit ||
+                !unit_can_attack(unit)) {
+                continue;
+            }
+            switch (unit.type_id) {
+            case 0x21u: case 0x22u: case 0x23u: case 0x24u:
+            case 0x25u: case 0x28u: case 0x2au: case 0x2eu:
+                break;
+            default:
+                continue;
+            }
+            candidates.push_back({unit.id, squared_distance(carrier->x,
+                carrier->y, unit.x, unit.y)});
+        }
+        if (candidates.empty()) {
+            return decision;
+        }
+        std::sort(candidates.begin(), candidates.end(),
+            [](const Candidate& lhs, const Candidate& rhs) {
+                return lhs.distance != rhs.distance ?
+                    lhs.distance < rhs.distance : lhs.id < rhs.id;
+            });
+        constexpr std::size_t kDropSquadSize = 4;
+        for (std::size_t i = 0; i < candidates.size() && i < kDropSquadSize;
+             ++i) {
+            act.unit_ids.push_back(candidates[i].id);
+        }
+        // March target: the nearest enemy start (same objective the siege
+        // path uses).
+        i32 target_x = -1;
+        i32 target_y = -1;
+        i64 target_distance = 0;
+        for (u32 owner = 0; owner < 8u; ++owner) {
+            if ((observation.competitor_start_mask & (1u << owner)) == 0) {
+                continue;
+            }
+            const i64 distance = squared_distance(observation.start_x,
+                observation.start_y, observation.owner_start_x[owner],
+                observation.owner_start_y[owner]);
+            if (distance == 0) {
+                continue;
+            }
+            if (target_x < 0 || distance < target_distance) {
+                target_x = observation.owner_start_x[owner];
+                target_y = observation.owner_start_y[owner];
+                target_distance = distance;
+            }
+        }
+        if (target_x < 0) {
+            return decision;
+        }
+        state.drop_stage = 1;
+        state.drop_carrier_id = carrier->id;
+        state.drop_stage_frame = observation.simulation_frame;
+        state.drop_target_x = target_x;
+        state.drop_target_y = target_y;
+        ++state.decisions_emitted;
+        return ready(TyranoScriptedBotIntent::drop_attack, std::move(act));
+    }
     }
 
     decision.code = TyranoScriptedBotDecisionCode::no_action;
@@ -1099,7 +1542,250 @@ std::vector<AiSemanticAction> PlanTyranoDefenseAutopilot(
     action.kind = AiSemanticActionKind::attack_unit;
     action.unit_ids = std::move(defenders);
     action.target_unit_id = intruder->id;
-    actions.push_back(std::move(action));
+    // >14-unit orders are rejected by the planner (too_many_units) — a large
+    // garrison must answer in chunks or it silently never answers at all.
+    for (AiSemanticAction& chunk : ChunkAiSemanticActionUnits(action)) {
+        actions.push_back(std::move(chunk));
+    }
+    return actions;
+}
+
+std::vector<AiSemanticAction> PlanTyranoOffenseAutopilot(
+    TyranoScriptedBotState& state, const AiObservation& observation) {
+    // Enough fighters to raze a base without feeding the army piecemeal.
+    constexpr std::size_t kOffenseMinArmy = 15;
+    // A blind march commits the army harder, so demand a bigger force.
+    constexpr std::size_t kOffenseMarchMinArmy = 25;
+    // Sieges are long; re-order rarely so unit pathing is not reset.
+    constexpr u32 kOffenseReorderFrames = 128u;
+    // Marker id for the march order in the reorder throttle.
+    constexpr u32 kOffenseMarchTargetId = 0xfffffffeu;
+
+    std::vector<AiSemanticAction> actions;
+    std::vector<u32> fighters;
+    for (const AiObservedUnit& unit : observation.units) {
+        if (unit.controlled && unit.alive && !unit.under_construction &&
+            unit.type_id != kTyranoWorkerType &&
+            unit.type_id < kTyranoMobileTypeLimit &&
+            unit_can_attack(unit) && !unit_is_constructing(unit)) {
+            fighters.push_back(unit.id);
+        }
+    }
+    if (fighters.size() < kOffenseMinArmy) {
+        return actions;
+    }
+
+    // Nearest visible enemy building — the elimination objective.
+    const AiObservedUnit* target = nullptr;
+    i64 target_distance = 0;
+    for (const AiObservedUnit& unit : observation.units) {
+        if (!is_hostile_visible_unit(observation, unit) ||
+            unit.type_id < kTyranoMobileTypeLimit) {
+            continue;
+        }
+        const i64 distance = squared_distance(observation.start_x,
+            observation.start_y, unit.x, unit.y);
+        if (target == nullptr || distance < target_distance ||
+            (distance == target_distance && unit.id < target->id)) {
+            target = &unit;
+            target_distance = distance;
+        }
+    }
+    if (target == nullptr) {
+        // No enemy building in sight: with a decisive army, attack-move on
+        // the nearest enemy start.  Without this, two turtling policies never
+        // even SEE each other's base and every match dies at the frame cap —
+        // the elimination reward needs eliminations to actually occur.
+        if (fighters.size() < kOffenseMarchMinArmy) {
+            return actions;
+        }
+        i64 best_distance = 0;
+        i32 march_x = 0;
+        i32 march_y = 0;
+        bool have_march = false;
+        for (u32 owner = 0; owner < 8u; ++owner) {
+            if ((observation.competitor_start_mask & (1u << owner)) == 0) {
+                continue;
+            }
+            const i64 distance = squared_distance(observation.start_x,
+                observation.start_y, observation.owner_start_x[owner],
+                observation.owner_start_y[owner]);
+            if (distance == 0) {
+                continue;  // our own start
+            }
+            if (!have_march || distance < best_distance) {
+                have_march = true;
+                best_distance = distance;
+                march_x = observation.owner_start_x[owner];
+                march_y = observation.owner_start_y[owner];
+            }
+        }
+        if (!have_march) {
+            return actions;
+        }
+        if (state.last_offense_target_id == kOffenseMarchTargetId &&
+            state.last_offense_order_frame != 0xffffffffu &&
+            observation.simulation_frame - state.last_offense_order_frame <
+                kOffenseReorderFrames) {
+            return actions;
+        }
+        state.last_offense_target_id = kOffenseMarchTargetId;
+        state.last_offense_order_frame = observation.simulation_frame;
+        AiSemanticAction march{};
+        march.kind = AiSemanticActionKind::attack_move;
+        march.unit_ids = std::move(fighters);
+        march.target_x = march_x;
+        march.target_y = march_y;
+        for (AiSemanticAction& chunk : ChunkAiSemanticActionUnits(march)) {
+            actions.push_back(std::move(chunk));
+        }
+        return actions;
+    }
+    if (target->id == state.last_offense_target_id &&
+        state.last_offense_order_frame != 0xffffffffu &&
+        observation.simulation_frame - state.last_offense_order_frame <
+            kOffenseReorderFrames) {
+        return actions;
+    }
+    state.last_offense_target_id = target->id;
+    state.last_offense_order_frame = observation.simulation_frame;
+
+    AiSemanticAction action{};
+    action.kind = AiSemanticActionKind::attack_unit;
+    action.unit_ids = std::move(fighters);
+    action.target_unit_id = target->id;
+    for (AiSemanticAction& chunk : ChunkAiSemanticActionUnits(action)) {
+        actions.push_back(std::move(chunk));
+    }
+    return actions;
+}
+
+std::vector<AiSemanticAction> ChunkAiSemanticActionUnits(
+    const AiSemanticAction& action) {
+    std::vector<AiSemanticAction> chunks;
+    if (action.unit_ids.size() <= kAiMaximumUnitsPerAction) {
+        chunks.push_back(action);
+        return chunks;
+    }
+    // merge_units arity is semantic (2 or 3), never chunked.
+    if (action.kind == AiSemanticActionKind::merge_units) {
+        chunks.push_back(action);
+        return chunks;
+    }
+    for (std::size_t begin = 0; begin < action.unit_ids.size();
+         begin += kAiMaximumUnitsPerAction) {
+        AiSemanticAction chunk = action;
+        chunk.unit_ids.assign(action.unit_ids.begin() + begin,
+            action.unit_ids.begin() + std::min(action.unit_ids.size(),
+                begin + kAiMaximumUnitsPerAction));
+        chunks.push_back(std::move(chunk));
+    }
+    return chunks;
+}
+
+std::vector<AiSemanticAction> PlanTyranoDropAttackAutopilot(
+    TyranoScriptedBotState& state, const AiObservation& observation) {
+    // Deterministic composite: every transition keys off the observation and
+    // decision frames only.  Stage 0 = idle (nothing to do here; initiation
+    // is the drop_attack high-level action).
+    constexpr u32 kBoardingMinFrames = 256u;
+    constexpr u32 kBoardingTimeoutFrames = 1024u;
+    constexpr u32 kTravelTimeoutFrames = 4096u;
+    constexpr i64 kUnloadRadiusSquared = 192 * 192;
+    constexpr i64 kSquadRallyRadiusSquared = 256 * 256;
+
+    std::vector<AiSemanticAction> actions;
+    if (state.drop_stage == 0) {
+        return actions;
+    }
+    const AiObservedUnit* carrier = nullptr;
+    for (const AiObservedUnit& unit : observation.units) {
+        if (unit.controlled && unit.alive &&
+            unit.id == state.drop_carrier_id) {
+            carrier = &unit;
+            break;
+        }
+    }
+    if (carrier == nullptr) {
+        state.drop_stage = 0;
+        return actions;
+    }
+    const u32 stage_age =
+        observation.simulation_frame - state.drop_stage_frame;
+
+    if (state.drop_stage == 1) {
+        std::size_t attached = 0;
+        for (const AiObservedUnit& unit : observation.units) {
+            if (unit.controlled && unit.alive &&
+                (unit.command_state & 0x00ffffffu) ==
+                    kTyranoTransportAttachedState) {
+                ++attached;
+            }
+        }
+        const bool loaded_enough =
+            attached != 0 && stage_age >= kBoardingMinFrames;
+        if (!loaded_enough && stage_age < kBoardingTimeoutFrames) {
+            return actions;
+        }
+        if (attached == 0) {
+            // Nobody boarded before the timeout: abort the run.
+            state.drop_stage = 0;
+            return actions;
+        }
+        AiSemanticAction travel{};
+        travel.kind = AiSemanticActionKind::move;
+        travel.unit_ids = {carrier->id};
+        travel.target_x = state.drop_target_x;
+        travel.target_y = state.drop_target_y;
+        actions.push_back(std::move(travel));
+        state.drop_stage = 2;
+        state.drop_stage_frame = observation.simulation_frame;
+        return actions;
+    }
+
+    if (state.drop_stage == 2) {
+        const i64 distance = squared_distance(carrier->x, carrier->y,
+            state.drop_target_x, state.drop_target_y);
+        if (distance > kUnloadRadiusSquared &&
+            stage_age < kTravelTimeoutFrames) {
+            return actions;
+        }
+        AiSemanticAction unload{};
+        unload.kind = AiSemanticActionKind::unload_transport;
+        unload.unit_ids = {carrier->id};
+        unload.target_x = carrier->x;
+        unload.target_y = carrier->y;
+        actions.push_back(std::move(unload));
+        state.drop_stage = 3;
+        state.drop_stage_frame = observation.simulation_frame;
+        return actions;
+    }
+
+    // Stage 3: the squad is on the ground next to the carrier — send it at
+    // the drop objective and release the composite.
+    AiSemanticAction assault{};
+    assault.kind = AiSemanticActionKind::attack_move;
+    assault.target_x = state.drop_target_x;
+    assault.target_y = state.drop_target_y;
+    for (const AiObservedUnit& unit : observation.units) {
+        if (assault.unit_ids.size() >= kAiMaximumUnitsPerAction) {
+            break;
+        }
+        if (unit.controlled && unit.alive &&
+            unit.type_id != kTyranoWorkerType &&
+            unit.type_id != kTyranoCarrierType &&
+            unit.type_id < kTyranoMobileTypeLimit && unit_can_attack(unit) &&
+            (unit.command_state & 0x00ffffffu) !=
+                kTyranoTransportAttachedState &&
+            squared_distance(carrier->x, carrier->y, unit.x, unit.y) <=
+                kSquadRallyRadiusSquared) {
+            assault.unit_ids.push_back(unit.id);
+        }
+    }
+    state.drop_stage = 0;
+    if (!assault.unit_ids.empty()) {
+        actions.push_back(std::move(assault));
+    }
     return actions;
 }
 

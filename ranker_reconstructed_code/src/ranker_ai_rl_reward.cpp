@@ -113,13 +113,15 @@ AiRlTraceStep make_trace_step(const AiRlOwnerTrace& trace,
     step.done = done;
     step.features = trace.prev_features;
     step.legal_mask = trace.prev_mask;
+    step.losses = trace.prev_losses;
     return step;
 }
 
 } // namespace
 
 void AiRlTraceRecordDecision(AiRlOwnerTrace& trace, u32 frame, u32 action,
-    const AiRlStepEncoding& encoding, const AiRlRewardConfig& config) {
+    const AiRlStepEncoding& encoding, const AiRlRewardConfig& config,
+    const std::array<u32, 4>& losses) {
     const float potential_now =
         AiRlPotentialFromFeatures(encoding.features, config);
     if (trace.has_prev) {
@@ -135,6 +137,7 @@ void AiRlTraceRecordDecision(AiRlOwnerTrace& trace, u32 frame, u32 action,
     trace.prev_potential = potential_now;
     trace.prev_features = encoding.features;
     trace.prev_mask = encoding.legal_mask;
+    trace.prev_losses = losses;
 }
 
 void AiRlTraceFinalize(AiRlOwnerTrace& trace, AiRlTerminalOutcome outcome,

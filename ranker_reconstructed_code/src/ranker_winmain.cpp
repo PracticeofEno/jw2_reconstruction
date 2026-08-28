@@ -844,6 +844,13 @@ struct RuntimeGlobals {
     // learnable policy (currently -AIRANDOM) drives the owner; flushed to
     // ai_rl_reward_trace.json when the self-play match ends.
     std::array<AiRlOwnerTrace, kPlayerSlotCount> ai_play_rl_traces{};
+    // Cumulative combat-loss accounting per owner (war-score reward material):
+    // production-cost sum of DEAD units, split mobile/building.  Incremented by
+    // the runtime death-accounting hook; zero-initialized per process (one
+    // self-play match per process).  Linked-release merges and morphs do not
+    // route through that hook, so consuming units into a twin is not a "loss".
+    std::array<u64, kPlayerSlotCount> ai_play_unit_value_lost{};
+    std::array<u64, kPlayerSlotCount> ai_play_building_value_lost{};
     // Imitation learning (#6): when enabled, a built-in-AI owner's per-decision
     // observations are recorded here and flushed to ai_rl_observe.jsonl at match
     // end for off-sim behavior cloning of the built-in Owner AI.
@@ -869,6 +876,14 @@ struct RuntimeGlobals {
     // Self-play harness: set once the match result JSON has been written so the
     // per-frame monitor emits it exactly once and then tears the process down.
     bool ai_selfplay_result_written = false;
+    // The map's start-slot coordinate table (map-slot order, captured before
+    // the lobby owner->slot permutation is applied).  This is MAP knowledge —
+    // where bases CAN be — as opposed to where each owner actually is; the AI
+    // executor scouts/marches these candidates instead of being told the
+    // enemy's true position.
+    std::array<i32, kPlayerSlotCount> map_start_slot_x{};
+    std::array<i32, kPlayerSlotCount> map_start_slot_y{};
+    u32 map_start_slot_mask = 0;
     AsyncComContext async_com;
     GameplaySessionFlowState gameplay_session_flow;
     u32 gameplay_transition_mode = 0;
@@ -12397,6 +12412,42 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
                 "start-slots: hydrated replay link params local=%lu",
                 static_cast<unsigned long>(
                     g_runtime.p2p_session_start_state.copied_runtime_local_player));
+            // Self-play replay playback: the recorded Computer(AI) owners were
+            // PACKET-driven with the built-in Owner AI suppressed.  The lobby
+            // payload cannot distinguish them from ordinary Computers (both
+            // are start-state 1), so playback used to run the built-in AI ON
+            // TOP of the recorded packets — double control, instant desync
+            // (worker armies, razed bases that never end the game).  Detect
+            // our replays by their observer host + "Observer" name marker and
+            // restore the suppression; the packet pump itself stays off in
+            // playback, so the recorded packets are the only controller.
+            const LinkLobbyState& playback_lobby = link_lobby_state();
+            const int playback_local = std::clamp(
+                playback_lobby.local_player_index, 0,
+                kLinkLobbyAvatarCount - 1);
+            const bool selfplay_replay =
+                playback_lobby.start_states[playback_local] == 2 &&
+                std::strncmp(link_lobby_startup_player_name(
+                    playback_lobby, static_cast<u32>(playback_local)).c_str(),
+                    "Observer", 8) == 0;
+            if (selfplay_replay) {
+                for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+                    if (playback_lobby.start_states[owner] == 1) {
+                        g_runtime.ai_play_owner_slots[owner] = true;
+                    }
+                }
+                g_runtime.ai_play_scripted_policy_enabled = true;
+                append_startup_log(
+                    "ai-replay: self-play playback, built-in AI suppressed");
+            }
+            // Headless verification (-AIREPLAY under -AISELF) runs playback
+            // uncapped like a training game; interactive playback keeps the
+            // user's replay speed controls.
+            if (p2p_network_launch_parameters().self_play &&
+                p2p_network_launch_parameters().self_play_replay_path[0] !=
+                    '\0') {
+                gameplay_loop_state().fast_uncapped = true;
+            }
         }
     }
     gameplay_loop_state().fixed_step_mode = 4;
@@ -12582,58 +12633,11 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
         g_runtime.gameplay_startup_state.local_owner_id = local_player;
         g_runtime.gameplay_player_slots.local_player_slot = local_player;
     }
-    if (p2p_network_launch_parameters().self_play &&
-        !g_runtime.gameplay_in_game_load_resume.pending &&
-        !campaign_stage_session &&
-        !replay_recording_state().playback_mode) {
-        GameplaySessionStartupState& startup = g_runtime.gameplay_startup_state;
-        // The host slot never plays in self-play (the AIs are owners 1/2), so
-        // make it a real OBSERVER: no start units spawn for it, the defeat
-        // check skips it, and replays show a clean AI-vs-AI match.  1v1 mode
-        // keeps the host playing (it IS the scripted side), so leave it there.
-        if (!p2p_network_launch_parameters().self_play_1v1 &&
-            startup.local_owner_id < startup.owner_slots.size()) {
-            startup.owner_slots[startup.local_owner_id].slot_state =
-                static_cast<u8>(PlayerSlotState::observer);
-            append_startup_log("ai-selfplay: host owner=%lu -> observer",
-                static_cast<unsigned long>(startup.local_owner_id));
-        }
-        // Randomize start positions each match: -SEED-derived Fisher-Yates
-        // over the competing slots' positional fields (map_slot/start_x/y).
-        // Deterministic per seed, so mirrored league pairs stay comparable.
-        u32 competitors[kPlayerSlotCount];
-        u32 competitor_count = 0;
-        for (u32 owner = 0; owner < startup.owner_slots.size(); ++owner) {
-            const u8 slot_state = startup.owner_slots[owner].slot_state;
-            if (slot_state != static_cast<u8>(PlayerSlotState::observer) &&
-                slot_state != static_cast<u8>(PlayerSlotState::disabled)) {
-                competitors[competitor_count++] = owner;
-            }
-        }
-        u32 shuffle_rng =
-            p2p_network_launch_parameters().self_play_seed * 2654435761u +
-            0x9e3779b9u;
-        for (u32 i = competitor_count; i > 1; --i) {
-            shuffle_rng = shuffle_rng * 1664525u + 1013904223u;
-            const u32 j = (shuffle_rng >> 16) % i;
-            if (j == i - 1) {
-                continue;
-            }
-            GameplayScenarioOwnerSlot& a =
-                startup.owner_slots[competitors[i - 1]];
-            GameplayScenarioOwnerSlot& b = startup.owner_slots[competitors[j]];
-            std::swap(a.map_slot, b.map_slot);
-            std::swap(a.start_x, b.start_x);
-            std::swap(a.start_y, b.start_y);
-        }
-        if (competitor_count > 1) {
-            append_startup_log(
-                "ai-selfplay: start positions shuffled (%lu competitors, seed=%lu)",
-                static_cast<unsigned long>(competitor_count),
-                static_cast<unsigned long>(
-                    p2p_network_launch_parameters().self_play_seed));
-        }
-    }
+    // NOTE: the self-play observer-host and start-position-shuffle transforms
+    // moved into PrepareLinkLobbyStartParameters (ranker_link_lobby.cpp) so
+    // they are recorded in the start-parameter payload and reproduced by
+    // replay playback.  Transforming here, after the payload snapshot, made
+    // saved replays desync (the host spawned units the recording never had).
     append_startup_log("start-slots: apply pending link params ok mode=%lu active_slots=%lu local=%lu",
         static_cast<unsigned long>(g_runtime.gameplay_startup_state.session_mode),
         static_cast<unsigned long>(g_runtime.gameplay_startup_state.active_slot_count),
@@ -15445,14 +15449,14 @@ u32 default_gameplay_loop_read_tick_ms(GameplayLoopState& state) {
 
 bool default_gameplay_loop_sync_replay_direct_music(GameplayLoopState& state) {
     P2PGameSessionStartState& p2p = g_runtime.p2p_session_start_state;
-    if (!state.replay_timing_enabled || !p2p.direct_music_started) {
+    if (!state.replay_timing_enabled) {
         return false;
     }
-    const bool hold_frame = TickP2PDirectMusicSync(
-        p2p, state.simulation_frame_counter,
-        p2p.replay_target_frame_count,
-        static_cast<u32>(std::max(0, GetDirectMilesMusicLengthMs())),
-        static_cast<u32>(GetDirectMilesMusicStatus()));
+    // Replay EOF must end the session with or without DirectMusic: the packet
+    // feed sets game_end_requested once every owner's packet cursor is
+    // exhausted, but this leave edge used to be routed only inside the
+    // DirectMusic branch — a musicless playback (or one whose music failed to
+    // start) kept simulating an idle world forever past the recording's end.
     if (ShouldRouteReplayCompletionToSessionLeave(
             replay_recording_state().playback_mode,
             p2p.game_end_requested)) {
@@ -15461,7 +15465,14 @@ bool default_gameplay_loop_sync_replay_direct_music(GameplayLoopState& state) {
         // the timing phase and therefore suppresses the packet gate.
         state.pause_loop_requested = true;
     }
-    return hold_frame;
+    if (!p2p.direct_music_started) {
+        return false;
+    }
+    return TickP2PDirectMusicSync(
+        p2p, state.simulation_frame_counter,
+        p2p.replay_target_frame_count,
+        static_cast<u32>(std::max(0, GetDirectMilesMusicLengthMs())),
+        static_cast<u32>(GetDirectMilesMusicStatus()));
 }
 
 bool default_gameplay_loop_external_turn_wait(GameplayLoopState&) {
@@ -22513,6 +22524,31 @@ bool default_ai_play_unit_visible(const UnitMovementUnit& unit,
         g_runtime.gameplay_player_slots, grid, visibility, local_owner);
 }
 
+// Live ability validator for AiSemanticActionKind::use_ability.  Applies the
+// authoritative execution gates (dispatch_default_unit_command_action_effect):
+// a usable effect definition at 0x3d + ability_id, the caster's secondary
+// budget covering action_secondary_cost, and surviving any source health cost.
+AiAbilityAvailability default_ai_play_check_ability(
+    const UnitMovementUnit& source, u32 ability_id, u32, i32, i32, u32,
+    void*) {
+    AiAbilityAvailability availability{};
+    if (ability_id >= 0x2eu) {
+        return availability;
+    }
+    UnitEffectRuntimeState& effects = g_runtime.gameplay_unit_effect_runtime;
+    configure_default_unit_effect_runtime_state(effects);
+    const UnitEffectDefinition* definition =
+        find_default_unit_effect_definition(effects, 0x3du + ability_id);
+    if (definition == nullptr) {
+        return availability;
+    }
+    availability.secondary_cost = definition->action_secondary_cost;
+    availability.available =
+        source.secondary_value >= definition->action_secondary_cost &&
+        source.health > definition->action_source_health_cost;
+    return availability;
+}
+
 // Build the per-owner AI observation (the shared front half of every AI-play
 // path: the packet controller, the RL policy, and the imitation logger).  The
 // explored/visible tile scratch buffers are returned to the caller because the
@@ -22600,6 +22636,24 @@ bool build_default_ai_play_observation(GameplayLoopState& state, u32 local_owner
             observation_input.research_order_levels[order] =
                 orders.variant_counts[local_owner][order];
         }
+    }
+    // Per-owner TRUE start positions from the startup slots (public opening
+    // knowledge).  Includes the local owner: PlayerSlotRuntimeState keeps its
+    // start-coordinate table in MAP-SLOT order, so indexing it by owner id
+    // returns the wrong position once the start-slot shuffle decouples owners
+    // from map slots — that skewed every start-anchored micro (build spiral,
+    // defense ring, harvest bias) toward another slot's base.
+    for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+        const GameplayScenarioOwnerSlot& slot =
+            g_runtime.gameplay_startup_state.owner_slots[owner];
+        if (slot.slot_state !=
+                static_cast<u8>(PlayerSlotState::player_controlled) &&
+            slot.slot_state != static_cast<u8>(PlayerSlotState::active)) {
+            continue;
+        }
+        observation_input.owner_start_x[owner] = slot.start_x;
+        observation_input.owner_start_y[owner] = slot.start_y;
+        observation_input.competitor_start_mask |= 1u << owner;
     }
 
     out = BuildAiObservationV1(observation_input);
@@ -22729,6 +22783,52 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
                     continue;
                 }
                 unit_line(has_refs ? "producer " : "type ", type_id);
+                // Capability row: everything the full-action design needs that
+                // lives only in JW2_09.TRC (see docs/
+                // AI_PLAY_TYRANO_FULL_CAPABILITY_DESIGN.md §7): the raw
+                // command-capability bitmask (bit i = wire command i), morph
+                // target + gate bit, mana pool, transport flags and the
+                // linked-release (merge) product type.
+                if (def != nullptr) {
+                    char cmds[192]{};
+                    int cmds_offset = 0;
+                    for (u32 bit = 0; bit < 32 && cmds_offset >= 0 &&
+                         cmds_offset < static_cast<int>(sizeof(cmds)); ++bit) {
+                        if ((def->type_flags & (1u << bit)) == 0) {
+                            continue;
+                        }
+                        cmds_offset += std::snprintf(cmds + cmds_offset,
+                            sizeof(cmds) - cmds_offset, "%s0x%02lx",
+                            cmds_offset == 0 ? "" : " ",
+                            static_cast<unsigned long>(bit));
+                    }
+                    char prereqs[96]{};
+                    int prereq_offset = 0;
+                    const u32 prereq_count = std::min<u32>(
+                        def->prerequisite_count,
+                        static_cast<u32>(def->prerequisite_type_ids.size()));
+                    for (u32 p = 0; p < prereq_count && prereq_offset >= 0 &&
+                         prereq_offset < static_cast<int>(sizeof(prereqs));
+                         ++p) {
+                        prereq_offset += std::snprintf(prereqs + prereq_offset,
+                            sizeof(prereqs) - prereq_offset, "%s0x%02lx",
+                            prereq_offset == 0 ? "" : " ",
+                            static_cast<unsigned long>(
+                                def->prerequisite_type_ids[p]));
+                    }
+                    std::fprintf(audit,
+                        "  caps type_flags=0x%08lx cmds=[%s] effect_flags=0x%08lx "
+                        "morph=0x%02lx alt=0x%02lx mana=%lu transport=0x%lx "
+                        "linked=0x%02lx prereq=[%s]\n",
+                        static_cast<unsigned long>(def->type_flags), cmds,
+                        static_cast<unsigned long>(def->action_effect_flags),
+                        static_cast<unsigned long>(def->morph_type_id),
+                        static_cast<unsigned long>(def->alternate_type_id),
+                        static_cast<unsigned long>(def->initial_max_secondary_value),
+                        static_cast<unsigned long>(def->transport_flags),
+                        static_cast<unsigned long>(def->linked_release_type_id),
+                        prereqs);
+                }
                 for (u32 i = 0; i < refs.alternate_reference_count; ++i) {
                     unit_line("  produces ", refs.alternate_references[i]);
                 }
@@ -22757,6 +22857,56 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
                 for (u32 i = 0; i < refs.primary_reference_count; ++i) {
                     unit_line("  builds ", refs.primary_references[i]);
                 }
+            }
+            // Ability catalog: subtype-0x09's command byte IS the ability_id
+            // (< 0x2e).  Costs come from the JW2_11 record, behavior from the
+            // unit-effect definition at 0x3d + ability_id.  A row without an
+            // effect definition is not a usable ability.
+            if (jw211_runtime_catalog_state().records.empty()) {
+                LoadJw211RuntimeCatalog();
+            }
+            const AuxiliaryRuntimeCatalogState& ability_catalog =
+                jw211_runtime_catalog_state();
+            UnitEffectRuntimeState& ability_effects =
+                g_runtime.gameplay_unit_effect_runtime;
+            configure_default_unit_effect_runtime_state(ability_effects);
+            for (u32 ability_id = 0; ability_id < 0x2eu; ++ability_id) {
+                const UnitEffectDefinition* effect =
+                    find_default_unit_effect_definition(ability_effects,
+                        0x3du + ability_id);
+                u32 secondary_cost = 0;
+                i32 health_delta = 0;
+                if (ability_id < ability_catalog.records.size()) {
+                    const AuxiliaryRuntimeCatalogRecord& record =
+                        ability_catalog.records[ability_id];
+                    secondary_cost = read_runtime_catalog_u32(
+                        record.definition_bytes, kJw211ActionSecondaryCostOffset, 1);
+                    health_delta = -read_runtime_catalog_i32(
+                        record.definition_bytes, kJw211ActionTargetHealthDeltaOffset,
+                        -1);
+                }
+                if (effect == nullptr) {
+                    std::fprintf(audit,
+                        "ability id=0x%02lx secondary_cost=%lu health_delta=%ld "
+                        "(no effect definition)\n",
+                        static_cast<unsigned long>(ability_id),
+                        static_cast<unsigned long>(secondary_cost),
+                        static_cast<long>(health_delta));
+                    continue;
+                }
+                std::fprintf(audit,
+                    "ability id=0x%02lx secondary_cost=%lu health_delta=%ld "
+                    "damage=%lu radius=%lu direction_mode=%lu source_hp_cost=%lu "
+                    "create_unit=0x%02lx behavior=0x%lx\n",
+                    static_cast<unsigned long>(ability_id),
+                    static_cast<unsigned long>(secondary_cost),
+                    static_cast<long>(health_delta),
+                    static_cast<unsigned long>(effect->damage_amount),
+                    static_cast<unsigned long>(effect->impact_radius),
+                    static_cast<unsigned long>(effect->action_direction_mode),
+                    static_cast<unsigned long>(effect->action_source_health_cost),
+                    static_cast<unsigned long>(effect->action_create_unit_type_id),
+                    static_cast<unsigned long>(effect->behavior_flags));
             }
             std::fclose(audit);
             append_startup_log("ai-play: tech-tree audit -> ai_techtree_audit.txt");
@@ -22821,8 +22971,29 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
         } else {
             pick = legal_indices[static_cast<u32>(rand()) % legal_count];
         }
+        // War-score sample for this decision state: own cumulative losses and
+        // the sum over hostile competing owners (competitor start mask minus
+        // allies; reward-only privileged info, never part of the observation).
+        std::array<u32, 4> losses{};
+        losses[0] = static_cast<u32>(
+            g_runtime.ai_play_unit_value_lost[local_owner]);
+        losses[1] = static_cast<u32>(
+            g_runtime.ai_play_building_value_lost[local_owner]);
+        for (u32 other = 0; other < kPlayerSlotCount; ++other) {
+            if (other == local_owner ||
+                (observation.observation.competitor_start_mask &
+                    (1u << other)) == 0 ||
+                (observation.observation.local_relation_mask &
+                    (1u << other)) != 0) {
+                continue;
+            }
+            losses[2] += static_cast<u32>(
+                g_runtime.ai_play_unit_value_lost[other]);
+            losses[3] += static_cast<u32>(
+                g_runtime.ai_play_building_value_lost[other]);
+        }
         AiRlTraceRecordDecision(g_runtime.ai_play_rl_traces[local_owner],
-            frame, pick, encoding);
+            frame, pick, encoding, {}, losses);
         decision = DecideTyranoScriptedBotForHighLevelAction(
             bot, observation.observation, static_cast<AiRlHighLevelAction>(pick),
             bot_config);
@@ -22858,6 +23029,7 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
     plan_input.explored_tiles = &explored;
     plan_input.production_available = CheckAiLiveProductionAvailability;
     plan_input.production_availability_user_data = &live_validation;
+    plan_input.ability_available = default_ai_play_check_ability;
 
     const auto publish_planned_packets =
         [&](const AiActionPlanResult& planned) {
@@ -22878,7 +23050,28 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
         return all_published;
     };
 
-    if (decision) {
+    if (decision && decision.action.unit_ids.size() >
+        kAiMaximumUnitsPerAction) {
+        // Army-scale decisions (hold/patrol/attack-move over the full roster)
+        // must be planned in chunks: the planner rejects >14-unit selections
+        // (too_many_units), which silently no-opped every big-army order.
+        AiActionPlanCode worst = AiActionPlanCode::okay;
+        bool all_published = true;
+        for (const AiSemanticAction& chunk :
+             ChunkAiSemanticActionUnits(decision.action)) {
+            const AiActionPlanResult chunk_plan =
+                PlanAiSemanticActionV1(plan_input, chunk);
+            if (!chunk_plan) {
+                worst = chunk_plan.code;
+                all_published = false;
+                continue;
+            }
+            all_published =
+                publish_planned_packets(chunk_plan) && all_published;
+        }
+        CommitTyranoScriptedBotDecision(g_runtime.ai_play_bots[local_owner],
+            decision, all_published, worst);
+    } else if (decision) {
         AiActionPlanResult plan =
             PlanAiSemanticActionV1(plan_input, decision.action);
         // Executor micro (RL mode): a rejected build placement wastes the whole
@@ -22968,8 +23161,32 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
         // Defense autopilot: a raid inside the base perimeter is answered by
         // every fighter immediately — base defense cannot wait for the macro
         // policy to happen to choose a defend action.
-        for (const AiSemanticAction& auto_action : PlanTyranoDefenseAutopilot(
-                 g_runtime.ai_play_bots[local_owner], observation.observation)) {
+        std::vector<AiSemanticAction> defense_actions =
+            PlanTyranoDefenseAutopilot(
+                g_runtime.ai_play_bots[local_owner], observation.observation);
+        for (const AiSemanticAction& auto_action : defense_actions) {
+            publish_planned_packets(
+                PlanAiSemanticActionV1(plan_input, auto_action));
+        }
+        // Offense (finishing) autopilot: with the base safe and a big army,
+        // raze the nearest visible enemy building — elimination is won by
+        // destroying buildings, and a dithering macro policy must not sit on
+        // a crushing army forever (observed 100k-frame stalemates).
+        if (defense_actions.empty()) {
+            for (const AiSemanticAction& auto_action :
+                 PlanTyranoOffenseAutopilot(
+                     g_runtime.ai_play_bots[local_owner],
+                     observation.observation)) {
+                publish_planned_packets(
+                    PlanAiSemanticActionV1(plan_input, auto_action));
+            }
+        }
+        // Drop-attack autopilot: advances an in-flight carrier run started by
+        // the drop_attack action (board -> travel -> unload -> assault).
+        for (const AiSemanticAction& auto_action :
+             PlanTyranoDropAttackAutopilot(
+                 g_runtime.ai_play_bots[local_owner],
+                 observation.observation)) {
             publish_planned_packets(
                 PlanAiSemanticActionV1(plan_input, auto_action));
         }
@@ -24453,6 +24670,27 @@ void default_unit_command_runtime_death_accounting(UnitCommandContext&,
         // instead of waiting for the following global mirror pass.
         sync_default_owner_type_count_for_unit(unit);
     }
+    // War-score value accounting lives in the shared death-counter sink
+    // (default_unit_lifecycle_death_accounted): mobile combat deaths route
+    // through HandleUnitDeathLifecycleTransition, NOT through this callback,
+    // so counting here would miss them.
+}
+
+// War-score accounting: cumulative production value each owner has LOST.
+// Installed as the lifecycle on_death_accounted callback — the single sink
+// every counted death passes through (reward material, not observation
+// state; under-construction deaths refund instead and never reach it).
+void default_unit_lifecycle_death_accounted(UnitLifecycleContext&,
+    UnitMovementUnit& unit) {
+    if (unit.owner_id >= g_runtime.ai_play_unit_value_lost.size()) {
+        return;
+    }
+    const u32 cost = unit.definition.production_resource_cost;
+    if (unit.type_id >= 0x60u) {  // building block base (all tribes)
+        g_runtime.ai_play_building_value_lost[unit.owner_id] += cost;
+    } else {
+        g_runtime.ai_play_unit_value_lost[unit.owner_id] += cost;
+    }
 }
 
 void default_unit_command_clear_footprint(UnitCommandContext&,
@@ -25286,6 +25524,10 @@ void configure_default_unit_lifecycle_callbacks(UnitLifecycleContext& lifecycle)
     if (lifecycle.callbacks.on_active_unit_runtime_dispatch == nullptr) {
         lifecycle.callbacks.on_active_unit_runtime_dispatch =
             run_default_active_unit_runtime_dispatch;
+    }
+    if (lifecycle.callbacks.on_death_accounted == nullptr) {
+        lifecycle.callbacks.on_death_accounted =
+            default_unit_lifecycle_death_accounted;
     }
     if (lifecycle.callbacks.find_definition == nullptr) {
         lifecycle.callbacks.find_definition = default_unit_lifecycle_find_definition;
@@ -31853,6 +32095,9 @@ bool consume_default_gameplay_cheat_stage_transition(GameplayLoopState& state) {
 // simulation frame is written out as a "max_frames" timeout so the harness can
 // never hang on an unfinished game.
 constexpr u32 kAiSelfplayMaxFrames = 20000u;
+// Building type ids start at 0x60 for every tribe (원시 0x60-, 엘프 0x70-,
+// 티라노 0x80-, 데몬 0x90-).  Used for the building-based elimination rule.
+constexpr u32 kAiBuildingTypeBase = 0x60u;
 
 // Resolve a self-play output filename against the -AIOUT:DIR redirect (empty =
 // CWD).  Creates the directory on first use so parallel rollout workers can each
@@ -31889,12 +32134,18 @@ void write_ai_selfplay_result(const GameplayLoopState& state, const char* reason
     // costs).  Raw unit COUNT mis-ranks armies — a 5000-cost 티라노스 equals a
     // 100-cost 마소스 — so match judgment and terminal rewards prefer value.
     std::array<u64, kPlayerSlotCount> unit_values{};
+    // Buildings are the RTS elimination criterion: an owner whose building
+    // count reaches zero is eliminated regardless of surviving mobile units.
+    std::array<u32, kPlayerSlotCount> building_counts{};
     if (movement != nullptr) {
         for (const UnitMovementUnit* unit : movement->active_units) {
             if (unit != nullptr && unit->owner_id < unit_counts.size()) {
                 ++unit_counts[unit->owner_id];
                 unit_values[unit->owner_id] +=
                     unit->definition.production_resource_cost;
+                if (unit->type_id >= kAiBuildingTypeBase) {
+                    ++building_counts[unit->owner_id];
+                }
             }
         }
     }
@@ -31930,17 +32181,25 @@ void write_ai_selfplay_result(const GameplayLoopState& state, const char* reason
             players.slot_states[owner] : 0;
         std::fprintf(file,
             "    {\"owner\": %lu, \"slot_state\": %lu, \"units\": %lu, "
-            "\"unit_value\": %llu, "
+            "\"unit_value\": %llu, \"buildings\": %lu, "
+            "\"unit_value_lost\": %llu, \"building_value_lost\": %llu, "
             "\"pop_used\": %lu, \"primary\": %lu, \"secondary\": %lu, "
             "\"alive\": %s}%s\n",
             static_cast<unsigned long>(owner),
             static_cast<unsigned long>(slot_state),
             static_cast<unsigned long>(unit_counts[owner]),
             static_cast<unsigned long long>(unit_values[owner]),
+            static_cast<unsigned long>(building_counts[owner]),
+            static_cast<unsigned long long>(
+                g_runtime.ai_play_unit_value_lost[owner]),
+            static_cast<unsigned long long>(
+                g_runtime.ai_play_building_value_lost[owner]),
             static_cast<unsigned long>(pop),
             static_cast<unsigned long>(primary),
             static_cast<unsigned long>(secondary),
-            unit_counts[owner] != 0 ? "true" : "false",
+            // Alive = still holding at least one building (the elimination
+            // rule), not merely having stray mobile units left.
+            building_counts[owner] != 0 ? "true" : "false",
             owner + 1 < kPlayerSlotCount ? "," : "");
     }
     std::fprintf(file, "  ]\n}\n");
@@ -32045,14 +32304,19 @@ void write_ai_rl_reward_trace(const GameplayLoopState& state,
         for (const AiRlTraceStep& step : trace.steps) {
             std::fprintf(ep,
                 "{\"owner\":%lu,\"f\":%lu,\"a\":%lu,\"r\":%.6f,\"sh\":%.6f,"
-                "\"tm\":%.3f,\"done\":%s,\"feat\":[",
+                "\"tm\":%.3f,\"done\":%s,"
+                "\"vl\":%lu,\"bl\":%lu,\"ovl\":%lu,\"obl\":%lu,\"feat\":[",
                 static_cast<unsigned long>(owner),
                 static_cast<unsigned long>(step.frame),
                 static_cast<unsigned long>(step.action),
                 static_cast<double>(step.total),
                 static_cast<double>(step.shaping),
                 static_cast<double>(step.terminal),
-                step.done ? "true" : "false");
+                step.done ? "true" : "false",
+                static_cast<unsigned long>(step.losses[0]),
+                static_cast<unsigned long>(step.losses[1]),
+                static_cast<unsigned long>(step.losses[2]),
+                static_cast<unsigned long>(step.losses[3]));
             for (std::size_t i = 0; i < step.features.size(); ++i) {
                 std::fprintf(ep, "%s%.5f", i == 0 ? "" : ",",
                     static_cast<double>(step.features[i]));
@@ -32266,43 +32530,71 @@ void run_default_gameplay_end_condition_monitor(GameplayLoopState& state) {
             p2p_network_launch_parameters().self_play_max_frames :
             kAiSelfplayMaxFrames;
         const bool timed_out = state.simulation_frame_counter >= max_frames;
-        // Elimination early-exit: once at most one competitor still has units
-        // the outcome is decided — the observer host never triggers the
-        // built-in victory check, so without this the decided game would burn
-        // every remaining frame of rollout wall-clock.  A short grace period
-        // covers the pre-spawn frames.
+        // Elimination check, applied to EVERY competitor equally: an owner
+        // whose BUILDING count reaches zero is eliminated (the standard melee
+        // rule — stray mobile units do not keep a player in the game).  Once
+        // at most one competitor still holds a building the match is decided;
+        // the observer host never trips the built-in local-player victory
+        // check, so the harness is the judge.  A short grace period covers
+        // the pre-spawn frames.
         bool decided_by_elimination = false;
         if (!timed_out && state.simulation_frame_counter > 600u) {
             const UnitMovementContext* elimination_movement =
                 default_gameplay_movement_context();
             if (elimination_movement != nullptr) {
-                std::array<u32, kPlayerSlotCount> counts{};
+                std::array<u32, kPlayerSlotCount> building_counts{};
                 for (const UnitMovementUnit* unit :
                      elimination_movement->active_units) {
-                    if (unit != nullptr && unit->owner_id < counts.size()) {
-                        ++counts[unit->owner_id];
+                    if (unit != nullptr &&
+                        unit->owner_id < building_counts.size() &&
+                        unit->type_id >= kAiBuildingTypeBase) {
+                        ++building_counts[unit->owner_id];
                     }
                 }
                 u32 competitors = 0;
-                u32 with_units = 0;
+                u32 with_buildings = 0;
                 for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
                     if ((g_runtime.gameplay_started_player_mask &
                             (1u << owner)) == 0) {
                         continue;
                     }
                     ++competitors;
-                    if (counts[owner] != 0) {
-                        ++with_units;
+                    if (building_counts[owner] != 0) {
+                        ++with_buildings;
+                    }
+                    // Diagnostic: the moment a competitor's building count
+                    // hits zero must coincide with the elimination ending —
+                    // log the transition so a "razed but running" report can
+                    // be checked against the simulation's own view.
+                    static std::array<bool, kPlayerSlotCount> was_razed{};
+                    if ((building_counts[owner] == 0) != was_razed[owner]) {
+                        was_razed[owner] = building_counts[owner] == 0;
+                        append_startup_log(
+                            "ai-elim: owner=%lu buildings=%lu frame=%lu mask=0x%lx",
+                            static_cast<unsigned long>(owner),
+                            static_cast<unsigned long>(building_counts[owner]),
+                            static_cast<unsigned long>(
+                                state.simulation_frame_counter),
+                            static_cast<unsigned long>(
+                                g_runtime.gameplay_started_player_mask));
                     }
                 }
-                decided_by_elimination = competitors >= 2 && with_units <= 1;
+                decided_by_elimination =
+                    competitors >= 2 && with_buildings <= 1;
             }
         }
-        if (timed_out || decided_by_elimination ||
+        // Headless -AIREPLAY verification: the recorded packet stream running
+        // out is the replay's natural end — capture the result before the
+        // EOF session-leave would otherwise drop to the frontend menu.
+        const bool replay_eof =
+            p2p_network_launch_parameters().self_play_replay_path[0] != '\0' &&
+            g_runtime.p2p_session_start_state.game_end_requested;
+        if (timed_out || decided_by_elimination || replay_eof ||
             g_runtime.gameplay_end_condition_state.end_requested) {
             const char* const end_reason =
                 timed_out ? "max_frames" :
-                (decided_by_elimination ? "elimination" : "end_condition");
+                (decided_by_elimination ? "elimination" :
+                    (replay_eof ? "replay_eof" : "end_condition"));
             write_ai_selfplay_result(state, end_reason);
             write_ai_rl_reward_trace(state, end_reason);
             write_ai_imitation_observations(state);
@@ -32398,7 +32690,14 @@ u32 pump_default_p2p_replay_frame_gate(GameplayLoopState& state) {
         // Original FUN_0044fb20 sets DAT_00725c09 here.  Mapping EOF to the
         // gameplay end-condition flag instead sent playback through the
         // ordinary victory result/ranking screen.
-        state.pause_loop_requested = true;
+        // Headless -AIREPLAY verification: leave the session via the harness
+        // termination instead (it writes the result JSON first; pausing here
+        // dropped to the menu before the monitor could capture the outcome).
+        if (!(p2p_network_launch_parameters().self_play &&
+              p2p_network_launch_parameters().self_play_replay_path[0] !=
+                  '\0')) {
+            state.pause_loop_requested = true;
+        }
     }
     return gate_result;
 }
@@ -33343,8 +33642,43 @@ void configure_default_p2p_command_line_ai_opponent(
     }
 }
 
+bool default_start_replay_playback(ReplayDialogState& state,
+    const ReplayArchiveDescriptor& descriptor);
+
 void open_default_p2p_command_line_host(HWND window, HINSTANCE instance,
     const P2PNetworkLaunchParameters& launch) {
+    // -AIREPLAY:PATH — headless playback verification: skip the lobby/host
+    // setup entirely and enter the same replay-playback transition the replay
+    // browser uses.  The self-play harness (fast_uncapped + result JSON +
+    // termination) still runs, so the replayed simulation's outcome can be
+    // machine-compared against the recording's saved result.
+    if (launch.self_play && launch.self_play_replay_path[0] != '\0') {
+        (void)instance;
+        ReplayArchiveDescriptor descriptor;
+        if (!LoadReplayArchiveDescriptor(launch.self_play_replay_path.data(),
+                descriptor, LoadTrcRecord9Value()) ||
+            descriptor.status != ReplayValidationStatus::Valid) {
+            append_startup_log("ai-replay: load failed path=%s",
+                launch.self_play_replay_path.data());
+            write_default_p2p_command_line_result(P2PGameEndReason::MapFileError);
+            finish_default_p2p_command_line_flow("ai-replay-load-failed");
+            return;
+        }
+        ReplayDialogState& replay_dialog = replay_load_dialog_state();
+        replay_dialog.main_window = window;
+        g_runtime.p2p_command_line_flow_active = false;
+        if (!default_start_replay_playback(replay_dialog, descriptor)) {
+            append_startup_log("ai-replay: playback start failed path=%s",
+                launch.self_play_replay_path.data());
+            finish_default_p2p_command_line_flow("ai-replay-start-failed");
+            return;
+        }
+        append_startup_log("ai-replay: headless playback begin path=%s packets=%lu",
+            launch.self_play_replay_path.data(),
+            static_cast<unsigned long>(descriptor.packet_count));
+        PostMessageA(window, WM_USER + 9, 0, 3);
+        return;
+    }
     append_startup_log("p2p command-line host begin map=%s",
         launch.map_path.data());
     CreateGameState& create = create_game_state();

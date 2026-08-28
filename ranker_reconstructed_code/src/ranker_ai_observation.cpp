@@ -135,12 +135,24 @@ AiObservationBuildResult BuildAiObservationV1(
     observation.population_used = input.population_used;
     observation.population_reserved = input.population_reserved;
     observation.population_limit = input.population_limit;
-    observation.start_x = input.players->owner_start_x[input.local_owner];
-    observation.start_y = input.players->owner_start_y[input.local_owner];
+    // The runtime's owner_start_x table is MAP-SLOT-ordered; once the start
+    // shuffle decouples owners from map slots, indexing it by owner id points
+    // at another slot's base.  Prefer the caller-supplied per-owner start
+    // (from the startup owner slots) and fall back for legacy callers.
+    if ((input.competitor_start_mask & (1u << input.local_owner)) != 0) {
+        observation.start_x = input.owner_start_x[input.local_owner];
+        observation.start_y = input.owner_start_y[input.local_owner];
+    } else {
+        observation.start_x = input.players->owner_start_x[input.local_owner];
+        observation.start_y = input.players->owner_start_y[input.local_owner];
+    }
     observation.game_ended = input.game_ended;
     observation.game_end_reason = input.game_end_reason;
     observation.research_levels = input.research_levels;
     observation.research_order_levels = input.research_order_levels;
+    observation.owner_start_x = input.owner_start_x;
+    observation.owner_start_y = input.owner_start_y;
+    observation.competitor_start_mask = input.competitor_start_mask;
 
     observation.tiles.reserve(tile_count);
     for (u32 y = 0; y < map.height; ++y) {

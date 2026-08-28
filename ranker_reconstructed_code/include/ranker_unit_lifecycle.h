@@ -38,6 +38,11 @@ using UnitLifecycleRandomLimitCallback = u32 (*)(UnitLifecycleContext& context,
 struct UnitLifecycleCallbacks {
     UnitLifecycleCallback on_unit_became_active = nullptr;
     UnitLifecycleCallback on_unit_lifecycle_removed = nullptr;
+    // Fired exactly once per counted unit death from the shared owner-counter
+    // sink (HandleUnitDeathOwnerCounters) — both the runtime-death-accounting
+    // command path and the lifecycle death transition route through it.  Used
+    // for war-score loss accounting (reward material).
+    UnitLifecycleCallback on_death_accounted = nullptr;
     UnitLifecycleCallback on_footprint_changed = nullptr;
     UnitLifecyclePhaseCallback on_before_active_simulation = nullptr;
     UnitLifecycleCallback on_active_unit_runtime_dispatch = nullptr;

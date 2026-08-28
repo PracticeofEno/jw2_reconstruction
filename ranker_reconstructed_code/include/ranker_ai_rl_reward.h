@@ -107,6 +107,11 @@ struct AiRlTraceStep {
     // (s, a, r, done) transitions; s' is the next step's features (or terminal).
     std::array<float, kAiRlFeatureCount> features{};
     std::array<std::uint8_t, kAiRlActionCount> legal_mask{};
+    // Cumulative combat-loss accounting sampled at this decision (war-score
+    // reward material; PRIVILEGED training-time info, never fed to the policy):
+    // [0] own unit value lost, [1] own building value lost,
+    // [2] hostile unit value lost, [3] hostile building value lost.
+    std::array<u32, 4> losses{};
 };
 
 struct AiRlOwnerTrace {
@@ -118,6 +123,7 @@ struct AiRlOwnerTrace {
     std::array<std::uint8_t, kAiRlActionCount> prev_mask{};
     float return_sum = 0.0f;  // undiscounted sum of total rewards so far
     AiRlTerminalOutcome final_outcome = AiRlTerminalOutcome::ongoing;
+    std::array<u32, 4> prev_losses{};
     std::vector<AiRlTraceStep> steps;
 
     void reset() { *this = AiRlOwnerTrace{}; }
@@ -126,8 +132,12 @@ struct AiRlOwnerTrace {
 // Record a decision: emit the reward for the *previous* action (aligned s,a,r,s')
 // and remember this action + its full state for the next call.  ongoing outcome
 // mid-game.  The encoding is the state s_t in which `action` was chosen.
+// `losses` is the cumulative loss accounting sampled with this state (see
+// AiRlTraceStep::losses); it is emitted with THIS decision's step on the next
+// call, keeping (s_t, losses_t) aligned.
 void AiRlTraceRecordDecision(AiRlOwnerTrace& trace, u32 frame, u32 action,
-    const AiRlStepEncoding& encoding, const AiRlRewardConfig& config = {});
+    const AiRlStepEncoding& encoding, const AiRlRewardConfig& config = {},
+    const std::array<u32, 4>& losses = {});
 
 // Flush the terminal transition for the last pending action with the given
 // end-of-game outcome (Phi(next) = 0).

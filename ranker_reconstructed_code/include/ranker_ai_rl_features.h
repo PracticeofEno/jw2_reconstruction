@@ -18,7 +18,7 @@ namespace ranker {
 // build placement).  The mask is a learning aid computed from the observation;
 // the live validator remains authoritative at execution time.
 
-constexpr u32 kAiRlFeatureVersion = 1u;
+constexpr u32 kAiRlFeatureVersion = 2u;
 
 // High-level (strategy) action space the RL policy samples from.
 enum class AiRlHighLevelAction : u32 {
@@ -60,13 +60,28 @@ enum class AiRlHighLevelAction : u32 {
     build_nest_x88,
     build_nest_x89,
     build_nest_x8a,
+    // v2 (docs/AI_PLAY_TYRANO_FULL_CAPABILITY_DESIGN.md §4, audited caps):
+    // the Tyrano-specific mechanics the packet interface can now express.
+    merge_twin_velocis, // 벨로시스 x2 -> 트윈 벨로시스 (0x22 -> 0x23)
+    merge_twin_rhampos, // 람포스 x2 -> 트윈 람포스 (0x25 -> 0x26)
+    merge_twin_pteras,  // 프테라스 x2 -> 트윈 프테라스 (0x27 -> 0x2d)
+    merge_mutant,       // 딜로포스+프테라스+트리세스 -> 뮤턴트 (0x2b)
+    morph_enter_army,   // wild-dino morph (research 0x2a gate)
+    morph_exit_army,
+    stance_on_army,     // Tyrano stance = command 0x14 (flag 0x10000)
+    stance_off_army,
+    hold_army,          // hold position at the current spot
+    patrol_defense,     // patrol base <-> nearest resource cluster
+    drop_attack,        // 둥가리 board -> enemy start -> unload (autopilot)
 };
 
-constexpr std::size_t kAiRlActionCount = 30;
+constexpr std::size_t kAiRlActionCount = 41;
 
 // Fixed feature-vector layout (see the .cpp for the exact per-index meaning).
-// 36 base + 3 research levels + 3 neutral-monster + 4 tech-tree = 46.
-constexpr std::size_t kAiRlFeatureCount = 46;
+// v1: 36 base + 3 research levels + 3 neutral-monster + 4 tech-tree = 46.
+// v2 appends: 10 research levels, 11 unit counts, 4 building counts, and 9
+// mechanic aggregates (stance/morph/transport/army/queue state) = 80.
+constexpr std::size_t kAiRlFeatureCount = 80;
 
 struct AiRlStepEncoding {
     // Normalized policy/value-network input.

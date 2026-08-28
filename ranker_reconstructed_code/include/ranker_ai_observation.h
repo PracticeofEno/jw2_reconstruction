@@ -106,6 +106,14 @@ struct AiObservation {
     // variant_counts row).  The executor's research cycle consults this so it
     // can run the whole audited research tree, not just the tracked trio.
     std::array<u8, kAiObservationResearchOrderCount> research_order_levels{};
+    // Competing (non-observer) owners' start positions — standard RTS opening
+    // knowledge (start locations are public).  The executor's siege march
+    // heads here when no enemy building is currently visible; without a real
+    // objective the army wandered map corners and never found the enemy base.
+    std::array<i32, 8> owner_start_x{};
+    std::array<i32, 8> owner_start_y{};
+    // Bit i set -> owner i is a competitor whose start position is valid.
+    u32 competitor_start_mask = 0;
     std::vector<AiObservedMapTile> tiles;
     std::vector<AiObservedUnit> units;
 };
@@ -125,6 +133,10 @@ struct AiObservationBuildInput {
     std::array<u8, kAiObservationTrackedResearchCount> research_levels{};
     // Full per-order level row (see AiObservation::research_order_levels).
     std::array<u8, kAiObservationResearchOrderCount> research_order_levels{};
+    // Competitor start positions (see AiObservation).
+    std::array<i32, 8> owner_start_x{};
+    std::array<i32, 8> owner_start_y{};
+    u32 competitor_start_mask = 0;
     const PlayerSlotRuntimeState* players = nullptr;
     const UnitMovementContext* movement = nullptr;
 

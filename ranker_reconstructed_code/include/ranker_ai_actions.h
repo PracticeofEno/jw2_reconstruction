@@ -8,10 +8,16 @@
 
 namespace ranker {
 
-constexpr u32 kAiActionSchemaVersion = 1;
+constexpr u32 kAiActionSchemaVersion = 2;
 constexpr std::size_t kAiMaximumUnitsPerAction = 14;
 constexpr u32 kAiNoProductionId = 0xffffffffu;
 constexpr u32 kAiLatestQueueIndex = 0xffffffffu;
+constexpr u32 kAiNoAbilityId = 0xffffffffu;
+constexpr u32 kAiNoStanceId = 0xffffffffu;
+// Wire ability ids are the subtype-0x09 command byte; the execution layer
+// rejects ids >= 0x2e (default_unit_command_can_use_ability).
+constexpr u32 kAiAbilityIdLimit = 0x2eu;
+constexpr u32 kAiStanceCount = 4;
 
 enum class AiSemanticActionKind : u32 {
     no_op = 0,
@@ -24,6 +30,22 @@ enum class AiSemanticActionKind : u32 {
     build,
     set_rally,
     cancel_production,
+    // Schema v2 (docs/AI_PLAY_TYRANO_FULL_CAPABILITY_DESIGN.md §2).  Wire
+    // routes are the audited human paths: subtype 0x02 command byte unless
+    // noted otherwise.
+    stop,               // cmd 0x00 -> immediate idle
+    hold_position,      // subtype 0x0a, cmd 0x21
+    patrol,             // cmd 0x09 + point
+    use_ability,        // subtype 0x09, command byte = ability_id
+    morph_enter,        // cmd 0x11
+    morph_exit,         // cmd 0x1b
+    merge_units,        // cmd 0x0b, 2-unit mirrored pair or 3-unit ring
+    board_transport,    // cmd 0x0a, passengers -> carrier target
+    unload_transport,   // cmd 0x24, carrier + point
+    transfer_secondary, // cmd 0x23, balance action_mode across the group
+    set_stance,         // cmd 0x12+stance_id on / arg1=1+flag off
+    return_cargo,       // cmd 0x07 + target 0x80000000
+    use_item,           // cmd 0x16
 };
 
 struct AiSemanticAction {
@@ -35,6 +57,10 @@ struct AiSemanticAction {
     i32 target_y = 0;
     u32 production_id = kAiNoProductionId;
     u32 queue_index = kAiLatestQueueIndex;
+    // v2 fields; defaults keep v1-style actions valid.
+    u32 ability_id = kAiNoAbilityId;
+    u32 stance_id = kAiNoStanceId;
+    bool stance_on = true;
     bool queued = false;
 };
 
@@ -56,6 +82,19 @@ using AiProductionAvailabilityCallback = AiProductionAvailability (*)(
     u32 production_id, i32 world_x, i32 world_y, u32 local_owner,
     void* user_data);
 
+struct AiAbilityAvailability {
+    bool available = false;
+    u32 code = 0;
+    u32 secondary_cost = 0;
+};
+
+// use_ability fails closed unless the live session supplies a validator that
+// applies the authoritative JW2_11 cost and effect-target rules (mirrors the
+// production-availability pattern above).
+using AiAbilityAvailabilityCallback = AiAbilityAvailability (*)(
+    const UnitMovementUnit& source, u32 ability_id, u32 target_unit_id,
+    i32 world_x, i32 world_y, u32 local_owner, void* user_data);
+
 struct AiActionPlanInput {
     u32 local_owner = 0;
     const PlayerSlotRuntimeState* players = nullptr;
@@ -75,6 +114,8 @@ struct AiActionPlanInput {
     // prerequisite, population, queue and placement rules.
     AiProductionAvailabilityCallback production_available = nullptr;
     void* production_availability_user_data = nullptr;
+    AiAbilityAvailabilityCallback ability_available = nullptr;
+    void* ability_availability_user_data = nullptr;
 };
 
 enum class AiActionPlanCode : u32 {
@@ -110,6 +151,23 @@ enum class AiActionPlanCode : u32 {
     rally_source_unsupported,
     unsupported_queue_index,
     nothing_to_cancel,
+    // Schema v2 codes (append-only).
+    unexpected_ability,
+    invalid_ability_id,
+    missing_ability_validator,
+    ability_unavailable,
+    morph_unavailable,
+    not_morphed,
+    merge_arity_invalid,
+    merge_recipe_invalid,
+    target_not_carrier,
+    passenger_cannot_board,
+    nothing_to_transfer,
+    invalid_stance,
+    stance_unavailable,
+    stance_inactive,
+    nothing_to_return,
+    missing_item,
 };
 
 struct AiActionPlanResult {

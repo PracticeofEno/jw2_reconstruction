@@ -24,6 +24,22 @@ constexpr u32 kNeutralMonsterOwnerId = 8u;     // kOwnerNeutralRouteProbeOwnerId
 constexpr u32 kTyranoHarvestUpgradeOrder = 0x14u;
 constexpr u32 kTyranoMovementUpgradeOrder = 0x16u;
 constexpr u32 kTyranoGroundAttackUpgradeOrder = 0x19u;
+// v2 roster/mechanics (audited caps rows in ai_techtree_audit.txt).
+constexpr u32 kTyranoRhamposType = 0x25u;
+constexpr u32 kTyranoPterasType = 0x27u;
+constexpr u32 kTyranoTricepsType = 0x28u;
+constexpr u32 kTyranoCarrierType = 0x29u;      // 둥가리: pure transport
+constexpr u32 kTyranoMutantType = 0x2bu;
+constexpr u32 kTyranoMorphResearchOrder = 0x2au;   // 공룡 변신 업그레이드
+constexpr u32 kTyranoMutantMergeResearchOrder = 0x18u;
+constexpr u32 kTyranoHasteResearchOrder = 0x38u;
+constexpr u32 kTyranoStanceId = 2u;            // command 0x14 / flag 0x10000
+constexpr u32 kTyranoStanceCommandBit = 1u << 0x14;
+constexpr u32 kTyranoStanceActiveFlag = 0x10000u;
+constexpr u32 kTyranoMorphCommandBit = 1u << 0x11;
+constexpr u32 kTyranoMorphedTypeFlag = 0x08000000u;
+constexpr u32 kTyranoMergeCommandBit = 1u << 0x0b;
+constexpr u32 kTyranoTransportAttachedState = 0x45u;
 
 struct TyranoScriptedBotConfig {
     u32 decision_interval_frames = 8;
@@ -60,9 +76,17 @@ enum class TyranoScriptedBotIntent : u32 {
     build_second_tyrano_nest,
     research_movement_upgrade,
     produce_dilophos,
+    // v2 intents (retry-backoff slots for the new executors).
+    merge_pair,
+    merge_mutant,
+    morph_shift,
+    stance_toggle,
+    hold_army,
+    patrol_defense,
+    drop_attack,
 };
 
-constexpr std::size_t kTyranoScriptedBotIntentCount = 16;
+constexpr std::size_t kTyranoScriptedBotIntentCount = 24;
 
 struct TyranoScriptedBotState {
     u32 last_decision_frame = 0xffffffffu;
@@ -80,6 +104,18 @@ struct TyranoScriptedBotState {
     // dwell window (re-spamming attack orders every cycle resets pathing).
     u32 last_defense_target_id = 0;
     u32 last_defense_order_frame = 0xffffffffu;
+    // Offense (finishing) autopilot throttle, mirroring the defense pair.
+    u32 last_offense_target_id = 0;
+    u32 last_offense_order_frame = 0xffffffffu;
+    // Drop-attack composite (board -> travel -> unload).  The policy action
+    // only INITIATES the run; the drop autopilot advances it every decision
+    // cycle so the policy is free to pick other actions meanwhile.  All
+    // transitions are frame/observation-driven (deterministic).
+    u32 drop_stage = 0;  // 0 idle, 1 boarding, 2 travelling, 3 unloading
+    u32 drop_carrier_id = 0;
+    u32 drop_stage_frame = 0xffffffffu;
+    i32 drop_target_x = 0;
+    i32 drop_target_y = 0;
     std::array<u32, kTyranoScriptedBotIntentCount> intent_retry_after_frame{};
     bool rally_configured = false;
     bool harvest_upgrade_requested = false;
@@ -139,6 +175,29 @@ std::vector<AiSemanticAction> PlanTyranoIdleWorkerHarvest(
 // re-issued on a target change or after a dwell window.  Returns 0 or 1 action.
 std::vector<AiSemanticAction> PlanTyranoDefenseAutopilot(
     TyranoScriptedBotState& state, const AiObservation& observation);
+
+// Offense (finishing) autopilot: with a big enough army and a visible enemy
+// BUILDING, order every non-worker fighter at the nearest one.  Elimination is
+// won by razing buildings; without this the macro policy could sit on a
+// crushing army for the rest of the match (observed: 247 units vs 1 building,
+// 100k frames, no kill).  Runs only when the defense autopilot found nothing
+// to do; throttled like defense.  Returns 0 or 1 action.
+std::vector<AiSemanticAction> PlanTyranoOffenseAutopilot(
+    TyranoScriptedBotState& state, const AiObservation& observation);
+
+// Drop-attack autopilot: advances the composite started by the drop_attack
+// high-level action (board passengers onto the 둥가리 carrier, travel to the
+// nearest enemy start, unload, then release the state machine).  Runs every
+// decision cycle while a run is active; returns the next step's actions.
+std::vector<AiSemanticAction> PlanTyranoDropAttackAutopilot(
+    TyranoScriptedBotState& state, const AiObservation& observation);
+
+// Split a multi-unit action into planner-sized chunks
+// (kAiMaximumUnitsPerAction).  Army orders beyond 14 units were silently
+// rejected by the planner (too_many_units) — every army-scale caller must
+// chunk.  Non-unit fields are copied into every chunk.
+std::vector<AiSemanticAction> ChunkAiSemanticActionUnits(
+    const AiSemanticAction& action);
 void CommitTyranoScriptedBotDecision(TyranoScriptedBotState& state,
     const TyranoScriptedBotDecision& decision, bool published,
     AiActionPlanCode plan_code = AiActionPlanCode::okay);

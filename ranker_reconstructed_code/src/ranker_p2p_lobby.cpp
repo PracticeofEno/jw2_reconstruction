@@ -710,6 +710,19 @@ bool ParseP2PNetworkCommandLine(P2PNetworkLaunchParameters& parameters,
         parameters.self_play_net_offset = net != nullptr ?
             static_cast<u16>(std::strtoul(net + std::strlen("-AINET:"),
                 nullptr, 10)) : 0u;
+        // -AIREPLAY:PATH is case-preserving (paths), parsed like -AIOUT.
+        const char* replay_upper = std::strstr(upper, "-AIREPLAY:");
+        if (replay_upper != nullptr && command_line != nullptr) {
+            const char* src = command_line + (replay_upper - upper) +
+                std::strlen("-AIREPLAY:");
+            std::size_t i = 0;
+            while (src[i] != '\0' && src[i] != ' ' && src[i] != '\t' &&
+                   i + 1 < parameters.self_play_replay_path.size()) {
+                parameters.self_play_replay_path[i] = src[i];
+                ++i;
+            }
+            parameters.self_play_replay_path[i] = '\0';
+        }
         const char* tribe = std::strstr(upper, "-AITRIBE:");
         parameters.self_play_opponent_tribe = tribe != nullptr ?
             static_cast<u32>(std::strtoul(tribe + std::strlen("-AITRIBE:"),

@@ -1172,6 +1172,9 @@ void HandleUnitDeathOwnerCounters(UnitLifecycleContext& context,
             ++context.owner_unit_lost_count[unit.owner_id];
         }
     }
+    if (context.callbacks.on_death_accounted != nullptr) {
+        context.callbacks.on_death_accounted(context, unit);
+    }
     // Original 0x004cf8e5..0x004cf90c decrements the building-active total,
     // then returns without touching DAT_00707430 when raw +0x30 is one.  A
     // construction-class building is not added to the completed-type table

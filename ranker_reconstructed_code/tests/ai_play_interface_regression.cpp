@@ -543,6 +543,345 @@ void test_action_validation_and_packet_planning() {
         "out-of-map point was accepted");
 }
 
+struct AbilityAvailabilityFixture {
+    bool available = true;
+    u32 expected_ability_id = 0;
+};
+
+AiAbilityAvailability ability_from_fixture(const UnitMovementUnit& source,
+    u32 ability_id, u32 target_unit_id, i32, i32, u32 local_owner,
+    void* user_data) {
+    const auto* fixture =
+        static_cast<const AbilityAvailabilityFixture*>(user_data);
+    AiAbilityAvailability availability{};
+    availability.available = fixture != nullptr && fixture->available &&
+        ability_id == fixture->expected_ability_id && local_owner == 0 &&
+        source.owner_id == 0 && target_unit_id != source.id;
+    availability.secondary_cost = 60;
+    return availability;
+}
+
+void test_semantic_action_v2_planning() {
+    constexpr u32 kMove = 1u << 4;
+    constexpr u32 kAttack = 1u << 5;
+    constexpr u32 kHarvest = 1u << 7;
+    constexpr u32 kPatrol = 1u << 9;
+    constexpr u32 kCarry = 1u << 0xa;
+    constexpr u32 kMerge = 1u << 0xb;
+    constexpr u32 kMorphEnter = 1u << 0x11;
+    constexpr u32 kStance2 = 1u << 0x14;
+    constexpr u32 kTransfer = 1u << 1;
+    constexpr u32 kMorphGate = 0x20000u;
+
+    PlayerSlotRuntimeState players{};
+    players.owner_relation_masks[0] = 0x01;
+
+    // Audited Tyrano shapes (ai_techtree_audit caps rows): 벨로시스 pair-merges
+    // into 트윈 벨로시스 and morphs into wild type 0x45; the mutant triad is
+    // 딜로포스+프테라스+트리세스; 둥가리 is the pure carrier.
+    UnitMovementUnit velocis_a = make_unit(
+        0x100, 1, 0, 0x22, kMove | kAttack | kPatrol | kMerge | kMorphEnter |
+            kMorphGate | kStance2 | kTransfer, 32, 32);
+    UnitMovementUnit velocis_b = make_unit(
+        0x110, 2, 0, 0x22, velocis_a.type_flags, 40, 32);
+    velocis_a.definition.linked_release_type_id = 0x23;
+    velocis_b.definition.linked_release_type_id = 0x23;
+    velocis_a.definition.morph_type_id = 0x45;
+    velocis_b.definition.morph_type_id = 0x45;
+    UnitMovementUnit dilophos = make_unit(
+        0x120, 3, 0, 0x24, kMove | kAttack | kMerge, 48, 40);
+    UnitMovementUnit pteras = make_unit(
+        0x130, 4, 0, 0x27, kMove | kAttack | kMerge, 56, 40);
+    UnitMovementUnit triceps = make_unit(
+        0x140, 5, 0, 0x28, kMove | kAttack | kMerge, 64, 40);
+    UnitMovementUnit carrier = make_unit(
+        0x150, 6, 0, 0x29, kMove | kCarry, 72, 48);
+    UnitMovementUnit worker = make_unit(
+        0x160, 7, 0, 0x20, kMove | kHarvest, 80, 48);
+    worker.definition.action_effect_flags = 0x4;
+    worker.definition.transport_flags = 0x4;
+    UnitMovementUnit enemy = make_unit(
+        0x170, 8, 1, 0x10, kMove | kAttack, 88, 56);
+
+    UnitMovementContext movement{};
+    seed_map(movement);
+    movement.active_units = {&velocis_a, &velocis_b, &dilophos, &pteras,
+        &triceps, &carrier, &worker, &enemy};
+    VisibilityFixture visibility{{enemy.id}};
+
+    AiActionPlanInput input{};
+    input.local_owner = 0;
+    input.players = &players;
+    input.movement = &movement;
+    input.unit_visible = visible_from_fixture;
+    input.unit_visibility_user_data = &visibility;
+
+    // Cross-field hygiene: v2 payload fields stay rejected on v1 kinds.
+    AiSemanticAction stray{};
+    stray.kind = AiSemanticActionKind::move;
+    stray.unit_ids = {velocis_a.id};
+    stray.target_x = 30;
+    stray.target_y = 30;
+    stray.ability_id = 3;
+    require(PlanAiSemanticActionV1(input, stray).code ==
+            AiActionPlanCode::unexpected_ability,
+        "ability_id leaked into a non-ability action");
+    stray.ability_id = kAiNoAbilityId;
+    stray.stance_id = 1;
+    require(PlanAiSemanticActionV1(input, stray).code ==
+            AiActionPlanCode::invalid_stance,
+        "stance_id leaked into a non-stance action");
+
+    // Stop / hold position.
+    AiSemanticAction stop{};
+    stop.kind = AiSemanticActionKind::stop;
+    stop.unit_ids = {velocis_a.id, velocis_b.id};
+    const AiActionPlanResult stop_plan = PlanAiSemanticActionV1(input, stop);
+    require(stop_plan && stop_plan.packets.size() == 2 &&
+        stop_plan.packets[0].subtype == 0x02 &&
+        stop_plan.packets[0].arg0 == 0x00 &&
+        stop_plan.packets[0].arg1 == 0,
+        "Stop did not plan bare command-0x00 orders");
+    stop.queued = true;
+    require(PlanAiSemanticActionV1(input, stop).code ==
+            AiActionPlanCode::queued_flag_unsupported,
+        "queued Stop was accepted");
+
+    AiSemanticAction hold{};
+    hold.kind = AiSemanticActionKind::hold_position;
+    hold.unit_ids = {velocis_a.id};
+    const AiActionPlanResult hold_plan = PlanAiSemanticActionV1(input, hold);
+    require(hold_plan && hold_plan.packets.size() == 1 &&
+        hold_plan.packets[0].subtype == 0x0a &&
+        hold_plan.packets[0].packed_opcode == 0x0a000000 &&
+        hold_plan.packets[0].arg0 == 0x21 &&
+        hold_plan.packets[0].arg2 == static_cast<u32>(velocis_a.x),
+        "HoldPosition did not mirror the subtype-0x0a forced order");
+
+    // Patrol.
+    AiSemanticAction patrol{};
+    patrol.kind = AiSemanticActionKind::patrol;
+    patrol.unit_ids = {velocis_a.id};
+    patrol.target_x = 100;
+    patrol.target_y = 80;
+    const AiActionPlanResult patrol_plan =
+        PlanAiSemanticActionV1(input, patrol);
+    require(patrol_plan && patrol_plan.packets[0].arg0 == 0x09 &&
+        patrol_plan.packets[0].arg2 == 100 &&
+        patrol_plan.packets[0].arg3 == 80,
+        "Patrol did not plan command 0x09 to the point");
+    patrol.unit_ids = {worker.id};
+    require(PlanAiSemanticActionV1(input, patrol).code ==
+            AiActionPlanCode::unit_action_unsupported,
+        "Patrol accepted a unit without the capability bit");
+
+    // Ability cast (subtype 0x09, command byte = ability id).
+    AbilityAvailabilityFixture ability_fixture{};
+    ability_fixture.expected_ability_id = 0x03;
+    AiSemanticAction cast{};
+    cast.kind = AiSemanticActionKind::use_ability;
+    cast.unit_ids = {velocis_a.id};
+    cast.ability_id = 0x03;
+    cast.target_unit_id = enemy.id;
+    require(PlanAiSemanticActionV1(input, cast).code ==
+            AiActionPlanCode::missing_ability_validator,
+        "UseAbility did not fail closed without its live validator");
+    input.ability_available = ability_from_fixture;
+    input.ability_availability_user_data = &ability_fixture;
+    const AiActionPlanResult cast_plan = PlanAiSemanticActionV1(input, cast);
+    require(cast_plan && cast_plan.packets.size() == 1 &&
+        cast_plan.packets[0].subtype == 0x09 &&
+        cast_plan.packets[0].packed_opcode == 0x09000000 &&
+        cast_plan.packets[0].arg0 == 0x03 &&
+        cast_plan.packets[0].arg1 == enemy.id &&
+        cast_plan.packets[0].arg2 == static_cast<u32>(enemy.x),
+        "UseAbility did not plan the subtype-0x09 ability packet");
+    ability_fixture.available = false;
+    require(PlanAiSemanticActionV1(input, cast).code ==
+            AiActionPlanCode::ability_unavailable,
+        "UseAbility ignored a live validator rejection");
+    ability_fixture.available = true;
+    cast.ability_id = 0x2e;
+    require(PlanAiSemanticActionV1(input, cast).code ==
+            AiActionPlanCode::invalid_ability_id,
+        "UseAbility accepted an out-of-range ability id");
+
+    // Morph enter / exit.
+    AiSemanticAction morph{};
+    morph.kind = AiSemanticActionKind::morph_enter;
+    morph.unit_ids = {velocis_a.id};
+    const AiActionPlanResult morph_plan = PlanAiSemanticActionV1(input, morph);
+    require(morph_plan && morph_plan.packets[0].arg0 == 0x11,
+        "MorphEnter did not plan command 0x11");
+    velocis_a.runtime_flags |= 0x40000u;
+    require(PlanAiSemanticActionV1(input, morph).code ==
+            AiActionPlanCode::morph_unavailable,
+        "MorphEnter accepted an already-morphed unit");
+    morph.kind = AiSemanticActionKind::morph_exit;
+    require(PlanAiSemanticActionV1(input, morph).code ==
+            AiActionPlanCode::not_morphed,
+        "MorphExit accepted a unit without the post-morph type flag");
+    velocis_a.type_flags |= 0x08000000u;
+    const AiActionPlanResult morph_exit_plan =
+        PlanAiSemanticActionV1(input, morph);
+    require(morph_exit_plan && morph_exit_plan.packets[0].arg0 == 0x1b,
+        "MorphExit did not plan command 0x1b");
+    velocis_a.type_flags &= ~0x08000000u;
+    velocis_a.runtime_flags &= ~0x40000u;
+
+    // Merge: mirrored pair, then the hard-coded mutant triad ring.
+    AiSemanticAction merge{};
+    merge.kind = AiSemanticActionKind::merge_units;
+    merge.unit_ids = {velocis_b.id, velocis_a.id};
+    const AiActionPlanResult pair_plan = PlanAiSemanticActionV1(input, merge);
+    require(pair_plan && pair_plan.packets.size() == 2 &&
+        pair_plan.packets[0].arg0 == 0x0b &&
+        pair_plan.packets[0].unit_offset == velocis_a.id &&
+        pair_plan.packets[0].arg1 == velocis_b.id &&
+        pair_plan.packets[1].unit_offset == velocis_b.id &&
+        pair_plan.packets[1].arg1 == velocis_a.id,
+        "pair merge did not plan the mirrored 0x0b orders");
+    merge.unit_ids = {velocis_a.id, dilophos.id};
+    require(PlanAiSemanticActionV1(input, merge).code ==
+            AiActionPlanCode::merge_recipe_invalid,
+        "pair merge accepted mismatched types");
+    merge.unit_ids = {dilophos.id, pteras.id, triceps.id};
+    const AiActionPlanResult triad_plan = PlanAiSemanticActionV1(input, merge);
+    require(triad_plan && triad_plan.packets.size() == 3 &&
+        triad_plan.packets[0].unit_offset == triceps.id &&
+        triad_plan.packets[0].arg1 == dilophos.id &&
+        triad_plan.packets[1].unit_offset == pteras.id &&
+        triad_plan.packets[1].arg1 == triceps.id &&
+        triad_plan.packets[2].unit_offset == dilophos.id &&
+        triad_plan.packets[2].arg1 == pteras.id,
+        "mutant triad did not plan the three-packet ring");
+    merge.unit_ids = {dilophos.id, pteras.id, velocis_a.id};
+    require(PlanAiSemanticActionV1(input, merge).code ==
+            AiActionPlanCode::merge_recipe_invalid,
+        "triad merge accepted a wrong member set");
+    merge.unit_ids = {velocis_a.id};
+    require(PlanAiSemanticActionV1(input, merge).code ==
+            AiActionPlanCode::merge_arity_invalid,
+        "single-unit merge was accepted");
+
+    // Transport board / unload.
+    AiSemanticAction board{};
+    board.kind = AiSemanticActionKind::board_transport;
+    board.unit_ids = {worker.id};
+    board.target_unit_id = carrier.id;
+    const AiActionPlanResult board_plan = PlanAiSemanticActionV1(input, board);
+    require(board_plan && board_plan.packets.size() == 1 &&
+        board_plan.packets[0].arg0 == 0x0a &&
+        board_plan.packets[0].arg1 == carrier.id &&
+        board_plan.packets[0].arg2 == static_cast<u32>(carrier.x),
+        "BoardTransport did not plan command 0x0a onto the carrier");
+    board.target_unit_id = velocis_a.id;
+    require(PlanAiSemanticActionV1(input, board).code ==
+            AiActionPlanCode::target_not_carrier,
+        "BoardTransport accepted a non-carrier target");
+    board.target_unit_id = carrier.id;
+    board.unit_ids = {velocis_a.id};
+    require(PlanAiSemanticActionV1(input, board).code ==
+            AiActionPlanCode::passenger_cannot_board,
+        "BoardTransport accepted a non-boardable passenger");
+
+    AiSemanticAction unload{};
+    unload.kind = AiSemanticActionKind::unload_transport;
+    unload.unit_ids = {carrier.id};
+    unload.target_x = 96;
+    unload.target_y = 64;
+    const AiActionPlanResult unload_plan =
+        PlanAiSemanticActionV1(input, unload);
+    require(unload_plan && unload_plan.packets[0].arg0 == 0x24 &&
+        unload_plan.packets[0].arg2 == 96 &&
+        unload_plan.packets[0].arg3 == 64,
+        "UnloadTransport did not plan command 0x24 to the point");
+    unload.unit_ids = {worker.id};
+    require(PlanAiSemanticActionV1(input, unload).code ==
+            AiActionPlanCode::target_not_carrier,
+        "UnloadTransport accepted a non-carrier source");
+
+    // Secondary-value balance.
+    velocis_a.runtime_flags |= 1u;
+    velocis_b.runtime_flags |= 1u;
+    velocis_a.action_mode = 10;
+    velocis_b.action_mode = 0;
+    AiSemanticAction transfer{};
+    transfer.kind = AiSemanticActionKind::transfer_secondary;
+    transfer.unit_ids = {velocis_a.id, velocis_b.id};
+    const AiActionPlanResult transfer_plan =
+        PlanAiSemanticActionV1(input, transfer);
+    require(transfer_plan && transfer_plan.packets.size() == 1 &&
+        transfer_plan.packets[0].arg0 == 0x23 &&
+        transfer_plan.packets[0].unit_offset == velocis_a.id + 0x10 &&
+        transfer_plan.packets[0].arg1 == velocis_a.id &&
+        transfer_plan.packets[0].arg2 == 5,
+        "TransferSecondary did not pair donor/recipient at the mean");
+    velocis_b.action_mode = 10;
+    require(PlanAiSemanticActionV1(input, transfer).code ==
+            AiActionPlanCode::nothing_to_transfer,
+        "TransferSecondary planned packets for a balanced group");
+    velocis_a.action_mode = 3;
+    velocis_b.action_mode = 3;
+
+    // Stance toggle (Tyrano ships stance #2 = command 0x14 / flag 0x10000).
+    AiSemanticAction stance{};
+    stance.kind = AiSemanticActionKind::set_stance;
+    stance.unit_ids = {velocis_a.id};
+    stance.stance_id = 2;
+    stance.stance_on = true;
+    const AiActionPlanResult stance_on_plan =
+        PlanAiSemanticActionV1(input, stance);
+    require(stance_on_plan && stance_on_plan.packets[0].arg0 == 0x14 &&
+        stance_on_plan.packets[0].arg1 == 0,
+        "stance-on did not plan command 0x14");
+    stance.stance_on = false;
+    velocis_a.command_flags |= 0x10000u;
+    const AiActionPlanResult stance_off_plan =
+        PlanAiSemanticActionV1(input, stance);
+    require(stance_off_plan && stance_off_plan.packets[0].arg0 == 0x14 &&
+        stance_off_plan.packets[0].arg1 == 1 &&
+        stance_off_plan.packets[0].arg2 == 0x10000,
+        "stance-off did not plan the cancel form");
+    velocis_a.command_flags &= ~0x10000u;
+    require(PlanAiSemanticActionV1(input, stance).code ==
+            AiActionPlanCode::stance_inactive,
+        "stance-off was planned without the active flag");
+    stance.stance_id = 7;
+    require(PlanAiSemanticActionV1(input, stance).code ==
+            AiActionPlanCode::invalid_stance,
+        "out-of-range stance id was accepted");
+
+    // Return cargo.
+    AiSemanticAction return_cargo{};
+    return_cargo.kind = AiSemanticActionKind::return_cargo;
+    return_cargo.unit_ids = {worker.id};
+    const AiActionPlanResult return_plan =
+        PlanAiSemanticActionV1(input, return_cargo);
+    require(return_plan && return_plan.packets[0].arg0 == 0x07 &&
+        return_plan.packets[0].arg1 == 0x80000000u,
+        "ReturnCargo did not plan the synthetic dropoff harvest");
+    return_cargo.unit_ids = {carrier.id};
+    require(PlanAiSemanticActionV1(input, return_cargo).code ==
+            AiActionPlanCode::nothing_to_return,
+        "ReturnCargo planned for a unit without cargo");
+
+    // Item use.
+    AiSemanticAction item{};
+    item.kind = AiSemanticActionKind::use_item;
+    item.unit_ids = {velocis_a.id};
+    item.target_x = 40;
+    item.target_y = 40;
+    require(PlanAiSemanticActionV1(input, item).code ==
+            AiActionPlanCode::missing_item,
+        "UseItem planned without a usable item slot");
+    velocis_a.item_slots[1] = 0x1b;
+    const AiActionPlanResult item_plan = PlanAiSemanticActionV1(input, item);
+    require(item_plan && item_plan.packets[0].arg0 == 0x16,
+        "UseItem did not plan command 0x16");
+    velocis_a.item_slots[1] = 0;
+}
+
 void test_live_validation_adapter() {
     GameSessionUnitReferenceTables references{};
     UnitTypeSessionDefinition& worker_references = references.definitions[32];
@@ -1142,6 +1481,61 @@ void test_ai_rl_defense_autopilot() {
         "defense autopilot chased a hostile far outside the perimeter");
 }
 
+void test_ai_rl_offense_autopilot_and_siege() {
+    // attack_enemy_base must target a visible enemy BUILDING (the elimination
+    // objective) over a nearer mobile unit, and the offense autopilot must
+    // commit a big army to the nearest enemy building on its own.
+    AiObservation obs = tyrano_build_order_observation();
+    // Enemy building (type >= 0x60) and a closer enemy fighter.
+    obs.units.push_back(observed_unit(0x9400, 1, 0x84, 0, 1500, 1500, false));
+    obs.units.push_back(observed_unit(0x9500, 1, kTyranoMasosType, 0,
+        500, 500, false));
+
+    TyranoScriptedBotState state{};
+    state.rally_configured = true;
+    TyranoScriptedBotConfig config{};
+    config.decision_interval_frames = 1;
+    obs.units.push_back(observed_unit(0x3200, 0, kTyranoMasosType,
+        (1u << 5), 400, 400, true));
+    const TyranoScriptedBotDecision siege =
+        DecideTyranoScriptedBotForHighLevelAction(state, obs,
+            AiRlHighLevelAction::attack_enemy_base, config);
+    require(siege && siege.action.kind == AiSemanticActionKind::attack_unit &&
+        siege.action.target_unit_id == 0x9400,
+        "attack_enemy_base did not besiege the visible enemy building");
+
+    // Offense autopilot: below the army threshold it stays quiet...
+    TyranoScriptedBotState fresh{};
+    require(PlanTyranoOffenseAutopilot(fresh, obs).empty(),
+        "offense autopilot engaged with a tiny army");
+    // ...with 15+ fighters it commits them to the enemy building.
+    for (u32 i = 0; i < 15; ++i) {
+        obs.units.push_back(observed_unit(0x4000 + i, 0, kTyranoMasosType,
+            (1u << 5), 400 + static_cast<i32>(i), 400, true));
+    }
+    std::vector<AiSemanticAction> offense =
+        PlanTyranoOffenseAutopilot(fresh, obs);
+    // The order arrives CHUNKED: the planner rejects >14-unit selections
+    // (too_many_units), so one oversized action would silently no-op the
+    // whole army (the pre-chunking behavior — a real observed stalemate
+    // cause).
+    std::size_t offense_units = 0;
+    bool offense_shape_ok = !offense.empty();
+    for (const AiSemanticAction& chunk : offense) {
+        offense_shape_ok = offense_shape_ok &&
+            chunk.kind == AiSemanticActionKind::attack_unit &&
+            chunk.target_unit_id == 0x9400 &&
+            chunk.unit_ids.size() <= kAiMaximumUnitsPerAction;
+        offense_units += chunk.unit_ids.size();
+    }
+    require(offense_shape_ok && offense_units >= 15,
+        "offense autopilot did not send the army at the enemy building");
+    // Same target within the dwell window -> throttled.
+    obs.simulation_frame += 8;
+    require(PlanTyranoOffenseAutopilot(fresh, obs).empty(),
+        "offense order was re-spammed inside the dwell window");
+}
+
 void test_ai_play_lobby_role_compatibility() {
     require(IsAiPlayLinkLobbyRole(kAiPlayLinkLobbyRoleValue) &&
         IsComputerLikeLinkLobbyRole(kOriginalComputerLinkLobbyRoleValue) &&
@@ -1158,6 +1552,7 @@ void test_ai_play_lobby_role_compatibility() {
 int main() {
     test_observation_visibility_and_determinism();
     test_action_validation_and_packet_planning();
+    test_semantic_action_v2_planning();
     test_live_validation_adapter();
     test_tyrano_scripted_bot();
     test_tyrano_replay_derived_build_order();
@@ -1166,6 +1561,7 @@ int main() {
     test_ai_rl_hunt_and_research();
     test_ai_rl_research_tree_walk();
     test_ai_rl_defense_autopilot();
+    test_ai_rl_offense_autopilot_and_siege();
     test_ai_play_lobby_role_compatibility();
     std::cout << "ai_play_interface_regression: passed\n";
     return 0;
