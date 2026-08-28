@@ -683,6 +683,18 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotAction(
     return decision;
 }
 
+namespace {
+// Mop-up helpers (defined ahead of PlanTyranoOffenseAutopilot below; shared
+// with the attack_enemy_base executor).
+void update_enemy_building_memory(TyranoScriptedBotState& state,
+    const AiObservation& observation);
+const TyranoScriptedBotState::RememberedEnemyBuilding*
+nearest_remembered_building(const TyranoScriptedBotState& state, i32 from_x,
+    i32 from_y);
+UnitMovementPoint nearest_unexplored_point(const AiObservation& observation,
+    i32 from_x, i32 from_y);
+} // namespace
+
 TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
     TyranoScriptedBotState& state, const AiObservation& observation,
     AiRlHighLevelAction action, const TyranoScriptedBotConfig& config) {
@@ -1067,38 +1079,101 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
             return ready(TyranoScriptedBotIntent::attack_visible_enemy,
                 std::move(act));
         }
+        // Mop-up chain (mirrors the offense autopilot): remembered building
+        // -> unexplored enemy start -> unexplored-region sweep -> rotating
+        // exploration cycle.  Camping an explored-empty start stalemated
+        // decided games at the frame cap.
+        update_enemy_building_memory(state, observation);
+        const i32 home_x = std::max(observation.start_x, 0);
+        const i32 home_y = std::max(observation.start_y, 0);
+        const TyranoScriptedBotState::RememberedEnemyBuilding* remembered =
+            nearest_remembered_building(state, home_x, home_y);
+        if (remembered != nullptr) {
+            return move_army_to(remembered->x, remembered->y,
+                TyranoScriptedBotIntent::attack_visible_enemy);
+        }
         i64 best_distance = 0;
-        i32 march_x = 0;
-        i32 march_y = 0;
-        bool have_march = false;
+        i32 march_x = -1;
+        i32 march_y = -1;
         for (u32 owner = 0; owner < 8u; ++owner) {
             if ((observation.competitor_start_mask & (1u << owner)) == 0) {
                 continue;
             }
-            const i64 distance = squared_distance(observation.start_x,
-                observation.start_y, observation.owner_start_x[owner],
-                observation.owner_start_y[owner]);
+            const i32 sx = observation.owner_start_x[owner];
+            const i32 sy = observation.owner_start_y[owner];
+            const i64 distance =
+                squared_distance(observation.start_x, observation.start_y,
+                    sx, sy);
             if (distance == 0) {
                 continue;  // our own start
             }
-            if (!have_march || distance < best_distance) {
-                have_march = true;
+            const u32 tile_x = static_cast<u32>(std::max(sx, 0)) >> 5;
+            const u32 tile_y = static_cast<u32>(std::max(sy, 0)) >> 5;
+            const std::size_t tile_index = static_cast<std::size_t>(tile_y) *
+                observation.map_width_tiles + tile_x;
+            if (tile_index < observation.tiles.size() &&
+                observation.tiles[tile_index].explored) {
+                continue;  // already checked and empty
+            }
+            if (march_x < 0 || distance < best_distance) {
                 best_distance = distance;
-                march_x = observation.owner_start_x[owner];
-                march_y = observation.owner_start_y[owner];
+                march_x = sx;
+                march_y = sy;
             }
         }
-        if (have_march) {
+        if (march_x >= 0) {
             return move_army_to(march_x, march_y,
                 TyranoScriptedBotIntent::attack_visible_enemy);
+        }
+        const UnitMovementPoint sweep =
+            nearest_unexplored_point(observation, home_x, home_y);
+        if (sweep.x >= 0) {
+            return move_army_to(sweep.x, sweep.y,
+                TyranoScriptedBotIntent::explore);
         }
         ++state.exploration_index;
         const UnitMovementPoint point = exploration_point(state, observation);
         return move_army_to(point.x, point.y,
             TyranoScriptedBotIntent::explore);
     }
-    case AiRlHighLevelAction::defend_base:
     case AiRlHighLevelAction::retreat: {
+        // Retreat != defend: pull back ONLY the units currently in a combat
+        // cycle (attack travel/target, guard combat/pursuit, patrol combat)
+        // with a plain move so they actually disengage; unengaged units stay
+        // where they are.  Sharing defend_base's case made the two actions
+        // identical (41 actions were effectively 40).
+        AiSemanticAction act{};
+        act.kind = AiSemanticActionKind::move;
+        for (const AiObservedUnit& unit : observation.units) {
+            if (act.unit_ids.size() >= kAiMaximumUnitsPerAction) {
+                break;
+            }
+            if (!unit.controlled || !unit.alive ||
+                unit.type_id == kTyranoWorkerType ||
+                unit.type_id >= kTyranoMobileTypeLimit) {
+                continue;
+            }
+            const u32 command_state = unit.command_state & 0x00ffffffu;
+            const bool engaged =
+                command_state == kUnitStateAttackTravel ||
+                command_state == kUnitStateAttackTarget ||
+                (command_state >= kUnitStateRuntimeTargetValidationStart &&
+                    command_state <= kUnitStateGuardPursueTarget) ||
+                command_state == kUnitStatePatrolReturnCombat ||
+                command_state == kUnitStatePatrolOutboundCombat;
+            if (engaged) {
+                act.unit_ids.push_back(unit.id);
+            }
+        }
+        if (act.unit_ids.empty()) {
+            return decision;
+        }
+        act.target_x = std::max(observation.start_x, 0);
+        act.target_y = std::max(observation.start_y, 0);
+        ++state.decisions_emitted;
+        return ready(TyranoScriptedBotIntent::explore, std::move(act));
+    }
+    case AiRlHighLevelAction::defend_base: {
         // With the army already home, HOLD instead of re-pathing: a plain
         // move let defenders chase whatever crossed their acquisition radius
         // and scatter off the base again.
@@ -1550,6 +1625,124 @@ std::vector<AiSemanticAction> PlanTyranoDefenseAutopilot(
     return actions;
 }
 
+namespace {
+
+// Refresh the mop-up memory from this observation (idempotent per frame):
+// upsert every visible hostile building, drop entries whose tile is currently
+// visible without their building (confirmed razed).
+void update_enemy_building_memory(TyranoScriptedBotState& state,
+    const AiObservation& observation) {
+    if (state.building_memory_frame == observation.simulation_frame) {
+        return;
+    }
+    state.building_memory_frame = observation.simulation_frame;
+    const auto find_remembered = [&](u32 id) -> u32 {
+        for (u32 i = 0; i < state.remembered_enemy_building_count; ++i) {
+            if (state.remembered_enemy_buildings[i].id == id) {
+                return i;
+            }
+        }
+        return 0xffffffffu;
+    };
+    for (const AiObservedUnit& unit : observation.units) {
+        if (!is_hostile_visible_unit(observation, unit) ||
+            unit.type_id < kTyranoMobileTypeLimit) {
+            continue;
+        }
+        const u32 slot = find_remembered(unit.id);
+        if (slot != 0xffffffffu) {
+            state.remembered_enemy_buildings[slot].x = unit.x;
+            state.remembered_enemy_buildings[slot].y = unit.y;
+        } else if (state.remembered_enemy_building_count <
+            TyranoScriptedBotState::kRememberedEnemyBuildingCapacity) {
+            state.remembered_enemy_buildings[
+                state.remembered_enemy_building_count++] = {unit.id, unit.x,
+                unit.y};
+        }
+    }
+    // Confirm razes: a remembered building whose tile we can SEE right now,
+    // without that id among visible hostiles, is gone.
+    u32 write = 0;
+    for (u32 i = 0; i < state.remembered_enemy_building_count; ++i) {
+        const TyranoScriptedBotState::RememberedEnemyBuilding& entry =
+            state.remembered_enemy_buildings[i];
+        bool keep = true;
+        const u32 tile_x = static_cast<u32>(std::max(entry.x, 0)) >> 5;
+        const u32 tile_y = static_cast<u32>(std::max(entry.y, 0)) >> 5;
+        const std::size_t tile_index = static_cast<std::size_t>(tile_y) *
+            observation.map_width_tiles + tile_x;
+        if (tile_x < observation.map_width_tiles &&
+            tile_y < observation.map_height_tiles &&
+            tile_index < observation.tiles.size() &&
+            observation.tiles[tile_index].visible) {
+            keep = false;
+            for (const AiObservedUnit& unit : observation.units) {
+                if (unit.id == entry.id &&
+                    is_hostile_visible_unit(observation, unit)) {
+                    keep = true;
+                    break;
+                }
+            }
+        }
+        if (keep) {
+            state.remembered_enemy_buildings[write++] =
+                state.remembered_enemy_buildings[i];
+        }
+    }
+    state.remembered_enemy_building_count = write;
+}
+
+// Nearest remembered enemy building to a reference point; nullptr if none.
+const TyranoScriptedBotState::RememberedEnemyBuilding*
+nearest_remembered_building(const TyranoScriptedBotState& state, i32 from_x,
+    i32 from_y) {
+    const TyranoScriptedBotState::RememberedEnemyBuilding* best = nullptr;
+    i64 best_distance = 0;
+    for (u32 i = 0; i < state.remembered_enemy_building_count; ++i) {
+        const TyranoScriptedBotState::RememberedEnemyBuilding& entry =
+            state.remembered_enemy_buildings[i];
+        const i64 distance =
+            squared_distance(from_x, from_y, entry.x, entry.y);
+        if (best == nullptr || distance < best_distance ||
+            (distance == best_distance && entry.id < best->id)) {
+            best = &entry;
+            best_distance = distance;
+        }
+    }
+    return best;
+}
+
+// Nearest UNEXPLORED tile center to a reference point ({-1,-1} when the map
+// is fully explored).  Coarse 2-tile stride keeps the scan cheap; fog reveals
+// a radius anyway.
+UnitMovementPoint nearest_unexplored_point(const AiObservation& observation,
+    i32 from_x, i32 from_y) {
+    UnitMovementPoint best{-1, -1};
+    i64 best_distance = 0;
+    for (u32 tile_y = 0; tile_y < observation.map_height_tiles; tile_y += 2) {
+        for (u32 tile_x = 0; tile_x < observation.map_width_tiles;
+             tile_x += 2) {
+            const std::size_t index = static_cast<std::size_t>(tile_y) *
+                observation.map_width_tiles + tile_x;
+            if (index >= observation.tiles.size() ||
+                observation.tiles[index].explored) {
+                continue;
+            }
+            const i32 world_x = static_cast<i32>(tile_x << 5) + 16;
+            const i32 world_y = static_cast<i32>(tile_y << 5) + 16;
+            const i64 distance =
+                squared_distance(from_x, from_y, world_x, world_y);
+            if (best.x < 0 || distance < best_distance) {
+                best = {world_x, world_y};
+                best_distance = distance;
+            }
+        }
+    }
+    return best;
+}
+
+} // namespace
+
 std::vector<AiSemanticAction> PlanTyranoOffenseAutopilot(
     TyranoScriptedBotState& state, const AiObservation& observation) {
     // Enough fighters to raze a base without feeding the army piecemeal.
@@ -1562,18 +1755,25 @@ std::vector<AiSemanticAction> PlanTyranoOffenseAutopilot(
     constexpr u32 kOffenseMarchTargetId = 0xfffffffeu;
 
     std::vector<AiSemanticAction> actions;
+    update_enemy_building_memory(state, observation);
     std::vector<u32> fighters;
+    i64 army_x = 0;
+    i64 army_y = 0;
     for (const AiObservedUnit& unit : observation.units) {
         if (unit.controlled && unit.alive && !unit.under_construction &&
             unit.type_id != kTyranoWorkerType &&
             unit.type_id < kTyranoMobileTypeLimit &&
             unit_can_attack(unit) && !unit_is_constructing(unit)) {
             fighters.push_back(unit.id);
+            army_x += unit.x;
+            army_y += unit.y;
         }
     }
     if (fighters.size() < kOffenseMinArmy) {
         return actions;
     }
+    army_x /= static_cast<i64>(fighters.size());
+    army_y /= static_cast<i64>(fighters.size());
 
     // Nearest visible enemy building — the elimination objective.
     const AiObservedUnit* target = nullptr;
@@ -1592,44 +1792,85 @@ std::vector<AiSemanticAction> PlanTyranoOffenseAutopilot(
         }
     }
     if (target == nullptr) {
-        // No enemy building in sight: with a decisive army, attack-move on
-        // the nearest enemy start.  Without this, two turtling policies never
-        // even SEE each other's base and every match dies at the frame cap —
-        // the elimination reward needs eliminations to actually occur.
+        // No enemy building in SIGHT.  Mop-up chain (each tier only when the
+        // previous is empty):
+        //   1. march on the nearest REMEMBERED building (seen earlier,
+        //      currently fogged) — a relocated/hidden base is usually here;
+        //   2. march on the nearest enemy start whose tile is still
+        //      UNEXPLORED (camping an explored-empty start caused the
+        //      100k-frame stalemates the last record replay showed);
+        //   3. sweep the nearest unexplored region from the army centroid;
+        //   4. fully explored and no memory: rotate the coarse exploration
+        //      cycle so re-fogged areas get re-checked for rebuilt bases.
         if (fighters.size() < kOffenseMarchMinArmy) {
             return actions;
         }
-        i64 best_distance = 0;
-        i32 march_x = 0;
-        i32 march_y = 0;
-        bool have_march = false;
-        for (u32 owner = 0; owner < 8u; ++owner) {
-            if ((observation.competitor_start_mask & (1u << owner)) == 0) {
-                continue;
-            }
-            const i64 distance = squared_distance(observation.start_x,
-                observation.start_y, observation.owner_start_x[owner],
-                observation.owner_start_y[owner]);
-            if (distance == 0) {
-                continue;  // our own start
-            }
-            if (!have_march || distance < best_distance) {
-                have_march = true;
-                best_distance = distance;
-                march_x = observation.owner_start_x[owner];
-                march_y = observation.owner_start_y[owner];
+        constexpr u32 kOffenseSweepTargetId = 0xfffffffdu;
+        i32 march_x = -1;
+        i32 march_y = -1;
+        u32 march_marker = kOffenseMarchTargetId;
+        const TyranoScriptedBotState::RememberedEnemyBuilding* remembered =
+            nearest_remembered_building(state,
+                static_cast<i32>(army_x), static_cast<i32>(army_y));
+        if (remembered != nullptr) {
+            march_x = remembered->x;
+            march_y = remembered->y;
+            march_marker = remembered->id;
+        }
+        if (march_x < 0) {
+            i64 best_distance = 0;
+            for (u32 owner = 0; owner < 8u; ++owner) {
+                if ((observation.competitor_start_mask & (1u << owner)) == 0) {
+                    continue;
+                }
+                const i32 sx = observation.owner_start_x[owner];
+                const i32 sy = observation.owner_start_y[owner];
+                const i64 distance = squared_distance(observation.start_x,
+                    observation.start_y, sx, sy);
+                if (distance == 0) {
+                    continue;  // our own start
+                }
+                const u32 tile_x = static_cast<u32>(std::max(sx, 0)) >> 5;
+                const u32 tile_y = static_cast<u32>(std::max(sy, 0)) >> 5;
+                const std::size_t tile_index =
+                    static_cast<std::size_t>(tile_y) *
+                    observation.map_width_tiles + tile_x;
+                if (tile_index < observation.tiles.size() &&
+                    observation.tiles[tile_index].explored) {
+                    continue;  // already checked; do not camp an empty start
+                }
+                if (march_x < 0 || distance < best_distance) {
+                    best_distance = distance;
+                    march_x = sx;
+                    march_y = sy;
+                }
             }
         }
-        if (!have_march) {
-            return actions;
+        if (march_x < 0) {
+            const UnitMovementPoint sweep = nearest_unexplored_point(
+                observation, static_cast<i32>(army_x),
+                static_cast<i32>(army_y));
+            if (sweep.x >= 0) {
+                march_x = sweep.x;
+                march_y = sweep.y;
+                march_marker = kOffenseSweepTargetId;
+            }
         }
-        if (state.last_offense_target_id == kOffenseMarchTargetId &&
+        if (march_x < 0) {
+            ++state.exploration_index;
+            const UnitMovementPoint cycle =
+                exploration_point(state, observation);
+            march_x = cycle.x;
+            march_y = cycle.y;
+            march_marker = kOffenseSweepTargetId;
+        }
+        if (state.last_offense_target_id == march_marker &&
             state.last_offense_order_frame != 0xffffffffu &&
             observation.simulation_frame - state.last_offense_order_frame <
                 kOffenseReorderFrames) {
             return actions;
         }
-        state.last_offense_target_id = kOffenseMarchTargetId;
+        state.last_offense_target_id = march_marker;
         state.last_offense_order_frame = observation.simulation_frame;
         AiSemanticAction march{};
         march.kind = AiSemanticActionKind::attack_move;

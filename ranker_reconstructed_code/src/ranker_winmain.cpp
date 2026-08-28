@@ -32217,11 +32217,15 @@ void write_ai_rl_reward_trace(const GameplayLoopState& state,
     // has a trace so normal (non-RL) matches produce no file.
     const bool timed_out = std::strcmp(reason, "max_frames") == 0;
     const UnitMovementContext* movement = default_gameplay_movement_context();
-    std::array<u32, kPlayerSlotCount> unit_counts{};
+    // BUILDING counts, not unit counts: the melee elimination rule (and the
+    // league/records judgment) is "zero buildings = eliminated"; surviving
+    // mobile units do not win a decided game.
+    std::array<u32, kPlayerSlotCount> building_counts{};
     if (movement != nullptr) {
         for (const UnitMovementUnit* unit : movement->active_units) {
-            if (unit != nullptr && unit->owner_id < unit_counts.size()) {
-                ++unit_counts[unit->owner_id];
+            if (unit != nullptr && unit->owner_id < building_counts.size() &&
+                unit->type_id >= kAiBuildingTypeBase) {
+                ++building_counts[unit->owner_id];
             }
         }
     }
@@ -32234,7 +32238,7 @@ void write_ai_rl_reward_trace(const GameplayLoopState& state,
         }
         AiRlTerminalOutcome outcome = AiRlTerminalOutcome::draw;
         if (!timed_out) {
-            outcome = unit_counts[owner] != 0 ?
+            outcome = building_counts[owner] != 0 ?
                 AiRlTerminalOutcome::win : AiRlTerminalOutcome::loss;
         }
         AiRlTraceFinalize(trace, outcome);

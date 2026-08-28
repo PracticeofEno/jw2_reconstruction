@@ -18,6 +18,11 @@ constexpr u32 kAiNoStanceId = 0xffffffffu;
 // rejects ids >= 0x2e (default_unit_command_can_use_ability).
 constexpr u32 kAiAbilityIdLimit = 0x2eu;
 constexpr u32 kAiStanceCount = 4;
+// A producer building holds at most this many deferred production commands;
+// PlanAiSemanticActionV1 rejects a produce order past it with
+// AiActionPlanCode::production_queue_full.  The RL legal-action mask reads the
+// same limit so "masked legal" means "the planner will accept it".
+constexpr u32 kUnitProductionQueueLimit = 4u;
 
 enum class AiSemanticActionKind : u32 {
     no_op = 0,

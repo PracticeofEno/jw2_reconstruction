@@ -1,5 +1,6 @@
 #include "ranker_ai_rl_features.h"
 
+#include "ranker_ai_actions.h"
 #include "ranker_unit_commands.h"
 
 #include <algorithm>
@@ -54,7 +55,11 @@ constexpr u32 kHarvestCommand = 7u;
 constexpr u32 kNeutralOwnerId = 8u;      // kOwnerNeutralRouteProbeOwnerId
 
 float norm(u32 value, float scale) {
-    return static_cast<float>(value) / scale;
+    // Clamped to [0,1]: unclamped features blew past the trained range in
+    // long games (frame/18000 reached 5.5 at the 100k cap, unit counts /50 hit
+    // 4.9 at 243 units) and saturated the tanh trunk, making late-game states
+    // indistinguishable.
+    return std::min(static_cast<float>(value) / scale, 1.0f);
 }
 
 // Worker "currently gathering" heuristic, mirroring the scripted bot's
@@ -115,6 +120,14 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
     // only legal then, so the policy cannot restart an in-progress order (each
     // restart re-debits the cost and the order never completes).
     bool idle_researcher = false;
+    // A completed producer of each kind with room left in its production
+    // queue.  "Completed producer exists" is not enough to make a produce
+    // action legal: the planner rejects an order once every producer of that
+    // kind is at kUnitProductionQueueLimit, and a masked-legal-but-rejected
+    // pick burns the owner's whole decision cycle.
+    bool producer_free_base = false;
+    bool producer_free_egg = false;
+    bool producer_free_87 = false;
     u32 own_total = 0, own_army = 0;
     u32 enemy_mobile = 0, enemy_building = 0, enemy_total = 0;
     bool have_nearest = false;
@@ -213,6 +226,15 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
                 u.deferred_command_count == 0) {
                 idle_researcher = true;
             }
+            if (!uc &&
+                u.deferred_command_count < kUnitProductionQueueLimit) {
+                switch (u.type_id) {
+                case kTypeBaseNest: producer_free_base = true; break;
+                case kTypeEggNest: producer_free_egg = true; break;
+                case kTypeNest87: producer_free_87 = true; break;
+                default: break;
+                }
+            }
         }
         if (is_hostile_visible(observation, u)) {
             ++enemy_total;
@@ -265,7 +287,9 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
     };
 
     // Global scalars [0..12]
-    put(norm(observation.simulation_frame, 18000.0f));    // 0
+    // Frame scale matches real game length: eliminations land at 31k-40k
+    // frames (safety cap 100k); /18000 saturated in the opening third.
+    put(norm(observation.simulation_frame, 60000.0f));    // 0
     put(norm(observation.primary_resources, 1000.0f));    // 1
     put(norm(observation.secondary_resources, 1000.0f));  // 2
     put(norm(observation.population_used, 100.0f));        // 3
@@ -400,8 +424,13 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
         out.legal_mask[static_cast<std::size_t>(a)] = legal ? 1u : 0u;
     };
     const u32 prim = observation.primary_resources;
-    const bool has_pop_room =
-        observation.population_limit == 0 || pop_free > 0;
+    // Per-unit population gate (audited pop costs): the old single
+    // `pop_free > 0` check marked every produce action legal with 1-3 pop
+    // left while the validator then rejected the 2-4 pop units — wasted picks.
+    const auto pop_ok = [&](u32 pop_cost) {
+        return observation.population_limit == 0 || pop_free >= pop_cost;
+    };
+    const bool has_pop_room = pop_ok(1u);
     const bool has_builder = idle_workers > 0 || harvesting > 0 || workers > 0;
     const bool completed_base = base > base_uc;   // at least one finished nest
     const bool completed_egg = egg > egg_uc;
@@ -421,11 +450,11 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
 
     set_legal(AiRlHighLevelAction::no_op, true);
     set_legal(AiRlHighLevelAction::produce_worker,
-        completed_base && has_pop_room && prim >= kWorkerCost);
+        producer_free_base && has_pop_room && prim >= kWorkerCost);
     set_legal(AiRlHighLevelAction::produce_masos,
-        completed_egg && has_pop_room && prim >= kMasosCost);
+        producer_free_egg && pop_ok(1u) && prim >= kMasosCost);
     set_legal(AiRlHighLevelAction::produce_dilophos,
-        completed_egg && has_pop_room && prim >= kDilophosCost);
+        producer_free_egg && pop_ok(2u) && prim >= kDilophosCost);
     set_legal(AiRlHighLevelAction::build_population_nest,
         has_builder && prim >= kPopulationNestCost);
     set_legal(AiRlHighLevelAction::build_egg_nest,
@@ -461,30 +490,29 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
     // 프테라스 sky+upgrade, 트리세스 land nisdos, 켄트로스 land+upgrade,
     // 티라노스 every advanced building; the upgrade nest itself needs
     // land+sky, the nisdos pair land/sky + upgrade.
-    const bool completed_87 = nest87 > nest87_uc;
     const bool completed_86 = nest86 > nest86_uc;
     set_legal(AiRlHighLevelAction::produce_unit_x22,
-        completed_egg && has_pop_room && prim >= kUnit22Cost);
+        producer_free_egg && pop_ok(1u) && prim >= kUnit22Cost);
     set_legal(AiRlHighLevelAction::produce_unit_x25,
-        completed_egg && completed_86 && has_pop_room && prim >= kUnit25Cost);
+        producer_free_egg && completed_86 && pop_ok(1u) && prim >= kUnit25Cost);
     set_legal(AiRlHighLevelAction::produce_unit_x27,
-        completed_egg && completed_86 && nest88 >= 1 && has_pop_room &&
+        producer_free_egg && completed_86 && nest88 >= 1 && pop_ok(2u) &&
         prim >= kUnit27Cost);
     set_legal(AiRlHighLevelAction::produce_unit_x28,
-        completed_egg && nest89 >= 1 && has_pop_room && prim >= kUnit28Cost);
+        producer_free_egg && nest89 >= 1 && pop_ok(4u) && prim >= kUnit28Cost);
     set_legal(AiRlHighLevelAction::produce_unit_x2e,
-        completed_egg && completed_land && nest88 >= 1 && has_pop_room &&
+        producer_free_egg && completed_land && nest88 >= 1 && pop_ok(3u) &&
         prim >= kUnit2eCost);
     // 티라노스 reserves 25 population, so the generic one-slot headroom check
     // is not enough.
     set_legal(AiRlHighLevelAction::produce_unit_x2c,
-        completed_base && completed_land && completed_86 && nest88 >= 1 &&
+        producer_free_base && completed_land && completed_86 && nest88 >= 1 &&
         nest89 >= 1 && nest8a >= 1 && prim >= kUnit2cCost &&
         (observation.population_limit == 0 || pop_free >= kUnit2cPopulation));
     set_legal(AiRlHighLevelAction::produce_unit_x29,
-        completed_87 && completed_86 && has_pop_room && prim >= kUnit29Cost);
+        producer_free_87 && completed_86 && pop_ok(2u) && prim >= kUnit29Cost);
     set_legal(AiRlHighLevelAction::produce_unit_x2a,
-        completed_87 && completed_land && has_pop_room &&
+        producer_free_87 && completed_land && pop_ok(4u) &&
         prim >= kUnit2aCost);
     set_legal(AiRlHighLevelAction::build_nest_x86,
         has_builder && completed_egg && prim >= kNest86Cost);

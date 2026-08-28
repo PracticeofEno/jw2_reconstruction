@@ -1280,6 +1280,22 @@ void test_ai_rl_reward() {
     require(loss_step.terminal == config.loss_reward,
         "terminal loss did not yield the loss reward");
 
+    // BUILDING-based judgment (melee elimination rule): stray mobile units
+    // without a single building are still a LOSS...
+    AiObservation building_loss{};
+    building_loss.local_faction = kTyranoFactionId;
+    building_loss.game_ended = true;
+    u32 stray_id = 0x7800;
+    add_observed_type(building_loss, kTyranoMasosType, 3, stray_id);
+    require(ClassifyAiRlTerminal(building_loss) == AiRlTerminalOutcome::loss,
+        "buildingless survivors were not classified a loss");
+    // ...and visible enemy MOBILES without any enemy building do not block a
+    // win while our base stands (the old unit-count rule called this a draw).
+    AiObservation building_win = with_enemy;
+    building_win.game_ended = true;
+    require(ClassifyAiRlTerminal(building_win) == AiRlTerminalOutcome::win,
+        "own-base-standing vs building-less enemy was not a win");
+
     // Determinism: identical inputs -> byte-identical reward.
     AiRlStepReward again = ComputeAiRlStepReward(base, with_army, undisc);
     require(again.total == grow.total && again.shaping == grow.shaping &&
@@ -1338,6 +1354,58 @@ void test_ai_rl_trace() {
     }
     require(std::fabs(sum - trace.return_sum) < 1e-5f,
         "return_sum did not equal the sum of per-step rewards");
+}
+
+void test_ai_rl_producer_queue_capacity_mask() {
+    // A produce action is legal only while some producer of that kind still has
+    // room in its queue.  The planner rejects an order once every candidate is
+    // at kUnitProductionQueueLimit (AiActionPlanCode::production_queue_full),
+    // and a masked-legal-but-rejected pick costs the owner a whole decision
+    // cycle -- self-play logs showed ~81% of produce picks failing this way.
+    AiObservation obs = tyrano_build_order_observation();
+    // population_used is the SUPPLY the nests provide; leave headroom so the
+    // pop gate never masks what this test is measuring.
+    obs.population_used = 40;
+    obs.population_reserved = 4;
+    obs.units.push_back(observed_unit(0x4000, 0, kTyranoEggNestType, 0,
+        352, 352, true));
+    AiObservedUnit& egg = obs.units.back();
+    AiObservedUnit& base = obs.units[1];
+
+    const auto masos_legal = [](const AiObservation& o) {
+        return EncodeAiObservationForRl(o).legal_mask[static_cast<std::size_t>(
+            AiRlHighLevelAction::produce_masos)] == 1;
+    };
+    const auto worker_legal = [](const AiObservation& o) {
+        return EncodeAiObservationForRl(o).legal_mask[static_cast<std::size_t>(
+            AiRlHighLevelAction::produce_worker)] == 1;
+    };
+
+    require(masos_legal(obs), "produce_masos was not legal with an idle egg nest");
+    egg.deferred_command_count = kUnitProductionQueueLimit - 1;
+    require(masos_legal(obs),
+        "produce_masos went illegal while the egg nest still had queue room");
+    egg.deferred_command_count = kUnitProductionQueueLimit;
+    require(!masos_legal(obs),
+        "produce_masos stayed legal with the only egg nest queue-full");
+
+    // A second, idle egg nest restores it: the bot picks the least-busy
+    // producer, so one free nest is enough.
+    obs.units.push_back(observed_unit(0x4001, 0, kTyranoEggNestType, 0,
+        384, 384, true));
+    require(masos_legal(obs),
+        "produce_masos stayed illegal despite a second idle egg nest");
+
+    // An under-construction nest is not a producer, full or not.
+    obs.units.back().under_construction = true;
+    require(!masos_legal(obs),
+        "an under-construction egg nest was counted as free producer capacity");
+
+    // The base nest gates workers independently of the egg nest.
+    require(worker_legal(obs), "produce_worker was not legal with an idle base");
+    base.deferred_command_count = kUnitProductionQueueLimit;
+    require(!worker_legal(obs),
+        "produce_worker stayed legal with the only base nest queue-full");
 }
 
 void test_ai_rl_hunt_and_research() {
@@ -1558,6 +1626,7 @@ int main() {
     test_tyrano_replay_derived_build_order();
     test_ai_rl_reward();
     test_ai_rl_trace();
+    test_ai_rl_producer_queue_capacity_mask();
     test_ai_rl_hunt_and_research();
     test_ai_rl_research_tree_walk();
     test_ai_rl_defense_autopilot();

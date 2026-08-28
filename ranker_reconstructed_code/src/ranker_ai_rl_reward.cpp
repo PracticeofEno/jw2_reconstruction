@@ -34,23 +34,30 @@ AiRlTerminalOutcome ClassifyAiRlTerminal(const AiObservation& observation) {
     if (!observation.game_ended) {
         return AiRlTerminalOutcome::ongoing;
     }
-    bool have_own = false;
-    bool have_enemy = false;
+    // BUILDING-based judgment, matching the melee elimination rule the
+    // harness and league use everywhere else (zero buildings = eliminated;
+    // stray mobile units do not keep an owner alive).  The old unit-count
+    // rule disagreed with the gate/records and mis-labeled outcomes.
+    constexpr u32 kBuildingTypeBase = 0x60u;
+    bool have_own_building = false;
+    bool have_enemy_building = false;
     for (const AiObservedUnit& unit : observation.units) {
-        if (unit.controlled && unit.alive) {
-            have_own = true;
-        } else if (unit.visible && unit.alive && !unit.controlled &&
-                   unit.owner_id < 32u &&
+        if (unit.type_id < kBuildingTypeBase || !unit.alive) {
+            continue;
+        }
+        if (unit.controlled) {
+            have_own_building = true;
+        } else if (unit.visible && unit.owner_id < 32u &&
                    (observation.active_owner_mask & (1u << unit.owner_id)) != 0 &&
                    (observation.local_relation_mask &
                        (1u << unit.owner_id)) == 0) {
-            have_enemy = true;
+            have_enemy_building = true;
         }
     }
-    if (!have_own) {
+    if (!have_own_building) {
         return AiRlTerminalOutcome::loss;
     }
-    if (!have_enemy) {
+    if (!have_enemy_building) {
         return AiRlTerminalOutcome::win;
     }
     return AiRlTerminalOutcome::draw;

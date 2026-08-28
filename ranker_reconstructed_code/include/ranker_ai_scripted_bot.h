@@ -116,6 +116,22 @@ struct TyranoScriptedBotState {
     u32 drop_stage_frame = 0xffffffffu;
     i32 drop_target_x = 0;
     i32 drop_target_y = 0;
+    // Mop-up memory: last-known positions of enemy BUILDINGS ever seen.
+    // Refreshed from each observation; an entry is dropped once its tile is
+    // currently visible without that building (confirmed razed).  This is
+    // what lets the army finish a relocated/hidden base instead of
+    // stalemating at the frame cap once the visible base is gone.
+    // Observation-driven only, so P2P-deterministic.
+    struct RememberedEnemyBuilding {
+        u32 id = 0;
+        i32 x = 0;
+        i32 y = 0;
+    };
+    static constexpr std::size_t kRememberedEnemyBuildingCapacity = 24;
+    std::array<RememberedEnemyBuilding, kRememberedEnemyBuildingCapacity>
+        remembered_enemy_buildings{};
+    u32 remembered_enemy_building_count = 0;
+    u32 building_memory_frame = 0xffffffffu;
     std::array<u32, kTyranoScriptedBotIntentCount> intent_retry_after_frame{};
     bool rally_configured = false;
     bool harvest_upgrade_requested = false;

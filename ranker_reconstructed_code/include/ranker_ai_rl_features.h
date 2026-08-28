@@ -18,7 +18,8 @@ namespace ranker {
 // build placement).  The mask is a learning aid computed from the observation;
 // the live validator remains authoritative at execution time.
 
-constexpr u32 kAiRlFeatureVersion = 2u;
+// v3: clamped normalization + frame scale 60000 (same layout/count as v2).
+constexpr u32 kAiRlFeatureVersion = 3u;
 
 // High-level (strategy) action space the RL policy samples from.
 enum class AiRlHighLevelAction : u32 {

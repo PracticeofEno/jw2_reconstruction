@@ -52,7 +52,6 @@ constexpr u32 kFirstBuildingType = 0x60u;
 constexpr u32 kBuildingTypeLimit = 0xaau;
 constexpr u32 kMobileUnitTypeLimit = 0x60u;
 constexpr u32 kResearchOrderLimit = 0x40u;
-constexpr u32 kUnitProductionQueueLimit = 4u;
 constexpr u32 kResearchQueueLimit = 10u;
 
 const UnitMovementUnit* find_active_unit(const UnitMovementContext& movement,
