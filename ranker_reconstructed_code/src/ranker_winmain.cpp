@@ -851,6 +851,17 @@ struct RuntimeGlobals {
     // route through that hook, so consuming units into a twin is not a "loss".
     std::array<u64, kPlayerSlotCount> ai_play_unit_value_lost{};
     std::array<u64, kPlayerSlotCount> ai_play_building_value_lost{};
+    // Per-owner last-seen harvestable-amount snapshot (fog-honest resource
+    // observation): the observation builder updates entries only for tiles in
+    // the owner's active vision, so explored-but-unwatched terrain reports the
+    // remembered amount instead of the live one.  Sized lazily by the builder.
+    std::array<std::vector<u32>, kPlayerSlotCount> ai_play_resource_memory{};
+    // Scratch grid for deriving an AI owner's ACTIVE vision: the engine keeps
+    // the real grid's current-visibility layer only for the local viewing
+    // player (an AI owner's row is empty), so the observation builder replays
+    // the engine's per-unit visibility expansion into this scratch each
+    // decision.  Never written back to the real grid — sim/replay unaffected.
+    GameplayVisibilityGrid ai_play_vision_scratch;
     // Imitation learning (#6): when enabled, a built-in-AI owner's per-decision
     // observations are recorded here and flushed to ai_rl_observe.jsonl at match
     // end for off-sim behavior cloning of the built-in Owner AI.
@@ -1354,6 +1365,7 @@ void run_default_periodic_unit_support_effects(UnitLifecycleContext& lifecycle);
 void run_default_active_unit_runtime_dispatch(UnitLifecycleContext& lifecycle,
     UnitMovementUnit& unit);
 void configure_default_unit_lifecycle_callbacks(UnitLifecycleContext& lifecycle);
+bool ai_play_no_draw_enabled();
 void sync_default_owner_threat_points_from_ai(u32 owner);
 void sync_default_owner_threat_points_to_ai(u32 owner);
 bool default_owners_are_related(u32 source_owner, u32 target_owner);
@@ -1371,6 +1383,17 @@ bool default_owner_ai_route_helper_path_score(
 
 bool rect_has_extent(const RECT& rect) {
     return rect.right > rect.left && rect.bottom > rect.top;
+}
+
+// Headless self-play (-AISELF without -AIDRAW) skips graphics/audio devices
+// entirely.  Every render/present/Bink/cursor primitive already no-ops when
+// DirectDraw is inactive, so leaving directx_initialized=false is safe; this
+// removes the device contention that black-screened an interactive viewer
+// next to a 24-instance training fleet.
+bool ai_play_no_draw_enabled() {
+    const P2PNetworkLaunchParameters& parameters =
+        p2p_network_launch_parameters();
+    return parameters.self_play && !parameters.self_play_draw;
 }
 
 const char* main_window_ddraw_ini_path() {
@@ -4088,6 +4111,9 @@ void default_gameplay_display_frame_boundary() {
 }
 
 void default_gameplay_display_configure_surfaces(u32 width, u32 height, u32 color_depth) {
+    if (ai_play_no_draw_enabled()) {
+        return;  // headless training: no surfaces exist to reconfigure
+    }
     const HRESULT result = ConfigureDirectDrawSurfaces(g_runtime.main_window,
         static_cast<int>(width), static_cast<int>(height),
         static_cast<int>(color_depth));
@@ -8515,7 +8541,8 @@ bool default_gameplay_flow_import_session_bundle(GameplaySessionFlowState& state
     g_runtime.gameplay_terrain_tile_sheet_loaded = false;
     g_runtime.gameplay_session_archive_path.clear();
 
-    if (!g_runtime.directx_initialized || !direct_draw_state().active) {
+    if ((!g_runtime.directx_initialized || !direct_draw_state().active) &&
+        !ai_play_no_draw_enabled()) {
         append_startup_log(
             "gameplay import blocked because the display surface is inactive");
         OutputDebugStringA(
@@ -14478,6 +14505,12 @@ const char* frontend_bootstrap_failure_detail(FrontendBootstrapFailureStage stag
 }
 
 void default_play_frontend_intro_sequence(FrontendBootstrapState&) {
+    // Headless training: the Media-Foundation intro fallback creates its own
+    // top-most video windows WITHOUT needing DirectDraw, so it must be
+    // skipped explicitly (the only render-adjacent path not surface-gated).
+    if (ai_play_no_draw_enabled()) {
+        return;
+    }
     HandleJw208IntroVideoSequence(g_runtime.main_window);
     const BinkVideoRuntimeState& bink = bink_video_state();
     append_startup_log(
@@ -22524,6 +22557,28 @@ bool default_ai_play_unit_visible(const UnitMovementUnit& unit,
         g_runtime.gameplay_player_slots, grid, visibility, local_owner);
 }
 
+// Fog-honest variant for AI-play observation/planning: the same engine
+// target-visibility predicate, but evaluated against the observing owner's
+// computed active-vision scratch (see build_default_ai_play_observation).
+// The real grid's owner layer would make any enemy standing on ever-explored
+// terrain permanently visible — a wallhack no human player has.
+bool default_ai_play_unit_active_visible(const UnitMovementUnit& unit,
+    u32 local_owner, void* user_data) {
+    const GameplayVisibilityGrid* vision =
+        static_cast<const GameplayVisibilityGrid*>(user_data);
+    if (vision == nullptr || vision->width == 0 || vision->height == 0) {
+        return false;
+    }
+    const std::size_t tile_count =
+        static_cast<std::size_t>(vision->width) * vision->height;
+    if (vision->current.size() < tile_count ||
+        vision->owner.size() < tile_count) {
+        return false;
+    }
+    return CheckUnitFullActionTargetVisibility(g_runtime.gameplay_player_slots,
+        *vision, make_default_gameplay_visibility_unit(unit), local_owner);
+}
+
 // Live ability validator for AiSemanticActionKind::use_ability.  Applies the
 // authoritative execution gates (dispatch_default_unit_command_action_effect):
 // a usable effect definition at 0x3d + ability_id, the caster's secondary
@@ -22588,7 +22643,47 @@ bool build_default_ai_play_observation(GameplayLoopState& state, u32 local_owner
         visible[index] =
             (visibility.current[index] & visible_bit) != 0 ? 1u : 0u;
     }
-
+    // The engine maintains the real grid's current-visibility layer only for
+    // the local viewing player, so an AI owner's row above is empty
+    // (probe-verified).  Derive this owner's ACTIVE vision by replaying the
+    // engine's own per-unit visibility expansion — same radii and terrain
+    // occlusion — into a scratch grid the sim never reads.  The layer feeds
+    // the tile.visible flag, the last-seen resource snapshot, and the
+    // enemy-unit visibility gate, making all three fog-honest.
+    GameplayVisibilityGrid& vision_scratch = g_runtime.ai_play_vision_scratch;
+    vision_scratch.width = visibility.width;
+    vision_scratch.height = visibility.height;
+    if (vision_scratch.terrain.size() != visibility.terrain.size() ||
+        vision_scratch.terrain_class_flags.size() !=
+            visibility.terrain_class_flags.size()) {
+        vision_scratch.terrain = visibility.terrain;
+        vision_scratch.terrain_class_flags = visibility.terrain_class_flags;
+    }
+    vision_scratch.current.assign(tile_count, 0);
+    vision_scratch.owner.assign(tile_count, 0);
+    GameplayVisibilityContext vision_context{};
+    vision_context.grid = &vision_scratch;
+    vision_context.players = &g_runtime.gameplay_player_slots;
+    // Treat the observing owner as the scratch context's LOCAL player: the
+    // engine records a normal unit's lit tiles only through the local-player
+    // mask (kGameplayVisibilityVisible); the per-owner shifted current bits
+    // are reserved for special production-effect-12 units (probe-verified:
+    // current_visibility_enabled=0 for regular units).
+    vision_context.local_player_slot = local_owner;
+    for (const UnitMovementUnit* unit : movement->active_units) {
+        if (unit == nullptr || !unit->active ||
+            unit->owner_id != local_owner) {
+            continue;
+        }
+        ApplyActiveUnitVisibility(vision_context,
+            make_default_gameplay_visibility_unit(*unit));
+    }
+    for (std::size_t index = 0; index < tile_count; ++index) {
+        if ((vision_scratch.current[index] &
+                kGameplayVisibilityVisible) != 0) {
+            visible[index] = 1u;
+        }
+    }
     AiObservationBuildInput observation_input{};
     observation_input.simulation_frame = state.simulation_frame_counter;
     observation_input.map_relative_path =
@@ -22610,7 +22705,10 @@ bool build_default_ai_play_observation(GameplayLoopState& state, u32 local_owner
     observation_input.movement = movement;
     observation_input.explored_tiles = &explored;
     observation_input.visible_tiles = &visible;
-    observation_input.unit_visible = default_ai_play_unit_visible;
+    observation_input.unit_visible = default_ai_play_unit_active_visible;
+    observation_input.unit_visibility_user_data = &vision_scratch;
+    observation_input.resource_memory =
+        &g_runtime.ai_play_resource_memory[local_owner];
 
     // Surface the owner's completed research/upgrade level for the tracked
     // Tyrano orders (harvest, movement, ground-attack) from the order-upgrade
@@ -22637,23 +22735,46 @@ bool build_default_ai_play_observation(GameplayLoopState& state, u32 local_owner
                 orders.variant_counts[local_owner][order];
         }
     }
-    // Per-owner TRUE start positions from the startup slots (public opening
-    // knowledge).  Includes the local owner: PlayerSlotRuntimeState keeps its
-    // start-coordinate table in MAP-SLOT order, so indexing it by owner id
-    // returns the wrong position once the start-slot shuffle decouples owners
-    // from map slots — that skewed every start-anchored micro (build spiral,
-    // defense ring, harvest bias) toward another slot's base.
-    for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
-        const GameplayScenarioOwnerSlot& slot =
-            g_runtime.gameplay_startup_state.owner_slots[owner];
-        if (slot.slot_state !=
-                static_cast<u8>(PlayerSlotState::player_controlled) &&
-            slot.slot_state != static_cast<u8>(PlayerSlotState::active)) {
+    // Fog-honest opening knowledge: the observer's OWN true start (from the
+    // startup slots — the runtime coordinate table is MAP-SLOT-ordered, so
+    // indexing it by owner id returns the wrong position once the start
+    // shuffle decouples owners from map slots), plus the map's start-slot
+    // CANDIDATES only.  Which candidate an opponent actually occupies is not
+    // revealed — the executor scouts candidates and confirms via its
+    // remembered-building/unexplored-first march chain.
+    {
+        const GameplayScenarioOwnerSlot& own_slot =
+            g_runtime.gameplay_startup_state.owner_slots[local_owner];
+        observation_input.own_start_x = own_slot.start_x;
+        observation_input.own_start_y = own_slot.start_y;
+        observation_input.own_start_valid =
+            own_slot.slot_state ==
+                static_cast<u8>(PlayerSlotState::player_controlled) ||
+            own_slot.slot_state == static_cast<u8>(PlayerSlotState::active) ||
+            own_slot.slot_state == static_cast<u8>(PlayerSlotState::observer);
+    }
+    for (u32 slot = 0; slot < kPlayerSlotCount; ++slot) {
+        // The map-slot-ordered runtime table carries every scenario start
+        // position (mirror_startup_slots_to_player_runtime), including slots
+        // no one occupies this match; (0,0) marks an unset slot.
+        const i32 sx = g_runtime.gameplay_player_slots.owner_start_x[slot];
+        const i32 sy = g_runtime.gameplay_player_slots.owner_start_y[slot];
+        if (sx == 0 && sy == 0) {
             continue;
         }
-        observation_input.owner_start_x[owner] = slot.start_x;
-        observation_input.owner_start_y[owner] = slot.start_y;
-        observation_input.competitor_start_mask |= 1u << owner;
+        observation_input.start_candidate_x[slot] = sx;
+        observation_input.start_candidate_y[slot] = sy;
+        observation_input.start_candidate_mask |= 1u << slot;
+    }
+    static bool s_candidates_logged = false;
+    if (!s_candidates_logged) {
+        s_candidates_logged = true;
+        append_startup_log(
+            "ai-obs: start candidates mask=0x%02lx own=(%ld,%ld)",
+            static_cast<unsigned long>(
+                observation_input.start_candidate_mask),
+            static_cast<long>(observation_input.own_start_x),
+            static_cast<long>(observation_input.own_start_y));
     }
 
     out = BuildAiObservationV1(observation_input);
@@ -22979,10 +23100,16 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
             g_runtime.ai_play_unit_value_lost[local_owner]);
         losses[1] = static_cast<u32>(
             g_runtime.ai_play_building_value_lost[local_owner]);
+        // Hostile competitors from the startup slots directly: this is
+        // reward-only PRIVILEGED accounting, so it may know who the real
+        // competitors are even though the observation no longer says.
         for (u32 other = 0; other < kPlayerSlotCount; ++other) {
+            const u8 other_state = g_runtime.gameplay_startup_state
+                .owner_slots[other].slot_state;
             if (other == local_owner ||
-                (observation.observation.competitor_start_mask &
-                    (1u << other)) == 0 ||
+                (other_state != static_cast<u8>(
+                     PlayerSlotState::player_controlled) &&
+                 other_state != static_cast<u8>(PlayerSlotState::active)) ||
                 (observation.observation.local_relation_mask &
                     (1u << other)) != 0) {
                 continue;
@@ -23024,7 +23151,9 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
     plan_input.local_owner = local_owner;
     plan_input.players = &g_runtime.gameplay_player_slots;
     plan_input.movement = movement;
-    plan_input.unit_visible = default_ai_play_unit_visible;
+    plan_input.unit_visible = default_ai_play_unit_active_visible;
+    plan_input.unit_visibility_user_data =
+        &g_runtime.ai_play_vision_scratch;
     plan_input.visible_tiles = &visible;
     plan_input.explored_tiles = &explored;
     plan_input.production_available = CheckAiLiveProductionAvailability;
@@ -32947,6 +33076,12 @@ bool render_zoomed_gameplay_frame(GameplayFrameRenderContext& context,
 }
 
 void default_gameplay_loop_present_phase(GameplayLoopState& state) {
+    // No-draw note: this phase must still run headless — besides pixels it
+    // advances CPU-side stage machinery (peer-startup cursor presentations,
+    // fades, overlay sync) that session transitions wait on; skipping it
+    // outright hung the loop right after the gameplay transition.  All
+    // surface-touching primitives below no-op with DirectDraw inactive, and
+    // fast_uncapped already throttles this phase to every 64th frame.
     // Publish the active logical surface before capturing HUD and viewport
     // metrics.  The original layout pass precedes the frame composite; doing
     // this from the first overlay callback left one frame of stale dimensions.
@@ -33306,7 +33441,9 @@ void run_default_gameplay_session_transition(HWND owner, u32 mode) {
     GameplaySessionFlowState& state = g_runtime.gameplay_session_flow;
     prepare_default_gameplay_session_state(state);
 
-    if (!g_runtime.directx_initialized) {
+    // Headless no-draw self-play runs the session without DirectDraw; only an
+    // interactive launch treats missing DirectX as fatal here.
+    if (!g_runtime.directx_initialized && !ai_play_no_draw_enabled()) {
         finish_default_peer_startup_cursor_transition();
         if (owner != nullptr && IsWindow(owner)) {
             PostMessageA(owner, WM_USER + 3, 0,
@@ -35439,6 +35576,33 @@ void NoOpStartupRuntimeHook() {
 
 bool InitDirectXSubsystems() {
     gameplay_script_dialog_state().effect_playback_enabled = false;
+    if (ai_play_no_draw_enabled()) {
+        // Skip DirectDraw only.  DirectSound must still initialize: the
+        // frontend bootstrap's gameplay-sound stage (stage 7) hard-fails
+        // without it and the lobby autostart never runs (verified hang).
+        append_startup_log("self-play no-draw: skipping DirectDraw init");
+        g_runtime.directx_initialized = false;
+        InitDirectSoundSubsystem(g_runtime.main_window);
+        gameplay_script_dialog_state().effect_playback_enabled =
+            direct_sound_state().active;
+        const HRESULT async_only_result =
+            InitAsyncComSubsystem(g_runtime.instance, &g_runtime.async_com);
+        if (FAILED(async_only_result)) {
+            append_startup_log("async com init failed hr=0x%08lx; continuing",
+                static_cast<unsigned long>(async_only_result));
+        }
+        else {
+            const HRESULT callback_result =
+                RegisterAsyncComWindowCallback(g_runtime.main_window);
+            if (FAILED(callback_result)) {
+                append_startup_log(
+                    "async com window callback failed hr=0x%08lx; continuing",
+                    static_cast<unsigned long>(callback_result));
+            }
+        }
+        initialize_main_window_cursor_handling(g_runtime.main_window);
+        return true;
+    }
     const HRESULT draw_result = InitDirectDrawSubsystem(g_runtime.main_window,
         kOriginalClientWidth, kOriginalClientHeight, kOriginalColorDepth,
         g_runtime.windowed_mode);

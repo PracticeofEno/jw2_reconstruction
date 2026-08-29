@@ -385,26 +385,27 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
     put(army_max_health != 0 ? static_cast<float>(army_health) /
         static_cast<float>(army_max_health) : 0.0f);  // 75 army HP ratio
     put(norm(raid_enemies, 20.0f));        // 76 enemies inside base perimeter
-    // 77: army centroid distance to the nearest competitor start (march
-    // progress; 1.0 = no army or no known start).
+    // 77: army centroid distance to the nearest non-own map start CANDIDATE
+    // (march progress; 1.0 = no army or no candidate).  Candidates are
+    // anonymous — which one the enemy actually occupies must be scouted.
     float march_distance = 1.0f;
-    if (own_army != 0 && observation.competitor_start_mask != 0) {
+    if (own_army != 0 && observation.start_candidate_mask != 0) {
         const i32 centroid_x =
             static_cast<i32>(army_centroid_x / static_cast<i64>(own_army));
         const i32 centroid_y =
             static_cast<i32>(army_centroid_y / static_cast<i64>(own_army));
         bool have_start = false;
         i64 best = 0;
-        for (u32 owner = 0; owner < 8u; ++owner) {
-            if ((observation.competitor_start_mask & (1u << owner)) == 0) {
+        for (u32 slot = 0; slot < 8u; ++slot) {
+            if ((observation.start_candidate_mask & (1u << slot)) == 0) {
                 continue;
             }
-            const i64 d = sq_dist(centroid_x, centroid_y,
-                observation.owner_start_x[owner],
-                observation.owner_start_y[owner]);
-            if (d == 0) {
-                continue;  // our own start
+            const i32 sx = observation.start_candidate_x[slot];
+            const i32 sy = observation.start_candidate_y[slot];
+            if (sx == observation.start_x && sy == observation.start_y) {
+                continue;  // our own start slot
             }
+            const i64 d = sq_dist(centroid_x, centroid_y, sx, sy);
             if (!have_start || d < best) {
                 have_start = true;
                 best = d;

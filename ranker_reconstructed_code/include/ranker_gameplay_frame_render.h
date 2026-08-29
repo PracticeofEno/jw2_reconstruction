@@ -126,7 +126,13 @@ enum GameplayPlayerResourceHudFlags : u32 {
     kGameplayPlayerResourceHudUnitCount = 0x10,
     kGameplayPlayerResourceHudScore = 0x20,
     kGameplayPlayerResourceHudRotationCountdown = 0x40,
-    kGameplayPlayerResourceHudIncludePlayerControlled = 0x80,
+    // Original FUN_00429bf0 at 0x00429c55: a slot-state-1 (player-controlled)
+    // row is drawn when this bit is CLEAR and skipped when it is SET — the
+    // bit EXCLUDES player rows (scenario scripts use it to show only script
+    // owners).  The replay observer toggle (item 0x195) sets 0x0f with this
+    // bit clear, which is exactly how the original shows every player's
+    // resources during playback.
+    kGameplayPlayerResourceHudExcludePlayerControlled = 0x80,
 };
 
 struct GameplayPlayerResourceHudCallbacks {

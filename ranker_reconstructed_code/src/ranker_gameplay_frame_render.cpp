@@ -1881,8 +1881,13 @@ bool GameplayPlayerResourceHudSlotVisible(
     if (slot_state == 0x14 || slot_state == 2 || slot_state == 3) {
         return false;
     }
+    // Original 0x00429c55-0x00429c70: state-1 rows are skipped only when the
+    // EXCLUDE bit is set.  The previous reconstruction had this inverted
+    // (hidden unless 0x80), which blanked the replay resource HUD — the
+    // observer toggle sets 0x0f, so every player-controlled row was filtered
+    // and the button appeared to do nothing.
     if (slot_state == 1 &&
-        (state.flags & kGameplayPlayerResourceHudIncludePlayerControlled) == 0) {
+        (state.flags & kGameplayPlayerResourceHudExcludePlayerControlled) != 0) {
         return false;
     }
     return true;

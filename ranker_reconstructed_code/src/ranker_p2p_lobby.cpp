@@ -669,6 +669,7 @@ bool ParseP2PNetworkCommandLine(P2PNetworkLaunchParameters& parameters,
         std::strstr(upper, "-AI1V1") != nullptr) {
         parameters.self_play = true;
         parameters.self_play_1v1 = std::strstr(upper, "-AI1V1") != nullptr;
+        parameters.self_play_draw = std::strstr(upper, "-AIDRAW") != nullptr;
         parameters.uses_map_file = true;
         std::snprintf(parameters.map_path.data(), parameters.map_path.size(),
             "%s", "Maps\\Rank Maps\\(4) Python Jurassic v0.1.trk");

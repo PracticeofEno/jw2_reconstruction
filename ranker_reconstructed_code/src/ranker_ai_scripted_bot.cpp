@@ -1007,16 +1007,16 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
         i32 scout_x = -1;
         i32 scout_y = -1;
         i64 scout_distance = 0;
-        for (u32 owner = 0; owner < 8u; ++owner) {
-            if ((observation.competitor_start_mask & (1u << owner)) == 0) {
+        for (u32 slot = 0; slot < 8u; ++slot) {
+            if ((observation.start_candidate_mask & (1u << slot)) == 0) {
                 continue;
             }
-            const i32 sx = observation.owner_start_x[owner];
-            const i32 sy = observation.owner_start_y[owner];
+            const i32 sx = observation.start_candidate_x[slot];
+            const i32 sy = observation.start_candidate_y[slot];
             const i64 distance = squared_distance(observation.start_x,
                 observation.start_y, sx, sy);
             if (distance == 0) {
-                continue;  // our own start
+                continue;  // our own start slot
             }
             const u32 tile_x = static_cast<u32>(std::max(sx, 0)) >> 5;
             const u32 tile_y = static_cast<u32>(std::max(sy, 0)) >> 5;
@@ -1095,17 +1095,17 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
         i64 best_distance = 0;
         i32 march_x = -1;
         i32 march_y = -1;
-        for (u32 owner = 0; owner < 8u; ++owner) {
-            if ((observation.competitor_start_mask & (1u << owner)) == 0) {
+        for (u32 slot = 0; slot < 8u; ++slot) {
+            if ((observation.start_candidate_mask & (1u << slot)) == 0) {
                 continue;
             }
-            const i32 sx = observation.owner_start_x[owner];
-            const i32 sy = observation.owner_start_y[owner];
+            const i32 sx = observation.start_candidate_x[slot];
+            const i32 sy = observation.start_candidate_y[slot];
             const i64 distance =
                 squared_distance(observation.start_x, observation.start_y,
                     sx, sy);
             if (distance == 0) {
-                continue;  // our own start
+                continue;  // our own start slot
             }
             const u32 tile_x = static_cast<u32>(std::max(sx, 0)) >> 5;
             const u32 tile_y = static_cast<u32>(std::max(sy, 0)) >> 5;
@@ -1480,24 +1480,24 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
              ++i) {
             act.unit_ids.push_back(candidates[i].id);
         }
-        // March target: the nearest enemy start (same objective the siege
-        // path uses).
+        // March target: the nearest non-own start candidate (same objective
+        // the siege path uses).
         i32 target_x = -1;
         i32 target_y = -1;
         i64 target_distance = 0;
-        for (u32 owner = 0; owner < 8u; ++owner) {
-            if ((observation.competitor_start_mask & (1u << owner)) == 0) {
+        for (u32 slot = 0; slot < 8u; ++slot) {
+            if ((observation.start_candidate_mask & (1u << slot)) == 0) {
                 continue;
             }
             const i64 distance = squared_distance(observation.start_x,
-                observation.start_y, observation.owner_start_x[owner],
-                observation.owner_start_y[owner]);
+                observation.start_y, observation.start_candidate_x[slot],
+                observation.start_candidate_y[slot]);
             if (distance == 0) {
                 continue;
             }
             if (target_x < 0 || distance < target_distance) {
-                target_x = observation.owner_start_x[owner];
-                target_y = observation.owner_start_y[owner];
+                target_x = observation.start_candidate_x[slot];
+                target_y = observation.start_candidate_y[slot];
                 target_distance = distance;
             }
         }
@@ -1819,16 +1819,16 @@ std::vector<AiSemanticAction> PlanTyranoOffenseAutopilot(
         }
         if (march_x < 0) {
             i64 best_distance = 0;
-            for (u32 owner = 0; owner < 8u; ++owner) {
-                if ((observation.competitor_start_mask & (1u << owner)) == 0) {
+            for (u32 slot = 0; slot < 8u; ++slot) {
+                if ((observation.start_candidate_mask & (1u << slot)) == 0) {
                     continue;
                 }
-                const i32 sx = observation.owner_start_x[owner];
-                const i32 sy = observation.owner_start_y[owner];
+                const i32 sx = observation.start_candidate_x[slot];
+                const i32 sy = observation.start_candidate_y[slot];
                 const i64 distance = squared_distance(observation.start_x,
                     observation.start_y, sx, sy);
                 if (distance == 0) {
-                    continue;  // our own start
+                    continue;  // our own start slot
                 }
                 const u32 tile_x = static_cast<u32>(std::max(sx, 0)) >> 5;
                 const u32 tile_y = static_cast<u32>(std::max(sy, 0)) >> 5;

@@ -10,7 +10,9 @@
 
 namespace ranker {
 
-constexpr u32 kAiObservationSchemaVersion = 1;
+// v2: per-owner true start positions replaced by anonymous map start
+// candidates + explicit own start (fog-honest opening knowledge).
+constexpr u32 kAiObservationSchemaVersion = 2;
 
 // Number of research/upgrade orders whose completion level is surfaced in the
 // observation (Tyrano MVP: harvest, movement, ground-attack upgrades).
@@ -23,9 +25,11 @@ using AiUnitVisibilityCallback = bool (*)(const UnitMovementUnit& unit,
 
 struct AiObservedMapTile {
     u32 terrain_flags = 0;
-    // Harvestable terrain is authoritative only while the tile is currently
-    // visible. Zero therefore means either no remaining resource or no
-    // current vision; policy code must also test visible.
+    // Harvestable amount under fog-of-war rules: the live value while the
+    // tile is currently visible, the last-seen snapshot while it is merely
+    // explored (when the caller supplies resource_memory), and 0 when
+    // unexplored or never actually seen.  A stale snapshot self-corrects the
+    // moment any own unit re-lights the tile.
     u32 resource_amount = 0;
     bool passable = false;
     bool explored = false;
@@ -106,14 +110,16 @@ struct AiObservation {
     // variant_counts row).  The executor's research cycle consults this so it
     // can run the whole audited research tree, not just the tracked trio.
     std::array<u8, kAiObservationResearchOrderCount> research_order_levels{};
-    // Competing (non-observer) owners' start positions — standard RTS opening
-    // knowledge (start locations are public).  The executor's siege march
-    // heads here when no enemy building is currently visible; without a real
-    // objective the army wandered map corners and never found the enemy base.
-    std::array<i32, 8> owner_start_x{};
-    std::array<i32, 8> owner_start_y{};
-    // Bit i set -> owner i is a competitor whose start position is valid.
-    u32 competitor_start_mask = 0;
+    // The map's start-position CANDIDATES (fair opening knowledge: knowing
+    // the map's start slots is public, knowing WHICH one an opponent occupies
+    // is not — that must be scouted).  Anonymous and map-slot-ordered; the
+    // observer's own start is included (identifiable by comparing against
+    // start_x/start_y).  Replaces the per-owner true start positions the
+    // observation used to leak.
+    std::array<i32, 8> start_candidate_x{};
+    std::array<i32, 8> start_candidate_y{};
+    // Bit i set -> start_candidate_x/y[i] is a valid map start slot.
+    u32 start_candidate_mask = 0;
     std::vector<AiObservedMapTile> tiles;
     std::vector<AiObservedUnit> units;
 };
@@ -133,10 +139,17 @@ struct AiObservationBuildInput {
     std::array<u8, kAiObservationTrackedResearchCount> research_levels{};
     // Full per-order level row (see AiObservation::research_order_levels).
     std::array<u8, kAiObservationResearchOrderCount> research_order_levels{};
-    // Competitor start positions (see AiObservation).
-    std::array<i32, 8> owner_start_x{};
-    std::array<i32, 8> owner_start_y{};
-    u32 competitor_start_mask = 0;
+    // Map start candidates (see AiObservation::start_candidate_x).
+    std::array<i32, 8> start_candidate_x{};
+    std::array<i32, 8> start_candidate_y{};
+    u32 start_candidate_mask = 0;
+    // The observing owner's TRUE start position (its own — always fair).
+    // Preferred over the legacy players->owner_start table, which is
+    // MAP-SLOT-ordered and returns another slot's base once the start
+    // shuffle decouples owners from map slots.
+    i32 own_start_x = 0;
+    i32 own_start_y = 0;
+    bool own_start_valid = false;
     const PlayerSlotRuntimeState* players = nullptr;
     const UnitMovementContext* movement = nullptr;
 
@@ -149,6 +162,16 @@ struct AiObservationBuildInput {
     // unless this callback explicitly confirms current local visibility.
     AiUnitVisibilityCallback unit_visible = nullptr;
     void* unit_visibility_user_data = nullptr;
+
+    // Optional per-owner "last seen harvestable amount" memory (fog-honest
+    // resource observation).  When supplied, the builder updates the entry
+    // for every currently-visible tile from the live map and reports the
+    // remembered value on explored-but-unwatched tiles — the live amount no
+    // longer leaks through fog.  The buffer persists across frames on the
+    // caller's side (one per observing owner) and is (re)sized to the map
+    // tile count here; zero means "never actually seen".  When null, the
+    // legacy relaxed behavior applies: explored tiles expose the live value.
+    std::vector<u32>* resource_memory = nullptr;
 };
 
 enum class AiObservationBuildCode : u32 {

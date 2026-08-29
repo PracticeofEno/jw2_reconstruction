@@ -137,11 +137,11 @@ AiObservationBuildResult BuildAiObservationV1(
     observation.population_limit = input.population_limit;
     // The runtime's owner_start_x table is MAP-SLOT-ordered; once the start
     // shuffle decouples owners from map slots, indexing it by owner id points
-    // at another slot's base.  Prefer the caller-supplied per-owner start
-    // (from the startup owner slots) and fall back for legacy callers.
-    if ((input.competitor_start_mask & (1u << input.local_owner)) != 0) {
-        observation.start_x = input.owner_start_x[input.local_owner];
-        observation.start_y = input.owner_start_y[input.local_owner];
+    // at another slot's base.  Prefer the caller-supplied own start (from the
+    // startup owner slots) and fall back for legacy callers.
+    if (input.own_start_valid) {
+        observation.start_x = input.own_start_x;
+        observation.start_y = input.own_start_y;
     } else {
         observation.start_x = input.players->owner_start_x[input.local_owner];
         observation.start_y = input.players->owner_start_y[input.local_owner];
@@ -150,10 +150,14 @@ AiObservationBuildResult BuildAiObservationV1(
     observation.game_end_reason = input.game_end_reason;
     observation.research_levels = input.research_levels;
     observation.research_order_levels = input.research_order_levels;
-    observation.owner_start_x = input.owner_start_x;
-    observation.owner_start_y = input.owner_start_y;
-    observation.competitor_start_mask = input.competitor_start_mask;
+    observation.start_candidate_x = input.start_candidate_x;
+    observation.start_candidate_y = input.start_candidate_y;
+    observation.start_candidate_mask = input.start_candidate_mask;
 
+    if (input.resource_memory != nullptr &&
+        input.resource_memory->size() != tile_count) {
+        input.resource_memory->assign(tile_count, 0);
+    }
     observation.tiles.reserve(tile_count);
     for (u32 y = 0; y < map.height; ++y) {
         for (u32 x = 0; x < map.width; ++x) {
@@ -165,19 +169,30 @@ AiObservationBuildResult BuildAiObservationV1(
             const bool visible = (*input.visible_tiles)[compact_index] != 0;
             const bool explored =
                 (*input.explored_tiles)[compact_index] != 0 || visible;
-            // Harvestable-terrain amounts are revealed for any explored tile,
-            // not only currently-visible ones.  The engine only maintains the
-            // "currently lit" fog grid for the local viewing player, so an
-            // AI-controlled owner has an empty current-visibility layer and
-            // would otherwise never see a single resource tile.  Exposing the
-            // last-known amount on explored terrain is legitimate AI memory and
-            // does not leak an opponent's private unit/production state.
+            const u32 live_amount =
+                (source.flags & kMapCellHarvestAmountMask) >>
+                    kMapCellHarvestAmountShift;
+            // Harvestable amount under fog-of-war rules: with a per-owner
+            // resource memory the reported value is the LAST-SEEN snapshot —
+            // updated only while the tile is in this owner's active vision —
+            // so depletion elsewhere is not observable through fog (a stale
+            // value self-corrects when any own unit re-lights the tile, and
+            // a harvester walking to a remembered-but-empty patch is exactly
+            // real-RTS behavior).  Legacy callers without a memory keep the
+            // relaxed explored-reveals-live behavior.
+            u32 reported_amount;
+            if (input.resource_memory != nullptr) {
+                std::vector<u32>& memory = *input.resource_memory;
+                if (visible) {
+                    memory[compact_index] = live_amount;
+                }
+                reported_amount = explored ? memory[compact_index] : 0u;
+            } else {
+                reported_amount = explored ? live_amount : 0u;
+            }
             observation.tiles.push_back(AiObservedMapTile{
                 source.flags & kAiStaticTerrainMask,
-                explored ?
-                    (source.flags & kMapCellHarvestAmountMask) >>
-                        kMapCellHarvestAmountShift :
-                    0u,
+                reported_amount,
                 (source.flags & kMapCellTerrainMask) ==
                         kMapCellPassableTerrain &&
                     (source.flags & kMapCellBlockedTerrain) == 0,

@@ -80,6 +80,13 @@ bool AiIpcConnect(unsigned short port) {
         st.socket = INVALID_SOCKET;
         return false;
     }
+    // The request/reply is a tiny newline-framed message every decision
+    // frame; Nagle + delayed ACK on this loopback socket stalled the game
+    // ~35% of each decision waiting for the policy reply (the P2P socket
+    // already disables it — ranker_network.cpp).
+    const int nodelay = 1;
+    setsockopt(st.socket, IPPROTO_TCP, TCP_NODELAY,
+        reinterpret_cast<const char*>(&nodelay), sizeof(nodelay));
     st.connected = true;
     return true;
 }

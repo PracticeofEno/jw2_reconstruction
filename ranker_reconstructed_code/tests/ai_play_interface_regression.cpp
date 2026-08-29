@@ -267,6 +267,67 @@ void test_observation_visibility_and_determinism() {
         "invalid visibility mask size was accepted");
 }
 
+// Fog-honest resource observation: with a per-owner resource memory the
+// reported harvestable amount is the last-seen snapshot (updated only while
+// the tile is in active vision), never the live value through fog.
+void test_observation_resource_memory() {
+    PlayerSlotRuntimeState players{};
+    players.global_active_slot_mask = 0x01;
+
+    UnitMovementUnit own = make_unit(0x1d0, 1, 0, 0x20, 1u << 4, 32, 64);
+    UnitMovementContext movement{};
+    seed_map(movement);
+    const auto set_amount = [&](std::size_t map_index, u32 amount) {
+        movement.map.cells[map_index].flags = kMapCellPassableTerrain |
+            (amount << kMapCellHarvestAmountShift);
+    };
+    set_amount(1, 4000);  // tile 1: starts in active vision
+    set_amount(2, 2000);  // tile 2: explored but never actually seen
+    movement.active_units = {&own};
+
+    std::vector<u8> explored(12, 1);
+    std::vector<u8> visible(12, 0);
+    visible[1] = 1;
+
+    AiObservationBuildInput input{};
+    input.local_owner = 0;
+    input.players = &players;
+    input.movement = &movement;
+    input.explored_tiles = &explored;
+    input.visible_tiles = &visible;
+    std::vector<u32> memory;
+    input.resource_memory = &memory;
+
+    const AiObservationBuildResult seen = BuildAiObservationV1(input);
+    require(seen && seen.observation.tiles[1].resource_amount == 4000,
+        "visible tile did not report the live amount");
+    require(seen.observation.tiles[2].resource_amount == 0,
+        "never-seen explored tile leaked the live amount");
+
+    set_amount(1, 1500);  // depletes while still watched
+    const AiObservationBuildResult watched = BuildAiObservationV1(input);
+    require(watched && watched.observation.tiles[1].resource_amount == 1500,
+        "watched depletion was not observed live");
+
+    visible[1] = 0;       // vision lost; further depletion must stay hidden
+    set_amount(1, 700);
+    const AiObservationBuildResult fogged = BuildAiObservationV1(input);
+    require(fogged && fogged.observation.tiles[1].resource_amount == 1500,
+        "fogged tile leaked the live amount instead of the snapshot");
+
+    visible[1] = 1;       // re-lighting the tile corrects the memory
+    const AiObservationBuildResult relit = BuildAiObservationV1(input);
+    require(relit && relit.observation.tiles[1].resource_amount == 700,
+        "re-lit tile did not refresh the remembered amount");
+
+    input.resource_memory = nullptr;  // legacy callers keep explored=live
+    visible[1] = 0;
+    const AiObservationBuildResult legacy = BuildAiObservationV1(input);
+    require(legacy && legacy.observation.tiles[1].resource_amount == 700 &&
+        legacy.observation.tiles[2].resource_amount == 2000,
+        "legacy relaxed behavior changed without a resource memory");
+}
+
 void test_action_validation_and_packet_planning() {
     constexpr u32 kMove = 1u << 4;
     constexpr u32 kAttack = 1u << 5;
@@ -1619,6 +1680,7 @@ void test_ai_play_lobby_role_compatibility() {
 
 int main() {
     test_observation_visibility_and_determinism();
+    test_observation_resource_memory();
     test_action_validation_and_packet_planning();
     test_semantic_action_v2_planning();
     test_live_validation_adapter();

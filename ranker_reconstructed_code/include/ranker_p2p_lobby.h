@@ -76,6 +76,11 @@ struct P2PNetworkLaunchParameters {
     // (Link role 4) and auto-starts the lobby without waiting for a peer so a
     // headless harness can run unattended matches.
     bool self_play = false;
+    // -AIDRAW: force DirectDraw/DirectSound init in self-play (debug escape
+    // hatch).  Default self-play is NO-DRAW: headless training instances do
+    // not touch graphics/audio devices, so dozens can run beside an
+    // interactive viewer without starving it (black-screen contention).
+    bool self_play_draw = false;
     // Optional -MAXFRAMES:N cap for a self-play match; 0 means use the default.
     u32 self_play_max_frames = 0;
     // -AIOUT:DIR — redirect the self-play output files (result / reward trace /
