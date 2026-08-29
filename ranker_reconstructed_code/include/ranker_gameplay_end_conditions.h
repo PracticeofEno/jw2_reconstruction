@@ -3,6 +3,7 @@
 #include "ranker_player_slots.h"
 #include "ranker_types.h"
 
+#include <array>
 #include <vector>
 
 namespace ranker {
@@ -49,11 +50,24 @@ struct GameplayEndConditionState {
     bool observer_owner_override = false;
     bool team_slot_rotation_enabled = false;
     bool end_requested = false;
+    // Building-elimination rule (reconstruction addition, user-requested):
+    // an owner that has held at least one building and now holds none is
+    // eliminated — its surviving mobile units no longer keep it alive for
+    // anyone's victory or defeat test.  Use Map Setting maps import unit-based
+    // masks (0x1 = any unit), which let a razed Computer stall the game on a
+    // stray unit.  Derived from the simulation snapshot on the same 64-frame
+    // cadence on every peer (deterministic).  Owners that never had a
+    // building (unit-only scenario players) are never eliminated this way.
+    std::array<bool, kPlayerSlotCount> owner_had_building{};
+    std::array<bool, kPlayerSlotCount> owner_eliminated{};
 };
 
 void ApplyGameplayEndConditionSessionModeDefaults(
     GameplayEndConditionState& state);
 void TickGameplayEndConditionMonitor(GameplayEndConditionState& state);
+// Recompute owner_had_building / owner_eliminated from the active-unit
+// snapshot (called by the monitor tick; exposed for tests).
+void RefreshGameplayEndOwnerElimination(GameplayEndConditionState& state);
 void CheckLocalDefeatCondition(GameplayEndConditionState& state);
 void CheckNoLocalEliteUnitDefeat(GameplayEndConditionState& state);
 void CheckNoLocalNonEliteUnitDefeat(GameplayEndConditionState& state);

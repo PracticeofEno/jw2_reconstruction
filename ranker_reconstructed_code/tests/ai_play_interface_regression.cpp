@@ -1595,170 +1595,493 @@ void test_ai_rl_hunt_and_research() {
     const TyranoScriptedBotDecision decision =
         DecideTyranoScriptedBotForHighLevelAction(state, obs,
             AiRlHighLevelAction::hunt_neutral_monster, config);
-    require(decision &&
-        decision.action.kind == AiSemanticActionKind::attack_unit &&
-        decision.action.target_unit_id == 0x9100 &&
-        !decision.action.unit_ids.empty(),
-        "hunt did not translate into an attack on the neutral monster");
+    const AiMicroObjective& hunt =
+        AiMicroObjectiveOf(state.micro, AiMicroGroup::army);
+    require(decision.code == TyranoScriptedBotDecisionCode::objective_updated &&
+        hunt.kind == AiMicroObjectiveKind::attack &&
+        hunt.target_unit_id == 0x9100 && hunt.include_neutral,
+        "hunt did not set an attack objective on the neutral monster");
+    // ...and the micro executor sends the fighter at it.
+    obs.simulation_frame = 5;
+    const std::vector<AiSemanticAction> orders =
+        AiMicroExecutorStep(state.micro, obs);
+    require(orders.size() == 1 &&
+        orders[0].kind == AiSemanticActionKind::attack_unit &&
+        orders[0].target_unit_id == 0x9100 &&
+        orders[0].unit_ids == std::vector<u32>{0x3000},
+        "executor did not attack the hunted neutral monster");
 }
 
 void test_ai_rl_research_tree_walk() {
-    // The research cycle must (a) walk past completed orders, (b) only target
-    // an IDLE researcher (re-enqueueing onto a busy one re-debits the cost and
-    // resets progress — the restart-drain bug), and (c) use the audited
-    // order->building map (0x16 belongs to the land nest, not the base).
+    // Per-order research: the policy names the order, the executor routes it
+    // to an IDLE researcher of the audited building type, refuses capped
+    // orders and busy researchers (restart-drain), and the mask agrees.
     AiObservation obs = tyrano_build_order_observation();
     TyranoScriptedBotConfig config{};
     config.decision_interval_frames = 1;
 
-    // Fresh state: first incomplete order is 0x14 at the (idle) base nest.
+    // Harvest upgrade (0x14) at the idle base nest.
     {
         TyranoScriptedBotState state{};
         const TyranoScriptedBotDecision decision =
             DecideTyranoScriptedBotForHighLevelAction(state, obs,
-                AiRlHighLevelAction::research_next, config);
+                AiRlHighLevelAction::research_harvest, config);
         require(decision &&
             decision.action.kind == AiSemanticActionKind::research &&
-            decision.action.production_id == kTyranoHarvestUpgradeOrder,
-            "research_next did not pick 0x14 first from the idle base");
+            decision.action.production_id == kTyranoHarvestUpgradeOrder &&
+            decision.action.unit_ids == std::vector<u32>{0x2000},
+            "research_harvest did not start 0x14 at the idle base");
+        const AiRlStepEncoding enc = EncodeAiObservationForRl(obs);
+        require(enc.legal_mask[static_cast<std::size_t>(
+                    AiRlHighLevelAction::research_harvest)] == 1 &&
+            enc.legal_mask[static_cast<std::size_t>(
+                    AiRlHighLevelAction::research_morph)] == 1 &&
+            enc.legal_mask[static_cast<std::size_t>(
+                    AiRlHighLevelAction::research_ground_attack)] == 0 &&
+            enc.legal_mask[static_cast<std::size_t>(
+                    AiRlHighLevelAction::research_air_attack)] == 0,
+            "research mask did not follow researcher-building availability");
     }
-
-    // 0x14 done and no land/86 nest: base orders (0x2a) come next; a BUSY base
-    // (queued production) must yield no research decision at all.
+    // Capped order -> no decision and masked out.
     obs.research_order_levels[kTyranoHarvestUpgradeOrder] = 1;
     {
         TyranoScriptedBotState state{};
-        const TyranoScriptedBotDecision next =
-            DecideTyranoScriptedBotForHighLevelAction(state, obs,
-                AiRlHighLevelAction::research_next, config);
-        require(next && next.action.production_id == 0x2au,
-            "research_next did not advance to the next base order (0x2a)");
+        require(!DecideTyranoScriptedBotForHighLevelAction(state, obs,
+                    AiRlHighLevelAction::research_harvest, config),
+            "research_harvest restarted a completed order");
+        require(EncodeAiObservationForRl(obs).legal_mask[static_cast<std::size_t>(
+                    AiRlHighLevelAction::research_harvest)] == 0,
+            "completed research stayed legal");
+        // Another base order (morph 0x2a) still works at the idle base...
+        TyranoScriptedBotState morph_state{};
+        const TyranoScriptedBotDecision morph =
+            DecideTyranoScriptedBotForHighLevelAction(morph_state, obs,
+                AiRlHighLevelAction::research_morph, config);
+        require(morph && morph.action.production_id == 0x2au,
+            "research_morph did not start 0x2a at the idle base");
+        // ...but a BUSY base (queued production) yields nothing.
         for (AiObservedUnit& unit : obs.units) {
             if (unit.type_id == kTyranoNestType) {
                 unit.queued_production_type_id = kTyranoWorkerType;
             }
         }
         TyranoScriptedBotState busy_state{};
-        const TyranoScriptedBotDecision busy =
-            DecideTyranoScriptedBotForHighLevelAction(busy_state, obs,
-                AiRlHighLevelAction::research_next, config);
-        require(!busy,
-            "research_next targeted a BUSY researcher (restart-drain risk)");
+        require(!DecideTyranoScriptedBotForHighLevelAction(busy_state, obs,
+                    AiRlHighLevelAction::research_morph, config) &&
+            EncodeAiObservationForRl(obs).legal_mask[static_cast<std::size_t>(
+                AiRlHighLevelAction::research_morph)] == 0,
+            "research targeted a BUSY researcher (restart-drain risk)");
     }
-
-    // With an idle completed land nest, the land orders (0x19) take priority
-    // over the remaining base orders even while the base stays busy.
+    // Land orders route to an idle completed land nest even while the base
+    // stays busy; level-scaled cost gates the mask (0x19 lv2 costs 600).
     obs.units.push_back(observed_unit(0x4100, 0, kTyranoLandNestType, 0,
         600, 600, true));
     {
         TyranoScriptedBotState state{};
         const TyranoScriptedBotDecision decision =
             DecideTyranoScriptedBotForHighLevelAction(state, obs,
-                AiRlHighLevelAction::research_next, config);
+                AiRlHighLevelAction::research_ground_attack, config);
         require(decision &&
             decision.action.production_id == kTyranoGroundAttackUpgradeOrder &&
             decision.action.unit_ids == std::vector<u32>{0x4100},
-            "research_next did not route the land order to the idle land nest");
+            "research_ground_attack was not routed to the idle land nest");
+        obs.research_order_levels[kTyranoGroundAttackUpgradeOrder] = 2;
+        obs.primary_resources = 500;
+        require(EncodeAiObservationForRl(obs).legal_mask[static_cast<std::size_t>(
+                    AiRlHighLevelAction::research_ground_attack)] == 0,
+            "research mask ignored the level-scaled cost");
+        obs.primary_resources = 600;
+        require(EncodeAiObservationForRl(obs).legal_mask[static_cast<std::size_t>(
+                    AiRlHighLevelAction::research_ground_attack)] == 1,
+            "research mask refused an affordable level-2 order");
     }
 }
 
-void test_ai_rl_defense_autopilot() {
+// Micro-executor fixture: the build-order observation (worker 0x1000 at
+// 300,300 with harvest/attack bits, nest 0x2000 at 320,320) plus a fully
+// passable explored map with one berry tile at (12, 9) -> world (400, 304).
+AiObservation micro_observation() {
     AiObservation obs = tyrano_build_order_observation();
-    // A fighter (attack bit 5) and a worker; the worker must NOT be drafted.
-    obs.units.push_back(observed_unit(0x3100, 0, kTyranoMasosType,
-        (1u << 5), 400, 400, true));
-
-    TyranoScriptedBotState state{};
-    // No hostile in range -> no defense action.
-    require(PlanTyranoDefenseAutopilot(state, obs).empty(),
-        "defense autopilot engaged without an intruder");
-
-    // Hostile inside the base perimeter -> everyone (except workers) attacks it.
-    obs.units.push_back(observed_unit(0x9200, 1, kTyranoMasosType, 0,
-        obs.start_x + 200, obs.start_y, false));
-    obs.simulation_frame = 100;
-    std::vector<AiSemanticAction> defense =
-        PlanTyranoDefenseAutopilot(state, obs);
-    require(defense.size() == 1 &&
-        defense[0].kind == AiSemanticActionKind::attack_unit &&
-        defense[0].target_unit_id == 0x9200 &&
-        defense[0].unit_ids == std::vector<u32>{0x3100},
-        "defense autopilot did not send the fighter at the intruder");
-
-    // Same target within the dwell window -> throttled (no re-spam).
-    obs.simulation_frame = 108;
-    require(PlanTyranoDefenseAutopilot(state, obs).empty(),
-        "defense order was re-spammed inside the dwell window");
-
-    // After the dwell window the order is refreshed.
-    obs.simulation_frame = 100 + 64;
-    require(PlanTyranoDefenseAutopilot(state, obs).size() == 1,
-        "defense order was not refreshed after the dwell window");
-
-    // A hostile far from every building stays ignored.
-    TyranoScriptedBotState fresh{};
-    AiObservation far_obs = tyrano_build_order_observation();
-    far_obs.units.push_back(observed_unit(0x3100, 0, kTyranoMasosType,
-        (1u << 5), 400, 400, true));
-    far_obs.units.push_back(observed_unit(0x9300, 1, kTyranoMasosType, 0,
-        1800, 1800, false));
-    require(PlanTyranoDefenseAutopilot(fresh, far_obs).empty(),
-        "defense autopilot chased a hostile far outside the perimeter");
+    obs.tiles.resize(obs.map_width_tiles * obs.map_height_tiles);
+    for (AiObservedMapTile& tile : obs.tiles) {
+        tile.passable = true;
+        tile.explored = true;
+    }
+    obs.tiles[9 * obs.map_width_tiles + 12].resource_amount = 500;
+    return obs;
 }
 
-void test_ai_rl_offense_autopilot_and_siege() {
-    // attack_enemy_base must target a visible enemy BUILDING (the elimination
-    // objective) over a nearer mobile unit, and the offense autopilot must
-    // commit a big army to the nearest enemy building on its own.
-    AiObservation obs = tyrano_build_order_observation();
-    // Enemy building (type >= 0x60) and a closer enemy fighter.
-    obs.units.push_back(observed_unit(0x9400, 1, 0x84, 0, 1500, 1500, false));
-    obs.units.push_back(observed_unit(0x9500, 1, kTyranoMasosType, 0,
-        500, 500, false));
+AiObservedUnit fighter_unit(u32 id, u32 owner, i32 x, i32 y, bool controlled) {
+    AiObservedUnit unit = observed_unit(id, owner, kTyranoMasosType, (1u << 5),
+        x, y, controlled);
+    unit.health = 100;
+    unit.max_health = 100;
+    unit.attack_range = 50;  // audited melee range (마소스)
+    return unit;
+}
 
+void test_ai_micro_executor_harvest_and_flee() {
+    AiObservation obs = micro_observation();
+    TyranoScriptedBotState state{};
+    obs.simulation_frame = 10;
+    std::vector<AiSemanticAction> orders = AiMicroExecutorStep(state.micro, obs);
+    require(orders.size() == 1 &&
+        orders[0].kind == AiSemanticActionKind::harvest &&
+        orders[0].unit_ids == std::vector<u32>{0x1000} &&
+        orders[0].target_x == 400 && orders[0].target_y == 304,
+        "idle worker was not sent to the berry nearest its nest");
+    require(AiMicroObjectiveOf(state.micro, AiMicroGroup::economy).kind ==
+            AiMicroObjectiveKind::harvest &&
+        AiMicroObjectiveOf(state.micro, AiMicroGroup::army).kind ==
+            AiMicroObjectiveKind::defend,
+        "default group objectives were not harvest / defend");
+    // Already told it: no re-issue the next frame.
+    obs.simulation_frame = 11;
+    require(AiMicroExecutorStep(state.micro, obs).empty(),
+        "harvest order was re-issued while the unit was still tasked");
+    // Working: nothing to do.
+    obs.units[0].command_state = kUnitStateWorkerApproachHarvest;
+    obs.simulation_frame = 30;
+    require(AiMicroExecutorStep(state.micro, obs).empty(),
+        "executor interfered with a harvesting worker");
+    // A hostile fighter inside the worker's sight -> flee to the nest.
+    obs.units.push_back(fighter_unit(0x9000, 1, 340, 300, false));
+    obs.simulation_frame = 31;
+    orders = AiMicroExecutorStep(state.micro, obs);
+    require(orders.size() == 1 &&
+        orders[0].kind == AiSemanticActionKind::move &&
+        orders[0].unit_ids == std::vector<u32>{0x1000} &&
+        orders[0].target_x == 320 && orders[0].target_y == 320,
+        "threatened worker did not flee to the nest");
+    // Threat gone and the worker idle again -> back to harvesting.
+    obs.units.pop_back();
+    obs.units[0].command_state = 0;
+    obs.simulation_frame = 40;
+    orders = AiMicroExecutorStep(state.micro, obs);
+    require(orders.size() == 1 &&
+        orders[0].kind == AiSemanticActionKind::harvest,
+        "worker did not resume harvesting after the threat left");
+    // No berries anywhere -> the economy group falls back to defend.
+    AiObservation barren = micro_observation();
+    barren.tiles[9 * barren.map_width_tiles + 12].resource_amount = 0;
+    TyranoScriptedBotState fresh{};
+    AiMicroExecutorStep(fresh.micro, barren);
+    require(AiMicroObjectiveOf(fresh.micro, AiMicroGroup::economy).kind ==
+            AiMicroObjectiveKind::defend,
+        "economy did not switch to defend with no berries left");
+}
+
+void test_ai_micro_executor_defend_bubble() {
+    AiObservation obs = micro_observation();
+    obs.units[0].command_state = kUnitStateWorkerApproachHarvest;  // busy
+    obs.units.push_back(fighter_unit(0x3100, 0, 400, 400, true));
+    TyranoScriptedBotState state{};
+    obs.simulation_frame = 100;
+    require(AiMicroExecutorStep(state.micro, obs).empty(),
+        "defender moved with nothing to do");
+    // Hostile seen far outside the nest bubble (one screen) -> ignored.
+    obs.units.push_back(fighter_unit(0x9300, 1, 1800, 1800, false));
+    obs.simulation_frame = 101;
+    require(AiMicroExecutorStep(state.micro, obs).empty(),
+        "defender chased a hostile outside the defense bubble");
+    obs.units.pop_back();
+    // Hostile inside the bubble and within reach -> attack it (once).
+    obs.units.push_back(fighter_unit(0x9200, 1, 520, 320, false));
+    obs.simulation_frame = 102;
+    std::vector<AiSemanticAction> orders = AiMicroExecutorStep(state.micro, obs);
+    require(orders.size() == 1 &&
+        orders[0].kind == AiSemanticActionKind::attack_unit &&
+        orders[0].target_unit_id == 0x9200 &&
+        orders[0].unit_ids == std::vector<u32>{0x3100},
+        "defender did not engage the intruder");
+    obs.units[2].command_state = kUnitStateAttackTarget;
+    obs.simulation_frame = 103;
+    require(AiMicroExecutorStep(state.micro, obs).empty(),
+        "attack order was re-issued to an engaged unit");
+    // Engine dropped the order (unit idle) after the re-issue interval ->
+    // issued again.
+    obs.units[2].command_state = 0;
+    obs.simulation_frame = 110;
+    require(AiMicroExecutorStep(state.micro, obs).size() == 1,
+        "dropped attack order was not re-issued to the idle unit");
+    // Melee spread: four fighters on one target -> at most three attack it
+    // (the first keeps its standing order, so two new orders go out).
+    obs.units[2].command_state = kUnitStateAttackTarget;
+    for (u32 i = 0; i < 3; ++i) {
+        obs.units.push_back(fighter_unit(0x3200 + i, 0, 410 + static_cast<i32>(i),
+            400, true));
+    }
+    obs.simulation_frame = 120;
+    orders = AiMicroExecutorStep(state.micro, obs);
+    std::size_t attackers = 0;
+    for (const AiSemanticAction& order : orders) {
+        if (order.kind == AiSemanticActionKind::attack_unit &&
+            order.target_unit_id == 0x9200) {
+            attackers += order.unit_ids.size();
+        }
+    }
+    require(attackers == 2,
+        "melee spread cap did not limit attackers per target");
+    // Leash: a defender one screen away from every nest returns to the post.
+    AiObservation far = micro_observation();
+    far.units[0].command_state = kUnitStateWorkerApproachHarvest;
+    far.units.push_back(fighter_unit(0x3100, 0, 1300, 400, true));
+    TyranoScriptedBotState fresh{};
+    far.simulation_frame = 200;
+    orders = AiMicroExecutorStep(fresh.micro, far);
+    require(orders.size() == 1 &&
+        orders[0].kind == AiSemanticActionKind::move &&
+        orders[0].target_x == 320 && orders[0].target_y == 320,
+        "defender outside the leash did not return to the post");
+}
+
+void test_ai_micro_executor_attack_retarget_retreat_and_pullback() {
+    AiObservation obs = micro_observation();
+    obs.units[0].command_state = kUnitStateWorkerApproachHarvest;
+    obs.units.push_back(fighter_unit(0x3200, 0, 400, 400, true));
+    TyranoScriptedBotState state{};
+    obs.simulation_frame = 1;
+    AiMicroExecutorStep(state.micro, obs);  // initialize records
+    obs.units.push_back(fighter_unit(0x9400, 1, 450, 400, false));  // A
+    obs.units.back().health = 50;
+    obs.units.push_back(fighter_unit(0x9500, 1, 460, 420, false));  // B
+    AiMicroObjective attack;
+    attack.kind = AiMicroObjectiveKind::attack;
+    attack.target_unit_id = 0x9500;
+    AiMicroSetObjective(state.micro, AiMicroGroup::army, attack);
+    obs.simulation_frame = 2;
+    std::vector<AiSemanticAction> orders = AiMicroExecutorStep(state.micro, obs);
+    // Focus fire: the lowest-health reachable hostile (A) over the objective's
+    // own target (B).
+    require(orders.size() == 1 &&
+        orders[0].kind == AiSemanticActionKind::attack_unit &&
+        orders[0].target_unit_id == 0x9400,
+        "attack did not focus the lowest-health hostile in reach");
+    // A dies -> the fighter switches to B; the objective keeps attacking.
+    obs.units[3].alive = false;
+    obs.units[2].command_state = kUnitStateAttackTarget;
+    obs.simulation_frame = 3;
+    orders = AiMicroExecutorStep(state.micro, obs);
+    require(orders.size() == 1 &&
+        orders[0].kind == AiSemanticActionKind::attack_unit &&
+        orders[0].target_unit_id == 0x9500 &&
+        AiMicroObjectiveOf(state.micro, AiMicroGroup::army).kind ==
+            AiMicroObjectiveKind::attack,
+        "fighter did not move on to the next hostile after its target died");
+    // B dies too, nothing else in sight -> stand still in attack (no order),
+    // objective target cleared, still attack.
+    obs.units[4].alive = false;
+    obs.units[2].command_state = 0;
+    obs.simulation_frame = 4;
+    require(AiMicroExecutorStep(state.micro, obs).empty() &&
+        AiMicroObjectiveOf(state.micro, AiMicroGroup::army).kind ==
+            AiMicroObjectiveKind::attack &&
+        AiMicroObjectiveOf(state.micro, AiMicroGroup::army).target_unit_id == 0,
+        "attack objective did not stand still with nothing in sight");
+    // Policy retreat: everyone moves to the nest, no engagement even with a
+    // hostile in reach.
+    obs.units[4].alive = true;
+    AiMicroObjective retreat;
+    retreat.kind = AiMicroObjectiveKind::retreat;
+    retreat.target_x = 320;
+    retreat.target_y = 320;
+    AiMicroSetObjective(state.micro, AiMicroGroup::army, retreat);
+    obs.simulation_frame = 5;
+    orders = AiMicroExecutorStep(state.micro, obs);
+    require(orders.size() == 1 &&
+        orders[0].kind == AiSemanticActionKind::move &&
+        orders[0].target_x == 320 && orders[0].target_y == 320,
+        "retreat did not move the army to the nest");
+    // Arrival flips the objective to defend(nest).
+    obs.units[2].x = 330;
+    obs.units[2].y = 330;
+    obs.simulation_frame = 6;
+    AiMicroExecutorStep(state.micro, obs);
+    const AiMicroObjective& after = AiMicroObjectiveOf(state.micro,
+        AiMicroGroup::army);
+    require(after.kind == AiMicroObjectiveKind::defend &&
+        after.target_x == 320 && after.target_y == 320,
+        "retreat arrival did not switch the army to defend");
+
+    // Low-health pull-back: a fighter under 30% hp in contact leaves toward
+    // the nest instead of attacking.
+    AiObservation hurt = micro_observation();
+    hurt.units[0].command_state = kUnitStateWorkerApproachHarvest;
+    hurt.units.push_back(fighter_unit(0x3300, 0, 400, 400, true));
+    hurt.units.back().health = 20;
+    hurt.units.push_back(fighter_unit(0x9600, 1, 430, 400, false));
+    TyranoScriptedBotState fresh{};
+    hurt.simulation_frame = 50;
+    orders = AiMicroExecutorStep(fresh.micro, hurt);
+    require(orders.size() == 1 &&
+        orders[0].kind == AiSemanticActionKind::move &&
+        orders[0].unit_ids == std::vector<u32>{0x3300} &&
+        orders[0].target_x == 320 && orders[0].target_y == 320,
+        "low-health fighter did not pull back to the nest");
+}
+
+void test_ai_micro_executor_translator_objectives() {
+    // Army actions set group objectives (objective_updated) instead of
+    // emitting semantic actions; attack_enemy_base prefers the enemy BUILDING
+    // over a closer mobile unit.
+    AiObservation obs = micro_observation();
+    obs.units.push_back(observed_unit(0x9400, 1, 0x84, 0, 1500, 1500, false));
+    obs.units.push_back(fighter_unit(0x9500, 1, 500, 500, false));
+    obs.units.push_back(fighter_unit(0x3200, 0, 400, 400, true));
     TyranoScriptedBotState state{};
     state.rally_configured = true;
     TyranoScriptedBotConfig config{};
     config.decision_interval_frames = 1;
-    obs.units.push_back(observed_unit(0x3200, 0, kTyranoMasosType,
-        (1u << 5), 400, 400, true));
-    const TyranoScriptedBotDecision siege =
+    obs.simulation_frame = 1;
+    TyranoScriptedBotDecision decision =
         DecideTyranoScriptedBotForHighLevelAction(state, obs,
             AiRlHighLevelAction::attack_enemy_base, config);
-    require(siege && siege.action.kind == AiSemanticActionKind::attack_unit &&
-        siege.action.target_unit_id == 0x9400,
-        "attack_enemy_base did not besiege the visible enemy building");
-
-    // Offense autopilot: below the army threshold it stays quiet...
-    TyranoScriptedBotState fresh{};
-    require(PlanTyranoOffenseAutopilot(fresh, obs).empty(),
-        "offense autopilot engaged with a tiny army");
-    // ...with 15+ fighters it commits them to the enemy building.
-    for (u32 i = 0; i < 15; ++i) {
-        obs.units.push_back(observed_unit(0x4000 + i, 0, kTyranoMasosType,
-            (1u << 5), 400 + static_cast<i32>(i), 400, true));
+    const AiMicroObjective* army = &AiMicroObjectiveOf(state.micro,
+        AiMicroGroup::army);
+    require(decision.code == TyranoScriptedBotDecisionCode::objective_updated &&
+        army->kind == AiMicroObjectiveKind::attack &&
+        army->target_unit_id == 0x9400,
+        "attack_enemy_base did not set an attack objective on the building");
+    obs.simulation_frame = 2;
+    decision = DecideTyranoScriptedBotForHighLevelAction(state, obs,
+        AiRlHighLevelAction::retreat, config);
+    require(decision.code == TyranoScriptedBotDecisionCode::objective_updated &&
+        army->kind == AiMicroObjectiveKind::retreat &&
+        army->target_x == 320 && army->target_y == 320,
+        "retreat did not set a retreat objective to the nearest nest");
+    obs.simulation_frame = 3;
+    decision = DecideTyranoScriptedBotForHighLevelAction(state, obs,
+        AiRlHighLevelAction::defend_base, config);
+    require(decision.code == TyranoScriptedBotDecisionCode::objective_updated &&
+        army->kind == AiMicroObjectiveKind::defend && army->radius == 800,
+        "defend_base did not set a one-screen defend objective");
+    obs.simulation_frame = 4;
+    decision = DecideTyranoScriptedBotForHighLevelAction(state, obs,
+        AiRlHighLevelAction::hold_army, config);
+    require(decision.code == TyranoScriptedBotDecisionCode::objective_updated &&
+        army->kind == AiMicroObjectiveKind::defend && army->radius < 800 &&
+        army->target_x == 400 && army->target_y == 400,
+        "hold_army did not set a small defend bubble at the army's spot");
+    // scout_map splits the fighter into the scout group with a post.
+    obs.simulation_frame = 5;
+    decision = DecideTyranoScriptedBotForHighLevelAction(state, obs,
+        AiRlHighLevelAction::scout_map, config);
+    const AiMicroObjective& scout = AiMicroObjectiveOf(state.micro,
+        AiMicroGroup::scout);
+    require(decision.code == TyranoScriptedBotDecisionCode::objective_updated &&
+        scout.kind == AiMicroObjectiveKind::scout && scout.target_x >= 0 &&
+        AiMicroGroupMembers(state.micro, obs, AiMicroGroup::scout).size() == 1 &&
+        AiMicroGroupMembers(state.micro, obs, AiMicroGroup::scout)[0]->id ==
+            0x3200,
+        "scout_map did not split one unit into the scout group");
+    // Scout executor: a hostile in sight -> step away; the post is far, so
+    // without the hostile it would have walked there instead.
+    obs.units[4].sight_range = 200;  // the scout (0x3200)
+    obs.simulation_frame = 6;
+    std::vector<AiSemanticAction> orders = AiMicroExecutorStep(state.micro, obs);
+    bool evaded = false;
+    for (const AiSemanticAction& order : orders) {
+        if (order.unit_ids == std::vector<u32>{0x3200} &&
+            order.kind == AiSemanticActionKind::move && order.target_x < 400 &&
+            order.target_y < 400) {
+            evaded = true;  // away from the hostile at 500,500
+        }
     }
-    std::vector<AiSemanticAction> offense =
-        PlanTyranoOffenseAutopilot(fresh, obs);
-    // The order arrives CHUNKED: the planner rejects >14-unit selections
-    // (too_many_units), so one oversized action would silently no-op the
-    // whole army (the pre-chunking behavior — a real observed stalemate
-    // cause).
-    std::size_t offense_units = 0;
-    bool offense_shape_ok = !offense.empty();
-    for (const AiSemanticAction& chunk : offense) {
-        offense_shape_ok = offense_shape_ok &&
-            chunk.kind == AiSemanticActionKind::attack_unit &&
-            chunk.target_unit_id == 0x9400 &&
-            chunk.unit_ids.size() <= kAiMaximumUnitsPerAction;
-        offense_units += chunk.unit_ids.size();
+    require(evaded, "scout did not step away from the sighted hostile");
+    // v4 features: engaged fraction / local force ratio / objective one-hot /
+    // pulling-back fraction, and the raid perimeter = the executor's 800 px
+    // defend bubble.
+    {
+        AiObservation v4 = micro_observation();
+        v4.units.push_back(fighter_unit(0x3200, 0, 400, 400, true));  // hp 100
+        AiRlStepEncoding calm = EncodeAiObservationForRl(v4);
+        require(calm.features[80] == 0.0f && calm.features[81] == 0.5f &&
+            calm.features[82] == 0.0f && calm.features[85] == 0.0f,
+            "v4 features were not neutral with no hostile in sight");
+        v4.units.push_back(fighter_unit(0x9700, 1, 460, 400, false));  // hp 100
+        v4.units.back().health = 300;
+        v4.army_objective_kind = 2;  // attack
+        v4.army_pulling_back = 1;
+        AiRlStepEncoding hot = EncodeAiObservationForRl(v4);
+        require(hot.features[80] == 1.0f &&
+            hot.features[81] > 0.24f && hot.features[81] < 0.26f &&
+            hot.features[82] == 1.0f && hot.features[83] == 0.0f &&
+            hot.features[85] == 1.0f && hot.features[76] > 0.0f,
+            "v4 engagement/objective features did not encode the fight");
+        // A hostile 700 px from the nest is inside the one-screen raid
+        // perimeter (was 384 px).
+        AiObservation raid = micro_observation();
+        raid.units.push_back(fighter_unit(0x9800, 1, 320 + 700, 320, false));
+        require(EncodeAiObservationForRl(raid).features[76] > 0.0f,
+            "raid perimeter feature did not use the 800 px defend bubble");
+        require(kAiRlActionCount == 52 && kAiRlFeatureCount == 531,
+            "v5 action/feature counts");
     }
-    require(offense_shape_ok && offense_units >= 15,
-        "offense autopilot did not send the army at the enemy building");
-    // Same target within the dwell window -> throttled.
-    obs.simulation_frame += 8;
-    require(PlanTyranoOffenseAutopilot(fresh, obs).empty(),
-        "offense order was re-spammed inside the dwell window");
+    // v5 features: spatial grid, directions, enemy composition, own state,
+    // production pipeline, scout.  64x64-tile map (2048 px) -> 8x8 cells of
+    // 256 px; the nest at (320,320) sits in cell (1,1) = index 9.
+    {
+        AiObservation v5 = micro_observation();
+        v5.units.push_back(fighter_unit(0x3200, 0, 400, 400, true));
+        AiObservedUnit ranged_enemy = fighter_unit(0x9900, 1, 1500, 400, false);
+        ranged_enemy.type_id = 0x34;  // Demon-range mobile type
+        ranged_enemy.attack_range = 250;
+        v5.units.push_back(ranged_enemy);
+        AiObservedUnit enemy_nest = observed_unit(0x9a00, 1, 0x94, 0, 1700, 1700, false);  // Demon building
+        enemy_nest.under_construction = true;
+        v5.units.push_back(enemy_nest);
+        // Remembered enemy building on an unlit tile at (40, 40) -> (1296,1296).
+        v5.enemy_building_memory.assign(v5.tiles.size(), 0);
+        v5.enemy_building_memory[40 * v5.map_width_tiles + 40] = 1;
+        v5.scout_unit_id = 0x3200;
+        v5.units[0].queued_production_type_id = 0;  // worker
+        v5.units[1].queued_production_type_id = 0x20;  // nest producing a worker
+        const AiRlStepEncoding e = EncodeAiObservationForRl(v5);
+        require(e.features[86 + 9] > 0.19f && e.features[86 + 9] < 0.21f,
+            "own-building grid cell was not encoded");
+        require(e.features[150 + 9] > 0.0f, "own-army grid cell was not encoded");
+        require(e.features[214 + (1 * 8 + 5)] > 0.0f,
+            "enemy-mobile grid cell was not encoded");
+        require(e.features[278 + (6 * 8 + 6)] > 0.0f &&
+            e.features[278 + (5 * 8 + 5)] > 0.0f,
+            "enemy-building grid (visible + remembered) was not encoded");
+        require(e.features[406 + 9] == 1.0f, "explored fraction was not 1");
+        require(e.features[470] > 0.14f && e.features[470] < 0.15f,
+            "own start cell x was not encoded");
+        // army -> nearest enemy: due east (dx=+1 -> 1.0, dy=0 -> 0.5), has=1
+        require(e.features[472] > 0.99f && e.features[473] > 0.49f &&
+            e.features[473] < 0.51f && e.features[475] == 1.0f,
+            "army->enemy direction vector was wrong");
+        require(e.features[479] == 1.0f, "enemy building vector has-flag");
+        require(e.features[483] == 0.0f, "no start candidates -> no unexplored flag");
+        // enemy composition: one ranged mobile, tribe 3 (Demon), one building uc
+        require(e.features[489] > 0.0f && e.features[494] == 1.0f &&
+            e.features[496] > 0.0f && e.features[497] > 0.49f,
+            "enemy composition / tribe / stats were not encoded");
+        // own army: one healthy fighter, idle, near home, melee, range 50
+        require(e.features[500] == 1.0f && e.features[502] == 1.0f &&
+            e.features[504] == 0.0f && e.features[505] > 0.0f &&
+            e.features[508] > 0.09f && e.features[508] < 0.11f,
+            "own-army state features were wrong");
+        // production pipeline: one worker in production
+        require(e.features[509] > 0.19f && e.features[509] < 0.21f &&
+            e.features[510] == 0.0f, "production pipeline was not encoded");
+        // scout: alive, east/south of home, sees no enemy (1100 px away)
+        require(e.features[526] == 1.0f && e.features[527] > 0.5f &&
+            e.features[529] == 0.0f && e.features[530] == 1.0f,
+            "scout features were wrong");
+    }
+    // Role derivation from data: range 0 = melee, long range = ranged.
+    AiObservedUnit ranged = fighter_unit(0x7000, 0, 0, 0, true);
+    ranged.attack_range = 200;
+    AiObservedUnit unknown_weapon = fighter_unit(0x7002, 0, 0, 0, true);
+    unknown_weapon.attack_range = 0;  // 트윈 람포스: no range in the definition
+    require(AiMicroRoleOf(fighter_unit(0x7001, 0, 0, 0, true)) ==
+            AiMicroRole::melee &&
+        AiMicroRoleOf(ranged) == AiMicroRole::ranged &&
+        AiMicroRoleOf(unknown_weapon) == AiMicroRole::ranged &&
+        AiMicroRoleOf(obs.units[0]) == AiMicroRole::worker,
+        "unit roles were not derived from the observed stats");
 }
 
 void test_ai_play_lobby_role_compatibility() {
@@ -1788,8 +2111,10 @@ int main() {
     test_ai_rl_producer_queue_capacity_mask();
     test_ai_rl_hunt_and_research();
     test_ai_rl_research_tree_walk();
-    test_ai_rl_defense_autopilot();
-    test_ai_rl_offense_autopilot_and_siege();
+    test_ai_micro_executor_harvest_and_flee();
+    test_ai_micro_executor_defend_bubble();
+    test_ai_micro_executor_attack_retarget_retreat_and_pullback();
+    test_ai_micro_executor_translator_objectives();
     test_ai_play_lobby_role_compatibility();
     std::cout << "ai_play_interface_regression: passed\n";
     return 0;

@@ -1535,7 +1535,20 @@ void HandleSubtype1aProductionCostPacket(const Mode1ReliablePacket& packet) {
     handle_production_cost_packet(packet, nullptr);
 }
 
+namespace {
+Mode1GameplayPacketTap g_packet_tap = nullptr;
+void* g_packet_tap_user_data = nullptr;
+} // namespace
+
+void SetMode1GameplayPacketTap(Mode1GameplayPacketTap tap, void* user_data) {
+    g_packet_tap = tap;
+    g_packet_tap_user_data = user_data;
+}
+
 bool DispatchMode1GameplayPacket(const Mode1ReliablePacket& packet) {
+    if (g_packet_tap != nullptr) {
+        g_packet_tap(packet, g_packet_tap_user_data);
+    }
     // The original handlers read DAT_00725100, the live gameplay owner, not
     // the reliable transport channel.  They normally hold the same 0..7
     // value, but replay playback publishes the no-local-player owner 9 while

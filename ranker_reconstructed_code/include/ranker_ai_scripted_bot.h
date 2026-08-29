@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ranker_ai_actions.h"
+#include "ranker_ai_micro_executor.h"
 #include "ranker_ai_observation.h"
 #include "ranker_ai_rl_features.h"
 
@@ -57,6 +58,9 @@ enum class TyranoScriptedBotDecisionCode : u32 {
     wrong_faction,
     no_controlled_units,
     no_action,
+    // The action changed a group objective in the micro executor instead of
+    // emitting a semantic action; the executor issues the orders each frame.
+    objective_updated,
 };
 
 enum class TyranoScriptedBotIntent : u32 {
@@ -99,14 +103,10 @@ struct TyranoScriptedBotState {
     // fights at each enemy start instead of re-pathing to a new point every
     // decision cycle (which left it wandering and never committing to a kill).
     u32 last_army_objective_frame = 0xffffffffu;
-    // Defense autopilot throttle: the intruder last engaged and when, so the
-    // executor re-issues the defend order only on a target change or after a
-    // dwell window (re-spamming attack orders every cycle resets pathing).
-    u32 last_defense_target_id = 0;
-    u32 last_defense_order_frame = 0xffffffffu;
-    // Offense (finishing) autopilot throttle, mirroring the defense pair.
-    u32 last_offense_target_id = 0;
-    u32 last_offense_order_frame = 0xffffffffu;
+    // Group-objective micro executor (docs/AI_PLAY_MICRO_EXECUTOR_DESIGN.md):
+    // the policy's army/economy/scout actions only set group objectives here;
+    // the executor runs every frame and issues the unit orders.
+    AiMicroExecutorState micro{};
     // Drop-attack composite (board -> travel -> unload).  The policy action
     // only INITIATES the run; the drop autopilot advances it every decision
     // cycle so the policy is free to pick other actions meanwhile.  All
@@ -183,23 +183,9 @@ std::vector<AiSemanticAction> PlanTyranoIdleWorkerHarvest(
     const AiObservation& observation, std::size_t max_actions,
     const std::vector<u32>& exclude_unit_ids = {});
 
-// Defense autopilot: if a visible hostile unit is inside the defense radius of
-// any own building (or the start position), order every non-worker fighter to
-// attack the nearest such intruder.  Base defense must not wait for the macro
-// policy to happen to pick a defend action — in the hierarchy, reacting to a
-// raid is executor micro.  Throttled via the bot state so the order is only
-// re-issued on a target change or after a dwell window.  Returns 0 or 1 action.
-std::vector<AiSemanticAction> PlanTyranoDefenseAutopilot(
-    TyranoScriptedBotState& state, const AiObservation& observation);
-
-// Offense (finishing) autopilot: with a big enough army and a visible enemy
-// BUILDING, order every non-worker fighter at the nearest one.  Elimination is
-// won by razing buildings; without this the macro policy could sit on a
-// crushing army for the rest of the match (observed: 247 units vs 1 building,
-// 100k frames, no kill).  Runs only when the defense autopilot found nothing
-// to do; throttled like defense.  Returns 0 or 1 action.
-std::vector<AiSemanticAction> PlanTyranoOffenseAutopilot(
-    TyranoScriptedBotState& state, const AiObservation& observation);
+// (The former defense / offense autopilots were absorbed by the group-objective
+// micro executor: base defense is the army's default `defend` objective, and
+// "when to attack" is the policy's decision, not an autopilot's.)
 
 // Drop-attack autopilot: advances the composite started by the drop_attack
 // high-level action (board passengers onto the 둥가리 carrier, travel to the

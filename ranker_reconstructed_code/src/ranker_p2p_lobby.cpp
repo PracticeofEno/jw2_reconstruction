@@ -684,6 +684,11 @@ bool ParseP2PNetworkCommandLine(P2PNetworkLaunchParameters& parameters,
             std::strstr(upper, "-AIRANDOM") != nullptr;
         parameters.self_play_imitate =
             std::strstr(upper, "-AIIMITATE") != nullptr;
+        const char* imitate_owner = std::strstr(upper, "-AIIMITOWNER:");
+        parameters.self_play_imitate_owner = imitate_owner != nullptr ?
+            static_cast<u32>(std::strtoul(
+                imitate_owner + std::strlen("-AIIMITOWNER:"), nullptr, 10)) :
+            0xffu;
         // -AIOUT:DIR — copy the whitespace-free directory token from the
         // ORIGINAL (case-preserving) command line, since paths are case- and
         // slash-sensitive.

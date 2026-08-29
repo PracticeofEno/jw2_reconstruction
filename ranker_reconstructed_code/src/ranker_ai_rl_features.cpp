@@ -1,4 +1,6 @@
 #include "ranker_ai_rl_features.h"
+#include <vector>
+#include <array>
 
 #include "ranker_ai_actions.h"
 #include "ranker_unit_commands.h"
@@ -128,6 +130,9 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
     // only legal then, so the policy cannot restart an in-progress order (each
     // restart re-debits the cost and the order never completes).
     bool idle_researcher = false;
+    // Completed own building of type 0x80+i with an empty production queue
+    // (a busy researcher must not be re-enqueued: restart-drain).
+    std::array<bool, 16> idle_researcher_by_type{};
     // A completed producer of each kind with room left in its production
     // queue.  "Completed producer exists" is not enough to make a produce
     // action legal: the planner rejects an order once every producer of that
@@ -155,12 +160,17 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
     u32 cargo_workers = 0;
     u64 army_health = 0, army_max_health = 0;
     i64 army_centroid_x = 0, army_centroid_y = 0;
+    // v4 engagement features: own fighters vs visible hostiles.
+    std::vector<const AiObservedUnit*> own_fighters;
+    std::vector<const AiObservedUnit*> visible_hostiles;
     constexpr u32 kStanceCommandBit = 1u << 0x14;
     constexpr u32 kStanceActiveFlag = 0x10000u;
     constexpr u32 kMorphCommandBit = 1u << 0x11;
     constexpr u32 kMorphedTypeFlag = 0x08000000u;
     constexpr u32 kAttachedState = 0x45u;
-    constexpr i64 kRaidRadiusSquared = 384 * 384;
+    // One screen (800 px) = the micro executor's defend bubble around every
+    // own nest, so "raid" here means the same thing the executor reacts to.
+    constexpr i64 kRaidRadiusSquared = 800 * 800;
 
     for (const AiObservedUnit& u : observation.units) {
         if (u.controlled && u.alive) {
@@ -226,12 +236,18 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
                 army_max_health += u.max_health;
                 army_centroid_x += u.x;
                 army_centroid_y += u.y;
+                own_fighters.push_back(&u);
             }
             if (!uc && (u.type_id == kTypeBaseNest ||
                     u.type_id == kTypeLandNest || u.type_id == kTypeNest86) &&
                 u.queued_production_type_id == 0 &&
                 u.deferred_command_count == 0) {
                 idle_researcher = true;
+            }
+            if (!uc && u.type_id >= 0x80u && u.type_id < 0x90u &&
+                u.queued_production_type_id == 0 &&
+                u.deferred_command_count == 0) {
+                idle_researcher_by_type[u.type_id - 0x80u] = true;
             }
             if (!uc &&
                 u.deferred_command_count < kUnitProductionQueueLimit) {
@@ -245,6 +261,7 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
         }
         if (is_hostile_visible(observation, u)) {
             ++enemy_total;
+            visible_hostiles.push_back(&u);
             // Buildings start at 0x60 across ALL tribes (Primitive 0x60-,
             // Elf 0x70-, Tyrano 0x80-, Demon 0x90-); testing >= 0x80 would
             // misread Primitive/Elf structures as mobile army.
@@ -298,6 +315,8 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
     // frames (safety cap 100k); /18000 saturated in the opening third.
     put(norm(observation.simulation_frame, 60000.0f));    // 0
     put(norm(observation.primary_resources, 1000.0f));    // 1
+    // 2: the engine carries a second owner resource slot, but this game has a
+    // single resource — always 0 here (kept for the append-only layout).
     put(norm(observation.secondary_resources, 1000.0f));  // 2
     put(norm(observation.population_used, 100.0f));        // 3
     put(norm(observation.population_limit, 100.0f));       // 4
@@ -427,6 +446,375 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
     put(norm(queue_depth, 20.0f));         // 78 total production queue depth
     put(norm(cargo_workers, 50.0f));       // 79
 
+    // --- v4 features [80..85]: what the micro executor is doing and how the
+    // fight is going, so the policy can decide attack/defend/retreat on the
+    // same terms the executor acts on (docs/AI_PLAY_MICRO_EXECUTOR_DESIGN.md).
+    // "In contact" mirrors the executor: a hostile inside
+    // max(own range, hostile range) + 64 px.  Force ratio compares the health
+    // of own fighters in contact with the health of hostile mobiles within
+    // twice that envelope of any own fighter (0.5 = even / no contact).
+    u32 engaged = 0;
+    u64 engaged_health = 0;
+    u64 enemy_near_health = 0;
+    std::vector<const AiObservedUnit*> counted_enemies;
+    constexpr i64 kContactMargin = 64;
+    for (const AiObservedUnit* fighter : own_fighters) {
+        bool in_contact = false;
+        for (const AiObservedUnit* hostile : visible_hostiles) {
+            const i64 envelope = static_cast<i64>(std::max(fighter->attack_range,
+                hostile->attack_range)) + kContactMargin;
+            const i64 d = sq_dist(fighter->x, fighter->y, hostile->x, hostile->y);
+            if (d <= envelope * envelope) {
+                in_contact = true;
+            }
+            if (hostile->type_id < kMobileTypeLimit &&
+                d <= envelope * envelope * 4 &&
+                std::find(counted_enemies.begin(), counted_enemies.end(),
+                    hostile) == counted_enemies.end()) {
+                counted_enemies.push_back(hostile);
+                enemy_near_health += hostile->health;
+            }
+        }
+        if (in_contact) {
+            ++engaged;
+            engaged_health += fighter->health;
+        }
+    }
+    put(own_army != 0 ? static_cast<float>(engaged) /
+        static_cast<float>(own_army) : 0.0f);                      // 80 engaged fraction
+    put(engaged_health + enemy_near_health != 0 ?
+        static_cast<float>(engaged_health) /
+        static_cast<float>(engaged_health + enemy_near_health) : 0.5f); // 81 local force ratio
+    // 82..84: army objective one-hot (attack / defend / retreat); harvest and
+    // scout never apply to the army group, "none" = all zero.
+    const u32 objective = observation.army_objective_kind;
+    put(objective == 2u ? 1.0f : 0.0f);    // 82 attack   (AiMicroObjectiveKind::attack + 1)
+    put(objective == 3u ? 1.0f : 0.0f);    // 83 defend
+    put(objective == 4u ? 1.0f : 0.0f);    // 84 retreat
+    put(own_army != 0 ? std::min(static_cast<float>(
+        observation.army_pulling_back) / static_cast<float>(own_army), 1.0f)
+        : 0.0f);                           // 85 fighters pulling back (low hp)
+
+
+    // ======================================================================
+    // v5 features [86..530] — the information the v4 vector discarded.
+    // ======================================================================
+    {
+        constexpr u32 kGrid = 8u;
+        constexpr std::size_t kCells = static_cast<std::size_t>(kGrid) * kGrid;
+        const i64 map_w = static_cast<i64>(
+            std::max<u32>(observation.map_width_tiles, 1u)) * 32;
+        const i64 map_h = static_cast<i64>(
+            std::max<u32>(observation.map_height_tiles, 1u)) * 32;
+        const auto cell_of = [&](i32 x, i32 y) -> std::size_t {
+            const i64 cx = std::clamp<i64>(
+                static_cast<i64>(std::max(x, 0)) * kGrid / map_w, 0, kGrid - 1);
+            const i64 cy = std::clamp<i64>(
+                static_cast<i64>(std::max(y, 0)) * kGrid / map_h, 0, kGrid - 1);
+            return static_cast<std::size_t>(cy * kGrid + cx);
+        };
+        const auto tribe_of = [](u32 type_id) -> i32 {
+            if (type_id < 0x40u) return static_cast<i32>(type_id >> 4);
+            if (type_id >= 0x60u && type_id < 0xa0u) {
+                return static_cast<i32>((type_id - 0x60u) >> 4);
+            }
+            return -1;
+        };
+        const auto unit_role = [](const AiObservedUnit& u) -> u32 {
+            // 0 worker, 1 melee, 2 ranged, 3 transport, 4 other
+            if ((u.type_flags & (1u << 7)) != 0) return 0u;
+            const bool attacks = (u.type_flags & (1u << 5)) != 0;
+            if (u.transport_capacity > 0 && !attacks) return 3u;
+            if (!attacks) return 4u;
+            return (u.attack_range != 0 && u.attack_range <= 64u) ? 1u : 2u;
+        };
+        const auto in_attack_state = [](const AiObservedUnit& u) {
+            const u32 s = u.command_state & kUnitCommandStateMask;
+            return s == 0x03u || s == 0x04u || (s >= 0x1cu && s <= 0x22u) ||
+                s == 0x39u || s == 0x3au;
+        };
+
+        // ---- spatial grid [86..469] --------------------------------------
+        std::array<float, kCells> g_own_buildings{}, g_own_army{},
+            g_enemy_mobile{}, g_enemy_building{}, g_resource{}, g_explored{},
+            g_cell_tiles{};
+        for (const AiObservedUnit& u : observation.units) {
+            if (u.controlled && u.alive) {
+                if (u.type_id >= kMobileTypeLimit) {
+                    g_own_buildings[cell_of(u.x, u.y)] += 1.0f;
+                } else if (u.type_id != kTypeWorker && !u.under_construction) {
+                    g_own_army[cell_of(u.x, u.y)] += 1.0f;
+                }
+            } else if (is_hostile_visible(observation, u)) {
+                if (u.type_id >= kMobileTypeLimit) {
+                    g_enemy_building[cell_of(u.x, u.y)] += 1.0f;
+                } else {
+                    g_enemy_mobile[cell_of(u.x, u.y)] += 1.0f;
+                }
+            }
+        }
+        const bool tiles_valid = observation.map_width_tiles != 0 &&
+            observation.tiles.size() == static_cast<std::size_t>(
+                observation.map_width_tiles) * observation.map_height_tiles;
+        const bool have_memory = tiles_valid &&
+            observation.enemy_building_memory.size() == observation.tiles.size();
+        std::vector<UnitMovementPoint> remembered_buildings;
+        if (tiles_valid) {
+            for (std::size_t t = 0; t < observation.tiles.size(); ++t) {
+                const u32 tx = static_cast<u32>(t % observation.map_width_tiles);
+                const u32 ty = static_cast<u32>(t / observation.map_width_tiles);
+                const i32 wx = static_cast<i32>(tx * 32u + 16u);
+                const i32 wy = static_cast<i32>(ty * 32u + 16u);
+                const std::size_t c = cell_of(wx, wy);
+                g_cell_tiles[c] += 1.0f;
+                const AiObservedMapTile& tile = observation.tiles[t];
+                if (tile.explored) {
+                    g_explored[c] += 1.0f;
+                    if (tile.passable) {
+                        g_resource[c] += static_cast<float>(tile.resource_amount);
+                    }
+                }
+                if (have_memory && observation.enemy_building_memory[t] != 0 &&
+                    !tile.visible) {
+                    // Visible tiles are covered by the live unit pass above.
+                    g_enemy_building[c] += 1.0f;
+                    remembered_buildings.push_back({wx, wy});
+                }
+            }
+        }
+        for (std::size_t c = 0; c < kCells; ++c) put(norm(g_own_buildings[c], 5.0f));
+        for (std::size_t c = 0; c < kCells; ++c) put(norm(g_own_army[c], 20.0f));
+        for (std::size_t c = 0; c < kCells; ++c) put(norm(g_enemy_mobile[c], 20.0f));
+        for (std::size_t c = 0; c < kCells; ++c) put(norm(g_enemy_building[c], 5.0f));
+        for (std::size_t c = 0; c < kCells; ++c) put(norm(g_resource[c], 5000.0f));
+        for (std::size_t c = 0; c < kCells; ++c) {
+            put(g_cell_tiles[c] > 0.0f ? g_explored[c] / g_cell_tiles[c] : 0.0f);
+        }
+        // ---- own start cell [470..471] -----------------------------------
+        const std::size_t start_cell = cell_of(std::max(observation.start_x, 0),
+            std::max(observation.start_y, 0));
+        put(static_cast<float>(start_cell % kGrid) / 7.0f);
+        put(static_cast<float>(start_cell / kGrid) / 7.0f);
+
+        // ---- direction / distance vectors [472..486] --------------------
+        // (dx, dy) unit vector mapped to [0,1], distance / 2048 px, has-flag.
+        const auto put_vector = [&](bool has, i32 fx, i32 fy, i32 tx, i32 ty,
+                                    bool with_flag) {
+            if (!has) {
+                put(0.5f); put(0.5f); put(1.0f);
+                if (with_flag) put(0.0f);
+                return;
+            }
+            const double dx = static_cast<double>(tx) - fx;
+            const double dy = static_cast<double>(ty) - fy;
+            const double len = std::sqrt(dx * dx + dy * dy);
+            put(len > 0.0 ? static_cast<float>((dx / len + 1.0) / 2.0) : 0.5f);
+            put(len > 0.0 ? static_cast<float>((dy / len + 1.0) / 2.0) : 0.5f);
+            put(std::min(static_cast<float>(len / 2048.0), 1.0f));
+            if (with_flag) put(1.0f);
+        };
+        const i32 home_x = std::max(observation.start_x, 0);
+        const i32 home_y = std::max(observation.start_y, 0);
+        const i32 acx = own_army != 0 ?
+            static_cast<i32>(army_centroid_x / static_cast<i64>(own_army)) : home_x;
+        const i32 acy = own_army != 0 ?
+            static_cast<i32>(army_centroid_y / static_cast<i64>(own_army)) : home_y;
+        // army -> nearest visible enemy
+        {
+            const AiObservedUnit* best = nullptr; i64 best_d = 0;
+            for (const AiObservedUnit* h : visible_hostiles) {
+                const i64 d = sq_dist(acx, acy, h->x, h->y);
+                if (best == nullptr || d < best_d) { best = h; best_d = d; }
+            }
+            put_vector(best != nullptr, acx, acy, best ? best->x : 0,
+                best ? best->y : 0, true);                        // 472..475
+        }
+        // army -> nearest enemy building (visible or remembered)
+        {
+            bool has = false; i32 bx = 0, by = 0; i64 best_d = 0;
+            for (const AiObservedUnit* h : visible_hostiles) {
+                if (h->type_id < kMobileTypeLimit) continue;
+                const i64 d = sq_dist(acx, acy, h->x, h->y);
+                if (!has || d < best_d) { has = true; best_d = d; bx = h->x; by = h->y; }
+            }
+            for (const UnitMovementPoint& p : remembered_buildings) {
+                const i64 d = sq_dist(acx, acy, p.x, p.y);
+                if (!has || d < best_d) { has = true; best_d = d; bx = p.x; by = p.y; }
+            }
+            put_vector(has, acx, acy, bx, by, true);                // 476..479
+        }
+        // own start -> nearest UNEXPLORED start candidate (where an enemy
+        // base can still be).
+        i32 unexplored_x = 0, unexplored_y = 0; bool have_unexplored = false;
+        {
+            i64 best_d = 0;
+            for (u32 slot = 0; slot < 8u; ++slot) {
+                if ((observation.start_candidate_mask & (1u << slot)) == 0) continue;
+                const i32 sx = observation.start_candidate_x[slot];
+                const i32 sy = observation.start_candidate_y[slot];
+                if (sx == observation.start_x && sy == observation.start_y) continue;
+                if (tiles_valid) {
+                    const u32 tx = static_cast<u32>(std::max(sx, 0)) >> 5;
+                    const u32 ty = static_cast<u32>(std::max(sy, 0)) >> 5;
+                    const std::size_t ti = static_cast<std::size_t>(ty) *
+                        observation.map_width_tiles + tx;
+                    if (ti < observation.tiles.size() &&
+                        observation.tiles[ti].explored) continue;
+                }
+                const i64 d = sq_dist(home_x, home_y, sx, sy);
+                if (!have_unexplored || d < best_d) {
+                    have_unexplored = true; best_d = d;
+                    unexplored_x = sx; unexplored_y = sy;
+                }
+            }
+            put_vector(have_unexplored, home_x, home_y, unexplored_x,
+                unexplored_y, true);                                // 480..483
+        }
+        // army -> home (nearest own base nest, else any own building, else start)
+        {
+            bool has = false; i32 bx = home_x, by = home_y; i64 best_d = 0;
+            for (int pass = 0; pass < 2 && !has; ++pass) {
+                for (const AiObservedUnit& u : observation.units) {
+                    if (!u.controlled || !u.alive || u.under_construction ||
+                        u.type_id < kMobileTypeLimit) continue;
+                    if (pass == 0 && u.type_id != kTypeBaseNest) continue;
+                    const i64 d = sq_dist(acx, acy, u.x, u.y);
+                    if (!has || d < best_d) { has = true; best_d = d; bx = u.x; by = u.y; }
+                }
+            }
+            put_vector(true, acx, acy, bx, by, false);              // 484..486
+        }
+
+        // ---- enemy composition / tribe / stats [487..497] ----------------
+        std::array<u32, 5> enemy_roles{};
+        std::array<u32, 4> enemy_tribes{};
+        u64 enemy_health = 0; u32 enemy_uc = 0; u32 enemy_max_range = 0;
+        for (const AiObservedUnit* h : visible_hostiles) {
+            enemy_health += h->health;
+            if (h->type_id >= kMobileTypeLimit) {
+                if (h->under_construction) ++enemy_uc;
+            } else {
+                ++enemy_roles[unit_role(*h)];
+            }
+            const i32 tribe = tribe_of(h->type_id);
+            if (tribe >= 0 && tribe < 4) ++enemy_tribes[static_cast<std::size_t>(tribe)];
+            enemy_max_range = std::max(enemy_max_range, h->attack_range);
+        }
+        for (std::size_t r = 0; r < 4; ++r) put(norm(enemy_roles[r], 20.0f)); // 487..490 worker/melee/ranged/transport
+        {
+            std::size_t best = 0; u32 best_n = 0;
+            for (std::size_t t = 0; t < 4; ++t) {
+                if (enemy_tribes[t] > best_n) { best_n = enemy_tribes[t]; best = t; }
+            }
+            for (std::size_t t = 0; t < 4; ++t) put(best_n != 0 && t == best ? 1.0f : 0.0f); // 491..494
+        }
+        put(norm(static_cast<u32>(std::min<u64>(enemy_health, 1000000u)), 10000.0f)); // 495
+        put(norm(enemy_uc, 10.0f));                                 // 496
+        put(norm(enemy_max_range, 500.0f));                          // 497
+
+        // ---- own army state [498..508] ----------------------------------
+        u32 hp_low = 0, hp_mid = 0, hp_high = 0, idle_fighters = 0,
+            attacking = 0, far_from_home = 0, own_max_range = 0;
+        std::array<u32, 5> own_roles{};
+        double spread = 0.0;
+        for (const AiObservedUnit* f : own_fighters) {
+            if (f->max_health != 0) {
+                const u64 pct = static_cast<u64>(f->health) * 100u / f->max_health;
+                if (pct < 30u) ++hp_low; else if (pct < 70u) ++hp_mid; else ++hp_high;
+            }
+            if (unit_is_idle(*f)) ++idle_fighters;
+            if (in_attack_state(*f)) ++attacking;
+            spread += std::sqrt(static_cast<double>(sq_dist(acx, acy, f->x, f->y)));
+            own_max_range = std::max(own_max_range, f->attack_range);
+            ++own_roles[unit_role(*f)];
+        }
+        {
+            // distance from the nearest own base (or start) for each fighter
+            std::vector<UnitMovementPoint> bases;
+            for (const AiObservedUnit& u : observation.units) {
+                if (u.controlled && u.alive && !u.under_construction &&
+                    u.type_id == kTypeBaseNest) bases.push_back({u.x, u.y});
+            }
+            if (bases.empty()) bases.push_back({home_x, home_y});
+            for (const AiObservedUnit* f : own_fighters) {
+                i64 best_d = -1;
+                for (const UnitMovementPoint& b : bases) {
+                    const i64 d = sq_dist(f->x, f->y, b.x, b.y);
+                    if (best_d < 0 || d < best_d) best_d = d;
+                }
+                if (best_d > 800ll * 800ll) ++far_from_home;
+            }
+        }
+        const float army_f = own_army != 0 ? static_cast<float>(own_army) : 1.0f;
+        put(own_army != 0 ? hp_low / army_f : 0.0f);                // 498
+        put(own_army != 0 ? hp_mid / army_f : 0.0f);                // 499
+        put(own_army != 0 ? hp_high / army_f : 0.0f);               // 500
+        put(own_army != 0 ? std::min(static_cast<float>(spread / own_army / 512.0), 1.0f) : 0.0f); // 501
+        put(own_army != 0 ? idle_fighters / army_f : 0.0f);         // 502
+        put(own_army != 0 ? attacking / army_f : 0.0f);             // 503
+        put(own_army != 0 ? far_from_home / army_f : 0.0f);         // 504
+        put(norm(own_roles[1], 50.0f));                              // 505 melee
+        put(norm(own_roles[2], 50.0f));                              // 506 ranged
+        put(norm(own_roles[3], 50.0f));                              // 507 transport
+        put(norm(own_max_range, 500.0f));                            // 508
+
+        // ---- production pipeline [509..525] ------------------------------
+        // Units queued/in production per type, from every producer's current
+        // production and deferred produce commands (state 0x10, value = type).
+        static constexpr u32 kPendingTypes[] = {0x20u, 0x21u, 0x22u, 0x24u,
+            0x25u, 0x27u, 0x28u, 0x29u, 0x2au, 0x2cu, 0x2eu};
+        std::array<u32, 16> pending{};
+        std::array<u32, 16> building_uc{};
+        for (const AiObservedUnit& u : observation.units) {
+            if (!u.controlled || !u.alive) continue;
+            if (u.type_id >= 0x80u && u.type_id < 0x90u && u.under_construction) {
+                ++building_uc[u.type_id - 0x80u];
+            }
+            if (u.type_id < kMobileTypeLimit || u.under_construction) continue;
+            const u32 q = u.queued_production_type_id;
+            if (q >= 0x20u && q < 0x30u) ++pending[q - 0x20u];
+            const u32 n = std::min<u32>(u.deferred_command_count,
+                static_cast<u32>(u.deferred_commands.size()));
+            for (u32 k = 0; k < n; ++k) {
+                const AiObservedQueuedCommand& cmd = u.deferred_commands[k];
+                const u32 v = static_cast<u32>(cmd.command_value_or_target);
+                if ((cmd.state & kUnitCommandStateMask) == 0x10u &&
+                    v >= 0x20u && v < 0x30u) ++pending[v - 0x20u];
+            }
+        }
+        for (const u32 t : kPendingTypes) put(norm(pending[t - 0x20u], 5.0f)); // 509..519
+        static constexpr u32 kUcBuildings[] = {0x83u, 0x86u, 0x87u, 0x88u, 0x89u, 0x8au};
+        for (const u32 b : kUcBuildings) put(norm(building_uc[b - 0x80u], 3.0f)); // 520..525
+
+        // ---- scout [526..530] --------------------------------------------
+        const AiObservedUnit* scout = nullptr;
+        if (observation.scout_unit_id != 0) {
+            for (const AiObservedUnit& u : observation.units) {
+                if (u.id == observation.scout_unit_id && u.controlled && u.alive) {
+                    scout = &u; break;
+                }
+            }
+        }
+        put(scout != nullptr ? 1.0f : 0.0f);                         // 526
+        if (scout != nullptr) {
+            put(std::clamp(static_cast<float>(
+                (static_cast<double>(scout->x - home_x) / map_w + 1.0) / 2.0), 0.0f, 1.0f)); // 527
+            put(std::clamp(static_cast<float>(
+                (static_cast<double>(scout->y - home_y) / map_h + 1.0) / 2.0), 0.0f, 1.0f)); // 528
+            bool sees = false;
+            const i64 sight = scout->sight_range != 0 ? scout->sight_range : 160;
+            for (const AiObservedUnit* h : visible_hostiles) {
+                if (sq_dist(scout->x, scout->y, h->x, h->y) <= sight * sight) { sees = true; break; }
+            }
+            put(sees ? 1.0f : 0.0f);                                 // 529
+            put(have_unexplored ? std::min(static_cast<float>(std::sqrt(
+                static_cast<double>(sq_dist(scout->x, scout->y, unexplored_x,
+                    unexplored_y))) / 2048.0), 1.0f) : 1.0f);        // 530
+        } else {
+            put(0.5f); put(0.5f); put(0.0f); put(1.0f);
+        }
+    }
+
     // --- Legal-action mask ---
     auto set_legal = [&](AiRlHighLevelAction a, bool legal) {
         out.legal_mask[static_cast<std::size_t>(a)] = legal ? 1u : 0u;
@@ -471,13 +859,19 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
         has_builder && completed_egg && prim >= kLandNestCost);
     set_legal(AiRlHighLevelAction::expand_base_nest,
         has_builder && prim >= kBaseNestCost);
-    // Research costs 500 primary (order 0x14 level 1).  Requires an idle
-    // researcher so an in-progress order cannot be restarted (restart re-debits
-    // the cost and resets progress — observed live).
-    set_legal(AiRlHighLevelAction::research_next,
-        idle_researcher && prim >= 500u);
-    set_legal(AiRlHighLevelAction::harvest_saturate,
-        idle_workers > 0 && have_resource_tile);
+    // Per-order research: an IDLE completed researcher building of the right
+    // type (re-enqueueing onto a busy one re-debits and resets progress),
+    // level below the cap, and the audited cost for the current level.
+    (void)idle_researcher;
+    for (const AiRlResearchAction& entry : kAiRlResearchActions) {
+        const u32 level = entry.order < observation.research_order_levels.size()
+            ? observation.research_order_levels[entry.order] : 0u;
+        const u32 cost = entry.cost_by_level[std::min<u32>(level, 2u)];
+        set_legal(entry.action,
+            level < entry.max_levels &&
+            idle_researcher_by_type[entry.researcher_type - 0x80u] &&
+            prim >= cost);
+    }
     set_legal(AiRlHighLevelAction::scout_map, own_total > 0);
     set_legal(AiRlHighLevelAction::attack_nearest_enemy,
         has_army && have_nearest);

@@ -59,6 +59,12 @@ struct AiObservedUnit {
     bool visible = false;
     bool alive = false;
     bool under_construction = false;
+    // Unit-type public stats (a unit's type is public knowledge, so these are
+    // filled for visible opponents too).  Pixels; base definition values
+    // (research/equipment bonuses not applied).
+    u32 attack_range = 0;
+    u32 sight_range = 0;
+    u32 transport_capacity = 0;
 
     // These fields are intentionally populated only for controlled units.
     // Visible opponents do not expose their private destination, queue or
@@ -120,6 +126,19 @@ struct AiObservation {
     std::array<i32, 8> start_candidate_y{};
     // Bit i set -> start_candidate_x/y[i] is a valid map start slot.
     u32 start_candidate_mask = 0;
+    // Micro-executor summary (filled by the AI-play pump from the owner's
+    // executor state before RL encoding; 0 when no executor drives the owner,
+    // e.g. imitation logging of the built-in AI).  army_objective_kind =
+    // AiMicroObjectiveKind + 1 (0 = none).
+    u32 army_objective_kind = 0;
+    u32 army_pulling_back = 0;
+    // Unit id of the executor's scout (0 = none).
+    u32 scout_unit_id = 0;
+    // Fog-honest memory of enemy BUILDINGS: one byte per map tile (same
+    // layout as `tiles`), 1 where a hostile building was last seen and the
+    // tile has not been re-lit empty since.  Maintained per owner by the
+    // AI-play pump; empty when no memory is kept.
+    std::vector<u8> enemy_building_memory;
     std::vector<AiObservedMapTile> tiles;
     std::vector<AiObservedUnit> units;
 };

@@ -705,7 +705,7 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotAction(
 }
 
 namespace {
-// Mop-up helpers (defined ahead of PlanTyranoOffenseAutopilot below; shared
+// Mop-up helpers (shared
 // with the attack_enemy_base executor).
 void update_enemy_building_memory(TyranoScriptedBotState& state,
     const AiObservation& observation);
@@ -861,6 +861,67 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
         ++state.decisions_emitted;
         return ready(intent, std::move(act));
     };
+    // ---- group-objective helpers (micro executor) -------------------------
+    // Army / economy / scout actions no longer emit a semantic action: they
+    // set the group's objective and the per-frame micro executor issues the
+    // unit orders (docs/AI_PLAY_MICRO_EXECUTOR_DESIGN.md).
+    const AiMicroExecutorConfig micro_config{};
+    const auto objective_updated = [&](AiMicroGroup group,
+                                       AiMicroObjective objective) {
+        objective.set_frame = observation.simulation_frame;
+        AiMicroSetObjective(state.micro, group, objective);
+        ++state.decisions_emitted;
+        TyranoScriptedBotDecision updated{};
+        updated.code = TyranoScriptedBotDecisionCode::objective_updated;
+        return updated;
+    };
+    const auto army_anchor = [&]() {
+        UnitMovementPoint anchor{std::max(observation.start_x, 0),
+            std::max(observation.start_y, 0)};
+        AiMicroGroupCentroid(state.micro, observation, AiMicroGroup::army,
+            anchor, micro_config);
+        return anchor;
+    };
+    const auto attack_unit_objective = [&](u32 target_id,
+                                           bool include_neutral) {
+        AiMicroObjective objective;
+        objective.kind = AiMicroObjectiveKind::attack;
+        objective.target_unit_id = target_id;
+        objective.include_neutral = include_neutral;
+        return objective_updated(AiMicroGroup::army, objective);
+    };
+    const auto attack_point_objective = [&](i32 x, i32 y) {
+        AiMicroObjective objective;
+        objective.kind = AiMicroObjectiveKind::attack;
+        objective.target_x = x;
+        objective.target_y = y;
+        return objective_updated(AiMicroGroup::army, objective);
+    };
+    const auto defend_objective = [&](UnitMovementPoint post, i32 radius) {
+        AiMicroObjective objective;
+        objective.kind = AiMicroObjectiveKind::defend;
+        objective.target_x = post.x;
+        objective.target_y = post.y;
+        objective.radius = radius;
+        return objective_updated(AiMicroGroup::army, objective);
+    };
+    const auto nearest_hostile_to = [&](i32 x, i32 y) -> const AiObservedUnit* {
+        const AiObservedUnit* best = nullptr;
+        i64 best_distance = 0;
+        for (const AiObservedUnit& unit : observation.units) {
+            if (!is_hostile_visible_unit(observation, unit)) {
+                continue;
+            }
+            const i64 distance = squared_distance(x, y, unit.x, unit.y);
+            if (best == nullptr || distance < best_distance ||
+                (distance == best_distance && unit.id < best->id)) {
+                best = &unit;
+                best_distance = distance;
+            }
+        }
+        return best;
+    };
+    (void)move_army_to;
     // Mergeable = alive controlled mobile unit of the type with the audited
     // 0x0b capability bit that is not already inside a linked-release cycle
     // (states 0x5f..0x61).
@@ -949,79 +1010,86 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
     case AiRlHighLevelAction::expand_base_nest:
         return build_structure(kTyranoNestType,
             TyranoScriptedBotIntent::build_second_tyrano_nest);
-    case AiRlHighLevelAction::research_next: {
-        // Walk the full audited Tyrano research tree (ai_techtree_audit.txt):
-        // request the first order below its max level whose researcher building
-        // exists.  The order->building mapping is the session reference table's
-        // completion_references; a wrong building made the live validator
-        // reject every request after the first completed order.
-        struct ResearchStep {
-            u32 order;
-            u32 researcher_type;
-            u8 max_levels;
-        };
-        static constexpr ResearchStep kSteps[] = {
-            {kTyranoHarvestUpgradeOrder, kTyranoNestType, 1},        // 0x14
-            {kTyranoGroundAttackUpgradeOrder, kTyranoLandNestType, 5},  // 0x19
-            {0x1au, kTyranoLandNestType, 5},   // ground defense up
-            {kTyranoMovementUpgradeOrder, kTyranoLandNestType, 1},   // 0x16
-            {0x1cu, kTyranoNest86Type, 5},     // air attack up
-            {0x1du, kTyranoNest86Type, 5},     // air defense up
-            {0x18u, kTyranoNest86Type, 1},     // mutant merge
-            {0x2au, kTyranoNestType, 1},       // dino morph
-            {0x38u, kTyranoNestType, 1},       // haste
-            {0x2bu, kTyranoNestType, 1},       // level-up exp down
-            {0x1bu, 0x89u, 1},                 // melee reinforce (land nisdos)
-            {0x2du, 0x89u, 1},                 // triceps speed
-            {0x1eu, 0x8au, 1},                 // air reinforce (sky nisdos)
-        };
-        for (const ResearchStep& step : kSteps) {
-            if (step.order < observation.research_order_levels.size() &&
-                observation.research_order_levels[step.order] >=
-                    step.max_levels) {
-                continue;
-            }
-            // Idle producers only: re-enqueueing onto a busy researcher
-            // re-debits and resets the in-progress order (restart-drain).
-            // Skipping a busy building also spreads research across nests.
-            const AiObservedUnit* producer = select_idle_completed_type(
-                observation, step.researcher_type);
-            if (producer == nullptr) {
-                continue;
-            }
-            AiSemanticAction act{};
-            act.kind = AiSemanticActionKind::research;
-            act.unit_ids = {producer->id};
-            act.production_id = step.order;
-            ++state.decisions_emitted;
-            return ready(TyranoScriptedBotIntent::research_harvest_upgrade,
-                std::move(act));
+    case AiRlHighLevelAction::research_harvest:
+    case AiRlHighLevelAction::research_ground_attack:
+    case AiRlHighLevelAction::research_ground_defense:
+    case AiRlHighLevelAction::research_movement:
+    case AiRlHighLevelAction::research_air_attack:
+    case AiRlHighLevelAction::research_air_defense:
+    case AiRlHighLevelAction::research_mutant_merge:
+    case AiRlHighLevelAction::research_morph:
+    case AiRlHighLevelAction::research_haste:
+    case AiRlHighLevelAction::research_exp_down:
+    case AiRlHighLevelAction::research_melee_reinforce:
+    case AiRlHighLevelAction::research_triceps_speed:
+    case AiRlHighLevelAction::research_air_reinforce: {
+        // The policy names the order; the executor only routes it to an IDLE
+        // completed building of the audited researcher type (re-enqueueing
+        // onto a busy researcher re-debits the cost and resets progress —
+        // the restart-drain bug) and refuses orders already at their cap.
+        const AiRlResearchAction* entry = FindAiRlResearchAction(action);
+        if (entry == nullptr) {
+            return decision;
         }
-        return decision;
-    }
-    case AiRlHighLevelAction::harvest_saturate: {
-        const HarvestAssignment assignment =
-            nearest_visible_resource_assignment(observation, workers);
-        if (assignment.worker == nullptr) {
+        if (entry->order < observation.research_order_levels.size() &&
+            observation.research_order_levels[entry->order] >=
+                entry->max_levels) {
+            return decision;
+        }
+        const AiObservedUnit* producer = select_idle_completed_type(
+            observation, entry->researcher_type);
+        if (producer == nullptr) {
             return decision;
         }
         AiSemanticAction act{};
-        act.kind = AiSemanticActionKind::harvest;
-        act.unit_ids = {assignment.worker->id};
-        act.target_x = assignment.point.x;
-        act.target_y = assignment.point.y;
+        act.kind = AiSemanticActionKind::research;
+        act.unit_ids = {producer->id};
+        act.production_id = entry->order;
         ++state.decisions_emitted;
-        return ready(TyranoScriptedBotIntent::harvest_visible_resource,
+        return ready(TyranoScriptedBotIntent::research_harvest_upgrade,
             std::move(act));
     }
     case AiRlHighLevelAction::scout_map: {
-        // Send one idle-ish unit (prefer a worker, else any) on a plain move
-        // so scouting never commits the army.  Destination priority:
+        // Scout group (0..1 units): reuse the live scout, else split one unit
+        // off the army (cheapest fighter first), else a worker.  Destination
+        // priority:
         //   1. the nearest competitor start whose tile is still UNEXPLORED —
         //      that is where an enemy base can actually be; and
         //   2. once every start is explored, the generic center/corner sweep
         //      (advancing the cursor each pick so coverage progresses).
-        const AiObservedUnit* scout = workers.empty() ? any_own : workers.front();
+        // The scout objective then holds the unit at that post; the executor
+        // steps it away from sighted hostiles and back again.
+        const AiObservedUnit* scout = nullptr;
+        {
+            const std::vector<const AiObservedUnit*> members =
+                AiMicroGroupMembers(state.micro, observation,
+                    AiMicroGroup::scout, micro_config);
+            if (!members.empty()) {
+                scout = members.front();
+            }
+        }
+        if (scout == nullptr) {
+            for (const AiObservedUnit& unit : observation.units) {
+                if (!unit.controlled || !unit.alive ||
+                    unit.under_construction ||
+                    unit.type_id >= kTyranoMobileTypeLimit ||
+                    unit.type_id == kTyranoWorkerType ||
+                    unit_is_constructing(unit) ||
+                    AiMicroRoleOf(unit, micro_config) ==
+                        AiMicroRole::transport) {
+                    continue;
+                }
+                const bool cheaper = unit.type_id == kTyranoMasosType;
+                if (scout == nullptr ||
+                    (cheaper && scout->type_id != kTyranoMasosType) ||
+                    (unit.type_id == scout->type_id && unit.id < scout->id)) {
+                    scout = &unit;
+                }
+            }
+        }
+        if (scout == nullptr && !workers.empty()) {
+            scout = workers.front();
+        }
         if (scout == nullptr) {
             return decision;
         }
@@ -1063,55 +1131,42 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
             scout_x = point.x;
             scout_y = point.y;
         }
-        AiSemanticAction act{};
-        act.kind = AiSemanticActionKind::move;
-        act.unit_ids = {scout->id};
-        act.target_x = scout_x;
-        act.target_y = scout_y;
-        ++state.decisions_emitted;
-        return ready(TyranoScriptedBotIntent::explore, std::move(act));
+        AiMicroAssignGroup(state.micro, scout->id, AiMicroGroup::scout);
+        AiMicroObjective objective;
+        objective.kind = AiMicroObjectiveKind::scout;
+        objective.target_x = scout_x;
+        objective.target_y = scout_y;
+        return objective_updated(AiMicroGroup::scout, objective);
     }
-    case AiRlHighLevelAction::attack_nearest_enemy:
-        if (!combat_units.empty() && nearest_enemy != nullptr) {
-            AiSemanticAction act{};
-            act.kind = AiSemanticActionKind::attack_unit;
-            act.unit_ids = std::move(combat_units);
-            act.target_unit_id = nearest_enemy->id;
-            ++state.decisions_emitted;
-            return ready(TyranoScriptedBotIntent::attack_visible_enemy,
-                std::move(act));
+    case AiRlHighLevelAction::attack_nearest_enemy: {
+        const UnitMovementPoint anchor = army_anchor();
+        const AiObservedUnit* target = nearest_hostile_to(anchor.x, anchor.y);
+        if (target == nullptr) {
+            return decision;
         }
-        return decision;
+        return attack_unit_objective(target->id, false);
+    }
     case AiRlHighLevelAction::attack_enemy_base: {
-        // Siege: the elimination objective is the enemy's BUILDINGS, so send
-        // the whole army at the nearest visible one (previously this was a
-        // plain exploration move that never razed anything — armies of 200+
-        // units stalemated for 100k frames).  Fall back to the nearest enemy
-        // unit; with nothing visible, MARCH ON THE NEAREST ENEMY START —
-        // corner-sweeping never found the base, so sieges never engaged.
+        // Siege: the elimination objective is the enemy's BUILDINGS, so aim
+        // the army at the nearest visible one; fall back to the nearest enemy
+        // unit; with nothing visible, MARCH ON THE NEAREST ENEMY START.  The
+        // attack objective keeps the army engaging whatever it meets and
+        // re-targets the next visible hostile once this one dies.
         const AiObservedUnit* target = nearest_enemy_building != nullptr ?
             nearest_enemy_building : nearest_enemy;
-        if (!combat_units.empty() && target != nullptr) {
-            AiSemanticAction act{};
-            act.kind = AiSemanticActionKind::attack_unit;
-            act.unit_ids = std::move(combat_units);
-            act.target_unit_id = target->id;
-            ++state.decisions_emitted;
-            return ready(TyranoScriptedBotIntent::attack_visible_enemy,
-                std::move(act));
+        if (target != nullptr) {
+            return attack_unit_objective(target->id, false);
         }
-        // Mop-up chain (mirrors the offense autopilot): remembered building
-        // -> unexplored enemy start -> unexplored-region sweep -> rotating
-        // exploration cycle.  Camping an explored-empty start stalemated
-        // decided games at the frame cap.
+        // Mop-up chain: remembered building -> unexplored enemy start ->
+        // unexplored-region sweep -> rotating exploration cycle.  Camping an
+        // explored-empty start stalemated decided games at the frame cap.
         update_enemy_building_memory(state, observation);
         const i32 home_x = std::max(observation.start_x, 0);
         const i32 home_y = std::max(observation.start_y, 0);
         const TyranoScriptedBotState::RememberedEnemyBuilding* remembered =
             nearest_remembered_building(state, home_x, home_y);
         if (remembered != nullptr) {
-            return move_army_to(remembered->x, remembered->y,
-                TyranoScriptedBotIntent::attack_visible_enemy);
+            return attack_point_objective(remembered->x, remembered->y);
         }
         i64 best_distance = 0;
         i32 march_x = -1;
@@ -1143,107 +1198,41 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
             }
         }
         if (march_x >= 0) {
-            return move_army_to(march_x, march_y,
-                TyranoScriptedBotIntent::attack_visible_enemy);
+            return attack_point_objective(march_x, march_y);
         }
         const UnitMovementPoint sweep =
             nearest_unexplored_point(observation, home_x, home_y);
         if (sweep.x >= 0) {
-            return move_army_to(sweep.x, sweep.y,
-                TyranoScriptedBotIntent::explore);
+            return attack_point_objective(sweep.x, sweep.y);
         }
         ++state.exploration_index;
         const UnitMovementPoint point = exploration_point(state, observation);
-        return move_army_to(point.x, point.y,
-            TyranoScriptedBotIntent::explore);
+        return attack_point_objective(point.x, point.y);
     }
     case AiRlHighLevelAction::retreat: {
-        // Retreat != defend: pull back ONLY the units currently in a combat
-        // cycle (attack travel/target, guard combat/pursuit, patrol combat)
-        // with a plain move so they actually disengage; unengaged units stay
-        // where they are.  Sharing defend_base's case made the two actions
-        // identical (41 actions were effectively 40).
-        AiSemanticAction act{};
-        act.kind = AiSemanticActionKind::move;
-        for (const AiObservedUnit& unit : observation.units) {
-            if (act.unit_ids.size() >= kAiMaximumUnitsPerAction) {
-                break;
-            }
-            if (!unit.controlled || !unit.alive ||
-                unit.type_id == kTyranoWorkerType ||
-                unit.type_id >= kTyranoMobileTypeLimit) {
-                continue;
-            }
-            const u32 command_state = unit.command_state & 0x00ffffffu;
-            const bool engaged =
-                command_state == kUnitStateAttackTravel ||
-                command_state == kUnitStateAttackTarget ||
-                (command_state >= kUnitStateRuntimeTargetValidationStart &&
-                    command_state <= kUnitStateGuardPursueTarget) ||
-                command_state == kUnitStatePatrolReturnCombat ||
-                command_state == kUnitStatePatrolOutboundCombat;
-            if (engaged) {
-                act.unit_ids.push_back(unit.id);
-            }
-        }
-        if (act.unit_ids.empty()) {
-            return decision;
-        }
-        act.target_x = std::max(observation.start_x, 0);
-        act.target_y = std::max(observation.start_y, 0);
-        ++state.decisions_emitted;
-        return ready(TyranoScriptedBotIntent::explore, std::move(act));
+        // Whole army to the nest nearest its centroid, no engagement; the
+        // executor flips the objective to defend(that nest) on arrival.
+        const UnitMovementPoint anchor = army_anchor();
+        const UnitMovementPoint nest = AiMicroNearestBase(observation,
+            anchor.x, anchor.y, micro_config);
+        AiMicroObjective objective;
+        objective.kind = AiMicroObjectiveKind::retreat;
+        objective.target_x = nest.x;
+        objective.target_y = nest.y;
+        return objective_updated(AiMicroGroup::army, objective);
     }
     case AiRlHighLevelAction::defend_base: {
-        // With the army already home, HOLD instead of re-pathing: a plain
-        // move let defenders chase whatever crossed their acquisition radius
-        // and scatter off the base again.
-        if (!combat_units.empty()) {
-            constexpr i64 kHomeRadiusSquared = 96 * 96;
-            i64 centroid_x = 0;
-            i64 centroid_y = 0;
-            std::size_t counted = 0;
-            for (const AiObservedUnit& unit : observation.units) {
-                if (unit.controlled && unit.alive &&
-                    std::find(combat_units.begin(), combat_units.end(),
-                        unit.id) != combat_units.end()) {
-                    centroid_x += unit.x;
-                    centroid_y += unit.y;
-                    ++counted;
-                }
-            }
-            if (counted != 0) {
-                centroid_x /= static_cast<i64>(counted);
-                centroid_y /= static_cast<i64>(counted);
-                const i64 home_distance = squared_distance(
-                    static_cast<i32>(centroid_x), static_cast<i32>(centroid_y),
-                    std::max(observation.start_x, 0),
-                    std::max(observation.start_y, 0));
-                if (home_distance <= kHomeRadiusSquared) {
-                    AiSemanticAction act{};
-                    act.kind = AiSemanticActionKind::hold_position;
-                    act.unit_ids = std::move(combat_units);
-                    ++state.decisions_emitted;
-                    return ready(TyranoScriptedBotIntent::hold_army,
-                        std::move(act));
-                }
-            }
-        }
-        return move_army_to(std::max(observation.start_x, 0),
-            std::max(observation.start_y, 0),
-            TyranoScriptedBotIntent::explore);
+        // Post = nest nearest the army; bubble = one screen around every own
+        // nest (hostiles seen outside it are ignored, chasers leash back).
+        const UnitMovementPoint anchor = army_anchor();
+        return defend_objective(AiMicroNearestBase(observation, anchor.x,
+            anchor.y, micro_config), micro_config.defend_radius);
     }
     case AiRlHighLevelAction::hunt_neutral_monster:
-        if (!combat_units.empty() && nearest_neutral != nullptr) {
-            AiSemanticAction act{};
-            act.kind = AiSemanticActionKind::attack_unit;
-            act.unit_ids = std::move(combat_units);
-            act.target_unit_id = nearest_neutral->id;
-            ++state.decisions_emitted;
-            return ready(TyranoScriptedBotIntent::attack_visible_enemy,
-                std::move(act));
+        if (nearest_neutral == nullptr) {
+            return decision;
         }
-        return decision;
+        return attack_unit_objective(nearest_neutral->id, true);
     // Producer map from the session reference tables: egg 0x84 produces the
     // fighter roster, base 0x80 produces 0x2c, 0x87 produces 0x29/0x2a.
     case AiRlHighLevelAction::produce_unit_x22:
@@ -1390,60 +1379,13 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
         ++state.decisions_emitted;
         return ready(TyranoScriptedBotIntent::stance_toggle, std::move(act));
     }
-    case AiRlHighLevelAction::hold_army: {
-        if (combat_units.empty()) {
-            return decision;
-        }
-        AiSemanticAction act{};
-        act.kind = AiSemanticActionKind::hold_position;
-        act.unit_ids = std::move(combat_units);
-        ++state.decisions_emitted;
-        return ready(TyranoScriptedBotIntent::hold_army, std::move(act));
-    }
-    case AiRlHighLevelAction::patrol_defense: {
-        if (combat_units.empty()) {
-            return decision;
-        }
-        // Patrol leg: current position <-> the nearest explored resource
-        // cluster (the harvest line is what raids hit first).
-        i32 patrol_x = -1;
-        i32 patrol_y = -1;
-        i64 patrol_distance = 0;
-        for (u32 tile_y = 0; tile_y < observation.map_height_tiles; ++tile_y) {
-            for (u32 tile_x = 0; tile_x < observation.map_width_tiles;
-                 ++tile_x) {
-                const std::size_t index = static_cast<std::size_t>(tile_y) *
-                    observation.map_width_tiles + tile_x;
-                if (index >= observation.tiles.size()) {
-                    continue;
-                }
-                const AiObservedMapTile& tile = observation.tiles[index];
-                if (!tile.explored || tile.resource_amount == 0) {
-                    continue;
-                }
-                const i32 world_x = static_cast<i32>(tile_x << 5) + 16;
-                const i32 world_y = static_cast<i32>(tile_y << 5) + 16;
-                const i64 distance = squared_distance(observation.start_x,
-                    observation.start_y, world_x, world_y);
-                if (patrol_x < 0 || distance < patrol_distance) {
-                    patrol_x = world_x;
-                    patrol_y = world_y;
-                    patrol_distance = distance;
-                }
-            }
-        }
-        if (patrol_x < 0) {
-            patrol_x = std::max(observation.start_x, 0);
-            patrol_y = std::max(observation.start_y, 0);
-        }
-        AiSemanticAction act{};
-        act.kind = AiSemanticActionKind::patrol;
-        act.unit_ids = std::move(combat_units);
-        act.target_x = patrol_x;
-        act.target_y = patrol_y;
-        ++state.decisions_emitted;
-        return ready(TyranoScriptedBotIntent::patrol_defense, std::move(act));
-    }
+    case AiRlHighLevelAction::hold_army:
+        // Hold = defend with a tiny bubble at the army's own spot.
+        return defend_objective(army_anchor(), micro_config.hold_radius);
+    case AiRlHighLevelAction::patrol_defense:
+        // Patrol = defend with a mid-size bubble at the army's own spot (the
+        // engine patrol command is not used: leashed defense covers it).
+        return defend_objective(army_anchor(), micro_config.patrol_radius);
     case AiRlHighLevelAction::drop_attack: {
         // Initiate only; PlanTyranoDropAttackAutopilot advances the composite
         // on subsequent decision cycles regardless of later policy picks.
@@ -1573,78 +1515,6 @@ std::vector<AiSemanticAction> PlanTyranoIdleWorkerHarvest(
     return actions;
 }
 
-std::vector<AiSemanticAction> PlanTyranoDefenseAutopilot(
-    TyranoScriptedBotState& state, const AiObservation& observation) {
-    // ~12 tiles: raids inside this ring around a building are a base threat.
-    constexpr i64 kDefenseRadiusSq = 384ll * 384ll;
-    constexpr u32 kDefenseReorderFrames = 64u;
-
-    std::vector<AiSemanticAction> actions;
-    std::vector<UnitMovementPoint> base_points;
-    std::vector<u32> defenders;
-    for (const AiObservedUnit& unit : observation.units) {
-        if (unit.controlled && unit.alive) {
-            if (unit.type_id >= 0x80u) {
-                base_points.push_back({unit.x, unit.y});
-            } else if (unit.type_id != kTyranoWorkerType &&
-                       unit_can_attack(unit) && !unit_is_constructing(unit)) {
-                defenders.push_back(unit.id);
-            }
-        }
-    }
-    if (base_points.empty()) {
-        base_points.push_back({std::max(observation.start_x, 0),
-            std::max(observation.start_y, 0)});
-    }
-    if (defenders.empty()) {
-        return actions;
-    }
-
-    const AiObservedUnit* intruder = nullptr;
-    i64 intruder_distance = 0;
-    for (const AiObservedUnit& unit : observation.units) {
-        if (!is_hostile_visible_unit(observation, unit)) {
-            continue;
-        }
-        for (const UnitMovementPoint& base : base_points) {
-            const i64 distance =
-                squared_distance(base.x, base.y, unit.x, unit.y);
-            if (distance > kDefenseRadiusSq) {
-                continue;
-            }
-            if (intruder == nullptr || distance < intruder_distance ||
-                (distance == intruder_distance && unit.id < intruder->id)) {
-                intruder = &unit;
-                intruder_distance = distance;
-            }
-        }
-    }
-    if (intruder == nullptr) {
-        return actions;
-    }
-    // Re-issue only on a new target or after the dwell window; spamming the
-    // same attack order every cycle resets unit pathing.
-    if (intruder->id == state.last_defense_target_id &&
-        state.last_defense_order_frame != 0xffffffffu &&
-        observation.simulation_frame - state.last_defense_order_frame <
-            kDefenseReorderFrames) {
-        return actions;
-    }
-    state.last_defense_target_id = intruder->id;
-    state.last_defense_order_frame = observation.simulation_frame;
-
-    AiSemanticAction action{};
-    action.kind = AiSemanticActionKind::attack_unit;
-    action.unit_ids = std::move(defenders);
-    action.target_unit_id = intruder->id;
-    // >14-unit orders are rejected by the planner (too_many_units) — a large
-    // garrison must answer in chunks or it silently never answers at all.
-    for (AiSemanticAction& chunk : ChunkAiSemanticActionUnits(action)) {
-        actions.push_back(std::move(chunk));
-    }
-    return actions;
-}
-
 namespace {
 
 // Refresh the mop-up memory from this observation (idempotent per frame):
@@ -1762,164 +1632,6 @@ UnitMovementPoint nearest_unexplored_point(const AiObservation& observation,
 }
 
 } // namespace
-
-std::vector<AiSemanticAction> PlanTyranoOffenseAutopilot(
-    TyranoScriptedBotState& state, const AiObservation& observation) {
-    // Enough fighters to raze a base without feeding the army piecemeal.
-    constexpr std::size_t kOffenseMinArmy = 15;
-    // A blind march commits the army harder, so demand a bigger force.
-    constexpr std::size_t kOffenseMarchMinArmy = 25;
-    // Sieges are long; re-order rarely so unit pathing is not reset.
-    constexpr u32 kOffenseReorderFrames = 128u;
-    // Marker id for the march order in the reorder throttle.
-    constexpr u32 kOffenseMarchTargetId = 0xfffffffeu;
-
-    std::vector<AiSemanticAction> actions;
-    update_enemy_building_memory(state, observation);
-    std::vector<u32> fighters;
-    i64 army_x = 0;
-    i64 army_y = 0;
-    for (const AiObservedUnit& unit : observation.units) {
-        if (unit.controlled && unit.alive && !unit.under_construction &&
-            unit.type_id != kTyranoWorkerType &&
-            unit.type_id < kTyranoMobileTypeLimit &&
-            unit_can_attack(unit) && !unit_is_constructing(unit)) {
-            fighters.push_back(unit.id);
-            army_x += unit.x;
-            army_y += unit.y;
-        }
-    }
-    if (fighters.size() < kOffenseMinArmy) {
-        return actions;
-    }
-    army_x /= static_cast<i64>(fighters.size());
-    army_y /= static_cast<i64>(fighters.size());
-
-    // Nearest visible enemy building — the elimination objective.
-    const AiObservedUnit* target = nullptr;
-    i64 target_distance = 0;
-    for (const AiObservedUnit& unit : observation.units) {
-        if (!is_hostile_visible_unit(observation, unit) ||
-            unit.type_id < kTyranoMobileTypeLimit) {
-            continue;
-        }
-        const i64 distance = squared_distance(observation.start_x,
-            observation.start_y, unit.x, unit.y);
-        if (target == nullptr || distance < target_distance ||
-            (distance == target_distance && unit.id < target->id)) {
-            target = &unit;
-            target_distance = distance;
-        }
-    }
-    if (target == nullptr) {
-        // No enemy building in SIGHT.  Mop-up chain (each tier only when the
-        // previous is empty):
-        //   1. march on the nearest REMEMBERED building (seen earlier,
-        //      currently fogged) — a relocated/hidden base is usually here;
-        //   2. march on the nearest enemy start whose tile is still
-        //      UNEXPLORED (camping an explored-empty start caused the
-        //      100k-frame stalemates the last record replay showed);
-        //   3. sweep the nearest unexplored region from the army centroid;
-        //   4. fully explored and no memory: rotate the coarse exploration
-        //      cycle so re-fogged areas get re-checked for rebuilt bases.
-        if (fighters.size() < kOffenseMarchMinArmy) {
-            return actions;
-        }
-        constexpr u32 kOffenseSweepTargetId = 0xfffffffdu;
-        i32 march_x = -1;
-        i32 march_y = -1;
-        u32 march_marker = kOffenseMarchTargetId;
-        const TyranoScriptedBotState::RememberedEnemyBuilding* remembered =
-            nearest_remembered_building(state,
-                static_cast<i32>(army_x), static_cast<i32>(army_y));
-        if (remembered != nullptr) {
-            march_x = remembered->x;
-            march_y = remembered->y;
-            march_marker = remembered->id;
-        }
-        if (march_x < 0) {
-            i64 best_distance = 0;
-            for (u32 slot = 0; slot < 8u; ++slot) {
-                if ((observation.start_candidate_mask & (1u << slot)) == 0) {
-                    continue;
-                }
-                const i32 sx = observation.start_candidate_x[slot];
-                const i32 sy = observation.start_candidate_y[slot];
-                const i64 distance = squared_distance(observation.start_x,
-                    observation.start_y, sx, sy);
-                if (distance == 0) {
-                    continue;  // our own start slot
-                }
-                const u32 tile_x = static_cast<u32>(std::max(sx, 0)) >> 5;
-                const u32 tile_y = static_cast<u32>(std::max(sy, 0)) >> 5;
-                const std::size_t tile_index =
-                    static_cast<std::size_t>(tile_y) *
-                    observation.map_width_tiles + tile_x;
-                if (tile_index < observation.tiles.size() &&
-                    observation.tiles[tile_index].explored) {
-                    continue;  // already checked; do not camp an empty start
-                }
-                if (march_x < 0 || distance < best_distance) {
-                    best_distance = distance;
-                    march_x = sx;
-                    march_y = sy;
-                }
-            }
-        }
-        if (march_x < 0) {
-            const UnitMovementPoint sweep = nearest_unexplored_point(
-                observation, static_cast<i32>(army_x),
-                static_cast<i32>(army_y));
-            if (sweep.x >= 0) {
-                march_x = sweep.x;
-                march_y = sweep.y;
-                march_marker = kOffenseSweepTargetId;
-            }
-        }
-        if (march_x < 0) {
-            ++state.exploration_index;
-            const UnitMovementPoint cycle =
-                exploration_point(state, observation);
-            march_x = cycle.x;
-            march_y = cycle.y;
-            march_marker = kOffenseSweepTargetId;
-        }
-        if (state.last_offense_target_id == march_marker &&
-            state.last_offense_order_frame != 0xffffffffu &&
-            observation.simulation_frame - state.last_offense_order_frame <
-                kOffenseReorderFrames) {
-            return actions;
-        }
-        state.last_offense_target_id = march_marker;
-        state.last_offense_order_frame = observation.simulation_frame;
-        AiSemanticAction march{};
-        march.kind = AiSemanticActionKind::attack_move;
-        march.unit_ids = std::move(fighters);
-        march.target_x = march_x;
-        march.target_y = march_y;
-        for (AiSemanticAction& chunk : ChunkAiSemanticActionUnits(march)) {
-            actions.push_back(std::move(chunk));
-        }
-        return actions;
-    }
-    if (target->id == state.last_offense_target_id &&
-        state.last_offense_order_frame != 0xffffffffu &&
-        observation.simulation_frame - state.last_offense_order_frame <
-            kOffenseReorderFrames) {
-        return actions;
-    }
-    state.last_offense_target_id = target->id;
-    state.last_offense_order_frame = observation.simulation_frame;
-
-    AiSemanticAction action{};
-    action.kind = AiSemanticActionKind::attack_unit;
-    action.unit_ids = std::move(fighters);
-    action.target_unit_id = target->id;
-    for (AiSemanticAction& chunk : ChunkAiSemanticActionUnits(action)) {
-        actions.push_back(std::move(chunk));
-    }
-    return actions;
-}
 
 std::vector<AiSemanticAction> ChunkAiSemanticActionUnits(
     const AiSemanticAction& action) {

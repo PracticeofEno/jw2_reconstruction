@@ -107,6 +107,9 @@ struct P2PNetworkLaunchParameters {
     // its per-decision observations to ai_rl_observe.jsonl for imitation
     // learning (behavior-cloning the built-in AI into the high-level policy).
     bool self_play_imitate = false;
+    // -AIIMITOWNER:N — with -AIREPLAY + -AIIMITATE, the recorded owner slot to
+    // log (a human player's replay).  0xff = the replay's own local player.
+    u32 self_play_imitate_owner = 0xffu;
     // -AIIPC:PORT — online policy-in-the-loop: the Computer(AI) owner asks a
     // Python policy server on 127.0.0.1:PORT for each high-level action instead
     // of sampling randomly.  0 = disabled.

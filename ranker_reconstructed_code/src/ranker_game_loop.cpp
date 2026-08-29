@@ -252,17 +252,20 @@ void UpdateGameplayFramePhaseFlags(GameplayLoopState& state) {
     set_phase_flags(state, false, false, false, false);
     RefreshGameplayLoopTick(state);
 
-    if (update_replay_frame_flags(state)) {
-        return;
-    }
-
     if (state.fast_uncapped) {
         // Simulate every iteration with no wall-clock wait; present sparsely so
         // the headless window keeps pumping messages without paying the D3D
-        // present cost each frame.
+        // present cost each frame.  Checked BEFORE the replay timing gate so a
+        // headless replay playback (-AISELF -AIREPLAY) is not paced to the
+        // recording's real-time speed either.
+        state.replay_simulation_suppressed = false;
         ++state.fast_present_counter;
         const bool present = (state.fast_present_counter & 0x3fu) == 0u;
         set_phase_flags(state, true, true, true, present);
+        return;
+    }
+
+    if (update_replay_frame_flags(state)) {
         return;
     }
 

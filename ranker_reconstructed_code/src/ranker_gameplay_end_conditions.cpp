@@ -63,8 +63,15 @@ bool unit_owner_active_slot(u32 owner) {
     return owner < kPlayerSlotCount;
 }
 
+bool owner_eliminated(const GameplayEndConditionState& state, u32 owner) {
+    return valid_player_slot(owner) && state.owner_eliminated[owner];
+}
+
 bool unit_matches_owner(const GameplayEndConditionState& state, u32 owner,
     bool (*type_predicate)(u32), bool exclude_special_elite) {
+    if (owner_eliminated(state, owner)) {
+        return false;  // razed: leftover units do not keep the owner alive
+    }
     for (const GameplayEndUnit* unit : state.active_units) {
         if (unit == nullptr || !live_unit(*unit) || !unit_owned_by(*unit, owner)) {
             continue;
@@ -81,6 +88,9 @@ bool unit_matches_owner(const GameplayEndConditionState& state, u32 owner,
 
 bool active_list_has_normal_defeat_elite(
     const GameplayEndConditionState& state, u32 owner) {
+    if (owner_eliminated(state, owner)) {
+        return false;
+    }
     for (const GameplayEndUnit* unit : state.active_units) {
         // CheckNoLocalEliteUnitDefeat (0x004d561b) deliberately treats a
         // dead-flagged elite as present until the simulation list moves it
@@ -121,6 +131,15 @@ bool hostile_to_local_strict(const GameplayEndConditionState& state, u32 owner) 
         return false;
     }
     const u32 local = state.local_player_slot;
+    // The local player's own units are never hostile to the local player.
+    // The mutual-relation test below also demands both slots' bits in the
+    // global-active mask, which melee only sets for Computer / observer /
+    // departed slots — a human slot lacks it, so the test used to count the
+    // human's own buildings as hostile and no melee-vs-Computer game could be
+    // won (observed live: razed every Computer building, no victory).
+    if (owner == local) {
+        return false;
+    }
     return !mutually_related_active_pair(*state.players, local, owner);
 }
 
@@ -134,7 +153,8 @@ bool hostile_to_local_relation_only(const GameplayEndConditionState& state, u32 
 bool hostile_unit_exists(const GameplayEndConditionState& state,
     bool (*type_predicate)(u32), bool strict_relation) {
     for (const GameplayEndUnit* unit : state.active_units) {
-        if (unit == nullptr || !unit_owner_active_slot(unit->owner_id)) {
+        if (unit == nullptr || !unit_owner_active_slot(unit->owner_id) ||
+            owner_eliminated(state, unit->owner_id)) {
             continue;
         }
         const bool hostile = strict_relation ?
@@ -248,10 +268,30 @@ void ApplyGameplayEndConditionSessionModeDefaults(
     }
 }
 
+void RefreshGameplayEndOwnerElimination(GameplayEndConditionState& state) {
+    std::array<bool, kPlayerSlotCount> has_building{};
+    for (const GameplayEndUnit* unit : state.active_units) {
+        if (unit == nullptr || !live_unit(*unit) ||
+            !valid_player_slot(unit->owner_id) ||
+            !victory_elite_unit_type(unit->type_id)) {
+            continue;
+        }
+        has_building[unit->owner_id] = true;
+    }
+    for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+        if (has_building[owner]) {
+            state.owner_had_building[owner] = true;
+        }
+        state.owner_eliminated[owner] =
+            state.owner_had_building[owner] && !has_building[owner];
+    }
+}
+
 void TickGameplayEndConditionMonitor(GameplayEndConditionState& state) {
     if ((state.frame_counter & 0x3f) != 0 || state.scenario_ai_profile_override) {
         return;
     }
+    RefreshGameplayEndOwnerElimination(state);
 
     if (state.generic_ai_profile_mode == 1) {
         CheckLocalDefeatCondition(state);

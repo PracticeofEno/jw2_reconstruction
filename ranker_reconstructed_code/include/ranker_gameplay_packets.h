@@ -347,6 +347,13 @@ Mode1GameplayPacketDispatchState& mode1_gameplay_packet_dispatch_state();
 void ResetMode1GameplayPacketDispatch();
 void SetMode1GameplayPacketHandler(u8 subtype, Mode1GameplayPacketHandler handler);
 void SetMode1GameplayPacketDispatchUserData(void* user_data);
+// Read-only observer of EVERY dispatched Mode1 gameplay packet (live and
+// replay playback alike), called before the subtype handler.  Used by the
+// replay-imitation logger to label a human player's decisions from the
+// recorded packets.  nullptr disables.
+using Mode1GameplayPacketTap = void (*)(const Mode1ReliablePacket& packet,
+    void* user_data);
+void SetMode1GameplayPacketTap(Mode1GameplayPacketTap tap, void* user_data);
 void SetMode1GameplayRuntimeCallbacks(
     const Mode1GameplayRuntimeCallbacks& callbacks,
     void* user_data = nullptr);

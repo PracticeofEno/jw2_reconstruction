@@ -238,6 +238,10 @@ AiObservationBuildResult BuildAiObservationV1(
         observed.visible = true;
         observed.alive = (unit->command_state & kUnitCommandDead) == 0;
         observed.under_construction = unit->under_construction;
+        observed.attack_range = unit->definition.action_range_base;
+        observed.sight_range =
+            unit->definition.effect_adjusted_interaction_range_base;
+        observed.transport_capacity = unit->definition.transport_capacity;
 
         if (controlled) {
             observed.command_state = unit->command_state;

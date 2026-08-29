@@ -19,7 +19,15 @@ namespace ranker {
 // the live validator remains authoritative at execution time.
 
 // v3: clamped normalization + frame scale 60000 (same layout/count as v2).
-constexpr u32 kAiRlFeatureVersion = 3u;
+// v4: +6 executor/combat features [80..85], harvest_saturate removed (the
+// micro executor keeps idle workers mining every frame; the action had no
+// effect left and was permanently masked).
+// v5: +445 = 8x8 spatial grid x6 channels [86..469], start cell [470..471],
+// direction/distance vectors [472..486], enemy composition/tribe [487..497],
+// own-army state [498..508], production pipeline [509..525], scout
+// [526..530].  Everything the v4 encoder threw away (map, enemy types,
+// per-unit state, queues, scout) is now summarized; layout is append-only.
+constexpr u32 kAiRlFeatureVersion = 5u;
 
 // High-level (strategy) action space the RL policy samples from.
 enum class AiRlHighLevelAction : u32 {
@@ -31,8 +39,6 @@ enum class AiRlHighLevelAction : u32 {
     build_egg_nest,
     build_land_nest,
     expand_base_nest,
-    research_next,
-    harvest_saturate,
     scout_map,
     attack_nearest_enemy,
     attack_enemy_base,
@@ -74,15 +80,67 @@ enum class AiRlHighLevelAction : u32 {
     hold_army,          // hold position at the current spot
     patrol_defense,     // patrol base <-> nearest resource cluster
     drop_attack,        // 둥가리 board -> enemy start -> unload (autopilot)
+    // Per-order research (replaces the single research_next walker, so the
+    // policy chooses WHAT to research).  Audited Tyrano tree: see
+    // kAiRlResearchActions for order id / researcher building / levels / cost.
+    research_harvest,          // 0x14 베리 채집량 증가        (티라노 네스트)
+    research_ground_attack,    // 0x19 지상 유닛 공격 업 x5     (랜드 네스트)
+    research_ground_defense,   // 0x1a 지상 유닛 방어 업 x5     (랜드 네스트)
+    research_movement,         // 0x16 벨로시스·딜로포스 속도   (랜드 네스트)
+    research_air_attack,       // 0x1c 공중 유닛 공격 업 x5     (스카이 네스트)
+    research_air_defense,      // 0x1d 공중 유닛 방어 업 x5     (스카이 네스트)
+    research_mutant_merge,     // 0x18 뮤턴트 합체             (스카이 네스트)
+    research_morph,            // 0x2a 공룡 변신               (티라노 네스트)
+    research_haste,            // 0x38 헤이스트                (티라노 네스트)
+    research_exp_down,         // 0x2b 레벨 업 경험치 감소      (티라노 네스트)
+    research_melee_reinforce,  // 0x1b 근접 강화               (랜드 니스도스)
+    research_triceps_speed,    // 0x2d 트리세스 속도            (랜드 니스도스)
+    research_air_reinforce,    // 0x1e 공중 강화               (스카이 니스도스)
 };
 
-constexpr std::size_t kAiRlActionCount = 41;
+constexpr std::size_t kAiRlActionCount = 52;
+
+// One row per research action: the production order it starts, the building
+// type that researches it (session completion_references), the level cap and
+// the primary cost per current level (ai_techtree_audit.txt cost_v0..v2).
+struct AiRlResearchAction {
+    AiRlHighLevelAction action;
+    u32 order;
+    u32 researcher_type;
+    u8 max_levels;
+    u32 cost_by_level[3];
+};
+constexpr std::size_t kAiRlResearchActionCount = 13;
+constexpr AiRlResearchAction kAiRlResearchActions[kAiRlResearchActionCount] = {
+    {AiRlHighLevelAction::research_harvest,         0x14u, 0x80u, 1, {500, 500, 500}},
+    {AiRlHighLevelAction::research_ground_attack,   0x19u, 0x85u, 5, {200, 400, 600}},
+    {AiRlHighLevelAction::research_ground_defense,  0x1au, 0x85u, 5, {200, 400, 600}},
+    {AiRlHighLevelAction::research_movement,        0x16u, 0x85u, 1, {400, 400, 400}},
+    {AiRlHighLevelAction::research_air_attack,      0x1cu, 0x86u, 5, {200, 400, 600}},
+    {AiRlHighLevelAction::research_air_defense,     0x1du, 0x86u, 5, {200, 400, 600}},
+    {AiRlHighLevelAction::research_mutant_merge,    0x18u, 0x86u, 1, {300, 300, 300}},
+    {AiRlHighLevelAction::research_morph,           0x2au, 0x80u, 1, {300, 300, 300}},
+    {AiRlHighLevelAction::research_haste,           0x38u, 0x80u, 1, {300, 300, 300}},
+    {AiRlHighLevelAction::research_exp_down,        0x2bu, 0x80u, 1, {500, 700, 1000}},
+    {AiRlHighLevelAction::research_melee_reinforce, 0x1bu, 0x89u, 1, {600, 600, 600}},
+    {AiRlHighLevelAction::research_triceps_speed,   0x2du, 0x89u, 1, {500, 500, 500}},
+    {AiRlHighLevelAction::research_air_reinforce,   0x1eu, 0x8au, 1, {600, 600, 600}},
+};
+constexpr const AiRlResearchAction* FindAiRlResearchAction(
+    AiRlHighLevelAction action) {
+    for (const AiRlResearchAction& entry : kAiRlResearchActions) {
+        if (entry.action == action) {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
 
 // Fixed feature-vector layout (see the .cpp for the exact per-index meaning).
 // v1: 36 base + 3 research levels + 3 neutral-monster + 4 tech-tree = 46.
 // v2 appends: 10 research levels, 11 unit counts, 4 building counts, and 9
 // mechanic aggregates (stance/morph/transport/army/queue state) = 80.
-constexpr std::size_t kAiRlFeatureCount = 80;
+constexpr std::size_t kAiRlFeatureCount = 531;
 
 struct AiRlStepEncoding {
     // Normalized policy/value-network input.
