@@ -1130,6 +1130,102 @@ void test_tyrano_scripted_bot() {
         "scripted bot did not resume worker production after funding it");
 }
 
+// The idle set is defined positively: only runtime states 0x00 (no command)
+// and 0x01 (idle/auto-acquire) with an empty command queue count.  Anything
+// else -- travelling, harvesting, carrying, or holding a queued order -- is
+// busy, and a worker that merely harvested at some point in the past must not
+// stay excluded forever because of the stale cargo_amount union.
+void test_idle_worker_detection() {
+    AiObservation observation{};
+    observation.map_width_tiles = 64;
+    observation.map_height_tiles = 64;
+    observation.local_owner = 0;
+    observation.local_faction = kTyranoFactionId;
+    observation.active_owner_mask = 1;
+    observation.local_relation_mask = 1;
+    observation.start_x = 320;
+    observation.start_y = 320;
+    observation.tiles.resize(
+        observation.map_width_tiles * observation.map_height_tiles);
+    constexpr u32 kResourceTileX = 12;
+    constexpr u32 kResourceTileY = 9;
+    AiObservedMapTile& resource = observation.tiles[
+        kResourceTileY * observation.map_width_tiles + kResourceTileX];
+    resource.passable = true;
+    resource.explored = true;
+    resource.visible = true;
+    resource.resource_amount = 4000;
+    constexpr u32 kWorkerCapabilities = (1u << 4) | (1u << 5) | (1u << 7);
+
+    const auto worker = [&](u32 id) {
+        return observed_unit(id, 0, kTyranoWorkerType, kWorkerCapabilities,
+            300, 300, true);
+    };
+
+    // 0x00 (no command) and 0x01 (idle/auto-acquire) are the only idle states.
+    AiObservedUnit no_command = worker(0x1000);
+    no_command.command_state = 0;
+    AiObservedUnit idle_acquire = worker(0x1001);
+    idle_acquire.command_state = kUnitStateRuntimeIdleAcquire;
+    // Deposited its cargo long ago: command_flags bit 2 is clear, but the
+    // cargo_amount union still holds the last harvested amount.
+    AiObservedUnit deposited = worker(0x1002);
+    deposited.command_state = kUnitStateRuntimeIdleAcquire;
+    deposited.cargo_amount = 8;
+    // Idle-looking state, but a queued command resumes work next tick.
+    AiObservedUnit queued = worker(0x1003);
+    queued.command_state = kUnitStateRuntimeIdleAcquire;
+    queued.deferred_command_count = 1;
+    queued.deferred_commands.resize(1);
+    // Walking somewhere on a move order.
+    AiObservedUnit travelling = worker(0x1004);
+    travelling.command_state = kUnitStateTravel;
+    // Inside the harvest cycle.
+    AiObservedUnit approaching = worker(0x1005);
+    approaching.command_state = kUnitStateWorkerApproachHarvest;
+    AiObservedUnit mining = worker(0x1006);
+    mining.command_state = kUnitStateWorkerHarvestTile;
+    // Knocked out of the harvest states but still carrying.
+    AiObservedUnit carrying = worker(0x1007);
+    carrying.command_state = kUnitStateRuntimeAttackTarget;
+    carrying.command_flags = 4u;
+    // The lockout/deferred-entry high bits must not hide the real state.
+    AiObservedUnit locked_mining = worker(0x1008);
+    locked_mining.command_state = kUnitStateWorkerHarvestTile | 0x40000000u;
+
+    observation.units = {no_command, idle_acquire, deposited, queued,
+        travelling, approaching, mining, carrying, locked_mining};
+
+    const std::vector<AiSemanticAction> actions =
+        PlanTyranoIdleWorkerHarvest(observation, observation.units.size(), {});
+    std::vector<u32> assigned;
+    for (const AiSemanticAction& action : actions) {
+        require(action.kind == AiSemanticActionKind::harvest &&
+            action.unit_ids.size() == 1,
+            "idle worker autopilot emitted a malformed harvest action");
+        assigned.push_back(action.unit_ids[0]);
+    }
+    std::sort(assigned.begin(), assigned.end());
+    const std::vector<u32> expected{0x1000, 0x1001, 0x1002};
+    require(assigned == expected,
+        "idle worker autopilot did not select exactly the standing-still workers");
+
+    // Excluding a unit still has to work on top of the idle filter.
+    const std::vector<AiSemanticAction> excluded =
+        PlanTyranoIdleWorkerHarvest(observation, observation.units.size(),
+            {0x1001, 0x1002});
+    require(excluded.size() == 1 && excluded[0].unit_ids.size() == 1 &&
+        excluded[0].unit_ids[0] == 0x1000,
+        "idle worker autopilot ignored its exclusion list");
+
+    // A dead or still-building worker is never idle.
+    observation.units = {no_command, idle_acquire};
+    observation.units[0].alive = false;
+    observation.units[1].under_construction = true;
+    require(PlanTyranoIdleWorkerHarvest(observation, 4, {}).empty(),
+        "idle worker autopilot ordered a dead or incomplete worker to harvest");
+}
+
 void add_observed_type(AiObservation& observation, u32 type_id, u32 count,
     u32& next_id) {
     for (u32 index = 0; index < count; ++index) {
@@ -1685,6 +1781,7 @@ int main() {
     test_semantic_action_v2_planning();
     test_live_validation_adapter();
     test_tyrano_scripted_bot();
+    test_idle_worker_detection();
     test_tyrano_replay_derived_build_order();
     test_ai_rl_reward();
     test_ai_rl_trace();

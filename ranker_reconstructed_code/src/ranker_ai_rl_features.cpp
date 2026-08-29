@@ -62,19 +62,27 @@ float norm(u32 value, float scale) {
     return std::min(static_cast<float>(value) / scale, 1.0f);
 }
 
-// Worker "currently gathering" heuristic, mirroring the scripted bot's
+// Worker "currently gathering", mirroring the scripted bot's
 // unit_is_harvesting so features agree with the policy's own view.
+// cargo_amount is deliberately NOT consulted: raw +0x4c is a state-dependent
+// union that ProcessWorkerDepositCargo never clears, so it stays non-zero for
+// the rest of the game once a worker has mined once.
 bool unit_is_harvesting(const AiObservedUnit& unit) {
     const u32 state = unit.command_state & kUnitCommandStateMask;
     return (state >= kUnitStateWorkerApproachHarvest &&
             state <= kUnitStateWorkerHarvestFailed) ||
-        unit.cargo_amount != 0 || (unit.command_flags & 4u) != 0;
+        (unit.command_flags & 4u) != 0;
 }
 
-bool unit_is_constructing(const AiObservedUnit& unit) {
+// Literally standing around doing nothing: runtime idle states 0x00/0x01 with
+// an empty command queue.  Mirrors the scripted bot's unit_is_idle.
+bool unit_is_idle(const AiObservedUnit& unit) {
+    if (!unit.controlled || !unit.alive || unit.under_construction ||
+        unit.deferred_command_count != 0) {
+        return false;
+    }
     const u32 state = unit.command_state & kUnitCommandStateMask;
-    return state >= kUnitStateLegacySpawnPlacementStart &&
-        state <= kUnitStateLegacySpawnPlacementApproach;
+    return state == 0u || state == kUnitStateRuntimeIdleAcquire;
 }
 
 bool is_completed_owned_type(const AiObservedUnit& unit, u32 type_id) {
@@ -173,8 +181,7 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
             if (u.type_id >= kMobileTypeLimit) {
                 queue_depth += u.deferred_command_count;
             }
-            if (u.type_id == kTypeWorker &&
-                ((u.command_flags & 4u) != 0 || u.cargo_amount != 0)) {
+            if (u.type_id == kTypeWorker && (u.command_flags & 4u) != 0) {
                 ++cargo_workers;
             }
             if (!uc && u.type_id < kMobileTypeLimit) {
@@ -199,7 +206,7 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
                 ++workers;
                 if (uc) ++worker_uc;
                 else if (unit_is_harvesting(u)) ++harvesting;
-                else if (!unit_is_constructing(u)) ++idle_workers;
+                else if (unit_is_idle(u)) ++idle_workers;
                 break;
             case kTypeMasos: ++masos; if (uc) ++masos_uc; break;
             case kTypeUnit22: ++unit22; if (uc) ++unit22_uc; break;

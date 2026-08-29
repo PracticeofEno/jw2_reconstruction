@@ -71,9 +71,30 @@ bool unit_can_harvest(const AiObservedUnit& unit) {
 
 bool unit_is_harvesting(const AiObservedUnit& unit) {
     const u32 state = unit.command_state & kUnitCommandStateMask;
+    // cargo_amount (raw +0x4c) is a state-dependent union that
+    // ProcessWorkerDepositCargo never resets, so it stays non-zero forever
+    // once a worker has mined once.  command_flags bit 2 is set only by
+    // ProcessWorkerHarvestTile and cleared only on deposit, so it is the
+    // reliable "carrying harvested cargo" signal.
     return (state >= kUnitStateWorkerApproachHarvest &&
             state <= kUnitStateWorkerHarvestFailed) ||
-        unit.cargo_amount != 0 || (unit.command_flags & 4u) != 0;
+        (unit.command_flags & 4u) != 0;
+}
+
+// Literally standing around doing nothing: the runtime idle states (0x00 = no
+// command at all, 0x01 = idle/auto-acquire) with an empty command queue.
+// ProcessUnitIdleAcquireCommand pops a deferred command before anything else,
+// so a unit sitting in 0x01 with a non-empty queue resumes work next tick and
+// is not a reassignment candidate.  Defining idle positively (rather than as
+// "not harvesting and not constructing") keeps workers that are travelling,
+// fighting back, fleeing or mid-order out of the idle set.
+bool unit_is_idle(const AiObservedUnit& unit) {
+    if (!unit.controlled || !unit.alive || unit.under_construction ||
+        unit.deferred_command_count != 0) {
+        return false;
+    }
+    const u32 state = unit.command_state & kUnitCommandStateMask;
+    return state == 0u || state == kUnitStateRuntimeIdleAcquire;
 }
 
 bool unit_is_constructing(const AiObservedUnit& unit) {
@@ -201,7 +222,7 @@ HarvestAssignment nearest_visible_resource_assignment(
 
     for (const AiObservedUnit* worker : workers) {
         if (worker == nullptr || !unit_can_harvest(*worker) ||
-            unit_is_harvesting(*worker) || unit_is_constructing(*worker)) {
+            !unit_is_idle(*worker)) {
             continue;
         }
         for (u32 tile_index = 0; tile_index < observation.tiles.size();
@@ -1529,8 +1550,7 @@ std::vector<AiSemanticAction> PlanTyranoIdleWorkerHarvest(
     std::vector<AiSemanticAction> actions;
     std::vector<const AiObservedUnit*> idle;
     for (const AiObservedUnit& unit : observation.units) {
-        if (unit.controlled && unit.alive && unit_can_harvest(unit) &&
-            !unit_is_harvesting(unit) && !unit_is_constructing(unit) &&
+        if (unit_is_idle(unit) && unit_can_harvest(unit) &&
             std::find(exclude_unit_ids.begin(), exclude_unit_ids.end(),
                 unit.id) == exclude_unit_ids.end()) {
             idle.push_back(&unit);
