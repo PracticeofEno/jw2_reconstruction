@@ -63,27 +63,6 @@ def save_gate_replays(install: Path, gen: int, promoted: bool,
             shutil.copy2(result, replays_dir / f"{name}.result.json")
         return True
 
-    def challenger_won(index):
-        """Judge the challenger's side of one gate game from its result JSON:
-        elimination (buildings) > surviving unit value > unit count — the
-        league's own ordering.  A1 games have the challenger as owner 1, B1
-        games as owner 2."""
-        result_path = league_dir / f"w{index}" / "ai_selfplay_result.json"
-        if not result_path.exists():
-            return False
-        try:
-            result = json.loads(result_path.read_text())
-        except json.JSONDecodeError:
-            return False
-        owners = {o["owner"]: o for o in result.get("owners", [])}
-        challenger = owners.get(1 if index % 2 == 0 else 2)
-        champion = owners.get(2 if index % 2 == 0 else 1)
-        if not challenger or not champion:
-            return False
-        key = lambda o: (o.get("buildings", 0) > 0, o.get("unit_value", 0),
-                         o.get("units", 0))
-        return key(challenger) > key(champion)
-
     saved = 0
     if promoted:
         for index in range(pairs * 2):
@@ -92,12 +71,6 @@ def save_gate_replays(install: Path, gen: int, promoted: bool,
             if copy_game(index,
                          f"AI_gate_gen{gen:03d}_PROMOTED_seed{seed}_{side}"):
                 saved += 1
-            # Champion-change showcase (user directive): every game the NEW
-            # champion (the challenger) actually won, under an unmistakable
-            # name — the replays to watch when the champion changes.
-            if challenger_won(index):
-                copy_game(index,
-                          f"AI_champion_gen{gen:03d}_seed{seed}_{side}")
     else:
         # Rejected gate: keep 3 random games (user directive — a random
         # sample shows typical play; the single best-win cherry-picked).
