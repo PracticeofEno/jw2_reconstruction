@@ -95,6 +95,11 @@ constexpr std::size_t kTyranoScriptedBotIntentCount = 24;
 struct TyranoScriptedBotState {
     u32 last_decision_frame = 0xffffffffu;
     u32 placement_probe_index = 0;
+    // Centre of the spiral placement probe in TILES (-1 = the own start).
+    // expand_base_nest points it at the chosen expansion site so the
+    // placement retries stay around that site instead of the main base.
+    i32 placement_center_tile_x = -1;
+    i32 placement_center_tile_y = -1;
     u32 exploration_index = 0;
     u32 decisions_emitted = 0;
     u32 actions_committed = 0;
@@ -116,22 +121,9 @@ struct TyranoScriptedBotState {
     u32 drop_stage_frame = 0xffffffffu;
     i32 drop_target_x = 0;
     i32 drop_target_y = 0;
-    // Mop-up memory: last-known positions of enemy BUILDINGS ever seen.
-    // Refreshed from each observation; an entry is dropped once its tile is
-    // currently visible without that building (confirmed razed).  This is
-    // what lets the army finish a relocated/hidden base instead of
-    // stalemating at the frame cap once the visible base is gone.
-    // Observation-driven only, so P2P-deterministic.
-    struct RememberedEnemyBuilding {
-        u32 id = 0;
-        i32 x = 0;
-        i32 y = 0;
-    };
-    static constexpr std::size_t kRememberedEnemyBuildingCapacity = 24;
-    std::array<RememberedEnemyBuilding, kRememberedEnemyBuildingCapacity>
-        remembered_enemy_buildings{};
-    u32 remembered_enemy_building_count = 0;
-    u32 building_memory_frame = 0xffffffffu;
+    // (Enemy-building memory lives in the observation now -
+    // AiObservation::enemy_building_memory, maintained by the AI-play pump -
+    // and the micro executor reads it for the attack_enemy_base march point.)
     std::array<u32, kTyranoScriptedBotIntentCount> intent_retry_after_frame{};
     bool rally_configured = false;
     bool harvest_upgrade_requested = false;

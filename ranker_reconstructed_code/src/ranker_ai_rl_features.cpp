@@ -3,6 +3,7 @@
 #include <array>
 
 #include "ranker_ai_actions.h"
+#include "ranker_ai_expansion.h"
 #include "ranker_unit_commands.h"
 
 #include <algorithm>
@@ -116,11 +117,34 @@ i64 sq_dist(i32 ax, i32 ay, i32 bx, i32 by) {
 
 } // namespace
 
+// Audited primary cost of a structure type (ai_techtree_audit.txt); 0 for an
+// unknown type.  Used by the reservation accounting below.
+u32 building_cost_of(u32 type_id) {
+    switch (type_id) {
+    case 0x80u: return kBaseNestCost;
+    case 0x82u: return kPopulationNestCost;
+    case 0x83u: return kNest83Cost;
+    case 0x84u: return kEggNestCost;
+    case 0x85u: return kLandNestCost;
+    case 0x86u: return kNest86Cost;
+    case 0x87u: return kNest87Cost;
+    case 0x88u: return kNest88Cost;
+    case 0x89u: return kNest89Cost;
+    case 0x8au: return kNest8aCost;
+    default: return 0u;
+    }
+}
+
 AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
     AiRlStepEncoding out{};
 
     // --- Aggregate the unit list once ---
     u32 workers = 0, worker_uc = 0, harvesting = 0, idle_workers = 0;
+    // Reservation accounting: cost of every structure a worker is walking to
+    // build (not yet debited by the engine).  Masks and features use
+    // primary - reserved, so the policy cannot spend money it already
+    // committed and have the build fail on arrival.
+    u32 reserved_resources = 0, builds_in_flight = 0, nest_walkers = 0;
     u32 masos = 0, masos_uc = 0, dilophos = 0, dilophos_uc = 0;
     u32 base = 0, base_uc = 0, popnest = 0, popnest_uc = 0;
     u32 egg = 0, egg_uc = 0, land = 0, land_uc = 0;
@@ -176,6 +200,13 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
         if (u.controlled && u.alive) {
             ++own_total;
             const bool uc = u.under_construction;
+            if (const u32 walking = AiWalkingBuildTypeOf(u)) {
+                reserved_resources += building_cost_of(walking);
+                ++builds_in_flight;
+                if (walking == 0x80u) {
+                    ++nest_walkers;
+                }
+            }
             if (!uc && u.type_id >= 0x20u && u.type_id < 0x30u) {
                 ++roster_counts[u.type_id - 0x20u];
             }
@@ -495,6 +526,10 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
         observation.army_pulling_back) / static_cast<float>(own_army), 1.0f)
         : 0.0f);                           // 85 fighters pulling back (low hp)
 
+    // An enemy building is KNOWN: visible now, or remembered in the fog
+    // memory (set in the v5 memory pass below).  Gates attack_enemy_base
+    // (needs one) against search_enemy_base (needs none).
+    bool enemy_base_known = enemy_building > 0;
 
     // ======================================================================
     // v5 features [86..530] — the information the v4 vector discarded.
@@ -570,15 +605,17 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
                 const AiObservedMapTile& tile = observation.tiles[t];
                 if (tile.explored) {
                     g_explored[c] += 1.0f;
-                    if (tile.passable) {
-                        g_resource[c] += static_cast<float>(tile.resource_amount);
-                    }
                 }
+                // Berries are public map knowledge (v7): the known amount is
+                // summed whether or not the tile has been explored.  (Berry
+                // tiles are not `passable` - engine class 0x100.)
+                g_resource[c] += static_cast<float>(tile.resource_amount);
                 if (have_memory && observation.enemy_building_memory[t] != 0 &&
                     !tile.visible) {
                     // Visible tiles are covered by the live unit pass above.
                     g_enemy_building[c] += 1.0f;
                     remembered_buildings.push_back({wx, wy});
+                    enemy_base_known = true;
                 }
             }
         }
@@ -815,11 +852,97 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
         }
     }
 
+    // ======================================================================
+    // v6 features [531..533] - what the army group is running right now.
+    // ======================================================================
+    put(objective == 6u ? 1.0f : 0.0f);    // 531 search  (AiMicroObjectiveKind::search + 1)
+    // Attack tactic one-hot (units_first = both zero); meaningful with 82.
+    put(objective == 2u && observation.army_attack_tactic == 1u ? 1.0f : 0.0f); // 532 buildings_first
+    put(objective == 2u && observation.army_attack_tactic == 2u ? 1.0f : 0.0f); // 533 neutral_only
+
+    // ======================================================================
+    // v7 features [534..540] - expansion: where the next base nest goes and
+    // whether it can be ordered yet, plus the reservation accounting.
+    // ======================================================================
+    const AiExpansionPlan expansion = ComputeAiExpansionPlan(observation);
+    {
+        // own start -> next expansion site: dx, dy ((v+1)/2), distance/2048,
+        // lit (explored -> expand_base_nest can be ordered).
+        const i32 home_x = std::max(observation.start_x, 0);
+        const i32 home_y = std::max(observation.start_y, 0);
+        if (expansion.has_target) {
+            const double dx = static_cast<double>(expansion.target_x - home_x);
+            const double dy = static_cast<double>(expansion.target_y - home_y);
+            const double length = std::sqrt(dx * dx + dy * dy);
+            put(length > 0.0 ? static_cast<float>((dx / length + 1.0) / 2.0) : 0.5f); // 534
+            put(length > 0.0 ? static_cast<float>((dy / length + 1.0) / 2.0) : 0.5f); // 535
+            put(std::min(static_cast<float>(length / 2048.0), 1.0f));              // 536
+            put(expansion.target_explored ? 1.0f : 0.0f);                          // 537
+        } else {
+            put(0.5f); put(0.5f); put(1.0f); put(0.0f);
+        }
+        put(observation.berry_scout_unit_id != 0 ? 1.0f : 0.0f);   // 538 berry scout alive
+        put(norm(reserved_resources, 1000.0f));                    // 539 reserved by walking builds
+        put(norm(builds_in_flight, 5.0f));                         // 540 builds walking
+        // A unit stands on the expansion site's footprint (neutral monster,
+        // enemy, or own): the engine refuses the placement while it does.
+        put(expansion.has_target && expansion.target_blocked ? 1.0f : 0.0f); // 541 site blocked
+        // Search split (v7): the single-unit explorer / roamer exist.
+        put(observation.explorer_unit_id != 0 ? 1.0f : 0.0f);     // 542 explorer alive
+        put(observation.roamer_unit_id != 0 ? 1.0f : 0.0f);       // 543 roamer alive
+    }
+    // Map knowledge gates for the split search actions: an unexplored start
+    // candidate left (search_enemy_base), and a frontier tile left - an
+    // unexplored passable tile bordering explored passable ground
+    // (explore_frontier; reachability is the executor's per-unit call, an air
+    // explorer reaches everything).
+    bool unexplored_start_left = false;
+    bool frontier_left = false;
+    {
+        const bool valid = observation.map_width_tiles != 0 &&
+            observation.tiles.size() == static_cast<std::size_t>(
+                observation.map_width_tiles) * observation.map_height_tiles;
+        const u32 w = observation.map_width_tiles;
+        const u32 h = observation.map_height_tiles;
+        for (u32 slot = 0; slot < 8u && valid; ++slot) {
+            if ((observation.start_candidate_mask & (1u << slot)) == 0) continue;
+            const i32 sx = observation.start_candidate_x[slot];
+            const i32 sy = observation.start_candidate_y[slot];
+            if (sx == observation.start_x && sy == observation.start_y) continue;
+            const u32 tx = static_cast<u32>(std::max(sx, 0)) >> 5;
+            const u32 ty = static_cast<u32>(std::max(sy, 0)) >> 5;
+            if (tx < w && ty < h && !observation.tiles[ty * w + tx].explored) {
+                unexplored_start_left = true;
+                break;
+            }
+        }
+        for (u32 ty = 0; ty < h && valid && !frontier_left; ++ty) {
+            for (u32 tx = 0; tx < w; ++tx) {
+                const AiObservedMapTile& tile = observation.tiles[ty * w + tx];
+                if (tile.explored || !tile.passable) continue;
+                const i32 offsets[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+                for (const auto& o : offsets) {
+                    const i64 nx = static_cast<i64>(tx) + o[0];
+                    const i64 ny = static_cast<i64>(ty) + o[1];
+                    if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+                    const AiObservedMapTile& n = observation.tiles[
+                        static_cast<std::size_t>(ny) * w + static_cast<std::size_t>(nx)];
+                    if (n.explored && n.passable) { frontier_left = true; break; }
+                }
+                if (frontier_left) break;
+            }
+        }
+    }
+
     // --- Legal-action mask ---
     auto set_legal = [&](AiRlHighLevelAction a, bool legal) {
         out.legal_mask[static_cast<std::size_t>(a)] = legal ? 1u : 0u;
     };
-    const u32 prim = observation.primary_resources;
+    // Available = owned - reserved by builds still walking (see
+    // walking_build_type_of): the engine debits on arrival, so spending the
+    // reserved part now would make that build fail when the worker gets there.
+    const u32 prim = observation.primary_resources > reserved_resources ?
+        observation.primary_resources - reserved_resources : 0u;
     // Per-unit population gate (audited pop costs): the old single
     // `pop_free > 0` check marked every produce action legal with 1-3 pop
     // left while the validator then rejected the 2-4 pop units — wasted picks.
@@ -828,6 +951,16 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
     };
     const bool has_pop_room = pop_ok(1u);
     const bool has_builder = idle_workers > 0 || harvesting > 0 || workers > 0;
+    // Shared placement rule (v7): an ordinary structure is legal only when a
+    // statically valid, explored, unblocked site for its footprint exists in
+    // the base area - the same site the translator will use, so a legal build
+    // is one the planner accepts (no more "mask open, placement rejected").
+    const AiExpansionConfig placement_config{};
+    const auto site_ok = [&](u32 structure_type) {
+        return FindAiBuildSite(observation, structure_type,
+            std::max(observation.start_x, 0), std::max(observation.start_y, 0),
+            placement_config.base_site_radius_tiles, placement_config).found;
+    };
     const bool completed_base = base > base_uc;   // at least one finished nest
     const bool completed_egg = egg > egg_uc;
     const bool completed_land = land > land_uc;
@@ -852,13 +985,21 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
     set_legal(AiRlHighLevelAction::produce_dilophos,
         producer_free_egg && pop_ok(2u) && prim >= kDilophosCost);
     set_legal(AiRlHighLevelAction::build_population_nest,
-        has_builder && prim >= kPopulationNestCost);
+        has_builder && prim >= kPopulationNestCost && site_ok(0x82u));
     set_legal(AiRlHighLevelAction::build_egg_nest,
-        has_builder && completed_base && prim >= kEggNestCost);
+        has_builder && completed_base && prim >= kEggNestCost && site_ok(0x84u));
     set_legal(AiRlHighLevelAction::build_land_nest,
-        has_builder && completed_egg && prim >= kLandNestCost);
+        has_builder && completed_egg && prim >= kLandNestCost && site_ok(0x85u));
+    // v7 expansion chain, taught by the mask: scout_berry while the next
+    // expansion site is dark, expand_base_nest once it is lit.  Only one nest
+    // build may be WALKING at a time (0x23/0x25 - uncommitted, may still
+    // fail); a nest under construction (paid) does not block the next.
+    set_legal(AiRlHighLevelAction::scout_berry,
+        own_total > 0 && expansion.has_target && !expansion.target_explored);
     set_legal(AiRlHighLevelAction::expand_base_nest,
-        has_builder && prim >= kBaseNestCost);
+        has_builder && prim >= kBaseNestCost && expansion.has_target &&
+        expansion.target_explored && !expansion.target_blocked &&
+        nest_walkers == 0);
     // Per-order research: an IDLE completed researcher building of the right
     // type (re-enqueueing onto a busy one re-debits and resets progress),
     // level below the cap, and the audited cost for the current level.
@@ -872,10 +1013,26 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
             idle_researcher_by_type[entry.researcher_type - 0x80u] &&
             prim >= cost);
     }
-    set_legal(AiRlHighLevelAction::scout_map, own_total > 0);
+    // scout_map posts an early-warning picket between home and the known
+    // enemy base - it needs a known enemy building to stand in front of.
+    set_legal(AiRlHighLevelAction::scout_map, own_total > 0 && enemy_base_known);
+    // v6: the two enemy attack actions differ only in class priority (units
+    // first / buildings first); both need a KNOWN enemy location - a visible
+    // hostile or a remembered building - to march on.  search is for when no
+    // enemy building is known.
     set_legal(AiRlHighLevelAction::attack_nearest_enemy,
-        has_army && have_nearest);
-    set_legal(AiRlHighLevelAction::attack_enemy_base, has_army);
+        has_army && (have_nearest || enemy_base_known));
+    set_legal(AiRlHighLevelAction::attack_enemy_base,
+        has_army && (have_nearest || enemy_base_known));
+    // search_enemy_base: the army sweeps the unexplored start candidates;
+    // done (masked off) once every candidate has been checked.
+    set_legal(AiRlHighLevelAction::search_enemy_base,
+        has_army && unexplored_start_left);
+    // explore_frontier: one unit walks the frontier; off when none is left.
+    // roam_scout: one unit patrols outside the active vision, indefinitely.
+    set_legal(AiRlHighLevelAction::explore_frontier,
+        own_total > 0 && frontier_left);
+    set_legal(AiRlHighLevelAction::roam_scout, own_total > 0);
     set_legal(AiRlHighLevelAction::defend_base, has_army);
     set_legal(AiRlHighLevelAction::retreat, has_army);
     // Hunting needs a fighting force and a visible neutral monster.
@@ -917,17 +1074,20 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
         producer_free_87 && completed_land && pop_ok(4u) &&
         prim >= kUnit2aCost);
     set_legal(AiRlHighLevelAction::build_nest_x86,
-        has_builder && completed_egg && prim >= kNest86Cost);
+        has_builder && completed_egg && prim >= kNest86Cost && site_ok(0x86u));
     set_legal(AiRlHighLevelAction::build_nest_x87,
-        has_builder && completed_egg && prim >= kNest87Cost);
+        has_builder && completed_egg && prim >= kNest87Cost && site_ok(0x87u));
     set_legal(AiRlHighLevelAction::build_nest_x83,
-        has_builder && completed_egg && prim >= kNest83Cost);
+        has_builder && completed_egg && prim >= kNest83Cost && site_ok(0x83u));
     set_legal(AiRlHighLevelAction::build_nest_x88,
-        has_builder && completed_land && completed_86 && prim >= kNest88Cost);
+        has_builder && completed_land && completed_86 && prim >= kNest88Cost &&
+        site_ok(0x88u));
     set_legal(AiRlHighLevelAction::build_nest_x89,
-        has_builder && completed_land && nest88 >= 1 && prim >= kNest89Cost);
+        has_builder && completed_land && nest88 >= 1 && prim >= kNest89Cost &&
+        site_ok(0x89u));
     set_legal(AiRlHighLevelAction::build_nest_x8a,
-        has_builder && completed_86 && nest88 >= 1 && prim >= kNest8aCost);
+        has_builder && completed_86 && nest88 >= 1 && prim >= kNest8aCost &&
+        site_ok(0x8au));
 
     // --- v2 actions (audited mechanics) ---
     // Merges need two completed units of the base type (pair) or the exact

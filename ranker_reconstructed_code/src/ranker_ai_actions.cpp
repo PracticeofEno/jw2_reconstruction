@@ -350,6 +350,29 @@ AiActionPlanResult PlanAiSemanticActionV1(const AiActionPlanInput& input,
         }
         const i32 aligned_x = action.target_x & ~0x1f;
         const i32 aligned_y = action.target_y & ~0x1f;
+        // Fog rule (same as harvest): a structure may only be placed on an
+        // EXPLORED tile.  The engine itself does not check fog here - it
+        // debits the cost on arrival - so this is the AI interface's gate:
+        // an unexplored site must be scouted first (scout_berry), never
+        // ordered blind.  Prefer the explored projection; fall back to
+        // current visibility when explored is absent.
+        {
+            const u64 tile_count = static_cast<u64>(input.movement->map.width) *
+                input.movement->map.height;
+            const std::vector<u8>* vision = input.explored_tiles != nullptr ?
+                input.explored_tiles : input.visible_tiles;
+            if (vision == nullptr || tile_count != vision->size()) {
+                return reject(AiActionPlanCode::invalid_visible_tile_count);
+            }
+            std::size_t compact_index = 0;
+            if (map_cell_at_world_point(input.movement->map, aligned_x,
+                    aligned_y, compact_index) == nullptr) {
+                return reject(AiActionPlanCode::point_out_of_bounds);
+            }
+            if ((*vision)[compact_index] == 0) {
+                return reject(AiActionPlanCode::target_not_visible);
+            }
+        }
         if (input.production_available == nullptr) {
             return reject(AiActionPlanCode::missing_production_validator);
         }

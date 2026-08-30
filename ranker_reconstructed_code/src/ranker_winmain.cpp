@@ -4,6 +4,7 @@
 #include "ranker_change_password.h"
 #include "ranker_change_lobby.h"
 #include "ranker_client_config.h"
+#include "ranker_ai_expansion.h"
 #include "ranker_ai_ipc.h"
 #include "ranker_ai_live_validator.h"
 #include "ranker_ai_rl_reward.h"
@@ -858,6 +859,16 @@ struct RuntimeGlobals {
     std::array<TyranoScriptedBotState, kPlayerSlotCount> ai_play_bots{};
     // Per-owner fog-honest memory of enemy building tiles (v5 features).
     std::array<std::vector<u8>, kPlayerSlotCount> ai_play_enemy_building_memory{};
+    // Per-owner EXPLORED memory (fog-of-war "has ever seen" layer).  The
+    // engine's per-owner explored bits are not persistent for AI owners
+    // (probe-verified: a tile lit by a scout went dark again once it walked
+    // away), so the pump accumulates active vision here and reports that as
+    // `explored` - monotonic, like a human player's fog memory.
+    std::array<std::vector<u8>, kPlayerSlotCount> ai_play_explored_memory{};
+    // Expansion builder timeline diagnostics (headless log only).
+    u32 ai_expand_tracked_unit = 0;
+    u32 ai_expand_tracked_state = 0xffffffffu;
+    u32 ai_expand_tracked_logs = 0;
     // Per-owner RL reward time-series (#4): populated per decision when a
     // learnable policy (currently -AIRANDOM) drives the owner; flushed to
     // ai_rl_reward_trace.json when the self-play match ends.
@@ -22595,6 +22606,88 @@ bool default_ai_play_check_placement(const UnitMovementUnit& source,
     const bool ok = CheckPreviewProductionPlacementFootprintGateCells(
         production, building_type, world_x, world_y, source.id);
     production.ai_relaxed_placement = false;
+    if (!ok && building_type == 0x80u) {
+        // Expansion placement diagnostics (first few rejections): the
+        // footprint cells' placement-map layers, so a rejected site can be
+        // traced to the gate that refused it.
+        static u32 logged = 0;
+        if (logged < 6) {
+            ++logged;
+            const i32 tile_x = world_x >> 5;
+            const i32 tile_y = world_y >> 5;
+            // Replicate the gate's individual checks over the 6x4 footprint
+            // so the log names the one that refused the site.
+            const auto cell_at = [&](i32 cx, i32 cy)
+                -> const GameplayProductionPlacementCell* {
+                if (cx < 0 || cy < 0 ||
+                    static_cast<u32>(cx) >= production.placement_map.width ||
+                    static_cast<u32>(cy) >= production.placement_map.height) {
+                    return nullptr;
+                }
+                return &production.placement_map.cells[
+                    static_cast<std::size_t>(cy) *
+                    production.placement_map.width + cx];
+            };
+            const GameplayProductionPlacementCell* origin = cell_at(tile_x, tile_y);
+            const u32 origin_class = origin != nullptr ?
+                (origin->owner_flags & 0x1c000000u) >> 26 : 99u;
+            u32 bad_terrain = 0, bad_valid = 0, bad_block = 0, bad_class = 0;
+            i32 berry_x = -1, berry_y = -1;
+            u32 units_on = 0, unit_type = 0, unit_owner = 0;
+            i32 unit_tx = -1, unit_ty = -1;
+            for (i32 y = 0; y < 4; ++y) {
+                for (i32 x = 0; x < 6; ++x) {
+                    const i32 cx = tile_x + x;
+                    const i32 cy = tile_y + y;
+                    const GameplayProductionPlacementCell* cell = cell_at(cx, cy);
+                    if (cell == nullptr) { ++bad_terrain; continue; }
+                    if ((cell->terrain_flags & 0x700u) != 0) ++bad_terrain;
+                    if ((cell->owner_flags & 0x80000000u) == 0) ++bad_valid;
+                    if ((cell->route_flags & 0x20000000u) != 0) ++bad_block;
+                    if (((cell->owner_flags & 0x1c000000u) >> 26) != origin_class)
+                        ++bad_class;
+                    for (i32 py = -4; py <= 4 && berry_x < 0; ++py) {
+                        for (i32 px = -4; px <= 4; ++px) {
+                            const GameplayProductionPlacementCell* probe =
+                                cell_at(cx + px, cy + py);
+                            if (probe != nullptr &&
+                                (probe->terrain_flags & 0x700u) == 0x100u) {
+                                berry_x = cx + px; berry_y = cy + py; break;
+                            }
+                        }
+                    }
+                    for (const GameplayProductionUnitState& unit : production.units) {
+                        if (!unit.active || unit.offset == source.id ||
+                            (unit.runtime_flags & 0x80u) != 0 ||
+                            unit.movement_class == 3) {
+                            continue;
+                        }
+                        if ((unit.x >> 5) == cx && (unit.y >> 5) == cy) {
+                            ++units_on; unit_type = unit.type;
+                            unit_owner = unit.owner; unit_tx = cx; unit_ty = cy;
+                        }
+                    }
+                }
+            }
+            append_startup_log("ai-expand: placement rejected type=0x80 at "
+                "tile=(%ld,%ld) owner=%lu: bad_terrain=%lu bad_valid=%lu "
+                "bad_block=%lu bad_class=%lu(origin class %lu) "
+                "berry_within4=(%ld,%ld) units_on_footprint=%lu "
+                "(type=0x%lx owner=%lu at %ld,%ld)",
+                static_cast<long>(tile_x), static_cast<long>(tile_y),
+                static_cast<unsigned long>(owner),
+                static_cast<unsigned long>(bad_terrain),
+                static_cast<unsigned long>(bad_valid),
+                static_cast<unsigned long>(bad_block),
+                static_cast<unsigned long>(bad_class),
+                static_cast<unsigned long>(origin_class),
+                static_cast<long>(berry_x), static_cast<long>(berry_y),
+                static_cast<unsigned long>(units_on),
+                static_cast<unsigned long>(unit_type),
+                static_cast<unsigned long>(unit_owner),
+                static_cast<long>(unit_tx), static_cast<long>(unit_ty));
+        }
+    }
     return ok;
 }
 
@@ -22633,6 +22726,47 @@ bool default_ai_play_unit_active_visible(const UnitMovementUnit& unit,
     }
     return CheckUnitFullActionTargetVisibility(g_runtime.gameplay_player_slots,
         *vision, make_default_gameplay_visibility_unit(unit), local_owner);
+}
+
+// Effective weapon envelope for the AI observation (schema v3).  The engine
+// gates every attack twice and the executor needs both gates:
+//   1) class gate - the damage profile picked by `action_profile_index` must
+//      allow the target's render class (default_unit_action_can_target ->
+//      default_unit_action_profile_allows_target_render_class).  Ordering a
+//      unit onto a class outside the mask is silently rejected and the unit
+//      goes idle, so the executor must never pick such a target.
+//   2) range gate - the reach is NOT `action_range_base`: the engine resolves
+//      it through CalculateUnitActionRangeWithProductionAndEquipmentEffects,
+//      which adds the variant bonus, the completed research effect and the
+//      equipment modifier, and reads a different base stat for a class-3
+//      (flying) target.
+// Research and equipment state is PRIVATE, so those modifiers are applied for
+// controlled units only; a visible opponent keeps the public base stats.
+void default_ai_play_unit_combat_profile(const UnitMovementUnit& unit,
+    bool controlled, AiUnitCombatProfile& profile, void*) {
+    sync_default_unit_action_damage_profiles_from_runtime_catalog();
+    const UnitActionDamageProfileTable& table =
+        g_runtime.gameplay_action_damage_profiles;
+    const u32 profile_index = unit.definition.action_profile_index;
+    // An out-of-range profile index is the engine's "no class restriction"
+    // path, so keep the permissive default mask there.
+    if (profile_index < table.profiles.size()) {
+        profile.attackable_class_mask =
+            table.profiles[profile_index].allowed_target_render_class_mask;
+    }
+    if (!controlled) {
+        return;
+    }
+    const UnitEquipmentCatalog& equipment =
+        frontend_bootstrap_state().equipment_catalog;
+    const ProductionOrderRuntimeState& production =
+        g_runtime.gameplay_production_runtime;
+    profile.attack_range =
+        CalculateUnitActionRangeWithProductionAndEquipmentEffects(
+            production, unit, 0u, &equipment);
+    profile.attack_range_vs_air =
+        CalculateUnitActionRangeWithProductionAndEquipmentEffects(
+            production, unit, 3u, &equipment);
 }
 
 // Live ability validator for AiSemanticActionKind::use_ability.  Applies the
@@ -22740,6 +22874,22 @@ bool build_default_ai_play_observation(GameplayLoopState& state, u32 local_owner
             visible[index] = 1u;
         }
     }
+    // Explored = everything this owner has EVER seen (fog memory), not the
+    // engine's non-persistent per-owner bit.  Accumulated per owner so the
+    // scout lighting an expansion site lights it for good.
+    {
+        std::vector<u8>& explored_memory =
+            g_runtime.ai_play_explored_memory[local_owner];
+        if (explored_memory.size() != tile_count) {
+            explored_memory.assign(tile_count, 0);
+        }
+        for (std::size_t index = 0; index < tile_count; ++index) {
+            if (visible[index] != 0 || explored[index] != 0) {
+                explored_memory[index] = 1u;
+            }
+            explored[index] = explored_memory[index];
+        }
+    }
     AiObservationBuildInput observation_input{};
     observation_input.simulation_frame = state.simulation_frame_counter;
     observation_input.map_relative_path =
@@ -22763,6 +22913,8 @@ bool build_default_ai_play_observation(GameplayLoopState& state, u32 local_owner
     observation_input.visible_tiles = &visible;
     observation_input.unit_visible = default_ai_play_unit_active_visible;
     observation_input.unit_visibility_user_data = &vision_scratch;
+    observation_input.unit_combat_profile =
+        default_ai_play_unit_combat_profile;
     observation_input.resource_memory =
         &g_runtime.ai_play_resource_memory[local_owner];
 
@@ -23224,6 +23376,41 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
     const bool decision_due = bot.last_decision_frame == 0xffffffffu ||
         frame - bot.last_decision_frame >=
             std::max<u32>(bot_config.decision_interval_frames, 1u);
+    // Enemy-building memory, EVERY frame: forget tiles that are lit and
+    // empty, remember every visible hostile building's tile.  The micro
+    // executor reads it each frame (attack_enemy_base marches on the nearest
+    // remembered building once none is in sight) and the encoder on decision
+    // frames (features, attack/search mask).
+    {
+        std::vector<u8>& memory =
+            g_runtime.ai_play_enemy_building_memory[local_owner];
+        const AiObservation& obs = observation.observation;
+        if (memory.size() != obs.tiles.size()) {
+            memory.assign(obs.tiles.size(), 0u);
+        }
+        for (std::size_t t = 0; t < obs.tiles.size(); ++t) {
+            if (obs.tiles[t].visible) {
+                memory[t] = 0u;
+            }
+        }
+        for (const AiObservedUnit& unit : obs.units) {
+            if (unit.controlled || !unit.visible || !unit.alive ||
+                unit.type_id < 0x60u || unit.owner_id >= 8u ||
+                unit.owner_id == obs.local_owner ||
+                (obs.local_relation_mask & (1u << unit.owner_id)) != 0 ||
+                (obs.active_owner_mask & (1u << unit.owner_id)) == 0) {
+                continue;
+            }
+            const std::size_t tile =
+                static_cast<std::size_t>(std::max(unit.y, 0) >> 5) *
+                obs.map_width_tiles +
+                static_cast<std::size_t>(std::max(unit.x, 0) >> 5);
+            if (tile < memory.size()) {
+                memory[tile] = 1u;
+            }
+        }
+        observation.observation.enemy_building_memory = memory;
+    }
     if (rl_mode && decision_due) {
         // RL plumbing: encode the observation, build the legal-action mask,
         // pick one legal high-level action (random / IPC policy), then let the
@@ -23231,15 +23418,18 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
         // a group objective, everything else becomes one semantic action.
         // rand() is seeded deterministically from -SEED so the run is
         // reproducible.  Also emits the per-owner reward time-series (#4).
-        // Executor summary for the v4 features: what the army group is
-        // doing and how many fighters are pulling back (previous frame's
-        // executor state; the executor steps after the decision).
+        // Executor summary for the v4/v6 features: what the army group is
+        // doing (objective kind + attack tactic) and how many fighters are
+        // pulling back (previous frame's executor state; the executor steps
+        // after the decision).
         {
             const AiMicroObjective& army_objective =
                 AiMicroObjectiveOf(bot.micro, AiMicroGroup::army);
             observation.observation.army_objective_kind =
                 army_objective.assigned ?
                 static_cast<u32>(army_objective.kind) + 1u : 0u;
+            observation.observation.army_attack_tactic =
+                static_cast<u32>(army_objective.tactic);
             u32 pulling_back = 0;
             for (const AiMicroUnitRecord& record : bot.micro.units) {
                 if (record.group == AiMicroGroup::army &&
@@ -23253,36 +23443,21 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
                     AiMicroGroup::scout);
             observation.observation.scout_unit_id =
                 scouts.empty() ? 0u : scouts.front()->id;
-            // Enemy-building memory: forget tiles that are lit and empty,
-            // remember every visible hostile building's tile.
-            std::vector<u8>& memory =
-                g_runtime.ai_play_enemy_building_memory[local_owner];
-            const AiObservation& obs = observation.observation;
-            if (memory.size() != obs.tiles.size()) {
-                memory.assign(obs.tiles.size(), 0u);
-            }
-            for (std::size_t t = 0; t < obs.tiles.size(); ++t) {
-                if (obs.tiles[t].visible) {
-                    memory[t] = 0u;
-                }
-            }
-            for (const AiObservedUnit& unit : obs.units) {
-                if (unit.controlled || !unit.visible || !unit.alive ||
-                    unit.type_id < 0x60u || unit.owner_id >= 8u ||
-                    unit.owner_id == obs.local_owner ||
-                    (obs.local_relation_mask & (1u << unit.owner_id)) != 0 ||
-                    (obs.active_owner_mask & (1u << unit.owner_id)) == 0) {
-                    continue;
-                }
-                const std::size_t tile =
-                    static_cast<std::size_t>(std::max(unit.y, 0) >> 5) *
-                    obs.map_width_tiles +
-                    static_cast<std::size_t>(std::max(unit.x, 0) >> 5);
-                if (tile < memory.size()) {
-                    memory[tile] = 1u;
-                }
-            }
-            observation.observation.enemy_building_memory = memory;
+            const std::vector<const AiObservedUnit*> berry_scouts =
+                AiMicroGroupMembers(bot.micro, observation.observation,
+                    AiMicroGroup::berry_scout);
+            observation.observation.berry_scout_unit_id =
+                berry_scouts.empty() ? 0u : berry_scouts.front()->id;
+            const std::vector<const AiObservedUnit*> explorers =
+                AiMicroGroupMembers(bot.micro, observation.observation,
+                    AiMicroGroup::explorer);
+            observation.observation.explorer_unit_id =
+                explorers.empty() ? 0u : explorers.front()->id;
+            const std::vector<const AiObservedUnit*> roamers =
+                AiMicroGroupMembers(bot.micro, observation.observation,
+                    AiMicroGroup::roamer);
+            observation.observation.roamer_unit_id =
+                roamers.empty() ? 0u : roamers.front()->id;
         }
         const AiRlStepEncoding encoding =
             EncodeAiObservationForRl(observation.observation);
@@ -23424,6 +23599,33 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
                 publish_planned_packets(chunk_plan) && all_published;
         }
         CommitTyranoScriptedBotDecision(bot, decision, all_published, worst);
+        if (decision.action.kind == AiSemanticActionKind::build &&
+            decision.action.production_id == kTyranoNestType &&
+            !decision.action.unit_ids.empty()) {
+            // Expansion builder timeline diagnostics: remember the builder and
+            // log its command state transitions until it starts walking.
+            g_runtime.ai_expand_tracked_unit = decision.action.unit_ids[0];
+            g_runtime.ai_expand_tracked_state = 0xffffffffu;
+            for (const AiObservedUnit& unit : observation.observation.units) {
+                if (unit.id != decision.action.unit_ids[0]) {
+                    continue;
+                }
+                append_startup_log("ai-expand: build issued frame=%lu unit=%lu "
+                    "published=%d worst=%lu state=%08lx flags=%08lx "
+                    "lockout=%lu/%lu deferred=%lu pos=(%ld,%ld) site=(%ld,%ld)",
+                    static_cast<unsigned long>(frame),
+                    static_cast<unsigned long>(unit.id), all_published ? 1 : 0,
+                    static_cast<unsigned long>(worst),
+                    static_cast<unsigned long>(unit.command_state),
+                    static_cast<unsigned long>(unit.command_flags),
+                    static_cast<unsigned long>(unit.command_entry_lockout_ticks),
+                    static_cast<unsigned long>(unit.command_lockout_ticks),
+                    static_cast<unsigned long>(unit.deferred_command_count),
+                    static_cast<long>(unit.x), static_cast<long>(unit.y),
+                    static_cast<long>(decision.action.target_x),
+                    static_cast<long>(decision.action.target_y));
+            }
+        }
         if (rl_mode && all_published) {
             AiMicroHoldUnits(bot.micro, decision.action.unit_ids,
                 frame + AiMicroExecutorConfig{}.policy_hold_frames);
@@ -23435,7 +23637,12 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
         // decision cycle, so retry further spiral probe points immediately.
         if (rl_mode && !plan &&
             decision.action.kind == AiSemanticActionKind::build) {
-            for (u32 attempt = 0; attempt < 5 && !plan; ++attempt) {
+            // An expansion nest probes a wider ring around its site: the
+            // chosen tile can be blocked by footprint / terrain-class details
+            // the observation does not carry.
+            const u32 retry_limit =
+                decision.action.production_id == kTyranoNestType ? 24u : 5u;
+            for (u32 attempt = 0; attempt < retry_limit && !plan; ++attempt) {
                 const UnitMovementPoint retry_point =
                     TyranoScriptedBotNextBuildPoint(bot,
                         observation.observation);
@@ -23489,6 +23696,32 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
         }
         const bool published = publish_planned_packets(plan);
         CommitTyranoScriptedBotDecision(bot, decision, published, plan.code);
+        if (decision.action.kind == AiSemanticActionKind::build &&
+            decision.action.production_id == kTyranoNestType &&
+            !decision.action.unit_ids.empty()) {
+            // Expansion builder timeline diagnostics (RL single-action path).
+            g_runtime.ai_expand_tracked_unit = decision.action.unit_ids[0];
+            g_runtime.ai_expand_tracked_state = 0xffffffffu;
+            for (const AiObservedUnit& unit : observation.observation.units) {
+                if (unit.id != decision.action.unit_ids[0]) {
+                    continue;
+                }
+                append_startup_log("ai-expand: build issued frame=%lu unit=%lu "
+                    "published=%d code=%lu state=%08lx flags=%08lx "
+                    "lockout=%lu/%lu deferred=%lu pos=(%ld,%ld) site=(%ld,%ld)",
+                    static_cast<unsigned long>(frame),
+                    static_cast<unsigned long>(unit.id), published ? 1 : 0,
+                    static_cast<unsigned long>(plan.code),
+                    static_cast<unsigned long>(unit.command_state),
+                    static_cast<unsigned long>(unit.command_flags),
+                    static_cast<unsigned long>(unit.command_entry_lockout_ticks),
+                    static_cast<unsigned long>(unit.command_lockout_ticks),
+                    static_cast<unsigned long>(unit.deferred_command_count),
+                    static_cast<long>(unit.x), static_cast<long>(unit.y),
+                    static_cast<long>(decision.action.target_x),
+                    static_cast<long>(decision.action.target_y));
+            }
+        }
         if (rl_mode && published) {
             // The policy tasked these units directly (build/produce/merge...):
             // the executor leaves them alone for a few frames.
@@ -23520,11 +23753,16 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
                     continue;
                 }
                 append_startup_log(
-                    "ai-micro: role type=0x%lx range=%lu sight=%lu transport=%lu role=%lu",
+                    "ai-micro: role type=0x%lx range=%lu base=%lu air=%lu "
+                    "sight=%lu transport=%lu class=%lu targets=0x%08lx role=%lu",
                     static_cast<unsigned long>(unit.type_id),
                     static_cast<unsigned long>(unit.attack_range),
+                    static_cast<unsigned long>(unit.attack_range_base),
+                    static_cast<unsigned long>(unit.attack_range_vs_air),
                     static_cast<unsigned long>(unit.sight_range),
                     static_cast<unsigned long>(unit.transport_capacity),
+                    static_cast<unsigned long>(unit.render_class),
+                    static_cast<unsigned long>(unit.attackable_class_mask),
                     static_cast<unsigned long>(AiMicroRoleOf(unit)));
             }
         }
@@ -23533,6 +23771,123 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
         // issuing only the orders that changed since the last frame.
         std::vector<AiSemanticAction> micro_actions =
             AiMicroExecutorStep(bot.micro, observation.observation);
+        // Expansion builder timeline: log every command-state change of the
+        // tracked builder (see the build-issued log above).
+        if (g_runtime.ai_expand_tracked_unit != 0 &&
+            g_runtime.ai_expand_tracked_logs < 80) {
+            for (const AiObservedUnit& unit : observation.observation.units) {
+                if (unit.id != g_runtime.ai_expand_tracked_unit) {
+                    continue;
+                }
+                if (unit.command_state != g_runtime.ai_expand_tracked_state) {
+                    g_runtime.ai_expand_tracked_state = unit.command_state;
+                    ++g_runtime.ai_expand_tracked_logs;
+                    append_startup_log("ai-expand: builder unit=%lu frame=%lu "
+                        "state=%08lx flags=%08lx value=%lu lockout=%lu/%lu "
+                        "deferred=%lu pos=(%ld,%ld) dest=(%ld,%ld)",
+                        static_cast<unsigned long>(unit.id),
+                        static_cast<unsigned long>(frame),
+                        static_cast<unsigned long>(unit.command_state),
+                        static_cast<unsigned long>(unit.command_flags),
+                        static_cast<unsigned long>(unit.command_value),
+                        static_cast<unsigned long>(unit.command_entry_lockout_ticks),
+                        static_cast<unsigned long>(unit.command_lockout_ticks),
+                        static_cast<unsigned long>(unit.deferred_command_count),
+                        static_cast<long>(unit.x), static_cast<long>(unit.y),
+                        static_cast<long>(unit.destination_x),
+                        static_cast<long>(unit.destination_y));
+                }
+                break;
+            }
+        }
+        // Executor health, every 2000 frames.  unattackable>0 means the class
+        // gate is doing work the pre-v3 executor could not (those units used
+        // to sit idle on a rejected order); stuck>0 means orders are being
+        // dropped somewhere worth investigating.
+        if (frame != 0 && frame % 2000u == 0) {
+            append_startup_log(
+                "ai-micro: owner=%lu frame=%lu orders=%lu retarget=%lu "
+                "unattackable=%lu stuck=%lu cohesion=%lu scout_sweep=%lu "
+                "search_sweep=%lu",
+                static_cast<unsigned long>(local_owner),
+                static_cast<unsigned long>(frame),
+                static_cast<unsigned long>(bot.micro.orders_issued),
+                static_cast<unsigned long>(bot.micro.targets_retargeted),
+                static_cast<unsigned long>(
+                    bot.micro.unattackable_targets_skipped),
+                static_cast<unsigned long>(bot.micro.stuck_reissues),
+                static_cast<unsigned long>(bot.micro.cohesion_holds),
+                static_cast<unsigned long>(bot.micro.scout_sweep_picks),
+                static_cast<unsigned long>(bot.micro.search_sweep_picks));
+            // Expansion plan diagnostics (v7): clusters seen, next site.
+            const AiExpansionPlan expansion =
+                ComputeAiExpansionPlan(observation.observation);
+            u32 known_berry_tiles = 0;
+            u32 passable_tiles = 0;
+            for (const AiObservedMapTile& tile : observation.observation.tiles) {
+                known_berry_tiles += tile.resource_amount != 0 ? 1u : 0u;
+                passable_tiles += tile.passable ? 1u : 0u;
+            }
+            u32 clusters_with_site = 0;
+            u32 clusters_developed = 0;
+            for (const AiBerryCluster& cluster : expansion.clusters) {
+                clusters_with_site += cluster.site_x >= 0 ? 1u : 0u;
+                clusters_developed += cluster.developed ? 1u : 0u;
+            }
+            UnitLifecycleContext definition_context{};
+            const UnitMovementDefinition* nest_definition =
+                default_unit_lifecycle_find_definition(definition_context, 0x80u);
+            {
+                // One-time footprint table of every Tyrano structure type,
+                // for the AI placement planner's static table.
+                static bool footprints_logged = false;
+                if (!footprints_logged) {
+                    footprints_logged = true;
+                    for (u32 type = 0x80u; type < 0x90u; ++type) {
+                        const UnitMovementDefinition* definition =
+                            default_unit_lifecycle_find_definition(
+                                definition_context, type);
+                        if (definition == nullptr) {
+                            continue;
+                        }
+                        append_startup_log("ai-expand: footprint type=0x%lx "
+                            "%lux%lu interaction=%ldx%ld",
+                            static_cast<unsigned long>(type),
+                            static_cast<unsigned long>(
+                                definition->footprint_width_tiles),
+                            static_cast<unsigned long>(
+                                definition->footprint_height_tiles),
+                            static_cast<long>(
+                                definition->interaction_bounds_width),
+                            static_cast<long>(
+                                definition->interaction_bounds_height));
+                    }
+                }
+            }
+            append_startup_log(
+                "ai-expand: owner=%lu frame=%lu nest_footprint=%lux%lu "
+                "berry_tiles=%lu passable=%lu/%lu "
+                "clusters=%lu sites=%lu developed=%lu nests=%lu walkers=%lu "
+                "target=%d site=(%ld,%ld) lit=%d",
+                static_cast<unsigned long>(local_owner),
+                static_cast<unsigned long>(frame),
+                static_cast<unsigned long>(nest_definition != nullptr ?
+                    nest_definition->footprint_width_tiles : 0u),
+                static_cast<unsigned long>(nest_definition != nullptr ?
+                    nest_definition->footprint_height_tiles : 0u),
+                static_cast<unsigned long>(known_berry_tiles),
+                static_cast<unsigned long>(passable_tiles),
+                static_cast<unsigned long>(observation.observation.tiles.size()),
+                static_cast<unsigned long>(expansion.clusters.size()),
+                static_cast<unsigned long>(clusters_with_site),
+                static_cast<unsigned long>(clusters_developed),
+                static_cast<unsigned long>(expansion.nest_count),
+                static_cast<unsigned long>(expansion.nest_walkers),
+                expansion.has_target ? 1 : 0,
+                static_cast<long>(expansion.target_x),
+                static_cast<long>(expansion.target_y),
+                expansion.target_explored ? 1 : 0);
+        }
         for (const AiSemanticAction& micro_action : micro_actions) {
             const AiActionPlanResult micro_plan =
                 PlanAiSemanticActionV1(plan_input, micro_action);

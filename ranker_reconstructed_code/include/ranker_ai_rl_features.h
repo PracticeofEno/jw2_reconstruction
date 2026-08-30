@@ -27,7 +27,12 @@ namespace ranker {
 // own-army state [498..508], production pipeline [509..525], scout
 // [526..530].  Everything the v4 encoder threw away (map, enemy types,
 // per-unit state, queues, scout) is now summarized; layout is append-only.
-constexpr u32 kAiRlFeatureVersion = 5u;
+// v6 appends the army objective/tactic the executor is running [531..533]:
+// search one-hot, buildings_first, neutral_only (attack one-hot stays at 82).
+// v7 appends expansion [534..540]: next expansion site dx/dy/distance/lit,
+// berry scout alive, reserved resources (builds still walking), builds in
+// flight.
+constexpr u32 kAiRlFeatureVersion = 7u;
 
 // High-level (strategy) action space the RL policy samples from.
 enum class AiRlHighLevelAction : u32 {
@@ -96,9 +101,25 @@ enum class AiRlHighLevelAction : u32 {
     research_melee_reinforce,  // 0x1b 근접 강화               (랜드 니스도스)
     research_triceps_speed,    // 0x2d 트리세스 속도            (랜드 니스도스)
     research_air_reinforce,    // 0x1e 공중 강화               (스카이 니스도스)
+    // v6 - the three army strategies are explicit and disjoint:
+    //   search_enemy_base   (no enemy building known)  army sweeps the map
+    //   attack_enemy_base   (an enemy building known)  army = buildings_first
+    //   defend_base                                    army holds own buildings
+    search_enemy_base,
+    // v7 - expansion is a two-step chain the MASK teaches: scout_berry sends
+    // one unit to light the next expansion site (legal while that site is
+    // dark), expand_base_nest builds there (legal once it is lit).
+    scout_berry,
+    // v7 - the search is split by purpose (masked off when its job is done):
+    //   search_enemy_base  army sweeps the UNEXPLORED START CANDIDATES
+    //   explore_frontier   one unit (air first) walks its reachable frontier
+    //   roam_scout         one unit (air, then fastest) patrols ground outside
+    //                      the active vision at random, indefinitely
+    explore_frontier,
+    roam_scout,
 };
 
-constexpr std::size_t kAiRlActionCount = 52;
+constexpr std::size_t kAiRlActionCount = 56;
 
 // One row per research action: the production order it starts, the building
 // type that researches it (session completion_references), the level cap and
@@ -140,7 +161,7 @@ constexpr const AiRlResearchAction* FindAiRlResearchAction(
 // v1: 36 base + 3 research levels + 3 neutral-monster + 4 tech-tree = 46.
 // v2 appends: 10 research levels, 11 unit counts, 4 building counts, and 9
 // mechanic aggregates (stance/morph/transport/army/queue state) = 80.
-constexpr std::size_t kAiRlFeatureCount = 531;
+constexpr std::size_t kAiRlFeatureCount = 544;
 
 struct AiRlStepEncoding {
     // Normalized policy/value-network input.

@@ -154,9 +154,22 @@ AiObservationBuildResult BuildAiObservationV1(
     observation.start_candidate_y = input.start_candidate_y;
     observation.start_candidate_mask = input.start_candidate_mask;
 
+    // Berry positions and INITIAL amounts are map data (public, like terrain
+    // and the start candidates), so a fresh memory is seeded from the map's
+    // current amounts - at the first observation nobody has harvested yet,
+    // so those are the initial amounts.  Only DEPLETION stays fog-honest:
+    // the memory is updated while a tile is in this owner's vision.
     if (input.resource_memory != nullptr &&
         input.resource_memory->size() != tile_count) {
-        input.resource_memory->assign(tile_count, 0);
+        std::vector<u32>& memory = *input.resource_memory;
+        memory.assign(tile_count, 0);
+        for (u32 y = 0; y < map.height; ++y) {
+            for (u32 x = 0; x < map.width; ++x) {
+                memory[static_cast<std::size_t>(y) * map.width + x] =
+                    (map.cells[static_cast<std::size_t>(y) * stride + x].flags &
+                        kMapCellHarvestAmountMask) >> kMapCellHarvestAmountShift;
+            }
+        }
     }
     observation.tiles.reserve(tile_count);
     for (u32 y = 0; y < map.height; ++y) {
@@ -186,18 +199,40 @@ AiObservationBuildResult BuildAiObservationV1(
                 if (visible) {
                     memory[compact_index] = live_amount;
                 }
-                reported_amount = explored ? memory[compact_index] : 0u;
+                // Reported even when unexplored: the memory started as the
+                // public map amounts, so an unexplored tile reports its
+                // initial amount (knowledge), not 0.  Orders on it are still
+                // refused by the planner's explored gate (harvest / build).
+                reported_amount = memory[compact_index];
             } else {
                 reported_amount = explored ? live_amount : 0u;
             }
+            // Walkable = the engine's ground entry rule for movement class 0
+            // (legacy_movement_class_can_enter_cell), static part: terrain
+            // class 0 (terrain_clear) and the decoration-layer entry bits
+            // 0x20000000 and 0x60000000 of alternate_flags.  Berry tiles
+            // (class 0x100) are NOT walkable - workers enter them only through
+            // the harvest command shortcut - so they are reported by
+            // resource_amount, not by passable.  The dynamic part (a building
+            // footprint on the cell, visibility_flags 0x20000000) is left to
+            // the engine's pathing.  Buildable = the engine placement rule's
+            // static part (terrain class 0 + placement-valid brush flag).
+            constexpr u32 kPlacementTerrainValidFlag = 0x80000000u;
+            constexpr u32 kGroundEntryFlag = 0x20000000u;
+            constexpr u32 kGroundEntryClassMask = 0x60000000u;
+            const u32 terrain_class = source.flags & kMapCellTerrainMask;
+            const bool blocked = (source.flags & kMapCellBlockedTerrain) != 0;
             observation.tiles.push_back(AiObservedMapTile{
                 source.flags & kAiStaticTerrainMask,
                 reported_amount,
-                (source.flags & kMapCellTerrainMask) ==
-                        kMapCellPassableTerrain &&
-                    (source.flags & kMapCellBlockedTerrain) == 0,
+                terrain_class == 0u &&
+                    (source.alternate_flags & kGroundEntryFlag) != 0 &&
+                    (source.alternate_flags & kGroundEntryClassMask) != 0,
                 explored,
                 visible,
+                terrain_class == 0u && !blocked &&
+                    (source.alternate_flags & kPlacementTerrainValidFlag) != 0,
+                (source.alternate_flags & 0x1c000000u) >> 26,
             });
         }
     }
@@ -238,10 +273,34 @@ AiObservationBuildResult BuildAiObservationV1(
         observed.visible = true;
         observed.alive = (unit->command_state & kUnitCommandDead) == 0;
         observed.under_construction = unit->under_construction;
-        observed.attack_range = unit->definition.action_range_base;
         observed.sight_range =
             unit->definition.effect_adjusted_interaction_range_base;
         observed.transport_capacity = unit->definition.transport_capacity;
+        observed.render_class = unit->definition.render_class;
+        observed.movement_step_limit = unit->definition.movement_step_limit;
+        observed.movement_period = std::max<u32>(unit->definition.movement_period, 1u);
+        observed.attack_range_base = unit->definition.action_range_base;
+        // Public type stats first; the optional hook replaces them with the
+        // engine's effective values where the caller can resolve them.
+        AiUnitCombatProfile profile{};
+        profile.attack_range = unit->definition.action_range_base;
+        profile.attack_range_vs_air =
+            unit->definition.action_range_base_vs_class3;
+        if (input.unit_combat_profile != nullptr) {
+            input.unit_combat_profile(*unit, controlled, profile,
+                input.unit_combat_profile_user_data);
+        }
+        observed.attack_range = profile.attack_range;
+        observed.attack_range_vs_air = profile.attack_range_vs_air;
+        observed.attackable_class_mask = profile.attackable_class_mask;
+        // Rendered state is public: facing/animation are drawn on screen and
+        // the overlays display level (status_timer + 1) and experience
+        // (elite_progress_value) for any selected unit.
+        observed.direction = unit->direction;
+        observed.animation_frame = unit->animation_frame;
+        observed.animation_timer = unit->animation_timer;
+        observed.level = unit->status_timer;
+        observed.experience = unit->elite_progress_value;
 
         if (controlled) {
             observed.command_state = unit->command_state;
@@ -259,6 +318,13 @@ AiObservationBuildResult BuildAiObservationV1(
             }
             observed.cargo_amount = unit->cargo_amount;
             observed.cargo_capacity = unit->cargo_capacity;
+            observed.command_entry_lockout_ticks =
+                unit->command_entry_lockout_ticks;
+            observed.command_lockout_ticks = unit->command_lockout_ticks;
+            observed.effect_timer = unit->effect_timer;
+            observed.equipment_flags = unit->equipment_flags;
+            observed.item_slots = unit->item_slots;
+            observed.equipment_slots = unit->equipment_slots;
             observed.queued_production_type_id =
                 unit->queued_production_type_id;
             observed.production_variant = unit->production_variant;
@@ -313,6 +379,8 @@ u64 HashAiObservationV1(const AiObservation& observation) {
         hash_bool(hash, tile.passable);
         hash_bool(hash, tile.explored);
         hash_bool(hash, tile.visible);
+        hash_bool(hash, tile.buildable);
+        hash_u32(hash, tile.placement_class);
     }
 
     hash_u32(hash, static_cast<u32>(observation.units.size()));
@@ -332,6 +400,20 @@ u64 HashAiObservationV1(const AiObservation& observation) {
         hash_bool(hash, unit.visible);
         hash_bool(hash, unit.alive);
         hash_bool(hash, unit.under_construction);
+        hash_u32(hash, unit.attack_range);
+        hash_u32(hash, unit.attack_range_vs_air);
+        hash_u32(hash, unit.attack_range_base);
+        hash_u32(hash, unit.sight_range);
+        hash_u32(hash, unit.transport_capacity);
+        hash_u32(hash, unit.movement_step_limit);
+        hash_u32(hash, unit.movement_period);
+        hash_u32(hash, unit.render_class);
+        hash_u32(hash, unit.attackable_class_mask);
+        hash_u32(hash, unit.direction);
+        hash_u32(hash, unit.animation_frame);
+        hash_u32(hash, unit.animation_timer);
+        hash_u32(hash, unit.level);
+        hash_u32(hash, unit.experience);
         hash_u32(hash, unit.command_state);
         hash_u32(hash, unit.command_flags);
         hash_u32(hash, unit.command_value);
@@ -346,6 +428,16 @@ u64 HashAiObservationV1(const AiObservation& observation) {
         hash_u32(hash, unit.cargo_capacity);
         hash_u32(hash, unit.queued_production_type_id);
         hash_u32(hash, unit.production_variant);
+        hash_u32(hash, unit.command_entry_lockout_ticks);
+        hash_u32(hash, unit.command_lockout_ticks);
+        hash_u32(hash, unit.effect_timer);
+        hash_u32(hash, unit.equipment_flags);
+        for (const u32 slot : unit.item_slots) {
+            hash_u32(hash, slot);
+        }
+        for (const u32 slot : unit.equipment_slots) {
+            hash_u32(hash, slot);
+        }
         hash_u32(hash, unit.deferred_command_count);
         hash_u32(hash, static_cast<u32>(unit.deferred_commands.size()));
         for (const AiObservedQueuedCommand& command :
