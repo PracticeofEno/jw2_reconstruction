@@ -743,10 +743,19 @@ DesiredOrder worker_order(StepContext& context, AiMicroExecutorState& state,
     const auto threat_within = [&](i64 radius) {
         for (const AiObservedUnit* hostile : context.hostiles) {
             // A hostile whose weapon cannot engage this worker's render class
-            // is not a threat and must not scatter the economy.
-            if (hostile->type_id < kMobileTypeLimit &&
-                can_engage(*hostile, unit, context.config) &&
-                squared_distance(unit.x, unit.y, hostile->x, hostile->y) <=
+            // is not a threat and must not scatter the economy.  Neither is a
+            // non-COMBAT unit: an enemy WORKER wandering in is a scout, and
+            // fleeing from it starved the economy (user replay report) - only
+            // melee/ranged hostiles scatter workers.
+            if (hostile->type_id >= kMobileTypeLimit ||
+                !can_engage(*hostile, unit, context.config)) {
+                continue;
+            }
+            const AiMicroRole role = AiMicroRoleOf(*hostile, context.config);
+            if (role != AiMicroRole::melee && role != AiMicroRole::ranged) {
+                continue;
+            }
+            if (squared_distance(unit.x, unit.y, hostile->x, hostile->y) <=
                     squared(radius)) {
                 return true;
             }
@@ -979,6 +988,14 @@ DesiredOrder scout_order(StepContext& context, AiMicroUnitRecord& record,
     i64 threat_distance = 0;
     for (const AiObservedUnit* hostile : context.hostiles) {
         if (hostile->type_id >= kMobileTypeLimit) {
+            continue;
+        }
+        // Only COMBAT units are worth evading - an enemy worker scouting past
+        // must not push the picket off its post (user replay report).
+        const AiMicroRole hostile_role =
+            AiMicroRoleOf(*hostile, context.config);
+        if (hostile_role != AiMicroRole::melee &&
+            hostile_role != AiMicroRole::ranged) {
             continue;
         }
         const i64 distance =

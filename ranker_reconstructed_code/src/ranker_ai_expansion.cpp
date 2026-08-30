@@ -210,6 +210,49 @@ bool AiBuildSiteCandidateOk(const AiObservation& observation,
             }
         }
     }
+    // Corridor guard (user replay report: buildings walled off berry access /
+    // movement).  Walk the one-tile ring around the footprint in cyclic order
+    // and count contiguous BLOCKED arcs (map edge, impassable terrain - berry
+    // fields and cliffs - or a standing/pending structure).  0 or 1 arc means
+    // the building can be walked around through the remaining open arc, so it
+    // cannot seal anything on its own; >= 2 arcs means the footprint would
+    // BRIDGE two separate obstacles - exactly the placement that turns a
+    // passage into a wall - and is refused.  Local and cheap (~2(w+h)+4
+    // cells), shared by the mask and the translator like every other rule.
+    {
+        std::vector<u8> ring_blocked;
+        ring_blocked.reserve(static_cast<std::size_t>(2 * (fw + fh) + 4));
+        const auto push_cell = [&](i64 cx, i64 cy) {
+            bool cell_blocked = cx < 0 || cy < 0 || cx >= width || cy >= height;
+            if (!cell_blocked) {
+                const AiObservedMapTile& tile = tile_at(observation,
+                    static_cast<u32>(cx), static_cast<u32>(cy));
+                cell_blocked = !tile.passable ||
+                    (occupancy.size() == observation.tiles.size() &&
+                        occupancy[static_cast<std::size_t>(cy) * width + cx]
+                            != 0);
+            }
+            ring_blocked.push_back(cell_blocked ? 1u : 0u);
+        };
+        for (i64 cx = tx - 1; cx <= tx + fw; ++cx) push_cell(cx, ty - 1);
+        for (i64 cy = ty; cy <= ty + fh - 1; ++cy) push_cell(tx + fw, cy);
+        for (i64 cx = tx + fw; cx >= tx - 1; --cx) push_cell(cx, ty + fh);
+        for (i64 cy = ty + fh - 1; cy >= ty; --cy) push_cell(tx - 1, cy);
+        u32 arcs = 0;
+        bool any_open = false;
+        for (std::size_t index = 0; index < ring_blocked.size(); ++index) {
+            const u8 current = ring_blocked[index];
+            const u8 previous = ring_blocked[
+                (index + ring_blocked.size() - 1) % ring_blocked.size()];
+            if (current != 0 && previous == 0) {
+                ++arcs;
+            }
+            any_open = any_open || current == 0;
+        }
+        if (!any_open || arcs >= 2) {
+            return false;
+        }
+    }
     if (blocked != nullptr) {
         for (const AiObservedUnit& unit : observation.units) {
             if (!unit.alive || !unit.visible) {

@@ -3549,6 +3549,75 @@ void test_ai_macro_autopilot() {
     }
 }
 
+// v9 follow-ups (user replay reports): a building must not BRIDGE two
+// obstacles (sealing a berry/movement corridor), and workers/scouts must not
+// flee from non-combat hostiles (an enemy worker scouting past).
+void test_ai_corridor_guard_and_noncombat_flee() {
+    // Corridor: two impassable walls with an exactly-footprint-wide gap; a
+    // population nest (3x2) in the gap would bridge them -> refused.  The
+    // same site with one wall removed is fine (walkable around).
+    AiObservation obs = micro_observation();
+    const u32 w = obs.map_width_tiles;
+    for (u32 ty = 10; ty <= 20; ++ty) {
+        obs.tiles[ty * w + 20].passable = false;
+        obs.tiles[ty * w + 24].passable = false;
+    }
+    require(!AiBuildSiteCandidateOk(obs, 0x82u, 21, 14, true, nullptr),
+        "corridor-bridging placement was accepted");
+    for (u32 ty = 10; ty <= 20; ++ty) {
+        obs.tiles[ty * w + 24].passable = true;
+    }
+    require(AiBuildSiteCandidateOk(obs, 0x82u, 21, 14, true, nullptr),
+        "placement beside a single wall was refused");
+    require(AiBuildSiteCandidateOk(obs, 0x82u, 40, 40, true, nullptr),
+        "open-field placement was refused");
+
+    // Non-combat flee: an enemy WORKER next to our harvesting worker and our
+    // scout picket moves neither; a masos does scatter the worker.
+    AiObservation calm = micro_observation();
+    calm.units.push_back(fighter_unit(0x4200, 0, 500, 400, true));  // picket
+    TyranoScriptedBotState bot{};
+    AiMicroAssignGroup(bot.micro, 0x4200, AiMicroGroup::scout);
+    AiMicroObjective post{};
+    post.kind = AiMicroObjectiveKind::scout;
+    post.target_x = 500;
+    post.target_y = 400;
+    post.assigned = true;
+    AiMicroSetObjective(bot.micro, AiMicroGroup::scout, post);
+    AiMicroExecutorConfig no_reflex{};
+    no_reflex.reflex_enabled = false;  // isolate the flee/evade rules
+    // Enemy WORKER (harvest-capable, non-combat role) near both.
+    AiObservedUnit enemy_worker = observed_unit(0x9d00, 1, 0x20u,
+        (1u << 4) | (1u << 5) | (1u << 6) | (1u << 7), 400, 380, false);
+    enemy_worker.health = 100;
+    enemy_worker.max_health = 100;
+    enemy_worker.attack_range = 50;
+    enemy_worker.attack_range_base = 50;
+    calm.units.push_back(enemy_worker);
+    calm.simulation_frame = 10;
+    AiMicroExecutorStep(bot.micro, calm, no_reflex);
+    bool any_flee = false;
+    for (const AiMicroUnitRecord& record : bot.micro.units) {
+        if (record.state == AiMicroUnitState::fleeing ||
+            record.state == AiMicroUnitState::evading) {
+            any_flee = true;
+        }
+    }
+    require(!any_flee, "a scouting enemy worker scattered worker/picket");
+    // A real fighter does scatter the harvest worker.
+    calm.units.pop_back();
+    calm.units.push_back(fighter_unit(0x9d01, 1, 320, 300, false));
+    calm.simulation_frame = 18;
+    AiMicroExecutorStep(bot.micro, calm, no_reflex);
+    bool worker_fled = false;
+    for (std::size_t index = 0; index < bot.micro.units.size(); ++index) {
+        if (bot.micro.units[index].state == AiMicroUnitState::fleeing) {
+            worker_fled = true;
+        }
+    }
+    require(worker_fled, "a combat hostile no longer scatters workers");
+}
+
 // v7 - a worker already walking to build reserves its site in the engine
 // (placement TemporaryBlock), so the planner must not hand the same site to
 // the next order; and a refused build order backs its structure type off.
@@ -3625,6 +3694,7 @@ int main() {
     test_ai_decision_gate();
     test_ai_defense_reflex();
     test_ai_macro_autopilot();
+    test_ai_corridor_guard_and_noncombat_flee();
     test_ai_pending_site_and_reject_backoff();
     test_ai_play_lobby_role_compatibility();
     std::cout << "ai_play_interface_regression: passed\n";
