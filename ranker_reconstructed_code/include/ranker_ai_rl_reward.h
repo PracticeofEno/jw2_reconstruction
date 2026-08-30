@@ -115,6 +115,10 @@ struct AiRlTraceStep {
     // v8 spatial-target head: the 8x8 grid cell chosen with the action, -1
     // when the action carried none.
     i32 target = -1;
+    // v9 decision gate: the AiDecisionTrigger bits that fired this decision
+    // and the frames since the previous decision (variable interval).
+    u32 triggers = 0;
+    u32 dt = 0;
 };
 
 struct AiRlOwnerTrace {
@@ -128,6 +132,8 @@ struct AiRlOwnerTrace {
     AiRlTerminalOutcome final_outcome = AiRlTerminalOutcome::ongoing;
     std::array<u32, 4> prev_losses{};
     i32 prev_target = -1;
+    u32 prev_triggers = 0;
+    u32 prev_dt = 0;
     std::vector<AiRlTraceStep> steps;
 
     void reset() { *this = AiRlOwnerTrace{}; }
@@ -140,9 +146,12 @@ struct AiRlOwnerTrace {
 // AiRlTraceStep::losses); it is emitted with THIS decision's step on the next
 // call, keeping (s_t, losses_t) aligned.
 // `target` is the spatial-target cell chosen with the action (-1 = none).
+// `triggers`/`dt` (v9) are the decision-gate trigger bits and the frames
+// since the previous decision.
 void AiRlTraceRecordDecision(AiRlOwnerTrace& trace, u32 frame, u32 action,
     const AiRlStepEncoding& encoding, const AiRlRewardConfig& config = {},
-    const std::array<u32, 4>& losses = {}, i32 target = -1);
+    const std::array<u32, 4>& losses = {}, i32 target = -1, u32 triggers = 0,
+    u32 dt = 0);
 
 // Flush the terminal transition for the last pending action with the given
 // end-of-game outcome (Phi(next) = 0).

@@ -1,3 +1,4 @@
+#include "ranker_ai_decision_gate.h"
 #include "ranker_ai_expansion.h"
 #include "ranker_ai_actions.h"
 #include "ranker_ai_live_validator.h"
@@ -2457,8 +2458,8 @@ void test_ai_micro_executor_translator_objectives() {
         raid.units.push_back(fighter_unit(0x9800, 1, 320 + 700, 320, false));
         require(EncodeAiObservationForRl(raid).features[76] > 0.0f,
             "raid perimeter feature did not use the 800 px defend bubble");
-        require(kAiRlActionCount == 64 && kAiRlFeatureCount == 772,
-            "v8 action/feature counts");
+        require(kAiRlActionCount == 64 && kAiRlFeatureCount == 788,
+            "v9 action/feature counts");
     }
     // v5 features: spatial grid, directions, enemy composition, own state,
     // production pipeline, scout.  64x64-tile map (2048 px) -> 8x8 cells of
@@ -3275,6 +3276,120 @@ void test_ai_v8_observation_features() {
         "raid-state features were wrong");
 }
 
+// v9 - the event-based decision gate (docs/AI_PLAY_DECISION_GATE_AUTOPILOT.md):
+// quiet stretches decide only at max_interval, decision-relevant events wake
+// the policy at the next check, the snapshot refreshes only on due, and the
+// decision-context features patch into [772..787].
+void test_ai_decision_gate() {
+    AiObservation obs = micro_observation();
+    obs.primary_resources = 0;  // every produce/build action illegal
+    obs.population_used = 9;    // base-nest supply (pop_free 9)
+    AiDecisionGateState gate{};
+    const AiDecisionGateConfig config{};
+    AiRlStepEncoding enc = EncodeAiObservationForRl(obs);
+    require(enc.legal_mask[static_cast<std::size_t>(
+                AiRlHighLevelAction::produce_worker)] == 0,
+        "fixture unexpectedly affords produce_worker with 0 resources");
+
+    // First decision fires unconditionally.
+    AiDecisionGateResult r =
+        AiDecisionGateEvaluate(gate, obs, enc, {}, false, 100, config);
+    require(r.due && (r.triggers & trigger_first) != 0,
+        "first decision did not fire");
+    // Quiet game: checks at +8..+56 stay silent, +64 fires max_interval.
+    for (u32 f = 108; f <= 156; f += 8) {
+        r = AiDecisionGateEvaluate(gate, obs, enc, {}, false, f, config);
+        require(!r.due, "quiet gate fired before max_interval");
+    }
+    r = AiDecisionGateEvaluate(gate, obs, enc, {}, false, 164, config);
+    require(r.due && (r.triggers & trigger_max_interval) != 0 &&
+        r.frames_since_last == 64,
+        "max_interval did not fire at 64 frames");
+
+    // Production opening: resources arrive -> produce_worker flips legal ->
+    // the next check fires trigger_production_open.
+    obs.primary_resources = 1000;
+    enc = EncodeAiObservationForRl(obs);
+    require(enc.legal_mask[static_cast<std::size_t>(
+                AiRlHighLevelAction::produce_worker)] == 1,
+        "produce_worker did not open with resources");
+    r = AiDecisionGateEvaluate(gate, obs, enc, {}, false, 172, config);
+    require(r.due && (r.triggers & trigger_production_open) != 0,
+        "production opening did not wake the policy");
+
+    // Enemy sighted (far from the base: no base-threat bit), then lost.
+    obs.units.push_back(fighter_unit(0x9a00, 1, 1900, 1900, false));
+    enc = EncodeAiObservationForRl(obs);
+    r = AiDecisionGateEvaluate(gate, obs, enc, {}, false, 180, config);
+    require(r.due && (r.triggers & trigger_enemy_sighted) != 0 &&
+        (r.triggers & trigger_base_threat) == 0,
+        "enemy sighting did not wake the policy (or mis-flagged base threat)");
+    obs.units.pop_back();
+    enc = EncodeAiObservationForRl(obs);
+    r = AiDecisionGateEvaluate(gate, obs, enc, {}, false, 188, config);
+    require(r.due && (r.triggers & trigger_enemy_lost) != 0,
+        "enemy loss did not wake the policy");
+
+    // Base threat: a hostile fighter 280 px from the nest (edge-triggered:
+    // the second check with the same standing threat stays silent until
+    // max_interval).
+    obs.units.push_back(fighter_unit(0x9b00, 1, 600, 320, false));
+    enc = EncodeAiObservationForRl(obs);
+    r = AiDecisionGateEvaluate(gate, obs, enc, {}, false, 196, config);
+    require(r.due && (r.triggers & trigger_base_threat) != 0,
+        "base threat did not wake the policy");
+    r = AiDecisionGateEvaluate(gate, obs, enc, {}, false, 204, config);
+    require(!r.due, "standing base threat re-fired every check");
+    obs.units.pop_back();
+
+    // Snapshot updates ONLY on due: with the gate quiet, mask changes since
+    // the last DECISION still compare against that decision's snapshot.
+    enc = EncodeAiObservationForRl(obs);
+    r = AiDecisionGateEvaluate(gate, obs, enc, {}, false, 212, config);  // enemy_lost fires (due)
+    obs.primary_resources = 0;
+    enc = EncodeAiObservationForRl(obs);
+    r = AiDecisionGateEvaluate(gate, obs, enc, {}, false, 220, config);
+    require(!r.due, "losing affordability alone woke the policy");
+    obs.primary_resources = 1000;
+    enc = EncodeAiObservationForRl(obs);
+    r = AiDecisionGateEvaluate(gate, obs, enc, {}, false, 228, config);
+    require(!r.due,
+        "re-opening an action that was legal at the last decision re-fired");
+
+    // Own-loss and owner-packet (imitation) triggers.
+    r = AiDecisionGateEvaluate(gate, obs, enc, {100, 0, 0, 0}, false, 236,
+        config);
+    require(r.due && (r.triggers & trigger_own_loss) != 0,
+        "own loss did not wake the policy");
+    r = AiDecisionGateEvaluate(gate, obs, enc, {100, 0, 0, 0}, true, 244,
+        config);
+    require(r.due && (r.triggers & trigger_owner_packet) != 0,
+        "owner packets did not force an imitation sample");
+
+    // Objective completion via the pump-mirrored fields: a raid that existed
+    // at the last decision died out.
+    obs.raid_unit_count = 3;
+    enc = EncodeAiObservationForRl(obs);
+    r = AiDecisionGateEvaluate(gate, obs, enc, {100, 0, 0, 0}, false, 252,
+        config);  // raid_attack legal-flip fires production? no - raid not production; completion? no. may be quiet
+    AiDecisionGateSnapshotObjectives(gate, 0, false, 3, 0, 0, 0, 0);
+    obs.raid_unit_count = 0;
+    enc = EncodeAiObservationForRl(obs);
+    r = AiDecisionGateEvaluate(gate, obs, enc, {100, 0, 0, 0}, false, 260,
+        config);
+    require(r.due && (r.triggers & trigger_objective_done) != 0,
+        "raid wipe did not wake the policy");
+
+    // Decision-context feature patch [772..787].
+    ApplyAiRlDecisionContext(enc, 32,
+        trigger_max_interval | trigger_base_threat, {2, 1, 8});
+    require(enc.features[772] == 0.5f && enc.features[773] == 1.0f &&
+        enc.features[779] == 1.0f && enc.features[774] == 0.0f &&
+        enc.features[785] == 0.25f && enc.features[786] == 0.125f &&
+        enc.features[787] == 1.0f,
+        "decision-context features mis-patched");
+}
+
 // v7 - a worker already walking to build reserves its site in the engine
 // (placement TemporaryBlock), so the planner must not hand the same site to
 // the next order; and a refused build order backs its structure type off.
@@ -3348,6 +3463,7 @@ int main() {
     test_ai_search_split();
     test_ai_raid_group_and_target_cell();
     test_ai_v8_observation_features();
+    test_ai_decision_gate();
     test_ai_pending_site_and_reject_backoff();
     test_ai_play_lobby_role_compatibility();
     std::cout << "ai_play_interface_regression: passed\n";

@@ -39,7 +39,14 @@ namespace ranker {
 // force-ratio [561..567], enemy-army fog-memory grid channel [568..631] +
 // last-sighting scalars [632..635], terrain grid channels passable
 // [636..699] / buildable [700..763], raid-group state [764..771].
-constexpr u32 kAiRlFeatureVersion = 8u;
+// v9 appends the DECISION CONTEXT [772..787]
+// (docs/AI_PLAY_DECISION_GATE_AUTOPILOT.md): [772] frames since the last
+// policy decision (/64, clamped), [773..784] the 12 decision-gate trigger
+// bits in AiDecisionTrigger bit order, [785..787] autopilot firings since the
+// last decision (workers / pop nests / fighters, /8 clamped).  The encoder
+// writes ZEROS here - these are gate/pump state, not observation state; the
+// caller patches them with ApplyAiRlDecisionContext before using the vector.
+constexpr u32 kAiRlFeatureVersion = 9u;
 
 // High-level (strategy) action space the RL policy samples from.
 enum class AiRlHighLevelAction : u32 {
@@ -197,7 +204,7 @@ constexpr const AiRlResearchAction* FindAiRlResearchAction(
 // v1: 36 base + 3 research levels + 3 neutral-monster + 4 tech-tree = 46.
 // v2 appends: 10 research levels, 11 unit counts, 4 building counts, and 9
 // mechanic aggregates (stance/morph/transport/army/queue state) = 80.
-constexpr std::size_t kAiRlFeatureCount = 772;
+constexpr std::size_t kAiRlFeatureCount = 788;
 
 struct AiRlStepEncoding {
     // Normalized policy/value-network input.
@@ -214,6 +221,15 @@ struct AiRlStepEncoding {
 
 // Encode one observation into the RL feature vector and legal-action mask.
 AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation);
+
+// Patch the v9 decision-context features [772..787] into an encoding: frames
+// since the last policy decision, the trigger bits that fired this decision
+// (AiDecisionTrigger order), and the autopilot firings since the last
+// decision (workers / pop nests / fighters).  Kept here so the layout lives
+// in one file; the encoder itself writes zeros (the context is gate/pump
+// state, not observation state).
+void ApplyAiRlDecisionContext(AiRlStepEncoding& encoding, u32 frames_since,
+    u32 triggers, const std::array<u32, 3>& autopilot_counts);
 
 } // namespace ranker
 

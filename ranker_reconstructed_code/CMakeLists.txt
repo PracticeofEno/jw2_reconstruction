@@ -1724,6 +1724,7 @@ if (RANKER_BUILD_AI_PLAY_INTERFACE_REGRESSION_TEST)
         src/ranker_ai_scripted_bot.cpp
         src/ranker_ai_micro_executor.cpp
         src/ranker_ai_rl_features.cpp
+        src/ranker_ai_decision_gate.cpp
         src/ranker_ai_expansion.cpp
         src/ranker_ai_rl_reward.cpp
     )
@@ -1745,6 +1746,7 @@ add_executable(ranker_rebuild WIN32
     src/ranker_ai_scripted_bot.cpp
     src/ranker_ai_micro_executor.cpp
     src/ranker_ai_rl_features.cpp
+    src/ranker_ai_decision_gate.cpp
     src/ranker_ai_expansion.cpp
     src/ranker_ai_rl_reward.cpp
     src/ranker_ai_ipc.cpp

@@ -266,6 +266,10 @@ struct AiObservation {
     // 0 = none).  v8.
     u32 raid_objective_kind = 0;
     u32 raid_attack_tactic = 0;
+    // v9: 1 when the army's ATTACK objective currently has a target or march
+    // point (executor-derived; pump-filled).  The decision gate fires
+    // trigger_objective_done on the 1 -> 0 edge (attack ran out of targets).
+    u32 army_attack_has_target = 0;
     // The owner's most recent REFUSED build order (the engine's placement
     // gate said no - information the owner receives, like a human's "cannot
     // build here"): structure type and frames since (0xffffffff = none).

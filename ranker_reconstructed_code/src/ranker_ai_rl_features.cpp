@@ -135,6 +135,20 @@ u32 building_cost_of(u32 type_id) {
     }
 }
 
+void ApplyAiRlDecisionContext(AiRlStepEncoding& encoding, u32 frames_since,
+    u32 triggers, const std::array<u32, 3>& autopilot_counts) {
+    encoding.features[772] =
+        std::min(static_cast<float>(frames_since) / 64.0f, 1.0f);
+    for (u32 bit = 0; bit < 12u; ++bit) {
+        encoding.features[773 + bit] =
+            (triggers & (1u << bit)) != 0 ? 1.0f : 0.0f;
+    }
+    for (u32 slot = 0; slot < 3u; ++slot) {
+        encoding.features[785 + slot] =
+            std::min(static_cast<float>(autopilot_counts[slot]) / 8.0f, 1.0f);
+    }
+}
+
 AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
     AiRlStepEncoding out{};
 
@@ -1041,6 +1055,20 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
             observation.raid_attack_tactic == 1u ? 1.0f : 0.0f);            // 769 buildings_first
         put(norm(observation.army_group_unit_count, 50.0f));                // 770
         put(observation.raid_objective_kind == 6u ? 1.0f : 0.0f);           // 771 search
+    }
+
+    // ======================================================================
+    // v9 decision context [772..787]
+    // (docs/AI_PLAY_DECISION_GATE_AUTOPILOT.md) - written as ZEROS here.
+    // These describe the decision-gate/pump state, not the observation; the
+    // caller patches them via ApplyAiRlDecisionContext:
+    //   [772]      frames since the last policy decision (/64 clamp)
+    //   [773..784] the 12 AiDecisionTrigger bits that fired this decision
+    //   [785..787] autopilot firings since the last decision
+    //              (workers / pop nests / fighters, /8 clamp)
+    // ======================================================================
+    for (std::size_t context = 0; context < 16; ++context) {
+        put(0.0f);
     }
     // Map knowledge gates for the split search actions: an unexplored start
     // candidate left (search_enemy_base), and a frontier tile left - an
