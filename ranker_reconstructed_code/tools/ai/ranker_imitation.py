@@ -115,7 +115,10 @@ def load_observations(path: str | Path, owner: int | None = 1
             mask = np.asarray(row["mask"], dtype=np.int8)
             if feat.shape[0] != N_FEATURES:
                 raise ValueError(f"bad feature length {feat.shape[0]}")
-            out.append((row["f"], feat, mask, int(row.get("label", -1))))
+            # v9 decision-gate context (0 on pre-v9 logs): trigger bitmask +
+            # frames since the previous sample.
+            out.append((row["f"], feat, mask, int(row.get("label", -1)),
+                        int(row.get("why", 0)), int(row.get("dt", 0))))
     return out
 
 
@@ -344,8 +347,14 @@ def build_dataset(samples: Sequence[tuple[int, np.ndarray, np.ndarray]]):
         X.append(feat)
         y.append(label)
         M.append(mask)
+    y_arr = np.asarray(y, dtype=np.int64)
+    if len(y_arr):
+        # Label-mix summary per game: the v9 decision gate exists to push the
+        # no_op share down from the 73% of the fixed-8-frame logger.
+        no_op_share = float((y_arr == A_NO_OP).mean())
+        print(f"    labels: {len(y_arr)} (no_op {no_op_share:.1%})", flush=True)
     return (np.asarray(X, dtype=np.float32),
-            np.asarray(y, dtype=np.int64),
+            y_arr,
             np.asarray(M, dtype=np.int8))
 
 

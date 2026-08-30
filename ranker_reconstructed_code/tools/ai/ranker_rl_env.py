@@ -7,8 +7,13 @@ sampled uniformly from the legal set (plumbing validation); a learned policy
 replaces that sampler.  Every decision is logged as a full transition to
 ``ai_rl_episode.jsonl``:
 
-    {"owner":1,"f":8,"a":2,"r":-0.0052,"sh":-0.0052,"tm":0.0,"done":false,
+    {"owner":1,"f":8,"a":2,"tgt":-1,"why":2048,"dt":24,
+     "r":-0.0052,"sh":-0.0052,"tm":0.0,"done":false,
      "feat":[N_FEATURES floats],"mask":[N_ACTIONS ints]}  (sizes follow the C++ constants)
+
+``why`` (v9) is the decision-gate trigger bitmask that fired this decision
+(AiDecisionTrigger in ranker_ai_decision_gate.h) and ``dt`` the frames since
+the previous decision - decisions are EVENT-BASED, not fixed-interval.
 
 ``feat`` is the exact policy/value-network input (see EncodeAiObservationForRl),
 ``mask`` the legal-action mask, ``a`` the action taken, ``r`` the reward earned
@@ -121,7 +126,7 @@ ACTION_NAMES: tuple[str, ...] = (
     "raid_search",
 )
 N_ACTIONS = len(ACTION_NAMES)      # 64 (kAiRlActionCount; v8 adds the 8 raid actions)
-N_FEATURES = 772                   # kAiRlFeatureCount (v8: +227 = enemy type slots 16, firepower 7, enemy-army memory grid 64+4, terrain passable/buildable grids 128, raid state 8)
+N_FEATURES = 788                   # kAiRlFeatureCount (v9: +16 decision context = dt/64 [772], 12 gate trigger bits [773..784], autopilot counts [785..787])
 # v8 spatial-target head (kAiRlTargetCellCount): the 8x8 grid cell argument
 # of attack_enemy_base / raid_attack_base / defend_base / raid_defend_base.
 # The game sends its legality as "tmask" in the IPC request and logs the
@@ -156,6 +161,10 @@ class Transition:
     mask: object       # np.ndarray[N_ACTIONS] or list[int]
     # v8 spatial-target cell chosen with the action (-1 = none).
     target: int = -1
+    # v9 decision-gate context: trigger bitmask + frames since the previous
+    # decision (0 on pre-v9 episodes).
+    why: int = 0
+    dt: int = 0
 
     @property
     def action_name(self) -> str:
@@ -193,6 +202,8 @@ def load_episode(path: str | Path, owner: int | None = None) -> list[Transition]
                 mask=(_np.asarray(row["mask"], dtype=_np.int8)
                       if _np is not None else list(row["mask"])),
                 target=int(row.get("tgt", -1)),
+                why=int(row.get("why", 0)),
+                dt=int(row.get("dt", 0)),
             ))
     return transitions
 

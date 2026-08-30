@@ -430,6 +430,7 @@ def rollout(net, install_dir: Path, port: int, seed: int | None,
 
     # Merge rewards (emitted by the game) by frame.
     reward_by_frame, done_by_frame, loss_by_frame = {}, {}, {}
+    dt_by_frame = {}
     if episode_path.exists():
         for line in episode_path.read_text().splitlines():
             if not line.strip():
@@ -439,6 +440,7 @@ def rollout(net, install_dir: Path, port: int, seed: int | None,
                 continue
             reward_by_frame[row["f"]] = row["r"]
             done_by_frame[row["f"]] = bool(row["done"])
+            dt_by_frame[row["f"]] = int(row.get("dt", 8))
             # War-score accounting (v3 exe): cumulative production value lost
             # [own units, own buildings, hostile units, hostile buildings].
             loss_by_frame[row["f"]] = (
@@ -446,7 +448,7 @@ def rollout(net, install_dir: Path, port: int, seed: int | None,
                 row.get("ovl", 0), row.get("obl", 0))
 
     (feats, masks, tmasks, auxes, actions, targets, logps, values, rewards,
-     dones, losses) = ([] for _ in range(11))
+     dones, losses, dts) = ([] for _ in range(12))
     for (frame, feat, mask, tmask, aux, action, target, logprob,
          value) in records:
         if frame not in reward_by_frame:
@@ -456,6 +458,7 @@ def rollout(net, install_dir: Path, port: int, seed: int | None,
         logps.append(logprob); values.append(value)
         rewards.append(reward_by_frame[frame]); dones.append(done_by_frame[frame])
         losses.append(loss_by_frame[frame])
+        dts.append(dt_by_frame.get(frame, 8))
 
     result = {}
     if result_path.exists():
@@ -475,6 +478,7 @@ def rollout(net, install_dir: Path, port: int, seed: int | None,
         "reward": np.asarray(rewards, dtype=np.float32),
         "done": np.asarray(dones, dtype=np.bool_),
         "losses": np.asarray(losses, dtype=np.float64),
+        "dt": np.asarray(dts, dtype=np.int64),
         "max_frames": max_frames,
         "result": result,
     }
@@ -563,6 +567,7 @@ def rollout_versus(net, install_dir: Path, port: int, seed: int | None,
     rewards_by_owner = {1: {}, 2: {}}
     dones_by_owner = {1: {}, 2: {}}
     losses_by_owner = {1: {}, 2: {}}
+    dts_by_owner = {1: {}, 2: {}}
     if episode_path.exists():
         for line in episode_path.read_text().splitlines():
             if not line.strip():
@@ -571,6 +576,7 @@ def rollout_versus(net, install_dir: Path, port: int, seed: int | None,
             owner = int(row.get("owner", 1))
             rewards_by_owner.setdefault(owner, {})[row["f"]] = row["r"]
             dones_by_owner.setdefault(owner, {})[row["f"]] = bool(row["done"])
+            dts_by_owner.setdefault(owner, {})[row["f"]] = int(row.get("dt", 8))
             losses_by_owner.setdefault(owner, {})[row["f"]] = (
                 row.get("vl", 0), row.get("bl", 0),
                 row.get("ovl", 0), row.get("obl", 0))
@@ -587,8 +593,9 @@ def rollout_versus(net, install_dir: Path, port: int, seed: int | None,
         reward_by_frame = rewards_by_owner.get(owner, {})
         done_by_frame = dones_by_owner.get(owner, {})
         loss_by_frame = losses_by_owner.get(owner, {})
+        dt_by_frame = dts_by_owner.get(owner, {})
         (feats, masks, tmasks, auxes, actions, targets, logps, values,
-         rewards, dones, losses) = ([] for _ in range(11))
+         rewards, dones, losses, dts) = ([] for _ in range(12))
         for (frame, feat, mask, tmask, aux, action, target, logprob,
              value) in rows:
             if frame not in reward_by_frame:
@@ -599,6 +606,7 @@ def rollout_versus(net, install_dir: Path, port: int, seed: int | None,
             rewards.append(reward_by_frame[frame])
             dones.append(done_by_frame[frame])
             losses.append(loss_by_frame.get(frame, (0, 0, 0, 0)))
+            dts.append(dt_by_frame.get(frame, 8))
         rolls.append({
             "feat": np.asarray(feats, dtype=np.float32),
             "mask": np.asarray(masks, dtype=np.float32),
@@ -611,6 +619,7 @@ def rollout_versus(net, install_dir: Path, port: int, seed: int | None,
             "reward": np.asarray(rewards, dtype=np.float32),
             "done": np.asarray(dones, dtype=np.bool_),
             "losses": np.asarray(losses, dtype=np.float64),
+            "dt": np.asarray(dts, dtype=np.int64),
             "max_frames": max_frames,
             "result": result,
             "owner": owner,
@@ -618,15 +627,23 @@ def rollout_versus(net, install_dir: Path, port: int, seed: int | None,
     return rolls
 
 
-def compute_gae(rewards, values, dones, gamma, lam):
+def compute_gae(rewards, values, dones, gamma, lam, dt=None):
+    """GAE.  With ``dt`` (v9 variable decision intervals, in frames), each
+    step discounts by gamma ** (dt/8) - the SMDP correction so a 64-frame gap
+    discounts like the 8 fixed-interval steps it replaced.  Default (dt=None)
+    keeps the fixed-interval behavior."""
     n = len(rewards)
     adv = np.zeros(n, dtype=np.float32)
     last = 0.0
     for t in range(n - 1, -1, -1):
         nonterminal = 0.0 if dones[t] else 1.0
+        if dt is not None and t + 1 < n:
+            step_gamma = gamma ** (max(float(dt[t + 1]), 1.0) / 8.0)
+        else:
+            step_gamma = gamma
         next_value = values[t + 1] if t + 1 < n else 0.0
-        delta = rewards[t] + gamma * next_value * nonterminal - values[t]
-        last = delta + gamma * lam * nonterminal * last
+        delta = rewards[t] + step_gamma * next_value * nonterminal - values[t]
+        last = delta + step_gamma * lam * nonterminal * last
         adv[t] = last
     returns = adv + values
     return adv, returns
@@ -886,9 +903,9 @@ def selftest() -> int:
     but quietly underperforms, and a broken aux zero-init would corrupt the
     BC warm start."""
     # 1. Contract constants line up with the C++ encoder layout.
-    assert N_FEATURES == 772, N_FEATURES
+    assert N_FEATURES == 788, N_FEATURES
     assert N_ACTIONS == 64, N_ACTIONS
-    assert GRID_CHANNELS == 9 and len(_GRID_IDX) == 576 and N_SCALARS == 196
+    assert GRID_CHANNELS == 9 and len(_GRID_IDX) == 576 and N_SCALARS == 212
     assert GRID_SLICES == ((86, 470), (568, 632), (636, 700), (700, 764))
     # 2. Reshape mapping: C++ index -> (channel, y, x).  Channel runs are
     # contiguous 64-cell row-major blocks, so v5 channel 0 cell (1,1) is
@@ -1015,6 +1032,10 @@ def main(argv=None) -> int:
     parser.add_argument("--lr-decay", type=float, default=0.3,
                         help="final lr as a fraction of --lr, annealed "
                              "linearly over --iters (1.0 = constant)")
+    parser.add_argument("--smdp", action="store_true",
+                        help="discount by gamma**(dt/8) per step (v9 variable "
+                             "decision intervals); default keeps fixed-step "
+                             "discounting")
     parser.add_argument("--selftest", action="store_true",
                         help="run the offline network/contract self-test "
                              "(no game needed) and exit")
@@ -1092,7 +1113,8 @@ def main(argv=None) -> int:
             shaped = augment_rewards(roll, args.reward_scale,
                                      args.terminal_weight)
             adv, ret = compute_gae(shaped, roll["value"], roll["done"],
-                                   args.gamma, args.lam)
+                                   args.gamma, args.lam,
+                                   dt=roll.get("dt") if args.smdp else None)
             batches.append((roll, adv, ret))
             returns_hist.append(float(shaped.sum()))
             own_units.append(_units(roll["result"], 1))
