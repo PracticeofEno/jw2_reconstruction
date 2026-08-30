@@ -4,6 +4,10 @@
 #include "ranker_types.h"
 #include "ranker_unit_movement.h"
 
+namespace ranker {
+struct MapEffectContext;
+}
+
 #include <array>
 #include <string>
 #include <vector>
@@ -199,6 +203,19 @@ struct AiObservedUnit {
     std::array<u32, 6> equipment_slots{};
 };
 
+// v9: a ground pickup the owner can currently SEE (fog-honest).  Meat
+// dropped by dying dinos is map effect ids 1..4 (ranker_meat_pipeline.h);
+// walking a pickup-capable unit onto it collects it, and the engine consumes
+// the reserve automatically for passive recovery.
+struct AiObservedMapEffect {
+    u32 id = 0;
+    u32 effect_id = 0;
+    i32 x = 0;
+    i32 y = 0;
+    u32 amount = 0;      // dropped meat amount (repeat_count)
+    bool linked = false; // a unit already claimed it (idle-acquire link)
+};
+
 struct AiObservation {
     u32 schema_version = kAiObservationSchemaVersion;
     u32 simulation_frame = 0;
@@ -289,6 +306,10 @@ struct AiObservation {
     // that is the honest model (it is what the owner last SAW).  Maintained
     // per owner by the AI-play pump; empty when no memory is kept.
     std::vector<u8> enemy_army_memory;
+    // v9: visible ground pickups (meat).  Filled only for callers that pass
+    // AiObservationBuildInput.map_effects; fog-honest (currently visible
+    // tiles only).
+    std::vector<AiObservedMapEffect> map_effects;
     // Summary of the most recent enemy-army sighting: frames since any
     // hostile mobile was visible (0xffffffff = never), the sighting centroid
     // and its size.  v8.
@@ -353,6 +374,11 @@ struct AiObservationBuildInput {
     // tile count here; zero means "never actually seen".  When null, the
     // legacy relaxed behavior applies: explored tiles expose the live value.
     std::vector<u32>* resource_memory = nullptr;
+
+    // v9 optional ground-pickup source (meat map effects).  When supplied,
+    // the builder reports meat effects (effect_id 1..4) on currently VISIBLE
+    // tiles into AiObservation::map_effects.  Null -> empty (legacy callers).
+    const MapEffectContext* map_effects = nullptr;
 };
 
 enum class AiObservationBuildCode : u32 {

@@ -1,5 +1,7 @@
 #include "ranker_ai_observation.h"
 
+#include "ranker_map_effects.h"
+
 #include <algorithm>
 #include <cstddef>
 #include <limits>
@@ -234,6 +236,42 @@ AiObservationBuildResult BuildAiObservationV1(
                     (source.alternate_flags & kPlacementTerrainValidFlag) != 0,
                 (source.alternate_flags & 0x1c000000u) >> 26,
             });
+        }
+    }
+
+    // v9 ground pickups: meat map effects (ids 1..4, ranker_meat_pipeline.h)
+    // on currently VISIBLE tiles only - the same fog rule as units.  Walking
+    // a pickup-capable unit onto one collects it (engine cmd-5 point path).
+    if (input.map_effects != nullptr && observation.map_width_tiles != 0) {
+        for (const u32 index : input.map_effects->active_effect_indices) {
+            if (index >= input.map_effects->effects.size()) {
+                continue;
+            }
+            const MapEffectInstance& effect = input.map_effects->effects[index];
+            if (!effect.active || effect.effect_id == 0 ||
+                effect.effect_id >= 5) {
+                continue;
+            }
+            const u32 tile_x = static_cast<u32>(std::max(effect.x, 0)) >> 5;
+            const u32 tile_y = static_cast<u32>(std::max(effect.y, 0)) >> 5;
+            if (tile_x >= observation.map_width_tiles ||
+                tile_y >= observation.map_height_tiles) {
+                continue;
+            }
+            const std::size_t tile = static_cast<std::size_t>(tile_y) *
+                observation.map_width_tiles + tile_x;
+            if (tile >= observation.tiles.size() ||
+                !observation.tiles[tile].visible) {
+                continue;
+            }
+            AiObservedMapEffect observed{};
+            observed.id = effect.id;
+            observed.effect_id = effect.effect_id;
+            observed.x = effect.x;
+            observed.y = effect.y;
+            observed.amount = effect.repeat_count;
+            observed.linked = (effect.flags & kMapEffectLinkedFlag) != 0;
+            observation.map_effects.push_back(observed);
         }
     }
 

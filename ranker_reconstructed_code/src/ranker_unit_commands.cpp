@@ -1,4 +1,5 @@
 #include "ranker_unit_commands.h"
+#include "ranker_startup_environment.h"
 
 #include "ranker_game_session_tables.h"
 #include "ranker_map_effects.h"
@@ -848,6 +849,23 @@ bool try_start_idle_map_effect_interaction(UnitCommandContext& context,
 
 void complete_point_equipment_to_idle(UnitCommandContext& context,
     UnitMovementUnit& unit) {
+    // Point-arrival diagnostics (budgeted): confirms the cmd-5 point path
+    // reaches its completion for AI-issued pickups.
+    {
+        static u32 point_complete_logged = 0;
+        if (point_complete_logged < 12) {
+            ++point_complete_logged;
+            append_startup_log("equip-point: unit=0x%lx type=0x%lx owner=%lu "
+                "target=(%ld,%ld) effects=%d catalog=%d",
+                static_cast<unsigned long>(unit.id),
+                static_cast<unsigned long>(unit.type_id),
+                static_cast<unsigned long>(unit.owner_id),
+                static_cast<long>(unit.path_target_x),
+                static_cast<long>(unit.path_target_y),
+                context.map_effects != nullptr ? 1 : 0,
+                context.equipment_catalog != nullptr ? 1 : 0);
+        }
+    }
     try_collect_map_effect_at_command_point(context, unit);
     mark_equipment_slots_changed(context, unit);
     StartUnitCommandLockoutTimer(context, unit, 2);
@@ -4039,6 +4057,21 @@ void ProcessUnitAttackTargetCommand(UnitCommandContext& context, UnitMovementUni
 
 void StartUnitEquipmentPointCommand(UnitCommandContext& context,
     UnitMovementUnit& unit) {
+    // State-5 entry diagnostics (budgeted): which owners' units enter the
+    // cmd-5 point path at all.
+    {
+        static u32 equip_start_logged = 0;
+        if (equip_start_logged < 16) {
+            ++equip_start_logged;
+            append_startup_log("equip-start: unit=0x%lx type=0x%lx owner=%lu "
+                "target=(%ld,%ld)",
+                static_cast<unsigned long>(unit.id),
+                static_cast<unsigned long>(unit.type_id),
+                static_cast<unsigned long>(unit.owner_id),
+                static_cast<long>(unit.path_target_x),
+                static_cast<long>(unit.path_target_y));
+        }
+    }
     if (!CheckPathTargetWithinAxisTile(unit)) {
         unit.command_state = kUnitStateEquipmentPointTravel;
         if (has_movement(context)) {

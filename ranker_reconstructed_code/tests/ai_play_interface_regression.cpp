@@ -3616,6 +3616,45 @@ void test_ai_corridor_guard_and_noncombat_flee() {
         }
     }
     require(worker_fled, "a combat hostile no longer scatters workers");
+
+    // Meat pickup (user directive): a hunter with nothing left to fight
+    // walks onto the nearest dropped meat; one collector per drop; the
+    // objective/tactic stays the policy's.
+    AiObservation hunt = micro_observation();
+    hunt.units.push_back(fighter_unit(0x4300, 0, 500, 400, true));
+    hunt.units.push_back(fighter_unit(0x4301, 0, 520, 400, true));
+    // Pickup capability bit (kUnitEquipmentPickupEnabledFlag) - definition
+    // type_flags in the real game.
+    hunt.units[hunt.units.size() - 2].type_flags |= 0x2u;
+    hunt.units[hunt.units.size() - 1].type_flags |= 0x2u;
+    AiObservedMapEffect meat{};
+    meat.id = 7;
+    meat.effect_id = 2;
+    meat.x = 600;
+    meat.y = 430;
+    meat.amount = 150;
+    hunt.map_effects.push_back(meat);
+    TyranoScriptedBotState hunter{};
+    AiMicroObjective hunt_objective{};
+    hunt_objective.kind = AiMicroObjectiveKind::attack;
+    hunt_objective.tactic = AiMicroAttackTactic::neutral_only;
+    hunt_objective.assigned = true;
+    AiMicroSetObjective(hunter.micro, AiMicroGroup::army, hunt_objective);
+    hunt.simulation_frame = 30;
+    std::vector<AiSemanticAction> hunt_orders =
+        AiMicroExecutorStep(hunter.micro, hunt, no_reflex);
+    u32 meat_moves = 0;
+    for (const AiSemanticAction& order : hunt_orders) {
+        if (order.kind == AiSemanticActionKind::pickup_move &&
+            order.target_x == 600 && order.target_y == 430) {
+            meat_moves += static_cast<u32>(order.unit_ids.size());
+        }
+    }
+    require(meat_moves == 1 && hunter.micro.meat_pickup_orders == 1,
+        "meat drop was not collected by exactly one hunter");
+    require(AiMicroObjectiveOf(hunter.micro, AiMicroGroup::army).tactic ==
+            AiMicroAttackTactic::neutral_only,
+        "meat pickup disturbed the hunt objective");
 }
 
 // v7 - a worker already walking to build reserves its site in the engine

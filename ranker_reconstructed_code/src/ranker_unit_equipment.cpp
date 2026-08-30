@@ -1,6 +1,7 @@
 #include "ranker_unit_equipment.h"
 
 #include "ranker_indexed_text_table.h"
+#include "ranker_startup_environment.h"
 #include "ranker_map_effects.h"
 #include "ranker_meat_pipeline.h"
 #include "ranker_miles.h"
@@ -569,6 +570,22 @@ bool HandleUnitEquipmentMapEffectCollect(UnitCommandContext& context,
 
         const u32 result = HandleUnitEquipmentPickupApply(
             context, unit, effect.effect_id, effect.repeat_count, catalog, nullptr);
+        // Meat-collect diagnostics (budgeted): which unit reached which meat
+        // drop and what the pickup-apply verdict was.  Meat = effect ids 1..4.
+        if (effect.effect_id < 5) {
+            static u32 meat_collect_logged = 0;
+            if (meat_collect_logged < 12) {
+                ++meat_collect_logged;
+                append_startup_log("meat-collect: unit=0x%lx type=0x%lx "
+                    "flags=0x%lx effect=%lu amount=%lu result=%lu",
+                    static_cast<unsigned long>(unit.id),
+                    static_cast<unsigned long>(unit.type_id),
+                    static_cast<unsigned long>(unit.type_flags),
+                    static_cast<unsigned long>(effect.effect_id),
+                    static_cast<unsigned long>(effect.repeat_count),
+                    static_cast<unsigned long>(result));
+            }
+        }
         if (result == static_cast<u32>(PickupApplyResult::consume_map_effect)) {
             ClearMapEffectTileOccupied(map_effects, effect);
             ReleaseMapEffect(map_effects, effect);

@@ -120,6 +120,7 @@ i32 engagement_range(const AiObservedUnit& attacker,
 bool is_move_order_kind(AiSemanticActionKind kind) {
     return kind == AiSemanticActionKind::move ||
         kind == AiSemanticActionKind::attack_move ||
+        kind == AiSemanticActionKind::pickup_move ||
         kind == AiSemanticActionKind::harvest;
 }
 
@@ -187,6 +188,10 @@ struct StepContext {
     // Diagnostics folded back into the executor state at the end of the step.
     u32 unattackable_skipped = 0;
     u32 cohesion_holds = 0;
+    // v9 meat pickup: effects claimed by a fighter this frame (one collector
+    // per drop) and the orders issued.
+    std::vector<u32> meat_claimed;
+    u32 meat_orders = 0;
     u32 scout_picks = 0;
     u32 search_picks = 0;
     u32 explore_picks = 0;
@@ -624,6 +629,46 @@ DesiredOrder fighter_order(StepContext& context, AiMicroExecutorState& state,
                 // order would be rejected and the unit would sit idle.
                 ++context.unattackable_skipped;
                 return {};
+            }
+        }
+        // v9 meat pickup (user directive): nothing left to fight in reach -
+        // walk onto the nearest unclaimed dropped meat nearby first.  The
+        // engine's cmd-5 point path collects it on arrival and the reserve
+        // is consumed automatically for passive recovery; one collector per
+        // drop, capability bit 2 (kUnitEquipmentPickupEnabledFlag) required.
+        if (objective.kind == AiMicroObjectiveKind::attack &&
+            (unit.type_flags & 0x2u) != 0) {
+            const AiObservedMapEffect* meat = nullptr;
+            i64 meat_distance = 0;
+            for (const AiObservedMapEffect& effect :
+                 context.observation.map_effects) {
+                if (effect.linked ||
+                    std::find(context.meat_claimed.begin(),
+                        context.meat_claimed.end(), effect.id) !=
+                        context.meat_claimed.end()) {
+                    continue;
+                }
+                const i64 distance =
+                    squared_distance(unit.x, unit.y, effect.x, effect.y);
+                if (distance > squared(config.meat_pickup_radius)) {
+                    continue;
+                }
+                if (meat == nullptr || distance < meat_distance) {
+                    meat = &effect;
+                    meat_distance = distance;
+                }
+            }
+            if (meat != nullptr) {
+                context.meat_claimed.push_back(meat->id);
+                // Count NEW pickup orders only (the walk re-derives the same
+                // order every frame; counting those made the diagnostic look
+                // like thousands of orders).
+                if (record.last_kind != AiSemanticActionKind::pickup_move ||
+                    record.last_x != meat->x || record.last_y != meat->y) {
+                    ++context.meat_orders;
+                }
+                return point_order(AiSemanticActionKind::pickup_move, meat->x,
+                    meat->y);
             }
         }
         if (objective.target_x >= 0 &&
@@ -1895,6 +1940,7 @@ std::vector<AiSemanticAction> AiMicroExecutorStep(AiMicroExecutorState& state,
         actions.push_back(std::move(action));
     }
     state.unattackable_targets_skipped += context.unattackable_skipped;
+    state.meat_pickup_orders += context.meat_orders;
     state.cohesion_holds += context.cohesion_holds;
     state.scout_sweep_picks += context.scout_picks;
     state.search_sweep_picks += context.search_picks;

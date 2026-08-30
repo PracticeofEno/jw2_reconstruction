@@ -15,6 +15,9 @@ constexpr u32 kForcedOrderSubtype = 0x0au;
 constexpr u32 kStopCommand = 0x00u;
 constexpr u32 kMoveCommand = 0x04u;
 constexpr u32 kAttackCommand = 0x05u;
+// The acquire variant of the attack/point command: same runtime, but the
+// state entry SETS the auto-pickup flag (bit 31) instead of clearing it.
+constexpr u32 kAcquireCommand = 0x0du;
 constexpr u32 kBuildCommand = 0x06u;
 constexpr u32 kHarvestCommand = 0x07u;
 constexpr u32 kPatrolCommand = 0x09u;
@@ -868,6 +871,7 @@ AiActionPlanResult PlanAiSemanticActionV1(const AiActionPlanInput& input,
     switch (action.kind) {
     case AiSemanticActionKind::move:
     case AiSemanticActionKind::attack_move:
+    case AiSemanticActionKind::pickup_move:
         if (action.target_unit_id != 0) {
             return reject(AiActionPlanCode::unexpected_target);
         }
@@ -977,6 +981,12 @@ AiActionPlanResult PlanAiSemanticActionV1(const AiActionPlanInput& input,
             // to ordinary action 4.
             command = supports_action(*unit, kAttackCommand)
                 ? kAttackCommand
+                : kMoveCommand;
+            break;
+        case AiSemanticActionKind::pickup_move:
+            // v9 meat pickup: cmd 0x0d point (auto-pickup flag set on entry).
+            command = supports_action(*unit, kAcquireCommand)
+                ? kAcquireCommand
                 : kMoveCommand;
             break;
         case AiSemanticActionKind::harvest:

@@ -224,6 +224,12 @@ struct AiMicroExecutorConfig {
     bool reflex_enabled = true;
     u32 threat_clear_frames = 120;
     i32 reflex_raid_join_radius = 1600;  // defend_radius * 2
+    // v9 meat pickup (user directive: "고기를 줍기만 하면 알아서 사용된다"):
+    // a fighter under an ATTACK objective with nothing left to fight in reach
+    // walks onto the nearest visible dropped meat within this radius.  The
+    // engine's cmd-5 point path collects it on arrival and consumes the
+    // reserve automatically for passive recovery.
+    i32 meat_pickup_radius = 800;
 };
 
 // v9 base-defense threat overlay (see AiMicroExecutorConfig::reflex_enabled).
@@ -266,6 +272,8 @@ struct AiMicroExecutorState {
     u32 unattackable_targets_skipped = 0;
     // v9: times the base-defense reflex ACTIVATED (rising edges only).
     u32 reflex_activations = 0;
+    // v9: meat-pickup move orders issued (hunt micro).
+    u32 meat_pickup_orders = 0;
 };
 
 AiMicroRole AiMicroRoleOf(const AiObservedUnit& unit,

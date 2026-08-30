@@ -51,6 +51,12 @@ enum class AiSemanticActionKind : u32 {
     set_stance,         // cmd 0x12+stance_id on / arg1=1+flag off
     return_cargo,       // cmd 0x07 + target 0x80000000
     use_item,           // cmd 0x16
+    // v9: point order via wire cmd 0x0d - the ACQUIRE variant of the attack
+    // command: identical target-validation runtime, but the entry SETS
+    // area_marker_flags bit 31 (cmd 0x05 clears it), which is the engine's
+    // auto-pickup enable.  A unit sent to a meat drop this way collects it
+    // on going idle at the point (idle-acquire -> state 5 -> collect).
+    pickup_move,        // cmd 0x0d + point
 };
 
 struct AiSemanticAction {

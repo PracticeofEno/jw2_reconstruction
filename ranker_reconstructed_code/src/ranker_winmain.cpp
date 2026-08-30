@@ -22981,6 +22981,9 @@ bool build_default_ai_play_observation(GameplayLoopState& state, u32 local_owner
         default_ai_play_unit_combat_profile;
     observation_input.resource_memory =
         &g_runtime.ai_play_resource_memory[local_owner];
+    // v9 ground pickups (meat): visible meat map effects for the executor's
+    // hunt micro (docs/AI_PLAY_DECISION_GATE_AUTOPILOT.md follow-up).
+    observation_input.map_effects = &g_runtime.map_effect_context;
 
     // Surface the owner's completed research/upgrade level for the tracked
     // Tyrano orders (harvest, movement, ground-attack) from the order-upgrade
@@ -24119,10 +24122,20 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
         // to sit idle on a rejected order); stuck>0 means orders are being
         // dropped somewhere worth investigating.
         if (frame != 0 && frame % 2000u == 0) {
+            // meat_held = sum of controlled mobiles' action_mode (the held
+            // meat / passive-recovery reserve) - positive proof pickups are
+            // actually collected, not just walked to.
+            unsigned long meat_held = 0;
+            for (const AiObservedUnit& unit : observation.observation.units) {
+                if (unit.controlled && unit.alive &&
+                    unit.type_id < 0x60u) {
+                    meat_held += unit.action_mode;
+                }
+            }
             append_startup_log(
                 "ai-micro: owner=%lu frame=%lu orders=%lu retarget=%lu "
                 "unattackable=%lu stuck=%lu cohesion=%lu scout_sweep=%lu "
-                "search_sweep=%lu",
+                "search_sweep=%lu reflex=%lu meat=%lu meat_held=%lu",
                 static_cast<unsigned long>(local_owner),
                 static_cast<unsigned long>(frame),
                 static_cast<unsigned long>(bot.micro.orders_issued),
@@ -24132,7 +24145,10 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
                 static_cast<unsigned long>(bot.micro.stuck_reissues),
                 static_cast<unsigned long>(bot.micro.cohesion_holds),
                 static_cast<unsigned long>(bot.micro.scout_sweep_picks),
-                static_cast<unsigned long>(bot.micro.search_sweep_picks));
+                static_cast<unsigned long>(bot.micro.search_sweep_picks),
+                static_cast<unsigned long>(bot.micro.reflex_activations),
+                static_cast<unsigned long>(bot.micro.meat_pickup_orders),
+                meat_held);
             // Expansion plan diagnostics (v7): clusters seen, next site.
             const AiExpansionPlan expansion =
                 ComputeAiExpansionPlan(observation.observation);
