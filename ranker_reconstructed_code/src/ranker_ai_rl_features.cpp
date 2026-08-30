@@ -1128,6 +1128,85 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
     set_legal(AiRlHighLevelAction::drop_attack,
         roster_counts[0x29u - 0x20u] >= 1 && has_army);
 
+    // --- v8 raid actions (docs/1순위.md) ---
+    // Group sizes come from the executor via the observation; with no
+    // executor driving the owner both counts are 0 and every raid action
+    // stays closed (e.g. imitation logging of the built-in AI).  Detaching a
+    // small main army is a self-defeating split, hence the floor.
+    constexpr u32 kRaidDetachArmyFloor = 6u;
+    const bool has_raid = observation.raid_unit_count > 0;
+    set_legal(AiRlHighLevelAction::detach_raid,
+        observation.army_group_unit_count >= kRaidDetachArmyFloor && !has_raid);
+    set_legal(AiRlHighLevelAction::merge_raid, has_raid);
+    set_legal(AiRlHighLevelAction::raid_attack_units,
+        has_raid && (have_nearest || enemy_base_known));
+    set_legal(AiRlHighLevelAction::raid_attack_base,
+        has_raid && (have_nearest || enemy_base_known));
+    set_legal(AiRlHighLevelAction::raid_defend_base, has_raid);
+    set_legal(AiRlHighLevelAction::raid_retreat, has_raid);
+    set_legal(AiRlHighLevelAction::raid_hunt_neutral, has_raid && have_neutral);
+    set_legal(AiRlHighLevelAction::raid_search,
+        has_raid && unexplored_start_left);
+
+    // --- v8 spatial-target cell mask ---
+    // A cell the owner has any knowledge of: an explored tile, a remembered
+    // enemy building, or a map start candidate.  Row-major 8x8 over the map.
+    {
+        const u32 w = observation.map_width_tiles;
+        const u32 h = observation.map_height_tiles;
+        const bool valid = w != 0 && h != 0 &&
+            observation.tiles.size() == static_cast<std::size_t>(w) * h;
+        const bool memory_valid = valid &&
+            observation.enemy_building_memory.size() == observation.tiles.size();
+        if (valid) {
+            for (u32 ty = 0; ty < h; ++ty) {
+                const u32 cy = ty * kAiRlTargetGridWidth / h;
+                for (u32 tx = 0; tx < w; ++tx) {
+                    const std::size_t tile = static_cast<std::size_t>(ty) * w + tx;
+                    if (!observation.tiles[tile].explored &&
+                        !(memory_valid &&
+                            observation.enemy_building_memory[tile] != 0)) {
+                        continue;
+                    }
+                    const u32 cx = tx * kAiRlTargetGridWidth / w;
+                    out.target_mask[cy * kAiRlTargetGridWidth + cx] = 1u;
+                }
+            }
+            for (u32 slot = 0; slot < 8u; ++slot) {
+                if ((observation.start_candidate_mask & (1u << slot)) == 0) {
+                    continue;
+                }
+                const u32 tx = static_cast<u32>(
+                    std::max(observation.start_candidate_x[slot], 0)) >> 5;
+                const u32 ty = static_cast<u32>(
+                    std::max(observation.start_candidate_y[slot], 0)) >> 5;
+                if (tx >= w || ty >= h) {
+                    continue;
+                }
+                const u32 cx = tx * kAiRlTargetGridWidth / w;
+                const u32 cy = ty * kAiRlTargetGridWidth / h;
+                out.target_mask[cy * kAiRlTargetGridWidth + cx] = 1u;
+            }
+        }
+        // With no legal cell at all the spatial actions themselves close
+        // (never happens once the own base is explored; belt and braces).
+        bool any_cell = false;
+        for (const std::uint8_t cell : out.target_mask) {
+            if (cell != 0) {
+                any_cell = true;
+                break;
+            }
+        }
+        if (!any_cell) {
+            for (std::size_t a = 0; a < kAiRlActionCount; ++a) {
+                if (AiRlActionTakesTargetCell(
+                        static_cast<AiRlHighLevelAction>(a))) {
+                    out.legal_mask[a] = 0u;
+                }
+            }
+        }
+    }
+
     return out;
 }
 

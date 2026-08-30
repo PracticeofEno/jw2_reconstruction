@@ -155,9 +155,13 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotAction(
 // action, this turns it into the same AiSemanticAction the scripted policy would
 // emit.  Returns a not-ready decision (code != action_ready) when the action
 // cannot currently be carried out.
+// target_cell (v8): the spatial-target head's 8x8 grid cell for the actions
+// that take one (AiRlActionTakesTargetCell) - the attack strike zone / defend
+// post; -1 = none (v7 behavior, executor-derived location).
 TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
     TyranoScriptedBotState& state, const AiObservation& observation,
-    AiRlHighLevelAction action, const TyranoScriptedBotConfig& config = {});
+    AiRlHighLevelAction action, const TyranoScriptedBotConfig& config = {},
+    i32 target_cell = -1);
 
 // Executor micro helpers exposed for the hierarchical-RL pump.
 //

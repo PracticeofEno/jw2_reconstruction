@@ -1257,6 +1257,11 @@ std::vector<AiSemanticAction> AiMicroExecutorStep(AiMicroExecutorState& state,
             roamer_default.set_frame = context.frame;
             roamer_default.assigned = true;
         }
+        AiMicroObjective& raid_default = state.objectives[
+            static_cast<std::size_t>(AiMicroGroup::raid)];
+        if (!raid_default.assigned) {
+            raid_default = make_defend(home, config.defend_radius, context.frame);
+        }
     }
 
     // ---- sync unit records (drop the dead, register the new) --------------
@@ -1332,8 +1337,6 @@ std::vector<AiSemanticAction> AiMicroExecutorStep(AiMicroExecutorState& state,
     // ---- objective transitions (default behavior, not decisions) -----------
     AiMicroObjective& economy =
         state.objectives[static_cast<std::size_t>(AiMicroGroup::economy)];
-    AiMicroObjective& army =
-        state.objectives[static_cast<std::size_t>(AiMicroGroup::army)];
     const bool resources_known = !context.resource_tiles.empty();
     if (economy.kind == AiMicroObjectiveKind::harvest && !resources_known) {
         economy = make_defend(home, config.defend_radius, context.frame);
@@ -1344,19 +1347,6 @@ std::vector<AiSemanticAction> AiMicroExecutorStep(AiMicroExecutorState& state,
         harvest.assigned = true;
         economy = harvest;
     }
-    if (army.kind == AiMicroObjectiveKind::retreat && army.target_x >= 0) {
-        UnitMovementPoint centroid{};
-        if (AiMicroGroupCentroid(state, observation, AiMicroGroup::army,
-                centroid, config) &&
-            squared_distance(centroid.x, centroid.y, army.target_x,
-                army.target_y) <= squared(config.arrival_radius)) {
-            army = make_defend({army.target_x, army.target_y},
-                config.defend_radius, context.frame);
-        }
-    }
-    const std::size_t army_index = static_cast<std::size_t>(AiMicroGroup::army);
-    const UnitMovementPoint army_centroid = context.centroid_valid[army_index] ?
-        context.centroid[army_index] : home;
     // Remembered enemy buildings (fog memory in the observation) - known
     // enemy locations for the attack march point and the scout picket.
     if (observation.map_width_tiles != 0 &&
@@ -1438,12 +1428,37 @@ std::vector<AiSemanticAction> AiMicroExecutorStep(AiMicroExecutorState& state,
             }
         }
     }
+    // The two FIGHTING groups (main army and the detached raid) run the same
+    // objective machinery, each around its own centroid and objective.
+    for (const AiMicroGroup fighting : {AiMicroGroup::army, AiMicroGroup::raid}) {
+    const std::size_t army_index = static_cast<std::size_t>(fighting);
+    AiMicroObjective& army = state.objectives[army_index];
+    const UnitMovementPoint army_centroid = context.centroid_valid[army_index] ?
+        context.centroid[army_index] : home;
+    if (army.kind == AiMicroObjectiveKind::retreat && army.target_x >= 0) {
+        UnitMovementPoint centroid{};
+        if (AiMicroGroupCentroid(state, observation, fighting,
+                centroid, config) &&
+            squared_distance(centroid.x, centroid.y, army.target_x,
+                army.target_y) <= squared(config.arrival_radius)) {
+            army = make_defend({army.target_x, army.target_y},
+                config.defend_radius, context.frame);
+        }
+    }
     if (army.kind == AiMicroObjectiveKind::attack) {
         // The policy chose a TACTIC; the group's target is re-derived from it
         // every frame.  Keep the current target while it is still valid and of
         // the preferred class (stability); switch when it dies, leaves sight,
         // or a preferred-class target appears while we hold a fallback one.
         const u32 army_mask = context.group_attackable_mask[army_index];
+        // v8 strike zone: while the policy's preferred point is set, targets
+        // are hunted around IT (not around the group), so the group fights
+        // where it was sent; abandoned once the group stands there and
+        // nothing of the tactic's class is known within the zone.
+        const bool zoned = army.preferred_x >= 0 &&
+            army.tactic != AiMicroAttackTactic::neutral_only;
+        const i32 hunt_x = zoned ? army.preferred_x : army_centroid.x;
+        const i32 hunt_y = zoned ? army.preferred_y : army_centroid.y;
         const AiObservedUnit* current =
             find_unit(observation, army.target_unit_id);
         // Item 1 - a target no army member can engage is not a valid target.
@@ -1454,7 +1469,12 @@ std::vector<AiSemanticAction> AiMicroExecutorStep(AiMicroExecutorState& state,
         bool keep = current != nullptr && current->alive && current->visible &&
             engageable && tactic_accepts(context, army.tactic, *current);
         const AiObservedUnit* best = pick_group_target(context, army.tactic,
-            army_centroid.x, army_centroid.y, army_mask);
+            hunt_x, hunt_y, army_mask);
+        if (zoned && best != nullptr &&
+            squared_distance(best->x, best->y, army.preferred_x,
+                army.preferred_y) > squared(config.preferred_zone_radius)) {
+            best = nullptr;  // outside the strike zone
+        }
         if (keep && !tactic_prefers(army.tactic, *current) && best != nullptr &&
             tactic_prefers(army.tactic, *best)) {
             keep = false;
@@ -1476,7 +1496,12 @@ std::vector<AiSemanticAction> AiMicroExecutorStep(AiMicroExecutorState& state,
         UnitMovementPoint remembered{-1, -1};
         if (army.tactic != AiMicroAttackTactic::neutral_only) {
             remembered = nearest_point(context.remembered_buildings,
-                army_centroid.x, army_centroid.y);
+                hunt_x, hunt_y);
+            if (zoned && remembered.x >= 0 &&
+                squared_distance(remembered.x, remembered.y, army.preferred_x,
+                    army.preferred_y) > squared(config.preferred_zone_radius)) {
+                remembered = {-1, -1};  // outside the strike zone
+            }
         }
         const AiObservedUnit* visible =
             find_unit(observation, army.target_unit_id);
@@ -1490,6 +1515,20 @@ std::vector<AiSemanticAction> AiMicroExecutorStep(AiMicroExecutorState& state,
         } else if (remembered.x >= 0) {
             army.target_x = remembered.x;
             army.target_y = remembered.y;
+        } else if (zoned) {
+            army.target_x = army.preferred_x;
+            army.target_y = army.preferred_y;
+        }
+        if (zoned && visible == nullptr && remembered.x < 0 &&
+            context.centroid_valid[army_index] &&
+            squared_distance(army_centroid.x, army_centroid.y,
+                army.preferred_x, army.preferred_y) <=
+                squared(config.arrival_radius)) {
+            // Arrived at the strike zone and nothing of the tactic's class is
+            // known inside it: the zone is done, fall back to the global
+            // chain from the next frame on.
+            army.preferred_x = -1;
+            army.preferred_y = -1;
         }
     }
     if (army.kind == AiMicroObjectiveKind::search) {
@@ -1531,6 +1570,7 @@ std::vector<AiSemanticAction> AiMicroExecutorStep(AiMicroExecutorState& state,
             army.target_y = destination.y;
         }
     }
+    }  // for (fighting group: army, raid)
     // Explorer: nearest reachable frontier from the unit; released (default
     // transition) when its reachable frontier is exhausted.  Roamer: random
     // reachable ground outside the active vision, re-picked on arrival.

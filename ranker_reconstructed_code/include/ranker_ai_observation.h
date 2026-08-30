@@ -238,6 +238,16 @@ struct AiObservation {
     // outside active vision) unit ids (0 = none).  v7.
     u32 explorer_unit_id = 0;
     u32 roamer_unit_id = 0;
+    // v8 fighting-group sizes (filled by the pump from the executor state):
+    // fighters in the MAIN army group and in the detached raid group.  0 when
+    // no executor drives the owner - which also keeps every raid action
+    // masked off in that context (imitation logging of the built-in AI).
+    u32 army_group_unit_count = 0;
+    u32 raid_unit_count = 0;
+    // Raid objective (same encoding as army_objective_kind/army_attack_tactic;
+    // 0 = none).  v8.
+    u32 raid_objective_kind = 0;
+    u32 raid_attack_tactic = 0;
     // The owner's most recent REFUSED build order (the engine's placement
     // gate said no - information the owner receives, like a human's "cannot
     // build here"): structure type and frames since (0xffffffff = none).

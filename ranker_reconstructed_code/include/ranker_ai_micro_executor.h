@@ -32,8 +32,14 @@ enum class AiMicroGroup : u32 {
     // 0..1 units split off by roam_scout: keeps walking to random reachable
     // ground outside the owner's active vision (a moving picket).
     roamer = 5,
+    // v8: the detachable strike group.  Filled only by detach_raid (mobility-
+    // first 30% of the main army), emptied by merge_raid or by dying; newly
+    // produced fighters always default to `army`, so a spent raid must be
+    // re-detached (an intended cost).  Holds its own objective, so the policy
+    // can play main-army defend + raid attack at the same time.
+    raid = 6,
 };
-constexpr std::size_t kAiMicroGroupCount = 6;
+constexpr std::size_t kAiMicroGroupCount = 7;
 
 enum class AiMicroObjectiveKind : u32 {
     harvest = 0,
@@ -76,6 +82,13 @@ struct AiMicroObjective {
     // destination / scout post.  -1 = none.
     i32 target_x = -1;
     i32 target_y = -1;
+    // v8 policy-chosen strike zone (attack only): the spatial-target head's
+    // cell centre.  While set, target pick and march stay inside
+    // preferred_zone_radius of it; cleared by the executor once the group
+    // arrives there and finds nothing (falls back to the global chain).
+    // -1 = none (v7 behavior).
+    i32 preferred_x = -1;
+    i32 preferred_y = -1;
     // defend: bubble radius around the post (px).
     i32 radius = 0;
     // search: frame the current sweep point was picked, and the rotating
@@ -189,6 +202,14 @@ struct AiMicroExecutorConfig {
     // but never closer than picket_enemy_gap px to that building (to live).
     u32 picket_forward_percent = 66;
     i32 picket_enemy_gap = 800;
+    // v8 strike zone: how far around a policy-chosen attack point (the 8x8
+    // target cell centre) targets are hunted before the zone is abandoned.
+    // One grid cell = 512 px; the radius covers the cell from its centre.
+    i32 preferred_zone_radius = 512;
+    // v8 raid detach: mobility-first share of the main army split off (and
+    // the floor below which detaching is pointless).
+    u32 raid_detach_percent = 30;
+    std::size_t raid_detach_minimum = 3;
     // Render class the engine treats as flying (terrain-independent).  Its
     // attackers resolve a separate range and damage profile.
     u32 flying_render_class = 3;

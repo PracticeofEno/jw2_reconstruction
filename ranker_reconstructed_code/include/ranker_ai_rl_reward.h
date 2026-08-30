@@ -112,6 +112,9 @@ struct AiRlTraceStep {
     // [0] own unit value lost, [1] own building value lost,
     // [2] hostile unit value lost, [3] hostile building value lost.
     std::array<u32, 4> losses{};
+    // v8 spatial-target head: the 8x8 grid cell chosen with the action, -1
+    // when the action carried none.
+    i32 target = -1;
 };
 
 struct AiRlOwnerTrace {
@@ -124,6 +127,7 @@ struct AiRlOwnerTrace {
     float return_sum = 0.0f;  // undiscounted sum of total rewards so far
     AiRlTerminalOutcome final_outcome = AiRlTerminalOutcome::ongoing;
     std::array<u32, 4> prev_losses{};
+    i32 prev_target = -1;
     std::vector<AiRlTraceStep> steps;
 
     void reset() { *this = AiRlOwnerTrace{}; }
@@ -135,9 +139,10 @@ struct AiRlOwnerTrace {
 // `losses` is the cumulative loss accounting sampled with this state (see
 // AiRlTraceStep::losses); it is emitted with THIS decision's step on the next
 // call, keeping (s_t, losses_t) aligned.
+// `target` is the spatial-target cell chosen with the action (-1 = none).
 void AiRlTraceRecordDecision(AiRlOwnerTrace& trace, u32 frame, u32 action,
     const AiRlStepEncoding& encoding, const AiRlRewardConfig& config = {},
-    const std::array<u32, 4>& losses = {});
+    const std::array<u32, 4>& losses = {}, i32 target = -1);
 
 // Flush the terminal transition for the last pending action with the given
 // end-of-game outcome (Phi(next) = 0).

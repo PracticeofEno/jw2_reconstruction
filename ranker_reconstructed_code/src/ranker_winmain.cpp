@@ -23470,6 +23470,21 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
                     AiMicroGroup::roamer);
             observation.observation.roamer_unit_id =
                 roamers.empty() ? 0u : roamers.front()->id;
+            // v8 fighting-group sizes + the raid's objective (raid mask gates
+            // and, later, raid features).
+            observation.observation.army_group_unit_count = static_cast<u32>(
+                AiMicroGroupMembers(bot.micro, observation.observation,
+                    AiMicroGroup::army).size());
+            observation.observation.raid_unit_count = static_cast<u32>(
+                AiMicroGroupMembers(bot.micro, observation.observation,
+                    AiMicroGroup::raid).size());
+            const AiMicroObjective& raid_objective =
+                AiMicroObjectiveOf(bot.micro, AiMicroGroup::raid);
+            observation.observation.raid_objective_kind =
+                raid_objective.assigned ?
+                static_cast<u32>(raid_objective.kind) + 1u : 0u;
+            observation.observation.raid_attack_tactic =
+                static_cast<u32>(raid_objective.tactic);
             // Most recent refused build order (type, frames ago).
             if (g_runtime.ai_play_last_build_reject_type[local_owner] != 0) {
                 observation.observation.last_build_reject_type =
@@ -23490,13 +23505,16 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
         if (legal_count != 0) {
             u32 pick;
             bool picked = true;
+            i32 target_cell = -1;
             if (g_runtime.ai_play_ipc_enabled) {
                 // Online policy-in-the-loop: the off-sim Python policy chooses
                 // the action.  On any IPC error, skip this decision (the
                 // connection is torn down and subsequent cycles fall through
                 // harmlessly).
+                int chosen_cell = -1;
                 const int chosen = AiIpcRequestAction(local_owner, frame,
-                    encoding.features, encoding.legal_mask);
+                    encoding.features, encoding.legal_mask,
+                    encoding.target_mask, &chosen_cell);
                 if (chosen < 0) {
                     g_runtime.ai_play_ipc_enabled = false;
                     picked = false;
@@ -23509,9 +23527,36 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
                         encoding.legal_mask[pick] == 0) {
                         pick = legal_indices[0];
                     }
+                    target_cell = chosen_cell;
                 }
             } else {
                 pick = legal_indices[static_cast<u32>(rand()) % legal_count];
+                // Random policy also exercises the spatial-target head: a
+                // uniform legal cell for the actions that take one.
+                if (AiRlActionTakesTargetCell(
+                        static_cast<AiRlHighLevelAction>(pick))) {
+                    u32 cell_indices[kAiRlTargetCellCount];
+                    u32 cell_count = 0;
+                    for (u32 c = 0; c < kAiRlTargetCellCount; ++c) {
+                        if (encoding.target_mask[c] != 0) {
+                            cell_indices[cell_count++] = c;
+                        }
+                    }
+                    if (cell_count != 0) {
+                        target_cell = static_cast<i32>(cell_indices[
+                            static_cast<u32>(rand()) % cell_count]);
+                    }
+                }
+            }
+            // Target-mask safety net (both sources): an illegal or
+            // out-of-range cell degrades to "no cell" (v7 behavior), and a
+            // cell on a non-spatial action is dropped.
+            if (target_cell >= 0 &&
+                (target_cell >= static_cast<i32>(kAiRlTargetCellCount) ||
+                    encoding.target_mask[static_cast<u32>(target_cell)] == 0 ||
+                    !AiRlActionTakesTargetCell(
+                        static_cast<AiRlHighLevelAction>(pick)))) {
+                target_cell = -1;
             }
             if (picked) {
                 // War-score sample for this decision state: own cumulative
@@ -23541,10 +23586,11 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
                         g_runtime.ai_play_building_value_lost[other]);
                 }
                 AiRlTraceRecordDecision(g_runtime.ai_play_rl_traces[local_owner],
-                    frame, pick, encoding, {}, losses);
+                    frame, pick, encoding, {}, losses, target_cell);
                 decision = DecideTyranoScriptedBotForHighLevelAction(
                     bot, observation.observation,
-                    static_cast<AiRlHighLevelAction>(pick), bot_config);
+                    static_cast<AiRlHighLevelAction>(pick), bot_config,
+                    target_cell);
             }
         }
     } else if (!rl_mode) {
@@ -33107,12 +33153,14 @@ void write_ai_rl_reward_trace(const GameplayLoopState& state,
         const AiRlOwnerTrace& trace = g_runtime.ai_play_rl_traces[owner];
         for (const AiRlTraceStep& step : trace.steps) {
             std::fprintf(ep,
-                "{\"owner\":%lu,\"f\":%lu,\"a\":%lu,\"r\":%.6f,\"sh\":%.6f,"
+                "{\"owner\":%lu,\"f\":%lu,\"a\":%lu,\"tgt\":%ld,"
+                "\"r\":%.6f,\"sh\":%.6f,"
                 "\"tm\":%.3f,\"done\":%s,"
                 "\"vl\":%lu,\"bl\":%lu,\"ovl\":%lu,\"obl\":%lu,\"feat\":[",
                 static_cast<unsigned long>(owner),
                 static_cast<unsigned long>(step.frame),
                 static_cast<unsigned long>(step.action),
+                static_cast<long>(step.target),
                 static_cast<double>(step.total),
                 static_cast<double>(step.shaping),
                 static_cast<double>(step.terminal),

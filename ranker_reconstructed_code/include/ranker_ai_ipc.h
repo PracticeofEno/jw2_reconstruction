@@ -18,8 +18,10 @@ namespace ranker {
 // follow kAiRlFeatureCount / kAiRlActionCount on both ends):
 //   request : {"t":"act","owner":O,"frame":F,
 //              "feat":[kAiRlFeatureCount floats],
-//              "mask":[kAiRlActionCount ints]}
-//   reply   : {"action":N}
+//              "mask":[kAiRlActionCount ints],
+//              "tmask":[kAiRlTargetCellCount ints]}      (v8)
+//   reply   : {"action":N} or {"action":N,"target":C}    (v8: C = 8x8 grid
+//             cell for the spatial actions, -1/absent = none)
 //   end     : {"t":"end","reason":"...","frame":F}   (no reply expected)
 
 // Connect to 127.0.0.1:port.  Returns true on success.  Idempotent-safe.
@@ -30,10 +32,14 @@ bool AiIpcConnected();
 
 // Request the high-level action for one decision.  Blocks for the reply.
 // Returns the action index in [0, kAiRlActionCount), or -1 on any I/O/parse
-// error (after which AiIpcConnected() reports false).
+// error (after which AiIpcConnected() reports false).  target_cell (v8, may
+// be null) receives the reply's "target" (-1 when absent/invalid); the caller
+// applies it only to actions that take one and re-checks the target mask.
 int AiIpcRequestAction(unsigned owner, unsigned frame,
     const std::array<float, kAiRlFeatureCount>& features,
-    const std::array<std::uint8_t, kAiRlActionCount>& mask);
+    const std::array<std::uint8_t, kAiRlActionCount>& mask,
+    const std::array<std::uint8_t, kAiRlTargetCellCount>& target_mask,
+    int* target_cell = nullptr);
 
 // Notify the server the match ended, then close.  Safe to call when not
 // connected (no-op).

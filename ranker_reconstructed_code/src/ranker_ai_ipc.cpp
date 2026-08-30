@@ -97,7 +97,12 @@ bool AiIpcConnected() {
 
 int AiIpcRequestAction(unsigned owner, unsigned frame,
     const std::array<float, kAiRlFeatureCount>& features,
-    const std::array<std::uint8_t, kAiRlActionCount>& mask) {
+    const std::array<std::uint8_t, kAiRlActionCount>& mask,
+    const std::array<std::uint8_t, kAiRlTargetCellCount>& target_mask,
+    int* target_cell) {
+    if (target_cell != nullptr) {
+        *target_cell = -1;
+    }
     AiIpcState& st = state();
     if (!st.connected) {
         return -1;
@@ -121,6 +126,13 @@ int AiIpcRequestAction(unsigned owner, unsigned frame,
             static_cast<unsigned>(mask[i]));
         message += num;
     }
+    message += "],\"tmask\":[";
+    for (std::size_t i = 0; i < target_mask.size(); ++i) {
+        char num[8];
+        std::snprintf(num, sizeof(num), "%s%u", i == 0 ? "" : ",",
+            static_cast<unsigned>(target_mask[i]));
+        message += num;
+    }
     message += "]}\n";
 
     if (!send_all(st.socket, message.data(),
@@ -134,7 +146,7 @@ int AiIpcRequestAction(unsigned owner, unsigned frame,
         AiIpcClose();
         return -1;
     }
-    // Parse {"action":N} — a minimal scan, no JSON library needed.
+    // Parse {"action":N[,"target":C]} — a minimal scan, no JSON library needed.
     const std::size_t key = reply.find("\"action\"");
     if (key == std::string::npos) {
         return -1;
@@ -146,6 +158,19 @@ int AiIpcRequestAction(unsigned owner, unsigned frame,
     const int action = std::atoi(reply.c_str() + colon + 1);
     if (action < 0 || static_cast<std::size_t>(action) >= kAiRlActionCount) {
         return -1;
+    }
+    if (target_cell != nullptr) {
+        const std::size_t target_key = reply.find("\"target\"");
+        if (target_key != std::string::npos) {
+            const std::size_t target_colon = reply.find(':', target_key);
+            if (target_colon != std::string::npos) {
+                const int cell = std::atoi(reply.c_str() + target_colon + 1);
+                if (cell >= 0 &&
+                    static_cast<std::size_t>(cell) < kAiRlTargetCellCount) {
+                    *target_cell = cell;
+                }
+            }
+        }
     }
     return action;
 }

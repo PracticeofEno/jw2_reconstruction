@@ -2457,8 +2457,8 @@ void test_ai_micro_executor_translator_objectives() {
         raid.units.push_back(fighter_unit(0x9800, 1, 320 + 700, 320, false));
         require(EncodeAiObservationForRl(raid).features[76] > 0.0f,
             "raid perimeter feature did not use the 800 px defend bubble");
-        require(kAiRlActionCount == 56 && kAiRlFeatureCount == 545,
-            "v7 action/feature counts");
+        require(kAiRlActionCount == 64 && kAiRlFeatureCount == 545,
+            "v8 action/feature counts");
     }
     // v5 features: spatial grid, directions, enemy composition, own state,
     // production pipeline, scout.  64x64-tile map (2048 px) -> 8x8 cells of
@@ -3062,6 +3062,135 @@ void test_ai_search_split() {
         "roamer did not re-pick a target on arrival");
 }
 
+// v8 - the detachable raid group (docs/1순위.md): detach splits a mobility-
+// first share off the main army, the raid runs its OWN objective through the
+// same executor machinery, merge folds it back; and the spatial-target head:
+// legal cells encode owner knowledge, a cell on attack becomes the strike
+// zone (targets hunted around it, march to it when nothing is known there),
+// a cell on defend becomes the post.
+void test_ai_raid_group_and_target_cell() {
+    AiObservation obs = micro_observation();
+    for (u32 i = 0; i < 8; ++i) {  // 8 own fighters near (400, 400)
+        obs.units.push_back(
+            fighter_unit(0x4000 + i, 0, 380 + static_cast<i32>(i) * 10, 400,
+                true));
+    }
+    // Enemy egg nest far away at (1500, 1500) - grid cell (5,5) = 45 on the
+    // 64x64-tile (2048 px, 256 px/cell) test map.
+    obs.units.push_back(observed_unit(0x9400, 1, 0x84, 0, 1500, 1500, false));
+
+    // Mask: detach needs the pump-filled army-group size and no raid; raid
+    // actions stay closed while no raid exists.
+    obs.army_group_unit_count = 8;
+    obs.raid_unit_count = 0;
+    AiRlStepEncoding enc = EncodeAiObservationForRl(obs);
+    require(enc.legal_mask[static_cast<std::size_t>(
+                AiRlHighLevelAction::detach_raid)] == 1 &&
+        enc.legal_mask[static_cast<std::size_t>(
+            AiRlHighLevelAction::merge_raid)] == 0 &&
+        enc.legal_mask[static_cast<std::size_t>(
+            AiRlHighLevelAction::raid_attack_base)] == 0,
+        "raid mask did not gate on detach preconditions");
+    obs.raid_unit_count = 3;
+    enc = EncodeAiObservationForRl(obs);
+    require(enc.legal_mask[static_cast<std::size_t>(
+                AiRlHighLevelAction::detach_raid)] == 0 &&
+        enc.legal_mask[static_cast<std::size_t>(
+            AiRlHighLevelAction::merge_raid)] == 1 &&
+        enc.legal_mask[static_cast<std::size_t>(
+            AiRlHighLevelAction::raid_attack_base)] == 1 &&
+        enc.legal_mask[static_cast<std::size_t>(
+            AiRlHighLevelAction::raid_defend_base)] == 1,
+        "raid mask did not open with a live raid");
+    obs.raid_unit_count = 0;
+
+    // Target-cell mask: every cell of the fully explored test map is legal;
+    // darkening the (7,7) cell block (tiles 56..63 square, no memory there)
+    // closes exactly that cell.
+    require(enc.target_mask[45] == 1 && enc.target_mask[63] == 1,
+        "explored cells were not legal target cells");
+    AiObservation dark = obs;
+    for (u32 ty = 56; ty < 64; ++ty) {
+        for (u32 tx = 56; tx < 64; ++tx) {
+            dark.tiles[ty * dark.map_width_tiles + tx].explored = false;
+        }
+    }
+    require(EncodeAiObservationForRl(dark).target_mask[63] == 0,
+        "an unexplored, memory-free cell stayed a legal target");
+
+    // Translator: detach forms the raid (8 fighters * 30% -> floor 3), the
+    // raid holds where it stands, and the main army group keeps the rest.
+    TyranoScriptedBotState state{};
+    state.rally_configured = true;
+    TyranoScriptedBotConfig config{};
+    config.decision_interval_frames = 1;
+    obs.simulation_frame = 1;
+    TyranoScriptedBotDecision decision =
+        DecideTyranoScriptedBotForHighLevelAction(state, obs,
+            AiRlHighLevelAction::detach_raid, config);
+    require(decision.code == TyranoScriptedBotDecisionCode::objective_updated &&
+        AiMicroGroupMembers(state.micro, obs, AiMicroGroup::raid).size() == 3 &&
+        AiMicroObjectiveOf(state.micro, AiMicroGroup::raid).kind ==
+            AiMicroObjectiveKind::defend,
+        "detach_raid did not split a holding 3-unit raid off the army");
+
+    // raid_attack_base with target cell 9 (centre (384,384)): buildings_first
+    // attack on the raid with the strike zone set; the enemy building is
+    // OUTSIDE that zone, so the executor marches on the zone with no target.
+    obs.simulation_frame = 2;
+    decision = DecideTyranoScriptedBotForHighLevelAction(state, obs,
+        AiRlHighLevelAction::raid_attack_base, config, 9);
+    const AiMicroObjective* raid = &AiMicroObjectiveOf(state.micro,
+        AiMicroGroup::raid);
+    require(decision.code == TyranoScriptedBotDecisionCode::objective_updated &&
+        raid->kind == AiMicroObjectiveKind::attack &&
+        raid->tactic == AiMicroAttackTactic::buildings_first &&
+        raid->preferred_x == 384 && raid->preferred_y == 384,
+        "raid_attack_base did not set the strike zone from the target cell");
+    AiMicroExecutorStep(state.micro, obs);
+    require(raid->target_unit_id == 0 && raid->target_x == 384 &&
+        raid->target_y == 384,
+        "strike zone with nothing inside did not march on the zone point");
+    // Same attack aimed at the building's cell (45): the zone contains it,
+    // so the executor locks onto it.
+    obs.simulation_frame = 3;
+    decision = DecideTyranoScriptedBotForHighLevelAction(state, obs,
+        AiRlHighLevelAction::raid_attack_base, config, 45);
+    AiMicroExecutorStep(state.micro, obs);
+    require(raid->target_unit_id == 0x9400 && raid->target_x == 1500,
+        "strike zone containing the enemy building did not target it");
+    // The MAIN army objective was never touched by any of the raid actions.
+    require(AiMicroObjectiveOf(state.micro, AiMicroGroup::army).kind !=
+            AiMicroObjectiveKind::attack,
+        "raid actions leaked into the main army objective");
+
+    // defend_base with a target cell: the post is the cell centre, not the
+    // nest; without a cell it falls back to the nest (v7 behavior).
+    obs.simulation_frame = 4;
+    decision = DecideTyranoScriptedBotForHighLevelAction(state, obs,
+        AiRlHighLevelAction::defend_base, config, 18);  // cell (2,2) = (640,640)
+    const AiMicroObjective* army = &AiMicroObjectiveOf(state.micro,
+        AiMicroGroup::army);
+    require(decision.code == TyranoScriptedBotDecisionCode::objective_updated &&
+        army->kind == AiMicroObjectiveKind::defend &&
+        army->target_x == 640 && army->target_y == 640,
+        "defend_base did not post at the target cell centre");
+    obs.simulation_frame = 5;
+    decision = DecideTyranoScriptedBotForHighLevelAction(state, obs,
+        AiRlHighLevelAction::defend_base, config);
+    require(army->target_x == 320 && army->target_y == 320,
+        "cell-less defend_base did not fall back to the nearest nest");
+
+    // merge_raid folds every raid member back into the main army.
+    obs.simulation_frame = 6;
+    decision = DecideTyranoScriptedBotForHighLevelAction(state, obs,
+        AiRlHighLevelAction::merge_raid, config);
+    require(decision.code == TyranoScriptedBotDecisionCode::objective_updated &&
+        AiMicroGroupMembers(state.micro, obs, AiMicroGroup::raid).empty() &&
+        AiMicroGroupMembers(state.micro, obs, AiMicroGroup::army).size() == 8,
+        "merge_raid did not fold the raid back into the army");
+}
+
 // v7 - a worker already walking to build reserves its site in the engine
 // (placement TemporaryBlock), so the planner must not hand the same site to
 // the next order; and a refused build order backs its structure type off.
@@ -3133,6 +3262,7 @@ int main() {
     test_ai_expansion_plan_and_chain();
     test_ai_shared_build_placement();
     test_ai_search_split();
+    test_ai_raid_group_and_target_cell();
     test_ai_pending_site_and_reject_backoff();
     test_ai_play_lobby_role_compatibility();
     std::cout << "ai_play_interface_regression: passed\n";

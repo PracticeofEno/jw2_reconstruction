@@ -709,7 +709,8 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotAction(
 
 TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
     TyranoScriptedBotState& state, const AiObservation& observation,
-    AiRlHighLevelAction action, const TyranoScriptedBotConfig& config) {
+    AiRlHighLevelAction action, const TyranoScriptedBotConfig& config,
+    i32 target_cell) {
     TyranoScriptedBotDecision decision{};
     if (observation.game_ended) {
         decision.code = TyranoScriptedBotDecisionCode::game_ended;
@@ -898,29 +899,52 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
         updated.code = TyranoScriptedBotDecisionCode::objective_updated;
         return updated;
     };
-    const auto army_anchor = [&]() {
+    const auto group_anchor = [&](AiMicroGroup group) {
         UnitMovementPoint anchor{std::max(observation.start_x, 0),
             std::max(observation.start_y, 0)};
-        AiMicroGroupCentroid(state.micro, observation, AiMicroGroup::army,
-            anchor, micro_config);
+        AiMicroGroupCentroid(state.micro, observation, group, anchor,
+            micro_config);
         return anchor;
+    };
+    const auto army_anchor = [&]() { return group_anchor(AiMicroGroup::army); };
+    // v8 spatial target: the policy's 8x8 grid cell as a map point (cell
+    // centre), or (-1,-1) when the action carried no cell.
+    const auto cell_point = [&]() -> UnitMovementPoint {
+        const i32 width_px = static_cast<i32>(observation.map_width_tiles) * 32;
+        const i32 height_px = static_cast<i32>(observation.map_height_tiles) * 32;
+        if (target_cell < 0 ||
+            target_cell >= static_cast<i32>(kAiRlTargetCellCount) ||
+            width_px <= 0 || height_px <= 0) {
+            return {-1, -1};
+        }
+        const i32 grid = static_cast<i32>(kAiRlTargetGridWidth);
+        const i32 cx = target_cell % grid;
+        const i32 cy = target_cell / grid;
+        return {cx * width_px / grid + width_px / (2 * grid),
+            cy * height_px / grid + height_px / (2 * grid)};
     };
     // Attack objectives carry a TACTIC, not a target: the executor derives
     // the group's current target from the tactic every frame, so the policy's
-    // choice keeps applying after the first kill.
-    const auto attack_tactic_objective = [&](AiMicroAttackTactic tactic) {
+    // choice keeps applying after the first kill.  An optional preferred
+    // point (the spatial-target cell) makes the group hunt there first.
+    const auto attack_tactic_objective = [&](AiMicroAttackTactic tactic,
+        AiMicroGroup group = AiMicroGroup::army,
+        UnitMovementPoint preferred = {-1, -1}) {
         AiMicroObjective objective;
         objective.kind = AiMicroObjectiveKind::attack;
         objective.tactic = tactic;
-        return objective_updated(AiMicroGroup::army, objective);
+        objective.preferred_x = preferred.x;
+        objective.preferred_y = preferred.y;
+        return objective_updated(group, objective);
     };
-    const auto defend_objective = [&](UnitMovementPoint post, i32 radius) {
+    const auto defend_objective = [&](UnitMovementPoint post, i32 radius,
+        AiMicroGroup group = AiMicroGroup::army) {
         AiMicroObjective objective;
         objective.kind = AiMicroObjectiveKind::defend;
         objective.target_x = post.x;
         objective.target_y = post.y;
         objective.radius = radius;
-        return objective_updated(AiMicroGroup::army, objective);
+        return objective_updated(group, objective);
     };
     const auto nearest_hostile_to = [&](i32 x, i32 y) -> const AiObservedUnit* {
         const AiObservedUnit* best = nullptr;
@@ -1235,12 +1259,22 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
         return objective_updated(AiMicroGroup::scout, objective);
     }
     case AiRlHighLevelAction::attack_nearest_enemy:
-    case AiRlHighLevelAction::attack_enemy_base: {
-        // The policy chooses only the class priority - enemy ARMY first or
-        // enemy BUILDINGS first.  Either way the executor attack-moves the
-        // army on the known enemy location (a visible hostile, or a building
-        // remembered in the fog memory) and engages what it meets in the
-        // tactic's order.  With no enemy location known, search first.
+    case AiRlHighLevelAction::attack_enemy_base:
+    case AiRlHighLevelAction::raid_attack_units:
+    case AiRlHighLevelAction::raid_attack_base: {
+        // The policy chooses the class priority - enemy ARMY first or enemy
+        // BUILDINGS first - and (v8) the GROUP: main army or the detached
+        // raid.  Either way the executor attack-moves the group on the known
+        // enemy location (a visible hostile, or a building remembered in the
+        // fog memory) and engages what it meets in the tactic's order.  With
+        // no enemy location known, search first.  The buildings_first actions
+        // also take the spatial-target cell as the strike zone.
+        const bool raid = action == AiRlHighLevelAction::raid_attack_units ||
+            action == AiRlHighLevelAction::raid_attack_base;
+        if (raid && AiMicroGroupMembers(state.micro, observation,
+                AiMicroGroup::raid, micro_config).empty()) {
+            return decision;
+        }
         bool known = nearest_enemy != nullptr ||
             nearest_enemy_building != nullptr;
         if (!known && observation.enemy_building_memory.size() ==
@@ -1256,16 +1290,24 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
         if (!known) {
             return decision;
         }
+        const bool buildings_first =
+            action == AiRlHighLevelAction::attack_enemy_base ||
+            action == AiRlHighLevelAction::raid_attack_base;
         return attack_tactic_objective(
-            action == AiRlHighLevelAction::attack_enemy_base ?
-                AiMicroAttackTactic::buildings_first :
-                AiMicroAttackTactic::units_first);
+            buildings_first ? AiMicroAttackTactic::buildings_first :
+                AiMicroAttackTactic::units_first,
+            raid ? AiMicroGroup::raid : AiMicroGroup::army,
+            buildings_first ? cell_point() : UnitMovementPoint{-1, -1});
     }
-    case AiRlHighLevelAction::search_enemy_base: {
-        // Army sweep of the UNEXPLORED START CANDIDATES (where an enemy base
+    case AiRlHighLevelAction::search_enemy_base:
+    case AiRlHighLevelAction::raid_search: {
+        // Group sweep of the UNEXPLORED START CANDIDATES (where an enemy base
         // can be); the executor picks and advances the target.  Refused
         // (and masked off) once every candidate has been checked.
-        if (combat_units.empty()) {
+        const bool raid = action == AiRlHighLevelAction::raid_search;
+        if (raid ? AiMicroGroupMembers(state.micro, observation,
+                AiMicroGroup::raid, micro_config).empty() :
+                combat_units.empty()) {
             return decision;
         }
         bool unexplored_start = false;
@@ -1295,7 +1337,8 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
         }
         AiMicroObjective objective;
         objective.kind = AiMicroObjectiveKind::search;
-        return objective_updated(AiMicroGroup::army, objective);
+        return objective_updated(
+            raid ? AiMicroGroup::raid : AiMicroGroup::army, objective);
     }
     case AiRlHighLevelAction::explore_frontier:
     case AiRlHighLevelAction::roam_scout: {
@@ -1355,30 +1398,60 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
             AiMicroObjectiveKind::explore : AiMicroObjectiveKind::roam;
         return objective_updated(group, objective);
     }
-    case AiRlHighLevelAction::retreat: {
-        // Whole army to the nest nearest its centroid, no engagement; the
+    case AiRlHighLevelAction::retreat:
+    case AiRlHighLevelAction::raid_retreat: {
+        // Whole group to the nest nearest its centroid, no engagement; the
         // executor flips the objective to defend(that nest) on arrival.
-        const UnitMovementPoint anchor = army_anchor();
+        const bool raid = action == AiRlHighLevelAction::raid_retreat;
+        const AiMicroGroup group =
+            raid ? AiMicroGroup::raid : AiMicroGroup::army;
+        if (raid && AiMicroGroupMembers(state.micro, observation,
+                AiMicroGroup::raid, micro_config).empty()) {
+            return decision;
+        }
+        const UnitMovementPoint anchor = group_anchor(group);
         const UnitMovementPoint nest = AiMicroNearestBase(observation,
             anchor.x, anchor.y, micro_config);
         AiMicroObjective objective;
         objective.kind = AiMicroObjectiveKind::retreat;
         objective.target_x = nest.x;
         objective.target_y = nest.y;
-        return objective_updated(AiMicroGroup::army, objective);
+        return objective_updated(group, objective);
     }
-    case AiRlHighLevelAction::defend_base: {
-        // Post = nest nearest the army; bubble = one screen around every own
-        // nest (hostiles seen outside it are ignored, chasers leash back).
-        const UnitMovementPoint anchor = army_anchor();
-        return defend_objective(AiMicroNearestBase(observation, anchor.x,
-            anchor.y, micro_config), micro_config.defend_radius);
+    case AiRlHighLevelAction::defend_base:
+    case AiRlHighLevelAction::raid_defend_base: {
+        // Post = the spatial-target cell centre when the policy chose one
+        // (v8), else the nest nearest the group; bubble = one screen around
+        // every own nest (hostiles seen outside it are ignored, chasers
+        // leash back).
+        const bool raid = action == AiRlHighLevelAction::raid_defend_base;
+        const AiMicroGroup group =
+            raid ? AiMicroGroup::raid : AiMicroGroup::army;
+        if (raid && AiMicroGroupMembers(state.micro, observation,
+                AiMicroGroup::raid, micro_config).empty()) {
+            return decision;
+        }
+        UnitMovementPoint post = cell_point();
+        if (post.x < 0) {
+            const UnitMovementPoint anchor = group_anchor(group);
+            post = AiMicroNearestBase(observation, anchor.x, anchor.y,
+                micro_config);
+        }
+        return defend_objective(post, micro_config.defend_radius, group);
     }
     case AiRlHighLevelAction::hunt_neutral_monster:
+    case AiRlHighLevelAction::raid_hunt_neutral: {
         if (nearest_neutral == nullptr) {
             return decision;
         }
-        return attack_tactic_objective(AiMicroAttackTactic::neutral_only);
+        const bool raid = action == AiRlHighLevelAction::raid_hunt_neutral;
+        if (raid && AiMicroGroupMembers(state.micro, observation,
+                AiMicroGroup::raid, micro_config).empty()) {
+            return decision;
+        }
+        return attack_tactic_objective(AiMicroAttackTactic::neutral_only,
+            raid ? AiMicroGroup::raid : AiMicroGroup::army);
+    }
     // Producer map from the session reference tables: egg 0x84 produces the
     // fighter roster, base 0x80 produces 0x2c, 0x87 produces 0x29/0x2a.
     case AiRlHighLevelAction::produce_unit_x22:
@@ -1620,6 +1693,91 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
         state.drop_target_y = target_y;
         ++state.decisions_emitted;
         return ready(TyranoScriptedBotIntent::drop_attack, std::move(act));
+    }
+    case AiRlHighLevelAction::detach_raid: {
+        // Split the strike group off the main army (docs/1순위.md): a
+        // deterministic mobility-first share - the policy cannot pick units
+        // with a flat discrete head, so WHO goes is an executor rule and the
+        // policy only decides THAT a raid exists and what it does.  Fastest
+        // first (ranged breaks ties - the raid's job is hit-and-run), then
+        // lowest id; 30% of the group, min 3, max one planner chunk.
+        if (!AiMicroGroupMembers(state.micro, observation, AiMicroGroup::raid,
+                micro_config).empty()) {
+            return decision;  // a raid already exists
+        }
+        std::vector<const AiObservedUnit*> members = AiMicroGroupMembers(
+            state.micro, observation, AiMicroGroup::army, micro_config);
+        std::vector<const AiObservedUnit*> fighters;
+        for (const AiObservedUnit* unit : members) {
+            if (unit->type_id == kTyranoWorkerType ||
+                unit->type_id >= kTyranoMobileTypeLimit ||
+                !unit_can_attack(*unit) || unit_is_constructing(*unit) ||
+                AiMicroRoleOf(*unit, micro_config) == AiMicroRole::transport) {
+                continue;
+            }
+            fighters.push_back(unit);
+        }
+        if (fighters.size() <
+            static_cast<std::size_t>(micro_config.raid_detach_minimum) * 2) {
+            return decision;  // too small to split (mask floor mirrors this)
+        }
+        const auto speed_of = [](const AiObservedUnit& unit) -> i64 {
+            return static_cast<i64>(unit.movement_step_limit) * 1000 /
+                std::max<u32>(unit.movement_period, 1u);
+        };
+        std::sort(fighters.begin(), fighters.end(),
+            [&](const AiObservedUnit* lhs, const AiObservedUnit* rhs) {
+                const i64 lhs_speed = speed_of(*lhs);
+                const i64 rhs_speed = speed_of(*rhs);
+                if (lhs_speed != rhs_speed) {
+                    return lhs_speed > rhs_speed;
+                }
+                const bool lhs_ranged =
+                    AiMicroRoleOf(*lhs, micro_config) == AiMicroRole::ranged;
+                const bool rhs_ranged =
+                    AiMicroRoleOf(*rhs, micro_config) == AiMicroRole::ranged;
+                if (lhs_ranged != rhs_ranged) {
+                    return lhs_ranged;
+                }
+                return lhs->id < rhs->id;
+            });
+        std::size_t count = fighters.size() *
+            micro_config.raid_detach_percent / 100u;
+        count = std::max<std::size_t>(count, micro_config.raid_detach_minimum);
+        count = std::min<std::size_t>(count, kAiMaximumUnitsPerAction);
+        count = std::min<std::size_t>(count, fighters.size() / 2);
+        i64 sum_x = 0;
+        i64 sum_y = 0;
+        for (std::size_t index = 0; index < count; ++index) {
+            AiMicroAssignGroup(state.micro, fighters[index]->id,
+                AiMicroGroup::raid);
+            sum_x += fighters[index]->x;
+            sum_y += fighters[index]->y;
+        }
+        // The fresh raid HOLDS where it stands until the policy directs it
+        // (a tiny defend bubble at its own centroid).
+        AiMicroObjective objective;
+        objective.kind = AiMicroObjectiveKind::defend;
+        objective.target_x = static_cast<i32>(sum_x / static_cast<i64>(count));
+        objective.target_y = static_cast<i32>(sum_y / static_cast<i64>(count));
+        objective.radius = micro_config.hold_radius;
+        return objective_updated(AiMicroGroup::raid, objective);
+    }
+    case AiRlHighLevelAction::merge_raid: {
+        // Fold the raid back into the main army: pure group re-assignment,
+        // the members pick up the army's current objective next frame.
+        const std::vector<const AiObservedUnit*> members = AiMicroGroupMembers(
+            state.micro, observation, AiMicroGroup::raid, micro_config);
+        if (members.empty()) {
+            return decision;
+        }
+        for (const AiObservedUnit* unit : members) {
+            AiMicroAssignGroup(state.micro, unit->id, AiMicroGroup::army);
+        }
+        ++state.decisions_emitted;
+        TyranoScriptedBotDecision updated{};
+        updated.code = TyranoScriptedBotDecisionCode::objective_updated;
+        return updated;
     }
     }
 

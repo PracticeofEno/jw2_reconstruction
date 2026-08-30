@@ -117,9 +117,38 @@ enum class AiRlHighLevelAction : u32 {
     //                      the active vision at random, indefinitely
     explore_frontier,
     roam_scout,
+    // v8 - the detachable RAID group (docs/1순위.md).  The policy cannot pick
+    // units (flat discrete head); detaching is a deterministic executor rule
+    // (mobility-first 30% of the main army, min 3, max one 14-unit chunk).
+    // The existing army actions keep their meaning (MAIN army only); these
+    // drive the raid group's own objective, so main-defend + raid-attack can
+    // run at the same time.  Newly produced fighters always join the main
+    // army; a dead raid must be re-detached.
+    detach_raid,        // split the raid off the main army
+    merge_raid,         // fold the raid back into the main army
+    raid_attack_units,  // raid <- attack(units_first)
+    raid_attack_base,   // raid <- attack(buildings_first); spatial-target cell
+    raid_defend_base,   // raid <- defend(nest nearest the raid)
+    raid_retreat,       // raid <- retreat (defend on arrival)
+    raid_hunt_neutral,  // raid <- attack(neutral_only)
+    raid_search,        // raid <- search (unexplored start candidates)
 };
 
-constexpr std::size_t kAiRlActionCount = 56;
+constexpr std::size_t kAiRlActionCount = 64;
+
+// v8 spatial-target head: the actions that also take one of the 8x8 grid
+// cells as WHERE (attack strike zone / defend post).  For every other action
+// the cell argument is ignored; -1 always means "no cell" (v7 behavior).
+constexpr bool AiRlActionTakesTargetCell(AiRlHighLevelAction action) {
+    return action == AiRlHighLevelAction::attack_enemy_base ||
+        action == AiRlHighLevelAction::raid_attack_base ||
+        action == AiRlHighLevelAction::defend_base ||
+        action == AiRlHighLevelAction::raid_defend_base;
+}
+constexpr std::size_t kAiRlTargetCellCount = 64;  // the 8x8 feature grid
+constexpr u32 kAiRlTargetGridWidth = 8;
+// One grid cell covers map_size/8 px (128x128-tile map at 32 px/tile = 512).
+constexpr i32 kAiRlTargetCellPx = 512;
 
 // One row per research action: the production order it starts, the building
 // type that researches it (session completion_references), the level cap and
@@ -169,6 +198,11 @@ struct AiRlStepEncoding {
     // legal_mask[i] == 1 -> action i is currently permissible (approx, from the
     // observation).  0 -> mask its logit to -inf so the policy never picks it.
     std::array<std::uint8_t, kAiRlActionCount> legal_mask{};
+    // v8: legal cells for the spatial-target head (row-major 8x8) - a cell the
+    // owner has any knowledge of: an explored tile, a remembered enemy
+    // building, or a start candidate.  All-zero -> the spatial actions
+    // themselves are closed in legal_mask.
+    std::array<std::uint8_t, kAiRlTargetCellCount> target_mask{};
 };
 
 // Encode one observation into the RL feature vector and legal-action mask.
