@@ -67,6 +67,8 @@
 !ranker_reconstructed_code/tools/extract_ui_tools.ps1
 !ranker_reconstructed_code/tools/replay_debug/*.py
 !ranker_reconstructed_code/tools/replay_debug/README.md
+!ranker_reconstructed_code/tools/ai/
+!ranker_reconstructed_code/tools/ai/*.py
 !ranker_reconstructed_code/tools/gameplay_parity/
 !ranker_reconstructed_code/tools/gameplay_parity/*.py
 !ranker_reconstructed_code/tools/gameplay_parity/*.md
