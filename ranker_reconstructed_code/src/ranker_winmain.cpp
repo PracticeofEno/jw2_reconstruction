@@ -4,6 +4,7 @@
 #include "ranker_change_password.h"
 #include "ranker_change_lobby.h"
 #include "ranker_client_config.h"
+#include "ranker_ai_autopilot.h"
 #include "ranker_ai_decision_gate.h"
 #include "ranker_ai_expansion.h"
 #include "ranker_ai_ipc.h"
@@ -866,6 +867,12 @@ struct RuntimeGlobals {
     std::array<std::vector<u8>, kPlayerSlotCount> ai_play_enemy_building_memory{};
     // v9 event-based decision gate state (docs/AI_PLAY_DECISION_GATE_AUTOPILOT.md).
     std::array<AiDecisionGateState, kPlayerSlotCount> ai_play_decision_gates{};
+    // v9 macro autopilot per-owner state + the runtime enables (-AIAUTOPILOT /
+    // -AIREFLEX / -AIGATE, all default ON for armed Computer(AI) owners).
+    std::array<AiAutopilotState, kPlayerSlotCount> ai_play_autopilots{};
+    bool ai_play_autopilot_enabled = true;
+    bool ai_play_reflex_enabled = true;
+    bool ai_play_gate_enabled = true;
     // v8: per-owner fog-honest memory of the enemy ARMY (per-tile last-seen
     // hostile-mobile counts) and the most recent sighting summary.
     std::array<std::vector<u8>, kPlayerSlotCount> ai_play_enemy_army_memory{};
@@ -12429,6 +12436,9 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     for (AiDecisionGateState& gate : g_runtime.ai_play_decision_gates) {
         gate = AiDecisionGateState{};
     }
+    for (AiAutopilotState& autopilot : g_runtime.ai_play_autopilots) {
+        autopilot = AiAutopilotState{};
+    }
     for (std::vector<u8>& memory : g_runtime.ai_play_enemy_army_memory) {
         memory.clear();
     }
@@ -12690,6 +12700,18 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
             append_startup_log("ai-play: imitation logging %s (owner=%lu)",
                 g_runtime.ai_play_imitation_enabled ? "enabled" : "disabled",
                 static_cast<unsigned long>(g_runtime.ai_play_imitation_owner));
+            // v9 macro autopilot / defense reflex / decision gate (default ON;
+            // -AIAUTOPILOT:0 / -AIREFLEX:0 / -AIGATE:0 = the A/B levers).
+            g_runtime.ai_play_autopilot_enabled =
+                p2p_network_launch_parameters().self_play_autopilot;
+            g_runtime.ai_play_reflex_enabled =
+                p2p_network_launch_parameters().self_play_reflex;
+            g_runtime.ai_play_gate_enabled =
+                p2p_network_launch_parameters().self_play_gate;
+            append_startup_log("ai-play: autopilot=%d reflex=%d gate=%d",
+                g_runtime.ai_play_autopilot_enabled ? 1 : 0,
+                g_runtime.ai_play_reflex_enabled ? 1 : 0,
+                g_runtime.ai_play_gate_enabled ? 1 : 0);
             // -AIIPC:PORT online policy-in-the-loop: reuse the random-policy
             // branch's encode/translate/publish plumbing, but source the action
             // from the Python policy server instead of rand().
@@ -23440,8 +23462,18 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
     // policy runs only when a decision-relevant trigger fired (or
     // max_interval passed).  The micro executor below still runs EVERY frame.
     AiDecisionGateState& gate = g_runtime.ai_play_decision_gates[local_owner];
-    const AiDecisionGateConfig gate_config{};
+    AiDecisionGateConfig gate_config{};
+    if (!g_runtime.ai_play_gate_enabled) {
+        // -AIGATE:0 = the pre-v9 behavior: max == min makes every check fire
+        // trigger_max_interval, i.e. a decision every 8 frames.
+        gate_config.max_interval_frames = gate_config.min_interval_frames;
+    }
     const bool check_due = AiDecisionGateCheckDue(gate, frame, gate_config);
+    // v9: the policy action this frame (no_op when the gate did not fire) and
+    // the autopilot's auxiliary actions - planned in the check block, planned
+    // + published after the policy decision below.
+    AiRlHighLevelAction policy_pick = AiRlHighLevelAction::no_op;
+    std::vector<AiRlHighLevelAction> autopilot_plan;
     // Enemy-building memory, EVERY frame: forget tiles that are lit and
     // empty, remember every visible hostile building's tile.  The micro
     // executor reads it each frame (attack_enemy_base marches on the nearest
@@ -23651,9 +23683,12 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
         }
         if (gate_result.due && legal_count != 0) {
             // v9 decision-context features [772..787]: why this decision
-            // fired and how long since the previous one.
+            // fired, how long since the previous one, and how much the
+            // autopilot did meanwhile.
             ApplyAiRlDecisionContext(encoding, gate_result.frames_since_last,
-                gate_result.triggers, {});
+                gate_result.triggers,
+                g_runtime.ai_play_autopilots[local_owner]
+                    .fired_since_decision);
             u32 pick;
             bool picked = true;
             i32 target_cell = -1;
@@ -23713,6 +23748,11 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
                 AiRlTraceRecordDecision(g_runtime.ai_play_rl_traces[local_owner],
                     frame, pick, encoding, {}, losses, target_cell,
                     gate_result.triggers, gate_result.frames_since_last);
+                // The recorded context consumed the autopilot counts since
+                // the previous decision; restart the window.
+                g_runtime.ai_play_autopilots[local_owner]
+                    .fired_since_decision = {};
+                policy_pick = static_cast<AiRlHighLevelAction>(pick);
                 decision = DecideTyranoScriptedBotForHighLevelAction(
                     bot, observation.observation,
                     static_cast<AiRlHighLevelAction>(pick), bot_config,
@@ -23739,6 +23779,16 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
                     first_group_member_id(bot.micro, observation.observation,
                         AiMicroGroup::roamer));
             }
+        }
+        // v9 macro autopilot: plan the auxiliary economy actions on the same
+        // check cadence, decision or not (the whole point is keeping the
+        // economy breathing while the policy decides rarely).  Planned here
+        // where the encoding lives; published below with the executor
+        // actions.  Never traced as a decision.
+        if (g_runtime.ai_play_autopilot_enabled) {
+            autopilot_plan = AiAutopilotPlan(
+                g_runtime.ai_play_autopilots[local_owner],
+                observation.observation, encoding, policy_pick, frame);
         }
     } else if (!rl_mode) {
         decision = DecideTyranoScriptedBotAction(bot, observation.observation);
@@ -23997,11 +24047,44 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
                     static_cast<unsigned long>(AiMicroRoleOf(unit)));
             }
         }
+        // v9 macro autopilot: publish the auxiliary actions planned in the
+        // check block through the normal translator + live validator.  The
+        // translator's own interval guard is bypassed around each call (it
+        // exists for the policy cadence; the autopilot is a same-frame
+        // auxiliary) and restored, so the policy path is unaffected.
+        for (const AiRlHighLevelAction auto_action : autopilot_plan) {
+            const u32 saved_decision_frame = bot.last_decision_frame;
+            bot.last_decision_frame = 0xffffffffu;
+            TyranoScriptedBotDecision auto_decision =
+                DecideTyranoScriptedBotForHighLevelAction(bot,
+                    observation.observation, auto_action, bot_config);
+            bot.last_decision_frame = saved_decision_frame;
+            if (!auto_decision) {
+                continue;
+            }
+            const AiActionPlanResult auto_plan =
+                PlanAiSemanticActionV1(plan_input, auto_decision.action);
+            if (auto_plan && publish_planned_packets(auto_plan)) {
+                AiAutopilotState& autopilot =
+                    g_runtime.ai_play_autopilots[local_owner];
+                const std::size_t rule =
+                    static_cast<std::size_t>(AiAutopilotRuleOf(auto_action));
+                ++autopilot.fired_total[rule];
+                ++autopilot.fired_since_decision[rule];
+                if (!auto_decision.action.unit_ids.empty()) {
+                    AiMicroHoldUnits(bot.micro, auto_decision.action.unit_ids,
+                        frame + AiMicroExecutorConfig{}.policy_hold_frames);
+                }
+            }
+        }
         // Group-objective micro executor (every frame): harvest / attack /
         // defend / retreat / scout default behaviors for every own unit,
         // issuing only the orders that changed since the last frame.
+        AiMicroExecutorConfig micro_exec_config{};
+        micro_exec_config.reflex_enabled = g_runtime.ai_play_reflex_enabled;
         std::vector<AiSemanticAction> micro_actions =
-            AiMicroExecutorStep(bot.micro, observation.observation);
+            AiMicroExecutorStep(bot.micro, observation.observation,
+                micro_exec_config);
         // Expansion builder timeline: log every command-state change of the
         // tracked builder (see the build-issued log above).
         if (g_runtime.ai_expand_tracked_unit != 0 &&
@@ -33172,11 +33255,14 @@ void write_ai_selfplay_result(const GameplayLoopState& state, const char* reason
             players.owner_secondary_resources[owner] : 0;
         const u32 slot_state = owner < players.slot_states.size() ?
             players.slot_states[owner] : 0;
+        const AiAutopilotState& autopilot = g_runtime.ai_play_autopilots[owner];
         std::fprintf(file,
             "    {\"owner\": %lu, \"slot_state\": %lu, \"units\": %lu, "
             "\"unit_value\": %llu, \"buildings\": %lu, "
             "\"unit_value_lost\": %llu, \"building_value_lost\": %llu, "
             "\"pop_used\": %lu, \"primary\": %lu, \"secondary\": %lu, "
+            "\"autopilot_workers\": %lu, \"autopilot_pop_nests\": %lu, "
+            "\"autopilot_fighters\": %lu, \"reflex_activations\": %lu, "
             "\"alive\": %s}%s\n",
             static_cast<unsigned long>(owner),
             static_cast<unsigned long>(slot_state),
@@ -33190,6 +33276,11 @@ void write_ai_selfplay_result(const GameplayLoopState& state, const char* reason
             static_cast<unsigned long>(pop),
             static_cast<unsigned long>(primary),
             static_cast<unsigned long>(secondary),
+            static_cast<unsigned long>(autopilot.fired_total[0]),
+            static_cast<unsigned long>(autopilot.fired_total[1]),
+            static_cast<unsigned long>(autopilot.fired_total[2]),
+            static_cast<unsigned long>(
+                g_runtime.ai_play_bots[owner].micro.reflex_activations),
             // Alive = still holding at least one building (the elimination
             // rule), not merely having stray mobile units left.
             building_counts[owner] != 0 ? "true" : "false",

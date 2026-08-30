@@ -222,6 +222,10 @@ struct AiRlStepEncoding {
 // Encode one observation into the RL feature vector and legal-action mask.
 AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation);
 
+// Audited primary cost of a worker-buildable structure (0 = unknown type).
+// Shared by the mask, the reservation accounting and the macro autopilot.
+u32 AiRlBuildingCostOf(u32 structure_type);
+
 // Patch the v9 decision-context features [772..787] into an encoding: frames
 // since the last policy decision, the trigger bits that fired this decision
 // (AiDecisionTrigger order), and the autopilot firings since the last

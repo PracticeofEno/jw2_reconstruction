@@ -135,6 +135,10 @@ u32 building_cost_of(u32 type_id) {
     }
 }
 
+u32 AiRlBuildingCostOf(u32 structure_type) {
+    return building_cost_of(structure_type);
+}
+
 void ApplyAiRlDecisionContext(AiRlStepEncoding& encoding, u32 frames_since,
     u32 triggers, const std::array<u32, 3>& autopilot_counts) {
     encoding.features[772] =

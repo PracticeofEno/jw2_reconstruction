@@ -213,11 +213,38 @@ struct AiMicroExecutorConfig {
     // Render class the engine treats as flying (terrain-independent).  Its
     // attackers resolve a separate range and damage profile.
     u32 flying_render_class = 3;
+    // v9 base-defense reflex (docs/AI_PLAY_DECISION_GATE_AUTOPILOT.md): when
+    // a hostile COMBAT mobile stands within defend_radius of an own building
+    // (or an own completed building lost health), the army group - and the
+    // raid, if it is within reflex_raid_join_radius of the anchor - fights
+    // under a temporary defend overlay at the threatened building.  The
+    // policy's objectives[] are never touched; the overlay simply takes
+    // precedence until the threat is gone for threat_clear_frames.  A policy
+    // retreat objective is respected (the reflex never overrides fleeing).
+    bool reflex_enabled = true;
+    u32 threat_clear_frames = 120;
+    i32 reflex_raid_join_radius = 1600;  // defend_radius * 2
+};
+
+// v9 base-defense threat overlay (see AiMicroExecutorConfig::reflex_enabled).
+// An OVERLAY, deliberately not an objective rewrite: the policy's objectives[]
+// stay untouched, so when the threat clears the groups resume exactly what
+// the policy last ordered with no restore step.
+struct AiMicroThreatOverlay {
+    bool active = false;
+    u32 since_frame = 0;
+    i32 anchor_x = -1;          // the threatened own building
+    i32 anchor_y = -1;
+    u32 last_seen_frame = 0;    // last frame a threat was inside the bubble
 };
 
 struct AiMicroExecutorState {
     std::array<AiMicroObjective, kAiMicroGroupCount> objectives{};
     std::vector<AiMicroUnitRecord> units;  // sorted by unit_id
+    AiMicroThreatOverlay threat;
+    // HP-decrease half of the reflex trigger: sum of completed own building
+    // health last frame (0xffffffffffffffff = not yet sampled).
+    u64 last_building_health = 0xffffffffffffffffull;
     u32 last_step_frame = 0xffffffffu;
     bool initialized = false;
     // Diagnostics (headless logs / tests).
@@ -237,6 +264,8 @@ struct AiMicroExecutorState {
     // target's render class.  A non-zero count means the pre-v3 executor
     // would have parked those units on an order the engine rejects.
     u32 unattackable_targets_skipped = 0;
+    // v9: times the base-defense reflex ACTIVATED (rising edges only).
+    u32 reflex_activations = 0;
 };
 
 AiMicroRole AiMicroRoleOf(const AiObservedUnit& unit,

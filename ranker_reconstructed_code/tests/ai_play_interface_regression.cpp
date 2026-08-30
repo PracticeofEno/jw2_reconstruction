@@ -1,3 +1,4 @@
+#include "ranker_ai_autopilot.h"
 #include "ranker_ai_decision_gate.h"
 #include "ranker_ai_expansion.h"
 #include "ranker_ai_actions.h"
@@ -2656,9 +2657,14 @@ void test_ai_micro_executor_tactics_and_search() {
         "search kept sweeping after every start candidate was checked");
     // A hostile met on the way is NOT engaged: search only moves (whether
     // to fight is the policy's next decision), so the sweep order stands.
+    // (Reflex disabled here: this hostile stands inside the base bubble, and
+    // with the v9 reflex on the army would rightly fight it - this assertion
+    // pins the SEARCH semantics, not the reflex.)
+    AiMicroExecutorConfig search_no_reflex{};
+    search_no_reflex.reflex_enabled = false;
     fog.units.push_back(fighter_unit(0x9600, 1, 430, 400, false));
     fog.simulation_frame = 100 + 9;
-    orders = AiMicroExecutorStep(searcher.micro, fog);
+    orders = AiMicroExecutorStep(searcher.micro, fog, search_no_reflex);
     bool attacked = false;
     for (const AiSemanticAction& order : orders) {
         attacked = attacked || order.kind == AiSemanticActionKind::attack_unit ||
@@ -3390,6 +3396,159 @@ void test_ai_decision_gate() {
         "decision-context features mis-patched");
 }
 
+// v9 - the base-defense reflex: an intruder near an own building makes the
+// army fight under a temporary overlay WITHOUT touching the policy's
+// objectives; the overlay clears after threat_clear_frames; a policy retreat
+// is respected; reflex_enabled=false disables everything.
+void test_ai_defense_reflex() {
+    AiObservation obs = micro_observation();
+    obs.units.push_back(fighter_unit(0x4100, 0, 500, 400, true));  // own
+    TyranoScriptedBotState bot{};
+    // Policy objective: a small hold bubble at the fighter's own spot - the
+    // intruder at the nest is OUTSIDE it, so only the reflex can engage.
+    AiMicroObjective hold{};
+    hold.kind = AiMicroObjectiveKind::defend;
+    hold.target_x = 500;
+    hold.target_y = 400;
+    hold.radius = 128;
+    hold.assigned = true;
+    AiMicroSetObjective(bot.micro, AiMicroGroup::army, hold);
+    obs.units.push_back(fighter_unit(0x9c00, 1, 360, 330, false));  // intruder
+    obs.simulation_frame = 10;
+    std::vector<AiSemanticAction> orders = AiMicroExecutorStep(bot.micro, obs);
+    bool attacked = false;
+    for (const AiSemanticAction& order : orders) {
+        if (order.kind == AiSemanticActionKind::attack_unit &&
+            order.target_unit_id == 0x9c00) {
+            attacked = true;
+        }
+    }
+    require(attacked && bot.micro.threat.active &&
+        bot.micro.reflex_activations == 1,
+        "reflex did not engage the intruder at the nest");
+    require(AiMicroObjectiveOf(bot.micro, AiMicroGroup::army).radius == 128 &&
+        AiMicroObjectiveOf(bot.micro, AiMicroGroup::army).target_x == 500,
+        "reflex overwrote the policy objective");
+    // Threat gone: the overlay stays for threat_clear_frames then clears.
+    obs.units.pop_back();
+    obs.simulation_frame = 60;
+    AiMicroExecutorStep(bot.micro, obs);
+    require(bot.micro.threat.active, "overlay dropped before clear window");
+    obs.simulation_frame = 10 + 120 + 8;
+    AiMicroExecutorStep(bot.micro, obs);
+    require(!bot.micro.threat.active, "overlay did not clear");
+    // Policy retreat is respected: the fighter walks home, intruder or not.
+    AiMicroObjective retreat{};
+    retreat.kind = AiMicroObjectiveKind::retreat;
+    retreat.target_x = 320;
+    retreat.target_y = 320;
+    retreat.assigned = true;
+    AiMicroSetObjective(bot.micro, AiMicroGroup::army, retreat);
+    obs.units.push_back(fighter_unit(0x9c01, 1, 360, 330, false));
+    obs.simulation_frame = 200;
+    orders = AiMicroExecutorStep(bot.micro, obs);
+    bool attacked_in_retreat = false;
+    for (const AiSemanticAction& order : orders) {
+        if (order.kind == AiSemanticActionKind::attack_unit) {
+            attacked_in_retreat = true;
+        }
+    }
+    require(!attacked_in_retreat && bot.micro.threat.active,
+        "reflex overrode a policy retreat");
+    // reflex_enabled = false: no overlay at all.
+    TyranoScriptedBotState off{};
+    AiMicroExecutorConfig no_reflex{};
+    no_reflex.reflex_enabled = false;
+    AiMicroSetObjective(off.micro, AiMicroGroup::army, hold);
+    AiMicroExecutorStep(off.micro, obs, no_reflex);
+    require(!off.micro.threat.active && off.micro.reflex_activations == 0,
+        "reflex fired while disabled");
+}
+
+// v9 - the macro autopilot rules (docs/AI_PLAY_DECISION_GATE_AUTOPILOT.md
+// §3.2): worker floor, pop guard, idle-producer guard; producer-conflict
+// skips; policy fighter picks steer the idle guard.
+void test_ai_macro_autopilot() {
+    AiObservation obs = micro_observation();
+    obs.population_used = 20;       // supply
+    obs.population_reserved = 5;    // demand (healthy headroom)
+    AiRlStepEncoding enc = EncodeAiObservationForRl(obs);
+    require(enc.legal_mask[static_cast<std::size_t>(
+                AiRlHighLevelAction::produce_worker)] == 1,
+        "fixture cannot produce a worker");
+    AiAutopilotState state{};
+    // 1 worker < floor 10 -> produce_worker; skipped when the policy already
+    // used the base producer this frame.
+    std::vector<AiRlHighLevelAction> plan = AiAutopilotPlan(state, obs, enc,
+        AiRlHighLevelAction::no_op, 100);
+    require(plan.size() == 1 && plan[0] == AiRlHighLevelAction::produce_worker,
+        "worker floor did not fire");
+    plan = AiAutopilotPlan(state, obs, enc,
+        AiRlHighLevelAction::produce_worker, 108);
+    require(plan.empty(), "worker floor collided with the policy's producer");
+    // Pop guard: demand at the supply edge fires build_population_nest; a pop
+    // nest already under construction suppresses it.
+    AiObservation crowded = obs;
+    crowded.population_reserved = 19;   // 19 + margin 2 >= supply 20
+    for (u32 i = 0; i < 12; ++i) {      // satisfy the worker floor
+        crowded.units.push_back(observed_unit(0x5000 + i, 0, 0x20,
+            (1u << 7), 300, 300, true));
+    }
+    enc = EncodeAiObservationForRl(crowded);
+    require(enc.legal_mask[static_cast<std::size_t>(
+                AiRlHighLevelAction::build_population_nest)] == 1,
+        "fixture cannot build a population nest");
+    plan = AiAutopilotPlan(state, crowded, enc, AiRlHighLevelAction::no_op,
+        116);
+    require(plan.size() == 1 &&
+        plan[0] == AiRlHighLevelAction::build_population_nest,
+        "pop guard did not fire");
+    AiObservation building = crowded;
+    AiObservedUnit pop_uc = observed_unit(0x6000, 0, 0x82u, 0, 500, 500, true);
+    pop_uc.under_construction = true;
+    building.units.push_back(pop_uc);
+    plan = AiAutopilotPlan(state, building, EncodeAiObservationForRl(building),
+        AiRlHighLevelAction::no_op, 124);
+    require(plan.empty(), "pop guard fired with a pop nest in flight");
+    // Idle-producer guard: a completed idle egg nest for >= 96 frames with a
+    // 600+ bank produces the policy's last fighter type (default masos).
+    AiObservation eggs = crowded;
+    eggs.population_reserved = 5;
+    eggs.units.push_back(observed_unit(0x7000, 0, 0x84u, 0, 700, 700, true));
+    enc = EncodeAiObservationForRl(eggs);
+    require(enc.legal_mask[static_cast<std::size_t>(
+                AiRlHighLevelAction::produce_masos)] == 1,
+        "fixture cannot produce masos");
+    AiAutopilotState idle_state{};
+    plan = AiAutopilotPlan(idle_state, eggs, enc,
+        AiRlHighLevelAction::produce_unit_x22, 200);  // starts the idle clock
+    require(idle_state.last_fighter_action ==
+            AiRlHighLevelAction::produce_unit_x22,
+        "policy fighter pick did not steer the idle guard");
+    bool fired_fighter = false;
+    plan = AiAutopilotPlan(idle_state, eggs, enc, AiRlHighLevelAction::no_op,
+        200 + 96);
+    for (const AiRlHighLevelAction action : plan) {
+        if (action == AiRlHighLevelAction::produce_unit_x22) {
+            fired_fighter = true;
+        }
+    }
+    require(fired_fighter, "idle-producer guard did not fire");
+    // Low bank suppresses the guard.
+    AiObservation broke = eggs;
+    broke.primary_resources = 500;
+    AiAutopilotState broke_state{};
+    AiAutopilotPlan(broke_state, broke, EncodeAiObservationForRl(broke),
+        AiRlHighLevelAction::no_op, 300);
+    plan = AiAutopilotPlan(broke_state, broke, EncodeAiObservationForRl(broke),
+        AiRlHighLevelAction::no_op, 300 + 96);
+    for (const AiRlHighLevelAction action : plan) {
+        require(action != AiRlHighLevelAction::produce_masos &&
+            action != broke_state.last_fighter_action,
+            "idle-producer guard ignored the bank threshold");
+    }
+}
+
 // v7 - a worker already walking to build reserves its site in the engine
 // (placement TemporaryBlock), so the planner must not hand the same site to
 // the next order; and a refused build order backs its structure type off.
@@ -3464,6 +3623,8 @@ int main() {
     test_ai_raid_group_and_target_cell();
     test_ai_v8_observation_features();
     test_ai_decision_gate();
+    test_ai_defense_reflex();
+    test_ai_macro_autopilot();
     test_ai_pending_site_and_reject_backoff();
     test_ai_play_lobby_role_compatibility();
     std::cout << "ai_play_interface_regression: passed\n";

@@ -132,6 +132,14 @@ struct P2PNetworkLaunchParameters {
     // The Computer(AI) owners themselves stay Tyrano — the executor only
     // speaks that tech tree.
     u32 self_play_opponent_tribe = 2;
+    // v9 (docs/AI_PLAY_DECISION_GATE_AUTOPILOT.md): -AIAUTOPILOT:0/1 macro
+    // autopilot (worker floor / pop guard / idle-producer guard),
+    // -AIREFLEX:0/1 executor base-defense reflex, -AIGATE:0/1 event decision
+    // gate (0 = decide every min_interval like the pre-v9 behavior).  All
+    // default ON; the 0 settings are the A/B measurement lever.
+    bool self_play_autopilot = true;
+    bool self_play_reflex = true;
+    bool self_play_gate = true;
 };
 
 enum class P2PGameWinResult : u32 {

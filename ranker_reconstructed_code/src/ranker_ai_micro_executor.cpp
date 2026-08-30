@@ -1334,6 +1334,72 @@ std::vector<AiSemanticAction> AiMicroExecutorStep(AiMicroExecutorState& state,
         }
     }
 
+    // ---- v9 base-defense reflex (overlay; objectives[] untouched) ----------
+    // Threat = a hostile COMBAT mobile (melee/ranged role - a harvesting
+    // worker nearby is not an attack) inside the defend bubble of any own
+    // building, or an own completed building losing health since last frame.
+    // While active, the army (and a nearby raid) fights under a temporary
+    // defend objective anchored at the threatened building; cleared after
+    // threat_clear_frames without a threat in the bubble.
+    if (config.reflex_enabled) {
+        u64 building_health = 0;
+        for (const AiObservedUnit& unit : observation.units) {
+            if (unit.controlled && unit.alive && !unit.under_construction &&
+                is_building_unit(unit)) {
+                building_health += unit.health;
+            }
+        }
+        const bool buildings_hurt =
+            state.last_building_health != 0xffffffffffffffffull &&
+            building_health < state.last_building_health;
+        state.last_building_health = building_health;
+        UnitMovementPoint anchor{-1, -1};
+        i64 best_distance = 0;
+        for (const AiObservedUnit* hostile : context.hostiles) {
+            if (is_building_unit(*hostile)) {
+                continue;
+            }
+            const AiMicroRole role = AiMicroRoleOf(*hostile, config);
+            if (role != AiMicroRole::melee && role != AiMicroRole::ranged) {
+                continue;
+            }
+            for (const UnitMovementPoint& building : context.buildings) {
+                const i64 gap = squared_distance(building.x, building.y,
+                    hostile->x, hostile->y);
+                if (gap > squared(config.defend_radius)) {
+                    continue;
+                }
+                if (anchor.x < 0 || gap < best_distance) {
+                    anchor = building;
+                    best_distance = gap;
+                }
+            }
+        }
+        const bool threat_now = anchor.x >= 0 ||
+            (buildings_hurt && !context.buildings.empty());
+        if (threat_now) {
+            if (!state.threat.active) {
+                state.threat.active = true;
+                state.threat.since_frame = context.frame;
+                ++state.reflex_activations;
+            }
+            if (anchor.x >= 0) {
+                state.threat.anchor_x = anchor.x;
+                state.threat.anchor_y = anchor.y;
+            } else if (state.threat.anchor_x < 0) {
+                state.threat.anchor_x = context.buildings.front().x;
+                state.threat.anchor_y = context.buildings.front().y;
+            }
+            state.threat.last_seen_frame = context.frame;
+        } else if (state.threat.active &&
+            context.frame - state.threat.last_seen_frame >=
+                config.threat_clear_frames) {
+            state.threat = AiMicroThreatOverlay{};
+        }
+    } else if (state.threat.active) {
+        state.threat = AiMicroThreatOverlay{};
+    }
+
     // ---- objective transitions (default behavior, not decisions) -----------
     AiMicroObjective& economy =
         state.objectives[static_cast<std::size_t>(AiMicroGroup::economy)];
@@ -1647,6 +1713,25 @@ std::vector<AiSemanticAction> AiMicroExecutorStep(AiMicroExecutorState& state,
     }
 
     // ---- per-unit default behavior ---------------------------------------
+    // v9 reflex overlay: the temporary defend objective the fighting groups
+    // run under while a base threat stands.  defend_radius >= the defend
+    // anchor rule, so the existing defend logic (bubble over every own
+    // building, focus fire, melee spread, leash, low-hp pull-back) does the
+    // fighting.  A raid joins only when it is already near the anchor.
+    const AiMicroObjective reflex_objective = state.threat.active ?
+        make_defend({state.threat.anchor_x, state.threat.anchor_y},
+            config.defend_radius, state.threat.since_frame) :
+        AiMicroObjective{};
+    bool raid_joins_reflex = false;
+    if (state.threat.active) {
+        const std::size_t raid_index =
+            static_cast<std::size_t>(AiMicroGroup::raid);
+        raid_joins_reflex = context.centroid_valid[raid_index] &&
+            squared_distance(context.centroid[raid_index].x,
+                context.centroid[raid_index].y, state.threat.anchor_x,
+                state.threat.anchor_y) <=
+                squared(config.reflex_raid_join_radius);
+    }
     struct PendingOrder {
         u32 unit_id;
         DesiredOrder order;
@@ -1680,18 +1765,28 @@ std::vector<AiSemanticAction> AiMicroExecutorStep(AiMicroExecutorState& state,
         if (unit_is_constructing(unit)) {
             continue;
         }
-        const AiMicroObjective& objective =
-            state.objectives[static_cast<std::size_t>(record.group)];
+        const AiMicroObjective* objective =
+            &state.objectives[static_cast<std::size_t>(record.group)];
+        // v9 reflex: the fighting groups switch to the threat overlay while
+        // it stands - unless the policy ordered a RETREAT (deliberate flight
+        // is respected).  Workers/scouts keep their own rules (flee/evade).
+        if (state.threat.active &&
+            objective->kind != AiMicroObjectiveKind::retreat &&
+            (record.group == AiMicroGroup::army ||
+                (record.group == AiMicroGroup::raid && raid_joins_reflex))) {
+            objective = &reflex_objective;
+        }
         DesiredOrder order;
         if (record.group == AiMicroGroup::scout ||
             record.group == AiMicroGroup::berry_scout ||
             record.group == AiMicroGroup::explorer ||
             record.group == AiMicroGroup::roamer) {
-            order = scout_order(context, record, unit, objective);
+            order = scout_order(context, record, unit, *objective);
         } else if (role == AiMicroRole::worker) {
-            order = worker_order(context, state, record, unit, objective);
+            order = worker_order(context, state, record, unit, *objective);
         } else {
-            order = fighter_order(context, state, record, unit, role, objective);
+            order = fighter_order(context, state, record, unit, role,
+                *objective);
         }
         if (order.kind == AiSemanticActionKind::no_op) {
             continue;

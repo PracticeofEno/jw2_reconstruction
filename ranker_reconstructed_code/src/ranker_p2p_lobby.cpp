@@ -733,6 +733,19 @@ bool ParseP2PNetworkCommandLine(P2PNetworkLaunchParameters& parameters,
         parameters.self_play_opponent_tribe = tribe != nullptr ?
             static_cast<u32>(std::strtoul(tribe + std::strlen("-AITRIBE:"),
                 nullptr, 10)) : 2u;
+        // v9 macro autopilot / base-defense reflex / event decision gate:
+        // default ON, -AIAUTOPILOT:0 / -AIREFLEX:0 / -AIGATE:0 disable (the
+        // A/B lever for measuring their effect).
+        const auto parse_bool_flag = [&](const char* name, bool fallback) {
+            const char* value = std::strstr(upper, name);
+            if (value == nullptr) {
+                return fallback;
+            }
+            return std::strtoul(value + std::strlen(name), nullptr, 10) != 0;
+        };
+        parameters.self_play_autopilot = parse_bool_flag("-AIAUTOPILOT:", true);
+        parameters.self_play_reflex = parse_bool_flag("-AIREFLEX:", true);
+        parameters.self_play_gate = parse_bool_flag("-AIGATE:", true);
         parameters.self_play_versus = std::strstr(upper, "-AIVS") != nullptr;
         // The random-legal / IPC policies run inside the packet-controller path,
         // so they imply the scripted-owner handover too.
