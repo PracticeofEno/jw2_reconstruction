@@ -894,6 +894,154 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
         // back-off window (the mask closes that structure type meanwhile).
         put(observation.last_build_reject_frames_ago < 64u ? 1.0f : 0.0f); // 544 build recently rejected
     }
+
+    // ======================================================================
+    // v8 features [545..771] (docs/2순위.md) - enemy composition by type,
+    // OP-DP firepower, enemy-army fog memory, terrain channels, raid state.
+    // ======================================================================
+    {
+        const u32 w = observation.map_width_tiles;
+        const u32 h = observation.map_height_tiles;
+        const bool tiles_ok = w != 0 && h != 0 &&
+            observation.tiles.size() == static_cast<std::size_t>(w) * h;
+        // [545..560] visible enemy MOBILES by tribe-relative type slot
+        // (type_id & 0x0f - the type layout is tribe-symmetric: worker =
+        // tribe*0x10, units follow to +0x0f; the dominant-tribe one-hot
+        // already in the vector disambiguates the tribe).
+        std::array<u32, 16> enemy_slots{};
+        for (const AiObservedUnit* hostile : visible_hostiles) {
+            if (hostile->type_id < kMobileTypeLimit) {
+                ++enemy_slots[hostile->type_id & 0x0fu];
+            }
+        }
+        for (const u32 slot_count : enemy_slots) {
+            put(norm(slot_count, 20.0f));                       // 545..560
+        }
+        // [561..567] firepower by the ENGINE's damage stats (damage = attacker
+        // attack_power - defender defense_power): melee/ranged offense sums
+        // and anti-air capability per side, and the power-based force ratio.
+        // The old health-based ratio [81] stays (append-only); this one ranks
+        // 트리세스 4 above 마소스 10 the way real combat does.
+        u64 own_melee_power = 0, own_ranged_power = 0;
+        bool own_anti_air = false;
+        for (const AiObservedUnit* fighter : own_fighters) {
+            if (fighter->attack_range_base <= 64u) {
+                own_melee_power += fighter->attack_power;
+            } else {
+                own_ranged_power += fighter->attack_power;
+            }
+            if ((fighter->attackable_class_mask & (1u << 3)) != 0 &&
+                fighter->attack_range_vs_air != 0) {
+                own_anti_air = true;
+            }
+        }
+        u64 enemy_melee_power = 0, enemy_ranged_power = 0;
+        bool enemy_anti_air = false;
+        for (const AiObservedUnit* hostile : visible_hostiles) {
+            if (hostile->type_id >= kMobileTypeLimit) {
+                continue;
+            }
+            if (hostile->attack_range_base <= 64u) {
+                enemy_melee_power += hostile->attack_power;
+            } else {
+                enemy_ranged_power += hostile->attack_power;
+            }
+            if ((hostile->attackable_class_mask & (1u << 3)) != 0 &&
+                hostile->attack_range_vs_air != 0) {
+                enemy_anti_air = true;
+            }
+        }
+        put(norm(static_cast<float>(own_melee_power), 5000.0f));    // 561
+        put(norm(static_cast<float>(own_ranged_power), 5000.0f));   // 562
+        put(own_anti_air ? 1.0f : 0.0f);                            // 563
+        put(norm(static_cast<float>(enemy_melee_power), 5000.0f));  // 564
+        put(norm(static_cast<float>(enemy_ranged_power), 5000.0f)); // 565
+        put(enemy_anti_air ? 1.0f : 0.0f);                          // 566
+        const u64 own_power = own_melee_power + own_ranged_power;
+        const u64 enemy_power = enemy_melee_power + enemy_ranged_power;
+        put(own_power + enemy_power == 0 ? 0.5f :
+            static_cast<float>(static_cast<double>(own_power) /
+                static_cast<double>(own_power + enemy_power)));     // 567
+        // [568..631] grid channel 7: enemy-army fog memory density (per-tile
+        // last-seen hostile-mobile counts folded into the 8x8 cells).
+        constexpr std::size_t kMemCells = 64;
+        constexpr u32 kMemGrid = 8;
+        std::array<float, kMemCells> cell_army_memory{};
+        std::array<u32, kMemCells> cell_passable{};
+        std::array<u32, kMemCells> cell_buildable{};
+        std::array<u32, kMemCells> cell_tiles{};
+        if (tiles_ok) {
+            const bool army_memory_ok =
+                observation.enemy_army_memory.size() == observation.tiles.size();
+            for (u32 ty = 0; ty < h; ++ty) {
+                const u32 cy = ty * kMemGrid / h;
+                for (u32 tx = 0; tx < w; ++tx) {
+                    const std::size_t tile = static_cast<std::size_t>(ty) * w + tx;
+                    const std::size_t cell = cy * kMemGrid + tx * kMemGrid / w;
+                    ++cell_tiles[cell];
+                    if (army_memory_ok) {
+                        cell_army_memory[cell] += static_cast<float>(
+                            observation.enemy_army_memory[tile]);
+                    }
+                    if (observation.tiles[tile].passable) {
+                        ++cell_passable[cell];
+                    }
+                    if (observation.tiles[tile].buildable) {
+                        ++cell_buildable[cell];
+                    }
+                }
+            }
+        }
+        for (std::size_t c = 0; c < kMemCells; ++c) {
+            put(norm(cell_army_memory[c], 20.0f));              // 568..631
+        }
+        // [632..635] most recent enemy-army sighting: frames since (1.0 =
+        // never seen), direction from own start ((v+1)/2 unit vector), size.
+        const bool army_seen =
+            observation.enemy_army_seen_frames_ago != 0xffffffffu;
+        put(army_seen ?
+            norm(observation.enemy_army_seen_frames_ago, 60000.0f) : 1.0f); // 632
+        if (army_seen && observation.enemy_army_seen_x >= 0) {
+            const double dx = static_cast<double>(
+                observation.enemy_army_seen_x - std::max(observation.start_x, 0));
+            const double dy = static_cast<double>(
+                observation.enemy_army_seen_y - std::max(observation.start_y, 0));
+            const double length = std::sqrt(dx * dx + dy * dy);
+            put(length > 0.0 ?
+                static_cast<float>((dx / length + 1.0) / 2.0) : 0.5f);      // 633
+            put(length > 0.0 ?
+                static_cast<float>((dy / length + 1.0) / 2.0) : 0.5f);      // 634
+        } else {
+            put(0.5f);
+            put(0.5f);
+        }
+        put(norm(observation.enemy_army_seen_count, 50.0f));                // 635
+        // [636..699] grid channel 8: passable-terrain ratio per cell.
+        // [700..763] grid channel 9: buildable ratio per cell.  Terrain is
+        // public in the original game (the minimap shows it), so these are
+        // not fog-gated.
+        for (std::size_t c = 0; c < kMemCells; ++c) {
+            put(cell_tiles[c] != 0 ? static_cast<float>(cell_passable[c]) /
+                static_cast<float>(cell_tiles[c]) : 0.0f);      // 636..699
+        }
+        for (std::size_t c = 0; c < kMemCells; ++c) {
+            put(cell_tiles[c] != 0 ? static_cast<float>(cell_buildable[c]) /
+                static_cast<float>(cell_tiles[c]) : 0.0f);      // 700..763
+        }
+        // [764..771] raid-group state (docs/1순위.md §1.4): size, aliveness,
+        // objective one-hot (kind encoding = AiMicroObjectiveKind + 1, same
+        // as army_objective_kind), buildings_first tactic, main-army size,
+        // search flag.  Without this the policy cannot see its own raid.
+        put(norm(observation.raid_unit_count, 14.0f));                      // 764
+        put(observation.raid_unit_count > 0 ? 1.0f : 0.0f);                 // 765
+        put(observation.raid_objective_kind == 2u ? 1.0f : 0.0f);           // 766 attack
+        put(observation.raid_objective_kind == 3u ? 1.0f : 0.0f);           // 767 defend
+        put(observation.raid_objective_kind == 4u ? 1.0f : 0.0f);           // 768 retreat
+        put(observation.raid_objective_kind == 2u &&
+            observation.raid_attack_tactic == 1u ? 1.0f : 0.0f);            // 769 buildings_first
+        put(norm(observation.army_group_unit_count, 50.0f));                // 770
+        put(observation.raid_objective_kind == 6u ? 1.0f : 0.0f);           // 771 search
+    }
     // Map knowledge gates for the split search actions: an unexplored start
     // candidate left (search_enemy_base), and a frontier tile left - an
     // unexplored passable tile bordering explored passable ground

@@ -2457,7 +2457,7 @@ void test_ai_micro_executor_translator_objectives() {
         raid.units.push_back(fighter_unit(0x9800, 1, 320 + 700, 320, false));
         require(EncodeAiObservationForRl(raid).features[76] > 0.0f,
             "raid perimeter feature did not use the 800 px defend bubble");
-        require(kAiRlActionCount == 64 && kAiRlFeatureCount == 545,
+        require(kAiRlActionCount == 64 && kAiRlFeatureCount == 772,
             "v8 action/feature counts");
     }
     // v5 features: spatial grid, directions, enemy composition, own state,
@@ -3191,6 +3191,90 @@ void test_ai_raid_group_and_target_cell() {
         "merge_raid did not fold the raid back into the army");
 }
 
+// v8 - observation/encoder expansion (docs/2순위.md): enemy composition by
+// tribe-relative type slot, OP-DP firepower sums and the power force ratio,
+// enemy-army fog-memory channel + last-sighting scalars, terrain channels,
+// and the raid-state features.
+void test_ai_v8_observation_features() {
+    AiObservation obs = micro_observation();  // 64x64 tiles, fully explored
+    const auto near_value = [](float actual, float expected) {
+        return actual > expected - 0.001f && actual < expected + 0.001f;
+    };
+    // Own melee (마소스, base range 50, OP 120) + own ranged (base range 250,
+    // OP 300, anti-air capable via mask bit 3 + vs-air range).
+    AiObservedUnit melee = fighter_unit(0x4100, 0, 400, 400, true);
+    melee.attack_power = 120;
+    obs.units.push_back(melee);
+    AiObservedUnit ranged = ranged_fighter_unit(0x4200, 0, 420, 400, true);
+    ranged.attack_power = 300;
+    obs.units.push_back(ranged);
+    // Two visible enemy masos-slot mobiles (0x21 -> slot 1), OP 100 each, no
+    // anti-air (mask misses bit 3).
+    for (u32 k = 0; k < 2; ++k) {
+        AiObservedUnit foe = fighter_unit(0x9600 + k, 1, 900, 900, false);
+        foe.attack_power = 100;
+        foe.attackable_class_mask = 0x7;
+        foe.attack_range_vs_air = 0;
+        obs.units.push_back(foe);
+    }
+    AiRlStepEncoding enc = EncodeAiObservationForRl(obs);
+    require(near_value(enc.features[545 + 1], 2.0f / 20.0f) &&
+        enc.features[545] == 0.0f,
+        "enemy type-slot counts did not encode the masos slot");
+    require(near_value(enc.features[561], 120.0f / 5000.0f) &&
+        near_value(enc.features[562], 300.0f / 5000.0f) &&
+        enc.features[563] == 1.0f &&
+        near_value(enc.features[564], 200.0f / 5000.0f) &&
+        enc.features[565] == 0.0f && enc.features[566] == 0.0f,
+        "OP-DP firepower sums / anti-air flags were wrong");
+    require(near_value(enc.features[567], 420.0f / 620.0f),
+        "power-based force ratio was wrong");
+    // Enemy-army memory: 5 remembered hostiles at tile (40,40) -> cell (5,5)
+    // = 45; last sighting 100 frames ago at (1300,1300), size 7.
+    obs.enemy_army_memory.assign(obs.tiles.size(), 0u);
+    obs.enemy_army_memory[40 * obs.map_width_tiles + 40] = 5u;
+    obs.enemy_army_seen_frames_ago = 100;
+    obs.enemy_army_seen_x = 1300;
+    obs.enemy_army_seen_y = 1300;
+    obs.enemy_army_seen_count = 7;
+    enc = EncodeAiObservationForRl(obs);
+    require(near_value(enc.features[568 + 45], 5.0f / 20.0f) &&
+        enc.features[568] == 0.0f,
+        "enemy-army memory channel did not fold into the right cell");
+    require(near_value(enc.features[632], 100.0f / 60000.0f) &&
+        enc.features[633] > 0.8f && enc.features[634] > 0.8f &&
+        near_value(enc.features[635], 7.0f / 50.0f),
+        "enemy-army sighting scalars were wrong");
+    // Never seen -> frames-ago saturates to 1, direction neutral.
+    AiObservation never = micro_observation();
+    enc = EncodeAiObservationForRl(never);
+    require(enc.features[632] == 1.0f && enc.features[633] == 0.5f,
+        "never-seen enemy army did not encode as 1.0 / neutral");
+    // Terrain channels: the fixture map is fully passable/buildable; blocking
+    // the (0,0) cell's tiles zeroes exactly that cell of channel 8.
+    require(enc.features[636] == 1.0f && enc.features[700] == 1.0f,
+        "terrain channels did not report the open map");
+    for (u32 ty = 0; ty < 8; ++ty) {
+        for (u32 tx = 0; tx < 8; ++tx) {
+            never.tiles[ty * never.map_width_tiles + tx].passable = false;
+        }
+    }
+    enc = EncodeAiObservationForRl(never);
+    require(enc.features[636] == 0.0f && enc.features[637] == 1.0f,
+        "passable channel did not localize the blocked cell");
+    // Raid-state features (pump-filled group summary).
+    never.raid_unit_count = 3;
+    never.raid_objective_kind = 2;   // attack
+    never.raid_attack_tactic = 1;    // buildings_first
+    never.army_group_unit_count = 10;
+    enc = EncodeAiObservationForRl(never);
+    require(near_value(enc.features[764], 3.0f / 14.0f) &&
+        enc.features[765] == 1.0f && enc.features[766] == 1.0f &&
+        enc.features[767] == 0.0f && enc.features[769] == 1.0f &&
+        near_value(enc.features[770], 10.0f / 50.0f),
+        "raid-state features were wrong");
+}
+
 // v7 - a worker already walking to build reserves its site in the engine
 // (placement TemporaryBlock), so the planner must not hand the same site to
 // the next order; and a refused build order backs its structure type off.
@@ -3263,6 +3347,7 @@ int main() {
     test_ai_shared_build_placement();
     test_ai_search_split();
     test_ai_raid_group_and_target_cell();
+    test_ai_v8_observation_features();
     test_ai_pending_site_and_reject_backoff();
     test_ai_play_lobby_role_compatibility();
     std::cout << "ai_play_interface_regression: passed\n";

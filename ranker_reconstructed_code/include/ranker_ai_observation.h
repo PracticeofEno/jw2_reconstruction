@@ -45,6 +45,11 @@ struct AiUnitCombatProfile {
     // 0xffffffff when the profile is unknown (permissive, engine behavior for
     // an out-of-range profile index).
     u32 attackable_class_mask = 0xffffffffu;
+    // v8: effective offense/defense (the engine's OP-DP damage stats).  The
+    // hook overwrites them for controlled units (research/buffs applied); the
+    // base fill uses the public definition values.
+    u32 attack_power = 0;
+    u32 defense_power = 0;
 };
 
 // Optional hook that upgrades the base definition stats above into the
@@ -137,6 +142,19 @@ struct AiObservedUnit {
     // unit onto a target outside this mask is rejected by the engine, which
     // leaves the unit idle (see AiMicroExecutorStep's re-issue rule).
     u32 attackable_class_mask = 0xffffffffu;
+    // v8 combat stats (docs/2순위.md).  The engine's damage formula is
+    // OP - DP: damage = attacker offense (runtime_stat_1c = definition
+    // profile_offense_value + attack research + buffs) minus defender defense
+    // (runtime_stat_20 likewise), then the profile's class percents
+    // (CalculateUnitActionDamageWithDefinitionModifiers).  Same knowledge
+    // policy as attack_range: CONTROLLED units carry the engine's effective
+    // values, a visible opponent stays at the public base definition (its
+    // research state is private).
+    u32 attack_power = 0;
+    u32 defense_power = 0;
+    // Weapon recovery between strikes, engine ticks (definition
+    // action_recovery_base_ticks; type-public).  The kiting prerequisite.
+    u32 attack_cooldown_ticks = 0;
     // v4 public runtime state, filled for visible opponents too because the
     // renderer draws all of it: sprite facing (engine `direction`), animation
     // phase, and the avatar level system.  `level` mirrors engine
@@ -260,6 +278,20 @@ struct AiObservation {
     // tile has not been re-lit empty since.  Maintained per owner by the
     // AI-play pump; empty when no memory is kept.
     std::vector<u8> enemy_building_memory;
+    // v8 fog-honest memory of the enemy ARMY (docs/2순위.md): per-tile count
+    // of hostile MOBILE units last seen there (clamped to 255); visible tiles
+    // are re-written every frame (cleared when empty), fogged tiles keep the
+    // last sighting.  The trail goes stale when the enemy moves under fog -
+    // that is the honest model (it is what the owner last SAW).  Maintained
+    // per owner by the AI-play pump; empty when no memory is kept.
+    std::vector<u8> enemy_army_memory;
+    // Summary of the most recent enemy-army sighting: frames since any
+    // hostile mobile was visible (0xffffffff = never), the sighting centroid
+    // and its size.  v8.
+    u32 enemy_army_seen_frames_ago = 0xffffffffu;
+    i32 enemy_army_seen_x = -1;
+    i32 enemy_army_seen_y = -1;
+    u32 enemy_army_seen_count = 0;
     std::vector<AiObservedMapTile> tiles;
     std::vector<AiObservedUnit> units;
 };

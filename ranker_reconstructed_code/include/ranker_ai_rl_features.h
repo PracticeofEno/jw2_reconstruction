@@ -29,10 +29,17 @@ namespace ranker {
 // per-unit state, queues, scout) is now summarized; layout is append-only.
 // v6 appends the army objective/tactic the executor is running [531..533]:
 // search one-hot, buildings_first, neutral_only (attack one-hot stays at 82).
-// v7 appends expansion [534..540]: next expansion site dx/dy/distance/lit,
-// berry scout alive, reserved resources (builds still walking), builds in
-// flight.
-constexpr u32 kAiRlFeatureVersion = 7u;
+// v7 appends expansion + search-split state [534..544]: next expansion site
+// dx/dy/distance/lit, berry scout alive, reserved resources (builds still
+// walking), builds in flight, site blocked, explorer alive, roamer alive,
+// build recently rejected.  (An earlier revision of this comment stopped at
+// 540 - the code always wrote through 544.)
+// v8 appends [545..771] (docs/2순위.md): visible-enemy counts by tribe-
+// relative type slot [545..560], OP-DP firepower sums / anti-air / power
+// force-ratio [561..567], enemy-army fog-memory grid channel [568..631] +
+// last-sighting scalars [632..635], terrain grid channels passable
+// [636..699] / buildable [700..763], raid-group state [764..771].
+constexpr u32 kAiRlFeatureVersion = 8u;
 
 // High-level (strategy) action space the RL policy samples from.
 enum class AiRlHighLevelAction : u32 {
@@ -190,7 +197,7 @@ constexpr const AiRlResearchAction* FindAiRlResearchAction(
 // v1: 36 base + 3 research levels + 3 neutral-monster + 4 tech-tree = 46.
 // v2 appends: 10 research levels, 11 unit counts, 4 building counts, and 9
 // mechanic aggregates (stance/morph/transport/army/queue state) = 80.
-constexpr std::size_t kAiRlFeatureCount = 545;
+constexpr std::size_t kAiRlFeatureCount = 772;
 
 struct AiRlStepEncoding {
     // Normalized policy/value-network input.

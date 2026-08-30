@@ -859,6 +859,13 @@ struct RuntimeGlobals {
     std::array<TyranoScriptedBotState, kPlayerSlotCount> ai_play_bots{};
     // Per-owner fog-honest memory of enemy building tiles (v5 features).
     std::array<std::vector<u8>, kPlayerSlotCount> ai_play_enemy_building_memory{};
+    // v8: per-owner fog-honest memory of the enemy ARMY (per-tile last-seen
+    // hostile-mobile counts) and the most recent sighting summary.
+    std::array<std::vector<u8>, kPlayerSlotCount> ai_play_enemy_army_memory{};
+    std::array<u32, kPlayerSlotCount> ai_play_enemy_army_seen_frame{};
+    std::array<i32, kPlayerSlotCount> ai_play_enemy_army_seen_x{};
+    std::array<i32, kPlayerSlotCount> ai_play_enemy_army_seen_y{};
+    std::array<u32, kPlayerSlotCount> ai_play_enemy_army_seen_count{};
     // Per-owner EXPLORED memory (fog-of-war "has ever seen" layer).  The
     // engine's per-owner explored bits are not persistent for AI owners
     // (probe-verified: a tile lit by a scout went dark again once it walked
@@ -12412,6 +12419,13 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     for (std::vector<u8>& memory : g_runtime.ai_play_enemy_building_memory) {
         memory.clear();
     }
+    for (std::vector<u8>& memory : g_runtime.ai_play_enemy_army_memory) {
+        memory.clear();
+    }
+    g_runtime.ai_play_enemy_army_seen_frame.fill(0xffffffffu);
+    g_runtime.ai_play_enemy_army_seen_x.fill(-1);
+    g_runtime.ai_play_enemy_army_seen_y.fill(-1);
+    g_runtime.ai_play_enemy_army_seen_count.fill(0u);
     for (std::vector<AiImitationPacket>& packets :
          g_runtime.ai_play_imitation_packets) {
         packets.clear();
@@ -22779,6 +22793,12 @@ void default_ai_play_unit_combat_profile(const UnitMovementUnit& unit,
     profile.attack_range_vs_air =
         CalculateUnitActionRangeWithProductionAndEquipmentEffects(
             production, unit, 3u, &equipment);
+    // v8: effective OP/DP for own units - the exact source stats of the
+    // engine's damage formula (attack/defense research + active buffs).
+    profile.attack_power =
+        CalculateUnitMaxHealthWithProductionEffects(production, unit);
+    profile.defense_power =
+        CalculateUnitMaxSecondaryValueWithProductionEffects(production, unit);
 }
 
 // Live ability validator for AiSemanticActionKind::use_ability.  Applies the
@@ -23422,6 +23442,62 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
             }
         }
         observation.observation.enemy_building_memory = memory;
+        // v8 enemy-ARMY memory: same fog-honest rule for hostile MOBILES,
+        // with per-tile counts (a moved army leaves a stale trail - that is
+        // what the owner last saw).  Also the last-sighting summary
+        // (centroid / size / frames ago) for the scalar features.
+        std::vector<u8>& army_memory =
+            g_runtime.ai_play_enemy_army_memory[local_owner];
+        if (army_memory.size() != obs.tiles.size()) {
+            army_memory.assign(obs.tiles.size(), 0u);
+        }
+        for (std::size_t t = 0; t < obs.tiles.size(); ++t) {
+            if (obs.tiles[t].visible) {
+                army_memory[t] = 0u;
+            }
+        }
+        i64 seen_sum_x = 0;
+        i64 seen_sum_y = 0;
+        u32 seen_count = 0;
+        for (const AiObservedUnit& unit : obs.units) {
+            if (unit.controlled || !unit.visible || !unit.alive ||
+                unit.type_id >= 0x60u || unit.owner_id >= 8u ||
+                unit.owner_id == obs.local_owner ||
+                (obs.local_relation_mask & (1u << unit.owner_id)) != 0 ||
+                (obs.active_owner_mask & (1u << unit.owner_id)) == 0) {
+                continue;
+            }
+            const std::size_t tile =
+                static_cast<std::size_t>(std::max(unit.y, 0) >> 5) *
+                obs.map_width_tiles +
+                static_cast<std::size_t>(std::max(unit.x, 0) >> 5);
+            if (tile < army_memory.size() && army_memory[tile] < 255u) {
+                ++army_memory[tile];
+            }
+            seen_sum_x += unit.x;
+            seen_sum_y += unit.y;
+            ++seen_count;
+        }
+        if (seen_count != 0) {
+            g_runtime.ai_play_enemy_army_seen_frame[local_owner] = frame;
+            g_runtime.ai_play_enemy_army_seen_x[local_owner] =
+                static_cast<i32>(seen_sum_x / seen_count);
+            g_runtime.ai_play_enemy_army_seen_y[local_owner] =
+                static_cast<i32>(seen_sum_y / seen_count);
+            g_runtime.ai_play_enemy_army_seen_count[local_owner] = seen_count;
+        }
+        observation.observation.enemy_army_memory = army_memory;
+        const u32 seen_frame =
+            g_runtime.ai_play_enemy_army_seen_frame[local_owner];
+        observation.observation.enemy_army_seen_frames_ago =
+            seen_frame == 0xffffffffu || seen_frame > frame ?
+                0xffffffffu : frame - seen_frame;
+        observation.observation.enemy_army_seen_x =
+            g_runtime.ai_play_enemy_army_seen_x[local_owner];
+        observation.observation.enemy_army_seen_y =
+            g_runtime.ai_play_enemy_army_seen_y[local_owner];
+        observation.observation.enemy_army_seen_count =
+            g_runtime.ai_play_enemy_army_seen_count[local_owner];
     }
     if (rl_mode && decision_due) {
         // RL plumbing: encode the observation, build the legal-action mask,

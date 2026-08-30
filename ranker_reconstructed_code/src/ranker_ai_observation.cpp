@@ -280,12 +280,18 @@ AiObservationBuildResult BuildAiObservationV1(
         observed.movement_step_limit = unit->definition.movement_step_limit;
         observed.movement_period = std::max<u32>(unit->definition.movement_period, 1u);
         observed.attack_range_base = unit->definition.action_range_base;
+        observed.attack_cooldown_ticks =
+            unit->definition.action_recovery_base_ticks;
         // Public type stats first; the optional hook replaces them with the
         // engine's effective values where the caller can resolve them.
         AiUnitCombatProfile profile{};
         profile.attack_range = unit->definition.action_range_base;
         profile.attack_range_vs_air =
             unit->definition.action_range_base_vs_class3;
+        // v8: the engine's OP-DP damage stats, public base definition values
+        // (the hook applies research/buffs for controlled units only).
+        profile.attack_power = unit->definition.profile_offense_value;
+        profile.defense_power = unit->definition.profile_defense_value;
         if (input.unit_combat_profile != nullptr) {
             input.unit_combat_profile(*unit, controlled, profile,
                 input.unit_combat_profile_user_data);
@@ -293,6 +299,8 @@ AiObservationBuildResult BuildAiObservationV1(
         observed.attack_range = profile.attack_range;
         observed.attack_range_vs_air = profile.attack_range_vs_air;
         observed.attackable_class_mask = profile.attackable_class_mask;
+        observed.attack_power = profile.attack_power;
+        observed.defense_power = profile.defense_power;
         // Rendered state is public: facing/animation are drawn on screen and
         // the overlays display level (status_timer + 1) and experience
         // (elite_progress_value) for any selected unit.
