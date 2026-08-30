@@ -1759,6 +1759,7 @@ AiObservation micro_observation() {
         tile.explored = true;
     }
     obs.tiles[9 * obs.map_width_tiles + 12].resource_amount = 500;
+    obs.tiles[9 * obs.map_width_tiles + 12].terrain_flags = 0x100;  // berry terrain
     return obs;
 }
 
@@ -2456,7 +2457,7 @@ void test_ai_micro_executor_translator_objectives() {
         raid.units.push_back(fighter_unit(0x9800, 1, 320 + 700, 320, false));
         require(EncodeAiObservationForRl(raid).features[76] > 0.0f,
             "raid perimeter feature did not use the 800 px defend bubble");
-        require(kAiRlActionCount == 56 && kAiRlFeatureCount == 544,
+        require(kAiRlActionCount == 56 && kAiRlFeatureCount == 545,
             "v7 action/feature counts");
     }
     // v5 features: spatial grid, directions, enemy composition, own state,
@@ -2736,9 +2737,10 @@ void test_ai_expansion_plan_and_chain() {
     // A second, far cluster of three tiles around (40, 40), still in the fog
     // (with its surroundings) - public position/amount, unexplored ground.
     const u32 w = obs.map_width_tiles;
-    obs.tiles[40 * w + 40].resource_amount = 1000;
-    obs.tiles[40 * w + 41].resource_amount = 1000;
-    obs.tiles[41 * w + 40].resource_amount = 1000;
+    for (const u32 index : {40 * w + 40, 40 * w + 41, 41 * w + 40}) {
+        obs.tiles[index].resource_amount = 1000;
+        obs.tiles[index].terrain_flags = 0x100;  // berry terrain
+    }
     for (u32 y = 34; y <= 47; ++y) {
         for (u32 x = 34; x <= 47; ++x) {
             obs.tiles[y * w + x].explored = false;
@@ -2881,6 +2883,10 @@ void test_ai_shared_build_placement() {
     const i32 sy = pop.y >> 5;
     require(!(12 >= sx && 12 < sx + 3 && 9 >= sy && 9 < sy + 2),
         "population nest site overlaps a berry tile");
+    // ...and clear of the home nest's whole 6x4 footprint (anchored at tile
+    // (10, 10)), not just its centre tile.
+    require(sx + 3 <= 10 || sx >= 16 || sy + 2 <= 10 || sy >= 14,
+        "population nest site overlaps the home nest footprint");
     AiRlStepEncoding enc = EncodeAiObservationForRl(obs);
     require(enc.legal_mask[static_cast<std::size_t>(
                 AiRlHighLevelAction::build_population_nest)] == 1,
@@ -3056,6 +3062,48 @@ void test_ai_search_split() {
         "roamer did not re-pick a target on arrival");
 }
 
+// v7 - a worker already walking to build reserves its site in the engine
+// (placement TemporaryBlock), so the planner must not hand the same site to
+// the next order; and a refused build order backs its structure type off.
+void test_ai_pending_site_and_reject_backoff() {
+    AiObservation obs = micro_observation();
+    obs.units[0].command_state = kUnitStateWorkerApproachHarvest;
+    const AiBuildSite first = FindAiBuildSite(obs, 0x82u, obs.start_x, obs.start_y, 16);
+    require(first.found, "no base-area site for the pending-site test");
+    // A second worker walking to build a population nest exactly there.
+    AiObservedUnit walker = observed_unit(0x3400, 0, 0x20, (1u << 7), 300, 300, true);
+    walker.command_state = 0x25;
+    walker.command_value = 0x82;
+    walker.path_target_x = (first.x & ~0x1f) + 115 / 2;   // site + interaction/2
+    walker.path_target_y = (first.y & ~0x1f) + 86 / 2;
+    obs.units.push_back(walker);
+    const AiBuildSite next = FindAiBuildSite(obs, 0x82u, obs.start_x, obs.start_y, 16);
+    require(next.found && (next.x != first.x || next.y != first.y),
+        "pending build site was handed out again");
+    const std::vector<u8> occupancy = AiBuildOccupancyGrid(obs);
+    require(occupancy[(first.y >> 5) * obs.map_width_tiles + (first.x >> 5)] != 0,
+        "pending site was not marked occupied");
+    obs.units.pop_back();
+
+    // Refused order back-off: the same structure type is illegal for a while
+    // and feature 544 reports it; other types stay open.
+    obs.last_build_reject_type = 0x82;
+    obs.last_build_reject_frames_ago = 10;
+    AiRlStepEncoding enc = EncodeAiObservationForRl(obs);
+    require(enc.legal_mask[static_cast<std::size_t>(
+                AiRlHighLevelAction::build_population_nest)] == 0 &&
+        enc.legal_mask[static_cast<std::size_t>(
+                AiRlHighLevelAction::build_egg_nest)] == 1 &&
+        enc.features[544] == 1.0f,
+        "refused population nest was not backed off");
+    obs.last_build_reject_frames_ago = 100;
+    enc = EncodeAiObservationForRl(obs);
+    require(enc.legal_mask[static_cast<std::size_t>(
+                AiRlHighLevelAction::build_population_nest)] == 1 &&
+        enc.features[544] == 0.0f,
+        "back-off did not expire");
+}
+
 int main() {
     test_observation_visibility_and_determinism();
     test_observation_resource_memory();
@@ -3085,6 +3133,7 @@ int main() {
     test_ai_expansion_plan_and_chain();
     test_ai_shared_build_placement();
     test_ai_search_split();
+    test_ai_pending_site_and_reject_backoff();
     test_ai_play_lobby_role_compatibility();
     std::cout << "ai_play_interface_regression: passed\n";
     return 0;

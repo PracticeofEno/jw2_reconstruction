@@ -890,6 +890,9 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
         // Search split (v7): the single-unit explorer / roamer exist.
         put(observation.explorer_unit_id != 0 ? 1.0f : 0.0f);     // 542 explorer alive
         put(observation.roamer_unit_id != 0 ? 1.0f : 0.0f);       // 543 roamer alive
+        // A build order of ours was refused by the placement gate within the
+        // back-off window (the mask closes that structure type meanwhile).
+        put(observation.last_build_reject_frames_ago < 64u ? 1.0f : 0.0f); // 544 build recently rejected
     }
     // Map knowledge gates for the split search actions: an unexplored start
     // candidate left (search_enemy_base), and a frontier tile left - an
@@ -956,10 +959,19 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
     // the base area - the same site the translator will use, so a legal build
     // is one the planner accepts (no more "mask open, placement rejected").
     const AiExpansionConfig placement_config{};
+    // Back-off after a refused build order of the same structure type (the
+    // engine placement gate sees fog-hidden units the observation cannot):
+    // the type stays illegal for kBuildRejectBackoffFrames.
+    constexpr u32 kBuildRejectBackoffFrames = 64u;
+    const auto recently_rejected = [&](u32 structure_type) {
+        return observation.last_build_reject_type == structure_type &&
+            observation.last_build_reject_frames_ago < kBuildRejectBackoffFrames;
+    };
     const auto site_ok = [&](u32 structure_type) {
-        return FindAiBuildSite(observation, structure_type,
-            std::max(observation.start_x, 0), std::max(observation.start_y, 0),
-            placement_config.base_site_radius_tiles, placement_config).found;
+        return !recently_rejected(structure_type) &&
+            FindAiBuildSite(observation, structure_type,
+                std::max(observation.start_x, 0), std::max(observation.start_y, 0),
+                placement_config.base_site_radius_tiles, placement_config).found;
     };
     const bool completed_base = base > base_uc;   // at least one finished nest
     const bool completed_egg = egg > egg_uc;
@@ -999,7 +1011,7 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
     set_legal(AiRlHighLevelAction::expand_base_nest,
         has_builder && prim >= kBaseNestCost && expansion.has_target &&
         expansion.target_explored && !expansion.target_blocked &&
-        nest_walkers == 0);
+        nest_walkers == 0 && !recently_rejected(0x80u));
     // Per-order research: an IDLE completed researcher building of the right
     // type (re-enqueueing onto a busy one re-debits and resets progress),
     // level below the cap, and the audited cost for the current level.

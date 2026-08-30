@@ -869,6 +869,13 @@ struct RuntimeGlobals {
     u32 ai_expand_tracked_unit = 0;
     u32 ai_expand_tracked_state = 0xffffffffu;
     u32 ai_expand_tracked_logs = 0;
+    // Placement diagnostics only for the planned site (first attempt), not
+    // the unchecked retry spiral around it.
+    bool ai_place_diag_enabled = false;
+    // Per-owner most recent refused build order (type, frame) - surfaced to
+    // the observation so the encoder can back that structure type off.
+    std::array<u32, kPlayerSlotCount> ai_play_last_build_reject_type{};
+    std::array<u32, kPlayerSlotCount> ai_play_last_build_reject_frame{};
     // Per-owner RL reward time-series (#4): populated per decision when a
     // learnable policy (currently -AIRANDOM) drives the owner; flushed to
     // ai_rl_reward_trace.json when the self-play match ends.
@@ -22606,12 +22613,14 @@ bool default_ai_play_check_placement(const UnitMovementUnit& source,
     const bool ok = CheckPreviewProductionPlacementFootprintGateCells(
         production, building_type, world_x, world_y, source.id);
     production.ai_relaxed_placement = false;
-    if (!ok && building_type == 0x80u) {
-        // Expansion placement diagnostics (first few rejections): the
-        // footprint cells' placement-map layers, so a rejected site can be
-        // traced to the gate that refused it.
+    if (!ok && g_runtime.ai_place_diag_enabled) {
+        // Placement diagnostics for the PLANNED site (the retry spiral is
+        // excluded by the caller): replicate the gate's checks over the
+        // footprint so a rejected site can be traced to the gate that
+        // refused it.
         static u32 logged = 0;
-        if (logged < 6) {
+        const AiBuildingFootprint fp = AiBuildingFootprintOf(building_type);
+        if (logged < 400) {
             ++logged;
             const i32 tile_x = world_x >> 5;
             const i32 tile_y = world_y >> 5;
@@ -22635,8 +22644,10 @@ bool default_ai_play_check_placement(const UnitMovementUnit& source,
             i32 berry_x = -1, berry_y = -1;
             u32 units_on = 0, unit_type = 0, unit_owner = 0;
             i32 unit_tx = -1, unit_ty = -1;
-            for (i32 y = 0; y < 4; ++y) {
-                for (i32 x = 0; x < 6; ++x) {
+            const bool base_probe = building_type == 0x60u || building_type == 0x70u ||
+                building_type == 0x80u || building_type == 0x90u;
+            for (i32 y = 0; y < static_cast<i32>(std::max<u32>(fp.height, 1u)); ++y) {
+                for (i32 x = 0; x < static_cast<i32>(std::max<u32>(fp.width, 1u)); ++x) {
                     const i32 cx = tile_x + x;
                     const i32 cy = tile_y + y;
                     const GameplayProductionPlacementCell* cell = cell_at(cx, cy);
@@ -22646,7 +22657,7 @@ bool default_ai_play_check_placement(const UnitMovementUnit& source,
                     if ((cell->route_flags & 0x20000000u) != 0) ++bad_block;
                     if (((cell->owner_flags & 0x1c000000u) >> 26) != origin_class)
                         ++bad_class;
-                    for (i32 py = -4; py <= 4 && berry_x < 0; ++py) {
+                    for (i32 py = -4; py <= 4 && berry_x < 0 && base_probe; ++py) {
                         for (i32 px = -4; px <= 4; ++px) {
                             const GameplayProductionPlacementCell* probe =
                                 cell_at(cx + px, cy + py);
@@ -22669,11 +22680,12 @@ bool default_ai_play_check_placement(const UnitMovementUnit& source,
                     }
                 }
             }
-            append_startup_log("ai-expand: placement rejected type=0x80 at "
+            append_startup_log("ai-expand: placement rejected type=0x%lx at "
                 "tile=(%ld,%ld) owner=%lu: bad_terrain=%lu bad_valid=%lu "
                 "bad_block=%lu bad_class=%lu(origin class %lu) "
                 "berry_within4=(%ld,%ld) units_on_footprint=%lu "
                 "(type=0x%lx owner=%lu at %ld,%ld)",
+                static_cast<unsigned long>(building_type),
                 static_cast<long>(tile_x), static_cast<long>(tile_y),
                 static_cast<unsigned long>(owner),
                 static_cast<unsigned long>(bad_terrain),
@@ -23458,6 +23470,13 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
                     AiMicroGroup::roamer);
             observation.observation.roamer_unit_id =
                 roamers.empty() ? 0u : roamers.front()->id;
+            // Most recent refused build order (type, frames ago).
+            if (g_runtime.ai_play_last_build_reject_type[local_owner] != 0) {
+                observation.observation.last_build_reject_type =
+                    g_runtime.ai_play_last_build_reject_type[local_owner];
+                observation.observation.last_build_reject_frames_ago =
+                    frame - g_runtime.ai_play_last_build_reject_frame[local_owner];
+            }
         }
         const AiRlStepEncoding encoding =
             EncodeAiObservationForRl(observation.observation);
@@ -23631,8 +23650,10 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
                 frame + AiMicroExecutorConfig{}.policy_hold_frames);
         }
     } else if (decision) {
+        g_runtime.ai_place_diag_enabled = true;   // diagnose the planned site only
         AiActionPlanResult plan =
             PlanAiSemanticActionV1(plan_input, decision.action);
+        g_runtime.ai_place_diag_enabled = false;
         // Executor micro (RL mode): a rejected build placement wastes the whole
         // decision cycle, so retry further spiral probe points immediately.
         if (rl_mode && !plan &&
@@ -23642,6 +23663,15 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
             // the observation does not carry.
             const u32 retry_limit =
                 decision.action.production_id == kTyranoNestType ? 24u : 5u;
+            // The planned SITE itself was refused (the retries below probe
+            // unchecked spiral points, so their refusals are expected noise).
+            append_startup_log("ai-expand: site rejected type=0x%lx code=%lu "
+                "at (%ld,%ld) frame=%lu",
+                static_cast<unsigned long>(decision.action.production_id),
+                static_cast<unsigned long>(plan.code),
+                static_cast<long>(decision.action.target_x),
+                static_cast<long>(decision.action.target_y),
+                static_cast<unsigned long>(frame));
             for (u32 attempt = 0; attempt < retry_limit && !plan; ++attempt) {
                 const UnitMovementPoint retry_point =
                     TyranoScriptedBotNextBuildPoint(bot,
@@ -23693,6 +23723,14 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
                     static_cast<unsigned long>(decision.action.production_id),
                     static_cast<unsigned long>(plan.code));
             }
+        }
+        if (!plan && decision.action.kind == AiSemanticActionKind::build) {
+            // The placement gate refused the site (and its retries): remember
+            // it so the observation can report the refusal and the encoder
+            // backs this structure type off for a while.
+            g_runtime.ai_play_last_build_reject_type[local_owner] =
+                decision.action.production_id;
+            g_runtime.ai_play_last_build_reject_frame[local_owner] = frame;
         }
         const bool published = publish_planned_packets(plan);
         CommitTyranoScriptedBotDecision(bot, decision, published, plan.code);
@@ -23851,7 +23889,8 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
                             continue;
                         }
                         append_startup_log("ai-expand: footprint type=0x%lx "
-                            "%lux%lu interaction=%ldx%ld",
+                            "%lux%lu interaction=%ldx%ld render_class=%lu "
+                            "profile=%lu",
                             static_cast<unsigned long>(type),
                             static_cast<unsigned long>(
                                 definition->footprint_width_tiles),
@@ -23860,7 +23899,10 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
                             static_cast<long>(
                                 definition->interaction_bounds_width),
                             static_cast<long>(
-                                definition->interaction_bounds_height));
+                                definition->interaction_bounds_height),
+                            static_cast<unsigned long>(definition->render_class),
+                            static_cast<unsigned long>(
+                                definition->action_profile_index));
                     }
                 }
             }

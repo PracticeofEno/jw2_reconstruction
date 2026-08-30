@@ -100,6 +100,9 @@ struct AiBuildingFootprint {
     u32 height = 1;
 };
 AiBuildingFootprint AiBuildingFootprintOf(u32 type_id);
+// Interaction bounds (px) of a structure type; a walking builder's path
+// target = site + bounds/2 (used to recover pending sites).  0x0 unknown.
+AiBuildingFootprint AiBuildingInteractionOf(u32 type_id);
 
 // Static placement validity of anchoring `type_id`'s footprint at a tile,
 // mirroring the engine gate's static part: every footprint tile buildable,
@@ -112,6 +115,15 @@ AiBuildingFootprint AiBuildingFootprintOf(u32 type_id);
 bool AiBuildSiteCandidateOk(const AiObservation& observation, u32 type_id,
     i32 tile_x, i32 tile_y, bool require_explored, bool* blocked,
     const AiExpansionConfig& config = {});
+
+// Per-tile occupancy by visible structures (their whole footprint, any
+// owner): a candidate footprint overlapping one is invalid, matching the
+// engine's footprint-occupied gate.  One byte per map tile; computed once
+// per planning call and passed to the overload below.
+std::vector<u8> AiBuildOccupancyGrid(const AiObservation& observation);
+bool AiBuildSiteCandidateOk(const AiObservation& observation,
+    const std::vector<u8>& occupancy, u32 type_id, i32 tile_x, i32 tile_y,
+    bool require_explored, bool* blocked, const AiExpansionConfig& config = {});
 
 struct AiBuildSite {
     bool found = false;

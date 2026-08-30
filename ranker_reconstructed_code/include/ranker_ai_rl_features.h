@@ -161,7 +161,7 @@ constexpr const AiRlResearchAction* FindAiRlResearchAction(
 // v1: 36 base + 3 research levels + 3 neutral-monster + 4 tech-tree = 46.
 // v2 appends: 10 research levels, 11 unit counts, 4 building counts, and 9
 // mechanic aggregates (stance/morph/transport/army/queue state) = 80.
-constexpr std::size_t kAiRlFeatureCount = 544;
+constexpr std::size_t kAiRlFeatureCount = 545;
 
 struct AiRlStepEncoding {
     // Normalized policy/value-network input.

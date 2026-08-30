@@ -238,6 +238,13 @@ struct AiObservation {
     // outside active vision) unit ids (0 = none).  v7.
     u32 explorer_unit_id = 0;
     u32 roamer_unit_id = 0;
+    // The owner's most recent REFUSED build order (the engine's placement
+    // gate said no - information the owner receives, like a human's "cannot
+    // build here"): structure type and frames since (0xffffffff = none).
+    // The encoder backs the refused structure type off for a while, since a
+    // fog-hidden unit on the site is invisible to the observation.  v7.
+    u32 last_build_reject_type = 0;
+    u32 last_build_reject_frames_ago = 0xffffffffu;
     // Fog-honest memory of enemy BUILDINGS: one byte per map tile (same
     // layout as `tiles`), 1 where a hostile building was last seen and the
     // tile has not been re-lit empty since.  Maintained per owner by the

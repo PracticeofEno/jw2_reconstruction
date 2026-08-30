@@ -32,8 +32,16 @@ const AiObservedMapTile& tile_at(const AiObservation& observation, u32 x, u32 y)
         static_cast<std::size_t>(y) * observation.map_width_tiles + x];
 }
 
+// Harvestable now (known amount left) - what a cluster is made of.
 bool is_berry(const AiObservation& observation, u32 x, u32 y) {
     return tile_at(observation, x, y).resource_amount != 0;
+}
+
+// Berry TERRAIN (engine class 0x100), amount or not - what the placement
+// gate's nearby-berry probe rejects.  A harvested-out patch still blocks a
+// base nest; the observation's static terrain flags carry the class.
+bool is_berry_terrain(const AiObservation& observation, u32 x, u32 y) {
+    return (tile_at(observation, x, y).terrain_flags & 0x700u) == 0x100u;
 }
 
 } // namespace
@@ -49,6 +57,27 @@ u32 AiWalkingBuildTypeOf(const AiObservedUnit& unit) {
     }
     return unit.command_value < kMobileTypeLimitLocal ?
         unit.command_value + kMobileTypeLimitLocal : unit.command_value;
+}
+
+// Interaction bounds (px) of a Tyrano structure type (headless "ai-expand:
+// footprint ... interaction=WxH").  A walking builder's path target is the
+// site plus half of these (offset_spawn_target_by_interaction_bounds), so
+// the pending site's anchor tile = (path_target - bounds/2) >> 5.
+AiBuildingFootprint AiBuildingInteractionOf(u32 type_id) {
+    switch (type_id) {
+    case 0x80u: return {203, 140};
+    case 0x82u: return {115, 86};
+    case 0x83u: return {79, 71};
+    case 0x84u: return {137, 92};
+    case 0x85u: return {141, 128};
+    case 0x86u: return {145, 140};
+    case 0x87u: return {158, 108};
+    case 0x88u: return {158, 109};
+    case 0x89u: return {147, 154};
+    case 0x8au: return {140, 164};
+    case 0x8fu: return {118, 107};
+    default: return {0, 0};
+    }
 }
 
 AiBuildingFootprint AiBuildingFootprintOf(u32 type_id) {
@@ -69,9 +98,71 @@ AiBuildingFootprint AiBuildingFootprintOf(u32 type_id) {
     }
 }
 
+std::vector<u8> AiBuildOccupancyGrid(const AiObservation& observation) {
+    std::vector<u8> occupancy;
+    if (!tiles_valid(observation)) {
+        return occupancy;
+    }
+    const i64 width = observation.map_width_tiles;
+    const i64 height = observation.map_height_tiles;
+    occupancy.assign(observation.tiles.size(), 0u);
+    for (const AiObservedUnit& unit : observation.units) {
+        if (!unit.alive || !unit.visible || unit.type_id < kMobileTypeLimitLocal) {
+            continue;
+        }
+        // Structure footprint anchored at the unit's tile (top-left, the
+        // engine's footprint_world_to_tile convention).  Unknown (other
+        // tribe) types get the common 4x3 so at least the bulk is covered.
+        AiBuildingFootprint footprint = AiBuildingFootprintOf(unit.type_id);
+        if (footprint.width == 1 && footprint.height == 1) {
+            footprint = {4, 3};
+        }
+        const i64 ax = unit.x >> 5;
+        const i64 ay = unit.y >> 5;
+        for (i64 y = ay; y < ay + footprint.height; ++y) {
+            for (i64 x = ax; x < ax + footprint.width; ++x) {
+                if (x >= 0 && y >= 0 && x < width && y < height) {
+                    occupancy[static_cast<std::size_t>(y) * width +
+                        static_cast<std::size_t>(x)] = 1u;
+                }
+            }
+        }
+    }
+    // Pending sites: a worker walking to build reserves its footprint in the
+    // engine (placement TemporaryBlock) until it arrives, so ordering another
+    // structure onto it is refused.  The anchor is recovered from the walk
+    // target (site + interaction/2); one tile of margin covers the rounding.
+    for (const AiObservedUnit& unit : observation.units) {
+        const u32 pending_type = AiWalkingBuildTypeOf(unit);
+        if (pending_type == 0) {
+            continue;
+        }
+        const AiBuildingFootprint footprint = AiBuildingFootprintOf(pending_type);
+        const AiBuildingFootprint bounds = AiBuildingInteractionOf(pending_type);
+        const i64 ax = (unit.path_target_x - static_cast<i32>(bounds.width) / 2) >> 5;
+        const i64 ay = (unit.path_target_y - static_cast<i32>(bounds.height) / 2) >> 5;
+        for (i64 y = ay - 1; y <= ay + footprint.height; ++y) {
+            for (i64 x = ax - 1; x <= ax + footprint.width; ++x) {
+                if (x >= 0 && y >= 0 && x < width && y < height) {
+                    occupancy[static_cast<std::size_t>(y) * width +
+                        static_cast<std::size_t>(x)] = 1u;
+                }
+            }
+        }
+    }
+    return occupancy;
+}
+
 bool AiBuildSiteCandidateOk(const AiObservation& observation, u32 type_id,
     i32 tile_x, i32 tile_y, bool require_explored, bool* blocked,
     const AiExpansionConfig& config) {
+    return AiBuildSiteCandidateOk(observation, AiBuildOccupancyGrid(observation),
+        type_id, tile_x, tile_y, require_explored, blocked, config);
+}
+
+bool AiBuildSiteCandidateOk(const AiObservation& observation,
+    const std::vector<u8>& occupancy, u32 type_id, i32 tile_x, i32 tile_y,
+    bool require_explored, bool* blocked, const AiExpansionConfig& config) {
     if (blocked != nullptr) {
         *blocked = false;
     }
@@ -99,8 +190,8 @@ bool AiBuildSiteCandidateOk(const AiObservation& observation, u32 type_id,
             }
             const u32 ux = static_cast<u32>(fx);
             const u32 uy = static_cast<u32>(fy);
-            if (is_berry(observation, ux, uy)) {
-                return false;  // berry inside the footprint or its clearance
+            if (is_berry_terrain(observation, ux, uy) || is_berry(observation, ux, uy)) {
+                return false;  // berry terrain inside the footprint / clearance
             }
             const bool inside = fx >= tx && fx < tx + fw && fy >= ty && fy < ty + fh;
             if (!inside) {
@@ -109,6 +200,10 @@ bool AiBuildSiteCandidateOk(const AiObservation& observation, u32 type_id,
             const AiObservedMapTile& part = tile_at(observation, ux, uy);
             if (!part.buildable || part.placement_class != anchor.placement_class) {
                 return false;
+            }
+            if (occupancy.size() == observation.tiles.size() &&
+                occupancy[static_cast<std::size_t>(uy) * width + ux] != 0) {
+                return false;  // a standing structure's footprint
             }
             if (require_explored && !part.explored) {
                 return false;
@@ -143,6 +238,7 @@ AiBuildSite FindAiBuildSite(const AiObservation& observation, u32 type_id,
     const i64 cx = std::max(center_x, 0) >> 5;
     const i64 cy = std::max(center_y, 0) >> 5;
     const i64 radius = std::max(radius_tiles, 0);
+    const std::vector<u8> occupancy = AiBuildOccupancyGrid(observation);
     i64 best_distance = 0;
     i64 best_blocked_distance = 0;
     bool have_blocked = false;
@@ -151,7 +247,7 @@ AiBuildSite FindAiBuildSite(const AiObservation& observation, u32 type_id,
         for (i64 tx = std::max<i64>(cx - radius, 0);
              tx <= std::min<i64>(cx + radius, width - 1); ++tx) {
             bool blocked = false;
-            if (!AiBuildSiteCandidateOk(observation, type_id,
+            if (!AiBuildSiteCandidateOk(observation, occupancy, type_id,
                     static_cast<i32>(tx), static_cast<i32>(ty), true, &blocked,
                     config)) {
                 continue;
@@ -205,6 +301,7 @@ AiExpansionPlan ComputeAiExpansionPlan(const AiObservation& observation,
         }
     }
     plan.nest_count = static_cast<u32>(nests.size());
+    const std::vector<u8> occupancy = AiBuildOccupancyGrid(observation);
 
     // ---- clusters: 8-connected components of berry tiles -----------------
     std::vector<u32> label(observation.tiles.size(), 0u);
@@ -286,9 +383,9 @@ AiExpansionPlan ComputeAiExpansionPlan(const AiObservation& observation,
             for (i64 ty = lo_y; ty <= hi_y; ++ty) {
                 for (i64 tx = lo_x; tx <= hi_x; ++tx) {
                     bool blocked = false;
-                    if (!AiBuildSiteCandidateOk(observation, config.base_type_id,
-                            static_cast<i32>(tx), static_cast<i32>(ty), false,
-                            &blocked, config)) {
+                    if (!AiBuildSiteCandidateOk(observation, occupancy,
+                            config.base_type_id, static_cast<i32>(tx),
+                            static_cast<i32>(ty), false, &blocked, config)) {
                         continue;
                     }
                     const u32 cx = static_cast<u32>(tx);
