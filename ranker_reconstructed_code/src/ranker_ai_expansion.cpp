@@ -153,6 +153,115 @@ std::vector<u8> AiBuildOccupancyGrid(const AiObservation& observation) {
     return occupancy;
 }
 
+
+bool AiBuildSiteKeepsLocalPaths(const AiObservation& observation,
+    const std::vector<u8>& occupancy, u32 type_id, i32 tile_x, i32 tile_y,
+    bool require_berry_reach, const AiExpansionConfig& config) {
+    if (!tiles_valid(observation) || tile_x < 0 || tile_y < 0) {
+        return false;
+    }
+    const i64 width = observation.map_width_tiles;
+    const i64 height = observation.map_height_tiles;
+    const AiBuildingFootprint footprint = AiBuildingFootprintOf(type_id);
+    const i64 fw = std::max<u32>(footprint.width, 1u);
+    const i64 fh = std::max<u32>(footprint.height, 1u);
+    const i64 tx = tile_x;
+    const i64 ty = tile_y;
+    if (tx + fw > width || ty + fh > height) {
+        return false;
+    }
+    const i64 margin = std::max(config.path_window_margin_tiles, 1);
+    const i64 win_lo_x = std::max<i64>(tx - margin, 0);
+    const i64 win_lo_y = std::max<i64>(ty - margin, 0);
+    const i64 win_hi_x = std::min<i64>(tx + fw - 1 + margin, width - 1);
+    const i64 win_hi_y = std::min<i64>(ty + fh - 1 + margin, height - 1);
+    const i64 win_w = win_hi_x - win_lo_x + 1;
+    const i64 win_h = win_hi_y - win_lo_y + 1;
+    const auto in_footprint = [&](i64 cell_x, i64 cell_y) {
+        return cell_x >= tx && cell_x < tx + fw && cell_y >= ty &&
+            cell_y < ty + fh;
+    };
+    const auto open_cell = [&](i64 cell_x, i64 cell_y) {
+        if (cell_x < win_lo_x || cell_y < win_lo_y || cell_x > win_hi_x ||
+            cell_y > win_hi_y || in_footprint(cell_x, cell_y)) {
+            return false;
+        }
+        const AiObservedMapTile& tile = tile_at(observation,
+            static_cast<u32>(cell_x), static_cast<u32>(cell_y));
+        if (!tile.passable) {
+            return false;
+        }
+        return occupancy.size() != observation.tiles.size() ||
+            occupancy[static_cast<std::size_t>(cell_y) * width + cell_x] == 0;
+    };
+    // Open cells on the one-tile ring around the footprint: the endpoints the
+    // placement must keep mutually connected.
+    std::vector<std::pair<i64, i64>> ring_open;
+    for (i64 cell_x = tx - 1; cell_x <= tx + fw; ++cell_x) {
+        if (open_cell(cell_x, ty - 1)) ring_open.push_back({cell_x, ty - 1});
+        if (open_cell(cell_x, ty + fh)) ring_open.push_back({cell_x, ty + fh});
+    }
+    for (i64 cell_y = ty; cell_y <= ty + fh - 1; ++cell_y) {
+        if (open_cell(tx - 1, cell_y)) ring_open.push_back({tx - 1, cell_y});
+        if (open_cell(tx + fw, cell_y)) ring_open.push_back({tx + fw, cell_y});
+    }
+    if (ring_open.empty()) {
+        return false;  // fully sealed in - nothing could even reach the site
+    }
+    // 4-connected BFS over the window from the first ring cell.
+    std::vector<u8> visited(static_cast<std::size_t>(win_w * win_h), 0u);
+    const auto visit_index = [&](i64 cell_x, i64 cell_y) {
+        return static_cast<std::size_t>((cell_y - win_lo_y) * win_w +
+            (cell_x - win_lo_x));
+    };
+    std::vector<std::pair<i64, i64>> queue;
+    queue.push_back(ring_open.front());
+    visited[visit_index(ring_open.front().first, ring_open.front().second)] = 1u;
+    bool berry_reached = false;
+    const auto touches_berry = [&](i64 cell_x, i64 cell_y) {
+        for (i32 dy = -1; dy <= 1; ++dy) {
+            for (i32 dx = -1; dx <= 1; ++dx) {
+                const i64 nx = cell_x + dx;
+                const i64 ny = cell_y + dy;
+                if (nx < 0 || ny < 0 || nx >= width || ny >= height) {
+                    continue;
+                }
+                if (is_berry_terrain(observation, static_cast<u32>(nx),
+                        static_cast<u32>(ny)) ||
+                    is_berry(observation, static_cast<u32>(nx),
+                        static_cast<u32>(ny))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+    while (!queue.empty()) {
+        const std::pair<i64, i64> cell = queue.back();
+        queue.pop_back();
+        if (require_berry_reach && !berry_reached &&
+            touches_berry(cell.first, cell.second)) {
+            berry_reached = true;
+        }
+        static const i32 kSteps[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        for (const auto& step : kSteps) {
+            const i64 nx = cell.first + step[0];
+            const i64 ny = cell.second + step[1];
+            if (!open_cell(nx, ny) || visited[visit_index(nx, ny)] != 0) {
+                continue;
+            }
+            visited[visit_index(nx, ny)] = 1u;
+            queue.push_back({nx, ny});
+        }
+    }
+    for (const std::pair<i64, i64>& cell : ring_open) {
+        if (visited[visit_index(cell.first, cell.second)] == 0) {
+            return false;  // the placement would split its neighbourhood
+        }
+    }
+    return !require_berry_reach || berry_reached;
+}
+
 bool AiBuildSiteCandidateOk(const AiObservation& observation, u32 type_id,
     i32 tile_x, i32 tile_y, bool require_explored, bool* blocked,
     const AiExpansionConfig& config) {
@@ -285,6 +394,14 @@ AiBuildSite FindAiBuildSite(const AiObservation& observation, u32 type_id,
     i64 best_distance = 0;
     i64 best_blocked_distance = 0;
     bool have_blocked = false;
+    // Cheap static checks first; the chosen candidates are then BFS-verified
+    // (nearest first) so a site never seals its own neighbourhood.
+    struct Candidate {
+        i64 tx;
+        i64 ty;
+        i64 distance;
+    };
+    std::vector<Candidate> candidates;
     for (i64 ty = std::max<i64>(cy - radius, 0);
          ty <= std::min<i64>(cy + radius, height - 1); ++ty) {
         for (i64 tx = std::max<i64>(cx - radius, 0);
@@ -306,13 +423,32 @@ AiBuildSite FindAiBuildSite(const AiObservation& observation, u32 type_id,
                 }
                 continue;
             }
-            if (!site.found || distance < best_distance) {
-                site.found = true;
-                best_distance = distance;
-                site.x = world_x;
-                site.y = world_y;
-            }
+            candidates.push_back({tx, ty, distance});
         }
+    }
+    std::sort(candidates.begin(), candidates.end(),
+        [](const Candidate& lhs, const Candidate& rhs) {
+            if (lhs.distance != rhs.distance) {
+                return lhs.distance < rhs.distance;
+            }
+            return lhs.ty != rhs.ty ? lhs.ty < rhs.ty : lhs.tx < rhs.tx;
+        });
+    u32 verified = 0;
+    for (const Candidate& candidate : candidates) {
+        if (verified >= config.path_verify_max_candidates) {
+            break;
+        }
+        ++verified;
+        if (!AiBuildSiteKeepsLocalPaths(observation, occupancy, type_id,
+                static_cast<i32>(candidate.tx), static_cast<i32>(candidate.ty),
+                false, config)) {
+            continue;
+        }
+        site.found = true;
+        best_distance = candidate.distance;
+        site.x = static_cast<i32>(candidate.tx) * kTilePixels + kTilePixels / 2;
+        site.y = static_cast<i32>(candidate.ty) * kTilePixels + kTilePixels / 2;
+        break;
     }
     site.nearest_blocked = have_blocked &&
         (!site.found || best_blocked_distance < best_distance);
@@ -420,9 +556,14 @@ AiExpansionPlan ComputeAiExpansionPlan(const AiObservation& observation,
                 static_cast<i64>(width) - 1);
             const i64 hi_y = std::min<i64>(static_cast<i64>(max_y) + margin,
                 static_cast<i64>(height) - 1);
-            double best_score = 0.0;
-            i64 best_start_distance = 0;
-            bool have_site = false;
+            struct SiteCandidate {
+                i64 tx;
+                i64 ty;
+                double score;
+                i64 start_distance;
+                bool blocked;
+            };
+            std::vector<SiteCandidate> site_candidates;
             for (i64 ty = lo_y; ty <= hi_y; ++ty) {
                 for (i64 tx = lo_x; tx <= hi_x; ++tx) {
                     bool blocked = false;
@@ -431,11 +572,9 @@ AiExpansionPlan ComputeAiExpansionPlan(const AiObservation& observation,
                             static_cast<i32>(ty), false, &blocked, config)) {
                         continue;
                     }
-                    const u32 cx = static_cast<u32>(tx);
-                    const u32 cy = static_cast<u32>(ty);
-                    const i32 world_x = static_cast<i32>(cx) * kTilePixels +
+                    const i32 world_x = static_cast<i32>(tx) * kTilePixels +
                         kTilePixels / 2;
-                    const i32 world_y = static_cast<i32>(cy) * kTilePixels +
+                    const i32 world_y = static_cast<i32>(ty) * kTilePixels +
                         kTilePixels / 2;
                     double score = 0.0;
                     for (const TilePoint& member : members) {
@@ -452,19 +591,48 @@ AiExpansionPlan ComputeAiExpansionPlan(const AiObservation& observation,
                     const i64 start_distance = squared_distance(world_x, world_y,
                         std::max(observation.start_x, 0),
                         std::max(observation.start_y, 0));
-                    if (!have_site || score < best_score ||
-                        (score == best_score &&
-                            start_distance < best_start_distance)) {
-                        have_site = true;
-                        best_score = score;
-                        best_start_distance = start_distance;
-                        cluster.site_x = world_x;
-                        cluster.site_y = world_y;
-                        cluster.site_explored = tile_at(observation, cx, cy).explored;
-                        cluster.site_blocked = blocked;
-                        cluster.site_distance_from_start_sq = start_distance;
-                    }
+                    site_candidates.push_back(
+                        {tx, ty, score, start_distance, blocked});
                 }
+            }
+            // Best score first; the chosen site must then pass the local
+            // path/berry-reach verification (v9): the nest must stand on the
+            // same walkable side as its berries (hill/cliff guard) and must
+            // not seal its neighbourhood.
+            std::sort(site_candidates.begin(), site_candidates.end(),
+                [](const SiteCandidate& lhs, const SiteCandidate& rhs) {
+                    if (lhs.score != rhs.score) {
+                        return lhs.score < rhs.score;
+                    }
+                    if (lhs.start_distance != rhs.start_distance) {
+                        return lhs.start_distance < rhs.start_distance;
+                    }
+                    return lhs.ty != rhs.ty ? lhs.ty < rhs.ty : lhs.tx < rhs.tx;
+                });
+            bool have_site = false;
+            u32 site_verified = 0;
+            for (const SiteCandidate& candidate : site_candidates) {
+                if (site_verified >= config.path_verify_max_candidates) {
+                    break;
+                }
+                ++site_verified;
+                if (!AiBuildSiteKeepsLocalPaths(observation, occupancy,
+                        config.base_type_id, static_cast<i32>(candidate.tx),
+                        static_cast<i32>(candidate.ty),
+                        /*require_berry_reach=*/true, config)) {
+                    continue;
+                }
+                have_site = true;
+                cluster.site_x = static_cast<i32>(candidate.tx) * kTilePixels +
+                    kTilePixels / 2;
+                cluster.site_y = static_cast<i32>(candidate.ty) * kTilePixels +
+                    kTilePixels / 2;
+                cluster.site_explored = tile_at(observation,
+                    static_cast<u32>(candidate.tx),
+                    static_cast<u32>(candidate.ty)).explored;
+                cluster.site_blocked = candidate.blocked;
+                cluster.site_distance_from_start_sq = candidate.start_distance;
+                break;
             }
             if (have_site) {
                 const i64 radius = config.developed_radius;

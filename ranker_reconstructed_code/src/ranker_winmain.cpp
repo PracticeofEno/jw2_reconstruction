@@ -23688,10 +23688,12 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
             // v9 decision-context features [772..787]: why this decision
             // fired, how long since the previous one, and how much the
             // autopilot did meanwhile.
+            const std::array<u32, 4>& autopilot_window =
+                g_runtime.ai_play_autopilots[local_owner].fired_since_decision;
             ApplyAiRlDecisionContext(encoding, gate_result.frames_since_last,
                 gate_result.triggers,
-                g_runtime.ai_play_autopilots[local_owner]
-                    .fired_since_decision);
+                {autopilot_window[0], autopilot_window[1],
+                    autopilot_window[2]});
             u32 pick;
             bool picked = true;
             i32 target_cell = -1;
@@ -24062,16 +24064,25 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
                 DecideTyranoScriptedBotForHighLevelAction(bot,
                     observation.observation, auto_action, bot_config);
             bot.last_decision_frame = saved_decision_frame;
+            AiAutopilotState& autopilot =
+                g_runtime.ai_play_autopilots[local_owner];
+            const std::size_t rule =
+                static_cast<std::size_t>(AiAutopilotRuleOf(auto_action));
+            // Objective-only rules (scout guard's explore_frontier) succeed
+            // at translation time - the executor drives the unit; nothing to
+            // plan or publish.
+            if (auto_decision.code ==
+                TyranoScriptedBotDecisionCode::objective_updated) {
+                ++autopilot.fired_total[rule];
+                ++autopilot.fired_since_decision[rule];
+                continue;
+            }
             if (!auto_decision) {
                 continue;
             }
             const AiActionPlanResult auto_plan =
                 PlanAiSemanticActionV1(plan_input, auto_decision.action);
             if (auto_plan && publish_planned_packets(auto_plan)) {
-                AiAutopilotState& autopilot =
-                    g_runtime.ai_play_autopilots[local_owner];
-                const std::size_t rule =
-                    static_cast<std::size_t>(AiAutopilotRuleOf(auto_action));
                 ++autopilot.fired_total[rule];
                 ++autopilot.fired_since_decision[rule];
                 if (!auto_decision.action.unit_ids.empty()) {
@@ -33278,7 +33289,8 @@ void write_ai_selfplay_result(const GameplayLoopState& state, const char* reason
             "\"unit_value_lost\": %llu, \"building_value_lost\": %llu, "
             "\"pop_used\": %lu, \"primary\": %lu, \"secondary\": %lu, "
             "\"autopilot_workers\": %lu, \"autopilot_pop_nests\": %lu, "
-            "\"autopilot_fighters\": %lu, \"reflex_activations\": %lu, "
+            "\"autopilot_fighters\": %lu, \"autopilot_scouts\": %lu, "
+            "\"reflex_activations\": %lu, "
             "\"alive\": %s}%s\n",
             static_cast<unsigned long>(owner),
             static_cast<unsigned long>(slot_state),
@@ -33295,6 +33307,7 @@ void write_ai_selfplay_result(const GameplayLoopState& state, const char* reason
             static_cast<unsigned long>(autopilot.fired_total[0]),
             static_cast<unsigned long>(autopilot.fired_total[1]),
             static_cast<unsigned long>(autopilot.fired_total[2]),
+            static_cast<unsigned long>(autopilot.fired_total[3]),
             static_cast<unsigned long>(
                 g_runtime.ai_play_bots[owner].micro.reflex_activations),
             // Alive = still holding at least one building (the elimination

@@ -1752,9 +1752,30 @@ std::vector<AiSemanticAction> AiMicroExecutorStep(AiMicroExecutorState& state,
         UnitMovementPoint destination{-1, -1};
         bool found = false;
         if (group == AiMicroGroup::explorer) {
-            found = pick_frontier(context, member->x, member->y, reachable,
-                destination);
+            // v9 (user directive): enemy-base finding order.  The explorer
+            // visits the UNEXPLORED START CANDIDATES first - that is where an
+            // enemy base can actually be - and only once every candidate is
+            // checked does it fall back to the generic frontier sweep.
+            UnitMovementPoint start_candidate{-1, -1};
+            if (pick_unexplored_start(context, member->x, member->y,
+                    start_candidate)) {
+                const u32 candidate_tile_x =
+                    static_cast<u32>(std::max(start_candidate.x, 0)) >> 5;
+                const u32 candidate_tile_y =
+                    static_cast<u32>(std::max(start_candidate.y, 0)) >> 5;
+                const std::size_t candidate_tile =
+                    static_cast<std::size_t>(candidate_tile_y) *
+                        observation.map_width_tiles + candidate_tile_x;
+                if (candidate_tile < reachable.size() &&
+                    reachable[candidate_tile] != 0) {
+                    destination = start_candidate;
+                    found = true;
+                }
+            }
             if (found) {
+                ++context.explore_picks;
+            } else if ((found = pick_frontier(context, member->x, member->y,
+                    reachable, destination))) {
                 ++context.explore_picks;
             } else {
                 // Nothing reachable left to reveal: release the unit.

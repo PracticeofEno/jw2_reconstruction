@@ -39,6 +39,12 @@ struct AiExpansionConfig {
     // 티라노 네스트 definition 0x80: 6x4 (headless log "nest_footprint=6x4").
     u32 footprint_width_tiles = 6;
     u32 footprint_height_tiles = 4;
+    // v9 local-connectivity verification (user replay report: buildings
+    // sealed unit paths / expansion nests placed across a cliff from the
+    // berries).  BFS window = footprint grown by this margin; only this many
+    // best candidates are BFS-verified per search (cost bound).
+    i32 path_window_margin_tiles = 8;
+    u32 path_verify_max_candidates = 24;
 };
 
 struct AiBerryCluster {
@@ -115,6 +121,18 @@ AiBuildingFootprint AiBuildingInteractionOf(u32 type_id);
 bool AiBuildSiteCandidateOk(const AiObservation& observation, u32 type_id,
     i32 tile_x, i32 tile_y, bool require_explored, bool* blocked,
     const AiExpansionConfig& config = {});
+
+// v9 chosen-site verification: with the candidate footprint blocked, every
+// open (passable, unoccupied) cell touching its one-tile ring must stay
+// mutually connected inside the local window - a placement that splits its
+// neighbourhood (U-yard closure, corridor sealing, penning produced units)
+// is refused.  With require_berry_reach the connected region must also touch
+// a cell adjacent to a berry tile (expansion sites: the nest must be on the
+// same walkable side as its berries - the hill/cliff guard).  Runs only on
+// the finally-chosen candidates (BFS is too costly per spiral probe).
+bool AiBuildSiteKeepsLocalPaths(const AiObservation& observation,
+    const std::vector<u8>& occupancy, u32 type_id, i32 tile_x, i32 tile_y,
+    bool require_berry_reach, const AiExpansionConfig& config = {});
 
 // Per-tile occupancy by visible structures (their whole footprint, any
 // owner): a candidate footprint overlapping one is invalid, matching the

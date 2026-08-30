@@ -31,6 +31,13 @@ struct AiAutopilotConfig {
     // bank to spend before the autopilot starts draining it into units.
     u32 bank_threshold = 1500;
     u32 producer_idle_frames = 96;  // egg producer idle this long -> produce
+    // Scout guard (user directive: the bot must actually SCOUT the enemy
+    // base): with no enemy building known after the opening grace, send one
+    // explorer - it visits the unexplored START CANDIDATES first and only
+    // then sweeps the frontier (executor rule), and the guard deactivates
+    // the moment an enemy building is seen or remembered.
+    u32 scout_guard_start_frame = 1200;
+    u32 scout_guard_cooldown_frames = 256;
 };
 
 // Autopilot rule slots (the counter/feature order).
@@ -38,6 +45,7 @@ enum AiAutopilotRule : u32 {
     autopilot_rule_worker = 0,
     autopilot_rule_pop_nest = 1,
     autopilot_rule_fighter = 2,
+    autopilot_rule_scout = 3,
 };
 
 struct AiAutopilotState {
@@ -48,10 +56,13 @@ struct AiAutopilotState {
     // Frame since which a completed egg-nest producer has been continuously
     // idle (queue empty, no deferred commands); 0xffffffff = none idle.
     u32 egg_idle_since_frame = 0xffffffffu;
+    // Scout-guard issuance throttle (set on emit, not publish).
+    u32 last_scout_guard_frame = 0xffffffffu;
     // Rule firings: total (result JSON) and since the last policy decision
-    // (features [785..787]; the pump resets this at each policy decision).
-    std::array<u32, 3> fired_total{};
-    std::array<u32, 3> fired_since_decision{};
+    // (features [785..787] carry the first three; the pump resets the window
+    // at each policy decision).  Slot order = AiAutopilotRule.
+    std::array<u32, 4> fired_total{};
+    std::array<u32, 4> fired_since_decision{};
 };
 
 // True for the fighter-produce actions whose pick should update

@@ -64,6 +64,9 @@ AiAutopilotRule AiAutopilotRuleOf(AiRlHighLevelAction action) {
     if (action == AiRlHighLevelAction::build_population_nest) {
         return autopilot_rule_pop_nest;
     }
+    if (action == AiRlHighLevelAction::explore_frontier) {
+        return autopilot_rule_scout;
+    }
     return autopilot_rule_fighter;
 }
 
@@ -153,6 +156,46 @@ std::vector<AiRlHighLevelAction> AiAutopilotPlan(AiAutopilotState& state,
         legal(encoding, state.last_fighter_action) &&
         !AiAutopilotIsEggFighterAction(policy_action)) {
         actions.push_back(state.last_fighter_action);
+    }
+
+    // --- rule 4: scout guard (user directive) -------------------------------
+    // No enemy building known (visible or fog-remembered), no explorer out,
+    // opening grace passed: send one explorer.  It checks the unexplored
+    // start candidates first, then the frontier (executor rule); the guard
+    // stops firing the moment an enemy building is known - finding the base
+    // IS its job, what to do about it stays the policy's.
+    bool enemy_base_known = false;
+    for (const AiObservedUnit& unit : observation.units) {
+        if (!unit.controlled && unit.visible && unit.alive &&
+            unit.type_id >= kBuildingTypeStart && unit.owner_id < 8u &&
+            unit.owner_id != observation.local_owner &&
+            (observation.local_relation_mask & (1u << unit.owner_id)) == 0 &&
+            (observation.active_owner_mask & (1u << unit.owner_id)) != 0) {
+            enemy_base_known = true;
+            break;
+        }
+    }
+    if (!enemy_base_known) {
+        for (const u8 remembered : observation.enemy_building_memory) {
+            if (remembered != 0) {
+                enemy_base_known = true;
+                break;
+            }
+        }
+    }
+    const bool policy_scouts =
+        policy_action == AiRlHighLevelAction::explore_frontier ||
+        policy_action == AiRlHighLevelAction::roam_scout ||
+        policy_action == AiRlHighLevelAction::scout_map ||
+        policy_action == AiRlHighLevelAction::search_enemy_base;
+    if (!enemy_base_known && frame >= config.scout_guard_start_frame &&
+        observation.explorer_unit_id == 0 && !policy_scouts &&
+        legal(encoding, AiRlHighLevelAction::explore_frontier) &&
+        (state.last_scout_guard_frame == 0xffffffffu ||
+            frame - state.last_scout_guard_frame >=
+                config.scout_guard_cooldown_frames)) {
+        state.last_scout_guard_frame = frame;
+        actions.push_back(AiRlHighLevelAction::explore_frontier);
     }
 
     return actions;

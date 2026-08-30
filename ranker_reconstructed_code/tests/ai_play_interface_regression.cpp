@@ -3007,8 +3007,16 @@ void test_ai_search_split() {
         "explore_frontier did not split one unit into the explorer group");
     obs.simulation_frame = 201;
     orders = AiMicroExecutorStep(explorer_bot.micro, obs);
+    // v9: the explorer visits the UNEXPLORED START CANDIDATE first (that is
+    // where an enemy base can be), and only then sweeps the frontier.
     require(orders.size() == 1 && orders[0].kind == AiSemanticActionKind::move &&
         orders[0].unit_ids == std::vector<u32>{0x3100} &&
+        orders[0].target_x == 30 * 32 + 16 && orders[0].target_y == 9 * 32 + 16,
+        "explorer did not visit the unexplored start candidate first");
+    obs.tiles[9 * obs.map_width_tiles + 30].explored = true;
+    obs.simulation_frame = 209;
+    orders = AiMicroExecutorStep(explorer_bot.micro, obs);
+    require(orders.size() == 1 && orders[0].kind == AiSemanticActionKind::move &&
         (orders[0].target_x >> 5) == 16,
         "explorer did not walk to the nearest frontier column");
     // Wall off the fog with impassable ground: nothing reachable -> released.
@@ -3658,6 +3666,132 @@ void test_ai_corridor_guard_and_noncombat_flee() {
         "meat pickup disturbed the hunt objective");
 }
 
+// v9 - replay-review follow-ups #2: local path connectivity of chosen build
+// sites (U-yard closure refused), expansion sites must REACH their berries
+// (hill/cliff guard), the explorer visits unexplored start candidates before
+// the frontier, and the autopilot scout guard fires exactly while the enemy
+// base is unknown.
+void test_ai_local_paths_and_scout_guard() {
+    // --- U-yard closure: impassable walls on three sides of a pocket; a pop
+    // nest (3x2) closing the fourth side splits inside from outside.
+    AiObservation obs = micro_observation();
+    const u32 w = obs.map_width_tiles;
+    for (u32 tx = 28; tx <= 32; ++tx) {          // top wall y=10
+        obs.tiles[10 * w + tx].passable = false;
+    }
+    for (u32 ty = 10; ty <= 17; ++ty) {          // side walls x=28 / x=32
+        obs.tiles[ty * w + 28].passable = false;
+        obs.tiles[ty * w + 32].passable = false;
+    }
+    // Pocket interior = x29..31 (exactly a pop nest wide), opening at y17.
+    const std::vector<u8> occupancy = AiBuildOccupancyGrid(obs);
+    require(!AiBuildSiteKeepsLocalPaths(obs, occupancy, 0x82u, 29, 17, false),
+        "U-yard closing placement passed the connectivity check");
+    require(AiBuildSiteKeepsLocalPaths(obs, occupancy, 0x82u, 44, 30, false),
+        "open-field placement failed the connectivity check");
+
+    // --- berry reach: a wall between the site and the berries fails the
+    // expansion verification; the same site with a gap passes.
+    AiObservation berry_obs = micro_observation();
+    for (const u32 index : {20u * w + 46u, 20u * w + 47u, 21u * w + 46u}) {
+        berry_obs.tiles[index].resource_amount = 800;
+        berry_obs.tiles[index].terrain_flags = 0x100;
+        berry_obs.tiles[index].passable = false;  // berry terrain is unwalkable
+    }
+    for (u32 ty = 8; ty <= 30; ++ty) {            // cliff at x=40 (spans the
+        berry_obs.tiles[ty * w + 40].passable = false;  // whole BFS window)
+    }
+    const std::vector<u8> berry_occupancy = AiBuildOccupancyGrid(berry_obs);
+    require(!AiBuildSiteKeepsLocalPaths(berry_obs, berry_occupancy, 0x80u,
+                32, 18, true),
+        "a nest site across a cliff from its berries was accepted");
+    berry_obs.tiles[21 * w + 40].passable = true;  // a ramp through the cliff
+    require(AiBuildSiteKeepsLocalPaths(berry_obs, berry_occupancy, 0x80u,
+                32, 18, true),
+        "a nest site with a ramp to its berries was refused");
+
+    // --- explorer start-candidate priority: with an unexplored candidate the
+    // explorer walks THERE; once it is explored, the frontier takes over.
+    AiObservation fog = micro_observation();
+    fog.units.push_back(fighter_unit(0x3300, 0, 400, 400, true));
+    for (u32 ty = 0; ty < fog.map_height_tiles; ++ty) {
+        for (u32 tx = 40; tx < fog.map_width_tiles; ++tx) {
+            fog.tiles[ty * fog.map_width_tiles + tx].explored = false;
+        }
+    }
+    fog.start_candidate_mask = (1u << 0) | (1u << 1);
+    fog.start_candidate_x[0] = fog.start_x;
+    fog.start_candidate_y[0] = fog.start_y;
+    fog.start_candidate_x[1] = 50 * 32 + 16;
+    fog.start_candidate_y[1] = 20 * 32 + 16;
+    TyranoScriptedBotState explorer_bot{};
+    TyranoScriptedBotConfig config{};
+    config.decision_interval_frames = 1;
+    fog.simulation_frame = 1;
+    TyranoScriptedBotDecision decision =
+        DecideTyranoScriptedBotForHighLevelAction(explorer_bot, fog,
+            AiRlHighLevelAction::explore_frontier, config);
+    require(decision.code == TyranoScriptedBotDecisionCode::objective_updated,
+        "explore_frontier was refused");
+    AiMicroExecutorStep(explorer_bot.micro, fog);
+    const AiMicroObjective& explore = AiMicroObjectiveOf(explorer_bot.micro,
+        AiMicroGroup::explorer);
+    require(explore.target_x == 50 * 32 + 16 && explore.target_y == 20 * 32 + 16,
+        "explorer did not go to the unexplored start candidate first");
+    fog.tiles[20 * fog.map_width_tiles + 50].explored = true;
+    fog.simulation_frame = 1 + 9;
+    AiMicroExecutorStep(explorer_bot.micro, fog);
+    require(explore.target_x >= 0 &&
+        !(explore.target_x == 50 * 32 + 16 && explore.target_y == 20 * 32 + 16),
+        "explorer did not fall back to the frontier after the candidate");
+
+    // --- scout guard: fires only while the enemy base is unknown.
+    AiObservation guard_obs = micro_observation();
+    guard_obs.units.push_back(fighter_unit(0x3400, 0, 400, 400, true));
+    for (u32 ty = 0; ty < guard_obs.map_height_tiles; ++ty) {
+        guard_obs.tiles[ty * guard_obs.map_width_tiles + 60].explored = false;
+    }
+    AiRlStepEncoding enc = EncodeAiObservationForRl(guard_obs);
+    require(enc.legal_mask[static_cast<std::size_t>(
+                AiRlHighLevelAction::explore_frontier)] == 1,
+        "guard fixture cannot explore");
+    AiAutopilotState guard{};
+    std::vector<AiRlHighLevelAction> plan = AiAutopilotPlan(guard, guard_obs,
+        enc, AiRlHighLevelAction::no_op, 1300);
+    bool scouted = false;
+    for (const AiRlHighLevelAction action : plan) {
+        scouted = scouted || action == AiRlHighLevelAction::explore_frontier;
+    }
+    require(scouted, "scout guard did not fire with the enemy base unknown");
+    // Cooldown suppresses an immediate re-fire.
+    plan = AiAutopilotPlan(guard, guard_obs, enc, AiRlHighLevelAction::no_op,
+        1308);
+    for (const AiRlHighLevelAction action : plan) {
+        require(action != AiRlHighLevelAction::explore_frontier,
+            "scout guard ignored its cooldown");
+    }
+    // An explorer already out suppresses it.
+    AiAutopilotState guard2{};
+    AiObservation busy = guard_obs;
+    busy.explorer_unit_id = 0x3400;
+    plan = AiAutopilotPlan(guard2, busy, enc, AiRlHighLevelAction::no_op, 1300);
+    for (const AiRlHighLevelAction action : plan) {
+        require(action != AiRlHighLevelAction::explore_frontier,
+            "scout guard fired with an explorer already out");
+    }
+    // A known (visible) enemy building deactivates it.
+    AiAutopilotState guard3{};
+    AiObservation known = guard_obs;
+    known.units.push_back(observed_unit(0x9e00, 1, 0x84u, 0, 1500, 1500,
+        false));
+    plan = AiAutopilotPlan(guard3, known, EncodeAiObservationForRl(known),
+        AiRlHighLevelAction::no_op, 1300);
+    for (const AiRlHighLevelAction action : plan) {
+        require(action != AiRlHighLevelAction::explore_frontier,
+            "scout guard fired although the enemy base is known");
+    }
+}
+
 // v7 - a worker already walking to build reserves its site in the engine
 // (placement TemporaryBlock), so the planner must not hand the same site to
 // the next order; and a refused build order backs its structure type off.
@@ -3735,6 +3869,7 @@ int main() {
     test_ai_defense_reflex();
     test_ai_macro_autopilot();
     test_ai_corridor_guard_and_noncombat_flee();
+    test_ai_local_paths_and_scout_guard();
     test_ai_pending_site_and_reject_backoff();
     test_ai_play_lobby_role_compatibility();
     std::cout << "ai_play_interface_regression: passed\n";
