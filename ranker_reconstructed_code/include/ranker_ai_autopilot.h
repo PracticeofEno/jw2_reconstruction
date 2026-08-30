@@ -26,7 +26,10 @@ namespace ranker {
 struct AiAutopilotConfig {
     u32 worker_floor = 10;        // keep at least this many workers (incl. uc)
     u32 pop_margin = 2;           // build supply when demand >= supply - margin
-    u32 bank_threshold = 600;     // idle-producer guard needs this much banked
+    // Idle-producer guard needs this much banked (net of reserved builds).
+    // 600 -> 1500 per user tuning (2026-08-30): leave the policy a real
+    // bank to spend before the autopilot starts draining it into units.
+    u32 bank_threshold = 1500;
     u32 producer_idle_frames = 96;  // egg producer idle this long -> produce
 };
 

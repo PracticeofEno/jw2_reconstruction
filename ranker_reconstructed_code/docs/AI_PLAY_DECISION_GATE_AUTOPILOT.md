@@ -83,7 +83,7 @@ mobile(role melee/ranged; 일꾼 하베스트는 위협 아님) 또는 완성 �
 |---|---|---|
 | 일꾼 하한 | 일꾼(생존+건설중+큐) < 10 ∧ produce_worker 합법 | produce_worker |
 | 인구 가드 | demand+2 ≥ supply ∧ 건설 중 pop nest 없음 ∧ 합법 | build_population_nest |
-| 생산 유휴 가드 | 에그 네스트 96프레임 연속 유휴 ∧ 예약 제외 뱅크 ≥ 600 ∧ 합법 | 정책이 마지막 고른 에그 전투유닛(기본 masos) 1개 |
+| 생산 유휴 가드 | 에그 네스트 96프레임 연속 유휴 ∧ 예약 제외 뱅크 ≥ 1500 ∧ 합법 | 정책이 마지막 고른 에그 전투유닛(기본 masos) 1개 |
 
 - 트레이스에 결정으로 기록하지 않음. 발동 성공만 카운트.
 - `-AIAUTOPILOT:0` 비활성. `-AIIMITATE` 관찰 owner(내장 AI)에는 미적용.

@@ -3511,7 +3511,8 @@ void test_ai_macro_autopilot() {
         AiRlHighLevelAction::no_op, 124);
     require(plan.empty(), "pop guard fired with a pop nest in flight");
     // Idle-producer guard: a completed idle egg nest for >= 96 frames with a
-    // 600+ bank produces the policy's last fighter type (default masos).
+    // bank_threshold+ bank produces the policy's last fighter type (masos
+    // default).
     AiObservation eggs = crowded;
     eggs.population_reserved = 5;
     eggs.units.push_back(observed_unit(0x7000, 0, 0x84u, 0, 700, 700, true));
