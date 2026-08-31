@@ -140,6 +140,10 @@ struct AiMicroUnitRecord {
     // it a wounded fighter oscillates: pull back, leave contact, walk in, drop
     // under the threshold, pull back again.
     u32 pullback_ready_frame = 0;
+    // Cohesion hysteresis: 1 while the unit is walking back to its group
+    // (entered beyond cohesion_engage_radius, held until back inside
+    // cohesion_radius).
+    u32 cohesion_returning = 0;
     // Stuck recovery: last observed position and the frame it last changed.
     // A unit whose order the engine dropped in a non-idle state never reaches
     // the idle re-issue path, so movement is what tells us it is alive.
@@ -178,6 +182,13 @@ struct AiMicroExecutorConfig {
     // arriving alone.  Laggards keep advancing, so the centroid moves forward
     // and the leaders are released - the gate cannot deadlock.
     i32 cohesion_radius = 256;
+    // Cohesion hysteresis band (2026-08-31 user replay report: fog-edge
+    // trembling).  The return state ENTERS only beyond this radius and
+    // RELEASES once back inside cohesion_radius.  One shared threshold made
+    // a leader on the boundary alternate advance/return every frame — and a
+    // changed order is issued immediately, so the unit vibrated in place.
+    // With the band each phase covers real walking distance.
+    i32 cohesion_engage_radius = 320;
     // Defend leash hysteresis: a defender leaves the bubble at `radius` and
     // stops returning only once back inside this percentage of it.  Sharing
     // one threshold made units on the boundary flip orders every frame.

@@ -2188,6 +2188,88 @@ void test_ai_micro_executor_attack_cohesion() {
     require(leader_attacked, "cohesion gate pulled a fighter out of contact");
 }
 
+// 2026-08-31 (user replay review: fog-edge trembling): the cohesion gate
+// needs its own hysteresis band.  One shared threshold flipped a boundary
+// leader between advance and return every frame — and a changed order is
+// issued immediately, so the unit vibrated in place.  Enter the return state
+// only beyond cohesion_engage_radius (320), hold it until back inside
+// cohesion_radius (256).
+void test_ai_micro_executor_cohesion_hysteresis() {
+    AiObservation obs = micro_observation();
+    obs.units[0].command_state = kUnitStateWorkerApproachHarvest;
+    obs.units.push_back(fighter_unit(0x3100, 0, 1000, 400, true));  // leader
+    obs.units.push_back(fighter_unit(0x3200, 0, 400, 400, true));   // laggard
+    obs.enemy_building_memory.assign(obs.tiles.size(), 0);
+    obs.enemy_building_memory[12 * obs.map_width_tiles + 62] = 1;  // (2000,400)
+    TyranoScriptedBotState state{};
+    AiMicroObjective attack;
+    attack.kind = AiMicroObjectiveKind::attack;
+    attack.tactic = AiMicroAttackTactic::buildings_first;
+    AiMicroSetObjective(state.micro, AiMicroGroup::army, attack);
+
+    const auto leader_returning = [&state]() -> u32 {
+        for (const AiMicroUnitRecord& record : state.micro.units) {
+            if (record.unit_id == 0x3100) {
+                return record.cohesion_returning;
+            }
+        }
+        return 0xffu;
+    };
+    const auto leader_order = [](const std::vector<AiSemanticAction>& orders)
+        -> const AiSemanticAction* {
+        for (const AiSemanticAction& order : orders) {
+            for (u32 id : order.unit_ids) {
+                if (id == 0x3100) {
+                    return &order;
+                }
+            }
+        }
+        return nullptr;
+    };
+
+    // Leader gap 300 = inside the 256..320 band, fresh state: advance.
+    obs.simulation_frame = 500;
+    std::vector<AiSemanticAction> orders = AiMicroExecutorStep(state.micro, obs);
+    const AiSemanticAction* order = leader_order(orders);
+    require(order != nullptr &&
+        order->kind == AiSemanticActionKind::attack_move &&
+        order->target_x == 2000,
+        "cohesion band: a fresh leader inside the band must keep advancing");
+    require(leader_returning() == 0,
+        "cohesion band: fresh in-band leader must not be returning");
+
+    // Gap 330 > engage 320: the return state enters, the leader turns back.
+    obs.units[2].x = 1060;
+    obs.simulation_frame = 501;
+    orders = AiMicroExecutorStep(state.micro, obs);
+    order = leader_order(orders);
+    require(order != nullptr && order->kind == AiSemanticActionKind::move &&
+        order->target_x < 1060,
+        "cohesion band: beyond the engage radius the leader must turn back");
+    require(leader_returning() == 1,
+        "cohesion band: the return state did not enter past engage");
+
+    // Back to gap 300 (inside the band) while returning: the state HOLDS —
+    // this is exactly where the old single threshold flipped every frame.
+    obs.units[2].x = 1000;
+    obs.simulation_frame = 502;
+    AiMicroExecutorStep(state.micro, obs);
+    require(leader_returning() == 1,
+        "cohesion band: the return state must hold inside the band");
+
+    // Gap 250 < release 256: released, the leader advances again.
+    obs.units[2].x = 900;
+    obs.simulation_frame = 503;
+    orders = AiMicroExecutorStep(state.micro, obs);
+    order = leader_order(orders);
+    require(order != nullptr &&
+        order->kind == AiSemanticActionKind::attack_move &&
+        order->target_x == 2000,
+        "cohesion band: back inside the release radius the leader must advance");
+    require(leader_returning() == 0,
+        "cohesion band: the return state did not release");
+}
+
 // Item 5 - the defend leash needs hysteresis: sharing one threshold between
 // "leave" and "re-engage" made a unit on the boundary flip every frame.
 void test_ai_micro_executor_leash_hysteresis() {
@@ -2731,6 +2813,37 @@ void test_ai_micro_executor_tactics_and_search() {
     require(enc.features[82] == 1.0f && enc.features[531] == 0.0f &&
         enc.features[532] == 1.0f && enc.features[533] == 0.0f,
         "attack tactic features were not encoded");
+}
+
+// 2026-08-31 (user replay review): visually-adjacent berry patches split by
+// 1-2 empty tiles must count as ONE cluster, so the nest site minimises the
+// amount-weighted distance over the whole group instead of hugging only one
+// patch while ignoring the berries next door.
+void test_ai_expansion_cluster_merge() {
+    AiObservation obs = micro_observation();   // home berry at tile (12,9)
+    const u32 w = obs.map_width_tiles;
+    // Two 2-tile patches with a 2-empty-tile gap (Chebyshev distance 3
+    // between the nearest members) in an open area.
+    for (const u32 index : {40 * w + 40, 40 * w + 41,
+                            40 * w + 44, 40 * w + 45}) {
+        obs.tiles[index].resource_amount = 1000;
+        obs.tiles[index].terrain_flags = 0x100;  // berry terrain
+    }
+    AiExpansionPlan merged = ComputeAiExpansionPlan(obs);
+    require(merged.clusters.size() == 2,
+        "gap<=merge patches did not form one cluster (with the home berry)");
+    bool merged_found = false;
+    for (const AiBerryCluster& cluster : merged.clusters) {
+        if (cluster.tile_count == 4) {
+            merged_found = true;
+        }
+    }
+    require(merged_found, "merged cluster did not contain all four tiles");
+    AiExpansionConfig strict{};
+    strict.cluster_merge_gap_tiles = 1;
+    AiExpansionPlan split = ComputeAiExpansionPlan(obs, strict);
+    require(split.clusters.size() == 3,
+        "merge gap 1 did not keep the patches separate");
 }
 
 // v7 - expansion: berry clusters are public map data, the next expansion
@@ -3854,12 +3967,14 @@ int main() {
     test_ai_micro_executor_target_class_gate();
     test_ai_micro_executor_effective_range();
     test_ai_micro_executor_attack_cohesion();
+    test_ai_micro_executor_cohesion_hysteresis();
     test_ai_micro_executor_leash_hysteresis();
     test_ai_micro_executor_stuck_recovery();
     test_ai_micro_executor_harvest_spread();
     test_ai_micro_executor_scout_picket();
     test_ai_micro_executor_translator_objectives();
     test_ai_micro_executor_tactics_and_search();
+    test_ai_expansion_cluster_merge();
     test_ai_expansion_plan_and_chain();
     test_ai_shared_build_placement();
     test_ai_search_split();

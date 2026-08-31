@@ -75,6 +75,43 @@ HISTORY_K = 4
 DELTA_IDX = (1, 29, 30, 31, 32, 33, 81, 567)
 AUX_DIM = HISTORY_K * N_ACTIONS + len(DELTA_IDX)
 
+# --- Semantic target masks (docs/1순위.md 5.4) -----------------------------
+# The C++ target mask is ACTION-COMMON (explored / remembered-building /
+# start-candidate cells for all four spatial actions), so nothing stopped an
+# attack order from picking the own main-base cell or a defend order from
+# picking an enemy start candidate.  Refine it per action class from the
+# observation grids the policy already receives:
+#   attack:  cells with known enemy presence (visible/remembered buildings
+#            [278..341] or fog army memory [568..631]); none known -> the full
+#            mask (search behavior).
+#   defend:  cells with own buildings [86..149]; none -> the full mask.
+# The refined mask is what act() samples from AND what rollouts store, so the
+# PPO update recomputes the identical distribution.
+ATTACK_TARGET_ACTION_IDS = frozenset(
+    ACTION_NAMES.index(n) for n in ("attack_enemy_base", "raid_attack_base"))
+DEFEND_TARGET_ACTION_IDS = frozenset(
+    ACTION_NAMES.index(n) for n in ("defend_base", "raid_defend_base"))
+_OWN_BUILDING_SLICE = (86, 150)
+_ENEMY_BUILDING_SLICE = (278, 342)
+_ENEMY_MEMORY_SLICE = (568, 632)
+
+
+def semantic_target_mask(feat, tmask, action: int):
+    """Per-action-class refinement of the game's common target-cell mask.
+    Always a subset of ``tmask`` (never adds cells the game called illegal);
+    falls back to ``tmask`` unchanged when the refinement would be empty."""
+    feat = np.asarray(feat)
+    tmask = np.asarray(tmask)
+    if action in ATTACK_TARGET_ACTION_IDS:
+        known = ((feat[_ENEMY_BUILDING_SLICE[0]:_ENEMY_BUILDING_SLICE[1]] > 0)
+                 | (feat[_ENEMY_MEMORY_SLICE[0]:_ENEMY_MEMORY_SLICE[1]] > 0))
+    elif action in DEFEND_TARGET_ACTION_IDS:
+        known = feat[_OWN_BUILDING_SLICE[0]:_OWN_BUILDING_SLICE[1]] > 0
+    else:
+        return tmask
+    refined = (tmask * known.astype(tmask.dtype))
+    return refined if refined.any() else tmask
+
 
 class HistoryState:
     """Per-owner rolling context for the aux input: last K actions + previous
@@ -135,12 +172,19 @@ class _Tower(nn.Module):
 
 
 class ActorCritic(nn.Module):
-    """v8 policy/value net (docs/3순위.md): two fully independent towers (a
-    shared trunk lets value-loss gradients perturb a narrow BC-warm-started
-    policy), each = grid CNN over the 9 8x8 channels + scalar branch.  The
-    policy tower carries TWO heads: the 64-way action head and the 64-way
-    spatial-target head (the 8x8 cell argument of the actions in
-    TARGET_ACTION_IDS)."""
+    """v9 policy/value net: two fully independent towers (a shared trunk lets
+    value-loss gradients perturb a narrow BC-warm-started policy), each = grid
+    CNN over the 9 8x8 channels + scalar branch.  The policy tower carries TWO
+    heads: the 64-way action head and the 64-way spatial-target head (the 8x8
+    cell argument of the actions in TARGET_ACTION_IDS).
+
+    v9 (docs/1순위.md 5.4): the target head is ACTION-CONDITIONED.  With the
+    v8 unconditioned head, attack_enemy_base and defend_base drew their cell
+    from the exact same distribution in the same state — an attack cell must
+    lean toward known enemy buildings, a defend cell toward the own base.  The
+    conditioning pathway (action embedding -> per-cell bias) is
+    ZERO-INITIALIZED, so a v8/BC checkpoint's behavior is exactly preserved at
+    load and PPO grows the conditioning from live data."""
 
     def __init__(self, hidden: int = 256):
         super().__init__()
@@ -150,9 +194,15 @@ class ActorCritic(nn.Module):
         self.action_head = nn.Linear(hidden, N_ACTIONS)
         self.target_head = nn.Linear(hidden, N_TARGET_CELLS)
         self.value_head = nn.Linear(hidden, 1)
+        # v9 action-conditioned target pathway (zero-init keeps v8 behavior).
+        self.target_action_emb = nn.Embedding(N_ACTIONS, 64)
+        self.target_cond = nn.Linear(64, N_TARGET_CELLS)
+        nn.init.zeros_(self.target_cond.weight)
+        nn.init.zeros_(self.target_cond.bias)
 
     def policy_parameters(self):
-        for module in (self.policy_tower, self.action_head, self.target_head):
+        for module in (self.policy_tower, self.action_head, self.target_head,
+                       self.target_action_emb, self.target_cond):
             yield from module.parameters()
 
     def value_parameters(self):
@@ -165,46 +215,104 @@ class ActorCritic(nn.Module):
         return (self.action_head(policy_embed), self.target_head(policy_embed),
                 self.value_head(value_embed).squeeze(-1))
 
+    def target_logits_for(self, policy_embed, action):
+        """Spatial-target logits conditioned on the chosen ``action`` (long
+        tensor).  base head + zero-initialized per-action bias."""
+        return (self.target_head(policy_embed) +
+                self.target_cond(self.target_action_emb(action)))
+
     def masked_logits(self, x, mask, aux=None):
         """Action logits + value (BC / update path; target head separate)."""
         logits, _, value = self.forward(x, aux)
         logits = torch.where(mask > 0, logits, torch.full_like(logits, NEG_INF))
         return logits, value
 
-    def full_logits(self, x, mask, tmask, aux=None):
-        logits, tlogits, value = self.forward(x, aux)
-        logits = torch.where(mask > 0, logits, torch.full_like(logits, NEG_INF))
-        if tmask is not None:
-            tlogits = torch.where(tmask > 0, tlogits,
-                                  torch.full_like(tlogits, NEG_INF))
-        return logits, tlogits, value
-
     @torch.no_grad()
     def act(self, feat, mask, deterministic: bool = False, tmask=None,
-            aux=None):
-        """One decision.  Returns (action, target_cell, joint_logprob, value);
-        target_cell is -1 unless the chosen action takes one and a legal cell
-        exists.  The joint logprob includes the target head only in that case
-        (the same conditioning the PPO update recomputes)."""
+            aux=None, generator=None, explore_eps: float = 0.0):
+        """One decision.  Returns (action, target_cell, joint_logprob, value,
+        used_tmask); target_cell is -1 unless the chosen action takes one and
+        a legal cell exists.  The joint logprob includes the target head only
+        in that case (the same conditioning the PPO update recomputes).
+
+        ``explore_eps`` (training rollouts only): sample from the MIXTURE
+        (1-eps)*policy + eps*uniform-over-legal, and return the mixture's
+        logprob as the behavior logp — the PPO ratio pi_new/behavior then
+        importance-corrects the surrogate.  Rationale (2026-08-31 r12
+        analysis): strategic actions the BC prior collapsed to ~0 probability
+        (attack_enemy_base 0/6311 legal picks, tech builds 0) can never be
+        sampled on-policy, so no reward signal ever reaches them; the uniform
+        component guarantees every legal action a floor of eps/n_legal
+        sampling probability.
+
+        ``used_tmask`` is the SEMANTIC target mask actually sampled from
+        (attack cells vs defend cells, see semantic_target_mask) — rollouts
+        must store it so the PPO update recomputes the identical
+        distribution.  For non-spatial decisions it is the input tmask.
+
+        ``generator`` (a torch.Generator) makes stochastic sampling
+        per-caller-reproducible: parallel evaluation matches each carry their
+        own generator, so thread scheduling can no longer reorder draws from
+        the single global torch RNG stream."""
         x = torch.as_tensor(feat, dtype=torch.float32).unsqueeze(0)
         m = torch.as_tensor(mask, dtype=torch.float32).unsqueeze(0)
-        t = (torch.as_tensor(tmask, dtype=torch.float32).unsqueeze(0)
-             if tmask is not None else None)
         a = (torch.as_tensor(aux, dtype=torch.float32).unsqueeze(0)
              if aux is not None else None)
-        logits, tlogits, value = self.full_logits(x, m, t, a)
+        policy_embed = self.policy_tower(x, a)
+        value = self.value_head(self.value_tower(x, a)).squeeze(-1)
+        logits = self.action_head(policy_embed)
+        logits = torch.where(m > 0, logits, torch.full_like(logits, NEG_INF))
         dist = torch.distributions.Categorical(logits=logits)
-        action = logits.argmax(-1) if deterministic else dist.sample()
-        logp = dist.log_prob(action)
+
+        def mix_probs(probs, legal):
+            n_legal = legal.sum().clamp(min=1.0)
+            uniform = legal / n_legal
+            return (1.0 - explore_eps) * probs + explore_eps * uniform
+
+        def draw(probs):
+            if generator is not None:
+                return torch.multinomial(probs, 1,
+                                         generator=generator).squeeze(-1)
+            return torch.multinomial(probs, 1).squeeze(-1)
+
+        explore = (not deterministic) and explore_eps > 0.0
+        if deterministic:
+            action = logits.argmax(-1)
+            logp = dist.log_prob(action)
+        elif explore:
+            probs = mix_probs(dist.probs, m)
+            action = draw(probs)
+            logp = torch.log(probs.gather(-1, action.unsqueeze(-1))
+                             .squeeze(-1).clamp(min=1e-12))
+        else:
+            action = draw(dist.probs) if generator is not None else dist.sample()
+            logp = dist.log_prob(action)
         target = -1
-        if (int(action.item()) in TARGET_ACTION_IDS and t is not None and
-                float(t.sum().item()) > 0):
-            tdist = torch.distributions.Categorical(logits=tlogits)
-            tchoice = tlogits.argmax(-1) if deterministic else tdist.sample()
-            logp = logp + tdist.log_prob(tchoice)
-            target = int(tchoice.item())
+        used_tmask = tmask
+        if (int(action.item()) in TARGET_ACTION_IDS and tmask is not None):
+            used_tmask = semantic_target_mask(feat, tmask, int(action.item()))
+            t = torch.as_tensor(used_tmask, dtype=torch.float32).unsqueeze(0)
+            if float(t.sum().item()) > 0:
+                tlogits = self.target_logits_for(policy_embed, action)
+                tlogits = torch.where(t > 0, tlogits,
+                                      torch.full_like(tlogits, NEG_INF))
+                tdist = torch.distributions.Categorical(logits=tlogits)
+                if deterministic:
+                    tchoice = tlogits.argmax(-1)
+                    tlogp = tdist.log_prob(tchoice)
+                elif explore:
+                    tprobs = mix_probs(tdist.probs, t)
+                    tchoice = draw(tprobs)
+                    tlogp = torch.log(tprobs.gather(-1, tchoice.unsqueeze(-1))
+                                      .squeeze(-1).clamp(min=1e-12))
+                else:
+                    tchoice = (draw(tdist.probs) if generator is not None
+                               else tdist.sample())
+                    tlogp = tdist.log_prob(tchoice)
+                logp = logp + tlogp
+                target = int(tchoice.item())
         return (int(action.item()), target, float(logp.item()),
-                float(value.item()))
+                float(value.item()), used_tmask)
 
 
 def _hidden_of(state_dict) -> int:
@@ -233,13 +341,33 @@ def _check_checkpoint_shape(ckpt, path):
         raise SystemExit(
             f"checkpoint {path} was trained with n_actions={saved_actions}, "
             f"current build expects {N_ACTIONS} — incompatible action space")
-    if saved_arch is not None and saved_arch != CHECKPOINT_ARCH:
+    if (saved_arch is not None and saved_arch != CHECKPOINT_ARCH and
+            saved_arch not in COMPAT_ARCHS):
         raise SystemExit(
             f"checkpoint {path} arch={saved_arch}, current build is "
             f"{CHECKPOINT_ARCH} — retrain or convert")
 
 
-CHECKPOINT_ARCH = "cnn2_v8"
+# v9at = v8 towers/heads + zero-init action-conditioned target pathway.  A
+# cnn2_v8 checkpoint loads losslessly (the new params stay at their zero
+# init, which reproduces the v8 forward pass exactly).
+CHECKPOINT_ARCH = "cnn2_v9at"
+COMPAT_ARCHS = ("cnn2_v8",)
+_V9_NEW_PARAM_KEYS = frozenset(
+    {"target_action_emb.weight", "target_cond.weight", "target_cond.bias"})
+
+
+def load_upgrading_state_dict(net, state_dict, path="<state>"):
+    """load_state_dict that tolerates EXACTLY the v9 additive params missing
+    (v8 checkpoints) — anything else missing/unexpected is a real contract
+    break and aborts instead of silently mixing architectures."""
+    missing, unexpected = net.load_state_dict(state_dict, strict=False)
+    bad_missing = set(missing) - _V9_NEW_PARAM_KEYS
+    if bad_missing or unexpected:
+        raise SystemExit(
+            f"checkpoint {path} state mismatch — missing {sorted(bad_missing)}"
+            f" unexpected {sorted(unexpected)}")
+    return net
 
 
 def checkpoint_payload(net):
@@ -259,34 +387,53 @@ class TorchPolicy:
     v8: stateful.  Keeps a per-owner HistoryState (action history + feature
     deltas) and answers with (action, target_cell) when the server passes the
     target-cell mask; ``wants_target_mask`` tells the server to use the
-    extended call and to ``reset()`` between games."""
+    extended call and to ``reset()`` between games.
+
+    Because of that statefulness a TorchPolicy instance must serve exactly ONE
+    match at a time: sharing one instance across parallel matches mixes the
+    per-owner action histories between games and lets one game's end-of-match
+    ``reset()`` wipe another game's context mid-flight.  Evaluation/league
+    runners therefore construct a fresh instance per match (policy factory).
+
+    ``seed`` (stochastic mode) creates a private torch.Generator so sampling
+    is reproducible per match regardless of thread scheduling."""
 
     wants_target_mask = True
 
-    def __init__(self, path, deterministic: bool = True):
+    def __init__(self, path, deterministic: bool = True,
+                 seed: int | None = None):
         ckpt = torch.load(path, map_location="cpu", weights_only=False)
         _check_checkpoint_shape(ckpt, path)
         self.net = ActorCritic(hidden=ckpt.get(
             "hidden", _hidden_of(ckpt["state_dict"])))
-        self.net.load_state_dict(ckpt["state_dict"])
+        load_upgrading_state_dict(self.net, ckpt["state_dict"], path)
         self.net.eval()
         self.deterministic = deterministic
+        self.generator = None
+        if seed is not None and not deterministic:
+            self.generator = torch.Generator()
+            self.generator.manual_seed(int(seed) & 0x7FFFFFFFFFFFFFFF)
         self.history = {}
 
     def reset(self):
         self.history.clear()
+        if self.generator is not None:
+            # Do NOT reseed: a reused instance keeps drawing from its stream.
+            pass
 
     def act(self, features, mask, tmask=None, owner: int = 1):
         state = self.history.setdefault(owner, HistoryState())
         aux = state.aux(features)
-        action, target, _, _ = self.net.act(
-            features, mask, self.deterministic, tmask, aux)
+        action, target, _, _, _ = self.net.act(
+            features, mask, self.deterministic, tmask, aux,
+            generator=self.generator)
         state.push(features, action)
         return action, target
 
 
-def load_policy(path, deterministic: bool = True) -> TorchPolicy:
-    return TorchPolicy(path, deterministic)
+def load_policy(path, deterministic: bool = True,
+                seed: int | None = None) -> TorchPolicy:
+    return TorchPolicy(path, deterministic, seed=seed)
 
 
 # --- Warm start: behavior-clone the MLP on the imitation dataset ---
@@ -328,8 +475,8 @@ def _recv_lines(conn):
     while True:
         try:
             chunk = conn.recv(65536)
-        except ConnectionError:
-            return
+        except (ConnectionError, socket.timeout):
+            return  # hung game: end the rollout instead of blocking forever
         if not chunk:
             return
         buf += chunk
@@ -356,7 +503,7 @@ def rollout(net, install_dir: Path, port: int, seed: int | None,
             max_frames: int, exe="ranker_rebuild.exe", timeout=300.0,
             deterministic=False, out_dir: Path | None = None,
             net_offset: int = 0, opp_tribe: int | None = None,
-            no_idle: bool = False):
+            no_idle: bool = False, explore_eps: float = 0.0):
     install = Path(install_dir)
     # Parallel workers share the game-data CWD (install) but each writes its
     # result/episode JSON into a private -AIOUT dir so they never collide.
@@ -395,6 +542,7 @@ def rollout(net, install_dir: Path, port: int, seed: int | None,
     try:
         conn, _ = server.accept()
         conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        conn.settimeout(timeout)
         for raw in _recv_lines(conn):
             msg = json.loads(raw)
             if msg.get("t") == "end":
@@ -407,8 +555,9 @@ def rollout(net, install_dir: Path, port: int, seed: int | None,
             if no_idle:
                 mask = drop_idle(mask)
             aux = history.aux(feat)
-            action, target, logprob, value = net.act(
-                feat, mask, deterministic, tmask, aux)
+            action, target, logprob, value, used_tmask = net.act(
+                feat, mask, deterministic, tmask, aux,
+                explore_eps=explore_eps)
             if mask[action] == 0:
                 legal = np.nonzero(mask)[0]
                 action = int(legal[0]) if len(legal) else 0
@@ -418,7 +567,9 @@ def rollout(net, install_dir: Path, port: int, seed: int | None,
             if target >= 0:
                 reply["target"] = target
             conn.sendall((json.dumps(reply) + "\n").encode())
-            records.append((msg["frame"], feat, mask, tmask, aux, action,
+            # Store the SEMANTIC tmask the target was sampled from, so the
+            # PPO update recomputes the identical target distribution.
+            records.append((msg["frame"], feat, mask, used_tmask, aux, action,
                             target, logprob, value))
         conn.close()
     finally:
@@ -487,7 +638,8 @@ def rollout(net, install_dir: Path, port: int, seed: int | None,
 def rollout_versus(net, install_dir: Path, port: int, seed: int | None,
                    max_frames: int, exe="ranker_rebuild.exe", timeout=300.0,
                    out_dir: Path | None = None, net_offset: int = 0,
-                   net2=None, no_idle: bool = False):
+                   net2=None, no_idle: bool = False,
+                   explore_eps: float = 0.0):
     """One -AIVS self-play game: BOTH owners are Computer(AI) and both ask the
     served policy for actions (owner 2 uses ``net2`` when given, else ``net``).
     Returns a list of TWO rollout dicts (owner 1 and owner 2), each shaped like
@@ -527,6 +679,7 @@ def rollout_versus(net, install_dir: Path, port: int, seed: int | None,
     try:
         conn, _ = server.accept()
         conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        conn.settimeout(timeout)
         for raw in _recv_lines(conn):
             msg = json.loads(raw)
             if msg.get("t") == "end":
@@ -542,8 +695,8 @@ def rollout_versus(net, install_dir: Path, port: int, seed: int | None,
             chooser = net2 if (net2 is not None and owner == 2) else net
             history = histories.setdefault(owner, HistoryState())
             aux = history.aux(feat)
-            action, target, logprob, value = chooser.act(
-                feat, mask, False, tmask, aux)
+            action, target, logprob, value, used_tmask = chooser.act(
+                feat, mask, False, tmask, aux, explore_eps=explore_eps)
             if mask[action] == 0:
                 legal = np.nonzero(mask)[0]
                 action = int(legal[0]) if len(legal) else 0
@@ -554,7 +707,7 @@ def rollout_versus(net, install_dir: Path, port: int, seed: int | None,
                 reply["target"] = target
             conn.sendall((json.dumps(reply) + "\n").encode())
             records.setdefault(owner, []).append(
-                (msg["frame"], feat, mask, tmask, aux, action, target,
+                (msg["frame"], feat, mask, used_tmask, aux, action, target,
                  logprob, value))
         conn.close()
     finally:
@@ -687,7 +840,9 @@ def augment_rewards(roll, reward_scale, terminal_weight,
                     econ_scale: float = 2.0,
                     econ_cap: float = 8000.0,
                     approach_weight: float = 1.0,
-                    opp_army_value=None):
+                    opp_army_value=None,
+                    gamma: float | None = None,
+                    timeout_material: bool = False):
     """Build the training reward from war-score accounting + saturated economy.
 
     v4 (2026-08-30, league combat analysis): 40000-frame self-play games ended
@@ -729,12 +884,32 @@ def augment_rewards(roll, reward_scale, terminal_weight,
         building-elimination bonus scaled by EARLY FINISH (faster kill pays up
         to 2x), matching the league's elimination>value>count judgment.
 
+    v5 (2026-08-31, docs/1순위.md 5.6 audit):
+      * ``gamma``: the approach shaping becomes DISCOUNT-CORRECT
+        (gamma_dt*Phi(s') - Phi(s) with gamma_dt = gamma**(dt/8) per v9
+        variable intervals) — the exact Ng potential form, so it cannot bias
+        the optimal policy.  gamma=None keeps the undiscounted telescoping
+        form.
+      * ``timeout_material=False`` (default): a frame-cap timeout pays ZERO
+        terminal — only an actual elimination pays +/-.  The old material
+        terminal (relative + absolute surviving value) taught hoarding
+        without fighting; it remains available (True) for the vs-built-in
+        curriculum stage where games rarely reach elimination.
+      * ``war_loss_weight=1.0`` makes the dense war term ZERO-SUM between the
+        two owners of a self-play game (A's kills = B's losses); the 0.5
+        default keeps the fight-encouraging asymmetry for vs-built-in
+        training.  (The econ growth term stays positive-sum but is tanh-capped
+        at ~econ_scale per game.)
+      * per-component sums are stored in roll["reward_components"] so reward
+        hacking shows up in logs instead of hiding inside the total.
+
     Falls back to the accumulation reward shape when the episode has no loss
     accounting (old exe).
     """
     feat = roll["feat"]                      # (N, F), normalized
     n = len(feat)
     r = np.zeros(n, dtype=np.float32)
+    comp = {"war": 0.0, "econ": 0.0, "approach": 0.0, "terminal": 0.0}
     losses = roll.get("losses")
     has_losses = losses is not None and len(losses) == n and n >= 2
 
@@ -743,23 +918,39 @@ def augment_rewards(roll, reward_scale, terminal_weight,
         hostile_lost = losses[:, 2] + losses[:, 3]
         war = (np.diff(hostile_lost) -
                war_loss_weight * np.diff(own_lost)) / 1000.0
-        r[:-1] += (war * reward_scale).astype(np.float32)
+        war = (war * reward_scale).astype(np.float32)
+        r[:-1] += war
+        comp["war"] = float(war.sum())
         if feat.shape[1] > 66:
             sat = np.tanh(np.asarray(
                 [_army_value(row) for row in feat]) / econ_cap)
-            r[:-1] += (np.clip(np.diff(sat), 0.0, None) *
-                       econ_scale).astype(np.float32)
+            econ = (np.clip(np.diff(sat), 0.0, None) *
+                    econ_scale).astype(np.float32)
+            r[:-1] += econ
+            comp["econ"] = float(econ.sum())
     elif n >= 2:
         # Legacy shape (no accounting in the episode rows).
         strength = feat[:, 29] + 0.5 * feat[:, 30]
         r[:-1] = np.clip(np.diff(strength), 0.0, None) * reward_scale
+        comp["econ"] = float(r[:-1].sum())
 
     if n >= 2 and feat.shape[1] > 479 and approach_weight > 0.0:
         # Potential-based approach shaping (see docstring).  Unknown enemy
         # base counts as the maximum distance so locating it pays once.
         dist = np.where(feat[:, 479] > 0.5, feat[:, 478], 1.0)
         phi = -approach_weight * dist
-        r[:-1] += (phi[1:] - phi[:-1]).astype(np.float32)
+        dt = roll.get("dt")
+        if gamma is not None and dt is not None and len(dt) == n:
+            # Exact SMDP potential shaping: r_t += gamma**(dt_{t+1}/8) *
+            # Phi(s_{t+1}) - Phi(s_t).  dt[t+1] is the duration of the
+            # transition t -> t+1 (same alignment as compute_gae).
+            step_gamma = gamma ** (np.maximum(
+                np.asarray(dt[1:], dtype=np.float64), 1.0) / 8.0)
+            approach = (step_gamma * phi[1:] - phi[:-1]).astype(np.float32)
+        else:
+            approach = (phi[1:] - phi[:-1]).astype(np.float32)
+        r[:-1] += approach
+        comp["approach"] = float(approach.sum())
 
     # In -AIVS self-play rollouts carry their owner (1 or 2); "opp" is then the
     # other Computer(AI).  Plain rollouts keep the owner-1 vs built-in framing.
@@ -770,21 +961,8 @@ def augment_rewards(roll, reward_scale, terminal_weight,
     own_v = _unit_value(roll["result"], own_owner)
     opp_v = _unit_value(roll["result"], opp_owner)
     if n and (own or opp):
+        terminal = 0.0
         if own_v is not None and opp_v is not None:
-            # Relative surviving COMBAT value leads (workers excluded, so
-            # out-massing workers is worth nothing); the absolute term is
-            # saturated so hoarding cannot out-reward fighting.
-            own_av = _army_value(feat[-1]) if feat.shape[1] > 66 else None
-            if own_av is not None and opp_army_value is not None:
-                r[-1] += float(np.tanh((own_av - opp_army_value) / 2500.0)) * \
-                    (terminal_weight * 0.5)
-            else:
-                r[-1] += float(np.tanh((own_v - opp_v) / 2500.0)) * \
-                    (terminal_weight * 0.5)
-            if own_av is not None:
-                r[-1] += float(np.tanh(own_av / econ_cap)) * (terminal_weight * 0.2)
-            else:
-                r[-1] += min(own_v / 5000.0, 1.0) * (terminal_weight * 0.2)
             own_b = _buildings(roll["result"], own_owner)
             opp_b = _buildings(roll["result"], opp_owner)
             if own_b is None or opp_b is None:
@@ -797,30 +975,57 @@ def augment_rewards(roll, reward_scale, terminal_weight,
             if end_frame is not None and max_frames:
                 early = 1.0 + max(0.0, 1.0 - float(end_frame) / max_frames)
             if opp_b == 0 and own_b > 0:
-                r[-1] += terminal_weight * 2.0 * early
+                terminal += terminal_weight * 2.0 * early
             elif own_b == 0 and opp_b > 0:
-                r[-1] -= terminal_weight * 2.0
-        else:
+                terminal -= terminal_weight * 2.0
+            elif timeout_material:
+                # Legacy material terminal for undecided (timeout) games:
+                # relative surviving COMBAT value (workers excluded) + a
+                # saturated absolute term.
+                own_av = _army_value(feat[-1]) if feat.shape[1] > 66 else None
+                if own_av is not None and opp_army_value is not None:
+                    terminal += float(np.tanh(
+                        (own_av - opp_army_value) / 2500.0)) * \
+                        (terminal_weight * 0.5)
+                else:
+                    terminal += float(np.tanh((own_v - opp_v) / 2500.0)) * \
+                        (terminal_weight * 0.5)
+                if own_av is not None:
+                    terminal += float(np.tanh(own_av / econ_cap)) * \
+                        (terminal_weight * 0.2)
+                else:
+                    terminal += min(own_v / 5000.0, 1.0) * \
+                        (terminal_weight * 0.2)
+        elif timeout_material:
             # Older exe without unit_value in the result JSON.
-            r[-1] += (own / 20.0) * terminal_weight
-            r[-1] += float(np.tanh((own - opp) / 8.0)) * (terminal_weight * 0.5)
+            terminal += (own / 20.0) * terminal_weight
+            terminal += float(np.tanh((own - opp) / 8.0)) * \
+                (terminal_weight * 0.5)
+        r[-1] += terminal
+        comp["terminal"] = float(terminal)
+    roll["reward_components"] = comp
     return r
 
 
 def ppo_update(net, opt, batch, adv, returns, clip=0.2, epochs=4,
                vf_coef=0.5, ent_coef=0.01, minibatch=1024, device="cpu",
-               value_only=False):
+               value_only=False, target_kl: float | None = 0.03):
     """One PPO update.  value_only=True trains just the value head (policy
     frozen) — used to warm up the critic before touching the BC policy, so the
     first real policy steps use calibrated advantages instead of the garbage a
     randomly-initialized value head produces (which otherwise collapses the
     narrow BC policy).
 
-    v8: the policy logprob is JOINT over (action, target_cell) — the target
-    head participates exactly on the steps whose sampled action carried a
-    cell (target >= 0), mirroring the conditioning used at act() time.  The
-    value loss is clipped against the rollout-time values (PPO2-style), so
-    the critic cannot move arbitrarily far in one update."""
+    The policy logprob is JOINT over (action, target_cell) — the target head
+    participates exactly on the steps whose sampled action carried a cell
+    (target >= 0), and (v9) the target logits are CONDITIONED on the stored
+    action, mirroring act().  The value loss is clipped against the
+    rollout-time values (PPO2-style), so the critic cannot move arbitrarily
+    far in one update.
+
+    Diagnostics (docs/1순위.md 5.15): stats carry approx_kl, clip_frac,
+    explained_variance and per-head entropies; ``target_kl`` stops further
+    epochs once the mean approx KL exceeds 1.5x the target (None disables)."""
     feat = torch.as_tensor(batch["feat"], device=device)
     mask = torch.as_tensor(batch["mask"], device=device)
     tmask = torch.as_tensor(batch["tmask"], device=device)
@@ -832,26 +1037,73 @@ def ppo_update(net, opt, batch, adv, returns, clip=0.2, epochs=4,
     adv_t = torch.as_tensor((adv - adv.mean()) / (adv.std() + 1e-8), device=device)
     ret_t = torch.as_tensor(returns, device=device)
 
+    # Critic calibration BEFORE this update: 1 - Var[ret - v]/Var[ret].
+    ret_var = float(np.var(returns))
+    explained_var = (1.0 - float(np.var(returns - batch["value"])) /
+                     (ret_var + 1e-8))
+
+    # Reference joint logp of the CURRENT policy before this update.  The
+    # approx-KL early stop must measure policy MOVEMENT within the update —
+    # with eps-exploration the stored behavior logp is the mixture's, and its
+    # constant offset from the policy alone exceeds any sane target KL (seen
+    # live: "KL" 0.13-0.23 during value-only warmup, truncating every update
+    # to one epoch).  The PPO ratio keeps using the behavior logp (that is
+    # the correct importance weight); only the KL diagnostic uses this ref.
+    ref_logp = torch.empty(len(action), device=device)
+    with torch.no_grad():
+        for start in range(0, len(action), minibatch):
+            b0 = slice(start, start + minibatch)
+            pe0 = net.policy_tower(feat[b0], aux[b0])
+            lg0 = net.action_head(pe0)
+            lg0 = torch.where(mask[b0] > 0, lg0,
+                              torch.full_like(lg0, NEG_INF))
+            d0 = torch.distributions.Categorical(logits=lg0)
+            lp0 = d0.log_prob(action[b0])
+            targeted0 = target[b0] >= 0
+            if bool(targeted0.any()):
+                tl0 = net.target_logits_for(pe0, action[b0])
+                tl0 = torch.where(tmask[b0] > 0, tl0,
+                                  torch.full_like(tl0, NEG_INF))
+                td0 = torch.distributions.Categorical(logits=tl0)
+                tlp0 = td0.log_prob(target[b0].clamp(min=0))
+                lp0 = lp0 + torch.where(targeted0, tlp0,
+                                        torch.zeros_like(tlp0))
+            ref_logp[b0] = lp0
+
     n = len(action)
     idx = np.arange(n)
     stats = {}
+    kl_stop = False
+    epochs_run = 0
     for _ in range(epochs):
         np.random.shuffle(idx)
+        kl_accum, kl_batches = 0.0, 0
         for start in range(0, n, minibatch):
             b = idx[start:start + minibatch]
-            logits, tlogits, value = net.full_logits(
-                feat[b], mask[b], tmask[b], aux[b])
+            policy_embed = net.policy_tower(feat[b], aux[b])
+            value = net.value_head(
+                net.value_tower(feat[b], aux[b])).squeeze(-1)
+            logits = net.action_head(policy_embed)
+            logits = torch.where(mask[b] > 0, logits,
+                                 torch.full_like(logits, NEG_INF))
             dist = torch.distributions.Categorical(logits=logits)
             logp = dist.log_prob(action[b])
             ent = dist.entropy()
+            ent_action = ent.mean()
+            ent_target = torch.zeros((), device=logits.device)
             targeted = target[b] >= 0
             if bool(targeted.any()):
+                tlogits = net.target_logits_for(policy_embed, action[b])
+                tlogits = torch.where(tmask[b] > 0, tlogits,
+                                      torch.full_like(tlogits, NEG_INF))
                 tdist = torch.distributions.Categorical(logits=tlogits)
                 tlogp = tdist.log_prob(target[b].clamp(min=0))
                 logp = logp + torch.where(targeted, tlogp,
                                           torch.zeros_like(tlogp))
-                ent = ent + torch.where(targeted, tdist.entropy(),
+                tent = tdist.entropy()
+                ent = ent + torch.where(targeted, tent,
                                         torch.zeros_like(tlogp))
+                ent_target = tent[targeted].mean()
             ratio = torch.exp(logp - old_logp[b])
             surr1 = ratio * adv_t[b]
             surr2 = torch.clamp(ratio, 1 - clip, 1 + clip) * adv_t[b]
@@ -868,9 +1120,28 @@ def ppo_update(net, opt, batch, adv, returns, clip=0.2, epochs=4,
             opt.zero_grad(); loss.backward()
             nn.utils.clip_grad_norm_(net.parameters(), 0.5)
             opt.step()
+            with torch.no_grad():
+                approx_kl = float((ref_logp[b] - logp).mean().item())
+                clip_frac = float(((ratio - 1.0).abs() > clip)
+                                  .float().mean().item())
+            kl_accum += approx_kl; kl_batches += 1
             stats = {"pol_loss": float(pol_loss.item()),
                      "val_loss": float(val_loss.item()),
-                     "entropy": float(ent_mean.item())}
+                     "entropy": float(ent_mean.item()),
+                     "ent_action": float(ent_action.item()),
+                     "ent_target": float(ent_target.item()),
+                     "approx_kl": approx_kl,
+                     "clip_frac": clip_frac,
+                     "explained_var": explained_var}
+        epochs_run += 1
+        epoch_kl = kl_accum / max(kl_batches, 1)
+        if (target_kl is not None and not value_only and
+                epoch_kl > 1.5 * target_kl):
+            kl_stop = True
+            break
+    if stats:
+        stats["epochs_run"] = epochs_run
+        stats["kl_stop"] = kl_stop
     return stats
 
 
@@ -927,13 +1198,46 @@ def selftest() -> int:
     mask[spatial] = 1
     tmask = np.zeros(N_TARGET_CELLS, dtype=np.int8)
     tmask[7] = 1
-    action, target, logp, _ = net.act(feat, mask, True, tmask)
+    action, target, logp, _, used = net.act(feat, mask, True, tmask)
     assert action == spatial and target == 7, (action, target)
     mask2 = np.zeros(N_ACTIONS, dtype=np.int8)
     mask2[1] = 1  # non-spatial
-    action, target, logp2, _ = net.act(feat, mask2, True, tmask)
+    action, target, logp2, _, _ = net.act(feat, mask2, True, tmask)
     assert action == 1 and target == -1
     assert logp2 == 0.0  # single legal action, no target term
+    # 3b. Action-conditioned target head (docs/1순위.md 5.4): identical to
+    # the unconditioned head at zero init (v8-preserving), different between
+    # attack and defend once the conditioning pathway has weights.
+    atk = sorted(ATTACK_TARGET_ACTION_IDS)[0]
+    dfd = sorted(DEFEND_TARGET_ACTION_IDS)[0]
+    with torch.no_grad():
+        embed = net.policy_tower(x, None)
+        base = net.target_head(embed)
+        t_atk = net.target_logits_for(embed, torch.tensor([atk]))
+        t_dfd = net.target_logits_for(embed, torch.tensor([dfd]))
+        assert torch.allclose(t_atk, base) and torch.allclose(t_dfd, base), \
+            "conditioning must be zero at init"
+        nn.init.normal_(net.target_cond.weight, std=0.1)
+        t_atk = net.target_logits_for(embed, torch.tensor([atk]))
+        t_dfd = net.target_logits_for(embed, torch.tensor([dfd]))
+        assert not torch.allclose(t_atk, t_dfd), \
+            "attack/defend target logits must differ when conditioned"
+        nn.init.zeros_(net.target_cond.weight)
+    # 3c. Semantic target masks: attack -> known-enemy cells, defend -> own
+    # building cells, both subsets of the game mask with full-mask fallback.
+    sfeat = np.zeros(N_FEATURES, dtype=np.float32)
+    sfeat[86 + 5] = 1.0    # own building at cell 5
+    sfeat[568 + 9] = 1.0   # remembered enemy army at cell 9
+    stmask = np.ones(N_TARGET_CELLS, dtype=np.int8)
+    am = semantic_target_mask(sfeat, stmask, atk)
+    dm = semantic_target_mask(sfeat, stmask, dfd)
+    assert am[9] == 1 and am.sum() == 1, "attack mask must be enemy cells"
+    assert dm[5] == 1 and dm.sum() == 1, "defend mask must be own-base cells"
+    empty_feat = np.zeros(N_FEATURES, dtype=np.float32)
+    assert (semantic_target_mask(empty_feat, stmask, atk) == stmask).all(), \
+        "no known enemy -> full mask (search behavior)"
+    assert (semantic_target_mask(sfeat, stmask, 1) == stmask).all(), \
+        "non-spatial action -> unchanged mask"
     # 4. Aux zero-init: BC (zero/None aux) and any nonzero aux give identical
     # outputs at initialization, so PPO starts exactly at the BC policy.
     aux = np.random.RandomState(0).rand(AUX_DIM).astype(np.float32)
@@ -980,7 +1284,104 @@ def selftest() -> int:
         act1 = loaded.act(feat, np.ones(N_ACTIONS, dtype=np.int8),
                           np.ones(N_TARGET_CELLS, dtype=np.int8), owner=1)
         assert isinstance(act1, tuple) and len(act1) == 2
-    print("ranker_ppo selftest OK: layout/reshape/heads/aux/update/checkpoint")
+        # 7. Per-match isolation (docs/1순위.md 5.1): two stochastic policies
+        # with the same seed must produce identical action sequences even when
+        # their calls interleave (each has a private generator + history), and
+        # resetting one must not disturb the other.
+        rfeat = rng.rand(N_FEATURES).astype(np.float32)
+        amask = np.ones(N_ACTIONS, dtype=np.int8)
+        tmask_all = np.ones(N_TARGET_CELLS, dtype=np.int8)
+        pol_x = TorchPolicy(path, deterministic=False, seed=123)
+        pol_y = TorchPolicy(path, deterministic=False, seed=123)
+        seq_x, seq_y = [], []
+        for step in range(6):
+            seq_x.append(pol_x.act(rfeat, amask, tmask_all, owner=1))
+            if step == 2:
+                pol_y.reset()  # a foreign reset must not corrupt pol_x
+                torch.manual_seed(999)  # nor may the global RNG interfere
+            seq_y.append(pol_y.act(rfeat, amask, tmask_all, owner=1))
+        # pol_y's reset clears ITS history, so streams diverge from step 3 —
+        # but a fresh same-seed policy replays pol_x's sequence exactly.
+        pol_z = TorchPolicy(path, deterministic=False, seed=123)
+        seq_z = [pol_z.act(rfeat, amask, tmask_all, owner=1) for _ in range(6)]
+        assert seq_x == seq_z, "same-seed policies must replay identically"
+        # 8. SMDP discount alignment: with zero values and lam=1, adv[0] of a
+        # single terminal reward equals the product of the per-step
+        # gamma**(dt/8) factors along the path (dt[t+1] discounts step t).
+        g = 0.99
+        dts = np.array([8, 16, 64], dtype=np.int64)
+        adv_s, _ = compute_gae(np.array([0.0, 0.0, 1.0], dtype=np.float32),
+                               np.zeros(3, dtype=np.float32),
+                               np.array([False, False, True]), g, 1.0, dt=dts)
+        expect = (g ** (16 / 8.0)) * (g ** (64 / 8.0))
+        assert abs(float(adv_s[0]) - expect) < 1e-6, (adv_s[0], expect)
+        # 9. v8 checkpoint upgrade: a payload without the v9 conditioning
+        # params must load (zero-filled -> identical behavior); a payload
+        # with a truly different architecture must be refused.
+        v8_payload = checkpoint_payload(net)
+        v8_payload["arch"] = "cnn2_v8"
+        for k in list(v8_payload["state_dict"]):
+            if k in _V9_NEW_PARAM_KEYS:
+                del v8_payload["state_dict"][k]
+        v8_path = Path(tmp) / "v8.pt"
+        torch.save(v8_payload, v8_path)
+        upgraded = TorchPolicy(v8_path, deterministic=True)
+        assert float(upgraded.net.target_cond.weight.detach()
+                     .abs().sum()) == 0.0
+        # 10. Reward v5: zero-sum war term on mirrored self-play rolls, and
+        # timeout terminal = 0 by default.
+        def mk_roll(own_losses, hostile_losses, owner):
+            steps = len(own_losses)
+            return {
+                "feat": np.zeros((steps, 40), dtype=np.float32),  # <67: no econ
+                "losses": np.stack([
+                    np.asarray(own_losses, dtype=np.float64), np.zeros(steps),
+                    np.asarray(hostile_losses, dtype=np.float64),
+                    np.zeros(steps)], axis=1),
+                "dt": np.full(steps, 8, dtype=np.int64),
+                "result": {"owners": [
+                    {"owner": 1, "units": 5, "unit_value": 500, "buildings": 2},
+                    {"owner": 2, "units": 4, "unit_value": 400, "buildings": 1},
+                ], "reason": "max_frames"},
+                "max_frames": 1000, "owner": owner,
+            }
+        ra = mk_roll([0, 100, 100], [0, 0, 300], owner=1)
+        rb = mk_roll([0, 0, 300], [0, 100, 100], owner=2)
+        sa = augment_rewards(ra, 5.0, 3.0, war_loss_weight=1.0,
+                             approach_weight=0.0, timeout_material=False)
+        sb = augment_rewards(rb, 5.0, 3.0, war_loss_weight=1.0,
+                             approach_weight=0.0, timeout_material=False)
+        assert abs(float(sa.sum() + sb.sum())) < 1e-5, \
+            "self-play reward must be zero-sum (war w=1, timeout payoff 0)"
+        assert ra["reward_components"]["terminal"] == 0.0, \
+            "timeout must pay no terminal by default"
+        rc = mk_roll([0, 0, 0], [0, 0, 0], owner=1)
+        rc["result"]["owners"][1]["buildings"] = 0  # elimination win
+        rc["result"]["reason"] = "elimination"
+        sc = augment_rewards(rc, 5.0, 3.0, approach_weight=0.0,
+                             timeout_material=False)
+        assert rc["reward_components"]["terminal"] > 0.0, \
+            "elimination must pay the terminal bonus"
+        # 11. eps-legal exploration mixture: eps=1 -> pure uniform over legal
+        # (behavior logp = -log(n_legal)), sampled action always legal.
+        emask = np.zeros(N_ACTIONS, dtype=np.int8)
+        emask[[2, 5, 9, 30]] = 1
+        gen_e = torch.Generator(); gen_e.manual_seed(7)
+        for _ in range(8):
+            a_e, _, lp_e, _, _ = net.act(feat, emask, False, None, None,
+                                         generator=gen_e, explore_eps=1.0)
+            assert emask[a_e] == 1, "eps sampling must stay legal"
+            assert abs(lp_e - float(np.log(1.0 / 4.0))) < 1e-5, lp_e
+        # eps=0 must reproduce the pure-policy path exactly (same generator
+        # stream, same draws).
+        g1 = torch.Generator(); g1.manual_seed(11)
+        g2 = torch.Generator(); g2.manual_seed(11)
+        r1 = net.act(feat, emask, False, None, None, generator=g1,
+                     explore_eps=0.0)
+        r2 = net.act(feat, emask, False, None, None, generator=g2)
+        assert r1[:3] == r2[:3], "eps=0 must equal the on-policy path"
+    print("ranker_ppo selftest OK: layout/reshape/heads/aux/update/checkpoint/"
+          "isolation/smdp/cond-target/semantic-mask/v8-upgrade/reward-v5")
     return 0
 
 
@@ -1007,6 +1408,26 @@ def main(argv=None) -> int:
     parser.add_argument("--terminal-weight", type=float, default=3.0,
                         help="weight of the terminal own-minus-opp-units reward "
                              "(the dominant goal signal: out-produce the opp)")
+    parser.add_argument("--war-loss-weight", type=float, default=0.5,
+                        help="weight of OWN losses inside the dense war term "
+                             "(0.5 = fight-encouraging asymmetry vs built-in; "
+                             "1.0 = zero-sum, the self-play default)")
+    parser.add_argument("--timeout-material",
+                        action=argparse.BooleanOptionalAction, default=True,
+                        help="pay the legacy material terminal on frame-cap "
+                             "timeouts.  Default ON for this vs-built-in "
+                             "stage (games rarely reach elimination, the "
+                             "material edge is the curriculum signal); "
+                             "self-play uses timeout=0 (docs/1순위.md 5.6)")
+    parser.add_argument("--target-kl", type=float, default=0.03,
+                        help="stop an update's remaining epochs when mean "
+                             "approx KL exceeds 1.5x this (0 disables)")
+    parser.add_argument("--explore-eps", type=float, default=0.05,
+                        help="training-rollout exploration: sample from "
+                             "(1-eps)*policy + eps*uniform-legal with the "
+                             "mixture as the behavior logp.  Rescues legal "
+                             "strategic actions the BC prior collapsed to "
+                             "~0 probability (0 = pure on-policy)")
     parser.add_argument("--ent-coef", type=float, default=0.02,
                         help="entropy bonus; higher keeps exploration alive")
     parser.add_argument("--value-warmup", type=int, default=3,
@@ -1032,10 +1453,13 @@ def main(argv=None) -> int:
     parser.add_argument("--lr-decay", type=float, default=0.3,
                         help="final lr as a fraction of --lr, annealed "
                              "linearly over --iters (1.0 = constant)")
-    parser.add_argument("--smdp", action="store_true",
-                        help="discount by gamma**(dt/8) per step (v9 variable "
-                             "decision intervals); default keeps fixed-step "
-                             "discounting")
+    parser.add_argument("--smdp", action=argparse.BooleanOptionalAction,
+                        default=True,
+                        help="discount by gamma**(dt/8) per step.  DEFAULT ON: "
+                             "the v9 decision gate emits 8..64-frame variable "
+                             "intervals, so fixed-step discounting treats a "
+                             "64-frame gap like an 8-frame one (docs/1순위.md "
+                             "5.5).  --no-smdp restores fixed-step")
     parser.add_argument("--selftest", action="store_true",
                         help="run the offline network/contract self-test "
                              "(no game needed) and exit")
@@ -1051,9 +1475,12 @@ def main(argv=None) -> int:
     # oversubscribe the CPU (games are the bottleneck, not the tiny MLP).
     torch.set_num_threads(1)
     net = ActorCritic()
+    resume_ckpt = None
     if args.resume is not None and Path(args.resume).exists():
-        net.load_state_dict(torch.load(args.resume, map_location="cpu",
-                                       weights_only=False)["state_dict"])
+        resume_ckpt = torch.load(args.resume, map_location="cpu",
+                                 weights_only=False)
+        _check_checkpoint_shape(resume_ckpt, args.resume)
+        load_upgrading_state_dict(net, resume_ckpt["state_dict"], args.resume)
         print(f"resumed from {args.resume}")
     elif args.dataset is not None and Path(args.dataset).exists():
         bc_pretrain(net, args.dataset, epochs=args.bc_epochs)
@@ -1066,6 +1493,13 @@ def main(argv=None) -> int:
         torch.save(checkpoint_payload(net), bc_ckpt)
         print(f"BC baseline checkpoint -> {bc_ckpt}")
     opt = torch.optim.Adam(net.parameters(), lr=args.lr)
+    if resume_ckpt is not None and "optimizer" in resume_ckpt:
+        try:
+            opt.load_state_dict(resume_ckpt["optimizer"])
+            print("optimizer state restored (true resume, not just a "
+                  "weight warm start)")
+        except ValueError as err:
+            print(f"optimizer state incompatible ({err}); starting fresh")
 
     net_lock = threading.Lock()
     io_base = Path(args.install_dir) / "rlout"
@@ -1077,16 +1511,18 @@ def main(argv=None) -> int:
         # concurrently across workers.
         class Locked:
             def act(self, feat, mask, deterministic=False, tmask=None,
-                    aux=None):
+                    aux=None, generator=None, explore_eps=0.0):
                 with net_lock:
-                    return net.act(feat, mask, deterministic, tmask, aux)
+                    return net.act(feat, mask, deterministic, tmask, aux,
+                                   generator, explore_eps)
         # A single failed game (startup crash, IPC accept timeout) must not
         # kill a multi-hour training run — drop the game and keep the batch.
         try:
             return rollout(Locked(), args.install_dir, args.port + index, seed,
                            args.max_frames, out_dir=io_base / f"w{index}",
                            net_offset=index + 1, opp_tribe=args.opp_tribe,
-                           no_idle=args.no_idle)
+                           no_idle=args.no_idle,
+                           explore_eps=args.explore_eps)
         except Exception as err:  # noqa: BLE001
             print(f"  rollout seed={seed} failed ({type(err).__name__}: {err});"
                   " dropped", flush=True)
@@ -1106,12 +1542,18 @@ def main(argv=None) -> int:
             rolls = [r for r in ex.map(lambda g: run_game(g, seeds[g]),
                                        range(args.games_per_iter))
                      if r is not None]
+        comp_sums = {"war": 0.0, "econ": 0.0, "approach": 0.0, "terminal": 0.0}
         for roll in rolls:
             if len(roll["action"]) == 0:
                 print(f"  iter {it}: empty rollout, skipping")
                 continue
             shaped = augment_rewards(roll, args.reward_scale,
-                                     args.terminal_weight)
+                                     args.terminal_weight,
+                                     war_loss_weight=args.war_loss_weight,
+                                     gamma=args.gamma if args.smdp else None,
+                                     timeout_material=args.timeout_material)
+            for k in comp_sums:
+                comp_sums[k] += roll["reward_components"].get(k, 0.0)
             adv, ret = compute_gae(shaped, roll["value"], roll["done"],
                                    args.gamma, args.lam,
                                    dt=roll.get("dt") if args.smdp else None)
@@ -1137,14 +1579,24 @@ def main(argv=None) -> int:
             group["lr"] = lr_now
         warming = it < args.value_warmup
         stats = ppo_update(net, opt, merged, adv, ret, ent_coef=args.ent_coef,
-                           value_only=warming)
+                           value_only=warming,
+                           target_kl=args.target_kl or None)
 
         tag = "warmup" if warming else "train "
+        n_games_used = max(len(batches), 1)
         print(f"iter {it:3d} [{tag}] | steps {len(adv):5d} | "
               f"return {np.mean(returns_hist):+.4f} | "
               f"units own {np.mean(own_units):.1f} vs opp {np.mean(opp_units):.1f} | "
               f"pol {stats['pol_loss']:+.3f} val {stats['val_loss']:.3f} "
-              f"ent {stats['entropy']:.3f} lr {lr_now:.1e}", flush=True)
+              f"ent {stats['entropy']:.3f} lr {lr_now:.1e} | "
+              f"kl {stats.get('approx_kl', 0):.4f}"
+              f"{'!' if stats.get('kl_stop') else ''} "
+              f"clip {stats.get('clip_frac', 0):.2f} "
+              f"ev {stats.get('explained_var', 0):+.2f} | "
+              f"r/game war {comp_sums['war']/n_games_used:+.2f} "
+              f"econ {comp_sums['econ']/n_games_used:+.2f} "
+              f"appr {comp_sums['approach']/n_games_used:+.2f} "
+              f"term {comp_sums['terminal']/n_games_used:+.2f}", flush=True)
 
         # Best-so-far keeping (rollout-return proxy; noisy but strictly better
         # than nothing - the definitive pick stays post-hoc fixed-seed eval).
@@ -1160,12 +1612,16 @@ def main(argv=None) -> int:
             # a later run never destroys an earlier (possibly better) policy —
             # post-hoc eval on fixed seeds picks the best (learned lesson: the
             # 8.2-unit 30-iter policy was overwritten by a worse continuation).
-            torch.save(checkpoint_payload(net), args.out)
+            # args.out carries the optimizer state so --resume continues the
+            # run instead of only warm-starting the weights.
+            torch.save({**checkpoint_payload(net),
+                        "optimizer": opt.state_dict()}, args.out)
             stamped = args.out.with_suffix(f".it{it + 1:03d}.pt")
             torch.save(checkpoint_payload(net), stamped)
             print(f"  checkpoint -> {args.out} (+ {stamped.name})")
 
-    torch.save(checkpoint_payload(net), args.out)
+    torch.save({**checkpoint_payload(net), "optimizer": opt.state_dict()},
+               args.out)
     print(f"final policy -> {args.out}")
     return 0
 

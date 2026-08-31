@@ -515,8 +515,9 @@ AiExpansionPlan ComputeAiExpansionPlan(const AiObservation& observation,
                 max_x = std::max(max_x, tile.tile_x);
                 min_y = std::min(min_y, tile.tile_y);
                 max_y = std::max(max_y, tile.tile_y);
-                for (i32 dy = -1; dy <= 1; ++dy) {
-                    for (i32 dx = -1; dx <= 1; ++dx) {
+                const i32 gap = std::max(config.cluster_merge_gap_tiles, 1);
+                for (i32 dy = -gap; dy <= gap; ++dy) {
+                    for (i32 dx = -gap; dx <= gap; ++dx) {
                         if (dx == 0 && dy == 0) {
                             continue;
                         }

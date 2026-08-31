@@ -20,6 +20,14 @@ struct AiExpansionConfig {
     // Candidate sites are searched inside the cluster's bounding box grown by
     // this many tiles on every side.
     i32 site_margin_tiles = 12;
+    // Berry tiles within this Chebyshev distance belong to ONE cluster.
+    // 1 = strict 8-neighbour connectivity, which split visually-adjacent
+    // patches (1-2 empty tiles apart) into separate clusters — the site then
+    // optimised against only one patch and ignored the berries next door
+    // (2026-08-31 user replay review: nest not at the berry-optimal spot).
+    // 3 bridges gaps of up to two empty tiles, so the site minimises the
+    // amount-weighted distance over the whole neighbourhood patch group.
+    i32 cluster_merge_gap_tiles = 3;
     // Engine rule for base nests (find_nearby_passable_placement_tile): no
     // berry (harvest terrain) tile within +-4 tiles of ANY footprint cell.
     // The footprint grown by this clearance must be berry-free.

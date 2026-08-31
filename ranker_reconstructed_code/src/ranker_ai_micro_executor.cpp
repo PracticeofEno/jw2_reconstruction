@@ -681,22 +681,35 @@ DesiredOrder fighter_order(StepContext& context, AiMicroExecutorState& state,
             // the whole group, and contact disables it outright.
             const std::size_t group_index =
                 static_cast<std::size_t>(record.group);
+            bool cohesion_return = false;
+            UnitMovementPoint centroid{0, 0};
             if (context.centroid_valid[group_index] &&
                 !unit_in_contact(context, unit, 1)) {
-                const UnitMovementPoint centroid =
-                    context.centroid[group_index];
+                centroid = context.centroid[group_index];
                 const i64 unit_gap = squared_distance(unit.x, unit.y,
                     centroid.x, centroid.y);
                 const i64 unit_to_goal = squared_distance(unit.x, unit.y,
                     objective.target_x, objective.target_y);
                 const i64 group_to_goal = squared_distance(centroid.x,
                     centroid.y, objective.target_x, objective.target_y);
-                if (unit_gap > squared(config.cohesion_radius) &&
-                    unit_to_goal < group_to_goal) {
-                    ++context.cohesion_holds;
-                    return point_order(AiSemanticActionKind::move, centroid.x,
-                        centroid.y);
-                }
+                // Hysteresis band (2026-08-31 user replay report): enter the
+                // return state only beyond cohesion_engage_radius, hold it
+                // until back inside cohesion_radius.  One shared threshold
+                // flipped a boundary leader between advance and return every
+                // frame — and a CHANGED order is issued immediately, so the
+                // unit vibrated in place at the army front (= vision edge).
+                const i32 engage = std::max(config.cohesion_engage_radius,
+                    config.cohesion_radius);
+                const i64 trigger = record.cohesion_returning != 0 ?
+                    squared(config.cohesion_radius) : squared(engage);
+                cohesion_return = unit_gap > trigger &&
+                    unit_to_goal < group_to_goal;
+            }
+            record.cohesion_returning = cohesion_return ? 1u : 0u;
+            if (cohesion_return) {
+                ++context.cohesion_holds;
+                return point_order(AiSemanticActionKind::move, centroid.x,
+                    centroid.y);
             }
             return point_order(objective.kind == AiMicroObjectiveKind::search ?
                 AiSemanticActionKind::move : AiSemanticActionKind::attack_move,

@@ -452,6 +452,37 @@ def _hist(y) -> dict:
     return out
 
 
+def split_train_test(n: int, groups=None, frac: float = 0.8, seed: int = 0):
+    """Episode-level train/test split (docs/1순위.md 5.2).
+
+    Two consecutive RTS decision states are nearly identical, so a random
+    TRANSITION split leaks each test state's near-duplicate into train and the
+    test accuracy stops measuring generalization.  With per-row ``groups``
+    (game ids) whole games go to one side: games are shuffled (seeded) and
+    accumulated into train until ``frac`` of the samples are covered, keeping
+    at least one game on each side.  Without groups (old caches, single game)
+    falls back to a CONTIGUOUS time cut — still no adjacent-state leakage
+    beyond the single boundary.  Returns (train_idx, test_idx)."""
+    if groups is not None:
+        groups = np.asarray(groups)
+        unique = np.unique(groups)
+        if len(unique) >= 2:
+            rng = np.random.default_rng(seed)
+            order = rng.permutation(unique)
+            counts = {int(g): int((groups == g).sum()) for g in unique}
+            train_games, covered = [], 0
+            for g in order:
+                if covered < frac * n and len(order) - len(train_games) > 1:
+                    train_games.append(int(g))
+                    covered += counts[int(g)]
+            train_set = set(train_games)
+            tr = np.nonzero([int(g) in train_set for g in groups])[0]
+            te = np.nonzero([int(g) not in train_set for g in groups])[0]
+            return tr, te
+    cut = min(max(int(n * frac), 1), n - 1)
+    return np.arange(cut), np.arange(cut, n)
+
+
 def _main(argv=None) -> int:
     import argparse
 
@@ -486,6 +517,11 @@ def _main(argv=None) -> int:
         cache = np.load(args.dataset)
         X, y, M = cache["X"], cache["y"], cache["M"]
         n_games = int(cache["n_games"]) if "n_games" in cache else 1
+        groups = cache["g"] if "g" in cache.files else None
+        if groups is None:
+            print("WARNING: cached dataset has no per-row game ids ('g'); "
+                  "using a contiguous time split instead of an episode "
+                  "split — re-collect to get a leak-free evaluation")
     else:
         games: list[list] = []
         if args.observe is not None:
@@ -517,12 +553,14 @@ def _main(argv=None) -> int:
         else:
             parser.error("provide --install-dir, --observe, or --dataset")
             return 2
-        Xs, ys, Ms = [], [], []
-        for series in games:
+        Xs, ys, Ms, gs = [], [], [], []
+        for game_id, series in enumerate(games):
             Xg, yg, Mg = build_dataset(series)
             if len(Xg):
                 Xs.append(Xg); ys.append(yg); Ms.append(Mg)
+                gs.append(np.full(len(yg), game_id, dtype=np.int32))
         X = np.concatenate(Xs); y = np.concatenate(ys); M = np.concatenate(Ms)
+        groups = np.concatenate(gs)
         n_games = len(games)
         if args.save_dataset is not None:
             # A bare filename lands next to the game artifacts (install dir),
@@ -531,17 +569,18 @@ def _main(argv=None) -> int:
             save_path = args.save_dataset
             if not save_path.is_absolute() and args.install_dir is not None:
                 save_path = Path(args.install_dir) / save_path
-            np.savez(save_path, X=X, y=y, M=M, n_games=n_games)
+            np.savez(save_path, X=X, y=y, M=M, g=groups, n_games=n_games)
             print(f"cached dataset -> {save_path}")
 
     print(f"dataset: {len(X)} labeled transitions from {n_games} game(s)")
     print("label histogram:", _hist(y))
 
-    # Train/test split.
-    rng = np.random.default_rng(0)
-    perm = rng.permutation(len(X))
-    cut = int(len(X) * 0.8)
-    tr, te = perm[:cut], perm[cut:]
+    # Episode-level train/test split (no adjacent-transition leakage).
+    tr, te = split_train_test(len(X), groups)
+    if groups is not None:
+        held = sorted(set(int(g) for g in np.asarray(groups)[te]))
+        print(f"split: {len(tr)} train / {len(te)} test transitions; "
+              f"held-out game(s): {held}")
 
     # Class-balanced training so the rare-but-decisive build/produce actions are
     # actually learned (raw accuracy is dominated by no_op and is misleading;

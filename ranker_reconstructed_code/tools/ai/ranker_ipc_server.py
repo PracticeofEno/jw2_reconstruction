@@ -37,34 +37,47 @@ import numpy as np
 from ranker_rl_env import ACTION_NAMES, RandomLegalPolicy
 
 
-def _load_policy(policy_path, seed, stochastic: bool = False):
+def _load_policy(policy_path, seed, stochastic: bool = False,
+                 verbose: bool = True):
+    """Load one policy instance.
+
+    Stateful policies (TorchPolicy history, RandomLegalPolicy xorshift state)
+    must serve exactly one match at a time — parallel runners call this per
+    match (policy factory) instead of sharing one object across a thread pool
+    (docs/1순위.md 5.1).  Stochastic torch policies get a PRIVATE generator
+    seeded with ``seed`` (not the global torch RNG), so a match's sampling
+    stream is reproducible regardless of how the pool schedules matches."""
     if policy_path is None:
-        print("policy: random-legal (no --policy given)")
+        if verbose:
+            print("policy: random-legal (no --policy given)")
         return RandomLegalPolicy(seed=seed)
     path = Path(policy_path)
     if path.suffix == ".pt":  # trained PPO / actor-critic checkpoint
         from ranker_ppo import load_policy
         mode = "stochastic" if stochastic else "argmax"
-        print(f"policy: torch actor-critic ({policy_path}, {mode})")
-        if stochastic:
-            # Deployment samples from the distribution; a fixed torch seed keeps
-            # the evaluation reproducible.  (Pure argmax can lock into a
-            # repetitive action loop over long games and understate strength.)
-            import torch
-            torch.manual_seed(seed)
-        return load_policy(path, deterministic=not stochastic)
+        if verbose:
+            print(f"policy: torch actor-critic ({policy_path}, {mode})")
+        # Deployment samples from the distribution; a per-policy generator
+        # keeps the evaluation reproducible.  (Pure argmax can lock into a
+        # repetitive action loop over long games and understate strength.)
+        return load_policy(path, deterministic=not stochastic,
+                           seed=seed if stochastic else None)
     from ranker_imitation import ImitationPolicy
-    print(f"policy: imitation ({policy_path})")
+    if verbose:
+        print(f"policy: imitation ({policy_path})")
     return ImitationPolicy(policy_path)
 
 
 def _recv_lines(conn):
-    """Yield complete newline-delimited messages from a socket."""
+    """Yield complete newline-delimited messages from a socket.
+
+    A recv timeout (the connected socket carries one, see serve_match) ends
+    the stream instead of blocking the harness forever on a hung game."""
     buffer = b""
     while True:
         try:
             chunk = conn.recv(65536)
-        except ConnectionError:
+        except (ConnectionError, socket.timeout):
             return
         if not chunk:
             return
@@ -117,6 +130,11 @@ def serve_match(install_dir: Path | None, policy, port: int, seed: int | None,
         print(f"listening on 127.0.0.1:{bound_port} ...")
     conn, _ = server.accept()
     conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    # A game that connects and then hangs (crash before the end message,
+    # debugger break, ...) must not block the harness forever: bound each
+    # recv by the same timeout the accept uses.  Decisions arrive every
+    # <=64 sim frames, so a healthy game never comes close.
+    conn.settimeout(timeout)
     if not quiet:
         print("game connected")
 
