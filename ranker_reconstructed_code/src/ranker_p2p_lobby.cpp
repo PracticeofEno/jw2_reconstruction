@@ -684,6 +684,8 @@ bool ParseP2PNetworkCommandLine(P2PNetworkLaunchParameters& parameters,
             std::strstr(upper, "-AIRANDOM") != nullptr;
         parameters.self_play_imitate =
             std::strstr(upper, "-AIIMITATE") != nullptr;
+        parameters.self_play_shadow =
+            std::strstr(upper, "-AISHADOW") != nullptr;
         const char* imitate_owner = std::strstr(upper, "-AIIMITOWNER:");
         parameters.self_play_imitate_owner = imitate_owner != nullptr ?
             static_cast<u32>(std::strtoul(
@@ -708,6 +710,10 @@ bool ParseP2PNetworkCommandLine(P2PNetworkLaunchParameters& parameters,
             }
             parameters.self_play_output_dir[i] = '\0';
         }
+        const char* entity = std::strstr(upper, "-AIENTITY:");
+        parameters.self_play_entity_port = entity != nullptr ?
+            static_cast<u16>(std::strtoul(entity + std::strlen("-AIENTITY:"),
+                nullptr, 10)) : 0u;
         const char* ipc = std::strstr(upper, "-AIIPC:");
         parameters.self_play_ipc_port = ipc != nullptr ?
             static_cast<u16>(std::strtoul(ipc + std::strlen("-AIIPC:"),

@@ -2056,6 +2056,8 @@ bool DispatchGameplayScriptOpcode(GameplayScriptTriggerState& state,
             if (object.unit != nullptr) {
                 object.unit->pending_command = {
                     4, 0, target_x, static_cast<u32>(target_y)};
+                // Script write: not an ordered-packet command.
+                object.unit->pending_command_origin = {};
             }
             total_x += static_cast<u32>(object.x);
             total_y += static_cast<u32>(object.y);

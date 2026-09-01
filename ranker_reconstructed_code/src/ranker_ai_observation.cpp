@@ -347,6 +347,9 @@ AiObservationBuildResult BuildAiObservationV1(
         observed.animation_timer = unit->animation_timer;
         observed.level = unit->status_timer;
         observed.experience = unit->elite_progress_value;
+        // v5 public type info (facing-table resolution).
+        observed.use_16_direction_lookup =
+            unit->definition.use_16_direction_lookup;
 
         if (controlled) {
             observed.command_state = unit->command_state;
@@ -368,6 +371,9 @@ AiObservationBuildResult BuildAiObservationV1(
                 unit->command_entry_lockout_ticks;
             observed.command_lockout_ticks = unit->command_lockout_ticks;
             observed.effect_timer = unit->effect_timer;
+            // v5 controlled-only entity-control inputs.
+            observed.movement_class = unit->definition.movement_class;
+            observed.distance_check_mode = unit->distance_check_mode;
             observed.equipment_flags = unit->equipment_flags;
             observed.item_slots = unit->item_slots;
             observed.equipment_slots = unit->equipment_slots;
@@ -460,6 +466,9 @@ u64 HashAiObservationV1(const AiObservation& observation) {
         hash_u32(hash, unit.animation_timer);
         hash_u32(hash, unit.level);
         hash_u32(hash, unit.experience);
+        hash_bool(hash, unit.use_16_direction_lookup);
+        hash_u32(hash, unit.movement_class);
+        hash_u32(hash, unit.distance_check_mode);
         hash_u32(hash, unit.command_state);
         hash_u32(hash, unit.command_flags);
         hash_u32(hash, unit.command_value);

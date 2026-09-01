@@ -218,6 +218,34 @@ struct UnitMovementDefinition {
     u32 placement_small_reference_count = 0;
 };
 
+// AI-only ordered-packet provenance sidecar (entity RL plan section 9).
+// Every pending/deferred/active command payload carries the (channel,
+// sequence) of the Mode1 ordered packet it came from, or INVALID for any
+// write that did not originate from ordered-packet dispatch (script,
+// lifecycle, unit actions, cancels, restores).  Metadata only: never part of
+// the engine payloads, packets or the P2P checksum.
+constexpr u32 kUnitCommandOriginInvalidChannel = 0xffffffffu;
+
+struct UnitCommandPacketOrigin {
+    u32 channel = kUnitCommandOriginInvalidChannel;
+    u32 sequence = 0;
+
+    bool valid() const { return channel != kUnitCommandOriginInvalidChannel; }
+    friend bool operator==(const UnitCommandPacketOrigin& a,
+        const UnitCommandPacketOrigin& b) {
+        return a.channel == b.channel && a.sequence == b.sequence;
+    }
+    friend bool operator!=(const UnitCommandPacketOrigin& a,
+        const UnitCommandPacketOrigin& b) {
+        return !(a == b);
+    }
+};
+
+// Ambient origin of the ordered packet currently being dispatched
+// (DispatchMode1GameplayPacket sets/restores it).  INVALID outside dispatch,
+// so every non-packet payload write naturally records INVALID.
+extern UnitCommandPacketOrigin g_mode1_dispatch_packet_origin;
+
 struct UnitQueuedCommand {
     u32 state = 0;
     // Original tuple order is state, command-value/target, x payload, y payload.
@@ -330,6 +358,12 @@ struct UnitMovementUnit {
     UnitQueuedCommand active_command_payload;
     std::array<UnitQueuedCommand, 10> deferred_commands{};
     u32 deferred_command_count = 0;
+    // Entity-RL origin sidecar, lockstep with the three payload stores above
+    // (in-place field tweaks of the SAME command keep their origin; whole
+    // payload writes carry or clear it).
+    UnitCommandPacketOrigin pending_command_origin;
+    UnitCommandPacketOrigin active_command_origin;
+    std::array<UnitCommandPacketOrigin, 10> deferred_command_origins{};
     UnitMovementUnit* target = nullptr;
     UnitMovementUnit* linked_unit = nullptr;
     bool active = true;
@@ -798,6 +832,20 @@ void HandleLifecycleUnitFreeListMove(UnitMovementContext& context,
     UnitMovementUnit& unit);
 void HandleLifecycleUnitActiveListMove(UnitMovementContext& context,
     UnitMovementUnit& unit);
+
+// AI entity-control activation observer (docs/AI_PLAY_ENTITY_COMMAND_RL_PLAN.md
+// section 5.3).  Purely observational AI-controller metadata: fired after a
+// canonical activation commit (activated=true; the unit is placed/initialized
+// and inserted into the active list) or after any transition out of the
+// active list (activated=false).  The free-list pop of an in-progress create
+// is NOT an activation commit — a failed placement must not advance the
+// entity generation — so HandleFreeUnitActivation does not fire it; the
+// placement-success paths do.  Never alters engine state.
+using UnitActivationObserver = void (*)(UnitMovementUnit& unit,
+    bool activated, void* ctx);
+extern UnitActivationObserver g_unit_activation_observer;
+extern void* g_unit_activation_observer_ctx;
+void NotifyUnitActivationObserver(UnitMovementUnit& unit, bool activated);
 void CopyCString(char* destination, const char* source);
 void CopyUnitStringSlotText(char* destination, std::size_t max_count,
     const char* source);

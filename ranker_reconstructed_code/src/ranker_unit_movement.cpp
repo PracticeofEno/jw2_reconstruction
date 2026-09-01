@@ -3231,6 +3231,7 @@ void HandleActiveUnitFreeListMove(UnitMovementContext& context,
     remove_unit_from_list(context.lifecycle_units, unit);
     push_unit_front_unique(context.free_units, unit);
     unit.active = false;
+    NotifyUnitActivationObserver(unit, false);
 }
 
 void HandleActiveUnitLifecycleListMove(UnitMovementContext& context,
@@ -3239,6 +3240,7 @@ void HandleActiveUnitLifecycleListMove(UnitMovementContext& context,
     remove_unit_from_list(context.free_units, unit);
     push_unit_front_unique(context.lifecycle_units, unit);
     unit.active = false;
+    NotifyUnitActivationObserver(unit, false);
 }
 
 void HandleLifecycleUnitFreeListMove(UnitMovementContext& context,
@@ -3247,6 +3249,7 @@ void HandleLifecycleUnitFreeListMove(UnitMovementContext& context,
     remove_unit_from_list(context.active_units, unit);
     push_unit_front_unique(context.free_units, unit);
     unit.active = false;
+    NotifyUnitActivationObserver(unit, false);
 }
 
 void HandleLifecycleUnitActiveListMove(UnitMovementContext& context,
@@ -3255,6 +3258,19 @@ void HandleLifecycleUnitActiveListMove(UnitMovementContext& context,
     remove_unit_from_list(context.free_units, unit);
     push_unit_front_unique(context.active_units, unit);
     unit.active = true;
+    NotifyUnitActivationObserver(unit, true);
+}
+
+UnitCommandPacketOrigin g_mode1_dispatch_packet_origin{};
+
+UnitActivationObserver g_unit_activation_observer = nullptr;
+void* g_unit_activation_observer_ctx = nullptr;
+
+void NotifyUnitActivationObserver(UnitMovementUnit& unit, bool activated) {
+    if (g_unit_activation_observer != nullptr) {
+        g_unit_activation_observer(unit, activated,
+            g_unit_activation_observer_ctx);
+    }
 }
 
 void CopyCString(char* destination, const char* source) {

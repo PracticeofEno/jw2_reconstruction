@@ -1,9 +1,12 @@
 #ifndef RANKER_AI_IPC_H
 #define RANKER_AI_IPC_H
 
+#include "ranker_ai_entity_control.h"
 #include "ranker_ai_rl_features.h"
 
 #include <array>
+#include <string>
+#include <vector>
 
 namespace ranker {
 
@@ -47,6 +50,30 @@ void AiIpcSendEnd(const char* reason, unsigned frame);
 
 // Close the socket / tear down Winsock.  Safe to call multiple times.
 void AiIpcClose();
+
+// ---------------------------------------------------------------------------
+// act2 entity-mode binary IPC (docs/AI_PLAY_ENTITY_COMMAND_RL_PLAN.md §11).
+// A separate connection from the legacy `act` socket; JSON and binary are
+// never mixed on one connection.  Every frame is exact-read/exact-written
+// under ONE monotonic deadline spanning header+payload — partial progress
+// never extends it — so a peer that accepts but does not read ends in a
+// bounded timeout, after which the caller latches the persistent controller
+// failure (fighters KEEP, macro no-op; never a random/scripted fallback).
+// ---------------------------------------------------------------------------
+
+bool AiIpc2Connect(unsigned short port, unsigned handshake_timeout_ms);
+bool AiIpc2Connected();
+void AiIpc2Close();
+
+// Stamps payload_bytes + CRC32 into `header`, then writes the whole frame.
+bool AiIpc2SendFrame(AiEntityWireHeader& header,
+    const std::vector<u8>& payload, unsigned timeout_ms);
+
+// Reads one whole frame: strict header parse (magic/versions/counts) and a
+// payload CRC check; any violation returns false with `error` set — the
+// caller must treat it as a framing failure and close the connection.
+bool AiIpc2ReceiveFrame(AiEntityWireHeader& header, std::vector<u8>& payload,
+    unsigned timeout_ms, std::string* error);
 
 } // namespace ranker
 

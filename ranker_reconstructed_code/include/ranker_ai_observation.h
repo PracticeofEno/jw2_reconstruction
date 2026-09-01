@@ -25,7 +25,12 @@ namespace ranker {
 // lockout timers, effect timer and item/equipment slots.  Without these,
 // observation logs recorded today cannot train raw micro later (the engine's
 // "can this unit act now" state was unobservable).
-constexpr u32 kAiObservationSchemaVersion = 4;
+// v5 (entity-command RL, docs/AI_PLAY_ENTITY_COMMAND_RL_PLAN.md): controlled
+// `movement_class` and `distance_check_mode` (the point-mask entry class and
+// the engine's force-approach flag the attack pair predicate early-rejects
+// on), plus the public type-level `use_16_direction_lookup` so the entity
+// encoder can decode `direction` into an exact facing vector.
+constexpr u32 kAiObservationSchemaVersion = 5;
 
 // Number of research/upgrade orders whose completion level is surfaced in the
 // observation (Tyrano MVP: harvest, movement, ground-attack upgrades).
@@ -170,6 +175,9 @@ struct AiObservedUnit {
     u32 animation_timer = 0;
     u32 level = 0;
     u32 experience = 0;
+    // v5 public type info: `direction` indexes the engine's 8- or 16-entry
+    // facing delta table depending on this flag.
+    bool use_16_direction_lookup = false;
 
     // These fields are intentionally populated only for controlled units.
     // Visible opponents do not expose their private destination, queue or
@@ -201,6 +209,12 @@ struct AiObservedUnit {
     u32 equipment_flags = 0;
     std::array<u32, 4> item_slots{};
     std::array<u32, 6> equipment_slots{};
+    // v5 controlled-only: static movement entry class (point-mask geometry)
+    // and the engine's force-approach flag (`distance_check_mode == 1`
+    // early-rejects ValidateUnitActionTarget, so the attack pair mask must
+    // see it).
+    u32 movement_class = 0;
+    u32 distance_check_mode = 0;
 };
 
 // v9: a ground pickup the owner can currently SEE (fog-honest).  Meat

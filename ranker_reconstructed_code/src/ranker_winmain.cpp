@@ -6,6 +6,7 @@
 #include "ranker_client_config.h"
 #include "ranker_ai_autopilot.h"
 #include "ranker_ai_decision_gate.h"
+#include "ranker_ai_entity_control.h"
 #include "ranker_ai_expansion.h"
 #include "ranker_ai_ipc.h"
 #include "ranker_ai_live_validator.h"
@@ -122,6 +123,14 @@
 namespace ranker {
 namespace {
 
+AiEntityRegistry& ai_entity_registry();
+std::string ai_selfplay_output_path(const char* name);
+void record_ai_entity_shadow_tick(u32 local_owner, u32 frame,
+    const AiObservation& observation);
+void run_ai_entity_play_frame(GameplayLoopState& state);
+void ai_entity_send_terminals(GameplayLoopState& state, bool timed_out);
+void update_ai_play_enemy_memory(u32 local_owner, u32 frame,
+    AiObservation& observation_ref);
 void default_lobby_show_message(HWND owner, const char* text, COLORREF color);
 void default_forward_lobby_network_message(HWND parent, UINT message, WPARAM wparam,
     LPARAM lparam);
@@ -931,6 +940,13 @@ struct RuntimeGlobals {
     std::array<std::vector<AiImitationPacket>, kPlayerSlotCount>
         ai_play_imitation_packets{};
     u32 ai_play_imitation_owner = 0xffu;
+    // Entity-command RL controller (-AIENTITY:PORT, act2).  0 = disabled.
+    u16 ai_play_entity_port = 0;
+    // Entity-command RL shadow dataset (-AISHADOW, plan section 13.1).
+    bool ai_play_shadow_enabled = false;
+    std::array<AiEntityShadowState, kPlayerSlotCount> ai_play_entity_shadow{};
+    std::array<std::FILE*, kPlayerSlotCount> ai_play_shadow_files{};
+    AiMicroDesiredOrderTap ai_play_shadow_tap;
     // -AISELF -AIREPLAY: a headless replay playback is in progress.  The
     // replay browser transition skips the command-line P2P arming block, so
     // the session-start reset arms uncapped speed + imitation logging from
@@ -8687,6 +8703,8 @@ void default_gameplay_startup_unit_placed(UnitMovementUnit& unit) {
     unit.active = true;
     unit.linked_unit = &unit;
     movement->active_units.insert(movement->active_units.begin(), &unit);
+    // Entity RL: placement success is the canonical activation commit.
+    NotifyUnitActivationObserver(unit, true);
     append_startup_log(
         "start-slots: unit placed id=%lu type=%lu owner=%lu xy=%ld,%ld active_units=%zu placed=%zu",
         static_cast<unsigned long>(unit.id),
@@ -8747,6 +8765,9 @@ void default_gameplay_session_unit_reset_or_removed(
     unit.active_command_payload = UnitQueuedCommand{};
     unit.deferred_commands = {};
     unit.deferred_command_count = 0;
+    unit.pending_command_origin = {};
+    unit.active_command_origin = {};
+    unit.deferred_command_origins.fill({});
 }
 
 void sync_default_gameplay_session_runtime_views_after_reset() {
@@ -12427,6 +12448,18 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     g_runtime.gameplay_result_screen_rendered = false;
     g_runtime.gameplay_leave_reset_processed = false;
     g_runtime.ai_play_owner_slots.fill(false);
+    // Entity RL: match registry reset — initial placed units re-register as
+    // generation 1 (plan section 5.3).
+    AiEntityRegistryReset(ai_entity_registry());
+    for (AiEntityShadowState& shadow : g_runtime.ai_play_entity_shadow) {
+        shadow = AiEntityShadowState{};
+    }
+    for (std::FILE*& file : g_runtime.ai_play_shadow_files) {
+        if (file != nullptr) {
+            std::fclose(file);
+            file = nullptr;
+        }
+    }
     for (TyranoScriptedBotState& bot : g_runtime.ai_play_bots) {
         ResetTyranoScriptedBot(bot);
     }
@@ -12700,6 +12733,13 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
             append_startup_log("ai-play: imitation logging %s (owner=%lu)",
                 g_runtime.ai_play_imitation_enabled ? "enabled" : "disabled",
                 static_cast<unsigned long>(g_runtime.ai_play_imitation_owner));
+            // -AISHADOW: entity shadow dataset (requires the scripted micro
+            // to be the live controller, i.e. -AISCRIPT).
+            g_runtime.ai_play_shadow_enabled =
+                p2p_network_launch_parameters().self_play &&
+                p2p_network_launch_parameters().self_play_shadow;
+            append_startup_log("ai-play: entity shadow dataset %s",
+                g_runtime.ai_play_shadow_enabled ? "enabled" : "disabled");
             // v9 macro autopilot / defense reflex / decision gate (default ON;
             // -AIAUTOPILOT:0 / -AIREFLEX:0 / -AIGATE:0 = the A/B levers).
             g_runtime.ai_play_autopilot_enabled =
@@ -12725,6 +12765,22 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
                     g_runtime.ai_play_ipc_enabled ? "connected" :
                         "connect FAILED (falling back to random)");
             }
+            // -AIENTITY:PORT — entity-command RL controller (act2).  Implies
+            // the scripted-policy takeover of the owner slots; the entity
+            // frame transaction replaces run_default_ai_play_owner.
+            g_runtime.ai_play_entity_port =
+                p2p_network_launch_parameters().self_play &&
+                p2p_network_launch_parameters().self_play_entity_port != 0 ?
+                p2p_network_launch_parameters().self_play_entity_port : 0;
+            if (g_runtime.ai_play_entity_port != 0) {
+                g_runtime.ai_play_scripted_policy_enabled = true;
+                // Plan section 4.2: AiAutopilotPlan can re-own entity
+                // fighters (scout guard) and blurs reward attribution —
+                // forced OFF for learning matches.
+                g_runtime.ai_play_autopilot_enabled = false;
+            }
+            append_startup_log("ai-play: entity act2 port=%u",
+                static_cast<unsigned>(g_runtime.ai_play_entity_port));
         }
         else if (std::any_of(lobby.player_role_values.begin(),
                      lobby.player_role_values.end(),
@@ -16460,6 +16516,7 @@ void default_mode1_packet_set_unit_command_payload(void*, u32 unit_offset,
     if (!enqueue_deferred && clear_deferred) {
         unit->deferred_commands = {};
         unit->deferred_command_count = 0;
+        unit->deferred_command_origins.fill({});
     }
 
     const UnitQueuedCommand command{
@@ -16475,6 +16532,7 @@ void default_mode1_packet_set_unit_command_payload(void*, u32 unit_offset,
     }
     else {
         unit->pending_command = command;
+        unit->pending_command_origin = g_mode1_dispatch_packet_origin;
         unit->command_flags &= ~0x20u;
     }
 }
@@ -16512,6 +16570,7 @@ bool remove_default_unit_deferred_resource_command(UnitMovementUnit& unit,
             // remain as inactive residue.  Clearing the whole typed tuple
             // made repeated ESC cancellation diverge after the final order.
             unit.active_command_payload.state = 0;
+            unit.active_command_origin = {};
             return true;
         }
         return false;
@@ -16530,10 +16589,13 @@ bool remove_default_unit_deferred_resource_command(UnitMovementUnit& unit,
     for (u32 index = queue_index + 1; index < unit.deferred_command_count;
          ++index) {
         unit.deferred_commands[index - 1] = unit.deferred_commands[index];
+        unit.deferred_command_origins[index - 1] =
+            unit.deferred_command_origins[index];
     }
     --unit.deferred_command_count;
     if (unit.deferred_command_count < unit.deferred_commands.size()) {
         unit.deferred_commands[unit.deferred_command_count] = {};
+        unit.deferred_command_origins[unit.deferred_command_count] = {};
     }
     return true;
 }
@@ -23414,6 +23476,103 @@ u32 first_group_member_id(AiMicroExecutorState& micro,
     return members.empty() ? 0u : members.front()->id;
 }
 
+// Fog-honest enemy building/army memory, shared by the objective-policy
+// and entity-mode paths (both must feed the same 802 features).
+void update_ai_play_enemy_memory(u32 local_owner, u32 frame,
+    AiObservation& observation_ref) {
+    // Enemy-building memory, EVERY frame: forget tiles that are lit and
+    // empty, remember every visible hostile building's tile.  The micro
+    // executor reads it each frame (attack_enemy_base marches on the nearest
+    // remembered building once none is in sight) and the encoder on decision
+    // frames (features, attack/search mask).
+    {
+        std::vector<u8>& memory =
+            g_runtime.ai_play_enemy_building_memory[local_owner];
+        const AiObservation& obs = observation_ref;
+        if (memory.size() != obs.tiles.size()) {
+            memory.assign(obs.tiles.size(), 0u);
+        }
+        for (std::size_t t = 0; t < obs.tiles.size(); ++t) {
+            if (obs.tiles[t].visible) {
+                memory[t] = 0u;
+            }
+        }
+        for (const AiObservedUnit& unit : obs.units) {
+            if (unit.controlled || !unit.visible || !unit.alive ||
+                unit.type_id < 0x60u || unit.owner_id >= 8u ||
+                unit.owner_id == obs.local_owner ||
+                (obs.local_relation_mask & (1u << unit.owner_id)) != 0 ||
+                (obs.active_owner_mask & (1u << unit.owner_id)) == 0) {
+                continue;
+            }
+            const std::size_t tile =
+                static_cast<std::size_t>(std::max(unit.y, 0) >> 5) *
+                obs.map_width_tiles +
+                static_cast<std::size_t>(std::max(unit.x, 0) >> 5);
+            if (tile < memory.size()) {
+                memory[tile] = 1u;
+            }
+        }
+        observation_ref.enemy_building_memory = memory;
+        // v8 enemy-ARMY memory: same fog-honest rule for hostile MOBILES,
+        // with per-tile counts (a moved army leaves a stale trail - that is
+        // what the owner last saw).  Also the last-sighting summary
+        // (centroid / size / frames ago) for the scalar features.
+        std::vector<u8>& army_memory =
+            g_runtime.ai_play_enemy_army_memory[local_owner];
+        if (army_memory.size() != obs.tiles.size()) {
+            army_memory.assign(obs.tiles.size(), 0u);
+        }
+        for (std::size_t t = 0; t < obs.tiles.size(); ++t) {
+            if (obs.tiles[t].visible) {
+                army_memory[t] = 0u;
+            }
+        }
+        i64 seen_sum_x = 0;
+        i64 seen_sum_y = 0;
+        u32 seen_count = 0;
+        for (const AiObservedUnit& unit : obs.units) {
+            if (unit.controlled || !unit.visible || !unit.alive ||
+                unit.type_id >= 0x60u || unit.owner_id >= 8u ||
+                unit.owner_id == obs.local_owner ||
+                (obs.local_relation_mask & (1u << unit.owner_id)) != 0 ||
+                (obs.active_owner_mask & (1u << unit.owner_id)) == 0) {
+                continue;
+            }
+            const std::size_t tile =
+                static_cast<std::size_t>(std::max(unit.y, 0) >> 5) *
+                obs.map_width_tiles +
+                static_cast<std::size_t>(std::max(unit.x, 0) >> 5);
+            if (tile < army_memory.size() && army_memory[tile] < 255u) {
+                ++army_memory[tile];
+            }
+            seen_sum_x += unit.x;
+            seen_sum_y += unit.y;
+            ++seen_count;
+        }
+        if (seen_count != 0) {
+            g_runtime.ai_play_enemy_army_seen_frame[local_owner] = frame;
+            g_runtime.ai_play_enemy_army_seen_x[local_owner] =
+                static_cast<i32>(seen_sum_x / seen_count);
+            g_runtime.ai_play_enemy_army_seen_y[local_owner] =
+                static_cast<i32>(seen_sum_y / seen_count);
+            g_runtime.ai_play_enemy_army_seen_count[local_owner] = seen_count;
+        }
+        observation_ref.enemy_army_memory = army_memory;
+        const u32 seen_frame =
+            g_runtime.ai_play_enemy_army_seen_frame[local_owner];
+        observation_ref.enemy_army_seen_frames_ago =
+            seen_frame == 0xffffffffu || seen_frame > frame ?
+                0xffffffffu : frame - seen_frame;
+        observation_ref.enemy_army_seen_x =
+            g_runtime.ai_play_enemy_army_seen_x[local_owner];
+        observation_ref.enemy_army_seen_y =
+            g_runtime.ai_play_enemy_army_seen_y[local_owner];
+        observation_ref.enemy_army_seen_count =
+            g_runtime.ai_play_enemy_army_seen_count[local_owner];
+    }
+}
+
 void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
     // One-time tech-tree dump: log each Tyrano building's producible list from
     // the session reference tables so the RL action translator can be grounded
@@ -23664,97 +23823,8 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
     // + published after the policy decision below.
     AiRlHighLevelAction policy_pick = AiRlHighLevelAction::no_op;
     std::vector<AiRlHighLevelAction> autopilot_plan;
-    // Enemy-building memory, EVERY frame: forget tiles that are lit and
-    // empty, remember every visible hostile building's tile.  The micro
-    // executor reads it each frame (attack_enemy_base marches on the nearest
-    // remembered building once none is in sight) and the encoder on decision
-    // frames (features, attack/search mask).
-    {
-        std::vector<u8>& memory =
-            g_runtime.ai_play_enemy_building_memory[local_owner];
-        const AiObservation& obs = observation.observation;
-        if (memory.size() != obs.tiles.size()) {
-            memory.assign(obs.tiles.size(), 0u);
-        }
-        for (std::size_t t = 0; t < obs.tiles.size(); ++t) {
-            if (obs.tiles[t].visible) {
-                memory[t] = 0u;
-            }
-        }
-        for (const AiObservedUnit& unit : obs.units) {
-            if (unit.controlled || !unit.visible || !unit.alive ||
-                unit.type_id < 0x60u || unit.owner_id >= 8u ||
-                unit.owner_id == obs.local_owner ||
-                (obs.local_relation_mask & (1u << unit.owner_id)) != 0 ||
-                (obs.active_owner_mask & (1u << unit.owner_id)) == 0) {
-                continue;
-            }
-            const std::size_t tile =
-                static_cast<std::size_t>(std::max(unit.y, 0) >> 5) *
-                obs.map_width_tiles +
-                static_cast<std::size_t>(std::max(unit.x, 0) >> 5);
-            if (tile < memory.size()) {
-                memory[tile] = 1u;
-            }
-        }
-        observation.observation.enemy_building_memory = memory;
-        // v8 enemy-ARMY memory: same fog-honest rule for hostile MOBILES,
-        // with per-tile counts (a moved army leaves a stale trail - that is
-        // what the owner last saw).  Also the last-sighting summary
-        // (centroid / size / frames ago) for the scalar features.
-        std::vector<u8>& army_memory =
-            g_runtime.ai_play_enemy_army_memory[local_owner];
-        if (army_memory.size() != obs.tiles.size()) {
-            army_memory.assign(obs.tiles.size(), 0u);
-        }
-        for (std::size_t t = 0; t < obs.tiles.size(); ++t) {
-            if (obs.tiles[t].visible) {
-                army_memory[t] = 0u;
-            }
-        }
-        i64 seen_sum_x = 0;
-        i64 seen_sum_y = 0;
-        u32 seen_count = 0;
-        for (const AiObservedUnit& unit : obs.units) {
-            if (unit.controlled || !unit.visible || !unit.alive ||
-                unit.type_id >= 0x60u || unit.owner_id >= 8u ||
-                unit.owner_id == obs.local_owner ||
-                (obs.local_relation_mask & (1u << unit.owner_id)) != 0 ||
-                (obs.active_owner_mask & (1u << unit.owner_id)) == 0) {
-                continue;
-            }
-            const std::size_t tile =
-                static_cast<std::size_t>(std::max(unit.y, 0) >> 5) *
-                obs.map_width_tiles +
-                static_cast<std::size_t>(std::max(unit.x, 0) >> 5);
-            if (tile < army_memory.size() && army_memory[tile] < 255u) {
-                ++army_memory[tile];
-            }
-            seen_sum_x += unit.x;
-            seen_sum_y += unit.y;
-            ++seen_count;
-        }
-        if (seen_count != 0) {
-            g_runtime.ai_play_enemy_army_seen_frame[local_owner] = frame;
-            g_runtime.ai_play_enemy_army_seen_x[local_owner] =
-                static_cast<i32>(seen_sum_x / seen_count);
-            g_runtime.ai_play_enemy_army_seen_y[local_owner] =
-                static_cast<i32>(seen_sum_y / seen_count);
-            g_runtime.ai_play_enemy_army_seen_count[local_owner] = seen_count;
-        }
-        observation.observation.enemy_army_memory = army_memory;
-        const u32 seen_frame =
-            g_runtime.ai_play_enemy_army_seen_frame[local_owner];
-        observation.observation.enemy_army_seen_frames_ago =
-            seen_frame == 0xffffffffu || seen_frame > frame ?
-                0xffffffffu : frame - seen_frame;
-        observation.observation.enemy_army_seen_x =
-            g_runtime.ai_play_enemy_army_seen_x[local_owner];
-        observation.observation.enemy_army_seen_y =
-            g_runtime.ai_play_enemy_army_seen_y[local_owner];
-        observation.observation.enemy_army_seen_count =
-            g_runtime.ai_play_enemy_army_seen_count[local_owner];
-    }
+    update_ai_play_enemy_memory(local_owner, frame,
+        observation.observation);
     if (rl_mode && check_due) {
         // RL plumbing: encode the observation, evaluate the decision gate,
         // and only when it fires pick one legal high-level action (random /
@@ -24347,9 +24417,26 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
         // issuing only the orders that changed since the last frame.
         AiMicroExecutorConfig micro_exec_config{};
         micro_exec_config.reflex_enabled = g_runtime.ai_play_reflex_enabled;
+        // -AISHADOW: entity cadence (first frame immediate, then every 8):
+        // tap this step's pre-dedupe desired orders as teacher labels.
+        AiEntityShadowState& shadow_state =
+            g_runtime.ai_play_entity_shadow[local_owner];
+        const bool shadow_tick = g_runtime.ai_play_shadow_enabled &&
+            (shadow_state.next_tick_frame == 0xffffffffu ||
+                frame >= shadow_state.next_tick_frame);
+        if (shadow_tick) {
+            g_runtime.ai_play_shadow_tap.entries.clear();
+            bot.micro.desired_order_tap = &g_runtime.ai_play_shadow_tap;
+        }
         std::vector<AiSemanticAction> micro_actions =
             AiMicroExecutorStep(bot.micro, observation.observation,
                 micro_exec_config);
+        if (shadow_tick) {
+            bot.micro.desired_order_tap = nullptr;
+            record_ai_entity_shadow_tick(local_owner, frame,
+                observation.observation);
+            shadow_state.next_tick_frame = frame + 8;
+        }
         // Expansion builder timeline: log every command-state change of the
         // tracked builder (see the build-issued log above).
         if (g_runtime.ai_expand_tracked_unit != 0 &&
@@ -24517,6 +24604,1397 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Entity-command RL activation registry (docs/AI_PLAY_ENTITY_COMMAND_RL_PLAN.md
+// section 5.3).  AI-controller metadata only; installed as the unit-pool
+// activation observer so every canonical activation/deactivation boundary
+// commits exactly once, with the every-frame audit catching missed paths and
+// direct-control signature changes.
+// ---------------------------------------------------------------------------
+
+AiEntityRegistry& ai_entity_registry() {
+    static AiEntityRegistry registry;
+    return registry;
+}
+
+void ai_entity_activation_observer(UnitMovementUnit& unit, bool activated,
+    void*) {
+    if (activated) {
+        AiEntityRegistryCommitActivation(ai_entity_registry(), unit);
+    } else {
+        AiEntityRegistryMarkDeactivated(ai_entity_registry(), unit);
+    }
+}
+
+void ensure_ai_entity_observer_installed() {
+    if (g_unit_activation_observer == nullptr) {
+        g_unit_activation_observer = ai_entity_activation_observer;
+        g_unit_activation_observer_ctx = nullptr;
+    }
+}
+
+// Per-tick live lookup shared by the entity snapshot's pair-predicate hooks.
+struct AiEntityLiveLookup {
+    UnitMovementContext* movement = nullptr;
+    std::unordered_map<u32, UnitMovementUnit*> by_id;
+};
+
+bool ai_entity_hook_runtime_flags(void* ctx, u32 runtime_id, u32* out_flags) {
+    auto* lookup = static_cast<AiEntityLiveLookup*>(ctx);
+    const auto it = lookup->by_id.find(runtime_id);
+    if (it == lookup->by_id.end()) {
+        return false;
+    }
+    *out_flags = it->second->runtime_flags;
+    return true;
+}
+
+bool ai_entity_hook_class2_gate(void* ctx, u32 runtime_id, u32* out_gate) {
+    auto* lookup = static_cast<AiEntityLiveLookup*>(ctx);
+    const auto it = lookup->by_id.find(runtime_id);
+    if (it == lookup->by_id.end()) {
+        return false;
+    }
+    const UnitActionDamageProfile* profile = default_unit_action_damage_profile(
+        it->second->definition.action_profile_index);
+    *out_gate = profile != nullptr ? profile->render_class2_terrain_gate : 1u;
+    return true;
+}
+
+bool ai_entity_hook_can_enter_cell(void* ctx, u32 source_runtime_id, i32 x,
+    i32 y) {
+    auto* lookup = static_cast<AiEntityLiveLookup*>(ctx);
+    const auto it = lookup->by_id.find(source_runtime_id);
+    if (it == lookup->by_id.end() || lookup->movement == nullptr) {
+        return false;
+    }
+    return CheckUnitCanEnterTerrainCell(*lookup->movement, *it->second, x, y);
+}
+
+// One -AISHADOW entity tick: build the entity snapshot, turn the micro's
+// pre-dedupe desired orders into KEEP/ISSUE labels and append one binary
+// record to ai_entity_shadow_<owner>.bin.  Observation-only: no engine or
+// packet state is touched.
+void record_ai_entity_shadow_tick(u32 local_owner, u32 frame,
+    const AiObservation& observation) {
+    UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+    UnitMovementContext* movement =
+        lifecycle != nullptr ? lifecycle->movement : nullptr;
+    AiEntityLiveLookup lookup;
+    lookup.movement = movement;
+    if (movement != nullptr) {
+        lookup.by_id.reserve(movement->active_units.size());
+        for (UnitMovementUnit* unit : movement->active_units) {
+            if (unit != nullptr && unit->active) {
+                lookup.by_id[unit->id] = unit;
+            }
+        }
+    }
+    AiEntitySnapshotInput input;
+    input.observation = &observation;
+    input.registry = &ai_entity_registry();
+    input.movement_map = movement != nullptr ? &movement->map : nullptr;
+    input.live.ctx = &lookup;
+    input.live.unit_runtime_flags = ai_entity_hook_runtime_flags;
+    input.live.source_class2_gate = ai_entity_hook_class2_gate;
+    input.live.pair_hooks.ctx = &lookup;
+    input.live.pair_hooks.source_can_enter_cell = ai_entity_hook_can_enter_cell;
+    AiEntityActRequestBody body;
+    body.snapshot = BuildAiEntitySnapshot(input);
+    if (body.snapshot.contract_error) {
+        append_startup_log("ai-shadow: owner=%lu frame=%lu snapshot error: %s",
+            static_cast<unsigned long>(local_owner),
+            static_cast<unsigned long>(frame),
+            body.snapshot.error.c_str());
+        return;
+    }
+    std::vector<AiEntityShadowDesiredOrder> desired;
+    desired.reserve(g_runtime.ai_play_shadow_tap.entries.size());
+    for (const AiMicroDesiredOrderTap::Entry& entry :
+        g_runtime.ai_play_shadow_tap.entries) {
+        desired.push_back({entry.unit_id, entry.kind, entry.target_id,
+            entry.x, entry.y});
+    }
+    AiEntityShadowState& shadow = g_runtime.ai_play_entity_shadow[local_owner];
+    const std::vector<AiEntityShadowLabel> labels = BuildAiEntityShadowLabels(
+        body.snapshot, input.movement_map, desired, shadow);
+    // Global features + raw u64 loss material (reward-only; frozen hostile
+    // mask semantics arrive with the act2 controller — here the shadow uses
+    // the live non-allied competitor set).
+    const AiRlStepEncoding encoding = EncodeAiObservationForRl(observation);
+    body.global = encoding.features;
+    body.cumulative_losses[0] = g_runtime.ai_play_unit_value_lost[local_owner];
+    body.cumulative_losses[1] =
+        g_runtime.ai_play_building_value_lost[local_owner];
+    for (u32 other = 0; other < kPlayerSlotCount; ++other) {
+        const u8 other_state = g_runtime.gameplay_startup_state
+            .owner_slots[other].slot_state;
+        if (other == local_owner ||
+            (other_state != static_cast<u8>(
+                 PlayerSlotState::player_controlled) &&
+             other_state != static_cast<u8>(PlayerSlotState::active)) ||
+            (observation.local_relation_mask & (1u << other)) != 0) {
+            continue;
+        }
+        body.cumulative_losses[2] += g_runtime.ai_play_unit_value_lost[other];
+        body.cumulative_losses[3] +=
+            g_runtime.ai_play_building_value_lost[other];
+    }
+    const std::vector<u8> payload = EncodeAiEntityActRequestPayload(body);
+    AiEntityWireHeader header;
+    header.kind = static_cast<u16>(AiEntityWireKind::act_req);
+    header.owner = local_owner;
+    header.episode = 1;
+    header.frame = frame;
+    header.sequence = ++shadow.sequence;
+    header.own_rows = static_cast<u32>(body.snapshot.own.size());
+    header.target_rows = static_cast<u32>(body.snapshot.targets.size());
+    header.payload_bytes = static_cast<u32>(payload.size());
+    header.payload_crc32 = AiEntityCrc32(payload.data(), payload.size());
+    const std::vector<u8> record =
+        EncodeAiEntityShadowRecord(header, payload, labels);
+    std::FILE*& file = g_runtime.ai_play_shadow_files[local_owner];
+    if (file == nullptr) {
+        char name[64];
+        std::snprintf(name, sizeof name, "ai_entity_shadow_%lu.bin",
+            static_cast<unsigned long>(local_owner));
+        const std::string path = ai_selfplay_output_path(name);
+        if (fopen_s(&file, path.c_str(), "wb") != 0 || file == nullptr) {
+            file = std::fopen(path.c_str(), "wb");
+        }
+        if (file == nullptr) {
+            append_startup_log("ai-shadow: cannot open %s", path.c_str());
+            g_runtime.ai_play_shadow_enabled = false;
+            return;
+        }
+    }
+    std::fwrite(record.data(), 1, record.size(), file);
+    std::fflush(file);
+}
+
+// ===========================================================================
+// Entity-command act2 controller (plan sections 4.3 / 9 / 11 / 16.B).
+//
+// v1 scope notes (documented deviations, all conservative):
+//  - enemy building/army fog memory upkeep is not yet mirrored into this
+//    path, so those global-feature blocks read zero for entity-mode owners;
+//  - accepted-macro history is committed immediately after the atomic batch
+//    (post-commit, same frame, single-threaded) instead of inside the
+//    success hook;
+//  - ATTACK_UNIT target fog visibility in the tracker uses alive/active/
+//    hostile (the pair mask and receiver still enforce visibility at
+//    selection time).
+// ===========================================================================
+
+struct AiEntityAckEvent {
+    u32 unit_id = 0;
+    UnitCommandPacketOrigin origin;
+    u32 frame = 0;
+};
+
+struct AiEntityOwnerControllerState {
+    bool controller_failed = false;
+    u32 episode_id = 1;
+    u32 sequence = 0;
+    u32 frozen_hostile_owner_mask = 0;
+    u32 pinned_entity_version = 0;
+    u32 pinned_macro_version = 0;
+    AiEntityOrderStore orders;
+    AiEntitySnapshot last_snapshot;
+};
+
+struct AiEntityStagedAttempt {
+    u32 owner = 0;
+    u64 key = 0;
+    AiEntityLastAttempt attempt;
+    // ISSUE rows only: the AWAITING order to install; packet_index selects
+    // the batch item whose assigned origin it adopts (-1 = no packet).
+    bool install_order = false;
+    AiEntityActiveOrder order;
+    i32 packet_index = -1;
+};
+
+struct AiEntityBatchStaging {
+    std::vector<AiEntityStagedAttempt>* attempts = nullptr;
+    std::vector<Mode1AiBatchPacketRequest>* packets = nullptr;
+    std::array<AiEntityOwnerControllerState, kPlayerSlotCount>* owners =
+        nullptr;
+};
+
+struct AiEntityPlayRuntime {
+    bool hello_done = false;
+    bool transport_failed = false;
+    bool terminal_done = false;
+    u32 reply_timeout_ms = 5000;
+    u32 next_tick_frame = 0xffffffffu;
+    std::array<AiEntityOwnerControllerState, kPlayerSlotCount> owners;
+    std::vector<AiEntityAckEvent> ack_events;
+    AiEntityBatchStaging staging;
+};
+
+AiEntityPlayRuntime& ai_entity_play() {
+    static AiEntityPlayRuntime runtime;
+    return runtime;
+}
+
+void ai_entity_on_command_acknowledged(UnitCommandContext& context,
+    UnitMovementUnit& unit) {
+    ai_entity_play().ack_events.push_back(AiEntityAckEvent{unit.id,
+        unit.active_command_origin, context.frame_counter});
+}
+
+AiSemanticActionKind ai_entity_semantic_kind_of(u8 command) {
+    switch (static_cast<AiEntityCommand>(command)) {
+    case AiEntityCommand::move: return AiSemanticActionKind::move;
+    case AiEntityCommand::attack_move: return AiSemanticActionKind::attack_move;
+    case AiEntityCommand::patrol: return AiSemanticActionKind::patrol;
+    case AiEntityCommand::attack_unit: return AiSemanticActionKind::attack_unit;
+    case AiEntityCommand::hold_position:
+        return AiSemanticActionKind::hold_position;
+    case AiEntityCommand::stop: return AiSemanticActionKind::stop;
+    default: return AiSemanticActionKind::no_op;
+    }
+}
+
+// Entity-mode macro mask (plan section 4.2): production/build/research only.
+void ai_entity_restrict_macro_mask(
+    std::array<std::uint8_t, kAiRlActionCount>& mask) {
+    for (u32 action = 8; action <= 13; ++action) {
+        mask[action] = 0;
+    }
+    for (u32 action = 28; action <= 38; ++action) {
+        mask[action] = 0;
+    }
+    for (u32 action = 52; action < kAiRlActionCount; ++action) {
+        mask[action] = 0;
+    }
+}
+
+// No-fail batch success hook: installs the staged AWAITING orders (adopting
+// each packet's assigned origin) and every row's last attempt.  Runs under
+// the reliable mutex; no allocation (all containers pre-sized).
+void ai_entity_batch_success_hook(void* user_data) {
+    auto* staging = static_cast<AiEntityBatchStaging*>(user_data);
+    for (AiEntityStagedAttempt& staged : *staging->attempts) {
+        AiEntityOwnerControllerState& controller =
+            (*staging->owners)[staged.owner];
+        if (staged.install_order) {
+            AiEntityActiveOrder order = staged.order;
+            if (staged.packet_index >= 0) {
+                const Mode1AiBatchPacketRequest& packet =
+                    (*staging->packets)[static_cast<std::size_t>(
+                        staged.packet_index)];
+                order.ordered_packet = {packet.assigned_channel,
+                    packet.assigned_sequence};
+            }
+            controller.orders.orders[staged.key] = order;
+        }
+        controller.orders.attempts[staged.key] = staged.attempt;
+    }
+}
+
+void ai_entity_fail_controllers(const char* reason, u32 frame) {
+    AiEntityPlayRuntime& play = ai_entity_play();
+    play.transport_failed = true;
+    for (AiEntityOwnerControllerState& owner : play.owners) {
+        owner.controller_failed = true;
+    }
+    AiIpc2Close();
+    append_startup_log("ai-entity: persistent controller failure frame=%lu: %s",
+        static_cast<unsigned long>(frame), reason != nullptr ? reason : "");
+}
+
+// Per-frame section 9 tracker for one owner's order records.
+void ai_entity_track_owner_orders(AiEntityOwnerControllerState& controller,
+    u32 owner, const std::unordered_map<u32, UnitMovementUnit*>& live_by_id,
+    u32 frame) {
+    AiEntityPlayRuntime& play = ai_entity_play();
+    std::vector<u64> purge;
+    for (auto& entry : controller.orders.orders) {
+        AiEntityActiveOrder& order = entry.second;
+        AiEntityOrderFrameView view{};
+        const auto unit_it = live_by_id.find(order.source.runtime_id);
+        UnitMovementUnit* unit =
+            unit_it != live_by_id.end() ? unit_it->second : nullptr;
+        const AiEntityRegistryRecord* record = unit != nullptr ?
+            AiEntityRegistryFindByUnit(ai_entity_registry(), *unit) : nullptr;
+        view.source_alive_active = unit != nullptr && unit->active &&
+            (unit->command_state & kUnitCommandDead) == 0 &&
+            unit->owner_id == owner && record != nullptr &&
+            record->runtime_id == order.source.runtime_id &&
+            record->generation == order.source.activation_generation;
+        view.control_epoch_matches = record != nullptr &&
+            record->control_epoch == order.control_epoch;
+        if (unit != nullptr) {
+            view.unit_x = unit->x;
+            view.unit_y = unit->y;
+            view.command_base_state =
+                unit->command_state & kUnitCommandStateMask;
+            view.idle = view.command_base_state <= 1u;
+            view.attack_recovery = unit->command_lockout_ticks;
+            // Canonical payload comparison through the origin sidecar: the
+            // exact origin implies the exact accepted payload.
+            const AiEntityPacketOrigin active_origin{
+                unit->active_command_origin.channel,
+                unit->active_command_origin.sequence};
+            if (active_origin == order.ordered_packet) {
+                view.engine_order_match = kAiEntityEngineOrderMatch;
+            } else if (!unit->active_command_origin.valid() &&
+                unit->active_command_payload.state == 0) {
+                view.engine_order_match = kAiEntityEngineOrderCleared;
+            } else {
+                view.engine_order_match = kAiEntityEngineOrderDifferent;
+            }
+            if (order.command ==
+                static_cast<u8>(AiEntityCommand::attack_unit)) {
+                const auto target_it =
+                    live_by_id.find(order.target.runtime_id);
+                UnitMovementUnit* target = target_it != live_by_id.end() ?
+                    target_it->second : nullptr;
+                const AiEntityRegistryRecord* target_record =
+                    target != nullptr ? AiEntityRegistryFindByUnit(
+                        ai_entity_registry(), *target) : nullptr;
+                view.target_valid = target != nullptr && target->active &&
+                    (target->command_state & kUnitCommandDead) == 0 &&
+                    target_record != nullptr &&
+                    target_record->generation ==
+                        order.target.activation_generation &&
+                    target->owner_id != owner &&
+                    default_ai_play_unit_active_visible(*target, owner,
+                        &g_runtime.ai_play_vision_scratch);
+                view.engine_target_matches = unit->target != nullptr &&
+                    unit->target->id == order.target.runtime_id;
+                if (view.target_valid) {
+                    const UnitActionTargetValidation validation =
+                        ValidateUnitActionTarget(g_runtime.gameplay_unit_actions,
+                            *unit, *target);
+                    view.target_out_of_reach =
+                        !(validation.valid && validation.in_range);
+                }
+            } else {
+                view.target_valid = true;
+            }
+            if (unit->target != nullptr) {
+                const UnitActionTargetValidation engine_validation =
+                    ValidateUnitActionTarget(g_runtime.gameplay_unit_actions,
+                        *unit, *unit->target);
+                view.engine_target_valid_in_range =
+                    engine_validation.valid && engine_validation.in_range;
+            }
+            const bool pending_matches =
+                UnitCommandPacketOrigin{order.ordered_packet.channel,
+                    order.ordered_packet.sequence} ==
+                unit->pending_command_origin;
+            view.delivery_origin_seen = pending_matches ||
+                view.engine_order_match == kAiEntityEngineOrderMatch;
+            if (order.ordered_packet.valid() &&
+                order.ordered_packet.channel < kMode1ReliableChannelCount) {
+                view.consumer_passed_sequence =
+                    mode1_reliable_state().read_sequences[
+                        order.ordered_packet.channel] >
+                    order.ordered_packet.sequence;
+            }
+            view.origin_replaced = view.consumer_passed_sequence &&
+                !view.delivery_origin_seen &&
+                (unit->pending_command_origin.valid() ||
+                    unit->active_command_origin.valid());
+            for (const AiEntityAckEvent& event : play.ack_events) {
+                if (event.unit_id == order.source.runtime_id &&
+                    AiEntityPacketOrigin{event.origin.channel,
+                        event.origin.sequence} == order.ordered_packet) {
+                    view.acknowledged_matching = true;
+                    break;
+                }
+            }
+        }
+        if (!AiEntityOrderTrackFrame(order, view, frame)) {
+            purge.push_back(entry.first);
+        }
+    }
+    for (const u64 key : purge) {
+        controller.orders.orders.erase(key);
+        controller.orders.attempts.erase(key);
+    }
+}
+
+
+// TERMINAL fan-out (plan section 11): one full final observation per
+// controlled owner (ascending), each ACKed, then the connection closes.
+// terminated XOR truncated; truncated (time limit) sends ONGOING.
+void ai_entity_send_terminals(GameplayLoopState& state, bool timed_out) {
+    AiEntityPlayRuntime& play = ai_entity_play();
+    if (!play.hello_done || play.transport_failed || play.terminal_done) {
+        return;
+    }
+    play.terminal_done = true;
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    const u32 frame = state.simulation_frame_counter;
+    const u32 command_line_owner =
+        g_runtime.gameplay_player_slots.local_player_slot;
+    AiEntityLiveLookup lookup;
+    lookup.movement = movement;
+    if (movement != nullptr) {
+        for (UnitMovementUnit* unit : movement->active_units) {
+            if (unit != nullptr && unit->active) {
+                lookup.by_id[unit->id] = unit;
+            }
+        }
+        // Elimination view for the owner-perspective outcome.
+    }
+    std::array<u32, kPlayerSlotCount> building_counts{};
+    if (movement != nullptr) {
+        for (const UnitMovementUnit* unit : movement->active_units) {
+            if (unit != nullptr && unit->active &&
+                unit->owner_id < building_counts.size() &&
+                unit->type_id >= 0x60u) {
+                ++building_counts[unit->owner_id];
+            }
+        }
+    }
+    for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+        const bool controlled = g_runtime.ai_play_owner_slots[owner] ||
+            (g_runtime.ai_play_enabled && owner == command_line_owner);
+        if (!controlled) {
+            continue;
+        }
+        AiEntityOwnerControllerState& controller = play.owners[owner];
+        std::vector<u8> explored;
+        std::vector<u8> visible;
+        AiObservationBuildResult observation;
+        if (!build_default_ai_play_observation(state, owner, explored,
+                visible, observation)) {
+            continue;
+        }
+        update_ai_play_enemy_memory(owner, frame, observation.observation);
+        AiEntitySnapshotInput input;
+        input.observation = &observation.observation;
+        input.registry = &ai_entity_registry();
+        input.movement_map = movement != nullptr ? &movement->map : nullptr;
+        input.live.ctx = &lookup;
+        input.live.unit_runtime_flags = ai_entity_hook_runtime_flags;
+        input.live.source_class2_gate = ai_entity_hook_class2_gate;
+        input.live.pair_hooks.ctx = &lookup;
+        input.live.pair_hooks.source_can_enter_cell =
+            ai_entity_hook_can_enter_cell;
+        AiEntityActRequestBody body;
+        body.snapshot = BuildAiEntitySnapshot(input);
+        if (body.snapshot.contract_error) {
+            continue;
+        }
+        const AiRlStepEncoding encoding =
+            EncodeAiObservationForRl(observation.observation);
+        body.global = encoding.features;
+        body.macro_mask[0] = 1u;
+        body.cumulative_losses[0] = g_runtime.ai_play_unit_value_lost[owner];
+        body.cumulative_losses[1] =
+            g_runtime.ai_play_building_value_lost[owner];
+        for (u32 other = 0; other < kPlayerSlotCount; ++other) {
+            if ((controller.frozen_hostile_owner_mask & (1u << other)) == 0) {
+                continue;
+            }
+            body.cumulative_losses[2] +=
+                g_runtime.ai_play_unit_value_lost[other];
+            body.cumulative_losses[3] +=
+                g_runtime.ai_play_building_value_lost[other];
+        }
+        // Authoritative session result, owner perspective (never inferred
+        // from fog): eliminated = LOSS; all frozen opponents eliminated =
+        // WIN; time limit = truncated/ONGOING; anything else at a true end
+        // = DRAW.
+        u32 outcome = 0;   // ONGOING
+        u16 flags = kAiEntityWireFlagTruncated;
+        if (!timed_out) {
+            flags = kAiEntityWireFlagTerminated;
+            const bool self_alive = building_counts[owner] != 0;
+            bool any_hostile_alive = false;
+            for (u32 other = 0; other < kPlayerSlotCount; ++other) {
+                if ((controller.frozen_hostile_owner_mask & (1u << other)) !=
+                        0 && building_counts[other] != 0) {
+                    any_hostile_alive = true;
+                }
+            }
+            outcome = !self_alive ? 2u :          // LOSS
+                !any_hostile_alive ? 1u : 3u;     // WIN : DRAW
+        }
+        AiEntityWireHeader header;
+        header.kind = static_cast<u16>(AiEntityWireKind::terminal);
+        header.flags = flags;
+        header.owner = owner;
+        header.episode = controller.episode_id;
+        header.frame = frame;
+        header.sequence = controller.sequence;
+        header.reply_to_sequence = controller.sequence;
+        header.own_rows = static_cast<u32>(body.snapshot.own.size());
+        header.target_rows = static_cast<u32>(body.snapshot.targets.size());
+        header.entity_policy_version = controller.pinned_entity_version;
+        header.macro_policy_version = controller.pinned_macro_version;
+        const std::vector<u8> payload =
+            EncodeAiEntityTerminalPayload(body, outcome);
+        AiEntityWireHeader ack_header;
+        std::vector<u8> ack_payload;
+        std::string error;
+        if (!AiIpc2SendFrame(header, payload, play.reply_timeout_ms) ||
+            !AiIpc2ReceiveFrame(ack_header, ack_payload,
+                play.reply_timeout_ms, &error) ||
+            ack_header.kind != static_cast<u16>(AiEntityWireKind::ack)) {
+            // A hung server must not block teardown: flush local state and
+            // mark the episode infrastructure-invalid (plan section 11).
+            append_startup_log(
+                "ai-entity: TERMINAL/ACK failed owner=%lu: %s",
+                static_cast<unsigned long>(owner), error.c_str());
+            break;
+        }
+        append_startup_log("ai-entity: TERMINAL sent owner=%lu outcome=%lu%s",
+            static_cast<unsigned long>(owner),
+            static_cast<unsigned long>(outcome),
+            timed_out ? " (truncated)" : "");
+    }
+    AiIpc2Close();
+}
+
+// One entity-mode frame (plan section 4.3 fixed order): observations, one
+// combined ACT_REQ/REPLY per owner on decision ticks, macro/worker/entity
+// plan collection with NO side effects, ONE per-channel atomic batch
+// preflight+commit, then OUTCOME per owner.  Between-tick frames run the
+// worker-only stage through the same atomic batch.
+void run_ai_entity_play_frame(GameplayLoopState& state) {
+    AiEntityPlayRuntime& play = ai_entity_play();
+    const u32 frame = state.simulation_frame_counter;
+    UnitMovementContext* movement = default_gameplay_movement_context();
+    if (movement == nullptr || play.terminal_done) {
+        return;
+    }
+    g_runtime.gameplay_unit_commands.callbacks.on_command_acknowledged =
+        ai_entity_on_command_acknowledged;
+
+    // Controlled owner set (ascending).
+    u32 owner_mask = 0;
+    const u32 command_line_owner =
+        g_runtime.gameplay_player_slots.local_player_slot;
+    for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+        if (g_runtime.ai_play_owner_slots[owner] ||
+            (g_runtime.ai_play_enabled && owner == command_line_owner)) {
+            owner_mask |= 1u << owner;
+        }
+    }
+    if (owner_mask == 0) {
+        return;
+    }
+
+    // ---- HELLO/ACK once per connection ----
+    if (!play.hello_done && !play.transport_failed) {
+        if (!AiIpc2Connect(g_runtime.ai_play_entity_port, 5000)) {
+            ai_entity_fail_controllers("act2 connect failed", frame);
+        } else {
+            AiEntityHelloBody hello;
+            hello.controlled_owner_mask = owner_mask;
+            for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+                if ((owner_mask & (1u << owner)) == 0) {
+                    continue;
+                }
+                AiEntityHelloOwnerRecord record;
+                record.owner = owner;
+                // Episode-start frozen reward opponent set: active
+                // competitors minus self/allies (plan section 10.4).
+                u32 hostile = 0;
+                for (u32 other = 0; other < kPlayerSlotCount; ++other) {
+                    const u8 other_state = g_runtime.gameplay_startup_state
+                        .owner_slots[other].slot_state;
+                    if (other == owner ||
+                        (other_state != static_cast<u8>(
+                             PlayerSlotState::player_controlled) &&
+                         other_state != static_cast<u8>(
+                             PlayerSlotState::active)) ||
+                        (g_runtime.gameplay_player_slots
+                                .owner_relation_masks[owner] &
+                            (1u << other)) != 0) {
+                        continue;
+                    }
+                    hostile |= 1u << other;
+                }
+                record.frozen_hostile_owner_mask = hostile;
+                play.owners[owner].frozen_hostile_owner_mask = hostile;
+                hello.owners.push_back(record);
+            }
+            AiEntityWireHeader hello_header;
+            hello_header.kind = static_cast<u16>(AiEntityWireKind::hello);
+            hello_header.owner = 0xffffffffu;
+            hello_header.episode = 1;
+            const std::vector<u8> hello_payload =
+                EncodeAiEntityHelloPayload(hello);
+            AiEntityWireHeader ack_header;
+            std::vector<u8> ack_payload;
+            std::string error;
+            if (!AiIpc2SendFrame(hello_header, hello_payload, 5000) ||
+                !AiIpc2ReceiveFrame(ack_header, ack_payload, 5000, &error) ||
+                ack_header.kind != static_cast<u16>(AiEntityWireKind::ack)) {
+                ai_entity_fail_controllers("act2 HELLO/ACK failed", frame);
+            } else {
+                AiEntityHelloBody ack_body;
+                if (!DecodeAiEntityHelloPayload(ack_payload.data(),
+                        ack_payload.size(), ack_body, &error)) {
+                    ai_entity_fail_controllers(error.c_str(), frame);
+                } else {
+                    play.reply_timeout_ms =
+                        ack_body.reply_timeout_ms != 0 ?
+                        ack_body.reply_timeout_ms : 5000;
+                    bool echo_ok = true;
+                    for (std::size_t i = 0; i < ack_body.owners.size(); ++i) {
+                        const AiEntityHelloOwnerRecord& record =
+                            ack_body.owners[i];
+                        if (record.owner >= kPlayerSlotCount ||
+                            record.frozen_hostile_owner_mask !=
+                                play.owners[record.owner]
+                                    .frozen_hostile_owner_mask) {
+                            echo_ok = false;   // server may not change it
+                            break;
+                        }
+                        play.owners[record.owner].pinned_entity_version =
+                            record.requested_entity_version;
+                        play.owners[record.owner].pinned_macro_version =
+                            record.requested_macro_version;
+                    }
+                    if (!echo_ok) {
+                        ai_entity_fail_controllers(
+                            "ACK frozen hostile mask not echoed", frame);
+                    } else {
+                        play.hello_done = true;
+                        append_startup_log(
+                            "ai-entity: HELLO ok owners=0x%02lx timeout=%lu",
+                            static_cast<unsigned long>(owner_mask),
+                            static_cast<unsigned long>(play.reply_timeout_ms));
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- live lookup + per-frame section 9 tracker ----
+    std::unordered_map<u32, UnitMovementUnit*> live_by_id;
+    live_by_id.reserve(movement->active_units.size());
+    for (UnitMovementUnit* unit : movement->active_units) {
+        if (unit != nullptr && unit->active) {
+            live_by_id[unit->id] = unit;
+        }
+    }
+    for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+        if ((owner_mask & (1u << owner)) != 0) {
+            ai_entity_track_owner_orders(play.owners[owner], owner,
+                live_by_id, frame);
+        }
+    }
+    play.ack_events.clear();
+
+    const bool decision_frame = play.hello_done && !play.transport_failed &&
+        (play.next_tick_frame == 0xffffffffu || frame >= play.next_tick_frame);
+
+    // ---- per-owner collect phase (NO packets published yet) ----
+    struct OwnerPlanData {
+        bool active = false;
+        std::vector<u8> explored;
+        std::vector<u8> visible;
+        AiObservationBuildResult observation;
+        AiEntitySnapshot snapshot;
+        AiEntityReplyBody reply;
+        bool macro_due = false;
+        AiRlHighLevelAction macro_action = AiRlHighLevelAction::no_op;
+        AiEntityOutcomeBody outcome;
+        // Planned per-stage packets: (source id for ordering, action args).
+        std::vector<std::pair<u32, GameplayPublishedAction>> macro_packets;
+        std::vector<std::pair<u32, GameplayPublishedAction>> worker_packets;
+        std::vector<std::pair<u32, GameplayPublishedAction>> entity_packets;
+        // Per-entity-packet staged attempt index (aligned with
+        // entity_packets) for origin adoption after assignment.
+        std::vector<i32> entity_packet_attempts;
+    };
+    std::array<OwnerPlanData, kPlayerSlotCount> plans;
+    std::vector<AiEntityStagedAttempt> staged_attempts;
+
+    AiEntityLiveLookup pair_lookup;
+    pair_lookup.movement = movement;
+    pair_lookup.by_id = live_by_id;
+
+    for (u32 owner = 0; owner < kPlayerSlotCount && decision_frame; ++owner) {
+        if ((owner_mask & (1u << owner)) == 0) {
+            continue;
+        }
+        AiEntityOwnerControllerState& controller = play.owners[owner];
+        if (controller.controller_failed) {
+            continue;
+        }
+        OwnerPlanData& plan = plans[owner];
+        if (!build_default_ai_play_observation(state, owner, plan.explored,
+                plan.visible, plan.observation)) {
+            continue;
+        }
+        AiObservation& observation = plan.observation.observation;
+        update_ai_play_enemy_memory(owner, frame, observation);
+        plan.active = true;
+
+        // Snapshot + masks.
+        AiEntitySnapshotInput snapshot_input;
+        snapshot_input.observation = &observation;
+        snapshot_input.registry = &ai_entity_registry();
+        snapshot_input.movement_map = &movement->map;
+        snapshot_input.live.ctx = &pair_lookup;
+        snapshot_input.live.unit_runtime_flags = ai_entity_hook_runtime_flags;
+        snapshot_input.live.source_class2_gate = ai_entity_hook_class2_gate;
+        snapshot_input.live.pair_hooks.ctx = &pair_lookup;
+        snapshot_input.live.pair_hooks.source_can_enter_cell =
+            ai_entity_hook_can_enter_cell;
+        plan.snapshot = BuildAiEntitySnapshot(snapshot_input);
+        if ((frame % 800u) == 0u) {
+            u32 controlled_mobile = 0;
+            u32 melee_or_ranged = 0;
+            for (const AiObservedUnit& unit : observation.units) {
+                if (!unit.controlled || !unit.alive ||
+                    unit.under_construction || unit.type_id >= 0x60u) {
+                    continue;
+                }
+                ++controlled_mobile;
+                const AiMicroRole role = AiMicroRoleOf(unit);
+                if (role == AiMicroRole::melee || role == AiMicroRole::ranged) {
+                    ++melee_or_ranged;
+                }
+            }
+            append_startup_log("ai-entity: diag frame=%lu owner=%lu units=%zu "
+                "controlled_mobile=%lu fighters=%lu U=%zu E=%zu",
+                static_cast<unsigned long>(frame),
+                static_cast<unsigned long>(owner), observation.units.size(),
+                static_cast<unsigned long>(controlled_mobile),
+                static_cast<unsigned long>(melee_or_ranged),
+                plan.snapshot.own.size(), plan.snapshot.targets.size());
+        }
+        if (plan.snapshot.contract_error) {
+            append_startup_log("ai-entity: snapshot error owner=%lu: %s",
+                static_cast<unsigned long>(owner),
+                plan.snapshot.error.c_str());
+            controller.controller_failed = true;
+            plan.active = false;
+            continue;
+        }
+
+        // Global features + entity-mode macro gate/mask.
+        AiRlStepEncoding encoding = EncodeAiObservationForRl(observation);
+        AiDecisionGateState& gate = g_runtime.ai_play_decision_gates[owner];
+        AiDecisionGateConfig gate_config{};
+        // Macro-due latch: an event between entity ticks holds until this
+        // act2 tick (plan section 4.2).
+        std::array<u32, 4> gate_losses{};
+        gate_losses[0] = static_cast<u32>(
+            g_runtime.ai_play_unit_value_lost[owner]);
+        gate_losses[1] = static_cast<u32>(
+            g_runtime.ai_play_building_value_lost[owner]);
+        const bool check_due = AiDecisionGateCheckDue(gate, frame,
+            gate_config);
+        plan.macro_due = false;
+        if (check_due) {
+            const AiDecisionGateResult gate_result = AiDecisionGateEvaluate(
+                gate, observation, encoding, gate_losses, false, frame,
+                gate_config);
+            plan.macro_due = gate_result.due;
+        }
+        ai_entity_restrict_macro_mask(encoding.legal_mask);
+
+        // ACT_REQ body.
+        AiEntityActRequestBody body;
+        body.global = encoding.features;
+        {
+            const u32 last = gate.last_decision_frame == 0xffffffffu ?
+                frame : gate.last_decision_frame;
+            const u32 elapsed = frame >= last ? frame - last : 0;
+            body.macro_gate[0] = static_cast<float>(elapsed) / 64.0f;
+            const u32 deadline = gate_config.max_interval_frames;
+            body.macro_gate[1] = static_cast<float>(
+                elapsed >= deadline ? 0 : deadline - elapsed) / 64.0f;
+        }
+        body.macro_mask.fill(0);
+        if (plan.macro_due) {
+            for (u32 action = 0; action < kAiRlActionCount; ++action) {
+                if (encoding.legal_mask[action] != 0) {
+                    body.macro_mask[action >> 5] |= 1u << (action & 31u);
+                }
+            }
+        } else {
+            body.macro_mask[0] = 1u;   // no_op only
+        }
+        body.cumulative_losses[0] = g_runtime.ai_play_unit_value_lost[owner];
+        body.cumulative_losses[1] =
+            g_runtime.ai_play_building_value_lost[owner];
+        for (u32 other = 0; other < kPlayerSlotCount; ++other) {
+            if ((controller.frozen_hostile_owner_mask & (1u << other)) == 0) {
+                continue;
+            }
+            body.cumulative_losses[2] +=
+                g_runtime.ai_play_unit_value_lost[other];
+            body.cumulative_losses[3] +=
+                g_runtime.ai_play_building_value_lost[other];
+        }
+        body.snapshot = plan.snapshot;
+
+        AiEntityWireHeader request_header;
+        request_header.kind = static_cast<u16>(AiEntityWireKind::act_req);
+        request_header.flags = plan.macro_due ? kAiEntityWireFlagMacroDue : 0;
+        request_header.owner = owner;
+        request_header.episode = controller.episode_id;
+        request_header.frame = frame;
+        request_header.reply_to_sequence = controller.sequence;
+        request_header.sequence = ++controller.sequence;
+        request_header.own_rows =
+            static_cast<u32>(plan.snapshot.own.size());
+        request_header.target_rows =
+            static_cast<u32>(plan.snapshot.targets.size());
+        request_header.entity_policy_version =
+            controller.pinned_entity_version;
+        request_header.macro_policy_version = controller.pinned_macro_version;
+        const std::vector<u8> request_payload =
+            EncodeAiEntityActRequestPayload(body);
+
+        AiEntityWireHeader reply_header;
+        std::vector<u8> reply_payload;
+        std::string error;
+        if (!AiIpc2SendFrame(request_header, request_payload,
+                play.reply_timeout_ms) ||
+            !AiIpc2ReceiveFrame(reply_header, reply_payload,
+                play.reply_timeout_ms, &error)) {
+            // Pre-publish framing/I/O failure: nothing published this frame
+            // and the whole controller latches (plan section 11.2).
+            ai_entity_fail_controllers("ACT_REQ/REPLY I/O failure", frame);
+            for (OwnerPlanData& reset : plans) {
+                reset.active = false;
+            }
+            break;
+        }
+        if (reply_header.kind !=
+                static_cast<u16>(AiEntityWireKind::act_reply) ||
+            reply_header.owner != owner ||
+            reply_header.frame != frame ||
+            reply_header.sequence != request_header.sequence ||
+            reply_header.reply_to_sequence != request_header.sequence ||
+            reply_header.own_rows != request_header.own_rows ||
+            reply_header.target_rows != request_header.target_rows ||
+            (reply_header.flags & kAiEntityWireFlagMacroDue) !=
+                (request_header.flags & kAiEntityWireFlagMacroDue) ||
+            !DecodeAiEntityReplyPayload(reply_payload.data(),
+                reply_payload.size(), reply_header.own_rows, plan.reply,
+                &error)) {
+            ai_entity_fail_controllers("ACT_REPLY framing violation", frame);
+            for (OwnerPlanData& reset : plans) {
+                reset.active = false;
+            }
+            break;
+        }
+        controller.last_snapshot = plan.snapshot;
+    }
+
+    // ---- row evaluation + planning (still no side effects) ----
+    GameplayProductionActionState& production =
+        gameplay_production_action_state();
+    sync_default_gameplay_production_action_units(production,
+        ui_overlay_state());
+    AiLiveProductionValidationContext live_validation{};
+    live_validation.unit_references = &g_runtime.unit_reference_tables;
+    live_validation.check_unit_requirements =
+        default_ai_play_check_unit_requirements;
+    live_validation.check_research_requirements =
+        default_ai_play_check_research_requirements;
+    live_validation.check_placement = default_ai_play_check_placement;
+
+    for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+        if ((owner_mask & (1u << owner)) == 0) {
+            continue;
+        }
+        OwnerPlanData& plan = plans[owner];
+        AiEntityOwnerControllerState& controller = play.owners[owner];
+        const bool worker_only_frame = !decision_frame || !plan.active;
+
+        AiActionPlanInput plan_input{};
+        plan_input.local_owner = owner;
+        plan_input.players = &g_runtime.gameplay_player_slots;
+        plan_input.movement = movement;
+        plan_input.unit_visible = default_ai_play_unit_active_visible;
+        plan_input.unit_visibility_user_data =
+            &g_runtime.ai_play_vision_scratch;
+        plan_input.production_available = CheckAiLiveProductionAvailability;
+        plan_input.production_availability_user_data = &live_validation;
+        plan_input.ability_available = default_ai_play_check_ability;
+
+        // Worker-only scripted economy (every simulation frame, fighters
+        // NEVER selected): the micro executor runs but only actions whose
+        // units are all workers survive.
+        std::vector<u8> worker_explored;
+        std::vector<u8> worker_visible;
+        AiObservationBuildResult worker_observation;
+        const AiObservation* frame_observation = nullptr;
+        if (plan.active) {
+            frame_observation = &plan.observation.observation;
+            plan_input.visible_tiles = &plan.visible;
+            plan_input.explored_tiles = &plan.explored;
+        } else if (build_default_ai_play_observation(state, owner,
+                worker_explored, worker_visible, worker_observation)) {
+            update_ai_play_enemy_memory(owner, frame,
+                worker_observation.observation);
+            frame_observation = &worker_observation.observation;
+            plan_input.visible_tiles = &worker_visible;
+            plan_input.explored_tiles = &worker_explored;
+        }
+        if (frame_observation == nullptr) {
+            continue;
+        }
+        TyranoScriptedBotState& bot = g_runtime.ai_play_bots[owner];
+        AiMicroExecutorConfig micro_config{};
+        micro_config.reflex_enabled = false;   // entity mode: reflex OFF
+        const std::vector<AiSemanticAction> micro_actions =
+            AiMicroExecutorStep(bot.micro, *frame_observation, micro_config);
+        for (const AiSemanticAction& action : micro_actions) {
+            bool workers_only = !action.unit_ids.empty();
+            for (const u32 unit_id : action.unit_ids) {
+                bool is_worker = false;
+                for (const AiObservedUnit& unit :
+                    frame_observation->units) {
+                    if (unit.id == unit_id) {
+                        is_worker =
+                            AiMicroRoleOf(unit) == AiMicroRole::worker;
+                        break;
+                    }
+                }
+                if (!is_worker) {
+                    workers_only = false;
+                    break;
+                }
+            }
+            if (!workers_only) {
+                continue;   // direct fighters belong to the entity policy
+            }
+            const AiActionPlanResult planned =
+                PlanAiSemanticActionV1(plan_input, action);
+            if (planned) {
+                for (const GameplayPublishedAction& packet : planned.packets) {
+                    plan.worker_packets.push_back({packet.unit_offset,
+                        packet});
+                }
+            }
+        }
+        if (worker_only_frame) {
+            continue;
+        }
+
+        // ---- macro head (due only) ----
+        plan.outcome.macro_result = static_cast<u16>(
+            plan.macro_due ? AiEntityAttemptResult::kept :
+            AiEntityAttemptResult::not_due);
+        plan.outcome.macro_trainable = plan.macro_due ? 1 : 0;
+        if (plan.macro_due && plan.reply.macro > 0) {
+            plan.macro_action =
+                static_cast<AiRlHighLevelAction>(plan.reply.macro);
+            const TyranoScriptedBotConfig bot_config{};
+            TyranoScriptedBotDecision macro_decision =
+                DecideTyranoScriptedBotForHighLevelAction(bot,
+                    *frame_observation, plan.macro_action, bot_config);
+            if (macro_decision &&
+                macro_decision.action.kind != AiSemanticActionKind::no_op) {
+                const AiActionPlanResult planned =
+                    PlanAiSemanticActionV1(plan_input,
+                        macro_decision.action);
+                if (planned) {
+                    for (const GameplayPublishedAction& packet :
+                        planned.packets) {
+                        plan.macro_packets.push_back({packet.unit_offset,
+                            packet});
+                    }
+                    plan.outcome.macro_result = static_cast<u16>(
+                        AiEntityAttemptResult::published);
+                } else {
+                    plan.outcome.macro_result = static_cast<u16>(
+                        AiEntityAttemptResult::planner_failed);
+                    plan.outcome.macro_reject_code = static_cast<u16>(
+                        AiEntityRejectCode::planner);
+                    plan.outcome.macro_trainable = 0;
+                }
+            } else {
+                plan.outcome.macro_result = static_cast<u16>(
+                    AiEntityAttemptResult::planner_failed);
+                plan.outcome.macro_reject_code =
+                    static_cast<u16>(AiEntityRejectCode::planner);
+                plan.outcome.macro_trainable = 0;
+            }
+        }
+
+        // ---- entity rows ----
+        const u32 own_rows = static_cast<u32>(plan.snapshot.own.size());
+        plan.outcome.entity_result.assign(own_rows,
+            static_cast<u16>(AiEntityAttemptResult::kept));
+        plan.outcome.entity_reject_code.assign(own_rows, 0);
+        plan.outcome.trainable_mask.assign((own_rows + 31u) / 32u, 0);
+        std::unordered_map<u32, AiEntityReachability> reachability;
+        for (u32 row_index = 0; row_index < own_rows; ++row_index) {
+            const AiEntityOwnRow& row = plan.snapshot.own[row_index];
+            const u8 command = plan.reply.command[row_index];
+            const u64 key64 = AiEntityPackKey(row.key);
+            auto reject_row = [&](AiEntityAttemptResult result,
+                AiEntityRejectCode code) {
+                plan.outcome.entity_result[row_index] =
+                    static_cast<u16>(result);
+                plan.outcome.entity_reject_code[row_index] =
+                    static_cast<u16>(code);
+            };
+            // Mask check first (command bit).
+            if ((row.command_mask & (1u << command)) == 0) {
+                reject_row(AiEntityAttemptResult::rejected_mask,
+                    AiEntityRejectCode::masked);
+                continue;
+            }
+            // Live source revalidation.
+            const auto live_it = live_by_id.find(row.key.runtime_id);
+            UnitMovementUnit* live_unit =
+                live_it != live_by_id.end() ? live_it->second : nullptr;
+            const AiEntityRegistryRecord* live_record = live_unit != nullptr ?
+                AiEntityRegistryFindByUnit(ai_entity_registry(), *live_unit) :
+                nullptr;
+            if (live_unit == nullptr || !live_unit->active ||
+                (live_unit->command_state & kUnitCommandDead) != 0 ||
+                live_unit->owner_id != owner || live_record == nullptr ||
+                live_record->generation != row.key.activation_generation ||
+                live_record->control_epoch != row.control_epoch) {
+                reject_row(AiEntityAttemptResult::rejected_stale,
+                    AiEntityRejectCode::stale_source);
+                continue;
+            }
+            AiEntityDecisionRowInput decision_input;
+            decision_input.command = command;
+            decision_input.unit_x = live_unit->x;
+            decision_input.unit_y = live_unit->y;
+            decision_input.unit_idle =
+                (live_unit->command_state & kUnitCommandStateMask) <= 1u;
+            const bool is_point_command =
+                command == static_cast<u8>(AiEntityCommand::move) ||
+                command == static_cast<u8>(AiEntityCommand::attack_move) ||
+                command == static_cast<u8>(AiEntityCommand::patrol);
+            u32 target_runtime_id = 0;
+            if (is_point_command) {
+                const i32 token = plan.reply.point[row_index];
+                if (token < 0 ||
+                    (row.point_mask[token >> 5] >> (token & 31) & 1u) == 0) {
+                    reject_row(AiEntityAttemptResult::rejected_mask,
+                        AiEntityRejectCode::point);
+                    continue;
+                }
+                auto reach_it = reachability.find(row.movement_class);
+                if (reach_it == reachability.end()) {
+                    reach_it = reachability.emplace(row.movement_class,
+                        BuildAiEntityReachability(movement->map,
+                            row.movement_class)).first;
+                }
+                const AiEntityPointResolveResult point =
+                    ResolveAiEntityPointToken(movement->map,
+                        reach_it->second, row.x, row.y,
+                        static_cast<u32>(token));
+                if (!point.valid) {
+                    reject_row(AiEntityAttemptResult::rejected_mask,
+                        AiEntityRejectCode::point);
+                    continue;
+                }
+                decision_input.point_x = point.x;
+                decision_input.point_y = point.y;
+            } else if (command ==
+                static_cast<u8>(AiEntityCommand::attack_unit)) {
+                const i32 target_row = plan.reply.target[row_index];
+                const u32 pair_words =
+                    (static_cast<u32>(plan.snapshot.targets.size()) + 31u) /
+                    32u;
+                if (target_row < 0 ||
+                    target_row >=
+                        static_cast<i32>(plan.snapshot.targets.size()) ||
+                    (plan.snapshot.attack_pair_mask[
+                        static_cast<std::size_t>(row_index) * pair_words +
+                        (static_cast<u32>(target_row) >> 5)] >>
+                        (static_cast<u32>(target_row) & 31u) & 1u) == 0) {
+                    reject_row(AiEntityAttemptResult::rejected_mask,
+                        AiEntityRejectCode::masked);
+                    continue;
+                }
+                const AiEntityTargetRow& target =
+                    plan.snapshot.targets[
+                        static_cast<std::size_t>(target_row)];
+                decision_input.target = target.key;
+                target_runtime_id = target.key.runtime_id;
+                // Live target revalidation with the same authoritative pair
+                // predicate (plan section 8).
+                const auto target_it = live_by_id.find(target.key.runtime_id);
+                UnitMovementUnit* live_target = target_it != live_by_id.end()
+                    ? target_it->second : nullptr;
+                const AiEntityRegistryRecord* target_record =
+                    live_target != nullptr ? AiEntityRegistryFindByUnit(
+                        ai_entity_registry(), *live_target) : nullptr;
+                if (live_target == nullptr || !live_target->active ||
+                    (live_target->command_state & kUnitCommandDead) != 0 ||
+                    target_record == nullptr ||
+                    target_record->generation !=
+                        target.key.activation_generation) {
+                    reject_row(AiEntityAttemptResult::rejected_stale,
+                        AiEntityRejectCode::stale_target);
+                    continue;
+                }
+                AiEntityPairSource pair_source;
+                pair_source.runtime_id = row.key.runtime_id;
+                pair_source.active_owned_alive = true;
+                pair_source.has_attack_capability =
+                    (live_unit->type_flags & (1u << 5)) != 0;
+                pair_source.distance_check_mode =
+                    live_unit->distance_check_mode;
+                pair_source.attackable_class_mask = row.attackable_class_mask;
+                u32 gate_value = 1;
+                ai_entity_hook_class2_gate(&pair_lookup, row.key.runtime_id,
+                    &gate_value);
+                pair_source.render_class2_terrain_gate = gate_value;
+                AiEntityPairTarget pair_target;
+                pair_target.runtime_id = target.key.runtime_id;
+                pair_target.active_alive = true;
+                pair_target.visible = default_ai_play_unit_active_visible(
+                    *live_target, owner, &g_runtime.ai_play_vision_scratch);
+                pair_target.non_friendly =
+                    live_target->owner_id != owner &&
+                    (live_target->owner_id >= 32u ||
+                        (g_runtime.gameplay_player_slots
+                                .owner_relation_masks[owner] &
+                            (1u << live_target->owner_id)) == 0);
+                pair_target.runtime_flags = live_target->runtime_flags;
+                pair_target.render_class =
+                    live_target->definition.render_class;
+                pair_target.x = live_target->x;
+                pair_target.y = live_target->y;
+                AiEntityLiveHooks pair_hooks;
+                pair_hooks.ctx = &pair_lookup;
+                pair_hooks.source_can_enter_cell =
+                    ai_entity_hook_can_enter_cell;
+                const AiEntityPairDecision pair_decision =
+                    AiEntityEvaluateAttackPair(pair_source, pair_target,
+                        pair_hooks);
+                if (!pair_decision.legal) {
+                    reject_row(AiEntityAttemptResult::rejected_stale,
+                        pair_decision.reject);
+                    continue;
+                }
+            }
+            // KEEP / same-ISSUE dedupe against the order latch.
+            const auto order_it = controller.orders.orders.find(key64);
+            const AiEntityActiveOrder* existing_order =
+                order_it != controller.orders.orders.end() ?
+                &order_it->second : nullptr;
+            const AiEntityDecisionRowOutcome row_outcome =
+                AiEntityEvaluateDecisionRow(existing_order, decision_input);
+            AiEntityStagedAttempt staged;
+            staged.owner = owner;
+            staged.key = key64;
+            staged.attempt.controller_owner = owner;
+            staged.attempt.control_epoch = row.control_epoch;
+            staged.attempt.request_sequence = controller.sequence;
+            staged.attempt.requested_command = command;
+            staged.attempt.attempt_frame = frame;
+            staged.attempt.result = row_outcome.result;
+            staged.attempt.reject_code = row_outcome.reject;
+            if (!row_outcome.needs_packet) {
+                plan.outcome.entity_result[row_index] =
+                    static_cast<u16>(row_outcome.result);
+                staged_attempts.push_back(staged);
+                continue;
+            }
+            // Plan the single-source semantic action (canonical per-unit
+            // packets; the flatten-sort below orders them by source id).
+            AiSemanticAction action{};
+            action.kind = ai_entity_semantic_kind_of(command);
+            action.unit_ids.push_back(row.key.runtime_id);
+            if (command == static_cast<u8>(AiEntityCommand::attack_unit)) {
+                action.target_unit_id = target_runtime_id;
+            } else if (is_point_command) {
+                action.target_x = decision_input.point_x;
+                action.target_y = decision_input.point_y;
+            }
+            const AiActionPlanResult planned =
+                PlanAiSemanticActionV1(plan_input, action);
+            if (!planned || planned.packets.empty()) {
+                reject_row(AiEntityAttemptResult::planner_failed,
+                    AiEntityRejectCode::planner);
+                staged.attempt.result = AiEntityAttemptResult::planner_failed;
+                staged.attempt.reject_code = AiEntityRejectCode::planner;
+                staged_attempts.push_back(staged);
+                continue;
+            }
+            plan.outcome.entity_result[row_index] =
+                static_cast<u16>(AiEntityAttemptResult::published);
+            staged.install_order = true;
+            staged.order.source = row.key;
+            staged.order.controller_owner = owner;
+            staged.order.control_epoch = row.control_epoch;
+            staged.order.command = command;
+            staged.order.target = decision_input.target;
+            staged.order.target_x = is_point_command ?
+                decision_input.point_x : decision_input.point_x;
+            staged.order.target_y = decision_input.point_y;
+            staged.order.issued_frame = frame;
+            staged.order.last_issue_frame = frame;
+            staged.order.delivery_seen_frame = 0xffffffffu;
+            staged.order.status = AiEntityOrderStatus::awaiting_apply;
+            staged_attempts.push_back(staged);
+            const i32 attempt_index =
+                static_cast<i32>(staged_attempts.size()) - 1;
+            for (const GameplayPublishedAction& packet : planned.packets) {
+                plan.entity_packets.push_back({row.key.runtime_id, packet});
+                plan.entity_packet_attempts.push_back(attempt_index);
+            }
+        }
+    }
+
+    // ---- assemble the frame batch: stage-major, owner asc, source asc ----
+    std::vector<Mode1AiBatchPacketRequest> batch;
+    std::vector<i32> batch_attempt_of;   // staged-attempt index per packet
+    auto append_stage = [&](bool entity_stage) {
+        for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+            if ((owner_mask & (1u << owner)) == 0) {
+                continue;
+            }
+            OwnerPlanData& plan = plans[owner];
+            auto emit = [&](std::vector<std::pair<u32,
+                    GameplayPublishedAction>>& packets,
+                std::vector<i32>* attempt_indices) {
+                std::vector<u32> order_indices(packets.size());
+                for (u32 i = 0; i < packets.size(); ++i) {
+                    order_indices[i] = i;
+                }
+                std::stable_sort(order_indices.begin(), order_indices.end(),
+                    [&](u32 a, u32 b) {
+                        return packets[a].first < packets[b].first;
+                    });
+                for (const u32 index : order_indices) {
+                    const GameplayPublishedAction& action =
+                        packets[index].second;
+                    Mode1AiBatchPacketRequest request;
+                    request.packed_opcode = action.packed_opcode;
+                    request.arg0 = action.arg0;
+                    request.unit_offset = action.unit_offset;
+                    request.arg1 = action.arg1;
+                    request.arg2 = action.arg2;
+                    request.arg3 = action.arg3;
+                    request.local_broadcast =
+                        !g_runtime.ai_play_owner_slots[owner];
+                    batch.push_back(request);
+                    batch_attempt_of.push_back(attempt_indices != nullptr ?
+                        (*attempt_indices)[index] : -1);
+                }
+            };
+            if (!entity_stage) {
+                emit(plan.macro_packets, nullptr);
+                emit(plan.worker_packets, nullptr);
+            } else {
+                emit(plan.entity_packets, &plan.entity_packet_attempts);
+            }
+        }
+    };
+    append_stage(false);   // macro + worker stages
+    append_stage(true);    // entity stage
+
+    // Wire the assigned-origin adoption: each staged ISSUE learns which
+    // batch item is its first packet.
+    for (u32 packet_index = 0; packet_index < batch_attempt_of.size();
+        ++packet_index) {
+        const i32 attempt_index = batch_attempt_of[packet_index];
+        if (attempt_index >= 0 &&
+            staged_attempts[static_cast<std::size_t>(attempt_index)]
+                .packet_index < 0) {
+            staged_attempts[static_cast<std::size_t>(attempt_index)]
+                .packet_index = static_cast<i32>(packet_index);
+        }
+    }
+
+    play.staging.attempts = &staged_attempts;
+    play.staging.packets = &batch;
+    play.staging.owners = &play.owners;
+    const Mode1AiBatchCode batch_code = PublishAiMode1GameplayPacketBatch(
+        batch, ai_entity_batch_success_hook, &play.staging);
+    if (batch_code != Mode1AiBatchCode::accepted &&
+        batch_code != Mode1AiBatchCode::empty) {
+        // All-or-none abort: every row/due-macro outcome becomes
+        // TRANSACTION_ABORTED/TRANSPORT_CAPACITY, nothing published, and the
+        // controller latches (plan section 2).
+        for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+            if ((owner_mask & (1u << owner)) == 0 || !plans[owner].active) {
+                continue;
+            }
+            OwnerPlanData& plan = plans[owner];
+            if (plan.macro_due) {
+                plan.outcome.macro_result = static_cast<u16>(
+                    AiEntityAttemptResult::transaction_aborted);
+                plan.outcome.macro_reject_code = static_cast<u16>(
+                    AiEntityRejectCode::transport_capacity);
+                plan.outcome.macro_trainable = 0;
+            }
+            for (u32 row = 0; row < plan.outcome.entity_result.size();
+                ++row) {
+                plan.outcome.entity_result[row] = static_cast<u16>(
+                    AiEntityAttemptResult::transaction_aborted);
+                plan.outcome.entity_reject_code[row] = static_cast<u16>(
+                    AiEntityRejectCode::transport_capacity);
+            }
+        }
+        append_startup_log("ai-entity: batch abort code=%lu frame=%lu",
+            static_cast<unsigned long>(batch_code),
+            static_cast<unsigned long>(frame));
+    }
+
+    // ---- OUTCOME per owner (decision frames only) ----
+    if (decision_frame && !play.transport_failed) {
+        for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
+            if ((owner_mask & (1u << owner)) == 0 || !plans[owner].active) {
+                continue;
+            }
+            OwnerPlanData& plan = plans[owner];
+            AiEntityOwnerControllerState& controller = play.owners[owner];
+            // Trainable bits mirror result<=PUBLISHED exactly (plan 11.1).
+            for (u32 row = 0; row < plan.outcome.entity_result.size();
+                ++row) {
+                if (plan.outcome.entity_result[row] <=
+                    static_cast<u16>(AiEntityAttemptResult::published)) {
+                    plan.outcome.trainable_mask[row >> 5] |=
+                        1u << (row & 31u);
+                }
+            }
+            if (plan.outcome.macro_result >
+                static_cast<u16>(AiEntityAttemptResult::published)) {
+                plan.outcome.macro_trainable = 0;
+            }
+            AiEntityWireHeader outcome_header;
+            outcome_header.kind = static_cast<u16>(AiEntityWireKind::outcome);
+            outcome_header.flags = plan.macro_due ?
+                kAiEntityWireFlagMacroDue : 0;
+            outcome_header.owner = owner;
+            outcome_header.episode = controller.episode_id;
+            outcome_header.frame = frame;
+            outcome_header.sequence = controller.sequence;
+            outcome_header.reply_to_sequence = controller.sequence;
+            outcome_header.own_rows =
+                static_cast<u32>(plan.snapshot.own.size());
+            outcome_header.target_rows =
+                static_cast<u32>(plan.snapshot.targets.size());
+            outcome_header.entity_policy_version =
+                controller.pinned_entity_version;
+            outcome_header.macro_policy_version =
+                controller.pinned_macro_version;
+            const std::vector<u8> outcome_payload =
+                EncodeAiEntityOutcomePayload(plan.outcome);
+            if (!AiIpc2SendFrame(outcome_header, outcome_payload,
+                    play.reply_timeout_ms)) {
+                // Post-publish I/O failure: published packets stay; the open
+                // action's rollout tail is the server's to drop.
+                ai_entity_fail_controllers("OUTCOME write failure", frame);
+                break;
+            }
+        }
+    }
+    if (decision_frame) {
+        play.next_tick_frame = frame + 8;
+    }
+}
+
 void run_default_ai_play_bot(GameplayLoopState& state) {
     if (gameplay_modal_ui_is_active(gameplay_modal_ui_state()) ||
         gameplay_input_action_state().player_reset_gate) {
@@ -24555,6 +26033,25 @@ void run_default_ai_play_bot(GameplayLoopState& state) {
     // policy only takes over once it is explicitly enabled.  Keeping this gate
     // here preserves the observation/action publish path for that later switch.
     if (!g_runtime.ai_play_scripted_policy_enabled) {
+        return;
+    }
+
+    // Entity RL: registry audit runs before any owner's observation so the
+    // snapshot never sees an uncommitted activation or a stale signature.
+    ensure_ai_entity_observer_installed();
+    {
+        UnitLifecycleContext* lifecycle =
+            g_runtime.gameplay_startup_state.lifecycle;
+        if (lifecycle != nullptr && lifecycle->movement != nullptr) {
+            AiEntityRegistryAuditFrame(ai_entity_registry(),
+                lifecycle->movement->active_units);
+        }
+    }
+
+    // -AIENTITY: the act2 frame transaction replaces the per-owner
+    // objective-policy path entirely (old fighter executor OFF).
+    if (g_runtime.ai_play_entity_port != 0) {
+        run_ai_entity_play_frame(state);
         return;
     }
 
@@ -27545,6 +29042,7 @@ void return_default_free_unit_head(UnitMovementContext& movement,
     remove_unit(movement.free_units);
     unit->active = false;
     movement.free_units.insert(movement.free_units.begin(), unit);
+    NotifyUnitActivationObserver(*unit, false);
 }
 
 UnitMovementUnit* default_unit_command_create_unit(UnitCommandContext&,
@@ -31176,6 +32674,7 @@ void activate_default_gameplay_script_unit(
         movement.active_units.push_back(&unit);
     }
     unit.active = true;
+    NotifyUnitActivationObserver(unit, true);
 }
 
 void initialize_default_unit_from_scenario_object(
@@ -31254,6 +32753,9 @@ void initialize_default_unit_from_scenario_object(
     unit.pending_command = to_unit_queued_command(object.pending_command);
     unit.active_command_payload =
         to_unit_queued_command(object.active_command_payload);
+    unit.pending_command_origin = {};
+    unit.active_command_origin = {};
+    unit.deferred_command_origins.fill({});
     unit.deferred_command_count = std::min<u32>(
         object.deferred_command_count,
         static_cast<u32>(unit.deferred_commands.size()));
@@ -34069,6 +35571,9 @@ void run_default_gameplay_end_condition_monitor(GameplayLoopState& state) {
                 AiIpcSendEnd(end_reason, state.simulation_frame_counter);
                 AiIpcClose();
                 g_runtime.ai_play_ipc_enabled = false;
+            }
+            if (g_runtime.ai_play_entity_port != 0 && AiIpc2Connected()) {
+                ai_entity_send_terminals(state, timed_out);
             }
             g_runtime.ai_selfplay_result_written = true;
             g_runtime.gameplay_end_condition_state.end_requested = false;

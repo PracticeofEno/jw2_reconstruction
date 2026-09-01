@@ -401,6 +401,14 @@ bool PublishLocallySimulatedMode1GameplayPacket(u32 packed_opcode, u32 arg0 = 0,
     u32 unit_offset = 0, u32 arg1 = 0, u32 arg2 = 0, u32 arg3 = 0);
 bool PublishLocalMode1GameplayPacketPreserveResult(u32 packed_opcode, u32 arg0 = 0,
     u32 unit_offset = 0, u32 arg1 = 0, u32 arg2 = 0, u32 arg3 = 0);
+// Entity-RL frame-transaction publish: atomic per-channel batch accept plus
+// the post-commit LOCAL_BROADCAST range/flush parity of
+// PublishLocalMode1GameplayPacket for each accepted local-broadcast item
+// (LOCALLY_SIMULATED items never touch the broadcast cursors).
+Mode1AiBatchCode PublishAiMode1GameplayPacketBatch(
+    std::vector<Mode1AiBatchPacketRequest>& packets,
+    void (*success_hook)(void* user_data) = nullptr,
+    void* success_user_data = nullptr);
 bool BroadcastMode1GameplayPacket(u32 packed_opcode, u32 arg0 = 0,
     u32 unit_offset = 0, u32 arg1 = 0, u32 arg2 = 0, u32 arg3 = 0);
 

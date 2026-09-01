@@ -1719,6 +1719,7 @@ if (RANKER_BUILD_AI_PLAY_INTERFACE_REGRESSION_TEST)
     add_executable(ai_play_interface_regression
         tests/ai_play_interface_regression.cpp
         src/ranker_ai_observation.cpp
+        src/ranker_ai_entity_control.cpp
         src/ranker_ai_actions.cpp
         src/ranker_ai_live_validator.cpp
         src/ranker_ai_scripted_bot.cpp
@@ -1742,6 +1743,7 @@ add_executable(ranker_rebuild WIN32
     src/imports.cpp
     src/ranker_client_config.cpp
     src/ranker_ai_observation.cpp
+    src/ranker_ai_entity_control.cpp
     src/ranker_ai_actions.cpp
     src/ranker_ai_live_validator.cpp
     src/ranker_ai_scripted_bot.cpp

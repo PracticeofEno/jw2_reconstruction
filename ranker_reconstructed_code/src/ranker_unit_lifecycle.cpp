@@ -280,6 +280,9 @@ void reset_runtime_fields(UnitMovementUnit& unit) {
     unit.pending_command.state = 0;
     unit.deferred_command_count = 0;
     unit.deferred_command_state = 0;
+    unit.pending_command_origin = {};
+    unit.active_command_origin = {};
+    unit.deferred_command_origins.fill({});
     unit.ability_id = 0;
     unit.spawn_type_id = 0;
     unit.queued_production_type_id = 0;
@@ -631,6 +634,9 @@ bool HandleUnitConstructionActivation(UnitLifecycleContext& context,
     unit.deferred_command_count = 0;
     unit.active_command_payload = {};
     unit.pending_command = {};
+    unit.pending_command_origin = {};
+    unit.active_command_origin = {};
+    unit.deferred_command_origins.fill({});
     unit.health = unit.max_health;
     unit.secondary_value = unit.max_secondary_value;
     unit.under_construction = false;

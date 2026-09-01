@@ -4623,6 +4623,9 @@ bool DispatchSelectedUnitActionEffect(UnitEffectRuntimeState& state,
         target->health = definition->damage_amount;
         target->pending_command = {};
         target->deferred_command_count = 0;
+        target->pending_command_origin = {};
+        target->active_command_origin = {};
+        target->deferred_command_origins.fill({});
         reactivate_effect_target(state, *target);
         break;
     }
@@ -4662,6 +4665,9 @@ bool DispatchSelectedUnitActionEffect(UnitEffectRuntimeState& state,
         target->command_bits.fill(0);
         target->pending_command = {};
         target->deferred_command_count = 0;
+        target->pending_command_origin = {};
+        target->active_command_origin = {};
+        target->deferred_command_origins.fill({});
         target->direction = 1;
         reactivate_effect_target(state, *target);
         break;

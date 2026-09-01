@@ -294,10 +294,28 @@ struct AiMicroThreatOverlay {
     u32 last_seen_frame = 0;    // last frame a threat was inside the bubble
 };
 
+// Entity-RL shadow teacher tap (plan section 13.1): every desired order the
+// executor computed this step, captured BEFORE the same-order dedupe so a
+// between-tick change is never mislabeled as the next tick's KEEP.  Units
+// whose order resolved to no_op are absent (interpreted as "keep current").
+struct AiMicroDesiredOrderTap {
+    struct Entry {
+        u32 unit_id = 0;
+        AiSemanticActionKind kind = AiSemanticActionKind::no_op;
+        u32 target_id = 0;
+        i32 x = 0;
+        i32 y = 0;
+    };
+    std::vector<Entry> entries;
+};
+
 struct AiMicroExecutorState {
     std::array<AiMicroObjective, kAiMicroGroupCount> objectives{};
     std::vector<AiMicroUnitRecord> units;  // sorted by unit_id
     AiMicroThreatOverlay threat;
+    // Shadow teacher tap: non-null enables capture for this step only (the
+    // caller owns the buffer and clears/attaches it on shadow ticks).
+    AiMicroDesiredOrderTap* desired_order_tap = nullptr;
     // v10: the sticky reflex defense detail (unit ids).  Only these army
     // members fight under the threat overlay (empty = nobody detailed).
     // Dead members are pruned, new ones added when the measured threat

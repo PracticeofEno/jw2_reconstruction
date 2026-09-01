@@ -1,4 +1,5 @@
 #include "ranker_gameplay_packets.h"
+#include "ranker_unit_movement.h"
 #include "ranker_gameplay_cheats.h"
 #include "ranker_gameplay_production_actions.h"
 #include "ranker_player_slots.h"
@@ -1546,6 +1547,16 @@ void SetMode1GameplayPacketTap(Mode1GameplayPacketTap tap, void* user_data) {
 }
 
 bool DispatchMode1GameplayPacket(const Mode1ReliablePacket& packet) {
+    // Entity-RL origin sidecar: any pending/deferred payload written while
+    // this packet dispatches records this exact (channel, sequence).
+    struct DispatchOriginScope {
+        UnitCommandPacketOrigin saved;
+        DispatchOriginScope(u8 channel, u32 sequence)
+            : saved(g_mode1_dispatch_packet_origin) {
+            g_mode1_dispatch_packet_origin = {channel, sequence};
+        }
+        ~DispatchOriginScope() { g_mode1_dispatch_packet_origin = saved; }
+    } dispatch_origin_scope(packet.channel, packet.sequence);
     if (g_packet_tap != nullptr) {
         g_packet_tap(packet, g_packet_tap_user_data);
     }
@@ -1739,6 +1750,37 @@ bool PublishLocallySimulatedMode1GameplayPacket(u32 packed_opcode, u32 arg0,
         AcceptMode1OrderedPacket(packet.bytes.data(), kMode1ReliablePacketBytes);
     ++g_packet_dispatch_state.published_local_packets;
     return accepted;
+}
+
+Mode1AiBatchCode PublishAiMode1GameplayPacketBatch(
+    std::vector<Mode1AiBatchPacketRequest>& packets,
+    void (*success_hook)(void* user_data), void* success_user_data) {
+    const Mode1AiBatchCode code = AcceptMode1AiOrderedPacketBatch(packets,
+        success_hook, success_user_data);
+    if (code != Mode1AiBatchCode::accepted) {
+        // empty is a metadata-only success; every other code published
+        // nothing (all-or-none).
+        return code;
+    }
+    for (const Mode1AiBatchPacketRequest& request : packets) {
+        ++g_packet_dispatch_state.published_local_packets;
+        if (!request.local_broadcast) {
+            continue;   // LOCALLY_SIMULATED: no broadcast range/cursor touch
+        }
+        // Exact per-packet replay of PublishLocalMode1GameplayPacket's
+        // post-accept sequence: end cursor, subtype flush gate, range send.
+        MarkMode1ReliableLocalBroadcastEnd(request.assigned_sequence + 1);
+        if (should_flush_published_packet_range(request.assigned_subtype) &&
+            mode1_reliable_state().local_broadcast_start <
+                mode1_reliable_state().local_broadcast_end) {
+            BroadcastMode1PacketRange(
+                mode1_reliable_state().local_broadcast_start,
+                mode1_reliable_state().local_broadcast_end - 1);
+            mode1_reliable_state().local_broadcast_start =
+                mode1_reliable_state().local_broadcast_end;
+        }
+    }
+    return code;
 }
 
 bool PublishLocalMode1GameplayPacketPreserveResult(u32 packed_opcode, u32 arg0,

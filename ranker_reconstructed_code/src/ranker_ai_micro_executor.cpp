@@ -2476,6 +2476,13 @@ std::vector<AiSemanticAction> AiMicroExecutorStep(AiMicroExecutorState& state,
             order.x = nudged.x;
             order.y = nudged.y;
         }
+        if (state.desired_order_tap != nullptr) {
+            // Shadow teacher tap: the desired order BEFORE dedupe (plan
+            // section 13.1).  Observing only changed packets would mislabel
+            // a between-tick change as the next tick's KEEP.
+            state.desired_order_tap->entries.push_back({unit.id, order.kind,
+                order.target_id, order.x, order.y});
+        }
         if (same_order(record, order)) {
             // Already told it.  Re-issue only if the engine dropped the order
             // (unit idle) or the unit is stuck, and the re-issue interval

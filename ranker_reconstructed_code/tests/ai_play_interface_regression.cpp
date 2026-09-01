@@ -1,4 +1,5 @@
 #include "ranker_ai_autopilot.h"
+#include "ranker_ai_entity_control.h"
 #include "ranker_ai_decision_gate.h"
 #include "ranker_ai_expansion.h"
 #include "ranker_ai_actions.h"
@@ -11,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <cstdlib>
 #include <iostream>
 #include <vector>
@@ -4690,6 +4692,910 @@ void test_ai_autopilot_tech_guard() {
     }
 }
 
+
+// ===========================================================================
+// Entity-command RL Phase A (docs/AI_PLAY_ENTITY_COMMAND_RL_PLAN.md):
+// activation registry, entity snapshot encoding, point geometry v1,
+// authoritative attack pair predicate and the act2 wire contract.
+// ===========================================================================
+
+UnitMovementUnit make_entity_live_unit(u32 slot, u32 owner, u32 type_id,
+    u32 type_flags) {
+    UnitMovementUnit unit{};
+    unit.id = slot * 0x1d0u;
+    unit.runtime_slot_index = slot;
+    unit.owner_id = owner;
+    unit.type_id = type_id;
+    unit.type_flags = type_flags;
+    unit.active = true;
+    unit.definition.action_range_base = 50;
+    unit.definition.movement_class = 0;
+    return unit;
+}
+
+void test_ai_entity_registry() {
+    AiEntityRegistry registry;
+    AiEntityRegistryReset(registry);
+    UnitMovementUnit a = make_entity_live_unit(1, 0, 5, 1u << 5);
+    std::vector<UnitMovementUnit*> active{&a};
+
+    // First audit commits the missed activation as generation 1 / epoch 1.
+    AiEntityRegistryAuditFrame(registry, active);
+    const AiEntityRegistryRecord* record =
+        AiEntityRegistryFindByUnit(registry, a);
+    require(record != nullptr && record->generation == 1 &&
+        record->control_epoch == 1 && record->engine_active,
+        "initial audit did not register generation 1");
+
+    // Overlapping helper calls of one activation stay at one commit.
+    AiEntityRegistryCommitActivation(registry, a);
+    AiEntityRegistryCommitActivation(registry, a);
+    require(record->generation == 1,
+        "nested activation helper calls double-committed the generation");
+
+    // Deactivate + reactivate the same slot/id: new generation, epoch reset.
+    AiEntityRegistryMarkDeactivated(registry, a);
+    require(!record->engine_active, "deactivation was not marked immediately");
+    AiEntityRegistryCommitActivation(registry, a);
+    require(record->generation == 2 && record->control_epoch == 1,
+        "same slot/id reactivation did not advance the generation");
+
+    // Owner change without deactivation: control epoch bump, generation kept.
+    a.owner_id = 3;
+    AiEntityRegistryAuditFrame(registry, active);
+    require(record->generation == 2 && record->control_epoch == 2,
+        "owner transfer did not bump the control epoch");
+    // A -> B -> A round trip is one more distinct epoch (stale replies from
+    // the first ownership must stay rejectable).
+    a.owner_id = 0;
+    AiEntityRegistryAuditFrame(registry, active);
+    require(record->control_epoch == 3,
+        "ownership round trip reused an old control epoch");
+    // Capability-signature change (attack bit lost) also bumps the epoch.
+    a.type_flags = 0;
+    AiEntityRegistryAuditFrame(registry, active);
+    require(record->control_epoch == 4,
+        "capability change did not bump the control epoch");
+
+    // Audit-detected deactivation (a path the hooks missed).
+    std::vector<UnitMovementUnit*> empty_active;
+    AiEntityRegistryAuditFrame(registry, empty_active);
+    require(!record->engine_active,
+        "audit did not sweep a vanished active record");
+
+    // Detached record (free list exhausted): pointer-keyed sparse registry.
+    UnitMovementUnit detached{};
+    detached.id = 0x80000001u;
+    detached.runtime_slot_index = kInvalidUnitRuntimeSlotIndex;
+    detached.owner_id = 0;
+    detached.type_id = 5;
+    detached.type_flags = 1u << 5;
+    detached.active = true;
+    detached.definition.action_range_base = 50;
+    std::vector<UnitMovementUnit*> with_detached{&detached};
+    AiEntityRegistryAuditFrame(registry, with_detached);
+    const AiEntityRegistryRecord* detached_record =
+        AiEntityRegistryFindByObserved(registry, 0x80000001u,
+            kInvalidUnitRuntimeSlotIndex);
+    require(detached_record != nullptr && detached_record->generation == 1 &&
+        detached_record->engine_active,
+        "detached spawn was not tracked in the sparse registry");
+
+    // Two simultaneously active records with one runtime id: contract-fatal,
+    // never a silent tie-break.
+    UnitMovementUnit dup = make_entity_live_unit(2, 0, 5, 1u << 5);
+    dup.id = detached.id;
+    dup.runtime_slot_index = 2;
+    std::vector<UnitMovementUnit*> duplicated{&detached, &dup};
+    AiEntityRegistryAuditFrame(registry, duplicated);
+    require(registry.contract_fatal,
+        "duplicate active runtime id was not contract-fatal");
+    AiEntityRegistryReset(registry);
+    require(!registry.contract_fatal,
+        "registry reset did not clear the contract-fatal latch");
+}
+
+UnitMovementMap make_entity_legacy_map(u32 width, u32 height) {
+    UnitMovementMap map;
+    map.width = width;
+    map.height = height;
+    map.stride_tiles = width;
+    map.legacy_entry_layers_present = true;
+    UnitMovementCell open{};
+    open.alternate_flags = 0x60000000u;   // classes 0/2/4 may enter
+    map.cells.assign(static_cast<std::size_t>(width) * height, open);
+    return map;
+}
+
+void block_entity_map_column(UnitMovementMap& map, u32 tile_x) {
+    for (u32 ty = 0; ty < map.height; ++ty) {
+        map.cells[static_cast<std::size_t>(ty) * map.width + tile_x]
+            .alternate_flags = 0;
+    }
+}
+
+void test_ai_entity_point_geometry() {
+    // 8x8 tiles: one global cell = one tile.  A blocked column at x=4 splits
+    // the map into two static components.
+    UnitMovementMap map = make_entity_legacy_map(8, 8);
+    block_entity_map_column(map, 4);
+    const AiEntityReachability ground = BuildAiEntityReachability(map, 0);
+    std::array<u32, kAiEntityPointMaskWords> mask{};
+    // Unit at tile (1,1), world (48,48).
+    BuildAiEntityPointMask(map, ground, 48, 48, mask);
+    auto bit = [&mask](u32 token) {
+        return (mask[token >> 5] >> (token & 31u)) & 1u;
+    };
+    require(bit(0) == 1 && bit(3) == 1 && bit(4) == 0 && bit(7) == 0,
+        "global tokens did not follow the static component split");
+    // Row 2 (tokens 16..23): same split.
+    require(bit(16 + 3) == 1 && bit(16 + 5) == 0,
+        "global token row 2 ignored the wall");
+    // Air (class 3) crosses the wall; class 1 can never enter anywhere.
+    const AiEntityReachability air = BuildAiEntityReachability(map, 3);
+    std::array<u32, kAiEntityPointMaskWords> air_mask{};
+    BuildAiEntityPointMask(map, air, 48, 48, air_mask);
+    require(((air_mask[0] >> 4) & 1u) == 1 && ((air_mask[1] >> 31) & 1u) == 1,
+        "air reachability did not ignore the ground wall");
+    const AiEntityReachability none = BuildAiEntityReachability(map, 1);
+    std::array<u32, kAiEntityPointMaskWords> none_mask{};
+    BuildAiEntityPointMask(map, none, 48, 48, none_mask);
+    require(none_mask[0] == 0 && none_mask[1] == 0 && none_mask[2] == 0,
+        "movement class 1 gained point tokens");
+
+    // Local tokens: E radius 64 stays left of the wall (bit set); E radius
+    // 256 crosses it (cleared); E radius 512 leaves the 256px map (cleared).
+    const u32 east_64 = 64 + 0 * 8 + 0;
+    const u32 east_256 = 64 + 2 * 8 + 0;
+    const u32 east_512 = 64 + 3 * 8 + 0;
+    require(bit(east_64) == 1 && bit(east_256) == 0 && bit(east_512) == 0,
+        "local east tokens ignored the wall or map bounds");
+
+    // Token resolution: global cell 0 resolves to the tile-0 world center.
+    const AiEntityPointResolveResult cell0 =
+        ResolveAiEntityPointToken(map, ground, 48, 48, 0);
+    require(cell0.valid && cell0.x == 16 && cell0.y == 16,
+        "global token 0 did not resolve to the tile center");
+    const AiEntityPointResolveResult east =
+        ResolveAiEntityPointToken(map, ground, 48, 48, east_64);
+    require(east.valid && east.x == 48 + 64 && east.y == 48,
+        "local east token did not resolve to the absolute offset point");
+    require(!ResolveAiEntityPointToken(map, ground, 48, 48, 4).valid,
+        "a wall cell resolved to a point");
+
+    // Tie-break on a 16x16 map (2x2 tiles per cell): all four tile centers
+    // are equidistant from the rational cell center -> smallest row-major
+    // tile index wins.
+    UnitMovementMap wide = make_entity_legacy_map(16, 16);
+    const AiEntityReachability wide_reach = BuildAiEntityReachability(wide, 0);
+    const AiEntityPointResolveResult tie =
+        ResolveAiEntityPointToken(wide, wide_reach, 48, 48, 0);
+    require(tie.valid && tie.x == 16 && tie.y == 16,
+        "global-cell tie-break did not pick the smallest row-major tile");
+
+    // The runtime building-footprint bit is cleared before the static
+    // judgment: an occupied tile stays point-legal.
+    UnitMovementMap footprint = make_entity_legacy_map(8, 8);
+    footprint.cells[0].visibility_flags = 0x20000000u;
+    const AiEntityReachability foot_reach =
+        BuildAiEntityReachability(footprint, 0);
+    require(ResolveAiEntityPointToken(footprint, foot_reach, 48, 48, 0).valid,
+        "a building footprint leaked into the static point mask");
+
+    // Virtual flood seed: a unit standing on a statically invalid tile keeps
+    // the tokens of the neighboring component.
+    UnitMovementMap seed_map = make_entity_legacy_map(8, 8);
+    seed_map.cells[static_cast<std::size_t>(1) * 8 + 1].alternate_flags = 0;
+    const AiEntityReachability seed_reach =
+        BuildAiEntityReachability(seed_map, 0);
+    std::array<u32, kAiEntityPointMaskWords> seed_mask{};
+    BuildAiEntityPointMask(seed_map, seed_reach, 48, 48, seed_mask);
+    require(((seed_mask[0] >> 0) & 1u) == 1,
+        "virtual flood seed did not join the neighboring component");
+
+    // Non-legacy map: passable terrain only; static blocked rejects, the
+    // dynamic reserved-by-unit bit is ignored.
+    UnitMovementMap plain;
+    plain.width = 8;
+    plain.height = 8;
+    plain.stride_tiles = 8;
+    plain.legacy_entry_layers_present = false;
+    UnitMovementCell plain_open{};
+    plain_open.flags = kMapCellPassableTerrain;
+    plain.cells.assign(64, plain_open);
+    plain.cells[1].flags |= kMapCellBlockedTerrain;
+    plain.cells[2].flags |= kMapCellReservedByUnit;
+    require(!AiEntityStaticCellEnterable(plain, 0, 1, 0) &&
+        AiEntityStaticCellEnterable(plain, 0, 2, 0) &&
+        AiEntityStaticCellEnterable(plain, 0, 3, 0),
+        "non-legacy static entry rule mishandled blocked/reserved bits");
+}
+
+void test_ai_entity_attack_pair_predicate() {
+    AiEntityPairSource source;
+    source.runtime_id = 0x1d0;
+    source.active_owned_alive = true;
+    source.has_attack_capability = true;
+    source.distance_check_mode = 0;
+    source.attackable_class_mask = 1u << 1;
+    AiEntityPairTarget target;
+    target.runtime_id = 0x3a0;
+    target.active_alive = true;
+    target.visible = true;
+    target.non_friendly = true;
+    target.render_class = 1;
+    AiEntityLiveHooks hooks{};
+    require(AiEntityEvaluateAttackPair(source, target, hooks).legal,
+        "a plain legal pair was rejected");
+
+    // Source-side gates.
+    AiEntityPairSource s2 = source;
+    s2.distance_check_mode = 1;
+    require(!AiEntityEvaluateAttackPair(s2, target, hooks).legal,
+        "distance_check_mode==1 source was not early-rejected");
+    s2 = source;
+    s2.has_attack_capability = false;
+    require(!AiEntityEvaluateAttackPair(s2, target, hooks).legal,
+        "attack-incapable source was not rejected (planner downgrade leak)");
+
+    // Target runtime flags.
+    AiEntityPairTarget t2 = target;
+    t2.runtime_flags = kAiEntityTargetFlagTransient;
+    require(!AiEntityEvaluateAttackPair(source, t2, hooks).legal,
+        "transient target flag was ignored");
+    t2 = target;
+    t2.runtime_flags = kAiEntityTargetFlagInactive;
+    require(!AiEntityEvaluateAttackPair(source, t2, hooks).legal,
+        "inactive target flag was ignored");
+    t2 = target;
+    t2.runtime_flags = kAiEntityTargetFlagClassBlocked;
+    require(!AiEntityEvaluateAttackPair(source, t2, hooks).legal,
+        "class-blocked target flag was ignored");
+
+    // Class mask below 32; permissive at 32 and above.
+    t2 = target;
+    t2.render_class = 3;
+    require(!AiEntityEvaluateAttackPair(source, t2, hooks).legal,
+        "class mask did not gate render class 3");
+    t2.render_class = 40;
+    require(AiEntityEvaluateAttackPair(source, t2, hooks).legal,
+        "render_class >= 32 was not engine-permissive");
+
+    // Class-2 terrain gate: only when the profile gate is 0, judged at the
+    // target's 32px-aligned cell through the live hook.
+    struct TerrainFixture {
+        u32 calls = 0;
+        i32 x = 0;
+        i32 y = 0;
+        bool result = false;
+    };
+    static TerrainFixture fixture;
+    fixture = TerrainFixture{};
+    AiEntityLiveHooks terrain_hooks{};
+    terrain_hooks.ctx = &fixture;
+    terrain_hooks.source_can_enter_cell = [](void* ctx, u32, i32 x, i32 y) {
+        auto* f = static_cast<TerrainFixture*>(ctx);
+        ++f->calls;
+        f->x = x;
+        f->y = y;
+        return f->result;
+    };
+    AiEntityPairSource class2_source = source;
+    class2_source.attackable_class_mask = 1u << 2;
+    class2_source.render_class2_terrain_gate = 0;
+    AiEntityPairTarget class2_target = target;
+    class2_target.render_class = 2;
+    class2_target.x = 100;
+    class2_target.y = 77;
+    require(!AiEntityEvaluateAttackPair(class2_source, class2_target,
+            terrain_hooks).legal &&
+        fixture.calls == 1 && fixture.x == 96 && fixture.y == 64,
+        "class-2 terrain gate did not query the aligned target cell");
+    fixture.result = true;
+    require(AiEntityEvaluateAttackPair(class2_source, class2_target,
+            terrain_hooks).legal,
+        "class-2 pair stayed illegal though the terrain check passed");
+    class2_source.render_class2_terrain_gate = 1;
+    fixture.calls = 0;
+    require(AiEntityEvaluateAttackPair(class2_source, class2_target,
+            terrain_hooks).legal && fixture.calls == 0,
+        "nonzero profile gate still invoked the terrain check");
+}
+
+AiObservation make_entity_snapshot_observation() {
+    AiObservation obs{};
+    obs.simulation_frame = 1232;
+    obs.map_width_tiles = 8;
+    obs.map_height_tiles = 8;
+    obs.local_owner = 0;
+    obs.active_owner_mask = 0x3;
+    obs.local_relation_mask = 0x1;
+    obs.start_x = 48;
+    obs.start_y = 48;
+    // Own fighter (move/attack/patrol capable).
+    AiObservedUnit own = fighter_unit(1 * 0x1d0, 0, 48, 48, true);
+    own.runtime_slot_index = 1;
+    own.type_flags = (1u << 4) | (1u << 5) | (1u << 9);
+    own.attackable_class_mask = 0xffffffffu;
+    obs.units.push_back(own);
+    // Own worker (harvest bit): excluded from the entity actor.
+    AiObservedUnit worker = observed_unit(2 * 0x1d0, 0, 0x10, 1u << 7,
+        60, 60, true);
+    worker.runtime_slot_index = 2;
+    worker.alive = true;
+    obs.units.push_back(worker);
+    // Own under-construction building: excluded.
+    AiObservedUnit building = observed_unit(3 * 0x1d0, 0, 0x80, 0, 90, 90,
+        true);
+    building.runtime_slot_index = 3;
+    building.under_construction = true;
+    obs.units.push_back(building);
+    // Visible hostile fighter: target row.
+    AiObservedUnit hostile = fighter_unit(5 * 0x1d0, 1, 200, 48, false);
+    hostile.runtime_slot_index = 5;
+    obs.units.push_back(hostile);
+    // Hidden hostile: no row.
+    AiObservedUnit hidden = fighter_unit(6 * 0x1d0, 1, 220, 60, false);
+    hidden.runtime_slot_index = 6;
+    hidden.visible = false;
+    obs.units.push_back(hidden);
+    // Neutral monster: target row.
+    AiObservedUnit monster = fighter_unit(7 * 0x1d0, 8, 100, 200, false);
+    monster.runtime_slot_index = 7;
+    obs.units.push_back(monster);
+    return obs;
+}
+
+void test_ai_entity_snapshot_and_wire() {
+    AiObservation obs = make_entity_snapshot_observation();
+    AiEntityRegistry registry;
+    AiEntityRegistryReset(registry);
+    // Live twins of the observed units so the registry carries generations.
+    UnitMovementUnit live_own = make_entity_live_unit(1, 0,
+        obs.units[0].type_id, obs.units[0].type_flags);
+    UnitMovementUnit live_worker = make_entity_live_unit(2, 0, 0x10, 1u << 7);
+    UnitMovementUnit live_building = make_entity_live_unit(3, 0, 0x80, 0);
+    UnitMovementUnit live_hostile = make_entity_live_unit(5, 1,
+        obs.units[3].type_id, obs.units[3].type_flags);
+    UnitMovementUnit live_hidden = make_entity_live_unit(6, 1, 5, 1u << 5);
+    UnitMovementUnit live_monster = make_entity_live_unit(7, 8,
+        obs.units[5].type_id, obs.units[5].type_flags);
+    std::vector<UnitMovementUnit*> live{&live_own, &live_worker,
+        &live_building, &live_hostile, &live_hidden, &live_monster};
+    AiEntityRegistryAuditFrame(registry, live);
+
+    UnitMovementMap map = make_entity_legacy_map(8, 8);
+    AiEntitySnapshotInput input;
+    input.observation = &obs;
+    input.registry = &registry;
+    input.movement_map = &map;
+    const AiEntitySnapshot snapshot = BuildAiEntitySnapshot(input);
+    require(!snapshot.contract_error, "snapshot build failed");
+    require(snapshot.own.size() == 1 && snapshot.targets.size() == 2,
+        "entity row selection did not match plan section 5");
+    require(snapshot.own[0].key.runtime_id == 1 * 0x1d0 &&
+        snapshot.own[0].key.activation_generation == 1 &&
+        snapshot.own[0].control_epoch == 1,
+        "own row did not carry the registry key");
+    require(snapshot.targets[0].key.runtime_id == 5 * 0x1d0 &&
+        snapshot.targets[1].key.runtime_id == 7 * 0x1d0,
+        "target rows were not EntityKey-ordered");
+    require((snapshot.targets[1].kind_bits & kAiEntityTargetKindNeutral) != 0,
+        "neutral monster kind bit missing");
+    // Full command mask: KEEP/HOLD/STOP always; point commands via bits
+    // 4/5/9 with a nonempty point mask; ATTACK_UNIT via the pair row.
+    require(snapshot.own[0].command_mask == 0x7fu,
+        "command mask did not open all seven commands");
+    require(snapshot.attack_pair_mask.size() == 1 &&
+        snapshot.attack_pair_mask[0] == 0x3u,
+        "attack pair bitset did not mark both visible targets");
+
+    // Deterministic bytes: permuting the observation unit order must not
+    // change the encoded request.
+    AiEntityActRequestBody body;
+    body.snapshot = snapshot;
+    const std::vector<u8> bytes = EncodeAiEntityActRequestPayload(body);
+    require(bytes.size() == AiEntityActRequestPayloadBytes(1, 2, false),
+        "ACT_REQ payload size formula mismatch");
+    require(bytes.size() == 3260u + 207u + 76u * 2u + 4u,
+        "ACT_REQ payload size formula constant drifted");
+    // SoA layout anchors shared with tools/ai/ranker_entity_contract.py:
+    // own arrays start at 3260 (own_id[0] = 0x1d0), the target arrays at
+    // 3260+207 (target_id[0] = 0x910) and the pair bitset at the tail (0x3).
+    require(bytes[3260] == 0xd0 && bytes[3261] == 0x01 &&
+        bytes[3467] == 0x10 && bytes[3468] == 0x09 &&
+        bytes[3619] == 0x03,
+        "ACT_REQ SoA byte anchors moved");
+    AiObservation shuffled = obs;
+    std::reverse(shuffled.units.begin(), shuffled.units.end());
+    AiEntitySnapshotInput shuffled_input = input;
+    shuffled_input.observation = &shuffled;
+    AiEntityActRequestBody shuffled_body;
+    shuffled_body.snapshot = BuildAiEntitySnapshot(shuffled_input);
+    require(EncodeAiEntityActRequestPayload(shuffled_body) == bytes,
+        "entity bytes changed with the active-list input order");
+
+    // A worker-only observation yields U=0 (still a valid request).
+    AiObservation workers_only = obs;
+    workers_only.units.erase(workers_only.units.begin());
+    AiEntitySnapshotInput workers_input = input;
+    workers_input.observation = &workers_only;
+    const AiEntitySnapshot no_own = BuildAiEntitySnapshot(workers_input);
+    require(!no_own.contract_error && no_own.own.empty() &&
+        no_own.targets.size() == 2,
+        "U=0 snapshot was not a normal request");
+
+    // TERMINAL prepends exactly the u32 outcome.
+    const std::vector<u8> terminal =
+        EncodeAiEntityTerminalPayload(body, 1);
+    require(terminal.size() == bytes.size() + 4 && terminal[0] == 1 &&
+        std::equal(bytes.begin(), bytes.end(), terminal.begin() + 4),
+        "TERMINAL payload did not prepend the outcome word");
+}
+
+void test_ai_entity_wire_contract() {
+    // CRC32 check value (IEEE reflected).
+    const char* check = "123456789";
+    require(AiEntityCrc32(reinterpret_cast<const u8*>(check), 9) ==
+        0xcbf43926u, "CRC32 does not match the IEEE reflected polynomial");
+
+    AiEntityWireHeader header;
+    header.kind = static_cast<u16>(AiEntityWireKind::act_req);
+    header.flags = kAiEntityWireFlagMacroDue;
+    header.payload_bytes = 3260;
+    header.owner = 1;
+    header.episode = 37;
+    header.frame = 1232;
+    header.sequence = 154;
+    header.reply_to_sequence = 153;
+    header.own_rows = 2;
+    header.target_rows = 3;
+    header.payload_crc32 = 0x12345678;
+    header.entity_policy_version = 21;
+    header.macro_policy_version = 8;
+    u8 raw[kAiEntityWireHeaderBytes];
+    AiEntityWriteWireHeader(header, raw);
+    // Golden byte anchors from the plan section 11.1 offset table.
+    require(raw[0] == 'R' && raw[1] == 'A' && raw[2] == 'I' && raw[3] == '2',
+        "header magic bytes wrong");
+    require(raw[4] == 96 && raw[5] == 0 && raw[6] == 2 && raw[7] == 0,
+        "header size/protocol bytes wrong");
+    require(raw[16] == 'E' && raw[23] == '1',
+        "contract id bytes wrong");
+    require(raw[24] == 5 && raw[26] == 10 && raw[28] == 1 && raw[30] == 1 &&
+        raw[32] == 2 && raw[34] == 1,
+        "contract version words wrong");
+    require(raw[64] == 0x22 && raw[65] == 0x03 && raw[68] == 80 &&
+        raw[72] == 7 && raw[76] == 96,
+        "fixed count words wrong");
+    AiEntityWireHeader parsed;
+    std::string error;
+    require(AiEntityParseWireHeader(raw, sizeof raw, parsed, &error),
+        "round-trip header parse failed");
+    require(parsed.owner == 1 && parsed.episode == 37 &&
+        parsed.frame == 1232 && parsed.sequence == 154 &&
+        parsed.reply_to_sequence == 153 && parsed.own_rows == 2 &&
+        parsed.target_rows == 3 && parsed.payload_crc32 == 0x12345678 &&
+        parsed.entity_policy_version == 21 &&
+        parsed.macro_policy_version == 8 &&
+        parsed.flags == kAiEntityWireFlagMacroDue,
+        "header fields did not round-trip");
+
+    // Hard failures: magic, version word, reserved field, both terminal
+    // flags, undefined flag bits.
+    u8 bad[kAiEntityWireHeaderBytes];
+    std::memcpy(bad, raw, sizeof bad);
+    bad[0] = 'X';
+    require(!AiEntityParseWireHeader(bad, sizeof bad, parsed, &error),
+        "bad magic was accepted");
+    std::memcpy(bad, raw, sizeof bad);
+    bad[26] = 9;   // global feature version
+    require(!AiEntityParseWireHeader(bad, sizeof bad, parsed, &error),
+        "version mismatch was accepted");
+    std::memcpy(bad, raw, sizeof bad);
+    bad[92] = 1;
+    require(!AiEntityParseWireHeader(bad, sizeof bad, parsed, &error),
+        "nonzero reserved field was accepted");
+    std::memcpy(bad, raw, sizeof bad);
+    bad[10] = kAiEntityWireFlagTerminated | kAiEntityWireFlagTruncated;
+    require(!AiEntityParseWireHeader(bad, sizeof bad, parsed, &error),
+        "terminated+truncated was accepted");
+    std::memcpy(bad, raw, sizeof bad);
+    bad[10] = 0x08;
+    require(!AiEntityParseWireHeader(bad, sizeof bad, parsed, &error),
+        "undefined flag bit was accepted");
+
+    // Reply body round-trip and range validation.
+    AiEntityReplyBody reply;
+    reply.macro = 0;
+    reply.macro_target = -1;
+    reply.command = {0, 4};
+    reply.point = {-1, -1};
+    reply.target = {-1, 0};
+    const std::vector<u8> reply_bytes = EncodeAiEntityReplyPayload(reply);
+    require(reply_bytes.size() == 8 + 2 * 9,
+        "reply payload size wrong");
+    AiEntityReplyBody reply_parsed;
+    require(DecodeAiEntityReplyPayload(reply_bytes.data(), reply_bytes.size(),
+            2, reply_parsed, &error) &&
+        reply_parsed.command == reply.command &&
+        reply_parsed.point == reply.point &&
+        reply_parsed.target == reply.target,
+        "reply payload did not round-trip");
+    require(!DecodeAiEntityReplyPayload(reply_bytes.data(),
+            reply_bytes.size(), 3, reply_parsed, &error),
+        "reply row-count mismatch was accepted");
+    std::vector<u8> bad_reply = reply_bytes;
+    bad_reply[8] = 7;   // command out of range
+    require(!DecodeAiEntityReplyPayload(bad_reply.data(), bad_reply.size(), 2,
+            reply_parsed, &error),
+        "out-of-range command was accepted");
+
+    // Outcome round-trip.
+    AiEntityOutcomeBody outcome;
+    outcome.macro_result = static_cast<u16>(AiEntityAttemptResult::not_due);
+    outcome.entity_result = {
+        static_cast<u16>(AiEntityAttemptResult::kept),
+        static_cast<u16>(AiEntityAttemptResult::published)};
+    outcome.entity_reject_code = {0, 0};
+    outcome.trainable_mask = {0x3u};
+    const std::vector<u8> outcome_bytes =
+        EncodeAiEntityOutcomePayload(outcome);
+    AiEntityOutcomeBody outcome_parsed;
+    require(DecodeAiEntityOutcomePayload(outcome_bytes.data(),
+            outcome_bytes.size(), 2, outcome_parsed, &error) &&
+        outcome_parsed.entity_result == outcome.entity_result &&
+        outcome_parsed.trainable_mask == outcome.trainable_mask,
+        "outcome payload did not round-trip");
+
+    // HELLO owner records: ascending, mask-consistent.
+    AiEntityHelloBody hello;
+    hello.controlled_owner_mask = (1u << 0) | (1u << 1);
+    AiEntityHelloOwnerRecord r0;
+    r0.owner = 0;
+    r0.frozen_hostile_owner_mask = 1u << 1;
+    AiEntityHelloOwnerRecord r1;
+    r1.owner = 1;
+    r1.frozen_hostile_owner_mask = 1u << 0;
+    hello.owners = {r0, r1};
+    const std::vector<u8> hello_bytes = EncodeAiEntityHelloPayload(hello);
+    require(hello_bytes.size() == 16 + 2 * 48, "hello payload size wrong");
+    AiEntityHelloBody hello_parsed;
+    require(DecodeAiEntityHelloPayload(hello_bytes.data(), hello_bytes.size(),
+            hello_parsed, &error) &&
+        hello_parsed.owners.size() == 2 &&
+        hello_parsed.owners[1].frozen_hostile_owner_mask == 1u,
+        "hello payload did not round-trip");
+    AiEntityHelloBody hello_bad = hello;
+    std::swap(hello_bad.owners[0], hello_bad.owners[1]);
+    const std::vector<u8> hello_bad_bytes =
+        EncodeAiEntityHelloPayload(hello_bad);
+    require(!DecodeAiEntityHelloPayload(hello_bad_bytes.data(),
+            hello_bad_bytes.size(), hello_parsed, &error),
+        "non-ascending hello owner records were accepted");
+
+    // Internal semantic enum -> wire category is a fixed switch; unknown
+    // kinds encode as EXTERNAL_UNKNOWN only.
+    require(AiEntityWireSemanticOrderOf(AiSemanticActionKind::move) ==
+            AiEntityWireSemanticOrder::move &&
+        AiEntityWireSemanticOrderOf(AiSemanticActionKind::hold_position) ==
+            AiEntityWireSemanticOrder::hold &&
+        AiEntityWireSemanticOrderOf(AiSemanticActionKind::pickup_move) ==
+            AiEntityWireSemanticOrder::external_unknown &&
+        AiEntityWireSemanticOrderOf(AiSemanticActionKind::harvest) ==
+            AiEntityWireSemanticOrder::external_unknown,
+        "semantic-order wire translation drifted");
+}
+
+
+void test_ai_entity_shadow_labels() {
+    AiObservation obs = make_entity_snapshot_observation();
+    AiEntityRegistry registry;
+    AiEntityRegistryReset(registry);
+    UnitMovementUnit live_own = make_entity_live_unit(1, 0,
+        obs.units[0].type_id, obs.units[0].type_flags);
+    UnitMovementUnit live_hostile = make_entity_live_unit(5, 1,
+        obs.units[3].type_id, obs.units[3].type_flags);
+    UnitMovementUnit live_monster = make_entity_live_unit(7, 8,
+        obs.units[5].type_id, obs.units[5].type_flags);
+    std::vector<UnitMovementUnit*> live{&live_own, &live_hostile,
+        &live_monster};
+    AiEntityRegistryAuditFrame(registry, live);
+    UnitMovementMap map = make_entity_legacy_map(8, 8);
+    AiEntitySnapshotInput input;
+    input.observation = &obs;
+    input.registry = &registry;
+    input.movement_map = &map;
+    const AiEntitySnapshot snapshot = BuildAiEntitySnapshot(input);
+    require(!snapshot.contract_error && snapshot.own.size() == 1,
+        "shadow fixture snapshot broken");
+
+    AiEntityShadowState state;
+    const u32 own_id = 1 * 0x1d0;
+    const u32 hostile_id = 5 * 0x1d0;
+
+    // First ATTACK_UNIT: ISSUE with the pointer row.
+    std::vector<AiEntityShadowDesiredOrder> desired{
+        {own_id, AiSemanticActionKind::attack_unit, hostile_id, 200, 48}};
+    std::vector<AiEntityShadowLabel> labels =
+        BuildAiEntityShadowLabels(snapshot, &map, desired, state);
+    require(labels.size() == 1 && labels[0].label == kAiEntityShadowIssue &&
+        labels[0].command ==
+            static_cast<u8>(AiEntityCommand::attack_unit) &&
+        labels[0].target == 0 && labels[0].point == -1,
+        "first attack desired order was not an ISSUE label");
+    // Same desired order at the next tick: KEEP (teacher latch).
+    labels = BuildAiEntityShadowLabels(snapshot, &map, desired, state);
+    require(labels[0].label == kAiEntityShadowKeep && labels[0].target == -1,
+        "unchanged attack was not labeled KEEP");
+    // No desired order at all: KEEP.
+    labels = BuildAiEntityShadowLabels(snapshot, &map, {}, state);
+    require(labels[0].label == kAiEntityShadowKeep,
+        "absent desired order was not labeled KEEP");
+    // A MOVE to the tile-0 center: ISSUE with the exact global token 0.
+    desired = {{own_id, AiSemanticActionKind::move, 0, 16, 16}};
+    labels = BuildAiEntityShadowLabels(snapshot, &map, desired, state);
+    require(labels[0].label == kAiEntityShadowIssue &&
+        labels[0].command == static_cast<u8>(AiEntityCommand::move) &&
+        labels[0].point == 0,
+        "move desired order did not resolve to the nearest token");
+    // Same MOVE again: KEEP (absolute resolved point matches the latch).
+    labels = BuildAiEntityShadowLabels(snapshot, &map, desired, state);
+    require(labels[0].label == kAiEntityShadowKeep,
+        "unchanged move was not labeled KEEP");
+    // A point no token approximates within 64px: excluded, not rewritten.
+    desired = {{own_id, AiSemanticActionKind::move, 0, 1000, 48}};
+    labels = BuildAiEntityShadowLabels(snapshot, &map, desired, state);
+    require(labels[0].label == kAiEntityShadowExcluded &&
+        labels[0].exclude_reason ==
+            static_cast<u16>(AiEntityShadowExcludeReason::point_error),
+        "out-of-vocabulary point was not excluded with point_error");
+    // Unsupported kind (harvest on a fighter): excluded.
+    desired = {{own_id, AiSemanticActionKind::harvest, 0, 48, 48}};
+    labels = BuildAiEntityShadowLabels(snapshot, &map, desired, state);
+    require(labels[0].label == kAiEntityShadowExcluded &&
+        labels[0].exclude_reason ==
+            static_cast<u16>(AiEntityShadowExcludeReason::unsupported_kind),
+        "unsupported kind was not excluded");
+    // Stale target pointer: excluded.
+    desired = {{own_id, AiSemanticActionKind::attack_unit, 0xdead, 0, 0}};
+    labels = BuildAiEntityShadowLabels(snapshot, &map, desired, state);
+    require(labels[0].label == kAiEntityShadowExcluded &&
+        labels[0].exclude_reason ==
+            static_cast<u16>(AiEntityShadowExcludeReason::stale_target),
+        "stale target pointer was not excluded");
+    // Excluded rows must not disturb the latch: the old MOVE still KEEPs.
+    desired = {{own_id, AiSemanticActionKind::move, 0, 16, 16}};
+    labels = BuildAiEntityShadowLabels(snapshot, &map, desired, state);
+    require(labels[0].label == kAiEntityShadowKeep,
+        "an excluded row corrupted the shadow latch");
+
+    // Record framing: SHD1 magic + size + header + payload + labels.
+    AiEntityActRequestBody body;
+    body.snapshot = snapshot;
+    const std::vector<u8> payload = EncodeAiEntityActRequestPayload(body);
+    AiEntityWireHeader header;
+    header.kind = static_cast<u16>(AiEntityWireKind::act_req);
+    header.own_rows = 1;
+    header.target_rows = 2;
+    header.payload_bytes = static_cast<u32>(payload.size());
+    header.payload_crc32 = AiEntityCrc32(payload.data(), payload.size());
+    const std::vector<u8> record =
+        EncodeAiEntityShadowRecord(header, payload, labels);
+    require(record.size() == 8 + 96 + payload.size() + 4 + 16 &&
+        record[0] == 'S' && record[1] == 'H' && record[2] == 'D' &&
+        record[3] == '1',
+        "shadow record framing wrong");
+}
+
+
+void test_ai_entity_order_latch() {
+    // Baseline view: valid source, engine mirrors the order (MATCH), moving.
+    AiEntityOrderFrameView view{};
+    view.source_alive_active = true;
+    view.control_epoch_matches = true;
+    view.target_valid = true;
+    view.idle = false;
+    view.engine_order_match = kAiEntityEngineOrderMatch;
+
+    // ---- AWAITING_APPLY: timers frozen, exact-origin ACK activates ----
+    AiEntityActiveOrder order{};
+    order.source = {0x1d0, 1};
+    order.command = static_cast<u8>(AiEntityCommand::move);
+    order.target_x = 500;
+    order.target_y = 0;
+    order.issued_frame = 100;
+    order.status = AiEntityOrderStatus::awaiting_apply;
+    order.delivery_seen_frame = 0xffffffffu;
+    AiEntityOrderFrameView awaiting = view;
+    awaiting.unit_x = 500;   // even standing AT the goal:
+    awaiting.idle = true;    // no completion while AWAITING
+    awaiting.engine_order_match = kAiEntityEngineOrderDifferent;  // old active Y
+    require(AiEntityOrderTrackFrame(order, awaiting, 101) &&
+        order.status == AiEntityOrderStatus::awaiting_apply,
+        "AWAITING ran completion/mismatch rules");
+    // Same-content ACK with a wrong origin must NOT activate (the view's
+    // acknowledged_matching models the exact origin+payload comparison).
+    awaiting.acknowledged_matching = false;
+    awaiting.delivery_origin_seen = true;
+    require(AiEntityOrderTrackFrame(order, awaiting, 102) &&
+        order.status == AiEntityOrderStatus::awaiting_apply,
+        "non-matching ACK activated the order");
+    // Exact ACK: ACTIVE, idle/progress baselines seeded at the ACK frame.
+    awaiting.acknowledged_matching = true;
+    awaiting.unit_x = 40;
+    awaiting.unit_y = 8;
+    require(AiEntityOrderTrackFrame(order, awaiting, 110) &&
+        order.status == AiEntityOrderStatus::active &&
+        order.applied_frame == 110 && order.last_progress_x == 40 &&
+        order.last_progress_frame == 110 && order.idle_candidate_frames == 0,
+        "matching ACK did not seed the ACTIVE baselines");
+    // ACK frame itself runs no ACTIVE rule (frame <= applied_frame).
+    AiEntityOrderFrameView active_view = view;
+    active_view.unit_x = 40;
+    active_view.unit_y = 8;
+    require(AiEntityOrderTrackFrame(order, active_view, 110) &&
+        order.status == AiEntityOrderStatus::active,
+        "ACTIVE rules ran on the ACK frame");
+
+    // ---- delivery escape: consumer passed without the exact origin ----
+    AiEntityActiveOrder waiting{};
+    waiting.command = static_cast<u8>(AiEntityCommand::move);
+    waiting.issued_frame = 200;
+    waiting.status = AiEntityOrderStatus::awaiting_apply;
+    waiting.delivery_seen_frame = 0xffffffffu;
+    AiEntityOrderFrameView passed = view;
+    passed.consumer_passed_sequence = true;
+    passed.delivery_origin_seen = false;
+    for (u32 frame = 201; frame <= 208; ++frame) {
+        AiEntityOrderTrackFrame(waiting, passed, frame);
+    }
+    require(waiting.status == AiEntityOrderStatus::interrupted,
+        "consumer-passed-without-origin did not escape after 8 frames");
+
+    // ---- absolute 256-frame apply timeout ----
+    AiEntityActiveOrder timed{};
+    timed.command = static_cast<u8>(AiEntityCommand::move);
+    timed.issued_frame = 300;
+    timed.status = AiEntityOrderStatus::awaiting_apply;
+    timed.delivery_seen_frame = 0xffffffffu;
+    require(AiEntityOrderTrackFrame(timed, view, 555) &&
+        timed.status == AiEntityOrderStatus::awaiting_apply,
+        "absolute timeout fired early");
+    require(AiEntityOrderTrackFrame(timed, view, 556) &&
+        timed.status == AiEntityOrderStatus::interrupted,
+        "absolute 256-frame apply timeout did not fire");
+
+    // ---- ACTIVE: completion, DIFFERENT, CLEARED, MATCH idle, stall ----
+    auto make_active_move = []() {
+        AiEntityActiveOrder o{};
+        o.command = static_cast<u8>(AiEntityCommand::move);
+        o.target_x = 500;
+        o.target_y = 0;
+        o.status = AiEntityOrderStatus::active;
+        o.applied_frame = 100;
+        o.last_progress_frame = 100;
+        return o;
+    };
+    // MOVE completion: within 32px and idle.
+    AiEntityActiveOrder done = make_active_move();
+    AiEntityOrderFrameView at_goal = view;
+    at_goal.unit_x = 490;
+    at_goal.idle = true;
+    require(AiEntityOrderTrackFrame(done, at_goal, 120) &&
+        done.status == AiEntityOrderStatus::completed,
+        "MOVE at the goal did not complete");
+    // DIFFERENT payload: immediate INTERRUPTED.
+    AiEntityActiveOrder overridden = make_active_move();
+    AiEntityOrderFrameView different = view;
+    different.engine_order_match = kAiEntityEngineOrderDifferent;
+    require(AiEntityOrderTrackFrame(overridden, different, 120) &&
+        overridden.status == AiEntityOrderStatus::interrupted,
+        "DIFFERENT payload did not interrupt");
+    // CLEARED: strictly 4 CONSECUTIVE idle frames.
+    AiEntityActiveOrder cleared = make_active_move();
+    AiEntityOrderFrameView cleared_idle = view;
+    cleared_idle.engine_order_match = kAiEntityEngineOrderCleared;
+    cleared_idle.idle = true;
+    AiEntityOrderFrameView cleared_busy = cleared_idle;
+    cleared_busy.idle = false;
+    AiEntityOrderTrackFrame(cleared, cleared_idle, 121);
+    AiEntityOrderTrackFrame(cleared, cleared_idle, 122);
+    AiEntityOrderTrackFrame(cleared, cleared_idle, 123);
+    AiEntityOrderTrackFrame(cleared, cleared_busy, 124);   // reset
+    AiEntityOrderTrackFrame(cleared, cleared_idle, 125);
+    AiEntityOrderTrackFrame(cleared, cleared_idle, 126);
+    AiEntityOrderTrackFrame(cleared, cleared_idle, 127);
+    require(cleared.status == AiEntityOrderStatus::active,
+        "nonconsecutive idle frames accumulated");
+    AiEntityOrderTrackFrame(cleared, cleared_idle, 128);
+    require(cleared.status == AiEntityOrderStatus::interrupted,
+        "CLEARED + 4 idle frames did not interrupt");
+    // MATCH MOVE stall: no 8px progress for 48 progress-required frames;
+    // freeze frames (attack recovery) advance the baseline instead.
+    AiEntityActiveOrder stalled = make_active_move();
+    AiEntityOrderFrameView stuck = view;
+    stuck.unit_x = 100;
+    AiEntityOrderFrameView frozen = stuck;
+    frozen.attack_recovery = 5;
+    u32 frame = 101;
+    for (u32 i = 0; i < 47; ++i, ++frame) {
+        AiEntityOrderTrackFrame(stalled, stuck, frame);
+    }
+    require(stalled.status == AiEntityOrderStatus::active,
+        "stall fired before 48 frames");
+    AiEntityOrderTrackFrame(stalled, frozen, frame++);   // freeze resets base
+    for (u32 i = 0; i < 47; ++i, ++frame) {
+        AiEntityOrderTrackFrame(stalled, stuck, frame);
+    }
+    require(stalled.status == AiEntityOrderStatus::active,
+        "freeze frame did not reset the progress baseline");
+    AiEntityOrderTrackFrame(stalled, stuck, frame++);
+    require(stalled.status == AiEntityOrderStatus::stalled,
+        "48 progress-required frames without 8px did not stall");
+
+    // ---- ATTACK_UNIT: target loss + terminal states stay latched ----
+    AiEntityActiveOrder attack{};
+    attack.command = static_cast<u8>(AiEntityCommand::attack_unit);
+    attack.target = {0x910, 3};
+    attack.status = AiEntityOrderStatus::active;
+    attack.applied_frame = 100;
+    attack.last_progress_frame = 100;
+    AiEntityOrderFrameView lost = view;
+    lost.target_valid = false;
+    require(AiEntityOrderTrackFrame(attack, lost, 130) &&
+        attack.status == AiEntityOrderStatus::target_lost,
+        "dead target did not close as TARGET_LOST");
+    require(AiEntityOrderTrackFrame(attack, view, 131) &&
+        attack.status == AiEntityOrderStatus::target_lost,
+        "terminal state auto-resumed");
+    // Source purge.
+    AiEntityOrderFrameView gone = view;
+    gone.source_alive_active = false;
+    require(!AiEntityOrderTrackFrame(attack, gone, 132),
+        "invalid source did not purge the record");
+
+    // ---- decision rows: KEEP / dedupe / satisfied-terminal / re-ISSUE ----
+    AiEntityDecisionRowInput keep{};
+    keep.command = static_cast<u8>(AiEntityCommand::keep_current_order);
+    require(AiEntityEvaluateDecisionRow(nullptr, keep).result ==
+            AiEntityAttemptResult::kept &&
+        !AiEntityEvaluateDecisionRow(nullptr, keep).needs_packet,
+        "KEEP produced a packet");
+    AiEntityActiveOrder pending_move = make_active_move();
+    pending_move.status = AiEntityOrderStatus::awaiting_apply;
+    AiEntityDecisionRowInput same_move{};
+    same_move.command = static_cast<u8>(AiEntityCommand::move);
+    same_move.point_x = 500;
+    same_move.point_y = 0;
+    require(AiEntityEvaluateDecisionRow(&pending_move, same_move).result ==
+        AiEntityAttemptResult::deduped,
+        "same ISSUE against AWAITING was not deduped");
+    // Completed MOVE, still inside the 32px radius: suppressed.
+    AiEntityActiveOrder done_move = make_active_move();
+    done_move.status = AiEntityOrderStatus::completed;
+    AiEntityDecisionRowInput near_goal = same_move;
+    near_goal.unit_x = 490;
+    require(AiEntityEvaluateDecisionRow(&done_move, near_goal).result ==
+        AiEntityAttemptResult::deduped,
+        "satisfied completed MOVE was re-published");
+    // Drifted away from the completed point: a fresh ISSUE again.
+    AiEntityDecisionRowInput drifted = same_move;
+    drifted.unit_x = 100;
+    require(AiEntityEvaluateDecisionRow(&done_move, drifted).needs_packet,
+        "unsatisfied completed MOVE stayed suppressed");
+    // INTERRUPTED: the same ISSUE is a fresh policy choice.
+    AiEntityActiveOrder broken = make_active_move();
+    broken.status = AiEntityOrderStatus::interrupted;
+    require(AiEntityEvaluateDecisionRow(&broken, same_move).needs_packet,
+        "same ISSUE after INTERRUPTED stayed suppressed");
+    // A different point is always a new packet.
+    AiEntityDecisionRowInput moved = same_move;
+    moved.point_x = 132;
+    require(AiEntityEvaluateDecisionRow(&pending_move, moved).needs_packet,
+        "changed point did not publish");
+}
+
 int main() {
     test_observation_visibility_and_determinism();
     test_observation_resource_memory();
@@ -4740,6 +5646,13 @@ int main() {
     test_ai_cohesion_median_anchor();
     test_ai_attack_waves();
     test_ai_play_lobby_role_compatibility();
+    test_ai_entity_registry();
+    test_ai_entity_point_geometry();
+    test_ai_entity_attack_pair_predicate();
+    test_ai_entity_snapshot_and_wire();
+    test_ai_entity_wire_contract();
+    test_ai_entity_shadow_labels();
+    test_ai_entity_order_latch();
     std::cout << "ai_play_interface_regression: passed\n";
     return 0;
 }

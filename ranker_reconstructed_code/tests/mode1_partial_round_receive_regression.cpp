@@ -124,6 +124,129 @@ int main() {
         return 1;
     }
 
+    // ---- entity-RL atomic AI batch publish (plan sections 2 / 17.18) ----
+    {
+        // Fresh cursors on channels 2 and 3.
+        auto& state = mode1_reliable_state();
+        state.channels[2] = Mode1ReliableChannelState{};
+        state.channels[3] = Mode1ReliableChannelState{};
+        state.read_sequences[2] = 0;
+        state.read_sequences[3] = 0;
+
+        // Success hook runs exactly once per successful transaction.
+        static u32 hook_calls = 0;
+        hook_calls = 0;
+        const auto hook = [](void*) { ++hook_calls; };
+
+        // Multi-channel batch: consecutive per-channel sequences, both
+        // committed in one transaction.
+        std::vector<Mode1AiBatchPacketRequest> batch;
+        Mode1AiBatchPacketRequest request{};
+        request.packed_opcode = (0x02u << 24) | 2u;   // subtype 2, channel 2
+        batch.push_back(request);
+        batch.push_back(request);
+        request.packed_opcode = (0x02u << 24) | 3u;   // channel 3
+        batch.push_back(request);
+        if (AcceptMode1AiOrderedPacketBatch(batch, hook, nullptr) !=
+                Mode1AiBatchCode::accepted ||
+            hook_calls != 1 ||
+            batch[0].assigned_channel != 2 || batch[0].assigned_sequence != 0 ||
+            batch[1].assigned_sequence != 1 ||
+            batch[2].assigned_channel != 3 || batch[2].assigned_sequence != 0 ||
+            state.channels[2].expected_sequence != 2 ||
+            state.channels[3].expected_sequence != 1) {
+            std::fprintf(stderr, "AI batch commit did not assign per-channel "
+                "consecutive sequences\n");
+            return 1;
+        }
+
+        // Empty batch: metadata-only success, hook still runs.
+        std::vector<Mode1AiBatchPacketRequest> empty;
+        if (AcceptMode1AiOrderedPacketBatch(empty, hook, nullptr) !=
+                Mode1AiBatchCode::empty || hook_calls != 2) {
+            std::fprintf(stderr, "empty AI batch did not commit metadata\n");
+            return 1;
+        }
+
+        // All-or-none: an invalid channel in the SECOND packet aborts the
+        // whole batch without touching the first packet's channel and
+        // without running the hook.
+        std::vector<Mode1AiBatchPacketRequest> bad;
+        request.packed_opcode = (0x02u << 24) | 2u;
+        bad.push_back(request);
+        request.packed_opcode = (0x02u << 24) | 9u;   // invalid channel
+        bad.push_back(request);
+        if (AcceptMode1AiOrderedPacketBatch(bad, hook, nullptr) !=
+                Mode1AiBatchCode::invalid_channel ||
+            hook_calls != 2 || state.channels[2].expected_sequence != 2) {
+            std::fprintf(stderr, "AI batch abort was not all-or-none\n");
+            return 1;
+        }
+
+        // Per-channel window boundary: unread 0x7ff + 1 planned hits the
+        // strict less-than rule; unread 0x7fe + 1 passes.  Channel 4 is
+        // synthetic (cursors only).
+        state.channels[4] = Mode1ReliableChannelState{};
+        state.channels[4].expected_sequence = 0x7ffu;
+        state.read_sequences[4] = 0;
+        std::vector<Mode1AiBatchPacketRequest> brim;
+        request.packed_opcode = (0x02u << 24) | 4u;
+        brim.push_back(request);
+        if (AcceptMode1AiOrderedPacketBatch(brim, nullptr, nullptr) !=
+                Mode1AiBatchCode::capacity ||
+            state.channels[4].expected_sequence != 0x7ffu) {
+            std::fprintf(stderr,
+                "0x7ff unread + 1 planned was not rejected\n");
+            return 1;
+        }
+        state.read_sequences[4] = 1;   // one consumed: 0x7fe unread
+        // The wrap slot (sequence 0x7ff -> slot 0x7ff) is empty here.
+        if (AcceptMode1AiOrderedPacketBatch(brim, nullptr, nullptr) !=
+                Mode1AiBatchCode::accepted ||
+            brim[0].assigned_sequence != 0x7ffu ||
+            state.channels[4].expected_sequence != 0x800u) {
+            std::fprintf(stderr,
+                "0x7fe unread + 1 planned was wrongly rejected\n");
+            return 1;
+        }
+
+        // Occupied wrap-around slot: an unread occupant in the target slot
+        // rejects the batch even when the count check passes.
+        state.channels[5] = Mode1ReliableChannelState{};
+        state.channels[5].expected_sequence = 0x800u;   // next slot = 0
+        state.read_sequences[5] = 0x7f0u;               // 0x10 unread
+        state.channels[5].packet_flags[0] |= 1;         // slot 0 occupant:
+        write_u32(state.channels[5].packet_bytes[0], 0x08, 0x7f5u);  // unread
+        std::vector<Mode1AiBatchPacketRequest> wrap;
+        request.packed_opcode = (0x02u << 24) | 5u;
+        wrap.push_back(request);
+        if (AcceptMode1AiOrderedPacketBatch(wrap, nullptr, nullptr) !=
+                Mode1AiBatchCode::slot_occupied) {
+            std::fprintf(stderr, "occupied wrap slot was not rejected\n");
+            return 1;
+        }
+        // Once the occupant is consumed the same batch commits.
+        write_u32(state.channels[5].packet_bytes[0], 0x08, 0x700u);
+        if (AcceptMode1AiOrderedPacketBatch(wrap, nullptr, nullptr) !=
+                Mode1AiBatchCode::accepted) {
+            std::fprintf(stderr, "consumed wrap slot stayed rejected\n");
+            return 1;
+        }
+
+        // Producer behind consumer: transport-fatal underflow.
+        state.channels[6] = Mode1ReliableChannelState{};
+        state.channels[6].expected_sequence = 3;
+        state.read_sequences[6] = 5;
+        std::vector<Mode1AiBatchPacketRequest> under;
+        request.packed_opcode = (0x02u << 24) | 6u;
+        under.push_back(request);
+        if (AcceptMode1AiOrderedPacketBatch(under, nullptr, nullptr) !=
+                Mode1AiBatchCode::sequence_underflow) {
+            std::fprintf(stderr, "producer<consumer was not fatal\n");
+            return 1;
+        }
+    }
+
     std::puts("mode-1 partial round receive regression passed");
     return 0;
 }

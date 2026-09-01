@@ -107,9 +107,19 @@ struct P2PNetworkLaunchParameters {
     // its per-decision observations to ai_rl_observe.jsonl for imitation
     // learning (behavior-cloning the built-in AI into the high-level policy).
     bool self_play_imitate = false;
+    // -AISHADOW: entity-command RL shadow dataset (plan section 13.1): the
+    // scripted micro keeps controlling the match while its pre-dedupe desired
+    // orders are recorded as per-unit KEEP/ISSUE labels at the 8-frame entity
+    // cadence (ai_entity_shadow_<owner>.bin under -AIOUT).
+    bool self_play_shadow = false;
     // -AIIMITOWNER:N — with -AIREPLAY + -AIIMITATE, the recorded owner slot to
     // log (a human player's replay).  0xff = the replay's own local player.
     u32 self_play_imitate_owner = 0xffu;
+    // -AIENTITY:PORT — entity-command RL controller (plan section 11): the
+    // controlled owners speak the binary act2 protocol to a Python policy
+    // server on 127.0.0.1:PORT.  Direct per-unit control; the old fighter
+    // objective executor and the autopilot are forced OFF.  0 = disabled.
+    u16 self_play_entity_port = 0;
     // -AIIPC:PORT — online policy-in-the-loop: the Computer(AI) owner asks a
     // Python policy server on 127.0.0.1:PORT for each high-level action instead
     // of sampling randomly.  0 = disabled.

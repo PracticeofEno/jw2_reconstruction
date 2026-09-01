@@ -260,6 +260,52 @@ bool TryGetMode1ReliableAuthoritativeSubtype10Value(
 
 bool AcceptMode1OrderedPacket(const void* packet, u32 packet_size);
 bool PopMode1OrderedPacket(u32 channel, Mode1ReliablePacket& out_packet);
+
+// ---------------------------------------------------------------------------
+// AI entity-command atomic batch publish (docs/AI_PLAY_ENTITY_COMMAND_RL_PLAN
+// section 2/4.3).  One frame's AI packets for ALL controlled owners are
+// preflighted per channel against the reliable ring and then committed
+// all-or-none under one mutex hold: capacity + target-slot checks first, the
+// caller's no-fail success hook (staged controller metadata) next, then every
+// packet's bytes and channel cursors.  The consumer cannot observe a partial
+// batch; callbacks fire after the lock in commit order.  The check is per
+// channel — two owners whose channels are individually safe are never
+// rejected just because their aggregate exceeds one window.
+// ---------------------------------------------------------------------------
+
+struct Mode1AiBatchPacketRequest {
+    u32 packed_opcode = 0;
+    u32 arg0 = 0;
+    u32 unit_offset = 0;
+    u32 arg1 = 0;
+    u32 arg2 = 0;
+    u32 arg3 = 0;
+    // LOCAL_BROADCAST owner packet: the caller replays the range-flush
+    // semantics post-commit; LOCALLY_SIMULATED (false) never touches the
+    // broadcast cursors.
+    bool local_broadcast = false;
+    // Outputs (valid when the batch is accepted): the origin the sidecar and
+    // active-order records adopt.
+    u32 assigned_channel = 0;
+    u32 assigned_sequence = 0;
+    u8 assigned_subtype = 0;
+};
+
+enum class Mode1AiBatchCode : u32 {
+    accepted = 0,
+    empty = 1,               // no packets; success hook still ran
+    invalid_channel = 2,
+    // producer < consumer or u32 wrap: transport-fatal for the controller.
+    sequence_underflow = 3,
+    capacity = 4,            // unread + planned would reach the window size
+    slot_occupied = 5,       // target ring slot still holds an unread packet
+};
+
+// success_hook runs while the reliable mutex is held and must not fail,
+// allocate, or re-enter the reliable layer.
+Mode1AiBatchCode AcceptMode1AiOrderedPacketBatch(
+    std::vector<Mode1AiBatchPacketRequest>& packets,
+    void (*success_hook)(void* user_data), void* success_user_data);
 void ShiftMode1Subtype10Values();
 void ApplyMode1SyncTimeoutPenalty();
 bool CheckMode1ReliableSync(u32 now_ms);

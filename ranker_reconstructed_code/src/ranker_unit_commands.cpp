@@ -373,6 +373,8 @@ void board_unit(UnitCommandContext& context, UnitMovementUnit& carrier,
     passenger.command_flags &= ~0x1010u;
     passenger.pending_command.state = 0;
     passenger.deferred_command_count = 0;
+    passenger.pending_command_origin = {};
+    passenger.deferred_command_origins.fill({});
     if (context.callbacks.on_unit_boarded != nullptr) {
         context.callbacks.on_unit_boarded(context, carrier, passenger);
     }
@@ -477,6 +479,8 @@ bool place_unloaded_unit(UnitCommandContext& context, UnitMovementUnit& carrier,
     }
     passenger.pending_command.state = 0;
     passenger.deferred_command_count = 0;
+    passenger.pending_command_origin = {};
+    passenger.deferred_command_origins.fill({});
     PopDeferredUnitCommandOrReturnIdle(context, passenger);
     if (carrier_driven) {
         carrier.command_lockout_ticks = 2;
@@ -2438,6 +2442,8 @@ bool PushDeferredUnitCommand(UnitMovementUnit& unit,
     }
 
     unit.deferred_commands[unit.deferred_command_count] = command;
+    unit.deferred_command_origins[unit.deferred_command_count] =
+        g_mode1_dispatch_packet_origin;
     ++unit.deferred_command_count;
     return true;
 }
@@ -2475,6 +2481,7 @@ bool SetOrQueueUnitCommandPayload(UnitMovementUnit* unit,
         return PushDeferredUnitCommand(*unit, command, max_deferred_count);
     }
     unit->pending_command = command;
+    unit->pending_command_origin = g_mode1_dispatch_packet_origin;
     return true;
 }
 
@@ -2759,17 +2766,22 @@ void PopDeferredUnitCommandOrReturnIdle(UnitCommandContext& context,
     UnitMovementUnit& unit) {
     if (unit.deferred_command_count == 0) {
         unit.active_command_payload.state = 0;
+        unit.active_command_origin = {};
         HandleUnitReturnToIdleState(context, unit);
         return;
     }
 
     unit.pending_command = unit.deferred_commands[0];
+    unit.pending_command_origin = unit.deferred_command_origins[0];
     --unit.deferred_command_count;
     if (unit.deferred_command_count != 0) {
         for (u32 i = 0; i + 1 < unit.deferred_commands.size(); ++i) {
             unit.deferred_commands[i] = unit.deferred_commands[i + 1];
+            unit.deferred_command_origins[i] =
+                unit.deferred_command_origins[i + 1];
         }
     }
+    unit.deferred_command_origins[unit.deferred_commands.size() - 1] = {};
 }
 
 bool HandleExtendedRuntimeTargetValidationActionResult(
@@ -2824,6 +2836,7 @@ bool FilterPendingUnitCommandInterrupt(UnitMovementUnit& unit) {
             return true;
         }
         unit.pending_command = {};
+        unit.pending_command_origin = {};
         return false;
     }
     if (current_state == kUnitStateTransportAttached) {
@@ -2951,6 +2964,7 @@ void HandlePendingUnitCommandDispatch(UnitCommandContext& context,
         basic_order_value % kOriginalUnitPoolStride == 0;
     command.state &= ~kUnitCommandMirrorClearFlag;
     unit.active_command_payload = command;
+    unit.active_command_origin = unit.pending_command_origin;
     unit.command_value = static_cast<u32>(command.x);
     // Original 0x004cfe37 stores one raw target-or-value word in a shared
     // field.  The reconstruction separates command_value from the resolved
@@ -2972,6 +2986,7 @@ void HandlePendingUnitCommandDispatch(UnitCommandContext& context,
     // words at +0x88..+0x90 deliberately remain as residual payload until a
     // later command overwrites them.
     unit.pending_command.state = 0;
+    unit.pending_command_origin = {};
     if (context.callbacks.on_command_acknowledged != nullptr) {
         context.callbacks.on_command_acknowledged(context, unit);
     }
@@ -6214,6 +6229,8 @@ void HandleUnitMorphEnterTimer(UnitCommandContext& context, UnitMovementUnit& un
     unit.movement_step_accumulator = 0;
     unit.pending_command.state = 0;
     unit.deferred_command_count = 0;
+    unit.pending_command_origin = {};
+    unit.deferred_command_origins.fill({});
     PopDeferredUnitCommandOrReturnIdle(context, unit);
 }
 
@@ -6233,6 +6250,8 @@ void HandleUnitMorphExitTimer(UnitCommandContext& context, UnitMovementUnit& uni
     unit.movement_step_accumulator = 0;
     unit.pending_command.state = 0;
     unit.deferred_command_count = 0;
+    unit.pending_command_origin = {};
+    unit.deferred_command_origins.fill({});
     if (unit.type_id == 0x25 &&
         context.callbacks.find_strict_placement_point != nullptr) {
         UnitMovementPoint point{unit.x, unit.y};

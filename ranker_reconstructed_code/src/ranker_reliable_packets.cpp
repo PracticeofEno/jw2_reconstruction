@@ -572,6 +572,128 @@ bool AcceptMode1OrderedPacket(const void* packet, u32 packet_size) {
     return true;
 }
 
+Mode1AiBatchCode AcceptMode1AiOrderedPacketBatch(
+    std::vector<Mode1AiBatchPacketRequest>& packets,
+    void (*success_hook)(void* user_data), void* success_user_data) {
+    std::vector<Mode1ReliablePacket> advanced_packets;
+    Mode1ReliablePacketHook advanced_hook = nullptr;
+    void* advanced_user_data = nullptr;
+    {
+        // One mutex hold across preflight + success hook + commit: the packet
+        // consumer can never observe a partial batch, and no network-thread
+        // Accept can slip between the capacity check and the sequence
+        // assignment (the plan's TOCTOU rule).
+        const std::lock_guard<std::recursive_mutex> lock(g_mode1_reliable_mutex);
+        std::array<u32, kMode1ReliableChannelCount> planned{};
+        for (Mode1AiBatchPacketRequest& request : packets) {
+            const u32 channel_index = request.packed_opcode & 0xffu;
+            if (channel_index >= kMode1ReliableChannelCount) {
+                return Mode1AiBatchCode::invalid_channel;
+            }
+            auto& channel = g_mode1_reliable_state.channels[channel_index];
+            const u32 read_sequence =
+                g_mode1_reliable_state.read_sequences[channel_index];
+            const u32 produced = channel.expected_sequence;
+            if (produced < read_sequence) {
+                // Checked subtraction: producer behind consumer is
+                // transport-fatal, never silently reinterpreted.
+                return Mode1AiBatchCode::sequence_underflow;
+            }
+            const u32 unread = produced - read_sequence;
+            // Strict less-than window rule including this packet.
+            if (unread + planned[channel_index] + 1 >=
+                kMode1ReliableWindowSlots) {
+                return Mode1AiBatchCode::capacity;
+            }
+            const u32 sequence = produced + planned[channel_index];
+            if (sequence == 0xffffffffu) {
+                return Mode1AiBatchCode::sequence_underflow;   // u32 wrap
+            }
+            const u32 slot = sequence & (kMode1ReliableWindowSlots - 1);
+            if ((channel.packet_flags[slot] & 1) != 0) {
+                // A flagged slot is only reusable when its occupant was
+                // already consumed by the game-side reader.
+                const u32 occupant = read_u32(
+                    channel.packet_bytes[slot].data(),
+                    kMode1ReliablePacketBytes, 8);
+                if (occupant >= read_sequence) {
+                    return Mode1AiBatchCode::slot_occupied;
+                }
+            }
+            request.assigned_channel = channel_index;
+            request.assigned_sequence = sequence;
+            request.assigned_subtype =
+                static_cast<u8>((request.packed_opcode >> 24) & 0xffu);
+            planned[channel_index] += 1;
+        }
+        // Preflight succeeded: install the staged controller metadata first
+        // (no-fail, no allocation, no reliable reentry), then commit bytes
+        // and cursors all-or-none.
+        if (success_hook != nullptr) {
+            success_hook(success_user_data);
+        }
+        if (packets.empty()) {
+            // A zero-packet success transaction commits staged metadata only.
+            return Mode1AiBatchCode::empty;
+        }
+        advanced_hook = g_mode1_reliable_state.callbacks.packet_advanced;
+        advanced_user_data = g_mode1_reliable_state.callback_user_data;
+        for (const Mode1AiBatchPacketRequest& request : packets) {
+            auto& channel =
+                g_mode1_reliable_state.channels[request.assigned_channel];
+            const u32 slot =
+                request.assigned_sequence & (kMode1ReliableWindowSlots - 1);
+            auto& bytes = channel.packet_bytes[slot];
+            bytes.fill(0);
+            const auto write_u32_at = [&bytes](u32 offset, u32 value) {
+                bytes[offset] = static_cast<u8>(value & 0xffu);
+                bytes[offset + 1] = static_cast<u8>((value >> 8) & 0xffu);
+                bytes[offset + 2] = static_cast<u8>((value >> 16) & 0xffu);
+                bytes[offset + 3] = static_cast<u8>((value >> 24) & 0xffu);
+            };
+            write_u32_at(0x00, 1);
+            write_u32_at(0x04, kMode1ReliablePacketBytes);
+            write_u32_at(0x08, request.assigned_sequence);
+            write_u32_at(0x0c, request.packed_opcode);
+            write_u32_at(0x10, request.arg0);
+            write_u32_at(0x14, request.unit_offset);
+            write_u32_at(0x18, request.arg1);
+            write_u32_at(0x1c, request.arg2);
+            write_u32_at(0x20, request.arg3);
+            channel.packet_sizes[slot] = kMode1ReliablePacketBytes;
+            channel.packet_flags[slot] |= 1;
+            // Sequences were assigned consecutively from the producer
+            // cursor, so each insert advances in order (same drain semantics
+            // as AcceptMode1OrderedPacket, including buffered successors).
+            u32 current_sequence = request.assigned_sequence;
+            while (channel.expected_sequence == current_sequence) {
+                Mode1ReliablePacket advanced =
+                    make_packet_view(channel, current_sequence);
+                channel.expected_sequence = current_sequence + 1;
+                collect_mode1_subtype10_value_locked(advanced);
+                advanced_packets.push_back(advanced);
+                const u32 next_sequence = current_sequence + 1;
+                const u32 next_slot =
+                    next_sequence & (kMode1ReliableWindowSlots - 1);
+                if ((channel.packet_flags[next_slot] & 1) == 0) {
+                    break;
+                }
+                current_sequence = read_u32(
+                    channel.packet_bytes[next_slot].data(),
+                    kMode1ReliablePacketBytes, 8);
+                channel.missing_range_requested = false;
+            }
+        }
+    }
+    // Callbacks after the lock, in commit order.
+    for (const Mode1ReliablePacket& advanced : advanced_packets) {
+        if (advanced_hook != nullptr) {
+            advanced_hook(advanced, advanced_user_data);
+        }
+    }
+    return Mode1AiBatchCode::accepted;
+}
+
 bool PopMode1OrderedPacket(u32 channel_index, Mode1ReliablePacket& out_packet) {
     if (channel_index >= kMode1ReliableChannelCount) {
         return false;
