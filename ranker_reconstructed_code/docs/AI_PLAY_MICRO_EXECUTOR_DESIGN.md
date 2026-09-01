@@ -283,3 +283,64 @@ walking builder 의 목적지 발자국(`AiBuildingInteractionOf` 로 path_targe
 "거부당했다"는 사실 자체를 관측에 노출: `last_build_reject_type / _frames_ago`(펌프가 플래너 최종 실패 시 기록)
 → 그 타입 건설 마스크를 64프레임 닫고 feature 544 `build_recently_rejected` 로 보고(feature 545개).
 사람도 "여기 못 지음" 메시지를 받으므로 안개 규칙에 어긋나지 않는다.
+
+## 9. v10 — 리플레이 리뷰 5건 반영 (2026-08-31)
+
+사용자 리플레이 리뷰(부대 일괄 이동 / 위협도 부재 / 도달 불가 사냥 / 고기 방치 / 건물 벽) 대응.
+
+**9.1 위협도 측정 + 비례 방어 반사 (문제 1·2)**
+- `AiMicroCombatPower(unit) = health × (10 + attack_power)` — 상대 비교용 전투력 점수(양쪽에 같은 식이라 스케일은 소거).
+- v9 방어 반사가 army **전체**에 오버레이를 씌우던 것을, 버블 안 적 전투력 합 × `reflex_margin_percent`(150%)를
+  넘을 때까지 **앵커 최근접 순으로만** 선발(`reflex_defenders`, 최소 `reflex_min_defenders`=2기)하도록 변경.
+  나머지 army 는 정책 목표를 계속 수행(견제 1기에 본대 회군 방지). 선발대는 오버레이가 서 있는 동안
+  추가만 되고(위협 증가 시) 해제는 위협 소멸 시 일괄 — 플랩 불가.
+- 건물 HP 감소만 있고 공격자가 안 보이면(측정 불가) **최근접 전투 유닛 3기 이하**(`reflex_unseen_defenders`)만
+  정찰대로 파견(사용자 지시) — 전군 회군 없음.
+
+**9.2 사냥 도달성 가드 (문제 3)**
+- army/raid 의 `neutral_only` 대상 선택 시, 그룹의 지상 전투 유닛 기준 4-연결 flood fill 로 **도달 불가
+  몬스터를 후보에서 제외**(몬스터 타일 또는 4-이웃이 도달 가능해야 함; 전원 공중이면 필터 없음).
+  들고 있던 대상이 도달 불가가 되면 keep 해제. 진단 `hunt_unreachable_skipped`.
+- RL 마스크: `hunt_neutral_monster`/`raid_hunt_neutral` 에 `AiMicroHuntableNeutralExists`(자기 시작점 기준
+  flood, 아군 공중 공격 유닛 있으면 통과) 게이트 추가 — 정책이 무의미한 사냥을 고를 수 없음.
+
+**9.3 고기 줍기 우선순위/순서 (문제 4)**
+- 버그 수정: 사냥 중 다음 몬스터 **지명 추격이 고기 분기보다 먼저 return** 해서 시야에 몬스터가 남아 있는 한
+  고기를 지나쳤음 → 사거리 내 교전 실패 후, 지명 추격 **이전에** 배정된 고기를 줍도록 순서 변경.
+- 수집자 선택을 유닛 id 순 선착에서 **프레임당 프리패스 배정**으로 교체: 드랍 1개당 1기,
+  **고기 미보유(`action_mode == 0`) 유닛 우선**(사용자 지시) → 최근접 → id. 교전 중/정책 홀드 유닛 제외.
+- defend 목표에서도 줍기 허용(사냥 종료 후 기지 근처 드랍 방치 방지). 단 **버블 안 드랍만** 배정해 리시와
+  싸우지 않음.
+
+**9.4 배치 개방 링 선호 (문제 5)**
+- `AiBuildSiteCandidateOk` 가 발자국 1타일 링의 **완전 개방 여부**(`ring_fully_open`)를 보고.
+- `FindAiBuildSite` 후보 정렬을 (개방 링 우선, 거리, 타일) 로 변경 — 공간이 있으면 모든 건물이 사방
+  1타일 보행 통로를 유지하고, 붙여 짓기는 폴백으로만 남음(기존 아크 가드·국소 BFS 검증은 그대로).
+
+회귀 테스트 4건 추가(`test_ai_reflex_proportional_detail`, `test_ai_hunt_reachability_guard`,
+`test_ai_meat_priority_and_defend_pickup`, `test_ai_placement_open_ring_preference`), 전체 통과.
+
+**9.5 4부대 운용 (2026-08-31, 사용자 지시)**
+- raid를 3슬롯(`raid`, `raid_b`, `raid_c`)으로 일반화 — **본대 + 별동대 3개 = 최대 4부대**.
+  각 슬롯은 기존 raid와 동일한 의미론: detach(본대 기동력 상위 30%, 최소 3기)/merge/자체 목표
+  (attack_units/attack_base/defend/retreat/hunt/search), 반사 합류 반경, 사냥 도달성 가드 공유.
+- 액션 64 → **80** (raid_b/raid_c 각 8종), 피처 788 → **802** ([788..801] 슬롯별 7항: 크기/생존/
+  attack/defend/retreat/buildings_first/search). 관측에 `raid_b/c_unit_count·objective_kind·attack_tactic`
+  추가(펌프 채움), 결정 게이트 raid 전멸 트리거를 3슬롯 감시로 확장.
+- **호환성**: 액션·피처 차원 변경으로 기존 챔피언/체크포인트 무효 — v8 raid 도입 때처럼 BC 웜스타트
+  재수집 후 재학습 필요. 기존 피처/액션 인덱스는 append-only라 과거 데이터셋의 인덱스 의미는 불변.
+- 반사 방어의 정책 이관은 보류(사용자 논의 2026-08-31): 매 프레임 반응 지연·훈련 안정성 근거로
+  실행기 유지, 정책 retreat 거부권 + 위협 비례 파견으로 침해 최소화. 후속: 반사 상태 피처 노출,
+  강해진 세대에서 반사 OFF A/B 리그로 제거 여부 판정.
+
+**9.6 공격 커밋 + 사냥 거리 게이트 (2026-08-31, 사용자 지시: "공격 명령이면 최소한 적은 만나야")**
+- **공격 커밋(마스크 잠금)**: 전투 부대(army·raid 3슬롯)가 attack 목표 + 표적 보유 + 미교전 +
+  2400프레임 미경과 상태면, 그 부대의 재지시 액션을 마스크에서 잠금(army: attack×2/defend/hunt/
+  search/hold/patrol, raid 슬롯: 자체 6액션+merge). **retreat는 항상 열림**(탈출구), 생산·연구·타
+  부대는 무관. 해제 = 첫 교전(부대원 무기 접촉 래치 `group_engaged`, `AiMicroSetObjective`가 리셋)
+  / 표적 소진 / 타임아웃. 관측 append: 부대별 `*_objective_age`·`*_engaged_since_set`·raid 슬롯별
+  `*_attack_has_target`, `army_centroid_x/y` (펌프 채움). 피처/액션 차원 불변(마스크만).
+- **사냥 거리 게이트**: 본대 `hunt_neutral_monster`는 부대 중심 `army_hunt_radius`(1200px) 안의
+  도달 가능 몬스터가 있을 때만 합법 + 실행기 대상 선택도 동일 반경 제한(반경 밖은 대상 소진 →
+  objective_done 트리거로 정책 재결정). raid 슬롯 사냥은 무제한(원정은 별동대의 일).
+- 회귀 테스트 `test_ai_attack_commit_and_hunt_range` 추가, 전체 통과.

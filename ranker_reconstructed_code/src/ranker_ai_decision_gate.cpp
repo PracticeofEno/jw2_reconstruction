@@ -191,6 +191,10 @@ AiDecisionGateResult AiDecisionGateEvaluate(AiDecisionGateState& state,
                 state.prev_army_had_target && !army_has_target) ||
             (state.prev_raid_members > 0 &&
                 observation.raid_unit_count == 0) ||
+            (state.prev_raid_b_members > 0 &&
+                observation.raid_b_unit_count == 0) ||
+            (state.prev_raid_c_members > 0 &&
+                observation.raid_c_unit_count == 0) ||
             (state.prev_scout_id != 0 && observation.scout_unit_id == 0) ||
             (state.prev_berry_id != 0 &&
                 observation.berry_scout_unit_id == 0) ||
@@ -205,6 +209,15 @@ AiDecisionGateResult AiDecisionGateEvaluate(AiDecisionGateState& state,
     // handled above against the snapshot.
     if (base_threat && !state.prev_base_threat) {
         triggers |= trigger_base_threat;
+    }
+    // v10.2 (user replay report: the army kept defending with no enemy in
+    // sight): a policy DEFEND is done once the base threat CLEARS.  The
+    // falling edge fires objective_done so the policy re-decides right away
+    // - the defend mask is closed again by then, so a stale defend objective
+    // cannot outlive its threat.
+    if (state.has_snapshot && !base_threat && state.prev_base_threat &&
+        observation.army_objective_kind == 3u) {
+        triggers |= trigger_objective_done;
     }
     if (owner_packet_pending) {
         triggers |= trigger_owner_packet;
@@ -233,17 +246,21 @@ AiDecisionGateResult AiDecisionGateEvaluate(AiDecisionGateState& state,
     AiDecisionGateSnapshotObjectives(state, observation.army_objective_kind,
         observation.army_attack_has_target != 0, observation.raid_unit_count,
         observation.scout_unit_id, observation.berry_scout_unit_id,
-        observation.explorer_unit_id, observation.roamer_unit_id);
+        observation.explorer_unit_id, observation.roamer_unit_id,
+        observation.raid_b_unit_count, observation.raid_c_unit_count);
     state.has_snapshot = true;
     return result;
 }
 
 void AiDecisionGateSnapshotObjectives(AiDecisionGateState& state,
     u32 army_kind, bool army_has_target, u32 raid_members, u32 scout_id,
-    u32 berry_id, u32 explorer_id, u32 roamer_id) {
+    u32 berry_id, u32 explorer_id, u32 roamer_id, u32 raid_b_members,
+    u32 raid_c_members) {
     state.prev_army_kind = army_kind;
     state.prev_army_had_target = army_has_target;
     state.prev_raid_members = raid_members;
+    state.prev_raid_b_members = raid_b_members;
+    state.prev_raid_c_members = raid_c_members;
     state.prev_scout_id = scout_id;
     state.prev_berry_id = berry_id;
     state.prev_explorer_id = explorer_id;

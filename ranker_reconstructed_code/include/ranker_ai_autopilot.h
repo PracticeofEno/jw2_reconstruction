@@ -38,6 +38,14 @@ struct AiAutopilotConfig {
     // the moment an enemy building is seen or remembered.
     u32 scout_guard_start_frame = 1200;
     u32 scout_guard_cooldown_frames = 256;
+    // v10 tech guard (2026-09-01): with this much UNRESERVED bank, the first
+    // missing tech building of the audited chain is built.  DEFAULT OFF
+    // (user decision: tech timing is the policy's to LEARN - the bootstrap
+    // is fixed by longer imitation games instead, so BC carries tech-build
+    // labels).  Kept as a last-resort safety net behind this flag.
+    bool tech_guard_enabled = false;
+    u32 tech_bank_threshold = 1200;
+    u32 tech_guard_cooldown_frames = 192;
 };
 
 // Autopilot rule slots (the counter/feature order).
@@ -58,6 +66,7 @@ struct AiAutopilotState {
     u32 egg_idle_since_frame = 0xffffffffu;
     // Scout-guard issuance throttle (set on emit, not publish).
     u32 last_scout_guard_frame = 0xffffffffu;
+    u32 last_tech_guard_frame = 0xffffffffu;
     // Rule firings: total (result JSON) and since the last policy decision
     // (features [785..787] carry the first three; the pump resets the window
     // at each policy decision).  Slot order = AiAutopilotRule.

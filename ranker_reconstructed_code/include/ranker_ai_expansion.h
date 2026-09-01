@@ -147,9 +147,15 @@ bool AiBuildSiteKeepsLocalPaths(const AiObservation& observation,
 // engine's footprint-occupied gate.  One byte per map tile; computed once
 // per planning call and passed to the overload below.
 std::vector<u8> AiBuildOccupancyGrid(const AiObservation& observation);
+// `ring_fully_open` (v10, optional): true when EVERY cell of the one-tile
+// ring around the footprint is walkable and unoccupied - a building placed
+// there keeps a full walk-around gap (user replay report: structures placed
+// flush against each other grew into walls units could not pass).  Site
+// searches prefer such candidates.
 bool AiBuildSiteCandidateOk(const AiObservation& observation,
     const std::vector<u8>& occupancy, u32 type_id, i32 tile_x, i32 tile_y,
-    bool require_explored, bool* blocked, const AiExpansionConfig& config = {});
+    bool require_explored, bool* blocked, const AiExpansionConfig& config = {},
+    bool* ring_fully_open = nullptr);
 
 struct AiBuildSite {
     bool found = false;

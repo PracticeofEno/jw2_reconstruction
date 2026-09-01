@@ -283,6 +283,34 @@ struct AiObservation {
     // 0 = none).  v8.
     u32 raid_objective_kind = 0;
     u32 raid_attack_tactic = 0;
+    // v10: the two extra raid slots (up to four fighting bodies).  Same
+    // encoding as the raid fields above; 0 when no executor drives the owner.
+    u32 raid_b_unit_count = 0;
+    u32 raid_b_objective_kind = 0;
+    u32 raid_b_attack_tactic = 0;
+    u32 raid_c_unit_count = 0;
+    u32 raid_c_objective_kind = 0;
+    u32 raid_c_attack_tactic = 0;
+    // v10 attack-commit state (pump-filled; user directive: an ordered attack
+    // must at least MEET the enemy).  Per fighting group: frames since the
+    // policy set its objective, and whether any member entered weapon contact
+    // since then.  The RL mask locks the group's re-tasking actions while an
+    // attack with a target is marching un-engaged (retreat stays open).
+    u32 army_objective_age = 0xffffffffu;
+    u32 army_engaged_since_set = 0;
+    u32 raid_attack_has_target = 0;
+    u32 raid_objective_age = 0xffffffffu;
+    u32 raid_engaged_since_set = 0;
+    u32 raid_b_attack_has_target = 0;
+    u32 raid_b_objective_age = 0xffffffffu;
+    u32 raid_b_engaged_since_set = 0;
+    u32 raid_c_attack_has_target = 0;
+    u32 raid_c_objective_age = 0xffffffffu;
+    u32 raid_c_engaged_since_set = 0;
+    // v10 hunt distance gate: the main army's centroid (pump-filled; -1 =
+    // no army).  Army hunts are only legal for monsters near this point.
+    i32 army_centroid_x = -1;
+    i32 army_centroid_y = -1;
     // v9: 1 when the army's ATTACK objective currently has a target or march
     // point (executor-derived; pump-filled).  The decision gate fires
     // trigger_objective_done on the 1 -> 0 edge (attack ran out of targets).

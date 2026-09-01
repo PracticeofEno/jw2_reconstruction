@@ -4,6 +4,7 @@
 
 #include "ranker_ai_actions.h"
 #include "ranker_ai_expansion.h"
+#include "ranker_ai_micro_executor.h"
 #include "ranker_unit_commands.h"
 
 #include <algorithm>
@@ -1074,6 +1075,30 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
     for (std::size_t context = 0; context < 16; ++context) {
         put(0.0f);
     }
+
+    // ======================================================================
+    // v10 [788..801] - raid_b / raid_c group state (7 slots each, mirroring
+    // the raid slots 764..769,771: size, alive, attack, defend, retreat,
+    // buildings_first, search).  Four fighting bodies (user directive).
+    // ======================================================================
+    for (const auto& squad : {
+             std::make_pair(std::make_pair(observation.raid_b_unit_count,
+                 observation.raid_b_objective_kind),
+                 observation.raid_b_attack_tactic),
+             std::make_pair(std::make_pair(observation.raid_c_unit_count,
+                 observation.raid_c_objective_kind),
+                 observation.raid_c_attack_tactic)}) {
+        const u32 count = squad.first.first;
+        const u32 kind = squad.first.second;
+        const u32 tactic = squad.second;
+        put(norm(count, 14.0f));
+        put(count > 0 ? 1.0f : 0.0f);
+        put(kind == 2u ? 1.0f : 0.0f);                    // attack
+        put(kind == 3u ? 1.0f : 0.0f);                    // defend
+        put(kind == 4u ? 1.0f : 0.0f);                    // retreat
+        put(kind == 2u && tactic == 1u ? 1.0f : 0.0f);    // buildings_first
+        put(kind == 6u ? 1.0f : 0.0f);                    // search
+    }
     // Map knowledge gates for the split search actions: an unexplored start
     // candidate left (search_enemy_base), and a frontier tile left - an
     // unexplored passable tile bordering explored passable ground
@@ -1225,11 +1250,60 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
     set_legal(AiRlHighLevelAction::explore_frontier,
         own_total > 0 && frontier_left);
     set_legal(AiRlHighLevelAction::roam_scout, own_total > 0);
-    set_legal(AiRlHighLevelAction::defend_base, has_army);
+    // v10.2 defend gate (2026-09-01 user replay report: the policy spammed
+    // defend at random): defend is a REACTION - legal only while a visible
+    // hostile COMBAT mobile stands near an own building (or near the start
+    // when no building stands).  Surprise attacks are the v9 reflex's job,
+    // and hold_army/patrol_defense stay open for stances.
+    bool defend_threat = false;
+    {
+        constexpr i64 kDefendGateRadius = 1200;
+        std::vector<std::pair<i32, i32>> own_buildings;
+        for (const AiObservedUnit& u : observation.units) {
+            if (u.controlled && u.alive && u.type_id >= kMobileTypeLimit) {
+                own_buildings.push_back({u.x, u.y});
+            }
+        }
+        if (own_buildings.empty()) {
+            own_buildings.push_back({std::max(observation.start_x, 0),
+                std::max(observation.start_y, 0)});
+        }
+        for (const AiObservedUnit* hostile : visible_hostiles) {
+            if (hostile->type_id >= kMobileTypeLimit ||
+                hostile->attack_range == 0) {
+                continue;  // buildings / non-combat are not a defend trigger
+            }
+            for (const std::pair<i32, i32>& building : own_buildings) {
+                if (sq_dist(building.first, building.second, hostile->x,
+                        hostile->y) <= kDefendGateRadius * kDefendGateRadius) {
+                    defend_threat = true;
+                    break;
+                }
+            }
+            if (defend_threat) {
+                break;
+            }
+        }
+    }
+    set_legal(AiRlHighLevelAction::defend_base, has_army && defend_threat);
     set_legal(AiRlHighLevelAction::retreat, has_army);
-    // Hunting needs a fighting force and a visible neutral monster.
+    // Hunting needs a fighting force and a visible neutral monster the
+    // forces can actually REACH (v10 guard: a monster on a disconnected
+    // walkable island parked the army at a cliff - such a hunt is illegal).
+    const bool huntable_neutral = have_neutral &&
+        AiMicroHuntableNeutralExists(observation);
+    // v10 hunt distance gate (user directive): the MAIN army only hunts
+    // monsters near its centroid - far expeditions are the raid slots' job.
+    const AiMicroExecutorConfig micro_defaults{};
+    const i32 hunt_cx = observation.army_centroid_x >= 0 ?
+        observation.army_centroid_x : std::max(observation.start_x, 0);
+    const i32 hunt_cy = observation.army_centroid_y >= 0 ?
+        observation.army_centroid_y : std::max(observation.start_y, 0);
+    const bool huntable_near_army = have_neutral &&
+        AiMicroHuntableNeutralExists(observation, micro_defaults, hunt_cx,
+            hunt_cy, micro_defaults.army_hunt_radius);
     set_legal(AiRlHighLevelAction::hunt_neutral_monster,
-        has_army && have_neutral);
+        has_army && huntable_near_army);
     // Tech-tree extension.  Exact producer/prereqs live in the game tables the
     // live validator consults; the mask pre-gates on the audited cost
     // (ai_techtree_audit.txt) and a plausible completed producer being present.
@@ -1322,11 +1396,140 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
         has_raid && (have_nearest || enemy_base_known));
     set_legal(AiRlHighLevelAction::raid_attack_base,
         has_raid && (have_nearest || enemy_base_known));
-    set_legal(AiRlHighLevelAction::raid_defend_base, has_raid);
+    set_legal(AiRlHighLevelAction::raid_defend_base,
+        has_raid && defend_threat);
     set_legal(AiRlHighLevelAction::raid_retreat, has_raid);
-    set_legal(AiRlHighLevelAction::raid_hunt_neutral, has_raid && have_neutral);
+    set_legal(AiRlHighLevelAction::raid_hunt_neutral,
+        has_raid && huntable_neutral);
     set_legal(AiRlHighLevelAction::raid_search,
         has_raid && unexplored_start_left);
+    // --- v10: the two extra raid slots (four fighting bodies) ---
+    // Same gates as the raid, driven by each slot's own count.  Detaching
+    // always splits the MAIN army, so every detach shares the army floor.
+    {
+        struct RaidSlotActions {
+            u32 count;
+            AiRlHighLevelAction detach;
+            AiRlHighLevelAction merge;
+            AiRlHighLevelAction attack_units;
+            AiRlHighLevelAction attack_base;
+            AiRlHighLevelAction defend;
+            AiRlHighLevelAction retreat;
+            AiRlHighLevelAction hunt;
+            AiRlHighLevelAction search;
+        };
+        const RaidSlotActions slots[2] = {
+            {observation.raid_b_unit_count,
+                AiRlHighLevelAction::detach_raid_b,
+                AiRlHighLevelAction::merge_raid_b,
+                AiRlHighLevelAction::raid_b_attack_units,
+                AiRlHighLevelAction::raid_b_attack_base,
+                AiRlHighLevelAction::raid_b_defend_base,
+                AiRlHighLevelAction::raid_b_retreat,
+                AiRlHighLevelAction::raid_b_hunt_neutral,
+                AiRlHighLevelAction::raid_b_search},
+            {observation.raid_c_unit_count,
+                AiRlHighLevelAction::detach_raid_c,
+                AiRlHighLevelAction::merge_raid_c,
+                AiRlHighLevelAction::raid_c_attack_units,
+                AiRlHighLevelAction::raid_c_attack_base,
+                AiRlHighLevelAction::raid_c_defend_base,
+                AiRlHighLevelAction::raid_c_retreat,
+                AiRlHighLevelAction::raid_c_hunt_neutral,
+                AiRlHighLevelAction::raid_c_search},
+        };
+        for (const RaidSlotActions& slot : slots) {
+            const bool has_slot = slot.count > 0;
+            set_legal(slot.detach, observation.army_group_unit_count >=
+                kRaidDetachArmyFloor && !has_slot);
+            set_legal(slot.merge, has_slot);
+            set_legal(slot.attack_units,
+                has_slot && (have_nearest || enemy_base_known));
+            set_legal(slot.attack_base,
+                has_slot && (have_nearest || enemy_base_known));
+            set_legal(slot.defend, has_slot && defend_threat);
+            set_legal(slot.retreat, has_slot);
+            set_legal(slot.hunt, has_slot && huntable_neutral);
+            set_legal(slot.search, has_slot && unexplored_start_left);
+        }
+    }
+
+    // --- v10 attack-commit lock (user directive: an ordered attack must at
+    // least MEET the enemy).  While a fighting group is marching under an
+    // attack objective with a target and has not entered weapon contact yet
+    // (and the commitment has not timed out), its re-tasking actions are
+    // masked off; retreat stays open as the escape hatch, and everything
+    // unrelated (production, research, other groups) is untouched.
+    {
+        constexpr u32 kCommitTimeoutFrames = 2400;
+        const auto committed = [&](u32 kind, u32 has_target, u32 engaged,
+            u32 age) {
+            return kind == 2u && has_target != 0 && engaged == 0 &&
+                age < kCommitTimeoutFrames;
+        };
+        const auto lock = [&](AiRlHighLevelAction action) {
+            out.legal_mask[static_cast<std::size_t>(action)] = 0u;
+        };
+        if (committed(observation.army_objective_kind,
+                observation.army_attack_has_target,
+                observation.army_engaged_since_set,
+                observation.army_objective_age)) {
+            lock(AiRlHighLevelAction::attack_nearest_enemy);
+            lock(AiRlHighLevelAction::attack_enemy_base);
+            lock(AiRlHighLevelAction::defend_base);
+            lock(AiRlHighLevelAction::hunt_neutral_monster);
+            lock(AiRlHighLevelAction::search_enemy_base);
+            lock(AiRlHighLevelAction::hold_army);
+            lock(AiRlHighLevelAction::patrol_defense);
+        }
+        struct CommitSlot {
+            u32 kind;
+            u32 has_target;
+            u32 engaged;
+            u32 age;
+            AiRlHighLevelAction actions[6];
+        };
+        const CommitSlot commit_slots[3] = {
+            {observation.raid_objective_kind,
+                observation.raid_attack_has_target,
+                observation.raid_engaged_since_set,
+                observation.raid_objective_age,
+                {AiRlHighLevelAction::raid_attack_units,
+                    AiRlHighLevelAction::raid_attack_base,
+                    AiRlHighLevelAction::raid_defend_base,
+                    AiRlHighLevelAction::raid_hunt_neutral,
+                    AiRlHighLevelAction::raid_search,
+                    AiRlHighLevelAction::merge_raid}},
+            {observation.raid_b_objective_kind,
+                observation.raid_b_attack_has_target,
+                observation.raid_b_engaged_since_set,
+                observation.raid_b_objective_age,
+                {AiRlHighLevelAction::raid_b_attack_units,
+                    AiRlHighLevelAction::raid_b_attack_base,
+                    AiRlHighLevelAction::raid_b_defend_base,
+                    AiRlHighLevelAction::raid_b_hunt_neutral,
+                    AiRlHighLevelAction::raid_b_search,
+                    AiRlHighLevelAction::merge_raid_b}},
+            {observation.raid_c_objective_kind,
+                observation.raid_c_attack_has_target,
+                observation.raid_c_engaged_since_set,
+                observation.raid_c_objective_age,
+                {AiRlHighLevelAction::raid_c_attack_units,
+                    AiRlHighLevelAction::raid_c_attack_base,
+                    AiRlHighLevelAction::raid_c_defend_base,
+                    AiRlHighLevelAction::raid_c_hunt_neutral,
+                    AiRlHighLevelAction::raid_c_search,
+                    AiRlHighLevelAction::merge_raid_c}},
+        };
+        for (const CommitSlot& slot : commit_slots) {
+            if (committed(slot.kind, slot.has_target, slot.engaged,
+                    slot.age)) {
+                for (const AiRlHighLevelAction action : slot.actions) {
+                    lock(action);
+                }
+            }
+        }
+    }
 
     // --- v8 spatial-target cell mask ---
     // A cell the owner has any knowledge of: an explored tile, a remembered

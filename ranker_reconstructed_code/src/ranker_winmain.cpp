@@ -14110,7 +14110,194 @@ void default_gameplay_hud_draw_shadow_text(
     renderer.cursor = saved;
 }
 
+// ---- v10.4 replay decision overlay (user request: SEE which action the
+// policy picked, toggled in-replay).  Loaded from the <replay>.decisions.jsonl
+// sidecar (feat-stripped episode log) when playback starts; drawn from the
+// HUD status-tail flush every frame while playback runs; F9 toggles.
+struct ReplayDecisionEntry {
+    u32 owner;
+    u32 frame;
+    u32 action;
+    i32 target;
+    u32 why;
+    u32 dt;
+};
+static std::vector<ReplayDecisionEntry> s_replay_decisions;
+static bool s_replay_overlay_enabled = true;
+static bool s_replay_overlay_key_down = false;
+static const char* const kAiRlActionNamesForOverlay[80] = {
+    "no_op",
+    "produce_worker",
+    "produce_masos",
+    "produce_dilophos",
+    "build_population_nest",
+    "build_egg_nest",
+    "build_land_nest",
+    "expand_base_nest",
+    "scout_map",
+    "attack_nearest_enemy",
+    "attack_enemy_base",
+    "defend_base",
+    "retreat",
+    "hunt_neutral_monster",
+    "produce_unit_x22",
+    "build_nest_x86",
+    "build_nest_x87",
+    "produce_unit_x25",
+    "produce_unit_x27",
+    "produce_unit_x28",
+    "produce_unit_x2e",
+    "produce_unit_x2c",
+    "produce_unit_x29",
+    "produce_unit_x2a",
+    "build_nest_x83",
+    "build_nest_x88",
+    "build_nest_x89",
+    "build_nest_x8a",
+    "merge_twin_velocis",
+    "merge_twin_rhampos",
+    "merge_twin_pteras",
+    "merge_mutant",
+    "morph_enter_army",
+    "morph_exit_army",
+    "stance_on_army",
+    "stance_off_army",
+    "hold_army",
+    "patrol_defense",
+    "drop_attack",
+    "research_harvest",
+    "research_ground_attack",
+    "research_ground_defense",
+    "research_movement",
+    "research_air_attack",
+    "research_air_defense",
+    "research_mutant_merge",
+    "research_morph",
+    "research_haste",
+    "research_exp_down",
+    "research_melee_reinforce",
+    "research_triceps_speed",
+    "research_air_reinforce",
+    "search_enemy_base",
+    "scout_berry",
+    "explore_frontier",
+    "roam_scout",
+    "detach_raid",
+    "merge_raid",
+    "raid_attack_units",
+    "raid_attack_base",
+    "raid_defend_base",
+    "raid_retreat",
+    "raid_hunt_neutral",
+    "raid_search",
+    "detach_raid_b",
+    "merge_raid_b",
+    "raid_b_attack_units",
+    "raid_b_attack_base",
+    "raid_b_defend_base",
+    "raid_b_retreat",
+    "raid_b_hunt_neutral",
+    "raid_b_search",
+    "detach_raid_c",
+    "merge_raid_c",
+    "raid_c_attack_units",
+    "raid_c_attack_base",
+    "raid_c_defend_base",
+    "raid_c_retreat",
+    "raid_c_hunt_neutral",
+    "raid_c_search"};
+
+void load_replay_decision_overlay(const std::string& replay_path) {
+    s_replay_decisions.clear();
+    std::string path = replay_path;
+    const std::size_t dot = path.rfind('.');
+    if (dot != std::string::npos) {
+        path.resize(dot);
+    }
+    path += ".decisions.jsonl";
+    std::FILE* file = std::fopen(path.c_str(), "rb");
+    if (file == nullptr) {
+        append_startup_log("replay-overlay: no decision sidecar at %s",
+            path.c_str());
+        return;
+    }
+    // The fields of interest sit at the head of each line, so a truncating
+    // read handles the un-stripped episode format too.
+    char line[1024];
+    while (std::fgets(line, sizeof(line), file) != nullptr) {
+        const auto field = [&](const char* key, long fallback) -> long {
+            const char* at = std::strstr(line, key);
+            return at != nullptr ?
+                std::strtol(at + std::strlen(key), nullptr, 10) : fallback;
+        };
+        const long frame = field("\"f\":", -1);
+        const long action = field("\"a\":", -1);
+        if (frame < 0 || action < 0) {
+            continue;
+        }
+        ReplayDecisionEntry entry{};
+        entry.owner = static_cast<u32>(field("\"owner\":", 0));
+        entry.frame = static_cast<u32>(frame);
+        entry.action = static_cast<u32>(action);
+        entry.target = static_cast<i32>(field("\"tgt\":", -1));
+        entry.why = static_cast<u32>(field("\"why\":", 0));
+        entry.dt = static_cast<u32>(field("\"dt\":", 0));
+        s_replay_decisions.push_back(entry);
+    }
+    std::fclose(file);
+    append_startup_log("replay-overlay: %lu decisions loaded from %s",
+        static_cast<unsigned long>(s_replay_decisions.size()), path.c_str());
+}
+
 void default_gameplay_hud_flush_status_tail(GameplayHudTextState&) {
+    if (!replay_recording_state().playback_mode || s_replay_decisions.empty()) {
+        return;
+    }
+#ifdef _WIN32
+    const bool key_down = (GetAsyncKeyState(VK_F9) & 0x8000) != 0;
+    if (key_down && !s_replay_overlay_key_down) {
+        s_replay_overlay_enabled = !s_replay_overlay_enabled;
+    }
+    s_replay_overlay_key_down = key_down;
+#endif
+    if (!s_replay_overlay_enabled) {
+        return;
+    }
+    const u32 now = gameplay_loop_state().simulation_frame_counter;
+    default_select_gameplay_hud_font();
+    TextRendererState& renderer = text_renderer_state();
+    const TextRenderCursor saved = renderer.cursor;
+    i32 y = 140;
+    for (u32 owner = 0; owner < 8u; ++owner) {
+        const ReplayDecisionEntry* latest = nullptr;
+        for (const ReplayDecisionEntry& entry : s_replay_decisions) {
+            if (entry.owner == owner && entry.frame <= now) {
+                latest = &entry;
+            }
+        }
+        if (latest == nullptr) {
+            continue;
+        }
+        char text[160];
+        std::snprintf(text, sizeof(text),
+            "P%lu f%lu %s%s tgt=%ld why=%lx dt=%lu",
+            static_cast<unsigned long>(owner),
+            static_cast<unsigned long>(latest->frame),
+            latest->action < 80u ? kAiRlActionNamesForOverlay[latest->action] :
+                "?",
+            latest->action >= 80u ? "(unknown)" : "",
+            static_cast<long>(latest->target),
+            static_cast<unsigned long>(latest->why),
+            static_cast<unsigned long>(latest->dt));
+        SetTextCursor(8, y, 0x11);
+        renderer.cursor.style_flags |= 1u;
+        renderer.cursor.shadow_foreground = 0xe9;
+        renderer.cursor.shadow_x = 1;
+        renderer.cursor.shadow_y = 1;
+        DrawTextString(text);
+        y += 14;
+    }
+    renderer.cursor = saved;
 }
 
 void configure_default_gameplay_hud_text_callbacks(GameplayHudTextState& hud) {
@@ -23635,6 +23822,66 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
                 static_cast<u32>(raid_objective.kind) + 1u : 0u;
             observation.observation.raid_attack_tactic =
                 static_cast<u32>(raid_objective.tactic);
+            // v10: the two extra raid slots (four fighting bodies).
+            observation.observation.raid_b_unit_count = static_cast<u32>(
+                AiMicroGroupMembers(bot.micro, observation.observation,
+                    AiMicroGroup::raid_b).size());
+            const AiMicroObjective& raid_b_objective =
+                AiMicroObjectiveOf(bot.micro, AiMicroGroup::raid_b);
+            observation.observation.raid_b_objective_kind =
+                raid_b_objective.assigned ?
+                static_cast<u32>(raid_b_objective.kind) + 1u : 0u;
+            observation.observation.raid_b_attack_tactic =
+                static_cast<u32>(raid_b_objective.tactic);
+            observation.observation.raid_c_unit_count = static_cast<u32>(
+                AiMicroGroupMembers(bot.micro, observation.observation,
+                    AiMicroGroup::raid_c).size());
+            const AiMicroObjective& raid_c_objective =
+                AiMicroObjectiveOf(bot.micro, AiMicroGroup::raid_c);
+            observation.observation.raid_c_objective_kind =
+                raid_c_objective.assigned ?
+                static_cast<u32>(raid_c_objective.kind) + 1u : 0u;
+            observation.observation.raid_c_attack_tactic =
+                static_cast<u32>(raid_c_objective.tactic);
+            // v10 attack-commit state + army centroid (mask inputs).
+            const auto commit_fill = [&](AiMicroGroup group, u32& has_target,
+                u32& age, u32& engaged) {
+                const AiMicroObjective& objective =
+                    AiMicroObjectiveOf(bot.micro, group);
+                has_target = objective.kind == AiMicroObjectiveKind::attack &&
+                    (objective.target_unit_id != 0 || objective.target_x >= 0)
+                    ? 1u : 0u;
+                age = objective.assigned && frame >= objective.set_frame ?
+                    frame - objective.set_frame : 0xffffffffu;
+                engaged = bot.micro.group_engaged[
+                    static_cast<std::size_t>(group)];
+            };
+            {
+                u32 army_has_target = 0;
+                commit_fill(AiMicroGroup::army, army_has_target,
+                    observation.observation.army_objective_age,
+                    observation.observation.army_engaged_since_set);
+                commit_fill(AiMicroGroup::raid,
+                    observation.observation.raid_attack_has_target,
+                    observation.observation.raid_objective_age,
+                    observation.observation.raid_engaged_since_set);
+                commit_fill(AiMicroGroup::raid_b,
+                    observation.observation.raid_b_attack_has_target,
+                    observation.observation.raid_b_objective_age,
+                    observation.observation.raid_b_engaged_since_set);
+                commit_fill(AiMicroGroup::raid_c,
+                    observation.observation.raid_c_attack_has_target,
+                    observation.observation.raid_c_objective_age,
+                    observation.observation.raid_c_engaged_since_set);
+            }
+            {
+                UnitMovementPoint centroid{-1, -1};
+                if (AiMicroGroupCentroid(bot.micro, observation.observation,
+                        AiMicroGroup::army, centroid)) {
+                    observation.observation.army_centroid_x = centroid.x;
+                    observation.observation.army_centroid_y = centroid.y;
+                }
+            }
             // Most recent refused build order (type, frames ago).
             if (g_runtime.ai_play_last_build_reject_type[local_owner] != 0) {
                 observation.observation.last_build_reject_type =
@@ -23782,7 +24029,11 @@ void run_default_ai_play_owner(GameplayLoopState& state, u32 local_owner) {
                     first_group_member_id(bot.micro, observation.observation,
                         AiMicroGroup::explorer),
                     first_group_member_id(bot.micro, observation.observation,
-                        AiMicroGroup::roamer));
+                        AiMicroGroup::roamer),
+                    static_cast<u32>(AiMicroGroupMembers(bot.micro,
+                        observation.observation, AiMicroGroup::raid_b).size()),
+                    static_cast<u32>(AiMicroGroupMembers(bot.micro,
+                        observation.observation, AiMicroGroup::raid_c).size()));
             }
         }
         // v9 macro autopilot: plan the auxiliary economy actions on the same
@@ -35034,6 +35285,8 @@ bool default_start_replay_playback(ReplayDialogState& state,
     if (!StartReplayPlaybackFromSelection(state, descriptor)) {
         return false;
     }
+    // v10.4: load the decision sidecar for the in-replay action overlay.
+    load_replay_decision_overlay(descriptor.source_path);
 
     // Selecting a replay closes the title menu before opening this dialog.
     // Queue the same worker-side gameplay transition used by a hosted/joined

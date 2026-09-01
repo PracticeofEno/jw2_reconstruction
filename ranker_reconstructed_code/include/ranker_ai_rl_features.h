@@ -46,7 +46,11 @@ namespace ranker {
 // last decision (workers / pop nests / fighters, /8 clamped).  The encoder
 // writes ZEROS here - these are gate/pump state, not observation state; the
 // caller patches them with ApplyAiRlDecisionContext before using the vector.
-constexpr u32 kAiRlFeatureVersion = 9u;
+// v10 appends the raid_b/raid_c group state [788..801] (7 slots each,
+// mirroring the raid slots 764..769,771: size, alive, attack, defend,
+// retreat, buildings_first, search) and grows the action space by the 16
+// raid_b/raid_c actions (user directive: up to four fighting bodies).
+constexpr u32 kAiRlFeatureVersion = 10u;
 
 // High-level (strategy) action space the RL policy samples from.
 enum class AiRlHighLevelAction : u32 {
@@ -146,9 +150,28 @@ enum class AiRlHighLevelAction : u32 {
     raid_retreat,       // raid <- retreat (defend on arrival)
     raid_hunt_neutral,  // raid <- attack(neutral_only)
     raid_search,        // raid <- search (unexplored start candidates)
+    // v10 (user directive: up to FOUR fighting bodies) - two more raid slots
+    // with the exact raid semantics, so the policy can run main army + three
+    // independent detachments (e.g. defend + attack + two-way harass).
+    detach_raid_b,
+    merge_raid_b,
+    raid_b_attack_units,
+    raid_b_attack_base,   // spatial-target cell
+    raid_b_defend_base,   // spatial-target cell
+    raid_b_retreat,
+    raid_b_hunt_neutral,
+    raid_b_search,
+    detach_raid_c,
+    merge_raid_c,
+    raid_c_attack_units,
+    raid_c_attack_base,   // spatial-target cell
+    raid_c_defend_base,   // spatial-target cell
+    raid_c_retreat,
+    raid_c_hunt_neutral,
+    raid_c_search,
 };
 
-constexpr std::size_t kAiRlActionCount = 64;
+constexpr std::size_t kAiRlActionCount = 80;
 
 // v8 spatial-target head: the actions that also take one of the 8x8 grid
 // cells as WHERE (attack strike zone / defend post).  For every other action
@@ -157,7 +180,11 @@ constexpr bool AiRlActionTakesTargetCell(AiRlHighLevelAction action) {
     return action == AiRlHighLevelAction::attack_enemy_base ||
         action == AiRlHighLevelAction::raid_attack_base ||
         action == AiRlHighLevelAction::defend_base ||
-        action == AiRlHighLevelAction::raid_defend_base;
+        action == AiRlHighLevelAction::raid_defend_base ||
+        action == AiRlHighLevelAction::raid_b_attack_base ||
+        action == AiRlHighLevelAction::raid_b_defend_base ||
+        action == AiRlHighLevelAction::raid_c_attack_base ||
+        action == AiRlHighLevelAction::raid_c_defend_base;
 }
 constexpr std::size_t kAiRlTargetCellCount = 64;  // the 8x8 feature grid
 constexpr u32 kAiRlTargetGridWidth = 8;
@@ -204,7 +231,7 @@ constexpr const AiRlResearchAction* FindAiRlResearchAction(
 // v1: 36 base + 3 research levels + 3 neutral-monster + 4 tech-tree = 46.
 // v2 appends: 10 research levels, 11 unit counts, 4 building counts, and 9
 // mechanic aggregates (stance/morph/transport/army/queue state) = 80.
-constexpr std::size_t kAiRlFeatureCount = 788;
+constexpr std::size_t kAiRlFeatureCount = 802;
 
 struct AiRlStepEncoding {
     // Normalized policy/value-network input.

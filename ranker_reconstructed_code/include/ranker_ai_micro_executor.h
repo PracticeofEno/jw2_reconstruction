@@ -38,8 +38,21 @@ enum class AiMicroGroup : u32 {
     // re-detached (an intended cost).  Holds its own objective, so the policy
     // can play main-army defend + raid attack at the same time.
     raid = 6,
+    // v10 (user directive: run up to FOUR fighting bodies): two more raid
+    // slots with the exact raid semantics - main army + raid + raid_b +
+    // raid_c.  Each has its own detach/merge/objective actions.
+    raid_b = 7,
+    raid_c = 8,
 };
-constexpr std::size_t kAiMicroGroupCount = 7;
+constexpr std::size_t kAiMicroGroupCount = 9;
+
+// The detachable fighting groups (everything the raid machinery applies to).
+constexpr AiMicroGroup kAiMicroRaidGroups[3] = {AiMicroGroup::raid,
+    AiMicroGroup::raid_b, AiMicroGroup::raid_c};
+constexpr bool AiMicroIsRaidGroup(AiMicroGroup group) {
+    return group == AiMicroGroup::raid || group == AiMicroGroup::raid_b ||
+        group == AiMicroGroup::raid_c;
+}
 
 enum class AiMicroObjectiveKind : u32 {
     harvest = 0,
@@ -157,6 +170,12 @@ struct AiMicroUnitRecord {
     // Harvest spread: map tile index this worker is assigned to
     // (kAiMicroNoResourceTile = none).
     u32 assigned_resource_tile = 0xffffffffu;
+    // v10.4 attack wave (user design): the wave this fighter marches with.
+    // 0 = none/staging.  Members present when the policy sets an ATTACK
+    // objective form the FIRST wave; fighters joining later STAGE at the
+    // base (defend) until attack_wave_minimum of them gather, then leave as
+    // their own wave.  Cohesion applies within a wave only.
+    u32 attack_wave = 0;
 };
 
 constexpr u32 kAiMicroNoResourceTile = 0xffffffffu;
@@ -235,6 +254,26 @@ struct AiMicroExecutorConfig {
     bool reflex_enabled = true;
     u32 threat_clear_frames = 120;
     i32 reflex_raid_join_radius = 1600;  // defend_radius * 2
+    // v10 threat-proportional reflex (2026-08-31 user replay review: ONE
+    // enemy harasser pulled the whole main army home).  The reflex details
+    // only enough fighters to outmatch the measured threat - combat power of
+    // the hostiles in the bubble times this margin - picked nearest-first to
+    // the anchor; the rest of the army keeps the policy's objective.  The
+    // detail is sticky while the overlay stands (members are added when the
+    // threat grows, released only when it clears) so it cannot flap.  A
+    // building losing health with NO visible attacker is an unmeasurable
+    // threat: a small investigation picket of at most reflex_unseen_defenders
+    // fighters responds (user directive: <= 3), never the whole army.
+    u32 reflex_margin_percent = 150;
+    std::size_t reflex_min_defenders = 2;
+    std::size_t reflex_unseen_defenders = 3;
+    // v10 hunt distance gate (user directive): the MAIN army only hunts
+    // monsters within this radius of its centroid - far expeditions are the
+    // raid slots' job.  0 disables the bound; raids are never bounded.
+    i32 army_hunt_radius = 1200;
+    // v10.4: staging fighters (produced after the attack order) leave as
+    // their own wave once this many have gathered at the base.
+    std::size_t attack_wave_minimum = 6;
     // v9 meat pickup (user directive: "고기를 줍기만 하면 알아서 사용된다"):
     // a fighter under an ATTACK objective with nothing left to fight in reach
     // walks onto the nearest visible dropped meat within this radius.  The
@@ -259,6 +298,27 @@ struct AiMicroExecutorState {
     std::array<AiMicroObjective, kAiMicroGroupCount> objectives{};
     std::vector<AiMicroUnitRecord> units;  // sorted by unit_id
     AiMicroThreatOverlay threat;
+    // v10: the sticky reflex defense detail (unit ids).  Only these army
+    // members fight under the threat overlay (empty = nobody detailed).
+    // Dead members are pruned, new ones added when the measured threat
+    // outgrows the detail's combat power (unseen attacker: topped up to
+    // reflex_unseen_defenders only).
+    std::vector<u32> reflex_defenders;
+    // v10 attack-commit tracking: 1 once any member of the group entered
+    // weapon contact since the group's objective was last SET by the policy
+    // (AiMicroSetObjective resets it).  Feeds the mask's attack-commit lock.
+    std::array<u32, kAiMicroGroupCount> group_engaged{};
+    // v10.1 sticky meat assignments (map effect id -> collector unit id).
+    // Re-picking the nearest collector EVERY frame flapped between two
+    // moving units (2026-09-01 user replay report: trembling next to the
+    // drop, never collected); an assignment now holds until the drop is
+    // gone/claimed or the collector stops being eligible.
+    std::vector<std::pair<u32, u32>> meat_assignments;
+    // v10.4 attack waves: per-group wave sequence and the "assign the current
+    // members to the new wave on the next step" latch set by a fresh ATTACK
+    // objective.
+    std::array<u32, kAiMicroGroupCount> attack_wave_seq{};
+    std::array<u8, kAiMicroGroupCount> attack_wave_pending{};
     // HP-decrease half of the reflex trigger: sum of completed own building
     // health last frame (0xffffffffffffffff = not yet sampled).
     u64 last_building_health = 0xffffffffffffffffull;
@@ -285,10 +345,29 @@ struct AiMicroExecutorState {
     u32 reflex_activations = 0;
     // v9: meat-pickup move orders issued (hunt micro).
     u32 meat_pickup_orders = 0;
+    // v10: neutral monsters skipped as hunt targets because the group's
+    // ground fighters cannot reach them (disconnected walkable region).
+    u32 hunt_unreachable_skipped = 0;
 };
 
 AiMicroRole AiMicroRoleOf(const AiObservedUnit& unit,
     const AiMicroExecutorConfig& config = {});
+
+// v10 combat power of one unit (threat measurement): current durability times
+// damage output.  A relative score - both sides are measured with the same
+// formula, so only the comparison matters, not the scale.
+u64 AiMicroCombatPower(const AiObservedUnit& unit);
+
+// v10: true when at least one VISIBLE neutral monster is huntable by the
+// owner's current forces - the owner fields a flying attacker (reaches
+// everything), or the monster stands in / adjacent to the walkable region
+// 4-connected to the owner's start.  Gates the hunt actions in the RL mask so
+// the policy stops ordering hunts on monsters no ground army can reach.
+// With radius > 0 only monsters within that distance of (center_x,
+// center_y) count (v10 army hunt distance gate); radius 0 = unbounded.
+bool AiMicroHuntableNeutralExists(const AiObservation& observation,
+    const AiMicroExecutorConfig& config = {}, i32 center_x = -1,
+    i32 center_y = -1, i32 radius = 0);
 
 void AiMicroReset(AiMicroExecutorState& state);
 void AiMicroSetObjective(AiMicroExecutorState& state, AiMicroGroup group,

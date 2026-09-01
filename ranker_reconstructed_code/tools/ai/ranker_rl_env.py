@@ -124,15 +124,34 @@ ACTION_NAMES: tuple[str, ...] = (
     "raid_retreat",
     "raid_hunt_neutral",
     "raid_search",
+    # v10: two more raid slots (four fighting bodies) - exact raid semantics.
+    "detach_raid_b",
+    "merge_raid_b",
+    "raid_b_attack_units",
+    "raid_b_attack_base",
+    "raid_b_defend_base",
+    "raid_b_retreat",
+    "raid_b_hunt_neutral",
+    "raid_b_search",
+    "detach_raid_c",
+    "merge_raid_c",
+    "raid_c_attack_units",
+    "raid_c_attack_base",
+    "raid_c_defend_base",
+    "raid_c_retreat",
+    "raid_c_hunt_neutral",
+    "raid_c_search",
 )
-N_ACTIONS = len(ACTION_NAMES)      # 64 (kAiRlActionCount; v8 adds the 8 raid actions)
-N_FEATURES = 788                   # kAiRlFeatureCount (v9: +16 decision context = dt/64 [772], 12 gate trigger bits [773..784], autopilot counts [785..787])
+N_ACTIONS = len(ACTION_NAMES)      # 80 (kAiRlActionCount; v10 adds the 16 raid_b/c actions)
+N_FEATURES = 802                   # kAiRlFeatureCount (v10: +14 raid_b/c group state [788..801])
 # v8 spatial-target head (kAiRlTargetCellCount): the 8x8 grid cell argument
 # of attack_enemy_base / raid_attack_base / defend_base / raid_defend_base.
 # The game sends its legality as "tmask" in the IPC request and logs the
 # chosen cell as "tgt" in the episode JSONL (-1 = none).
 N_TARGET_CELLS = 64
 TARGET_ACTIONS = ("attack_enemy_base", "raid_attack_base",
+                  "raid_b_attack_base", "raid_b_defend_base",
+                  "raid_c_attack_base", "raid_c_defend_base",
                   "defend_base", "raid_defend_base")
 TARGET_ACTION_IDS = tuple(ACTION_NAMES.index(name) for name in TARGET_ACTIONS)
 # Discount horizon matched to real game length: eliminations land at

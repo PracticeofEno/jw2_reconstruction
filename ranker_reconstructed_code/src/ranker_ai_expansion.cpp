@@ -271,9 +271,13 @@ bool AiBuildSiteCandidateOk(const AiObservation& observation, u32 type_id,
 
 bool AiBuildSiteCandidateOk(const AiObservation& observation,
     const std::vector<u8>& occupancy, u32 type_id, i32 tile_x, i32 tile_y,
-    bool require_explored, bool* blocked, const AiExpansionConfig& config) {
+    bool require_explored, bool* blocked, const AiExpansionConfig& config,
+    bool* ring_fully_open) {
     if (blocked != nullptr) {
         *blocked = false;
+    }
+    if (ring_fully_open != nullptr) {
+        *ring_fully_open = false;
     }
     if (!tiles_valid(observation) || tile_x < 0 || tile_y < 0) {
         return false;
@@ -349,6 +353,7 @@ bool AiBuildSiteCandidateOk(const AiObservation& observation,
         for (i64 cy = ty + fh - 1; cy >= ty; --cy) push_cell(tx - 1, cy);
         u32 arcs = 0;
         bool any_open = false;
+        bool any_blocked = false;
         for (std::size_t index = 0; index < ring_blocked.size(); ++index) {
             const u8 current = ring_blocked[index];
             const u8 previous = ring_blocked[
@@ -357,9 +362,13 @@ bool AiBuildSiteCandidateOk(const AiObservation& observation,
                 ++arcs;
             }
             any_open = any_open || current == 0;
+            any_blocked = any_blocked || current != 0;
         }
         if (!any_open || arcs >= 2) {
             return false;
+        }
+        if (ring_fully_open != nullptr) {
+            *ring_fully_open = !any_blocked;
         }
     }
     if (blocked != nullptr) {
@@ -400,6 +409,7 @@ AiBuildSite FindAiBuildSite(const AiObservation& observation, u32 type_id,
         i64 tx;
         i64 ty;
         i64 distance;
+        bool ring_open;
     };
     std::vector<Candidate> candidates;
     for (i64 ty = std::max<i64>(cy - radius, 0);
@@ -407,9 +417,10 @@ AiBuildSite FindAiBuildSite(const AiObservation& observation, u32 type_id,
         for (i64 tx = std::max<i64>(cx - radius, 0);
              tx <= std::min<i64>(cx + radius, width - 1); ++tx) {
             bool blocked = false;
+            bool ring_open = false;
             if (!AiBuildSiteCandidateOk(observation, occupancy, type_id,
                     static_cast<i32>(tx), static_cast<i32>(ty), true, &blocked,
-                    config)) {
+                    config, &ring_open)) {
                 continue;
             }
             const i32 world_x = static_cast<i32>(tx) * kTilePixels + kTilePixels / 2;
@@ -423,11 +434,18 @@ AiBuildSite FindAiBuildSite(const AiObservation& observation, u32 type_id,
                 }
                 continue;
             }
-            candidates.push_back({tx, ty, distance});
+            candidates.push_back({tx, ty, distance, ring_open});
         }
     }
+    // v10 (user replay report): distance-first placement stacked structures
+    // flush against each other into walls.  A site whose whole one-tile ring
+    // stays walkable ranks FIRST, so every building keeps a walk-around gap
+    // whenever the base area allows one; flush sites remain the fallback.
     std::sort(candidates.begin(), candidates.end(),
         [](const Candidate& lhs, const Candidate& rhs) {
+            if (lhs.ring_open != rhs.ring_open) {
+                return lhs.ring_open;
+            }
             if (lhs.distance != rhs.distance) {
                 return lhs.distance < rhs.distance;
             }

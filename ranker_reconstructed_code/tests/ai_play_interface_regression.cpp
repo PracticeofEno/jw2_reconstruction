@@ -2103,8 +2103,14 @@ void test_ai_micro_executor_effective_range() {
     obs.units.push_back(fighter_unit(0x9200, 1, 750, 400, false));
     TyranoScriptedBotState base_state{};
     obs.simulation_frame = 300;
-    require(AiMicroExecutorStep(base_state.micro, obs).empty(),
-        "defender engaged a hostile outside its effective range");
+    // v10.5: the reflex now advances the defender AT the intruder (move
+    // orders are fine); an ATTACK order beyond effective range is still
+    // forbidden.
+    for (const AiSemanticAction& order :
+         AiMicroExecutorStep(base_state.micro, obs)) {
+        require(order.kind != AiSemanticActionKind::attack_unit,
+            "defender attacked a hostile outside its effective range");
+    }
     obs.units[2].attack_range = 400;  // range research completed
     TyranoScriptedBotState upgraded{};
     obs.simulation_frame = 301;
@@ -2125,8 +2131,13 @@ void test_ai_micro_executor_effective_range() {
     air.units.push_back(flying_unit(0x9200, 1, 700, 400, false));
     TyranoScriptedBotState air_state{};
     air.simulation_frame = 310;
-    require(AiMicroExecutorStep(air_state.micro, air).empty(),
-        "anti-air reach used the ground range stat");
+    // v10.5: reflex advance produces move orders; only an ATTACK past the
+    // anti-air reach would prove the wrong range stat was read.
+    for (const AiSemanticAction& order :
+         AiMicroExecutorStep(air_state.micro, air)) {
+        require(order.kind != AiSemanticActionKind::attack_unit,
+            "anti-air reach used the ground range stat");
+    }
 }
 
 // Item 4 - a fighter far ahead of its group regroups instead of arriving
@@ -2156,9 +2167,12 @@ void test_ai_micro_executor_attack_cohesion() {
     for (const AiSemanticAction& order : orders) {
         for (u32 id : order.unit_ids) {
             if (id == 0x3100) {
+                // v10: the leader waits IN PLACE (move to its own spot) -
+                // walking back to the centroid was the forward-backward army
+                // surge the user reported.
                 leader_regrouped =
                     order.kind == AiSemanticActionKind::move &&
-                    order.target_x < 1400;
+                    order.target_x == 1400 && order.target_y == 400;
             } else if (id == 0x3200 || id == 0x3300) {
                 laggards_advanced =
                     order.kind == AiSemanticActionKind::attack_move &&
@@ -2244,8 +2258,8 @@ void test_ai_micro_executor_cohesion_hysteresis() {
     orders = AiMicroExecutorStep(state.micro, obs);
     order = leader_order(orders);
     require(order != nullptr && order->kind == AiSemanticActionKind::move &&
-        order->target_x < 1060,
-        "cohesion band: beyond the engage radius the leader must turn back");
+        order->target_x == 1060,
+        "cohesion band: beyond the engage radius the leader must wait in place");
     require(leader_returning() == 1,
         "cohesion band: the return state did not enter past engage");
 
@@ -2541,8 +2555,8 @@ void test_ai_micro_executor_translator_objectives() {
         raid.units.push_back(fighter_unit(0x9800, 1, 320 + 700, 320, false));
         require(EncodeAiObservationForRl(raid).features[76] > 0.0f,
             "raid perimeter feature did not use the 800 px defend bubble");
-        require(kAiRlActionCount == 64 && kAiRlFeatureCount == 788,
-            "v9 action/feature counts");
+        require(kAiRlActionCount == 80 && kAiRlFeatureCount == 802,
+            "v10 action/feature counts");
     }
     // v5 features: spatial grid, directions, enemy composition, own state,
     // production pipeline, scout.  64x64-tile map (2048 px) -> 8x8 cells of
@@ -3206,6 +3220,9 @@ void test_ai_raid_group_and_target_cell() {
     // Enemy egg nest far away at (1500, 1500) - grid cell (5,5) = 45 on the
     // 64x64-tile (2048 px, 256 px/cell) test map.
     obs.units.push_back(observed_unit(0x9400, 1, 0x84, 0, 1500, 1500, false));
+    // v10.2: defend actions are threat-gated - a hostile fighter near the
+    // nest keeps them open for the mask assertions below.
+    obs.units.push_back(fighter_unit(0x9401, 1, 900, 320, false));
 
     // Mask: detach needs the pump-filled army-group size and no raid; raid
     // actions stay closed while no raid exists.
@@ -3230,6 +3247,7 @@ void test_ai_raid_group_and_target_cell() {
         enc.legal_mask[static_cast<std::size_t>(
             AiRlHighLevelAction::raid_defend_base)] == 1,
         "raid mask did not open with a live raid");
+    obs.units.pop_back();  // drop the threat fighter before the translator part
     obs.raid_unit_count = 0;
 
     // Target-cell mask: every cell of the fully explored test map is legal;
@@ -3593,6 +3611,8 @@ void test_ai_macro_autopilot() {
     AiObservation obs = micro_observation();
     obs.population_used = 20;       // supply
     obs.population_reserved = 5;    // demand (healthy headroom)
+    obs.primary_resources = 900;    // below the v10 tech-guard bank threshold
+                                    // so the older guards are tested alone
     AiRlStepEncoding enc = EncodeAiObservationForRl(obs);
     require(enc.legal_mask[static_cast<std::size_t>(
                 AiRlHighLevelAction::produce_worker)] == 1,
@@ -3636,6 +3656,7 @@ void test_ai_macro_autopilot() {
     // default).
     AiObservation eggs = crowded;
     eggs.population_reserved = 5;
+    eggs.primary_resources = 10000;  // idle guard needs its 1500 bank back
     eggs.units.push_back(observed_unit(0x7000, 0, 0x84u, 0, 700, 700, true));
     enc = EncodeAiObservationForRl(eggs);
     require(enc.legal_mask[static_cast<std::size_t>(
@@ -3947,6 +3968,718 @@ void test_ai_pending_site_and_reject_backoff() {
         "back-off did not expire");
 }
 
+// v10 - threat-proportional defense reflex (user replay review: one harasser
+// recalled the whole main army).  A measured threat details only enough
+// fighters (nearest-first, power >= threat * margin); the rest keep the
+// policy's objective.  An unmeasurable threat (building health drop, no
+// visible attacker) still triggers the full-army response.
+void test_ai_reflex_proportional_detail() {
+    AiObservation obs = micro_observation();
+    // Outlying second nest - the threat anchor, far from the worker so no
+    // flee orders mix into the assertion.
+    obs.units.push_back(observed_unit(0x2001, 0, 0x80u, 0, 1600, 320, true));
+    for (u32 i = 0; i < 6; ++i) {
+        obs.units.push_back(fighter_unit(0x4100 + i, 0, 1500 + 8 * i, 1500,
+            true));
+    }
+    TyranoScriptedBotState bot{};
+    AiMicroObjective hold{};
+    hold.kind = AiMicroObjectiveKind::defend;
+    hold.target_x = 1504;
+    hold.target_y = 1500;
+    hold.radius = 128;
+    hold.assigned = true;
+    AiMicroSetObjective(bot.micro, AiMicroGroup::army, hold);
+    // One intruder (power 100hp * 10 = 1000) at the outlying nest: needed =
+    // 1000 * 150% = 1500 -> two 1000-power defenders (also the minimum).
+    obs.units.push_back(fighter_unit(0x9c00, 1, 1640, 350, false));
+    obs.simulation_frame = 10;
+    const std::vector<AiSemanticAction> orders =
+        AiMicroExecutorStep(bot.micro, obs);
+    require(bot.micro.threat.active &&
+        bot.micro.reflex_defenders.size() == 2,
+        "measured threat did not produce a two-fighter detail");
+    // Nearest-first to the anchor: the two highest-x fighters.
+    require(std::find(bot.micro.reflex_defenders.begin(),
+            bot.micro.reflex_defenders.end(), 0x4105u) !=
+            bot.micro.reflex_defenders.end() &&
+        std::find(bot.micro.reflex_defenders.begin(),
+            bot.micro.reflex_defenders.end(), 0x4104u) !=
+            bot.micro.reflex_defenders.end(),
+        "detail was not picked nearest-first to the anchor");
+    for (const AiSemanticAction& order : orders) {
+        for (const u32 unit_id : order.unit_ids) {
+            require(unit_id < 0x4100u || unit_id > 0x4103u,
+                "a non-detail fighter was pulled off the policy objective");
+        }
+    }
+    bool detail_moved = false;
+    for (const AiSemanticAction& order : orders) {
+        if (order.kind == AiSemanticActionKind::move &&
+            order.target_x == 1640 && order.target_y == 350) {
+            detail_moved = true;  // v10.5: anchor = the intruder, not the nest
+        }
+    }
+    require(detail_moved, "the detail was not sent at the enemy force");
+    require(AiMicroCombatPower(obs.units.back()) == 1000u,
+        "combat power formula changed unexpectedly");
+    // Unmeasurable threat: an own building losing health with NO visible
+    // attacker sends a small investigation picket (user directive: at most
+    // reflex_unseen_defenders = 3 fighters), never the whole army.
+    AiObservation hurt = micro_observation();
+    hurt.units.push_back(observed_unit(0x2001, 0, 0x80u, 0, 1600, 320, true));
+    hurt.units.back().health = 500;
+    hurt.units.back().max_health = 500;
+    for (u32 i = 0; i < 6; ++i) {
+        hurt.units.push_back(fighter_unit(0x4100 + i, 0, 1500 + 8 * i, 1500,
+            true));
+    }
+    TyranoScriptedBotState bot2{};
+    AiMicroSetObjective(bot2.micro, AiMicroGroup::army, hold);
+    hurt.simulation_frame = 10;
+    AiMicroExecutorStep(bot2.micro, hurt);
+    require(!bot2.micro.threat.active, "reflex fired without a threat");
+    hurt.units[hurt.units.size() - 7].health = 450;  // the nest lost health
+    hurt.simulation_frame = 14;
+    const std::vector<AiSemanticAction> picket_orders =
+        AiMicroExecutorStep(bot2.micro, hurt);
+    require(bot2.micro.threat.active &&
+        bot2.micro.reflex_defenders.size() == 3,
+        "an unseen-attacker threat did not send a 3-fighter picket");
+    // Anchor falls back to the FIRST own building (the home nest at 320,320):
+    // the three lowest-x fighters are nearest and form the picket.
+    for (const u32 unit_id : {0x4100u, 0x4101u, 0x4102u}) {
+        require(std::find(bot2.micro.reflex_defenders.begin(),
+                bot2.micro.reflex_defenders.end(), unit_id) !=
+                bot2.micro.reflex_defenders.end(),
+            "the unseen-attacker picket was not picked nearest-first");
+    }
+    for (const AiSemanticAction& order : picket_orders) {
+        for (const u32 unit_id : order.unit_ids) {
+            require(unit_id < 0x4103u || unit_id > 0x4105u,
+                "an unseen-attacker threat pulled more than the picket");
+        }
+    }
+}
+
+// v10 - hunt reachability guard (user replay report: the army parked at a
+// cliff hunting a monster on a walkable island it could never reach).  The
+// executor drops unreachable monsters from the hunt pick, and the RL mask
+// closes the hunt actions when no reachable monster is in sight.
+void test_ai_hunt_reachability_guard() {
+    AiObservation obs = micro_observation();
+    // A full-height impassable wall at tile x = 20 splits the map; the
+    // monster stands on the far side.
+    for (u32 y = 0; y < obs.map_height_tiles; ++y) {
+        obs.tiles[y * obs.map_width_tiles + 20].passable = false;
+    }
+    obs.units.push_back(fighter_unit(0x4100, 0, 400, 400, true));
+    obs.units.push_back(observed_unit(0x9100, kNeutralMonsterOwnerId, 0x30, 0,
+        976, 400, false));
+    const AiRlStepEncoding walled = EncodeAiObservationForRl(obs);
+    require(walled.legal_mask[static_cast<std::size_t>(
+                AiRlHighLevelAction::hunt_neutral_monster)] == 0,
+        "hunt stayed legal with only an unreachable monster in sight");
+    TyranoScriptedBotState bot{};
+    AiMicroObjective hunt{};
+    hunt.kind = AiMicroObjectiveKind::attack;
+    hunt.tactic = AiMicroAttackTactic::neutral_only;
+    hunt.assigned = true;
+    AiMicroSetObjective(bot.micro, AiMicroGroup::army, hunt);
+    obs.simulation_frame = 10;
+    std::vector<AiSemanticAction> orders = AiMicroExecutorStep(bot.micro, obs);
+    for (const AiSemanticAction& order : orders) {
+        require(order.kind != AiSemanticActionKind::attack_unit &&
+            order.kind != AiSemanticActionKind::attack_move,
+            "the executor hunted an unreachable monster");
+    }
+    require(bot.micro.hunt_unreachable_skipped >= 1 &&
+        AiMicroObjectiveOf(bot.micro, AiMicroGroup::army).target_unit_id == 0,
+        "the unreachable monster was not dropped from the hunt pick");
+    // Punch a gap into the wall on the fighter's row: the monster becomes
+    // reachable, the mask opens and the hunt names it again.
+    obs.tiles[12 * obs.map_width_tiles + 20].passable = true;
+    require(EncodeAiObservationForRl(obs).legal_mask[static_cast<std::size_t>(
+                AiRlHighLevelAction::hunt_neutral_monster)] == 1,
+        "hunt did not reopen once the monster became reachable");
+    TyranoScriptedBotState bot2{};
+    AiMicroSetObjective(bot2.micro, AiMicroGroup::army, hunt);
+    orders = AiMicroExecutorStep(bot2.micro, obs);
+    bool hunted = false;
+    for (const AiSemanticAction& order : orders) {
+        if (order.kind == AiSemanticActionKind::attack_unit &&
+            order.target_unit_id == 0x9100) {
+            hunted = true;
+        }
+    }
+    require(hunted, "a reachable monster was not hunted");
+}
+
+// v10 - meat-pickup priority (user directive: fighters WITHOUT a held meat
+// reserve collect first) and pickup under a defend objective, so drops near
+// the base no longer rot once the hunt objective ends.
+void test_ai_meat_priority_and_defend_pickup() {
+    AiObservation obs = micro_observation();
+    obs.units.push_back(fighter_unit(0x4400, 0, 560, 400, true));  // empty
+    obs.units.push_back(fighter_unit(0x4401, 0, 580, 400, true));  // holds meat
+    obs.units[obs.units.size() - 2].type_flags |= 0x2u;
+    obs.units[obs.units.size() - 1].type_flags |= 0x2u;
+    obs.units.back().action_mode = 500;  // held meat reserve (+0x2c)
+    AiObservedMapEffect meat{};
+    meat.id = 9;
+    meat.effect_id = 2;
+    meat.x = 620;
+    meat.y = 400;
+    meat.amount = 100;
+    obs.map_effects.push_back(meat);
+    // A monster far away keeps the named chase alive - pre-v10 both fighters
+    // walked past the drop to it.
+    obs.units.push_back(observed_unit(0x9100, kNeutralMonsterOwnerId, 0x30, 0,
+        1400, 400, false));
+    TyranoScriptedBotState bot{};
+    AiMicroObjective hunt{};
+    hunt.kind = AiMicroObjectiveKind::attack;
+    hunt.tactic = AiMicroAttackTactic::neutral_only;
+    hunt.assigned = true;
+    AiMicroSetObjective(bot.micro, AiMicroGroup::army, hunt);
+    obs.simulation_frame = 10;
+    const std::vector<AiSemanticAction> orders =
+        AiMicroExecutorStep(bot.micro, obs);
+    bool empty_collects = false;
+    bool full_chases = false;
+    for (const AiSemanticAction& order : orders) {
+        if (order.kind == AiSemanticActionKind::pickup_move &&
+            order.target_x == 620 &&
+            order.unit_ids == std::vector<u32>{0x4400}) {
+            empty_collects = true;
+        }
+        if (order.kind == AiSemanticActionKind::attack_unit &&
+            order.target_unit_id == 0x9100 &&
+            order.unit_ids == std::vector<u32>{0x4401}) {
+            full_chases = true;
+        }
+    }
+    require(empty_collects,
+        "the reserve-free fighter did not collect the drop first");
+    require(full_chases, "the full fighter did not continue the hunt");
+    // Defend objective: a defender with no bubble target collects a drop
+    // INSIDE the bubble...
+    AiObservation base = micro_observation();
+    base.units.push_back(fighter_unit(0x4500, 0, 500, 400, true));
+    base.units.back().type_flags |= 0x2u;
+    AiObservedMapEffect drop{};
+    drop.id = 11;
+    drop.effect_id = 1;
+    drop.x = 600;
+    drop.y = 430;
+    drop.amount = 80;
+    base.map_effects.push_back(drop);
+    TyranoScriptedBotState bot2{};
+    AiMicroObjective guard{};
+    guard.kind = AiMicroObjectiveKind::defend;
+    guard.target_x = 500;
+    guard.target_y = 400;
+    guard.radius = 800;
+    guard.assigned = true;
+    AiMicroSetObjective(bot2.micro, AiMicroGroup::army, guard);
+    base.simulation_frame = 10;
+    std::vector<AiSemanticAction> base_orders =
+        AiMicroExecutorStep(bot2.micro, base);
+    bool defender_collects = false;
+    for (const AiSemanticAction& order : base_orders) {
+        if (order.kind == AiSemanticActionKind::pickup_move &&
+            order.target_x == 600 &&
+            order.unit_ids == std::vector<u32>{0x4500}) {
+            defender_collects = true;
+        }
+    }
+    require(defender_collects, "a defender left the drop in its bubble to rot");
+    // v10.1 sticky assignment (user replay report: two collectors flapped and
+    // trembled next to the drop): once 0x4500 owns the drop, a NEARER empty
+    // fighter appearing must not steal it.
+    base.units.push_back(fighter_unit(0x4501, 0, 590, 428, true));
+    base.units.back().type_flags |= 0x2u;
+    base.simulation_frame = 18;
+    base_orders = AiMicroExecutorStep(bot2.micro, base);
+    for (const AiSemanticAction& order : base_orders) {
+        if (order.kind == AiSemanticActionKind::pickup_move) {
+            require(order.unit_ids == std::vector<u32>{0x4500},
+                "a nearer collector stole a sticky meat assignment");
+        }
+    }
+    require(bot2.micro.meat_assignments.size() == 1 &&
+        bot2.micro.meat_assignments[0].second == 0x4500u,
+        "the meat assignment did not stay sticky in the executor state");
+    // ...but never leaves the bubble for one (the leash would fight it).
+    AiObservation tight = base;
+    tight.map_effects[0].x = 900;
+    TyranoScriptedBotState bot3{};
+    AiMicroObjective narrow = guard;
+    narrow.radius = 128;
+    AiMicroSetObjective(bot3.micro, AiMicroGroup::army, narrow);
+    for (const AiSemanticAction& order :
+         AiMicroExecutorStep(bot3.micro, tight)) {
+        require(order.kind != AiSemanticActionKind::pickup_move,
+            "a defender chased a drop outside its bubble");
+    }
+}
+
+// v10 - open-ring placement preference (user replay report: structures placed
+// flush against each other grew into walls units could not pass).  With room
+// available, the chosen site keeps its whole one-tile ring walkable - no cell
+// of the ring may overlap a standing structure's footprint.
+void test_ai_placement_open_ring_preference() {
+    AiObservation obs = micro_observation();
+    const AiBuildSite site = FindAiBuildSite(obs, 0x84u, obs.start_x,
+        obs.start_y, 12);
+    require(site.found, "no site found for the open-ring test");
+    const AiBuildingFootprint egg = AiBuildingFootprintOf(0x84u);
+    const AiBuildingFootprint nest = AiBuildingFootprintOf(0x80u);
+    const i32 tx = site.x >> 5;
+    const i32 ty = site.y >> 5;
+    const i32 nest_tx = 320 >> 5;
+    const i32 nest_ty = 320 >> 5;
+    // The ring [tx-1, tx+fw] x [ty-1, ty+fh] must not touch the nest's
+    // footprint - the rectangles must be separated on at least one axis.
+    const bool separated =
+        tx > nest_tx + static_cast<i32>(nest.width) ||
+        tx + static_cast<i32>(egg.width) < nest_tx ||
+        ty > nest_ty + static_cast<i32>(nest.height) ||
+        ty + static_cast<i32>(egg.height) < nest_ty;
+    require(separated,
+        "the chosen site sits flush against the nest despite open ground");
+}
+
+// v10 - four fighting bodies (user directive): the two extra raid slots carry
+// the exact raid semantics - own detach/merge, own objective, own mask gates -
+// so main army + three detachments can act independently.
+void test_ai_four_squads() {
+    AiObservation obs = micro_observation();
+    for (u32 i = 0; i < 12; ++i) {
+        obs.units.push_back(fighter_unit(0x4000 + i, 0,
+            380 + static_cast<i32>(i) * 10, 400, true));
+    }
+    obs.units.push_back(observed_unit(0x9400, 1, 0x84, 0, 1500, 1500, false));
+    obs.army_group_unit_count = 12;
+    AiRlStepEncoding enc = EncodeAiObservationForRl(obs);
+    require(enc.legal_mask[static_cast<std::size_t>(
+                AiRlHighLevelAction::detach_raid_b)] == 1 &&
+        enc.legal_mask[static_cast<std::size_t>(
+            AiRlHighLevelAction::raid_b_attack_units)] == 0 &&
+        enc.legal_mask[static_cast<std::size_t>(
+            AiRlHighLevelAction::merge_raid_b)] == 0,
+        "raid_b mask did not gate on detach preconditions");
+    obs.raid_b_unit_count = 3;
+    enc = EncodeAiObservationForRl(obs);
+    require(enc.legal_mask[static_cast<std::size_t>(
+                AiRlHighLevelAction::detach_raid_b)] == 0 &&
+        enc.legal_mask[static_cast<std::size_t>(
+            AiRlHighLevelAction::raid_b_attack_units)] == 1 &&
+        enc.legal_mask[static_cast<std::size_t>(
+            AiRlHighLevelAction::merge_raid_b)] == 1 &&
+        enc.legal_mask[static_cast<std::size_t>(
+            AiRlHighLevelAction::raid_c_attack_units)] == 0,
+        "raid_b mask did not open independently of raid_c");
+    require(enc.features[788] > 0.0f && enc.features[789] == 1.0f &&
+        enc.features[795] == 0.0f,
+        "raid_b/raid_c group features were not encoded");
+    obs.raid_b_unit_count = 0;
+    // Translator: three successive detaches carve three disjoint 3-unit
+    // squads off the 12-fighter army (30%, floor 3, half cap).
+    TyranoScriptedBotState state{};
+    state.rally_configured = true;
+    TyranoScriptedBotConfig config{};
+    config.decision_interval_frames = 1;
+    obs.simulation_frame = 1;
+    DecideTyranoScriptedBotForHighLevelAction(state, obs,
+        AiRlHighLevelAction::detach_raid, config);
+    obs.simulation_frame = 2;
+    DecideTyranoScriptedBotForHighLevelAction(state, obs,
+        AiRlHighLevelAction::detach_raid_b, config);
+    obs.simulation_frame = 3;
+    DecideTyranoScriptedBotForHighLevelAction(state, obs,
+        AiRlHighLevelAction::detach_raid_c, config);
+    require(AiMicroGroupMembers(state.micro, obs, AiMicroGroup::raid).size()
+            == 3 &&
+        AiMicroGroupMembers(state.micro, obs, AiMicroGroup::raid_b).size()
+            == 3 &&
+        AiMicroGroupMembers(state.micro, obs, AiMicroGroup::raid_c).size()
+            == 3 &&
+        AiMicroGroupMembers(state.micro, obs, AiMicroGroup::army).size() == 3,
+        "three detaches did not carve three disjoint squads");
+    // Independent objectives per squad; the untouched raid keeps its hold.
+    obs.simulation_frame = 4;
+    DecideTyranoScriptedBotForHighLevelAction(state, obs,
+        AiRlHighLevelAction::raid_b_attack_units, config);
+    obs.simulation_frame = 5;
+    DecideTyranoScriptedBotForHighLevelAction(state, obs,
+        AiRlHighLevelAction::raid_c_retreat, config);
+    require(AiMicroObjectiveOf(state.micro, AiMicroGroup::raid_b).kind ==
+            AiMicroObjectiveKind::attack &&
+        AiMicroObjectiveOf(state.micro, AiMicroGroup::raid_b).tactic ==
+            AiMicroAttackTactic::units_first &&
+        AiMicroObjectiveOf(state.micro, AiMicroGroup::raid_c).kind ==
+            AiMicroObjectiveKind::retreat &&
+        AiMicroObjectiveOf(state.micro, AiMicroGroup::raid).kind ==
+            AiMicroObjectiveKind::defend,
+        "squad objectives were not independent");
+    // Merging one squad returns exactly its members to the army.
+    obs.simulation_frame = 6;
+    DecideTyranoScriptedBotForHighLevelAction(state, obs,
+        AiRlHighLevelAction::merge_raid_b, config);
+    require(AiMicroGroupMembers(state.micro, obs,
+            AiMicroGroup::raid_b).empty() &&
+        AiMicroGroupMembers(state.micro, obs, AiMicroGroup::army).size() == 6,
+        "merge_raid_b did not fold the squad back into the army");
+}
+
+// v10 - attack commit + hunt distance gate (user directive: an ordered attack
+// must at least meet the enemy; the main army does not trek across the map
+// for monsters - that is the raid slots' job).
+void test_ai_attack_commit_and_hunt_range() {
+    const auto legal = [](const AiRlStepEncoding& enc,
+        AiRlHighLevelAction action) {
+        return enc.legal_mask[static_cast<std::size_t>(action)] != 0;
+    };
+    AiObservation obs = micro_observation();
+    obs.population_used = 20;      // supply so produce_worker stays open
+    obs.population_reserved = 5;
+    obs.units.push_back(fighter_unit(0x4100, 0, 400, 400, true));
+    obs.units.push_back(observed_unit(0x9400, 1, 0x84, 0, 1500, 1500, false));
+    obs.army_group_unit_count = 1;
+    obs.army_objective_kind = 2;   // attack, marching, un-engaged
+    obs.army_attack_has_target = 1;
+    obs.army_engaged_since_set = 0;
+    obs.army_objective_age = 100;
+    AiRlStepEncoding enc = EncodeAiObservationForRl(obs);
+    require(!legal(enc, AiRlHighLevelAction::attack_nearest_enemy) &&
+        !legal(enc, AiRlHighLevelAction::defend_base) &&
+        !legal(enc, AiRlHighLevelAction::hunt_neutral_monster) &&
+        !legal(enc, AiRlHighLevelAction::search_enemy_base) &&
+        legal(enc, AiRlHighLevelAction::retreat) &&
+        legal(enc, AiRlHighLevelAction::produce_worker),
+        "attack commit did not lock army re-tasking (retreat/macro open)");
+    obs.army_engaged_since_set = 1;   // first contact releases
+    enc = EncodeAiObservationForRl(obs);
+    require(legal(enc, AiRlHighLevelAction::attack_nearest_enemy),
+        "first contact did not release the commit lock");
+    obs.army_engaged_since_set = 0;
+    obs.army_objective_age = 3000;    // timeout releases
+    enc = EncodeAiObservationForRl(obs);
+    require(legal(enc, AiRlHighLevelAction::attack_nearest_enemy),
+        "commit timeout did not release the lock");
+    // v10.2 defend gate: no hostile COMBAT mobile near an own building (the
+    // far enemy nest is a building) -> defend stays closed; a fighter near
+    // the base opens it.
+    require(!legal(enc, AiRlHighLevelAction::defend_base),
+        "defend was legal with no visible threat near the base");
+    obs.units.push_back(fighter_unit(0x9c10, 1, 800, 320, false));
+    enc = EncodeAiObservationForRl(obs);
+    require(legal(enc, AiRlHighLevelAction::defend_base),
+        "defend did not open with a hostile fighter near the base");
+    obs.units.pop_back();
+    enc = EncodeAiObservationForRl(obs);
+    // v10.2: the threat CLEARING while the army defends fires objective_done
+    // so the policy re-decides instead of defending an empty base forever.
+    {
+        AiObservation guard_obs = micro_observation();
+        guard_obs.units.push_back(fighter_unit(0x4100, 0, 400, 400, true));
+        guard_obs.units.push_back(fighter_unit(0x9c11, 1, 800, 320, false));
+        guard_obs.army_objective_kind = 3;  // defend
+        AiDecisionGateState gate{};
+        AiRlStepEncoding guard_enc = EncodeAiObservationForRl(guard_obs);
+        AiDecisionGateResult r = AiDecisionGateEvaluate(gate, guard_obs,
+            guard_enc, {}, false, 100);
+        require(r.due, "defend-clear fixture: first decision did not fire");
+        guard_obs.units.pop_back();  // the threat leaves
+        guard_enc = EncodeAiObservationForRl(guard_obs);
+        r = AiDecisionGateEvaluate(gate, guard_obs, guard_enc, {}, false, 200);
+        require(r.due && (r.triggers & trigger_objective_done) != 0,
+            "threat clearing under a defend objective did not re-decide");
+    }
+    // A marching raid slot locks its own actions (incl. merge) only.
+    obs.raid_b_unit_count = 3;
+    obs.raid_b_objective_kind = 2;
+    obs.raid_b_attack_has_target = 1;
+    obs.raid_b_engaged_since_set = 0;
+    obs.raid_b_objective_age = 50;
+    enc = EncodeAiObservationForRl(obs);
+    require(!legal(enc, AiRlHighLevelAction::raid_b_attack_units) &&
+        !legal(enc, AiRlHighLevelAction::merge_raid_b) &&
+        legal(enc, AiRlHighLevelAction::raid_b_retreat) &&
+        legal(enc, AiRlHighLevelAction::attack_nearest_enemy),
+        "raid_b commit lock leaked or missed");
+
+    // Hunt distance gate: a monster 1400 px from the army centroid closes the
+    // ARMY hunt but leaves the raid hunt open; a near monster opens both.
+    AiObservation hunt = micro_observation();
+    hunt.units.push_back(fighter_unit(0x4100, 0, 400, 400, true));
+    hunt.units.push_back(observed_unit(0x9100, kNeutralMonsterOwnerId, 0x30,
+        0, 1800, 400, false));
+    hunt.army_group_unit_count = 1;
+    hunt.army_centroid_x = 400;
+    hunt.army_centroid_y = 400;
+    hunt.raid_unit_count = 3;
+    enc = EncodeAiObservationForRl(hunt);
+    require(!legal(enc, AiRlHighLevelAction::hunt_neutral_monster) &&
+        legal(enc, AiRlHighLevelAction::raid_hunt_neutral),
+        "far monster did not close the army hunt (raid stays open)");
+    hunt.units.back().x = 900;
+    enc = EncodeAiObservationForRl(hunt);
+    require(legal(enc, AiRlHighLevelAction::hunt_neutral_monster),
+        "near monster did not open the army hunt");
+    // Executor: under an army hunt objective the far monster is not named.
+    hunt.units.back().x = 1800;
+    TyranoScriptedBotState bot{};
+    AiMicroObjective hunt_objective{};
+    hunt_objective.kind = AiMicroObjectiveKind::attack;
+    hunt_objective.tactic = AiMicroAttackTactic::neutral_only;
+    hunt_objective.assigned = true;
+    AiMicroSetObjective(bot.micro, AiMicroGroup::army, hunt_objective);
+    hunt.simulation_frame = 10;
+    AiMicroExecutorStep(bot.micro, hunt);
+    require(AiMicroObjectiveOf(bot.micro, AiMicroGroup::army).target_unit_id
+            == 0,
+        "the army hunted a monster beyond its hunt radius");
+    hunt.units.back().x = 900;
+    hunt.simulation_frame = 18;
+    AiMicroExecutorStep(bot.micro, hunt);
+    require(AiMicroObjectiveOf(bot.micro, AiMicroGroup::army).target_unit_id
+            == 0x9100,
+        "the army did not hunt a monster inside its hunt radius");
+}
+
+// v10 - replay-review fixes: a stale harvest command flag (0x4) must not park
+// an idle worker, and a hostile in SIGHT (not only weapon contact) disables
+// the cohesion return so units stop trembling next to enemy soldiers.
+void test_ai_idle_worker_stale_flag_and_cohesion_sight() {
+    AiObservation obs = micro_observation();
+    obs.units[0].command_flags = 0x4u;  // stale harvest flag, unit fully idle
+    TyranoScriptedBotState bot{};
+    obs.simulation_frame = 10;
+    const std::vector<AiSemanticAction> orders =
+        AiMicroExecutorStep(bot.micro, obs);
+    bool harvests = false;
+    for (const AiSemanticAction& order : orders) {
+        if (order.kind == AiSemanticActionKind::harvest &&
+            order.unit_ids == std::vector<u32>{0x1000}) {
+            harvests = true;
+        }
+    }
+    require(harvests, "a stale harvest flag parked an idle worker");
+
+    // Cohesion (v10): a fast leader far ahead of its group WAITS IN PLACE -
+    // it must never walk backward (the army surge) and never charge the
+    // nearby enemy alone; weapon contact still releases the gate.
+    AiObservation march = micro_observation();
+    march.units.push_back(fighter_unit(0x4100, 0, 1200, 400, true)); // leader
+    march.units.push_back(fighter_unit(0x4101, 0, 400, 400, true));  // laggards
+    march.units.push_back(fighter_unit(0x4102, 0, 420, 400, true));
+    march.units.push_back(fighter_unit(0x9c00, 1, 1500, 400, false)); // enemy near, out of reach
+    TyranoScriptedBotState bot2{};
+    AiMicroExecutorConfig no_reflex{};
+    no_reflex.reflex_enabled = false;
+    AiMicroObjective attack{};
+    attack.kind = AiMicroObjectiveKind::attack;
+    attack.tactic = AiMicroAttackTactic::units_first;
+    attack.assigned = true;
+    AiMicroSetObjective(bot2.micro, AiMicroGroup::army, attack);
+    march.simulation_frame = 10;
+    bool leader_waits = false;
+    for (const AiSemanticAction& order :
+         AiMicroExecutorStep(bot2.micro, march, no_reflex)) {
+        for (const u32 unit_id : order.unit_ids) {
+            if (unit_id == 0x4100u) {
+                leader_waits = order.kind == AiSemanticActionKind::move &&
+                    order.target_x == 1200 && order.target_y == 400;
+            }
+        }
+    }
+    require(leader_waits && bot2.micro.cohesion_holds != 0,
+        "a far-ahead fast leader did not wait in place for its group");
+}
+
+// v10.3 - the cohesion anchor is the group MEDIAN, not the mean: a tail of
+// freshly produced units walking up from the base must not stop the marching
+// front (2026-09-01 user replay report: the army kept stop-and-going as
+// reinforcements spawned).
+void test_ai_cohesion_median_anchor() {
+    AiObservation obs = micro_observation();
+    obs.units[0].command_state = kUnitStateWorkerApproachHarvest;
+    // Front mass: three fighters together mid-march; tail: two fresh spawns
+    // at the base.  Mean x = 968 (front gap 432 -> would stop); median 1400.
+    obs.units.push_back(fighter_unit(0x4100, 0, 1400, 400, true));
+    obs.units.push_back(fighter_unit(0x4101, 0, 1390, 400, true));
+    obs.units.push_back(fighter_unit(0x4102, 0, 1410, 400, true));
+    obs.units.push_back(fighter_unit(0x4103, 0, 320, 320, true));
+    obs.units.push_back(fighter_unit(0x4104, 0, 330, 320, true));
+    obs.enemy_building_memory.assign(obs.tiles.size(), 0);
+    obs.enemy_building_memory[12 * obs.map_width_tiles + 62] = 1;  // (2000,400)
+    TyranoScriptedBotState bot{};
+    AiMicroExecutorConfig no_reflex{};
+    no_reflex.reflex_enabled = false;
+    AiMicroObjective attack{};
+    attack.kind = AiMicroObjectiveKind::attack;
+    attack.tactic = AiMicroAttackTactic::buildings_first;
+    attack.assigned = true;
+    AiMicroSetObjective(bot.micro, AiMicroGroup::army, attack);
+    obs.simulation_frame = 10;
+    bool front_advances = false;
+    for (const AiSemanticAction& order :
+         AiMicroExecutorStep(bot.micro, obs, no_reflex)) {
+        for (const u32 unit_id : order.unit_ids) {
+            if (unit_id >= 0x4100u && unit_id <= 0x4102u) {
+                front_advances =
+                    order.kind == AiSemanticActionKind::attack_move &&
+                    order.target_x == 2000;
+            }
+        }
+    }
+    require(front_advances && bot.micro.cohesion_holds == 0,
+        "the reinforcement tail stopped the marching front (mean anchor)");
+}
+
+// v10.4 - attack waves (user design): members present at the attack order
+// form the first wave and march regardless of later spawns; fighters
+// produced afterwards STAGE at the base and leave only once
+// attack_wave_minimum of them gather, as their own wave.
+void test_ai_attack_waves() {
+    AiObservation obs = micro_observation();
+    obs.units[0].command_state = kUnitStateWorkerApproachHarvest;
+    obs.units.push_back(fighter_unit(0x4100, 0, 700, 400, true));
+    obs.units.push_back(fighter_unit(0x4101, 0, 710, 400, true));
+    obs.units.push_back(fighter_unit(0x4102, 0, 720, 400, true));
+    obs.enemy_building_memory.assign(obs.tiles.size(), 0);
+    obs.enemy_building_memory[12 * obs.map_width_tiles + 62] = 1;  // (2000,400)
+    TyranoScriptedBotState bot{};
+    AiMicroExecutorConfig no_reflex{};
+    no_reflex.reflex_enabled = false;
+    AiMicroObjective attack{};
+    attack.kind = AiMicroObjectiveKind::attack;
+    attack.tactic = AiMicroAttackTactic::buildings_first;
+    attack.assigned = true;
+    AiMicroSetObjective(bot.micro, AiMicroGroup::army, attack);
+    obs.simulation_frame = 10;
+    std::vector<AiSemanticAction> orders =
+        AiMicroExecutorStep(bot.micro, obs, no_reflex);
+    u32 first_wave_marchers = 0;
+    for (const AiSemanticAction& order : orders) {
+        if (order.kind == AiSemanticActionKind::attack_move &&
+            order.target_x == 2000) {
+            first_wave_marchers += static_cast<u32>(order.unit_ids.size());
+        }
+    }
+    require(first_wave_marchers == 3,
+        "the first wave did not march together");
+    // Two fresh spawns at the base: they must STAGE, not join the assault.
+    obs.units.push_back(fighter_unit(0x4200, 0, 340, 320, true));
+    obs.units.push_back(fighter_unit(0x4201, 0, 350, 320, true));
+    obs.simulation_frame = 20;
+    orders = AiMicroExecutorStep(bot.micro, obs, no_reflex);
+    for (const AiSemanticAction& order : orders) {
+        if (order.kind != AiSemanticActionKind::attack_move) {
+            continue;
+        }
+        for (const u32 unit_id : order.unit_ids) {
+            require(unit_id < 0x4200u,
+                "a staging spawn trickled into the ongoing assault");
+        }
+    }
+    for (const AiMicroUnitRecord& record : bot.micro.units) {
+        if (record.unit_id == 0x4200u || record.unit_id == 0x4201u) {
+            require(record.attack_wave == 0,
+                "a late spawn was enrolled into the first wave");
+        }
+    }
+    // Four more gather (6 staging >= attack_wave_minimum): they leave as
+    // wave 2 together.
+    for (u32 i = 0; i < 4; ++i) {
+        obs.units.push_back(fighter_unit(0x4202 + i, 0,
+            360 + static_cast<i32>(i) * 10, 320, true));
+    }
+    obs.simulation_frame = 30;
+    orders = AiMicroExecutorStep(bot.micro, obs, no_reflex);
+    u32 second_wave_marchers = 0;
+    for (const AiSemanticAction& order : orders) {
+        if (order.kind == AiSemanticActionKind::attack_move &&
+            order.target_x == 2000) {
+            for (const u32 unit_id : order.unit_ids) {
+                if (unit_id >= 0x4200u) {
+                    ++second_wave_marchers;
+                }
+            }
+        }
+    }
+    require(second_wave_marchers == 6,
+        "the gathered staging fighters did not leave as their own wave");
+    for (const AiMicroUnitRecord& record : bot.micro.units) {
+        if (record.unit_id >= 0x4200u && record.unit_id <= 0x4205u) {
+            require(record.attack_wave == 2,
+                "the second wave did not get its own wave id");
+        }
+    }
+}
+
+// v10 - autopilot tech guard (2026-09-01 user replay report: no tech
+// buildings were ever built): a fat bank builds the first missing building
+// of the audited chain; cooldown and policy-build collisions respected.
+void test_ai_autopilot_tech_guard() {
+    AiObservation obs = micro_observation();
+    obs.population_used = 20;
+    obs.population_reserved = 5;
+    obs.primary_resources = 5000;
+    // Completed egg nest -> the first missing chain slot is the land nest.
+    obs.units.push_back(observed_unit(0x7000, 0, 0x84u, 0, 700, 700, true));
+    AiRlStepEncoding enc = EncodeAiObservationForRl(obs);
+    require(enc.legal_mask[static_cast<std::size_t>(
+                AiRlHighLevelAction::build_land_nest)] == 1,
+        "tech-guard fixture cannot build a land nest");
+    AiAutopilotState state{};
+    AiAutopilotConfig tech_on{};
+    tech_on.tech_guard_enabled = true;  // default OFF (policy learns tech)
+    std::vector<AiRlHighLevelAction> plan = AiAutopilotPlan(state, obs, enc,
+        AiRlHighLevelAction::no_op, 500, tech_on);
+    bool teched = false;
+    for (const AiRlHighLevelAction action : plan) {
+        teched = teched || action == AiRlHighLevelAction::build_land_nest;
+    }
+    require(teched, "tech guard did not build the first missing tech building");
+    // Cooldown suppresses an immediate refire.
+    plan = AiAutopilotPlan(state, obs, enc, AiRlHighLevelAction::no_op, 508,
+        tech_on);
+    for (const AiRlHighLevelAction action : plan) {
+        require(action != AiRlHighLevelAction::build_land_nest,
+            "tech guard ignored its cooldown");
+    }
+    // A land nest under construction fills the slot: next slot is 0x86.
+    AiObservation building = obs;
+    AiObservedUnit land_uc = observed_unit(0x7100, 0, 0x85u, 0, 800, 700, true);
+    land_uc.under_construction = true;
+    building.units.push_back(land_uc);
+    AiAutopilotState state2{};
+    plan = AiAutopilotPlan(state2, building, EncodeAiObservationForRl(building),
+        AiRlHighLevelAction::no_op, 900, tech_on);
+    for (const AiRlHighLevelAction action : plan) {
+        require(action != AiRlHighLevelAction::build_land_nest,
+            "tech guard rebuilt a slot already under construction");
+    }
+    // A policy build this frame suppresses the guard entirely.
+    AiAutopilotState state3{};
+    plan = AiAutopilotPlan(state3, obs, enc,
+        AiRlHighLevelAction::build_egg_nest, 900, tech_on);
+    for (const AiRlHighLevelAction action : plan) {
+        require(action != AiRlHighLevelAction::build_land_nest,
+            "tech guard collided with a policy build");
+    }
+    // Default config: the guard stays OFF (the policy owns tech timing).
+    AiAutopilotState state4{};
+    plan = AiAutopilotPlan(state4, obs, enc, AiRlHighLevelAction::no_op, 900);
+    for (const AiRlHighLevelAction action : plan) {
+        require(action != AiRlHighLevelAction::build_land_nest,
+            "tech guard collided with a policy build");
+    }
+}
+
 int main() {
     test_observation_visibility_and_determinism();
     test_observation_resource_memory();
@@ -3986,6 +4719,16 @@ int main() {
     test_ai_corridor_guard_and_noncombat_flee();
     test_ai_local_paths_and_scout_guard();
     test_ai_pending_site_and_reject_backoff();
+    test_ai_reflex_proportional_detail();
+    test_ai_hunt_reachability_guard();
+    test_ai_meat_priority_and_defend_pickup();
+    test_ai_placement_open_ring_preference();
+    test_ai_four_squads();
+    test_ai_attack_commit_and_hunt_range();
+    test_ai_idle_worker_stale_flag_and_cohesion_sight();
+    test_ai_autopilot_tech_guard();
+    test_ai_cohesion_median_anchor();
+    test_ai_attack_waves();
     test_ai_play_lobby_role_compatibility();
     std::cout << "ai_play_interface_regression: passed\n";
     return 0;

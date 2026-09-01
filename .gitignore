@@ -5,6 +5,9 @@
 !.gitattributes
 !INTERIM_GAMEPLAY_SYNC_REPORT_2026-08-14.md
 
+!docs/
+!docs/AI_PLAY_MULTI_RACE_RL_ANALYSIS.md
+
 !ranker_reconstructed_code/
 !ranker_reconstructed_code/CMakeLists.txt
 !ranker_reconstructed_code/READABILITY.md

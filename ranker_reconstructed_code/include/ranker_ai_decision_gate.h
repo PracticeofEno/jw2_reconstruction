@@ -76,6 +76,9 @@ struct AiDecisionGateState {
     u32 prev_army_kind = 0;
     bool prev_army_had_target = false;
     u32 prev_raid_members = 0;
+    // v10: the two extra raid slots (four fighting bodies).
+    u32 prev_raid_b_members = 0;
+    u32 prev_raid_c_members = 0;
     u32 prev_scout_id = 0;
     u32 prev_berry_id = 0;
     u32 prev_explorer_id = 0;
@@ -113,7 +116,8 @@ AiDecisionGateResult AiDecisionGateEvaluate(AiDecisionGateState& state,
 // policy's own change would fire trigger_objective_done next check).
 void AiDecisionGateSnapshotObjectives(AiDecisionGateState& state,
     u32 army_kind, bool army_has_target, u32 raid_members, u32 scout_id,
-    u32 berry_id, u32 explorer_id, u32 roamer_id);
+    u32 berry_id, u32 explorer_id, u32 roamer_id, u32 raid_b_members = 0,
+    u32 raid_c_members = 0);
 
 } // namespace ranker
 

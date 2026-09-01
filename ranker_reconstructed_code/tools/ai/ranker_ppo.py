@@ -1174,9 +1174,9 @@ def selftest() -> int:
     but quietly underperforms, and a broken aux zero-init would corrupt the
     BC warm start."""
     # 1. Contract constants line up with the C++ encoder layout.
-    assert N_FEATURES == 788, N_FEATURES
-    assert N_ACTIONS == 64, N_ACTIONS
-    assert GRID_CHANNELS == 9 and len(_GRID_IDX) == 576 and N_SCALARS == 212
+    assert N_FEATURES == 802, N_FEATURES
+    assert N_ACTIONS == 80, N_ACTIONS
+    assert GRID_CHANNELS == 9 and len(_GRID_IDX) == 576 and N_SCALARS == 226
     assert GRID_SLICES == ((86, 470), (568, 632), (636, 700), (700, 764))
     # 2. Reshape mapping: C++ index -> (channel, y, x).  Channel runs are
     # contiguous 64-cell row-major blocks, so v5 channel 0 cell (1,1) is

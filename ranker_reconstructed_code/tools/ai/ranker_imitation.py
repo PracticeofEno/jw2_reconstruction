@@ -340,10 +340,24 @@ def build_dataset(samples: Sequence[tuple[int, np.ndarray, np.ndarray]]):
         nxt = samples[t + 1][1]
         # Exact packet-decoded label (replay imitation) beats delta inference.
         label = int(exact) if exact >= 0 else infer_label(feat, nxt)
-        # Only keep labels that are legal in the state (sanity: the built-in AI's
-        # effect should correspond to a legal action; drops rare mask races).
+        # A label illegal in its own state is usually a COMPLETION edge seen
+        # too late: the build/research was paid for long before it completed,
+        # so at the edge the mask has already closed (cost).  Dropping the
+        # sample erased every tech-build label from the dataset (2026-09-01
+        # user replay report: the policy never learned to tech).  Instead,
+        # walk BACK to the nearest earlier no_op sample of the same game
+        # where the action WAS legal - approximately where the built-in AI
+        # actually decided it - and label that sample.
         if mask[label] == 0 and label != A_NO_OP:
-            continue
+            moved = False
+            for back in range(len(y) - 1, max(len(y) - 16, -1), -1):
+                if y[back] == A_NO_OP and M[back][label] != 0:
+                    y[back] = label
+                    moved = True
+                    break
+            if not moved:
+                continue
+            label = A_NO_OP  # this sample itself stays a quiet step
         X.append(feat)
         y.append(label)
         M.append(mask)

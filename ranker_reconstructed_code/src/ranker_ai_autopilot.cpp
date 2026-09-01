@@ -198,6 +198,54 @@ std::vector<AiRlHighLevelAction> AiAutopilotPlan(AiAutopilotState& state,
         actions.push_back(AiRlHighLevelAction::explore_frontier);
     }
 
+    // --- rule 5: tech guard (2026-09-01 user replay report) -----------------
+    // The policy owns WHEN to tech, but an early policy that never picks a
+    // build_nest action stalls the whole tree.  With a fat unreserved bank,
+    // build the FIRST missing building of the audited chain (egg -> land ->
+    // sky -> throw -> upgrade -> land nisdos -> sky nisdos); one per
+    // cooldown, never colliding with a policy build, and a building of the
+    // type already standing/under construction/walking skips its slot.
+    if (config.tech_guard_enabled &&
+        bank >= config.tech_bank_threshold && !is_build_action(policy_action) &&
+        (state.last_tech_guard_frame == 0xffffffffu ||
+            frame - state.last_tech_guard_frame >=
+                config.tech_guard_cooldown_frames)) {
+        struct TechSlot {
+            u32 type;
+            AiRlHighLevelAction action;
+        };
+        static const TechSlot kTechChain[] = {
+            {0x84u, AiRlHighLevelAction::build_egg_nest},
+            {0x85u, AiRlHighLevelAction::build_land_nest},
+            {0x86u, AiRlHighLevelAction::build_nest_x86},
+            {0x87u, AiRlHighLevelAction::build_nest_x87},
+            {0x88u, AiRlHighLevelAction::build_nest_x88},
+            {0x89u, AiRlHighLevelAction::build_nest_x89},
+            {0x8au, AiRlHighLevelAction::build_nest_x8a},
+        };
+        for (const TechSlot& slot : kTechChain) {
+            bool present = false;
+            for (const AiObservedUnit& unit : observation.units) {
+                if (unit.controlled && unit.alive &&
+                    (unit.type_id == slot.type ||
+                        AiWalkingBuildTypeOf(unit) == slot.type)) {
+                    present = true;
+                    break;
+                }
+            }
+            if (present) {
+                continue;
+            }
+            if (legal(encoding, slot.action)) {
+                state.last_tech_guard_frame = frame;
+                actions.push_back(slot.action);
+            }
+            // Missing but illegal (cost/prereq/site): wait - never skip
+            // ahead, the chain order IS the prerequisite order.
+            break;
+        }
+    }
+
     return actions;
 }
 

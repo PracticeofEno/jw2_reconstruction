@@ -85,6 +85,15 @@ bool is_neutral_monster(const AiObservedUnit& unit) {
         unit.type_id < kMobileTypeLimit;
 }
 
+// v10 threat measurement: durability times damage output.  Relative - both
+// sides run through the same formula, so the scale cancels in comparisons.
+// The +10 keeps a zero-OP unit (some monsters, workers) from scoring zero
+// while it can still soak hits.
+u64 unit_power(const AiObservedUnit& unit) {
+    return static_cast<u64>(unit.health) *
+        (10u + static_cast<u64>(unit.attack_power));
+}
+
 i32 unit_sight(const AiObservedUnit& unit) {
     return unit.sight_range > 0 ? static_cast<i32>(unit.sight_range) :
         kDefaultSightPixels;
@@ -184,14 +193,33 @@ struct StepContext {
     // masks (item 1, used when re-picking a group target).
     std::array<UnitMovementPoint, kAiMicroGroupCount> centroid{};
     std::array<bool, kAiMicroGroupCount> centroid_valid{};
+    // v10.3 cohesion anchor: the component-wise MEDIAN of the group.  The
+    // mean let a tail of freshly produced units (walking up from the base)
+    // drag the reference point backwards, so the marching front kept
+    // stop-and-going (2026-09-01 user replay report); the median stays with
+    // the main body and ignores the reinforcement tail.
+    std::array<UnitMovementPoint, kAiMicroGroupCount> cohesion_anchor{};
+    // v10.4: per-(group, wave) median anchor - cohesion applies WITHIN a
+    // wave, so a staging tail can never stop a marching wave.
+    struct WaveAnchor {
+        u32 group;
+        u32 wave;
+        UnitMovementPoint anchor;
+    };
+    std::vector<WaveAnchor> wave_anchors;
     std::array<u32, kAiMicroGroupCount> group_attackable_mask{};
     // Diagnostics folded back into the executor state at the end of the step.
     u32 unattackable_skipped = 0;
     u32 cohesion_holds = 0;
-    // v9 meat pickup: effects claimed by a fighter this frame (one collector
-    // per drop) and the orders issued.
-    std::vector<u32> meat_claimed;
+    // v10 meat pickup: per-frame drop -> collector assignment (unit id, drop
+    // position), built in one pre-pass.  One collector per drop; fighters
+    // WITHOUT a held meat reserve are preferred (user directive), then the
+    // nearest.  Replaces the old first-come claim in unit-id order.
+    std::vector<std::pair<u32, UnitMovementPoint>> meat_assignments;
     u32 meat_orders = 0;
+    // v10 hunt guard: monsters dropped from the hunt pick because the group's
+    // ground fighters cannot reach them.
+    u32 hunt_unreachable = 0;
     u32 scout_picks = 0;
     u32 search_picks = 0;
     u32 explore_picks = 0;
@@ -391,8 +419,12 @@ bool tactic_accepts(const StepContext& context, AiMicroAttackTactic tactic,
 // first, the other class only when none of the preferred is in sight.
 // `attackable_mask` is the union of the group's weapon masks: a target no
 // member can engage is not a target (item 1).
+// `neutral_pool` (v10): the huntable subset of context.neutrals for
+// neutral_only - the caller filters out monsters its ground fighters cannot
+// reach; null keeps the unfiltered list.
 const AiObservedUnit* pick_group_target(const StepContext& context,
-    AiMicroAttackTactic tactic, i32 x, i32 y, u32 attackable_mask) {
+    AiMicroAttackTactic tactic, i32 x, i32 y, u32 attackable_mask,
+    const std::vector<const AiObservedUnit*>* neutral_pool = nullptr) {
     const auto nearest_of = [&](const std::vector<const AiObservedUnit*>& list,
                                 bool preferred_only) -> const AiObservedUnit* {
         const AiObservedUnit* best = nullptr;
@@ -416,7 +448,8 @@ const AiObservedUnit* pick_group_target(const StepContext& context,
         return best;
     };
     if (tactic == AiMicroAttackTactic::neutral_only) {
-        return nearest_of(context.neutrals, true);
+        return nearest_of(neutral_pool != nullptr ? *neutral_pool :
+            context.neutrals, true);
     }
     if (const AiObservedUnit* preferred = nearest_of(context.hostiles, true)) {
         return preferred;
@@ -593,6 +626,16 @@ DesiredOrder fighter_order(StepContext& context, AiMicroExecutorState& state,
     switch (objective.kind) {
     case AiMicroObjectiveKind::attack:
     case AiMicroObjectiveKind::search: {
+        // v10.4 staging (user design): a fighter produced AFTER the attack
+        // order does not trickle into the ongoing assault - it defends the
+        // base while gathering, and leaves only as part of a full new wave
+        // (assignment happens in the objective-transition pass).
+        if (objective.kind == AiMicroObjectiveKind::attack &&
+            record.attack_wave == 0) {
+            const AiMicroObjective staging = make_defend(nearest_base,
+                config.defend_radius, context.frame);
+            return fighter_order(context, state, record, unit, role, staging);
+        }
         // search never engages: the sweep exists to reveal the map, and a
         // fight on the way is the policy's call (it sees the hostile and can
         // switch to attack).  So no per-unit pick, and a plain move below.
@@ -614,6 +657,25 @@ DesiredOrder fighter_order(StepContext& context, AiMicroExecutorState& state,
                     objective.tactic == AiMicroAttackTactic::buildings_first)) {
                 return attack_order(target->id);
             }
+            // v10 meat pickup order (user replay report: hunters walked past
+            // the drop to the NEXT monster and the meat rotted): with nothing
+            // left to fight in reach, an assigned collector (pre-pass:
+            // no-reserve fighters first, then nearest; one per drop) walks
+            // onto its drop BEFORE the named-monster chase below.  The
+            // engine's cmd-5 point path collects on arrival.
+            for (const std::pair<u32, UnitMovementPoint>& assignment :
+                 context.meat_assignments) {
+                if (assignment.first != unit.id) {
+                    continue;
+                }
+                if (record.last_kind != AiSemanticActionKind::pickup_move ||
+                    record.last_x != assignment.second.x ||
+                    record.last_y != assignment.second.y) {
+                    ++context.meat_orders;
+                }
+                return point_order(AiSemanticActionKind::pickup_move,
+                    assignment.second.x, assignment.second.y);
+            }
             // Out of reach: the enemy tactics ADVANCE on the march point
             // (attack_move, so the engine engages whatever is met) - the
             // policy chose only the class priority, not a unit to chase.
@@ -631,46 +693,6 @@ DesiredOrder fighter_order(StepContext& context, AiMicroExecutorState& state,
                 return {};
             }
         }
-        // v9 meat pickup (user directive): nothing left to fight in reach -
-        // walk onto the nearest unclaimed dropped meat nearby first.  The
-        // engine's cmd-5 point path collects it on arrival and the reserve
-        // is consumed automatically for passive recovery; one collector per
-        // drop, capability bit 2 (kUnitEquipmentPickupEnabledFlag) required.
-        if (objective.kind == AiMicroObjectiveKind::attack &&
-            (unit.type_flags & 0x2u) != 0) {
-            const AiObservedMapEffect* meat = nullptr;
-            i64 meat_distance = 0;
-            for (const AiObservedMapEffect& effect :
-                 context.observation.map_effects) {
-                if (effect.linked ||
-                    std::find(context.meat_claimed.begin(),
-                        context.meat_claimed.end(), effect.id) !=
-                        context.meat_claimed.end()) {
-                    continue;
-                }
-                const i64 distance =
-                    squared_distance(unit.x, unit.y, effect.x, effect.y);
-                if (distance > squared(config.meat_pickup_radius)) {
-                    continue;
-                }
-                if (meat == nullptr || distance < meat_distance) {
-                    meat = &effect;
-                    meat_distance = distance;
-                }
-            }
-            if (meat != nullptr) {
-                context.meat_claimed.push_back(meat->id);
-                // Count NEW pickup orders only (the walk re-derives the same
-                // order every frame; counting those made the diagnostic look
-                // like thousands of orders).
-                if (record.last_kind != AiSemanticActionKind::pickup_move ||
-                    record.last_x != meat->x || record.last_y != meat->y) {
-                    ++context.meat_orders;
-                }
-                return point_order(AiSemanticActionKind::pickup_move, meat->x,
-                    meat->y);
-            }
-        }
         if (objective.target_x >= 0 &&
             squared_distance(unit.x, unit.y, objective.target_x,
                 objective.target_y) > squared(config.arrival_radius)) {
@@ -682,16 +704,27 @@ DesiredOrder fighter_order(StepContext& context, AiMicroExecutorState& state,
             const std::size_t group_index =
                 static_cast<std::size_t>(record.group);
             bool cohesion_return = false;
-            UnitMovementPoint centroid{0, 0};
             if (context.centroid_valid[group_index] &&
                 !unit_in_contact(context, unit, 1)) {
-                centroid = context.centroid[group_index];
+                UnitMovementPoint anchor =
+                    context.cohesion_anchor[group_index];
+                if (objective.kind == AiMicroObjectiveKind::attack) {
+                    for (const StepContext::WaveAnchor& wave_anchor :
+                         context.wave_anchors) {
+                        if (wave_anchor.group ==
+                                static_cast<u32>(record.group) &&
+                            wave_anchor.wave == record.attack_wave) {
+                            anchor = wave_anchor.anchor;
+                            break;
+                        }
+                    }
+                }
                 const i64 unit_gap = squared_distance(unit.x, unit.y,
-                    centroid.x, centroid.y);
+                    anchor.x, anchor.y);
                 const i64 unit_to_goal = squared_distance(unit.x, unit.y,
                     objective.target_x, objective.target_y);
-                const i64 group_to_goal = squared_distance(centroid.x,
-                    centroid.y, objective.target_x, objective.target_y);
+                const i64 group_to_goal = squared_distance(anchor.x,
+                    anchor.y, objective.target_x, objective.target_y);
                 // Hysteresis band (2026-08-31 user replay report): enter the
                 // return state only beyond cohesion_engage_radius, hold it
                 // until back inside cohesion_radius.  One shared threshold
@@ -707,9 +740,16 @@ DesiredOrder fighter_order(StepContext& context, AiMicroExecutorState& state,
             }
             record.cohesion_returning = cohesion_return ? 1u : 0u;
             if (cohesion_return) {
+                // v10 (user replay report: the army surged forward and
+                // backward, and fast units fought far ahead alone): a leader
+                // WAITS IN PLACE for its group instead of walking back to the
+                // centroid.  Walking back was the surge - and it also walked
+                // leaders backwards through enemy vision (trembling, free
+                // hits).  Standing still, the fast unit cannot enter the
+                // fight alone either; weapon contact still releases the gate
+                // so a reached fight is never refused.
                 ++context.cohesion_holds;
-                return point_order(AiSemanticActionKind::move, centroid.x,
-                    centroid.y);
+                return point_order(AiSemanticActionKind::move, unit.x, unit.y);
             }
             return point_order(objective.kind == AiMicroObjectiveKind::search ?
                 AiSemanticActionKind::move : AiSemanticActionKind::attack_move,
@@ -766,6 +806,23 @@ DesiredOrder fighter_order(StepContext& context, AiMicroExecutorState& state,
         if (const AiObservedUnit* target =
                 pick_target(context, unit, role, bubble, current_target)) {
             return attack_order(target->id);
+        }
+        // v10 (user replay report): drops near the base rotted once the hunt
+        // objective ended.  A defender with no bubble target collects its
+        // assigned drop (the pre-pass only assigns defenders meat INSIDE the
+        // bubble, so this never fights the leash).
+        for (const std::pair<u32, UnitMovementPoint>& assignment :
+             context.meat_assignments) {
+            if (assignment.first != unit.id) {
+                continue;
+            }
+            if (record.last_kind != AiSemanticActionKind::pickup_move ||
+                record.last_x != assignment.second.x ||
+                record.last_y != assignment.second.y) {
+                ++context.meat_orders;
+            }
+            return point_order(AiSemanticActionKind::pickup_move,
+                assignment.second.x, assignment.second.y);
         }
         if (post.x >= 0 &&
             squared_distance(unit.x, unit.y, post.x, post.y) >
@@ -837,8 +894,13 @@ DesiredOrder worker_order(StepContext& context, AiMicroExecutorState& state,
         return point_order(AiSemanticActionKind::move, nearest_base.x,
             nearest_base.y);
     }
+    // v10 (user replay report: idle workers stood around instead of mining):
+    // no unit_is_harvesting() here - a truly IDLE unit (idle state, empty
+    // queue) cannot be harvesting, but a STALE harvest command flag (0x4)
+    // left behind by an interrupted trip made that test true and parked the
+    // worker forever.
     if (unit_is_idle(unit) && unit_can_harvest(unit) &&
-        !unit_is_constructing(unit) && !unit_is_harvesting(unit)) {
+        !unit_is_constructing(unit)) {
         // Item 7 - free this worker's old reservation first so its own slot is
         // available again, then take the nearest berry that is not saturated.
         release_resource_slot(context, record);
@@ -899,12 +961,10 @@ bool pick_unexplored_start(const StepContext& context, i32 from_x, i32 from_y,
     return true;
 }
 
-// Tiles a unit can reach: everything for a flyer; for a ground unit the
-// passable tiles 4-connected to the tile it stands on (terrain is public, so
-// unexplored passable ground counts).  Empty vector = map invalid.
-std::vector<u8> reachable_tiles(const StepContext& context,
-    const AiObservedUnit& unit) {
-    const AiObservation& observation = context.observation;
+// Passable tiles 4-connected to the tile under (x, y) px (terrain is public,
+// so unexplored passable ground counts).  Empty vector = map invalid.
+std::vector<u8> ground_reachable_tiles(const AiObservation& observation,
+    i32 x, i32 y) {
     const u32 width = observation.map_width_tiles;
     const u32 height = observation.map_height_tiles;
     std::vector<u8> reachable;
@@ -913,12 +973,8 @@ std::vector<u8> reachable_tiles(const StepContext& context,
         return reachable;
     }
     reachable.assign(observation.tiles.size(), 0u);
-    if (unit.render_class == context.config.flying_render_class) {
-        std::fill(reachable.begin(), reachable.end(), 1u);
-        return reachable;
-    }
-    const u32 start_x = static_cast<u32>(std::max(unit.x, 0)) >> 5;
-    const u32 start_y = static_cast<u32>(std::max(unit.y, 0)) >> 5;
+    const u32 start_x = static_cast<u32>(std::max(x, 0)) >> 5;
+    const u32 start_y = static_cast<u32>(std::max(y, 0)) >> 5;
     if (start_x >= width || start_y >= height) {
         return reachable;
     }
@@ -947,6 +1003,52 @@ std::vector<u8> reachable_tiles(const StepContext& context,
         }
     }
     return reachable;
+}
+
+// Tiles a unit can reach: everything for a flyer; for a ground unit the
+// ground flood from the tile it stands on.  Empty vector = map invalid.
+std::vector<u8> reachable_tiles(const StepContext& context,
+    const AiObservedUnit& unit) {
+    const AiObservation& observation = context.observation;
+    const u32 width = observation.map_width_tiles;
+    const u32 height = observation.map_height_tiles;
+    if (unit.render_class == context.config.flying_render_class) {
+        std::vector<u8> reachable;
+        if (width != 0 && height != 0 && observation.tiles.size() ==
+                static_cast<std::size_t>(width) * height) {
+            reachable.assign(observation.tiles.size(), 1u);
+        }
+        return reachable;
+    }
+    return ground_reachable_tiles(observation, unit.x, unit.y);
+}
+
+// v10 hunt guard: whether a unit at (target.x, target.y) can be reached by a
+// ground force whose flood is `reachable` - its own tile or any 4-neighbour
+// (a monster may stand on impassable ground, e.g. a berry tile edge).
+bool target_ground_reachable(const AiObservation& observation,
+    const std::vector<u8>& reachable, const AiObservedUnit& target) {
+    const u32 width = observation.map_width_tiles;
+    const u32 height = observation.map_height_tiles;
+    if (width == 0 || height == 0 ||
+        reachable.size() != static_cast<std::size_t>(width) * height) {
+        return true;  // no flood available - do not filter
+    }
+    const i64 tile_x = std::max(target.x, 0) >> 5;
+    const i64 tile_y = std::max(target.y, 0) >> 5;
+    static const i32 kSteps[5][2] = {{0, 0}, {1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+    for (const auto& step : kSteps) {
+        const i64 nx = tile_x + step[0];
+        const i64 ny = tile_y + step[1];
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) {
+            continue;
+        }
+        if (reachable[static_cast<std::size_t>(ny) * width +
+                static_cast<std::size_t>(nx)] != 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // Nearest reachable frontier tile to (from_x, from_y): unexplored passable
@@ -1127,6 +1229,45 @@ AiMicroRole AiMicroRoleOf(const AiObservedUnit& unit,
         AiMicroRole::melee : AiMicroRole::ranged;
 }
 
+u64 AiMicroCombatPower(const AiObservedUnit& unit) {
+    return unit_power(unit);
+}
+
+bool AiMicroHuntableNeutralExists(const AiObservation& observation,
+    const AiMicroExecutorConfig& config, i32 center_x, i32 center_y,
+    i32 radius) {
+    std::vector<const AiObservedUnit*> neutrals;
+    bool own_flyer_attacker = false;
+    for (const AiObservedUnit& unit : observation.units) {
+        if (is_neutral_monster(unit)) {
+            if (radius > 0 && center_x >= 0 &&
+                squared_distance(center_x, center_y, unit.x, unit.y) >
+                    squared(radius)) {
+                continue;  // v10: outside the hunt bound
+            }
+            neutrals.push_back(&unit);
+        } else if (own_alive(unit) && !unit.under_construction &&
+            unit_can_attack(unit) &&
+            unit.render_class == config.flying_render_class) {
+            own_flyer_attacker = true;
+        }
+    }
+    if (neutrals.empty()) {
+        return false;
+    }
+    if (own_flyer_attacker) {
+        return true;  // a flyer reaches everything
+    }
+    const std::vector<u8> reachable = ground_reachable_tiles(observation,
+        std::max(observation.start_x, 0), std::max(observation.start_y, 0));
+    for (const AiObservedUnit* neutral : neutrals) {
+        if (target_ground_reachable(observation, reachable, *neutral)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void AiMicroReset(AiMicroExecutorState& state) {
     state = AiMicroExecutorState{};
 }
@@ -1135,6 +1276,18 @@ void AiMicroSetObjective(AiMicroExecutorState& state, AiMicroGroup group,
     const AiMicroObjective& objective) {
     state.objectives[static_cast<std::size_t>(group)] = objective;
     state.objectives[static_cast<std::size_t>(group)].assigned = true;
+    // v10 attack commit: a fresh policy objective restarts the "has this
+    // group met the enemy yet" latch.
+    state.group_engaged[static_cast<std::size_t>(group)] = 0;
+    // v10.4: a fresh ATTACK forms a new wave from the members present at the
+    // next step; any other objective dissolves the wave structure (everyone
+    // follows the new objective together - the staged tail merges here).
+    if (objective.kind == AiMicroObjectiveKind::attack) {
+        ++state.attack_wave_seq[static_cast<std::size_t>(group)];
+        state.attack_wave_pending[static_cast<std::size_t>(group)] = 1;
+    } else {
+        state.attack_wave_pending[static_cast<std::size_t>(group)] = 0;
+    }
 }
 
 const AiMicroObjective& AiMicroObjectiveOf(const AiMicroExecutorState& state,
@@ -1151,6 +1304,9 @@ void AiMicroAssignGroup(AiMicroExecutorState& state, u32 unit_id,
         // Force a fresh order under the new objective.
         record.last_kind = AiSemanticActionKind::no_op;
         record.last_target_id = 0;
+        // v10.4: wave membership does not carry across groups - a unit that
+        // changes group joins the new group's attack as staging.
+        record.attack_wave = 0;
     }
 }
 
@@ -1332,10 +1488,13 @@ std::vector<AiSemanticAction> AiMicroExecutorStep(AiMicroExecutorState& state,
             roamer_default.set_frame = context.frame;
             roamer_default.assigned = true;
         }
-        AiMicroObjective& raid_default = state.objectives[
-            static_cast<std::size_t>(AiMicroGroup::raid)];
-        if (!raid_default.assigned) {
-            raid_default = make_defend(home, config.defend_radius, context.frame);
+        for (const AiMicroGroup raid_group : kAiMicroRaidGroups) {
+            AiMicroObjective& raid_default = state.objectives[
+                static_cast<std::size_t>(raid_group)];
+            if (!raid_default.assigned) {
+                raid_default = make_defend(home, config.defend_radius,
+                    context.frame);
+            }
         }
     }
 
@@ -1407,6 +1566,65 @@ std::vector<AiSemanticAction> AiMicroExecutorStep(AiMicroExecutorState& state,
                 static_cast<i32>(sum_y[group] / count[group])};
             context.centroid_valid[group] = true;
         }
+        // v10.3 cohesion anchors: per-group component-wise median.
+        std::array<std::vector<i32>, kAiMicroGroupCount> xs;
+        std::array<std::vector<i32>, kAiMicroGroupCount> ys;
+        for (std::size_t index = 0; index < own.size(); ++index) {
+            const std::size_t group =
+                static_cast<std::size_t>(state.units[index].group);
+            xs[group].push_back(own[index]->x);
+            ys[group].push_back(own[index]->y);
+        }
+        const auto median_of = [](std::vector<i32>& values) -> i32 {
+            const std::size_t mid = values.size() / 2;
+            std::nth_element(values.begin(), values.begin() + mid,
+                values.end());
+            i32 result = values[mid];
+            if (values.size() % 2 == 0) {
+                std::nth_element(values.begin(), values.begin() + mid - 1,
+                    values.begin() + mid);
+                result = static_cast<i32>((static_cast<i64>(result) +
+                    values[mid - 1]) / 2);
+            }
+            return result;
+        };
+        for (std::size_t group = 0; group < kAiMicroGroupCount; ++group) {
+            if (!xs[group].empty()) {
+                context.cohesion_anchor[group] = {median_of(xs[group]),
+                    median_of(ys[group])};
+            }
+        }
+        // v10.4 per-wave anchors (attack objectives only need them, but the
+        // pairs are few and cheap to build for everyone).
+        for (std::size_t index = 0; index < own.size(); ++index) {
+            const AiMicroUnitRecord& record = state.units[index];
+            if (record.attack_wave == 0) {
+                continue;
+            }
+            const u32 group = static_cast<u32>(record.group);
+            bool found = false;
+            for (const StepContext::WaveAnchor& anchor : context.wave_anchors) {
+                if (anchor.group == group && anchor.wave == record.attack_wave) {
+                    found = true;
+                    break;
+                }
+            }
+            if (found) {
+                continue;
+            }
+            std::vector<i32> wave_xs;
+            std::vector<i32> wave_ys;
+            for (std::size_t other = 0; other < own.size(); ++other) {
+                const AiMicroUnitRecord& peer = state.units[other];
+                if (static_cast<u32>(peer.group) == group &&
+                    peer.attack_wave == record.attack_wave) {
+                    wave_xs.push_back(own[other]->x);
+                    wave_ys.push_back(own[other]->y);
+                }
+            }
+            context.wave_anchors.push_back({group, record.attack_wave,
+                {median_of(wave_xs), median_of(wave_ys)}});
+        }
     }
 
     // ---- v9 base-defense reflex (overlay; objectives[] untouched) ----------
@@ -1429,7 +1647,15 @@ std::vector<AiSemanticAction> AiMicroExecutorStep(AiMicroExecutorState& state,
             building_health < state.last_building_health;
         state.last_building_health = building_health;
         UnitMovementPoint anchor{-1, -1};
-        i64 best_distance = 0;
+        // v10 threat measurement: combat power of every hostile inside any
+        // building's bubble, so the response can be SIZED to the threat.
+        // v10.5 (user directive): the anchor is the CENTROID OF THE VISIBLE
+        // THREAT, not the threatened building - defenders walk at the enemy
+        // force instead of standing at the nest watching it shoot.
+        u64 threat_power = 0;
+        i64 threat_sum_x = 0;
+        i64 threat_sum_y = 0;
+        i64 threat_count = 0;
         for (const AiObservedUnit* hostile : context.hostiles) {
             if (is_building_unit(*hostile)) {
                 continue;
@@ -1438,17 +1664,24 @@ std::vector<AiSemanticAction> AiMicroExecutorStep(AiMicroExecutorState& state,
             if (role != AiMicroRole::melee && role != AiMicroRole::ranged) {
                 continue;
             }
+            bool in_bubble = false;
             for (const UnitMovementPoint& building : context.buildings) {
-                const i64 gap = squared_distance(building.x, building.y,
-                    hostile->x, hostile->y);
-                if (gap > squared(config.defend_radius)) {
-                    continue;
-                }
-                if (anchor.x < 0 || gap < best_distance) {
-                    anchor = building;
-                    best_distance = gap;
+                if (squared_distance(building.x, building.y, hostile->x,
+                        hostile->y) <= squared(config.defend_radius)) {
+                    in_bubble = true;
+                    break;
                 }
             }
+            if (in_bubble) {
+                threat_power += unit_power(*hostile);
+                threat_sum_x += hostile->x;
+                threat_sum_y += hostile->y;
+                ++threat_count;
+            }
+        }
+        if (threat_count > 0) {
+            anchor = {static_cast<i32>(threat_sum_x / threat_count),
+                static_cast<i32>(threat_sum_y / threat_count)};
         }
         const bool threat_now = anchor.x >= 0 ||
             (buildings_hurt && !context.buildings.empty());
@@ -1466,13 +1699,92 @@ std::vector<AiSemanticAction> AiMicroExecutorStep(AiMicroExecutorState& state,
                 state.threat.anchor_y = context.buildings.front().y;
             }
             state.threat.last_seen_frame = context.frame;
+            // v10 proportional detail (2026-08-31 user replay review: one
+            // harasser recalled the whole army).  Keep the standing members
+            // that are still alive in the army group, then top the detail up
+            // nearest-first until its combat power covers the measured threat
+            // times the margin.  Members are only ever ADDED while the
+            // overlay stands (released when it clears), so the selection
+            // cannot flap.  An unmeasurable threat (buildings losing health,
+            // attacker unseen) sends a small investigation picket of at most
+            // reflex_unseen_defenders fighters (user directive: <= 3), never
+            // the whole army.  Only updated while a threat is PRESENT this
+            // frame - during the linger window the standing detail keeps
+            // fighting.
+            std::vector<u32> kept_defenders;
+            u64 detail_power = 0;
+            for (std::size_t index = 0; index < own.size(); ++index) {
+                if (state.units[index].group != AiMicroGroup::army) {
+                    continue;
+                }
+                if (std::find(state.reflex_defenders.begin(),
+                        state.reflex_defenders.end(), own[index]->id) ==
+                        state.reflex_defenders.end()) {
+                    continue;
+                }
+                kept_defenders.push_back(own[index]->id);
+                detail_power += unit_power(*own[index]);
+            }
+            state.reflex_defenders = std::move(kept_defenders);
+            // Measured threat: power target with the usual floor.  Unseen
+            // attacker: no power target, just the small picket cap.
+            const u64 needed = threat_power *
+                config.reflex_margin_percent / 100u;
+            const std::size_t want_count = threat_power != 0 ?
+                config.reflex_min_defenders : config.reflex_unseen_defenders;
+            if (detail_power < needed ||
+                state.reflex_defenders.size() < want_count) {
+                struct DefenseCandidate {
+                    i64 gap;
+                    u32 id;
+                    u64 power;
+                };
+                std::vector<DefenseCandidate> candidates;
+                for (std::size_t index = 0; index < own.size(); ++index) {
+                    if (state.units[index].group != AiMicroGroup::army) {
+                        continue;
+                    }
+                    const AiMicroRole own_role =
+                        AiMicroRoleOf(*own[index], config);
+                    if (own_role != AiMicroRole::melee &&
+                        own_role != AiMicroRole::ranged) {
+                        continue;
+                    }
+                    if (std::find(state.reflex_defenders.begin(),
+                            state.reflex_defenders.end(),
+                            own[index]->id) !=
+                            state.reflex_defenders.end()) {
+                        continue;
+                    }
+                    candidates.push_back({squared_distance(own[index]->x,
+                        own[index]->y, state.threat.anchor_x,
+                        state.threat.anchor_y), own[index]->id,
+                        unit_power(*own[index])});
+                }
+                std::sort(candidates.begin(), candidates.end(),
+                    [](const DefenseCandidate& lhs,
+                        const DefenseCandidate& rhs) {
+                        return lhs.gap != rhs.gap ? lhs.gap < rhs.gap :
+                            lhs.id < rhs.id;
+                    });
+                for (const DefenseCandidate& candidate : candidates) {
+                    if (detail_power >= needed &&
+                        state.reflex_defenders.size() >= want_count) {
+                        break;
+                    }
+                    state.reflex_defenders.push_back(candidate.id);
+                    detail_power += candidate.power;
+                }
+            }
         } else if (state.threat.active &&
             context.frame - state.threat.last_seen_frame >=
                 config.threat_clear_frames) {
             state.threat = AiMicroThreatOverlay{};
+            state.reflex_defenders.clear();
         }
     } else if (state.threat.active) {
         state.threat = AiMicroThreatOverlay{};
+        state.reflex_defenders.clear();
     }
 
     // ---- objective transitions (default behavior, not decisions) -----------
@@ -1571,9 +1883,47 @@ std::vector<AiSemanticAction> AiMicroExecutorStep(AiMicroExecutorState& state,
     }
     // The two FIGHTING groups (main army and the detached raid) run the same
     // objective machinery, each around its own centroid and objective.
-    for (const AiMicroGroup fighting : {AiMicroGroup::army, AiMicroGroup::raid}) {
+    for (const AiMicroGroup fighting : {AiMicroGroup::army, AiMicroGroup::raid,
+             AiMicroGroup::raid_b, AiMicroGroup::raid_c}) {
     const std::size_t army_index = static_cast<std::size_t>(fighting);
     AiMicroObjective& army = state.objectives[army_index];
+    // v10.4 attack waves.  A fresh attack enrolls everyone present as the
+    // new FIRST wave; afterwards, fighters that joined the group later
+    // (attack_wave 0) stage at the base until attack_wave_minimum of them
+    // have gathered, then leave together as their own wave.
+    if (army.kind == AiMicroObjectiveKind::attack) {
+        const auto is_wave_fighter = [&](std::size_t index) {
+            if (state.units[index].group != fighting) {
+                return false;
+            }
+            const AiMicroRole role = AiMicroRoleOf(*own[index], config);
+            return role == AiMicroRole::melee || role == AiMicroRole::ranged;
+        };
+        if (state.attack_wave_pending[army_index] != 0) {
+            for (std::size_t index = 0; index < own.size(); ++index) {
+                if (is_wave_fighter(index)) {
+                    state.units[index].attack_wave =
+                        state.attack_wave_seq[army_index];
+                }
+            }
+            state.attack_wave_pending[army_index] = 0;
+        } else {
+            std::vector<std::size_t> staging;
+            for (std::size_t index = 0; index < own.size(); ++index) {
+                if (is_wave_fighter(index) &&
+                    state.units[index].attack_wave == 0) {
+                    staging.push_back(index);
+                }
+            }
+            if (staging.size() >= config.attack_wave_minimum) {
+                ++state.attack_wave_seq[army_index];
+                for (const std::size_t index : staging) {
+                    state.units[index].attack_wave =
+                        state.attack_wave_seq[army_index];
+                }
+            }
+        }
+    }
     const UnitMovementPoint army_centroid = context.centroid_valid[army_index] ?
         context.centroid[army_index] : home;
     if (army.kind == AiMicroObjectiveKind::retreat && army.target_x >= 0) {
@@ -1600,6 +1950,50 @@ std::vector<AiSemanticAction> AiMicroExecutorStep(AiMicroExecutorState& state,
             army.tactic != AiMicroAttackTactic::neutral_only;
         const i32 hunt_x = zoned ? army.preferred_x : army_centroid.x;
         const i32 hunt_y = zoned ? army.preferred_y : army_centroid.y;
+        // v10 hunt guard (user replay report: the army parked at a cliff
+        // hunting a monster on a walkable island it could never reach).  For
+        // the hunt, monsters the group's GROUND fighters cannot walk to (not
+        // 4-connected to where they stand) are no targets; a group with no
+        // ground fighter (all flyers) hunts unfiltered.
+        std::vector<const AiObservedUnit*> huntable;
+        const std::vector<const AiObservedUnit*>* neutral_pool = nullptr;
+        if (army.tactic == AiMicroAttackTactic::neutral_only &&
+            !context.neutrals.empty()) {
+            const AiObservedUnit* ground = nullptr;
+            for (std::size_t index = 0; index < own.size(); ++index) {
+                if (state.units[index].group != fighting) {
+                    continue;
+                }
+                if (unit_can_attack(*own[index]) &&
+                    own[index]->render_class != config.flying_render_class) {
+                    ground = own[index];
+                    break;
+                }
+            }
+            if (ground != nullptr) {
+                const std::vector<u8> reachable =
+                    ground_reachable_tiles(observation, ground->x, ground->y);
+                // v10 hunt bound: the MAIN army only hunts near itself; far
+                // monsters are the raid slots' job (user directive).
+                const bool bounded = fighting == AiMicroGroup::army &&
+                    config.army_hunt_radius > 0 &&
+                    context.centroid_valid[army_index];
+                for (const AiObservedUnit* neutral : context.neutrals) {
+                    if (bounded && squared_distance(army_centroid.x,
+                            army_centroid.y, neutral->x, neutral->y) >
+                            squared(config.army_hunt_radius)) {
+                        continue;
+                    }
+                    if (target_ground_reachable(observation, reachable,
+                            *neutral)) {
+                        huntable.push_back(neutral);
+                    } else {
+                        ++context.hunt_unreachable;
+                    }
+                }
+                neutral_pool = &huntable;
+            }
+        }
         const AiObservedUnit* current =
             find_unit(observation, army.target_unit_id);
         // Item 1 - a target no army member can engage is not a valid target.
@@ -1609,8 +2003,13 @@ std::vector<AiSemanticAction> AiMicroExecutorStep(AiMicroExecutorState& state,
                 (army_mask & (1u << current->render_class)) != 0);
         bool keep = current != nullptr && current->alive && current->visible &&
             engageable && tactic_accepts(context, army.tactic, *current);
+        if (keep && neutral_pool != nullptr &&
+            std::find(huntable.begin(), huntable.end(), current) ==
+                huntable.end()) {
+            keep = false;  // the held monster became unreachable
+        }
         const AiObservedUnit* best = pick_group_target(context, army.tactic,
-            hunt_x, hunt_y, army_mask);
+            hunt_x, hunt_y, army_mask, neutral_pool);
         if (zoned && best != nullptr &&
             squared_distance(best->x, best->y, army.preferred_x,
                 army.preferred_y) > squared(config.preferred_zone_radius)) {
@@ -1818,15 +2217,173 @@ std::vector<AiSemanticAction> AiMicroExecutorStep(AiMicroExecutorState& state,
         make_defend({state.threat.anchor_x, state.threat.anchor_y},
             config.defend_radius, state.threat.since_frame) :
         AiMicroObjective{};
-    bool raid_joins_reflex = false;
+    std::array<bool, kAiMicroGroupCount> raid_joins_reflex{};
     if (state.threat.active) {
-        const std::size_t raid_index =
-            static_cast<std::size_t>(AiMicroGroup::raid);
-        raid_joins_reflex = context.centroid_valid[raid_index] &&
-            squared_distance(context.centroid[raid_index].x,
-                context.centroid[raid_index].y, state.threat.anchor_x,
-                state.threat.anchor_y) <=
-                squared(config.reflex_raid_join_radius);
+        for (const AiMicroGroup raid_group : kAiMicroRaidGroups) {
+            const std::size_t raid_index =
+                static_cast<std::size_t>(raid_group);
+            raid_joins_reflex[raid_index] =
+                context.centroid_valid[raid_index] &&
+                squared_distance(context.centroid[raid_index].x,
+                    context.centroid[raid_index].y, state.threat.anchor_x,
+                    state.threat.anchor_y) <=
+                    squared(config.reflex_raid_join_radius);
+        }
+    }
+    // Effective objective of a unit's group with the reflex overlay applied:
+    // the defense detail (army) and any joined raid fight at the threat
+    // anchor; a policy retreat is always respected.
+    const auto effective_objective =
+        [&](const AiMicroUnitRecord& record,
+            u32 unit_id) -> const AiMicroObjective* {
+        const AiMicroObjective* objective =
+            &state.objectives[static_cast<std::size_t>(record.group)];
+        if (state.threat.active &&
+            objective->kind != AiMicroObjectiveKind::retreat &&
+            ((record.group == AiMicroGroup::army &&
+                std::find(state.reflex_defenders.begin(),
+                    state.reflex_defenders.end(), unit_id) !=
+                    state.reflex_defenders.end()) ||
+                (AiMicroIsRaidGroup(record.group) &&
+                    raid_joins_reflex[
+                        static_cast<std::size_t>(record.group)]))) {
+            objective = &reflex_objective;
+        }
+        return objective;
+    };
+    // ---- v10 meat-pickup pre-pass ------------------------------------------
+    // One collector per drop, chosen over ALL eligible fighters instead of
+    // first-come in unit-id order: fighters WITHOUT a held meat reserve
+    // (action_mode == 0) first (user directive - a full unit wastes the
+    // drop's healing), then the nearest.  Eligible = pickup-capable fighter
+    // of a fighting group whose EFFECTIVE objective (incl. the reflex
+    // overlay) is attack or defend, out of contact and not policy-held; a
+    // defender is only assigned drops inside its bubble so pickup never
+    // fights the leash.  The per-unit behaviors consume the assignment only
+    // when they have nothing to fight in reach.
+    if (!observation.map_effects.empty()) {
+        struct MeatCollector {
+            const AiObservedUnit* unit;
+            const AiMicroObjective* objective;
+            bool assigned;
+        };
+        std::vector<MeatCollector> collectors;
+        for (std::size_t index = 0; index < own.size(); ++index) {
+            const AiObservedUnit& unit = *own[index];
+            const AiMicroUnitRecord& record = state.units[index];
+            if ((unit.type_flags & 0x2u) == 0 ||
+                (record.group != AiMicroGroup::army &&
+                    !AiMicroIsRaidGroup(record.group))) {
+                continue;
+            }
+            if (record.policy_hold_until_frame != 0 &&
+                context.frame < record.policy_hold_until_frame) {
+                continue;
+            }
+            const AiMicroObjective* objective =
+                effective_objective(record, unit.id);
+            if ((objective->kind != AiMicroObjectiveKind::attack &&
+                    objective->kind != AiMicroObjectiveKind::defend) ||
+                unit_in_contact(context, unit, 1)) {
+                continue;
+            }
+            collectors.push_back({&unit, objective, false});
+        }
+        // v10.1: sticky assignments first - keep every standing (drop ->
+        // collector) pair whose drop is still unclaimed and whose collector
+        // is still eligible, so the choice cannot flap between two moving
+        // units.  Only drops left over get a fresh collector.
+        std::vector<std::pair<u32, u32>> kept_assignments;
+        for (const std::pair<u32, u32>& assignment : state.meat_assignments) {
+            const AiObservedMapEffect* effect = nullptr;
+            for (const AiObservedMapEffect& candidate : observation.map_effects) {
+                if (candidate.id == assignment.first && !candidate.linked) {
+                    effect = &candidate;
+                    break;
+                }
+            }
+            if (effect == nullptr) {
+                continue;
+            }
+            for (MeatCollector& collector : collectors) {
+                if (collector.assigned ||
+                    collector.unit->id != assignment.second) {
+                    continue;
+                }
+                if (squared_distance(collector.unit->x, collector.unit->y,
+                        effect->x, effect->y) >
+                        squared(config.meat_pickup_radius)) {
+                    break;  // walked out of range - release the pair
+                }
+                collector.assigned = true;
+                kept_assignments.push_back(assignment);
+                context.meat_assignments.push_back({collector.unit->id,
+                    UnitMovementPoint{effect->x, effect->y}});
+                break;
+            }
+        }
+        state.meat_assignments = std::move(kept_assignments);
+        for (const AiObservedMapEffect& effect : observation.map_effects) {
+            if (effect.linked || collectors.empty()) {
+                continue;
+            }
+            bool already_kept = false;
+            for (const std::pair<u32, u32>& assignment :
+                 state.meat_assignments) {
+                if (assignment.first == effect.id) {
+                    already_kept = true;
+                    break;
+                }
+            }
+            if (already_kept) {
+                continue;
+            }
+            MeatCollector* best = nullptr;
+            i64 best_gap = 0;
+            for (MeatCollector& collector : collectors) {
+                if (collector.assigned) {
+                    continue;
+                }
+                if (collector.objective->kind == AiMicroObjectiveKind::defend &&
+                    collector.objective->target_x >= 0 &&
+                    squared_distance(effect.x, effect.y,
+                        collector.objective->target_x,
+                        collector.objective->target_y) >
+                        squared(collector.objective->radius)) {
+                    continue;
+                }
+                const i64 gap = squared_distance(collector.unit->x,
+                    collector.unit->y, effect.x, effect.y);
+                if (gap > squared(config.meat_pickup_radius)) {
+                    continue;
+                }
+                if (best != nullptr) {
+                    const bool best_empty = best->unit->action_mode == 0;
+                    const bool empty = collector.unit->action_mode == 0;
+                    if (best_empty != empty) {
+                        if (best_empty) {
+                            continue;
+                        }
+                    } else if (gap > best_gap ||
+                        (gap == best_gap &&
+                            collector.unit->id > best->unit->id)) {
+                        continue;
+                    }
+                }
+                best = &collector;
+                best_gap = gap;
+            }
+            if (best != nullptr) {
+                best->assigned = true;
+                state.meat_assignments.push_back({effect.id, best->unit->id});
+                context.meat_assignments.push_back({best->unit->id,
+                    UnitMovementPoint{effect.x, effect.y}});
+            }
+        }
+    }
+
+    if (observation.map_effects.empty()) {
+        state.meat_assignments.clear();
     }
     struct PendingOrder {
         u32 unit_id;
@@ -1858,20 +2415,25 @@ std::vector<AiSemanticAction> AiMicroExecutorStep(AiMicroExecutorState& state,
             role == AiMicroRole::other) {
             continue;  // carriers are the drop autopilot's
         }
+        // v10 attack commit: latch "this group met the enemy" on first weapon
+        // contact of any fighter since the objective was set.
+        if ((record.group == AiMicroGroup::army ||
+                AiMicroIsRaidGroup(record.group)) &&
+            (role == AiMicroRole::melee || role == AiMicroRole::ranged) &&
+            state.group_engaged[static_cast<std::size_t>(record.group)] == 0 &&
+            unit_in_contact(context, unit, 1)) {
+            state.group_engaged[static_cast<std::size_t>(record.group)] = 1;
+        }
         if (unit_is_constructing(unit)) {
             continue;
         }
-        const AiMicroObjective* objective =
-            &state.objectives[static_cast<std::size_t>(record.group)];
         // v9 reflex: the fighting groups switch to the threat overlay while
         // it stands - unless the policy ordered a RETREAT (deliberate flight
         // is respected).  Workers/scouts keep their own rules (flee/evade).
-        if (state.threat.active &&
-            objective->kind != AiMicroObjectiveKind::retreat &&
-            (record.group == AiMicroGroup::army ||
-                (record.group == AiMicroGroup::raid && raid_joins_reflex))) {
-            objective = &reflex_objective;
-        }
+        // v10: only the defense detail (reflex_defenders) responds; the rest
+        // of the army keeps the policy's objective.  A joined raid fights
+        // whole (it is already near the anchor).
+        const AiMicroObjective* objective = effective_objective(record, unit.id);
         DesiredOrder order;
         if (record.group == AiMicroGroup::scout ||
             record.group == AiMicroGroup::berry_scout ||
@@ -1975,6 +2537,7 @@ std::vector<AiSemanticAction> AiMicroExecutorStep(AiMicroExecutorState& state,
     }
     state.unattackable_targets_skipped += context.unattackable_skipped;
     state.meat_pickup_orders += context.meat_orders;
+    state.hunt_unreachable_skipped += context.hunt_unreachable;
     state.cohesion_holds += context.cohesion_holds;
     state.scout_sweep_picks += context.scout_picks;
     state.search_sweep_picks += context.search_picks;

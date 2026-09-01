@@ -113,6 +113,18 @@ def save_gate_replays(install: Path, gen: int, promoted: bool,
         result = league_dir / f"w{index}" / "ai_selfplay_result.json"
         if result.exists():
             shutil.copy2(result, replays_dir / f"{name}.result.json")
+        # v10.4 replay decision overlay: a LIGHT copy of the episode log
+        # (features/mask stripped) rides along so the in-game replay overlay
+        # can show which action the policy picked at each frame.
+        episode = league_dir / f"w{index}" / "ai_rl_episode.jsonl"
+        if episode.exists():
+            try:
+                with open(episode, "r", errors="replace") as src_file,                         open(replays_dir / f"{name}.decisions.jsonl", "w")                         as out_file:
+                    for line in src_file:
+                        cut = line.find(',"feat":')
+                        out_file.write(line[:cut] + "}" + chr(10) if cut >= 0 else line)
+            except OSError:
+                pass
         return True
 
     saved = 0
