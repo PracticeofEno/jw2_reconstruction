@@ -1286,7 +1286,31 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
         }
     }
     set_legal(AiRlHighLevelAction::defend_base, has_army && defend_threat);
-    set_legal(AiRlHighLevelAction::retreat, has_army);
+    // v10.6 retreat gate (user replay report: always-legal retreat was
+    // spammed): retreat is a REACTION too - legal only while a visible
+    // hostile COMBAT mobile stands near an own fighter (600 px: contact or
+    // imminent contact, so a pre-emptive pull-out stays possible).
+    bool combat_proximity = false;
+    for (const AiObservedUnit& own : observation.units) {
+        if (!own.controlled || !own.alive || own.type_id >= kMobileTypeLimit ||
+            own.attack_range == 0) {
+            continue;
+        }
+        for (const AiObservedUnit* hostile : visible_hostiles) {
+            if (hostile->type_id >= kMobileTypeLimit ||
+                hostile->attack_range == 0) {
+                continue;
+            }
+            if (sq_dist(own.x, own.y, hostile->x, hostile->y) <= 600 * 600) {
+                combat_proximity = true;
+                break;
+            }
+        }
+        if (combat_proximity) {
+            break;
+        }
+    }
+    set_legal(AiRlHighLevelAction::retreat, has_army && combat_proximity);
     // Hunting needs a fighting force and a visible neutral monster the
     // forces can actually REACH (v10 guard: a monster on a disconnected
     // walkable island parked the army at a cliff - such a hunt is illegal).
@@ -1398,7 +1422,8 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
         has_raid && (have_nearest || enemy_base_known));
     set_legal(AiRlHighLevelAction::raid_defend_base,
         has_raid && defend_threat);
-    set_legal(AiRlHighLevelAction::raid_retreat, has_raid);
+    set_legal(AiRlHighLevelAction::raid_retreat,
+        has_raid && combat_proximity);
     set_legal(AiRlHighLevelAction::raid_hunt_neutral,
         has_raid && huntable_neutral);
     set_legal(AiRlHighLevelAction::raid_search,
@@ -1448,7 +1473,7 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
             set_legal(slot.attack_base,
                 has_slot && (have_nearest || enemy_base_known));
             set_legal(slot.defend, has_slot && defend_threat);
-            set_legal(slot.retreat, has_slot);
+            set_legal(slot.retreat, has_slot && combat_proximity);
             set_legal(slot.hunt, has_slot && huntable_neutral);
             set_legal(slot.search, has_slot && unexplored_start_left);
         }

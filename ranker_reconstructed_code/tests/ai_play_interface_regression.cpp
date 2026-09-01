@@ -4351,6 +4351,8 @@ void test_ai_attack_commit_and_hunt_range() {
     obs.army_attack_has_target = 1;
     obs.army_engaged_since_set = 0;
     obs.army_objective_age = 100;
+    // v10.6: retreat needs combat proximity - a hostile fighter near ours.
+    obs.units.push_back(fighter_unit(0x9c20, 1, 700, 400, false));
     AiRlStepEncoding enc = EncodeAiObservationForRl(obs);
     require(!legal(enc, AiRlHighLevelAction::attack_nearest_enemy) &&
         !legal(enc, AiRlHighLevelAction::defend_base) &&
@@ -4368,6 +4370,8 @@ void test_ai_attack_commit_and_hunt_range() {
     enc = EncodeAiObservationForRl(obs);
     require(legal(enc, AiRlHighLevelAction::attack_nearest_enemy),
         "commit timeout did not release the lock");
+    obs.units.pop_back();  // drop the proximity fighter for the defend gate
+    enc = EncodeAiObservationForRl(obs);
     // v10.2 defend gate: no hostile COMBAT mobile near an own building (the
     // far enemy nest is a building) -> defend stays closed; a fighter near
     // the base opens it.
@@ -4404,11 +4408,17 @@ void test_ai_attack_commit_and_hunt_range() {
     obs.raid_b_engaged_since_set = 0;
     obs.raid_b_objective_age = 50;
     enc = EncodeAiObservationForRl(obs);
+    obs.units.push_back(fighter_unit(0x9c21, 1, 700, 400, false));
+    enc = EncodeAiObservationForRl(obs);
     require(!legal(enc, AiRlHighLevelAction::raid_b_attack_units) &&
         !legal(enc, AiRlHighLevelAction::merge_raid_b) &&
         legal(enc, AiRlHighLevelAction::raid_b_retreat) &&
         legal(enc, AiRlHighLevelAction::attack_nearest_enemy),
         "raid_b commit lock leaked or missed");
+    obs.units.pop_back();
+    enc = EncodeAiObservationForRl(obs);
+    require(!legal(enc, AiRlHighLevelAction::retreat),
+        "retreat stayed legal with no hostile near any fighter");
 
     // Hunt distance gate: a monster 1400 px from the army centroid closes the
     // ARMY hunt but leaves the raid hunt open; a near monster opens both.
