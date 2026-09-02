@@ -6,6 +6,7 @@
 #include "ranker_directx.h"
 #include "ranker_miles.h"
 #include "ranker_setup_data.h"
+#include "ranker_startup_environment.h"
 #include "ranker_trc.h"
 
 #include <algorithm>
@@ -77,7 +78,7 @@ bool append_bounded_unit_definition_name(std::vector<u8>& bytes,
 }
 
 void append_runtime_resource_log(const char* format, ...) {
-    FILE* file = std::fopen("Jw2.log", "a");
+    FILE* file = std::fopen(startup_log_path(), "a");
     if (file == nullptr) {
         return;
     }

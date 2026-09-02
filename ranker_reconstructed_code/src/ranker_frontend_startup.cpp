@@ -11,6 +11,7 @@
 #include "ranker_resource_store.h"
 #include "ranker_runtime_resources.h"
 #include "ranker_setup_data.h"
+#include "ranker_startup_environment.h"
 #include "ranker_system_ui.h"
 #include "ranker_text_renderer.h"
 #include "ranker_trc.h"
@@ -37,7 +38,7 @@ FrontendStartupState g_frontend_startup_state;
 FrontendBootstrapState g_frontend_bootstrap_state;
 
 void append_frontend_bootstrap_log(const char* format, ...) {
-    FILE* file = std::fopen("Jw2.log", "a");
+    FILE* file = std::fopen(startup_log_path(), "a");
     if (file == nullptr) {
         return;
     }

@@ -1528,10 +1528,13 @@ oracle로만 query하는 DAgger pass를 짧게 수행해 covariate shift를 줄�
 
 ## 14. v1 이후 확장
 
-v1에 넣지 않는 기능은 별도 conditional head로 append한다. 기존 command index를
-재번호화하지 않는다.
+전투 외 tactical 기능은 별도 conditional head로 append하고 기존 command index를
+재번호화하지 않는다. 단, 일꾼·건물 경제 전체를 직접 제어하는 변경은 macro 계약과
+wire 의미까지 달라지므로 ENTCMD01에 append하지 않는다. 별도
+[ENTCMD02 직접 경제·전투 제어 계획](AI_PLAY_ENTCMD02_DIRECT_ECONOMY_PLAN.md)이 이
+항목의 worker/economy 초안을 대체한다. ENTCMD02에는 `RETURN_CARGO`가 없으며,
+`HARVEST` 한 번 뒤 엔진이 채집과 반납을 자동 반복한다.
 
-- worker entity control: HARVEST/BUILD/RETURN_CARGO + resource/build pointer
 - meat pickup: `PICKUP_MOVE` + visible map-effect pointer
 - transport: BOARD/UNLOAD + friendly unit/carrier pointer
 - merge: recipe-compatible friendly pointer/set

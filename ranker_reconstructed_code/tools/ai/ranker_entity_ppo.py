@@ -25,7 +25,7 @@ import argparse
 import math
 import sys
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -80,10 +80,12 @@ class EntityStep:
     target: torch.Tensor                 # [U] row or -1
     trainable: torch.Tensor              # [U] bool (OUTCOME result 0..2)
     old_logp: torch.Tensor               # [U]
+    behavior_value: Optional[float] = None  # value from the frozen collector
     reward: float = 0.0
     dt: float = 8.0
     terminal: bool = False               # terminated (bootstrap 0)
     truncated: bool = False              # time-limit (bootstrap V(final))
+    cutoff: bool = False                 # infrastructure cutoff prefix
 
 
 OWN_CAT_FIELDS = ("type", "movement_class", "dcm", "render", "command_base",
@@ -421,11 +423,13 @@ def ppo_update(net: EntityNet, optimizer: torch.optim.Optimizer,
         values.append(out["value"])
     values_tensor = torch.stack(values)
     with torch.no_grad():
-        advantages = compute_gae(steps, values_tensor.detach(), final_value)
+        raw_advantages = compute_gae(
+            steps, values_tensor.detach(), final_value)
+        returns = raw_advantages + values_tensor.detach()
+        advantages = raw_advantages
         if advantages.numel() > 1:
             advantages = (advantages - advantages.mean()) / \
                 (advantages.std() + 1e-8)
-        returns = advantages + values_tensor.detach()
 
     actor_terms = []
     entropy_terms = []
@@ -481,23 +485,89 @@ def ppo_update_batched(net: EntityNet, optimizer: torch.optim.Optimizer,
                        entropy_coef: float = 0.003,
                        max_train_steps: int = 1024,
                        minibatch: int = 64,
-                       generator: Optional[torch.Generator] = None
-                       ) -> Dict[str, float]:
-    """Cost-bounded episode update: values for GAE come from ONE no-grad
-    pass over the whole episode (correct full-sequence advantages), then
-    the actor/critic train on at most max_train_steps uniformly sampled
-    timesteps.  A 7200-step full-length match no longer stalls the serve
-    loop for minutes — the wall-clock is bounded by max_train_steps."""
+                       generator: Optional[torch.Generator] = None,
+                       gate_prior: Optional[float] = None,
+                       gate_kl_coef: float = 0.01,
+                       epochs: int = 1) -> Dict[str, float]:
+    """Backward-compatible single-episode entry point."""
+    return ppo_update_batched_episodes(
+        net, optimizer, [(steps, final_value)], clip=clip,
+        value_coef=value_coef, entropy_coef=entropy_coef,
+        max_train_steps=max_train_steps, minibatch=minibatch,
+        generator=generator, gate_prior=gate_prior,
+        gate_kl_coef=gate_kl_coef, epochs=epochs)
+
+
+def _prepare_ppo_episode_batch(
+        net: EntityNet,
+        episodes: List[Tuple[List[EntityStep], float]]
+        ) -> Tuple[List[EntityStep], torch.Tensor, torch.Tensor]:
+    """Calculate value targets without ever crossing an episode boundary."""
+    flat_steps: List[EntityStep] = []
+    value_chunks = []
+    advantage_chunks = []
     with torch.no_grad():
-        values = torch.stack(
-            [net(_step_tensors(step))["value"] for step in steps])
-        advantages = compute_gae(steps, values, final_value)
-        if advantages.numel() > 1:
-            advantages = (advantages - advantages.mean()) / \
-                (advantages.std() + 1e-8)
-        returns = advantages + values
+        for steps, final_value in episodes:
+            if not steps:
+                continue
+            if all(step.behavior_value is not None for step in steps):
+                values = torch.tensor(
+                    [float(step.behavior_value) for step in steps],
+                    dtype=torch.float32)
+            else:
+                # Compatibility for legacy/offline records that predate
+                # behavior-value storage.  Online collectors always take the
+                # branch above, pinning value targets to their rollout model.
+                values = torch.stack(
+                    [net(_step_tensors(step))["value"] for step in steps])
+            # Each worker/owner has an independent terminal or truncated
+            # bootstrap.  Flattening before this call would leak GAE from one
+            # game into the next one.
+            advantages = compute_gae(steps, values, final_value)
+            flat_steps.extend(steps)
+            value_chunks.append(values)
+            advantage_chunks.append(advantages)
+    if not flat_steps:
+        return [], torch.empty(0), torch.empty(0)
+
+    values = torch.cat(value_chunks)
+    raw_advantages = torch.cat(advantage_chunks)
+    # Critic targets use the unnormalized GAE.  Advantage normalization is
+    # an actor optimization aid and must not redefine the return target.
+    returns = raw_advantages + values
+    advantages = raw_advantages
+    if advantages.numel() > 1:
+        advantages = (advantages - advantages.mean()) / \
+            (advantages.std() + 1e-8)
+    return flat_steps, advantages, returns
+
+
+def ppo_update_batched_episodes(
+        net: EntityNet, optimizer: torch.optim.Optimizer,
+        episodes: List[Tuple[List[EntityStep], float]],
+        clip: float = 0.2, value_coef: float = 0.5,
+        entropy_coef: float = 0.003, max_train_steps: int = 1024,
+        minibatch: int = 64,
+        generator: Optional[torch.Generator] = None,
+        gate_prior: Optional[float] = None,
+        gate_kl_coef: float = 0.01,
+        epochs: int = 1) -> Dict[str, float]:
+    """Update once from a synchronous cohort of parallel rollouts.
+
+    The cohort shares one immutable behavior-policy version.  GAE and
+    bootstrap are computed independently per episode, after which timestep
+    records may be merged and shuffled.  Targets and the cost-bounded sample
+    stay fixed for every PPO epoch.
+    """
+    steps, advantages, returns = _prepare_ppo_episode_batch(net, episodes)
 
     count = len(steps)
+    episode_count = sum(1 for episode_steps, _ in episodes if episode_steps)
+    if count == 0:
+        return {"loss": 0.0, "actor": 0.0, "value": 0.0,
+                "entropy": 0.0, "trained_steps": 0.0,
+                "episode_steps": 0.0, "episodes": 0.0,
+                "epochs": 0.0}
     if count > max_train_steps:
         order = torch.randperm(count, generator=generator)[:max_train_steps]
         indices = order.tolist()
@@ -505,60 +575,87 @@ def ppo_update_batched(net: EntityNet, optimizer: torch.optim.Optimizer,
         indices = list(range(count))
     stats = {"loss": 0.0, "actor": 0.0, "value": 0.0, "entropy": 0.0}
     batches = 0
-    for start in range(0, len(indices), minibatch):
-        batch = indices[start:start + minibatch]
-        actor_terms = []
-        entropy_terms = []
-        value_terms = []
-        for index in batch:
-            step = steps[index]
-            tensors = _step_tensors(step)
-            out = net(tensors)
-            value_terms.append(
-                (out["value"] - returns[index]) ** 2)
-            if out["u"] == 0:
+    epoch_count = max(int(epochs), 1)
+    for _ in range(epoch_count):
+        if len(indices) > 1:
+            permutation = torch.randperm(len(indices), generator=generator)
+            epoch_indices = [indices[i] for i in permutation.tolist()]
+        else:
+            epoch_indices = indices
+        for start in range(0, len(epoch_indices), minibatch):
+            batch = epoch_indices[start:start + minibatch]
+            actor_terms = []
+            entropy_terms = []
+            kl_terms = []
+            value_terms = []
+            for index in batch:
+                step = steps[index]
+                tensors = _step_tensors(step)
+                out = net(tensors)
+                value_terms.append(
+                    (out["value"] - returns[index]) ** 2)
+                if out["u"] == 0:
+                    continue
+                trainable = step.trainable
+                if trainable.sum() == 0:
+                    continue
+                logp = entity_log_prob(out, tensors, step.command, step.point,
+                                       step.target)
+                logp_delta = torch.where(trainable, logp - step.old_logp,
+                                         torch.zeros_like(logp))
+                ratio = torch.exp(logp_delta)
+                advantage = advantages[index]
+                surrogate = torch.min(
+                    ratio * advantage,
+                    torch.clamp(ratio, 1 - clip, 1 + clip) * advantage)
+                actor_terms.append(
+                    (surrogate * trainable.float()).sum() /
+                    trainable.sum())
+                gate_probs = torch.sigmoid(out["gate_logit"])
+                gate_entropy = -(
+                    gate_probs * torch.log(gate_probs + 1e-8) +
+                    (1 - gate_probs) *
+                    torch.log(1 - gate_probs + 1e-8))
+                entropy_terms.append(gate_entropy.mean())
+                if gate_prior is not None:
+                    # The gate is anchored by a KL to the calibrated prior,
+                    # rather than generic entropy pushing KEEP toward 1/2.
+                    prior = gate_probs.new_tensor(float(gate_prior))
+                    gate_kl = (
+                        gate_probs * torch.log((gate_probs + 1e-8) /
+                                               (prior + 1e-8)) +
+                        (1 - gate_probs) *
+                        torch.log((1 - gate_probs + 1e-8) /
+                                  (1 - prior + 1e-8)))
+                    kl_terms.append(gate_kl.mean())
+            if not value_terms:
                 continue
-            trainable = step.trainable
-            if trainable.sum() == 0:
-                continue
-            logp = entity_log_prob(out, tensors, step.command, step.point,
-                                   step.target)
-            logp_delta = torch.where(trainable, logp - step.old_logp,
-                                     torch.zeros_like(logp))
-            ratio = torch.exp(logp_delta)
-            advantage = advantages[index]
-            surrogate = torch.min(
-                ratio * advantage,
-                torch.clamp(ratio, 1 - clip, 1 + clip) * advantage)
-            actor_terms.append(
-                (surrogate * trainable.float()).sum() / trainable.sum())
-            gate_probs = torch.sigmoid(out["gate_logit"])
-            gate_entropy = -(gate_probs * torch.log(gate_probs + 1e-8) +
-                             (1 - gate_probs) *
-                             torch.log(1 - gate_probs + 1e-8))
-            entropy_terms.append(gate_entropy.mean())
-        if not value_terms:
-            continue
-        actor_loss = -torch.stack(actor_terms).mean() if actor_terms else \
-            torch.zeros(())
-        entropy = torch.stack(entropy_terms).mean() if entropy_terms else \
-            torch.zeros(())
-        value_loss = torch.stack(value_terms).mean()
-        loss = actor_loss + value_coef * value_loss - entropy_coef * entropy
-        optimizer.zero_grad()
-        loss.backward()
-        nn.utils.clip_grad_norm_(net.parameters(), 1.0)
-        optimizer.step()
-        stats["loss"] += float(loss.detach())
-        stats["actor"] += float(actor_loss.detach())
-        stats["value"] += float(value_loss.detach())
-        stats["entropy"] += float(entropy.detach())
-        batches += 1
+            zero = returns.new_zeros(())
+            actor_loss = -torch.stack(actor_terms).mean() \
+                if actor_terms else zero
+            entropy = torch.stack(entropy_terms).mean() \
+                if entropy_terms else zero
+            gate_kl_loss = torch.stack(kl_terms).mean() \
+                if kl_terms else zero
+            value_loss = torch.stack(value_terms).mean()
+            loss = actor_loss + value_coef * value_loss - \
+                entropy_coef * entropy + gate_kl_coef * gate_kl_loss
+            optimizer.zero_grad()
+            loss.backward()
+            nn.utils.clip_grad_norm_(net.parameters(), 1.0)
+            optimizer.step()
+            stats["loss"] += float(loss.detach())
+            stats["actor"] += float(actor_loss.detach())
+            stats["value"] += float(value_loss.detach())
+            stats["entropy"] += float(entropy.detach())
+            batches += 1
     if batches:
         for key in stats:
             stats[key] /= batches
     stats["trained_steps"] = float(len(indices))
     stats["episode_steps"] = float(count)
+    stats["episodes"] = float(episode_count)
+    stats["epochs"] = float(epoch_count)
     return stats
 
 
@@ -736,6 +833,47 @@ def selftest() -> None:
     assert stats_batched["episode_steps"] == 20.0
     assert all(math.isfinite(v) for v in stats_batched.values()), \
         stats_batched
+
+    # 5c. Parallel cohort: GAE/bootstrap never crosses worker boundaries,
+    # rollout values define raw critic returns, and targets stay valid across
+    # multiple PPO epochs.
+    cohort_a = [_synthetic_step(2, 1, seed=200 + i) for i in range(3)]
+    cohort_b = [_synthetic_step(2, 1, seed=210 + i) for i in range(2)]
+    for index, s5c in enumerate(cohort_a + cohort_b):
+        sampled = sample_actions(net, _step_tensors(s5c), g)
+        s5c.command = sampled["command"]
+        s5c.point = sampled["point"]
+        s5c.target = sampled["target"]
+        s5c.old_logp = sampled["logp"]
+        s5c.reward = 0.2 * (index + 1)
+        s5c.behavior_value = -0.1 + 0.05 * index
+    cohort_a[-1].truncated = True
+    cohort_b[-1].terminal = True
+    episode_batch = [(cohort_a, 0.75), (cohort_b, 0.0)]
+    flat5c, advantages5c, returns5c = _prepare_ppo_episode_batch(
+        net, episode_batch)
+    values_a = torch.tensor([s.behavior_value for s in cohort_a])
+    values_b = torch.tensor([s.behavior_value for s in cohort_b])
+    raw_a = compute_gae(cohort_a, values_a, 0.75)
+    raw_b = compute_gae(cohort_b, values_b, 0.0)
+    expected_returns = torch.cat((raw_a + values_a, raw_b + values_b))
+    assert all(actual is expected for actual, expected in
+               zip(flat5c, cohort_a + cohort_b))
+    assert torch.allclose(returns5c, expected_returns, atol=1e-6), \
+        "parallel return crossed an episode boundary"
+    expected_adv = torch.cat((raw_a, raw_b))
+    expected_adv = (expected_adv - expected_adv.mean()) / \
+        (expected_adv.std() + 1e-8)
+    assert torch.allclose(advantages5c, expected_adv, atol=1e-6)
+    gen5c = torch.Generator().manual_seed(71)
+    stats_cohort = ppo_update_batched_episodes(
+        net, optimizer, episode_batch, max_train_steps=4, minibatch=2,
+        generator=gen5c, epochs=2)
+    assert stats_cohort["episodes"] == 2.0
+    assert stats_cohort["trained_steps"] == 4.0
+    assert stats_cohort["epochs"] == 2.0
+    assert all(math.isfinite(v) for v in stats_cohort.values()), \
+        stats_cohort
 
     # 6. BC: excluded labels drop; inclusion probability reweights.
     bc_step = _step_tensors(_synthetic_step(3, 2, seed=9))

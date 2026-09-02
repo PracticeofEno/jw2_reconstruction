@@ -7,6 +7,7 @@
 #include "ranker_icon_strips.h"
 #include "ranker_online_dialogs.h"
 #include "ranker_setup_data.h"
+#include "ranker_startup_environment.h"
 #include "ranker_text_tables.h"
 #include "ranker_trc.h"
 #include "ranker_winmain.h"
@@ -1102,7 +1103,7 @@ bool SubmitAccountProfileRequest(AccountProfileState& state) {
     // account failures otherwise happen before any packet reaches the server,
     // which makes field/selector regressions indistinguishable from a stalled
     // connection in a deployed build.
-    if (FILE* log = std::fopen("Jw2.log", "a")) {
+    if (FILE* log = std::fopen(startup_log_path(), "a")) {
         std::fprintf(log,
             "wizard-account submit lengths=%zu/%zu/%zu/%zu selectors=%d/%d/%d\n",
             std::strlen(state.submitted_account.data()),

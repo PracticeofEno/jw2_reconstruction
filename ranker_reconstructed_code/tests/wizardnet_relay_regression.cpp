@@ -2,6 +2,7 @@
 #include "ranker_network.h"
 #include "ranker_player_slots.h"
 #include "ranker_reliable_packets.h"
+#include "ranker_startup_environment.h"
 #include "ranker_wizardnet_relay.h"
 
 #include <array>
@@ -20,6 +21,10 @@ PlayerSlotRuntimeState g_test_player_slot_state{};
 u32 g_test_inactive_broadcast_count = 0;
 u32 g_test_inactive_source_slot = 0xffffffffu;
 u32 g_test_inactive_target_slot = 0xffffffffu;
+
+const char* startup_log_path() {
+    return "Jw2.log";
+}
 
 bool DispatchMode1GameplayPacket(const Mode1ReliablePacket&) {
     return false;

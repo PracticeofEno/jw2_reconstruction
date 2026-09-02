@@ -11,6 +11,7 @@
 #include "ranker_network.h"
 #include "ranker_online_dialogs.h"
 #include "ranker_p2p_lobby.h"
+#include "ranker_startup_environment.h"
 #include "ranker_system_ui.h"
 #include "ranker_text_tables.h"
 #include "ranker_trc.h"
@@ -100,7 +101,7 @@ void append_link_lobby_log(const char* format, ...) {
         return;
     }
 
-    FILE* file = std::fopen("Jw2.log", "a");
+    FILE* file = std::fopen(startup_log_path(), "a");
     if (file == nullptr) {
         return;
     }

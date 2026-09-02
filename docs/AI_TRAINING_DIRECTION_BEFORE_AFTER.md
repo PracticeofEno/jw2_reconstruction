@@ -220,6 +220,10 @@
 현재는 살아 있고 완성된 근접·원거리 이동 전투 유닛만 직접 제어한다.
 일꾼 직접 제어, 수송, 변신, stance, item, ability는 후속 범위다.
 
+macro 없이 일꾼의 채집·건설, 건물의 생산·연구까지 직접 제어하는 후속 계약은
+[ENTCMD02 직접 경제·전투 제어 계획](../ranker_reconstructed_code/docs/AI_PLAY_ENTCMD02_DIRECT_ECONOMY_PLAN.md)에
+설계되어 있다. 이 문서는 아직 구현 완료를 뜻하지 않는다.
+
 ### 실제 P2P에는 아직 사용하지 않는다
 
 현재 entity AI 경로는 로컬 AI 학습·평가용이다. network player가 2명 이상인 실제
@@ -274,6 +278,7 @@ P2P 게임에서는 이 경로를 실행하지 않는다.
 더 자세한 구현 계약은 다음 문서와 코드에서 확인할 수 있다.
 
 - [Entity-command RL 상세 설계](../ranker_reconstructed_code/docs/AI_PLAY_ENTITY_COMMAND_RL_PLAN.md)
+- [ENTCMD02 직접 경제·전투 제어 계획](../ranker_reconstructed_code/docs/AI_PLAY_ENTCMD02_DIRECT_ECONOMY_PLAN.md)
 - [기존 AI 관측·액션·micro 설명](../ranker_reconstructed_code/docs/AI_PLAY_CURRENT_OBSERVATION_ACTION_MICRO.md)
 - [Entity 정책과 PPO](../ranker_reconstructed_code/tools/ai/ranker_entity_ppo.py)
 - [Shadow BC](../ranker_reconstructed_code/tools/ai/ranker_entity_bc.py)

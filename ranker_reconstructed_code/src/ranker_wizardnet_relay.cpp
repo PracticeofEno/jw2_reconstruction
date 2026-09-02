@@ -3,6 +3,7 @@
 #ifdef _WIN32
 
 #include "ranker_network.h"
+#include "ranker_startup_environment.h"
 
 #include <atomic>
 #include <cstdarg>
@@ -89,11 +90,11 @@ void append_relay_log(const char* format, ...) {
     const std::lock_guard<std::mutex> lock(g_relay_log_mutex);
     FILE* file = nullptr;
 #if defined(_MSC_VER)
-    if (fopen_s(&file, "Jw2.log", "a") != 0) {
+    if (fopen_s(&file, startup_log_path(), "a") != 0) {
         file = nullptr;
     }
 #else
-    file = std::fopen("Jw2.log", "a");
+    file = std::fopen(startup_log_path(), "a");
 #endif
     if (file == nullptr) {
         return;

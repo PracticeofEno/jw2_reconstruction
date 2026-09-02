@@ -190,6 +190,13 @@ bool find_expected_jw208_archive_on_cdrom() {
 
 } // namespace
 
+const char* startup_log_path() {
+    const char* configured =
+        std::getenv("RANKER_RECONSTRUCTED_LOG_PATH");
+    return configured != nullptr && configured[0] != '\0' ?
+        configured : "Jw2.log";
+}
+
 void append_startup_log(const char* format, ...) {
     if (format == nullptr) {
         return;
@@ -197,11 +204,11 @@ void append_startup_log(const char* format, ...) {
 
     FILE* file = nullptr;
 #if defined(_MSC_VER)
-    if (fopen_s(&file, "Jw2.log", "a") != 0) {
+    if (fopen_s(&file, startup_log_path(), "a") != 0) {
         file = nullptr;
     }
 #else
-    file = std::fopen("Jw2.log", "a");
+    file = std::fopen(startup_log_path(), "a");
 #endif
     if (file == nullptr) {
         return;
@@ -282,7 +289,10 @@ bool CpuSupportsMmx() {
 }
 
 void WriteStartupTimestampLog(const char* path) {
-    if (path == nullptr || *path == '\0') {
+    if (path == nullptr) {
+        path = startup_log_path();
+    }
+    if (*path == '\0') {
         return;
     }
 

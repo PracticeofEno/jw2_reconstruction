@@ -2,10 +2,12 @@
 
 #include "ranker_replay.h"
 #include "ranker_replay_dialogs.h"
+#include "ranker_startup_environment.h"
 #include "ranker_unit_action.h"
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -37,12 +39,37 @@ std::string capture_timestamp() {
 
 std::filesystem::path capture_directory() {
     std::error_code error;
-    std::filesystem::path directory =
-        std::filesystem::current_path(error) / "Replays";
-    if (error) {
-        directory = "Replays";
+    std::filesystem::path directory;
+    const char* configured =
+        std::getenv("RANKER_RECONSTRUCTED_REPLAY_DIR");
+    if (configured != nullptr && configured[0] != '\0') {
+        directory = std::filesystem::path(configured).lexically_normal();
+        if (!directory.is_absolute()) {
+            append_startup_log(
+                "P2P flight capture rejected relative override path=%s",
+                configured);
+            return {};
+        }
+    } else {
+        directory = std::filesystem::current_path(error) / "Replays";
+        if (error) {
+            directory = "Replays";
+        }
     }
     std::filesystem::create_directories(directory, error);
+    if (error) {
+        append_startup_log(
+            "P2P flight capture directory unavailable path=%s error=%d",
+            directory.string().c_str(), error.value());
+        return {};
+    }
+    const bool is_directory = std::filesystem::is_directory(directory, error);
+    if (error || !is_directory) {
+        append_startup_log(
+            "P2P flight capture path is not a directory path=%s error=%d",
+            directory.string().c_str(), error.value());
+        return {};
+    }
     return directory;
 }
 
@@ -321,6 +348,9 @@ bool PersistP2PDropCapture(const P2PSyncMismatchCaptureInfo& mismatch,
             std::to_string(mismatch.detected_frame) + "_s" +
             std::to_string(mismatch.sequence);
         const std::filesystem::path directory = capture_directory();
+        if (directory.empty()) {
+            return false;
+        }
         const std::filesystem::path replay_path = directory / (stem + ".ply");
         const std::filesystem::path trace_path =
             directory / (stem + ".sync.csv");

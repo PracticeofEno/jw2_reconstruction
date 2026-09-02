@@ -15,11 +15,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import glob
 import os
 import random
 import struct
 import sys
+import tempfile
 from typing import Dict, List, Tuple
 
 import torch
@@ -54,6 +56,25 @@ CHECKPOINT_METADATA = {
 }
 
 
+@dataclass(frozen=True)
+class ShadowRecord:
+    source: str
+    header: wire.Header
+    request: Dict
+    labels: List
+
+    def __iter__(self):
+        # Keep existing BC loops/source callers compatible with 3-tuples.
+        return iter((self.header, self.request, self.labels))
+
+    def __getitem__(self, index):
+        return (self.header, self.request, self.labels)[index]
+
+
+def _record_source(record) -> str:
+    return record.source if isinstance(record, ShadowRecord) else "<legacy>"
+
+
 def validate_checkpoint_metadata(metadata: Dict) -> None:
     """Hard-fail on any contract mismatch (plan section 12)."""
     for key, expected in CHECKPOINT_METADATA.items():
@@ -70,24 +91,46 @@ def save_checkpoint(net: ppo.EntityNet, path: str,
                "hidden": net.hidden}
     if extra:
         payload["extra"] = extra
-    torch.save(payload, path)
+    absolute = os.path.abspath(path)
+    directory = os.path.dirname(absolute)
+    os.makedirs(directory, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(
+        prefix=".%s." % os.path.basename(absolute), suffix=".tmp",
+        dir=directory)
+    os.close(descriptor)
+    try:
+        torch.save(payload, temporary)
+        # One learner publishes the new generation atomically.  Readers see
+        # either the previous complete checkpoint or the new complete one.
+        os.replace(temporary, absolute)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
 
 
-def load_checkpoint(path: str) -> ppo.EntityNet:
+def load_checkpoint_payload(path: str) -> Tuple[ppo.EntityNet, Dict]:
     payload = torch.load(path, map_location="cpu", weights_only=False)
     validate_checkpoint_metadata(payload.get("metadata", {}))
     net = ppo.EntityNet(hidden=payload.get("hidden", 128))
     net.load_state_dict(payload["model"])
+    return net, payload
+
+
+def load_checkpoint(path: str) -> ppo.EntityNet:
+    net, _ = load_checkpoint_payload(path)
     return net
 
 
 def load_shadow_records(paths: List[str], limit: int = 0
-                        ) -> List[Tuple[wire.Header, Dict, List]]:
+                        ) -> List[ShadowRecord]:
     records = []
     for path in paths:
+        source = os.path.abspath(path)
         data = open(path, "rb").read()
         for header, request, labels in wire.parse_shadow_records(data):
-            records.append((header, request, labels))
+            records.append(ShadowRecord(source, header, request, labels))
             if limit and len(records) >= limit:
                 return records
     return records
@@ -143,20 +186,42 @@ def train_bc(net: ppo.EntityNet, records, epochs: int, lr: float,
     return last_mean
 
 
+def shadow_trajectory_indices(records) -> List[List[int]]:
+    """Contiguous source/episode/owner streams; frame reset starts a run."""
+    trajectories = []
+    current = []
+    current_key = None
+    previous_frame = None
+    for index, record in enumerate(records):
+        header = record[0]
+        key = (_record_source(record), header.episode, header.owner)
+        if (current and (key != current_key or
+                         header.frame <= previous_frame)):
+            trajectories.append(current)
+            current = []
+        current.append(index)
+        current_key = key
+        previous_frame = header.frame
+    if current:
+        trajectories.append(current)
+    return trajectories
+
+
 def shadow_rewards(records) -> List[float]:
     """Per-transition war-score reward (plan 10.4, entity head: war only)
     from the records' raw u64 loss material; forward-looking like the act2
     seal semantics."""
-    rewards = []
-    for index in range(len(records) - 1):
-        losses_now = records[index][1]["cumulative_losses"]
-        losses_next = records[index + 1][1]["cumulative_losses"]
-        own_delta = (losses_next[0] - losses_now[0]) + \
-            (losses_next[1] - losses_now[1])
-        hostile_delta = (losses_next[2] - losses_now[2]) + \
-            (losses_next[3] - losses_now[3])
-        rewards.append(5.0 * (hostile_delta - own_delta) / 1000.0)
-    rewards.append(0.0)   # unsealed tail: no future material
+    rewards = [0.0] * len(records)
+    for trajectory in shadow_trajectory_indices(records):
+        for index, next_index in zip(trajectory, trajectory[1:]):
+            losses_now = records[index][1]["cumulative_losses"]
+            losses_next = records[next_index][1]["cumulative_losses"]
+            own_delta = (losses_next[0] - losses_now[0]) + \
+                (losses_next[1] - losses_now[1])
+            hostile_delta = (losses_next[2] - losses_now[2]) + \
+                (losses_next[3] - losses_now[3])
+            rewards[index] = 5.0 * (hostile_delta - own_delta) / 1000.0
+        # Each trajectory tail stays 0: there is no same-stream next state.
     return rewards
 
 
@@ -173,6 +238,7 @@ def value_warmup(net: ppo.EntityNet, records, epochs: int, lr: float,
     optimizer = torch.optim.Adam(value_params, lr=lr)
     rewards = shadow_rewards(records)
     frames = [header.frame for header, _, _ in records]
+    trajectories = shadow_trajectory_indices(records)
     last_loss = float("nan")
     for epoch in range(epochs):
         values = []
@@ -182,13 +248,19 @@ def value_warmup(net: ppo.EntityNet, records, epochs: int, lr: float,
         values_tensor = torch.stack(values)
         with torch.no_grad():
             returns = torch.zeros(len(records))
-            next_return = float(values_tensor[-1])
-            for index in range(len(records) - 1, -1, -1):
-                dt = (frames[index + 1] - frames[index]) \
-                    if index + 1 < len(records) else 8
-                gamma_dt = ppo.GAMMA_8 ** (dt / 8.0)
-                next_return = rewards[index] + gamma_dt * next_return
-                returns[index] = next_return
+            for trajectory in trajectories:
+                tail = trajectory[-1]
+                # Unsealed shadow tail bootstraps itself; it is not a
+                # transition into the next file/episode/owner.
+                next_return = float(values_tensor[tail])
+                returns[tail] = next_return
+                for position in range(len(trajectory) - 2, -1, -1):
+                    index = trajectory[position]
+                    next_index = trajectory[position + 1]
+                    dt = frames[next_index] - frames[index]
+                    gamma_dt = ppo.GAMMA_8 ** (dt / 8.0)
+                    next_return = rewards[index] + gamma_dt * next_return
+                    returns[index] = next_return
         loss = torch.nn.functional.mse_loss(values_tensor, returns)
         optimizer.zero_grad()
         loss.backward()
@@ -260,6 +332,13 @@ def selftest() -> None:
                     for i in range(12))
     records = list(wire.parse_shadow_records(blob))
     assert len(records) == 12
+    sourced = [ShadowRecord("worker-a" if index < 6 else "worker-b",
+                            header, request, labels)
+               for index, (header, request, labels) in enumerate(records)]
+    rewards = shadow_rewards(sourced)
+    assert len(shadow_trajectory_indices(sourced)) == 2
+    assert rewards[4] > 0.0 and rewards[5] == 0.0 and rewards[6] > 0.0, \
+        "shadow reward crossed a worker/source boundary"
     stats = dataset_stats(records)
     assert stats["rows"] == 36 and stats["issue"] == 12
     net = ppo.EntityNet(hidden=64)

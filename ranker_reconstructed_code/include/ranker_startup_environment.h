@@ -4,6 +4,7 @@ namespace ranker {
 
 // Startup diagnostics intentionally remain available throughout the frontend
 // and gameplay wiring so early failures can be recorded before UI is ready.
+const char* startup_log_path();
 void append_startup_log(const char* format, ...);
 
 void install_startup_exception_logger_once();
@@ -13,7 +14,7 @@ void install_startup_exception_logger_once();
 bool ensure_ranker_data_working_directory();
 
 bool CpuSupportsMmx();
-void WriteStartupTimestampLog(const char* path = "Jw2.log");
+void WriteStartupTimestampLog(const char* path = nullptr);
 bool VerifySetupVersionData();
 bool VerifySetupOrFindJw208Archive();
 bool background_test_mode_enabled();
