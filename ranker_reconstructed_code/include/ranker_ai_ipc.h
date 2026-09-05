@@ -2,6 +2,7 @@
 #define RANKER_AI_IPC_H
 
 #include "ranker_ai_entity_control.h"
+#include "ranker_ai_entity_economy.h"
 #include "ranker_ai_rl_features.h"
 
 #include <array>
@@ -73,6 +74,20 @@ bool AiIpc2SendFrame(AiEntityWireHeader& header,
 // payload CRC check; any violation returns false with `error` set — the
 // caller must treat it as a framing failure and close the connection.
 bool AiIpc2ReceiveFrame(AiEntityWireHeader& header, std::vector<u8>& payload,
+    unsigned timeout_ms, std::string* error);
+
+// ---------------------------------------------------------------------------
+// act3 ENTCMD02 binary IPC (docs/AI_PLAY_ENTCMD02_DIRECT_ECONOMY_PLAN.md §12).
+// Own endpoint state, never shared with the act2 socket; the same bounded
+// exact-read/exact-write discipline with the 128-byte RAI3 header.
+// ---------------------------------------------------------------------------
+
+bool AiIpc3Connect(unsigned short port, unsigned handshake_timeout_ms);
+bool AiIpc3Connected();
+void AiIpc3Close();
+bool AiIpc3SendFrame(AiEntity2WireHeader& header,
+    const std::vector<u8>& payload, unsigned timeout_ms);
+bool AiIpc3ReceiveFrame(AiEntity2WireHeader& header, std::vector<u8>& payload,
     unsigned timeout_ms, std::string* error);
 
 } // namespace ranker

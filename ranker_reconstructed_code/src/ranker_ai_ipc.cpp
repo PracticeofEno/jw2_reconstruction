@@ -389,4 +389,133 @@ bool AiIpc2ReceiveFrame(AiEntityWireHeader& header, std::vector<u8>& payload,
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// act3 ENTCMD02 binary IPC: separate endpoint, same bounded I/O discipline.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+AiIpc2State& ipc3_state() {
+    static AiIpc2State instance;
+    return instance;
+}
+
+}  // namespace
+
+bool AiIpc3Connect(unsigned short port, unsigned handshake_timeout_ms) {
+    AiIpc2State& st = ipc3_state();
+    if (st.connected) {
+        return true;
+    }
+    if (!st.wsa_started) {
+        WSADATA data{};
+        if (WSAStartup(MAKEWORD(2, 0), &data) != 0) {
+            return false;
+        }
+        st.wsa_started = true;
+    }
+    st.socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (st.socket == INVALID_SOCKET) {
+        return false;
+    }
+    sockaddr_in target{};
+    target.sin_family = AF_INET;
+    target.sin_port = htons(port);
+    target.sin_addr.s_addr = inet_addr("127.0.0.1");
+    if (connect(st.socket, reinterpret_cast<const sockaddr*>(&target),
+            sizeof(target)) == SOCKET_ERROR) {
+        closesocket(st.socket);
+        st.socket = INVALID_SOCKET;
+        return false;
+    }
+    const int nodelay = 1;
+    setsockopt(st.socket, IPPROTO_TCP, TCP_NODELAY,
+        reinterpret_cast<const char*>(&nodelay), sizeof(nodelay));
+    u_long nonblocking = 1;
+    ioctlsocket(st.socket, FIONBIO, &nonblocking);
+    (void)handshake_timeout_ms;
+    st.connected = true;
+    return true;
+}
+
+bool AiIpc3Connected() {
+    return ipc3_state().connected;
+}
+
+void AiIpc3Close() {
+    AiIpc2State& st = ipc3_state();
+    if (st.socket != INVALID_SOCKET) {
+        closesocket(st.socket);
+        st.socket = INVALID_SOCKET;
+    }
+    st.connected = false;
+    if (st.wsa_started) {
+        WSACleanup();
+        st.wsa_started = false;
+    }
+}
+
+bool AiIpc3SendFrame(AiEntity2WireHeader& header,
+    const std::vector<u8>& payload, unsigned timeout_ms) {
+    AiIpc2State& st = ipc3_state();
+    if (!st.connected || payload.size() > kAiEntityWireMaxPayloadBytes) {
+        return false;
+    }
+    header.payload_bytes = static_cast<u32>(payload.size());
+    header.payload_crc32 = AiEntityCrc32(payload.data(), payload.size());
+    u8 header_bytes[kAiEntity2WireHeaderBytes];
+    AiEntity2WriteWireHeader(header, header_bytes);
+    const unsigned long start_ms = GetTickCount();
+    if (!ipc2_exact_io(st.socket, true, header_bytes,
+            kAiEntity2WireHeaderBytes, start_ms, timeout_ms)) {
+        return false;
+    }
+    if (!payload.empty() &&
+        !ipc2_exact_io(st.socket, true, const_cast<u8*>(payload.data()),
+            payload.size(), start_ms, timeout_ms)) {
+        return false;
+    }
+    return true;
+}
+
+bool AiIpc3ReceiveFrame(AiEntity2WireHeader& header, std::vector<u8>& payload,
+    unsigned timeout_ms, std::string* error) {
+    AiIpc2State& st = ipc3_state();
+    if (!st.connected) {
+        if (error != nullptr) {
+            *error = "not connected";
+        }
+        return false;
+    }
+    u8 header_bytes[kAiEntity2WireHeaderBytes];
+    const unsigned long start_ms = GetTickCount();
+    if (!ipc2_exact_io(st.socket, false, header_bytes,
+            kAiEntity2WireHeaderBytes, start_ms, timeout_ms)) {
+        if (error != nullptr) {
+            *error = "header read timeout/close";
+        }
+        return false;
+    }
+    if (!AiEntity2ParseWireHeader(header_bytes, kAiEntity2WireHeaderBytes,
+            header, error)) {
+        return false;
+    }
+    payload.assign(header.payload_bytes, 0);
+    if (header.payload_bytes != 0 &&
+        !ipc2_exact_io(st.socket, false, payload.data(), payload.size(),
+            start_ms, timeout_ms)) {
+        if (error != nullptr) {
+            *error = "payload read timeout/close";
+        }
+        return false;
+    }
+    if (AiEntityCrc32(payload.data(), payload.size()) != header.payload_crc32) {
+        if (error != nullptr) {
+            *error = "payload CRC mismatch";
+        }
+        return false;
+    }
+    return true;
+}
+
 } // namespace ranker

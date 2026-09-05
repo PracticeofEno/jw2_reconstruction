@@ -684,8 +684,11 @@ bool ParseP2PNetworkCommandLine(P2PNetworkLaunchParameters& parameters,
             std::strstr(upper, "-AIRANDOM") != nullptr;
         parameters.self_play_imitate =
             std::strstr(upper, "-AIIMITATE") != nullptr;
+        parameters.self_play_shadow2 =
+            std::strstr(upper, "-AISHADOW2") != nullptr;
         parameters.self_play_shadow =
-            std::strstr(upper, "-AISHADOW") != nullptr;
+            std::strstr(upper, "-AISHADOW") != nullptr &&
+            !parameters.self_play_shadow2;
         const char* imitate_owner = std::strstr(upper, "-AIIMITOWNER:");
         parameters.self_play_imitate_owner = imitate_owner != nullptr ?
             static_cast<u32>(std::strtoul(
@@ -714,6 +717,21 @@ bool ParseP2PNetworkCommandLine(P2PNetworkLaunchParameters& parameters,
         parameters.self_play_entity_port = entity != nullptr ?
             static_cast<u16>(std::strtoul(entity + std::strlen("-AIENTITY:"),
                 nullptr, 10)) : 0u;
+        const char* act3 = std::strstr(upper, "-AIACT3:");
+        parameters.self_play_act3_port = act3 != nullptr ?
+            static_cast<u16>(std::strtoul(act3 + std::strlen("-AIACT3:"),
+                nullptr, 10)) : 0u;
+        const char* worker_floor = std::strstr(upper, "-AIWORKERFLOOR:");
+        parameters.self_play_worker_floor = worker_floor != nullptr ?
+            static_cast<u32>(std::strtoul(
+                worker_floor + std::strlen("-AIWORKERFLOOR:"), nullptr, 10)) :
+            0u;
+        const char* opp_slow = std::strstr(upper, "-AIOPPSLOW:");
+        parameters.self_play_opponent_slow = opp_slow != nullptr ?
+            static_cast<u32>(std::strtoul(
+                opp_slow + std::strlen("-AIOPPSLOW:"), nullptr, 10)) : 0u;
+        parameters.self_play_reveal_base =
+            std::strstr(upper, "-AIREVEALBASE") != nullptr;
         const char* ipc = std::strstr(upper, "-AIIPC:");
         parameters.self_play_ipc_port = ipc != nullptr ?
             static_cast<u16>(std::strtoul(ipc + std::strlen("-AIIPC:"),

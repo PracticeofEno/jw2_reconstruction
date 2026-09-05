@@ -286,6 +286,12 @@ struct AiEntityReachability {
 AiEntityReachability BuildAiEntityReachability(const UnitMovementMap& map,
     u32 movement_class);
 
+// Whether tile (tile_x,tile_y) lies in a component reachable from a unit
+// standing at world (unit_x,unit_y) — the same virtual-seed rule the point
+// mask uses (ENTCMD02 economy pair gates share it).
+bool AiEntityTileReachableFromUnit(const AiEntityReachability& reach,
+    i32 unit_x, i32 unit_y, u32 tile_x, u32 tile_y);
+
 // Builds the 96-bit point mask for a unit standing at world (unit_x,unit_y).
 // The source tile is a virtual flood seed even when static-invalid.
 void BuildAiEntityPointMask(const UnitMovementMap& map,
@@ -640,6 +646,9 @@ struct AiEntityActiveOrder {
     i32 last_progress_y = 0;
     u32 last_progress_frame = 0;
     AiEntityOrderStatus status = AiEntityOrderStatus::awaiting_apply;
+    // ENTCMD02 slot extension: the team slot this order was derived from
+    // (0xff = a personal order / ENTCMD01).
+    u8 origin_slot = 0xffu;
 };
 
 struct AiEntityLastAttempt {

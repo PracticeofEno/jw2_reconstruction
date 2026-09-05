@@ -93,7 +93,8 @@ def serve_match(install_dir: Path | None, policy, port: int, seed: int | None,
                 timeout: float = 300.0, out_dir: Path | None = None,
                 net_offset: int = 0, quiet: bool = False,
                 policy2=None, versus: bool = False,
-                opp_tribe: int | None = None) -> dict:
+                opp_tribe: int | None = None,
+                extra_flags: list | None = None) -> dict:
     """Serve one match.  With ``versus``/``policy2`` the game runs -AIVS and
     owner 2's decisions are answered by ``policy2`` (owner 1 -> ``policy``), so
     two policies play head-to-head; otherwise owner 2 is the built-in AI.
@@ -122,6 +123,8 @@ def serve_match(install_dir: Path | None, policy, port: int, seed: int | None,
             args.append(f"-AINET:{net_offset}")
         if opp_tribe is not None:
             args.append(f"-AITRIBE:{opp_tribe}")
+        if extra_flags:
+            args.extend(str(flag) for flag in extra_flags)
         if not quiet:
             print(f"launching: {' '.join(args)}")
         proc = subprocess.Popen(args, cwd=str(install))

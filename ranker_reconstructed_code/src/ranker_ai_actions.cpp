@@ -9,7 +9,7 @@ constexpr u32 kUnitProductionSubtype = 0x01u;
 constexpr u32 kUnitOrderSubtype = 0x02u;
 constexpr u32 kRallySubtype = 0x08u;
 constexpr u32 kResearchSubtype = 0x0cu;
-// Schema v2 wire routes (docs/AI_PLAY_TYRANO_FULL_CAPABILITY_DESIGN.md §1.4).
+// Schema v2 audited wire routes.
 constexpr u32 kAbilitySubtype = 0x09u;
 constexpr u32 kForcedOrderSubtype = 0x0au;
 constexpr u32 kStopCommand = 0x00u;

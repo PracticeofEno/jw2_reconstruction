@@ -8,7 +8,7 @@
 
 namespace ranker {
 
-// Event-based decision gate (docs/AI_PLAY_DECISION_GATE_AUTOPILOT.md).
+// Event-based decision gate.
 //
 // The v8 policy was invoked unconditionally every 8 frames, which made 73% of
 // the imitation labels "no_op", let the sampled army objective thrash (the

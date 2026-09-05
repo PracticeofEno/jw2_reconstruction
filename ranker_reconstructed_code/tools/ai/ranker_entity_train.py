@@ -58,6 +58,15 @@ def main() -> int:
     parser.add_argument("--workers", type=int, default=4,
                         help="parallel rollout games per PPO cohort")
     parser.add_argument("--max-frames", type=int, default=20000)
+    parser.add_argument("--worker-floor", type=int, default=0,
+                        help="game-side -AIWORKERFLOOR:N autopilot economy "
+                             "override (0 = engine default)")
+    parser.add_argument("--opp-slow", type=int, default=0,
+                        help="curriculum: built-in opponent thinks every Nth "
+                             "frame (-AIOPPSLOW:N; 0/1 = full strength)")
+    parser.add_argument("--reveal-base", action="store_true",
+                        help="curriculum: seed hostile start tiles into fog "
+                             "memory while unexplored (-AIREVEALBASE)")
     parser.add_argument("--port", type=int, default=6001)
     parser.add_argument("--net-offset-base", type=int, default=100,
                         help="first -AINET offset reserved for this run")
@@ -68,6 +77,15 @@ def main() -> int:
                         help="load policy weights with fresh optimizer/RNG/jobs")
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--epochs", type=int, default=2)
+    parser.add_argument("--approach-coef", type=float, default=0.0,
+                        help="server-side approach shaping coefficient")
+    parser.add_argument("--explore-bias", type=float, default=0.0,
+                        help="directed-exploration logit bias (server)")
+    parser.add_argument("--explore-bias-command", type=float, default=None,
+                        help="command-head bias override (server)")
+    parser.add_argument("--gate-kl-coef", type=float, default=0.01,
+                        help="KEEP-gate KL anchor coefficient for the "
+                             "server (0.5 = measured re-expansion strength)")
     parser.add_argument("--issue-prior", type=float, default=None,
                         help="BC-free start: calibrated KEEP gate prior "
                              "for the fresh net (plan 10.1)")
@@ -241,7 +259,13 @@ def main() -> int:
                   str(arguments.game_timeout + 30.0),
                   "--reply-timeout-ms", str(arguments.reply_timeout_ms),
                   "--lr", str(arguments.lr),
-                  "--epochs", str(arguments.epochs)]
+                  "--epochs", str(arguments.epochs),
+                  "--gate-kl-coef", str(arguments.gate_kl_coef),
+                  "--approach-coef", str(arguments.approach_coef),
+                  "--explore-bias", str(arguments.explore_bias)]
+    if arguments.explore_bias_command is not None:
+        server_cmd += ["--explore-bias-command",
+                       str(arguments.explore_bias_command)]
     if policy_path:
         server_cmd += ["--policy", policy_path]
         server_cmd += ["--expected-rollout-jobs",
@@ -307,6 +331,12 @@ def main() -> int:
                     "-MAXFRAMES:%d" % arguments.max_frames,
                     "-SEED:%d" % (arguments.seed0 + global_job),
                     "-AIOUT:%s" % out_dir]
+        if arguments.worker_floor > 0:
+            game_cmd.append("-AIWORKERFLOOR:%d" % arguments.worker_floor)
+        if arguments.opp_slow > 1:
+            game_cmd.append("-AIOPPSLOW:%d" % arguments.opp_slow)
+        if arguments.reveal_base:
+            game_cmd.append("-AIREVEALBASE")
         log_path = os.path.join(out_dir, "process.log")
         game_env = os.environ.copy()
         game_env["RANKER_RECONSTRUCTED_LOG_PATH"] = os.path.join(
@@ -411,10 +441,23 @@ def main() -> int:
                     owners = result.get("owners", [])
                     own = next((owner for owner in owners
                                 if owner.get("owner") == 1), {})
+                    opp = next((owner for owner in owners
+                                if owner.get("owner") == 2), {})
+                    # WIN only when the OPPONENT was eliminated: a bare
+                    # "elimination" reason also covers our own death, and a
+                    # log-side grep of it silently conflated the two.
+                    if opp and not opp.get("alive", True) and \
+                            own.get("alive"):
+                        verdict = "WIN"
+                    elif own and not own.get("alive", True):
+                        verdict = "DEATH"
+                    else:
+                        verdict = "TRUNC"
                     results.append(result)
-                    print("game %d job %d: %s frame=%s units=%s value=%s "
+                    print("game %d job %d: %s %s frame=%s units=%s value=%s "
                           "lost=%s" %
-                          (game, job, result.get("reason", "unknown"),
+                          (game, job, verdict,
+                           result.get("reason", "unknown"),
                            result.get("end_frame"), own.get("units"),
                            own.get("unit_value"),
                            own.get("unit_value_lost")), flush=True)

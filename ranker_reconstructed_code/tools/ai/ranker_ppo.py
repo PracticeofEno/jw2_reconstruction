@@ -865,7 +865,7 @@ def augment_rewards(roll, reward_scale, terminal_weight,
         it gives attack a dense edge over retreat and pays for finding the
         enemy base.
 
-    v3 (docs/AI_PLAY_TYRANO_FULL_CAPABILITY_DESIGN.md follow-up): the previous
+    v3 reward revision: the previous
     reward paid for ACCUMULATION (any unit/building growth, uncapped, losses
     free), which taught tech-building farms and army hoarding.  RTS victory is
     destroying the opponent, so the reward now measures COMBAT PROGRESS:

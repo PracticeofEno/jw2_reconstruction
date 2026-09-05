@@ -49,6 +49,11 @@ struct TyranoScriptedBotConfig {
     u32 worker_primary_resource_cost = 100;
     u32 desired_masos_count = 15;
     u32 desired_dilophos_count = 6;
+    // Entity mode: pick a WORKER as the berry scout — fighters belong to the
+    // entity policy, and the entity worker-only executor can only publish
+    // orders for workers (a fighter berry scout would be assigned but never
+    // moved).
+    bool berry_scout_prefer_worker = false;
 };
 
 enum class TyranoScriptedBotDecisionCode : u32 {

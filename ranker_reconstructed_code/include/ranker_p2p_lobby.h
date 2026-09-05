@@ -112,14 +112,39 @@ struct P2PNetworkLaunchParameters {
     // orders are recorded as per-unit KEEP/ISSUE labels at the 8-frame entity
     // cadence (ai_entity_shadow_<owner>.bin under -AIOUT).
     bool self_play_shadow = false;
+    // -AISHADOW2 — ENTCMD02 SHD2 teacher dataset (same live scripted micro,
+    // labels = economy + combat teacher orders on the v2 snapshot).
+    bool self_play_shadow2 = false;
     // -AIIMITOWNER:N — with -AIREPLAY + -AIIMITATE, the recorded owner slot to
     // log (a human player's replay).  0xff = the replay's own local player.
     u32 self_play_imitate_owner = 0xffu;
     // -AIENTITY:PORT — entity-command RL controller (plan section 11): the
     // controlled owners speak the binary act2 protocol to a Python policy
     // server on 127.0.0.1:PORT.  Direct per-unit control; the old fighter
-    // objective executor and the autopilot are forced OFF.  0 = disabled.
+    // objective executor is forced OFF and the autopilot runs economy-only
+    // (scout guard disabled — plan section 4.2).  0 = disabled.
     u16 self_play_entity_port = 0;
+    // -AIACT3:PORT — ENTCMD02 (act3) direct economy + combat entity-command
+    // controller on 127.0.0.1:PORT (docs/AI_PLAY_ENTCMD02_DIRECT_ECONOMY_PLAN.md).
+    // The scripted macro stage and the worker executor are fully OFF for the
+    // controlled owners.  0 = disabled.  Mutually exclusive with -AIENTITY.
+    u16 self_play_act3_port = 0;
+    // -AIWORKERFLOOR:N — economy A/B lever: override the autopilot's
+    // worker-floor rule target (how many workers it keeps alive).  0 = the
+    // AiAutopilotConfig default.  Applied in the entity transaction only.
+    u32 self_play_worker_floor = 0;
+    // -AIOPPSLOW:N — training curriculum lever: the built-in Computer
+    // owners think only every Nth simulation frame (their maintenance tick
+    // is skipped otherwise), smoothly weakening them so a learning policy
+    // sees winnable games; anneal N toward 1 as the win rate rises.
+    // 0/1 = full strength.  Self-play sessions only.
+    u32 self_play_opponent_slow = 0;
+    // -AIREVEALBASE — training curriculum lever: seed each hostile owner's
+    // START tile into the fog building-memory while it is still unexplored
+    // (real sightings take over once the tile is lit).  Removes the
+    // scout-survival lottery that otherwise gates every knowledge-based
+    // behavior; anneal OFF once the policy closes reliably.
+    bool self_play_reveal_base = false;
     // -AIIPC:PORT — online policy-in-the-loop: the Computer(AI) owner asks a
     // Python policy server on 127.0.0.1:PORT for each high-level action instead
     // of sampling randomly.  0 = disabled.
@@ -142,7 +167,7 @@ struct P2PNetworkLaunchParameters {
     // The Computer(AI) owners themselves stay Tyrano — the executor only
     // speaks that tech tree.
     u32 self_play_opponent_tribe = 2;
-    // v9 (docs/AI_PLAY_DECISION_GATE_AUTOPILOT.md): -AIAUTOPILOT:0/1 macro
+    // v9 runtime switches: -AIAUTOPILOT:0/1 macro
     // autopilot (worker floor / pop guard / idle-producer guard),
     // -AIREFLEX:0/1 executor base-defense reflex, -AIGATE:0/1 event decision
     // gate (0 = decide every min_interval like the pre-v9 behavior).  All

@@ -854,6 +854,9 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
         return ready(intent, std::move(act));
     };
     // Nearest available worker to a point (the builder for every structure).
+    // Nearest available worker to a point (the builder for every structure).
+    // Harvesting/carrying workers are eligible: the engine accepts a build
+    // order in every harvest state (2026-09-04 user rule).
     const auto nearest_worker_to = [&](i32 x, i32 y) -> const AiObservedUnit* {
         const AiObservedUnit* best = nullptr;
         i64 best_distance = 0;
@@ -1139,7 +1142,7 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
                 scout = members.front();
             }
         }
-        if (scout == nullptr) {
+        if (scout == nullptr && !config.berry_scout_prefer_worker) {
             for (const AiObservedUnit& unit : observation.units) {
                 if (!unit.controlled || !unit.alive ||
                     unit.under_construction ||
@@ -1411,6 +1414,8 @@ TyranoScriptedBotDecision DecideTyranoScriptedBotForHighLevelAction(
                 if (!unit.controlled || !unit.alive || unit.under_construction ||
                     unit.type_id >= kTyranoMobileTypeLimit ||
                     unit_is_constructing(unit) ||
+                    (config.berry_scout_prefer_worker &&
+                        unit.type_id != kTyranoWorkerType) ||
                     AiMicroRoleOf(unit, micro_config) == AiMicroRole::transport) {
                     continue;
                 }

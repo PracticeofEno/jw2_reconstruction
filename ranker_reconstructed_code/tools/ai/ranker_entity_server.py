@@ -167,9 +167,17 @@ class NetPolicy:
     Transitions seal on the NEXT ACT_REQ (reward from the u64 loss deltas,
     dt from the frame difference) exactly like the act2 contract."""
 
+    APPROACH_DIST_FEATURE = 478   # army centroid -> nearest known enemy
+    APPROACH_FLAG_FEATURE = 479   # building (visible or fog-remembered)
+    ENEMY_BUILDING_GRID_START = 278   # 8x8 remembered/visible, row-major
+    ENEMY_BUILDING_GRID_END = 342
+
     def __init__(self, checkpoint: str, rng: random.Random,
                  train: bool = False, out: str = "", lr: float = 1e-4,
                  epochs: int = 2, issue_prior: float = None,
+                 gate_kl_coef: float = 0.01, approach_coef: float = 0.0,
+                 explore_bias: float = 0.0,
+                 explore_bias_command: float = None,
                  max_train_steps: int = 1024, macro_policy: str = "",
                  base_seed: int = 1,
                  environment_seed_base: int = None,
@@ -214,6 +222,12 @@ class NetPolicy:
         self.epochs = epochs
         self.max_train_steps_per_worker = max_train_steps
         self.issue_prior = issue_prior
+        self.gate_kl_coef = float(gate_kl_coef)
+        self.approach_coef = float(approach_coef)
+        self.explore_bias = float(explore_bias)
+        self.explore_bias_command = float(explore_bias_command)             if explore_bias_command is not None else self.explore_bias
+        self.bias_source_counts = {'base': 0, 'candidate': 0,
+                                   'dark': 0, 'none': 0}
         # BC-free start: a fresh net takes the calibrated KEEP-gate prior
         # (plan 10.1) so it does not thrash orders from step one.
         payload = None
@@ -279,23 +293,52 @@ class NetPolicy:
                     raise RuntimeError(
                         "resume issue_prior differs from the checkpoint")
             if (online_resume and
-                    float(resume_extra["gate_kl_coef"]) != 0.01):
+                    float(resume_extra["gate_kl_coef"]) !=
+                    self.gate_kl_coef):
                 raise RuntimeError(
                     "resume gate_kl_coef differs from this learner")
-            if (online_resume and
-                    float(resume_extra["learning_rate"]) != float(self.lr)):
-                raise RuntimeError(
-                    "resume learning rate differs from the checkpoint")
-            if (online_resume and
-                    int(resume_extra["ppo_epochs"]) != int(self.epochs)):
-                raise RuntimeError(
-                    "resume PPO epochs differ from the checkpoint")
-            if (online_resume and
-                    int(resume_extra["max_train_steps_per_worker"]) !=
-                    int(self.max_train_steps_per_worker)):
-                raise RuntimeError(
-                    "resume per-worker train-step budget differs from the "
-                    "checkpoint")
+            # Reward-shaping/exploration coefficients are curriculum knobs:
+            # each cohort is collected on-policy under the CURRENT values, so
+            # changing them between legs cannot corrupt stored data — warn
+            # only (2026-09-03: the approach-coef exploit fix needs this).
+            if online_resume:
+                for label, saved, current in (
+                        ("approach_coef",
+                         float(resume_extra.get("approach_coef", 0.0)),
+                         self.approach_coef),
+                        ("explore_bias",
+                         float(resume_extra.get("explore_bias", 0.0)),
+                         self.explore_bias)):
+                    if saved != current:
+                        print("ranker_entity_server: resume %s %s -> %s"
+                              % (label, saved, current), flush=True)
+            if online_resume:
+                saved_cmd_bias = float(resume_extra.get(
+                    "explore_bias_command",
+                    resume_extra.get("explore_bias", 0.0)))
+                if saved_cmd_bias != self.explore_bias_command:
+                    print("ranker_entity_server: resume explore_bias_command"
+                          " %s -> %s" % (saved_cmd_bias,
+                                         self.explore_bias_command),
+                          flush=True)
+            # Training-SCHEDULE knobs (lr / epochs / per-worker sample
+            # budget) may evolve across curriculum legs: warn, don't reject.
+            # Environment semantics (seed base, horizon, cohort width,
+            # reward coefficients) stay hard-checked below/above.
+            if online_resume:
+                for label, saved, current in (
+                        ("learning_rate",
+                         float(resume_extra["learning_rate"]),
+                         float(self.lr)),
+                        ("ppo_epochs",
+                         int(resume_extra["ppo_epochs"]),
+                         int(self.epochs)),
+                        ("max_train_steps_per_worker",
+                         int(resume_extra["max_train_steps_per_worker"]),
+                         int(self.max_train_steps_per_worker))):
+                    if saved != current:
+                        print("ranker_entity_server: resume %s %s -> %s"
+                              % (label, saved, current), flush=True)
             if online_resume:
                 if (self.cohort_workers is None or
                         int(resume_extra["cohort_workers"]) !=
@@ -442,9 +485,102 @@ class NetPolicy:
         with self.lock:
             self._check_version(connection_id, header)
 
+    START_CELL_X_FEATURE = 470      # own start cell / 7
+    START_CELL_Y_FEATURE = 471
+    CANDIDATE_DX_FEATURE = 480      # home -> nearest UNEXPLORED start
+    CANDIDATE_DY_FEATURE = 481      # candidate ((d/|d|+1)/2 per axis)
+    CANDIDATE_DIST_FEATURE = 482    # |d| / 2048 px, clamped to 1
+    CANDIDATE_FLAG_FEATURE = 483
+
+    def _direction_bias(self, global_feat, u):
+        """Directed-exploration prior: bias the point head toward the enemy
+        base's global 8x8 cell and the command head toward ATTACK_MOVE.
+        Point tokens 0..63 and the building-grid features share the same
+        row-major cell order.  When NO enemy building is known (honest
+        mode before discovery), fall back to the nearest UNEXPLORED start
+        candidate's cell so the army sweeps the spawn spots — horizon eval
+        2026-09-03 showed dominant armies otherwise never find the base at
+        any cap.  Applied to sampling and update recompute identically
+        (ppo._apply_direction_bias)."""
+        if not self.explore_bias or u == 0:
+            return None, None
+        grid = global_feat[self.ENEMY_BUILDING_GRID_START:
+                           self.ENEMY_BUILDING_GRID_END]
+        if len(grid) != 64:
+            return None, None
+        best = max(range(64), key=lambda c: grid[c])
+        known = grid[best] > 0.0
+        source = 'base'
+        target = best
+        if not known:
+            target = self._candidate_cell(global_feat)
+            source = 'candidate'
+            if target is None:
+                # Stage 3: candidates all explored yet the base never seen
+                # (worker scouts light tiles but die before SIGHTING the
+                # buildings — v18 leg3 measured 66% of decisions here).
+                # Point the ARMY at the darkest cell: many units sweep with
+                # wide vision where a lone scout kept failing.
+                target = self._dark_cell(global_feat)
+                source = 'dark' if target is not None else 'none'
+        self.bias_source_counts[source] += 1
+        total = sum(self.bias_source_counts.values())
+        if total % 2000 == 0:
+            print('ranker_entity_server: bias sources %r'
+                  % dict(self.bias_source_counts), flush=True)
+        if target is None:
+            return None, None
+        point_bias = self.torch.zeros(96)
+        point_bias[target] = self.explore_bias
+        command_bias = None
+        if self.explore_bias_command:
+            command_bias = self.torch.zeros(6)
+            command_bias[1] = self.explore_bias_command   # ATTACK_MOVE (2)
+        return point_bias, command_bias
+
+    def _candidate_cell(self, global_feat):
+        """Approximate global cell of the nearest unexplored start
+        candidate from the home->candidate vector features (a 128x128-tile
+        map spans 4096px, so one 8x8 cell is ~512px)."""
+        if (len(global_feat) <= self.CANDIDATE_FLAG_FEATURE or
+                global_feat[self.CANDIDATE_FLAG_FEATURE] <= 0.5):
+            return None
+        cx = global_feat[self.START_CELL_X_FEATURE] * 7.0
+        cy = global_feat[self.START_CELL_Y_FEATURE] * 7.0
+        dx = global_feat[self.CANDIDATE_DX_FEATURE] * 2.0 - 1.0
+        dy = global_feat[self.CANDIDATE_DY_FEATURE] * 2.0 - 1.0
+        dist_cells = global_feat[self.CANDIDATE_DIST_FEATURE] * 2048.0 / 512.0
+        tx = min(7, max(0, int(round(cx + dx * dist_cells))))
+        ty = min(7, max(0, int(round(cy + dy * dist_cells))))
+        return ty * 8 + tx
+
+    EXPLORED_GRID_START = 406   # 8x8 explored-fraction, row-major
+    EXPLORED_GRID_END = 470
+
+    def _dark_cell(self, global_feat):
+        """Least-explored global cell, or None once the map is essentially
+        lit (then the stalemate is not an exploration problem)."""
+        grid = global_feat[self.EXPLORED_GRID_START:self.EXPLORED_GRID_END]
+        if len(grid) != 64:
+            return None
+        best = min(range(64), key=lambda c: grid[c])
+        return best if grid[best] < 0.95 else None
+
+    def _approach_phi(self, global_feat):
+        """Staged potential for approach shaping.  Base known (feature 479):
+        phi = -(distance/2048) in [-1, 0].  Base unknown: a FLAT -1.5, so
+        the moment a unit reveals the enemy base phi jumps by >= 0.5 — a
+        potential-based discovery bonus (a distance-to-candidate stage would
+        PENALIZE clearing the nearest empty candidate, so it stays flat)."""
+        if len(global_feat) <= self.APPROACH_FLAG_FEATURE:
+            return None
+        if global_feat[self.APPROACH_FLAG_FEATURE] > 0.5:
+            return -float(global_feat[self.APPROACH_DIST_FEATURE])
+        return -1.5
+
     def _seal(self, key, losses_next, frame_next: int,
               terminal_payoff: float = 0.0, terminated: bool = False,
-              truncated: bool = False) -> None:
+              truncated: bool = False, phi_next=None) -> None:
         pending = self.pending.pop(key, None)
         if pending is None:
             return
@@ -461,6 +597,14 @@ class NetPolicy:
             (losses_next[3] - losses_prev[3])
         reward = 5.0 * (hostile_delta - own_delta) / 1000.0 + \
             terminal_payoff
+        # Approach shaping (curriculum lever): potential-based reward on
+        # closing the distance to the known enemy base.  2026-09-03: this
+        # block was silently lost in a concurrent edit and phi became dead
+        # code — keep the += HERE, next to the base reward, so any future
+        # reward rewrite has to face it.
+        if (self.approach_coef and not terminated and
+                phi_next is not None and pending.get("phi") is not None):
+            reward += self.approach_coef * (phi_next - pending["phi"])
         step = self.ppo.EntityStep(
             global_feat=pending["tensors"]["global_feat"],
             own_cat=pending["tensors"]["own_cat"],
@@ -475,7 +619,9 @@ class NetPolicy:
             old_logp=pending["logp"],
             behavior_value=pending["value"], reward=reward,
             dt=float(max(frame_next - pending["frame"], 1)),
-            terminal=terminated, truncated=truncated)
+            terminal=terminated, truncated=truncated,
+            point_bias=pending["tensors"].get("point_bias"),
+            command_bias=pending["tensors"].get("command_bias"))
         self.episodes.setdefault(key, []).append(step)
 
     def act(self, connection_id: int, header: wire.Header,
@@ -484,8 +630,11 @@ class NetPolicy:
             self._check_version(connection_id, header)
             torch = self.torch
             key = self._key(connection_id, header)
-            self._seal(key, request["cumulative_losses"], header.frame)
+            phi_next = self._approach_phi(request["global"])
+            self._seal(key, request["cumulative_losses"], header.frame,
+                       phi_next=phi_next)
             tensors = self.ppo.step_from_request(request, header)
+            tensors["point_bias"], tensors["command_bias"] =                 self._direction_bias(request["global"], header.own_rows)
             torch_rng = self._connection_torch_rng(connection_id)
             with torch.no_grad():
                 sample = self.ppo.sample_actions(
@@ -517,6 +666,7 @@ class NetPolicy:
                 "outcome_received": False,
                 "losses": list(request["cumulative_losses"]),
                 "frame": header.frame, "sequence": header.sequence,
+                "phi": phi_next,
             }
             return wire.pack_reply(
                 macro, -1, [int(c) for c in sample["command"]],
@@ -578,7 +728,10 @@ class NetPolicy:
             "base_seed": self.base_seed,
             "environment_seed_base": self.environment_seed_base,
             "issue_prior": self.issue_prior,
-            "gate_kl_coef": 0.01,
+            "gate_kl_coef": self.gate_kl_coef,
+            "approach_coef": self.approach_coef,
+            "explore_bias": self.explore_bias,
+            "explore_bias_command": self.explore_bias_command,
             "learning_rate": self.lr,
             "ppo_epochs": self.epochs,
             "max_train_steps_per_worker":
@@ -636,7 +789,8 @@ class NetPolicy:
                 max_train_steps=self._cohort_train_step_cap(
                     rollout_job_count),
                 generator=self.update_generator,
-                gate_prior=self.issue_prior, epochs=self.epochs)
+                gate_prior=self.issue_prior,
+                gate_kl_coef=self.gate_kl_coef, epochs=self.epochs)
             self.updates += 1
             self.global_steps += int(stats["trained_steps"])
             self.rollout_jobs += rollout_job_count
@@ -764,6 +918,49 @@ class RandomLegalPolicy:
     def abort_connection(self, connection_id: int) -> None:
         with self.lock:
             self.connection_rngs.pop(connection_id, None)
+
+
+class AssaultProbePolicy(RandomLegalPolicy):
+    """Mechanism probe: EVERY unit is ordered ATTACK_MOVE (else MOVE) at the
+    known enemy base's global cell each tick; macro stays random-legal so
+    production keeps flowing.  If even this cannot close a far-spawn game,
+    the blocker is mechanical (point resolve / order path), not learning."""
+
+    def act(self, connection_id: int, header: wire.Header,
+            request: dict) -> bytes:
+        with self.lock:
+            rng = self._connection_rng(connection_id)
+            macro_legal = [i for i in range(wire.MACRO_ACTION_COUNT)
+                           if (request["macro_mask_words"][i >> 5] >>
+                               (i & 31)) & 1]
+            macro = rng.choice(macro_legal) if macro_legal else 0
+            grid = request["global"][278:342]
+            base_cell = -1
+            if len(grid) == 64:
+                best = max(range(64), key=lambda c: grid[c])
+                if grid[best] > 0.0:
+                    base_cell = best
+            commands = []
+            points = []
+            targets = []
+            for row in range(header.own_rows):
+                mask = request["command_mask"][row]
+                command = COMMAND_KEEP
+                point = -1
+                if base_cell >= 0:
+                    words = request["point_mask"][row]
+                    cell_legal = (words[base_cell >> 5] >>
+                                  (base_cell & 31)) & 1
+                    for candidate in (2, 1):   # ATTACK_MOVE, then MOVE
+                        if ((mask >> candidate) & 1) and cell_legal:
+                            command = candidate
+                            point = base_cell
+                            break
+                commands.append(command)
+                points.append(point)
+                targets.append(-1)
+            return wire.pack_reply(macro, -1, commands, points, targets)
+
 
 
 def serve_connection(sock, policy, stats, connection_id: int,
@@ -1460,6 +1657,22 @@ def main() -> int:
                         help="HELLO-negotiated ACT/TERMINAL reply deadline")
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--epochs", type=int, default=2)
+    parser.add_argument("--probe-assault", action="store_true",
+                        help="mechanism probe: all units attack-move at the "
+                             "known enemy base cell every tick")
+    parser.add_argument("--explore-bias-command", type=float, default=None,
+                        help="command-head share of the exploration bias "
+                             "(default: same as --explore-bias)")
+    parser.add_argument("--explore-bias", type=float, default=0.0,
+                        help="directed-exploration logit bias toward the "
+                             "known enemy base cell (curriculum lever)")
+    parser.add_argument("--approach-coef", type=float, default=0.0,
+                        help="potential-based approach shaping toward the "
+                             "known enemy base (curriculum closing lever)")
+    parser.add_argument("--gate-kl-coef", type=float, default=0.01,
+                        help="KEEP-gate KL anchor coefficient (0.01 was "
+                             "~50x too weak in v5; 0.5 re-expanded the "
+                             "gate in the smoke test)")
     parser.add_argument("--issue-prior", type=float, default=None,
                         help="fresh-net calibrated KEEP gate (e.g. 0.08 = "
                              "the measured teacher ISSUE rate); ignored "
@@ -1514,6 +1727,11 @@ def main() -> int:
                            out=arguments.out, lr=arguments.lr,
                            epochs=arguments.epochs,
                            issue_prior=arguments.issue_prior,
+                           gate_kl_coef=arguments.gate_kl_coef,
+                           approach_coef=arguments.approach_coef,
+                           explore_bias=arguments.explore_bias,
+                           explore_bias_command=
+                           arguments.explore_bias_command,
                            max_train_steps=arguments.max_train_steps,
                            macro_policy=arguments.macro_policy,
                            base_seed=arguments.seed,
@@ -1527,6 +1745,9 @@ def main() -> int:
                            arguments.expected_rollout_jobs,
                            expected_policy_fingerprint=
                            arguments.expected_policy_fingerprint)
+    elif arguments.probe_assault:
+        policy = AssaultProbePolicy(arguments.keep_bias, rng,
+                                    base_seed=arguments.seed)
     else:
         policy = RandomLegalPolicy(arguments.keep_bias, rng,
                                    base_seed=arguments.seed)

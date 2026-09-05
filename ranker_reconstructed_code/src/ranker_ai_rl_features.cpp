@@ -191,7 +191,7 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
     u32 neutral_count = 0;
     bool have_neutral = false;
     i64 neutral_nearest_sq = 0;
-    // v2 aggregates (docs/AI_PLAY_TYRANO_FULL_CAPABILITY_DESIGN.md §3).
+    // v2 audited capability aggregates.
     // COMPLETED-only per-type counts for the extended roster 0x20..0x2f.
     std::array<u32, 16> roster_counts{};
     u32 nest83 = 0, nest88 = 0, nest89 = 0, nest8a = 0;
@@ -1063,8 +1063,7 @@ AiRlStepEncoding EncodeAiObservationForRl(const AiObservation& observation) {
     }
 
     // ======================================================================
-    // v9 decision context [772..787]
-    // (docs/AI_PLAY_DECISION_GATE_AUTOPILOT.md) - written as ZEROS here.
+    // v9 decision context [772..787] - written as ZEROS here.
     // These describe the decision-gate/pump state, not the observation; the
     // caller patches them via ApplyAiRlDecisionContext:
     //   [772]      frames since the last policy decision (/64 clamp)

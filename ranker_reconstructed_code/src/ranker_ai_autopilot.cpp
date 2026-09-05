@@ -40,6 +40,26 @@ bool uses_base_producer(AiRlHighLevelAction action) {
         action == AiRlHighLevelAction::produce_unit_x2c;
 }
 
+constexpr u32 kBaseNestType = 0x80u;
+
+u32 count_base_nests(const AiObservation& observation) {
+    u32 base_nests = 0;
+    for (const AiObservedUnit& unit : observation.units) {
+        if (unit.controlled && unit.alive &&
+            (unit.type_id == kBaseNestType ||
+                AiWalkingBuildTypeOf(unit) == kBaseNestType)) {
+            ++base_nests;
+        }
+    }
+    return base_nests;
+}
+
+u32 effective_base_target(u32 frame, const AiAutopilotConfig& config) {
+    return frame < config.expansion_late_base_frame ?
+        std::min(config.expansion_base_target, 2u) :
+        config.expansion_base_target;
+}
+
 } // namespace
 
 bool AiAutopilotIsEggFighterAction(AiRlHighLevelAction action) {
@@ -57,14 +77,42 @@ bool AiAutopilotIsEggFighterAction(AiRlHighLevelAction action) {
     }
 }
 
+bool AiAutopilotExpansionSaving(AiAutopilotState& state,
+    const AiObservation& observation, u32 frame,
+    const AiAutopilotConfig& config) {
+    if (!config.expansion_guard_enabled ||
+        frame < config.expansion_start_frame ||
+        count_base_nests(observation) >=
+            effective_base_target(frame, config)) {
+        state.saving_since_frame = 0xffffffffu;
+        return false;
+    }
+    // Funds already there with margin: if expand is still illegal the
+    // blocker is the site, not the bank — do not freeze the economy.
+    const u32 cost = AiRlBuildingCostOf(kBaseNestType);
+    if (observation.primary_resources >= cost + cost / 4u) {
+        return false;
+    }
+    if (state.saving_since_frame == 0xffffffffu) {
+        state.saving_since_frame = frame;
+    }
+    // Duty cycle: save for a stretch, then spend freely for a stretch, so a
+    // slow or blocked expansion can never starve the army/workers for good.
+    const u32 duty = std::max(config.expansion_saving_duty_frames, 1u);
+    return ((frame - state.saving_since_frame) / duty) % 2u == 0u;
+}
+
 AiAutopilotRule AiAutopilotRuleOf(AiRlHighLevelAction action) {
     if (action == AiRlHighLevelAction::produce_worker) {
         return autopilot_rule_worker;
     }
-    if (action == AiRlHighLevelAction::build_population_nest) {
+    if (action == AiRlHighLevelAction::build_population_nest ||
+        action == AiRlHighLevelAction::expand_base_nest) {
+        // Expansion guard shares the base-infrastructure slot.
         return autopilot_rule_pop_nest;
     }
-    if (action == AiRlHighLevelAction::explore_frontier) {
+    if (action == AiRlHighLevelAction::explore_frontier ||
+        action == AiRlHighLevelAction::scout_berry) {
         return autopilot_rule_scout;
     }
     return autopilot_rule_fighter;
@@ -147,6 +195,42 @@ std::vector<AiRlHighLevelAction> AiAutopilotPlan(AiAutopilotState& state,
         actions.push_back(AiRlHighLevelAction::build_population_nest);
     }
 
+    // --- rule 2.4: berry-scout guard.  expand_base_nest is only legal once
+    // the next expansion site is LIT, and entity mode masks the policy's
+    // scout_berry — so nobody would ever light it.  Fired without a legal()
+    // check: the translator no-ops itself when there is no dark target, and
+    // the action spends nothing.  (Entity mode also makes the translator
+    // pick a WORKER scout — see berry_scout_prefer_worker.)
+    if (config.expansion_guard_enabled &&
+        frame >= config.expansion_start_frame &&
+        count_base_nests(observation) <
+            effective_base_target(frame, config) &&
+        (state.last_berry_scout_frame == 0xffffffffu ||
+            frame - state.last_berry_scout_frame >=
+                config.berry_scout_cooldown_frames)) {
+        state.last_berry_scout_frame = frame;
+        actions.push_back(AiRlHighLevelAction::scout_berry);
+    }
+
+    // --- rule 2.5: expansion guard (before the idle-producer guard so the
+    // expansion claims the bank first; income is berry-saturated on one base
+    // and the bank floats near zero, so the saving mode below withholds the
+    // macro's spend actions until the expand action is cost-legal).  Counted
+    // under the pop-nest slot (base infrastructure).
+    if (config.expansion_guard_enabled &&
+        frame >= config.expansion_start_frame &&
+        !is_build_action(policy_action) &&
+        (state.last_expansion_guard_frame == 0xffffffffu ||
+            frame - state.last_expansion_guard_frame >=
+                config.expansion_cooldown_frames)) {
+        if (count_base_nests(observation) <
+                effective_base_target(frame, config) &&
+            legal(encoding, AiRlHighLevelAction::expand_base_nest)) {
+            state.last_expansion_guard_frame = frame;
+            actions.push_back(AiRlHighLevelAction::expand_base_nest);
+        }
+    }
+
     // --- rule 3: idle-producer guard ---------------------------------------
     const u32 bank = observation.primary_resources > reserved ?
         observation.primary_resources - reserved : 0u;
@@ -188,7 +272,8 @@ std::vector<AiRlHighLevelAction> AiAutopilotPlan(AiAutopilotState& state,
         policy_action == AiRlHighLevelAction::roam_scout ||
         policy_action == AiRlHighLevelAction::scout_map ||
         policy_action == AiRlHighLevelAction::search_enemy_base;
-    if (!enemy_base_known && frame >= config.scout_guard_start_frame &&
+    if (config.scout_guard_enabled &&
+        !enemy_base_known && frame >= config.scout_guard_start_frame &&
         observation.explorer_unit_id == 0 && !policy_scouts &&
         legal(encoding, AiRlHighLevelAction::explore_frontier) &&
         (state.last_scout_guard_frame == 0xffffffffu ||

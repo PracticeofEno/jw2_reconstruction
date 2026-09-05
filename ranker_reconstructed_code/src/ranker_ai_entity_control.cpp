@@ -569,6 +569,14 @@ AiEntityReachability BuildAiEntityReachability(const UnitMovementMap& map,
     return reach;
 }
 
+bool AiEntityTileReachableFromUnit(const AiEntityReachability& reach,
+    i32 unit_x, i32 unit_y, u32 tile_x, u32 tile_y) {
+    const u32 seed_x = static_cast<u32>(std::max(unit_x, 0)) >> 5;
+    const u32 seed_y = static_cast<u32>(std::max(unit_y, 0)) >> 5;
+    const ReachableFrom from = reachable_from_tile(reach, seed_x, seed_y);
+    return tile_reachable(reach, from, tile_x, tile_y);
+}
+
 void BuildAiEntityPointMask(const UnitMovementMap& map,
     const AiEntityReachability& reach, i32 unit_x, i32 unit_y,
     std::array<u32, kAiEntityPointMaskWords>& mask_out) {

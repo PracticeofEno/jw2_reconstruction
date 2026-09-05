@@ -282,12 +282,19 @@ entity mode v1에서 macro로 남기는 기존 action index는 정확히 다음�
 유닛을 직접 이동시켜 site를 밝힐 수 있다. builder와 정확한 건설 지점 선택은
 v1 macro translator에 남는다.
 
-`AiAutopilotPlan`은 worker/population/fighter 보충뿐 아니라 scout guard까지
-entity fighter를 다시 소유할 수 있으므로 학습 경기에서는 plan 전체를 강제로
-OFF한다. 켜 두면 정책이 행동하지 않아도 경제·정찰·병력 보충이 진행되어
-reward의 원인이 흐려진다. v1의 scripted worker harvest는 autopilot이 아니라
-fighter를 절대 선택하지 않는 별도 worker-only 경로로 유지하고, 현재처럼 매
-simulation frame 실행한다.
+`AiAutopilotPlan`의 규칙 중 entity fighter를 다시 소유할 수 있는 것은 scout
+guard(explore_frontier) 하나뿐이므로, 학습 경기에서는 plan 전체가 아니라
+**scout guard만** `AiAutopilotConfig::scout_guard_enabled=false`로 끈다
+(2026-09-02 개정). worker floor·pop-nest guard·idle-producer guard는 생산/건설
+액션만 내며 유닛 소유권과 충돌하지 않고, v10 macro tower가 이 규칙들이 켜진
+분포에서 학습되어 스스로 경제 액션을 뽑지 않기 때문에 전체 OFF는 경제를
+시작 일꾼 수준(pop 8)에 고정시켜 모든 경기를 구조적 패배로 만든다(v4~v6
+330+게임 실측). autopilot과 macro 번역이 계획한 build의 builder worker는
+`AiMicroHoldUnits`로 잠가 같은 frame의 worker-only executor harvest 재할당이
+build 명령을 덮어쓰지 않게 한다(발행 순서가 macro stage → worker stage이므로
+잠그지 않으면 뒤에 실린 harvest가 이긴다). v1의 scripted worker harvest는
+autopilot이 아니라 fighter를 절대 선택하지 않는 별도 worker-only 경로로
+유지하고, 현재처럼 매 simulation frame 실행한다.
 
 macro event가 두 entity tick 사이에 발생하면 `macro_due`를 다음 act2 tick까지
 latch한다. `macro_due == false`인 요청은 macro action/history/feature-delta
@@ -299,8 +306,10 @@ history를 갱신하지도 rollout row를 만들지도 않는다. 이는 현재 
 ```text
 1. controlled owner id 오름차순으로 observation + fog memory 갱신
 2. 각 owner의 latched macro gate를 포함한 ACT_REQ/REPLY를 모두 수집·검증
-3. 모든 owner의 macro action 번역·plan                         (due일 때)
-4. 모든 owner의 scripted worker economy order 계산·plan        (fighter 제외)
+3. 모든 owner의 macro action 번역·plan + economy autopilot plan (builder는
+   AiMicroHoldUnits로 잠금)
+4. 모든 owner의 scripted worker economy order 계산·plan        (fighter 제외,
+   held builder 제외)
 5. 모든 owner의 entity fighter order dedupe·plan                (source id 정렬)
 6. unread ring + 모든 owner/세 stage packet을 channel별로 batch preflight 1회
 7. 성공 시 stage-major `(macro, worker, entity)`, 각 stage 안 owner id 오름차순으로

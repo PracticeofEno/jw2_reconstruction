@@ -35,7 +35,7 @@ enum class AiSemanticActionKind : u32 {
     build,
     set_rally,
     cancel_production,
-    // Schema v2 (docs/AI_PLAY_TYRANO_FULL_CAPABILITY_DESIGN.md §2).  Wire
+    // Schema v2. Wire
     // routes are the audited human paths: subtype 0x02 command byte unless
     // noted otherwise.
     stop,               // cmd 0x00 -> immediate idle

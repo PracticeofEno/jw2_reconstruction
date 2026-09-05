@@ -243,7 +243,7 @@ struct AiMicroExecutorConfig {
     // Render class the engine treats as flying (terrain-independent).  Its
     // attackers resolve a separate range and damage profile.
     u32 flying_render_class = 3;
-    // v9 base-defense reflex (docs/AI_PLAY_DECISION_GATE_AUTOPILOT.md): when
+    // v9 base-defense reflex: when
     // a hostile COMBAT mobile stands within defend_radius of an own building
     // (or an own completed building lost health), the army group - and the
     // raid, if it is within reflex_raid_join_radius of the anchor - fights

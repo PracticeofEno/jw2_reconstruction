@@ -76,7 +76,7 @@ ACTION_NAMES: tuple[str, ...] = (
     "build_nest_x88",
     "build_nest_x89",
     "build_nest_x8a",
-    # v2 (docs/AI_PLAY_TYRANO_FULL_CAPABILITY_DESIGN.md): merges, morph,
+    # v2 audited capability expansion: merges, morph,
     # stance, positional micro and the carrier drop composite.
     "merge_twin_velocis",
     "merge_twin_rhampos",

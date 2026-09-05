@@ -2,7 +2,13 @@
 
 > 작성·검토 기준: 2026-09-02
 >
-> 상태: **설계와 교차 검토 완료, 구현 전**
+> 상태: **구현됨 (2026-09-03) + 팀 의도 슬롯/커맨더 확장 feature v3 (2026-09-04)** —
+> C++ `ranker_ai_entity_economy.*` + winmain `run_ai_entity2_play_frame`
+> (`-AIACT3:PORT`, `-AISHADOW2`→SHD3), Python `tools/ai/ranker_entity2_*.py`.
+> act2/ENTCMD01은 별도 모드로 그대로 유지. v3 추가분(슬롯 4개·슬롯 명령 8·전역 셀 64·
+> assign 원장·시작 후보 8칸·intent_reward_material·불복종 마스크)은
+> [AI_PLAY_INTENT_SLOT_DESIGN_EASY.md](../../docs/AI_PLAY_INTENT_SLOT_DESIGN_EASY.md) §8 구현 메모 참조.
+> 버전 튜플 (5,10,3,3,3,1,1,3), 고정 prefix 3624B, own appendix 42B, reply 6U+20B.
 >
 > 범위: 로컬 `ranker_rebuild.exe` ↔ Python AI의 새 `act3` socket mode
 >

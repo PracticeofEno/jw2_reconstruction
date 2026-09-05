@@ -22,7 +22,7 @@ namespace ranker {
 //      teach the wrong thing.  Phi is a linear function of the RL feature vector
 //      so it stays consistent with the network input and is naturally normalized.
 //
-// Design: docs/AI_PLAY_RL_STRUCTURE.md.  Keeping this a pure function (no engine
+// Keeping this a pure function (no engine
 // state) makes the reward time-series reproducible and unit-testable.
 
 enum class AiRlTerminalOutcome : u32 {

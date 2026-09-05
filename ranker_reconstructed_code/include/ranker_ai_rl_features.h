@@ -13,7 +13,7 @@ namespace ranker {
 // pure function of the observation so it is deterministic and testable: the
 // same observation always yields byte-identical features and mask.
 //
-// Design: docs/AI_PLAY_RL_STRUCTURE.md.  The high-level actions are strategy
+// The high-level actions are strategy
 // decisions; the scripted bot executes their micro (unit selection, pathing,
 // build placement).  The mask is a learning aid computed from the observation;
 // the live validator remains authoritative at execution time.
@@ -39,8 +39,7 @@ namespace ranker {
 // force-ratio [561..567], enemy-army fog-memory grid channel [568..631] +
 // last-sighting scalars [632..635], terrain grid channels passable
 // [636..699] / buildable [700..763], raid-group state [764..771].
-// v9 appends the DECISION CONTEXT [772..787]
-// (docs/AI_PLAY_DECISION_GATE_AUTOPILOT.md): [772] frames since the last
+// v9 appends the DECISION CONTEXT [772..787]: [772] frames since the last
 // policy decision (/64, clamped), [773..784] the 12 decision-gate trigger
 // bits in AiDecisionTrigger bit order, [785..787] autopilot firings since the
 // last decision (workers / pop nests / fighters, /8 clamped).  The encoder
@@ -90,7 +89,7 @@ enum class AiRlHighLevelAction : u32 {
     build_nest_x88,
     build_nest_x89,
     build_nest_x8a,
-    // v2 (docs/AI_PLAY_TYRANO_FULL_CAPABILITY_DESIGN.md §4, audited caps):
+    // v2 audited capability expansion:
     // the Tyrano-specific mechanics the packet interface can now express.
     merge_twin_velocis, // 벨로시스 x2 -> 트윈 벨로시스 (0x22 -> 0x23)
     merge_twin_rhampos, // 람포스 x2 -> 트윈 람포스 (0x25 -> 0x26)

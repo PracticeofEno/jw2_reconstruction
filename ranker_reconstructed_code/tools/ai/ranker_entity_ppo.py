@@ -86,6 +86,11 @@ class EntityStep:
     terminal: bool = False               # terminated (bootstrap 0)
     truncated: bool = False              # time-limit (bootstrap V(final))
     cutoff: bool = False                 # infrastructure cutoff prefix
+    # Directed-exploration prior (curriculum): logit bias applied
+    # identically at sampling and update recompute so stored log-probs
+    # stay exact under the BIASED behavior distribution.
+    point_bias: Optional[torch.Tensor] = None      # [96] or None
+    command_bias: Optional[torch.Tensor] = None    # [6] or None
 
 
 OWN_CAT_FIELDS = ("type", "movement_class", "dcm", "render", "command_base",
@@ -350,10 +355,24 @@ def entity_log_prob(net_out: Dict, step: Dict, command: torch.Tensor,
 
 
 @torch.no_grad()
+def _apply_direction_bias(out: Dict, step: Dict) -> Dict:
+    """Directed-exploration prior: add the step's stored logit bias.  Must
+    run after EVERY net() call that feeds entity_log_prob (sampling and
+    update recompute) so behavior and recomputed log-probs agree."""
+    if out.get("u", 0) > 0:
+        bias_point = step.get("point_bias")
+        if bias_point is not None:
+            out["point_logits"] = out["point_logits"] + bias_point
+        bias_command = step.get("command_bias")
+        if bias_command is not None:
+            out["command_logits"] = out["command_logits"] + bias_command
+    return out
+
+
 def sample_actions(net: EntityNet, step: Dict,
                    rng: Optional[torch.Generator] = None) -> Dict:
     """Mask-legal sampling; returns commands/points/targets + logp."""
-    out = net(step)
+    out = _apply_direction_bias(net(step), step)
     u = out["u"]
     if u == 0:
         return {"command": torch.zeros(0, dtype=torch.long),
@@ -385,8 +404,10 @@ def sample_actions(net: EntityNet, step: Dict,
             target[row] = int(torch.multinomial(pair_probs, 1,
                                                 generator=rng))
     logp = entity_log_prob(out, step, command, point, target)
+    # Behavior outputs never need grad: a graph-attached old_logp poisons
+    # every later PPO backward (stale weights version after optimizer.step).
     return {"command": command, "point": point, "target": target,
-            "logp": logp, "value": out["value"]}
+            "logp": logp.detach(), "value": out["value"].detach()}
 
 
 def compute_gae(steps: List[EntityStep], values: torch.Tensor,
@@ -418,7 +439,8 @@ def ppo_update(net: EntityNet, optimizer: torch.optim.Optimizer,
     outs = []
     values = []
     for step in steps:
-        out = net(_step_tensors(step))
+        out = _apply_direction_bias(net(_step_tensors(step)),
+                                    _step_tensors(step))
         outs.append(out)
         values.append(out["value"])
     values_tensor = torch.stack(values)
@@ -591,7 +613,7 @@ def ppo_update_batched_episodes(
             for index in batch:
                 step = steps[index]
                 tensors = _step_tensors(step)
-                out = net(tensors)
+                out = _apply_direction_bias(net(tensors), tensors)
                 value_terms.append(
                     (out["value"] - returns[index]) ** 2)
                 if out["u"] == 0:
@@ -669,6 +691,8 @@ def _step_tensors(step: EntityStep) -> Dict:
         "command_mask": step.command_mask,
         "point_mask": step.point_mask,
         "pair_mask": step.pair_mask,
+        "point_bias": step.point_bias,
+        "command_bias": step.command_bias,
     }
 
 
@@ -803,7 +827,8 @@ def selftest() -> None:
     # 5. Rejected rows leave the actor loss but keep the others: a huge
     # old_logp on an untrainable row must not blow up the update.
     for s in steps:
-        sampled = sample_actions(net, _step_tensors(s), g)
+        with torch.no_grad():
+            sampled = sample_actions(net, _step_tensors(s), g)
         s.command = sampled["command"]
         s.point = sampled["point"]
         s.target = sampled["target"]
@@ -817,7 +842,8 @@ def selftest() -> None:
     # 5b. Batched update: bounded sampling, finite, trainable exclusion.
     big = [_synthetic_step(3, 2, seed=100 + i) for i in range(20)]
     for s5 in big:
-        sampled = sample_actions(net, _step_tensors(s5), g)
+        with torch.no_grad():
+            sampled = sample_actions(net, _step_tensors(s5), g)
         s5.command = sampled["command"]
         s5.point = sampled["point"]
         s5.target = sampled["target"]
@@ -840,7 +866,8 @@ def selftest() -> None:
     cohort_a = [_synthetic_step(2, 1, seed=200 + i) for i in range(3)]
     cohort_b = [_synthetic_step(2, 1, seed=210 + i) for i in range(2)]
     for index, s5c in enumerate(cohort_a + cohort_b):
-        sampled = sample_actions(net, _step_tensors(s5c), g)
+        with torch.no_grad():
+            sampled = sample_actions(net, _step_tensors(s5c), g)
         s5c.command = sampled["command"]
         s5c.point = sampled["point"]
         s5c.target = sampled["target"]

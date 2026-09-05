@@ -1,5 +1,6 @@
 #include "ranker_ai_autopilot.h"
 #include "ranker_ai_entity_control.h"
+#include "ranker_ai_entity_economy.h"
 #include "ranker_ai_decision_gate.h"
 #include "ranker_ai_expansion.h"
 #include "ranker_ai_actions.h"
@@ -3423,7 +3424,7 @@ void test_ai_v8_observation_features() {
         "raid-state features were wrong");
 }
 
-// v9 - the event-based decision gate (docs/AI_PLAY_DECISION_GATE_AUTOPILOT.md):
+// v9 - the event-based decision gate:
 // quiet stretches decide only at max_interval, decision-relevant events wake
 // the policy at the next check, the snapshot refreshes only on due, and the
 // decision-context features patch into [772..787].
@@ -3606,8 +3607,8 @@ void test_ai_defense_reflex() {
         "reflex fired while disabled");
 }
 
-// v9 - the macro autopilot rules (docs/AI_PLAY_DECISION_GATE_AUTOPILOT.md
-// §3.2): worker floor, pop guard, idle-producer guard; producer-conflict
+// v9 - the macro autopilot rules: worker floor, pop guard, idle-producer
+// guard; producer-conflict
 // skips; policy fighter picks steer the idle guard.
 void test_ai_macro_autopilot() {
     AiObservation obs = micro_observation();
@@ -5596,6 +5597,1046 @@ void test_ai_entity_order_latch() {
         "changed point did not publish");
 }
 
+// ===========================================================================
+// ENTCMD02 / act3 (docs/AI_PLAY_ENTCMD02_DIRECT_ECONOMY_PLAN.md)
+// ===========================================================================
+
+namespace {
+
+// 8x8 map: base nest 0x80 (6x4) at tile (0,0), a worker 0x10 at tile (6,5),
+// two berry tiles at (7,6)/(7,7), one visible hostile fighter at tile (6,0).
+AiObservation make_entity2_observation() {
+    AiObservation obs{};
+    obs.simulation_frame = 9600;
+    obs.map_width_tiles = 8;
+    obs.map_height_tiles = 8;
+    obs.local_owner = 0;
+    obs.active_owner_mask = 0x3;
+    obs.local_relation_mask = 0x1;
+    obs.start_x = 48;
+    obs.start_y = 48;
+    obs.primary_resources = 400;
+    obs.population_used = 10;      // supply
+    obs.population_limit = 100;
+    obs.population_reserved = 7;   // demand
+    AiObservedMapTile open{};
+    open.passable = true;
+    open.explored = true;
+    open.visible = true;
+    open.buildable = true;
+    obs.tiles.assign(64, open);
+    for (u32 index : {7u * 8u + 6u, 7u * 8u + 7u, 6u * 8u + 7u}) {
+        obs.tiles[index].terrain_flags = 0x100u;
+        obs.tiles[index].passable = false;
+        obs.tiles[index].buildable = false;
+        obs.tiles[index].resource_amount = index == 6u * 8u + 7u ? 1800u : 900u;
+    }
+    obs.tiles[7u * 8u + 6u].resource_amount = 0;   // berry terrain, harvested out
+    AiObservedUnit worker = observed_unit(1 * 0x1d0, 0, 0x10,
+        (1u << 4) | (1u << 6) | (1u << 7), 6 * 32 + 16, 5 * 32 + 16, true);
+    worker.runtime_slot_index = 1;
+    worker.alive = true;
+    worker.cargo_capacity = 8;
+    obs.units.push_back(worker);
+    AiObservedUnit base = observed_unit(2 * 0x1d0, 0, 0x80, 0, 0, 0, true);
+    base.runtime_slot_index = 2;
+    base.alive = true;
+    obs.units.push_back(base);
+    AiObservedUnit hostile = fighter_unit(5 * 0x1d0, 1, 6 * 32 + 16, 16, false);
+    hostile.runtime_slot_index = 5;
+    obs.units.push_back(hostile);
+    return obs;
+}
+
+GameSessionUnitReferenceTables make_entity2_references() {
+    GameSessionUnitReferenceTables tables{};
+    UnitTypeSessionDefinition& worker = tables.definitions[0x10];
+    worker.present = true;
+    worker.primary_reference_count = 2;
+    worker.primary_references[0] = 0x82;
+    worker.primary_references[1] = 0x80;
+    UnitTypeSessionDefinition& base = tables.definitions[0x80];
+    base.present = true;
+    base.alternate_reference_count = 1;
+    base.alternate_references[0] = 0x20;
+    base.completion_reference_count = 1;
+    base.completion_references[0] = 0x19;
+    return tables;
+}
+
+bool entity2_unit_catalog(void*, u32, u32 type_id,
+    AiEntity2UnitCatalogEntry* out) {
+    *out = AiEntity2UnitCatalogEntry{};
+    switch (type_id) {
+    case 0x10: out->primary_cost = 50; out->population_cost = 1; return true;
+    case 0x20: out->primary_cost = 50; out->population_cost = 1; return true;
+    case 0x80: out->primary_cost = 500; return true;
+    case 0x82: out->primary_cost = 300; return true;
+    default: return false;
+    }
+}
+
+bool entity2_research_catalog(void*, u32, u32 order_id,
+    AiEntity2ResearchCatalogEntry* out) {
+    if (order_id != 0x19) {
+        return false;
+    }
+    *out = AiEntity2ResearchCatalogEntry{};
+    out->next_level = 1;
+    out->max_level = 3;
+    out->primary_cost = 400;
+    return true;
+}
+
+AiEntity2Snapshot build_entity2_fixture(AiObservation& obs,
+    AiEntityRegistry& registry, UnitMovementMap& map,
+    const GameSessionUnitReferenceTables& tables,
+    const AiEntity2OrderStore* store = nullptr) {
+    AiEntityRegistryReset(registry);
+    UnitMovementUnit live_worker = make_entity_live_unit(1, 0, 0x10,
+        (1u << 4) | (1u << 6) | (1u << 7));
+    UnitMovementUnit live_base = make_entity_live_unit(2, 0, 0x80, 0);
+    UnitMovementUnit live_hostile = make_entity_live_unit(5, 1, 5, 1u << 5);
+    std::vector<UnitMovementUnit*> live{&live_worker, &live_base, &live_hostile};
+    AiEntityRegistryAuditFrame(registry, live);
+    AiEntity2SnapshotInput input;
+    input.observation = &obs;
+    input.registry = &registry;
+    input.movement_map = &map;
+    input.catalog.unit_references = &tables;
+    input.catalog.unit_catalog = entity2_unit_catalog;
+    input.catalog.research_catalog = entity2_research_catalog;
+    input.orders = store;
+    return BuildAiEntity2Snapshot(input);
+}
+
+}  // namespace
+
+void test_ai_entity2_wire_contract() {
+    AiEntity2WireHeader header;
+    header.kind = static_cast<u16>(AiEntityWireKind::act_req);
+    header.payload_bytes = 3336;
+    header.owner = 1;
+    header.episode = 37;
+    header.frame = 1232;
+    header.sequence = 154;
+    header.reply_to_sequence = 153;
+    header.own_rows = 2;
+    header.target_rows = 3;
+    header.resource_rows = 4;
+    header.build_rows = 5;
+    header.produce_rows = 6;
+    header.research_rows = 7;
+    header.payload_crc32 = 0x12345678;
+    header.policy_version = 21;
+    u8 raw[kAiEntity2WireHeaderBytes];
+    AiEntity2WriteWireHeader(header, raw);
+    // Golden anchors shared with tools/ai/ranker_entity2_contract.py.
+    require(raw[0] == 'R' && raw[1] == 'A' && raw[2] == 'I' && raw[3] == '3',
+        "entity2 header magic wrong");
+    require(raw[4] == 128 && raw[6] == 3, "entity2 header size/protocol wrong");
+    require(raw[16] == 'E' && raw[23] == '2', "entity2 contract id wrong");
+    require(raw[24] == 5 && raw[26] == 10 && raw[28] == 3 && raw[30] == 5 &&
+        raw[32] == 3 && raw[34] == 1 && raw[36] == 1 && raw[38] == 3,
+        "entity2 version tuple wrong");
+    require(raw[40] == 1 && raw[44] == 37 && raw[52] == 154 && raw[60] == 2 &&
+        raw[64] == 3 && raw[68] == 4 && raw[72] == 5 && raw[76] == 6 &&
+        raw[80] == 7, "entity2 header count words wrong");
+    require(raw[84] == 0x22 && raw[85] == 0x03 &&
+        raw[88] == kAiEntity2PolicyCommandCount &&
+        raw[92] == 96 && raw[96] == 0x78 && raw[100] == 21,
+        "entity2 fixed count / crc / policy words wrong");
+    for (u32 i = 104; i < 128; ++i) {
+        require(raw[i] == 0, "entity2 reserved bytes nonzero");
+    }
+    AiEntity2WireHeader parsed;
+    std::string error;
+    require(AiEntity2ParseWireHeader(raw, sizeof raw, parsed, &error),
+        "entity2 header round trip failed");
+    require(parsed.build_rows == 5 && parsed.research_rows == 7 &&
+        parsed.policy_version == 21 && parsed.candidate_rows() == 22,
+        "entity2 header fields did not round-trip");
+    u8 bad[kAiEntity2WireHeaderBytes];
+    std::memcpy(bad, raw, sizeof bad);
+    bad[3] = '2';   // RAI2
+    require(!AiEntity2ParseWireHeader(bad, sizeof bad, parsed, &error),
+        "RAI2 magic accepted by the ENTCMD02 parser");
+    std::memcpy(bad, raw, sizeof bad);
+    bad[23] = '1';  // ENTCMD01
+    require(!AiEntity2ParseWireHeader(bad, sizeof bad, parsed, &error),
+        "ENTCMD01 contract id accepted");
+    std::memcpy(bad, raw, sizeof bad);
+    bad[104] = 1;
+    require(!AiEntity2ParseWireHeader(bad, sizeof bad, parsed, &error),
+        "nonzero reserved word accepted");
+    std::memcpy(bad, raw, sizeof bad);
+    bad[10] = kAiEntity2WireFlagTerminated | kAiEntity2WireFlagTruncated;
+    require(!AiEntity2ParseWireHeader(bad, sizeof bad, parsed, &error),
+        "terminated+truncated accepted");
+    std::memcpy(bad, raw, sizeof bad);
+    bad[88] = 7;
+    require(!AiEntity2ParseWireHeader(bad, sizeof bad, parsed, &error),
+        "wrong command count accepted");
+    // ENTCMD01 parser must reject RAI3 too.
+    AiEntityWireHeader old_parsed;
+    require(!AiEntityParseWireHeader(raw, kAiEntityWireHeaderBytes, old_parsed,
+            &error), "ENTCMD01 parser accepted a RAI3 header");
+
+    // Payload size formula anchors (plan 12.2 + slot extension: prefix 3624,
+    // row 329).
+    require(AiEntity2ActRequestPayloadBytes(0, 0, 0, false) == 3624 &&
+        AiEntity2ActRequestPayloadBytes(1, 0, 0, false) == 3624 + 329 &&
+        AiEntity2ActRequestPayloadBytes(1, 2, 5, false) ==
+            3624 + 329 + 152 + 320 + 8 &&
+        AiEntity2ActRequestPayloadBytes(2, 33, 65, true) ==
+            4 + 3624 + 658 + 76 * 33 + 64 * 65 + 4 * 2 * (2 + 3) &&
+        AiEntity2ActRequestPayloadBytes(2049, 0, 0, false) == 0,
+        "entity2 payload size formula drifted");
+
+    // Reply / outcome / hello round trips and domain rejects.
+    AiEntity2WireHeader ctx;
+    ctx.own_rows = 2;
+    ctx.target_rows = 1;
+    ctx.resource_rows = 1;
+    ctx.build_rows = 2;
+    ctx.produce_rows = 1;
+    ctx.research_rows = 1;
+    AiEntity2ReplyBody reply;
+    reply.command = {static_cast<u8>(AiEntity2PolicyCommand::build), 0};
+    reply.argument = {1, -1};
+    reply.assign = {0, 2};
+    reply.slot_command[0] = static_cast<u8>(AiEntity2SlotCommand::attack_move);
+    reply.slot_cell[0] = 58;
+    const std::vector<u8> reply_bytes = EncodeAiEntity2ReplyPayload(reply);
+    require(reply_bytes.size() == 2 * 6 + 4 + 16, "entity2 reply size wrong");
+    AiEntity2ReplyBody reply_parsed;
+    require(DecodeAiEntity2ReplyPayload(reply_bytes.data(), reply_bytes.size(),
+            ctx, reply_parsed, &error) &&
+        reply_parsed.command == reply.command &&
+        reply_parsed.argument == reply.argument &&
+        reply_parsed.assign == reply.assign &&
+        reply_parsed.slot_command == reply.slot_command &&
+        reply_parsed.slot_cell == reply.slot_cell,
+        "entity2 reply did not round-trip");
+    {
+        AiEntity2ReplyBody bad_slot = reply;
+        bad_slot.slot_cell[1] = 3;   // KEEP with a cell
+        const std::vector<u8> bytes = EncodeAiEntity2ReplyPayload(bad_slot);
+        require(!DecodeAiEntity2ReplyPayload(bytes.data(), bytes.size(), ctx,
+                reply_parsed, &error), "slot cell on KEEP accepted");
+        bad_slot = reply;
+        bad_slot.slot_command[2] = static_cast<u8>(kAiEntity2SlotCommandCount);
+        const std::vector<u8> bytes2 = EncodeAiEntity2ReplyPayload(bad_slot);
+        require(!DecodeAiEntity2ReplyPayload(bytes2.data(), bytes2.size(), ctx,
+                reply_parsed, &error), "out-of-range slot command accepted");
+        bad_slot = reply;
+        bad_slot.assign = {5, 0};
+        const std::vector<u8> bytes3 = EncodeAiEntity2ReplyPayload(bad_slot);
+        require(!DecodeAiEntity2ReplyPayload(bytes3.data(), bytes3.size(), ctx,
+                reply_parsed, &error), "assign 5 accepted");
+    }
+    for (const auto& bad_reply : std::vector<std::pair<u8, i32>>{
+            {0, 0}, {1, 96}, {4, 1}, {8, 5}, {11, -1}, {7, -1}}) {
+        AiEntity2ReplyBody r;
+        r.command = {bad_reply.first, 0};
+        r.argument = {bad_reply.second, -1};
+        const std::vector<u8> bytes = EncodeAiEntity2ReplyPayload(r);
+        require(!DecodeAiEntity2ReplyPayload(bytes.data(), bytes.size(), ctx,
+                reply_parsed, &error), "out-of-domain entity2 reply accepted");
+    }
+    AiEntity2OutcomeBody outcome;
+    outcome.result = {static_cast<u16>(AiEntity2AttemptResult::published),
+        static_cast<u16>(AiEntity2AttemptResult::kept)};
+    outcome.reject_code = {0, 0};
+    outcome.trainable_mask = {0x1u};
+    outcome.slot_result[0] = static_cast<u16>(AiEntity2AttemptResult::published);
+    outcome.slot_trainable_bits = 0xfu;
+    outcome.assign_trainable_mask = {0x2u};
+    const std::vector<u8> outcome_bytes = EncodeAiEntity2OutcomePayload(outcome);
+    require(outcome_bytes.size() == 12 + 8 + 8 + 4 + 4, "entity2 outcome size wrong");
+    AiEntity2OutcomeBody outcome_parsed;
+    require(DecodeAiEntity2OutcomePayload(outcome_bytes.data(),
+            outcome_bytes.size(), 2, outcome_parsed, &error) &&
+        outcome_parsed.result == outcome.result &&
+        outcome_parsed.trainable_mask == outcome.trainable_mask &&
+        outcome_parsed.slot_result == outcome.slot_result &&
+        outcome_parsed.slot_trainable_bits == 0xfu &&
+        outcome_parsed.assign_trainable_mask == outcome.assign_trainable_mask,
+        "entity2 outcome did not round-trip");
+    AiEntity2OutcomeBody bad_outcome = outcome;
+    bad_outcome.result[0] = static_cast<u16>(AiEntity2AttemptResult::rejected_conflict);
+    bad_outcome.reject_code[0] = static_cast<u16>(AiEntity2RejectCode::site_conflict);
+    const std::vector<u8> bad_outcome_bytes = EncodeAiEntity2OutcomePayload(bad_outcome);
+    require(!DecodeAiEntity2OutcomePayload(bad_outcome_bytes.data(),
+            bad_outcome_bytes.size(), 2, outcome_parsed, &error),
+        "trainable bit on a failed entity2 row accepted");
+    AiEntity2HelloBody hello;
+    hello.controlled_owner_mask = 0x3;
+    AiEntity2HelloOwnerRecord r0;
+    r0.owner = 0;
+    r0.frozen_hostile_owner_mask = 2;
+    AiEntity2HelloOwnerRecord r1;
+    r1.owner = 1;
+    r1.frozen_hostile_owner_mask = 1;
+    hello.owners = {r0, r1};
+    const std::vector<u8> hello_bytes = EncodeAiEntity2HelloPayload(hello);
+    require(hello_bytes.size() == 16 + 2 * 48, "entity2 hello size wrong");
+    AiEntity2HelloBody hello_parsed;
+    require(DecodeAiEntity2HelloPayload(hello_bytes.data(), hello_bytes.size(),
+            hello_parsed, &error) && hello_parsed.owners.size() == 2 &&
+        hello_parsed.owners[1].frozen_hostile_owner_mask == 1,
+        "entity2 hello did not round-trip");
+
+    // Semantic vocabulary v3: economy kinds map, return_cargo does not.
+    require(AiEntity2WireSemanticOrderOf(AiSemanticActionKind::harvest) ==
+            AiEntity2WireSemanticOrder::harvest &&
+        AiEntity2WireSemanticOrderOf(AiSemanticActionKind::research) ==
+            AiEntity2WireSemanticOrder::research_upgrade &&
+        AiEntity2WireSemanticOrderOf(AiSemanticActionKind::return_cargo) ==
+            AiEntity2WireSemanticOrder::external_unknown,
+        "entity2 semantic vocabulary drifted");
+}
+
+void test_ai_entity2_snapshot_and_ledger() {
+    AiObservation obs = make_entity2_observation();
+    AiEntityRegistry registry;
+    UnitMovementMap map = make_entity_legacy_map(8, 8);
+    const GameSessionUnitReferenceTables tables = make_entity2_references();
+    const AiEntity2Snapshot snapshot =
+        build_entity2_fixture(obs, registry, map, tables);
+    require(!snapshot.contract_error, snapshot.error.c_str());
+    require(snapshot.own.size() == 2 && snapshot.targets.size() == 1,
+        "entity2 row selection: every controlled unit is a row");
+    require(snapshot.own[0].role == static_cast<u8>(AiEntity2Role::worker) &&
+        snapshot.own[1].role == static_cast<u8>(AiEntity2Role::building),
+        "entity2 roles wrong");
+    require(snapshot.spendable_primary == 400 &&
+        snapshot.spendable_population == 3,
+        "entity2 spendable budget wrong");
+    // R: two harvestable berries (the harvested-out berry tile is not one).
+    require(snapshot.resource_rows == 2 &&
+        snapshot.candidates[0].key == 6 * 8 + 7 &&
+        snapshot.candidates[1].key == 7 * 8 + 7 &&
+        snapshot.candidates[0].raw1 == 1800,
+        "entity2 resource candidates wrong");
+    // B: 0x82 sites below the nest (rows 4..6), canonical (type,ty,tx) order;
+    // expansion (0x80) has no undeveloped cluster here.
+    require(snapshot.build_rows > 0, "entity2 build candidates missing");
+    for (u32 c = snapshot.resource_rows;
+        c + 1 < snapshot.resource_rows + snapshot.build_rows; ++c) {
+        require(snapshot.candidates[c].key < snapshot.candidates[c + 1].key,
+            "entity2 build candidates not in canonical order");
+    }
+    const AiEntity2Candidate& first_site = snapshot.candidates[snapshot.resource_rows];
+    require(first_site.object_id == 0x82 && first_site.raw0 == 300 &&
+        first_site.footprint_width() == 3 && first_site.footprint_height() == 2 &&
+        (first_site.flags & kAiEntity2CandidateFlagExplored) != 0 &&
+        (first_site.y >> 5) >= 4,
+        "entity2 build candidate fields wrong");
+    // P / Q.
+    const u32 produce_row = snapshot.resource_rows + snapshot.build_rows;
+    const u32 research_row = produce_row + snapshot.produce_rows;
+    require(snapshot.produce_rows == 1 && snapshot.research_rows == 1 &&
+        snapshot.candidates[produce_row].object_id == 0x20 &&
+        snapshot.candidates[produce_row].raw2 == 1 &&
+        snapshot.candidates[research_row].key == ((0x19ull << 32) | 1) &&
+        snapshot.candidates[research_row].raw0 == 400,
+        "entity2 produce/research candidates wrong");
+    // Pair masks: worker -> every resource + every site, base -> P + Q.
+    require(snapshot.economy_pair_bit(0, 0) && snapshot.economy_pair_bit(0, 1) &&
+        snapshot.economy_pair_bit(0, snapshot.resource_rows) &&
+        !snapshot.economy_pair_bit(0, produce_row) &&
+        snapshot.economy_pair_bit(1, produce_row) &&
+        snapshot.economy_pair_bit(1, research_row) &&
+        !snapshot.economy_pair_bit(1, 0),
+        "entity2 economy pair mask wrong");
+    // Action v4 role table: an idle calm worker offers KEEP/HARVEST/BUILD
+    // only (no point moves, no STOP); the building PRODUCE/RESEARCH.
+    require(snapshot.own[0].command_mask ==
+            ((1u << 0) | (1u << static_cast<u32>(AiEntity2PolicyCommand::harvest)) |
+                (1u << static_cast<u32>(AiEntity2PolicyCommand::build))) &&
+        snapshot.own[1].command_mask ==
+            ((1u << 0) | (1u << static_cast<u32>(AiEntity2PolicyCommand::produce_unit)) |
+                (1u << static_cast<u32>(AiEntity2PolicyCommand::research_upgrade))),
+        "entity2 command masks wrong");
+    require(snapshot.own_appendix[0].capability_bits ==
+            (kAiEntity2CapMove | kAiEntity2CapHold | kAiEntity2CapHarvest |
+                kAiEntity2CapBuild) &&
+        snapshot.own_appendix[1].capability_bits ==
+            (kAiEntity2CapProduce | kAiEntity2CapResearch) &&
+        snapshot.own_appendix[1].queued_production_type_id == kAiEntity2TypeSentinel &&
+        snapshot.own_appendix[0].source_state_bits == kAiEntity2StateCompleted,
+        "entity2 appendix wrong");
+    require((snapshot.candidates[produce_row].flags &
+            kAiEntity2CandidateFlagAnySourceAvailable) != 0 &&
+        snapshot.candidates[produce_row].feature[6] == 1.0f,
+        "entity2 any-source availability flag wrong");
+    require(snapshot.economy_reward_material[0] == 400 &&
+        snapshot.economy_reward_material[2] == 50 &&
+        snapshot.economy_reward_material[4] == 500 &&
+        snapshot.economy_reward_material[9] == 10,
+        "entity2 reward material wrong");
+
+    // Wire round trip of the whole snapshot.
+    AiEntity2ActRequestBody body;
+    body.snapshot = snapshot;
+    body.cumulative_losses = {1, 2, 3, 4};
+    const std::vector<u8> bytes = EncodeAiEntity2ActRequestPayload(body);
+    require(bytes.size() == AiEntity2ActRequestPayloadBytes(2, 1,
+            snapshot.candidate_rows(), false),
+        "entity2 ACT_REQ size formula mismatch");
+    AiEntity2WireHeader header;
+    header.own_rows = 2;
+    header.target_rows = 1;
+    header.resource_rows = snapshot.resource_rows;
+    header.build_rows = snapshot.build_rows;
+    header.produce_rows = snapshot.produce_rows;
+    header.research_rows = snapshot.research_rows;
+    header.owner = 0;
+    header.frame = 9600;
+    AiEntity2ActRequestBody decoded;
+    std::string error;
+    require(DecodeAiEntity2ActRequestPayload(bytes.data(), bytes.size(), header,
+            false, decoded, nullptr, &error), error.c_str());
+    require(decoded.snapshot.candidates.size() == snapshot.candidates.size() &&
+        decoded.snapshot.candidates[research_row].key ==
+            snapshot.candidates[research_row].key &&
+        decoded.snapshot.economy_pair_mask == snapshot.economy_pair_mask &&
+        decoded.snapshot.own_appendix[1].capability_bits ==
+            snapshot.own_appendix[1].capability_bits &&
+        decoded.cumulative_losses[3] == 4 &&
+        decoded.snapshot.spendable_primary == 400,
+        "entity2 ACT_REQ did not round-trip");
+    require(EncodeAiEntity2ActRequestPayload(decoded) == bytes,
+        "entity2 ACT_REQ re-encode is not byte-identical");
+    const std::vector<u8> terminal = EncodeAiEntity2TerminalPayload(body, 1);
+    require(terminal.size() == bytes.size() + 4 && terminal[0] == 1,
+        "entity2 TERMINAL prefix wrong");
+
+    // Ledger replay: BUILD (300) at the worker leaves 100 -> the base can
+    // still PRODUCE (50) but no longer RESEARCH (400).
+    const u32 site = snapshot.resource_rows;
+    std::vector<u8> commands{static_cast<u8>(AiEntity2PolicyCommand::build), 0};
+    std::vector<i32> arguments{static_cast<i32>(site), -1};
+    AiEntity2LedgerReplay replay = AiEntity2ReplayLedger(snapshot, commands,
+        arguments);
+    require(replay.remaining_budget[0] == (std::array<u32, 3>{400, 0, 3}) &&
+        replay.remaining_budget[1] == (std::array<u32, 3>{100, 0, 3}),
+        "entity2 ledger budget replay wrong");
+    require(replay.dynamic_command_mask[0] == snapshot.own[0].command_mask &&
+        replay.dynamic_command_mask[1] ==
+            ((1u << 0) | (1u << static_cast<u32>(AiEntity2PolicyCommand::produce_unit))) &&
+        replay.choice_legal[0] == 1,
+        "entity2 dynamic command mask wrong");
+    const u32 words = snapshot.economy_words_per_row();
+    require((replay.dynamic_economy_pair_mask[words + (produce_row >> 5)] >>
+            (produce_row & 31u) & 1u) == 1u &&
+        (replay.dynamic_economy_pair_mask[words + (research_row >> 5)] >>
+            (research_row & 31u) & 1u) == 0u,
+        "entity2 dynamic pair mask wrong");
+    require(AiEntity2RowStochastic(replay.dynamic_command_mask[1]) &&
+        !AiEntity2RowStochastic(1u), "entity2 stochastic-row rule wrong");
+    // An illegal choice consumes nothing; PREFIX_UNRESOLVED zeroes the rest.
+    commands[0] = static_cast<u8>(AiEntity2PolicyCommand::build);
+    arguments[0] = static_cast<i32>(produce_row);
+    replay = AiEntity2ReplayLedger(snapshot, commands, arguments);
+    require(replay.choice_legal[0] == 0 &&
+        replay.remaining_budget[1] == (std::array<u32, 3>{400, 0, 3}),
+        "entity2 illegal choice consumed budget");
+    replay = AiEntity2ReplayLedger(snapshot, commands, arguments, 0);
+    require(replay.dynamic_command_mask[1] == 1u &&
+        replay.dynamic_economy_pair_mask[words] == 0,
+        "entity2 unresolved prefix did not zero the economy masks");
+    // Site overlap: a second worker choosing an overlapping site conflicts.
+    {
+        AiEntity2Ledger ledger;
+        AiEntity2LedgerInit(ledger, snapshot);
+        AiEntity2LedgerReserve(ledger, snapshot, AiEntity2Command::build,
+            static_cast<i32>(site));
+        require(!AiEntity2LedgerCandidateAvailable(ledger, snapshot, site) &&
+            AiEntity2LedgerConflictOf(ledger, snapshot, site) ==
+                AiEntity2RejectCode::site_conflict,
+            "entity2 same-site reservation not detected");
+        require(AiEntity2LedgerConflictOf(ledger, snapshot, research_row) ==
+                AiEntity2RejectCode::resource_conflict,
+            "entity2 resource conflict code wrong");
+    }
+
+    // A worker with an active HARVEST latch is KEEP-only, and its candidate
+    // row is exposed for attention.
+    AiEntity2OrderStore store;
+    AiEntity2EconomyOrder latch;
+    latch.source = snapshot.own[0].key;
+    latch.controller_owner = 0;
+    latch.control_epoch = 1;
+    latch.command = AiEntity2Command::harvest;
+    latch.candidate_kind = static_cast<u8>(AiEntity2CandidateKind::resource);
+    latch.candidate_key = 7 * 8 + 7;
+    latch.object_id = 7 * 8 + 7;
+    latch.x = 7 * 32 + 16;
+    latch.y = 7 * 32 + 16;
+    latch.status = AiEntityOrderStatus::active;
+    latch.issued_frame = 9500;
+    store.economy[AiEntityPackKey(latch.source)] = latch;
+    const AiEntity2Snapshot latched =
+        build_entity2_fixture(obs, registry, map, tables, &store);
+    // A harvesting worker keeps BUILD (carrying or not); no STOP in the
+    // policy vocabulary (action v4).
+    require(!latched.contract_error &&
+        latched.own[0].command_mask ==
+            ((1u << 0) | (1u << static_cast<u32>(AiEntity2PolicyCommand::build))) &&
+        latched.own_appendix[0].active_economy_candidate_row == 1 &&
+        latched.own[0].semantic_order ==
+            static_cast<u8>(AiEntity2WireSemanticOrder::harvest) &&
+        latched.own[0].order_status ==
+            static_cast<u8>(AiEntityOrderStatus::active) &&
+        (latched.own_appendix[0].source_state_bits &
+            kAiEntity2StateActiveEconomyOrder) != 0,
+        "entity2 economy latch not reflected in the row");
+    // Permuting the observation must not change the bytes.
+    AiObservation shuffled = obs;
+    std::reverse(shuffled.units.begin(), shuffled.units.end());
+    const AiEntity2Snapshot shuffled_snapshot =
+        build_entity2_fixture(shuffled, registry, map, tables);
+    AiEntity2ActRequestBody shuffled_body;
+    shuffled_body.snapshot = shuffled_snapshot;
+    shuffled_body.cumulative_losses = {1, 2, 3, 4};
+    require(EncodeAiEntity2ActRequestPayload(shuffled_body) == bytes,
+        "entity2 bytes changed with the observation unit order");
+}
+
+void test_ai_entity2_economy_tracking() {
+    // HARVEST: awaiting -> active on ACK; the automatic return / deposit
+    // states stay ACTIVE; depleted + not carrying + out of family = COMPLETED.
+    AiEntity2EconomyOrder order;
+    order.command = AiEntity2Command::harvest;
+    order.issued_frame = 100;
+    AiEntity2EconomyOrderFrameView view;
+    view.source_alive_active = true;
+    view.control_epoch_matches = true;
+    view.command_base_state = 0x28;
+    require(AiEntity2TrackEconomyOrderFrame(order, view, 101) &&
+        order.status == AiEntityOrderStatus::awaiting_apply,
+        "harvest order activated without an ACK");
+    view.acknowledged_matching = true;
+    require(AiEntity2TrackEconomyOrderFrame(order, view, 102) &&
+        order.status == AiEntityOrderStatus::active,
+        "harvest order did not activate on the ACK");
+    view.acknowledged_matching = false;
+    for (u32 state : {0x29u, 0x2au, 0x2bu, 0x2cu}) {
+        view.command_base_state = state;
+        require(AiEntity2TrackEconomyOrderFrame(order, view, 103 + state) &&
+            order.status == AiEntityOrderStatus::active,
+            "harvest family state interrupted the order");
+    }
+    view.command_base_state = 0;
+    view.carrying = true;
+    view.resource_depleted = true;
+    for (u32 f = 200; f < 210; ++f) {
+        require(AiEntity2TrackEconomyOrderFrame(order, view, f) &&
+            order.status == AiEntityOrderStatus::active,
+            "carrying cargo did not keep the harvest order active");
+    }
+    view.carrying = false;
+    for (u32 f = 210; f < 213; ++f) {
+        AiEntity2TrackEconomyOrderFrame(order, view, f);
+    }
+    require(order.status == AiEntityOrderStatus::active,
+        "harvest order closed before four idle frames");
+    AiEntity2TrackEconomyOrderFrame(order, view, 213);
+    require(order.status == AiEntityOrderStatus::completed,
+        "depleted harvest order did not complete");
+    // Source death purges.
+    view.source_alive_active = false;
+    require(!AiEntity2TrackEconomyOrderFrame(order, view, 214),
+        "dead source kept its economy order");
+
+    // BUILD: walk -> spawned (claims released) -> completed.
+    AiEntity2EconomyOrder build;
+    build.command = AiEntity2Command::build;
+    build.issued_frame = 300;
+    build.cost_claimed = true;
+    build.site_claimed = true;
+    AiEntity2EconomyOrderFrameView bview;
+    bview.source_alive_active = true;
+    bview.control_epoch_matches = true;
+    bview.acknowledged_matching = true;
+    bview.command_base_state = 0x23;
+    AiEntity2TrackEconomyOrderFrame(build, bview, 301);
+    bview.acknowledged_matching = false;
+    bview.command_base_state = 0x25;
+    require(AiEntity2TrackEconomyOrderFrame(build, bview, 302) &&
+        build.status == AiEntityOrderStatus::active && build.cost_claimed,
+        "build approach did not keep the claims");
+    bview.command_base_state = 0;
+    bview.spawned_present = true;
+    bview.spawned_key = AiEntityKey{0x900, 3};
+    require(AiEntity2TrackEconomyOrderFrame(build, bview, 303) &&
+        build.status == AiEntityOrderStatus::active && !build.cost_claimed &&
+        !build.site_claimed && build.spawned_building.runtime_id == 0x900,
+        "spawned structure did not release the claims");
+    bview.spawned_completed = true;
+    AiEntity2TrackEconomyOrderFrame(build, bview, 304);
+    require(build.status == AiEntityOrderStatus::completed,
+        "completed structure did not complete the build order");
+    // BUILD interrupted when the walk ends without a spawn.
+    AiEntity2EconomyOrder lost = build;
+    lost.status = AiEntityOrderStatus::active;
+    lost.applied_frame = 300;
+    lost.spawned_building = AiEntityKey{};
+    lost.cost_claimed = true;
+    bview.spawned_present = false;
+    bview.spawned_completed = false;
+    for (u32 f = 305; f < 309; ++f) {
+        AiEntity2TrackEconomyOrderFrame(lost, bview, f);
+    }
+    require(lost.status == AiEntityOrderStatus::interrupted && !lost.cost_claimed,
+        "abandoned build walk did not interrupt / release");
+
+    // PRODUCE event: awaiting -> queued (resource+queue claims released) ->
+    // completed when it leaves the queue; handler-missing bounded timeout.
+    AiEntity2EconomyEvent event;
+    event.command = AiEntity2Command::produce_unit;
+    event.issued_frame = 400;
+    event.resource_claimed = true;
+    event.population_claimed = true;
+    event.queue_claimed = true;
+    AiEntity2EventFrameView eview;
+    eview.source_alive_active = true;
+    eview.control_epoch_matches = true;
+    eview.origin_in_deferred = true;
+    require(AiEntity2TrackEventFrame(event, eview, 401) &&
+        event.status == AiEntity2EventStatus::engine_queued &&
+        !event.resource_claimed && !event.queue_claimed && event.population_claimed,
+        "queued produce event kept the resource/queue claim");
+    eview.origin_in_deferred = false;
+    eview.origin_in_active = true;
+    eview.population_reserved_by_engine = true;
+    AiEntity2TrackEventFrame(event, eview, 402);
+    require(!event.population_claimed, "active produce kept the population claim");
+    eview.origin_in_active = false;
+    AiEntity2TrackEventFrame(event, eview, 403);
+    require(event.status == AiEntity2EventStatus::completed,
+        "produce event leaving the queue did not complete");
+    AiEntity2EconomyEvent missing;
+    missing.command = AiEntity2Command::research_upgrade;
+    missing.issued_frame = 500;
+    missing.research_claimed = true;
+    AiEntity2EventFrameView mview;
+    mview.source_alive_active = true;
+    mview.control_epoch_matches = true;
+    mview.consumer_passed_sequence = true;
+    for (u32 f = 501; f < 508; ++f) {
+        AiEntity2TrackEventFrame(missing, mview, f);
+    }
+    require(missing.status == AiEntity2EventStatus::awaiting_apply,
+        "research event rejected before eight missing frames");
+    AiEntity2TrackEventFrame(missing, mview, 508);
+    require(missing.status == AiEntity2EventStatus::handler_rejected &&
+        !missing.research_claimed,
+        "handler-missing research event not rejected / released");
+    AiEntity2EconomyEvent done;
+    done.command = AiEntity2Command::research_upgrade;
+    done.level_at_issue = 1;
+    done.issued_frame = 600;
+    AiEntity2EventFrameView dview;
+    dview.source_alive_active = true;
+    dview.control_epoch_matches = true;
+    dview.owner_research_level = 2;
+    AiEntity2TrackEventFrame(done, dview, 601);
+    require(done.status == AiEntity2EventStatus::completed,
+        "level increase did not complete the research event");
+
+    // Decision rows: HARVEST/BUILD dedupe against the latch, PRODUCE never,
+    // RESEARCH against an awaiting event of the same order.
+    AiEntity2OrderStore store;
+    AiEntityKey source{0x1d0, 1};
+    AiEntity2EconomyOrder latch;
+    latch.source = source;
+    latch.command = AiEntity2Command::harvest;
+    latch.candidate_kind = 0;
+    latch.candidate_key = 55;
+    latch.status = AiEntityOrderStatus::active;
+    store.economy[AiEntityPackKey(source)] = latch;
+    AiEntity2EconomyDecisionInput same;
+    same.command = AiEntity2Command::harvest;
+    same.candidate_kind = 0;
+    same.candidate_key = 55;
+    require(AiEntity2EvaluateEconomyRow(store, source, same).result ==
+            AiEntity2AttemptResult::deduped,
+        "same harvest ISSUE was not deduped");
+    same.candidate_key = 56;
+    require(AiEntity2EvaluateEconomyRow(store, source, same).needs_packet,
+        "different resource was deduped");
+    AiEntity2EconomyEvent awaiting;
+    awaiting.source = source;
+    awaiting.command = AiEntity2Command::research_upgrade;
+    awaiting.object_id = 0x19;
+    store.events.push_back(awaiting);
+    AiEntity2EconomyDecisionInput research;
+    research.command = AiEntity2Command::research_upgrade;
+    research.object_id = 0x19;
+    require(AiEntity2EvaluateEconomyRow(store, source, research).result ==
+            AiEntity2AttemptResult::deduped,
+        "research re-issue while awaiting was not deduped");
+    AiEntity2EconomyDecisionInput produce;
+    produce.command = AiEntity2Command::produce_unit;
+    produce.object_id = 0x20;
+    require(AiEntity2EvaluateEconomyRow(store, source, produce).needs_packet,
+        "produce enqueue was deduped");
+}
+
+void test_ai_entity2_shadow_labels() {
+    AiObservation obs = make_entity2_observation();
+    AiEntityRegistry registry;
+    UnitMovementMap map = make_entity_legacy_map(8, 8);
+    const GameSessionUnitReferenceTables tables = make_entity2_references();
+    const AiEntity2Snapshot snapshot =
+        build_entity2_fixture(obs, registry, map, tables);
+    require(!snapshot.contract_error, snapshot.error.c_str());
+    const AiEntity2Candidate& site = snapshot.candidates[snapshot.resource_rows];
+    const u32 produce_row = snapshot.resource_rows + snapshot.build_rows;
+    const u32 research_row = produce_row + snapshot.produce_rows;
+
+    // Teacher: worker builds 0x82 at the first site, base researches 0x19.
+    std::vector<AiEntity2ShadowDesiredOrder> desired;
+    desired.push_back({0x1d0, AiSemanticActionKind::build, 0, site.x, site.y, 0x82});
+    desired.push_back({2 * 0x1d0, AiSemanticActionKind::research, 0, 0, 0, 0x19});
+    AiEntity2ShadowState state;
+    AiEntity2LedgerReplay replay;
+    std::vector<AiEntity2ShadowLabel> labels = BuildAiEntity2ShadowLabels(
+        snapshot, &map, desired, state, replay);
+    require(labels.size() == 2 && labels[0].label == kAiEntityShadowIssue &&
+        labels[0].command == static_cast<u8>(AiEntity2PolicyCommand::build) &&
+        labels[0].argument == static_cast<i32>(snapshot.resource_rows),
+        "shadow BUILD label wrong");
+    // The research (400) no longer fits after the build (300): the teacher
+    // event consumed budget we cannot account for, so that row (and every
+    // later economy row) is PREFIX_UNRESOLVED (plan 15.1).
+    require(labels[1].label == kAiEntityShadowExcluded &&
+        labels[1].exclude_reason ==
+            static_cast<u16>(AiEntity2ShadowExcludeReason::prefix_unresolved),
+        "shadow research label after the build was not PREFIX_UNRESOLVED");
+    require(replay.remaining_budget[1] == (std::array<u32, 3>{100, 0, 3}),
+        "shadow replay budget wrong");
+    // Same teacher order next tick = KEEP.
+    labels = BuildAiEntity2ShadowLabels(snapshot, &map, desired, state, replay);
+    require(labels[0].label == kAiEntityShadowKeep && labels[0].argument == -1,
+        "repeated shadow BUILD was not KEEP");
+    // Unmappable produce (type not in the table) -> PREFIX_UNRESOLVED from
+    // that row on, with zeroed economy masks.
+    AiEntity2ShadowState fresh;
+    std::vector<AiEntity2ShadowDesiredOrder> bad;
+    bad.push_back({0x1d0, AiSemanticActionKind::produce_unit, 0, 0, 0, 0x33});
+    bad.push_back({2 * 0x1d0, AiSemanticActionKind::produce_unit, 0, 0, 0, 0x20});
+    labels = BuildAiEntity2ShadowLabels(snapshot, &map, bad, fresh, replay);
+    require(labels[0].exclude_reason ==
+            static_cast<u16>(AiEntity2ShadowExcludeReason::prefix_unresolved) &&
+        labels[1].label == kAiEntityShadowExcluded &&
+        labels[1].exclude_reason ==
+            static_cast<u16>(AiEntity2ShadowExcludeReason::prefix_unresolved) &&
+        replay.dynamic_economy_pair_mask[snapshot.economy_words_per_row()] == 0,
+        "unresolved shadow prefix handling wrong");
+    // return_cargo is never a label; a resource ordered by target id is
+    // unmappable; two orders for one unit are MULTIPLE_DESIRED.
+    std::vector<AiEntity2ShadowDesiredOrder> misc;
+    misc.push_back({0x1d0, AiSemanticActionKind::return_cargo, 0, 0, 0, 0});
+    labels = BuildAiEntity2ShadowLabels(snapshot, &map, misc, fresh, replay);
+    require(labels[0].exclude_reason ==
+            static_cast<u16>(AiEntity2ShadowExcludeReason::return_cargo),
+        "return_cargo teacher event not excluded");
+    misc.clear();
+    misc.push_back({0x1d0, AiSemanticActionKind::harvest, 0, 7 * 32 + 16, 7 * 32 + 16, 0});
+    misc.push_back({0x1d0, AiSemanticActionKind::stop, 0, 0, 0, 0});
+    labels = BuildAiEntity2ShadowLabels(snapshot, &map, misc, fresh, replay);
+    require(labels[0].exclude_reason ==
+            static_cast<u16>(AiEntity2ShadowExcludeReason::multiple_desired),
+        "multiple desired orders not excluded");
+    misc.clear();
+    misc.push_back({0x1d0, AiSemanticActionKind::harvest, 0, 7 * 32 + 16, 7 * 32 + 16, 0});
+    labels = BuildAiEntity2ShadowLabels(snapshot, &map, misc, fresh, replay);
+    require(labels[0].label == kAiEntityShadowIssue && labels[0].argument == 1,
+        "shadow HARVEST label wrong");
+    // Record encoding: SHD2 magic, exact size.
+    AiEntity2ActRequestBody body;
+    body.snapshot = snapshot;
+    const std::vector<u8> payload = EncodeAiEntity2ActRequestPayload(body);
+    AiEntity2WireHeader header;
+    header.kind = static_cast<u16>(AiEntityWireKind::act_req);
+    header.own_rows = 2;
+    header.target_rows = 1;
+    header.resource_rows = snapshot.resource_rows;
+    header.build_rows = snapshot.build_rows;
+    header.produce_rows = snapshot.produce_rows;
+    header.research_rows = snapshot.research_rows;
+    header.payload_bytes = static_cast<u32>(payload.size());
+    header.payload_crc32 = AiEntityCrc32(payload.data(), payload.size());
+    std::array<AiEntity2ShadowSlotLabel, kAiEntity2SlotCount> slot_labels{};
+    const std::vector<u8> record = EncodeAiEntity2ShadowRecord(header, payload,
+        labels, replay, slot_labels);
+    const std::size_t words = snapshot.economy_words_per_row();
+    require(record.size() == 8 + 128 + payload.size() + 4 + 2 * 16 + 2 * 4 +
+            2 * 12 + 2 * words * 4 + 2 * 4 + 4 * 8 &&
+        record[0] == 'S' && record[3] == '5',
+        "SHD5 record framing wrong");
+    (void)research_row;
+}
+
+void test_ai_entity2_slots() {
+    // Two fighters join the economy fixture: ids 3 and 4 (rows after the
+    // worker 1 and the base 2), both attack/move/patrol capable.
+    AiObservation obs = make_entity2_observation();
+    AiObservedUnit fighter_a = fighter_unit(3 * 0x1d0, 0, 3 * 32 + 16, 6 * 32 + 16, true);
+    fighter_a.runtime_slot_index = 3;
+    fighter_a.type_flags = (1u << 4) | (1u << 5) | (1u << 9);
+    obs.units.push_back(fighter_a);
+    AiObservedUnit fighter_b = fighter_unit(4 * 0x1d0, 0, 4 * 32 + 16, 6 * 32 + 16, true);
+    fighter_b.runtime_slot_index = 4;
+    fighter_b.type_flags = (1u << 4) | (1u << 5) | (1u << 9);
+    obs.units.push_back(fighter_b);
+    // Map start candidates: our own (48,48) and one at tile (6,6).
+    obs.start_candidate_mask = 0x3;
+    obs.start_candidate_x = {48, 6 * 32 + 16, 0, 0, 0, 0, 0, 0};
+    obs.start_candidate_y = {48, 6 * 32 + 16, 0, 0, 0, 0, 0, 0};
+    AiEntityRegistry registry;
+    AiEntityRegistryReset(registry);
+    UnitMovementUnit live_worker = make_entity_live_unit(1, 0, 0x10,
+        (1u << 4) | (1u << 6) | (1u << 7));
+    UnitMovementUnit live_base = make_entity_live_unit(2, 0, 0x80, 0);
+    UnitMovementUnit live_a = make_entity_live_unit(3, 0, 5,
+        (1u << 4) | (1u << 5) | (1u << 9));
+    UnitMovementUnit live_b = make_entity_live_unit(4, 0, 5,
+        (1u << 4) | (1u << 5) | (1u << 9));
+    UnitMovementUnit live_hostile = make_entity_live_unit(5, 1, 5, 1u << 5);
+    std::vector<UnitMovementUnit*> live{&live_worker, &live_base, &live_a, &live_b,
+        &live_hostile};
+    AiEntityRegistryAuditFrame(registry, live);
+    UnitMovementMap map = make_entity_legacy_map(8, 8);
+    const GameSessionUnitReferenceTables tables = make_entity2_references();
+
+    // Slot state: B was assigned to SCOUT a while ago (past the assign
+    // cooldown); MAIN marches to cell 63.
+    AiEntity2SlotState slots;
+    const AiEntityKey key_a{3 * 0x1d0, 1};
+    const AiEntityKey key_b{4 * 0x1d0, 1};
+    slots.membership[AiEntityPackKey(key_b)] = kAiEntity2SlotScout;
+    slots.assigned_frame[AiEntityPackKey(key_b)] = 9000;
+    slots.orders[kAiEntity2SlotMain].active = true;
+    slots.orders[kAiEntity2SlotMain].command = AiEntity2SlotCommand::attack_move;
+    slots.orders[kAiEntity2SlotMain].cell = 63;
+    slots.orders[kAiEntity2SlotMain].issued_frame = 9500;
+    // A already carries the derived order (origin MAIN, active).
+    AiEntity2OrderStore store;
+    AiEntityActiveOrder derived;
+    derived.source = key_a;
+    derived.controller_owner = 0;
+    derived.control_epoch = 1;
+    derived.command = static_cast<u8>(AiEntity2Command::attack_move);
+    derived.target_x = 7 * 32 + 16;
+    derived.target_y = 7 * 32 + 16;
+    derived.status = AiEntityOrderStatus::active;
+    derived.issued_frame = 9500;
+    derived.origin_slot = kAiEntity2SlotMain;
+    store.combat[AiEntityPackKey(key_a)] = derived;
+
+    AiEntity2SnapshotInput input;
+    input.observation = &obs;
+    input.registry = &registry;
+    input.movement_map = &map;
+    input.catalog.unit_references = &tables;
+    input.catalog.unit_catalog = entity2_unit_catalog;
+    input.catalog.research_catalog = entity2_research_catalog;
+    input.orders = &store;
+    input.slots = &slots;
+    const AiEntity2Snapshot snapshot = BuildAiEntity2Snapshot(input);
+    require(!snapshot.contract_error, snapshot.error.c_str());
+    require(snapshot.own.size() == 4, "slot fixture row count");
+    const AiEntity2OwnAppendix& worker = snapshot.own_appendix[0];
+    const AiEntity2OwnAppendix& base = snapshot.own_appendix[1];
+    const AiEntity2OwnAppendix& a = snapshot.own_appendix[2];
+    const AiEntity2OwnAppendix& b = snapshot.own_appendix[3];
+    require(worker.slot_id == kAiEntity2SlotNone && base.slot_id == kAiEntity2SlotNone &&
+        worker.assign_mask == 0 && base.assign_mask == 0,
+        "non-combat rows got slot fields");
+    require(a.slot_id == kAiEntity2SlotMain && b.slot_id == kAiEntity2SlotScout,
+        "slot membership wrong");
+    // SCOUT is full: A may move to RAID_A/RAID_B only; B may go anywhere else.
+    require(a.assign_mask == ((1u << 1) | (1u << 2)) &&
+        b.assign_mask == ((1u << 0) | (1u << 1) | (1u << 2)) &&
+        snapshot.scout_free_at_snapshot == 0,
+        "assign masks wrong");
+    // Assign cooldown: a member assigned last tick cannot be moved again.
+    {
+        AiEntity2SlotState cooling = slots;
+        cooling.assigned_frame[AiEntityPackKey(key_b)] = 9596;
+        AiEntity2SnapshotInput cooling_input = input;
+        cooling_input.slots = &cooling;
+        const AiEntity2Snapshot cooling_snapshot = BuildAiEntity2Snapshot(cooling_input);
+        require(!cooling_snapshot.contract_error &&
+            cooling_snapshot.own_appendix[3].assign_mask == 0 &&
+            cooling_snapshot.own_appendix[2].assign_mask == ((1u << 1) | (1u << 2)),
+            "assign cooldown mask wrong");
+    }
+    require(a.slot_order_relation == kAiEntity2SlotRelationMatch &&
+        b.slot_order_relation == kAiEntity2SlotRelationNone,
+        "slot order relation wrong");
+    // Disobedience mask: A cannot take a personal MOVE/ATTACK_MOVE/PATROL
+    // while MAIN marches; HOLD (and ATTACK_UNIT) stay; B (SCOUT, no order)
+    // is free.  No STOP bit exists in the policy vocabulary (action v4).
+    require((snapshot.own[2].command_mask & ((1u << 1) | (1u << 2) | (1u << 3))) == 0 &&
+        (snapshot.own[2].command_mask & (1u << 5)) != 0 &&
+        (snapshot.own[2].command_mask & (1u << 6)) == 0 &&
+        (snapshot.own[3].command_mask & (1u << 1)) != 0,
+        "disobedience mask wrong");
+    // Slot blocks.
+    const AiEntity2SlotBlock& main = snapshot.slots[kAiEntity2SlotMain];
+    const AiEntity2SlotBlock& scout = snapshot.slots[kAiEntity2SlotScout];
+    require(main.member_count == 1 && main.active == 1 &&
+        main.command == static_cast<u8>(AiEntity2SlotCommand::attack_move) &&
+        main.cell == 63 && main.age_frames == 100 && main.pursuing == 1 &&
+        main.centroid_x == 3 * 32 + 16,
+        "MAIN slot block wrong");
+    require(scout.member_count == 1 && scout.active == 0 && scout.cell == -1 &&
+        snapshot.slots[kAiEntity2SlotRaidA].member_count == 0,
+        "SCOUT/RAID slot block wrong");
+    // Slot masks: MAIN (active) may STOP; RAID_A (empty) may still be
+    // commanded ahead (cell union of all fighters); HUNT takes no cell.
+    require((snapshot.slot_command_mask[kAiEntity2SlotMain] &
+            (1u << static_cast<u32>(AiEntity2SlotCommand::stop))) != 0 &&
+        (snapshot.slot_command_mask[kAiEntity2SlotRaidA] &
+            (1u << static_cast<u32>(AiEntity2SlotCommand::stop))) == 0 &&
+        (snapshot.slot_command_mask[kAiEntity2SlotRaidA] &
+            (1u << static_cast<u32>(AiEntity2SlotCommand::attack_move))) != 0 &&
+        snapshot.slot_cell_mask[kAiEntity2SlotRaidA] ==
+            snapshot.slot_cell_mask[kAiEntity2SlotMain] &&
+        AiEntity2SlotChoiceLegal(snapshot, kAiEntity2SlotRaidA,
+            static_cast<u8>(AiEntity2SlotCommand::attack_move), 63) &&
+        !AiEntity2SlotChoiceLegal(snapshot, kAiEntity2SlotRaidA,
+            static_cast<u8>(AiEntity2SlotCommand::stop), -1) &&
+        !AiEntity2SlotChoiceLegal(snapshot, kAiEntity2SlotMain,
+            static_cast<u8>(AiEntity2SlotCommand::hunt_neutral), 5) &&
+        !AiEntity2SlotChoiceLegal(snapshot, kAiEntity2SlotMain,
+            static_cast<u8>(AiEntity2SlotCommand::hold), 5),
+        "slot command/cell masks wrong");
+    // Start candidates: own (tile 1,1 -> cell 9) and (6,6) -> cell 54, both
+    // explored; the other six absent.
+    require(snapshot.start_candidates[0].cell == 9 &&
+        snapshot.start_candidates[0].is_own == 1 &&
+        snapshot.start_candidates[1].cell == 54 &&
+        snapshot.start_candidates[1].explored == 1 &&
+        snapshot.start_candidates[2].cell == -1 &&
+        snapshot.intent_reward_material[0] == 2 &&
+        snapshot.intent_reward_material[1] == 2 &&
+        snapshot.intent_reward_material[2] == 0,
+        "start candidates / intent material wrong");
+    // Wire round trip carries every slot field.
+    AiEntity2ActRequestBody body;
+    body.snapshot = snapshot;
+    const std::vector<u8> bytes = EncodeAiEntity2ActRequestPayload(body);
+    AiEntity2WireHeader header;
+    header.own_rows = 4;
+    header.target_rows = 1;
+    header.resource_rows = snapshot.resource_rows;
+    header.build_rows = snapshot.build_rows;
+    header.produce_rows = snapshot.produce_rows;
+    header.research_rows = snapshot.research_rows;
+    AiEntity2ActRequestBody decoded;
+    std::string error;
+    require(DecodeAiEntity2ActRequestPayload(bytes.data(), bytes.size(), header,
+            false, decoded, nullptr, &error), error.c_str());
+    require(decoded.snapshot.slots[kAiEntity2SlotMain].cell == 63 &&
+        decoded.snapshot.start_candidates[1].cell == 54 &&
+        decoded.snapshot.own_appendix[3].slot_id == kAiEntity2SlotScout &&
+        decoded.snapshot.own_appendix[2].assign_mask == a.assign_mask &&
+        decoded.snapshot.slot_command_mask == snapshot.slot_command_mask &&
+        decoded.snapshot.intent_reward_material[3] == 0xffffffffull &&
+        EncodeAiEntity2ActRequestPayload(decoded) == bytes,
+        "slot fields did not round-trip");
+
+    // Assign ledger: with SCOUT full nobody may join; with it free the first
+    // canonical row wins and the second is closed.
+    std::vector<u8> commands(4, 0);
+    std::vector<i32> arguments(4, -1);
+    std::vector<u8> assigns{0, 0, 4, 0};
+    AiEntity2LedgerReplay replay = AiEntity2ReplayLedger(snapshot, commands,
+        arguments, kAiEntity2NoUnresolvedRow, &assigns);
+    require(replay.assign_legal[2] == 0 &&
+        (replay.dynamic_assign_mask[2] & (1u << kAiEntity2SlotScout)) == 0,
+        "full SCOUT accepted an assign");
+    AiEntity2SlotState free_slots = slots;
+    free_slots.membership.clear();
+    input.slots = &free_slots;
+    const AiEntity2Snapshot free_snapshot = BuildAiEntity2Snapshot(input);
+    require(free_snapshot.scout_free_at_snapshot == 1 &&
+        (free_snapshot.own_appendix[2].assign_mask & (1u << kAiEntity2SlotScout)) != 0,
+        "free SCOUT bit missing");
+    assigns = {0, 0, 4, 4};
+    replay = AiEntity2ReplayLedger(free_snapshot, commands, arguments,
+        kAiEntity2NoUnresolvedRow, &assigns);
+    require(replay.assign_legal[2] == 1 && replay.assign_legal[3] == 0 &&
+        (replay.dynamic_assign_mask[3] & (1u << kAiEntity2SlotScout)) == 0 &&
+        (replay.dynamic_assign_mask[2] & (1u << kAiEntity2SlotScout)) != 0,
+        "assign ledger did not close SCOUT after the first taker");
+
+    // Derivation rule (EASY §2 ⑤ / §4 (i)).
+    AiEntity2SlotOrder march;
+    march.active = true;
+    march.command = AiEntity2SlotCommand::attack_move;
+    march.cell = 63;
+    AiEntity2SlotMemberView view;
+    view.slot_changed = true;
+    require(AiEntity2SlotMemberNeedsOrder(march, view), "changed slot not derived");
+    view = AiEntity2SlotMemberView{};
+    view.latch_matches_slot = true;
+    require(!AiEntity2SlotMemberNeedsOrder(march, view), "matching latch re-derived");
+    view = AiEntity2SlotMemberView{};
+    view.has_latch = true;
+    view.latch_terminal = true;
+    require(AiEntity2SlotMemberNeedsOrder(march, view), "stopped member not re-guided");
+    view.arrived = true;
+    require(!AiEntity2SlotMemberNeedsOrder(march, view), "arrived member re-guided");
+    view = AiEntity2SlotMemberView{};
+    view.has_personal_issue = true;
+    view.slot_changed = true;
+    require(!AiEntity2SlotMemberNeedsOrder(march, view), "personal order overridden");
+    AiEntity2SlotOrder hold;
+    hold.active = true;
+    hold.command = AiEntity2SlotCommand::hold;
+    view = AiEntity2SlotMemberView{};
+    view.just_assigned = true;
+    require(AiEntity2SlotMemberNeedsOrder(hold, view), "hold not derived on join");
+    view.latch_matches_slot = true;
+    require(!AiEntity2SlotMemberNeedsOrder(hold, view), "hold re-derived");
+
+    // Teacher intent -> slot / assign labels (SHD3).
+    AiEntity2ShadowTeacherIntent intent;
+    intent.desired[kAiEntity2SlotMain].active = true;
+    intent.desired[kAiEntity2SlotMain].command = AiEntity2SlotCommand::attack_move;
+    intent.desired[kAiEntity2SlotMain].cell = 63;          // same as current -> KEEP
+    intent.desired[kAiEntity2SlotRaidA].active = true;
+    intent.desired[kAiEntity2SlotRaidA].command = AiEntity2SlotCommand::move;
+    intent.desired[kAiEntity2SlotRaidA].cell = 9;          // new -> ISSUE
+    intent.desired_slot[4 * 0x1d0] = kAiEntity2SlotRaidA;  // B leaves SCOUT
+    intent.desired_slot[3 * 0x1d0] = kAiEntity2SlotScout;  // A wants SCOUT (full)
+    AiEntity2ShadowState shadow_state;
+    AiEntity2LedgerReplay shadow_replay;
+    std::array<AiEntity2ShadowSlotLabel, kAiEntity2SlotCount> slot_labels{};
+    std::vector<AiEntity2ShadowDesiredOrder> none;
+    const std::vector<AiEntity2ShadowLabel> labels = BuildAiEntity2ShadowLabels(
+        snapshot, &map, none, shadow_state, shadow_replay,
+        kAiEntityShadowPointMaxErrorPx, &intent, &slot_labels);
+    require(slot_labels[kAiEntity2SlotMain].label == kAiEntityShadowKeep &&
+        slot_labels[kAiEntity2SlotRaidA].label == kAiEntityShadowIssue &&
+        slot_labels[kAiEntity2SlotRaidA].command ==
+            static_cast<u8>(AiEntity2SlotCommand::move) &&
+        slot_labels[kAiEntity2SlotRaidA].cell == 9,
+        "commander teacher labels wrong");
+    require(labels[3].assign_label == kAiEntityShadowIssue &&
+        labels[3].assign == kAiEntity2SlotRaidA + 1 &&
+        labels[2].assign_label == kAiEntityShadowExcluded,
+        "assign teacher labels wrong");
+}
+
 int main() {
     test_observation_visibility_and_determinism();
     test_observation_resource_memory();
@@ -5653,6 +6694,11 @@ int main() {
     test_ai_entity_wire_contract();
     test_ai_entity_shadow_labels();
     test_ai_entity_order_latch();
+    test_ai_entity2_wire_contract();
+    test_ai_entity2_snapshot_and_ledger();
+    test_ai_entity2_economy_tracking();
+    test_ai_entity2_shadow_labels();
+    test_ai_entity2_slots();
     std::cout << "ai_play_interface_regression: passed\n";
     return 0;
 }
