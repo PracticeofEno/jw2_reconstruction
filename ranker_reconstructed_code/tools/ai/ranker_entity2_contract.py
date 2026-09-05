@@ -37,7 +37,8 @@ PROTOCOL = 3
 # observation / global-feature / entity-feature / entity-action / wire
 # semantic vocabulary / point-geometry / economy-candidate / outcome versions,
 # in header order (plan 12; feature/action/outcome 3 = slot extension).
-VERSIONS = (5, 10, 3, 5, 3, 1, 1, 3)
+VERSIONS = (5, 10, 3, 6, 3, 1, 1, 3)
+LEGACY_SHADOW_VERSIONS = (5, 10, 3, 5, 3, 1, 1, 3)
 GLOBAL_COUNT = 802
 # Action v4: the personal command vocabulary has no STOP (10 entries).
 COMMAND_COUNT = 10
@@ -302,7 +303,7 @@ def pack_header(header: Header) -> bytes:
         0, 0, 0, 0, 0, 0)
 
 
-def parse_header(data: bytes) -> Header:
+def parse_header(data: bytes, *, legacy_shadow: bool = False) -> Header:
     if len(data) < HEADER_BYTES:
         raise WireError("short header")
     fields = _HEADER_STRUCT.unpack(data[:HEADER_BYTES])
@@ -327,7 +328,8 @@ def parse_header(data: bytes) -> Header:
         raise WireError("payload above limit")
     if contract != CONTRACT_ID:
         raise WireError("bad contract id")
-    if (v0, v1, v2, v3, v4, v5, v6, v7) != VERSIONS:
+    versions = (v0, v1, v2, v3, v4, v5, v6, v7)
+    if versions != VERSIONS and not (legacy_shadow and versions == LEGACY_SHADOW_VERSIONS):
         raise WireError("contract version mismatch")
     if (global_count, command_count, point_count) != (
             GLOBAL_COUNT, COMMAND_COUNT, POINT_COUNT):
@@ -1290,7 +1292,7 @@ def parse_shadow_records(data: bytes, source: str = ""):
             raise WireError("truncated shadow record body")
         body = data[offset:offset + body_bytes]
         offset += body_bytes
-        header = parse_header(body[:HEADER_BYTES])
+        header = parse_header(body[:HEADER_BYTES], legacy_shadow=True)
         if header.kind != KIND_ACT_REQ:
             raise WireError("shadow record is not an ACT_REQ")
         payload = body[HEADER_BYTES:HEADER_BYTES + header.payload_bytes]
@@ -1574,7 +1576,7 @@ def selftest() -> None:
     assert len(raw) == HEADER_BYTES
     assert raw[0:4] == MAGIC and raw[4] == 128 and raw[6] == PROTOCOL
     assert raw[16:24] == CONTRACT_ID
-    assert raw[24] == 5 and raw[26] == 10 and raw[28] == 3 and raw[30] == 5
+    assert raw[24] == 5 and raw[26] == 10 and raw[28] == 3 and raw[30] == 6
     assert raw[32] == 3 and raw[34] == 1 and raw[36] == 1 and raw[38] == 3
     assert raw[40] == 1 and raw[44] == 37 and raw[52] == 154
     assert raw[60] == 2 and raw[64] == 3 and raw[68] == 4 and raw[72] == 5

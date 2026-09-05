@@ -44,7 +44,9 @@ constexpr char kAiEntity2ContractId[8] = {
 constexpr u16 kAiEntity2FeatureVersion = 3;
 // Action v4 (2026-09-04 user rule): the personal command head has no STOP;
 // the wire vocabulary is AiEntity2PolicyCommand (10 entries).
-constexpr u16 kAiEntity2ActionVersion = 5;
+// v6: calm idle/harvesting workers may receive a global scout MOVE; ongoing
+// worker tasks stay locked. The policy removes HARVEST from learned actions.
+constexpr u16 kAiEntity2ActionVersion = 6;
 constexpr u16 kAiEntity2SemanticVocabularyVersion = 3;
 constexpr u16 kAiEntity2CandidateVersion = 1;
 constexpr u16 kAiEntity2OutcomeVersion = 3;

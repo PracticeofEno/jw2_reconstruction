@@ -37,7 +37,7 @@ import torch.nn.functional as F
 import ranker_entity2_contract as wire
 import ranker_entity2_squads as squads
 
-ARCHITECTURE_ID = "entv6-type-squads-mlp"
+ARCHITECTURE_ID = "entv7-worker-autopilot-mlp"
 GAMMA_8 = 0.9998
 LAMBDA_8 = 0.95
 # Reward (plan 14.2 + intent shaping A), rebalanced 2026-09-04 (user
@@ -60,7 +60,9 @@ CHUNK_STEPS = 256
 
 COMMAND_KEEP = wire.COMMAND_KEEP
 COMMAND_COUNT = wire.COMMAND_COUNT
-NON_KEEP_COUNT = COMMAND_COUNT - 1
+POLICY_COMMANDS = tuple(c for c in range(1, COMMAND_COUNT) if c != wire.COMMAND_HARVEST)
+POLICY_COMMAND_INDEX = {command: index for index, command in enumerate(POLICY_COMMANDS)}
+NON_KEEP_COUNT = len(POLICY_COMMANDS)
 POINT_COMMANDS = wire.POINT_COMMANDS
 ECONOMY_COMMANDS = wire.ECONOMY_COMMANDS
 SLOT_COUNT = wire.SLOT_COUNT
@@ -131,7 +133,7 @@ class EntityStep:
     own_feat: torch.Tensor             # [U, 33 + OWN_EXTRA]
     own_role: torch.Tensor             # [U] long
     active_cand_row: torch.Tensor      # [U] long (-1 none)
-    command_mask: torch.Tensor         # [U, 11] bool (base)
+    command_mask: torch.Tensor         # [U, 10] wire-indexed bool; HARVEST always false
     point_mask: torch.Tensor           # [U, 96] bool
     target_cat: torch.Tensor           # [E, 4] long
     target_feat: torch.Tensor          # [E, 14]
@@ -145,7 +147,7 @@ class EntityStep:
     slot_cont: torch.Tensor            # [4, SLOT_CONT]
     slot_command_cur: torch.Tensor     # [4] long (current slot command)
     slot_cell_cur: torch.Tensor        # [4] long (cell + 1, 0 none)
-    slot_command_mask: torch.Tensor    # [4, 8] bool
+    slot_command_mask: torch.Tensor    # [4, 7] bool
     slot_cell_mask: torch.Tensor       # [4, 64] bool
     start_cells: torch.Tensor          # [8] long (cell + 1, 0 absent)
     start_flags: torch.Tensor          # [8, 2]
@@ -156,7 +158,7 @@ class EntityStep:
     control_layout: Optional[squads.SquadLayout] = None
     control_feat: Optional[torch.Tensor] = None     # [U, 6] squad size/geometry/kind
     # Filled by sampling / teacher forcing (stored, never regenerated):
-    dyn_command_mask: Optional[torch.Tensor] = None   # [U, 11] bool
+    dyn_command_mask: Optional[torch.Tensor] = None   # [U, 10] bool
     dyn_econ_mask: Optional[torch.Tensor] = None      # [U, C] bool
     dyn_assign_mask: Optional[torch.Tensor] = None    # [U, 4] bool
     budget_before: Optional[torch.Tensor] = None      # [U, 3] long
@@ -255,6 +257,7 @@ def step_from_request(request: Dict, header: wire.Header, *, grouped: bool = Tru
         cand_feat.append(list(cand.feature) +
                          [float((cand.flags >> b) & 1) for b in range(6)])
     command_mask = _bits_of_ints(list(request["command_mask"]), COMMAND_COUNT)
+    command_mask[:, wire.COMMAND_HARVEST] = False  # deterministic worker autopilot only
     point_mask = _bits_of_words(request["point_mask"], wire.POINT_COUNT)
     pair_mask = _bits_of_words(request["attack_pair_mask_words"], e) if u else \
         torch.zeros(0, e, dtype=torch.bool)
@@ -796,9 +799,9 @@ def _slot_choice_legal(step: EntityStep, slot: int, command: int, cell: int) -> 
 
 
 def _row_distribution(heads: Dict, index: int, dyn_cmd: torch.Tensor) -> Dict:
-    can_issue = bool(dyn_cmd[1:].any())
+    cmd_mask = dyn_cmd[list(POLICY_COMMANDS)]
+    can_issue = bool(cmd_mask.any())
     gate_logit = heads["gate_logit"][index]
-    cmd_mask = dyn_cmd[1:]
     cmd_logp = _masked_log_softmax(heads["command_logits"][index],
                                    cmd_mask if can_issue else torch.ones_like(cmd_mask))
     return {"can_issue": can_issue, "logp_issue": F.logsigmoid(gate_logit),
@@ -958,7 +961,7 @@ def sample_actions(net: Entity2Net, step: EntityStep,
             logps[row] = dist["logp_keep"]
             continue
         cmd_index = int(torch.multinomial(dist["cmd_logp"].exp(), 1, generator=rng).item())
-        command = cmd_index + 1
+        command = POLICY_COMMANDS[cmd_index]
         logp = dist["logp_issue"] + dist["cmd_logp"][cmd_index]
         argument = -1
         if _needs_argument(command):
@@ -1114,7 +1117,7 @@ def teacher_forced_logp(net: Entity2Net, step: EntityStep,
         if not bool(dyn_cmd[command]):
             out["ok"] = False
             continue
-        cmd_index = command - 1
+        cmd_index = POLICY_COMMAND_INDEX[command]
         out["gate_logp"][row] = dist["logp_issue"]
         logp = dist["logp_issue"] + dist["cmd_logp"][cmd_index]
         entropy = gate_entropy + _entropy_from_logp(dist["cmd_logp"], dist["cmd_mask"])

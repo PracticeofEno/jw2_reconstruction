@@ -5736,7 +5736,7 @@ void test_ai_entity2_wire_contract() {
         "entity2 header magic wrong");
     require(raw[4] == 128 && raw[6] == 3, "entity2 header size/protocol wrong");
     require(raw[16] == 'E' && raw[23] == '2', "entity2 contract id wrong");
-    require(raw[24] == 5 && raw[26] == 10 && raw[28] == 3 && raw[30] == 5 &&
+    require(raw[24] == 5 && raw[26] == 10 && raw[28] == 3 && raw[30] == 6 &&
         raw[32] == 3 && raw[34] == 1 && raw[36] == 1 && raw[38] == 3,
         "entity2 version tuple wrong");
     require(raw[40] == 1 && raw[44] == 37 && raw[52] == 154 && raw[60] == 2 &&
@@ -5950,10 +5950,10 @@ void test_ai_entity2_snapshot_and_ledger() {
         snapshot.economy_pair_bit(1, research_row) &&
         !snapshot.economy_pair_bit(1, 0),
         "entity2 economy pair mask wrong");
-    // Action v4 role table: an idle calm worker offers KEEP/HARVEST/BUILD
-    // only (no point moves, no STOP); the building PRODUCE/RESEARCH.
+    // Action v6: calm workers also permit a dispatcher-selected global MOVE.
     require(snapshot.own[0].command_mask ==
-            ((1u << 0) | (1u << static_cast<u32>(AiEntity2PolicyCommand::harvest)) |
+            ((1u << 0) | (1u << static_cast<u32>(AiEntity2PolicyCommand::move)) |
+                (1u << static_cast<u32>(AiEntity2PolicyCommand::harvest)) |
                 (1u << static_cast<u32>(AiEntity2PolicyCommand::build))) &&
         snapshot.own[1].command_mask ==
             ((1u << 0) | (1u << static_cast<u32>(AiEntity2PolicyCommand::produce_unit)) |
@@ -6084,7 +6084,8 @@ void test_ai_entity2_snapshot_and_ledger() {
     // policy vocabulary (action v4).
     require(!latched.contract_error &&
         latched.own[0].command_mask ==
-            ((1u << 0) | (1u << static_cast<u32>(AiEntity2PolicyCommand::build))) &&
+            ((1u << 0) | (1u << static_cast<u32>(AiEntity2PolicyCommand::move)) |
+                (1u << static_cast<u32>(AiEntity2PolicyCommand::build))) &&
         latched.own_appendix[0].active_economy_candidate_row == 1 &&
         latched.own[0].semantic_order ==
             static_cast<u8>(AiEntity2WireSemanticOrder::harvest) &&
@@ -6637,7 +6638,58 @@ void test_ai_entity2_slots() {
         "assign teacher labels wrong");
 }
 
-int main() {
+void test_ai_entity2_worker_task_locks() {
+    AiObservation obs = make_entity2_observation();
+    AiEntityRegistry registry;
+    UnitMovementMap map = make_entity_legacy_map(8, 8);
+    const GameSessionUnitReferenceTables tables = make_entity2_references();
+    auto snapshot = build_entity2_fixture(obs, registry, map, tables);
+    require((snapshot.own[0].command_mask & (1u << 1)) != 0 &&
+        snapshot.own[0].point_mask[2] == 0,
+        "calm worker scout MOVE must use global points only");
+    AiEntity2OrderStore store;
+    AiEntityActiveOrder scout;
+    scout.source = snapshot.own[0].key;
+    scout.controller_owner = 0;
+    scout.control_epoch = 1;
+    scout.command = static_cast<u8>(AiEntity2Command::move);
+    scout.status = AiEntityOrderStatus::active;
+    const u64 key = AiEntityPackKey(scout.source);
+    store.combat[key] = scout;
+    snapshot = build_entity2_fixture(obs, registry, map, tables, &store);
+    require(snapshot.own[0].command_mask == 1u,
+        "active worker scout was available for another task or harvesting");
+    store.combat[key].status = AiEntityOrderStatus::completed;
+    snapshot = build_entity2_fixture(obs, registry, map, tables, &store);
+    require((snapshot.own[0].command_mask &
+        (1u << static_cast<u32>(AiEntity2PolicyCommand::harvest))) != 0,
+        "completed worker scout did not return to the economy");
+    store.combat[key].status = AiEntityOrderStatus::active;
+    // Armed enemy close to the worker: automatic retreat overrides its trip.
+    obs.units.back().x = obs.units[0].x - 32;
+    obs.units.back().y = obs.units[0].y;
+    obs.units.back().attack_power = 10;
+    snapshot = build_entity2_fixture(obs, registry, map, tables, &store);
+    require((snapshot.own[0].command_mask & (1u << 1)) != 0 &&
+        snapshot.own[0].point_mask[0] == 0 && snapshot.own[0].point_mask[1] == 0 &&
+        snapshot.own[0].point_mask[2] != 0,
+        "threatened worker scout did not retain local escape points");
+    require((snapshot.own[0].command_mask &
+        ((1u << static_cast<u32>(AiEntity2PolicyCommand::harvest)) |
+         (1u << static_cast<u32>(AiEntity2PolicyCommand::build)))) == 0,
+        "threatened worker was dispatchable for economic work");
+}
+
+int main(int argc, char** argv) {
+    if (argc == 2 && std::string(argv[1]) == "--entity2-worker-autopilot") {
+        test_ai_entity2_wire_contract();
+        test_ai_entity2_snapshot_and_ledger();
+        test_ai_entity2_economy_tracking();
+        test_ai_entity2_shadow_labels();
+        test_ai_entity2_worker_task_locks();
+        std::cout << "entity2 worker autopilot: passed\n";
+        return 0;
+    }
     test_observation_visibility_and_determinism();
     test_observation_resource_memory();
     test_action_validation_and_packet_planning();

@@ -41,6 +41,12 @@ def fixture(specs):
     body["slots"] = [wire.SlotBlock() for _ in range(wire.SLOT_COUNT)]
     for i, (template, _) in enumerate(specs):
         body["own_feature"][i][0:3] = [0.1 + i / 4096.0, 0.2, 0.75]
+        if template == 0:
+            # Action v6: calm task MOVE uses global points; threat response
+            # instead enables local points and disables economic work.
+            body["command_mask"][i] = (1 << wire.COMMAND_KEEP) | \
+                (1 << wire.COMMAND_MOVE) | (1 << wire.COMMAND_HARVEST) | (1 << wire.COMMAND_BUILD)
+            body["point_mask"][i] = [0xffffffff, 0xffffffff, 0]
         if template >= 2:
             body["command_mask"][i] = (1 << wire.COMMAND_HARVEST) - 1
             body["own_assign_mask"][i] = 0b1000 if template == 2 else 0b0001
@@ -121,21 +127,21 @@ class SquadTests(unittest.TestCase):
         body["own_source_state_bits"][1] |= wire.STATE_ACTIVE_ECONOMY_ORDER
         body["own_active_economy_candidate_row"][1] = 0
         body["own_walking_build_type_id"][2] = 0x82
-        body["own_source_state_bits"][3] |= wire.STATE_CARGO_NONZERO
+        body["own_source_state_bits"][3] |= wire.STATE_OUTSTANDING_RESERVATION
+        body["command_mask"][1:4] = [1, 1, 1]
+        body["own_feature"][4][0:2] = body["candidates"][1].feature[0:2]
         request, header = parse(body, header)
         step = ppo.step_from_request(request, header)
-        group = next(i for i, row in enumerate(step.control_layout.rows) if row.kind == squads.SQUAD)
-        self.assertEqual(step.control_layout.rows[group].members, (0, 4))
+        task = next(i for i, row in enumerate(step.control_layout.rows) if row.kind == squads.WORKER_TASK)
+        self.assertEqual(step.control_layout.rows[task].members, (0, 1, 2, 3, 4))
         sample = blank_sample(step)
-        sample["command"][group], sample["argument"][group] = wire.COMMAND_MOVE, 64
-        economic = next(i for i, row in enumerate(step.control_layout.rows)
-                        if row.kind == squads.ECONOMY and row.members == (4,))
-        sample["command"][economic], sample["argument"][economic] = wire.COMMAND_BUILD, 1
+        self.assertFalse(bool(step.command_mask[task, wire.COMMAND_HARVEST]))
+        sample["command"][task], sample["argument"][task] = wire.COMMAND_BUILD, 1
         expanded = squads.expand_actions(step, sample)
-        self.assertEqual(expanded["command"], [wire.COMMAND_MOVE, 0, 0, 0, wire.COMMAND_BUILD, 0])
-        self.assertEqual(expanded["recipients"][group], [0])
+        self.assertEqual(expanded["command"], [wire.COMMAND_HARVEST, 0, 0, 0, wire.COMMAND_BUILD, 0])
+        self.assertEqual(expanded["recipients"][task], [4])
         assert_wire_legal(self, request, header, expanded)
-        self.assertEqual(squads.published_decisions(outcome_for(expanded), expanded), 2)
+        self.assertEqual(squads.published_decisions(outcome_for(expanded), expanded), 1)
 
     def test_shared_legality_intersections_and_no_empty_pointer_sampling(self):
         body, header = fixture([(2, 5), (2, 5)])
@@ -197,10 +203,18 @@ class SquadTests(unittest.TestCase):
             expanded = squads.expand_actions(step, sample)
             replay = assert_wire_legal(self, request, header, expanded)
             self.assertLessEqual(sum(a == wire.SLOT_SCOUT + 1 for a in expanded["assign"]), 1)
-            for j, row in enumerate(step.control_layout.rows):
-                if row.kind != squads.SQUAD:
-                    self.assertEqual(tuple(step.budget_before[j].tolist()),
-                                     tuple(replay["remaining_budget"][row.members[0]]))
+            # Dispatcher position and selected source position can differ.
+            # Validate the entire expanded wire ledger above, and compare
+            # final resource claims instead of unrelated prefix positions.
+            ledger = ppo.StepLedger(step)
+            for command, argument in zip(sample["command"], sample["argument"]):
+                if int(command) in wire.ECONOMY_COMMANDS:
+                    ledger.reserve(int(command), int(argument))
+            raw_ledger = wire.EconomyLedger(request, header)
+            for command, argument in zip(expanded["command"], expanded["argument"]):
+                if command in wire.ECONOMY_COMMANDS:
+                    raw_ledger.reserve(command, argument)
+            self.assertEqual(tuple(ledger.remaining), raw_ledger.budget())
 
     def test_outcome_reduces_once_and_rejects_partial_or_overridden_squad(self):
         body, header = fixture([(2, 5), (2, 5), (2, 5)])
@@ -218,12 +232,10 @@ class SquadTests(unittest.TestCase):
         request, header = parse(body, header)
         step = ppo.step_from_request(request, header)
         sample = blank_sample(step)
-        for j, row in enumerate(step.control_layout.rows):
-            sample["command"][j] = wire.COMMAND_MOVE if row.kind == squads.SQUAD else wire.COMMAND_HARVEST
-            sample["argument"][j] = 9 if row.kind == squads.SQUAD else 0
         expanded = squads.expand_actions(step, sample)
         bits, _ = squads.reduce_outcome(outcome_for(expanded), expanded)
-        self.assertFalse(bool(bits[0]))   # both workers took individual tasks
+        self.assertTrue(bool(bits[0]))  # valid choice to dispatch no worker
+        self.assertEqual(squads.published_decisions(outcome_for(expanded), expanded), 0)
 
     def test_compact_rollouts_train_and_invalid_member_does_not_multiply_loss(self):
         body, header = fixture([(2, 5), (2, 5), (0, 0x20), (1, 0x80)])
@@ -278,6 +290,10 @@ class SquadTests(unittest.TestCase):
         old_state["own_encoder.0.weight"] = old_state["own_encoder.0.weight"][:, :-squads.CONTROL_FEATURE_COUNT]
         metadata = dict(bc.CHECKPOINT_METADATA)
         metadata["architecture_id"] = "entv5-slot-hunt-mlp"
+        metadata["entity_action_version"] = 5
+        metadata.pop("policy_commands")
+        old_state["command_head.weight"] = torch.arange(9 * 16, dtype=torch.float32).reshape(9, 16)
+        old_state["command_head.bias"] = torch.arange(9, dtype=torch.float32)
         metadata.pop("control_schema_id")
         metadata.pop("control_feature_count")
         with tempfile.TemporaryDirectory() as directory:
@@ -366,11 +382,13 @@ class SquadTests(unittest.TestCase):
             policy.close()
 
 
-def benchmark():
+def benchmark(worker_heavy=False):
     torch.set_num_threads(1)
     torch.manual_seed(7)
-    body, header = fixture([(0, 0x20)] * 12 + [(1, 0x80)] * 4 +
-                            [(2, 5 + i % 4) for i in range(128)])
+    specs = [(0, 0x20)] * (128 if worker_heavy else 12) + [(1, 0x80)] * 4
+    if not worker_heavy:
+        specs += [(2, 5 + i % 4) for i in range(128)]
+    body, header = fixture(specs)
     request, header = parse(body, header)
     net = ppo.Entity2Net(hidden=128, issue_prior=0.3)
     results = {"wire_units": header.own_rows, "torch_threads": 1, "hidden": 128,
@@ -402,7 +420,7 @@ def benchmark():
 
 
 if __name__ == "__main__":
-    if "--benchmark" in sys.argv:
-        benchmark()
+    if "--benchmark" in sys.argv or "--worker-benchmark" in sys.argv:
+        benchmark(worker_heavy="--worker-benchmark" in sys.argv)
     else:
         unittest.main()

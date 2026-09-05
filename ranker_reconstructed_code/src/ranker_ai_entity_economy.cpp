@@ -1780,8 +1780,8 @@ AiEntity2Snapshot BuildAiEntity2Snapshot(const AiEntity2SnapshotInput& input) {
 
         // ---- command mask (policy vocabulary, action v4 role table) ----
         //   fighter               KEEP MOVE ATTACK_MOVE PATROL ATTACK_UNIT HOLD
-        //   idle worker           KEEP HARVEST BUILD
-        //   harvesting worker     KEEP BUILD (a harvest that ended reopens
+        //   idle worker           KEEP MOVE(global scouting) HARVEST BUILD
+        //   harvesting worker     KEEP MOVE(global scouting) BUILD (a harvest that ended reopens
         //                         HARVEST: the order is then no longer active)
         //   threatened worker     KEEP, MOVE to local tokens only, ATTACK_UNIT
         //                         within kAiEntity2WorkerThreatRadiusPx
@@ -1798,6 +1798,15 @@ AiEntity2Snapshot BuildAiEntity2Snapshot(const AiEntity2SnapshotInput& input) {
         const bool awaiting_ack = info.economy_order != nullptr &&
             info.economy_order->status == AiEntityOrderStatus::awaiting_apply;
         const bool worker_blocked = worker && (awaiting_ack || build_locked);
+        // A dispatched scout/defender finishes its trip before becoming an
+        // economy source again. Threat response still overrides this lock.
+        bool worker_personal_task = false;
+        if (worker && store != nullptr) {
+            const auto task = store->combat.find(AiEntityPackKey(info.key));
+            worker_personal_task = task != store->combat.end() &&
+                (task->second.status == AiEntityOrderStatus::awaiting_apply ||
+                 task->second.status == AiEntityOrderStatus::active);
+        }
         bool worker_threatened = false;
         if (worker && !worker_blocked) {
             const i64 radius = static_cast<i64>(kAiEntity2WorkerThreatRadiusPx);
@@ -1860,14 +1869,20 @@ AiEntity2Snapshot BuildAiEntity2Snapshot(const AiEntity2SnapshotInput& input) {
                 command_mask |= 1u << static_cast<u32>(AiEntity2PolicyCommand::attack_unit);
             }
         } else if (worker) {
-            // Calm worker: no point moves and no attacks; the pair row is
-            // cleared so the wire carries exactly what the mask allows.
+            // Calm workers accept one dispatcher-selected global scout task.
+            // Local MOVE remains reserved for automatic threat response.
+            row.point_mask[2] = 0;
+            if (!worker_blocked && !worker_personal_task &&
+                (unit.type_flags & kMoveBit) != 0 &&
+                (row.point_mask[0] != 0 || row.point_mask[1] != 0)) {
+                command_mask |= 1u << static_cast<u32>(AiEntity2PolicyCommand::move);
+            }
             for (u32 w = 0; w < pair_words; ++w) {
                 snapshot.attack_pair_mask[static_cast<std::size_t>(own_index) * pair_words +
                     w] = 0;
             }
         }
-        if (worker && !worker_blocked && !worker_threatened) {
+        if (worker && !worker_blocked && !worker_threatened && !worker_personal_task) {
             if (any_resource && !harvest_locked) {
                 command_mask |= 1u << static_cast<u32>(AiEntity2PolicyCommand::harvest);
             }

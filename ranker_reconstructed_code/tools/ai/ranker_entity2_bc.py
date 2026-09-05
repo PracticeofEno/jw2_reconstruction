@@ -5,7 +5,7 @@
 Checkpoints are ENTCMD02-only: every metadata key is pinned exactly and an
 ENTCMD01 checkpoint (contract_id ENTCMD01 / protocol 2) is a hard reject.
 The optional one-way converter copies the allow-listed ENTCMD01 tensors
-(global tower shape permitting, target encoder, gate, command rows 1..6,
+(global tower shape permitting, target encoder, gate, command rows 1..5,
 attack pointer) into a fresh ENTCMD02 net and records the parent SHA-256,
 the tensor allowlist and the mapping id.
 
@@ -45,6 +45,7 @@ CHECKPOINT_METADATA = {
     "outcome_version": wire.VERSIONS[7],
     "global_feature_count": wire.GLOBAL_COUNT,
     "command_count": wire.COMMAND_COUNT,
+    "policy_commands": list(ppo.POLICY_COMMANDS),
     "point_count": wire.POINT_COUNT,
     "own_continuous_count": wire.OWN_CONTINUOUS_COUNT,
     "own_extra_count": ppo.OWN_EXTRA,
@@ -97,8 +98,8 @@ def validate_checkpoint_metadata(metadata: Dict, log=print) -> None:
     if metadata.get("contract_id") != "ENTCMD02":
         raise RuntimeError("not an ENTCMD02 checkpoint (contract_id=%r)" %
                            (metadata.get("contract_id"),))
-    if metadata.get("architecture_id") == "entv5-slot-hunt-mlp":
-        raise RuntimeError("per-unit checkpoint requires explicit conversion: "
+    if metadata.get("architecture_id") in ("entv5-slot-hunt-mlp", "entv6-type-squads-mlp"):
+        raise RuntimeError("legacy checkpoint requires explicit conversion: "
                            "ranker_entity2_bc.py --convert-squads-from OLD.pt --out NEW.pt")
     for key, expected in CHECKPOINT_METADATA.items():
         if metadata.get(key) != expected:
@@ -158,9 +159,9 @@ def load_checkpoint(path: str) -> ppo.Entity2Net:
 
 
 def convert_squad_checkpoint(source_path: str) -> Dict:
-    """Warm start from the immediately preceding per-unit architecture.
+    """Warm start from action-v5 per-unit or type-squad checkpoints.
 
-    The new six summary inputs start at zero weight. Optimizer, rollout
+    Drop the HARVEST output and initialise changed summary inputs. Optimizer, rollout
     lineage and old likelihoods are deliberately not carried across the
     changed action distribution. Unknown wire/action versions are rejected.
     """
@@ -168,9 +169,14 @@ def convert_squad_checkpoint(source_path: str) -> Dict:
         parent_sha = hashlib.sha256(handle.read()).hexdigest()
     payload = torch.load(source_path, map_location="cpu", weights_only=False)
     metadata = dict(payload.get("metadata") or {})
-    if metadata.get("architecture_id") != "entv5-slot-hunt-mlp":
-        raise RuntimeError("squad converter requires entv5-slot-hunt-mlp")
+    architecture = metadata.get("architecture_id")
+    if architecture not in ("entv5-slot-hunt-mlp", "entv6-type-squads-mlp"):
+        raise RuntimeError("worker-task converter requires entv5 or entv6")
+    if metadata.get("entity_action_version") != 5:
+        raise RuntimeError("worker-task converter requires legacy action version 5")
     metadata.update(architecture_id=ppo.ARCHITECTURE_ID,
+                    entity_action_version=wire.VERSIONS[3],
+                    policy_commands=list(ppo.POLICY_COMMANDS),
                     control_schema_id=squads.CONTROL_SCHEMA_ID,
                     control_feature_count=squads.CONTROL_FEATURE_COUNT)
     validate_checkpoint_metadata(metadata)
@@ -186,10 +192,19 @@ def convert_squad_checkpoint(source_path: str) -> Dict:
                 raise RuntimeError("squad converter missing tensor: " + name)
             old = source[name]
             if name == "own_encoder.0.weight":
-                if old.shape != (tensor.shape[0], tensor.shape[1] - squads.CONTROL_FEATURE_COUNT):
+                added = squads.CONTROL_FEATURE_COUNT if architecture == "entv5-slot-hunt-mlp" else 0
+                if old.shape != (tensor.shape[0], tensor.shape[1] - added):
                     raise RuntimeError("squad converter own encoder shape mismatch")
                 tensor.zero_()
                 tensor[:, :old.shape[1]].copy_(old)
+                # The old economy-source flag becomes the pooled worker-task
+                # flag; do not carry its incompatible meaning into the model.
+                if not added:
+                    tensor[:, -1] = 0
+            elif name in ("command_head.weight", "command_head.bias"):
+                if old.shape[0] != wire.COMMAND_COUNT - 1 or old.shape[1:] != tensor.shape[1:]:
+                    raise RuntimeError("worker-task converter command head shape mismatch")
+                tensor.copy_(old[[c - 1 for c in ppo.POLICY_COMMANDS]])
             elif old.shape == tensor.shape:
                 tensor.copy_(old)
             else:
@@ -199,14 +214,14 @@ def convert_squad_checkpoint(source_path: str) -> Dict:
         raise RuntimeError("squad converter unexpected model tensors")
     net.load_state_dict(target)
     return {"net": net, "copied": copied, "parent_sha256": parent_sha,
-            "mapping_id": "entv5-to-type-squads-v1"}
+            "mapping_id": architecture + "-to-worker-tasks-v2"}
 
 
 # ---------------------------------------------------------------------------
 # ENTCMD01 -> ENTCMD02 one-way converter (plan 15.2 allowlist)
 # ---------------------------------------------------------------------------
 
-CONVERTER_MAPPING_ID = "entcmd01to02-v1"
+CONVERTER_MAPPING_ID = "entcmd01-to-worker-tasks-v2"
 # (source tensor name, destination tensor name).  Shapes must match exactly;
 # the ENTCMD02 global tower takes 805 inputs so only its second layer copies.
 CONVERTER_ALLOWLIST = [
@@ -235,8 +250,8 @@ CONVERTER_ALLOWLIST = [
 
 def convert_entcmd01_checkpoint(source_path: str, hidden: int = 128) -> Dict:
     """Copy the allow-listed ENTCMD01 tensors into a fresh ENTCMD02 net.
-    Returns {"net", "copied", "parent_sha256"}.  Command rows 1..6 of the
-    ENTCMD01 6-way command head map onto rows 0..5 of the 10-way head."""
+    Returns {"net", "copied", "parent_sha256"}. Only commands 1..5 have
+    matching semantics in the eight-way learned command head."""
     raw = open(source_path, "rb").read()
     parent_sha = hashlib.sha256(raw).hexdigest()
     payload = torch.load(source_path, map_location="cpu", weights_only=False)
@@ -255,9 +270,11 @@ def convert_entcmd01_checkpoint(source_path: str, hidden: int = 128) -> Dict:
                 copied.append(dst_name)
         if "command_head.weight" in source and \
                 tuple(source["command_head.weight"].shape) == (6, hidden):
-            target["command_head.weight"][0:6].copy_(source["command_head.weight"])
-            target["command_head.bias"][0:6].copy_(source["command_head.bias"])
-            copied.append("command_head[0:6]")
+            # Legacy row 6 was STOP; personal STOP and learned HARVEST are
+            # absent. Preserve only MOVE/ATTACK_MOVE/PATROL/ATTACK_UNIT/HOLD.
+            target["command_head.weight"][0:5].copy_(source["command_head.weight"][0:5])
+            target["command_head.bias"][0:5].copy_(source["command_head.bias"][0:5])
+            copied.append("command_head[0:5]")
     net.load_state_dict(target)
     return {"net": net, "copied": copied, "parent_sha256": parent_sha,
             "mapping_id": CONVERTER_MAPPING_ID}
@@ -324,12 +341,75 @@ class ShadowStep:
     intent_material: List[int]
 
 
+def _teacher_member_command(record: wire.ShadowRecord, source: int,
+                            preserve_scout: bool = False):
+    """Resolve personal KEEP against the teacher's effective legacy slot.
+
+    SHD3 omits a personal point order when its slot already carries it. MAIN
+    and RAID commanders disappear at the type-squad boundary, so their orders
+    must become personal/shared ISSUE labels. Unknown or unrepresentable slot
+    orders cannot be used as evidence for KEEP. Personal ISSUE takes priority.
+    """
+    label = record.labels[source]
+    if label.label == wire.SHADOW_EXCLUDED:
+        return None
+    if label.label == wire.SHADOW_ISSUE:
+        return label.command, label.argument
+    if label.assign_label == wire.SHADOW_EXCLUDED:
+        return None
+    request = record.request
+    current_slot = request["own_slot_id"][source]
+    slot = current_slot
+    if label.assign_label == wire.SHADOW_ISSUE:
+        slot = label.assign - 1
+    if slot == wire.SLOT_NONE:
+        return wire.COMMAND_KEEP, -1
+    if slot == wire.SLOT_SCOUT:
+        # Existing scouts retain their separate commander. A new scout must
+        # be detached by the projected assignment before resolving consensus.
+        return (wire.COMMAND_KEEP, -1) if preserve_scout else None
+    teacher = record.slot_labels[slot]
+    if teacher.label == wire.SHADOW_EXCLUDED:
+        return None
+    if teacher.label == wire.SHADOW_ISSUE:
+        command, cell = teacher.command, teacher.cell
+    else:
+        previous = request["slots"][slot]
+        if not previous.active:
+            return wire.COMMAND_KEEP, -1
+        command, cell = previous.command, previous.cell
+    # KEEP also encodes a repeated personal shadow latch (e.g. ATTACK_UNIT).
+    # It is ambiguous when a live order is not known to originate in this
+    # slot. Do not turn an ongoing personal attack into the commander's HOLD.
+    # MATCH refers to the snapshot slot, not a same-tick reassignment target.
+    status = request["own_order_status"][source]
+    tracking = status in (1, 2)  # AiEntityOrderStatus awaiting_apply / active
+    untracked = status == 0 and request["own_semantic_order"][source] != wire.SEMANTIC_NONE
+    if (tracking or untracked) and (
+            slot != current_slot or
+            request["own_slot_order_relation"][source] != wire.SLOT_RELATION_MATCH):
+        return None
+    point_commands = {
+        wire.SLOT_COMMAND_MOVE: wire.COMMAND_MOVE,
+        wire.SLOT_COMMAND_ATTACK_MOVE: wire.COMMAND_ATTACK_MOVE,
+        wire.SLOT_COMMAND_PATROL: wire.COMMAND_PATROL,
+    }
+    if command in point_commands:
+        return point_commands[command], cell
+    if command == wire.SLOT_COMMAND_HOLD:
+        return wire.COMMAND_HOLD, -1
+    # STOP has no personal policy command. HUNT_NEUTRAL also needs a member's
+    # resolved target, which is absent from a personal KEEP record.
+    return None
+
+
 def _squad_teacher_labels(step: ppo.EntityStep, record: wire.ShadowRecord):
     """Project compatible teacher actions; never vote away conflicting orders.
 
     Raw SHD3 blocks have already been verified by the wire reader. Compact
-    blocks replay the projected prefix; personal/legacy RAID choices that
-    cannot represent a shared action are excluded from supervision.
+    blocks replay the projected prefix. Resolve old slot orders after the
+    teacher's same-tick assignments before checking shared-action consensus.
+    Choices that cannot represent a shared action are excluded from supervision.
     """
     labels = []
     unresolved = None
@@ -343,7 +423,29 @@ def _squad_teacher_labels(step: ppo.EntityStep, record: wire.ShadowRecord):
                                  wire.SHADOW_REASON_MULTIPLE_DESIRED, -1, 1.0,
                                  wire.SHADOW_EXCLUDED, 0)
         other_assignments_known_keep = True
-        if row.kind == squads.SQUAD:
+        if row.kind == squads.WORKER_TASK:
+            assign_source = -1
+            choices = []
+            known = all(record.labels[i].label != wire.SHADOW_EXCLUDED and
+                        record.labels[i].inclusion_probability == 1.0 for i in members)
+            for i in members:
+                original = record.labels[i]
+                if original.label != wire.SHADOW_ISSUE:
+                    continue
+                command, argument = original.command, original.argument
+                if command == wire.COMMAND_BUILD or (
+                        command == wire.COMMAND_MOVE and 0 <= argument < wire.GLOBAL_CELL_COUNT):
+                    choices.append((command, argument))
+                elif command not in (wire.COMMAND_HARVEST, wire.COMMAND_MOVE,
+                                      wire.COMMAND_ATTACK_UNIT):
+                    known = False
+            # A single dispatcher cannot represent simultaneous different
+            # worker tasks. Automatic harvesting/defence is not a BC target.
+            if known and len(choices) <= 1:
+                command, argument = choices[0] if choices else (wire.COMMAND_KEEP, -1)
+                label = wire.ShadowLabel(wire.SHADOW_ISSUE if command else wire.SHADOW_KEEP,
+                                         command, 0, argument, 1.0, wire.SHADOW_EXCLUDED, 0)
+        elif row.kind == squads.SQUAD:
             assign_source = row.scout_source
             other_assignments_known_keep = all(
                 record.labels[i].assign_label == wire.SHADOW_KEEP
@@ -354,14 +456,12 @@ def _squad_teacher_labels(step: ppo.EntityStep, record: wire.ShadowRecord):
                 if source_label.assign_label == wire.SHADOW_ISSUE and \
                         source_label.assign == wire.SLOT_SCOUT + 1:
                     detached = assign_source
-            relevant = [record.labels[i] for i in members
+            relevant = [i for i in members
                         if i != detached and not (record.labels[i].label == wire.SHADOW_ISSUE and
                                 record.labels[i].command in wire.ECONOMY_COMMANDS)]
-            if relevant and all(l.label != wire.SHADOW_EXCLUDED and
-                                l.inclusion_probability == 1.0 for l in relevant):
-                choices = {(l.command, l.argument) if l.label == wire.SHADOW_ISSUE
-                           else (wire.COMMAND_KEEP, -1) for l in relevant}
-                if len(choices) == 1:
+            if relevant and all(record.labels[i].inclusion_probability == 1.0 for i in relevant):
+                choices = {_teacher_member_command(record, i) for i in relevant}
+                if None not in choices and len(choices) == 1:
                     command, argument = next(iter(choices))
                     label = wire.ShadowLabel(wire.SHADOW_ISSUE if command else wire.SHADOW_KEEP,
                                              command, 0, argument, 1.0,
@@ -370,10 +470,15 @@ def _squad_teacher_labels(step: ppo.EntityStep, record: wire.ShadowRecord):
             original = record.labels[members[0]]
             label = wire.ShadowLabel(**original.__dict__)
             label.assign_label, label.assign = wire.SHADOW_EXCLUDED, 0
-            if row.kind == squads.ECONOMY and label.label == wire.SHADOW_ISSUE and \
-                    label.command not in wire.ECONOMY_COMMANDS:
-                label.label, label.command, label.argument = wire.SHADOW_KEEP, 0, -1
-            assign_source = members[0] if row.kind != squads.ECONOMY else -1
+            if label.label == wire.SHADOW_KEEP:
+                choice = _teacher_member_command(record, members[0], preserve_scout=True)
+                if choice is None:
+                    label.label, label.command = wire.SHADOW_EXCLUDED, wire.SHADOW_EXCLUDED_COMMAND
+                    label.argument, label.exclude_reason = -1, wire.SHADOW_REASON_MULTIPLE_DESIRED
+                else:
+                    label.command, label.argument = choice
+                    label.label = wire.SHADOW_ISSUE if label.command else wire.SHADOW_KEEP
+            assign_source = members[0]
         # An unrepresentable assignment on another member is unknown
         # supervision, not evidence that the squad should choose KEEP.
         if assign_source >= 0 and other_assignments_known_keep:
@@ -669,6 +774,9 @@ def _synthetic_records(count: int = 3) -> List[wire.ShadowRecord]:
     """SHD3 records over the slot fixture: worker BUILDs site 1, fighter B
     (row 3) moves to RAID_A, the commander sends RAID_A to cell 9."""
     body, header = wire._slot_fixture_request()
+    # A calm worker has economy choices but no local threat-only MOVE/ATTACK.
+    body["command_mask"][0] = ((1 << wire.COMMAND_KEEP) | (1 << wire.COMMAND_HARVEST) |
+                               (1 << wire.COMMAND_BUILD))
     payload = wire.pack_act_request(body)
     header.payload_bytes = len(payload)
     header.payload_crc32 = wire.crc32(payload)
@@ -704,9 +812,9 @@ def selftest() -> None:
     assert stats["assign_issue"] == 4 and stats["slot_issue"] == 4 and \
         stats["slot_excluded"] == 4
     steps = shadow_steps(records)
-    # worker squad + worker economy source + building + fighter squad + scout
-    assert steps[0].step.u == 5
-    assert not bool(steps[0].step.dyn_command_mask[2, wire.COMMAND_RESEARCH_UPGRADE])
+    # one worker task + building + fighter squad + scout
+    assert steps[0].step.u == 4
+    assert not bool(steps[0].step.dyn_command_mask[1, wire.COMMAND_RESEARCH_UPGRADE])
     assert not bool(steps[0].step.dyn_assign_mask[:, wire.SLOT_SCOUT].any())
     assert steps[0].slot_labels[1].label == wire.SHADOW_EXCLUDED and steps[0].intent_material[0] == 1
     net = ppo.Entity2Net(hidden=32)
@@ -747,9 +855,9 @@ def selftest() -> None:
     torch.save(source, src_path)
     converted = convert_entcmd01_checkpoint(src_path, hidden=32)
     assert "gate_head.weight" in converted["copied"] and \
-        "command_head[0:6]" in converted["copied"]
+        "command_head[0:5]" in converted["copied"]
     state = converted["net"].state_dict()
-    assert torch.equal(state["command_head.weight"][0:6], torch.ones(6, 32))
+    assert torch.equal(state["command_head.weight"][0:5], torch.ones(5, 32))
     assert not torch.equal(state["value_head.0.weight"], torch.ones(96, 32)[:, :]) or True
     print("ranker_entity2_bc: selftest passed")
 
@@ -763,7 +871,7 @@ def main() -> int:
     parser.add_argument("--init", default="")
     parser.add_argument("--convert-from", default="")
     parser.add_argument("--convert-squads-from", default="",
-                        help="warm start from an entv5 per-unit checkpoint; resets learner state")
+                        help="convert an entv5/entv6 checkpoint to worker tasks; resets learner state")
     parser.add_argument("--epochs", type=int, default=4)
     parser.add_argument("--value-warmup", type=int, default=2)
     parser.add_argument("--lr", type=float, default=3e-4)

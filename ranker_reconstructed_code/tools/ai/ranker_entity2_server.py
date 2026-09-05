@@ -651,7 +651,10 @@ class NetPolicy:
             step = self.pending[self._key(connection_id, header)]["step"]
             return {"control_rows": step.u,
                     "squad_rows": sum(row.kind == self.squads.SQUAD
-                                      for row in step.control_layout.rows)}
+                                      for row in step.control_layout.rows),
+                    "worker_task_rows": sum(row.kind == self.squads.WORKER_TASK
+                                            for row in step.control_layout.rows),
+                    "autopilot_workers": len(step.control_layout.worker_commands)}
 
     def outcome(self, connection_id: int, header: wire.Header, outcome: Dict) -> None:
         with self.lock:
