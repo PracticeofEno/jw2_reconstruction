@@ -76,6 +76,27 @@ struct P2PNetworkLaunchParameters {
     // (Link role 4) and auto-starts the lobby without waiting for a peer so a
     // headless harness can run unattended matches.
     bool self_play = false;
+    // Fixed-head commander: inference and deterministic execution live in
+    // this process. These options are accepted only by the self-play parser.
+    bool self_play_commander = false;
+    bool self_play_teacher = false;
+    // -AITEACHER2: only the second policy owner (under -AIVS) is a teacher.
+    bool self_play_teacher2 = false;
+    // -AIDAGGER: the learned policy acts while the rule commander's decision
+    // for each observation is recorded as a training label.
+    bool self_play_dagger = false;
+    bool self_play_deterministic = false;
+    bool self_play_autoscout = true;
+    // -AINOSLEEP (self-play only): skip the per-frame Sleep(1) of the
+    // end_frame phase so headless training instances run at CPU speed.
+    bool self_play_no_sleep = false;
+    u32 self_play_curriculum = 2;
+    // -AITEACHERVAR:N — rule-commander variant id (0 = default teacher);
+    // -AITEACHERVAR2:N applies to the second policy owner under -AIVS.
+    u32 self_play_teacher_variant = 0, self_play_teacher_variant2 = 0;
+    std::array<char, kP2PNetworkLaunchMapPathBytes> self_play_weights{};
+    std::array<char, kP2PNetworkLaunchMapPathBytes> self_play_weights2{};
+    std::array<char, kP2PNetworkLaunchMapPathBytes> self_play_rollout{};
     // -AIDRAW: force DirectDraw/DirectSound init in self-play (debug escape
     // hatch).  Default self-play is NO-DRAW: headless training instances do
     // not touch graphics/audio devices, so dozens can run beside an

@@ -1738,11 +1738,60 @@ if (RANKER_BUILD_AI_PLAY_INTERFACE_REGRESSION_TEST)
         COMMAND ai_play_interface_regression)
 endif()
 
+option(RANKER_BUILD_COMMANDER_TESTS "Build focused commander policy/executor checks" OFF)
+if (RANKER_BUILD_COMMANDER_TESTS)
+    enable_testing()
+    add_executable(ai_commander_model_probe
+        tests/ai_commander_model_probe.cpp src/ranker_ai_commander_model.cpp)
+    target_include_directories(ai_commander_model_probe PRIVATE include)
+    add_executable(ai_commander_regression
+        tests/ai_commander_regression.cpp src/ranker_ai_commander.cpp
+        src/ranker_ai_expansion.cpp)
+    target_include_directories(ai_commander_regression PRIVATE include)
+    # Assertions in this behavioral regression must also run in Release builds.
+    if (MSVC)
+        target_compile_options(ai_commander_regression PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(ai_commander_regression PRIVATE -UNDEBUG)
+    endif()
+    add_test(NAME ai_commander_regression COMMAND ai_commander_regression)
+    add_executable(ai_commander_actions_regression
+        tests/ai_commander_actions_regression.cpp src/ranker_ai_actions.cpp)
+    target_include_directories(ai_commander_actions_regression PRIVATE include)
+    if (MSVC)
+        target_compile_options(ai_commander_actions_regression PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(ai_commander_actions_regression PRIVATE -UNDEBUG)
+    endif()
+    add_test(NAME ai_commander_actions_regression COMMAND ai_commander_actions_regression)
+    if (WIN32)
+        add_executable(ai_commander_launch_regression
+            tests/ai_commander_launch_regression.cpp src/ranker_p2p_lobby.cpp)
+        target_include_directories(ai_commander_launch_regression PRIVATE include)
+        # Whole-program optimization removes the unused lobby/UI entry points
+        # so this checks the real parser without linking or launching the game.
+        if (MSVC)
+            target_compile_options(ai_commander_launch_regression PRIVATE
+                /UNDEBUG /O2 /GL /Gy /Gw)
+            target_link_options(ai_commander_launch_regression PRIVATE /LTCG /OPT:REF)
+        else()
+            target_compile_options(ai_commander_launch_regression PRIVATE
+                -UNDEBUG -O2 -flto -ffunction-sections -fdata-sections)
+            target_link_options(ai_commander_launch_regression PRIVATE
+                -flto -Wl,--gc-sections)
+        endif()
+        add_test(NAME ai_commander_launch_regression COMMAND ai_commander_launch_regression)
+    endif()
+endif()
+
 add_executable(ranker_rebuild WIN32
     resources/ranker_resources.rc
     src/main.cpp
     src/imports.cpp
     src/ranker_client_config.cpp
+    src/ranker_ai_commander.cpp
+    src/ranker_ai_commander_model.cpp
+    src/ranker_ai_commander_rollout.cpp
     src/ranker_ai_observation.cpp
     src/ranker_ai_entity_control.cpp
     src/ranker_ai_entity_economy.cpp

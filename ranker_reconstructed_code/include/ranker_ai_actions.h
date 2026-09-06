@@ -57,6 +57,10 @@ enum class AiSemanticActionKind : u32 {
     // auto-pickup enable.  A unit sent to a meat drop this way collects it
     // on going idle at the point (idle-acquire -> state 5 -> collect).
     pickup_move,        // cmd 0x0d + point
+    // Commander executor actions; append-only to preserve existing wire ids.
+    cancel_construction, // subtype 0x07 cmd 0x1c, own unfinished building only
+    set_hunt_marker,    // subtype 0x0b cmd 0x0d, stance_on toggles area bit 31
+    hunt_unit,          // subtype 0x02 cmd 0x0d, currently visible neutral only
 };
 
 struct AiSemanticAction {
@@ -179,6 +183,7 @@ enum class AiActionPlanCode : u32 {
     stance_inactive,
     nothing_to_return,
     missing_item,
+    target_not_neutral,
 };
 
 struct AiActionPlanResult {

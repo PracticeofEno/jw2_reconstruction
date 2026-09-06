@@ -12,6 +12,10 @@ constexpr u32 kResearchSubtype = 0x0cu;
 // Schema v2 audited wire routes.
 constexpr u32 kAbilitySubtype = 0x09u;
 constexpr u32 kForcedOrderSubtype = 0x0au;
+constexpr u32 kConstructionCancelSubtype = 0x07u;
+constexpr u32 kStatusMaskSubtype = 0x0bu;
+constexpr u32 kConstructionCancelCommand = 0x1cu;
+constexpr u32 kHuntMarkerFlag = 0x80000000u;
 constexpr u32 kStopCommand = 0x00u;
 constexpr u32 kMoveCommand = 0x04u;
 constexpr u32 kAttackCommand = 0x05u;
@@ -270,6 +274,7 @@ AiActionPlanResult PlanAiSemanticActionV1(const AiActionPlanInput& input,
         action.kind == AiSemanticActionKind::research ||
         action.kind == AiSemanticActionKind::build ||
         action.kind == AiSemanticActionKind::cancel_production ||
+        action.kind == AiSemanticActionKind::cancel_construction ||
         action.kind == AiSemanticActionKind::use_item) {
         if (units.size() != 1) {
             return reject(AiActionPlanCode::requires_single_unit);
@@ -277,6 +282,40 @@ AiActionPlanResult PlanAiSemanticActionV1(const AiActionPlanInput& input,
     }
 
     const UnitMovementUnit& primary = *units.front();
+    if (action.kind == AiSemanticActionKind::cancel_construction) {
+        if (action.target_unit_id != 0 || action.target_x != 0 || action.target_y != 0)
+            return reject(AiActionPlanCode::unexpected_target);
+        if (action.queued) return reject(AiActionPlanCode::queued_flag_unsupported);
+        // Subtype07 unconditionally marks the addressed object for death.
+        // Fail closed here: only an unfinished building may enter the engine's
+        // construction-cancellation/refund path; never a completed asset.
+        if (primary.type_id < kFirstBuildingType || primary.type_id >= kBuildingTypeLimit ||
+            !primary.under_construction || primary.action_mode_gate != 1u)
+            return reject(AiActionPlanCode::nothing_to_cancel);
+        AiActionPlanResult result;
+        result.code = AiActionPlanCode::okay;
+        result.packets.push_back(make_packet(input.local_owner, kConstructionCancelSubtype,
+            primary, kConstructionCancelCommand, 0, static_cast<u32>(primary.x), static_cast<u32>(primary.y)));
+        return result;
+    }
+    if (action.kind == AiSemanticActionKind::set_hunt_marker) {
+        if (action.target_unit_id != 0 || action.target_x != 0 || action.target_y != 0)
+            return reject(AiActionPlanCode::unexpected_target);
+        if (action.queued) return reject(AiActionPlanCode::queued_flag_unsupported);
+        AiActionPlanResult result;
+        for (const UnitMovementUnit* unit : units) {
+            // Human FUN_004db799 and PublishSelectedUnitsStatusMaskToggle use
+            // capability5, not capability13 or the unrelated command_flags.
+            if (!supports_action(*unit, kAttackCommand))
+                return reject(AiActionPlanCode::unit_action_unsupported);
+            const u32 desired = action.stance_on ? kHuntMarkerFlag : 0;
+            if ((unit->area_marker_flags & kHuntMarkerFlag) == desired) continue;
+            result.packets.push_back(make_packet(input.local_owner, kStatusMaskSubtype,
+                *unit, kAcquireCommand, desired, static_cast<u32>(unit->x), static_cast<u32>(unit->y)));
+        }
+        result.code = AiActionPlanCode::okay;
+        return result;
+    }
     if (action.kind == AiSemanticActionKind::produce_unit) {
         if (action.target_unit_id != 0 || action.target_x != 0 ||
             action.target_y != 0) {
@@ -877,6 +916,7 @@ AiActionPlanResult PlanAiSemanticActionV1(const AiActionPlanInput& input,
         }
         break;
     case AiSemanticActionKind::attack_unit:
+    case AiSemanticActionKind::hunt_unit:
         if (action.target_unit_id == 0) {
             return reject(AiActionPlanCode::missing_target);
         }
@@ -891,6 +931,8 @@ AiActionPlanResult PlanAiSemanticActionV1(const AiActionPlanInput& input,
         if (is_friendly_target(input, *target)) {
             return reject(AiActionPlanCode::target_is_friendly);
         }
+        if (action.kind == AiSemanticActionKind::hunt_unit && target->owner_id != kPlayerSlotCount)
+            return reject(AiActionPlanCode::target_not_neutral);
         target_id = target->id;
         target_x = target->x;
         target_y = target->y;
@@ -988,6 +1030,13 @@ AiActionPlanResult PlanAiSemanticActionV1(const AiActionPlanInput& input,
             command = supports_action(*unit, kAcquireCommand)
                 ? kAcquireCommand
                 : kMoveCommand;
+            break;
+        case AiSemanticActionKind::hunt_unit:
+            // Preserve the acquire marker while attacking the visible animal;
+            // ordinary attack_unit clears it and loses hunting/meat pickup.
+            if (!supports_action(*unit, kAttackCommand))
+                return reject(AiActionPlanCode::unit_action_unsupported);
+            command = kAcquireCommand;
             break;
         case AiSemanticActionKind::harvest:
             command = kHarvestCommand;

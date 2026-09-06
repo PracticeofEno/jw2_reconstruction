@@ -10,6 +10,10 @@
 !docs/AI_TRAINING_CODE_EFFECTIVENESS_REVIEW_2026-09-03.md
 !docs/RL_COMMAND_HEAD_ROW_BEHAVIOR.md
 !docs/RL_FLOW_CURRENT.md
+!docs/RL_COMMANDER_CURRENT.md
+!docs/RL_COMMANDER_VERIFICATION.md
+!docs/JW2_STRONG_AI_BOT_DESIGN.md
+!docs/JW2_COMMANDER_IMPLEMENTATION_STATUS.md
 
 !ranker_reconstructed_code/
 !ranker_reconstructed_code/CMakeLists.txt
@@ -67,6 +71,10 @@
 !ranker_reconstructed_code/tests/bitmap_png_resource_regression.cpp
 !ranker_reconstructed_code/tests/ui_png_resource_regression.cpp
 !ranker_reconstructed_code/tests/ai_play_interface_regression.cpp
+!ranker_reconstructed_code/tests/ai_commander_regression.cpp
+!ranker_reconstructed_code/tests/ai_commander_model_probe.cpp
+!ranker_reconstructed_code/tests/ai_commander_actions_regression.cpp
+!ranker_reconstructed_code/tests/ai_commander_launch_regression.cpp
 
 !ranker_reconstructed_code/tools/
 !ranker_reconstructed_code/tools/replay_debug/

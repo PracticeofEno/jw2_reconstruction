@@ -5,6 +5,8 @@
 #include "ranker_change_lobby.h"
 #include "ranker_client_config.h"
 #include "ranker_ai_autopilot.h"
+#include "ranker_ai_commander.h"
+#include "ranker_ai_commander_rollout.h"
 #include "ranker_ai_decision_gate.h"
 #include "ranker_ai_entity_control.h"
 #include "ranker_ai_expansion.h"
@@ -101,11 +103,15 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <cmath>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
 #include <cstring>
+#include <filesystem>
+#include <map>
 #include <set>
 #include <limits>
 #include <memory>
@@ -132,6 +138,11 @@ void ai_entity_send_terminals(GameplayLoopState& state, bool timed_out);
 void run_ai_entity2_play_frame(GameplayLoopState& state);
 void ai_entity2_send_terminals(GameplayLoopState& state, bool timed_out);
 void ai_entity2_reset_session();
+void ai_commander_reset_session();
+void run_ai_commander_frame(GameplayLoopState& state);
+void ai_commander_finish(GameplayLoopState& state, bool timed_out);
+void ai_commander_account_death(const UnitMovementUnit& unit,
+    const UnitMovementUnit* attacker);
 void record_ai_entity2_shadow_tick(u32 local_owner, u32 frame,
     const AiObservation& observation);
 void ai_entity2_shadow_tap_push(u32 local_owner, const AiSemanticAction& action);
@@ -12468,6 +12479,7 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
     // generation 1 (plan section 5.3).
     AiEntityRegistryReset(ai_entity_registry());
     ai_entity2_reset_session();
+    ai_commander_reset_session();
     for (AiEntityShadowState& shadow : g_runtime.ai_play_entity_shadow) {
         shadow = AiEntityShadowState{};
     }
@@ -23163,7 +23175,7 @@ AiAbilityAvailability default_ai_play_check_ability(
 // observation holds pointers into them for the caller-scoped action planning.
 bool build_default_ai_play_observation(GameplayLoopState& state, u32 local_owner,
     std::vector<u8>& explored, std::vector<u8>& visible,
-    AiObservationBuildResult& out) {
+    AiObservationBuildResult& out, bool engine_owner_vision = false) {
     UnitMovementContext* movement = default_gameplay_movement_context();
     UnitLifecycleContext* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
     if (movement == nullptr || lifecycle == nullptr) {
@@ -23194,7 +23206,8 @@ bool build_default_ai_play_observation(GameplayLoopState& state, u32 local_owner
         explored[index] =
             (visibility.owner[index] & explored_bit) != 0 ? 1u : 0u;
         visible[index] =
-            (visibility.current[index] & visible_bit) != 0 ? 1u : 0u;
+            (engine_owner_vision ? (visibility.owner[index] & explored_bit) != 0 :
+                (visibility.current[index] & visible_bit) != 0) ? 1u : 0u;
     }
     // The engine maintains the real grid's current-visibility layer only for
     // the local viewing player, so an AI owner's row above is empty
@@ -23204,6 +23217,10 @@ bool build_default_ai_play_observation(GameplayLoopState& state, u32 local_owner
     // the tile.visible flag, the last-seen resource snapshot, and the
     // enemy-unit visibility gate, making all three fog-honest.
     GameplayVisibilityGrid& vision_scratch = g_runtime.ai_play_vision_scratch;
+    // Commander observes the engine owner layer directly. Both halves are
+    // cleared every 64 frames and populated for every owner, independently of
+    // the observer-only current layer; our explored memory persists separately.
+    if (!engine_owner_vision) {
     vision_scratch.width = visibility.width;
     vision_scratch.height = visibility.height;
     if (vision_scratch.terrain.size() != visibility.terrain.size() ||
@@ -23236,6 +23253,7 @@ bool build_default_ai_play_observation(GameplayLoopState& state, u32 local_owner
                 kGameplayVisibilityVisible) != 0) {
             visible[index] = 1u;
         }
+    }
     }
     // Explored = everything this owner has EVER seen (fog memory), not the
     // engine's non-persistent per-owner bit.  Accumulated per owner so the
@@ -23274,7 +23292,8 @@ bool build_default_ai_play_observation(GameplayLoopState& state, u32 local_owner
     observation_input.movement = movement;
     observation_input.explored_tiles = &explored;
     observation_input.visible_tiles = &visible;
-    observation_input.unit_visible = default_ai_play_unit_active_visible;
+    observation_input.unit_visible = engine_owner_vision ?
+        default_ai_play_unit_visible : default_ai_play_unit_active_visible;
     observation_input.unit_visibility_user_data = &vision_scratch;
     observation_input.unit_combat_profile =
         default_ai_play_unit_combat_profile;
@@ -23352,6 +23371,12 @@ bool build_default_ai_play_observation(GameplayLoopState& state, u32 local_owner
     }
 
     out = BuildAiObservationV1(observation_input);
+    if (engine_owner_vision && out) {
+        // The HUD mirror can lag a constructor's actual resource debit.
+        // Commander budgets must use the simulation owner's current balance.
+        out.observation.primary_resources = lifecycle->owner_primary_resources[local_owner];
+        out.observation.secondary_resources = lifecycle->owner_secondary_resources[local_owner];
+    }
     return static_cast<bool>(out);
 }
 
@@ -28829,6 +28854,10 @@ void run_ai_entity2_play_frame(GameplayLoopState& state) {
     }
 }
 
+// This adapter shares only the host's private engine contexts; the model,
+// observation/executor and rollout implementations are independent modules.
+#include "ranker_ai_commander_game.inc"
+
 void run_default_ai_play_bot(GameplayLoopState& state) {
     if (gameplay_modal_ui_is_active(gameplay_modal_ui_state()) ||
         gameplay_input_action_state().player_reset_gate) {
@@ -28880,6 +28909,11 @@ void run_default_ai_play_bot(GameplayLoopState& state) {
             AiEntityRegistryAuditFrame(ai_entity_registry(),
                 lifecycle->movement->active_units);
         }
+    }
+
+    if (p2p_network_launch_parameters().self_play_commander) {
+        run_ai_commander_frame(state);
+        return;
     }
 
     // -AIENTITY: the act2 frame transaction replaces the per-owner
@@ -29427,6 +29461,7 @@ void default_unit_damage_defeated_accounting(UnitDamageContext& context,
         return;
     }
     HandleUnitKillOwnerCounters(*lifecycle, *attacker_unit, *target_unit);
+    ai_commander_account_death(*target_unit, attacker_unit);
     sync_default_owner_lifecycle_score_counter_tables(
         *lifecycle, attacker_unit->owner_id);
 }
@@ -29906,6 +29941,8 @@ void default_unit_damage_reaction(UnitDamageContext&, UnitRecord& source,
         return;
     }
 
+    ai_commander_note_threat(*strategic_target_unit);
+
     if (target_owner < kOwnerAiOwnerCount && target_owner < kPlayerSlotCount &&
         g_runtime.gameplay_player_slots.slot_states[target_owner] ==
             static_cast<u8>(PlayerSlotState::player_controlled)) {
@@ -30357,6 +30394,7 @@ void default_unit_command_runtime_death_accounting(UnitCommandContext&,
 // state; under-construction deaths refund instead and never reach it).
 void default_unit_lifecycle_death_accounted(UnitLifecycleContext&,
     UnitMovementUnit& unit) {
+    ai_commander_account_death(unit, nullptr);
     if (unit.owner_id >= g_runtime.ai_play_unit_value_lost.size()) {
         return;
     }
@@ -38400,6 +38438,8 @@ void run_default_gameplay_end_condition_monitor(GameplayLoopState& state) {
                 (decided_by_elimination ? "elimination" :
                     (replay_eof ? "replay_eof" : "end_condition"));
             write_ai_selfplay_result(state, end_reason);
+            if (p2p_network_launch_parameters().self_play_commander)
+                ai_commander_finish(state, timed_out);
             write_ai_rl_reward_trace(state, end_reason);
             write_ai_imitation_observations(state);
             // Save the match replay (map archive + packet record + .vpo) into
@@ -38637,7 +38677,9 @@ void default_gameplay_loop_simulation_phase(GameplayLoopState& state) {
     }
     if constexpr (Index == 16) {
         if (!replay_recording_state().playback_mode &&
-            g_runtime.p2p_session_start_state.network_player_count > 1) {
+            (g_runtime.p2p_session_start_state.network_player_count > 1 ||
+             (p2p_network_launch_parameters().self_play &&
+              p2p_network_launch_parameters().self_play_commander))) {
             UnitMovementContext* movement = default_gameplay_movement_context();
             if (movement != nullptr) {
                 CaptureP2PFlightFrame(state.simulation_frame_counter,
@@ -41391,7 +41433,9 @@ void YieldBackgroundWorkerThreadSlice() {
     // The original also keeps the multimedia timer period active during the
     // session, so this preserves its scheduler-controlled Bline redraw cadence
     // instead of imposing an independent high-resolution spin cadence.
-    Sleep(1);
+    // Headless self-play may opt out with -AINOSLEEP; normal play never does.
+    const auto& launch = p2p_network_launch_parameters();
+    if (!(launch.self_play && launch.self_play_no_sleep)) Sleep(1);
 }
 
 void TerminateBackgroundWorkerThread() {

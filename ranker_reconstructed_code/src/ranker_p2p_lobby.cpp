@@ -646,6 +646,19 @@ void ResetP2PNetworkLaunchParameters(P2PNetworkLaunchParameters& parameters) {
     parameters.password.fill('\0');
     parameters.map_path.fill('\0');
     parameters.remote_address.fill('\0');
+    parameters.self_play_commander = false;
+    parameters.self_play_teacher = false;
+    parameters.self_play_teacher2 = false;
+    parameters.self_play_dagger = false;
+    parameters.self_play_deterministic = false;
+    parameters.self_play_autoscout = true;
+    parameters.self_play_no_sleep = false;
+    parameters.self_play_curriculum = 2;
+    parameters.self_play_teacher_variant = 0;
+    parameters.self_play_teacher_variant2 = 0;
+    parameters.self_play_weights.fill('\0');
+    parameters.self_play_weights2.fill('\0');
+    parameters.self_play_rollout.fill('\0');
     parameters.uses_map_file = false;
     parameters.valid = false;
 }
@@ -670,6 +683,63 @@ bool ParseP2PNetworkCommandLine(P2PNetworkLaunchParameters& parameters,
         parameters.self_play = true;
         parameters.self_play_1v1 = std::strstr(upper, "-AI1V1") != nullptr;
         parameters.self_play_draw = std::strstr(upper, "-AIDRAW") != nullptr;
+        // Whole-token match: "-AITEACHER" must not be satisfied by the
+        // prefix of "-AITEACHERVAR:" or "-AITEACHER2".
+        const auto has_token = [&](const char* flag) {
+            const std::size_t length = std::strlen(flag);
+            for (const char* found = std::strstr(upper, flag); found != nullptr;
+                 found = std::strstr(found + 1, flag)) {
+                const char next = found[length];
+                if (next == '\0' || next == ' ' || next == '\t' || next == '"') return true;
+            }
+            return false;
+        };
+        parameters.self_play_teacher = has_token("-AITEACHER");
+        // -AITEACHER2: under -AIVS only the second policy owner is a rule
+        // commander (policy-vs-teacher-variant games for curricula/leagues).
+        parameters.self_play_teacher2 = has_token("-AITEACHER2");
+        parameters.self_play_dagger = has_token("-AIDAGGER");
+        parameters.self_play_deterministic =
+            std::strstr(upper, "-AIDETERMINISTIC") != nullptr;
+        // Self-play only: headless instances may skip the per-frame Sleep(1).
+        parameters.self_play_no_sleep = std::strstr(upper, "-AINOSLEEP") != nullptr;
+        // Quoted paths work as well as whitespace-free tokens. Always copy
+        // from the original command line to preserve filenames.
+        const auto commander_path = [&](const char* flag, auto& destination) {
+            const char* found = std::strstr(upper, flag);
+            if (found == nullptr) return true;
+            const char* source = command_line + (found - upper) + std::strlen(flag);
+            const char* flag_start = command_line + (found - upper);
+            const bool quoted = *source == '"' ||
+                (flag_start > command_line && flag_start[-1] == '"');
+            if (*source == '"') ++source;
+            std::size_t length = 0;
+            while (source[length] != '\0' &&
+                   (quoted ? source[length] != '"' :
+                       source[length] != ' ' && source[length] != '\t')) {
+                if (length + 1 >= destination.size()) return false;
+                destination[length] = source[length];
+                ++length;
+            }
+            destination[length] = '\0';
+            return length != 0 && (!quoted || source[length] == '"');
+        };
+        if (!commander_path("-AIWEIGHTS:", parameters.self_play_weights) ||
+            !commander_path("-AIWEIGHTS2:", parameters.self_play_weights2) ||
+            !commander_path("-AIROLLOUT:", parameters.self_play_rollout)) return false;
+        parameters.self_play_commander = parameters.self_play_teacher ||
+            parameters.self_play_teacher2 ||
+            parameters.self_play_weights[0] != '\0' ||
+            std::strstr(upper, "-AICOMMANDER") != nullptr;
+        const char* curriculum = std::strstr(upper, "-AICURRICULUM:");
+        if (curriculum != nullptr) parameters.self_play_curriculum =
+            static_cast<u32>(std::strtoul(curriculum + std::strlen("-AICURRICULUM:"), nullptr, 10));
+        const char* teacher_variant = std::strstr(upper, "-AITEACHERVAR:");
+        if (teacher_variant != nullptr) parameters.self_play_teacher_variant =
+            static_cast<u32>(std::strtoul(teacher_variant + std::strlen("-AITEACHERVAR:"), nullptr, 10));
+        const char* teacher_variant2 = std::strstr(upper, "-AITEACHERVAR2:");
+        if (teacher_variant2 != nullptr) parameters.self_play_teacher_variant2 =
+            static_cast<u32>(std::strtoul(teacher_variant2 + std::strlen("-AITEACHERVAR2:"), nullptr, 10));
         parameters.uses_map_file = true;
         std::snprintf(parameters.map_path.data(), parameters.map_path.size(),
             "%s", "Maps\\Rank Maps\\(4) Python Jurassic v0.1.trk");
@@ -713,6 +783,8 @@ bool ParseP2PNetworkCommandLine(P2PNetworkLaunchParameters& parameters,
             }
             parameters.self_play_output_dir[i] = '\0';
         }
+        if (parameters.self_play_commander &&
+            !commander_path("-AIOUT:", parameters.self_play_output_dir)) return false;
         const char* entity = std::strstr(upper, "-AIENTITY:");
         parameters.self_play_entity_port = entity != nullptr ?
             static_cast<u16>(std::strtoul(entity + std::strlen("-AIENTITY:"),
@@ -770,10 +842,21 @@ bool ParseP2PNetworkCommandLine(P2PNetworkLaunchParameters& parameters,
         parameters.self_play_autopilot = parse_bool_flag("-AIAUTOPILOT:", true);
         parameters.self_play_reflex = parse_bool_flag("-AIREFLEX:", true);
         parameters.self_play_gate = parse_bool_flag("-AIGATE:", true);
+        parameters.self_play_autoscout = parse_bool_flag("-AIAUTOSCOUT:", true);
         parameters.self_play_versus = std::strstr(upper, "-AIVS") != nullptr;
+        if (parameters.self_play_commander &&
+            (parameters.self_play_entity_port != 0 || parameters.self_play_act3_port != 0 ||
+             parameters.self_play_ipc_port != 0 || parameters.self_play_reveal_base ||
+             parameters.self_play_shadow || parameters.self_play_shadow2 ||
+             parameters.self_play_imitate || parameters.self_play_replay_path[0] != '\0' ||
+             parameters.self_play_curriculum > 4)) return false;
+        if (parameters.self_play_weights2[0] != '\0' &&
+            (!parameters.self_play_commander || !parameters.self_play_versus)) return false;
+        if (parameters.self_play_teacher2 && !parameters.self_play_versus) return false;
         // The random-legal / IPC policies run inside the packet-controller path,
         // so they imply the scripted-owner handover too.
         parameters.self_play_scripted =
+            parameters.self_play_commander ||
             parameters.self_play_1v1 ||
             parameters.self_play_random ||
             parameters.self_play_ipc_port != 0 ||
@@ -782,6 +865,10 @@ bool ParseP2PNetworkCommandLine(P2PNetworkLaunchParameters& parameters,
         parameters.self_play_seed = seed != nullptr ?
             static_cast<u32>(std::strtoul(seed + std::strlen("-SEED:"),
                 nullptr, 10)) : 0u;
+        if (parameters.self_play_commander && parameters.self_play_seed == 0)
+            parameters.self_play_seed = 1;
+        if (parameters.self_play_commander && parameters.self_play_max_frames > 60000)
+            return false;
         parameters.valid = true;
         return true;
     }
