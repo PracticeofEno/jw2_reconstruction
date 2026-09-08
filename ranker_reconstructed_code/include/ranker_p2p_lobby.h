@@ -12,6 +12,7 @@
 #include <array>
 #include <cstddef>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace ranker {
@@ -86,7 +87,14 @@ struct P2PNetworkLaunchParameters {
     // for each observation is recorded as a training label.
     bool self_play_dagger = false;
     bool self_play_deterministic = false;
+    // Optional -AIPOLICYSEED:N controls only commander sampling. Explicit 0
+    // is valid; omission retains the historical SEED/owner/model-version mix.
+    bool self_play_has_policy_seed = false;
+    u64 self_play_policy_seed = 0;
     bool self_play_autoscout = true;
+    // -AICOORDINATEDTRANSFERS:1 allows a transferred squad to receive its
+    // mission in the same decision. Explicit opt-in supports paired evaluation.
+    bool self_play_coordinated_transfers = false;
     // -AINOSLEEP (self-play only): skip the per-frame Sleep(1) of the
     // end_frame phase so headless training instances run at CPU speed.
     bool self_play_no_sleep = false;
@@ -196,6 +204,13 @@ struct P2PNetworkLaunchParameters {
     bool self_play_autopilot = true;
     bool self_play_reflex = true;
     bool self_play_gate = true;
+
+    // Arguments for CommanderPcg32::seed, excluding the separately supplied
+    // owner. Keep the actual model version and the game seed unchanged.
+    std::pair<u64, u32> commander_rng_seed(u32 model_version) const {
+        return self_play_has_policy_seed ? std::make_pair(self_play_policy_seed, 0u) :
+            std::make_pair(static_cast<u64>(self_play_seed), model_version);
+    }
 };
 
 enum class P2PGameWinResult : u32 {

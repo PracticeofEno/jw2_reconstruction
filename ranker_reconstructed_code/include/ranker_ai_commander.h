@@ -31,6 +31,8 @@ struct CommanderServices {
     u32 cumulative_gathered = 0, kills_investment = 0, losses_investment = 0;
     u32 public_enemy_tribe = 4, curriculum_stage = 2;
     bool autoscout = true;
+    // Optional transfer+mission action semantics; false preserves legacy behavior.
+    bool coordinated_transfers = false;
     u32 packet_budget = 64;
     // Rule-commander variant id (0 = default). Nonzero ids derive randomized
     // opening/timing/target parameters (design 8.3) for opponent diversity.
@@ -69,6 +71,7 @@ struct CommanderSquadState {
     CommanderRoe roe = CommanderRoe::normal;
     u8 anchor = 1;
     u32 serial = 1, changed_decision = 0;
+    u32 last_intent_frame = 0;
     float decision_weight = 0;
     bool automatic_retreat = false, arrived = false;
 };
@@ -122,6 +125,13 @@ struct CommanderState {
     std::vector<std::vector<u32>> expansion_members;
     // Last frame each berry cluster site was inside our vision (sweep order).
     std::vector<u32> cluster_last_visible;
+    // Public tile-vision history for searching beyond resource cluster sites.
+    std::vector<u32> sweep_last_visible;
+    std::vector<u32> sweep_retry_after;
+    CommanderPoint sweep_target;
+    u32 sweep_target_selected_frame = 0;
+    u32 sweep_progress_frame = 0;
+    float sweep_best_distance = 0;
     std::vector<u8> build_open_cells;
     std::vector<u32> build_components;
     u32 build_component_width = 0;
@@ -129,6 +139,9 @@ struct CommanderState {
     std::vector<CommanderPoint> route;
     std::array<u32, 8> start_path_lengths{}; // 0 unknown, UINT_MAX unreachable
     std::array<float, 512> static_map{};
+    // Appended actor map channel: actual public terrain class / 7, cell mean.
+    // Keep the old two cached channels and their interpretation unchanged.
+    std::array<float, 256> public_height_map{};
     bool static_map_initialized = false;
     // Building placement plans are searched in full only on fixed decision
     // frames; executor ticks and interrupts reuse re-validated cached plans.
@@ -151,6 +164,10 @@ struct CommanderView {
     std::array<CommanderPoint, 16> anchors{};
     std::array<CommanderSquadView, 3> squads{};
     std::array<std::vector<AiSemanticAction>, 42> macro_plans;
+    // Exact transfer membership planned from the pre-decision registry. The
+    // conditional masks and executor share these lists and projected totals.
+    std::array<std::vector<u32>, 4> transfer_members;
+    std::array<float, 4> transfer_investment{};
     // H1b only affects HQ/tower construction, and is conditional on H1.
     std::array<std::vector<AiSemanticAction>, 16> hq_build_plans, tower_build_plans;
     std::vector<AiObservedUnit> own, visible_enemies, visible_neutrals;

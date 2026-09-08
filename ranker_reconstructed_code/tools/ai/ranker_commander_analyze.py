@@ -27,7 +27,7 @@ def rollout_path(path):
 
 
 def summarize_game(path):
-    episode = read_rollout(rollout_path(path), teacher=True)
+    episode = read_rollout(rollout_path(path))
     try:
         records = episode.decisions
         actions = records["action"]
@@ -57,6 +57,8 @@ def summarize_game(path):
         return {
             "game": rollout_path(path).parent.parent.name,
             "seed": episode.seed,
+            "teacher": bool(records[0]["teacher"]),
+            "weight_version": episode.weight_version,
             "status": int(episode.terminal["status"]),
             "end_frame": int(episode.terminal["frame"]),
             "decisions": len(records),
@@ -102,7 +104,7 @@ def summarize(path):
 
 
 def timeline(args):
-    episode = read_rollout(rollout_path(args.path), teacher=True)
+    episode = read_rollout(rollout_path(args.path))
     try:
         print("frame action[8] res workers army Wown Wvisible Wmemory near | MAIN(count,W,x,y,intent,anchor) GUARD RAID")
         next_frame = args.start

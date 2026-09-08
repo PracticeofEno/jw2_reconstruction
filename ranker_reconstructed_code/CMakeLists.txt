@@ -1755,6 +1755,34 @@ if (RANKER_BUILD_COMMANDER_TESTS)
         target_compile_options(ai_commander_regression PRIVATE -UNDEBUG)
     endif()
     add_test(NAME ai_commander_regression COMMAND ai_commander_regression)
+    add_executable(ai_commander_context_regression
+        tests/ai_commander_context_regression.cpp src/ranker_ai_commander.cpp
+        src/ranker_ai_expansion.cpp)
+    target_include_directories(ai_commander_context_regression PRIVATE include)
+    add_test(NAME ai_commander_context_regression COMMAND ai_commander_context_regression)
+    foreach(commander_check IN ITEMS transfer observation economy_recovery)
+        add_executable(ai_commander_${commander_check}_regression
+            tests/ai_commander_${commander_check}_regression.cpp src/ranker_ai_commander.cpp
+            src/ranker_ai_expansion.cpp)
+        target_include_directories(ai_commander_${commander_check}_regression PRIVATE include)
+        if (MSVC)
+            target_compile_options(ai_commander_${commander_check}_regression PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(ai_commander_${commander_check}_regression PRIVATE -UNDEBUG)
+        endif()
+        add_test(NAME ai_commander_${commander_check}_regression
+            COMMAND ai_commander_${commander_check}_regression)
+    endforeach()
+    add_executable(ai_sweep_coverage_regression
+        tests/ai_sweep_coverage_regression.cpp src/ranker_ai_commander.cpp
+        src/ranker_ai_expansion.cpp)
+    target_include_directories(ai_sweep_coverage_regression PRIVATE include)
+    if (MSVC)
+        target_compile_options(ai_sweep_coverage_regression PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(ai_sweep_coverage_regression PRIVATE -UNDEBUG)
+    endif()
+    add_test(NAME ai_sweep_coverage_regression COMMAND ai_sweep_coverage_regression)
     add_executable(ai_commander_actions_regression
         tests/ai_commander_actions_regression.cpp src/ranker_ai_actions.cpp)
     target_include_directories(ai_commander_actions_regression PRIVATE include)
@@ -1766,7 +1794,8 @@ if (RANKER_BUILD_COMMANDER_TESTS)
     add_test(NAME ai_commander_actions_regression COMMAND ai_commander_actions_regression)
     if (WIN32)
         add_executable(ai_commander_launch_regression
-            tests/ai_commander_launch_regression.cpp src/ranker_p2p_lobby.cpp)
+            tests/ai_commander_launch_regression.cpp src/ranker_p2p_lobby.cpp
+            src/ranker_ai_commander_model.cpp)
         target_include_directories(ai_commander_launch_regression PRIVATE include)
         # Whole-program optimization removes the unused lobby/UI entry points
         # so this checks the real parser without linking or launching the game.

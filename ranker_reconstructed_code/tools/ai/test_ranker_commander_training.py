@@ -8,6 +8,7 @@ import json
 import random
 import struct
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -21,7 +22,7 @@ from ranker_commander_model import CommanderPolicy, load_weights
 from ranker_commander_league import (champion_challenge_jobs, champion_gate, curriculum_jobs,
                                      league_jobs)
 from ranker_commander_rollout import (DECISION, Episode, HEADER, HEAD_OFFSETS, HEAD_SIZES,
-    LOSS, MAP_SHAPE, RECORD_DTYPE, RECORD_SIZE, RolloutError, TRUNCATED, WIN,
+    LOSS, MAP_SHAPE, RECORD_DTYPE, RECORD_SIZE, RolloutError, TRUNCATED, WIN, VECTOR_SIZE,
     episode_returns, potential_components, read_rollout, write_rollout)
 from ranker_commander_train import (TrainConfig, build_batch, load_cohort, load_optimizer,
     LazyBcBatch, assess_bc_accuracy, main as train_main, ppo_admission, save_checkpoint,
@@ -58,9 +59,9 @@ class RolloutTests(unittest.TestCase):
         episode = self.read(current_version=8)
         self.assertEqual((episode.owner, episode.seed, episode.weight_version), (1, 22, 7))
         self.assertEqual(self.path.stat().st_size, HEADER.size + 4 * RECORD_SIZE)
-        self.assertEqual(RECORD_SIZE, 3522)
+        self.assertEqual(RECORD_SIZE, 4446)
         self.assertEqual(episode.records.dtype.itemsize, RECORD_DTYPE.itemsize)
-        self.assertEqual(episode.records["map"].shape, (4, 2304))
+        self.assertEqual(episode.records["map"].shape, (4, 3072))
         with self.assertRaisesRegex(RolloutError, "version"):
             read_rollout(self.path, current_version=9)
         with self.assertRaisesRegex(RolloutError, "version"):
@@ -166,7 +167,11 @@ class TrainerTests(unittest.TestCase):
         config = TrainConfig(mode="bc", epochs=2, minibatch=3)
         batch, metrics = build_batch([episode], config)
         before = policy.heads[0].weight.detach().clone()
-        optimizer, report = train_update(policy, batch, config)
+        progress = []
+        optimizer, report = train_update(policy, batch, config, progress_callback=progress.append)
+        self.assertEqual([row["epoch"] for row in progress], [1, 2])
+        self.assertEqual(progress[-1]["optimizer_steps"], report["optimizer_steps"])
+        self.assertTrue(all(row["decisions_per_second"] > 0 and np.isfinite(row["loss"]) for row in progress))
         self.assertFalse(torch.equal(before, policy.heads[0].weight))
         self.assertTrue(np.isfinite(report["loss"]))
         self.assertEqual(metrics["decisions"], 3)
@@ -192,7 +197,7 @@ class TrainerTests(unittest.TestCase):
         records = fixture(TRUNCATED)
         records["mask"][:-1].fill(1)
         with torch.no_grad():
-            output = policy.sample(torch.zeros(3, 528), torch.zeros(3, *MAP_SHAPE),
+            output = policy.sample(torch.zeros(3, VECTOR_SIZE), torch.zeros(3, *MAP_SHAPE),
                                    torch.ones(3, 95, dtype=torch.bool), torch.zeros(3, 32))
         records["action"][:-1] = output["action"].numpy()
         records["mask"][:-1] = output["mask"].numpy()
@@ -206,6 +211,7 @@ class TrainerTests(unittest.TestCase):
         self.assertEqual(report["clip_fraction"], 0.0)
         self.assertEqual(report["teacher_kl_coefficient"], 0.05)
         self.assertFalse(report["critic_only"])
+        self.assertEqual(report["lr"], 3e-4)
 
     def test_warm_start_admits_gameplay_pass_without_accuracy_and_rejects_neither(self):
         from ranker_commander_train import ppo_admission
@@ -223,7 +229,112 @@ class TrainerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ppo_admission(metadata, version=1, weights_sha256="abc", warm_start=False)
 
+    def test_configurable_learning_rate_schedule_updates_adam_groups(self):
+        episode = Episode(Path("teacher.rlo"), 1, 1, 0, fixture(teacher=True))
+        batch, _ = build_batch([episode], TrainConfig(mode="bc"))
+        for iteration, expected in ((0, 1e-4), (150, 7.5e-5), (300, 5e-5)):
+            policy = CommanderPolicy()
+            optimizer = torch.optim.Adam(policy.parameters(), lr=0.01)
+            config = TrainConfig(mode="bc", iteration=iteration, epochs=1, minibatch=3,
+                learning_rate_initial=1e-4, learning_rate_final=5e-5)
+            optimizer, metrics = train_update(policy, batch, config, optimizer=optimizer)
+            self.assertAlmostEqual(metrics["lr"], expected)
+            self.assertTrue(all(abs(group["lr"] - expected) < 1e-12 for group in optimizer.param_groups))
+        for invalid in (0.0, -1.0, float("nan"), float("inf")):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "learning rates"):
+                train_update(CommanderPolicy(), batch, TrainConfig(mode="bc", learning_rate_initial=invalid))
+
+    def test_ppo_cli_preserves_learning_rate_schedule_on_resume_and_allows_override(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            current = root / "initial.bin"
+            save_checkpoint(CommanderPolicy(), current, version=1, metadata={})
+            for iteration, extra, initial, final in (
+                    (0, ["--learning-rate-initial", "0.00012", "--learning-rate-final", "0.00006"], 1.2e-4, 6e-5),
+                    (1, [], 1.2e-4, 6e-5),
+                    (2, ["--learning-rate-initial", "0.0001", "--learning-rate-final", "0.0001"], 1e-4, 1e-4)):
+                policy = load_weights(current)
+                rollout = write_rollout(root / f"input_{iteration}.rlo", fixture(),
+                    weight_version=policy.weight_version)
+                target = root / f"updated_{iteration}.bin"
+                with redirect_stdout(io.StringIO()):
+                    train_main(["ppo", "--policy", str(current), "--out", str(target),
+                        "--rollouts", str(rollout), "--no-bc-control", "--keep-rollouts",
+                        "--epochs", "1", "--minibatch", "3", "--threads", "1", *extra])
+                metadata = json.loads(target.with_suffix(".bin.json").read_text())
+                self.assertEqual(metadata["iteration"], iteration)
+                self.assertEqual(metadata["training_config"]["learning_rate_initial"], initial)
+                self.assertEqual(metadata["training_config"]["learning_rate_final"], final)
+                self.assertAlmostEqual(metadata["lr"], initial + (final - initial) * iteration / 300)
+                self.assertTrue(target.with_suffix(".bin.optimizer.npz").is_file())
+                self.assertTrue(rollout.is_file())
+                current = target
+
+    def test_league_preserves_learning_rate_through_resume_champion_and_exploiter(self):
+        from types import SimpleNamespace
+        from ranker_commander_league import run_league, train_exploiter
+
+        def collect_fixture(install, weights, directory, jobs, **kwargs):
+            policy = load_weights(weights)
+            reports = []
+            for index, job in enumerate(jobs):
+                records = fixture()
+                with torch.no_grad():
+                    sampled = policy.sample(torch.zeros(3, VECTOR_SIZE), torch.zeros(3, *MAP_SHAPE),
+                        torch.ones(3, 95, dtype=torch.bool), torch.zeros(3, 32))
+                for field, source in (("action", "action"), ("mask", "mask"), ("logp", "logp")):
+                    records[field][:-1] = sampled[source].numpy()
+                records["value"][:-1] = sampled["value"].reshape(-1).numpy()
+                rollout = write_rollout(Path(directory) / f"game_{index}.rlo", records,
+                    seed=job["seed"], weight_version=policy.weight_version)
+                reports.append({**job, "valid": True, "win": True, "rollout": str(rollout)})
+            return reports
+
+        def check_checkpoint(path, iteration):
+            metadata = json.loads(path.with_suffix(".bin.json").read_text())
+            expected = 1.2e-4 + (6e-5 - 1.2e-4) * iteration / 300
+            self.assertAlmostEqual(metadata["lr"], expected)
+            self.assertEqual(metadata["training_config"]["learning_rate_initial"], 1.2e-4)
+            self.assertEqual(metadata["training_config"]["learning_rate_final"], 6e-5)
+            policy = load_weights(path)
+            optimizer = load_optimizer(torch.optim.Adam(policy.parameters()),
+                path.with_suffix(".bin.optimizer.npz"), version=policy.weight_version)
+            self.assertTrue(all(abs(group["lr"] - expected) < 1e-12 for group in optimizer.param_groups))
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            initial = root / "initial.bin"
+            save_checkpoint(CommanderPolicy(), initial, version=1, metadata={"mode": "ppo",
+                "iteration": 149, "training_config": {"learning_rate_initial": 1.2e-4,
+                                                        "learning_rate_final": 6e-5}})
+            state = {"policy": str(initial), "updates": 150}
+            args = SimpleNamespace(work_dir=root, state=root / "state.json", install_dir=root,
+                seed=1, games=1, workers=1, exe=None, keep_sleep=False, keep_rollouts=True,
+                max_updates=1, evaluate_every=1, exploiter_every=0, exploiter_reset=20,
+                target_replacements=10)
+            catalog = {(a, b): list(range(1 + index * 5, 6 + index * 5))
+                for index, (a, b) in enumerate((a, b) for a in range(4) for b in range(4) if a != b)}
+            mapping = {pair: seeds[0] for pair, seeds in catalog.items()}
+            # Synthetic game receipts exercise optimizer/checkpoint transitions;
+            # the mocked promotion is not a gameplay or champion-gate test.
+            with patch("ranker_commander_league.run_games", side_effect=collect_fixture), \
+                    patch("ranker_commander_league.collect_evaluation", return_value=[]), \
+                    patch("ranker_commander_league.champion_gate", return_value={"promote": True}), \
+                    redirect_stdout(io.StringIO()):
+                for iteration in (150, 151):
+                    run_league(args, state, mapping, catalog)
+                    check_checkpoint(Path(state["policy"]), iteration)
+                    champion_meta = json.loads(Path(state["champion"]).with_suffix(".bin.json").read_text())
+                    self.assertEqual(champion_meta["training_config"]["learning_rate_initial"], 1.2e-4)
+                    self.assertEqual(champion_meta["training_config"]["learning_rate_final"], 6e-5)
+                train_exploiter(args, state, root / "exploiter_first")
+                check_checkpoint(Path(state["exploiter"]), 0)
+                state["league_updates"] += 1
+                train_exploiter(args, state, root / "exploiter_resume")
+                check_checkpoint(Path(state["exploiter"]), 1)
+
     def test_teacher_kl_schedule_holds_floor_and_critic_warmup_freezes_actor(self):
+        torch.manual_seed(17)
         schedule = TrainConfig(mode="ppo", teacher_kl_initial=0.5, teacher_kl_floor=0.1, teacher_kl_decay=100)
         self.assertAlmostEqual(schedule.teacher_coefficient(), 0.5)
         schedule.iteration = 50
@@ -247,18 +358,79 @@ class TrainerTests(unittest.TestCase):
         config = TrainConfig(mode="ppo", epochs=1, minibatch=3, critic_warmup=2,
                              teacher_kl_initial=0.0, teacher_kl_floor=0.0)
         batch, _ = build_batch([episode], config)
-        before = [parameter.detach().clone() for parameter in policy.heads.parameters()]
+        before = {name: parameter.detach().clone() for name, parameter in policy.named_parameters()}
+        with torch.no_grad():
+            logits_before = policy.evaluate(batch["vector"], batch["maps"], batch["actions"],
+                batch["masks"], batch["privileged"])["logits"].clone()
         _, report = train_update(policy, batch, config, teacher_policy=None)
         self.assertTrue(report["critic_only"])
         self.assertEqual(report["teacher_kl_coefficient"], 0.0)
-        for previous, parameter in zip(before, policy.heads.parameters()):
-            self.assertTrue(torch.equal(previous, parameter.detach()))
+        for name, parameter in policy.named_parameters():
+            if not name.startswith(("value1.", "value2.")):
+                self.assertTrue(torch.equal(before[name], parameter.detach()), name)
+        self.assertFalse(torch.equal(before["value2.weight"], policy.value2.weight.detach()))
+        with torch.no_grad():
+            logits_after = policy.evaluate(batch["vector"], batch["maps"], batch["actions"],
+                batch["masks"], batch["privileged"])["logits"]
+        self.assertTrue(torch.equal(logits_before, logits_after))
+
+    def test_critic_warmup_preserves_adam_momentum_and_actor_resumes(self):
+        torch.manual_seed(19)
+        policy, reference = CommanderPolicy(), CommanderPolicy()
+        reference.load_state_dict(policy.state_dict())
+        records = fixture()
+        with torch.no_grad():
+            output = policy.sample(torch.zeros(3, VECTOR_SIZE), torch.zeros(3, *MAP_SHAPE),
+                torch.ones(3, 95, dtype=torch.bool), torch.zeros(3, 32))
+        for field in ("action", "mask", "logp", "value"):
+            records[field][:-1] = output[field].numpy()
+        episode = Episode(Path("policy.rlo"), 1, 1, 0, records)
+        config = TrainConfig(mode="ppo", epochs=1, minibatch=3,
+            teacher_kl_initial=0.5, teacher_kl_floor=0.1)
+        batch, _ = build_batch([episode], config)
+        optimizer, _ = train_update(policy, batch, config, teacher_policy=reference)
+        actor = {name: p for name, p in policy.named_parameters()
+                 if not name.startswith(("value1.", "value2."))}
+        parameters_before = {name: p.detach().clone() for name, p in actor.items()}
+        state_before = {name: {key: value.clone() for key, value in optimizer.state[p].items()}
+                        for name, p in actor.items()}
+        self.assertTrue(any(state["exp_avg"].abs().sum() > 0 for state in state_before.values()))
+        critic_before = policy.value2.weight.detach().clone()
+        with torch.no_grad():
+            output = policy.evaluate(batch["vector"], batch["maps"], batch["actions"],
+                batch["masks"], batch["privileged"])
+            batch["old_logp"] = output["logp"].sum(1)
+            logits_before = output["logits"].clone()
+        config.iteration, config.critic_warmup = 1, 2
+        optimizer, report = train_update(policy, batch, config, optimizer=optimizer,
+            teacher_policy=reference)
+        self.assertTrue(report["critic_only"])
+        self.assertGreater(report["teacher_kl_coefficient"], 0)
+        for name, parameter in actor.items():
+            self.assertTrue(torch.equal(parameters_before[name], parameter.detach()), name)
+            for key, value in state_before[name].items():
+                self.assertTrue(torch.equal(value, optimizer.state[parameter][key]), (name, key))
+        self.assertFalse(torch.equal(critic_before, policy.value2.weight.detach()))
+        with torch.no_grad():
+            output = policy.evaluate(batch["vector"], batch["maps"], batch["actions"],
+                batch["masks"], batch["privileged"])
+            self.assertTrue(torch.equal(logits_before, output["logits"]))
+            batch["old_logp"] = output["logp"].sum(1)
+        config.iteration = 2
+        _, report = train_update(policy, batch, config, optimizer=optimizer,
+            teacher_policy=reference)
+        self.assertFalse(report["critic_only"])
+        self.assertTrue(any(not torch.equal(parameters_before[name], p.detach()) for name, p in actor.items()))
 
     def test_bc_holds_out_seed_groups_and_does_not_claim_gameplay_pass(self):
         records = fixture(teacher=True)
         records["mask"][:-1].fill(1)
-        episodes = [Episode(Path(f"teacher_{seed}_{owner}.rlo"), owner, seed, 0, records)
-                    for seed in range(1, 21) for owner in (1, 2)]
+        episodes = []
+        for seed in range(1, 21):
+            unique = records.copy()
+            unique["vector"][:, 0] = seed / 20
+            for owner in (1, 2):
+                episodes.append(Episode(Path(f"teacher_{seed}_{owner}.rlo"), owner, seed, 0, unique))
         training, held_out = split_teacher_episodes(episodes)
         self.assertFalse({episode.seed for episode in training} & {episode.seed for episode in held_out})
         self.assertEqual(len(held_out), 4)
@@ -273,6 +445,33 @@ class TrainerTests(unittest.TestCase):
             policy.heads[3].bias[1] = 10
         self.assertFalse(assess_bc_accuracy(policy, held_out)["accuracy_passed"])
 
+    def test_bc_validation_excludes_duplicate_actor_trajectories_across_seeds(self):
+        episodes = []
+        for seed in range(1, 21):
+            records = fixture(teacher=True)
+            records["vector"][:, 0] = (1 if seed == 12 else seed) / 20
+            # Critic-only data and model versions cannot make repeated actor
+            # inputs/labels an independent imitation-learning validation set.
+            records["privileged"][:, 0] = seed / 20
+            records["value"] = seed / 20
+            episodes.append(Episode(Path(f"teacher_{seed}.rlo"), 1, seed, seed, records))
+        audit = {}
+        training, held_out = split_teacher_episodes(episodes, seed=1, audit=audit)
+        self.assertEqual({episode.seed for episode in training}, set(range(1, 21)) - {6, 12})
+        self.assertEqual({episode.seed for episode in held_out}, {6})
+        self.assertEqual(audit["candidate_validation_seed_groups"], [6, 12])
+        self.assertEqual(audit["excluded_validation_seed_groups"], [12])
+        self.assertEqual(audit["validation_seed_groups"], [6])
+
+    def test_repeated_teacher_games_cannot_supply_independent_validation(self):
+        episodes = [Episode(Path(f"same_{seed}.rlo"), 1, seed, 0, fixture(teacher=True))
+                    for seed in range(1, 21)]
+        training, held_out = split_teacher_episodes(episodes, seed=1)
+        self.assertEqual(len(training), 18)
+        self.assertEqual(len(held_out), 0)
+        measured = assess_bc_accuracy(CommanderPolicy(), held_out)
+        self.assertFalse(measured["accuracy_passed"])
+
     def test_bc_export_never_deletes_caller_inputs_and_requires_complete_teacher_collection(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -280,7 +479,9 @@ class TrainerTests(unittest.TestCase):
                 inputs = root / ("keep" if keep else "discard")
                 inputs.mkdir()
                 for seed in (1, 2):
-                    write_rollout(inputs / f"teacher_{seed}.rlo", fixture(teacher=True), seed=seed)
+                    records = fixture(teacher=True)
+                    records["vector"][:, 0] = seed / 2
+                    write_rollout(inputs / f"teacher_{seed}.rlo", records, seed=seed)
                 arguments = ["bc", "--rollouts", str(inputs), "--out", str(root / f"bc_{keep}.bin"),
                              "--epochs", "1", "--threads", "1", "--minibatch", "3"]
                 if keep:
@@ -448,6 +649,48 @@ class EvaluationTests(unittest.TestCase):
             (install / "ranker_rebuild.exe").unlink()
             prepare_job_directory(install, root / "build_job", build / "ranker_rebuild.exe")
 
+    def test_free_worker_takes_pending_job_while_slow_game_keeps_its_port(self):
+        from ranker_commander_eval import run_games
+        slow_started = threading.Event()
+        pending_started = threading.Event()
+        lock = threading.Lock()
+        active_slots, seen, assigned_slots, slow_was_released = set(), [], {}, []
+        peak_active = []
+        jobs = [{"seed": index + 1, "tribe": index % 4} for index in range(4)]
+
+        def play(install, weights, root, index, job, slot, **options):
+            with lock:
+                self.assertNotIn(slot, active_slots)
+                active_slots.add(slot)
+                peak_active.append(len(active_slots))
+                seen.append(index)
+                assigned_slots[index] = slot
+            if index == 0:
+                slow_started.set()
+                slow_was_released.append(pending_started.wait(2.0))
+            elif index == 1:
+                self.assertTrue(slow_started.wait(2.0))
+            elif index == 2:
+                pending_started.set()
+            with lock:
+                active_slots.remove(slot)
+            return {**job, "job": index, "valid": True, "slot": slot}
+
+        with tempfile.TemporaryDirectory() as directory:
+            with patch("ranker_commander_eval._run_game", side_effect=play):
+                reports = run_games("assets", "policy.bin", directory, jobs, workers=2, stagger=0)
+            manifest = json.loads((Path(directory) / "manifest.json").read_text())
+        self.assertEqual(slow_was_released, [True])
+        self.assertEqual(assigned_slots[1], assigned_slots[2])
+        self.assertNotEqual(assigned_slots[0], assigned_slots[2])
+        self.assertEqual(sorted(seen), list(range(4)))
+        self.assertEqual(max(peak_active), 2)
+        self.assertFalse(active_slots)
+        self.assertEqual([row["job"] for row in reports], list(range(4)))
+        self.assertEqual([(row["seed"], row["tribe"]) for row in reports],
+                         [(job["seed"], job["tribe"]) for job in jobs])
+        self.assertEqual(manifest, reports)
+
     def test_start_log_and_league_mixture(self):
         slots = extract_start_slots("start-slots: owner=1 state=1 map_slot=2 faction=1 tribe=2 xy=1,2")
         self.assertEqual(slots[1]["map_slot"], 2)
@@ -462,6 +705,28 @@ class EvaluationTests(unittest.TestCase):
 class ControllerTests(unittest.TestCase):
     def setUp(self):
         self.mapping = {(a, b): 1 + 4 * a + b for a in range(4) for b in range(4) if a != b}
+
+    def test_teacher_collection_crosses_variants_with_every_tribe(self):
+        from collections import Counter
+        from ranker_commander_train import collection_jobs
+        jobs = collection_jobs(mode="bc", seed=1, iteration=0, count=400,
+                               curriculum=2, teacher_variants=15)
+        counts = Counter((j["teacher_variant"], j["tribe"]) for j in jobs)
+        self.assertEqual(set(counts), {(v, t) for v in range(16) for t in range(4)})
+        self.assertTrue(all(6 <= n <= 7 for n in counts.values()))
+        self.assertEqual([j["seed"] for j in jobs], list(range(1, 401)))
+        self.assertTrue(all(j["max_frames"] == 60000 and j["opp_slow"] == 0 for j in jobs))
+
+    def test_collection_retains_ppo_variant_and_builtin_balance(self):
+        from collections import Counter
+        from ranker_commander_train import collection_jobs
+        jobs = collection_jobs(mode="ppo", seed=1000, iteration=2, count=16,
+                               curriculum=1, variant_opponents=0.25)
+        self.assertEqual(Counter(j["tribe"] for j in jobs if not j.get("teacher2")),
+                         {0: 3, 1: 3, 2: 3, 3: 3})
+        self.assertEqual(sum(bool(j.get("teacher2")) for j in jobs), 4)
+        self.assertTrue(all(j["tribe"] == 2 for j in jobs if j.get("teacher2")))
+        self.assertEqual([j["seed"] for j in jobs], list(range(1032, 1048)))
 
     def reports(self, jobs, deterministic, wins=None):
         return [{**job, "valid": True, "evaluation_valid": True, "deterministic": deterministic,

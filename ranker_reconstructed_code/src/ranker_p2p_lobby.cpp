@@ -29,6 +29,40 @@
 namespace ranker {
 namespace {
 
+bool parse_commander_policy_seed(const char* command_line, bool& present, u64& seed) {
+    // Inspect whole arguments so a flag-looking substring inside a quoted
+    // weights/output path cannot change the policy's random stream.
+    const auto whitespace = [](char c) {
+        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+    };
+    const std::string flag = "-AIPOLICYSEED";
+    while (*command_line) {
+        while (whitespace(*command_line)) ++command_line;
+        if (!*command_line) break;
+        std::string token;
+        bool quoted = false;
+        while (*command_line && (quoted || !whitespace(*command_line))) {
+            if (*command_line == '"') quoted = !quoted;
+            else token.push_back(*command_line);
+            ++command_line;
+        }
+        if (token != flag && token.compare(0, flag.size() + 1, flag + ':') != 0) continue;
+        if (present || quoted || token.size() <= flag.size() + 1 || token[flag.size()] != ':') return false;
+        u64 parsed = 0;
+        constexpr u64 maximum = ~u64{0};
+        for (std::size_t i = flag.size() + 1; i < token.size(); ++i) {
+            const char digit = token[i];
+            if (digit < '0' || digit > '9') return false;
+            const u64 value = static_cast<u64>(digit - '0');
+            if (parsed > (maximum - value) / 10) return false;
+            parsed = parsed * 10 + value;
+        }
+        present = true;
+        seed = parsed;
+    }
+    return true;
+}
+
 constexpr DWORD kWindowStyleFullscreen = WS_POPUP;
 constexpr DWORD kWindowStyleWindowed =
     WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
@@ -651,7 +685,10 @@ void ResetP2PNetworkLaunchParameters(P2PNetworkLaunchParameters& parameters) {
     parameters.self_play_teacher2 = false;
     parameters.self_play_dagger = false;
     parameters.self_play_deterministic = false;
+    parameters.self_play_has_policy_seed = false;
+    parameters.self_play_policy_seed = 0;
     parameters.self_play_autoscout = true;
+    parameters.self_play_coordinated_transfers = false;
     parameters.self_play_no_sleep = false;
     parameters.self_play_curriculum = 2;
     parameters.self_play_teacher_variant = 0;
@@ -731,6 +768,9 @@ bool ParseP2PNetworkCommandLine(P2PNetworkLaunchParameters& parameters,
             parameters.self_play_teacher2 ||
             parameters.self_play_weights[0] != '\0' ||
             std::strstr(upper, "-AICOMMANDER") != nullptr;
+        if (!parse_commander_policy_seed(upper, parameters.self_play_has_policy_seed,
+                parameters.self_play_policy_seed) ||
+            (parameters.self_play_has_policy_seed && !parameters.self_play_commander)) return false;
         const char* curriculum = std::strstr(upper, "-AICURRICULUM:");
         if (curriculum != nullptr) parameters.self_play_curriculum =
             static_cast<u32>(std::strtoul(curriculum + std::strlen("-AICURRICULUM:"), nullptr, 10));
@@ -843,6 +883,8 @@ bool ParseP2PNetworkCommandLine(P2PNetworkLaunchParameters& parameters,
         parameters.self_play_reflex = parse_bool_flag("-AIREFLEX:", true);
         parameters.self_play_gate = parse_bool_flag("-AIGATE:", true);
         parameters.self_play_autoscout = parse_bool_flag("-AIAUTOSCOUT:", true);
+        parameters.self_play_coordinated_transfers = parameters.self_play_commander &&
+            parse_bool_flag("-AICOORDINATEDTRANSFERS:", false);
         parameters.self_play_versus = std::strstr(upper, "-AIVS") != nullptr;
         if (parameters.self_play_commander &&
             (parameters.self_play_entity_port != 0 || parameters.self_play_act3_port != 0 ||

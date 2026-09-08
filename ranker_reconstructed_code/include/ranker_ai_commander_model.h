@@ -10,15 +10,18 @@
 
 namespace ranker {
 
-inline constexpr std::size_t kCommanderVectorSize = 528;
-inline constexpr std::size_t kCommanderMapSize = 9 * 16 * 16;
+inline constexpr std::size_t kCommanderContextVectorSize = 542;
+inline constexpr std::size_t kCommanderLegacyMapSize = 9 * 16 * 16;
+inline constexpr std::size_t kCommanderVectorSize = 606;
+inline constexpr std::size_t kCommanderMapSize = 12 * 16 * 16;
+inline constexpr std::size_t kCommanderAdapterWidth = 32;
 inline constexpr std::size_t kCommanderPrivilegedSize = 32;
 inline constexpr std::size_t kCommanderHeadCount = 8;
 inline constexpr std::size_t kCommanderLogitCount = 95;
 inline constexpr std::array<std::size_t, 8> kCommanderHeadSizes{42,16,4,8,16,3,3,3};
 inline constexpr std::array<std::size_t, 8> kCommanderHeadOffsets{0,42,58,62,70,86,89,92};
 // Changes to feature order, action semantics, or network layout require a new schema.
-inline constexpr u32 kCommanderSchemaHash = 0x1f364207U;
+inline constexpr u32 kCommanderSchemaHash = 0x53dd6137U;
 inline constexpr u64 kCommanderSchema = kCommanderSchemaHash;
 
 struct CommanderInput {
@@ -51,7 +54,7 @@ private:
 class CommanderModel {
 public:
     // A failed load leaves the previous complete model intact.
-    bool load(const std::string& path, std::string* error = nullptr);
+    bool load(const std::string& path, std::string* error = nullptr, bool allow_legacy = false);
     bool loaded() const { return !tensors_.empty(); }
     u32 version() const { return version_; }
     CommanderDecision decide(const CommanderInput& input, const CommanderMask& base_mask,
@@ -60,6 +63,8 @@ public:
 private:
     std::vector<std::vector<float>> tensors_;
     u32 version_ = 0;
+    std::size_t vector_size_ = kCommanderVectorSize;
+    bool has_adapters_ = true;
 };
 
 } // namespace ranker

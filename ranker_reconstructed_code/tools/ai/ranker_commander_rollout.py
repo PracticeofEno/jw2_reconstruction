@@ -6,6 +6,7 @@ separate final record. An unfinished/crashed file is never a training episode.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from pathlib import Path
 import struct
 import zlib
@@ -13,23 +14,30 @@ import zlib
 import numpy as np
 
 MAGIC = b"JWRLO001"
-SCHEMA_CRC = 0x1F364207
-FORMAT_VERSION = 2
-VECTOR_SIZE = 528
-MAP_SHAPE = (9, 16, 16)
-MAP_SIZE = 2304
+LEGACY_SCHEMA_CRC = 0x1F364207
+LEGACY_VECTOR_SIZE = 528
+CONTEXT_SCHEMA_CRC = 0xDA97FD92
+CONTEXT_VECTOR_SIZE = 542
+LEGACY_MAP_SIZE = 9 * 16 * 16
+SCHEMA_CRC = 0x53DD6137
+FORMAT_VERSION = 4
+VECTOR_SIZE = 606
+MAP_SHAPE = (12, 16, 16)
+MAP_SIZE = 3072
 PRIVILEGED_SIZE = 32
 HEAD_SIZES = (42, 16, 4, 8, 16, 3, 3, 3)
 HEAD_OFFSETS = tuple(np.cumsum((0,) + HEAD_SIZES[:-1]).tolist())
 MASK_SIZE = sum(HEAD_SIZES)
 HEADER = struct.Struct("<8s8I")
 DECISION, WIN, LOSS, TRUNCATED, INVALID = range(5)
-def _record_dtype(compact: bool) -> np.dtype:
+def _record_dtype(compact: bool, vector_size: int = VECTOR_SIZE, map_size: int | None = None) -> np.dtype:
+    if map_size is None:
+        map_size = LEGACY_MAP_SIZE if vector_size in (LEGACY_VECTOR_SIZE, CONTEXT_VECTOR_SIZE) else MAP_SIZE
     return np.dtype([
     ("frame", "<u4"), ("delta_frame", "<u2"), ("event", "u1"), ("teacher", "u1"),
     ("status", "u1"), ("reserved", "u1"),
     ("weight_version", "<u4"),
-    ("vector", "<f2" if compact else "<f4", (VECTOR_SIZE,)), ("map", "u1", (MAP_SIZE,)),
+    ("vector", "<f2" if compact else "<f4", (vector_size,)), ("map", "u1", (map_size,)),
     ("mask_packed" if compact else "mask", "u1", (12 if compact else MASK_SIZE,)),
     ("action", "u1", (8,)),
     ("logp", "<f4", (8,)), ("value", "<f4"),
@@ -42,7 +50,7 @@ def _record_dtype(compact: bool) -> np.dtype:
 WIRE_RECORD_DTYPE = _record_dtype(True)
 RECORD_DTYPE = _record_dtype(False)  # decoded compatibility view / fixture input
 RECORD_SIZE = WIRE_RECORD_DTYPE.itemsize
-assert RECORD_SIZE == 3522
+assert RECORD_SIZE == 4446
 
 
 class DecodedRecords:
@@ -55,6 +63,7 @@ class DecodedRecords:
 
     def __init__(self, raw):
         self.raw = raw
+        self.dtype = _record_dtype(False, raw.dtype["vector"].shape[0], raw.dtype["map"].shape[0])
 
     @property
     def shape(self):
@@ -84,8 +93,8 @@ class DecodedRecords:
             yield self[index]
 
     def __array__(self, dtype=None, copy=None):
-        result = np.empty(self.shape, dtype=RECORD_DTYPE)
-        for name in RECORD_DTYPE.names:
+        result = np.empty(self.shape, dtype=self.dtype)
+        for name in self.dtype.names:
             result[name] = self[name]
         return result.astype(dtype, copy=False) if dtype is not None else result
 
@@ -168,7 +177,7 @@ def _validate_records(records: np.ndarray) -> None:
 
 
 def read_rollout(path: str | Path, *, current_version: int | None = None,
-                 teacher: bool | None = None) -> Episode:
+                 teacher: bool | None = None, allow_legacy: bool = False) -> Episode:
     path = Path(path)
     size = path.stat().st_size
     with path.open("rb") as stream:
@@ -176,18 +185,26 @@ def read_rollout(path: str | Path, *, current_version: int | None = None,
     if len(raw) != HEADER.size:
         raise RolloutError("truncated header")
     magic, schema, version, owner, seed, weight, vector, maps, record_size = HEADER.unpack(raw)
-    if (magic, schema, version, vector, maps, record_size) != (
+    contract = (magic, schema, version, vector, maps, record_size)
+    legacy = contract in (
+        (MAGIC, LEGACY_SCHEMA_CRC, 2, LEGACY_VECTOR_SIZE, LEGACY_MAP_SIZE, 3522),
+        (MAGIC, CONTEXT_SCHEMA_CRC, 3, CONTEXT_VECTOR_SIZE, LEGACY_MAP_SIZE, 3550),
+    )
+    if legacy and not allow_legacy:
+        raise RolloutError("legacy RLO1 requires explicit historical decoding; new observations must be collected for current training")
+    if not legacy and contract != (
             MAGIC, SCHEMA_CRC, FORMAT_VERSION, VECTOR_SIZE, MAP_SIZE, RECORD_SIZE):
-        raise RolloutError("RLO1 schema, compact format version 2, or dimensions mismatch")
+        raise RolloutError("RLO1 schema, compact format version 4, or dimensions mismatch")
+    wire_dtype = _record_dtype(True, vector, maps)
     if owner >= 8 or seed == 0:
         raise RolloutError("invalid owner or zero policy seed")
     if current_version is not None and not 0 <= current_version - weight <= 1:
         raise RolloutError("policy version must be current or one generation old")
     payload_size = size - HEADER.size
-    if payload_size <= 0 or payload_size % RECORD_SIZE:
+    if payload_size <= 0 or payload_size % record_size:
         raise RolloutError("partial or empty record payload")
-    raw_records = np.memmap(path, dtype=WIRE_RECORD_DTYPE, mode="r", offset=HEADER.size,
-                        shape=(payload_size // RECORD_SIZE,))
+    raw_records = np.memmap(path, dtype=wire_dtype, mode="r", offset=HEADER.size,
+                        shape=(payload_size // record_size,))
     try:
         for index, record in enumerate(raw_records):
             if zlib.crc32(record.tobytes()[:-4]) != int(record["crc32"]):
@@ -232,7 +249,9 @@ def relabel_with_teacher(episode: Episode) -> Episode:
     commander's labels for the same observations, yielding a teacher-cohort
     episode over the states the policy actually visited."""
     actions, masks = read_teacher_labels(str(episode.path) + ".teacher.bin")
-    records = np.asarray(episode.records)
+    # Converted context episodes may already be ordinary ndarrays. Relabeling
+    # must leave their executed action history and on-policy probabilities intact.
+    records = np.array(episode.records, copy=True)
     if len(actions) != len(records):
         raise RolloutError("teacher label count does not match rollout records")
     decisions = len(records) - 1
@@ -255,7 +274,23 @@ def terminal_rewards(frames, statuses) -> np.ndarray:
 def write_rollout(path: str | Path, records: np.ndarray, *, owner: int = 1,
                   seed: int = 1, weight_version: int = 0) -> Path:
     """Reference writer used by collection tools and binary parity fixtures."""
-    records = np.array(records, dtype=RECORD_DTYPE, copy=True)
+    return _write_rollout(path, records, owner=owner, seed=seed, weight_version=weight_version,
+                          schema=SCHEMA_CRC, version=FORMAT_VERSION, vector=VECTOR_SIZE, maps=MAP_SIZE)
+
+
+def write_context_rollout(path: str | Path, records: np.ndarray, *, owner: int = 1,
+                          seed: int = 1, weight_version: int = 0) -> Path:
+    """Explicit historical 528-to-542 migration output; not current training data.
+
+    This writer never invents the new execution or map observations. The normal
+    reader rejects its result unless historical decoding is explicitly enabled.
+    """
+    return _write_rollout(path, records, owner=owner, seed=seed, weight_version=weight_version,
+                          schema=CONTEXT_SCHEMA_CRC, version=3, vector=CONTEXT_VECTOR_SIZE, maps=LEGACY_MAP_SIZE)
+
+
+def _write_rollout(path, records, *, owner, seed, weight_version, schema, version, vector, maps):
+    records = np.array(records, dtype=_record_dtype(False, vector, maps), copy=True)
     if not 0 <= owner < 8 or not 1 <= seed <= 0xFFFFFFFF or not 0 <= weight_version <= 0xFFFFFFFF:
         raise RolloutError("invalid owner or seed")
     intervals = np.diff(np.concatenate(([0], records["frame"].astype(np.int64))))
@@ -266,9 +301,9 @@ def write_rollout(path: str | Path, records: np.ndarray, *, owner: int = 1,
     records["terminal_reward"] = terminal_rewards(records["frame"], records["status"])
     records["reserved_reward"] = 0
     _validate_records(records)
-    wire = np.empty(len(records), dtype=WIRE_RECORD_DTYPE)
+    wire = np.empty(len(records), dtype=_record_dtype(True, vector, maps))
     with np.errstate(over="ignore", invalid="ignore"):
-        for name in WIRE_RECORD_DTYPE.names:
+        for name in wire.dtype.names:
             if name == "mask_packed":
                 wire[name] = np.packbits(records["mask"], axis=-1, bitorder="little")
             else:
@@ -280,8 +315,8 @@ def write_rollout(path: str | Path, records: np.ndarray, *, owner: int = 1,
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as stream:
-        stream.write(HEADER.pack(MAGIC, SCHEMA_CRC, FORMAT_VERSION, owner, seed,
-                                 weight_version, VECTOR_SIZE, MAP_SIZE, RECORD_SIZE))
+        stream.write(HEADER.pack(MAGIC, schema, version, owner, seed,
+                                 weight_version, vector, maps, wire.dtype.itemsize))
         stream.write(wire.tobytes())
     return path
 
@@ -306,6 +341,10 @@ def episode_returns(episode: Episode, *, iteration: int = 0,
     until the frame cap instead of finishing the game. Real terminal states
     also have zero value. There is no event/issue/time bonus.
     """
+    if not math.isfinite(gamma) or not 0 < gamma <= 1:
+        raise ValueError("gamma must be finite and in (0, 1]")
+    if not math.isfinite(gae_lambda) or not 0 <= gae_lambda <= 1:
+        raise ValueError("gae_lambda must be finite and in [0, 1]")
     records = episode.records
     frames = records["frame"].astype(np.float64)
     elapsed = np.diff(frames) / 32.0

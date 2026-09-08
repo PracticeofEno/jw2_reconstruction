@@ -22,11 +22,13 @@ int main(int argc, char** argv) {
             for (int i = 0; i < 32; ++i) std::cout << rng.next() << '\n';
             return 0;
         }
-        if (argc != 2 && argc != 4) return 1;
+        const bool allow_legacy = (argc == 3 || argc == 5) && std::string(argv[argc - 1]) == "--allow-legacy";
+        const int effective_argc = argc - (allow_legacy ? 1 : 0);
+        if (effective_argc != 2 && effective_argc != 4) return 1;
         ranker::CommanderModel model;
         std::string error;
-        if (!model.load(argv[1], &error)) { std::cerr << error << '\n'; return 2; }
-        if (argc == 2) { std::cout << model.version() << '\n'; return 0; }
+        if (!model.load(argv[1], &error, allow_legacy)) { std::cerr << error << '\n'; return 2; }
+        if (effective_argc == 2) { std::cout << model.version() << '\n'; return 0; }
         std::ifstream input(argv[2], std::ios::binary);
         std::ofstream output(argv[3], std::ios::binary);
         u32 count = 0;

@@ -14,6 +14,12 @@
 !docs/RL_COMMANDER_VERIFICATION.md
 !docs/JW2_STRONG_AI_BOT_DESIGN.md
 !docs/JW2_COMMANDER_IMPLEMENTATION_STATUS.md
+!docs/JW2_COMMANDER_SEARCH_COVERAGE_20260907.md
+!docs/JW2_COMMANDER_LEARNING_PLATEAU_AUDIT_20260907.md
+!docs/JW2_COMMANDER_CONTEXT_IMPROVEMENT_20260907.md
+!docs/JW2_COMMANDER_CONTEXT_RECOVERY_20260907.md
+!docs/JW2_COMMANDER_OBSERVATION_CONTRACT_20260908.md
+!docs/JW2_COMMANDER_STRONG_BOT_20260908.md
 
 !ranker_reconstructed_code/
 !ranker_reconstructed_code/CMakeLists.txt
@@ -72,7 +78,13 @@
 !ranker_reconstructed_code/tests/ui_png_resource_regression.cpp
 !ranker_reconstructed_code/tests/ai_play_interface_regression.cpp
 !ranker_reconstructed_code/tests/ai_commander_regression.cpp
+!ranker_reconstructed_code/tests/ai_sweep_coverage_regression.cpp
 !ranker_reconstructed_code/tests/ai_commander_model_probe.cpp
+!ranker_reconstructed_code/tests/ai_commander_context_regression.cpp
+!ranker_reconstructed_code/tests/ai_commander_context_probe.cpp
+!ranker_reconstructed_code/tests/ai_commander_observation_regression.cpp
+!ranker_reconstructed_code/tests/ai_commander_transfer_regression.cpp
+!ranker_reconstructed_code/tests/ai_commander_economy_recovery_regression.cpp
 !ranker_reconstructed_code/tests/ai_commander_actions_regression.cpp
 !ranker_reconstructed_code/tests/ai_commander_launch_regression.cpp
 

@@ -1,4 +1,5 @@
 #include "ranker_p2p_lobby.h"
+#include "ranker_ai_commander_model.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -11,6 +12,81 @@ void require(bool result, const char* message) {
 }
 bool parse(P2PNetworkLaunchParameters& options, const std::string& command) {
     return ParseP2PNetworkCommandLine(options, command.c_str());
+}
+std::array<u32, 32> policy_stream(const P2PNetworkLaunchParameters& options, u32 owner, u32 version) {
+    CommanderPcg32 rng;
+    const auto seed = options.commander_rng_seed(version);
+    rng.seed(seed.first, owner, seed.second);
+    std::array<u32, 32> values{};
+    for (auto& value : values) value = rng.next();
+    return values;
+}
+
+void policy_seed_regression() {
+    P2PNetworkLaunchParameters options;
+    require(parse(options, "-AISELF -AIWEIGHTS:policy.bin -SEED:901"), "default policy seed launch rejected");
+    require(!options.self_play_has_policy_seed && options.self_play_seed == 901,
+        "omitted policy seed changed game seed or enabled override");
+    CommanderPcg32 original;
+    original.seed(901, 3, 17);
+    const auto default_stream = policy_stream(options, 3, 17);
+    for (u32 value : default_stream) require(value == original.next(), "default policy RNG sequence changed");
+    require(policy_stream(options, 3, 8) != policy_stream(options, 3, 9),
+        "default stream lost the model-version salt");
+
+    require(parse(options, "-AISELF -AIWEIGHTS:policy.bin -SEED:901 -AIPOLICYSEED:0"),
+        "explicit zero policy seed rejected");
+    require(options.self_play_has_policy_seed && options.self_play_policy_seed == 0 && options.self_play_seed == 901,
+        "explicit zero confused with omission or replaced game seed");
+    const auto zero_stream = policy_stream(options, 3, 8);
+    require(zero_stream == policy_stream(options, 3, 9), "override still depends on model version");
+    require(zero_stream != policy_stream(options, 4, 8), "override lost owner separation");
+    CommanderPcg32 explicit_reference;
+    explicit_reference.seed(0, 3, 0);
+    for (u32 value : zero_stream) require(value == explicit_reference.next(), "override seed mix differs from (N,owner,0)");
+
+    require(parse(options, "-AISELF -AIWEIGHTS:policy.bin -SEED:7 -AIPOLICYSEED:0"),
+        "second explicit zero policy seed rejected");
+    require(policy_stream(options, 3, 9) == zero_stream && options.self_play_seed == 7,
+        "override remains tied to game seed");
+    require(parse(options, "-AISELF -AIWEIGHTS:policy.bin -SEED:7 -AIPOLICYSEED:1"),
+        "positive policy seed rejected");
+    require(policy_stream(options, 3, 9) != zero_stream, "distinct policy seeds yielded identical streams");
+    require(parse(options, "-AISELF -AIWEIGHTS:policy.bin -AIPOLICYSEED:18446744073709551615"),
+        "maximum u64 policy seed rejected");
+    require(options.self_play_policy_seed == ~u64{0}, "maximum u64 policy seed truncated");
+    require(parse(options, "-AISELF -AIWEIGHTS:policy.bin \"-aipolicyseed:0042\" -SEED:17"),
+        "quoted lower-case policy seed rejected");
+    require(options.self_play_policy_seed == 42 && options.self_play_seed == 17,
+        "quoted policy seed or game seed parsed incorrectly");
+    require(parse(options, "-AISELF -AIWEIGHTS:policy.bin -AIPOLICYSEED:\"43\""),
+        "quoted policy seed value rejected");
+    require(options.self_play_policy_seed == 43, "quoted policy seed value changed");
+
+    for (const char* malformed : {"-AIPOLICYSEED", "-AIPOLICYSEED:", "-AIPOLICYSEED:-1",
+            "-AIPOLICYSEED:+1", "-AIPOLICYSEED:1.0", "-AIPOLICYSEED:1x", "-AIPOLICYSEED:0x10",
+            "-AIPOLICYSEED:18446744073709551616", "-AIPOLICYSEED:999999999999999999999999",
+            "-AIPOLICYSEED:1 -AIPOLICYSEED:1", "-AIPOLICYSEED:\"7"}) {
+        require(!parse(options, std::string("-AISELF -AIWEIGHTS:policy.bin ") + malformed),
+            "malformed/overflow/duplicate policy seed accepted");
+    }
+    require(parse(options, R"(-AISELF -AIWEIGHTS:"C:\Models\path -AIPOLICYSEED:99.bin" -SEED:9)"),
+        "flag-like path substring rejected");
+    require(!options.self_play_has_policy_seed && options.self_play_policy_seed == 0 && options.self_play_seed == 9,
+        "flag-like path substring changed policy RNG or override leaked across parses");
+    require(!parse(options, "-AISELF -AIRANDOM -AIPOLICYSEED:9"),
+        "policy seed accepted outside commander mode");
+    require(!parse(options, "-AIPOLICYSEED:9") && !options.self_play_has_policy_seed,
+        "policy seed escaped self-play-only parser");
+
+    std::srand(777);
+    const int expected_game_random = std::rand();
+    std::srand(777);
+    require(parse(options, "-AISELF -AIWEIGHTS:policy.bin -SEED:23 -AIPOLICYSEED:4"),
+        "RNG isolation launch rejected");
+    policy_stream(options, 1, 9);
+    require(std::rand() == expected_game_random && options.self_play_seed == 23,
+        "policy seed parsing/initialization consumed or reseeded game/slot RNG");
 }
 }
 
@@ -77,5 +153,15 @@ int main() {
     require(!parse(normal, "-AIWEIGHTS:policy.bin -AINOSLEEP") &&
         !normal.self_play_commander && !normal.self_play_no_sleep,
         "commander flags escaped the self-play-only entry");
+    policy_seed_regression();
+    P2PNetworkLaunchParameters transfer_options;
+    require(parse(transfer_options, "-AISELF -AIWEIGHTS:policy.bin -AICOORDINATEDTRANSFERS:1") &&
+        transfer_options.self_play_coordinated_transfers, "coordinated transfers opt-in rejected");
+    require(parse(transfer_options, "-AISELF -AIWEIGHTS:policy.bin") &&
+        !transfer_options.self_play_coordinated_transfers, "coordinated transfers leaked between launches");
+    require(parse(transfer_options, "-AISELF -AIWEIGHTS:policy.bin -AICOORDINATEDTRANSFERS:0") &&
+        !transfer_options.self_play_coordinated_transfers, "explicit baseline transfers changed");
+    require(parse(transfer_options, "-AISELF -AIRANDOM -AICOORDINATEDTRANSFERS:1") &&
+        !transfer_options.self_play_coordinated_transfers, "coordinated transfers escaped commander mode");
     std::cout << "commander launch reparse/path/isolation regression passed\n";
 }

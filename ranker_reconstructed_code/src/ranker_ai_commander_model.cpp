@@ -11,16 +11,16 @@
 namespace ranker {
 namespace {
 struct TensorSpec { std::string name; std::vector<u32> shape; };
-std::vector<TensorSpec> TensorSpecs() {
+std::vector<TensorSpec> TensorSpecs(u32 vector_size, bool adapters) {
     std::vector<TensorSpec> specs;
     const auto layer = [&specs](const std::string& name, std::vector<u32> shape) {
         const u32 out = shape.front();
         specs.push_back({name + ".weight", std::move(shape)});
         specs.push_back({name + ".bias", {out}});
     };
-    layer("vector1", {256, 528});
+    layer("vector1", {256, vector_size});
     layer("vector2", {256, 256});
-    layer("conv1", {16, 9, 3, 3});
+    layer("conv1", {16, adapters ? 12U : 9U, 3, 3});
     layer("conv2", {32, 16, 3, 3});
     layer("map_fc", {128, 2048});
     layer("trunk", {256, 384});
@@ -31,6 +31,11 @@ std::vector<TensorSpec> TensorSpecs() {
         specs.push_back({"embeddings." + std::to_string(h) + ".weight", {static_cast<u32>(kCommanderHeadSizes[h]), 8}});
     layer("value1", {64, 288});
     layer("value2", {1, 64});
+    if (adapters) for (u32 h = 1; h < 8; ++h) {
+        const std::string prefix = "head_adapters." + std::to_string(h);
+        layer(prefix + ".down", {static_cast<u32>(kCommanderAdapterWidth), 256 + 8 * h});
+        layer(prefix + ".up", {static_cast<u32>(kCommanderHeadSizes[h]), static_cast<u32>(kCommanderAdapterWidth)});
+    }
     return specs;
 }
 
@@ -76,9 +81,10 @@ private:
 };
 
 void Dense(const float* in, std::size_t inputs, float* out, std::size_t outputs,
-           const std::vector<float>& weight, const std::vector<float>& bias, bool relu) {
+           const std::vector<float>& weight, const std::vector<float>& bias, bool relu,
+           std::size_t row_stride = 0, std::size_t column_offset = 0) {
     for (std::size_t o = 0; o < outputs; ++o) {
-        const float* row = weight.data() + o * inputs;
+        const float* row = weight.data() + o * (row_stride ? row_stride : inputs) + column_offset;
         // Independent partial sums permit vectorization without fast-math.
         float a = 0, b = 0, c = 0, d = 0;
         std::size_t i = 0;
@@ -86,28 +92,30 @@ void Dense(const float* in, std::size_t inputs, float* out, std::size_t outputs,
             a += row[i] * in[i]; b += row[i + 1] * in[i + 1];
             c += row[i + 2] * in[i + 2]; d += row[i + 3] * in[i + 3];
         }
-        float value = ((a + b) + (c + d)) + bias[o];
+        float value = ((a + b) + (c + d)) + (bias.empty() ? 0.0f : bias[o]);
         for (; i < inputs; ++i) value += row[i] * in[i];
         out[o] = relu ? std::max(value, 0.0f) : value;
     }
 }
 
 void Conv(const float* in, int channels, int size, float* out, int outputs, int stride,
-          const std::vector<float>& weight, const std::vector<float>& bias) {
+          const std::vector<float>& weight, const std::vector<float>& bias,
+          int weight_channels = 0, int channel_offset = 0, bool relu = true) {
     const int target = (size + 2 - 3) / stride + 1;
     for (int oc = 0; oc < outputs; ++oc) {
         for (int oy = 0; oy < target; ++oy) for (int ox = 0; ox < target; ++ox) {
-            float sum = bias[oc];
+            float sum = bias.empty() ? 0.0f : bias[oc];
             for (int ic = 0; ic < channels; ++ic) for (int ky = 0; ky < 3; ++ky) {
                 const int iy = oy * stride + ky - 1;
                 if (iy < 0 || iy >= size) continue;
                 for (int kx = 0; kx < 3; ++kx) {
                     const int ix = ox * stride + kx - 1;
                     if (ix >= 0 && ix < size)
-                        sum += in[(ic * size + iy) * size + ix] * weight[((oc * channels + ic) * 3 + ky) * 3 + kx];
+                        sum += in[(ic * size + iy) * size + ix] *
+                            weight[((oc * (weight_channels ? weight_channels : channels) + ic + channel_offset) * 3 + ky) * 3 + kx];
                 }
             }
-            out[(oc * target + oy) * target + ox] = std::max(sum, 0.0f);
+            out[(oc * target + oy) * target + ox] = relu ? std::max(sum, 0.0f) : sum;
         }
     }
 }
@@ -136,7 +144,7 @@ u32 CommanderPcg32::next() {
 
 double CommanderPcg32::uniform() { return static_cast<double>(next()) / 4294967296.0; }
 
-bool CommanderModel::load(const std::string& path, std::string* error) {
+bool CommanderModel::load(const std::string& path, std::string* error, bool allow_legacy) {
     try {
         std::ifstream stream(path, std::ios::binary | std::ios::ate);
         if (!stream) throw std::runtime_error("cannot open commander weights: " + path);
@@ -147,14 +155,23 @@ bool CommanderModel::load(const std::string& path, std::string* error) {
         if (!stream.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size())))
             throw std::runtime_error("cannot read commander weights");
         Reader reader(bytes);
-        if (reader.string(8) != "JW2CMD01" || reader.integer(4) != 1)
+        if (reader.string(8) != "JW2CMD01")
             throw std::runtime_error("unsupported commander weight format");
+        const u32 format = static_cast<u32>(reader.integer(4));
         const u32 version = static_cast<u32>(reader.integer(4));
-        if (reader.integer(8) != kCommanderSchema || reader.integer(4) != kCommanderVectorSize ||
-            reader.integer(4) != kCommanderMapSize || reader.integer(4) != kCommanderPrivilegedSize ||
+        const u64 schema = reader.integer(8);
+        const u32 vector_size = static_cast<u32>(reader.integer(4));
+        const u32 map_size = static_cast<u32>(reader.integer(4));
+        const bool legacy = format == 1 && map_size == kCommanderLegacyMapSize &&
+            ((schema == 0x1f364207U && vector_size == 528) ||
+             (schema == 0xda97fd92U && vector_size == kCommanderContextVectorSize));
+        if (legacy && !allow_legacy) throw std::runtime_error("legacy commander weights require explicit migration");
+        const bool adapters = !legacy;
+        if ((!legacy && (format != 2 || schema != kCommanderSchema || vector_size != kCommanderVectorSize ||
+                         map_size != kCommanderMapSize)) || reader.integer(4) != kCommanderPrivilegedSize ||
             reader.integer(4) != kCommanderHeadCount || reader.integer(4) != kCommanderLogitCount)
             throw std::runtime_error("commander weight schema mismatch");
-        const auto specs = TensorSpecs();
+        const auto specs = TensorSpecs(vector_size, adapters);
         if (reader.integer(4) != specs.size()) throw std::runtime_error("commander tensor count mismatch");
         const u32 payload_size = static_cast<u32>(reader.integer(4));
         const u32 crc = static_cast<u32>(reader.integer(4));
@@ -180,6 +197,8 @@ bool CommanderModel::load(const std::string& path, std::string* error) {
         if (reader.position() != bytes.size()) throw std::runtime_error("trailing commander weight data");
         tensors_ = std::move(tensors);
         version_ = version;
+        vector_size_ = vector_size;
+        has_adapters_ = adapters;
         if (error) error->clear();
         return true;
     } catch (const std::exception& ex) {
@@ -200,9 +219,24 @@ CommanderDecision CommanderModel::decide(const CommanderInput& input, const Comm
     alignas(32) std::array<float, 2048> c2{};
     alignas(32) std::array<float, 128> map{};
     alignas(32) std::array<float, 384> combined{};
-    Dense(input.vector.data(), 528, v1.data(), 256, t[0], t[1], true);
+    if (has_adapters_) {
+        alignas(32) std::array<float, 256> extra{};
+        Dense(input.vector.data(), kCommanderContextVectorSize, v1.data(), 256, t[0], t[1], false, vector_size_);
+        Dense(input.vector.data() + kCommanderContextVectorSize, vector_size_ - kCommanderContextVectorSize,
+              extra.data(), 256, t[0], {}, false, vector_size_, kCommanderContextVectorSize);
+        for (std::size_t i = 0; i < v1.size(); ++i) v1[i] = std::max(v1[i] + extra[i], 0.0f);
+    } else {
+        Dense(input.vector.data(), vector_size_, v1.data(), 256, t[0], t[1], true);
+    }
     Dense(v1.data(), 256, v2.data(), 256, t[2], t[3], true);
-    Conv(input.map.data(), 9, 16, c1.data(), 16, 1, t[4], t[5]);
+    if (has_adapters_) {
+        alignas(32) std::array<float, 4096> extra{};
+        Conv(input.map.data(), 9, 16, c1.data(), 16, 1, t[4], t[5], 12, 0, false);
+        Conv(input.map.data() + kCommanderLegacyMapSize, 3, 16, extra.data(), 16, 1, t[4], {}, 12, 9, false);
+        for (std::size_t i = 0; i < c1.size(); ++i) c1[i] = std::max(c1[i] + extra[i], 0.0f);
+    } else {
+        Conv(input.map.data(), 9, 16, c1.data(), 16, 1, t[4], t[5]);
+    }
     Conv(c1.data(), 16, 16, c2.data(), 32, 2, t[6], t[7]);
     Dense(c2.data(), 2048, map.data(), 128, t[8], t[9], true);
     std::copy(v2.begin(), v2.end(), combined.begin());
@@ -226,6 +260,14 @@ CommanderDecision CommanderModel::decide(const CommanderInput& input, const Comm
             result.mask[offset] = 1;
         }
         Dense(conditioned.data(), 256 + 8 * h, result.logits.data() + offset, count, t[12 + 2 * h], t[13 + 2 * h], false);
+        if (has_adapters_ && h) {
+            const std::size_t index = 39 + 4 * (h - 1);
+            alignas(32) std::array<float, kCommanderAdapterWidth> hidden{};
+            alignas(32) std::array<float, 42> residual{};
+            Dense(conditioned.data(), 256 + 8 * h, hidden.data(), hidden.size(), t[index], t[index + 1], true);
+            Dense(hidden.data(), hidden.size(), residual.data(), count, t[index + 2], t[index + 3], false);
+            for (std::size_t i = 0; i < count; ++i) result.logits[offset + i] += residual[i];
+        }
         float maximum = -std::numeric_limits<float>::infinity();
         std::size_t selected = 0, legal = 0;
         for (std::size_t i = 0; i < count; ++i) {

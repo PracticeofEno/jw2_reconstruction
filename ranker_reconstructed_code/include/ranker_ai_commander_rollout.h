@@ -9,8 +9,9 @@ namespace ranker {
 // Every file is one owner/episode pinned to one immutable policy version.
 // Incomplete files have no terminal record and are rejected by the learner.
 enum class CommanderRolloutStatus : u8 { decision, win, loss, truncated, invalid };
-inline constexpr u32 kCommanderRolloutFormatVersion = 2;
-inline constexpr u32 kCommanderRolloutRecordBytes = 3522;
+inline constexpr u32 kCommanderRolloutFormatVersion = 4;
+inline constexpr u32 kCommanderRolloutRecordBytes =
+    162 + 2 * kCommanderVectorSize + kCommanderMapSize;
 
 class CommanderRolloutWriter {
 public:

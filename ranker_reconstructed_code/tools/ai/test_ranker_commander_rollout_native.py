@@ -32,7 +32,7 @@ int main(int argc, char** argv) {
         source.read(reinterpret_cast<char*>(&count), sizeof(count));
         for (u32 offset = 0; offset < count;) {
             ranker::CommanderInput input;
-            const u32 batch = std::min<u32>(528, count - offset);
+            const u32 batch = std::min<u32>(ranker::kCommanderVectorSize, count - offset);
             if (!source.read(reinterpret_cast<char*>(input.vector.data()), batch * sizeof(float))) return 19;
             ranker::QuantizeCommanderMap(input);
             target.write(reinterpret_cast<const char*>(input.vector.data()), batch * sizeof(float));
@@ -161,11 +161,11 @@ class NativeRolloutTests(unittest.TestCase):
     def test_native_header_record_crc_and_python_roundtrip(self):
         episode = self.read()
         raw = episode.path.read_bytes()
-        self.assertEqual(len(raw), 40 + 3 * 3522)
+        self.assertEqual(len(raw), 40 + 3 * rollout.RECORD_SIZE)
         self.assertEqual(rollout.HEADER.unpack_from(raw),
-                         (b"JWRLO001", 0x1F364207, 2, 3, 901, 17, 528, 2304, 3522))
+                         (b"JWRLO001", rollout.SCHEMA_CRC, 4, 3, 901, 17, rollout.VECTOR_SIZE, rollout.MAP_SIZE, rollout.RECORD_SIZE))
         for index, record in enumerate(episode.records):
-            self.assertEqual(int(record["crc32"]), zlib.crc32(raw[40 + index * 3522:40 + (index + 1) * 3522 - 4]))
+            self.assertEqual(int(record["crc32"]), zlib.crc32(raw[40 + index * rollout.RECORD_SIZE:40 + (index + 1) * rollout.RECORD_SIZE - 4]))
         np.testing.assert_array_equal(episode.records["frame"], [1, 33, 1801])
         np.testing.assert_array_equal(episode.records["event"], [0, 2, 0])
         np.testing.assert_array_equal(episode.records["delta_frame"], [1, 32, 1768])
@@ -186,7 +186,7 @@ class NativeRolloutTests(unittest.TestCase):
 
     def test_map_rounding_matches_inference_and_training(self):
         episode = self.read()
-        raw, inference = np.fromfile(self.directory / "win.maps.bin", dtype="<f4").reshape(2, 2304)
+        raw, inference = np.fromfile(self.directory / "win.maps.bin", dtype="<f4").reshape(2, rollout.MAP_SIZE)
         scaled = np.clip(raw, np.float32(0), np.float32(1)) * np.float32(255)
         # C++ round uses ties away from zero. numpy.rint uses ties-to-even;
         # converting to float64 before adding0.5 preserves just-below ties.
@@ -217,14 +217,15 @@ class NativeRolloutTests(unittest.TestCase):
         self.assertAlmostEqual(float(win["terminal"][-1]), 1 + .3 * (1 - 1801 / 60000), places=6)
         np.testing.assert_allclose(win["shape"][-1], -expected_potential[-2], rtol=0, atol=1e-7)
         np.testing.assert_array_equal(cap["terminal"], 0)
-        np.testing.assert_allclose(cap["shape"][-1],
-                                   discounts[-1] * expected_potential[-1] - expected_potential[-2], rtol=0, atol=1e-7)
+        # The existing cap rule zeroes terminal potential while preserving
+        # the value bootstrap, so unfinished games cannot bank shaping.
+        np.testing.assert_allclose(cap["shape"][-1], -expected_potential[-2], rtol=0, atol=1e-7)
         expected_mc = cap["reward"][-1] + discounts[-1] * .4
         self.assertAlmostEqual(float(cap["mc_return"][-1]), expected_mc, places=6)
 
     def test_native_corruption_and_incomplete_episode_rejected(self):
         original = (self.directory / "win.rlo").read_bytes()
-        cases = {"partial": original[:-1], "missing_terminal": original[:-3522],
+        cases = {"partial": original[:-1], "missing_terminal": original[:-rollout.RECORD_SIZE],
                  "trailing": original + b"x"}
         for label, offset in (("schema", 8), ("record_size", 36), ("record_crc", 40 + 100)):
             bad = bytearray(original)
@@ -239,7 +240,7 @@ class NativeRolloutTests(unittest.TestCase):
 
     def test_same_frame_terminal_replaces_unelapsed_action_and_jsonl(self):
         episode = self.read("same_frame")
-        self.assertEqual(episode.path.stat().st_size, 40 + 2 * 3522)
+        self.assertEqual(episode.path.stat().st_size, 40 + 2 * rollout.RECORD_SIZE)
         np.testing.assert_array_equal(episode.records["frame"], [1, 33])
         np.testing.assert_array_equal(episode.records["delta_frame"], [1, 32])
         np.testing.assert_array_equal(episode.records["status"], [rollout.DECISION, rollout.TRUNCATED])
@@ -259,7 +260,7 @@ class NativeRolloutTests(unittest.TestCase):
 
     def test_single_same_frame_decision_is_not_a_trainable_transition(self):
         path = self.directory / "single_frame.rlo"
-        self.assertEqual(path.stat().st_size, 40 + 3522)
+        self.assertEqual(path.stat().st_size, 40 + rollout.RECORD_SIZE)
         with self.assertRaisesRegex(rollout.RolloutError, "decision and terminal"):
             rollout.read_rollout(path)
         entries = [json.loads(line) for line in Path(str(path) + ".decisions.jsonl").read_text().splitlines()]
@@ -277,17 +278,17 @@ class NativeRolloutTests(unittest.TestCase):
         episode = self.read("reopen")
         self.assertEqual(episode.weight_version, 18)
         np.testing.assert_array_equal(episode.records["frame"], [1, 33])
-        self.assertEqual(episode.path.stat().st_size, 40 + 2 * 3522)
+        self.assertEqual(episode.path.stat().st_size, 40 + 2 * rollout.RECORD_SIZE)
 
     def test_half_precision_ties_subnormals_and_pre_inference_quantization(self):
         episode = self.read()
-        raw, native = np.fromfile(self.directory / "win.maps.bin.halves.bin", dtype="<f4").reshape(2, 560)
+        raw, native = np.fromfile(self.directory / "win.maps.bin.halves.bin", dtype="<f4").reshape(2, rollout.VECTOR_SIZE + rollout.PRIVILEGED_SIZE)
         expected = raw.astype(np.float16).astype(np.float32)
         np.testing.assert_array_equal(native.view(np.uint32), expected.view(np.uint32))
-        np.testing.assert_array_equal(episode.records["vector"][0].view(np.uint32), expected[:528].view(np.uint32))
-        np.testing.assert_array_equal(episode.records["privileged"][0], expected[528:])
+        np.testing.assert_array_equal(episode.records["vector"][0].view(np.uint32), expected[:rollout.VECTOR_SIZE].view(np.uint32))
+        np.testing.assert_array_equal(episode.records["privileged"][0], expected[rollout.VECTOR_SIZE:])
         batch, _ = build_batch([episode], TrainConfig(iteration=300))
-        np.testing.assert_array_equal(batch["vector"][0].numpy().view(np.uint32), native[:528].view(np.uint32))
+        np.testing.assert_array_equal(batch["vector"][0].numpy().view(np.uint32), native[:rollout.VECTOR_SIZE].view(np.uint32))
 
     def test_rechecksummed_invalid_compact_metadata_is_rejected(self):
         original = (self.directory / "win.rlo").read_bytes()

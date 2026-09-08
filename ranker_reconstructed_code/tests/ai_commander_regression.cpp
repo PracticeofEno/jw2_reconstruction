@@ -139,11 +139,20 @@ void expansion_cache_refreshes_live_knowledge() {
     const auto site=CommanderPoint{s.expansion.target_x,s.expansion.target_y,true};
     o.tiles[10*64+50].resource_amount=0;o.simulation_frame=9;BuildCommanderView(s,o,sv);
     require(s.expansion.clusters[0].known_amount==12000&&s.expansion.clusters[0].tile_count==3,"cached cluster depletion was stale");
-    auto base=unit(2,0x80,site.x,site.y);base.under_construction=true;o.units.push_back(base);o.simulation_frame=17;BuildCommanderView(s,o,sv);
+    auto base=unit(2,0x80,site.x,site.y);base.under_construction=true;o.units.push_back(base);o.simulation_frame=17;auto view=BuildCommanderView(s,o,sv);
     require(!s.expansion.has_target&&s.expansion.clusters[0].developed,"new HQ did not reserve cached expansion");
-    o.units.pop_back();o.simulation_frame=25;BuildCommanderView(s,o,sv);require(s.expansion.has_target,"lost HQ left permanent developed marker");
+    require(view.anchors[3].valid&&view.anchors[3].x==site.x&&view.anchors[3].y==site.y,"expansion guard abandoned the HQ construction site");
+    o.units.back().under_construction=false;o.simulation_frame=25;view=BuildCommanderView(s,o,sv);
+    require(view.anchors[3].valid&&view.anchors[3].x==site.x&&view.anchors[3].y==site.y,"completed expansion lost its defense anchor");
+    o.units.pop_back();o.simulation_frame=33;BuildCommanderView(s,o,sv);require(s.expansion.has_target,"lost HQ left permanent developed marker");
+    auto walker=unit(3,0x20,320,350);walker.command_state=0x25;walker.command_value=0x80;
+    const CommanderPoint walking_site{site.x&~31,site.y&~31,true}; // Actual build packets snap to tile origins.
+    const auto bounds=AiBuildingInteractionOf(0x80);walker.path_target_x=walking_site.x+i32(bounds.width/2);walker.path_target_y=walking_site.y+i32(bounds.height/2);
+    o.units.push_back(walker);o.simulation_frame=41;view=BuildCommanderView(s,o,sv);
+    require(view.anchors[3].valid&&view.anchors[3].x==walking_site.x&&view.anchors[3].y==walking_site.y,"walking HQ builder lost its escort anchor");
+    o.units.pop_back();
     for(u32 x=50;x<54;++x)o.tiles[10*64+x].resource_amount=0;
-    o.simulation_frame=33;BuildCommanderView(s,o,sv);
+    o.simulation_frame=49;BuildCommanderView(s,o,sv);
     require(!s.expansion.has_target&&s.expansion.clusters[0].known_amount==0,"depleted cached cluster remained an expansion target");
 }
 void construction_return_waits_for_acknowledgment() {
@@ -166,6 +175,23 @@ void construction_return_waits_for_acknowledgment() {
     require(std::any_of(actions.begin(),actions.end(),[](const auto&a){return a.kind==AiSemanticActionKind::harvest&&a.queued&&a.unit_ids[0]==2;}),"active constructor did not queue postconstruction harvest");
     o.simulation_frame=25;v=BuildCommanderView(s,o,sv);actions=CommanderExecute(s,o,v);
     require(std::none_of(actions.begin(),actions.end(),[](const auto&a){return a.kind==AiSemanticActionKind::harvest;}),"postconstruction harvest queued twice");
+}
+void expansion_guard_scouts_unknown_build_site() {
+    auto o=world();o.primary_resources=0;o.simulation_frame=9001;o.map_width_tiles=64;o.tiles.resize(64*32);
+    for(auto& t:o.tiles){t.passable=true;t.buildable=true;t.explored=true;t.visible=true;}
+    for(u32 x=50;x<54;++x){auto& t=o.tiles[10*64+x];t.resource_amount=4000;t.passable=false;t.buildable=false;}
+    for(u32 y=0;y<32;++y)for(u32 x=35;x<64;++x){o.tiles[y*64+x].explored=false;o.tiles[y*64+x].visible=false;}
+    o.units={unit(1,0x80,320,320),unit(2,0x22,380,320),unit(3,0x22,400,320)};
+    auto sv=services();CommanderState s;BuildCommanderView(s,o,sv);s.units.at(3).squad=1;
+    o.simulation_frame=9009;auto v=BuildCommanderView(s,o,sv);
+    require(v.anchors[3].valid&&v.input.vector[260]==0,"fixture must have an unexplored public expansion site");
+    auto a=CommanderTeacherAction(s,v);
+    require(a[2]==2&&a[3]==u8(CommanderIntent::hold)&&a[4]==3,"expansion preparation never scouts the unknown build site");
+    // After scouting, the normal opening can resume; no reveal or legal-build
+    // bypass is needed. An actual construction later activates the escort.
+    for(auto& t:o.tiles){t.explored=true;t.visible=true;}
+    o.simulation_frame=9017;v=BuildCommanderView(s,o,sv);a=CommanderTeacherAction(s,v);
+    require(!(a[2]==2&&a[4]==3),"already explored site kept pulling the idle guard from home");
 }
 void unreachable_builder_and_reselection() {
     auto o=world();add_berries(o);o.units={unit(1,0x80,320,320),unit(2,0x20,640,640),unit(3,0x20,950,950)};
@@ -300,9 +326,30 @@ void engage_reflex_does_not_alternate_with_home_order() {
     require(std::none_of(next.begin(),next.end(),[](const auto&a){return a.unit_ids[0]==10&&a.kind==AiSemanticActionKind::attack_move;}),"unchanged engagement was interrupted by fallback home order");
     }
 }
+void expansion_priority_requires_a_confirmed_hq_at_the_anchor() {
+    CommanderState s;s.decision_count=100;
+    s.squads[0].intent=CommanderIntent::attack_move;s.squads[0].anchor=9;
+    CommanderView v;v.frame=40001;v.army_count=40;v.own_weight=20000;v.workers=28;
+    v.own_counts[16]=3;v.own_counts[2]=20;v.mask.fill(1);
+    v.squads[0].members={1};v.squads[0].weight=18000;v.squads[0].center={1490,2736,true};
+    v.anchors[0]={2528,256,true};v.anchors[1]=v.anchors[0];
+    v.anchors[4]={1344,3712,true};v.anchors[6]={1536,3424,true};v.anchors[9]={1520,2800,true};
+    CommanderGhost building_memory;building_memory.seen=unit(90,0x62,1536,3424,false);v.enemies.push_back(building_memory);
+    for(u32 variant:{4u,9u,11u}) {
+        v.services.teacher_variant=variant;
+        require(CommanderTeacherVariant(variant).target_priority==1,"test variant lost expansion priority");
+        const auto action=CommanderTeacherAction(s,v);
+        require(action[2]==1&&action[4]==6,"distant production building falsely confirmed an empty expansion anchor");
+    }
+    // A remembered secondary HQ supplies the exact anchor position, even
+    // under fog. Its real location retains the variant's expansion priority.
+    v.enemies[0].seen=unit(91,0x60,1520,2800,false);s.squads[0].anchor=6;
+    const auto confirmed=CommanderTeacherAction(s,v);
+    require(confirmed[2]==1&&confirmed[4]==9,"confirmed expansion HQ lost target priority");
+}
 }
 int main() {
-    try {fog_honesty();masks_and_generation();macro_and_queue_gate();workers_and_cadence();bounded_deterministic_packets();reservations_and_receipts();potential_and_teacher();visible_hunting_and_damage_reflex();recovery_kiting();busy_constructor_not_reassigned();expansion_cache_refreshes_live_knowledge();construction_return_waits_for_acknowledgment();unreachable_builder_and_reselection();recycled_sources_retire_pending_work();scouting_party_lifecycle();reinforcement_does_not_split_attacking_main();commander_can_override_defense_reflex();marching_squads_are_not_merge_material();engage_reflex_does_not_alternate_with_home_order();}
+    try {fog_honesty();masks_and_generation();macro_and_queue_gate();workers_and_cadence();bounded_deterministic_packets();reservations_and_receipts();potential_and_teacher();visible_hunting_and_damage_reflex();recovery_kiting();busy_constructor_not_reassigned();expansion_cache_refreshes_live_knowledge();construction_return_waits_for_acknowledgment();expansion_guard_scouts_unknown_build_site();unreachable_builder_and_reselection();recycled_sources_retire_pending_work();scouting_party_lifecycle();reinforcement_does_not_split_attacking_main();commander_can_override_defense_reflex();marching_squads_are_not_merge_material();engage_reflex_does_not_alternate_with_home_order();expansion_priority_requires_a_confirmed_hq_at_the_anchor();}
     catch(const std::exception& e){std::cerr<<"ai_commander_regression: "<<e.what()<<'\n';return 1;}
-    std::cout<<"ai_commander_regression: 19 groups passed\n";return 0;
+    std::cout<<"ai_commander_regression: 21 groups passed\n";return 0;
 }

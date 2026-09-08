@@ -19,6 +19,8 @@ import time
 from ranker_commander_rollout import LOSS, TRUNCATED, WIN, RolloutError, read_rollout
 
 START_PATTERN = re.compile(r"start-slots: owner=(\d+) state=(\d+) map_slot=(\d+).*?tribe=(\d+)")
+POLICY_SEED_PATTERN = re.compile(r"ai-commander: policy-seed-override owner=(\d+) policy_seed=(\d+) "
+                                 r"rng_version_salt=(\d+) game_seed=(\d+) model_version=(\d+)")
 ASSET_DIRECTORIES = {"data", "maps", "map", "sound", "sounds", "music", "movie", "movies",
                      "resources", "media", "icons"}
 OUTPUT_DIRECTORIES = {"replays", "logs", "debug_artifacts", "result", "results", ".git"}
@@ -31,6 +33,22 @@ OUTPUT_DIRECTORIES = {"replays", "logs", "debug_artifacts", "result", "results",
 STARTUP_TIMEOUT_SECONDS = 120.0
 STARTUP_POLL_SECONDS = 5.0
 STARTUP_ATTEMPTS = 2
+MAX_POLICY_SEED = (1 << 64) - 1
+
+
+def validate_policy_seed(value):
+    if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= MAX_POLICY_SEED:
+        raise ValueError("policy_seed must be an integer in 0..18446744073709551615")
+    return value
+
+
+def _parse_policy_seed(value):
+    if not re.fullmatch(r"[0-9]+", value):
+        raise argparse.ArgumentTypeError("policy seed must contain unsigned decimal digits only")
+    try:
+        return validate_policy_seed(int(value))
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
 
 
 def curriculum_settings(stage: int) -> dict:
@@ -103,6 +121,21 @@ def extract_start_slots(log: str) -> dict[int, dict[str, int]]:
     return slots
 
 
+def validate_policy_seed_log(log, *, owner, policy_seed, game_seed, model_version):
+    """Require engine confirmation; older executables can ignore unknown flags."""
+    validate_policy_seed(policy_seed)
+    rows = [tuple(map(int, row)) for row in POLICY_SEED_PATTERN.findall(log) if int(row[0]) == owner]
+    if rows != [(owner, policy_seed, 0, game_seed, model_version)]:
+        raise RuntimeError(f"policy_seed override was not confirmed by engine for owner {owner}")
+
+
+def validate_transfer_mode_log(log, *, owner, enabled):
+    rows = re.findall(r"ai-commander: coordinated-transfers owner=(\d+) enabled=([01])", log)
+    values = [int(value) for found_owner, value in rows if int(found_owner) == owner]
+    if values != [int(enabled)]:
+        raise RuntimeError(f"coordinated_transfers mode was not confirmed by engine for owner {owner}")
+
+
 def validate_terminal_result(episode, result):
     """Use the engine-backed RLO outcome when elimination and the cap coincide.
 
@@ -125,6 +158,10 @@ def validate_terminal_result(episode, result):
 
 def _run_game(install_dir, weights, job_root, index, job, slot, *, teacher,
               deterministic, timeout, weights2=None, executable=None, no_sleep=True):
+    if "policy_seed" in job:
+        validate_policy_seed(job["policy_seed"])
+    if "coordinated_transfers" in job and not isinstance(job["coordinated_transfers"], bool):
+        raise ValueError("coordinated_transfers must be a boolean")
     weights = job.get("primary_weights", weights)
     weights2 = job.get("opponent_weights", weights2)
     job_dir = prepare_job_directory(install_dir, Path(job_root) / f"game_{index:05d}", executable)
@@ -139,6 +176,12 @@ def _run_game(install_dir, weights, job_root, index, job, slot, *, teacher,
                f"-AINET:{300 + slot}", f"-SEED:{job['seed']}", f"-AITRIBE:{job['tribe']}",
                f"-MAXFRAMES:{job.get('max_frames', 60000)}", f"-AIOUT:{output}",
                f"-AICURRICULUM:{job.get('curriculum', 2)}", "-AIAUTOSCOUT:1"]
+    if "coordinated_transfers" in job:
+        command.append(f"-AICOORDINATEDTRANSFERS:{int(job['coordinated_transfers'])}")
+    if "policy_seed" in job:
+        # Explicit seeds initialize policy RNG independently of layout seed and
+        # weight version. Zero is meaningful; omission retains the native default.
+        command.append(f"-AIPOLICYSEED:{job['policy_seed']}")
     if teacher:
         command.append("-AITEACHER")
     if job.get("teacher_variant"):
@@ -222,7 +265,13 @@ def _run_game(install_dir, weights, job_root, index, job, slot, *, teacher,
         status = validate_terminal_result(episode, result)
         if episode.seed != job["seed"]:
             raise RuntimeError("rollout seed does not match job")
-        slots = extract_start_slots((output / "Jw2.log").read_text(encoding="utf-8", errors="replace"))
+        startup_log = (output / "Jw2.log").read_text(encoding="utf-8", errors="replace")
+        slots = extract_start_slots(startup_log)
+        if "coordinated_transfers" in job:
+            validate_transfer_mode_log(startup_log, owner=1, enabled=job["coordinated_transfers"])
+        if "policy_seed" in job:
+            validate_policy_seed_log(startup_log, owner=1, policy_seed=job["policy_seed"],
+                                     game_seed=job["seed"], model_version=episode.weight_version)
         if 1 not in slots or 2 not in slots:
             raise RuntimeError("startup log has no competing start slots")
         pair = [slots[1]["map_slot"], slots[2]["map_slot"]]
@@ -243,6 +292,11 @@ def _run_game(install_dir, weights, job_root, index, job, slot, *, teacher,
             if (other.owner != 2 or other.seed != episode.seed or
                     int(other.terminal["frame"]) != end_frame or other_status != expected_other):
                 raise RuntimeError("the two policy rollouts disagree on the terminal outcome")
+            if "policy_seed" in job:
+                validate_policy_seed_log(startup_log, owner=2, policy_seed=job["policy_seed"],
+                                         game_seed=job["seed"], model_version=other.weight_version)
+            if "coordinated_transfers" in job:
+                validate_transfer_mode_log(startup_log, owner=2, enabled=job["coordinated_transfers"])
             report["rollout2"] = str(other.path)
             report["weight_version2"] = other.weight_version
             report["status2"] = other_status
@@ -255,6 +309,10 @@ def _run_game(install_dir, weights, job_root, index, job, slot, *, teacher,
                       weight_version=episode.weight_version,
                       evaluation_valid=status in (WIN, LOSS) or end_frame >= 20000,
                       result=result)
+        if "policy_seed" in job:
+            report["policy_seed_verified"] = True
+        if "coordinated_transfers" in job:
+            report["coordinated_transfers_verified"] = True
         metrics_path = output / "commander_metrics_1.json"
         if metrics_path.exists():
             metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
@@ -283,20 +341,28 @@ def run_games(install_dir, weights, job_root, jobs, *, workers=8, teacher=False,
     for job in jobs:
         if not 1 <= job["seed"] <= 0xFFFFFFFF or job["tribe"] not in range(4):
             raise ValueError("seed must be nonzero u32 and tribe must be fixed 0..3")
+        if "policy_seed" in job:
+            validate_policy_seed(job["policy_seed"])
     Path(job_root).mkdir(parents=True, exist_ok=True)
     reports = []
-    # Each long-lived worker owns a port; jobs cannot reuse a live worker's port.
+    # Each long-lived worker owns a port. The next free worker takes the next
+    # job, so a slow match cannot leave other ports idle with jobs still queued.
     start_lock = threading.Lock()
     next_start = [time.monotonic()]
+    pending = iter(enumerate(jobs))
     def worker(slot):
         worker_reports = []
-        for index in range(slot, len(jobs), workers):
+        while True:
             with start_lock:
+                item = next(pending, None)
+                if item is None:
+                    break
+                index, job = item
                 delay = max(0.0, next_start[0] - time.monotonic())
                 if delay:
                     time.sleep(delay)
                 next_start[0] = time.monotonic() + stagger
-            worker_reports.append(_run_game(install_dir, weights, job_root, index, jobs[index],
+            worker_reports.append(_run_game(install_dir, weights, job_root, index, job,
                 slot, teacher=teacher, deterministic=deterministic, timeout=timeout, weights2=weights2,
                 executable=executable, no_sleep=no_sleep))
         return worker_reports
@@ -321,10 +387,20 @@ def discover_seed_mapping(reports) -> dict[tuple[int, int], int]:
     return mapping
 
 
-def evaluation_jobs(mapping, *, sampling=False):
+def evaluation_jobs(mapping, *, sampling=False, policy_seed_base=None):
+    if policy_seed_base is not None:
+        validate_policy_seed(policy_seed_base)
+        if not sampling:
+            raise ValueError("policy_seed_base requires sampled policy evaluation")
+        if policy_seed_base > MAX_POLICY_SEED - 199:
+            raise ValueError("200 policy seeds exceed the u64 range")
     if sampling:
-        return [{"seed": seed, "tribe": tribe, **curriculum_settings(2)}
+        jobs = [{"seed": seed, "tribe": tribe, **curriculum_settings(2)}
                 for tribe in range(4) for seed in range(100, 150)]
+        if policy_seed_base is not None:
+            for index, job in enumerate(jobs):
+                job["policy_seed"] = policy_seed_base + index
+        return jobs
     expected = {(first, second) for first in range(4) for second in range(4) if first != second}
     if set(mapping) != expected:
         raise ValueError(f"need all 12 measured ordered start pairs; missing {sorted(expected - set(mapping))}")
@@ -342,6 +418,23 @@ def wilson_interval(wins, games, z=1.959963984540054):
     return [max(0.0, center - radius), min(1.0, center + radius)]
 
 
+def _sampling_identity(item):
+    if "policy_seed" not in item:
+        # Legacy policy RNG also incorporates model version; a summary is for
+        # one evaluated policy, as before this optional seed control existed.
+        return ("legacy", item["tribe"], item.get("seed"))
+    seed = validate_policy_seed(item["policy_seed"])
+    pair = tuple(item.get("start_pair", ()))
+    if len(pair) != 2 or pair[0] == pair[1] or any(value not in range(4) for value in pair):
+        raise ValueError("explicit policy_seed sampling requires a measured start_pair")
+    if item.get("teacher"):
+        # Rule actions do not draw from the policy sampler.
+        return ("teacher", item["tribe"], pair, item.get("teacher_variant", 0))
+    if item.get("deterministic"):
+        return ("deterministic", item["tribe"], pair)
+    return ("policy_seed", item["tribe"], pair, seed)
+
+
 def summarize_evaluation(reports, *, expected_games):
     usable = [item for item in reports if item.get("valid") and item.get("evaluation_valid")]
     wins = sum(bool(item["win"]) for item in usable)
@@ -351,8 +444,13 @@ def summarize_evaluation(reports, *, expected_games):
     winning_frames = [item["end_frame"] for item in usable if item["win"]]
     identities = {(item["tribe"], tuple(item.get("start_pair", ()))) for item in usable}
     deterministic = bool(reports) and all(item.get("deterministic") for item in reports)
+    explicit_policy_seed = any("policy_seed" in item for item in reports)
+    for item in reports:
+        if "policy_seed" in item:
+            validate_policy_seed(item["policy_seed"])
     interval_wins, interval_games = wins, len(usable)
     consistent = None
+    sampling_consistent = None
     if deterministic:
         expected_pairs = {(a, b) for a in range(4) for b in range(4) if a != b}
         expected_tribes = (2,) if expected_games == 12 else range(4)
@@ -368,13 +466,28 @@ def summarize_evaluation(reports, *, expected_games):
         interval_games = len(outcomes) if consistent else None
         interval_wins = sum(next(iter(values)) for values in outcomes.values()) if consistent else None
     else:
-        sampled_cases = {(item["tribe"], item.get("seed")) for item in usable}
+        sampled_cases = {_sampling_identity(item) for item in usable}
         coverage = len(sampled_cases) == expected_games
+        if explicit_policy_seed:
+            # Replaying the same initial policy RNG state under the same layout
+            # is one sampled case. Shared seeds across different policies only
+            # match initialization: divergent trajectories can consume different
+            # draws, so this does not establish common random numbers.
+            outcomes = {}
+            for item in usable:
+                outcomes.setdefault(_sampling_identity(item), set()).add(bool(item["win"]))
+            sampling_consistent = all(len(values) == 1 for values in outcomes.values())
+            interval_games = len(outcomes) if sampling_consistent else None
+            interval_wins = sum(next(iter(values)) for values in outcomes.values()) if sampling_consistent else None
+            coverage = coverage and sampling_consistent
         if expected_games == 200:
-            coverage = sampled_cases == {(tribe, seed) for tribe in range(4) for seed in range(100, 150)}
-    return {"expected_games": expected_games, "valid_games": len(usable), "wins": wins,
+            # Keep the existing 200-game layout schedule requirement even when
+            # policy sampling now has its own independently specified seeds.
+            layout_cases = {(item["tribe"], item.get("seed")) for item in usable}
+            coverage = coverage and layout_cases == {(tribe, seed) for tribe in range(4) for seed in range(100, 150)}
+    summary = {"expected_games": expected_games, "valid_games": len(usable), "wins": wins,
             "invalid_games": len(reports) - len(usable), "win_rate": wins / len(usable) if usable else 0.0,
-            "wilson_95": wilson_interval(interval_wins, interval_games) if consistent is not False else None,
+            "wilson_95": wilson_interval(interval_wins, interval_games) if consistent is not False and sampling_consistent is not False else None,
             "wilson_games": interval_games,
             "wilson_basis": "unique_deterministic_conditions_descriptive_only" if deterministic else "policy_sampling",
             "deterministic_outcomes_consistent": consistent, "tribes": tribes,
@@ -382,6 +495,14 @@ def summarize_evaluation(reports, *, expected_games):
             "unique_start_tribe_cases": len(identities), "coverage_complete": coverage,
             "passed_100_percent": len(usable) == expected_games and wins == expected_games and coverage,
             "commander_metrics": aggregate_commander_metrics(usable)}
+    if explicit_policy_seed:
+        summary.update(explicit_policy_seed_games=sum("policy_seed" in item for item in usable),
+                       policy_seed_scope="initial policy RNG state only; divergent policies may consume different draws")
+        if not deterministic:
+            summary.update(unique_sampling_cases=len(sampled_cases),
+                           sampling_outcomes_consistent=sampling_consistent,
+                           wilson_basis="unique_policy_seed_layout_cases_descriptive_only")
+    return summary
 
 
 def aggregate_commander_metrics(reports):
@@ -467,10 +588,16 @@ def main(argv=None):
     parser.add_argument("--mapping", type=Path, help="manifest(s) with measured start_pair fields")
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--max-seed", type=int, default=128)
+    parser.add_argument("--policy-seed-base", type=_parse_policy_seed,
+                        help="sample mode: assign explicit u64 policy seeds N..N+199 in job order; controls RNG initialization, not matched draw consumption across policies")
     parser.add_argument("--teacher", action="store_true")
     parser.add_argument("--curriculum", type=int, choices=range(4),
                         help="argmax/sample: play the 48 cases under this curriculum stage's settings (default: C2 normal speed)")
     args = parser.parse_args(argv)
+    if args.policy_seed_base is not None and (args.mode != "sample" or args.teacher):
+        parser.error("--policy-seed-base requires sample mode without --teacher")
+    if args.policy_seed_base is not None and args.policy_seed_base > MAX_POLICY_SEED - 199:
+        parser.error("200 policy seeds exceed the u64 range")
     if args.mode == "report":
         reports = json.loads(args.io.read_text(encoding="utf-8"))
         print(json.dumps(summarize_evaluation(reports, expected_games=48 if all(
@@ -517,7 +644,7 @@ def main(argv=None):
                 for seed in range(1, args.max_seed + 1)]
     else:
         mapping = discover_seed_mapping(json.loads(args.mapping.read_text(encoding="utf-8"))) if args.mapping else {}
-        jobs = evaluation_jobs(mapping, sampling=args.mode == "sample")
+        jobs = evaluation_jobs(mapping, sampling=args.mode == "sample", policy_seed_base=args.policy_seed_base)
         if args.curriculum is not None:
             # Same 48 cases under a curriculum stage's opponent speed and
             # frame cap, e.g. to compare checkpoints under the C1 gate's terms.

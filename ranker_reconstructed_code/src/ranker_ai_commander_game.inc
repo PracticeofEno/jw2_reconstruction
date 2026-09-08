@@ -324,6 +324,7 @@ CommanderServices ai_commander_services(u32 owner, const AiObservation& observat
     services.kills_investment = ai_commander_play().kills[owner];
     services.losses_investment = ai_commander_play().losses[owner];
     services.autoscout = p2p_network_launch_parameters().self_play_autoscout;
+    services.coordinated_transfers = p2p_network_launch_parameters().self_play_coordinated_transfers;
     services.curriculum_stage = p2p_network_launch_parameters().self_play_curriculum;
     services.teacher_variant = owner == 2 && p2p_network_launch_parameters().self_play_versus ?
         p2p_network_launch_parameters().self_play_teacher_variant2 :
@@ -453,7 +454,15 @@ void run_ai_commander_frame(GameplayLoopState& loop) {
                     throw std::runtime_error("weight load: " + error);
                 if (!teacher_owner && !owner.model.loaded() && !launch.self_play_random)
                     throw std::runtime_error("commander requires -AIWEIGHTS, -AITEACHER or -AIRANDOM");
-                owner.rng.seed(launch.self_play_seed, owner_id, owner.model.version());
+                const auto policy_seed = launch.commander_rng_seed(owner.model.version());
+                owner.rng.seed(policy_seed.first, owner_id, policy_seed.second);
+                if (launch.self_play_has_policy_seed) {
+                    append_startup_log("ai-commander: policy-seed-override owner=%lu policy_seed=%llu rng_version_salt=0 game_seed=%lu model_version=%lu",
+                        static_cast<unsigned long>(owner_id),
+                        static_cast<unsigned long long>(policy_seed.first),
+                        static_cast<unsigned long>(launch.self_play_seed),
+                        static_cast<unsigned long>(owner.model.version()));
+                }
                 std::string rollout_path;
                 if (launch.self_play_rollout[0]) {
                     rollout_path = launch.self_play_rollout.data();
@@ -463,6 +472,8 @@ void run_ai_commander_frame(GameplayLoopState& loop) {
                 if (!owner.rollout.open(rollout_path, owner_id, launch.self_play_seed, owner.model.version()))
                     throw std::runtime_error("cannot open rollout " + rollout_path);
                 owner.initialized = true;
+                append_startup_log("ai-commander: coordinated-transfers owner=%lu enabled=%d",
+                    static_cast<unsigned long>(owner_id), launch.self_play_coordinated_transfers ? 1 : 0);
                 append_startup_log("ai-commander: owner=%lu version=%lu hostile=0x%lx teacher=%d rollout=%s",
                     static_cast<unsigned long>(owner_id), static_cast<unsigned long>(owner.model.version()),
                     static_cast<unsigned long>(owner.hostile_mask), teacher_owner, rollout_path.c_str());

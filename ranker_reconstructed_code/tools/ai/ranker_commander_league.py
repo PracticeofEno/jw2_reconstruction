@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
+from dataclasses import asdict
 import hashlib
 import json
+import math
 from pathlib import Path
 import random
 
@@ -141,17 +143,44 @@ def league_jobs(pool, scores, *, seed, start_game, games, primary, champion_only
     return jobs
 
 
+def _checkpoint_metadata(path):
+    path = Path(path)
+    sidecar = path.with_suffix(path.suffix + ".json")
+    return json.loads(sidecar.read_text(encoding="utf-8")) if sidecar.exists() else {}
+
+
+def _learning_rates(metadata):
+    saved = metadata.get("training_config", {}) if metadata.get("mode") == "ppo" else {}
+    rates = {name: float(saved.get(name, default)) for name, default in (
+        ("learning_rate_initial", 3e-4), ("learning_rate_final", 1e-4))}
+    if not all(math.isfinite(rate) and rate > 0 for rate in rates.values()):
+        raise ValueError("learning rates must be finite and positive")
+    return rates
+
+
+def _return_settings(metadata):
+    saved = metadata.get("training_config", {}) if metadata.get("mode") == "ppo" else {}
+    defaults = TrainConfig()
+    settings = {name: float(saved.get(name, getattr(defaults, name)))
+                for name in ("gamma", "gae_lambda")}
+    TrainConfig(**settings)  # Validate before collecting a league cohort.
+    return settings
+
+
 def _update(policy, optimizer, reports, output, iteration, shaping_scale, teacher=None,
-             *, keep_rollouts=False):
+             *, keep_rollouts=False, learning_rates=None, return_settings=None):
+    config = TrainConfig(iteration=iteration, shaping_scale=shaping_scale,
+                         **(learning_rates or {}), **(return_settings or {}))
     paths = [row["rollout"] for row in reports if row.get("valid")]
     episodes, rejected = load_cohort(paths, version=policy.weight_version)
     if len(episodes) * 12 < len(reports) * 10:
         raise RuntimeError(f"cohort has fewer than 10/12 valid episodes: {rejected}")
-    config = TrainConfig(iteration=iteration, shaping_scale=shaping_scale)
     batch, reward_metrics = build_batch(episodes, config)
     optimizer, optimizer_metrics = train_update(policy, batch, config, optimizer=optimizer,
-                                                teacher_policy=teacher)
+        teacher_policy=teacher,
+        progress_callback=lambda row: print(json.dumps({"training_progress": row}), flush=True))
     metadata = {"mode": "ppo", "iteration": iteration, "rejected": rejected,
+                "training_config": asdict(config),
                 **reward_metrics, **optimizer_metrics}
     save_checkpoint(policy, output, version=policy.weight_version + 1, metadata=metadata, optimizer=optimizer)
     if keep_rollouts:
@@ -178,6 +207,7 @@ def run_curriculum(args, state, mapping):
                    "--out", str(args.work_dir / "current.bin"), "--io", str(args.work_dir / "training"),
                    "--iterations", "1", "--iteration", str(iteration), "--workers", str(args.workers),
                    "--games-per-cohort", str(args.games), "--curriculum", str(stage), "--seed", str(args.seed),
+                   "--threads", str(args.threads),
                    # Design 5.5 mixes rule-commander variants from C1 (40%) and
                    # C2 (20%). At C1 the policy still loses ~80% of variant games,
                    # so the mix is held at 25% there (with 16-game cohorts: 12
@@ -245,14 +275,18 @@ def run_curriculum(args, state, mapping):
 def train_exploiter(args, state, directory):
     update = state.get("league_updates", 0)
     reset = "exploiter" not in state or update % args.exploiter_reset == 0
-    policy = load_weights(state["champion"] if reset else state["exploiter"])
+    source = state["champion"] if reset else state["exploiter"]
+    metadata = _checkpoint_metadata(source)
+    learning_rates = _learning_rates(metadata)
+    return_settings = _return_settings(metadata)
+    policy = load_weights(source)
     optimizer = torch.optim.Adam(policy.parameters(), lr=3e-4)
     if not reset:
         optimizer_path = Path(state["exploiter"]).with_suffix(".bin.optimizer.npz")
         if optimizer_path.exists():
             load_optimizer(optimizer, optimizer_path, version=policy.weight_version)
     snapshot = directory / "exploiter_start.bin"
-    save_checkpoint(policy, snapshot, version=policy.weight_version, metadata={"reset": reset})
+    save_checkpoint(policy, snapshot, version=policy.weight_version, metadata={**metadata, "reset": reset})
     games_seen = state.get("exploiter_games", 0)
     jobs = league_jobs({}, {}, seed=args.seed + 1000000, start_game=games_seen,
                        games=args.games, primary=snapshot, champion_only=state["champion"])
@@ -260,7 +294,9 @@ def train_exploiter(args, state, directory):
                          workers=args.workers, executable=args.exe, no_sleep=not args.keep_sleep)
     output = args.work_dir / "exploiter.bin"
     iterations = 0 if reset else state.get("exploiter_updates", 0)
-    _update(policy, optimizer, reports, output, iterations, 0.0, keep_rollouts=args.keep_rollouts)
+    _update(policy, optimizer, reports, output, iterations, 0.0,
+        keep_rollouts=args.keep_rollouts, learning_rates=learning_rates,
+        return_settings=return_settings)
     state.update(exploiter=str(output.resolve()), exploiter_games=games_seen + len(jobs),
                  exploiter_updates=iterations + 1)
     # Freeze each sampled exploiter version; future cohorts never see a mid-game replacement.
@@ -268,15 +304,20 @@ def train_exploiter(args, state, directory):
     frozen = args.work_dir / "pool" / f"{name}.bin"
     if frozen.exists():
         raise FileExistsError(frozen)
-    save_checkpoint(policy, frozen, version=policy.weight_version, metadata={"exploiter": True})
+    save_checkpoint(policy, frozen, version=policy.weight_version,
+        metadata={**_checkpoint_metadata(output), "exploiter": True})
     state["pool"][name] = str(frozen.resolve())
 
 
 def run_league(args, state, mapping, catalog):
+    metadata = _checkpoint_metadata(state["policy"])
+    learning_rates = _learning_rates(metadata)
+    return_settings = _return_settings(metadata)
     policy = load_weights(state["policy"])
     if "champion" not in state:
         champion = args.work_dir / "pool" / "champion_000.bin"
-        save_checkpoint(policy, champion, version=policy.weight_version, metadata={"league_champion": 0})
+        save_checkpoint(policy, champion, version=policy.weight_version,
+            metadata={**metadata, "league_champion": 0})
         state.update(champion=str(champion.resolve()), pool={"champion_000": str(champion.resolve())},
                      scores={}, league_games=0, replacements=0, league_updates=0)
         for candidate in sorted((Path(state["policy"]).parent / "pool").glob("commander_*.bin")):
@@ -294,7 +335,8 @@ def run_league(args, state, mapping, catalog):
         update = state.get("league_updates", 0)
         directory = args.work_dir / "league" / f"update_{update:05d}"
         snapshot = directory / "weights.bin"
-        save_checkpoint(policy, snapshot, version=policy.weight_version, metadata={"league_update": update})
+        save_checkpoint(policy, snapshot, version=policy.weight_version,
+            metadata={**metadata, "league_update": update})
         opponents = {**state["pool"], "main_self": str(snapshot.resolve())}
         jobs = league_jobs(opponents, state["scores"], seed=args.seed,
                            start_game=state["league_games"], games=args.games, primary=snapshot)
@@ -308,7 +350,9 @@ def run_league(args, state, mapping, catalog):
                 score["wins"] += int(report["win"])
         current = args.work_dir / "current.bin"
         optimizer, shaping_scale = _update(policy, optimizer, reports, current,
-            state["updates"], shaping_scale, keep_rollouts=args.keep_rollouts)
+            state["updates"], shaping_scale, keep_rollouts=args.keep_rollouts,
+            learning_rates=learning_rates, return_settings=return_settings)
+        metadata = _checkpoint_metadata(current)
         state.update(policy=str(current.resolve()), updates=state["updates"] + 1,
                      league_updates=update + 1, league_games=state["league_games"] + len(jobs),
                      shaping_scale=shaping_scale)
@@ -317,7 +361,7 @@ def run_league(args, state, mapping, catalog):
             frozen = args.work_dir / "pool" / f"{name}.bin"
             if frozen.exists():
                 raise FileExistsError(frozen)
-            save_checkpoint(policy, frozen, version=policy.weight_version, metadata={"frozen": True})
+            save_checkpoint(policy, frozen, version=policy.weight_version, metadata={**metadata, "frozen": True})
             state["pool"][name] = str(frozen.resolve())
         if args.exploiter_every and (update + 1) % args.exploiter_every == 0:
             train_exploiter(args, state, directory)
@@ -338,7 +382,7 @@ def run_league(args, state, mapping, catalog):
             champion = args.work_dir / "pool" / f"{name}.bin"
             if champion.exists():
                 raise FileExistsError(champion)
-            save_checkpoint(policy, champion, version=policy.weight_version, metadata=gate)
+            save_checkpoint(policy, champion, version=policy.weight_version, metadata={**metadata, **gate})
             state["champion"] = str(champion.resolve())
             state["pool"][name] = str(champion.resolve())
         write_state(directory / "champion_gate.json", gate)
@@ -365,6 +409,7 @@ def main(argv=None):
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--workers", type=int, default=8)
+    parser.add_argument("--threads", type=int, default=8, help="Torch CPU threads; independent of concurrent game workers")
     parser.add_argument("--games", type=int, default=12)
     parser.add_argument("--seed", type=int, default=1000)
     parser.add_argument("--max-updates", type=int, default=300)
@@ -378,7 +423,7 @@ def main(argv=None):
     parser.add_argument("--teacher-kl-decay", type=int, default=30, help="updates over which the PPO KL coefficient decays")
     parser.add_argument("--critic-warmup", type=int, default=0, help="first N PPO updates train only the critic")
     args = parser.parse_args(argv)
-    if min(args.workers, args.games, args.seed, args.max_updates, args.evaluate_every, args.target_replacements) < 1:
+    if min(args.workers, args.threads, args.games, args.seed, args.max_updates, args.evaluate_every, args.target_replacements) < 1:
         parser.error("counts and seeds must be positive")
     if args.exploiter_every < 0 or args.exploiter_reset < 1:
         parser.error("exploiter frequency must be nonnegative and reset interval positive")
@@ -409,7 +454,7 @@ def main(argv=None):
         ppo_admission(metadata, version=policy.weight_version, no_bc_control=args.no_bc_control,
                       warm_start=args.bc_warm_start,
                       weights_sha256=hashlib.sha256(policy_path.read_bytes()).hexdigest())
-    torch.set_num_threads(8)
+    torch.set_num_threads(args.threads)
     torch.manual_seed(args.seed)
     if args.mode == "curriculum":
         run_curriculum(args, state, mapping)

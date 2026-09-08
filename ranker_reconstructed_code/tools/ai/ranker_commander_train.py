@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import hashlib
 import json
 import math
 from pathlib import Path
 import random
+import time
 
 import numpy as np
 import torch
@@ -48,9 +49,21 @@ class TrainConfig:
     teacher_kl_initial: float = 0.05
     teacher_kl_floor: float = 0.0
     teacher_kl_decay: int = 30
-    # PPO: for the first N updates only the critic (and the KL anchor) train,
-    # so early noisy advantages cannot move the warm-started actor.
+    # PPO: for the first N updates only value1/value2 train. Freeze the shared
+    # actor features too, so value regression cannot move the BC policy.
     critic_warmup: int = 0
+    learning_rate_initial: float = 3e-4
+    learning_rate_final: float = 1e-4
+    # Both discounts are per 32 simulation frames, including variable-duration
+    # decisions. Keep the historical defaults for controlled one-variable runs.
+    gamma: float = 0.997
+    gae_lambda: float = 0.95
+
+    def __post_init__(self):
+        if not math.isfinite(self.gamma) or not 0 < self.gamma <= 1:
+            raise ValueError("gamma must be finite and in (0, 1]")
+        if not math.isfinite(self.gae_lambda) or not 0 <= self.gae_lambda <= 1:
+            raise ValueError("gae_lambda must be finite and in [0, 1]")
 
     def teacher_coefficient(self) -> float:
         progress = max(0.0, 1.0 - self.iteration / max(1, self.teacher_kl_decay))
@@ -97,20 +110,56 @@ def discard_accepted(episodes):
         path.unlink()
 
 
-def split_teacher_episodes(episodes, *, seed=1):
-    """Hold out complete policy-seed groups so related states cannot leak."""
+def actor_trajectory_fingerprint(episode):
+    """Hash the BC actor's inputs and labels, independent of seed/critic data."""
+    records = episode.decisions
+    digest = hashlib.sha256()
+    digest.update(len(records).to_bytes(8, "little"))
+    for name, dtype in (("vector", "<f4"), ("map", "u1"), ("mask", "u1"), ("action", "u1")):
+        digest.update(name.encode("ascii"))
+        for start in range(0, len(records), 2048):
+            digest.update(np.asarray(records[start:start + 2048][name], dtype=dtype).tobytes())
+    return digest.hexdigest()
+
+
+def independent_teacher_holdout(training, candidates):
+    """Keep the fitted training set fixed; exclude leaked validation seed groups.
+
+    Different seeds or teacher variants can produce identical trajectories.
+    Hashing only actor inputs/labels also detects these repeats when the
+    model version, critic targets or privileged observations differ.
+    """
+    training_hashes = {actor_trajectory_fingerprint(episode) for episode in training} if candidates else set()
+    excluded = {episode.seed for episode in candidates
+                if actor_trajectory_fingerprint(episode) in training_hashes}
+    held_out = [episode for episode in candidates if episode.seed not in excluded]
+    return held_out, {"method": "seed_groups_excluding_repeated_actor_trajectories",
+        "training_episodes": len(training), "training_seed_groups": sorted({e.seed for e in training}),
+        "candidate_validation_episodes": len(candidates),
+        "candidate_validation_seed_groups": sorted({e.seed for e in candidates}),
+        "excluded_validation_seed_groups": sorted(excluded),
+        "validation_episodes": len(held_out), "validation_seed_groups": sorted({e.seed for e in held_out})}
+
+
+def split_teacher_episodes(episodes, *, seed=1, audit=None):
+    """Hold out seed groups and remove exact actor trajectories seen in training."""
     seeds = sorted({episode.seed for episode in episodes})
-    if len(seeds) < 2:
-        return list(episodes), []
     random.Random(seed).shuffle(seeds)
-    held_seeds = set(seeds[:max(1, math.ceil(len(seeds) / 10))])
-    return ([episode for episode in episodes if episode.seed not in held_seeds],
-            [episode for episode in episodes if episode.seed in held_seeds])
+    held_seeds = set(seeds[:max(1, math.ceil(len(seeds) / 10))]) if len(seeds) >= 2 else set()
+    training = [episode for episode in episodes if episode.seed not in held_seeds]
+    candidates = [episode for episode in episodes if episode.seed in held_seeds]
+    held_out, split_audit = independent_teacher_holdout(training, candidates)
+    if audit is not None:
+        audit.update(split_audit)
+    return training, held_out
 
 
 def assess_bc_accuracy(policy, episodes, *, minibatch=2048):
     """Teacher-forced accuracy on held-out episodes; never a gameplay pass."""
     matches = np.zeros(8, dtype=np.int64)
+    action_labels = np.zeros(8, dtype=np.int64)
+    action_matches = np.zeros(8, dtype=np.int64)
+    false_actions = np.zeros(8, dtype=np.int64)
     decisions = 0
     policy.eval()
     with torch.no_grad():
@@ -126,7 +175,14 @@ def assess_bc_accuracy(policy, episodes, *, minibatch=2048):
                 offset = 0
                 for head, width in enumerate(HEAD_SIZES):
                     logits = output["logits"][:, offset:offset + width].masked_fill(~masks[:, offset:offset + width], -1e9)
-                    matches[head] += int((logits.argmax(-1) == actions[:, head]).sum())
+                    prediction = logits.argmax(-1)
+                    correct = prediction == actions[:, head]
+                    matches[head] += int(correct.sum())
+                    if head in (0, 2):  # Macro and squad selection use zero for NOOP.
+                        active = actions[:, head] != 0
+                        action_labels[head] += int(active.sum())
+                        action_matches[head] += int((correct & active).sum())
+                        false_actions[head] += int(((prediction != 0) & ~active).sum())
                     offset += width
                 decisions += len(sample)
     accuracy = (matches / decisions).tolist() if decisions else [0.0] * 8
@@ -135,6 +191,13 @@ def assess_bc_accuracy(policy, episodes, *, minibatch=2048):
             "seed_groups": sorted({episode.seed for episode in episodes}),
             "head_accuracy": accuracy, "H1_accuracy": accuracy[0],
             "H3_accuracy": accuracy[3], "H4_accuracy": accuracy[4],
+            "macro_action_decisions": int(action_labels[0]),
+            "macro_action_recall": float(action_matches[0] / action_labels[0]) if action_labels[0] else None,
+            "macro_false_actions_on_noop": int(false_actions[0]),
+            "squad_order_accuracy": accuracy[2],
+            "squad_order_decisions": int(action_labels[2]),
+            "squad_order_recall": float(action_matches[2] / action_labels[2]) if action_labels[2] else None,
+            "squad_false_orders_on_noop": int(false_actions[2]),
             "accuracy_passed": passed, "gameplay_passed": False,
             "passed": False, "requires": "48 distinct teacher and BC gameplay evaluations"}
 
@@ -195,8 +258,17 @@ class LazyBcBatch:
     """Decode only the sampled BC minibatch, retaining compact files as memmaps."""
     names = ("vector", "maps", "masks", "actions", "privileged", "old_logp", "advantage", "target")
 
-    def __init__(self, episodes, targets, advantages):
+    def __init__(self, episodes, targets, advantages, *, episode_weights=None):
         self.episodes = episodes
+        self.episode_weights = None
+        if episode_weights is not None:
+            weights = np.asarray(episode_weights, dtype=np.float32)
+            if (weights.shape != (len(episodes),) or not np.isfinite(weights).all()
+                    or np.any(weights <= 0)):
+                raise ValueError("BC episode weights must be finite, positive, and match the episodes")
+            if not np.all(weights == 1):
+                self.episode_weights = weights.copy()
+                self.names = self.names + ("bc_weight",)
         self.ends = np.cumsum([len(episode.decisions) for episode in episodes])
         self.starts = np.r_[0, self.ends[:-1]]
         self.targets = torch.from_numpy(targets)
@@ -228,15 +300,23 @@ class LazyBcBatch:
             "privileged": torch.from_numpy(records["privileged"].copy()),
             "old_logp": torch.from_numpy(records["logp"].copy()).sum(1),
             "advantage": self.advantages[indices], "target": self.targets[indices]}
+        if self.episode_weights is not None:
+            self.cache["bc_weight"] = torch.from_numpy(self.episode_weights[owners].copy())
         self.indices = indices
         return self.cache
 
 
-def build_batch(episodes: list[Episode], config: TrainConfig):
+def build_batch(episodes: list[Episode], config: TrainConfig, *, bc_episode_weights=None):
     if not episodes:
         raise ValueError("no valid completed episodes in this cohort")
+    if any(episode.records.dtype["vector"].shape != RECORD_DTYPE["vector"].shape or
+           episode.records.dtype["map"].shape != RECORD_DTYPE["map"].shape for episode in episodes):
+        raise ValueError("historical observations cannot train this schema; collect the new native observations")
+    if bc_episode_weights is not None and config.mode != "bc":
+        raise ValueError("BC episode weights are only supported for behavior cloning")
     targets = [episode_returns(episode, iteration=config.iteration,
-                               shaping_scale=config.shaping_scale) for episode in episodes]
+                               shaping_scale=config.shaping_scale,
+                               gamma=config.gamma, gae_lambda=config.gae_lambda) for episode in episodes]
     shape_mean = float(np.mean([abs(_discounted_sum(item["shape"].sum(axis=1),
                                                    item["discount"])) for item in targets]))
     terminal_mean = float(np.mean([abs(_discounted_sum(item["terminal"], item["discount"]))
@@ -246,13 +326,19 @@ def build_batch(episodes: list[Episode], config: TrainConfig):
     if reduced:
         config.shaping_scale *= 0.5
         targets = [episode_returns(episode, iteration=config.iteration,
-                                   shaping_scale=config.shaping_scale) for episode in episodes]
+                                   shaping_scale=config.shaping_scale,
+                                   gamma=config.gamma, gae_lambda=config.gae_lambda) for episode in episodes]
+    # The signed PBRS return above telescopes even when individual steps have
+    # a strong shaping signal. Measure step magnitudes on the final training
+    # rewards separately; this diagnostic must not change the halving rule.
+    step_shape_mean = float(np.mean([_discounted_sum(np.abs(item["shape"].sum(axis=1)),
+                                                     item["discount"]) for item in targets]))
     advantages = np.concatenate([target["advantage"] for target in targets])
     advantages = (advantages - advantages.mean()) / max(float(advantages.std()), 1e-8)
     target_values = np.concatenate([
         item["mc_return" if config.mode == "bc" else "return"] for item in targets])
     if config.mode == "bc":
-        batch = LazyBcBatch(episodes, target_values, advantages)
+        batch = LazyBcBatch(episodes, target_values, advantages, episode_weights=bc_episode_weights)
         decision_count = len(target_values)
     else:
         records = np.concatenate([episode.decisions for episode in episodes])
@@ -275,14 +361,19 @@ def build_batch(episodes: list[Episode], config: TrainConfig):
     return batch, {"episodes": len(episodes), "decisions": decision_count,
                    "shaping_scale": config.shaping_scale, "shaping_halved": reduced,
                    "discounted_abs_shape_mean": shape_mean,
+                   "discounted_abs_step_shape_mean": step_shape_mean,
                    "discounted_abs_terminal_mean": terminal_mean, **decomposition}
 
 
-def train_update(policy, batch, config: TrainConfig, *, optimizer=None, teacher_policy=None):
+def train_update(policy, batch, config: TrainConfig, *, optimizer=None, teacher_policy=None,
+                 progress_callback=None):
     if config.mode not in ("bc", "ppo") or config.epochs < 1 or config.minibatch < 1:
         raise ValueError("invalid optimizer configuration")
+    if not all(math.isfinite(rate) and rate > 0
+               for rate in (config.learning_rate_initial, config.learning_rate_final)):
+        raise ValueError("learning rates must be finite and positive")
     progress = min(1.0, max(0.0, config.iteration / max(1, config.schedule_iterations)))
-    learning_rate = 3e-4 + (1e-4 - 3e-4) * progress
+    learning_rate = config.learning_rate_initial + (config.learning_rate_final - config.learning_rate_initial) * progress
     optimizer = optimizer or torch.optim.Adam(policy.parameters(), lr=learning_rate)
     for group in optimizer.param_groups:
         group["lr"] = learning_rate
@@ -290,6 +381,7 @@ def train_update(policy, batch, config: TrainConfig, *, optimizer=None, teacher_
                                         [0.005 - 0.004 * progress] * 7)
     teacher_coefficient = config.teacher_coefficient() if config.mode == "ppo" else 0.0
     critic_only = config.mode == "ppo" and config.iteration < config.critic_warmup
+    critic_parameters = set(policy.value1.parameters()) | set(policy.value2.parameters()) if critic_only else set()
     class_weights = None
     if config.mode == "bc" and config.bc_class_power > 0:
         if isinstance(batch, LazyBcBatch):
@@ -308,7 +400,9 @@ def train_update(policy, batch, config: TrainConfig, *, optimizer=None, teacher_
     if teacher_policy is not None:
         teacher_policy.eval()
     reports = []
-    for _ in range(config.epochs):
+    for epoch in range(config.epochs):
+        epoch_started = time.monotonic()
+        first_report = len(reports)
         permutation = torch.randperm(len(batch["target"]), generator=generator)
         for indices in permutation.split(config.minibatch):
             sample = {key: value[indices] for key, value in batch.items()}
@@ -316,13 +410,15 @@ def train_update(policy, batch, config: TrainConfig, *, optimizer=None, teacher_
                                      sample["masks"], sample["privileged"])
             logp = output["logp"].sum(dim=1)
             if config.mode == "bc":
-                weights = torch.ones(len(logp))
+                # Source replay weights affect imitation only; critic targets and
+                # their regression remain on the original sampled state distribution.
+                weights = sample.get("bc_weight", torch.ones(len(logp)))
                 if config.bc_rare_weight > 0:
                     important = (sample["actions"][:, 0] != 0) | (sample["actions"][:, 2] != 0)
                     weights = weights * (1.0 + config.bc_rare_weight * important.float())
                 if config.bc_class_power > 0:
                     weights = weights * class_weights[sample["actions"][:, 0]]
-                if config.bc_rare_weight > 0 or config.bc_class_power > 0:
+                if config.bc_rare_weight > 0 or config.bc_class_power > 0 or "bc_weight" in sample:
                     actor_loss = -(logp * weights).sum() / weights.sum()
                 else:
                     actor_loss = -logp.mean()
@@ -363,6 +459,14 @@ def train_update(policy, batch, config: TrainConfig, *, optimizer=None, teacher_
                 raise ValueError("nonfinite commander training loss")
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
+            if critic_only:
+                # The value head reads the actor's shared trunk. Dropping the
+                # policy loss alone still changes its features and logits.
+                # None also prevents existing Adam momentum from moving the
+                # frozen parameters; zero gradients would not do that.
+                for parameter in policy.parameters():
+                    if parameter not in critic_parameters:
+                        parameter.grad = None
             gradient_norm = torch.nn.utils.clip_grad_norm_(policy.parameters(), 1.0,
                                                            error_if_nonfinite=True)
             optimizer.step()
@@ -370,6 +474,13 @@ def train_update(policy, batch, config: TrainConfig, *, optimizer=None, teacher_
                 "value_loss": float(value_loss.detach()), "entropy_bonus": float(entropy_bonus.detach()),
                 "teacher_kl": float(teacher_kl.detach()), "clip_fraction": float(clipped.detach()),
                 "approximate_kl": float(approximate_kl.detach()), "gradient_norm": float(gradient_norm)})
+        if progress_callback is not None:
+            recent = reports[first_report:]
+            elapsed = time.monotonic() - epoch_started
+            progress_callback({"mode": config.mode, "iteration": config.iteration,
+                "epoch": epoch + 1, "epochs": config.epochs, "optimizer_steps": len(reports),
+                "wall_seconds": elapsed, "decisions_per_second": len(batch["target"]) / max(elapsed, 1e-9),
+                **{key: float(np.mean([row[key] for row in recent])) for key in recent[0]}})
     metrics = {key: float(np.mean([item[key] for item in reports])) for key in reports[0]}
     metrics.update(lr=learning_rate, optimizer_steps=len(reports),
                    teacher_kl_coefficient=teacher_coefficient if teacher_policy is not None else 0.0,
@@ -445,6 +556,31 @@ def save_checkpoint(policy, path: str | Path, *, version: int, metadata: dict, o
     policy.weight_version = version
 
 
+def collection_jobs(*, mode, seed, iteration, count, curriculum,
+                    teacher_variants=0, variant_opponents=0.0):
+    from ranker_commander_eval import curriculum_settings
+    settings = curriculum_settings(curriculum)
+
+    def variant_opponent(game):
+        if mode != "ppo" or variant_opponents <= 0:
+            return {}
+        # Rotate the slot in each block so variant opponents do not remove
+        # all built-in games of a particular tribe from the PPO cohort.
+        period = max(1, int(round(1.0 / variant_opponents)))
+        if game % period != (game // period) % period:
+            return {}
+        return {"teacher2": True, "tribe": 2,
+                "teacher_variant2": 1 + (seed + iteration * count + game) % 15}
+
+    return [{"seed": seed + iteration * count + game,
+             "tribe": 2 if curriculum == 0 else game % 4,
+             # Advance the teacher only after all four opponent tribes. With
+             # game % 16, variant v previously faced only tribe v % 4.
+             **({"teacher_variant": (game // 4) % (teacher_variants + 1)}
+                if mode == "bc" and teacher_variants else {}),
+             **settings, **variant_opponent(game)} for game in range(count)]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("bc", "ppo"))
@@ -466,7 +602,7 @@ def main(argv=None):
     parser.add_argument("--games-per-cohort", type=int, default=12)
     parser.add_argument("--teacher-games", type=int, default=400)
     parser.add_argument("--teacher-variants", type=int, default=0,
-                        help="BC collection: cycle rule-commander variants 0..N (0 = default teacher only)")
+                        help="BC collection: cross rule-commander variants 0..N with all four opponent tribes")
     parser.add_argument("--variant-opponents", type=float, default=0.0,
                         help="PPO cohorts: fraction of games played against a rule-commander variant (-AIVS -AITEACHER2)")
     parser.add_argument("--bc-rare-weight", type=float, default=0.0,
@@ -476,14 +612,22 @@ def main(argv=None):
     parser.add_argument("--bc-class-cap", type=float, default=20.0)
     parser.add_argument("--bc-class-skip", type=str, default="",
                         help="BC: comma-separated macro indices kept at weight 1 under --bc-class-power")
-    parser.add_argument("--teacher-kl-initial", type=float, default=0.05,
+    parser.add_argument("--teacher-kl-initial", type=float,
                         help="PPO: KL(BC reference || policy) coefficient at update 0")
-    parser.add_argument("--teacher-kl-floor", type=float, default=0.0,
+    parser.add_argument("--teacher-kl-floor", type=float,
                         help="PPO: coefficient held after the decay (0 = anchor released, the original schedule)")
-    parser.add_argument("--teacher-kl-decay", type=int, default=30,
+    parser.add_argument("--teacher-kl-decay", type=int,
                         help="PPO: updates over which the coefficient decays from initial to floor")
-    parser.add_argument("--critic-warmup", type=int, default=0,
-                        help="PPO: first N updates train only the value head (plus the KL anchor)")
+    parser.add_argument("--critic-warmup", type=int,
+                        help="PPO: first N updates train only the value head; actor and shared features stay fixed")
+    parser.add_argument("--learning-rate-initial", type=float,
+                        help="initial learning rate; defaults to saved PPO schedule or 3e-4")
+    parser.add_argument("--learning-rate-final", type=float,
+                        help="final learning rate; defaults to saved PPO schedule or 1e-4")
+    parser.add_argument("--gamma", type=float,
+                        help="discount per 32 frames; defaults to saved PPO setting or 0.997")
+    parser.add_argument("--gae-lambda", type=float,
+                        help="GAE trace discount per 32 frames; defaults to saved PPO setting or 0.95")
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--curriculum", type=int, choices=range(4), help="BC defaults to normal-speed four-tribe C2; PPO defaults to C0")
     parser.add_argument("--epochs", type=int, default=3)
@@ -493,8 +637,6 @@ def main(argv=None):
     parser.add_argument("--keep-rollouts", action="store_true", help="retain accepted training RLOs after publication; default deletes them")
     parser.add_argument("--discard-rollouts", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
-    if args.curriculum is None:
-        args.curriculum = 2 if args.mode == "bc" else 0
     if min(args.iterations, args.games_per_cohort, args.teacher_games, args.workers,
            args.epochs, args.minibatch, args.threads, args.seed) < 1:
         parser.error("counts, threads, seed, epochs and minibatch must be positive")
@@ -538,6 +680,33 @@ def main(argv=None):
                                            optimizer_path, version=version)
     if start_iteration < 0:
         parser.error("iteration must be nonnegative")
+    saved_config = (metadata.get("training_config", {})
+                    if args.mode == "ppo" and metadata.get("mode") == "ppo" else {})
+    # Omitted resume flags inherit the saved PPO configuration; explicit zero
+    # remains an override. Fresh PPO and BC warm starts retain their defaults.
+    if args.curriculum is None:
+        args.curriculum = (metadata.get("curriculum", 0)
+                           if args.mode == "ppo" and metadata.get("mode") == "ppo"
+                           else 2 if args.mode == "bc" else 0)
+    if args.curriculum not in range(4):
+        parser.error("saved curriculum must be C0..C3")
+    defaults = TrainConfig()
+    for name in ("teacher_kl_initial", "teacher_kl_floor", "teacher_kl_decay", "critic_warmup",
+                 "gamma", "gae_lambda"):
+        if getattr(args, name) is None:
+            setattr(args, name, saved_config.get(name, getattr(defaults, name)))
+    try:
+        args.gamma, args.gae_lambda = float(args.gamma), float(args.gae_lambda)
+        TrainConfig(gamma=args.gamma, gae_lambda=args.gae_lambda)
+    except (ValueError, TypeError) as error:
+        parser.error(str(error))
+    for name, default in (("learning_rate_initial", 3e-4), ("learning_rate_final", 1e-4)):
+        rate = getattr(args, name)
+        if rate is None:
+            rate = float(saved_config.get(name, default))
+        if not math.isfinite(rate) or rate <= 0:
+            parser.error("learning rates must be finite and positive")
+        setattr(args, name, rate)
     admission = ppo_admission(metadata, version=version, no_bc_control=args.no_bc_control,
                               fresh=args.policy is None, warm_start=args.bc_warm_start,
                               weights_sha256=hashlib.sha256(args.policy.read_bytes()).hexdigest() if args.policy else None
@@ -565,7 +734,10 @@ def main(argv=None):
                              teacher_kl_initial=args.teacher_kl_initial,
                              teacher_kl_floor=args.teacher_kl_floor,
                              teacher_kl_decay=args.teacher_kl_decay,
-                             critic_warmup=args.critic_warmup)
+                             critic_warmup=args.critic_warmup,
+                             learning_rate_initial=args.learning_rate_initial,
+                             learning_rate_final=args.learning_rate_final,
+                             gamma=args.gamma, gae_lambda=args.gae_lambda)
         paths = []
         collected_paths = []
         if iteration == start_iteration:
@@ -573,38 +745,16 @@ def main(argv=None):
                 item = Path(value)
                 paths.extend(item.rglob("*.rlo") if item.is_dir() else [item])
         if args.install_dir:
-            from ranker_commander_eval import curriculum_settings, run_games
+            from ranker_commander_eval import run_games
             cohort_dir = args.io.resolve() / f"cohort_{iteration:05d}"
             snapshot = cohort_dir / f"weights_{version:05d}.bin"
             save_checkpoint(policy, snapshot, version=version, metadata={"shaping_scale": shaping_scale})
-            settings = curriculum_settings(args.curriculum)
             count = args.teacher_games if args.mode == "bc" else args.games_per_cohort
-            # The engine and the teacher are deterministic, so a (start pair,
-            # tribe) condition replays identically under any seed. Teacher
-            # variants (design 8.3) give BC distinct trajectories: game g uses
-            # variant g % (N + 1), where 0 is the default teacher.
-            # PPO cohorts: a fraction of the games (design C1 40%, C2 20%) put
-            # a rule-commander variant on the second owner (-AIVS -AITEACHER2)
-            # instead of the built-in opponent; the policy still owns slot 1.
-            def variant_opponent(game):
-                if args.mode != "ppo" or args.variant_opponents <= 0:
-                    return {}
-                # One game per block of (1/fraction) games, with the offset
-                # rotating per block so the variant slots do not always land
-                # on the same `game % 4` tribe: 0.25 -> games 0,5,10,15 of 16
-                # (the built-in games then cover every tribe 3 times).
-                period = max(1, int(round(1.0 / args.variant_opponents)))
-                if game % period != (game // period) % period:
-                    return {}
-                # -AIVS games: the second owner is the Tyrano policy slot.
-                return {"teacher2": True, "tribe": 2,
-                        "teacher_variant2": 1 + (args.seed + iteration * count + game) % 15}
-            jobs = [{"seed": args.seed + iteration * count + game,
-                     "tribe": 2 if args.curriculum == 0 else game % 4,
-                     **({"teacher_variant": game % (args.teacher_variants + 1)}
-                        if args.mode == "bc" and args.teacher_variants else {}),
-                     **settings,
-                     **variant_opponent(game)} for game in range(count)]
+            jobs = collection_jobs(mode=args.mode, seed=args.seed, iteration=iteration,
+                count=count, curriculum=args.curriculum, teacher_variants=args.teacher_variants,
+                variant_opponents=args.variant_opponents)
+            print(json.dumps({"collection_started": {"mode": args.mode, "iteration": iteration,
+                "games": count, "workers": args.workers, "directory": str(cohort_dir)}}), flush=True)
             reports = run_games(args.install_dir, snapshot, cohort_dir / "games", jobs,
                                  workers=args.workers, teacher=args.mode == "bc",
                                  executable=args.exe, no_sleep=not args.keep_sleep)
@@ -639,18 +789,26 @@ def main(argv=None):
             minimum = expected if args.mode == "bc" else math.ceil(expected * 10 / 12)
             if len(episodes) < minimum:
                 raise RuntimeError(f"incomplete cohort: {len(episodes)}/{expected} valid games; {rejected}")
-        training_episodes, validation_episodes = (split_teacher_episodes(episodes, seed=args.seed)
+        split_audit = {}
+        training_episodes, validation_episodes = (split_teacher_episodes(episodes, seed=args.seed, audit=split_audit)
             if args.mode == "bc" else (episodes, []))
         batch, reward_metrics = build_batch(training_episodes, config)
         optimizer, metrics = train_update(policy, batch, config, optimizer=optimizer,
-                                            teacher_policy=teacher_policy)
+            teacher_policy=teacher_policy,
+            progress_callback=lambda row: print(json.dumps({"training_progress": row}), flush=True))
         shaping_scale = config.shaping_scale
         version += 1
         metadata = {"mode": args.mode, "iteration": iteration, "curriculum": args.curriculum,
                     "shaping_scale": shaping_scale,
+                    "training_config": asdict(config), "threads": args.threads,
+                    "collection_config": {"workers": args.workers,
+                        "teacher_variants": args.teacher_variants,
+                        "teacher_schedule": "four_tribes_per_variant",
+                        "variant_opponents": args.variant_opponents},
                     "rejected": rejected, **reward_metrics, **metrics}
         if args.mode == "bc":
             metadata["bc_validation"] = assess_bc_accuracy(policy, validation_episodes, minibatch=args.minibatch)
+            metadata["bc_validation"]["split_audit"] = split_audit
             metadata["bc_validation"]["teacher_games_total"] = len(episodes)
             metadata["teacher_games_total"] = len(episodes)
         else:
