@@ -1760,7 +1760,7 @@ if (RANKER_BUILD_COMMANDER_TESTS)
         src/ranker_ai_expansion.cpp)
     target_include_directories(ai_commander_context_regression PRIVATE include)
     add_test(NAME ai_commander_context_regression COMMAND ai_commander_context_regression)
-    foreach(commander_check IN ITEMS transfer observation economy_recovery)
+    foreach(commander_check IN ITEMS transfer observation economy_recovery multirace)
         add_executable(ai_commander_${commander_check}_regression
             tests/ai_commander_${commander_check}_regression.cpp src/ranker_ai_commander.cpp
             src/ranker_ai_expansion.cpp)
@@ -1792,6 +1792,24 @@ if (RANKER_BUILD_COMMANDER_TESTS)
         target_compile_options(ai_commander_actions_regression PRIVATE -UNDEBUG)
     endif()
     add_test(NAME ai_commander_actions_regression COMMAND ai_commander_actions_regression)
+    add_executable(ai_commander_skills_regression tests/ai_commander_skills_regression.cpp
+        src/ranker_ai_commander.cpp src/ranker_ai_expansion.cpp src/ranker_ai_actions.cpp)
+    target_include_directories(ai_commander_skills_regression PRIVATE include)
+    add_test(NAME ai_commander_skills_regression COMMAND ai_commander_skills_regression)
+    add_executable(ai_commander_elf_strategy_regression
+        tests/ai_commander_elf_strategy_regression.cpp)
+    target_include_directories(ai_commander_elf_strategy_regression PRIVATE include src)
+    add_test(NAME ai_commander_elf_strategy_regression COMMAND ai_commander_elf_strategy_regression)
+    # These standalone targets exercise the optional profile loader without
+    # linking the frontend/window startup subsystem used by ranker_rebuild.
+    foreach(commander_log_target IN ITEMS
+        ai_commander_regression ai_commander_context_regression
+        ai_commander_transfer_regression ai_commander_observation_regression
+        ai_commander_economy_recovery_regression ai_commander_multirace_regression
+        ai_sweep_coverage_regression ai_commander_skills_regression
+        ai_commander_elf_strategy_regression)
+        target_sources(${commander_log_target} PRIVATE tests/ai_commander_startup_log_stub.cpp)
+    endforeach()
     if (WIN32)
         add_executable(ai_commander_launch_regression
             tests/ai_commander_launch_regression.cpp src/ranker_p2p_lobby.cpp

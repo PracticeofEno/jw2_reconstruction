@@ -1,4 +1,5 @@
 #include "ranker_ai_expansion.h"
+#include "ranker_ai_commander_races.h"
 
 #include <algorithm>
 #include <cmath>
@@ -52,18 +53,27 @@ u32 AiWalkingBuildTypeOf(const AiObservedUnit& unit) {
         return 0u;
     }
     const u32 state = unit.command_state & 0x00ffffffu;
-    if (state != 0x23u && state != 0x25u) {
+    // Elf placement uses 0x5a/0x5c, then 0x5b while the creation
+    // animation runs. Until creation succeeds, +0x68 still holds the type;
+    // afterwards it holds a linked unit offset, which must not be a type.
+    if (state != 0x23u && state != 0x25u &&
+        state != 0x5au && state != 0x5bu && state != 0x5cu) {
         return 0u;
     }
-    return unit.command_value < kMobileTypeLimitLocal ?
+    const u32 type = unit.command_value < kMobileTypeLimitLocal ?
         unit.command_value + kMobileTypeLimitLocal : unit.command_value;
+    return type < 0xa0u ? type : 0u;
 }
 
-// Interaction bounds (px) of a Tyrano structure type (headless "ai-expand:
+// Interaction bounds (px) of a structure type (headless "ai-expand:
 // footprint ... interaction=WxH").  A walking builder's path target is the
 // site plus half of these (offset_spawn_target_by_interaction_bounds), so
 // the pending site's anchor tile = (path_target - bounds/2) >> 5.
 AiBuildingFootprint AiBuildingInteractionOf(u32 type_id) {
+    if(type_id>=0x60&&type_id<0xa0&&(type_id<0x80||type_id>=0x90)) {
+        const auto& d=kCommanderRaceDefinitions[type_id];
+        return {d.interaction_width,d.interaction_height};
+    }
     switch (type_id) {
     case 0x80u: return {203, 140};
     case 0x82u: return {115, 86};
@@ -81,6 +91,10 @@ AiBuildingFootprint AiBuildingInteractionOf(u32 type_id) {
 }
 
 AiBuildingFootprint AiBuildingFootprintOf(u32 type_id) {
+    if(type_id>=0x60&&type_id<0xa0&&(type_id<0x80||type_id>=0x90)) {
+        const auto& d=kCommanderRaceDefinitions[type_id];
+        return {std::max(1u,d.width),std::max(1u,d.height)};
+    }
     // Measured from the unit definitions (headless "ai-expand: footprint"):
     switch (type_id) {
     case 0x80u: return {6, 4};   // 티라노 네스트

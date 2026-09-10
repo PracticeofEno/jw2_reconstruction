@@ -11,7 +11,7 @@
 namespace ranker {
 namespace {
 struct TensorSpec { std::string name; std::vector<u32> shape; };
-std::vector<TensorSpec> TensorSpecs(u32 vector_size, bool adapters) {
+std::vector<TensorSpec> TensorSpecs(u32 vector_size, bool adapters, u32 macro_count) {
     std::vector<TensorSpec> specs;
     const auto layer = [&specs](const std::string& name, std::vector<u32> shape) {
         const u32 out = shape.front();
@@ -25,10 +25,10 @@ std::vector<TensorSpec> TensorSpecs(u32 vector_size, bool adapters) {
     layer("map_fc", {128, 2048});
     layer("trunk", {256, 384});
     for (u32 h = 0; h < 8; ++h)
-        layer("heads." + std::to_string(h), {static_cast<u32>(kCommanderHeadSizes[h]), 256 + 8 * h});
+        layer("heads." + std::to_string(h), {h == 0 ? macro_count : static_cast<u32>(kCommanderHeadSizes[h]), 256 + 8 * h});
     // The last head's embedding is unused and is deliberately not exported.
     for (u32 h = 0; h < 7; ++h)
-        specs.push_back({"embeddings." + std::to_string(h) + ".weight", {static_cast<u32>(kCommanderHeadSizes[h]), 8}});
+        specs.push_back({"embeddings." + std::to_string(h) + ".weight", {h == 0 ? macro_count : static_cast<u32>(kCommanderHeadSizes[h]), 8}});
     layer("value1", {64, 288});
     layer("value2", {1, 64});
     if (adapters) for (u32 h = 1; h < 8; ++h) {
@@ -162,16 +162,22 @@ bool CommanderModel::load(const std::string& path, std::string* error, bool allo
         const u64 schema = reader.integer(8);
         const u32 vector_size = static_cast<u32>(reader.integer(4));
         const u32 map_size = static_cast<u32>(reader.integer(4));
-        const bool legacy = format == 1 && map_size == kCommanderLegacyMapSize &&
+        const bool linear_legacy = format == 1 && map_size == kCommanderLegacyMapSize &&
             ((schema == 0x1f364207U && vector_size == 528) ||
              (schema == 0xda97fd92U && vector_size == kCommanderContextVectorSize));
+        const bool residual_legacy = format == 2 && map_size == kCommanderMapSize &&
+            schema == 0x53dd6137U && vector_size == kCommanderResidualVectorSize;
+        const bool race_legacy = format == 2 && map_size == kCommanderMapSize &&
+            schema == 0xb32db21eU && vector_size == kCommanderRaceVectorSize;
+        const bool legacy = linear_legacy || residual_legacy || race_legacy;
+        const u32 macro_count = race_legacy ? 64U : legacy ? 42U : kCommanderMacroCount;
         if (legacy && !allow_legacy) throw std::runtime_error("legacy commander weights require explicit migration");
-        const bool adapters = !legacy;
+        const bool adapters = !linear_legacy;
         if ((!legacy && (format != 2 || schema != kCommanderSchema || vector_size != kCommanderVectorSize ||
                          map_size != kCommanderMapSize)) || reader.integer(4) != kCommanderPrivilegedSize ||
-            reader.integer(4) != kCommanderHeadCount || reader.integer(4) != kCommanderLogitCount)
+            reader.integer(4) != kCommanderHeadCount || reader.integer(4) != (macro_count + 53U))
             throw std::runtime_error("commander weight schema mismatch");
-        const auto specs = TensorSpecs(vector_size, adapters);
+        const auto specs = TensorSpecs(vector_size, adapters, macro_count);
         if (reader.integer(4) != specs.size()) throw std::runtime_error("commander tensor count mismatch");
         const u32 payload_size = static_cast<u32>(reader.integer(4));
         const u32 crc = static_cast<u32>(reader.integer(4));
@@ -192,6 +198,8 @@ bool CommanderModel::load(const std::string& path, std::string* error, bool allo
                 throw std::runtime_error("commander tensor name/size mismatch");
             std::vector<float> tensor(elements);
             for (float& value : tensor) value = reader.real();
+            if (legacy && (spec.name == "heads.0.weight" || spec.name == "heads.0.bias" || spec.name == "embeddings.0.weight"))
+                tensor.resize(elements / macro_count * kCommanderMacroCount, spec.name == "heads.0.bias" ? -2.0f : 0.0f);
             tensors.push_back(std::move(tensor));
         }
         if (reader.position() != bytes.size()) throw std::runtime_error("trailing commander weight data");
@@ -222,9 +230,20 @@ CommanderDecision CommanderModel::decide(const CommanderInput& input, const Comm
     if (has_adapters_) {
         alignas(32) std::array<float, 256> extra{};
         Dense(input.vector.data(), kCommanderContextVectorSize, v1.data(), 256, t[0], t[1], false, vector_size_);
-        Dense(input.vector.data() + kCommanderContextVectorSize, vector_size_ - kCommanderContextVectorSize,
+        Dense(input.vector.data() + kCommanderContextVectorSize, kCommanderResidualVectorSize - kCommanderContextVectorSize,
               extra.data(), 256, t[0], {}, false, vector_size_, kCommanderContextVectorSize);
-        for (std::size_t i = 0; i < v1.size(); ++i) v1[i] = std::max(v1[i] + extra[i], 0.0f);
+        for (std::size_t i = 0; i < v1.size(); ++i) v1[i] += extra[i];
+        if (vector_size_ > kCommanderResidualVectorSize) {
+            Dense(input.vector.data() + kCommanderResidualVectorSize, std::min(vector_size_, kCommanderRaceVectorSize) - kCommanderResidualVectorSize,
+                  extra.data(), 256, t[0], {}, false, vector_size_, kCommanderResidualVectorSize);
+            for (std::size_t i = 0; i < v1.size(); ++i) v1[i] += extra[i];
+        }
+        if (vector_size_ > kCommanderRaceVectorSize) {
+            Dense(input.vector.data() + kCommanderRaceVectorSize, vector_size_ - kCommanderRaceVectorSize,
+                  extra.data(), 256, t[0], {}, false, vector_size_, kCommanderRaceVectorSize);
+            for (std::size_t i = 0; i < v1.size(); ++i) v1[i] += extra[i];
+        }
+        for (float& value : v1) value = std::max(value, 0.0f);
     } else {
         Dense(input.vector.data(), vector_size_, v1.data(), 256, t[0], t[1], true);
     }
@@ -281,7 +300,7 @@ CommanderDecision CommanderModel::decide(const CommanderInput& input, const Comm
         }
         if (!legal) throw std::runtime_error("empty commander head mask");
         double sum = 0;
-        std::array<double, 42> probabilities{};
+        std::array<double, kCommanderMacroCount> probabilities{};
         for (std::size_t i = 0; i < count; ++i) if (result.mask[offset + i]) {
             probabilities[i] = std::exp(static_cast<double>(result.logits[offset + i]) - maximum);
             sum += probabilities[i];

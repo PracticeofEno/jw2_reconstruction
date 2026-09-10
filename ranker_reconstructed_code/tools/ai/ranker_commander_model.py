@@ -2,7 +2,9 @@
 
 All maps are channel-major (12, 16, 16), converted from rollout uint8 using /255.
 The original G70 + T96 + S63 + A128 + E152 + static19 = 528 fields are followed
-by 14 commander-context and 64 execution/economy features, for 606 in total.
+by 14 commander-context, 64 execution/economy, and 36 race/roster features,
+followed by 32 skill candidates with 24 features each, for 1410 in total.
+The macro head has 96 choices; indices 64..95 select described skill candidates.
 The original nine map channels are followed by terrain, visibility, and
 exploration channels. Privileged features enter only the critic.
 Checkpoints use this same bounded, checksummed tensor format; no pickle is read.
@@ -27,15 +29,22 @@ CONTEXT_VECTOR_SIZE = 542
 CONTEXT_SCHEMA_CRC = 0xDA97FD92
 LEGACY_MAP_SHAPE = (9, 16, 16)
 LEGACY_MAP_SIZE = 2304
-VECTOR_SIZE = 606
+RESIDUAL_VECTOR_SIZE = 606
+RESIDUAL_SCHEMA_CRC = 0x53DD6137
+RACE_VECTOR_SIZE = 642
+RACE_SCHEMA_CRC = 0xB32DB21E
+SKILL_SLOTS, SKILL_FEATURE_SIZE = 32, 24
+VECTOR_SIZE = RACE_VECTOR_SIZE + SKILL_SLOTS * SKILL_FEATURE_SIZE
 MAP_SHAPE = (12, 16, 16)
 MAP_SIZE = 3072
 PRIVILEGED_SIZE = 32
-HEAD_SIZES = (42, 16, 4, 8, 16, 3, 3, 3)
-HEAD_OFFSETS = (0, 42, 58, 62, 70, 86, 89, 92)
+LEGACY_HEAD_SIZES = (42, 16, 4, 8, 16, 3, 3, 3)
+RACE_HEAD_SIZES = (64, 16, 4, 8, 16, 3, 3, 3)
+HEAD_SIZES = (96, 16, 4, 8, 16, 3, 3, 3)
+HEAD_OFFSETS = tuple(np.cumsum((0,) + HEAD_SIZES[:-1]).tolist())
 LOGIT_COUNT = sum(HEAD_SIZES)
 LEGACY_ARCHITECTURE = "jw2-commander-conv-ar-v2"
-ARCHITECTURE = "jw2-commander-conv-ar-residual-v3"
+ARCHITECTURE = "jw2-commander-conv-ar-skills-v5"
 ADAPTER_WIDTH = 32
 SCHEMA_TEXT = (
     "JW2_COMMANDER_3|G70,T96,S3x21,A16x8,E12x11+4x5,STATIC19|"
@@ -55,6 +64,11 @@ SCHEMA_TEXT = (
     "FC606x256x256:SPLIT542+64,CONV12x16k3s1p1:SPLIT9+3,CONV16x32k3s2p1,FC2048x128,"
     "FC384x256,AR8,AR_RESIDUAL:H1b-H7:32:relu:add,VALUE288x64x1:relu"
 )
+SCHEMA_TEXT += ("|RACES_V1:primitive,elf,tyrano,demon:catalog_v1|H1:64:legacy42+race_extras22|"
+                "V642:legacy606,own_tribe4,own_type50_5f16/10,pending_type50_5f16/4|"
+                "FC642:SPLIT542+64+36|research8:race_roles|owned_special_units50_5f")
+SCHEMA_TEXT += ("|SKILLS_V1:32x24:present,legal,kind/32,selector/45,source_type/169,hp,mana,hp_cost,mana_cost,level/10,min_level/10,range/1024,source_xy2,relation,target_type/169,target_hp,target_xy2,distance/2048,flags7/127,entry_lock/600,research_ready,stance_on_or_item|"
+                "H1:96:legacy64+candidate32:one_per_skill_then_alternatives:visible_corpses|FC1410:SPLIT542+64+36+768")
 SCHEMA_CRC = zlib.crc32(SCHEMA_TEXT.encode("ascii"))
 MAGIC = b"JW2CMD01"
 LEGACY_FORMAT_VERSION = 1
@@ -73,18 +87,19 @@ def tensor_shapes(vector_size=VECTOR_SIZE) -> OrderedDict[str, tuple[int, ...]]:
 
     layer("vector1", (256, vector_size))
     layer("vector2", (256, 256))
-    layer("conv1", (16, 12 if vector_size == VECTOR_SIZE else 9, 3, 3))
+    sizes = HEAD_SIZES if vector_size == VECTOR_SIZE else RACE_HEAD_SIZES if vector_size == RACE_VECTOR_SIZE else LEGACY_HEAD_SIZES
+    layer("conv1", (16, 12 if vector_size >= RESIDUAL_VECTOR_SIZE else 9, 3, 3))
     layer("conv2", (32, 16, 3, 3))
     layer("map_fc", (128, 2048))
     layer("trunk", (256, 384))
-    for head, count in enumerate(HEAD_SIZES):
+    for head, count in enumerate(sizes):
         layer(f"heads.{head}", (count, 256 + 8 * head))
-    for head, count in enumerate(HEAD_SIZES[:-1]):
+    for head, count in enumerate(sizes[:-1]):
         result[f"embeddings.{head}.weight"] = (count, 8)
     layer("value1", (64, 288))
     layer("value2", (1, 64))
-    if vector_size == VECTOR_SIZE:
-        for head, count in enumerate(HEAD_SIZES[1:], 1):
+    if vector_size >= RESIDUAL_VECTOR_SIZE:
+        for head, count in enumerate(sizes[1:], 1):
             layer(f"head_adapters.{head}.down", (ADAPTER_WIDTH, 256 + 8 * head))
             layer(f"head_adapters.{head}.up", (count, ADAPTER_WIDTH))
     return result
@@ -105,15 +120,18 @@ class CommanderHeadAdapter(nn.Module):
 class CommanderPolicy(nn.Module):
     def __init__(self, weight_version: int = 0, *, vector_size: int = VECTOR_SIZE):
         super().__init__()
-        if vector_size not in (LEGACY_VECTOR_SIZE, CONTEXT_VECTOR_SIZE, VECTOR_SIZE):
+        if vector_size not in (LEGACY_VECTOR_SIZE, CONTEXT_VECTOR_SIZE, RESIDUAL_VECTOR_SIZE, RACE_VECTOR_SIZE, VECTOR_SIZE):
             raise ValueError("unsupported commander input dimension")
         self.vector_size = vector_size
-        self.has_adapters = vector_size == VECTOR_SIZE
+        self.has_adapters = vector_size >= RESIDUAL_VECTOR_SIZE
+        self.head_sizes = HEAD_SIZES if vector_size == VECTOR_SIZE else RACE_HEAD_SIZES if vector_size == RACE_VECTOR_SIZE else LEGACY_HEAD_SIZES
+        self.head_offsets = tuple(np.cumsum((0,) + self.head_sizes[:-1]).tolist())
+        self.logit_count = sum(self.head_sizes)
         self.map_shape = MAP_SHAPE if self.has_adapters else LEGACY_MAP_SHAPE
         self.map_size = int(np.prod(self.map_shape))
-        self.schema_crc = SCHEMA_CRC if self.has_adapters else (
+        self.schema_crc = SCHEMA_CRC if vector_size == VECTOR_SIZE else RACE_SCHEMA_CRC if vector_size == RACE_VECTOR_SIZE else RESIDUAL_SCHEMA_CRC if self.has_adapters else (
             CONTEXT_SCHEMA_CRC if vector_size == CONTEXT_VECTOR_SIZE else LEGACY_SCHEMA_CRC)
-        self.architecture = ARCHITECTURE if self.has_adapters else LEGACY_ARCHITECTURE
+        self.architecture = ARCHITECTURE if vector_size == VECTOR_SIZE else "jw2-commander-conv-ar-races-v4" if vector_size == RACE_VECTOR_SIZE else "jw2-commander-conv-ar-residual-v3" if self.has_adapters else LEGACY_ARCHITECTURE
         self.weight_version = int(weight_version)
         self.vector1 = nn.Linear(vector_size, 256)
         self.vector2 = nn.Linear(256, 256)
@@ -121,13 +139,13 @@ class CommanderPolicy(nn.Module):
         self.conv2 = nn.Conv2d(16, 32, 3, stride=2, padding=1)
         self.map_fc = nn.Linear(2048, 128)
         self.trunk = nn.Linear(384, 256)
-        self.heads = nn.ModuleList(nn.Linear(256 + 8 * h, count) for h, count in enumerate(HEAD_SIZES))
-        self.embeddings = nn.ModuleList(nn.Embedding(count, 8) for count in HEAD_SIZES[:-1])
+        self.heads = nn.ModuleList(nn.Linear(256 + 8 * h, count) for h, count in enumerate(self.head_sizes))
+        self.embeddings = nn.ModuleList(nn.Embedding(count, 8) for count in self.head_sizes[:-1])
         self.value1 = nn.Linear(288, 64)
         self.value2 = nn.Linear(64, 1)
         # Append after all 39 existing parameters: old Adam indexes stay fixed.
         self.head_adapters = nn.ModuleDict({str(h): CommanderHeadAdapter(256 + 8 * h, count)
-                                           for h, count in enumerate(HEAD_SIZES[1:], 1)}) if self.has_adapters else nn.ModuleDict()
+                                           for h, count in enumerate(self.head_sizes[1:], 1)}) if self.has_adapters else nn.ModuleDict()
 
     def _features(self, vector, maps, privileged):
         if vector.ndim != 2 or vector.shape[1] != self.vector_size:
@@ -146,7 +164,11 @@ class CommanderPolicy(nn.Module):
             # Preserve the incumbent's reduction dimensions at zero extension.
             first = F.linear(vector[:, :CONTEXT_VECTOR_SIZE].contiguous(),
                              self.vector1.weight[:, :CONTEXT_VECTOR_SIZE].contiguous(), self.vector1.bias)
-            first = first + F.linear(vector[:, CONTEXT_VECTOR_SIZE:], self.vector1.weight[:, CONTEXT_VECTOR_SIZE:])
+            first = first + F.linear(vector[:, CONTEXT_VECTOR_SIZE:RESIDUAL_VECTOR_SIZE], self.vector1.weight[:, CONTEXT_VECTOR_SIZE:RESIDUAL_VECTOR_SIZE])
+            if self.vector_size > RESIDUAL_VECTOR_SIZE:
+                first = first + F.linear(vector[:, RESIDUAL_VECTOR_SIZE:RACE_VECTOR_SIZE], self.vector1.weight[:, RESIDUAL_VECTOR_SIZE:RACE_VECTOR_SIZE])
+            if self.vector_size > RACE_VECTOR_SIZE:
+                first = first + F.linear(vector[:, RACE_VECTOR_SIZE:], self.vector1.weight[:, RACE_VECTOR_SIZE:])
             first_grid = F.conv2d(grid[:, :9].contiguous(), self.conv1.weight[:, :9].contiguous(), self.conv1.bias, padding=1)
             first_grid = first_grid + F.conv2d(grid[:, 9:].contiguous(), self.conv1.weight[:, 9:].contiguous(), padding=1)
         else:
@@ -162,8 +184,8 @@ class CommanderPolicy(nn.Module):
     def _decide(self, vector, maps, masks, privileged, actions, deterministic, head_mask_callback, generator):
         trunk, value = self._features(vector, maps, privileged)
         batch = vector.shape[0]
-        if masks.shape != (batch, LOGIT_COUNT) or not ((masks == 0) | (masks == 1)).all():
-            raise ValueError("commander masks must be binary [B,95]")
+        if masks.shape != (batch, self.logit_count) or not ((masks == 0) | (masks == 1)).all():
+            raise ValueError(f"commander masks must be binary [B,{self.logit_count}]")
         if actions is not None:
             if actions.shape != (batch, 8) or actions.dtype not in (torch.int64, torch.int32, torch.uint8):
                 raise ValueError("commander actions must be integer [B,8]")
@@ -172,7 +194,7 @@ class CommanderPolicy(nn.Module):
         used_masks = masks.bool().clone()
         conditioned = [trunk]
         logits, logps, entropies = [], [], []
-        for head, (offset, count) in enumerate(zip(HEAD_OFFSETS, HEAD_SIZES)):
+        for head, (offset, count) in enumerate(zip(self.head_offsets, self.head_sizes)):
             if head_mask_callback is not None:
                 adjusted = used_masks.clone()
                 head_mask_callback(head, prefix.clone(), adjusted)
@@ -258,7 +280,7 @@ def export_weights(policy: CommanderPolicy, path, version: int | None = None, *,
         payload += struct.pack("<I", len(raw)) + encoded + raw
     header = HEADER.pack(MAGIC, FORMAT_VERSION if policy.has_adapters else LEGACY_FORMAT_VERSION,
                          version, policy.schema_crc, policy.vector_size,
-                         policy.map_size, PRIVILEGED_SIZE, 8, LOGIT_COUNT, len(specs), len(payload), zlib.crc32(payload))
+                         policy.map_size, PRIVILEGED_SIZE, 8, policy.logit_count, len(specs), len(payload), zlib.crc32(payload))
     if len(header) + len(payload) > MAX_WEIGHT_BYTES:
         raise ValueError("commander weights exceed format bound")
     destination = Path(path)
@@ -287,15 +309,18 @@ def load_weights(path, *, allow_legacy=False) -> CommanderPolicy:
     magic, fmt, version, schema, vector, maps, private, heads, logits, count, size, crc = HEADER.unpack_from(raw)
     legacy = (schema, vector, fmt, maps) in (
         (LEGACY_SCHEMA_CRC, LEGACY_VECTOR_SIZE, LEGACY_FORMAT_VERSION, LEGACY_MAP_SIZE),
-        (CONTEXT_SCHEMA_CRC, CONTEXT_VECTOR_SIZE, LEGACY_FORMAT_VERSION, LEGACY_MAP_SIZE))
+        (CONTEXT_SCHEMA_CRC, CONTEXT_VECTOR_SIZE, LEGACY_FORMAT_VERSION, LEGACY_MAP_SIZE),
+        (RESIDUAL_SCHEMA_CRC, RESIDUAL_VECTOR_SIZE, FORMAT_VERSION, MAP_SIZE),
+        (RACE_SCHEMA_CRC, RACE_VECTOR_SIZE, FORMAT_VERSION, MAP_SIZE))
     if legacy and not allow_legacy:
         raise ValueError("legacy commander weights require explicit context migration")
     expected_schema = schema if legacy else SCHEMA_CRC
     expected_vector = vector if legacy else VECTOR_SIZE
     specs = tensor_shapes(expected_vector)
     if (magic, fmt, schema, vector, maps, private, heads, logits, count) != (
-            MAGIC, LEGACY_FORMAT_VERSION if legacy else FORMAT_VERSION, expected_schema, expected_vector,
-            LEGACY_MAP_SIZE if legacy else MAP_SIZE, PRIVILEGED_SIZE, 8, LOGIT_COUNT, len(specs)):
+            MAGIC, LEGACY_FORMAT_VERSION if expected_vector < RESIDUAL_VECTOR_SIZE else FORMAT_VERSION, expected_schema, expected_vector,
+            LEGACY_MAP_SIZE if expected_vector < RESIDUAL_VECTOR_SIZE else MAP_SIZE, PRIVILEGED_SIZE, 8,
+            sum(RACE_HEAD_SIZES) if expected_vector == RACE_VECTOR_SIZE else sum(LEGACY_HEAD_SIZES) if legacy else LOGIT_COUNT, len(specs)):
         raise ValueError("commander weight schema mismatch")
     payload = memoryview(raw)[HEADER.size:]
     if len(payload) != size or zlib.crc32(payload) != crc:
@@ -365,8 +390,8 @@ def upgrade_policy(policy: CommanderPolicy, *, adapter_seed: int = 941) -> Comma
     Newly appended observations have zero initial weights. This migrates no RLO
     fields, optimizer, admission, or training evidence. It never mutates source.
     """
-    if policy.vector_size not in (LEGACY_VECTOR_SIZE, CONTEXT_VECTOR_SIZE):
-        raise ValueError("upgrade requires an explicitly loaded 528/542 policy")
+    if policy.vector_size not in (LEGACY_VECTOR_SIZE, CONTEXT_VECTOR_SIZE, RESIDUAL_VECTOR_SIZE, RACE_VECTOR_SIZE):
+        raise ValueError("upgrade requires an explicitly loaded 528/542/606/642 policy")
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(adapter_seed)
         upgraded = CommanderPolicy(policy.weight_version)
@@ -377,7 +402,13 @@ def upgrade_policy(policy: CommanderPolicy, *, adapter_seed: int = 941) -> Comma
             state[name][:, :policy.vector_size] = value
         elif name == "conv1.weight":
             state[name].zero_()
-            state[name][:, :9] = value
+            state[name][:, :value.shape[1]] = value
+        elif name in ("heads.0.weight", "heads.0.bias", "embeddings.0.weight"):
+            state[name].zero_()
+            state[name][:value.shape[0]] = value
+            # New legal actions start with a modest exploration probability.
+            if name == "heads.0.bias":
+                state[name][value.shape[0]:] = -2.0
         else:
             state[name].copy_(value)
     upgraded.load_state_dict(state, strict=True)

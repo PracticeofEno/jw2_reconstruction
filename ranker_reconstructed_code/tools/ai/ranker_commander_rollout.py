@@ -19,18 +19,22 @@ LEGACY_VECTOR_SIZE = 528
 CONTEXT_SCHEMA_CRC = 0xDA97FD92
 CONTEXT_VECTOR_SIZE = 542
 LEGACY_MAP_SIZE = 9 * 16 * 16
-SCHEMA_CRC = 0x53DD6137
-FORMAT_VERSION = 4
-VECTOR_SIZE = 606
+SCHEMA_CRC = 0x7EEED592
+FORMAT_VERSION = 6
+RACE_VECTOR_SIZE = 642
+VECTOR_SIZE = 1410
 MAP_SHAPE = (12, 16, 16)
 MAP_SIZE = 3072
 PRIVILEGED_SIZE = 32
-HEAD_SIZES = (42, 16, 4, 8, 16, 3, 3, 3)
+LEGACY_HEAD_SIZES = (42, 16, 4, 8, 16, 3, 3, 3)
+RACE_HEAD_SIZES = (64, 16, 4, 8, 16, 3, 3, 3)
+HEAD_SIZES = (96, 16, 4, 8, 16, 3, 3, 3)
 HEAD_OFFSETS = tuple(np.cumsum((0,) + HEAD_SIZES[:-1]).tolist())
 MASK_SIZE = sum(HEAD_SIZES)
 HEADER = struct.Struct("<8s8I")
 DECISION, WIN, LOSS, TRUNCATED, INVALID = range(5)
 def _record_dtype(compact: bool, vector_size: int = VECTOR_SIZE, map_size: int | None = None) -> np.dtype:
+    masks = MASK_SIZE if vector_size == VECTOR_SIZE else 117 if vector_size == RACE_VECTOR_SIZE else 95
     if map_size is None:
         map_size = LEGACY_MAP_SIZE if vector_size in (LEGACY_VECTOR_SIZE, CONTEXT_VECTOR_SIZE) else MAP_SIZE
     return np.dtype([
@@ -38,7 +42,7 @@ def _record_dtype(compact: bool, vector_size: int = VECTOR_SIZE, map_size: int |
     ("status", "u1"), ("reserved", "u1"),
     ("weight_version", "<u4"),
     ("vector", "<f2" if compact else "<f4", (vector_size,)), ("map", "u1", (map_size,)),
-    ("mask_packed" if compact else "mask", "u1", (12 if compact else MASK_SIZE,)),
+    ("mask_packed" if compact else "mask", "u1", ((masks + 7) // 8 if compact else masks,)),
     ("action", "u1", (8,)),
     ("logp", "<f4", (8,)), ("value", "<f4"),
     ("potential", "<f4", (4,)), ("terminal_reward", "<f4"), ("reserved_reward", "<f4"),
@@ -50,7 +54,7 @@ def _record_dtype(compact: bool, vector_size: int = VECTOR_SIZE, map_size: int |
 WIRE_RECORD_DTYPE = _record_dtype(True)
 RECORD_DTYPE = _record_dtype(False)  # decoded compatibility view / fixture input
 RECORD_SIZE = WIRE_RECORD_DTYPE.itemsize
-assert RECORD_SIZE == 4446
+assert RECORD_SIZE == 6061
 
 
 class DecodedRecords:
@@ -81,7 +85,7 @@ class DecodedRecords:
             if key in ("vector", "privileged"):
                 return self.raw[key].astype(np.float32)
             if key == "mask":
-                return np.unpackbits(self.raw["mask_packed"], axis=-1, bitorder="little")[..., :MASK_SIZE]
+                return np.unpackbits(self.raw["mask_packed"], axis=-1, bitorder="little")[..., :self.dtype["mask"].shape[0]]
             return self.raw[key]
         raw = self.raw[key]
         if isinstance(raw, np.void):
@@ -168,7 +172,9 @@ def _validate_records(records: np.ndarray) -> None:
     if np.any(records["potential"][:, 1:] < -1e-6):
         raise RolloutError("noncombat potential components must be nonnegative")
     decision = records[:-1]
-    for head, (offset, size) in enumerate(zip(HEAD_OFFSETS, HEAD_SIZES)):
+    sizes = HEAD_SIZES if records.dtype["mask"].shape[0] == MASK_SIZE else RACE_HEAD_SIZES if records.dtype["mask"].shape[0] == 117 else LEGACY_HEAD_SIZES
+    offsets = np.cumsum((0,) + sizes[:-1]).tolist()
+    for head, (offset, size) in enumerate(zip(offsets, sizes)):
         chosen = decision["action"][:, head].astype(np.int64)
         if np.any(chosen >= size):
             raise RolloutError(f"head {head} action out of range")
@@ -189,12 +195,14 @@ def read_rollout(path: str | Path, *, current_version: int | None = None,
     legacy = contract in (
         (MAGIC, LEGACY_SCHEMA_CRC, 2, LEGACY_VECTOR_SIZE, LEGACY_MAP_SIZE, 3522),
         (MAGIC, CONTEXT_SCHEMA_CRC, 3, CONTEXT_VECTOR_SIZE, LEGACY_MAP_SIZE, 3550),
+        (MAGIC, 0x53DD6137, 4, 606, MAP_SIZE, 4446),
+        (MAGIC, 0xB32DB21E, 5, RACE_VECTOR_SIZE, MAP_SIZE, 4521),
     )
     if legacy and not allow_legacy:
         raise RolloutError("legacy RLO1 requires explicit historical decoding; new observations must be collected for current training")
     if not legacy and contract != (
             MAGIC, SCHEMA_CRC, FORMAT_VERSION, VECTOR_SIZE, MAP_SIZE, RECORD_SIZE):
-        raise RolloutError("RLO1 schema, compact format version 4, or dimensions mismatch")
+        raise RolloutError("RLO1 schema, compact format version 6, or dimensions mismatch")
     wire_dtype = _record_dtype(True, vector, maps)
     if owner >= 8 or seed == 0:
         raise RolloutError("invalid owner or zero policy seed")
@@ -211,8 +219,8 @@ def read_rollout(path: str | Path, *, current_version: int | None = None,
                 raise RolloutError(f"record {index} CRC32 mismatch")
         if np.any(raw_records["weight_version"] != weight):
             raise RolloutError("record policy version differs from pinned header")
-        if np.any(raw_records["mask_packed"][:, -1] & 0x80):
-            raise RolloutError("reserved 96th mask bit must be zero")
+        if np.any(raw_records["mask_packed"][:, -1] & (0x80 if vector < RACE_VECTOR_SIZE else 0xe0)):
+            raise RolloutError("reserved mask bits must be zero")
         records = DecodedRecords(raw_records)
         _validate_records(records)
         if teacher is not None and bool(records[0]["teacher"]) != teacher:
@@ -223,24 +231,29 @@ def read_rollout(path: str | Path, *, current_version: int | None = None,
     return Episode(path, owner, seed, weight, records)
 
 
-LABEL_MAGIC = b"JWTL0001"
-LABEL_RECORD = np.dtype([("mask_packed", "u1", (12,)), ("action", "u1", (8,))], align=False)
+LABEL_MAGIC = b"JWTL0003"
+LABEL_RECORD = np.dtype([("mask_packed", "u1", ((MASK_SIZE + 7) // 8,)), ("action", "u1", (8,))], align=False)
+LEGACY_LABEL_MAGIC = b"JWTL0001"
+LEGACY_LABEL_RECORD = np.dtype([("mask_packed", "u1", (12,)), ("action", "u1", (8,))], align=False)
 
 
-def read_teacher_labels(path: str | Path):
-    """Return (actions u8[n,8], masks u8[n,95]) from <rollout>.teacher.bin.
+def read_teacher_labels(path: str | Path, *, allow_legacy=False):
+    """Return actions u8[n,8] and current u8[n,149] (legacy 95/117) masks.
 
     Written under -AIDAGGER: one record per RLO record (terminal = zeros).
     """
     path = Path(path)
     raw = path.read_bytes()
-    if len(raw) < len(LABEL_MAGIC) or raw[:len(LABEL_MAGIC)] != LABEL_MAGIC:
+    legacy = allow_legacy and raw[:8] in (LEGACY_LABEL_MAGIC, b"JWTL0002")
+    race_legacy = legacy and raw[:8] == b"JWTL0002"
+    if len(raw) < len(LABEL_MAGIC) or (raw[:len(LABEL_MAGIC)] != LABEL_MAGIC and not legacy):
         raise RolloutError("teacher label file magic mismatch")
     payload = raw[len(LABEL_MAGIC):]
-    if len(payload) % LABEL_RECORD.itemsize:
+    dtype = np.dtype([("mask_packed", "u1", (15,)), ("action", "u1", (8,))]) if race_legacy else LEGACY_LABEL_RECORD if legacy else LABEL_RECORD
+    if len(payload) % dtype.itemsize:
         raise RolloutError("partial teacher label payload")
-    records = np.frombuffer(payload, dtype=LABEL_RECORD)
-    masks = np.unpackbits(records["mask_packed"], axis=-1, bitorder="little")[:, :MASK_SIZE]
+    records = np.frombuffer(payload, dtype=dtype)
+    masks = np.unpackbits(records["mask_packed"], axis=-1, bitorder="little")[:, :117 if race_legacy else 95 if legacy else MASK_SIZE]
     return records["action"].copy(), masks.astype(np.uint8)
 
 
@@ -248,7 +261,8 @@ def relabel_with_teacher(episode: Episode) -> Episode:
     """DAgger: replace the policy's sampled actions/masks by the rule
     commander's labels for the same observations, yielding a teacher-cohort
     episode over the states the policy actually visited."""
-    actions, masks = read_teacher_labels(str(episode.path) + ".teacher.bin")
+    actions, masks = read_teacher_labels(str(episode.path) + ".teacher.bin",
+        allow_legacy=episode.records.dtype["mask"].shape[0] != MASK_SIZE)
     # Converted context episodes may already be ordinary ndarrays. Relabeling
     # must leave their executed action history and on-policy probabilities intact.
     records = np.array(episode.records, copy=True)

@@ -15,7 +15,7 @@ int main(int argc, char** argv) {
     std::ofstream output(argv[2], std::ios::binary);
     u32 count = 0;
     if (!input.read(reinterpret_cast<char*>(&count), sizeof(count)) || count > 1000) return 2;
-    static_assert(ranker::kCommanderVectorSize == 606);
+    static_assert(ranker::kCommanderVectorSize == 1410);
     for (u32 index = 0; index < count; ++index) {
         std::array<u32, 6> sample{};
         if (!input.read(reinterpret_cast<char*>(sample.data()), sizeof(sample))) return 3;

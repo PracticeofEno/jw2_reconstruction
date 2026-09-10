@@ -16,7 +16,9 @@ import subprocess
 import threading
 import time
 
-from ranker_commander_rollout import LOSS, TRUNCATED, WIN, RolloutError, read_rollout
+from ranker_commander_rollout import (LOSS, TRUNCATED, WIN, RolloutError, read_rollout,
+                                    read_teacher_labels, relabel_with_teacher)
+from ranker_commander_strategy import ENV as STRATEGY_ENV, validate_strategy
 
 START_PATTERN = re.compile(r"start-slots: owner=(\d+) state=(\d+) map_slot=(\d+).*?tribe=(\d+)")
 POLICY_SEED_PATTERN = re.compile(r"ai-commander: policy-seed-override owner=(\d+) policy_seed=(\d+) "
@@ -34,6 +36,13 @@ STARTUP_TIMEOUT_SECONDS = 120.0
 STARTUP_POLL_SECONDS = 5.0
 STARTUP_ATTEMPTS = 2
 MAX_POLICY_SEED = (1 << 64) - 1
+
+
+def policy_tribes(job):
+    values = (job.get("own_tribe", 2), job.get("opponent_policy_tribe", 2))
+    if any(isinstance(x, bool) or not isinstance(x, int) or x not in range(4) for x in values):
+        raise ValueError("policy tribes must be integers in 0..3")
+    return values
 
 
 def validate_policy_seed(value):
@@ -140,8 +149,8 @@ def validate_terminal_result(episode, result):
     """Use the engine-backed RLO outcome when elimination and the cap coincide.
 
     The output writer may retain reason=max_frames even when the end-condition
-    check has already eliminated an owner. Its broad building counts include
-    traps, so they cannot override the rollout's strict elimination outcome.
+    check has already eliminated an owner. Historical result files also counted
+    traps as buildings; they cannot override the rollout's elimination outcome.
     """
     end_frame = int(episode.terminal["frame"])
     if end_frame != int(result["end_frame"]):
@@ -156,6 +165,65 @@ def validate_terminal_result(episode, result):
     return status
 
 
+def validate_dagger_label_job(job, *, teacher, weights2, executable_sha, log=None):
+    """Resolve a teacher used only to label the unchanged neural actor's states."""
+    present = ('dagger_label_router' in job, 'dagger_label_strategy' in job)
+    if not any(present):
+        return None
+    if not all(present):
+        raise ValueError('DAgger label router and selected strategy must both be bound')
+    if (teacher is not False or job.get('dagger') is not True or job.get('own_tribe') != 1
+            or job.get('curriculum') != 2 or job.get('max_frames') != 60000
+            or job.get('opp_slow', 0) != 0 or job.get('coordinated_transfers') is not False
+            or job.get('teacher_variant') != 268435456 or weights2 is not None
+            or any(job.get(key) for key in ('teacher2', 'teacher_variant2', 'opponent_weights',
+                'primary_weights', 'controller', 'controller_manifest', 'elf_strategy_profile',
+                'elf_strategy_router'))):
+        raise ValueError('label-only DAgger requires the Elf neural actor against the normal builtin')
+    from ranker_commander_label_router import validate_label_profile
+    router = job['dagger_label_router']
+    return validate_label_profile(router, job['tribe'], job['dagger_label_strategy'],
+        executable_sha=executable_sha, log=log)
+
+
+def validate_dagger_label_output(job, *, executable_sha, log, episode):
+    """Bind native label bytes to this actor RLO; never rewrite actor actions."""
+    definition = validate_dagger_label_job(job, teacher=False, weights2=None,
+        executable_sha=executable_sha, log=log)
+    if definition is None:
+        raise ValueError('missing label-only DAgger provenance')
+    records = episode.records
+    if (episode.owner != 1 or episode.seed != job['seed'] or (records['teacher'] != 0).any()
+            or not (records['vector'][:, 606:610] == [0, 1, 0, 0]).all()
+            or not (records['vector'][:, 66:70] == [int(i == job['tribe']) for i in range(4)]).all()
+            or not (records['vector'][:, 536:542] == [.25, 0, 1, 0, 0, 0]).all()):
+        raise ValueError('DAgger changed the actor identity or public variant0 context')
+    path = Path(str(episode.path) + '.teacher.bin')
+    actions, masks = read_teacher_labels(path)
+    if len(actions) != len(records) or (actions[-1] != 0).any() or (masks[-1] != 0).any():
+        raise ValueError('native DAgger label count or terminal zeros differ')
+    # Checks each label under its own conditional mask, on a copy of records.
+    labelled = relabel_with_teacher(episode)
+    try:
+        if len(labelled.decisions) != len(episode.decisions):
+            raise ValueError('native DAgger decision count differs')
+    finally:
+        labelled.close()
+    provenance = {}
+    from ranker_commander_label_router import KIND as LABEL_RUNTIME_ROUTER
+    if job['dagger_label_router']['definition']['kind'] == LABEL_RUNTIME_ROUTER:
+        provenance = dict(label_runtime_sha256=executable_sha,
+            label_source_runtime_sha256=definition['executable_sha256'],
+            label_runtime_method='native_model_runtime_migration')
+    return dict(path=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+        actor_rollout_sha256=hashlib.sha256(Path(episode.path).read_bytes()).hexdigest(),
+        records=len(records), decisions=len(episode.decisions), native_label_prefix_masks_valid=True,
+        terminal_zero=True, actor_context_variant0_verified=True,
+        label_router_sha256=job['dagger_label_router']['manifest_sha256'],
+        label_strategy_sha256=job['dagger_label_strategy']['manifest_sha256'],
+        label_profile_sha256=definition['profile_sha256'], label_only=True, **provenance)
+
+
 def _run_game(install_dir, weights, job_root, index, job, slot, *, teacher,
               deterministic, timeout, weights2=None, executable=None, no_sleep=True):
     if "policy_seed" in job:
@@ -164,18 +232,22 @@ def _run_game(install_dir, weights, job_root, index, job, slot, *, teacher,
         raise ValueError("coordinated_transfers must be a boolean")
     weights = job.get("primary_weights", weights)
     weights2 = job.get("opponent_weights", weights2)
+    own_tribe, opponent_policy_tribe = policy_tribes(job)
+    game_executable = Path(executable).resolve() if executable else Path(install_dir).resolve() / "ranker_rebuild.exe"
+    label_definition = validate_dagger_label_job(job, teacher=teacher, weights2=weights2,
+        executable_sha=hashlib.sha256(game_executable.read_bytes()).hexdigest())
     job_dir = prepare_job_directory(install_dir, Path(job_root) / f"game_{index:05d}", executable)
     output = job_dir / "output"
     output.mkdir()
     replay_dir = output / "Replays"
     replay_dir.mkdir()
     rollout = output / "commander.rlo"
-    game_executable = Path(executable).resolve() if executable else Path(install_dir).resolve() / "ranker_rebuild.exe"
     command = [str(game_executable), "-AISELF", "-AICOMMANDER",
                f"-AIWEIGHTS:{Path(weights).resolve()}", f"-AIROLLOUT:{rollout}",
                f"-AINET:{300 + slot}", f"-SEED:{job['seed']}", f"-AITRIBE:{job['tribe']}",
                f"-MAXFRAMES:{job.get('max_frames', 60000)}", f"-AIOUT:{output}",
                f"-AICURRICULUM:{job.get('curriculum', 2)}", "-AIAUTOSCOUT:1"]
+    command.extend([f"-AIOWNTRIBE:{own_tribe}", f"-AIOWNTRIBE2:{opponent_policy_tribe}"])
     if "coordinated_transfers" in job:
         command.append(f"-AICOORDINATEDTRANSFERS:{int(job['coordinated_transfers'])}")
     if "policy_seed" in job:
@@ -209,15 +281,28 @@ def _run_game(install_dir, weights, job_root, index, job, slot, *, teacher,
     if weights2 is not None:
         command.extend(["-AIVS", f"-AIWEIGHTS2:{Path(weights2).resolve()}"])
     environment = os.environ.copy()
+    environment.pop(STRATEGY_ENV,None)
+    strategy=job.get('elf_strategy_profile')
+    if strategy:
+        if not teacher or own_tribe!=1 or weights2 is not None or teacher2:
+            raise ValueError('Elf strategy search requires its rule executor against normal builtin AI')
+        definition=validate_strategy(strategy,executable_sha=hashlib.sha256(Path(command[0]).read_bytes()).hexdigest())
+        environment[STRATEGY_ENV]=definition['profile_path']
+    if label_definition is not None:
+        environment[STRATEGY_ENV] = label_definition['profile_path']
     environment["RANKER_RECONSTRUCTED_LOG_PATH"] = str(output / "Jw2.log")
     environment["RANKER_RECONSTRUCTED_REPLAY_DIR"] = str(replay_dir)
     environment.pop("RANKER_RECONSTRUCTED_PORT_OFFSET", None)
     report = {**job, "job": index, "rollout": str(rollout), "directory": str(job_dir),
               "deterministic": deterministic, "teacher": teacher, "valid": False,
               "win": False, "reason": "not_started", "command": command}
+    if label_definition is not None:
+        report.update(neural_actor=True, ppo_enabled=False, label_controller_only=True)
     started = time.monotonic()
     try:
         report["weights_sha256"] = hashlib.sha256(Path(weights).read_bytes()).hexdigest()
+        if weights2 is not None:
+            report["weights_sha2562"] = hashlib.sha256(Path(weights2).read_bytes()).hexdigest()
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         for attempt in range(STARTUP_ATTEMPTS):
             if attempt:
@@ -266,6 +351,14 @@ def _run_game(install_dir, weights, job_root, index, job, slot, *, teacher,
         if episode.seed != job["seed"]:
             raise RuntimeError("rollout seed does not match job")
         startup_log = (output / "Jw2.log").read_text(encoding="utf-8", errors="replace")
+        if strategy:
+            validate_strategy(strategy,executable_sha=hashlib.sha256(Path(command[0]).read_bytes()).hexdigest(),log=startup_log)
+            report['strategy_profile_verified']=True
+        if label_definition is not None:
+            report['dagger_labels'] = validate_dagger_label_output(job,
+                executable_sha=hashlib.sha256(Path(command[0]).read_bytes()).hexdigest(),
+                log=startup_log, episode=episode)
+            report['dagger_label_profile_verified'] = True
         slots = extract_start_slots(startup_log)
         if "coordinated_transfers" in job:
             validate_transfer_mode_log(startup_log, owner=1, enabled=job["coordinated_transfers"])
@@ -275,11 +368,11 @@ def _run_game(install_dir, weights, job_root, index, job, slot, *, teacher,
         if 1 not in slots or 2 not in slots:
             raise RuntimeError("startup log has no competing start slots")
         pair = [slots[1]["map_slot"], slots[2]["map_slot"]]
-        # Under -AIVS slot 2 is the second (Tyrano) policy owner, not the
-        # built-in opponent the job's tribe field describes.
-        expected_tribe = 2 if (weights2 is not None or teacher2) else job["tribe"]
-        if pair[0] == pair[1] or slots[2]["tribe"] != expected_tribe:
+        expected_tribe = opponent_policy_tribe if (weights2 is not None or teacher2) else job["tribe"]
+        if pair[0] == pair[1] or slots[1]["tribe"] != own_tribe or slots[2]["tribe"] != expected_tribe:
             raise RuntimeError("actual map slots or opponent tribe disagree with job")
+        if not (episode.records["vector"][:, 606:610] == [int(i == own_tribe) for i in range(4)]).all():
+            raise RuntimeError("rollout own race disagrees with startup slots")
         if "start_pair" in job and pair != list(job["start_pair"]):
             raise RuntimeError("measured start pair changed; rediscover seed mapping")
         if weights2 is not None or teacher2:
@@ -288,6 +381,8 @@ def _run_game(install_dir, weights, job_root, index, job, slot, *, teacher,
             # the matching cohort.
             other = read_rollout(str(rollout) + ".owner2.rlo", teacher=teacher or teacher2)
             other_status = int(other.terminal["status"])
+            if not (other.records["vector"][:, 606:610] == [int(i == opponent_policy_tribe) for i in range(4)]).all():
+                raise RuntimeError("second rollout own race disagrees with startup slots")
             expected_other = {WIN: LOSS, LOSS: WIN, TRUNCATED: TRUNCATED}[status]
             if (other.owner != 2 or other.seed != episode.seed or
                     int(other.terminal["frame"]) != end_frame or other_status != expected_other):
@@ -319,8 +414,11 @@ def _run_game(install_dir, weights, job_root, index, job, slot, *, teacher,
             if metrics.get("owner") != 1 or metrics.get("end_frame") != end_frame or metrics.get("status") != status:
                 raise RuntimeError("commander metrics disagree with the rollout terminal")
             report["commander_metrics"] = metrics
-        if weights2 is not None and (output / "commander_metrics_2.json").exists():
-            report["commander_metrics2"] = json.loads((output / "commander_metrics_2.json").read_text(encoding="utf-8"))
+        if (weights2 is not None or teacher2) and (output / "commander_metrics_2.json").exists():
+            metrics = json.loads((output / "commander_metrics_2.json").read_text(encoding="utf-8"))
+            if metrics.get("owner") != 2 or metrics.get("end_frame") != end_frame or metrics.get("status") != other_status:
+                raise RuntimeError("second commander metrics disagree with the rollout terminal")
+            report["commander_metrics2"] = metrics
         if hasattr(episode, "close"):
             episode.close()
         elif hasattr(episode.records, "_mmap"):

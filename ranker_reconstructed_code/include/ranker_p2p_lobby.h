@@ -193,9 +193,10 @@ struct P2PNetworkLaunchParameters {
     // -AITRIBE:N — tribe of the built-in Computer opponent in self-play/1v1
     // (0=Primitive 1=Elf 2=Tyrano 3=Demon; 4=derive from -SEED so a seed sweep
     // rotates opponents).  Default 2 (Tyrano mirror, the historic behavior).
-    // The Computer(AI) owners themselves stay Tyrano — the executor only
-    // speaks that tech tree.
     u32 self_play_opponent_tribe = 2;
+    // Commander policy owners, independently selected for cross-race self-play.
+    // Older scripted/entity executors remain restricted to their Tyrano tree.
+    u32 self_play_own_tribe = 2, self_play_own_tribe2 = 2;
     // v9 runtime switches: -AIAUTOPILOT:0/1 macro
     // autopilot (worker floor / pop guard / idle-producer guard),
     // -AIREFLEX:0/1 executor base-defense reflex, -AIGATE:0/1 event decision

@@ -44,6 +44,29 @@ int main(int argc, char** argv) {
     if (!writer.open(argv[1], 3, 901, 17)) return 2;
     ranker::CommanderInput input;
     ranker::CommanderDecision decision;
+    if (mode == "dagger" || mode == "dagger_same_frame") {
+        ranker::CommanderDecision label;
+        for (std::size_t h = 0; h < ranker::kCommanderHeadCount; ++h) {
+            decision.mask[ranker::kCommanderHeadOffsets[h]] = 1;
+            label.mask[ranker::kCommanderHeadOffsets[h]] = 1;
+        }
+        // Exercise the last skill macro and the final mask bit. Older label
+        // versions cannot represent the current 149-bit action contract.
+        label.action[0] = ranker::kCommanderMacroCount - 1;
+        label.mask[label.action[0]] = 1;
+        label.mask[ranker::kCommanderLogitCount - 1] = 1;
+        const std::array<float, 4> potential{};
+        if (!writer.append(1, 0, false, ranker::CommanderRolloutStatus::decision,
+                input, decision, potential, &label)) return 21;
+        input.vector[533] = .25f; // Observed history belongs to the acting policy.
+        if (!writer.append(33, 0, false, ranker::CommanderRolloutStatus::decision,
+                input, decision, potential, &label)) return 22;
+        const u32 terminal_frame = mode == "dagger_same_frame" ? 33 : 65;
+        if (!writer.append(terminal_frame, 0, false, ranker::CommanderRolloutStatus::truncated,
+                input, decision, potential)) return 23;
+        writer.close();
+        return 0;
+    }
     for (std::size_t i = 0; i < input.vector.size(); ++i)
         input.vector[i] = (static_cast<int>(i % 33) - 16) / 16.0f;
     const float half_edges[] = {0.33333334f, 1.00048828125f, 1.00146484375f,
@@ -82,7 +105,7 @@ int main(int argc, char** argv) {
     }
     // H1=TRANSFER makes the unused building anchor a singleton.
     decision.action[1] = 0;
-    for (std::size_t a = 0; a < 16; ++a) decision.mask[42 + a] = a == 0;
+    for (std::size_t a = 0; a < 16; ++a) decision.mask[ranker::kCommanderHeadOffsets[1] + a] = a == 0;
     decision.logp[1] = 0;
     decision.value = 0.25f;
     std::array<float,4> potential{0.05f,0.02f,0.01f,0.0f};
@@ -145,7 +168,8 @@ class NativeRolloutTests(unittest.TestCase):
         subprocess.run([compiler, "-std=c++17", "-O2", "-Wall", "-Wextra", "-static", "-I", str(root / "include"),
                         str(source), str(root / "src/ranker_ai_commander_rollout.cpp"), "-o", str(executable)],
                        check=True, capture_output=True)
-        for status in ("win", "truncated", "same_frame", "single_frame", "invalid_frames", "reopen"):
+        for status in ("win", "truncated", "same_frame", "single_frame", "invalid_frames", "reopen",
+                       "dagger", "dagger_same_frame"):
             subprocess.run([str(executable), str(cls.directory / (status + ".rlo")),
                             str(cls.directory / (status + ".maps.bin")), status], check=True, capture_output=True)
 
@@ -163,7 +187,7 @@ class NativeRolloutTests(unittest.TestCase):
         raw = episode.path.read_bytes()
         self.assertEqual(len(raw), 40 + 3 * rollout.RECORD_SIZE)
         self.assertEqual(rollout.HEADER.unpack_from(raw),
-                         (b"JWRLO001", rollout.SCHEMA_CRC, 4, 3, 901, 17, rollout.VECTOR_SIZE, rollout.MAP_SIZE, rollout.RECORD_SIZE))
+                         (b"JWRLO001", rollout.SCHEMA_CRC, rollout.FORMAT_VERSION, 3, 901, 17, rollout.VECTOR_SIZE, rollout.MAP_SIZE, rollout.RECORD_SIZE))
         for index, record in enumerate(episode.records):
             self.assertEqual(int(record["crc32"]), zlib.crc32(raw[40 + index * rollout.RECORD_SIZE:40 + (index + 1) * rollout.RECORD_SIZE - 4]))
         np.testing.assert_array_equal(episode.records["frame"], [1, 33, 1801])
@@ -172,7 +196,7 @@ class NativeRolloutTests(unittest.TestCase):
         np.testing.assert_array_equal(episode.records["weight_version"], [17, 17, 17])
         self.assertEqual(episode.raw_records["vector"].dtype, np.dtype("<f2"))
         self.assertEqual(episode.raw_records["privileged"].dtype, np.dtype("<f2"))
-        self.assertEqual(episode.raw_records["mask_packed"].shape, (3, 12))
+        self.assertEqual(episode.raw_records["mask_packed"].shape, (3, (rollout.MASK_SIZE + 7) // 8))
         self.assertFalse(np.any(episode.raw_records["mask_packed"][:, -1] & 0x80))
         np.testing.assert_array_equal(episode.records["action"][:, 1], 0)
         np.testing.assert_array_equal(episode.records["logp"][:, 1], 0)
@@ -183,6 +207,26 @@ class NativeRolloutTests(unittest.TestCase):
         sidecar = [json.loads(line) for line in Path(str(episode.path) + ".decisions.jsonl").read_text().splitlines()]
         self.assertEqual([item["status"] for item in sidecar], [0, 0, 1])
         self.assertEqual(sidecar[0]["action"], episode.decisions[0]["action"].tolist())
+
+    def test_native_dagger_labels_match_current_schema_and_preserve_executed_history(self):
+        for mode, count in (("dagger", 3), ("dagger_same_frame", 2)):
+            with self.subTest(mode=mode):
+                episode = self.read(mode)
+                path = Path(str(episode.path) + ".teacher.bin")
+                raw = path.read_bytes()
+                self.assertEqual(raw[:8], rollout.LABEL_MAGIC)
+                self.assertEqual(len(raw), 8 + count * rollout.LABEL_RECORD.itemsize)
+                actions, masks = rollout.read_teacher_labels(path)
+                self.assertEqual(masks.shape, (count, rollout.MASK_SIZE))
+                np.testing.assert_array_equal(actions[:-1, 0], 95)
+                np.testing.assert_array_equal(masks[:-1, -1], 1)
+                np.testing.assert_array_equal(actions[-1], 0)
+                np.testing.assert_array_equal(masks[-1], 0)
+                labelled = rollout.relabel_with_teacher(episode)
+                np.testing.assert_array_equal(labelled.decisions["action"][:, 0], 95)
+                np.testing.assert_array_equal(episode.decisions["action"], 0)
+                for field in ("frame", "vector", "map", "potential", "terminal_reward"):
+                    np.testing.assert_array_equal(labelled.records[field], episode.records[field])
 
     def test_map_rounding_matches_inference_and_training(self):
         episode = self.read()
@@ -309,7 +353,7 @@ class NativeRolloutTests(unittest.TestCase):
         records[0]["crc32"] = zlib.crc32(records[0].tobytes()[:-4])
         path = self.directory / "metadata_mask_padding.rlo"
         path.write_bytes(original[:40] + records.tobytes())
-        with self.assertRaisesRegex(rollout.RolloutError, "96th"):
+        with self.assertRaisesRegex(rollout.RolloutError, "reserved mask"):
             rollout.read_rollout(path)
 
     def test_all_finite_half_values_and_random_float_rounding(self):

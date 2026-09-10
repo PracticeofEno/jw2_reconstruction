@@ -41,6 +41,10 @@ class TrainConfig:
     # boosting them made one BC policy shuffle units between squads hundreds
     # of times per game instead of sieging.
     bc_class_skip: tuple = ()
+    # Opt-in BC objective: keep macro/squad balancing on their own heads and
+    # average each head only over states in which it has a real choice.
+    # The default retains the historical joint per-decision objective.
+    bc_head_specific_weights: bool = False
     # PPO: KL(reference || policy) coefficient decays linearly from
     # teacher_kl_initial to teacher_kl_floor over teacher_kl_decay updates and
     # then holds the floor. The design's original schedule (0.05 -> 0 over 30
@@ -365,6 +369,37 @@ def build_batch(episodes: list[Episode], config: TrainConfig, *, bc_episode_weig
                    "discounted_abs_terminal_mean": terminal_mean, **decomposition}
 
 
+def head_specific_bc_loss(logps, actions, masks, *, episode_weights=None,
+                          rare_weight=0.0, class_weights=None):
+    """Sum independently normalized head losses over non-forced decisions.
+
+    An uncommon macro must not change the target distribution for army
+    orders, and an army order must not boost a macro NOOP. Conditional heads
+    with only one legal action have no learning signal and no denominator
+    contribution. Episode quality weights remain attached to every head.
+    """
+    if logps.shape != actions.shape or logps.ndim != 2 or logps.shape[1] != len(HEAD_SIZES):
+        raise ValueError("head-specific BC requires one log-probability per action head")
+    if masks.shape != (len(logps), sum(HEAD_SIZES)):
+        raise ValueError("head-specific BC requires current per-head legal masks")
+    base = logps.new_ones(len(logps)) if episode_weights is None else episode_weights
+    losses = []
+    offset = 0
+    for head, width in enumerate(HEAD_SIZES):
+        active = masks[:, offset:offset + width].sum(1) > 1
+        weights = base * active.to(logps.dtype)
+        if head in (0, 2) and rare_weight > 0:
+            weights = weights * (1.0 + rare_weight * (actions[:, head] != 0).to(logps.dtype))
+        if head == 0 and class_weights is not None:
+            weights = weights * class_weights[actions[:, 0]]
+        # A forced head contributes zero, even when the whole minibatch is forced.
+        denominator = weights.sum()
+        denominator = torch.where(denominator > 0, denominator, denominator.new_ones(()))
+        losses.append(-(logps[:, head] * weights).sum() / denominator)
+        offset += width
+    return torch.stack(losses).sum()
+
+
 def train_update(policy, batch, config: TrainConfig, *, optimizer=None, teacher_policy=None,
                  progress_callback=None):
     if config.mode not in ("bc", "ppo") or config.epochs < 1 or config.minibatch < 1:
@@ -412,16 +447,21 @@ def train_update(policy, batch, config: TrainConfig, *, optimizer=None, teacher_
             if config.mode == "bc":
                 # Source replay weights affect imitation only; critic targets and
                 # their regression remain on the original sampled state distribution.
-                weights = sample.get("bc_weight", torch.ones(len(logp)))
-                if config.bc_rare_weight > 0:
-                    important = (sample["actions"][:, 0] != 0) | (sample["actions"][:, 2] != 0)
-                    weights = weights * (1.0 + config.bc_rare_weight * important.float())
-                if config.bc_class_power > 0:
-                    weights = weights * class_weights[sample["actions"][:, 0]]
-                if config.bc_rare_weight > 0 or config.bc_class_power > 0 or "bc_weight" in sample:
-                    actor_loss = -(logp * weights).sum() / weights.sum()
+                if config.bc_head_specific_weights:
+                    actor_loss = head_specific_bc_loss(output["logp"], sample["actions"],
+                        sample["masks"], episode_weights=sample.get("bc_weight"),
+                        rare_weight=config.bc_rare_weight, class_weights=class_weights)
                 else:
-                    actor_loss = -logp.mean()
+                    weights = sample.get("bc_weight", torch.ones(len(logp)))
+                    if config.bc_rare_weight > 0:
+                        important = (sample["actions"][:, 0] != 0) | (sample["actions"][:, 2] != 0)
+                        weights = weights * (1.0 + config.bc_rare_weight * important.float())
+                    if config.bc_class_power > 0:
+                        weights = weights * class_weights[sample["actions"][:, 0]]
+                    if config.bc_rare_weight > 0 or config.bc_class_power > 0 or "bc_weight" in sample:
+                        actor_loss = -(logp * weights).sum() / weights.sum()
+                    else:
+                        actor_loss = -logp.mean()
                 clipped = torch.zeros(())
                 approximate_kl = torch.zeros(())
             else:
@@ -612,6 +652,8 @@ def main(argv=None):
     parser.add_argument("--bc-class-cap", type=float, default=20.0)
     parser.add_argument("--bc-class-skip", type=str, default="",
                         help="BC: comma-separated macro indices kept at weight 1 under --bc-class-power")
+    parser.add_argument("--bc-head-specific-weights", action="store_true",
+                        help="BC: balance macro/squad heads separately and exclude forced heads from each mean")
     parser.add_argument("--teacher-kl-initial", type=float,
                         help="PPO: KL(BC reference || policy) coefficient at update 0")
     parser.add_argument("--teacher-kl-floor", type=float,
@@ -731,6 +773,7 @@ def main(argv=None):
                              bc_rare_weight=args.bc_rare_weight,
                              bc_class_power=args.bc_class_power, bc_class_cap=args.bc_class_cap,
                              bc_class_skip=tuple(int(x) for x in args.bc_class_skip.split(",") if x.strip()),
+                             bc_head_specific_weights=args.bc_head_specific_weights,
                              teacher_kl_initial=args.teacher_kl_initial,
                              teacher_kl_floor=args.teacher_kl_floor,
                              teacher_kl_decay=args.teacher_kl_decay,

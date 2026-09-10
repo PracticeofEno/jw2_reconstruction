@@ -120,7 +120,7 @@ bool CommanderRolloutWriter::append(u32 frame, u8 event, bool teacher,
         labels_path_ = rollout_path_ + ".teacher.bin";
         labels_.open(labels_path_, std::ios::binary | std::ios::trunc);
         if (!labels_) return false;
-        std::vector<u8> header{'J','W','T','L','0','0','0','1'};
+        std::vector<u8> header{'J','W','T','L','0','0','0','3'};
         if (!write(labels_, header)) return false;
     }
     if (labels_.is_open() && label == nullptr && !terminal) return false;
@@ -146,7 +146,7 @@ bool CommanderRolloutWriter::append(u32 frame, u8 event, bool teacher,
         if (!std::isfinite(value)) return false;
         bytes.push_back(static_cast<u8>(std::round(std::clamp(value, 0.0f, 1.0f) * 255.0f)));
     }
-    std::array<u8, 12> packed_mask{};
+    std::array<u8, (kCommanderLogitCount + 7) / 8> packed_mask{};
     for (std::size_t bit = 0; bit < decision.mask.size(); ++bit) {
         if (decision.mask[bit] > 1) return false;
         packed_mask[bit / 8] |= static_cast<u8>(decision.mask[bit] << (bit % 8));
@@ -181,7 +181,7 @@ bool CommanderRolloutWriter::append(u32 frame, u8 event, bool teacher,
     const std::string line = entry.str();
     std::vector<u8> label_bytes;
     if (labels_.is_open()) {
-        std::array<u8, 12> label_mask{};
+        std::array<u8, (kCommanderLogitCount + 7) / 8> label_mask{};
         if (label != nullptr) for (std::size_t bit = 0; bit < label->mask.size(); ++bit) {
             if (label->mask[bit] > 1) return false;
             label_mask[bit / 8] |= static_cast<u8>(label->mask[bit] << (bit % 8));

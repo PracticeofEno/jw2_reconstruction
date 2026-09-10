@@ -1505,6 +1505,28 @@ void test_ai_rl_reward() {
     require(ClassifyAiRlTerminal(building_win) == AiRlTerminalOutcome::win,
         "own-base-standing vs building-less enemy was not a win");
 
+    // A trap remains a targetable structure, but is not an elimination building.
+    AiObservation trapped_loss = building_loss;
+    trapped_loss.units.push_back(observed_unit(0x7900, 0, 0x6a, 0, 500, 500, true));
+    require(ClassifyAiRlTerminal(trapped_loss) == AiRlTerminalOutcome::loss,
+        "surviving own trap prevented the terminal loss");
+    require(ComputeAiRlStepReward(base, trapped_loss, config).terminal == config.loss_reward,
+        "surviving own trap changed the loss reward");
+    AiObservation trapped_win = building_win;
+    trapped_win.active_owner_mask |= 2u;
+    trapped_win.local_relation_mask &= ~2u;
+    trapped_win.units.push_back(observed_unit(0x7901, 1, 0x6a, 0, 900, 900, false));
+    require(ClassifyAiRlTerminal(trapped_win) == AiRlTerminalOutcome::win,
+        "surviving hostile trap prevented the terminal win");
+    require(ComputeAiRlStepReward(base, trapped_win, config).terminal == config.win_reward,
+        "surviving hostile trap changed the win reward");
+    for (const u32 hq_type : {0x60u, 0x70u, 0x80u, 0x90u}) {
+        AiObservation still_fighting = trapped_win;
+        still_fighting.units.push_back(observed_unit(0x7902, 1, hq_type, 0, 950, 950, false));
+        require(ClassifyAiRlTerminal(still_fighting) == AiRlTerminalOutcome::draw,
+            "ordinary hostile headquarters was excluded from terminal buildings");
+    }
+
     // Determinism: identical inputs -> byte-identical reward.
     AiRlStepReward again = ComputeAiRlStepReward(base, with_army, undisc);
     require(again.total == grow.total && again.shaping == grow.shaping &&
@@ -6681,6 +6703,12 @@ void test_ai_entity2_worker_task_locks() {
 }
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string(argv[1]) == "--terminal-rewards") {
+        test_ai_rl_reward();
+        test_ai_rl_trace();
+        std::cout << "AI terminal rewards: passed\n";
+        return 0;
+    }
     if (argc == 2 && std::string(argv[1]) == "--entity2-worker-autopilot") {
         test_ai_entity2_wire_contract();
         test_ai_entity2_snapshot_and_ledger();

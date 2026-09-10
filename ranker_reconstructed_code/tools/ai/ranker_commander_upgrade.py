@@ -30,10 +30,12 @@ def _expand_slot(name, value, parameter):
     if tuple(value.shape) == tuple(parameter.shape):
         return value.clone()
     expanded = torch.zeros_like(parameter, memory_format=torch.contiguous_format)
-    if name == "vector1.weight" and value.shape == (256, value.shape[1]) and value.shape[1] in (528, 542):
+    if name == "vector1.weight" and value.shape == (256, value.shape[1]) and value.shape[1] in (528, 542, 606, 642):
         expanded[:, :value.shape[1]] = value
     elif name == "conv1.weight" and tuple(value.shape) == (16, 9, 3, 3):
         expanded[:, :9] = value
+    elif name in ("heads.0.weight", "heads.0.bias", "embeddings.0.weight") and value.shape[0] in (42, 64):
+        expanded[:value.shape[0]] = value
     else:
         raise ValueError(f"unsupported optimizer shape migration: {name}")
     return expanded
@@ -47,8 +49,8 @@ def upgrade_optimizer(source_policy, upgraded_policy, path):
     """
     old = list(source_policy.named_parameters())
     new = list(upgraded_policy.named_parameters())
-    if len(old) != 39 or [name for name, _ in new[:39]] != [name for name, _ in old]:
-        raise ValueError("source parameter names/order do not match the original 39 tensors")
+    if len(old) not in (39, 67) or [name for name, _ in new[:len(old)]] != [name for name, _ in old]:
+        raise ValueError("source parameter names/order do not match the original tensors")
     with np.load(path, allow_pickle=False) as data:
         if int(data["schema_crc"]) != source_policy.schema_crc or int(data["weight_version"]) != source_policy.weight_version:
             raise ValueError("source optimizer schema/version mismatch")
@@ -91,7 +93,7 @@ def upgrade_optimizer(source_policy, upgraded_policy, path):
             optimizer.state[parameter] = state
         if set(data.files) != expected_files:
             raise ValueError("unexpected source optimizer fields")
-        for _, parameter in new[39:]:
+        for _, parameter in new[len(old):]:
             optimizer.state[parameter] = {"step": torch.tensor(0.0), "exp_avg": torch.zeros_like(parameter),
                                           "exp_avg_sq": torch.zeros_like(parameter)}
             if options.get("amsgrad", False):

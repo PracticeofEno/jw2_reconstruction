@@ -91,7 +91,7 @@ void strategy_is_actor_visible_and_preserves_default() {
 }
 }
 int main() {
-    static_assert(kCommanderVectorSize==606&&kCommanderRolloutFormatVersion==4&&kCommanderRolloutRecordBytes==4446);
+    static_assert(kCommanderVectorSize==1410&&kCommanderRolloutFormatVersion==6&&kCommanderRolloutRecordBytes==6061);
     try {
         context_exposes_history_without_changing_existing_observation();
         transfer_context_is_pre_decision_and_uses_executed_actions();

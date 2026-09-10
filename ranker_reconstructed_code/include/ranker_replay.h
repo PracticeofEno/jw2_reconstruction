@@ -67,6 +67,11 @@ inline bool ReplayRecordingHasSaveControls(
 
 ReplayRecordingState& replay_recording_state();
 
+// The self-play lobby serializes policy controllers as Computer(AI) / (AI)2.
+// Ordinary Computer opponents share slot state 1 but need their built-in AI.
+bool ReplayUsesRecordedComputerCommands(bool self_play_replay, u8 slot_state,
+    const std::string& player_name);
+
 void InitializeReplayTempFiles(ReplayRecordingState& state,
     bool playback_mode = false, u32 game_version = 0, u8 reliable_mode = 0,
     bool forced_replay_mode = false, u8 local_player = 0,

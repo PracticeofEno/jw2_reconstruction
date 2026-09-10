@@ -87,6 +87,27 @@ void verify_terminal_packet_replay_boundary() {
         "explicit test auto-broadcast must retain precedence");
 }
 
+void verify_replay_computer_controllers() {
+    using namespace ranker;
+
+    require(ReplayUsesRecordedComputerCommands(true, 1, "Computer(AI)"),
+        "the learned owner must use recorded commands without a second AI");
+    require(!ReplayUsesRecordedComputerCommands(true, 1, "Computer"),
+        "a built-in opponent must keep harvesting and producing during replay");
+    require(ReplayUsesRecordedComputerCommands(true, 1, "Computer(AI)2"),
+        "both policy owners in self-play must avoid duplicate built-in commands");
+    require(!ReplayUsesRecordedComputerCommands(false, 1, "Computer(AI)"),
+        "ordinary replay names must not opt into self-play controller rules");
+    require(!ReplayUsesRecordedComputerCommands(true, 2, "Computer(AI)"),
+        "an observer or human slot must not become a computer controller");
+    require(!ReplayUsesRecordedComputerCommands(true, 20, "Computer(AI)2"),
+        "a closed slot must not become a policy controller");
+    require(!ReplayUsesRecordedComputerCommands(true, 1, ""),
+        "an unnamed computer must retain its normal built-in controller");
+    require(!ReplayUsesRecordedComputerCommands(true, 1, "Computer(AI) impostor"),
+        "only the generated policy names identify recorded computer controllers");
+}
+
 void verify_replay_live_game_boundary() {
     using namespace ranker;
 
@@ -112,6 +133,13 @@ int main(int argc, char** argv) {
     using namespace ranker;
 
     if (argc == 2 &&
+        std::strcmp(argv[1], "replay_computer_controllers") == 0) {
+        verify_replay_computer_controllers();
+        std::cout << "replay computer controllers regression: PASS\n";
+        return EXIT_SUCCESS;
+    }
+
+    if (argc == 2 &&
         std::strcmp(argv[1], "replay_frontend_return") == 0) {
         verify_replay_frontend_return_route();
         std::cout << "replay frontend return regression: PASS\n";
@@ -127,6 +155,7 @@ int main(int argc, char** argv) {
     verify_replay_frontend_return_route();
     verify_terminal_packet_replay_boundary();
     verify_replay_live_game_boundary();
+    verify_replay_computer_controllers();
 
     static_assert(std::is_same_v<
         decltype(&SaveReplayRecordingArchiveSnapshot),

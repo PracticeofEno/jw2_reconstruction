@@ -52,7 +52,7 @@ bool elite_unit_type(u32 type_id) {
 }
 
 bool victory_elite_unit_type(u32 type_id) {
-    return elite_unit_type(type_id) && type_id != kGameplayEndExcludedEliteType;
+    return IsGameplayEliminationBuildingType(type_id);
 }
 
 bool unit_owned_by(const GameplayEndUnit& unit, u32 owner) {

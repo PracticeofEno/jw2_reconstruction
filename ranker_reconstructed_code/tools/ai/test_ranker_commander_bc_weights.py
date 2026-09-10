@@ -10,7 +10,7 @@ import torch
 torch.set_num_threads(1)
 import ranker_commander_train as train
 from ranker_commander_model import CommanderPolicy, VECTOR_SIZE
-from ranker_commander_rollout import Episode, RECORD_DTYPE, HEAD_OFFSETS, WIN
+from ranker_commander_rollout import Episode, RECORD_DTYPE, HEAD_OFFSETS, HEAD_SIZES, WIN
 
 
 def episode(seed, count=3):
@@ -94,6 +94,80 @@ class EpisodeWeightingTests(unittest.TestCase):
                 train.build_batch(episodes, train.TrainConfig(mode='bc'), bc_episode_weights=weights)
         with self.assertRaises(ValueError):
             train.build_batch(episodes, train.TrainConfig(mode='ppo'), bc_episode_weights=[1, 1])
+
+
+class HeadSpecificWeightingTests(unittest.TestCase):
+    def make_inputs(self, count=3):
+        logps = torch.tensor([[-.2 - .1 * row - .05 * head for head in range(8)]
+                             for row in range(count)], requires_grad=True)
+        actions = torch.zeros(count, 8, dtype=torch.long)
+        masks = torch.zeros(count, sum(HEAD_SIZES), dtype=torch.bool)
+        for offset in HEAD_OFFSETS:
+            masks[:, offset:offset + 2] = True
+        return logps, actions, masks
+
+    def gradient(self, logps, actions, masks, **kwargs):
+        loss = train.head_specific_bc_loss(logps, actions, masks, **kwargs)
+        return torch.autograd.grad(loss, logps)[0]
+
+    def test_rare_macro_and_class_weight_do_not_change_other_head_gradients(self):
+        logps, actions, masks = self.make_inputs()
+        original = self.gradient(logps, actions, masks, rare_weight=4)
+        actions[0, 0] = 1
+        classes = torch.ones(HEAD_SIZES[0]); classes[1] = 20
+        boosted = self.gradient(logps, actions, masks, rare_weight=4, class_weights=classes)
+        self.assertFalse(torch.equal(original[:, 0], boosted[:, 0]))
+        torch.testing.assert_close(original[:, 1:], boosted[:, 1:], rtol=0, atol=0)
+        self.assertAlmostEqual(float(boosted[0, 0]), -100 / 102, places=6)
+
+    def test_squad_order_does_not_boost_macro_noop_or_target_heads(self):
+        logps, actions, masks = self.make_inputs()
+        original = self.gradient(logps, actions, masks, rare_weight=4)
+        actions[0, 2] = 1
+        boosted = self.gradient(logps, actions, masks, rare_weight=4)
+        unchanged = [0, 1, 3, 4, 5, 6, 7]
+        torch.testing.assert_close(original[:, unchanged], boosted[:, unchanged], rtol=0, atol=0)
+        torch.testing.assert_close(boosted[:, 2], torch.tensor([-5 / 7, -1 / 7, -1 / 7]))
+
+    def test_forced_states_do_not_dilute_conditional_heads(self):
+        logps, actions, masks = self.make_inputs()
+        # Only one state has a real target decision. Two forced target states
+        # must not turn this target's training signal into one third its value.
+        offset = HEAD_OFFSETS[4]
+        masks[1:, offset + 1:offset + HEAD_SIZES[4]] = False
+        grad = self.gradient(logps, actions, masks)
+        torch.testing.assert_close(grad[:, 4], torch.tensor([-1., 0., 0.]))
+        torch.testing.assert_close(grad[:, 0], torch.full((3,), -1 / 3))
+
+    def test_episode_weights_are_retained_in_every_nonforced_head(self):
+        logps, actions, masks = self.make_inputs()
+        grad = self.gradient(logps, actions, masks, episode_weights=torch.tensor([1., .15, .5]))
+        expected = -torch.tensor([1., .15, .5]) / 1.65
+        for head in range(8):
+            torch.testing.assert_close(grad[:, head], expected)
+
+    def test_all_forced_minibatch_is_finite_zero_loss_and_gradient(self):
+        logps, actions, masks = self.make_inputs()
+        for head, offset in enumerate(HEAD_OFFSETS):
+            masks[:, offset + 1:offset + HEAD_SIZES[head]] = False
+        loss = train.head_specific_bc_loss(logps, actions, masks,
+            episode_weights=torch.tensor([.15, .15, .15]), rare_weight=4)
+        self.assertEqual(float(loss.detach()), 0)
+        torch.testing.assert_close(torch.autograd.grad(loss, logps)[0], torch.zeros_like(logps))
+
+    def test_train_update_uses_the_opt_in_objective(self):
+        episodes = [episode(2, 1), episode(3, 1)]
+        config = train.TrainConfig(mode='bc', epochs=1, minibatch=2,
+                                   bc_head_specific_weights=True, bc_rare_weight=4)
+        batch, _ = train.build_batch(episodes, config, bc_episode_weights=[.15, .5])
+        torch.manual_seed(17)
+        policy = CommanderPolicy()
+        sample = batch.select(torch.tensor([0, 1]))
+        output = policy.evaluate(sample['vector'], sample['maps'], sample['actions'],
+                                 sample['masks'], sample['privileged'])
+        expected = -(output['logp'][:, 0] * torch.tensor([.15, 2.5])).sum() / 2.65
+        _, metrics = train.train_update(policy, batch, config)
+        self.assertAlmostEqual(metrics['actor_loss'], float(expected.detach()), places=6)
 
 
 if __name__ == '__main__':

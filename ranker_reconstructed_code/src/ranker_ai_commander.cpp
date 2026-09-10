@@ -1,4 +1,7 @@
 #include "ranker_ai_commander.h"
+#include "ranker_ai_commander_elf_strategy.inc"
+#include "ranker_ai_commander_races.h"
+#include "ranker_ai_skill_catalog.h"
 
 #include <algorithm>
 #include <cmath>
@@ -10,15 +13,62 @@
 
 namespace ranker {
 namespace {
-constexpr std::array<u32, 11> train_types{{0x20,0x21,0x22,0x24,0x25,0x27,0x28,0x29,0x2a,0x2c,0x2e}};
-constexpr std::array<u32, 10> build_types{{0x80,0x82,0x83,0x84,0x85,0x86,0x87,0x88,0x89,0x8a}};
-constexpr std::array<u32, 13> research_orders{{0x14,0x16,0x18,0x19,0x1a,0x1b,0x1c,0x1d,0x1e,0x2a,0x2b,0x2d,0x38}};
+const std::array<CommanderRaceAction, 64>& race_actions(const CommanderServices& services) {
+    return kCommanderRaceActions[std::min(services.own_tribe, 3u)];
+}
+u32 hq(const CommanderView& v) { return 0x60 + 16 * std::min(v.services.own_tribe,3u); }
+u32 count_index(u32 type) {
+    return type>=0x60?16+(type&15):type>=0x50?32+(type&15):(type&15);
+}
+u32 role_type(const CommanderView& v,u32 tyrano_type) {
+    if(v.services.own_tribe==2)return tyrano_type;
+    for(u32 i=1;i<22;++i)if(kCommanderRaceActions[2][i].type==tyrano_type)
+        return race_actions(v.services)[i].type;
+    return 0xffffffffu;
+}
+bool teacher_race_roles(const CommanderView& v) {
+    return (v.services.teacher_variant&kCommanderTeacherRaceRoles)!=0;
+}
+u32 teacher_macro(const CommanderView& v,u32 macro) {
+    // Teacher roles are independent of the immutable policy action indices.
+    // Original Jw2_09.trc: RedElf is ranged, BlueElf is melee, Unicorn has
+    // zero offense. ManaSpread's range is 400, but its primary profile mask
+    // 0x8 permits only air (class3), as original 0x004c209c verifies. DeathEye
+    // and Phantom have no normal attack; Darkbat/Gargoyle are combat air.
+    // Byte proof: debug_artifacts/commander/elf_reaudit_20260909/
+    // elf_original_attack_profile_audit.json (original ranker.exe,122 bytes).
+    if(!teacher_race_roles(v))return macro;
+    if(v.services.own_tribe==1) {
+        switch(macro) {
+        case 5:return 7; case 9:return 43;
+        case 16:return 19; case 17:return 18;
+        case 18:return 17; case 19:return 45; case 20:return 20;
+        default:break;
+        }
+    } else if(v.services.own_tribe==3) {
+        switch(macro) {
+        case 3:return 2; case 4:return 42; case 5:return 8; case 6:return 9;
+        default:break;
+        }
+    }
+    return macro;
+}
+u32 teacher_role_type(const CommanderView& v,u32 tyrano_type) {
+    if(v.services.own_tribe==2)return tyrano_type;
+    for(u32 i=1;i<22;++i)if(kCommanderRaceActions[2][i].type==tyrano_type)
+        return race_actions(v.services)[teacher_macro(v,i)].type;
+    return 0xffffffffu;
+}
+u32 building_limit(const CommanderView& v,u32 type) {
+    for(const auto& a:race_actions(v.services))if(a.kind==2&&a.type==type)return a.maximum;
+    return 0;
+}
 constexpr u32 never = 0xffffffffu;
 float norm(float value, float scale) { return std::clamp(value / scale, 0.0f, 1.0f); }
 float log_resource(u32 value) { return std::clamp(std::log1p(float(value))/std::log1p(20000.0f),0.0f,1.0f); }
 bool building(const AiObservedUnit& u) { return u.type_id >= 0x60 && u.type_id < 0xa0; }
 bool worker(const AiObservedUnit& u) { return u.type_id < 0x40 && (u.type_id & 15) == 0; }
-bool combat(const AiObservedUnit& u) { return u.type_id < 0x40 && !worker(u) && (u.type_flags & 0x20) != 0; }
+bool combat(const AiObservedUnit& u) { return u.type_id < 0x60 && u.owner_id < 8 && !worker(u) && (u.type_flags & 0x20) != 0; }
 bool hostile(const AiObservation& o, const AiObservedUnit& u) {
     return u.owner_id < 8 && u.owner_id != o.local_owner &&
         (o.local_relation_mask & (1u << u.owner_id)) == 0;
@@ -41,18 +91,20 @@ const AiObservedUnit* find_unit(const std::vector<AiObservedUnit>& units,u32 id)
     auto i=std::lower_bound(units.begin(),units.end(),id,[](const AiObservedUnit& u,u32 v){return u.id<v;});
     return i!=units.end()&&i->id==id?&*i:nullptr;
 }
-u32 type_index(const AiObservedUnit& u) { return (building(u)?16u:0u)+(u.type_id&15); }
+u32 type_index(const AiObservedUnit& u) { return count_index(u.type_id); }
 bool busy(const AiObservedUnit& u) {
     // command_lockout_ticks is weapon recovery, when movement/kiting is
     // allowed. command_entry_lockout_ticks is the actual entry lock.
     const u32 state=u.command_state&0x00ffffffu;
     return u.command_entry_lockout_ticks||(u.command_state&0x50000000u)||
-        u.type_flags==0x08002011u||state==0x24||state==0x45||state==0x5b||state==0x7e||
-        (state>=0x5f&&state<=0x61)||state==0x6e||state==0x6f;
+        u.type_flags==0x08002011u||state==0x24||state==0x45||
+        (state>=0x5a&&state<=0x5c)||(state>=0x7d&&state<=0x7f)||
+        (state>=0x5f&&state<=0x61)||(state>=0x64&&state<=0x6a)||state==0x6e||state==0x6f;
 }
 bool researching(const AiObservedUnit& u) {return (u.command_state&0xff)==0x4d||(u.command_state&0xff)==0x4e;}
 u32 order_count(const AiObservedUnit& u,AiSemanticActionKind kind,u32 type) {
-    u32 count=kind==AiSemanticActionKind::research?(researching(u)&&u.command_value==type):(u.queued_production_type_id==type);
+    u32 count=kind==AiSemanticActionKind::research?(researching(u)&&u.command_value==type):
+        (u.queued_production_type_id==type&&(type!=0||(u.command_state&0xff)==0x51));
     const u32 state=kind==AiSemanticActionKind::research?0x17:0x10;
     for(const auto& q:u.deferred_commands)if((q.state&0xff)==state&&u32(q.command_value_or_target)==type)++count;
     return count;
@@ -60,6 +112,10 @@ u32 order_count(const AiObservedUnit& u,AiSemanticActionKind kind,u32 type) {
 CommanderProductionInfo info(const CommanderServices& s,AiProductionRequestKind kind,u32 type) {
     if(s.production_info) return s.production_info(kind,type);
     CommanderProductionInfo r;
+    if(s.own_tribe!=2&&kind!=AiProductionRequestKind::research&&type<kCommanderRaceDefinitions.size()) {
+        const auto& d=kCommanderRaceDefinitions[type];
+        return {d.cost,d.population,std::max(1u,d.width),std::max(1u,d.height)};
+    }
     if(kind==AiProductionRequestKind::unit) {
         constexpr u32 costs[16]={100,100,250,500,250,300,600,450,800,400,600,1500,5000,900,600,0};
         constexpr u32 pops[16]={1,1,1,2,2,1,2,2,4,2,4,8,25,4,3,0};
@@ -76,7 +132,7 @@ void diagnose(const CommanderServices& services,const char* event,u32 frame,
     if(!services.diagnostic)return;
     std::ostringstream line;
     line<<"ai-commander: "<<event<<" frame="<<frame<<" source="<<(source?source->id:0)
-        <<" kind="<<u32(action.kind)<<" production="<<action.production_id
+        <<" kind="<<u32(action.kind)<<" production="<<action.production_id<<" ability="<<action.ability_id<<" target="<<action.target_unit_id
         <<" site="<<action.target_x<<','<<action.target_y<<" resources="<<resources;
     if(source)line<<" state="<<source->command_state<<" flags="<<source->command_flags
         <<" xy="<<source->x<<','<<source->y<<" command="<<source->command_value
@@ -90,7 +146,7 @@ AiSemanticAction order(AiSemanticActionKind kind,u32 id,CommanderPoint p={}) {
 }
 bool same_order(const AiSemanticAction& a,const AiSemanticAction& b) {
     return a.kind==b.kind&&a.target_unit_id==b.target_unit_id&&a.target_x==b.target_x&&a.target_y==b.target_y&&
-        a.production_id==b.production_id&&a.stance_id==b.stance_id&&a.stance_on==b.stance_on&&a.queued==b.queued;
+        a.production_id==b.production_id&&a.ability_id==b.ability_id&&a.stance_id==b.stance_id&&a.stance_on==b.stance_on&&a.queued==b.queued;
 }
 CommanderPoint clamp_point(const AiObservation& o,CommanderPoint p) {
     p.x=std::clamp(p.x,0,std::max(0,i32(o.map_width_tiles)*32-1));
@@ -175,6 +231,7 @@ std::vector<CommanderPoint> path(const AiObservation& o,CommanderPoint from,Comm
 }
 bool completed(const CommanderView& v,u32 type) { return v.own_counts[16+(type&15)]!=0; }
 bool build_prerequisite(const CommanderView& v,u32 type) {
+    if(v.services.own_tribe!=2)return !v.services.building_prerequisite||v.services.building_prerequisite(type);
     switch(type) {
     case 0x80:case 0x82:return true;
     case 0x84:return completed(v,0x80);
@@ -194,17 +251,21 @@ bool construction_worker(const CommanderState& s,u32 id) {
 bool matching_identity(const CommanderState& s,u32 id,u32 generation) {
     const auto found=s.units.find(id);return found!=s.units.end()&&found->second.generation==generation;
 }
-u32 queued_population(const AiObservation& o,const CommanderServices& s,std::array<u32,32>& pending) {
+u32 queued_population(const AiObservation& o,const CommanderServices& s,std::array<u32,48>& pending) {
     u32 result=0;
     for(const auto& u:o.units)if(u.controlled&&u.alive) {
         if(u.under_construction&&building(u))++pending[type_index(u)];
         if(!building(u))continue;
-        if(u.queued_production_type_id>0&&u.queued_production_type_id<0x40)++pending[u.queued_production_type_id&15];
+        // Primitive workers have type 0, which is also the empty queue value.
+        // Production command state disambiguates that active order.
+        if(u.queued_production_type_id<0x60&&(u.queued_production_type_id>0||
+            (s.own_tribe==0&&(u.command_state&0xff)==0x51)))
+            ++pending[count_index(u.queued_production_type_id)];
         for(const auto& q:u.deferred_commands) {
             // Building production queues encode the type in command_value.
             const u32 t=u32(q.command_value_or_target);
-            if((q.state&0xff)!=0x10||t>=0x40)continue;
-            result+=info(s,AiProductionRequestKind::unit,t).population;++pending[t&15];
+            if((q.state&0xff)!=0x10||t>=0x60)continue;
+            result+=info(s,AiProductionRequestKind::unit,t).population;++pending[count_index(t)];
         }
     }
     return result;
@@ -252,20 +313,24 @@ std::vector<AiSemanticAction> build_plan(const CommanderState& s,const AiObserva
     const auto cost=info(v.services,AiProductionRequestKind::building,type).cost;
     const u32 reserved=v.reserved_resources-(replacing?std::min(v.reserved_resources,replacing->cost):0u);
     if(u64(cost)+reserved>o.primary_resources)return {};
-    const u32 index=16+(type&15),limit=type==0x80||type==0x84?3:type==0x83?6:type==0x82?24:1;
+    const u32 index=16+(type&15),limit=building_limit(v,type);
     const u32 pending=v.pending_counts[index]-(replacing&&v.pending_counts[index]?1u:0u);
-    if(v.own_counts[index]+pending>=limit||pending>=(type==0x82?2u:1u))return {};
-    if(type==0x82&&o.population_used>=180)return {};
+    if(v.own_counts[index]+pending>=limit||pending>=(type==hq(v)+2?2u:1u))return {};
+    if(type==hq(v)+2&&o.population_used>=180)return {};
     const u32 retry_worker=replacing&&!replacing->order.unit_ids.empty()?replacing->order.unit_ids[0]:0;
     std::vector<const AiObservedUnit*> workers;
     for(const auto& u:v.own)if(worker(u)&&!busy(u)&&(!construction_worker(s,u.id)||u.id==retry_worker)&&u.id!=s.scout_id)workers.push_back(&u);
     if(workers.empty())return {};
     const auto footprint=AiBuildingFootprintOf(type);
+    // Replanned and retry sites obey the same HQ clearance as the expansion
+    // planner. Its default base type is Tyrano, so pass our actual race here.
+    AiExpansionConfig placement_config;
+    placement_config.base_type_id=hq(v);
     // Candidate ordering is deterministic Chebyshev spiral, then y/x.
     for(i32 r=0;r<=radius;++r)for(i32 y=-r;y<=r;++y)for(i32 x=-r;x<=r;++x) {
         if(std::max(std::abs(x),std::abs(y))!=r)continue;
         const i32 tx=center.x/32+x,ty=center.y/32+y;bool blocked=false,ring=false;
-        if(!AiBuildSiteCandidateOk(o,occupancy,type,tx,ty,true,&blocked,{},&ring)||blocked||!ring)continue;
+        if(!AiBuildSiteCandidateOk(o,occupancy,type,tx,ty,true,&blocked,placement_config,&ring)||blocked||!ring)continue;
         bool overlap=false;
         for(const auto& b:s.builds) {
             if(&b==replacing)continue;
@@ -280,7 +345,7 @@ std::vector<AiSemanticAction> build_plan(const CommanderState& s,const AiObserva
         }
         // The required fully open one-tile ring already connects every
         // boundary cell. Only HQ placement needs the additional berry path.
-        if(berry_close||(type==0x80&&!AiBuildSiteKeepsLocalPaths(o,occupancy,type,tx,ty,true)))continue;
+        if(berry_close||(type==hq(v)&&!AiBuildSiteKeepsLocalPaths(o,occupancy,type,tx,ty,true)))continue;
         const CommanderPoint site{tx*32,ty*32,true};
         std::sort(workers.begin(),workers.end(),[site,retry_worker](auto a,auto b){return std::make_tuple(a->id==retry_worker,distance2(point(*a),site),a->id)<std::make_tuple(b->id==retry_worker,distance2(point(*b),site),b->id);});
         for(const auto* w:workers) {
@@ -298,7 +363,7 @@ bool intent_anchor(const CommanderView& v,u32 intent,u32 a) {
     case CommanderIntent::hold:case CommanderIntent::retreat:return a<=3;
     case CommanderIntent::defend:return a==10;
     case CommanderIntent::hunt:return a==11;
-    case CommanderIntent::scout:return a==12||a==4||a==9||a==13;
+    case CommanderIntent::scout:return a==12||a==4||a==9||a==13||(v.services.own_tribe==1&&a==3);
     case CommanderIntent::harass:return a==8||a==9;
     case CommanderIntent::siege:return a==4||a==6||a==9;
     case CommanderIntent::attack_move:return a!=11;
@@ -343,7 +408,7 @@ std::array<CommanderSquadView,3> projected_squads(const CommanderView& v,u32 mac
 }
 void fill_masks(CommanderView& v) {
     v.mask.fill(0);v.mask[0]=1;
-    for(std::size_t i=1;i<42;++i)v.mask[i]=!v.macro_plans[i].empty();
+    for(std::size_t i=1;i<kCommanderMacroCount;++i)v.mask[i]=!v.macro_plans[i].empty();
     // Transfers are registry operations without engine packets.
     if(v.services.coordinated_transfers) {
         for(u32 macro=38;macro<42;++macro)v.mask[macro]=!v.transfer_members[macro-38].empty();
@@ -351,12 +416,12 @@ void fill_masks(CommanderView& v) {
         v.mask[38]=!v.squads[0].members.empty();v.mask[39]=!v.squads[1].members.empty();
         v.mask[40]=!v.squads[0].members.empty();v.mask[41]=!v.squads[2].members.empty();
     }
-    for(u32 i=0;i<16;++i)v.mask[42+i]=v.anchors[i].valid;
-    v.mask[58]=1;for(u32 i=0;i<3;++i)v.mask[59+i]=!v.squads[i].members.empty();
-    for(u32 i=0;i<8;++i)for(u32 a=0;a<16;++a)if(intent_anchor(v,i,a))v.mask[62+i]=1;
-    for(u32 a=0;a<16;++a)v.mask[70+a]=v.anchors[a].valid;
-    for(u32 i=86;i<95;++i)v.mask[i]=1;
-    if(!v.near_enemies)v.mask[90]=v.mask[91]=0;
+    for(u32 i=0;i<16;++i)v.mask[kCommanderHeadOffsets[1]+i]=v.anchors[i].valid;
+    v.mask[kCommanderHeadOffsets[2]]=1;for(u32 i=0;i<3;++i)v.mask[kCommanderHeadOffsets[2]+1+i]=!v.squads[i].members.empty();
+    for(u32 i=0;i<8;++i)for(u32 a=0;a<16;++a)if(intent_anchor(v,i,a))v.mask[kCommanderHeadOffsets[3]+i]=1;
+    for(u32 a=0;a<16;++a)v.mask[kCommanderHeadOffsets[4]+a]=v.anchors[a].valid;
+    for(u32 i=kCommanderHeadOffsets[5];i<kCommanderLogitCount;++i)v.mask[i]=1;
+    if(!v.near_enemies)v.mask[kCommanderHeadOffsets[6]+1]=v.mask[kCommanderHeadOffsets[6]+2]=0;
 }
 
 // Unlike the legacy actor's bounded norm, the appended measurements preserve
@@ -377,7 +442,7 @@ void append_commander_observation(const CommanderState& s,const AiObservation& o
     // bits. Expose our own current harvest assignments instead. Eligible base
     // tiles match the executor's explored, nonempty +/-15-tile HQ windows.
     std::set<std::size_t> berry_tiles;
-    for(const auto& base:v.own)if(base.type_id==0x80&&!base.under_construction) {
+    for(const auto& base:v.own)if(base.type_id==hq(v)&&!base.under_construction) {
         for(i32 y=base.y/32-15;y<=base.y/32+15;++y)for(i32 x=base.x/32-15;x<=base.x/32+15;++x) {
             const auto t=tile_index(o,{x*32,y*32,true});
             if(t<o.tiles.size()&&o.tiles[t].explored&&o.tiles[t].resource_amount)berry_tiles.insert(t);
@@ -448,6 +513,7 @@ void append_commander_observation(const CommanderState& s,const AiObservation& o
     }
 }
 
+#include "ranker_ai_commander_skills.inc"
 } // namespace
 
 CommanderView BuildCommanderView(CommanderState& s,const AiObservation& o,const CommanderServices& services) {
@@ -462,9 +528,11 @@ CommanderView BuildCommanderView(CommanderState& s,const AiObservation& o,const 
         if(u.controlled)v.own.push_back(u);
         else if(hostile(o,u))v.visible_enemies.push_back(u);
         else if(u.owner_id==8)v.visible_neutrals.push_back(u);
+        else v.visible_allies.push_back(u);
     }
     auto sort_ids=[](auto& units){std::sort(units.begin(),units.end(),[](const auto& a,const auto& b){return a.id<b.id;});};
     sort_ids(v.own);sort_ids(v.visible_enemies);sort_ids(v.visible_neutrals);
+    sort_ids(v.visible_allies);
     for(auto& g:s.ghosts)g.second.visible_now=false;
     auto see=[&](const AiObservedUnit& u) {
         auto previous=s.ghosts.find(u.id);
@@ -562,7 +630,7 @@ CommanderView BuildCommanderView(CommanderState& s,const AiObservation& o,const 
         v.reserved_resources+=it->cost;++v.pending_counts[16+(it->order.production_id&15)];++it;
     }
     std::vector<const AiObservedUnit*> bases;
-    for(const auto& u:v.own)if(u.type_id==0x80&&!u.under_construction)bases.push_back(&u);
+    for(const auto& u:v.own)if(u.type_id==hq(v)&&!u.under_construction)bases.push_back(&u);
     v.anchors[0]=bases.empty()?CommanderPoint{o.start_x,o.start_y,true}:point(*bases.front());
     std::array<u32,2> berry_amount{};std::set<std::size_t> base_tiles;
     for(std::size_t b=0;b<bases.size();++b) {
@@ -579,7 +647,12 @@ CommanderView BuildCommanderView(CommanderState& s,const AiObservation& o,const 
         // expensive footprint/connectivity search once, without dynamic
         // occupants. Exact live occupancy is checked when planning a build.
         AiObservation terrain=o;terrain.units.clear();
-        s.expansion=ComputeAiExpansionPlan(terrain);
+        AiExpansionConfig expansion_config;
+        expansion_config.base_type_id=hq(v);
+        const auto footprint=AiBuildingFootprintOf(hq(v));
+        expansion_config.footprint_width_tiles=footprint.width;
+        expansion_config.footprint_height_tiles=footprint.height;
+        s.expansion=ComputeAiExpansionPlan(terrain,expansion_config);
         std::vector<u8> seen(o.tiles.size(),0);
         for(u32 seed=0;seed<o.tiles.size();++seed)if(!seen[seed]&&o.tiles[seed].resource_amount) {
             s.expansion_members.push_back({seed});seen[seed]=1;
@@ -601,10 +674,10 @@ CommanderView BuildCommanderView(CommanderState& s,const AiObservation& o,const 
     s.expansion.has_target=false;s.expansion.nest_count=0;s.expansion.nest_walkers=0;
     std::vector<CommanderPoint> developed;
     for(const auto& u:v.own) {
-        if(u.type_id==0x80){developed.push_back(point(u));++s.expansion.nest_count;}
-        else if(AiWalkingBuildTypeOf(u)==0x80){developed.push_back({u.path_target_x,u.path_target_y,true});++s.expansion.nest_count;++s.expansion.nest_walkers;}
+        if(u.type_id==hq(v)){developed.push_back(point(u));++s.expansion.nest_count;}
+        else if(AiWalkingBuildTypeOf(u)==hq(v)){developed.push_back({u.path_target_x,u.path_target_y,true});++s.expansion.nest_count;++s.expansion.nest_walkers;}
     }
-    for(const auto& b:s.builds)if(b.order.production_id==0x80)developed.push_back({b.order.target_x,b.order.target_y,true});
+    for(const auto& b:s.builds)if(b.order.production_id==hq(v))developed.push_back({b.order.target_x,b.order.target_y,true});
     for(std::size_t i=0;i<s.expansion.clusters.size();++i) {
         auto& c=s.expansion.clusters[i];c.known_amount=0;c.tile_count=0;
         if(i<s.expansion_members.size())for(u32 t:s.expansion_members[i]) {
@@ -613,7 +686,7 @@ CommanderView BuildCommanderView(CommanderState& s,const AiObservation& o,const 
         const CommanderPoint site{c.site_x,c.site_y,c.site_x>=0};
         c.site_explored=site.valid&&explored_tile(o,site);c.developed=false;c.site_blocked=false;
         for(const auto p:developed)if(near(p,site,512)){c.developed=true;break;}
-        const auto footprint=AiBuildingFootprintOf(0x80);
+        const auto footprint=AiBuildingFootprintOf(hq(v));
         auto blocks=[&](const AiObservedUnit& u) {
             return u.x/32>=c.site_x/32&&u.x/32<c.site_x/32+i32(footprint.width)&&
                 u.y/32>=c.site_y/32&&u.y/32<c.site_y/32+i32(footprint.height);
@@ -634,12 +707,12 @@ CommanderView BuildCommanderView(CommanderState& s,const AiObservation& o,const 
     // A funded HQ reserves its berry cluster, removing it from the next-build
     // candidates above. Its escort must still hold the actual construction
     // site, not the newly selected (possibly distant) next expansion.
-    for(const auto& u:v.own)if(u.type_id==0x80&&u.under_construction){v.anchors[3]=point(u);break;}
-    if(!v.anchors[3].valid)for(const auto& b:s.builds)if(b.order.production_id==0x80){
+    for(const auto& u:v.own)if(u.type_id==hq(v)&&u.under_construction){v.anchors[3]=point(u);break;}
+    if(!v.anchors[3].valid)for(const auto& b:s.builds)if(b.order.production_id==hq(v)){
         v.anchors[3]={b.order.target_x,b.order.target_y,true};break;
     }
-    if(!v.anchors[3].valid)for(const auto& u:v.own)if(AiWalkingBuildTypeOf(u)==0x80){
-        const auto bounds=AiBuildingInteractionOf(0x80);
+    if(!v.anchors[3].valid)for(const auto& u:v.own)if(AiWalkingBuildTypeOf(u)==hq(v)){
+        const auto bounds=AiBuildingInteractionOf(hq(v));
         v.anchors[3]={(u.path_target_x-i32(bounds.width/2))&~31,
                       (u.path_target_y-i32(bounds.height/2))&~31,true};break;
     }
@@ -771,17 +844,18 @@ CommanderView BuildCommanderView(CommanderState& s,const AiObservation& o,const 
 
     // Macro plans share authoritative semantic validation with execution.
     const u32 available=o.primary_resources>v.reserved_resources?o.primary_resources-v.reserved_resources:0;
-    for(u32 i=0;i<train_types.size();++i) {
-        const u32 t=train_types[i];const auto cost=info(services,AiProductionRequestKind::unit,t);
+    const auto& catalog=race_actions(services);
+    for(u32 macro=1;macro<catalog.size();++macro) {
+        const auto& spec=catalog[macro];if(spec.kind!=1)continue;
+        const u32 t=spec.type;const auto cost=info(services,AiProductionRequestKind::unit,t);
         if(cost.cost>available||o.population_reserved+v.queued_population+cost.population>std::min(180u,o.population_used))continue;
-        if(t==0x20&&v.workers+v.pending_counts[0]>=v.worker_cap)continue;
-        if(t==0x2c&&(v.own_counts[12]||v.pending_counts[12]))continue;
-        if(services.curriculum_stage<3&&(t==0x29||t==0x2c))continue;
-        const u32 producer=t==0x20||t==0x2c?0x80:t==0x29||t==0x2a?0x87:0x84;
+        if(macro==1&&v.workers+v.pending_counts[0]>=v.worker_cap)continue;
+        if(spec.maximum&&v.own_counts[count_index(t)]+v.pending_counts[count_index(t)]>=spec.maximum)continue;
+        if(services.own_tribe==2&&services.curriculum_stage<3&&(t==0x29||t==0x2c))continue;
         std::vector<const AiObservedUnit*> producers;
-        for(const auto& u:v.own)if(u.type_id==producer&&!u.under_construction&&u.deferred_command_count<4)producers.push_back(&u);
+        for(const auto& u:v.own)if(u.type_id==spec.producer&&!u.under_construction&&u.deferred_command_count<4)producers.push_back(&u);
         std::sort(producers.begin(),producers.end(),[](auto a,auto b){return std::make_tuple(a->deferred_command_count,a->queued_production_type_id!=0,a->id)<std::make_tuple(b->deferred_command_count,b->queued_production_type_id!=0,b->id);});
-        for(const auto* u:producers) {auto a=order(AiSemanticActionKind::produce_unit,u->id);a.production_id=t;if(valid(services,a)){v.macro_plans[1+i]={a};break;}}
+        for(const auto* u:producers) {auto a=order(AiSemanticActionKind::produce_unit,u->id);a.production_id=t;if(valid(services,a)){v.macro_plans[macro]={a};break;}}
     }
     AiObservation placement_observation=o;
     placement_observation.units=v.own;
@@ -816,7 +890,8 @@ CommanderView BuildCommanderView(CommanderState& s,const AiObservation& o,const 
         // every cached worker/site still usable. Otherwise search again now
         // rather than lose the action until the next decision frame.
         if(available_workers!=s.plan_cache_workers)full_plan_search=true;
-        for(u32 type:build_types) {
+        for(const auto& spec:catalog) {
+            if(spec.kind!=2)continue;const u32 type=spec.type;
             const u32 cost=info(services,AiProductionRequestKind::building,type).cost;
             if(s.plan_cache_available<cost&&available>=cost)full_plan_search=true;
         }
@@ -824,32 +899,33 @@ CommanderView BuildCommanderView(CommanderState& s,const AiObservation& o,const 
         for(const auto& p:s.cached_tower_plans)if(!p.empty()&&revalidate(p).empty())full_plan_search=true;
         for(const auto& p:s.cached_build_plans)if(!p.empty()&&revalidate(p).empty())full_plan_search=true;
     }
-    for(u32 i=0;i<build_types.size();++i) {
-        const u32 type=build_types[i];if(services.curriculum_stage<3&&type==0x8a)continue;
+    for(u32 macro=1;macro<catalog.size();++macro) {
+        const auto& spec=catalog[macro];if(spec.kind!=2)continue;
+        const u32 type=spec.type;if(services.own_tribe==2&&services.curriculum_stage<3&&type==0x8a)continue;
         if(info(services,AiProductionRequestKind::building,type).cost>available||!build_prerequisite(v,type))continue;
-        const u32 bi=16+(type&15),limit=type==0x80||type==0x84?3:type==0x83?6:type==0x82?24:1;
-        if(v.own_counts[bi]+v.pending_counts[bi]>=limit||v.pending_counts[bi]>=(type==0x82?2u:1u))continue;
+        const u32 bi=16+(type&15),limit=building_limit(v,type);
+        if(v.own_counts[bi]+v.pending_counts[bi]>=limit||v.pending_counts[bi]>=(type==hq(v)+2?2u:1u))continue;
         if(!full_plan_search) {
-            if(type==0x80||type==0x83) {
-                auto& plans=type==0x80?v.hq_build_plans:v.tower_build_plans;
-                const auto& cached=type==0x80?s.cached_hq_plans:s.cached_tower_plans;
+            if(type==hq(v)||type==hq(v)+3) {
+                auto& plans=type==hq(v)?v.hq_build_plans:v.tower_build_plans;
+                const auto& cached=type==hq(v)?s.cached_hq_plans:s.cached_tower_plans;
                 for(u32 a=0;a<16;++a)plans[a]=revalidate(cached[a]);
-                const u32 preferred=type==0x80?3:1;
-                if(!plans[preferred].empty())v.macro_plans[12+i]=plans[preferred];
-                else for(const auto& p:plans)if(!p.empty()){v.macro_plans[12+i]=p;break;}
-            } else v.macro_plans[12+i]=revalidate(s.cached_build_plans[i]);
+                const u32 preferred=type==hq(v)?3:1;
+                if(!plans[preferred].empty())v.macro_plans[macro]=plans[preferred];
+                else for(const auto& p:plans)if(!p.empty()){v.macro_plans[macro]=p;break;}
+            } else v.macro_plans[macro]=revalidate(s.cached_build_plans[macro]);
             continue;
         }
-        if(type==0x80||type==0x83) {
-            auto& plans=type==0x80?v.hq_build_plans:v.tower_build_plans;
+        if(type==hq(v)||type==hq(v)+3) {
+            auto& plans=type==hq(v)?v.hq_build_plans:v.tower_build_plans;
             for(u32 a=0;a<16;++a) {
                 // Placement anchors: towers only at our own places, the threat
                 // point and the contested cluster; expansions only at the
                 // expansion/contested cluster anchors. Searching every anchor
                 // (enemy territory, unexplored starts) was the main view cost.
-                if(type==0x83&&!(a<=3||a==10||a==13))continue;
-                if(type==0x80&&!(a==3||a==13))continue;
-                if(type==0x80) {
+                if(type==hq(v)+3&&!(a<=3||a==10||a==13))continue;
+                if(type==hq(v)&&!(a==3||a==13))continue;
+                if(type==hq(v)) {
                     // HQ construction is an expansion, requiring an actual
                     // undeveloped, accessible berry cluster near its anchor.
                     if(!v.anchors[a].valid)continue;
@@ -866,32 +942,34 @@ CommanderView BuildCommanderView(CommanderState& s,const AiObservation& o,const 
                     if(site.valid)plans[a]=build_plan(s,placement_observation,v,type,site,occupancy);
                 } else plans[a]=build_plan(s,placement_observation,v,type,v.anchors[a],occupancy,nullptr,8);
             }
-            const u32 preferred=type==0x80?3:1;
-            if(!plans[preferred].empty())v.macro_plans[12+i]=plans[preferred];
-            else for(const auto& p:plans)if(!p.empty()){v.macro_plans[12+i]=p;break;}
-        } else v.macro_plans[12+i]=build_plan(s,placement_observation,v,type,v.anchors[0],occupancy);
+            const u32 preferred=type==hq(v)?3:1;
+            if(!plans[preferred].empty())v.macro_plans[macro]=plans[preferred];
+            else for(const auto& p:plans)if(!p.empty()){v.macro_plans[macro]=p;break;}
+        } else v.macro_plans[macro]=build_plan(s,placement_observation,v,type,v.anchors[0],occupancy);
     }
     if(full_plan_search) {
         s.cached_hq_plans=v.hq_build_plans;s.cached_tower_plans=v.tower_build_plans;
-        for(u32 i=0;i<build_types.size();++i)s.cached_build_plans[i]=v.macro_plans[12+i];
+        for(u32 macro=1;macro<catalog.size();++macro)if(catalog[macro].kind==2)s.cached_build_plans[macro]=v.macro_plans[macro];
         s.plan_cache_frame=f;s.plan_cache_valid=true;s.plan_cache_workers=available_workers;s.plan_cache_available=available;s.plan_cache_terrain=terrain_key;
     }
-    for(u32 i=0;i<research_orders.size();++i) {
-        const u32 t=research_orders[i],level=o.research_order_levels[t];const bool multi=t==0x19||t==0x1a||t==0x1c||t==0x1d;
-        if(level>=(multi?5u:1u))continue;
-        if(services.curriculum_stage<3&&(t==0x1e||t==0x2a||t==0x2b))continue;
-        if(multi&&level>=2&&!completed(v,t==0x19||t==0x1a?0x89:0x8a))continue;
-        const u32 producer=t==0x14||t==0x2a||t==0x2b||t==0x38?0x80:
-            t==0x19||t==0x1a||t==0x16?0x85:t==0x1c||t==0x1d||t==0x18?0x86:t==0x1b||t==0x2d?0x89:0x8a;
-        const u32 cost=multi?200+200*level:info(services,AiProductionRequestKind::research,t).cost;
+    for(u32 macro=1;macro<catalog.size();++macro) {
+        const auto& spec=catalog[macro];if(spec.kind!=3)continue;
+        const u32 t=spec.type,level=o.research_order_levels[t];
+        const bool multi=spec.maximum>1;
+        if(level>=spec.maximum)continue;
+        if(services.own_tribe==2) {
+            if(services.curriculum_stage<3&&(t==0x1e||t==0x2a||t==0x2b))continue;
+            if(multi&&level>=2&&!completed(v,t==0x19||t==0x1a?0x89:0x8a))continue;
+        }
+        const u32 cost=services.own_tribe==2&&multi?200+200*level:info(services,AiProductionRequestKind::research,t).cost;
         if(cost>available)continue;
         bool in_progress=false;for(const auto& u:v.own)if(building(u)&&order_count(u,AiSemanticActionKind::research,t))in_progress=true;
         if(in_progress)continue;
-        for(const auto& u:v.own)if(u.type_id==producer&&!u.under_construction&&u.deferred_command_count<10) {
-            auto a=order(AiSemanticActionKind::research,u.id);a.production_id=t;if(valid(services,a)){v.macro_plans[22+i]={a};break;}
+        for(const auto& u:v.own)if(u.type_id==spec.producer&&!u.under_construction&&u.deferred_command_count<10) {
+            auto a=order(AiSemanticActionKind::research,u.id);a.production_id=t;if(valid(services,a)){v.macro_plans[macro]={a};break;}
         }
     }
-    if(s.merges.empty()) {
+    if(services.own_tribe==2&&s.merges.empty()) {
         for(u32 squad:{1u,0u,2u}) {
             // Merging stops both parents for 250 frames. Travelling or
             // defending squads must retain their fighting units.
@@ -917,6 +995,12 @@ CommanderView BuildCommanderView(CommanderState& s,const AiObservation& o,const 
         auto a=order(AiSemanticActionKind::cancel_production,it->id);if(valid(services,a)){v.macro_plans[37]={a};break;}
     }
     if(services.coordinated_transfers)plan_transfers(s,v);
+    v.input.vector[606+std::min(services.own_tribe,3u)]=1;
+    for(u32 i=0;i<16;++i) {
+        v.input.vector[610+i]=norm(float(v.own_counts[32+i]),10);
+        v.input.vector[626+i]=norm(float(v.pending_counts[32+i]),4);
+    }
+    plan_commander_skills(s,o,v);
     fill_masks(v);
     bool damage_interrupt=false;
     for(u32 id:damaged_assets) {
@@ -925,7 +1009,7 @@ CommanderView BuildCommanderView(CommanderState& s,const AiObservation& o,const 
             damage_interrupt=true;s.damage_interrupt_frames[id]=f;
         }
     }
-    bool unlocked=false;for(u32 i=1;i<42;++i)if(v.mask[i]&&!s.last_mask[i])unlocked=true;
+    bool unlocked=false;for(u32 i=1;i<kCommanderMacroCount;++i)if(v.mask[i]&&!s.last_mask[i])unlocked=true;
     bool squad_event=s.pending_reflex_event;s.pending_reflex_event=false;
     for(u32 q=0;q<3;++q)if(v.squads[q].center.valid) {
         const bool arrived=near(v.squads[q].center,v.anchors[s.squads[q].anchor],96);
@@ -968,13 +1052,20 @@ CommanderView BuildCommanderView(CommanderState& s,const AiObservation& o,const 
     put(48,norm(float(s.max_enemy_count),8));put(49,std::clamp(std::log2((mem_weight+1)/(v.own_weight+1)),-3.0f,3.0f)/3);put(50,mem_weight>=1.2f*v.own_weight&&mem_weight>0);put(51,norm(float(s.waves_seen),5));put(52,s.last_wave_frame?norm(float(f-s.last_wave_frame),6600):1);
     put(53,s.threat.valid?norm(float(f-s.threat_frame),220):1);put(54,norm(float(s.damage_frames.size()),8));put(55,s.threat.x/4096.0f);put(56,s.threat.y/4096.0f);
     const auto building_count=std::count_if(v.own.begin(),v.own.end(),building);put(57,building_count?base_health/building_count:0);
-    constexpr u32 tech[8]={0x14,0x16,0x1b,0x38,0x19,0x1a,0x1c,0x1d};for(u32 i=0;i<8;++i)put(58+i,float(o.research_order_levels[tech[i]])/(i<4?1:5));if(services.public_enemy_tribe<4)put(66+services.public_enemy_tribe,1);
+    constexpr u32 tech_slots[8]={22,23,27,34,25,26,28,29};
+    for(u32 i=0;i<8;++i){const auto& tech=catalog[tech_slots[i]];put(58+i,float(o.research_order_levels[tech.type])/std::max(1u,tech.maximum));}if(services.public_enemy_tribe<4)put(66+services.public_enemy_tribe,1);
     for(u32 i=0;i<32;++i){put(70+i,norm(float(v.own_counts[i]),i<16?10:4));put(102+i,norm(float(v.pending_counts[i]),4));}
-    for(const auto& g:v.enemies)if(g.seen.type_id<0xa0)z[134+type_index(g.seen)]+=float(std::pow(0.5,double(f-g.last_seen_frame)/3000.0))/10;
+    // This historical enemy histogram has only 32 entries. Special OWN
+    // identities live in the appended inputs; retain the original folded
+    // enemy buckets so they cannot spill into the squad features at 166.
+    for(const auto& g:v.enemies)if(g.seen.type_id<0xa0) {
+        const u32 index=(building(g.seen)?16u:0u)+(g.seen.type_id&15);
+        z[134+index]+=float(std::pow(0.5,double(f-g.last_seen_frame)/3000.0))/10;
+    }
     for(u32 q=0;q<3;++q) {
         const auto& squad=v.squads[q];const auto& ss=s.squads[q];const u32 off=166+q*21;float sumhp=0,minhp=1,spread=0,engage=0;std::array<u32,4> composition{};bool stalled=false;
         for(u32 id:squad.members){const auto& u=*find_unit(v.own,id);sumhp+=hp(u);minhp=std::min(minhp,hp(u));spread+=float(distance2(point(u),squad.center));engage+=(u.command_flags&0x10)!=0;stalled|=f-s.units.at(id).last_progress>=64;
-            ++composition[u.type_id==0x2a||u.type_id==0x2d?3:u.render_class==3?2:u.attack_range_base>96?1:0];}
+            ++composition[u.type_id==role_type(v,0x2a)||u.type_id==0x2d?3:u.render_class==3?2:u.attack_range_base>96?1:0];}
         const float n=float(squad.members.size());put(off,norm(n,20));put(off+1,norm(squad.weight,8000));put(off+2,norm(squad.investment,6000));put(off+3,squad.center.x/4096.0f);put(off+4,squad.center.y/4096.0f);put(off+5,n?norm(std::sqrt(spread/n),256):0);put(off+6,n?sumhp/n:0);put(off+7,n?minhp:0);
         for(u32 i=0;i<4;++i)put(off+8+i,norm(float(composition[i]),10));
         put(off+12,float(ss.intent)/8);put(off+13,float(ss.anchor)/16);put(off+14,float(ss.roe)/2);put(off+15,n?engage/n:0);put(off+16,norm(float(s.decision_count-ss.changed_decision),20));put(off+17,stalled);put(off+18,n?norm(distance(squad.center,v.anchors[0]),4096):0);put(off+19,n&&v.anchors[ss.anchor].valid?norm(distance(squad.center,v.anchors[ss.anchor]),4096):0);put(off+20,ss.automatic_retreat);
@@ -1021,7 +1112,7 @@ CommanderView BuildCommanderView(CommanderState& s,const AiObservation& o,const 
     for(u32 i=0;i<4;++i)if(o.start_candidate_mask&(1u<<i)) {
         CommanderPoint p{o.start_candidate_x[i],o.start_candidate_y[i],true};if(near(p,{o.start_x,o.start_y,true},160))put(509+i,1);if(confirmed_enemy.valid&&near(p,confirmed_enemy,320))put(513+i,1);
     }
-    put(517,norm(float(unexplored),3));for(u32 i=0;i<8;++i)put(518+i,float(s.previous_action[i])/kCommanderHeadSizes[i]);put(526,s.decision_count?norm(float(f-s.last_decision_frame),220):0);put(527,norm(float(s.mask_violations+s.silent_rejections),10));
+    put(517,norm(float(unexplored),3));for(u32 i=0;i<8;++i)put(518+i,float(s.previous_action[i])/(i==0?42:kCommanderHeadSizes[i]));put(526,s.decision_count?norm(float(f-s.last_decision_frame),220):0);put(527,norm(float(s.mask_violations+s.silent_rejections),10));
     // Policy context is pre-decision, just like every other actor feature.
     // Unused transfer clocks begin at frame zero; the explicit flags distinguish
     // an unperformed transfer from an old performed transfer after saturation.
@@ -1084,6 +1175,7 @@ void CommanderLegalHeadMask(const CommanderView& v,const CommanderAction& p,std:
 }
 
 CommanderTeacherParams CommanderTeacherVariant(u32 variant) {
+    variant&=~(kCommanderTeacherRaceRoles|kCommanderTeacherRaceEconomy|kCommanderTeacherElfMatchup);
     CommanderTeacherParams p;if(!variant)return p;
     u32 h=variant*2654435761u+0x9e3779b9u;
     auto next=[&]{h^=h<<13;h^=h>>17;h^=h<<5;return h;};
@@ -1096,16 +1188,32 @@ CommanderTeacherParams CommanderTeacherVariant(u32 variant) {
     return p;
 }
 
+#include "ranker_ai_commander_elf_teacher.inc"
+
 CommanderAction CommanderTeacherAction(const CommanderState& s,const CommanderView& v) {
+    if(v.services.own_tribe==1&&(v.services.teacher_variant&kCommanderTeacherElfMatchup)) {
+        if(v.services.public_enemy_tribe==0||v.services.public_enemy_tribe==3)
+            return ElfMatchupTeacher(s,v);
+    }
     const CommanderTeacherParams P=CommanderTeacherVariant(v.services.teacher_variant);
     // Rule commander (teacher). Same masked head space as the learned policy.
     // Strategy uses only game structure and our own observations: economy
     // clock, chokepoints, matchups, towers, strength ratios from what we saw.
     CommanderAction a{};
     const auto& z=v.input.vector;const u32 f=v.frame;
-    auto choose=[&](std::initializer_list<u32> options){for(u32 x:options)if(v.mask[x]){a[0]=u8(x);return true;}return false;};
-    const auto count=[&](u32 t){return v.own_counts[(t>=0x60?16:0)+(t&15)]+v.pending_counts[(t>=0x60?16:0)+(t&15)];};
-    const auto done=[&](u32 t){return v.own_counts[16+(t&15)];};
+    auto choose=[&](std::initializer_list<u32> options){for(u32 role:options){const u32 x=teacher_macro(v,role);if(v.mask[x]){a[0]=u8(x);return true;}}return false;};
+    auto choose_actual=[&](u32 x){if(v.mask[x]){a[0]=u8(x);return true;}return false;};
+    const auto count_actual=[&](u32 t){return v.own_counts[count_index(t)]+v.pending_counts[count_index(t)];};
+    const auto count=[&](u32 t){t=teacher_role_type(v,t);return t==never?0u:count_actual(t);};
+    const auto done=[&](u32 t){t=teacher_role_type(v,t);return t==never?0u:v.own_counts[count_index(t)];};
+    const auto prepare_producer=[&](u32 role){
+        const auto& catalog=race_actions(v.services);
+        const auto& unit=catalog[teacher_macro(v,role)];
+        if(unit.kind!=1||count_actual(unit.producer))return false;
+        for(u32 i=12;i<catalog.size();++i)
+            if(catalog[i].kind==2&&catalog[i].type==unit.producer)return choose_actual(i);
+        return false;
+    };
     const float res=std::expm1(z[8]*std::log1p(20000.0f));
     const u32 workers=v.workers+v.pending_counts[0],army=v.army_count;
     const float own_w=v.own_weight,mem_w=z[36]*20000,near_w=z[46]*10000,base_w=z[33]*10000;
@@ -1116,7 +1224,7 @@ CommanderAction CommanderTeacherAction(const CommanderState& s,const CommanderVi
     const u32 velocis=count(0x22),dilo=count(0x24),bases=done(0x80);
     const u32 melee_core=velocis+2*count(0x23);
     const bool light_support=melee_core>=2&&count(0x21)<std::min(12u,2+melee_core/2)&&z[22]*180<120;
-    const u32 worker_target=std::min(v.worker_cap,20u+8u*(bases>1?bases-1:0u));
+    const u32 worker_target=std::min(v.worker_cap,ElfCemWorkerGoal(v,20u+8u*(bases>1?bases-1:0u)));
     const bool emergency=near_w>=600&&near_w>base_w*0.8f;
     // Starving: no income for the last 220 frames late in the game. Saving
     // is pointless then; the army must decide the game with what exists.
@@ -1146,8 +1254,8 @@ CommanderAction CommanderTeacherAction(const CommanderState& s,const CommanderVi
     // remembered strength is meaningful. Without it a small scouting party is
     // sent first (RAID rules below) instead of marching blind into a base.
     const bool fresh=z[47]<0.5f;
-    const bool can_attack=desperate||(main_ready&&siege_ready&&fresh&&((army>=16&&own_w>=4000&&own_w>=P.attack_ratio*mem_w+1500)||
-        (s.waves_seen&&f-s.last_wave_frame>300&&army>=14&&own_w>=3500&&own_w>=P.attack_ratio*mem_w&&near_w==0)));
+    const bool can_attack=desperate||(main_ready&&siege_ready&&fresh&&((army>=ElfCemAttackArmy(v,16u)&&own_w>=4000&&own_w>=ElfCemAttackRatio(v,P.attack_ratio)*mem_w+1500)||
+        (s.waves_seen&&f-s.last_wave_frame>300&&army>=ElfCemAttackArmy(v,14u)&&own_w>=3500&&own_w>=ElfCemAttackRatio(v,P.attack_ratio)*mem_w&&near_w==0)));
     const auto& raid=v.squads[2];
     const bool must_stop=army<6||(own_w<0.6f*mem_w&&!desperate)||base_danger;
     if(attacking&&must_stop&&(base_danger||since_change>=10))attacking=false;
@@ -1171,7 +1279,12 @@ CommanderAction CommanderTeacherAction(const CommanderState& s,const CommanderVi
     const u32 expansion_frame=u32(std::max(3000,8000+P.expansion_shift));
     const bool expansion_due=bases<4&&!expansion_pending&&(f>=expansion_frame||home_berries<0.55f)&&
         (bases<2||(home_berries<0.35f&&z[17]<0.35f));
-    const bool saving=expansion_due&&res<1000&&!emergency&&!starving;
+    // Tyrano's HQ costs 1000; the other three races require 1200. Releasing
+    // the savings at 1000 spends the expansion bank on another unit before
+    // the real HQ build becomes legal. Keep this recipe independently opt-in.
+    const float expansion_cost=(v.services.teacher_variant&kCommanderTeacherRaceEconomy)?
+        float(info(v.services,AiProductionRequestKind::building,hq(v)).cost):1000.0f;
+    bool saving=expansion_due&&res<expansion_cost&&!emergency&&!starving;
     // --- H1 macro: strict priority list; the first affordable/legal option wins.
     // Keep the main melee line, with bounded low-cost support when the
     // preferred unit is unaffordable and population is still plentiful.
@@ -1179,11 +1292,14 @@ CommanderAction CommanderTeacherAction(const CommanderState& s,const CommanderVi
     if(!a[0]&&emergency&&light_support)choose({2});
     if(!a[0]&&supply_margin<3&&v.pending_counts[18]==0)choose({13});
     if(!a[0]&&workers<8)choose({1});
-    if(!a[0]&&expansion_due&&res>=1000&&near_w==0)choose({12});
+    if(!a[0]&&expansion_due&&res>=expansion_cost&&near_w==0)choose({12});
     if(!a[0]&&!count(0x84))choose({15});
     if(!a[0]&&workers<14)choose({1});
-    if(!a[0]&&velocis<P.opening_velocis)choose({3});
+    if(!a[0]&&velocis<ElfCemRedGoal(v,P.opening_velocis))choose({3});
     if(!a[0]&&count(0x83)<1&&(f>=P.tower_frame||near_w>0))choose({14});
+    // Unlike Tyrano, the main line and its support may need different halls.
+    if(!a[0]&&teacher_race_roles(v)&&v.services.own_tribe!=2&&!saving&&workers>=12&&velocis>=2)
+        prepare_producer(4);
     // Squad balance: GUARD keeps about a third of the army at home; a large
     // idle GUARD folds into MAIN once MAIN is back home. Never peel units
     // from an attacking MAIN just after reinforcements joined it. At home,
@@ -1203,20 +1319,32 @@ CommanderAction CommanderTeacherAction(const CommanderState& s,const CommanderVi
     if(!a[0]&&!saving&&workers>=12)choose({22});
     if(!a[0]&&count(0x83)<2&&f>=3000)choose({14});
     if(!a[0]&&bases>=2&&count(0x83)<3)choose({14});
-    if(!a[0]&&!saving&&velocis<6)choose({3});
+    if(!a[0]&&!saving&&velocis<ElfCemRedGoal(v,6u))choose({3});
     // Observed opponent composition (relative-indexed memory counts): a
     // large basic-unit swarm calls for splash (egg throwers) and more towers.
     const float basic_enemy=(z[135]+z[136])*10;
     const bool swarm=basic_enemy>=15;
     if(!a[0]&&!saving&&swarm&&count(0x83)<4&&res>=400)choose({14});
     if(!a[0]&&!saving&&(swarm||(enemy_plateau&&f>=6000))&&!count(0x87)&&done(0x84)>=2&&res>=500)choose({18});
+    if(!a[0]&&teacher_race_roles(v)&&!saving&&(swarm||(enemy_plateau&&f>=6000))&&done(0x87)&&workers>=12) {
+        // BowMachine requires Blacksmith; Gargoyle needs both flight portals.
+        // Each action still passes the real engine's prerequisite/cost mask.
+        if(v.services.own_tribe==0&&!count_actual(0x67))choose_actual(19);
+        if(v.services.own_tribe==3) {
+            if(!count_actual(0x95))choose_actual(16);
+            if(!a[0]&&!count_actual(0x99))choose_actual(21);
+        }
+    }
     if(!a[0]&&!saving&&(swarm||enemy_plateau)&&done(0x87)&&count(0x2a)<(swarm?4u:3u)&&res>=650)choose({9});
     // Reinforcements: units gathered at home while MAIN is out join it in a
     // group once enough have accumulated and home is quiet.
     if(!a[0]&&attacking&&guard.weight>3000&&near_w==0&&!guard.members.empty())choose({39});
     // Ranged support: a dilophos line behind the melee core (always at
     // least a third against ranged/air-heavy opponents, a fifth otherwise).
-    if(!a[0]&&!saving&&dilo<std::max(1u,velocis/(ranged_need?3u:5u)))choose({4});
+    if(!a[0]&&!saving&&dilo<ElfCemFrontlineGoal(v,std::max(1u,velocis/(ranged_need?3u:5u))))choose({4});
+    // Demon weapon research is in FlyPortal, whose prerequisite is FlyDen.
+    if(!a[0]&&teacher_race_roles(v)&&!saving&&v.services.own_tribe==3&&workers>=16&&army>=8&&f>=4000&&
+       !count_actual(0x95)&&!count_actual(0x9a))choose_actual(18);
     if(!a[0]&&!saving&&!count(0x85)&&f>=2800&&workers>=12)choose({16});
     if(!a[0]&&!saving&&done(0x85)&&army>=4&&res>=250){if(z[62]<0.2f)choose({25});if(!a[0]&&z[63]<0.2f)choose({26});}
     if(!a[0]&&!saving&&count(0x84)<3&&f>=7000&&res>=600)choose({15});
@@ -1236,9 +1364,42 @@ CommanderAction CommanderTeacherAction(const CommanderState& s,const CommanderVi
     const bool safe_merge=quiet&&!twins.empty()&&!twins[0].unit_ids.empty()&&
         (!attacking||s.units.at(twins[0].unit_ids[0]).squad!=0);
     if(!a[0]&&safe_merge&&velocis>=6&&done(0x85)&&supply_margin<6)choose({35});
+    if(!a[0]&&teacher_race_roles(v)&&!saving&&v.services.own_tribe==1) {
+        // Keep a bounded melee upgrade and healer contingent. Unicorn is
+        // support; it must never satisfy the plateau's siege requirement.
+        if(velocis>=6&&count_actual(0x14)<std::min(6u,velocis/3))choose_actual(4);
+        if(!a[0]&&army>=16&&count_actual(0x15)<2)choose_actual(9);
+        if(!a[0]&&count_actual(0x17)>=2&&army>=12) {
+            if(!count_actual(0x7a))choose_actual(21);
+            if(!a[0])choose_actual(30); // ManaLibrary's Meteo research.
+        }
+    }
+    // CEM support allocation: optional actual Elf ManaHall/ManaSpread target.
+    // Zero goal is an exact no-op; original legal masks and real costs decide.
+    const u32 cem_mana = ElfCemManaGoal(v,0u);
+    if(v.services.own_tribe==1&&cem_mana>0&&!a[0]&&!saving&&workers>=16&&army>=8&&count_actual(0x17)<cem_mana) {
+        const bool need_hall=count_actual(0x76)==0;
+        const u32 target=need_hall?0x76u:0x17u;
+        const auto& catalog=race_actions(v.services);
+        for(u32 slot=1;slot<catalog.size();++slot)if(catalog[slot].type==target&&catalog[slot].kind==(need_hall?2u:1u)) {
+            if(v.mask[slot])a[0]=u8(slot);
+            else if(res<info(v.services,need_hall?AiProductionRequestKind::building:AiProductionRequestKind::unit,target).cost)saving=true;
+            break;
+        }
+    }
     if(!a[0]&&!saving)choose({3,4});
     if(!a[0]&&!saving&&light_support)choose({2});
     if(!a[0]&&safe_merge&&velocis>=8&&done(0x85))choose({35});
+    if(v.services.own_tribe!=2&&!a[0]&&!saving) {
+        const auto& catalog=race_actions(v.services);
+        // An early army and the next real production/research building.
+        choose({3,4,2,5});
+        if(!a[0]&&workers>=8)for(u32 i=15;i<catalog.size();++i)
+            if(catalog[i].kind==2&&v.mask[i]&&!v.own_counts[count_index(catalog[i].type)]&&
+                !v.pending_counts[count_index(catalog[i].type)]){a[0]=u8(i);break;}
+        if(!a[0]&&res>=500)for(u32 i=42;i<catalog.size();++i)
+            if(catalog[i].kind==1&&v.mask[i]){a[0]=u8(i);break;}
+    }
     if(a[0]==12)a[1]=3;
     else if(a[0]==14)a[1]=(count(0x83)==0&&v.closed_plateau&&v.anchors[2].valid)?2:(bases>=2&&count(0x83)>=2&&v.anchors[3].valid?3:1);
     // --- Squads: GUARD holds home (aggressive ROE, towers help); MAIN
@@ -1260,11 +1421,15 @@ CommanderAction CommanderTeacherAction(const CommanderState& s,const CommanderVi
     // experience levels (the HUNT mask only opens when the hunt is safe).
     // Only inside the home area: chasing fleeing animals drew the guard out
     // of the plateau and it was caught alone by the first raid.
-    if(!threat&&!cover_expansion&&!v.closed_plateau&&f<6000&&guard.weight>=900&&v.mask[62+u8(CommanderIntent::hunt)]&&v.anchors[11].valid&&near(v.anchors[11],v.anchors[0],320)){gi=u8(CommanderIntent::hunt);ga=11;}
+    if(!threat&&!cover_expansion&&!v.closed_plateau&&f<6000&&guard.weight>=900&&v.mask[kCommanderHeadOffsets[3]+u8(CommanderIntent::hunt)]&&v.anchors[11].valid&&near(v.anchors[11],v.anchors[0],320)){gi=u8(CommanderIntent::hunt);ga=11;}
     if(threat){gi=u8(CommanderIntent::defend);ga=10;}
     u8 mi=u8(CommanderIntent::hold),ma=home,mr=0;
     if(attacking) {
         mr=1;mi=u8(CommanderIntent::attack_move);
+        // Commit the remaining army when workers and rebuilding income are gone.
+        // Preserve attack entry/exit and targets; change only an existing attack's ROE.
+        if(v.services.own_tribe==1&&(tribe==1||tribe==2)&&starving&&workers==0&&
+           (s.squads[0].intent==CommanderIntent::attack_move||s.squads[0].intent==CommanderIntent::siege))mr=0;
         // Finish the opponent: known building → enemy expansion → unexplored
         // start → contested cluster → enemy HQ estimate.
         // Variant target priority: enemy expansion or workers first when
@@ -1297,6 +1462,17 @@ CommanderAction CommanderTeacherAction(const CommanderState& s,const CommanderVi
     // While MAIN attacks, new units gather in GUARD before joining as a group.
     const float guard_target=std::clamp(own_w/3.0f,660.0f,1800.0f);
     a[7]=(attacking||guard.weight<guard_target)?1:0;
+    // Rule-teacher demonstrations share the policy's candidate menu. Skill
+    // orders still require an explicit macro selection by the learned actor.
+    if(s.decision_count%4==0) {
+        for(u32 slot=64;slot<kCommanderMacroCount;++slot)if(v.mask[slot]&&!v.macro_plans[slot].empty()) {
+            const auto& order=v.macro_plans[slot][0];
+            const auto* source=find_unit(v.own,order.unit_ids[0]);
+            bool contact=false;
+            if(source)for(const auto& enemy:v.visible_enemies)if(near(point(*source),point(enemy),512)){contact=true;break;}
+            if(contact){a[0]=u8(slot);a[1]=0;break;}
+        }
+    }
     CommanderMask mask=v.mask;
     for(std::size_t h=0;h<8;++h) {
         CommanderLegalHeadMask(v,a,h,mask);const auto off=kCommanderHeadOffsets[h];
@@ -1317,8 +1493,20 @@ std::vector<AiSemanticAction> CommanderExecute(CommanderState& s,const AiObserva
     const auto* squad_views=&v.squads;
     auto publish=[&](AiSemanticAction a,bool remember=true) {
         const auto packets=u32(a.unit_ids.size());if(packets==0||frame_packets+packets>std::min(64u,v.services.packet_budget)||s.packets_in_window+packets>256)return false;
-        if(a.target_unit_id&&!find_unit(v.visible_enemies,a.target_unit_id)&&!find_unit(v.visible_neutrals,a.target_unit_id))return false;
+        if(a.target_unit_id&&!find_unit(v.visible_enemies,a.target_unit_id)&&!find_unit(v.visible_neutrals,a.target_unit_id)) {
+            const bool support=a.kind==AiSemanticActionKind::use_ability||a.kind==AiSemanticActionKind::board_transport;
+            const bool seen_ally=find_unit(v.own,a.target_unit_id)||find_unit(v.visible_allies,a.target_unit_id);
+            const bool seen_corpse=a.kind==AiSemanticActionKind::use_ability&&std::any_of(v.services.visible_corpses.begin(),v.services.visible_corpses.end(),
+                [&](const auto& u){return u.id==a.target_unit_id&&u.visible;});
+            if(!support||(!seen_ally&&!seen_corpse))return false;
+        }
         if(a.kind==AiSemanticActionKind::move&&a.target_unit_id)return false;
+        for(u32 id:a.unit_ids) {
+            const auto* u=find_unit(v.own,id);const auto it=s.units.find(id);
+            if(u&&busy(*u)&&(u->command_state&0xffffffu)>=0x64&&(u->command_state&0xffffffu)<=0x6a)return false;
+            if(it!=s.units.end()&&it->second.last_order.kind==AiSemanticActionKind::use_ability&&
+                f-it->second.last_order_frame<16)return false;
+        }
         if(!valid(v.services,a))return false;
         for(u32 id:a.unit_ids) {
             commanded.insert(id);auto it=s.units.find(id);
@@ -1384,7 +1572,7 @@ std::vector<AiSemanticAction> CommanderExecute(CommanderState& s,const AiObserva
             if(q.intent!=intent||q.anchor!=action[4]||q.roe!=roe){q.intent=intent;q.anchor=action[4];q.roe=roe;++q.serial;q.last_intent_frame=f;q.changed_decision=s.decision_count;}
             q.automatic_retreat=false;q.decision_weight=(*squad_views)[action[2]-1].weight;
         }
-        if(macro>=38&&!coordinated) {
+        if(macro>=38&&macro<42&&!coordinated) {
             const u32 source=macro==39?1:macro==41?2:0,dest=macro==38?1:macro==40?2:0;
             auto ids=v.squads[source].members;
             if(macro==38)std::sort(ids.begin(),ids.end(),[&](u32 a,u32 b){return std::make_tuple(-i64(s.units.at(a).investment),a)<std::make_tuple(-i64(s.units.at(b).investment),b);});
@@ -1398,11 +1586,18 @@ std::vector<AiSemanticAction> CommanderExecute(CommanderState& s,const AiObserva
                 for(u32 id:m.units){const auto& u=*find_unit(v.own,id);m.center.x+=u.x;m.center.y+=u.y;m.investment+=s.units.at(id).investment;m.squad=s.units.at(id).squad;m.generations.push_back(s.units.at(id).generation);}
                 if(!m.units.empty()){m.center.x/=i32(m.units.size());m.center.y/=i32(m.units.size());m.center.valid=true;s.merges.push_back(m);}
             }
-        } else if(macro>0&&macro<38) {
+        } else if(macro>0&&macro<kCommanderMacroCount) {
             const auto& plans=macro==12?v.hq_build_plans[action[1]]:macro==14?v.tower_build_plans[action[1]]:v.macro_plans[macro];
             for(const auto& a:plans) {
                 if(a.kind==AiSemanticActionKind::build)apply_build(a);
                 else if(publish(a)) {
+                    if(a.kind==AiSemanticActionKind::use_ability&&a.ability_id<s.ability_orders.size()) {
+                        ++s.ability_orders[a.ability_id];
+                        diagnose(v.services,"ability-issued",f,a,find_unit(v.own,a.unit_ids[0]),o.primary_resources);
+                    }
+                    if(a.kind==AiSemanticActionKind::morph_enter||a.kind==AiSemanticActionKind::morph_exit)++s.morph_orders;
+                    if(a.kind==AiSemanticActionKind::set_stance)++s.stance_orders;
+                    if(a.kind==AiSemanticActionKind::board_transport||a.kind==AiSemanticActionKind::unload_transport)++s.transport_orders;
                     const auto kind=a.kind==AiSemanticActionKind::research?AiProductionRequestKind::research:AiProductionRequestKind::unit;
                     if(a.kind==AiSemanticActionKind::produce_unit||a.kind==AiSemanticActionKind::research) {
                         spent+=info(v.services,kind,a.production_id).cost;
@@ -1417,7 +1612,7 @@ std::vector<AiSemanticAction> CommanderExecute(CommanderState& s,const AiObserva
     }
     // Reserve supply before spending workers' outstanding construction costs.
     if(o.population_reserved+v.queued_population+4>=o.population_used&&v.pending_counts[18]==0) {
-        const bool reserved=std::any_of(s.builds.begin(),s.builds.end(),[](const auto& b){return b.order.production_id==0x82;});
+        const bool reserved=std::any_of(s.builds.begin(),s.builds.end(),[&](const auto& b){return b.order.production_id==hq(v)+2;});
         if(!reserved&&!v.macro_plans[13].empty())apply_build(v.macro_plans[13][0]);
     }
     // Retry only commands which never entered the worker's build state.
@@ -1515,7 +1710,7 @@ std::vector<AiSemanticAction> CommanderExecute(CommanderState& s,const AiObserva
     // toward per-window 2.5 workers/tile. Idle workers get one order only.
     std::map<std::size_t,u32> assigned;std::vector<std::pair<CommanderPoint,std::vector<std::size_t>>> windows;
     std::set<std::size_t> claimed;std::vector<std::size_t> far_tiles;bool far_tiles_ready=false;
-    for(const auto& base:v.own)if(base.type_id==0x80&&!base.under_construction) {
+    for(const auto& base:v.own)if(base.type_id==hq(v)&&!base.under_construction) {
         windows.push_back({point(base),{}});auto& tiles=windows.back().second;
         for(i32 y=base.y/32-15;y<=base.y/32+15;++y)for(i32 x=base.x/32-15;x<=base.x/32+15;++x) {
             const auto t=tile_index(o,{x*32,y*32,true});if(t<o.tiles.size()&&o.tiles[t].resource_amount&&o.tiles[t].explored&&claimed.insert(t).second)tiles.push_back(t);
@@ -1596,7 +1791,7 @@ std::vector<AiSemanticAction> CommanderExecute(CommanderState& s,const AiObserva
         }
     }
     // Rally once per producer when H7 changes (and once for a new producer).
-    for(const auto& u:v.own)if((u.type_id==0x80||u.type_id==0x84||u.type_id==0x87)&&!u.under_construction&&!commanded.count(u.id)) {
+    for(const auto& u:v.own)if((std::any_of(race_actions(v.services).begin(),race_actions(v.services).end(),[&](const auto& a){return a.kind==1&&a.producer==u.type_id;}))&&!u.under_construction&&!commanded.count(u.id)) {
         auto& state=s.units.at(u.id);const auto& sq=(*squad_views)[s.rally_squad];
         auto p=sq.center.valid?sq.center:v.anchors[s.squads[s.rally_squad].anchor];if(!p.valid)p=v.anchors[0];
         const u32 marker=0x10000000u+s.rally_squad+1;

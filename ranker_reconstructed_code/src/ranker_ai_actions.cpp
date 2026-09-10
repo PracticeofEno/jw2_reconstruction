@@ -528,13 +528,24 @@ AiActionPlanResult PlanAiSemanticActionV1(const AiActionPlanInput& input,
         if (action.target_unit_id != 0) {
             ability_target = find_active_unit(*input.movement,
                 action.target_unit_id);
+            if ((ability_target == nullptr || !ability_target->active ||
+                 (ability_target->command_state & kUnitCommandDead) != 0) && input.ability_corpse_visible) {
+                for (const auto* corpse : input.movement->lifecycle_units)
+                    if (corpse && corpse->id == action.target_unit_id && (corpse->runtime_flags & 4u)) {
+                        ability_target = corpse;
+                        break;
+                    }
+            }
+            const bool corpse = ability_target && (ability_target->runtime_flags & 4u) &&
+                input.ability_corpse_visible && input.ability_corpse_visible(*ability_target,
+                    input.local_owner, input.ability_corpse_visibility_user_data);
             if (ability_target == nullptr || !ability_target->active ||
                 (ability_target->command_state & kUnitCommandDead) != 0) {
-                return reject(AiActionPlanCode::target_inactive);
+                if (!corpse) return reject(AiActionPlanCode::target_inactive);
             }
             // Friendly targets stay legal (heal/buff class effects); only
             // fog-hidden targets are rejected.
-            if (!is_visible_target(input, *ability_target)) {
+            if (!corpse && !is_visible_target(input, *ability_target)) {
                 return reject(AiActionPlanCode::target_not_visible);
             }
             cast_x = ability_target->x;
@@ -556,8 +567,8 @@ AiActionPlanResult PlanAiSemanticActionV1(const AiActionPlanInput& input,
             // Subtype 0x09's command byte IS the ability id; the deferred
             // entry prefix routes it into special-ability state 0x64.
             result.packets.push_back(make_packet(input.local_owner,
-                kAbilitySubtype, *unit, action.ability_id,
-                action.target_unit_id, static_cast<u32>(cast_x),
+                kAbilitySubtype, *unit, action.ability_id == 31 ? 19 : action.ability_id,
+                action.ability_id == 31 ? 0xffffffffu : action.target_unit_id, static_cast<u32>(cast_x),
                 static_cast<u32>(cast_y)));
         }
         result.code = AiActionPlanCode::okay;

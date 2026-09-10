@@ -3,6 +3,7 @@
 *
 !.gitignore
 !.gitattributes
+!play_last_replay.cmd
 !INTERIM_GAMEPLAY_SYNC_REPORT_2026-08-14.md
 
 !docs/
@@ -20,6 +21,11 @@
 !docs/JW2_COMMANDER_CONTEXT_RECOVERY_20260907.md
 !docs/JW2_COMMANDER_OBSERVATION_CONTRACT_20260908.md
 !docs/JW2_COMMANDER_STRONG_BOT_20260908.md
+!docs/JW2_COMMANDER_MULTIRACE_20260908.md
+!docs/JW2_COMMANDER_SKILLS_20260908.md
+!docs/JW2_COMMANDER_BUILTIN_RECOVERY_20260909.md
+!docs/JW2_COMMANDER_ELF_FOCUS_20260909.md
+!docs/JW2_COMMANDER_ELF_REAUDIT_20260909.md
 
 !ranker_reconstructed_code/
 !ranker_reconstructed_code/CMakeLists.txt
@@ -87,6 +93,10 @@
 !ranker_reconstructed_code/tests/ai_commander_economy_recovery_regression.cpp
 !ranker_reconstructed_code/tests/ai_commander_actions_regression.cpp
 !ranker_reconstructed_code/tests/ai_commander_launch_regression.cpp
+!ranker_reconstructed_code/tests/ai_commander_multirace_regression.cpp
+!ranker_reconstructed_code/tests/ai_commander_skills_regression.cpp
+!ranker_reconstructed_code/tests/ai_commander_elf_strategy_regression.cpp
+!ranker_reconstructed_code/tests/ai_commander_startup_log_stub.cpp
 
 !ranker_reconstructed_code/tools/
 !ranker_reconstructed_code/tools/replay_debug/
@@ -97,6 +107,8 @@
 !ranker_reconstructed_code/tools/replay_debug/README.md
 !ranker_reconstructed_code/tools/ai/
 !ranker_reconstructed_code/tools/ai/*.py
+!ranker_reconstructed_code/tools/ai/commander_races.json
+!ranker_reconstructed_code/tools/ai/commander_skills.json
 !ranker_reconstructed_code/tools/gameplay_parity/
 !ranker_reconstructed_code/tools/gameplay_parity/*.py
 !ranker_reconstructed_code/tools/gameplay_parity/*.md

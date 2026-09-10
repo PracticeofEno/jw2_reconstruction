@@ -6,6 +6,7 @@
 #include "ranker_client_config.h"
 #include "ranker_ai_autopilot.h"
 #include "ranker_ai_commander.h"
+#include "ranker_ai_skills.h"
 #include "ranker_ai_commander_rollout.h"
 #include "ranker_ai_decision_gate.h"
 #include "ranker_ai_entity_control.h"
@@ -1365,6 +1366,7 @@ UnitMovementContext* default_gameplay_movement_context();
 const ProductionOrderDefinition* default_production_order_definition(u32 order_id);
 u32 default_unit_command_bit_mask(const UnitMovementUnit& unit);
 u32 default_unit_action_capability_mask(const UnitMovementUnit& unit);
+void ai_commander_record_ability_result(u32 owner, u32 ability, bool success);
 u32 read_runtime_catalog_u32(const std::vector<u8>& bytes,
     std::size_t offset, u32 fallback);
 bool default_unit_action_profile_allows_target_render_class(
@@ -12616,33 +12618,50 @@ void default_gameplay_flow_start_session_from_slots(GameplaySessionFlowState& st
                 "start-slots: hydrated replay link params local=%lu",
                 static_cast<unsigned long>(
                     g_runtime.p2p_session_start_state.copied_runtime_local_player));
-            // Self-play replay playback: the recorded Computer(AI) owners were
-            // PACKET-driven with the built-in Owner AI suppressed.  The lobby
-            // payload cannot distinguish them from ordinary Computers (both
-            // are start-state 1), so playback used to run the built-in AI ON
-            // TOP of the recorded packets — double control, instant desync
-            // (worker armies, razed bases that never end the game).  Detect
-            // our replays by their observer host + "Observer" name marker and
-            // restore the suppression; the packet pump itself stays off in
-            // playback, so the recorded packets are the only controller.
+            // Both policy controllers and built-in Computers use start-state
+            // 1. Their startup names retain the distinction: Computer(AI) and
+            // Computer(AI)2 replay recorded commands, while Computer must run
+            // the built-in Owner AI just as it did during the saved match.
+            // Keep this interpretation scoped to our observer-host replays.
             const LinkLobbyState& playback_lobby = link_lobby_state();
+            const auto playback_player_name = [&](u32 owner) {
+                // Read the saved payload, not role/name controls left over
+                // from an earlier live lobby in this game process.
+                const auto& payload = playback_lobby.player_payloads[owner];
+                return fixed_packet_string_raw(payload.data(), payload.size(),
+                    kLinkLobbyStartupPlayerNamePayloadOffset,
+                    kLinkLobbyStartupPlayerNamePayloadBytes);
+            };
             const int playback_local = std::clamp(
                 playback_lobby.local_player_index, 0,
                 kLinkLobbyAvatarCount - 1);
             const bool selfplay_replay =
                 playback_lobby.start_states[playback_local] == 2 &&
-                std::strncmp(link_lobby_startup_player_name(
-                    playback_lobby, static_cast<u32>(playback_local)).c_str(),
+                std::strncmp(playback_player_name(
+                    static_cast<u32>(playback_local)).c_str(),
                     "Observer", 8) == 0;
             if (selfplay_replay) {
+                u32 recorded_owner_mask = 0;
+                u32 builtin_owner_mask = 0;
                 for (u32 owner = 0; owner < kPlayerSlotCount; ++owner) {
-                    if (playback_lobby.start_states[owner] == 1) {
-                        g_runtime.ai_play_owner_slots[owner] = true;
+                    const bool recorded = ReplayUsesRecordedComputerCommands(
+                        selfplay_replay, playback_lobby.start_states[owner],
+                        playback_player_name(owner));
+                    g_runtime.ai_play_owner_slots[owner] = recorded;
+                    if (recorded) {
+                        recorded_owner_mask |= 1u << owner;
+                    }
+                    else if (playback_lobby.start_states[owner] == 1) {
+                        builtin_owner_mask |= 1u << owner;
                     }
                 }
-                g_runtime.ai_play_scripted_policy_enabled = true;
+                g_runtime.ai_play_scripted_policy_enabled =
+                    recorded_owner_mask != 0;
                 append_startup_log(
-                    "ai-replay: self-play playback, built-in AI suppressed");
+                    "ai-replay: self-play playback packet_owner_mask=0x%02lx "
+                    "builtin_owner_mask=0x%02lx",
+                    static_cast<unsigned long>(recorded_owner_mask),
+                    static_cast<unsigned long>(builtin_owner_mask));
             }
             // Headless verification (-AIREPLAY under -AISELF) runs playback
             // uncapped like a training game; interactive playback keeps the
@@ -17567,6 +17586,7 @@ bool apply_default_mode1_extended_special_command_flag(UnitMovementUnit& unit,
     u32 command, i32 mode) {
     if (mode == -1) {
         unit.command_flags &= ~0x840u;
+        ai_commander_record_ability_result(unit.owner_id, 31, true);
         return true;
     }
     if (command != 0x13 || (unit.command_flags & 0x800u) != 0) {
@@ -17594,6 +17614,7 @@ bool apply_default_mode1_extended_special_command_flag(UnitMovementUnit& unit,
     unit.secondary_value -= definition->queued_limit;
     unit.health -= definition->resource_limit;
     unit.command_flags |= 0x840u;
+    ai_commander_record_ability_result(unit.owner_id, 19, true);
     return true;
 }
 
@@ -25174,7 +25195,7 @@ void ai_entity_send_terminals(GameplayLoopState& state, bool timed_out) {
         for (const UnitMovementUnit* unit : movement->active_units) {
             if (unit != nullptr && unit->active &&
                 unit->owner_id < building_counts.size() &&
-                unit->type_id >= 0x60u) {
+                IsGameplayEliminationBuildingType(unit->type_id)) {
                 ++building_counts[unit->owner_id];
             }
         }
@@ -27540,7 +27561,7 @@ void ai_entity2_send_terminals(GameplayLoopState& state, bool timed_out) {
             if (unit != nullptr && unit->active) {
                 lookup.by_id[unit->id] = unit;
                 if (unit->owner_id < building_counts.size() &&
-                    unit->type_id >= 0x60u) {
+                    IsGameplayEliminationBuildingType(unit->type_id)) {
                     ++building_counts[unit->owner_id];
                 }
             }
@@ -32157,8 +32178,9 @@ bool dispatch_default_unit_command_action_effect(UnitMovementUnit& source,
 
 void default_unit_command_execute_ability(UnitCommandContext&,
     UnitMovementUnit& source, UnitMovementUnit* target, u32 ability_id) {
-    dispatch_default_unit_command_action_effect(source, target, ability_id,
+    const bool success = dispatch_default_unit_command_action_effect(source, target, ability_id,
         source.path_target_x, source.path_target_y);
+    ai_commander_record_ability_result(source.owner_id, ability_id, success);
 }
 
 bool start_default_unit_command_ability_attachment_effect(
@@ -37839,9 +37861,6 @@ bool consume_default_gameplay_cheat_stage_transition(GameplayLoopState& state) {
 // simulation frame is written out as a "max_frames" timeout so the harness can
 // never hang on an unfinished game.
 constexpr u32 kAiSelfplayMaxFrames = 20000u;
-// Building type ids start at 0x60 for every tribe (원시 0x60-, 엘프 0x70-,
-// 티라노 0x80-, 데몬 0x90-).  Used for the building-based elimination rule.
-constexpr u32 kAiBuildingTypeBase = 0x60u;
 
 // Resolve a self-play output filename against the -AIOUT:DIR redirect (empty =
 // CWD).  Creates the directory on first use so parallel rollout workers can each
@@ -37887,7 +37906,7 @@ void write_ai_selfplay_result(const GameplayLoopState& state, const char* reason
                 ++unit_counts[unit->owner_id];
                 unit_values[unit->owner_id] +=
                     unit->definition.production_resource_cost;
-                if (unit->type_id >= kAiBuildingTypeBase) {
+                if (IsGameplayEliminationBuildingType(unit->type_id)) {
                     ++building_counts[unit->owner_id];
                 }
             }
@@ -37978,7 +37997,7 @@ void write_ai_rl_reward_trace(const GameplayLoopState& state,
     if (movement != nullptr) {
         for (const UnitMovementUnit* unit : movement->active_units) {
             if (unit != nullptr && unit->owner_id < building_counts.size() &&
-                unit->type_id >= kAiBuildingTypeBase) {
+                IsGameplayEliminationBuildingType(unit->type_id)) {
                 ++building_counts[unit->owner_id];
             }
         }
@@ -38374,7 +38393,7 @@ void run_default_gameplay_end_condition_monitor(GameplayLoopState& state) {
         const bool timed_out = state.simulation_frame_counter >= max_frames;
         // Elimination check, applied to EVERY competitor equally: an owner
         // whose BUILDING count reaches zero is eliminated (the standard melee
-        // rule — stray mobile units do not keep a player in the game).  Once
+        // rule — traps and stray mobile units do not keep a player alive). Once
         // at most one competitor still holds a building the match is decided;
         // the observer host never trips the built-in local-player victory
         // check, so the harness is the judge.  A short grace period covers
@@ -38389,7 +38408,7 @@ void run_default_gameplay_end_condition_monitor(GameplayLoopState& state) {
                      elimination_movement->active_units) {
                     if (unit != nullptr &&
                         unit->owner_id < building_counts.size() &&
-                        unit->type_id >= kAiBuildingTypeBase) {
+                        IsGameplayEliminationBuildingType(unit->type_id)) {
                         ++building_counts[unit->owner_id];
                     }
                 }
@@ -39339,7 +39358,7 @@ void configure_default_p2p_command_line_ai_opponent(
     }
 
     // -AITRIBE:N — the built-in opponent's tribe.  4 rotates by -SEED so a seed
-    // sweep faces all four tribes; Computer(AI) owners stay Tyrano regardless.
+    // sweep faces all four tribes. Commander policy owners are independent.
     const auto resolve_opponent_tribe = [&]() -> u8 {
         const u32 choice =
             p2p_network_launch_parameters().self_play_opponent_tribe;
@@ -39383,10 +39402,10 @@ void configure_default_p2p_command_line_ai_opponent(
     // an ordinary built-in Computer opponent for a 1v1 evaluation.
     lobby.player_role_values[1] = (self_play && !one_v_one) ? 4 : 3;
     lobby.player_team_values[1] = 1;
-    // Tribe index 2 is Tyrano; the scripted bot only acts on that faction.
-    // In 1v1 slot 1 is the built-in opponent, so it takes -AITRIBE instead.
+    // In 1v1 slot 1 is the built-in opponent; Commander self-play uses the
+    // explicitly selected policy race (the historic default remains Tyrano).
     lobby.tribe_choices[1] = one_v_one ? resolve_opponent_tribe() :
-        (self_play ? 2 : 1);
+        (self_play ? static_cast<u8>(p2p_network_launch_parameters().self_play_own_tribe) : 1);
     // PrepareLinkLobbyStartParameters re-reads each Computer slot's tribe from
     // its combo control (CB_GETCURSEL) and would otherwise overwrite the field
     // set above with the combo's default selection.  Force the combo to match.
@@ -39457,10 +39476,9 @@ void configure_default_p2p_command_line_ai_opponent(
                 p2p_network_launch_parameters().self_play_versus;
             lobby.player_role_values[opponent] = versus ? 4 : 3;
             lobby.player_team_values[opponent] = opponent;
-            // A second Computer(AI) must stay Tyrano (the executor's tribe);
-            // a built-in opponent takes -AITRIBE for matchup diversity.
+            // Independent race selection for the second policy owner.
             lobby.tribe_choices[opponent] =
-                versus ? 2 : resolve_opponent_tribe();
+                versus ? static_cast<u8>(p2p_network_launch_parameters().self_play_own_tribe2) : resolve_opponent_tribe();
             if (lobby.tribe_combos[opponent].window != nullptr) {
                 SendMessageA(lobby.tribe_combos[opponent].window, CB_SETCURSEL,
                     lobby.tribe_choices[opponent], 0);

@@ -18,6 +18,13 @@ constexpr u32 kGameplayEndEliteTypeThreshold = 0x5f;
 constexpr u32 kGameplayEndExcludedEliteType = 0x6a;
 constexpr u32 kGameplayEndDeadUnitFlag = 0x10000000;
 
+constexpr bool IsGameplayEliminationBuildingType(u32 type_id) {
+    // Traps (0x6a) are structures, but never keep an owner in the game.
+    // Share the original end-condition predicate with AI match accounting.
+    return type_id > kGameplayEndEliteTypeThreshold &&
+        type_id != kGameplayEndExcludedEliteType;
+}
+
 constexpr bool ShouldRefreshGameplayEndConditionSnapshot(
     u32 frame_counter, bool scenario_ai_profile_override) {
     // FUN_004d55c0 tests the 64-frame cadence and the scenario override before

@@ -113,7 +113,7 @@ def migrate_episode(episode: rollout.Episode, *, teacher_variant: int) -> rollou
     if int(source["frame"][0]) != 1 or np.any(vectors[0, 518:527] != 0):
         raise rollout.RolloutError("context migration requires a fresh commander recording starting at frame 1")
     expected_previous = (source["action"][:-1].astype(np.float32) /
-                         np.asarray(rollout.HEAD_SIZES, dtype=np.float32))
+                         np.asarray(rollout.LEGACY_HEAD_SIZES, dtype=np.float32))
     expected_previous = expected_previous.astype(np.float16).astype(np.float32)
     if not np.array_equal(vectors[1:, 518:526], expected_previous):
         raise rollout.RolloutError("previous-action history differs from executed actions; migrate before DAgger relabeling")

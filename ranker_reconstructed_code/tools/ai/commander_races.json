@@ -1,0 +1,1562 @@
+[
+  {
+    "tribe": 0,
+    "name": "primitive",
+    "actions": [
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 0,
+        "producer": 96,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 15,
+        "producer": 101,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 1,
+        "producer": 101,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 3,
+        "producer": 101,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 7,
+        "producer": 102,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 14,
+        "producer": 102,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 4,
+        "producer": 101,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 8,
+        "producer": 102,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 6,
+        "producer": 100,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 9,
+        "producer": 96,
+        "maximum": 1
+      },
+      {
+        "kind": 1,
+        "type": 5,
+        "producer": 100,
+        "maximum": 0
+      },
+      {
+        "kind": 2,
+        "type": 96,
+        "producer": 0,
+        "maximum": 3
+      },
+      {
+        "kind": 2,
+        "type": 98,
+        "producer": 0,
+        "maximum": 24
+      },
+      {
+        "kind": 2,
+        "type": 99,
+        "producer": 0,
+        "maximum": 6
+      },
+      {
+        "kind": 2,
+        "type": 101,
+        "producer": 0,
+        "maximum": 3
+      },
+      {
+        "kind": 2,
+        "type": 104,
+        "producer": 0,
+        "maximum": 1
+      },
+      {
+        "kind": 2,
+        "type": 102,
+        "producer": 0,
+        "maximum": 1
+      },
+      {
+        "kind": 2,
+        "type": 100,
+        "producer": 0,
+        "maximum": 1
+      },
+      {
+        "kind": 2,
+        "type": 103,
+        "producer": 0,
+        "maximum": 1
+      },
+      {
+        "kind": 2,
+        "type": 107,
+        "producer": 0,
+        "maximum": 1
+      },
+      {
+        "kind": 2,
+        "type": 105,
+        "producer": 0,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 0,
+        "producer": 96,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 2,
+        "producer": 104,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 1,
+        "producer": 96,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 3,
+        "producer": 104,
+        "maximum": 3
+      },
+      {
+        "kind": 3,
+        "type": 4,
+        "producer": 104,
+        "maximum": 3
+      },
+      {
+        "kind": 3,
+        "type": 8,
+        "producer": 108,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 9,
+        "producer": 105,
+        "maximum": 3
+      },
+      {
+        "kind": 3,
+        "type": 10,
+        "producer": 105,
+        "maximum": 3
+      },
+      {
+        "kind": 3,
+        "type": 7,
+        "producer": 105,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 6,
+        "producer": 108,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 43,
+        "producer": 96,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 44,
+        "producer": 108,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 55,
+        "producer": 96,
+        "maximum": 1
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 2,
+        "producer": 101,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 92,
+        "producer": 100,
+        "maximum": 0
+      },
+      {
+        "kind": 2,
+        "type": 106,
+        "producer": 0,
+        "maximum": 1
+      },
+      {
+        "kind": 2,
+        "type": 108,
+        "producer": 0,
+        "maximum": 1
+      },
+      {
+        "kind": 2,
+        "type": 111,
+        "producer": 0,
+        "maximum": 1
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      }
+    ]
+  },
+  {
+    "tribe": 1,
+    "name": "elf",
+    "actions": [
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 16,
+        "producer": 112,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 19,
+        "producer": 117,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 17,
+        "producer": 116,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 20,
+        "producer": 117,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 22,
+        "producer": 118,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 26,
+        "producer": 119,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 25,
+        "producer": 119,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 24,
+        "producer": 119,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 21,
+        "producer": 118,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 27,
+        "producer": 112,
+        "maximum": 1
+      },
+      {
+        "kind": 1,
+        "type": 28,
+        "producer": 116,
+        "maximum": 0
+      },
+      {
+        "kind": 2,
+        "type": 112,
+        "producer": 16,
+        "maximum": 3
+      },
+      {
+        "kind": 2,
+        "type": 114,
+        "producer": 16,
+        "maximum": 24
+      },
+      {
+        "kind": 2,
+        "type": 115,
+        "producer": 16,
+        "maximum": 6
+      },
+      {
+        "kind": 2,
+        "type": 116,
+        "producer": 16,
+        "maximum": 3
+      },
+      {
+        "kind": 2,
+        "type": 117,
+        "producer": 16,
+        "maximum": 1
+      },
+      {
+        "kind": 2,
+        "type": 118,
+        "producer": 16,
+        "maximum": 1
+      },
+      {
+        "kind": 2,
+        "type": 119,
+        "producer": 16,
+        "maximum": 1
+      },
+      {
+        "kind": 2,
+        "type": 120,
+        "producer": 16,
+        "maximum": 1
+      },
+      {
+        "kind": 2,
+        "type": 121,
+        "producer": 16,
+        "maximum": 1
+      },
+      {
+        "kind": 2,
+        "type": 122,
+        "producer": 16,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 11,
+        "producer": 112,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 16,
+        "producer": 124,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 12,
+        "producer": 112,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 13,
+        "producer": 120,
+        "maximum": 3
+      },
+      {
+        "kind": 3,
+        "type": 14,
+        "producer": 120,
+        "maximum": 3
+      },
+      {
+        "kind": 3,
+        "type": 17,
+        "producer": 112,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 46,
+        "producer": 121,
+        "maximum": 3
+      },
+      {
+        "kind": 3,
+        "type": 47,
+        "producer": 121,
+        "maximum": 3
+      },
+      {
+        "kind": 3,
+        "type": 18,
+        "producer": 122,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 19,
+        "producer": 121,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 43,
+        "producer": 112,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 50,
+        "producer": 124,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 57,
+        "producer": 112,
+        "maximum": 1
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 18,
+        "producer": 117,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 23,
+        "producer": 118,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 29,
+        "producer": 116,
+        "maximum": 0
+      },
+      {
+        "kind": 2,
+        "type": 124,
+        "producer": 16,
+        "maximum": 1
+      },
+      {
+        "kind": 2,
+        "type": 127,
+        "producer": 16,
+        "maximum": 1
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      }
+    ]
+  },
+  {
+    "tribe": 2,
+    "name": "tyrano",
+    "actions": [
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 32,
+        "producer": 128,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 33,
+        "producer": 132,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 34,
+        "producer": 132,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 36,
+        "producer": 132,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 37,
+        "producer": 132,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 39,
+        "producer": 132,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 40,
+        "producer": 132,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 41,
+        "producer": 135,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 42,
+        "producer": 135,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 44,
+        "producer": 128,
+        "maximum": 1
+      },
+      {
+        "kind": 1,
+        "type": 46,
+        "producer": 132,
+        "maximum": 0
+      },
+      {
+        "kind": 2,
+        "type": 128,
+        "producer": 32,
+        "maximum": 3
+      },
+      {
+        "kind": 2,
+        "type": 130,
+        "producer": 32,
+        "maximum": 24
+      },
+      {
+        "kind": 2,
+        "type": 131,
+        "producer": 32,
+        "maximum": 6
+      },
+      {
+        "kind": 2,
+        "type": 132,
+        "producer": 32,
+        "maximum": 3
+      },
+      {
+        "kind": 2,
+        "type": 133,
+        "producer": 32,
+        "maximum": 1
+      },
+      {
+        "kind": 2,
+        "type": 134,
+        "producer": 32,
+        "maximum": 1
+      },
+      {
+        "kind": 2,
+        "type": 135,
+        "producer": 32,
+        "maximum": 1
+      },
+      {
+        "kind": 2,
+        "type": 136,
+        "producer": 32,
+        "maximum": 1
+      },
+      {
+        "kind": 2,
+        "type": 137,
+        "producer": 32,
+        "maximum": 1
+      },
+      {
+        "kind": 2,
+        "type": 138,
+        "producer": 32,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 20,
+        "producer": 128,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 22,
+        "producer": 133,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 24,
+        "producer": 134,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 25,
+        "producer": 133,
+        "maximum": 5
+      },
+      {
+        "kind": 3,
+        "type": 26,
+        "producer": 133,
+        "maximum": 5
+      },
+      {
+        "kind": 3,
+        "type": 27,
+        "producer": 137,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 28,
+        "producer": 134,
+        "maximum": 5
+      },
+      {
+        "kind": 3,
+        "type": 29,
+        "producer": 134,
+        "maximum": 5
+      },
+      {
+        "kind": 3,
+        "type": 30,
+        "producer": 138,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 42,
+        "producer": 128,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 43,
+        "producer": 128,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 45,
+        "producer": 137,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 56,
+        "producer": 128,
+        "maximum": 1
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      }
+    ]
+  },
+  {
+    "tribe": 3,
+    "name": "demon",
+    "actions": [
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 48,
+        "producer": 144,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 49,
+        "producer": 148,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 50,
+        "producer": 148,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 90,
+        "producer": 148,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 51,
+        "producer": 154,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 52,
+        "producer": 154,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 56,
+        "producer": 150,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 57,
+        "producer": 154,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 53,
+        "producer": 154,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 58,
+        "producer": 144,
+        "maximum": 1
+      },
+      {
+        "kind": 1,
+        "type": 62,
+        "producer": 148,
+        "maximum": 0
+      },
+      {
+        "kind": 2,
+        "type": 144,
+        "producer": 48,
+        "maximum": 3
+      },
+      {
+        "kind": 2,
+        "type": 146,
+        "producer": 48,
+        "maximum": 24
+      },
+      {
+        "kind": 2,
+        "type": 147,
+        "producer": 48,
+        "maximum": 6
+      },
+      {
+        "kind": 2,
+        "type": 148,
+        "producer": 48,
+        "maximum": 3
+      },
+      {
+        "kind": 2,
+        "type": 149,
+        "producer": 48,
+        "maximum": 1
+      },
+      {
+        "kind": 2,
+        "type": 150,
+        "producer": 48,
+        "maximum": 1
+      },
+      {
+        "kind": 2,
+        "type": 154,
+        "producer": 48,
+        "maximum": 1
+      },
+      {
+        "kind": 2,
+        "type": 151,
+        "producer": 48,
+        "maximum": 1
+      },
+      {
+        "kind": 2,
+        "type": 152,
+        "producer": 48,
+        "maximum": 1
+      },
+      {
+        "kind": 2,
+        "type": 153,
+        "producer": 48,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 31,
+        "producer": 144,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 33,
+        "producer": 155,
+        "maximum": 3
+      },
+      {
+        "kind": 3,
+        "type": 32,
+        "producer": 144,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 35,
+        "producer": 149,
+        "maximum": 3
+      },
+      {
+        "kind": 3,
+        "type": 36,
+        "producer": 149,
+        "maximum": 3
+      },
+      {
+        "kind": 3,
+        "type": 37,
+        "producer": 155,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 38,
+        "producer": 149,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 39,
+        "producer": 149,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 41,
+        "producer": 149,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 34,
+        "producer": 155,
+        "maximum": 3
+      },
+      {
+        "kind": 3,
+        "type": 43,
+        "producer": 144,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 48,
+        "producer": 155,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 58,
+        "producer": 144,
+        "maximum": 1
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 54,
+        "producer": 150,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 55,
+        "producer": 150,
+        "maximum": 0
+      },
+      {
+        "kind": 1,
+        "type": 63,
+        "producer": 150,
+        "maximum": 0
+      },
+      {
+        "kind": 2,
+        "type": 155,
+        "producer": 48,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 52,
+        "producer": 152,
+        "maximum": 1
+      },
+      {
+        "kind": 3,
+        "type": 53,
+        "producer": 149,
+        "maximum": 1
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      },
+      {
+        "kind": 0,
+        "type": 0,
+        "producer": 0,
+        "maximum": 0
+      }
+    ]
+  }
+]

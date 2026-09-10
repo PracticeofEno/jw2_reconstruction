@@ -9,9 +9,9 @@ namespace ranker {
 // Every file is one owner/episode pinned to one immutable policy version.
 // Incomplete files have no terminal record and are rejected by the learner.
 enum class CommanderRolloutStatus : u8 { decision, win, loss, truncated, invalid };
-inline constexpr u32 kCommanderRolloutFormatVersion = 4;
+inline constexpr u32 kCommanderRolloutFormatVersion = 6;
 inline constexpr u32 kCommanderRolloutRecordBytes =
-    162 + 2 * kCommanderVectorSize + kCommanderMapSize;
+    150 + (kCommanderLogitCount + 7) / 8 + 2 * kCommanderVectorSize + kCommanderMapSize;
 
 class CommanderRolloutWriter {
 public:
@@ -21,8 +21,8 @@ public:
     // Ordinary decisions must increase in frame; nothing follows a terminal.
     // `label` (optional, DAgger): the rule commander's decision for the same
     // observation while the learned policy acted. Labels go to a parallel
-    // "<path>.teacher.bin" file with one 20-byte record (95-bit conditional
-    // mask packed in 12 bytes + 8 head actions) per RLO record; the terminal
+    // "<path>.teacher.bin" file with one 27-byte record (149-bit conditional
+    // mask packed in 19 bytes + 8 head actions) per RLO record; the terminal
     // record gets zeros. Once a label is written every later record must
     // carry one (terminal excepted) so the two files stay index-aligned.
     bool append(u32 frame, u8 event, bool teacher, CommanderRolloutStatus status,

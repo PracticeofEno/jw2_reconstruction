@@ -40,16 +40,17 @@ class CommanderAdapterTests(unittest.TestCase):
             torch.manual_seed(762)
             source = model.CommanderPolicy(9, vector_size=542).eval()
             upgraded = model.upgrade_policy(source, adapter_seed=951)
-            vector = torch.randn(5, 606)
+            vector = torch.randn(5, model.VECTOR_SIZE)
             maps = torch.randint(0, 256, (5, 12, 16, 16)).float() / 255
             private = torch.randn(5, 32)
-            masks = torch.ones(5, 95, dtype=torch.bool)
-            masks[1, :42] = False
+            masks = torch.ones(5, model.LOGIT_COUNT, dtype=torch.bool)
+            masks[1, :model.HEAD_SIZES[0]] = False
             masks[1, 14] = True
-            masks[1, 58:62] = False
-            masks[1, 59] = True
-            masks[2, 58:62] = False
-            masks[2, 58] = True
+            masks[1, model.HEAD_OFFSETS[2]:model.HEAD_OFFSETS[3]] = False
+            masks[1, model.HEAD_OFFSETS[2]+1] = True
+            masks[2, model.HEAD_OFFSETS[2]:model.HEAD_OFFSETS[3]] = False
+            masks[2, model.HEAD_OFFSETS[2]] = True
+        masks[:, 42:model.HEAD_SIZES[0]] = False
         return source, upgraded, vector, maps, private, masks
 
     def native(self, policy, vector, maps, private, masks, *, legacy=False):
@@ -68,17 +69,18 @@ class CommanderAdapterTests(unittest.TestCase):
         if legacy:
             command.append("--allow-legacy")
         subprocess.run(command, check=True, capture_output=True)
-        dtype = np.dtype([("action", "u1", 8), ("mask", "u1", 95), ("logp", "<f4", 8),
-                          ("logits", "<f4", 95), ("value", "<f4")])
+        dtype = np.dtype([("action", "u1", 8), ("mask", "u1", model.LOGIT_COUNT), ("logp", "<f4", 8),
+                          ("logits", "<f4", model.LOGIT_COUNT), ("value", "<f4")])
         return np.fromfile(output_path, dtype=dtype)
 
     def test_zero_extension_preserves_exact_python_and_native_outputs(self):
         source, upgraded, vector, maps, private, masks = self.fixture()
         with torch.no_grad():
-            old = source.sample(vector[:, :542].contiguous(), maps[:, :9].contiguous(), masks, private, deterministic=True)
+            old = source.sample(vector[:, :542].contiguous(), maps[:, :9].contiguous(), torch.cat((masks[:, :42], masks[:, model.HEAD_SIZES[0]:]), 1), private, deterministic=True)
             new = upgraded.sample(vector, maps, masks, private, deterministic=True)
         for name in old:
-            torch.testing.assert_close(new[name], old[name], rtol=0, atol=0, msg=name)
+            actual = torch.cat((new[name][:, :42], new[name][:, model.HEAD_SIZES[0]:]), 1) if name in ("mask", "logits") else new[name]
+            torch.testing.assert_close(actual, old[name], rtol=0, atol=5e-7 if name == "entropy" else 0, msg=name)
         original = self.native(source, vector, maps, private, masks, legacy=True)
         extended = self.native(upgraded, vector, maps, private, masks)
         for name in original.dtype.names:
@@ -140,7 +142,7 @@ class CommanderAdapterTests(unittest.TestCase):
         restored = model.load_weights(path, allow_legacy=True)
         upgraded = model.upgrade_policy(restored)
         torch.testing.assert_close(torch.get_rng_state(), initial_rng, rtol=0, atol=0)
-        self.assertEqual(upgraded.vector_size, 606)
+        self.assertEqual(upgraded.vector_size, model.VECTOR_SIZE)
         if self.probe:
             self.assertEqual(subprocess.run([str(self.probe), str(path)], capture_output=True).returncode, 2)
         legacy = model.CommanderPolicy(3, vector_size=528)
@@ -148,7 +150,7 @@ class CommanderAdapterTests(unittest.TestCase):
         self.assertEqual(context.vector_size, 542)
         self.assertEqual(context.conv1.in_channels, 9)
         latest = model.upgrade_policy(legacy)
-        self.assertEqual(latest.vector_size, 606)
+        self.assertEqual(latest.vector_size, model.VECTOR_SIZE)
         torch.testing.assert_close(latest.vector1.weight[:, :528], legacy.vector1.weight, rtol=0, atol=0)
 
     def test_numeric_adam_migration_preserves_old_slots_and_rejects_bad_layout(self):
@@ -171,6 +173,9 @@ class CommanderAdapterTests(unittest.TestCase):
                 elif slot != "step" and name == "conv1.weight":
                     self.assertEqual(int(torch.count_nonzero(actual[:, 9:])), 0)
                     actual = actual[:, :9]
+                elif slot != "step" and name in ("heads.0.weight", "heads.0.bias", "embeddings.0.weight"):
+                    self.assertEqual(int(torch.count_nonzero(actual[42:])), 0)
+                    actual = actual[:42]
                 torch.testing.assert_close(actual, original, rtol=0, atol=0)
         for parameter in list(policy.parameters())[39:]:
             for value in upgraded.state[parameter].values():
@@ -205,7 +210,7 @@ class CommanderAdapterTests(unittest.TestCase):
         record = upgrade.migrate(original, output)
         self.assertFalse(record["source_admission_migrated"])
         self.assertFalse(record["bc_gate"]["passed"])
-        self.assertEqual(model.load_weights(output).vector_size, 606)
+        self.assertEqual(model.load_weights(output).vector_size, model.VECTOR_SIZE)
         self.assertEqual(hashlib.sha256(original.read_bytes()).hexdigest(), before)
         with self.assertRaises(FileExistsError):
             upgrade.migrate(original, output)

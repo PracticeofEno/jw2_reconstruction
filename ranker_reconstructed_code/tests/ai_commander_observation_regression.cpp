@@ -82,7 +82,7 @@ void construction_reservation_and_empty_state(){
 }
 }
 int main(){
-    static_assert(kCommanderVectorSize==606&&kCommanderMapSize==3072&&kCommanderRolloutRecordBytes==4446);
+    static_assert(kCommanderVectorSize==1410&&kCommanderMapSize==3072&&kCommanderRolloutRecordBytes==6061);
     try{assignments_and_hidden_information();terrain_and_visibility();unclipped_values_and_execution_history();construction_reservation_and_empty_state();}
     catch(const std::exception& e){std::cerr<<"ai_commander_observation_regression: "<<e.what()<<'\n';return 1;}
     std::cout<<"ai_commander_observation_regression: 4 groups passed\n";return 0;

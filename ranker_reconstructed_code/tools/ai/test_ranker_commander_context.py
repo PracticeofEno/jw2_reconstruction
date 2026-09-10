@@ -33,7 +33,7 @@ def legacy_records():
     records["vector"][3, 208] = .1
     records["vector"][1:, 518:526] = (
         records["action"][:-1].astype(np.float32) /
-        np.asarray(rollout.HEAD_SIZES, dtype=np.float32)).astype(np.float16)
+        np.asarray(rollout.LEGACY_HEAD_SIZES, dtype=np.float32)).astype(np.float16)
     records["terminal_reward"] = rollout.terminal_rewards(records["frame"], records["status"])
     return records
 
@@ -59,7 +59,7 @@ def write_legacy_weights(path, policy):
         payload += struct.pack("<I", len(raw)) + encoded + raw
     path.write_bytes(model.HEADER.pack(model.MAGIC, 1, policy.weight_version,
                                       0x1F364207, 528, rollout.LEGACY_MAP_SIZE, model.PRIVILEGED_SIZE,
-                                      8, model.LOGIT_COUNT, len(model.tensor_shapes(528)),
+                                      8, sum(model.LEGACY_HEAD_SIZES), len(model.tensor_shapes(528)),
                                       len(payload), zlib.crc32(payload)) + payload)
 
 
@@ -161,11 +161,11 @@ class CommanderContextTests(unittest.TestCase):
     def test_dagger_labels_are_preserved_but_do_not_drive_clocks(self):
         source, destination = self.directory / "source.rlo", self.directory / "converted.rlo"
         write_legacy_rollout(source)
-        labels = np.zeros(6, dtype=rollout.LABEL_RECORD)
-        labels["mask_packed"] = np.packbits(np.ones((6, rollout.MASK_SIZE), dtype=np.uint8), axis=-1, bitorder="little")
+        labels = np.zeros(6, dtype=rollout.LEGACY_LABEL_RECORD)
+        labels["mask_packed"] = np.packbits(np.ones((6, 95), dtype=np.uint8), axis=-1, bitorder="little")
         # The teacher wants GUARD -> MAIN throughout, regardless of execution.
         labels["action"][:-1, 0] = 39
-        label_bytes = rollout.LABEL_MAGIC + labels.tobytes()
+        label_bytes = rollout.LEGACY_LABEL_MAGIC + labels.tobytes()
         Path(str(source) + ".teacher.bin").write_bytes(label_bytes)
         original_bytes = source.read_bytes()
         with self.assertRaises(rollout.RolloutError):
@@ -194,9 +194,9 @@ class CommanderContextTests(unittest.TestCase):
         episode = self.episode()
         converted = context.migrate_episode(episode, teacher_variant=0)
         original = converted.records.tobytes()
-        labels = np.zeros(6, dtype=rollout.LABEL_RECORD)
-        labels["mask_packed"] = np.packbits(np.ones((6, rollout.MASK_SIZE), dtype=np.uint8), axis=-1, bitorder="little")
-        Path(str(episode.path) + ".teacher.bin").write_bytes(rollout.LABEL_MAGIC + labels.tobytes())
+        labels = np.zeros(6, dtype=rollout.LEGACY_LABEL_RECORD)
+        labels["mask_packed"] = np.packbits(np.ones((6, 95), dtype=np.uint8), axis=-1, bitorder="little")
+        Path(str(episode.path) + ".teacher.bin").write_bytes(rollout.LEGACY_LABEL_MAGIC + labels.tobytes())
         relabeled = rollout.relabel_with_teacher(converted)
         self.assertEqual(converted.records.tobytes(), original)
         np.testing.assert_array_equal(relabeled.records["teacher"], np.ones(6))
@@ -218,10 +218,10 @@ class CommanderContextTests(unittest.TestCase):
         write_legacy_rollout(source)
         self.assertFalse(Path(str(source) + ".teacher.bin").exists())
         destination = self.directory / "orphaned_labels.rlo"
-        labels = np.zeros(6, dtype=rollout.LABEL_RECORD)
-        labels["mask_packed"] = np.packbits(np.ones((6, rollout.MASK_SIZE), dtype=np.uint8), axis=-1, bitorder="little")
+        labels = np.zeros(6, dtype=rollout.LEGACY_LABEL_RECORD)
+        labels["mask_packed"] = np.packbits(np.ones((6, 95), dtype=np.uint8), axis=-1, bitorder="little")
         stale_labels = Path(str(destination) + ".teacher.bin")
-        stale_label_bytes = rollout.LABEL_MAGIC + labels.tobytes()
+        stale_label_bytes = rollout.LEGACY_LABEL_MAGIC + labels.tobytes()
         stale_labels.write_bytes(stale_label_bytes)
         with self.assertRaises(FileExistsError):
             context.migrate_rollout_file(source, destination, teacher_variant=0)
@@ -296,7 +296,7 @@ class CommanderContextTests(unittest.TestCase):
         vector = torch.rand(3, 528)
         maps = torch.rand(3, model.LEGACY_MAP_SIZE)
         private = torch.rand(3, model.PRIVILEGED_SIZE)
-        masks = torch.ones(3, model.LOGIT_COUNT, dtype=torch.bool)
+        masks = torch.ones(3, sum(model.LEGACY_HEAD_SIZES), dtype=torch.bool)
         with torch.no_grad():
             old = legacy.sample(vector, maps, masks, private, deterministic=True)
             new = upgraded.sample(torch.cat([vector, torch.randn(3, 14)], 1), maps, masks, private, deterministic=True)

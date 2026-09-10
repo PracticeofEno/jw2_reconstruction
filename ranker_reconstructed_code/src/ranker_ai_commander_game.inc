@@ -7,6 +7,7 @@ struct AiCommanderOwner {
     CommanderRolloutWriter rollout;
     bool initialized = false;
     u32 hostile_mask = 0, packets = 0, interrupted = 0;
+    std::array<u32, 46> ability_effect_success{}, ability_effect_failed{};
     std::vector<double> decision_ms, observation_ms;
     std::vector<double> snapshot_ms, view_ms, inference_ms, executor_ms;
     std::vector<std::pair<u32,u32>> enemy_income_history;
@@ -25,6 +26,13 @@ AiCommanderPlay& ai_commander_play() {
     return play;
 }
 void ai_commander_reset_session() { ai_commander_play() = AiCommanderPlay{}; }
+
+void ai_commander_record_ability_result(u32 owner, u32 ability, bool success) {
+    if (owner >= kPlayerSlotCount || ability >= 46) return;
+    auto& controller = ai_commander_play().owners[owner];
+    if (!controller.initialized) return;
+    ++(success ? controller.ability_effect_success[ability] : controller.ability_effect_failed[ability]);
+}
 
 float ai_commander_construction_progress(const UnitMovementUnit& unit) {
     if (!unit.under_construction) return 1.0f;
@@ -273,9 +281,74 @@ void ai_commander_privileged(CommanderInput& input, u32 owner, u32 hostile_mask,
     p[24] = ai_commander_play().losses[owner] / 10000.0f;
 }
 
+const UnitMovementUnit* ai_commander_skill_target(const AiActionPlanInput& plan, u32 id) {
+    if (!plan.movement || !id) return nullptr;
+    for (const auto* unit : plan.movement->active_units) if (unit && unit->id == id) return unit;
+    for (const auto* unit : plan.movement->lifecycle_units) if (unit && unit->id == id) return unit;
+    return nullptr;
+}
+
+u32 ai_commander_item_ability_mask(const UnitMovementUnit& source) {
+    u32 mask = 0;
+    for (u32 item : source.item_slots) {
+        const auto* definition = FindUnitEquipmentEffect(frontend_bootstrap_state().equipment_catalog, item);
+        if (definition && definition->attachment_definition_id && definition->attachment_definition_id < 32)
+            mask |= 1u << definition->attachment_definition_id;
+    }
+    return mask;
+}
+
+bool ai_commander_corpse_visible(const UnitMovementUnit& unit, u32 owner, void* context) {
+    const auto& plan = *static_cast<const AiActionPlanInput*>(context);
+    if (!plan.visible_tiles || !plan.movement || !(unit.runtime_flags & 4u) || unit.path_target_x == 1 || unit.x < 0 || unit.y < 0)
+        return false;
+    const auto width = plan.movement->map.width;
+    if (!width || u32(unit.x / 32) >= width || u32(unit.y / 32) >= plan.movement->map.height) return false;
+    const auto tile = std::size_t(unit.y / 32) * width + unit.x / 32;
+    return tile < plan.visible_tiles->size() && (*plan.visible_tiles)[tile] &&
+        default_ai_play_unit_visible(unit, owner, nullptr);
+}
+
+AiAbilityAvailability ai_commander_check_ability(const UnitMovementUnit& source,
+    u32 ability, u32 target_id, i32 x, i32 y, u32 owner, void* context) {
+    AiAbilityAvailability result;
+    if (!context || source.owner_id != owner || ability >= kAiSkillDefinitions.size()) return result;
+    const auto& plan = *static_cast<const AiActionPlanInput*>(context);
+    const auto& d = kAiSkillDefinitions[ability];
+    const auto& research = g_runtime.gameplay_production_runtime.variant_counts;
+    const u32 level = owner < research.size() && d.research < research[owner].size() ? research[owner][d.research] : 0;
+    const bool item = ability < 32 && (ai_commander_item_ability_mask(source) & (1u << ability));
+    if (!AiSkillSourceAvailable(source, ability, level, item)) return result;
+    const auto* target = ai_commander_skill_target(plan, target_id);
+    if (target_id && !target) return result;
+    const bool related = target && target->owner_id < kPlayerSlotCount &&
+        (target->owner_id == owner || (g_runtime.gameplay_player_slots.owner_relation_masks[target->owner_id] & (1u << owner)));
+    if (!AiSkillTargetAvailable(ability, target, related)) return result;
+    if (target && (target->runtime_flags & 4u) && !ai_commander_corpse_visible(*target, owner, context)) return result;
+    if (ability != 31 && ability != 19) {
+        UnitMovementUnit gate_source;
+        gate_source.x = source.x; gate_source.y = source.y;
+        gate_source.definition = source.definition;
+        gate_source.target = const_cast<UnitMovementUnit*>(target);
+        gate_source.active_command_payload.y = x;
+        gate_source.active_command_payload.value = static_cast<u32>(y);
+        // This gate only reads the snapshot. A distance carry means the native
+        // approach state can execute it; a nonzero carried value is rejection.
+        const auto gate = EvaluateUnitEffectActionTargetGate(g_runtime.gameplay_unit_effect_runtime, gate_source, ability);
+        if (gate.carry && gate.value != 0) return result;
+    }
+    result.available = true; result.secondary_cost = item ? 0 : d.mana_cost;
+    return result;
+}
+
 CommanderServices ai_commander_services(u32 owner, const AiObservation& observation,
     const AiActionPlanInput& plan) {
     CommanderServices services;
+    services.own_tribe = g_runtime.gameplay_startup_state.owner_faction_ids[owner];
+    services.building_prerequisite = [owner](u32 type) {
+        auto* lifecycle = g_runtime.gameplay_startup_state.lifecycle;
+        return lifecycle && CheckUnitProductionPrerequisites(*lifecycle, owner, type);
+    };
     services.diagnostic = [](const std::string& message) {
         append_startup_log("%s", message.c_str());
     };
@@ -296,9 +369,49 @@ CommanderServices ai_commander_services(u32 owner, const AiObservation& observat
                 return ai_commander_construction_progress(*unit);
         return 1.0f;
     };
-    services.validator = [&plan](const AiSemanticAction& action) {
+    services.validator = [&plan, owner](const AiSemanticAction& action) {
+        if (action.kind == AiSemanticActionKind::set_stance) {
+            if (action.stance_id >= 4) return false;
+            const auto& d = kAiSkillDefinitions[32 + action.stance_id];
+            const auto& research = g_runtime.gameplay_production_runtime.variant_counts;
+            const u32 level = d.research < research[owner].size() ? research[owner][d.research] : 0;
+            for (u32 id : action.unit_ids) {
+                const auto* unit = ai_commander_skill_target(plan, id);
+                if (!unit || !AiSkillStanceAvailable(*unit, action.stance_id, action.stance_on, level)) return false;
+            }
+        }
         return static_cast<bool>(PlanAiSemanticActionV1(plan, action));
     };
+    configure_default_unit_effect_runtime_state(g_runtime.gameplay_unit_effect_runtime);
+    services.skill_source = [&plan, owner](u32 id) {
+        CommanderSkillSource info;
+        const auto* unit = ai_commander_skill_target(plan, id);
+        if (!unit || !unit->active || unit->owner_id != owner) return info;
+        info.item_ability_mask = ai_commander_item_ability_mask(*unit);
+        info.ability_mask = unit->script_bit_flags | info.item_ability_mask;
+        info.runtime_flags = unit->runtime_flags; info.status = unit->status_timer;
+        info.range = UnitEffectCommandDistanceGate(*unit);
+        info.boardable = (unit->definition.transport_flags & 4u) != 0;
+        if (plan.movement) for (const auto* passenger : plan.movement->active_units)
+            if (passenger && passenger->owner_id == owner && passenger->target == unit &&
+                (passenger->command_state & 0xffffffu) == 0x45u) info.loaded_transport = true;
+        return info;
+    };
+    services.skill_target = [&plan, owner](u32 ability, u32 id) {
+        const auto* target = ai_commander_skill_target(plan, id);
+        if (!target) return false;
+        const bool related = target->owner_id < kPlayerSlotCount &&
+            (target->owner_id == owner || (g_runtime.gameplay_player_slots.owner_relation_masks[target->owner_id] & (1u << owner)));
+        return AiSkillTargetAvailable(ability, target, related);
+    };
+    if (plan.movement && plan.visible_tiles) for (const auto* corpse : plan.movement->lifecycle_units) {
+        if (!corpse || !ai_commander_corpse_visible(*corpse, owner, const_cast<AiActionPlanInput*>(&plan))) continue;
+        AiObservedUnit seen;
+        seen.id = corpse->id; seen.type_id = corpse->type_id; seen.owner_id = corpse->owner_id;
+        seen.type_flags = corpse->type_flags; seen.x = corpse->x; seen.y = corpse->y;
+        seen.render_class = corpse->definition.render_class; seen.visible = true; seen.alive = false;
+        services.visible_corpses.push_back(seen);
+    }
     services.production_info = [owner](AiProductionRequestKind kind, u32 id) {
         CommanderProductionInfo info;
         if (kind == AiProductionRequestKind::research) {
@@ -498,7 +611,10 @@ void run_ai_commander_frame(GameplayLoopState& loop) {
             plan.explored_tiles = &explored;
             plan.production_available = CheckAiLiveProductionAvailability;
             plan.production_availability_user_data = &live;
-            plan.ability_available = default_ai_play_check_ability;
+            plan.ability_available = ai_commander_check_ability;
+            plan.ability_availability_user_data = &plan;
+            plan.ability_corpse_visible = ai_commander_corpse_visible;
+            plan.ability_corpse_visibility_user_data = &plan;
             const CommanderServices services = ai_commander_services(owner_id, observation.observation, plan);
             CommanderView view = BuildCommanderView(owner.state, observation.observation, services);
             ai_commander_privileged(view.input, owner_id, owner.hostile_mask, frame, *movement);
@@ -616,7 +732,7 @@ void ai_commander_finish(GameplayLoopState& loop, bool timed_out) {
     std::array<u32, kPlayerSlotCount> buildings{};
     for (const auto* unit : movement->active_units)
         if (unit && unit->active && unit->health > 0 && unit->owner_id < kPlayerSlotCount &&
-            unit->type_id >= 0x60 && unit->type_id < 0xa0 && unit->type_id != kGameplayEndExcludedEliteType)
+            unit->type_id < 0xa0 && IsGameplayEliminationBuildingType(unit->type_id))
             ++buildings[unit->owner_id];
     for (u32 owner_id = 0; owner_id < kPlayerSlotCount; ++owner_id) {
         auto& owner = play.owners[owner_id];
@@ -677,7 +793,19 @@ void ai_commander_finish(GameplayLoopState& loop, bool timed_out) {
             << ",\"snapshot_p99_ms\":" << percentile(owner.snapshot_ms, 0.99)
             << ",\"commander_view_p99_ms\":" << percentile(owner.view_ms, 0.99)
             << ",\"inference_p99_ms\":" << percentile(owner.inference_ms, 0.99)
-            << ",\"executor_p99_ms\":" << percentile(owner.executor_ms, 0.99) << "}\n";
+            << ",\"executor_p99_ms\":" << percentile(owner.executor_ms, 0.99)
+            << ",\"morph_orders\":" << owner.state.morph_orders
+            << ",\"stance_orders\":" << owner.state.stance_orders
+            << ",\"transport_orders\":" << owner.state.transport_orders;
+        const auto counts = [&](const char* name, const auto& values) {
+            out << ",\"" << name << "\":[";
+            for (std::size_t i = 0; i < values.size(); ++i) { if (i) out << ','; out << values[i]; }
+            out << ']';
+        };
+        counts("ability_orders", owner.state.ability_orders);
+        counts("ability_effect_success", owner.ability_effect_success);
+        counts("ability_effect_failed", owner.ability_effect_failed);
+        out << "}\n";
     }
     } catch (const std::exception& error) { ai_commander_fail(loop, error.what()); }
 }

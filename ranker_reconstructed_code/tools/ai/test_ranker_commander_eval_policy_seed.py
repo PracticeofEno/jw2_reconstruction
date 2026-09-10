@@ -8,6 +8,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
+import numpy as np
+
 import ranker_commander_eval as evaluation
 
 
@@ -38,7 +40,8 @@ class PolicySeedEvaluationTests(unittest.TestCase):
                     command = [str(install / "ranker_rebuild.exe"), "-AISELF", "-AICOMMANDER",
                         f"-AIWEIGHTS:{weights}", f"-AIROLLOUT:{output / 'commander.rlo'}",
                         "-AINET:302", "-SEED:9", "-AITRIBE:0", "-MAXFRAMES:60000",
-                        f"-AIOUT:{output}", "-AICURRICULUM:2", "-AIAUTOSCOUT:1"]
+                        f"-AIOUT:{output}", "-AICURRICULUM:2", "-AIAUTOSCOUT:1",
+                        "-AIOWNTRIBE:2", "-AIOWNTRIBE2:2"]
                     if seed is not None:
                         command.append(f"-AIPOLICYSEED:{seed}")
                         self.assertEqual(report["policy_seed"], seed)
@@ -81,6 +84,9 @@ class PolicySeedEvaluationTests(unittest.TestCase):
                 return Mock(wait=Mock(return_value=0))
             episode = SimpleNamespace(owner=1, seed=9, weight_version=8,
                 terminal={"frame": 22000, "status": evaluation.WIN}, decisions=[0], close=Mock())
+            vector = np.zeros((1, 1410), dtype=np.float32)
+            vector[:, 608] = 1
+            episode.records = {"vector": vector}
             correct = "ai-commander: policy-seed-override owner=1 policy_seed=0 rng_version_salt=0 game_seed=9 model_version=8\n"
             for index, confirmation in enumerate(("", correct.replace("policy_seed=0", "policy_seed=1"), correct)):
                 with self.subTest(log=confirmation), patch.object(evaluation.subprocess, "Popen", side_effect=launch), \

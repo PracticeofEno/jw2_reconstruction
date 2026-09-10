@@ -17,10 +17,21 @@ struct CommanderPoint { i32 x = 0, y = 0; bool valid = false; };
 struct CommanderProductionInfo {
     u32 cost = 0, population = 0, width = 1, height = 1;
 };
+struct CommanderSkillSource {
+    u32 ability_mask = 0, item_ability_mask = 0, runtime_flags = 0;
+    u32 status = 0, range = 0;
+    bool boardable = false, loaded_transport = false;
+};
 struct CommanderServices {
     // Authoritative engine planner. Absent validators fail closed.
     std::function<bool(const AiSemanticAction&)> validator;
+    // Own-unit runtime state only. Corpse targets are separately filtered by
+    // current tile vision and the engine's target-visibility predicate.
+    std::function<CommanderSkillSource(u32)> skill_source;
+    std::function<bool(u32, u32)> skill_target;
+    std::vector<AiObservedUnit> visible_corpses;
     std::function<CommanderProductionInfo(AiProductionRequestKind, u32)> production_info;
+    std::function<bool(u32)> building_prerequisite;
     std::function<u32(u32)> generation_of;
     // Controlled construction work elapsed / definition production ticks.
     // HP is not a progress proxy: damage may lower an almost finished site.
@@ -29,7 +40,7 @@ struct CommanderServices {
     // Optional engine path/open-window query. Fraction runs from a to b.
     std::function<CommanderPoint(CommanderPoint, CommanderPoint, float)> route_point;
     u32 cumulative_gathered = 0, kills_investment = 0, losses_investment = 0;
-    u32 public_enemy_tribe = 4, curriculum_stage = 2;
+    u32 own_tribe = 2, public_enemy_tribe = 4, curriculum_stage = 2;
     bool autoscout = true;
     // Optional transfer+mission action semantics; false preserves legacy behavior.
     bool coordinated_transfers = false;
@@ -39,6 +50,13 @@ struct CommanderServices {
     u32 teacher_variant = 0;
 };
 // Teacher variant parameters derived deterministically from a variant id.
+// Explicit experimental teacher recipe; low bits retain the strategy variant.
+inline constexpr u32 kCommanderTeacherRaceRoles = 0x80000000u;
+inline constexpr u32 kCommanderTeacherRaceEconomy = 0x40000000u;
+// Elf uses its composition teacher against public Primitive/Demon opponents;
+// other matchups retain the default teacher. This flag is not an actor feature.
+inline constexpr u32 kCommanderTeacherElfMatchup = 0x10000000u;
+
 struct CommanderTeacherParams {
     u32 opening_velocis = 2;   // velocis before the first tower (2..8)
     u32 tower_frame = 0;       // earliest frame for the first tower (2000..5000)
@@ -119,6 +137,8 @@ struct CommanderState {
     u8 worker_policy = 0, rally_squad = 0;
     u32 scout_id = 0, packet_window = 0, packets_in_window = 0;
     u32 mask_violations = 0, silent_rejections = 0;
+    std::array<u32, 46> ability_orders{};
+    u32 morph_orders = 0, stance_orders = 0, transport_orders = 0;
     AiExpansionPlan expansion;
     u32 expansion_frame = 0;
     bool expansion_initialized = false;
@@ -146,7 +166,7 @@ struct CommanderState {
     // Building placement plans are searched in full only on fixed decision
     // frames; executor ticks and interrupts reuse re-validated cached plans.
     std::array<std::vector<AiSemanticAction>, 16> cached_hq_plans, cached_tower_plans;
-    std::array<std::vector<AiSemanticAction>, 10> cached_build_plans;
+    std::array<std::vector<AiSemanticAction>, kCommanderMacroCount> cached_build_plans;
     u32 plan_cache_frame = 0, plan_cache_workers = 0, plan_cache_available = 0, plan_cache_terrain = 0;
     bool plan_cache_valid = false;
 };
@@ -163,19 +183,19 @@ struct CommanderView {
     CommanderMask mask{};
     std::array<CommanderPoint, 16> anchors{};
     std::array<CommanderSquadView, 3> squads{};
-    std::array<std::vector<AiSemanticAction>, 42> macro_plans;
+    std::array<std::vector<AiSemanticAction>, kCommanderMacroCount> macro_plans;
     // Exact transfer membership planned from the pre-decision registry. The
     // conditional masks and executor share these lists and projected totals.
     std::array<std::vector<u32>, 4> transfer_members;
     std::array<float, 4> transfer_investment{};
     // H1b only affects HQ/tower construction, and is conditional on H1.
     std::array<std::vector<AiSemanticAction>, 16> hq_build_plans, tower_build_plans;
-    std::vector<AiObservedUnit> own, visible_enemies, visible_neutrals;
+    std::vector<AiObservedUnit> own, visible_enemies, visible_neutrals, visible_allies;
     std::vector<u8> build_occupancy;
     std::vector<CommanderGhost> enemies, neutrals;
     CommanderServices services;
     std::array<float, 4> potential_components{};
-    std::array<u32, 32> own_counts{}, pending_counts{};
+    std::array<u32, 48> own_counts{}, pending_counts{};
     u32 frame = 0, event = 0, queued_population = 0, reserved_resources = 0;
     u32 worker_cap = 0, workers = 0, army_count = 0, near_enemies = 0;
     float own_weight = 0, enemy_weight = 0, income_rate = 0;

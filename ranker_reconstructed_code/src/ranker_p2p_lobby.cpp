@@ -29,13 +29,13 @@
 namespace ranker {
 namespace {
 
-bool parse_commander_policy_seed(const char* command_line, bool& present, u64& seed) {
+bool parse_commander_unsigned_option(const char* command_line, const std::string& flag,
+    bool& present, u64& value_out, u64 maximum) {
     // Inspect whole arguments so a flag-looking substring inside a quoted
     // weights/output path cannot change the policy's random stream.
     const auto whitespace = [](char c) {
         return c == ' ' || c == '\t' || c == '\r' || c == '\n';
     };
-    const std::string flag = "-AIPOLICYSEED";
     while (*command_line) {
         while (whitespace(*command_line)) ++command_line;
         if (!*command_line) break;
@@ -49,18 +49,21 @@ bool parse_commander_policy_seed(const char* command_line, bool& present, u64& s
         if (token != flag && token.compare(0, flag.size() + 1, flag + ':') != 0) continue;
         if (present || quoted || token.size() <= flag.size() + 1 || token[flag.size()] != ':') return false;
         u64 parsed = 0;
-        constexpr u64 maximum = ~u64{0};
         for (std::size_t i = flag.size() + 1; i < token.size(); ++i) {
             const char digit = token[i];
             if (digit < '0' || digit > '9') return false;
             const u64 value = static_cast<u64>(digit - '0');
-            if (parsed > (maximum - value) / 10) return false;
+            if (value > maximum || parsed > (maximum - value) / 10) return false;
             parsed = parsed * 10 + value;
         }
         present = true;
-        seed = parsed;
+        value_out = parsed;
     }
     return true;
+}
+
+bool parse_commander_policy_seed(const char* command_line, bool& present, u64& seed) {
+    return parse_commander_unsigned_option(command_line, "-AIPOLICYSEED", present, seed, ~u64{0});
 }
 
 constexpr DWORD kWindowStyleFullscreen = WS_POPUP;
@@ -687,6 +690,8 @@ void ResetP2PNetworkLaunchParameters(P2PNetworkLaunchParameters& parameters) {
     parameters.self_play_deterministic = false;
     parameters.self_play_has_policy_seed = false;
     parameters.self_play_policy_seed = 0;
+    parameters.self_play_own_tribe = 2;
+    parameters.self_play_own_tribe2 = 2;
     parameters.self_play_autoscout = true;
     parameters.self_play_coordinated_transfers = false;
     parameters.self_play_no_sleep = false;
@@ -869,6 +874,17 @@ bool ParseP2PNetworkCommandLine(P2PNetworkLaunchParameters& parameters,
         parameters.self_play_opponent_tribe = tribe != nullptr ?
             static_cast<u32>(std::strtoul(tribe + std::strlen("-AITRIBE:"),
                 nullptr, 10)) : 2u;
+        const auto parse_policy_tribe = [&](const char* flag, u32& choice) {
+            bool present = false;
+            u64 parsed = choice;
+            if (!parse_commander_unsigned_option(upper, flag, present, parsed, 3)) return false;
+            choice = static_cast<u32>(parsed);
+            return true;
+        };
+        if (!parse_policy_tribe("-AIOWNTRIBE", parameters.self_play_own_tribe) ||
+            !parse_policy_tribe("-AIOWNTRIBE2", parameters.self_play_own_tribe2)) return false;
+        if ((!parameters.self_play_commander || parameters.self_play_1v1) &&
+            (parameters.self_play_own_tribe != 2 || parameters.self_play_own_tribe2 != 2)) return false;
         // v9 macro autopilot / base-defense reflex / event decision gate:
         // default ON, -AIAUTOPILOT:0 / -AIREFLEX:0 / -AIGATE:0 disable (the
         // A/B lever for measuring their effect).

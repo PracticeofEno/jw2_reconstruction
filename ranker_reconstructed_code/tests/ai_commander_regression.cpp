@@ -1,4 +1,5 @@
 #include "ranker_ai_commander.h"
+#include "ranker_ai_skill_catalog.h"
 
 #include <algorithm>
 #include <cmath>
@@ -44,10 +45,10 @@ void fog_honesty() {
 }
 void masks_and_generation() {
     auto o=world();o.primary_resources=0;o.units={unit(1,0x80,320,320),unit(2,0x22,500,500)};auto sv=services();u32 generation=1;sv.generation_of=[&](u32){return generation;};
-    CommanderState s;auto v=BuildCommanderView(s,o,sv);require(v.mask[59]&&!v.mask[60]&&!v.mask[61],"empty squad selectable");
-    CommanderAction p{};CommanderMask m=v.mask;CommanderLegalHeadMask(v,p,3,m);require(m[62]&&!m[63],"NONE squad has nontrivial intent distribution");
-    p[2]=1;p[3]=0;CommanderLegalHeadMask(v,p,4,m);for(u32 i=4;i<16;++i)require(!m[70+i],"HOLD allowed hostile anchor");
-    p[0]=0;CommanderLegalHeadMask(v,p,1,m);require(m[42]&&std::count(m.begin()+43,m.begin()+58,1)==0,"irrelevant placement head not collapsed");
+    CommanderState s;auto v=BuildCommanderView(s,o,sv);require(v.mask[kCommanderHeadOffsets[2]+1]&&!v.mask[kCommanderHeadOffsets[2]+2]&&!v.mask[kCommanderHeadOffsets[2]+3],"empty squad selectable");
+    CommanderAction p{};CommanderMask m=v.mask;CommanderLegalHeadMask(v,p,3,m);require(m[kCommanderHeadOffsets[3]]&&!m[kCommanderHeadOffsets[3]+1],"NONE squad has nontrivial intent distribution");
+    p[2]=1;p[3]=0;CommanderLegalHeadMask(v,p,4,m);for(u32 i=4;i<16;++i)require(!m[kCommanderHeadOffsets[4]+i],"HOLD allowed hostile anchor");
+    p[0]=0;CommanderLegalHeadMask(v,p,1,m);require(m[kCommanderHeadOffsets[1]]&&std::count(m.begin()+kCommanderHeadOffsets[1]+1,m.begin()+kCommanderHeadOffsets[2],1)==0,"irrelevant placement head not collapsed");
     s.units.at(2).squad=2;s.units.at(2).last_order_frame=99;++generation;o.simulation_frame=9;BuildCommanderView(s,o,sv);
     require(s.units.at(2).squad==0&&s.units.at(2).last_order_frame==0,"recycled identity inherited old squad/order");
 }
@@ -348,8 +349,81 @@ void expansion_priority_requires_a_confirmed_hq_at_the_anchor() {
     require(confirmed[2]==1&&confirmed[4]==9,"confirmed expansion HQ lost target priority");
 }
 }
+namespace {
+void elf_expansion_scout_preserves_its_actual_destination() {
+    CommanderView v;v.mask.fill(1);
+    for(auto& p:v.anchors)p={512,512,true};
+    v.squads[0].members={1};v.squads[0].center={320,320,true};
+    CommanderAction prefix{};prefix[2]=1;prefix[3]=u8(CommanderIntent::scout);
+    for(u32 race=0;race<4;++race) {
+        v.services.own_tribe=race;CommanderMask legal=v.mask;
+        CommanderLegalHeadMask(v,prefix,4,legal);
+        require(bool(legal[kCommanderHeadOffsets[4]+3])==(race==1),
+            "Elf expansion SCOUT mask missing or other-race legality changed");
+        for(u32 anchor:{4u,9u,12u,13u})
+            require(legal[kCommanderHeadOffsets[4]+anchor],"existing SCOUT anchor was lost");
+    }
+    v.services.own_tribe=1;v.services.public_enemy_tribe=3;
+    v.services.teacher_variant=kCommanderTeacherElfMatchup;
+    v.frame=12001;v.workers=20;v.worker_cap=28;v.army_count=20;
+    v.own_weight=v.squads[0].weight=6000;
+    v.own_counts[0]=20;v.own_counts[1]=10;v.own_counts[4]=4;
+    v.own_counts[5]=2;v.own_counts[7]=4;v.own_counts[16]=1;
+    v.own_counts[18]=4;v.own_counts[19]=2;v.own_counts[20]=2;
+    v.own_counts[21]=1;v.own_counts[22]=1;v.own_counts[24]=1;
+    auto& z=v.input.vector;
+    z[8]=std::log1p(1257.f)/std::log1p(20000.f);z[9]=.2f;
+    z[16]=.4f;z[24]=.5f;z[30]=.8f;z[58]=1;z[62]=z[63]=1;
+    z[260]=0; // The actual candidate expansion footprint is unexplored.
+    CommanderState s;s.decision_count=100;s.squads[0].anchor=1;
+    const auto action=CommanderTeacherAction(s,v);
+    require(action[2]==1&&action[3]==u8(CommanderIntent::scout)&&action[4]==3,
+        "Elf teacher silently redirected expansion scout to the enemy base");
+    v.anchors[3].valid=false;CommanderMask invalid=v.mask;
+    CommanderLegalHeadMask(v,prefix,4,invalid);
+    require(!invalid[kCommanderHeadOffsets[4]+3],"invalid expansion anchor became legal");
+}
+}
+namespace {
+void elf_damaging_unit_skill_requires_the_actual_enemy_target() {
+    require(kAiSkillDefinitions[1].mode==3&&kAiSkillDefinitions[1].radius==0&&
+        kAiSkillDefinitions[1].mana_cost==60,"Thunder bolt unit-only contract changed");
+    require(kAiSkillDefinitions[9].mode==2,"Meteo point-target contract changed");
+    CommanderView v;v.services.own_tribe=1;v.services.public_enemy_tribe=3;
+    v.services.teacher_variant=kCommanderTeacherElfMatchup;v.frame=42721;
+    v.mask.fill(0);v.mask[0]=v.mask[64]=1;
+    v.workers=20;v.worker_cap=28;v.own_counts[0]=20;v.own_counts[16]=1;
+    v.input.vector[24]=1;v.input.vector[30]=1;
+    v.own={unit(100,0x11,320,320),unit(101,0x11,344,320)};
+    v.visible_enemies={unit(200,0x03,336,320,false)};
+    AiSemanticAction order;order.kind=AiSemanticActionKind::use_ability;
+    order.unit_ids={100};order.ability_id=1;order.target_unit_id=100;
+    order.target_x=320;order.target_y=320;v.macro_plans[64]={order};
+    CommanderState s;s.decision_count=100;
+    auto selected=[&](){return CommanderTeacherAction(s,v)[0];};
+    require(selected()!=64,"Thunder bolt selected its caster because an enemy stood nearby");
+    auto& cast=v.macro_plans[64][0];cast.target_unit_id=101;cast.target_x=344;
+    require(selected()!=64,"Thunder bolt selected an ally beside a visible enemy");
+    cast.target_unit_id=999;cast.target_x=336;
+    require(selected()!=64,"Thunder bolt selected an absent unit using nearby enemy coordinates");
+    cast.target_unit_id=200;
+    require(selected()==64,"Thunder bolt rejected its actual visible enemy target");
+    v.visible_enemies[0].render_class=5;
+    v.visible_enemies.push_back(unit(201,0x03,344,320,false));
+    require(selected()!=64,"damaging unit skill ignored its actual target's invalid class");
+    v.visible_enemies.resize(1);v.visible_enemies[0].render_class=0;
+    v.enemies.push_back({v.visible_enemies[0],42720,false,0});v.visible_enemies.clear();
+    require(selected()!=64,"damaging unit skill selected only a remembered enemy");
+    v.visible_enemies={unit(200,0x03,640,320,false)};
+    cast.ability_id=9;cast.target_unit_id=0;cast.target_x=640;
+    require(selected()==64,"ground-targeted Meteo lost its legitimate enemy area");
+    cast.ability_id=17;cast.target_unit_id=101;cast.target_x=344;
+    v.own[0].type_id=0x15;
+    require(selected()==64,"Blessing lost its legitimate allied combat target");
+}
+}
 int main() {
-    try {fog_honesty();masks_and_generation();macro_and_queue_gate();workers_and_cadence();bounded_deterministic_packets();reservations_and_receipts();potential_and_teacher();visible_hunting_and_damage_reflex();recovery_kiting();busy_constructor_not_reassigned();expansion_cache_refreshes_live_knowledge();construction_return_waits_for_acknowledgment();expansion_guard_scouts_unknown_build_site();unreachable_builder_and_reselection();recycled_sources_retire_pending_work();scouting_party_lifecycle();reinforcement_does_not_split_attacking_main();commander_can_override_defense_reflex();marching_squads_are_not_merge_material();engage_reflex_does_not_alternate_with_home_order();expansion_priority_requires_a_confirmed_hq_at_the_anchor();}
+    try {elf_damaging_unit_skill_requires_the_actual_enemy_target();elf_expansion_scout_preserves_its_actual_destination();fog_honesty();masks_and_generation();macro_and_queue_gate();workers_and_cadence();bounded_deterministic_packets();reservations_and_receipts();potential_and_teacher();visible_hunting_and_damage_reflex();recovery_kiting();busy_constructor_not_reassigned();expansion_cache_refreshes_live_knowledge();construction_return_waits_for_acknowledgment();expansion_guard_scouts_unknown_build_site();unreachable_builder_and_reselection();recycled_sources_retire_pending_work();scouting_party_lifecycle();reinforcement_does_not_split_attacking_main();commander_can_override_defense_reflex();marching_squads_are_not_merge_material();engage_reflex_does_not_alternate_with_home_order();expansion_priority_requires_a_confirmed_hq_at_the_anchor();}
     catch(const std::exception& e){std::cerr<<"ai_commander_regression: "<<e.what()<<'\n';return 1;}
-    std::cout<<"ai_commander_regression: 21 groups passed\n";return 0;
+    std::cout<<"ai_commander_regression: 23 groups passed\n";return 0;
 }

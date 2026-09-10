@@ -1,4 +1,5 @@
 #include "ranker_ai_rl_reward.h"
+#include "ranker_gameplay_end_conditions.h"
 
 namespace ranker {
 
@@ -38,11 +39,10 @@ AiRlTerminalOutcome ClassifyAiRlTerminal(const AiObservation& observation) {
     // harness and league use everywhere else (zero buildings = eliminated;
     // stray mobile units do not keep an owner alive).  The old unit-count
     // rule disagreed with the gate/records and mis-labeled outcomes.
-    constexpr u32 kBuildingTypeBase = 0x60u;
     bool have_own_building = false;
     bool have_enemy_building = false;
     for (const AiObservedUnit& unit : observation.units) {
-        if (unit.type_id < kBuildingTypeBase || !unit.alive) {
+        if (!IsGameplayEliminationBuildingType(unit.type_id) || !unit.alive) {
             continue;
         }
         if (unit.controlled) {

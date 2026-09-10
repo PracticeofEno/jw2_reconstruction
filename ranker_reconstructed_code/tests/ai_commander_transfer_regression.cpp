@@ -46,10 +46,10 @@ void populate_main(AiObservation& o) {
 void new_raid_receives_same_decision_mission() {
     auto o=world();populate_main(o);auto sv=services();CommanderState s;
     const auto view=BuildCommanderView(s,o,sv);
-    require(!view.mask[61]&&view.mask[40],"pre-decision RAID should be empty and transfer available");
+    require(!view.mask[kCommanderHeadOffsets[2]+3]&&view.mask[40],"pre-decision RAID should be empty and transfer available");
     CommanderAction action{};action[0]=40;action[2]=3;action[3]=u8(CommanderIntent::attack_move);action[4]=6;
-    require(conditional(view,action,2)[61],"new RAID cannot receive a same-decision mission");
-    require(conditional(view,action,3)[62+u8(CommanderIntent::retreat)],"new RAID center was treated as empty/home");
+    require(conditional(view,action,2)[kCommanderHeadOffsets[2]+3],"new RAID cannot receive a same-decision mission");
+    require(conditional(view,action,3)[kCommanderHeadOffsets[3]+u8(CommanderIntent::retreat)],"new RAID center was treated as empty/home");
     const auto packets=CommanderExecute(s,o,view,&action);
     require(s.mask_violations==0&&s.previous_action==action,"legal composed transfer/mission was replaced");
     require(members(s,2)==std::vector<u32>({20,21,22,23}),"fastest four transfer selection changed");
@@ -63,7 +63,7 @@ void new_raid_receives_same_decision_mission() {
         require(found!=packets.end()&&found->target_x>800&&found->target_y>800,
             "new RAID micro used an empty/pre-transfer center and returned home");
     }
-    require(view.squads[2].members.empty()&&!view.mask[61],"projection mutated the original observation");
+    require(view.squads[2].members.empty()&&!view.mask[kCommanderHeadOffsets[2]+3],"projection mutated the original observation");
     o.simulation_frame=9;const auto next=BuildCommanderView(s,o,sv);
     require(next.mask[41],"coordinated transfers introduced a reversal cooldown");
 }
@@ -77,7 +77,7 @@ void guard_selection_preserves_investment_order() {
     require(view.transfer_members[0]==std::vector<u32>({11,12})&&view.transfer_investment[0]==1600,
         "transfer plan lost registry investment (including merged-unit investment)");
     CommanderAction action{};action[0]=38;action[2]=2;action[3]=u8(CommanderIntent::hold);action[4]=0;
-    require(conditional(view,action,2)[60],"new GUARD is masked");
+    require(conditional(view,action,2)[kCommanderHeadOffsets[2]+2],"new GUARD is masked");
     CommanderExecute(s,o,view,&action);
     require(members(s,1)==std::vector<u32>({11,12})&&s.squads[1].decision_weight==660,
         "GUARD execution differs from the projected membership/weight");
@@ -90,17 +90,17 @@ void projected_hunt_weight_and_drained_source_masks() {
     neutral.health=neutral.max_health=900;o.units.push_back(neutral);
     CommanderState s;auto sv=services();auto view=BuildCommanderView(s,o,sv);
     CommanderAction action{};action[0]=40;action[2]=1;
-    require(!conditional(view,action,3)[62+u8(CommanderIntent::hunt)],
+    require(!conditional(view,action,3)[kCommanderHeadOffsets[3]+u8(CommanderIntent::hunt)],
         "HUNT retained the MAIN weight of units transferred out");
     action[2]=3;
-    require(!conditional(view,action,3)[62+u8(CommanderIntent::hunt)],
+    require(!conditional(view,action,3)[kCommanderHeadOffsets[3]+u8(CommanderIntent::hunt)],
         "HUNT overestimated the new RAID's strength");
     action[2]=0;CommanderExecute(s,o,view,&action);
     o.simulation_frame=9;view=BuildCommanderView(s,o,sv);
     action={};action[0]=41;action[2]=1;action[3]=u8(CommanderIntent::hunt);action[4]=11;
     const auto mask=conditional(view,action,2);
-    require(mask[59]&&!mask[61],"empty post-transfer RAID remains selectable");
-    require(conditional(view,action,3)[62+u8(CommanderIntent::hunt)],
+    require(mask[kCommanderHeadOffsets[2]+1]&&!mask[kCommanderHeadOffsets[2]+3],"empty post-transfer RAID remains selectable");
+    require(conditional(view,action,3)[kCommanderHeadOffsets[3]+u8(CommanderIntent::hunt)],
         "HUNT ignored units transferred into MAIN");
     CommanderExecute(s,o,view,&action);
     require(s.mask_violations==0&&members(s,2).empty()&&members(s,0).size()==6&&s.squads[0].decision_weight==1980,
@@ -110,7 +110,7 @@ void projected_hunt_weight_and_drained_source_masks() {
     BuildCommanderView(t,lone,sv);t.units.at(2).squad=1;lone.simulation_frame=9;
     const auto lone_view=BuildCommanderView(t,lone,sv);action={};action[0]=39;action[2]=1;
     const auto return_mask=conditional(lone_view,action,2);
-    require(return_mask[59]&&!return_mask[60],"GUARD-to-MAIN projection keeps the drained source selectable");
+    require(return_mask[kCommanderHeadOffsets[2]+1]&&!return_mask[kCommanderHeadOffsets[2]+2],"GUARD-to-MAIN projection keeps the drained source selectable");
     CommanderExecute(t,lone,lone_view,&action);
     require(members(t,0)==std::vector<u32>{2}&&members(t,1).empty()&&t.last_transfer_frame[1]==9,
         "GUARD-to-MAIN applied different units or omitted the transfer clock");
@@ -121,7 +121,7 @@ void reflex_sees_new_guard_members() {
     s.threat={180,180,true};s.threat_frame=1;
     const auto view=BuildCommanderView(s,o,services());CommanderAction action{};action[0]=38;
     const auto mask=conditional(view,action,2);
-    require(!mask[59]&&mask[60],"all MAIN members transferred but source is still selectable");
+    require(!mask[kCommanderHeadOffsets[2]+1]&&mask[kCommanderHeadOffsets[2]+2],"all MAIN members transferred but source is still selectable");
     CommanderExecute(s,o,view,&action);
     require(s.squads[1].intent==CommanderIntent::defend&&s.squads[0].intent==CommanderIntent::hold,
         "defense reflex used pre-transfer squad membership");
@@ -138,9 +138,9 @@ void default_mode_and_nontransfer_behavior_preserved() {
     const auto old_view=BuildCommanderView(legacy,o,services(false));
     const auto new_view=BuildCommanderView(updated,o,services(true));
     CommanderAction action{};action[0]=40;
-    require(!conditional(old_view,action,2)[61]&&old_view.transfer_members[2].empty(),
+    require(!conditional(old_view,action,2)[kCommanderHeadOffsets[2]+3]&&old_view.transfer_members[2].empty(),
         "disabled option changes legacy transfer masks/planning");
-    require(conditional(new_view,action,2)[61],"enabled option has no composed transfer action");
+    require(conditional(new_view,action,2)[kCommanderHeadOffsets[2]+3],"enabled option has no composed transfer action");
     action={};action[2]=1;action[3]=u8(CommanderIntent::attack_move);action[4]=6;
     const auto old_packets=CommanderExecute(legacy,o,old_view,&action);
     const auto new_packets=CommanderExecute(updated,o,new_view,&action);

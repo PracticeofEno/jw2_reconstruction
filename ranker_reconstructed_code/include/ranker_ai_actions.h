@@ -131,6 +131,10 @@ struct AiActionPlanInput {
     void* production_availability_user_data = nullptr;
     AiAbilityAvailabilityCallback ability_available = nullptr;
     void* ability_availability_user_data = nullptr;
+    // Opt-in for lifecycle targets. The ability validator must accept this
+    // specific corpse/selector; other action families still require live units.
+    AiUnitVisibilityCallback ability_corpse_visible = nullptr;
+    void* ability_corpse_visibility_user_data = nullptr;
 };
 
 enum class AiActionPlanCode : u32 {

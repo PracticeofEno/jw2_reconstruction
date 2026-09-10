@@ -73,6 +73,12 @@ ReplayRecordingState& replay_recording_state() {
     return g_replay_recording_state;
 }
 
+bool ReplayUsesRecordedComputerCommands(bool self_play_replay, u8 slot_state,
+    const std::string& player_name) {
+    return self_play_replay && slot_state == 1 &&
+        (player_name == "Computer(AI)" || player_name == "Computer(AI)2");
+}
+
 void InitializeReplayTempFiles(ReplayRecordingState& state, bool playback_mode,
     u32 game_version, u8 reliable_mode, bool forced_replay_mode, u8 local_player,
     const std::vector<u8>& metadata, bool scenario_ai_profile_override) {

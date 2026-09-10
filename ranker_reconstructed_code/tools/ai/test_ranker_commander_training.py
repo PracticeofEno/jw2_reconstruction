@@ -59,7 +59,7 @@ class RolloutTests(unittest.TestCase):
         episode = self.read(current_version=8)
         self.assertEqual((episode.owner, episode.seed, episode.weight_version), (1, 22, 7))
         self.assertEqual(self.path.stat().st_size, HEADER.size + 4 * RECORD_SIZE)
-        self.assertEqual(RECORD_SIZE, 4446)
+        self.assertEqual(RECORD_SIZE, 6061)
         self.assertEqual(episode.records.dtype.itemsize, RECORD_DTYPE.itemsize)
         self.assertEqual(episode.records["map"].shape, (4, 3072))
         with self.assertRaisesRegex(RolloutError, "version"):
@@ -198,7 +198,7 @@ class TrainerTests(unittest.TestCase):
         records["mask"][:-1].fill(1)
         with torch.no_grad():
             output = policy.sample(torch.zeros(3, VECTOR_SIZE), torch.zeros(3, *MAP_SHAPE),
-                                   torch.ones(3, 95, dtype=torch.bool), torch.zeros(3, 32))
+                                   torch.ones(3, sum(HEAD_SIZES), dtype=torch.bool), torch.zeros(3, 32))
         records["action"][:-1] = output["action"].numpy()
         records["mask"][:-1] = output["mask"].numpy()
         records["logp"][:-1] = output["logp"].numpy()
@@ -281,7 +281,7 @@ class TrainerTests(unittest.TestCase):
                 records = fixture()
                 with torch.no_grad():
                     sampled = policy.sample(torch.zeros(3, VECTOR_SIZE), torch.zeros(3, *MAP_SHAPE),
-                        torch.ones(3, 95, dtype=torch.bool), torch.zeros(3, 32))
+                        torch.ones(3, sum(HEAD_SIZES), dtype=torch.bool), torch.zeros(3, 32))
                 for field, source in (("action", "action"), ("mask", "mask"), ("logp", "logp")):
                     records[field][:-1] = sampled[source].numpy()
                 records["value"][:-1] = sampled["value"].reshape(-1).numpy()
@@ -349,7 +349,7 @@ class TrainerTests(unittest.TestCase):
         with torch.no_grad():
             output = policy.sample(torch.from_numpy(records["vector"][:-1].astype(np.float32)),
                                    torch.from_numpy(records["map"][:-1].copy()).float() / 255,
-                                   torch.ones(3, 95, dtype=torch.bool), torch.zeros(3, 32))
+                                   torch.ones(3, sum(HEAD_SIZES), dtype=torch.bool), torch.zeros(3, 32))
         records["action"][:-1] = output["action"].numpy()
         records["mask"][:-1] = output["mask"].numpy()
         records["logp"][:-1] = output["logp"].numpy()
@@ -381,7 +381,7 @@ class TrainerTests(unittest.TestCase):
         records = fixture()
         with torch.no_grad():
             output = policy.sample(torch.zeros(3, VECTOR_SIZE), torch.zeros(3, *MAP_SHAPE),
-                torch.ones(3, 95, dtype=torch.bool), torch.zeros(3, 32))
+                torch.ones(3, sum(HEAD_SIZES), dtype=torch.bool), torch.zeros(3, 32))
         for field in ("action", "mask", "logp", "value"):
             records[field][:-1] = output[field].numpy()
         episode = Episode(Path("policy.rlo"), 1, 1, 0, records)

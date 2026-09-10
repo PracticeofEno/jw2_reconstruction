@@ -116,13 +116,15 @@ void verify_building_elimination_ends_use_map_game() {
     GameplayEndUnit local_worker{0, 0x20, 0};
     GameplayEndUnit enemy_nest{1, 0x80, 0};
     GameplayEndUnit enemy_fighter{1, 0x21, 0};
-    state.active_units = {&local_nest, &local_worker, &enemy_nest, &enemy_fighter};
+    GameplayEndUnit enemy_trap{1, 0x6a, 0};
+    state.active_units = {&local_nest, &local_worker, &enemy_nest,
+        &enemy_fighter, &enemy_trap};
 
     state.frame_counter = 0x800;
     TickGameplayEndConditionMonitor(state);
     require(!state.end_requested, "game ended while both sides held buildings");
 
-    // Enemy nest razed, fighter still alive -> the Computer is eliminated and
+    // Enemy nest razed, fighter and trap still alive -> the Computer loses and
     // the local player wins on the next monitor tick.
     enemy_nest.state_flags = kGameplayEndDeadUnitFlag;
     state.frame_counter = 0x840;
@@ -141,8 +143,9 @@ void verify_building_elimination_ends_use_map_game() {
     mirror.scenario_defeat_condition_mask = kGameplayEndConditionAnyUnit;
     GameplayEndUnit my_nest{0, 0x80, 0};
     GameplayEndUnit my_worker{0, 0x20, 0};
+    GameplayEndUnit my_trap{0, 0x6a, 0};
     GameplayEndUnit their_nest{1, 0x80, 0};
-    mirror.active_units = {&my_nest, &my_worker, &their_nest};
+    mirror.active_units = {&my_nest, &my_worker, &my_trap, &their_nest};
     mirror.frame_counter = 0x800;
     TickGameplayEndConditionMonitor(mirror);
     require(!mirror.end_requested, "mirror ended early");
@@ -204,7 +207,38 @@ void verify_melee_victory_with_human_slot_outside_global_active_mask() {
         "razing the Computer's last building did not win the melee game");
 }
 
+void verify_trap_does_not_prevent_melee_defeat() {
+    for (const u32 hq_type : {0x60u, 0x70u, 0x80u, 0x90u}) {
+        PlayerSlotRuntimeState players{};
+        players.slot_states.fill(static_cast<u8>(PlayerSlotState::disabled));
+        players.slot_states[0] = static_cast<u8>(PlayerSlotState::active);
+        players.slot_states[1] = static_cast<u8>(PlayerSlotState::player_controlled);
+        players.owner_relation_masks[0] = 1u;
+        players.owner_relation_masks[1] = 2u;
+        players.global_active_slot_mask = 2u;
+        GameplayEndConditionState state{};
+        state.players = &players;
+        state.local_player_slot = 0;
+        state.session_mode = 1;
+        state.generic_ai_profile_mode = 1;
+        ApplyGameplayEndConditionSessionModeDefaults(state);
+        GameplayEndUnit local_hq{0, hq_type, 0};
+        GameplayEndUnit local_trap{0, 0x6a, 0};
+        GameplayEndUnit enemy_hq{1, 0x80, 0};
+        state.active_units = {&local_hq, &local_trap, &enemy_hq};
+        state.frame_counter = 0x800;
+        TickGameplayEndConditionMonitor(state);
+        require(!state.end_requested, "ordinary headquarters did not keep its owner alive");
+        state.active_units = {&local_trap, &enemy_hq};
+        state.frame_counter += 64;
+        TickGameplayEndConditionMonitor(state);
+        require(state.end_requested && state.result_code == kGameplayEndResultDefeat,
+            "surviving trap prevented melee defeat after the last building fell");
+    }
+}
+
 int main() {
+    verify_trap_does_not_prevent_melee_defeat();
     verify_building_elimination_ends_use_map_game();
     verify_melee_victory_with_human_slot_outside_global_active_mask();
     verify_zero_use_map_masks_remain_script_controlled();

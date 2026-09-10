@@ -154,6 +154,25 @@ int main() {
         !normal.self_play_commander && !normal.self_play_no_sleep,
         "commander flags escaped the self-play-only entry");
     policy_seed_regression();
+    for(u32 tribe=0;tribe<4;++tribe) {
+        require(parse(options,"-AISELF -AIWEIGHTS:policy.bin -AIVS -AIOWNTRIBE:"+
+            std::to_string(tribe)+" -AIOWNTRIBE2:"+std::to_string((tribe+1)%4)),
+            "cross-race launch rejected");
+        require(options.self_play_own_tribe==tribe&&options.self_play_own_tribe2==(tribe+1)%4,
+            "policy races parsed incorrectly");
+    }
+    require(parse(options,R"(-AISELF -AIWEIGHTS:"C:\Models\path -AIOWNTRIBE:0.bin")")&&
+        options.self_play_own_tribe==2&&options.self_play_own_tribe2==2,
+        "race default leaked or path substring changed race");
+    require(parse(options,R"(-AISELF -AIWEIGHTS:policy.bin "-aiowntribe:0")")&&
+        options.self_play_own_tribe==0,"quoted race argument rejected");
+    for(const char* malformed:{"-AIOWNTRIBE", "-AIOWNTRIBE:", "-AIOWNTRIBE:-1", "-AIOWNTRIBE:4",
+        "-AIOWNTRIBE:1.5", "-AIOWNTRIBE:0 -AIOWNTRIBE:0", "-AIOWNTRIBE2:4"})
+        require(!parse(options,std::string("-AISELF -AIWEIGHTS:policy.bin ")+malformed),
+            "invalid or duplicate policy race accepted");
+    require(!parse(options,"-AISELF -AIRANDOM -AIOWNTRIBE:1"),"race flag escaped Commander");
+    require(!parse(options,"-AI1V1 -AIWEIGHTS:policy.bin -AIOWNTRIBE:1"),
+        "unsupported legacy owner-zero launch silently ignored the chosen race");
     P2PNetworkLaunchParameters transfer_options;
     require(parse(transfer_options, "-AISELF -AIWEIGHTS:policy.bin -AICOORDINATEDTRANSFERS:1") &&
         transfer_options.self_play_coordinated_transfers, "coordinated transfers opt-in rejected");

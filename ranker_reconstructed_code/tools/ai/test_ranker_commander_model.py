@@ -47,20 +47,20 @@ class CommanderModelTests(unittest.TestCase):
         # Exactly the deployment's byte quantization, with nonzero spatial patterns.
         maps = torch.randint(0, 256, (count, *model.MAP_SHAPE), generator=generator).float() / 255
         privileged = torch.rand((count, 32), generator=generator)
-        masks = torch.ones((count, 95), dtype=torch.bool)
+        masks = torch.ones((count, model.LOGIT_COUNT), dtype=torch.bool)
         if count > 1:
-            masks[1, :42] = False
+            masks[1, :model.HEAD_SIZES[0]] = False
             masks[1, 14] = True  # tower build exercises the H1b autoregressive head
-            masks[1, 58:62] = False
-            masks[1, 59] = True  # MAIN leaves intent, anchor and ROE relevant
+            masks[1, model.HEAD_OFFSETS[2]:model.HEAD_OFFSETS[3]] = False
+            masks[1, model.HEAD_OFFSETS[2]+1] = True  # MAIN leaves intent, anchor and ROE relevant
         if count > 2:
-            masks[2, 58:62] = False
-            masks[2, 58] = True  # irrelevant intent/anchor/ROE become singleton zero
+            masks[2, model.HEAD_OFFSETS[2]:model.HEAD_OFFSETS[3]] = False
+            masks[2, model.HEAD_OFFSETS[2]] = True  # irrelevant intent/anchor/ROE become singleton zero
         if count > 3:
             masks[3, ::3] = False
         return vectors, maps, privileged, masks
 
-    def run_probe(self, vectors, maps, private, masks):
+    def run_probe(self, vectors, maps, private, masks, *, weights=None):
         if self.probe is None:
             self.skipTest("g++ unavailable for standalone C++ parity probe")
         input_path = self.directory / "input.bin"
@@ -71,9 +71,9 @@ class CommanderModelTests(unittest.TestCase):
                 for values in (vector, grid, privileged):
                     output.write(values.numpy().astype("<f4").tobytes())
                 output.write(mask.numpy().astype("u1").tobytes())
-        subprocess.run([str(self.probe), str(self.weights), str(input_path), str(output_path)], check=True, capture_output=True)
-        dtype = np.dtype([("action", "u1", 8), ("mask", "u1", 95), ("logp", "<f4", 8),
-                          ("logits", "<f4", 95), ("value", "<f4")])
+        subprocess.run([str(self.probe), str(weights or self.weights), str(input_path), str(output_path)], check=True, capture_output=True)
+        dtype = np.dtype([("action", "u1", 8), ("mask", "u1", model.LOGIT_COUNT), ("logp", "<f4", 8),
+                          ("logits", "<f4", model.LOGIT_COUNT), ("value", "<f4")])
         return np.fromfile(output_path, dtype=dtype)
 
     def test_cpp_python_nonzero_convolution_and_prefix_parity(self):
@@ -105,6 +105,50 @@ class CommanderModelTests(unittest.TestCase):
         actual = self.run_probe(vectors, maps, private, masks)
         np.testing.assert_array_equal(actual["logits"][0], actual["logits"][1])
         self.assertNotEqual(actual["value"][0], actual["value"][1])
+
+    def test_elf_expansion_scout_preserves_recorded_mask_and_native_parity(self):
+        # Native CommanderLegalHeadMask supplies the semantic anchor mask. Old
+        # Elf histories retain their old mask; training must not reinterpret it
+        # merely because newly collected Elf SCOUT histories can use anchor 3.
+        policy = model.load_weights(self.weights).eval()
+        with torch.no_grad():
+            for head in policy.heads:
+                head.weight.zero_()
+                head.bias.zero_()
+            for adapter in policy.head_adapters.values():
+                adapter.up.weight.zero_()
+                adapter.up.bias.zero_()
+            policy.heads[4].bias[3] = 2
+            policy.heads[4].bias[4] = 1
+        vectors, maps, private, masks = self.fixture(5)
+        vectors[:, 606:610] = 0
+        for row, race in enumerate((1, 1, 0, 2, 3)):
+            vectors[row, 606 + race] = 1
+        masks[:] = True
+        for head, selected in ((0, 0), (2, 1), (3, 6)):
+            offset, width = model.HEAD_OFFSETS[head], model.HEAD_SIZES[head]
+            masks[:, offset:offset + width] = False
+            masks[:, offset + selected] = True
+        anchor_offset = model.HEAD_OFFSETS[4]
+        masks[:, anchor_offset:anchor_offset + 16] = False
+        for anchor in (4, 9, 12, 13):
+            masks[:, anchor_offset + anchor] = True
+        masks[1, anchor_offset + 3] = True  # Fresh Elf expansion-scout mask.
+        with torch.no_grad():
+            sampled = policy.sample(vectors, maps, masks, private, deterministic=True)
+            recorded = policy.evaluate(vectors, maps, sampled["action"], sampled["mask"], private)
+        self.assertEqual(sampled["action"][:, 4].tolist(), [4, 3, 4, 4, 4])
+        torch.testing.assert_close(recorded["logp"], sampled["logp"], rtol=0, atol=0)
+        illegal_old = sampled["action"].clone()
+        illegal_old[0, 4] = 3
+        with self.assertRaisesRegex(ValueError, "illegal commander action for head 4"):
+            policy.evaluate(vectors, maps, illegal_old, sampled["mask"], private)
+        weights = self.directory / "elf_scout_weights.bin"
+        model.export_weights(policy, weights)
+        actual = self.run_probe(vectors, maps, private, masks, weights=weights)
+        np.testing.assert_array_equal(actual["action"], sampled["action"].numpy())
+        np.testing.assert_array_equal(actual["mask"], sampled["mask"].numpy())
+        np.testing.assert_allclose(actual["logp"], sampled["logp"].numpy(), rtol=0, atol=1e-5)
 
     def test_recorded_masks_singletons_and_gradient(self):
         policy = model.load_weights(self.weights)
@@ -183,7 +227,7 @@ class CommanderModelTests(unittest.TestCase):
 
     def test_invalid_inputs_and_illegal_actions_rejected(self):
         vectors, maps, private, masks = self.fixture(1)
-        masks[:, :42] = False
+        masks[:, :model.HEAD_SIZES[0]] = False
         with self.assertRaises(ValueError):
             self.policy.sample(vectors, maps, masks, private)
         masks[:] = True
@@ -192,7 +236,7 @@ class CommanderModelTests(unittest.TestCase):
             self.policy.sample(vectors, maps, masks, private)
         vectors[0, 0] = 0
         actions = torch.zeros((1, 8), dtype=torch.long)
-        actions[0, 0] = 42
+        actions[0, 0] = model.HEAD_SIZES[0]
         with self.assertRaises(ValueError):
             self.policy.evaluate(vectors, maps, actions, masks, private)
 
