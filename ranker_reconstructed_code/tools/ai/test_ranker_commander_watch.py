@@ -1,5 +1,6 @@
 """A failed/newer job must not replace the latest completed replay."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import tempfile
@@ -56,6 +57,27 @@ class LatestReplayTests(unittest.TestCase):
             output = self.match(work, "3", 30)
             (output / "job.json").write_text('{"valid":')
             self.assertEqual(watch.latest_match([work]).replay.parent, expected)
+
+    def test_registered_primitive_teacher_and_changed_artifacts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work=Path(temporary);older=self.match(work,'older',10)
+            output=self.match(work,'primitive',20);receipt=output/'job.json'
+            exe=work/'ranker_rebuild.exe';exe.write_bytes(b'primitive teacher')
+            pin=lambda p:dict(path=str(p),sha256=hashlib.sha256(p.read_bytes()).hexdigest())
+            row=json.loads(receipt.read_text());row.update(teacher=True,own_tribe=0,
+                weight_version=0,command=[str(exe)])
+            receipt.write_text(json.dumps(row))
+            registry=dict(matches=[dict(own_tribe=0,receipt=pin(receipt),
+                replay=pin(output/'ai_selfplay_replay.ply'),executable=pin(exe))])
+            (work/'teacher_replay_registry.json').write_text(json.dumps(registry))
+            match=watch.latest_match([work]);self.assertEqual(match.replay.parent,output)
+            self.assertEqual(match.describe()['policy_kind'],'rule_teacher')
+            self.assertEqual(match.describe()['policy_sha256'],pin(exe)['sha256'])
+            self.assertIsNone(match.describe()['policy_version'])
+            for target in (receipt,exe,output/'ai_selfplay_replay.ply'):
+                previous=target.read_bytes();target.write_bytes(previous+b' ')
+                self.assertEqual(watch.latest_match([work]).replay.parent,older)
+                target.write_bytes(previous)
 
     def test_verified_reward_search_is_visible_but_zero_scaffold_is_not(self):
         with tempfile.TemporaryDirectory() as temporary:

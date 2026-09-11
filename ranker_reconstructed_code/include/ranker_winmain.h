@@ -156,7 +156,8 @@ void SetRankerMainWindowFrontendRouteWindow(HWND window);
 void SetRankerMainWindowGenericAiProfileState(bool enabled, bool scenario_active);
 void SetRankerMainWindowScenarioAiProfileOverride(bool enabled);
 void SetRankerMainWindowNetworkAiProfileOverride(bool enabled);
-std::array<std::string, kRankerReplayPlayerNameCount> RankerMainWindowReplayPlayerNames();
+std::array<std::string, kRankerReplayPlayerNameCount> RankerMainWindowReplayPlayerNames(
+    bool descriptive = true);
 RankerMainWindowStateSnapshot RankerMainWindowState();
 POINT RankerFrontendWindowOrigin();
 POINT RankerCenteredFrontendWindowOrigin(int width, int height);

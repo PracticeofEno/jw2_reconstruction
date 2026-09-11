@@ -79,8 +79,11 @@ struct CommanderUnitState {
     u32 investment = 0, health = 0, born_frame = 0, last_seen = 0, last_progress = 0;
     i32 x = 0, y = 0;
     bool completed = false, regrouping = false, hunting = false;
+    bool march_paced = false;
     AiSemanticAction last_order;
     u32 last_order_frame = 0, applied_intent_serial = 0;
+    u32 cohesion_resume_frame = 0;
+    u32 assistance_target = 0;
     i32 harvest_tile = -1;
     CommanderPoint post_build_harvest;
 };
@@ -92,6 +95,15 @@ struct CommanderSquadState {
     u32 last_intent_frame = 0;
     float decision_weight = 0;
     bool automatic_retreat = false, arrived = false;
+    // Executor-only walking corridor. It is never written into unit speed or
+    // synchronized simulation state; followers use ordinary point orders.
+    u32 march_pacer = 0, march_pacer_generation = 0, march_serial = 0;
+    CommanderPoint march_goal;
+    std::vector<CommanderPoint> march_route;
+};
+struct CommanderMeatReservation {
+    u32 effect = 0, unit = 0, generation = 0, started_frame = 0;
+    i32 x = 0, y = 0;
 };
 struct CommanderBuildReservation {
     AiSemanticAction order;
@@ -119,6 +131,8 @@ struct CommanderState {
     std::vector<CommanderBuildReservation> builds;
     std::vector<CommanderMergeReservation> merges;
     std::vector<CommanderReceipt> receipts;
+    // Collection is a stage of the policy's existing HUNT mission.
+    std::vector<CommanderMeatReservation> meat;
     std::vector<std::pair<u32, u32>> income_history;
     std::vector<u32> damage_frames;
     std::array<u8, 64> last_research{};
@@ -136,6 +150,12 @@ struct CommanderState {
     u32 external_damage_unit_id = 0;
     u8 worker_policy = 0, rally_squad = 0;
     u32 scout_id = 0, packet_window = 0, packets_in_window = 0;
+    // One cheap combat scout keeps exploring after the opening worker returns.
+    // Reserved scouts do not pull the fighting squads' centers toward the fog.
+    u32 recon_scout_id = 0, recon_next_frame = 0, recon_started_frame = 0;
+    bool recon_returning = false;
+    CommanderPoint recon_destination;
+    std::vector<CommanderPoint> recon_route;
     u32 mask_violations = 0, silent_rejections = 0;
     std::array<u32, 46> ability_orders{};
     u32 morph_orders = 0, stance_orders = 0, transport_orders = 0;
@@ -149,6 +169,10 @@ struct CommanderState {
     std::vector<u32> sweep_last_visible;
     std::vector<u32> sweep_retry_after;
     CommanderPoint sweep_target;
+    // Initially unseen cells around a reconnaissance destination. Seeing its
+    // center tile alone does not complete this regional exploration mission.
+    std::vector<u32> sweep_region;
+    u32 sweep_region_observed = 0, sweep_region_progress_frame = 0;
     u32 sweep_target_selected_frame = 0;
     u32 sweep_progress_frame = 0;
     float sweep_best_distance = 0;
@@ -191,6 +215,8 @@ struct CommanderView {
     // H1b only affects HQ/tower construction, and is conditional on H1.
     std::array<std::vector<AiSemanticAction>, 16> hq_build_plans, tower_build_plans;
     std::vector<AiObservedUnit> own, visible_enemies, visible_neutrals, visible_allies;
+    std::vector<AiObservedMapEffect> visible_meat;
+    std::vector<CommanderMeatReservation> meat_in_progress;
     std::vector<u8> build_occupancy;
     std::vector<CommanderGhost> enemies, neutrals;
     CommanderServices services;
@@ -209,6 +235,9 @@ CommanderView BuildCommanderView(CommanderState& state, const AiObservation& obs
 void CommanderLegalHeadMask(const CommanderView& view, const CommanderAction& prefix,
     std::size_t head, CommanderMask& mask);
 CommanderAction CommanderTeacherAction(const CommanderState& state, const CommanderView& view);
+// Optional offline supervision. Never called to override a live actor decision.
+CommanderAction CommanderIdleHuntLabel(const CommanderState& state, const CommanderView& view,
+    const CommanderAction& actor);
 // Invoke on f=1 mod8. Mutates only explicit executor state; caller commits it
 // after the returned semantic actions are atomically published by the engine.
 std::vector<AiSemanticAction> CommanderExecute(CommanderState& state,

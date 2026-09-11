@@ -22,10 +22,11 @@ from ranker_commander_strategy import validate_strategy
 
 ROOT = Path(__file__).resolve().parents[3]
 COMMANDER = ROOT / "debug_artifacts/commander"
-VIEWER = ROOT / "build/replay_controller_fix_20260908/ranker_rebuild.exe"
-# This viewer has the per-owner replay controller fix. A changed binary must
-# be explicitly selected, rather than silently substituting the training exe.
-VIEWER_SHA256 = "92e9d4542bd9e850c810993aa080e42369e2e1974f2185505762c45398e9df2c"
+VIEWER = ROOT / "RankerOCPV_Win/ranker_rebuild.exe"
+# This viewer has the per-owner replay controller fix and resource HUD names.
+# A changed binary must be explicitly selected, rather than silently
+# substituting the training exe.
+VIEWER_SHA256 = "981e3b41e58135367a7c92abfbe53985e64b99658832c2436074f996923b1458"
 NAMES = {0: "Primitive", 1: "Elf", 2: "Tyrano", 3: "Demon"}
 
 
@@ -53,12 +54,15 @@ class Match:
             result.update(policy_kind=router['definition']['kind'],
                 policy_sha256=router['manifest_sha256'],
                 strategy_profile_sha256=row['elf_strategy_profile']['definition']['profile_sha256'])
+        if row.get('teacher') and not row.get('elf_strategy_profile'):
+            result.update(policy_kind='rule_teacher', policy_version=None,
+                          policy_sha256=row.get('replay_rule_teacher_sha256'))
         return result
 
 
 def campaign_directories(base=COMMANDER):
     # Only registered campaigns; isolated teacher probes and replay verification
-    # jobs must not displace the user's last actual learned-policy game.
+    # jobs must not displace the user's last policy or audited teacher game.
     states = set(base.glob("*/training_run/state.json")) | set(base.glob("*/state.json"))
     return [p.parent for p in sorted(states)]
 
@@ -75,7 +79,16 @@ def receipts(work):
 
 def latest_match(directories):
     candidates = []
+    registered_teachers = {}
     for work in directories:
+        # Explicitly audited campaign teachers are reviewable matches too.
+        # Isolated probes remain excluded; never relabel a teacher as a model.
+        try:
+            registry = json.loads((work / 'teacher_replay_registry.json').read_text(encoding='utf-8'))
+            for entry in registry['matches']:
+                registered_teachers[str(Path(entry['receipt']['path']).resolve())] = entry
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
         for receipt in receipts(work):
             result = receipt.with_name("ai_selfplay_result.json")
             replay = receipt.with_name("ai_selfplay_replay.ply")
@@ -89,6 +102,17 @@ def latest_match(directories):
             row = json.loads(receipt.read_text(encoding="utf-8"))
             result = json.loads(receipt.with_name("ai_selfplay_result.json").read_text(encoding="utf-8"))
             strategy=False
+            registered = registered_teachers.get(str(receipt.resolve()))
+            if registered and row.get('teacher') is True and row.get('weight_version') == 0:
+                def matches_pin(p, actual):
+                    return (Path(p['path']).resolve() == actual.resolve()
+                            and hashlib.sha256(actual.read_bytes()).hexdigest() == p['sha256'])
+                strategy = (registered['own_tribe'] == row.get('own_tribe')
+                            and matches_pin(registered['receipt'], receipt)
+                            and matches_pin(registered['replay'], replay)
+                            and matches_pin(registered['executable'], Path(row['command'][0])))
+                if strategy:
+                    row = dict(row, replay_rule_teacher_sha256=registered['executable']['sha256'])
             if row.get('elf_strategy_profile') and row.get('strategy_profile_verified') is True:
                 definition=validate_strategy(row['elf_strategy_profile'],
                     executable_sha=hashlib.sha256(Path(row['command'][0]).read_bytes()).hexdigest())
@@ -111,7 +135,7 @@ def latest_match(directories):
             return Match(receipt.resolve(), replay.resolve(), finished, row)
         except (OSError, ValueError, KeyError, TypeError):
             continue  # An unfinished/invalid receipt never hides an older valid one.
-    raise RuntimeError("No completed learned-policy match with a saved .ply was found.")
+    raise RuntimeError("No completed policy or registered teacher match with a saved .ply was found.")
 
 
 def verify_viewer(executable, expected_sha256):

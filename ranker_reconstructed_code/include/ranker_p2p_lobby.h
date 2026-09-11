@@ -86,6 +86,7 @@ struct P2PNetworkLaunchParameters {
     // -AIDAGGER: the learned policy acts while the rule commander's decision
     // for each observation is recorded as a training label.
     bool self_play_dagger = false;
+    bool self_play_hunt_labels = false;
     bool self_play_deterministic = false;
     // Optional -AIPOLICYSEED:N controls only commander sampling. Explicit 0
     // is valid; omission retains the historical SEED/owner/model-version mix.

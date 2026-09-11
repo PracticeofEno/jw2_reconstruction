@@ -109,8 +109,8 @@ void known_building_keeps_priority() {
     enemy.controlled = false; enemy.owner_id = 1; o.units.push_back(enemy);
     CommanderState s;
     const auto v = BuildCommanderView(s, o, services());
-    require(v.anchors[6].valid && !v.anchors[12].valid,
-            "broad search started while an enemy building was known");
+    require(v.anchors[6].valid && v.anchors[6].x==1000 && in_region(v.anchors[12]),
+            "known attack target and independent fog search did not coexist");
 }
 void observing_target_during_combat_retires_it() {
     auto o = world(); conceal_region(o);
@@ -196,8 +196,11 @@ void combat_pause_does_not_count_as_search_stagnation() {
     const auto target = v.anchors[12]; search_main(s);
     auto enemy = unit(90, 0x60, 1000, 1000);
     enemy.controlled = false; enemy.owner_id = 1; o.units.push_back(enemy);
+    // Knowing a building alone no longer pauses reconnaissance. A real
+    // attack animation still suspends the assigned formation's progress clock.
+    o.units[1].command_flags|=0x10;
     o.simulation_frame = 5000; BuildCommanderView(s, o, services());
-    o.units.pop_back(); o.simulation_frame = 5008;
+    o.units.pop_back();o.units[1].command_flags&=~0x10u; o.simulation_frame = 5008;
     v = BuildCommanderView(s, o, services());
     require(same_target(v.anchors[12], target), "combat pause counted as an unsuccessful search");
 }

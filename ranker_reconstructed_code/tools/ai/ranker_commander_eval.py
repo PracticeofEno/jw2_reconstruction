@@ -266,6 +266,10 @@ def _run_game(install_dir, weights, job_root, index, job, slot, *, teacher,
         # Policy acts; the rule commander's decisions are recorded as labels
         # in commander.rlo.teacher.bin (DAgger data for BC).
         command.append("-AIDAGGER")
+    if job.get("hunt_labels"):
+        if not job.get("dagger") or teacher:
+            raise ValueError("hunt_labels requires a learned actor with dagger enabled")
+        command.append("-AIHUNTLABELS")
     teacher2 = bool(job.get("teacher2"))
     if teacher2 and weights2 is None:
         # Policy (owner 1) versus a rule-commander (variant) on owner 2.

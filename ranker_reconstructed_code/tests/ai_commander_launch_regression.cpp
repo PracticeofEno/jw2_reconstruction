@@ -24,6 +24,10 @@ std::array<u32, 32> policy_stream(const P2PNetworkLaunchParameters& options, u32
 
 void policy_seed_regression() {
     P2PNetworkLaunchParameters options;
+    require(parse(options,"-AISELF -AIWEIGHTS:policy.bin -AIDAGGER -AIHUNTLABELS")&&options.self_play_hunt_labels,"hunt label mode rejected");
+    require(!parse(options,"-AISELF -AIWEIGHTS:policy.bin -AIHUNTLABELS"),"hunt labels accepted without label recording");
+    require(!parse(options,"-AISELF -AITEACHER -AIDAGGER -AIHUNTLABELS"),"hunt labels accepted for rule actor");
+    require(parse(options,"-AISELF -AIWEIGHTS:policy.bin")&&!options.self_play_hunt_labels,"hunt label option leaked across parses");
     require(parse(options, "-AISELF -AIWEIGHTS:policy.bin -SEED:901"), "default policy seed launch rejected");
     require(!options.self_play_has_policy_seed && options.self_play_seed == 901,
         "omitted policy seed changed game seed or enabled override");

@@ -256,6 +256,21 @@ std::string SanitizeReplayFilenameComponent(const std::string& value) {
     return sanitized;
 }
 
+std::string BuildReplayPlayerDisplayName(const std::string& player_name,
+    u32 owner, u32 faction, bool computer, bool ai_player) {
+    if (player_name.empty() || (!computer && !ai_player)) {
+        return player_name;
+    }
+
+    constexpr std::array<const char*, 4> kFactionNames{{
+        "Primitive", "Elf", "Tyrano", "Demon"}};
+    const char* faction_name = faction < kFactionNames.size() ?
+        kFactionNames[faction] : "Unknown";
+    // The replay resource HUD displays at most 20 bytes per username.
+    return std::string(ai_player ? "AI(" : "CPU(") + faction_name +
+        ",P" + std::to_string(owner + 1u) + ")";
+}
+
 std::string BuildAutomaticReplayFilename(const std::string& map_name,
     int year, int month, int day, int hour, int minute, int second,
     const std::array<std::string, kReplayChannelCount>& player_names) {

@@ -26,6 +26,9 @@
 !docs/JW2_COMMANDER_BUILTIN_RECOVERY_20260909.md
 !docs/JW2_COMMANDER_ELF_FOCUS_20260909.md
 !docs/JW2_COMMANDER_ELF_REAUDIT_20260909.md
+!docs/JW2_COMMANDER_PRIMITIVE_TEACHER_20260910.md
+!docs/JW2_COMMANDER_DEMON_TEACHER_20260910.md
+!docs/JW2_UNIFIED_HUNT_20260911.md
 
 !ranker_reconstructed_code/
 !ranker_reconstructed_code/CMakeLists.txt
@@ -50,6 +53,8 @@
 !ranker_reconstructed_code/src/**
 
 !ranker_reconstructed_code/tests/
+!ranker_reconstructed_code/tests/ai_commander_primitive_foundation_regression.cpp
+!ranker_reconstructed_code/tests/ai_commander_demon_foundation_regression.cpp
 !ranker_reconstructed_code/tests/evil_portal_construction_release_regression.cpp
 !ranker_reconstructed_code/tests/legacy_udp_burst_regression.cpp
 !ranker_reconstructed_code/tests/minimap_attack_target_regression.cpp
@@ -94,6 +99,10 @@
 !ranker_reconstructed_code/tests/ai_commander_actions_regression.cpp
 !ranker_reconstructed_code/tests/ai_commander_launch_regression.cpp
 !ranker_reconstructed_code/tests/ai_commander_multirace_regression.cpp
+!ranker_reconstructed_code/tests/ai_commander_march_regression.cpp
+!ranker_reconstructed_code/tests/ai_commander_recon_regression.cpp
+!ranker_reconstructed_code/tests/ai_commander_elf_foundation_regression.cpp
+!ranker_reconstructed_code/tests/ai_commander_elf_tree_supply_regression.cpp
 !ranker_reconstructed_code/tests/ai_commander_skills_regression.cpp
 !ranker_reconstructed_code/tests/ai_commander_elf_strategy_regression.cpp
 !ranker_reconstructed_code/tests/ai_commander_startup_log_stub.cpp
@@ -163,3 +172,12 @@ ranker_reconstructed_server/**/*.pyc
 ranker_reconstructed_server/data/accounts.json
 ranker_reconstructed_server/data/accounts.json.tmp
 ranker_reconstructed_server/data/*.log
+!docs/JW2_COMMANDER_THREE_RACE_BC_20260910.md
+!docs/JW2_COMMANDER_ELF_NEURAL_FOLLOWUP_20260910.md
+!docs/JW2_COMMANDER_ELF_PPO_PILOT_20260910.md
+!docs/JW2_COMMANDER_ELF_COMBAT_PPO_20260910.md
+!docs/JW2_COMMANDER_ELF_BEHAVIOR_RECOVERY_20260910.md
+!docs/JW2_COMMANDER_ALL_RACE_SELFPLAY_20260911.md
+!docs/JW2_COMMANDER_MARCH_COHESION_20260911.md
+!docs/JW2_COMMANDER_RECON_HUNT_20260911.md
+!docs/JW2_PPO_SELF_IMPROVEMENT_20260911.md

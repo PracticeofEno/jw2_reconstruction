@@ -631,7 +631,9 @@ void run_ai_commander_frame(GameplayLoopState& loop) {
             bool has_label = false;
             if (view.decision_due && launch.self_play_dagger && !ai_commander_owner_teacher_flag(owner_id)) {
                 label.mask = view.mask;
-                label.action = CommanderTeacherAction(owner.state, view);
+                label.action = launch.self_play_hunt_labels
+                    ? CommanderIdleHuntLabel(owner.state, view, decision.action)
+                    : CommanderTeacherAction(owner.state, view);
                 for (std::size_t head = 0; head < 8; ++head)
                     CommanderLegalHeadMask(view, label.action, head, label.mask);
                 has_label = true;

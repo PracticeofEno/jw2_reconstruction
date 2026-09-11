@@ -13627,7 +13627,7 @@ void auto_save_default_gameplay_replay_after_result_dialog() {
         result.replay_record_index_is_zero &&
         !result.scenario_ai_profile_override &&
         live_save_controls) {
-        const auto player_names = RankerMainWindowReplayPlayerNames();
+        const auto player_names = RankerMainWindowReplayPlayerNames(false);
         replay.automatic_save_succeeded =
             AutoSaveReplayRecordingArchive(replay,
                 current_gameplay_replay_map_name(), player_names,
@@ -14597,6 +14597,19 @@ void sync_default_gameplay_player_resource_hud(
             char name[32]{};
             std::snprintf(name, sizeof(name), "Player %u", owner + 1);
             row.name = name;
+        }
+
+        if (replay_recording_state().playback_mode) {
+            // The Message settings button toggles this resource/Username HUD.
+            // Derive labels while viewing, including old recordings whose
+            // display-name table contains only "Computer" for both sides.
+            const auto& slot =
+                g_runtime.gameplay_startup_state.owner_slots[owner];
+            row.name = BuildReplayPlayerDisplayName(row.name, owner,
+                slot.faction_id,
+                slot.slot_state ==
+                    static_cast<u8>(PlayerSlotState::player_controlled),
+                g_runtime.ai_play_owner_slots[owner]);
         }
 
         if (lifecycle != nullptr && owner < lifecycle->owner_primary_resources.size()) {
@@ -41183,7 +41196,8 @@ void SetRankerMainWindowNetworkAiProfileOverride(bool enabled) {
     g_runtime.network_ai_profile_override = enabled;
 }
 
-std::array<std::string, kRankerReplayPlayerNameCount> RankerMainWindowReplayPlayerNames() {
+std::array<std::string, kRankerReplayPlayerNameCount> RankerMainWindowReplayPlayerNames(
+    bool descriptive) {
     std::array<std::string, kRankerReplayPlayerNameCount> names{};
     const GameplaySessionStartupState& startup = g_runtime.gameplay_startup_state;
     const P2PGameSessionStartState& p2p = g_runtime.p2p_session_start_state;
@@ -41209,6 +41223,19 @@ std::array<std::string, kRankerReplayPlayerNameCount> RankerMainWindowReplayPlay
         }
         if (names[owner].empty()) {
             names[owner] = "Player " + std::to_string(owner + 1u);
+        }
+    }
+    if (descriptive) {
+        for (u32 owner = 0; owner < names.size(); ++owner) {
+            // Terminal packets disable live slots, while startup identity and
+            // the AI role survive until saving. Only the display-name table
+            // uses these labels; recorded lobby controller names stay intact.
+            const auto& slot = startup.owner_slots[owner];
+            names[owner] = BuildReplayPlayerDisplayName(names[owner], owner,
+                slot.faction_id,
+                slot.slot_state ==
+                    static_cast<u8>(PlayerSlotState::player_controlled),
+                g_runtime.ai_play_owner_slots[owner]);
         }
     }
     return names;

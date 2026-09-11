@@ -687,6 +687,7 @@ void ResetP2PNetworkLaunchParameters(P2PNetworkLaunchParameters& parameters) {
     parameters.self_play_teacher = false;
     parameters.self_play_teacher2 = false;
     parameters.self_play_dagger = false;
+    parameters.self_play_hunt_labels = false;
     parameters.self_play_deterministic = false;
     parameters.self_play_has_policy_seed = false;
     parameters.self_play_policy_seed = 0;
@@ -741,6 +742,8 @@ bool ParseP2PNetworkCommandLine(P2PNetworkLaunchParameters& parameters,
         // commander (policy-vs-teacher-variant games for curricula/leagues).
         parameters.self_play_teacher2 = has_token("-AITEACHER2");
         parameters.self_play_dagger = has_token("-AIDAGGER");
+        parameters.self_play_hunt_labels = has_token("-AIHUNTLABELS");
+        if(parameters.self_play_hunt_labels&&(!parameters.self_play_dagger||parameters.self_play_teacher))return false;
         parameters.self_play_deterministic =
             std::strstr(upper, "-AIDETERMINISTIC") != nullptr;
         // Self-play only: headless instances may skip the per-frame Sleep(1).

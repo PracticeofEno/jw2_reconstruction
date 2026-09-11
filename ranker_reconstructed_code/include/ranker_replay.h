@@ -85,6 +85,9 @@ bool AppendReplayViewportRecord(ReplayRecordingState& state, u32 frame_tick,
     i32 camera_x, i32 camera_y);
 void ClearReplayPlaybackState(ReplayRecordingState& state);
 std::string SanitizeReplayFilenameComponent(const std::string& value);
+// Names for the replay header's display table, separate from lobby controllers.
+std::string BuildReplayPlayerDisplayName(const std::string& player_name,
+    u32 owner, u32 faction, bool computer, bool ai_player);
 std::string BuildAutomaticReplayFilename(const std::string& map_name,
     int year, int month, int day, int hour, int minute, int second,
     const std::array<std::string, kReplayChannelCount>& player_names);

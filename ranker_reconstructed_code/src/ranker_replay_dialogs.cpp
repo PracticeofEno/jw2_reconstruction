@@ -1438,7 +1438,8 @@ bool LoadReplayArchiveDescriptor(const char* path, ReplayArchiveDescriptor& desc
 
 bool BuildReplayDescriptorFromRecording(const ReplayRecordingState& recording,
     ReplayArchiveDescriptor& descriptor) {
-    const std::vector<u8> payload = build_replay_payload_from_recording(recording);
+    std::vector<u8> payload = build_replay_payload_from_recording(recording);
+    patch_replay_payload_player_names(payload);
     descriptor = descriptor_from_payload(payload, recording.last_output_path.c_str(), 0);
     if (descriptor.status == ReplayValidationStatus::VersionMismatch) {
         descriptor.status = ReplayValidationStatus::Valid;

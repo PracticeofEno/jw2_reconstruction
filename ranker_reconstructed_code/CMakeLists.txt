@@ -1760,7 +1760,7 @@ if (RANKER_BUILD_COMMANDER_TESTS)
         src/ranker_ai_expansion.cpp)
     target_include_directories(ai_commander_context_regression PRIVATE include)
     add_test(NAME ai_commander_context_regression COMMAND ai_commander_context_regression)
-    foreach(commander_check IN ITEMS transfer observation economy_recovery multirace)
+    foreach(commander_check IN ITEMS transfer observation economy_recovery multirace march recon support)
         add_executable(ai_commander_${commander_check}_regression
             tests/ai_commander_${commander_check}_regression.cpp src/ranker_ai_commander.cpp
             src/ranker_ai_expansion.cpp)
@@ -1773,6 +1773,18 @@ if (RANKER_BUILD_COMMANDER_TESTS)
         add_test(NAME ai_commander_${commander_check}_regression
             COMMAND ai_commander_${commander_check}_regression)
     endforeach()
+    target_sources(ai_commander_support_regression PRIVATE src/ranker_ai_actions.cpp)
+    target_sources(ai_commander_march_regression PRIVATE
+        src/ranker_ai_actions.cpp src/ranker_unit_movement.cpp)
+    # The walking fixture uses the real acceleration/deceleration functions.
+    # Discard unrelated movement entry points rather than linking the frontend.
+    if (MSVC)
+        target_compile_options(ai_commander_march_regression PRIVATE /GL /Gy /Gw)
+        target_link_options(ai_commander_march_regression PRIVATE /LTCG /OPT:REF)
+    else()
+        target_compile_options(ai_commander_march_regression PRIVATE -flto -ffunction-sections -fdata-sections)
+        target_link_options(ai_commander_march_regression PRIVATE -flto -Wl,--gc-sections)
+    endif()
     add_executable(ai_sweep_coverage_regression
         tests/ai_sweep_coverage_regression.cpp src/ranker_ai_commander.cpp
         src/ranker_ai_expansion.cpp)
@@ -1800,14 +1812,45 @@ if (RANKER_BUILD_COMMANDER_TESTS)
         tests/ai_commander_elf_strategy_regression.cpp)
     target_include_directories(ai_commander_elf_strategy_regression PRIVATE include src)
     add_test(NAME ai_commander_elf_strategy_regression COMMAND ai_commander_elf_strategy_regression)
+    foreach(elf_teacher_check IN ITEMS foundation tree_supply)
+        add_executable(ai_commander_elf_${elf_teacher_check}_regression
+            tests/ai_commander_elf_${elf_teacher_check}_regression.cpp
+            src/ranker_ai_commander.cpp src/ranker_ai_expansion.cpp)
+        target_include_directories(ai_commander_elf_${elf_teacher_check}_regression PRIVATE include src)
+    endforeach()
+    add_test(NAME ai_commander_elf_foundation_regression
+        COMMAND ai_commander_elf_foundation_regression 1)
+    add_test(NAME ai_commander_elf_foundation_tyrano_regression
+        COMMAND ai_commander_elf_foundation_regression 2)
+    add_test(NAME ai_commander_elf_foundation_primitive_regression
+        COMMAND ai_commander_elf_foundation_regression 0)
+    add_test(NAME ai_commander_elf_foundation_demon_regression
+        COMMAND ai_commander_elf_foundation_regression 3)
+    add_test(NAME ai_commander_elf_tree_supply_regression
+        COMMAND ai_commander_elf_tree_supply_regression)
+    add_executable(ai_commander_primitive_foundation_regression
+        tests/ai_commander_primitive_foundation_regression.cpp
+        src/ranker_ai_commander.cpp src/ranker_ai_expansion.cpp
+        tests/ai_commander_startup_log_stub.cpp)
+    target_include_directories(ai_commander_primitive_foundation_regression PRIVATE include src)
+    add_test(NAME ai_commander_primitive_foundation_regression
+        COMMAND ai_commander_primitive_foundation_regression)
+    add_executable(ai_commander_demon_foundation_regression
+        tests/ai_commander_demon_foundation_regression.cpp
+        src/ranker_ai_commander.cpp src/ranker_ai_expansion.cpp
+        tests/ai_commander_startup_log_stub.cpp)
+    target_include_directories(ai_commander_demon_foundation_regression PRIVATE include src)
+    add_test(NAME ai_commander_demon_foundation_regression
+        COMMAND ai_commander_demon_foundation_regression)
     # These standalone targets exercise the optional profile loader without
     # linking the frontend/window startup subsystem used by ranker_rebuild.
     foreach(commander_log_target IN ITEMS
         ai_commander_regression ai_commander_context_regression
-        ai_commander_transfer_regression ai_commander_observation_regression
+        ai_commander_transfer_regression ai_commander_observation_regression ai_commander_march_regression ai_commander_recon_regression ai_commander_support_regression
         ai_commander_economy_recovery_regression ai_commander_multirace_regression
         ai_sweep_coverage_regression ai_commander_skills_regression
-        ai_commander_elf_strategy_regression)
+        ai_commander_elf_strategy_regression
+        ai_commander_elf_foundation_regression ai_commander_elf_tree_supply_regression)
         target_sources(${commander_log_target} PRIVATE tests/ai_commander_startup_log_stub.cpp)
     endforeach()
     if (WIN32)
