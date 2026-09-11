@@ -1,4 +1,4 @@
-"""Export, verify and relocate a complete Commander PPO checkpoint for Git."""
+"""Export, verify and relocate a local Commander PPO checkpoint."""
 from __future__ import annotations
 
 import argparse
@@ -47,6 +47,36 @@ def pins(value):
             yield from pins(child)
 
 
+def named_folders(contract, documents, candidates):
+    """Group weights by purpose, race and version; keep Adam sidecars adjacent."""
+    latest = list(documents.values())[-1]
+    roles = {}
+    for role, roster in (('current', latest.get('current', {})),
+                         ('best', latest.get('best', {})), ('candidates', candidates)):
+        for item in pins(roster):
+            if str(item['path']).endswith('.bin'):
+                assigned = roles.setdefault(str(Path(item['path']).resolve()), [])
+                if role not in assigned:
+                    assigned.append(role)
+    races = ('primitive', 'elf', 'tyrano', 'demon')
+    folders = {}
+    for item in pins([contract, list(documents.values()), candidates]):
+        path = Path(item['path']).resolve()
+        if path.suffix != '.bin' or 'race' not in item or 'version' not in item:
+            continue
+        if str(path.parent) in folders:
+            continue
+        race, version = int(item['race']), int(item['version'])
+        if race not in range(len(races)):
+            raise ValueError(f'unknown race: {race}')
+        role = '_'.join(roles.get(str(path), ['history']))
+        folder = f'{role}/{race}_{races[race]}_v{version}'
+        if folder in folders.values():
+            folder += '_' + str(item['sha256'])[:8]
+        folders[str(path.parent)] = folder
+    return folders
+
+
 def export(campaign, bundle):
     campaign, bundle = campaign.resolve(), bundle.resolve()
     contract = read(campaign / 'contract.json')
@@ -71,7 +101,7 @@ def export(campaign, bundle):
         source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
         completed_rounds=completed, resume_round=completed, files={}, sources={}, documents={},
         packages={name: importlib.metadata.version(name) for name in ('torch', 'numpy')})
-    folders = {}
+    folders = named_folders(contract, documents, candidates)
 
     def add(path, expected=None):
         path = Path(path).resolve()
@@ -88,7 +118,8 @@ def export(campaign, bundle):
             return
         # Keep checkpoints and their sidecars together without carrying long
         # experiment paths into a second checkout's Windows MAX_PATH budget.
-        folder = folders.setdefault(str(path.parent), f'files/{len(folders):03d}')
+        fallback = 'runtime' if path.suffix == '.exe' else f'records/{len(folders):03d}'
+        folder = folders.setdefault(str(path.parent), fallback)
         stored = folder + '/' + path.name
         destination = inside(bundle, stored)
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -125,7 +156,7 @@ def verify(bundle, *, load=True):
     for item in [*manifest['files'].values(), *manifest['documents'].values()]:
         path = inside(bundle, item['stored'])
         if digest(path) != item['sha256']:
-            raise ValueError(f'checkpoint hash mismatch (run git lfs pull if needed): {path}')
+            raise ValueError(f'checkpoint hash mismatch (copy the complete snapshot again): {path}')
     for relative, expected in manifest['sources'].items():
         if digest(inside(ROOT, relative), text=True) != expected:
             raise ValueError(f'training source differs from snapshot: {relative}')

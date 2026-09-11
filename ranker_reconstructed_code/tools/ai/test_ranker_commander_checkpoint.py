@@ -8,6 +8,19 @@ from ranker_commander_checkpoint import digest, inside, verify, write
 
 
 class CheckpointIntegrityTests(unittest.TestCase):
+    def test_readable_folders_identify_current_best_and_pending_models(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            refs = [dict(path=str(root / str(version) / 'policy.bin'),
+                         sha256=str(version), race=0, version=version)
+                    for version in (100, 200, 300)]
+            initial = dict(current={'0': refs[0]}, best={'0': refs[0]})
+            latest = dict(current={'0': refs[1]}, best={'0': refs[1]})
+            folders = checkpoint.named_folders({}, {'initial': initial, 'latest': latest}, {'0': refs[2]})
+            self.assertEqual(folders[str((root / '100').resolve())], 'history/0_primitive_v100')
+            self.assertEqual(folders[str((root / '200').resolve())], 'current_best/0_primitive_v200')
+            self.assertEqual(folders[str((root / '300').resolve())], 'candidates/0_primitive_v300')
+
     def test_bundle_paths_cannot_escape(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -6,8 +6,9 @@
 !training/
 !training/README.md
 !training/requirements.txt
-!training/checkpoints/
-!training/checkpoints/**
+# Weights and optimizer snapshots are kept locally and copied between PCs.
+/AI_Weights/
+/training/checkpoints/
 !play_last_replay.cmd
 !INTERIM_GAMEPLAY_SYNC_REPORT_2026-08-14.md
 

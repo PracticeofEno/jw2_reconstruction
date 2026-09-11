@@ -1,4 +1,0 @@
-/training/checkpoints/** -text whitespace=cr-at-eol
-/training/checkpoints/**/*.bin filter=lfs diff=lfs merge=lfs -text
-/training/checkpoints/**/*.npz filter=lfs diff=lfs merge=lfs -text
-/training/checkpoints/**/*.exe filter=lfs diff=lfs merge=lfs -text
