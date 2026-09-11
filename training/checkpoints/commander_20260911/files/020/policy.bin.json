@@ -1,0 +1,248 @@
+{
+  "scope": "all_policy_parameters",
+  "source": {
+    "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_000\\fit\\race1\\policy.bin",
+    "sha256": "def7d5f0ae5670e5b2de101aa15e7aa89aab4916c768e1321a90ca3daea8df5c",
+    "version": 2011,
+    "race": 1,
+    "optimizer": {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_000\\fit\\race1\\policy.bin.optimizer.npz",
+      "sha256": "a1157cc2fb54eb78a9b6b9235ebdd531c3f7c2d3f07aaf84dc39c6f31fea3257"
+    },
+    "full_policy_optimizer": true
+  },
+  "config": {
+    "mode": "ppo",
+    "iteration": 2,
+    "epochs": 3,
+    "minibatch": 1024,
+    "schedule_iterations": 300,
+    "shaping_scale": 1.0,
+    "seed": 2026091190005,
+    "bc_rare_weight": 0.0,
+    "bc_class_power": 0.0,
+    "bc_class_cap": 20.0,
+    "bc_class_skip": [],
+    "bc_head_specific_weights": false,
+    "teacher_kl_initial": 0.05,
+    "teacher_kl_floor": 0.05,
+    "teacher_kl_decay": 30,
+    "critic_warmup": 0,
+    "learning_rate_initial": 1e-05,
+    "learning_rate_final": 1e-05,
+    "gamma": 1.0,
+    "gae_lambda": 0.98
+  },
+  "episodes": [
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00005\\output\\commander.rlo",
+      "sha256": "6a060d41254fc93de1e628709effd3031e18fd3d2f0933428147e8cbf40fe0d9"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00008\\output\\commander.rlo.owner2.rlo",
+      "sha256": "82db2c7d0d1e0b6904f679d9a974dd772e2daf53cbfe1829f76cfd66c8248f59"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00010\\output\\commander.rlo",
+      "sha256": "6adcb8852fd5cb281251cf7257ff5b3a6a8c81f8d1bc21d5eb7ed3fdf629c046"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00012\\output\\commander.rlo",
+      "sha256": "292eb8b92455918e8f515500f7e545c8e15cdb72d7ccdc3bb3661ed833205740"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00014\\output\\commander.rlo.owner2.rlo",
+      "sha256": "a4fa172a2613442d8c39ff5bc7a6df496a1a75014b3a3d7a0fb016ec87294481"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00015\\output\\commander.rlo.owner2.rlo",
+      "sha256": "df4d7a7e55f962275a337264ff63a655316ceb525708f148f72ff26e9091aeb0"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00017\\output\\commander.rlo",
+      "sha256": "fe5accab243b557cc939338f5f3cfa38677fcbea236525cbab7e76d722205056"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00023\\output\\commander.rlo",
+      "sha256": "9693d852bffa9d01cfb8e52a11f3fc860ae466941ff23a8c15d4731213877195"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00029\\output\\commander.rlo",
+      "sha256": "9c710ff74ab523d4e1e2b426fe6c3df35187ef58915e7a6633ce11562271cce8"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00030\\output\\commander.rlo",
+      "sha256": "7f012a40b79106d4712a8db1d2844659c15073550b09199a5595c0bbea846334"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00033\\output\\commander.rlo",
+      "sha256": "e83ee097c881007526b0cc02e9f0ab592a1abae64a9fd10bf81ad6db84217479"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00037\\output\\commander.rlo",
+      "sha256": "da96fc76124ff4645af557c37d66145845ebbf1631091db37d9c30819d96ccec"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00039\\output\\commander.rlo",
+      "sha256": "a168a8ca9dcd9e0e87686b6a4cc2a2053ad9cdaaf77aaa8bf1a740552baa59ec"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00039\\output\\commander.rlo.owner2.rlo",
+      "sha256": "491cc8d37ede2941e828556346b1db768a1e8e7fd6966acb94f4a71c3ee57d24"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00041\\output\\commander.rlo",
+      "sha256": "ab6e1fb1d970ea1a5c31cc31417e0e6fd81305ea45249af9ea24acc2ee57ea78"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00047\\output\\commander.rlo",
+      "sha256": "99e8536dcf05eba9d8f512075b624f381d85111ccd56b54beadd79693d4c3a57"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00049\\output\\commander.rlo",
+      "sha256": "e398c15d05d8be8eec4d1220cbcb239e85accf75b59052f107f549cb888d305c"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00051\\output\\commander.rlo",
+      "sha256": "b9911937aca0c8dd6bc9311ed22a7b57b86337e6612bb642794ebed321daff0e"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00051\\output\\commander.rlo.owner2.rlo",
+      "sha256": "79907c61dfac18cf4ec2e3ec1f1cdbd9aed0ddbe867ab5eb4ddd9df7bd34ea73"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00059\\output\\commander.rlo",
+      "sha256": "af2e84201a2c2244980f6e4fd1b95b0793919b6cd1f7d33637baa01cbc44f659"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00060\\output\\commander.rlo",
+      "sha256": "a5fceb6544f115b55f6c43bf68a152c5a0e7d973525dedd571e0799e564a8499"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00063\\output\\commander.rlo",
+      "sha256": "8bd5d4a193eef77719fd8cf37f0ca0a0eef9719d32dc8614bcc506f171c5432a"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00065\\output\\commander.rlo",
+      "sha256": "cd813764a14b198cfe39ea8f62b09b6cd1da0f8309821b9168901e0a56cecc1a"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00067\\output\\commander.rlo",
+      "sha256": "ba1249c996d584e902d0d87b9ee8d14d5f60cebd15957ae7c866d67bbdf3d378"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00074\\output\\commander.rlo.owner2.rlo",
+      "sha256": "975960a28639e0f3cde10be9a623cd4cbc24b1d04f6527fb19102a554020efd9"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00075\\output\\commander.rlo.owner2.rlo",
+      "sha256": "11c6ddd3dea3c7e1801234e6015f3afb0cb7d60c5e4f30cddc87a5ab4d839b5a"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00076\\output\\commander.rlo.owner2.rlo",
+      "sha256": "2c79b95d6d877ee96ea776477f91ae9d88719c0027218c58f02d6faa2f061a94"
+    },
+    {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_001\\collect\\games\\game_00077\\output\\commander.rlo",
+      "sha256": "a523bf2e6abb97217c7eee0319a6d1a1e85f7b914bdf8eee8da497c87f13cbf7"
+    }
+  ],
+  "mode": "ppo",
+  "own_tribe": 1,
+  "before": {
+    "value_loss": 0.03094510340183746,
+    "approximate_kl": 9.649998969003671e-10,
+    "clip_fraction": 0.0
+  },
+  "after": {
+    "value_loss": 0.022981037636430588,
+    "approximate_kl": 0.0024765828468213346,
+    "clip_fraction": 0.030585639791415965
+  },
+  "changed": [
+    "vector1.weight",
+    "vector1.bias",
+    "vector2.weight",
+    "vector2.bias",
+    "conv1.weight",
+    "conv1.bias",
+    "conv2.weight",
+    "conv2.bias",
+    "map_fc.weight",
+    "map_fc.bias",
+    "trunk.weight",
+    "trunk.bias",
+    "heads.0.weight",
+    "heads.0.bias",
+    "heads.2.weight",
+    "heads.2.bias",
+    "heads.3.weight",
+    "heads.3.bias",
+    "heads.4.weight",
+    "heads.4.bias",
+    "heads.5.weight",
+    "heads.5.bias",
+    "heads.6.weight",
+    "embeddings.0.weight",
+    "embeddings.1.weight",
+    "embeddings.2.weight",
+    "embeddings.3.weight",
+    "embeddings.4.weight",
+    "value1.weight",
+    "value1.bias",
+    "value2.weight",
+    "value2.bias",
+    "head_adapters.2.down.weight",
+    "head_adapters.2.down.bias",
+    "head_adapters.2.up.weight",
+    "head_adapters.2.up.bias",
+    "head_adapters.3.down.weight",
+    "head_adapters.3.down.bias",
+    "head_adapters.3.up.weight",
+    "head_adapters.3.up.bias",
+    "head_adapters.4.down.weight",
+    "head_adapters.4.down.bias",
+    "head_adapters.4.up.weight",
+    "head_adapters.4.up.bias",
+    "head_adapters.5.down.weight",
+    "head_adapters.5.down.bias",
+    "head_adapters.5.up.weight",
+    "head_adapters.5.up.bias",
+    "head_adapters.6.down.weight"
+  ],
+  "all_parameters_trainable": true,
+  "optimizer_resumed": true,
+  "reward": {
+    "episodes": 28,
+    "decisions": 19944,
+    "shaping_scale": 1.0,
+    "shaping_halved": false,
+    "discounted_abs_shape_mean": 9.137888921730207e-09,
+    "discounted_abs_step_shape_mean": 0.881207282452287,
+    "discounted_abs_terminal_mean": 1.1913755408355169,
+    "terminal": 25.3585147857666,
+    "shape_K": -5.3551048040390015e-08,
+    "shape_R": -5.960464477539063e-08,
+    "shape_T": 5.122274160385132e-09,
+    "shape_hq": 0.0
+  },
+  "metrics": {
+    "loss": 0.021555571747012437,
+    "actor_loss": -0.0017784881095091502,
+    "value_loss": 0.026404662492374577,
+    "entropy_bonus": 0.003417867763588826,
+    "teacher_kl": 0.006945302131740997,
+    "clip_fraction": 0.02002460081130266,
+    "approximate_kl": 0.0019272889669583403,
+    "gradient_norm": 2.665146408478419,
+    "lr": 1e-05,
+    "optimizer_steps": 60,
+    "teacher_kl_coefficient": 0.05,
+    "critic_only": false
+  },
+  "preflight_passed": true,
+  "schema_crc": 2129581458,
+  "architecture": "jw2-commander-conv-ar-skills-v5",
+  "weight_version": 2021,
+  "weights_sha256": "991b62d636c75ecd20e3b8e781f01718166c816a578665340a297fc4402156d4"
+}

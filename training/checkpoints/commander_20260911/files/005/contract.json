@@ -1,0 +1,675 @@
+{
+  "created": "2026-09-09T18:08:15+09:00",
+  "executable": "C:\\Users\\note2\\Downloads\\jw_resversing\\build\\trap_elimination_20260909\\ranker_rebuild.exe",
+  "executable_sha256": "b0127b01e89b5abda8eba2b68461c41fa720736b019ce63af56e25124dd9fbdc",
+  "jobs48": [
+    {
+      "seed": 9,
+      "tribe": 0,
+      "start_pair": [
+        0,
+        1
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 17,
+      "tribe": 0,
+      "start_pair": [
+        0,
+        2
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 23,
+      "tribe": 0,
+      "start_pair": [
+        0,
+        3
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 11,
+      "tribe": 0,
+      "start_pair": [
+        1,
+        0
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 2,
+      "tribe": 0,
+      "start_pair": [
+        1,
+        2
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 6,
+      "tribe": 0,
+      "start_pair": [
+        1,
+        3
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 1,
+      "tribe": 0,
+      "start_pair": [
+        2,
+        0
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 8,
+      "tribe": 0,
+      "start_pair": [
+        2,
+        1
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 4,
+      "tribe": 0,
+      "start_pair": [
+        2,
+        3
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 10,
+      "tribe": 0,
+      "start_pair": [
+        3,
+        0
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 5,
+      "tribe": 0,
+      "start_pair": [
+        3,
+        1
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 7,
+      "tribe": 0,
+      "start_pair": [
+        3,
+        2
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 9,
+      "tribe": 1,
+      "start_pair": [
+        0,
+        1
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 17,
+      "tribe": 1,
+      "start_pair": [
+        0,
+        2
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 23,
+      "tribe": 1,
+      "start_pair": [
+        0,
+        3
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 11,
+      "tribe": 1,
+      "start_pair": [
+        1,
+        0
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 2,
+      "tribe": 1,
+      "start_pair": [
+        1,
+        2
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 6,
+      "tribe": 1,
+      "start_pair": [
+        1,
+        3
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 1,
+      "tribe": 1,
+      "start_pair": [
+        2,
+        0
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 8,
+      "tribe": 1,
+      "start_pair": [
+        2,
+        1
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 4,
+      "tribe": 1,
+      "start_pair": [
+        2,
+        3
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 10,
+      "tribe": 1,
+      "start_pair": [
+        3,
+        0
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 5,
+      "tribe": 1,
+      "start_pair": [
+        3,
+        1
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 7,
+      "tribe": 1,
+      "start_pair": [
+        3,
+        2
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 9,
+      "tribe": 2,
+      "start_pair": [
+        0,
+        1
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 17,
+      "tribe": 2,
+      "start_pair": [
+        0,
+        2
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 23,
+      "tribe": 2,
+      "start_pair": [
+        0,
+        3
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 11,
+      "tribe": 2,
+      "start_pair": [
+        1,
+        0
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 2,
+      "tribe": 2,
+      "start_pair": [
+        1,
+        2
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 6,
+      "tribe": 2,
+      "start_pair": [
+        1,
+        3
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 1,
+      "tribe": 2,
+      "start_pair": [
+        2,
+        0
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 8,
+      "tribe": 2,
+      "start_pair": [
+        2,
+        1
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 4,
+      "tribe": 2,
+      "start_pair": [
+        2,
+        3
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 10,
+      "tribe": 2,
+      "start_pair": [
+        3,
+        0
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 5,
+      "tribe": 2,
+      "start_pair": [
+        3,
+        1
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 7,
+      "tribe": 2,
+      "start_pair": [
+        3,
+        2
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 9,
+      "tribe": 3,
+      "start_pair": [
+        0,
+        1
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 17,
+      "tribe": 3,
+      "start_pair": [
+        0,
+        2
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 23,
+      "tribe": 3,
+      "start_pair": [
+        0,
+        3
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 11,
+      "tribe": 3,
+      "start_pair": [
+        1,
+        0
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 2,
+      "tribe": 3,
+      "start_pair": [
+        1,
+        2
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 6,
+      "tribe": 3,
+      "start_pair": [
+        1,
+        3
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 1,
+      "tribe": 3,
+      "start_pair": [
+        2,
+        0
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 8,
+      "tribe": 3,
+      "start_pair": [
+        2,
+        1
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 4,
+      "tribe": 3,
+      "start_pair": [
+        2,
+        3
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 10,
+      "tribe": 3,
+      "start_pair": [
+        3,
+        0
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 5,
+      "tribe": 3,
+      "start_pair": [
+        3,
+        1
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    },
+    {
+      "seed": 7,
+      "tribe": 3,
+      "start_pair": [
+        3,
+        2
+      ],
+      "curriculum": 2,
+      "max_frames": 60000,
+      "opp_slow": 0,
+      "dagger": true,
+      "teacher_variant": 0
+    }
+  ],
+  "screen": [
+    0,
+    5,
+    10,
+    13,
+    18,
+    23,
+    26,
+    31,
+    32,
+    39,
+    40,
+    45
+  ],
+  "weights": {
+    "1": {
+      "policy": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\foundation_checked_20260909\\elf\\initial.bin",
+      "sha256": "5f354f9d96a020c6131f893455b0413c939c5eba51b518ec940920effa1cb202",
+      "version": 8,
+      "source": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\skills_20260908\\training_run\\elf\\update_00008_4cc006ab\\policy.bin"
+    },
+    "3": {
+      "policy": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\foundation_checked_20260909\\demon\\initial.bin",
+      "sha256": "7fb72caf688a234cbc128c0bf4caf7884c9fd9b6db2858c0286e6819c57cb1af",
+      "version": 25,
+      "source": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\builtin_recovery_20260909\\training_run\\demon\\warmstart\\policy.bin"
+    },
+    "0": {
+      "policy": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\foundation_checked_20260909\\primitive\\initial.bin",
+      "sha256": "2c4f0b46d138ac1c63875c3396e7238a4aca713fe722c05764a84e5684a3ee02",
+      "version": 20,
+      "source": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\skills_20260908\\training_run\\primitive\\update_00020_cbfc2749\\policy.bin"
+    }
+  },
+  "frozen_tyrano": {
+    "policy": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\skills_20260908\\training_run\\tyrano\\update_00023_872ea3a0\\policy.bin",
+    "sha256": "7f0a83463f193430802eb63b93eaf353b5e20f3ba96169bfbb0f6f4b7269fc18",
+    "version": 23
+  },
+  "schema_crc": 2129581458,
+  "normal_builtin": true,
+  "coordinated_transfers": false,
+  "purpose": "development baseline, not an unseen generalization test",
+  "workers": 4
+}

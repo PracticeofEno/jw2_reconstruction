@@ -1,0 +1,46 @@
+{
+  "0": {
+    "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_002\\fit\\race0\\policy.bin",
+    "sha256": "792b5d52a903888062d19793c3fb9a7161945bfb15b1be4537f80bde5d3303d5",
+    "version": 2030,
+    "race": 0,
+    "optimizer": {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_002\\fit\\race0\\policy.bin.optimizer.npz",
+      "sha256": "eddaf56187d9dca2781e419254a7b38b5b43c4bf1d1449341ef9e39daa23ff17"
+    },
+    "full_policy_optimizer": true
+  },
+  "1": {
+    "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_002\\fit\\race1\\policy.bin",
+    "sha256": "0229d80db11d673d45a9abaa3117a77ceaacc32c60f4027092279dd87e00e613",
+    "version": 2031,
+    "race": 1,
+    "optimizer": {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_002\\fit\\race1\\policy.bin.optimizer.npz",
+      "sha256": "a4a5341ace70a1c8b07c65c62b9ba1ff7a9725d5132b95af721af12049c66d10"
+    },
+    "full_policy_optimizer": true
+  },
+  "2": {
+    "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_002\\fit\\race2\\policy.bin",
+    "sha256": "dc4a6905bdc93c781091c34a4f851ff1c537536d37a356b06fbe953a70ddeb9e",
+    "version": 2032,
+    "race": 2,
+    "optimizer": {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_002\\fit\\race2\\policy.bin.optimizer.npz",
+      "sha256": "9228ab5007d2ca029625570595e79ec030ea6ade16644a4c20a5960e9de2f5b8"
+    },
+    "full_policy_optimizer": true
+  },
+  "3": {
+    "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_002\\fit\\race3\\policy.bin",
+    "sha256": "c16da6124e24a0e8a1151c1ba1f10ffa4b939343a3dd937449de8b07bc64d48b",
+    "version": 2033,
+    "race": 3,
+    "optimizer": {
+      "path": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911\\round_002\\fit\\race3\\policy.bin.optimizer.npz",
+      "sha256": "7d050b80810a7596e0968fc686c8fc0fed125cfd250fd93fd7d89a576c850a9e"
+    },
+    "full_policy_optimizer": true
+  }
+}

@@ -1,0 +1,389 @@
+{
+  "schema": 1,
+  "created_utc": "2026-09-11T09:17:51.113024+00:00",
+  "source_root": "C:\\Users\\note2\\Downloads\\jw_resversing",
+  "source_campaign": "C:\\Users\\note2\\Downloads\\jw_resversing\\debug_artifacts\\commander\\ppo_full_policy_20260911",
+  "source_commit": "02bbd886126d48a8ea82de97e7a80e8a4352ada6",
+  "completed_rounds": 2,
+  "resume_round": 2,
+  "files": {
+    "debug_artifacts/commander/race_strength_20260909/training_run/primitive/update_recon_v3_behavior_20260911/policy.bin": {
+      "stored": "files/000/policy.bin",
+      "sha256": "c430abfd2c1c901f57e11f463707b53369f52b438b489f48f7eb9fde766b8cf1",
+      "bytes": 3682491
+    },
+    "debug_artifacts/commander/race_strength_20260909/training_run/primitive/update_recon_v3_behavior_20260911/policy.bin.json": {
+      "stored": "files/000/policy.bin.json",
+      "sha256": "ca9f94dee0f1136f12218ed0083424af8719ca174def641e5d6649b3c9853154",
+      "bytes": 6848
+    },
+    "debug_artifacts/commander/race_strength_20260909/training_run/primitive/update_recon_v3_behavior_20260911/policy.bin.optimizer.npz": {
+      "stored": "files/000/policy.bin.optimizer.npz",
+      "sha256": "eafee109012cea28d9b241c3cdd67b6736b611ddb4153ce23991906c39d60a36",
+      "bytes": 302747
+    },
+    "debug_artifacts/commander/race_strength_20260909/training_run/elf/update_unified_hunt_fit_20260911/policy.bin": {
+      "stored": "files/001/policy.bin",
+      "sha256": "2c5b1473c5979aff106a6023fe699a1f73a18108838357391c8272b61a4dd405",
+      "bytes": 3682491
+    },
+    "debug_artifacts/commander/race_strength_20260909/training_run/tyrano/update_unified_hunt_fit_20260911/policy.bin": {
+      "stored": "files/002/policy.bin",
+      "sha256": "d06f245d1211473ab835b5b90d7ed854948d28d5d3f889012005514c1186173c",
+      "bytes": 3682491
+    },
+    "debug_artifacts/commander/race_strength_20260909/training_run/demon/update_unified_hunt_fit_20260911/policy.bin": {
+      "stored": "files/003/policy.bin",
+      "sha256": "45d6f5f2bcba5dab9f067437ddd07ad37606c74779ec2501e414c919c78ece4a",
+      "bytes": 3682491
+    },
+    "build/combat_support_20260911_121416/ranker_rebuild.exe": {
+      "stored": "files/004/ranker_rebuild.exe",
+      "sha256": "981e3b41e58135367a7c92abfbe53985e64b99658832c2436074f996923b1458",
+      "bytes": 17008533
+    },
+    "debug_artifacts/commander/race_strength_20260909/training_run/contract.json": {
+      "stored": "files/005/contract.json",
+      "sha256": "ec77722ff7388d943db68a8a831a8f4a1fc388806190be522df11b8356caf4c4",
+      "bytes": 13389
+    },
+    "debug_artifacts/commander/ppo_improvement_20260911/contract.json": {
+      "stored": "files/006/contract.json",
+      "sha256": "36a3ec5bebf9d1743f7aa7930e621f3f0e34f1e63e76e23aacb72dfd5114cc4b",
+      "bytes": 15634
+    },
+    "debug_artifacts/commander/ppo_improvement_20260911/baseline/result.json": {
+      "stored": "files/007/result.json",
+      "sha256": "76379f848b933b47bd3fa7b5dabe776d5e523f5aca5b603fab5143a227ddb097",
+      "bytes": 2138429
+    },
+    "debug_artifacts/commander/ppo_improvement_20260911/round_000/evaluation/result.json": {
+      "stored": "files/008/result.json",
+      "sha256": "b90fd27b51ca3971ffec55736670413f9865f70097e9249c3dc795cdb2507ad7",
+      "bytes": 2137471
+    },
+    "debug_artifacts/commander/ppo_improvement_20260911/round_000/fit/roster.json": {
+      "stored": "files/009/roster.json",
+      "sha256": "73ab9cd54f72493bc030d9f379f9b846194035331516b752b80a9590efd11858",
+      "bytes": 1141
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/initial_selection.json": {
+      "stored": "files/010/initial_selection.json",
+      "sha256": "e249017421326817edb387c4241c738ae6c591e33d4bf0ca9a7e2b1fecbf72ee",
+      "bytes": 2033393
+    },
+    "debug_artifacts/commander/ppo_improvement_20260911/round_000/fit/race0/policy.bin": {
+      "stored": "files/011/policy.bin",
+      "sha256": "34393672f63535aea5356b8cbc37dc1d6356091c2dec2f3fe4a9378a142cae68",
+      "bytes": 3682491
+    },
+    "debug_artifacts/commander/ppo_improvement_20260911/round_000/fit/race0/policy.bin.json": {
+      "stored": "files/011/policy.bin.json",
+      "sha256": "d353b108570ace03172a899fa117b0998f965da812a6d9134fde544bf5daa29c",
+      "bytes": 11238
+    },
+    "debug_artifacts/commander/ppo_improvement_20260911/round_000/fit/race0/policy.bin.optimizer.npz": {
+      "stored": "files/011/policy.bin.optimizer.npz",
+      "sha256": "3dab35d6e4628d1a1058f500877103177b620e9b53d2f446b29b4fb794515dbc",
+      "bytes": 636530
+    },
+    "debug_artifacts/commander/ppo_improvement_20260911/round_000/fit/race1/policy.bin": {
+      "stored": "files/012/policy.bin",
+      "sha256": "83a071c566aa836c66aba748c2555813bb3eae34977e6960f4c85e8ee48857a7",
+      "bytes": 3682491
+    },
+    "debug_artifacts/commander/ppo_improvement_20260911/round_000/fit/race1/policy.bin.json": {
+      "stored": "files/012/policy.bin.json",
+      "sha256": "56046182ebb6879e9460bd78ff9e4d1c6e4bd615f45db2e21ae640663090be81",
+      "bytes": 11136
+    },
+    "debug_artifacts/commander/ppo_improvement_20260911/round_000/fit/race1/policy.bin.optimizer.npz": {
+      "stored": "files/012/policy.bin.optimizer.npz",
+      "sha256": "28c036ec369134dae3bc04f5abe800a016d7be9ee74cfb8c1103bba1c8227820",
+      "bytes": 636530
+    },
+    "debug_artifacts/commander/ppo_improvement_20260911/round_000/fit/race2/policy.bin": {
+      "stored": "files/013/policy.bin",
+      "sha256": "0ba512bb14911a32002378449a6382f44e30a548ff938a411e4a44ea707af18a",
+      "bytes": 3682491
+    },
+    "debug_artifacts/commander/ppo_improvement_20260911/round_000/fit/race2/policy.bin.json": {
+      "stored": "files/013/policy.bin.json",
+      "sha256": "b6aebadfe96ee4ae59eff8835f7e7b3e8c8973c30f40fb4f9dbee24c4877e1b1",
+      "bytes": 11256
+    },
+    "debug_artifacts/commander/ppo_improvement_20260911/round_000/fit/race2/policy.bin.optimizer.npz": {
+      "stored": "files/013/policy.bin.optimizer.npz",
+      "sha256": "0af6fb1dcfd32ccb08d846161ac59ea9ef09f08dd76fab78a5c7d05098bb872f",
+      "bytes": 636530
+    },
+    "debug_artifacts/commander/ppo_improvement_20260911/round_000/fit/race3/policy.bin": {
+      "stored": "files/014/policy.bin",
+      "sha256": "8bce79da42e68844a644475c31576e9e4f027d6b03023b7dbd57a8150898d58e",
+      "bytes": 3682491
+    },
+    "debug_artifacts/commander/ppo_improvement_20260911/round_000/fit/race3/policy.bin.json": {
+      "stored": "files/014/policy.bin.json",
+      "sha256": "70691529e331ce2ecbbe77436b8e3df791a7caa0bcae25102a504eb340935a7b",
+      "bytes": 11230
+    },
+    "debug_artifacts/commander/ppo_improvement_20260911/round_000/fit/race3/policy.bin.optimizer.npz": {
+      "stored": "files/014/policy.bin.optimizer.npz",
+      "sha256": "7712ba13dd4e6650588153b5c072e8287e2392dbc8caaf277593fa740fee7b63",
+      "bytes": 636530
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_000/fit/race0/policy.bin": {
+      "stored": "files/015/policy.bin",
+      "sha256": "2534af80d78a9a90b3085728605e763294b6dcb2392c525930c200a3daab629e",
+      "bytes": 3682491
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_000/fit/race0/policy.bin.json": {
+      "stored": "files/015/policy.bin.json",
+      "sha256": "0fb73085007b6bf26b51d0f6348bafb1306cbc0511bb193561bdb4cc8e9028d6",
+      "bytes": 14315
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_000/fit/race0/policy.bin.optimizer.npz": {
+      "stored": "files/015/policy.bin.optimizer.npz",
+      "sha256": "9e46c53b46e00f89e50c1d677a526da057460bcea3b4fdb66c62b1a18f615bb5",
+      "bytes": 7415779
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_000/fit/race1/policy.bin": {
+      "stored": "files/016/policy.bin",
+      "sha256": "def7d5f0ae5670e5b2de101aa15e7aa89aab4916c768e1321a90ca3daea8df5c",
+      "bytes": 3682491
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_000/fit/race1/policy.bin.json": {
+      "stored": "files/016/policy.bin.json",
+      "sha256": "e03b0c8adf17880fbf84b471b982ec20a10fce00c4812714a7fabd6964611a84",
+      "bytes": 11618
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_000/fit/race1/policy.bin.optimizer.npz": {
+      "stored": "files/016/policy.bin.optimizer.npz",
+      "sha256": "a1157cc2fb54eb78a9b6b9235ebdd531c3f7c2d3f07aaf84dc39c6f31fea3257",
+      "bytes": 7415779
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_000/fit/race2/policy.bin": {
+      "stored": "files/017/policy.bin",
+      "sha256": "6bf6d1845915b6b53e8f016c8c579faf7304daa42f70b7597df3dd4c7d96c4ce",
+      "bytes": 3682491
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_000/fit/race2/policy.bin.json": {
+      "stored": "files/017/policy.bin.json",
+      "sha256": "23453095203c99db97ad6e6febc8377148620fa02fc87a3848111dd57aefd4aa",
+      "bytes": 12155
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_000/fit/race2/policy.bin.optimizer.npz": {
+      "stored": "files/017/policy.bin.optimizer.npz",
+      "sha256": "ede346df6b5fc32b4b789debc377fcb744a2c182e8a3ac9d569e3d31f8091d61",
+      "bytes": 7415779
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_000/fit/race3/policy.bin": {
+      "stored": "files/018/policy.bin",
+      "sha256": "646ba259b06c23daa586e0444f8341e08df43102953f7d756fc01a8b5a767c41",
+      "bytes": 3682491
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_000/fit/race3/policy.bin.json": {
+      "stored": "files/018/policy.bin.json",
+      "sha256": "b4693af09f31e905ed9a01b510f04239af2747edcb910052ba8d58bc2b2901d1",
+      "bytes": 11895
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_000/fit/race3/policy.bin.optimizer.npz": {
+      "stored": "files/018/policy.bin.optimizer.npz",
+      "sha256": "db9bac1f804293ec6e5f86210815cc12335c2e2ed152e2523d13d52851c415a2",
+      "bytes": 7415779
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_001/fit/race0/policy.bin": {
+      "stored": "files/019/policy.bin",
+      "sha256": "00d858b26e3eda3d7131ab4b551822e822097184c2e003f609b43db864ecccc7",
+      "bytes": 3682491
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_001/fit/race0/policy.bin.json": {
+      "stored": "files/019/policy.bin.json",
+      "sha256": "b958543bf1ae9634b39b02f128bc9ef4ea45a883dd225f0573c8d5d87e138c85",
+      "bytes": 14703
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_001/fit/race0/policy.bin.optimizer.npz": {
+      "stored": "files/019/policy.bin.optimizer.npz",
+      "sha256": "7a051b75c6da9d731ba6e37cf4c66be6f1042fc6d83301f2f26f59e4a697d6ad",
+      "bytes": 7415779
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_001/fit/race1/policy.bin": {
+      "stored": "files/020/policy.bin",
+      "sha256": "991b62d636c75ecd20e3b8e781f01718166c816a578665340a297fc4402156d4",
+      "bytes": 3682491
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_001/fit/race1/policy.bin.json": {
+      "stored": "files/020/policy.bin.json",
+      "sha256": "2417b6de2fb2e15dad0483f62d60daaab6621f5cb6157e5fc6f3290c3f826994",
+      "bytes": 11925
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_001/fit/race1/policy.bin.optimizer.npz": {
+      "stored": "files/020/policy.bin.optimizer.npz",
+      "sha256": "868e953d9357a7b6b471ca38be28969de2233530bbe04cb7eafd38175a1391c7",
+      "bytes": 7415779
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_001/fit/race2/policy.bin": {
+      "stored": "files/021/policy.bin",
+      "sha256": "f53a77ba5ec82832b12948233fde60420dff9b41c36f737dbe8d72c9c0e1c0a0",
+      "bytes": 3682491
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_001/fit/race2/policy.bin.json": {
+      "stored": "files/021/policy.bin.json",
+      "sha256": "5eb2883f111acada7b06ed1824c518c86be4a5fd03901b5e08a0f1274c77807d",
+      "bytes": 12466
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_001/fit/race2/policy.bin.optimizer.npz": {
+      "stored": "files/021/policy.bin.optimizer.npz",
+      "sha256": "3a34c8911e5b1a3359e12c2bf4e7de28f8d538a6651b5df2ed7b287532088878",
+      "bytes": 7415779
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_001/fit/race3/policy.bin": {
+      "stored": "files/022/policy.bin",
+      "sha256": "7d13d4e7d04d70bcfe147c8d0c0560767bab879321a6d85e567bfca34b06f674",
+      "bytes": 3682491
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_001/fit/race3/policy.bin.json": {
+      "stored": "files/022/policy.bin.json",
+      "sha256": "ecd6e127954fafc7bdc94af3a9d264b884f465eb796cdcfa8f632e48ce3ba1f5",
+      "bytes": 12210
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_001/fit/race3/policy.bin.optimizer.npz": {
+      "stored": "files/022/policy.bin.optimizer.npz",
+      "sha256": "dc9ae0811e5c3cf9b80dadd2cd461805315b7b5b103c0b8ae8ee63853b61cfa0",
+      "bytes": 7415779
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_002/fit/race0/policy.bin": {
+      "stored": "files/023/policy.bin",
+      "sha256": "792b5d52a903888062d19793c3fb9a7161945bfb15b1be4537f80bde5d3303d5",
+      "bytes": 3682491
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_002/fit/race0/policy.bin.json": {
+      "stored": "files/023/policy.bin.json",
+      "sha256": "0aea19faf465d603a3979632e77a972fb300af6c59fb0f7f1f72da0495f82eea",
+      "bytes": 12416
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_002/fit/race0/policy.bin.optimizer.npz": {
+      "stored": "files/023/policy.bin.optimizer.npz",
+      "sha256": "eddaf56187d9dca2781e419254a7b38b5b43c4bf1d1449341ef9e39daa23ff17",
+      "bytes": 7415779
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_002/fit/race1/policy.bin": {
+      "stored": "files/024/policy.bin",
+      "sha256": "0229d80db11d673d45a9abaa3117a77ceaacc32c60f4027092279dd87e00e613",
+      "bytes": 3682491
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_002/fit/race1/policy.bin.json": {
+      "stored": "files/024/policy.bin.json",
+      "sha256": "d64f73e077549c35f06b7dcdf2987639b27c12570b0f284a32602de061fef87b",
+      "bytes": 11960
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_002/fit/race1/policy.bin.optimizer.npz": {
+      "stored": "files/024/policy.bin.optimizer.npz",
+      "sha256": "a4a5341ace70a1c8b07c65c62b9ba1ff7a9725d5132b95af721af12049c66d10",
+      "bytes": 7415779
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_002/fit/race2/policy.bin": {
+      "stored": "files/025/policy.bin",
+      "sha256": "dc4a6905bdc93c781091c34a4f851ff1c537536d37a356b06fbe953a70ddeb9e",
+      "bytes": 3682491
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_002/fit/race2/policy.bin.json": {
+      "stored": "files/025/policy.bin.json",
+      "sha256": "155b738360922041c6dd85505509b01cfc44b50b3d3f313592b584a84e59cbb8",
+      "bytes": 12464
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_002/fit/race2/policy.bin.optimizer.npz": {
+      "stored": "files/025/policy.bin.optimizer.npz",
+      "sha256": "9228ab5007d2ca029625570595e79ec030ea6ade16644a4c20a5960e9de2f5b8",
+      "bytes": 7415779
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_002/fit/race3/policy.bin": {
+      "stored": "files/026/policy.bin",
+      "sha256": "c16da6124e24a0e8a1151c1ba1f10ffa4b939343a3dd937449de8b07bc64d48b",
+      "bytes": 3682491
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_002/fit/race3/policy.bin.json": {
+      "stored": "files/026/policy.bin.json",
+      "sha256": "7bceed4ce79e46b412552fea2973a48806a65ced1f51cd524b54b21cb42f88d5",
+      "bytes": 12143
+    },
+    "debug_artifacts/commander/ppo_full_policy_20260911/round_002/fit/race3/policy.bin.optimizer.npz": {
+      "stored": "files/026/policy.bin.optimizer.npz",
+      "sha256": "7d050b80810a7596e0968fc686c8fc0fed125cfd250fd93fd7d89a576c850a9e",
+      "bytes": 7415779
+    }
+  },
+  "sources": {
+    "ranker_reconstructed_code/tools/ai/ranker_commander_analyze.py": "dd16a12ec19cb60d3b21a3b37ec6d988c9b6e987d34a17c0f1467c7d14b6c2fe",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_archive.py": "478a1040397e52b000cc11bd638e242ba115a2415c4445d8351ce2507bee71a5",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_behavior_prior.py": "da1d7a493c72a7ad4e7a5b97e0d6ee82ecc76299f8b71de51192ea11fc911211",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_benchmark.py": "f1745cfac5e4f807f40fd65ae3d727cae1819a0d3f01973fbfd19ae992343fcc",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_catalog.py": "c44c850ae463d921fe0d2baf02ece567da37abfcd020082ad87969e5608ccec9",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_cohort_report.py": "c082013cc540754ab4df05964af45226637eb184c71a813d786c115707cf28ea",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_combat_ppo.py": "79ac0591c82d61d7c091197c8a31c7f0380b9bd1914a19860456ab755c097cca",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_context.py": "9e4c851e7e4beb0e4d81eea43a8838966285d7f5adebc47282a59f6ebaead381",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_eval.py": "54a3af7fd2c18bd89ca91c66c05604a7e3d0fbccc807f9ac89d2659487c93260",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_exploration_prior.py": "7daef15c07d466f9812bc1c2ffb9c394b596cf426ddc6ef0e0ac2a92bc5fd2bf",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_foundation.py": "68b5930ef38d16534ee3af92700acd0b227ad5910baa8f55063f33b5865e0024",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_hunt_continuity.py": "ec774dcae5b843d8f95e15f699ee6987be86fef673d657158175b52c07bd1374",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_hunt_output.py": "3f382926b97ff7a0bd90c9c8c3586e6faea38c97b7226a2aec62c0ab1260df24",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_idle_hunt.py": "b2f042675d12e5e43262215b8d5b79b937937b21e7f039b19deb9c3d95513dd4",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_improve.py": "c3e653f4f7d7af8037b8e1c347a31c35a6573aec6497634c92a63bfb4ec5dfee",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_label_router.py": "4ba2bc75f6088d4b36511b9f5739eee14b011540853093bf7acaff890e1ffdd5",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_league.py": "6029b9370ec83cc03e23e11689a774235ac6942e36c9f5cfcc439070d670ecbf",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_model.py": "1cef51ed7867e65ada77ddec3de54d3552000893be18f3d5bd649f624e1db795",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_multirace.py": "19d670ee18382a27342ebad20fd60c4f77c0cf1f7f76c6b619e403e4be475108",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_recover.py": "b1ce58bc8358eb70c4a3f4f80f91230b9fcc5c1298c66ae53580364125defab1",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_research.py": "eaafed49af2aee4c465743873a3214750071ebd0aa57188cccd164257135033b",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_rollout.py": "1731af462b008ba6cdb1d99a5ad4d5fd4f7ce05751823d0651da826c6e4393fa",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_selfplay_batch.py": "918f231d27991b8d80eac2a6745911de654b32626e6d2ccca655770fd02913a2",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_skills_catalog.py": "942e4ba75c7bf18545a87841bd9406b24dfa9169702bbb599025fadaf9c5a02a",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_strategy.py": "8e70b52a4762669c18167d753f819f29341936754085f1ba435a1deb5f1ed83b",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_strategy_router.py": "28fc236d633395e2306560af6db0ee8a791fb07b7e9e81a341c6e2f8ad83d054",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_train.py": "d40ef0aee8b5cf9e9883e8679aae6443d7a206a450695c1dfa30d3a1ada12b35",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_upgrade.py": "64a58b2434ffe5428ab6ee1cfe9bdce628948c8f516112435bd64f8932e93fd3",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_watch.py": "5fee0110c731bec64e20727d97f2f4efd321aecd22129dfa458e2a8275c56873",
+    "ranker_reconstructed_code/src/ranker_ai_commander.cpp": "c6eb3a3e05dc42a76f86b3cc7badce29e6f803aafb6bf6f7b44bbc22e6fb9586",
+    "ranker_reconstructed_code/src/ranker_ai_commander_demon_foundation.inc": "a36e1adb74cffcafeef6c1c8a742ce725e90fa8b2179ac239b97303c36a8e8e9",
+    "ranker_reconstructed_code/src/ranker_ai_commander_elf_foundation.inc": "a02012f6f539e27cb0bb3bc5870fa32f7ca2e4ba21845e78a06357d328a5995d",
+    "ranker_reconstructed_code/src/ranker_ai_commander_elf_strategy.inc": "40d7b889cda8820ac5ada3d309d79f9751adc5911a0abf6c0375423d65b916b7",
+    "ranker_reconstructed_code/src/ranker_ai_commander_elf_teacher.inc": "4acf44ee667f8820b0579ddca8f726a358ce3a9fc8c297610e90691079617143",
+    "ranker_reconstructed_code/src/ranker_ai_commander_elf_tree_supply.inc": "1c094e8fe2b8470ecf22ea46a5601cde1e8481fb2ef49c9a49c3a0f286d6efcb",
+    "ranker_reconstructed_code/src/ranker_ai_commander_game.inc": "ddaadef50c88a500ce68382219e76dd4948f74283c963bef47279ea84eadd84f",
+    "ranker_reconstructed_code/src/ranker_ai_commander_march.inc": "f03892171a7c8bed7dd66eeaa2f0ba9f2198dbe2d5429af85248fb37e8e339e5",
+    "ranker_reconstructed_code/src/ranker_ai_commander_meat.inc": "275b3964ecee84c0a027bbb2294a948a7802230bd476841653c39ef635bb3cab",
+    "ranker_reconstructed_code/src/ranker_ai_commander_model.cpp": "d3b3bfe3459f9d9180fae3e235afe7203722b046f67343aff051c4bfb8a7d0b7",
+    "ranker_reconstructed_code/src/ranker_ai_commander_primitive_foundation.inc": "e456284986993a2af78aca1dced32b16087434e4ee974dddd4b3f86f600fba2c",
+    "ranker_reconstructed_code/src/ranker_ai_commander_rollout.cpp": "03b4dddef480f9cf773f0e6435a459d7c3770a93d147482828b5c34c3c6034b1",
+    "ranker_reconstructed_code/src/ranker_ai_commander_skills.inc": "704f074ab2401203d16afd01056a81232698700909c9105088ae19a3acb57e0f",
+    "ranker_reconstructed_code/src/ranker_ai_commander_support.inc": "2e7051aa282bbe6081f48ad5dce83f334fb5e55486d783895547c1db4308ceb9",
+    "ranker_reconstructed_code/include/ranker_ai_commander.h": "61c8222a024eb29dd4337dae19d2d207b8c744ea13c61b83ba850d8beeb6688f",
+    "ranker_reconstructed_code/tools/ai/ranker_commander_full_ppo.py": "dbfeba475655aefa81e9981af0ee80eca34d90d655bd8ca70a8a8da2fd3cacbb"
+  },
+  "documents": {
+    "contract.json": {
+      "stored": "templates/contract.json",
+      "sha256": "b82d113056316f28422faf2b1cd4a90d5bba9558a9245c70ebfd1831a9248196"
+    },
+    "initial_selection.json": {
+      "stored": "templates/initial_selection.json",
+      "sha256": "e249017421326817edb387c4241c738ae6c591e33d4bf0ca9a7e2b1fecbf72ee"
+    },
+    "round_000/selection.json": {
+      "stored": "templates/round_000/selection.json",
+      "sha256": "d9bcf9a280ae618113837f562d746fbf421f18f4c533da82694b38c347ce1324"
+    },
+    "round_001/selection.json": {
+      "stored": "templates/round_001/selection.json",
+      "sha256": "8d252a3e54e120ea078c3aec80b60a614ea9b28d9e972618b9be7627f59ccae5"
+    },
+    "pending_candidates.json": {
+      "stored": "templates/pending_candidates.json",
+      "sha256": "4d77ab535cc29e5da8d46c3aa372668943438822c5331b8a244827961b4f61ea"
+    }
+  },
+  "packages": {
+    "torch": "2.13.0+cpu",
+    "numpy": "2.5.2"
+  }
+}
